@@ -1799,7 +1799,9 @@
    *                     shared key would teleport each panel to wherever another was last left.
    *                     No key means the position is simply not remembered.
    *  opts.width         width to clamp against while the panel has not been laid out and reports
-   *                     offsetWidth 0. The panel's CSS width; defaults to clampPanelPos's own 250.
+   *                     offsetWidth 0, on the restore and on the drag alike (the rail is hidden at
+   *                     init, so its restore is exactly where this matters). The panel's CSS width;
+   *                     defaults to clampPanelPos's own 250.
    *
    *  The restore only runs while the panel really is `position: fixed`. Below the breakpoint the
    *  CSS puts it back in the flow, where left/top are inert and offsetWidth is the whole column;
@@ -1818,7 +1820,9 @@
         // Clamped on the way back IN, not only during the drag -- see clampPanelPos.
         if (p && Number.isFinite(p.left) && Number.isFinite(p.top)
             && getComputedStyle(panel).position === "fixed") {
-          const at = clampPanelPos(p.left, p.top, panel.offsetWidth);
+          // Against the same width the drag uses. A panel hidden at init (the rail) has no layout
+          // yet, and without the declared width this clamped it against clampPanelPos's own 250.
+          const at = clampPanelPos(p.left, p.top, panel.offsetWidth || fallbackWidth);
           panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
           panel.style.right = "auto";
         }

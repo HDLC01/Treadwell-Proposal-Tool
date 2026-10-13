@@ -404,6 +404,21 @@ out.float = {};
   out.float.unlaidOut = { declared, byDefault: panelB.at().left };
 }
 {
+  // The RESTORE is where a panel is most likely not laid out: the rail is hidden at init, so it
+  // reports offsetWidth 0 exactly when the saved position is read back. The declared width has to
+  // stand in there as well, or the restore and the drag clamp the same panel to different edges.
+  const restoreUnlaidOut = (opts) => {
+    const panel = makePanel("sheets", 0, 0, "sh-drag");
+    const env = makeEnv(panel, "tw_probe_pos", { left: 5000, top: 100 }, WIN);
+    loadTW(env).floatPanel(panel, Object.assign({}, OPTS, opts));
+    return panel.at();
+  };
+  out.float.unlaidOutRestore = {
+    declared: restoreUnlaidOut({ width: 300 }),
+    byDefault: restoreUnlaidOut({}),
+  };
+}
+{
   // two panels on one page, one storage: each restores from and saves to its OWN key
   const a = makePanel("a", 256, 1000, "sh-drag");
   const b = makePanel("b", 256, 1000, "sh-drag");
@@ -457,6 +472,25 @@ out.float = {};
   panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
   panel.fire("pointermove", { clientX: 9000, clientY: 200 });
   out.cheatUnlaidOut = { left: panel.at().left };
+}
+{
+  // The same two callers, but RESTORING a far-right saved position into a panel that is not laid
+  // out yet (the rail is hidden at init). Each must clamp to its own declared width, the one its
+  // drag already uses, so a position the drag could leave is a position the restore gives back.
+  const restoreFar = (id, handle, key, init) => {
+    const panel = makePanel(id, 0, 0, handle);
+    const env = makeEnv(panel, key, { left: 5000, top: 100 }, WIN);
+    global.window = env.window;
+    runInit(init.body, init.call, env);
+    return panel.at().left;
+  };
+  out.unlaidOutRestore = {
+    rail: restoreFar("options-panel", "op-drag", "tw_opts_pos", {
+      body: "const RAW = " + iife(REVIEW, "initOptionsPanelDrag", "proposal-review.js") + ";",
+      call: "RAW();" }),
+    cheat: restoreFar("verbal-cheat", "vc-drag", "tw_vcheat_pos", {
+      body: fn(VERBAL, "initCheatDrag", "polish-verbal.js"), call: "initCheatDrag();" }),
+  };
 }
 
 process.stdout.write(JSON.stringify(out) + "\n");

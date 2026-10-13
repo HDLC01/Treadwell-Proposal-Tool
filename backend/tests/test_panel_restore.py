@@ -307,6 +307,15 @@ def test_a_panel_not_laid_out_yet_is_clamped_against_its_declared_width(ran):
     assert u["byDefault"] == WIN_W - 250 - 4
 
 
+def test_a_panel_not_laid_out_yet_is_restored_against_its_declared_width_too(ran):
+    """The restore is where a panel is most likely not laid out (the rail is hidden at init), and it
+    used to ignore `width` and clamp against clampPanelPos's own 250: a 300px panel saved far right
+    came back 46px past the edge while its drag clamped it correctly. Same width, both paths."""
+    u = ran["float"]["unlaidOutRestore"]
+    assert u["declared"] == {"left": WIN_W - 300 - 4, "top": 100, "right": "auto"}
+    assert u["byDefault"] == {"left": WIN_W - 250 - 4, "top": 100, "right": "auto"}
+
+
 def test_two_panels_on_one_page_never_share_a_position(ran):
     """One shared key would teleport each panel to wherever the other was last left. Each restores
     from its own key, and dragging one leaves the other's saved spot untouched."""
@@ -335,6 +344,16 @@ def test_the_cheat_sheet_keeps_its_own_declared_width(ran):
     assert ran["cheatUnlaidOut"]["left"] == WIN_W - CHEAT_W - 4
 
 
+def test_each_callers_restore_uses_its_own_declared_width_before_layout(ran):
+    """The rail is hidden until it has content, so its restore runs with offsetWidth 0. It clamps to
+    its own 240 (what its drag uses), not the helper's 250: restoring a far-right position puts it
+    at the same last legal pixel the drag could have left it on. The cheat sheet declares 250, so
+    for it nothing moves."""
+    u = ran["unlaidOutRestore"]
+    assert u["rail"] == WIN_W - OPTS_W - 4
+    assert u["cheat"] == WIN_W - CHEAT_W - 4
+
+
 # ── the rail's CSS moved into the shared stylesheet, rule for rule ────────────────
 def _block_at(text, open_at):
     """The text between the brace at `open_at` and its match. Counts braces only, so a comment
@@ -352,6 +371,139 @@ def _block_at(text, open_at):
 
 def _norm(decls):
     return " ".join(decls.split())
+
+
+# ── reading selectors out of a page, for the "no second copy" guard ───────────────
+# Walks by position. A single-pass regex over markup or comments is the shape CodeQL calls
+# incomplete sanitisation, and a hand-rolled walk reads no worse for a sheet this plain.
+def _drop_css_comments(css):
+    out, at = [], 0
+    while True:
+        start = css.find("/*", at)
+        if start == -1:
+            out.append(css[at:])
+            return "".join(out)
+        out.append(css[at:start])
+        end = css.find("*/", start + 2)
+        if end == -1:
+            return "".join(out)
+        at = end + 2
+
+
+def _style_text(html):
+    """The text of every <style> element in the page, joined."""
+    parts, at = [], 0
+    while True:
+        start = html.find("<style", at)
+        if start == -1:
+            return "\n".join(parts)
+        after = html[start + len("<style"):start + len("<style") + 1]
+        if after and not (after == ">" or after.isspace()):
+            at = start + 1                      # <styles...>, not a style element
+            continue
+        gt = html.find(">", start)
+        end = html.find("</style>", gt)
+        if gt == -1 or end == -1:
+            return "\n".join(parts)
+        parts.append(html[gt + 1:end])
+        at = end + len("</style>")
+
+
+def _split_top_level_commas(text):
+    parts, depth, buf = [], 0, []
+    for ch in text:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _selector_entries(css):
+    """Every selector in a sheet, one per comma-separated entry, at any @media depth. A prelude is
+    the text since the last `{`, `}` or `;`; at-rule preludes are not selectors and are skipped, but
+    the rules inside them are read as the preludes they are."""
+    out, buf = [], []
+    for ch in _drop_css_comments(css):
+        if ch == "{":
+            prelude = "".join(buf).strip()
+            if prelude and not prelude.startswith("@"):
+                out.extend(_split_top_level_commas(prelude))
+            buf = []
+        elif ch in "};":
+            buf = []
+        else:
+            buf.append(ch)
+    return out
+
+
+def _without_has(selector):
+    """The selector with its `:has( ... )` groups taken out. `:has(#options-panel) .word-canvas`
+    styles the CANVAS and merely reads the panel; it is not a rule about the panel."""
+    out, at = [], 0
+    while True:
+        start = selector.find(":has(", at)
+        if start == -1:
+            out.append(selector[at:])
+            return "".join(out)
+        out.append(selector[at:start])
+        depth, i = 0, start + len(":has")
+        while i < len(selector):
+            if selector[i] == "(":
+                depth += 1
+            elif selector[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        at = i + 1
+
+
+def _mentions(selector, name):
+    """`name` as a whole word in the selector: `.op-row`, `#options-panel`, `[id=options-panel]`
+    match, `.my-op-row` does not."""
+    at = 0
+    while True:
+        i = selector.find(name, at)
+        if i == -1:
+            return False
+        before = selector[i - 1] if i else " "
+        end = i + len(name)
+        after = selector[end] if end < len(selector) else " "
+        if not (before.isalnum() or before in "_-") and not (after.isalnum() or after in "_-"):
+            return True
+        at = i + 1
+
+
+def _panel_owned_names():
+    """The class and id names that belong to the floating panel: every one that styles.css only ever
+    uses in a selector that also names `.options-panel`. Read from the stylesheet rather than listed
+    here, so a class added to the panel's rules is covered without anyone remembering this file."""
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    inside, outside = set(), set()
+    for entry in _selector_entries(css):
+        names = set(re.findall(r"[.#]([A-Za-z_][\w-]*)", _without_has(entry)))
+        (inside if "options-panel" in names else outside).update(names)
+    return (inside - outside) | {"options-panel"}
+
+
+def _panel_forks_in(page):
+    """Every selector in the page's own <style> that is a rule about the panel, however it is
+    spelled: `#options-panel`, `body .options-panel`, `aside.options-panel`, a bare `.op-drag`."""
+    owned = _panel_owned_names()
+    forks = []
+    for entry in _selector_entries(_style_text(page)):
+        bare = _without_has(entry)
+        hit = sorted(n for n in owned if _mentions(bare, n))
+        if hit:
+            forks.append((entry, hit))
+    return forks
 
 
 def test_the_options_panel_rules_live_in_the_shared_stylesheet():
@@ -399,14 +551,66 @@ def test_the_inline_breakpoint_for_the_panel_is_in_the_shared_stylesheet():
 def test_the_proposal_page_no_longer_carries_a_second_copy_of_the_panel_rules():
     """A copy left behind in the page would quietly fork the look the day someone edits one."""
     page = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
-    assert not re.search(r"(?m)^\s*\.options-panel[^{\n]*\{", page), (
-        "proposal-review.html still defines .options-panel rules; they belong in styles.css")
+    # Not "no selector that STARTS with .options-panel": a fork spelled `#options-panel`,
+    # `body .options-panel` or a bare `.op-drag` loads after styles.css and wins a tie just the same.
+    forks = _panel_forks_in(page)
+    assert forks == [], (
+        "proposal-review.html's own <style> still has rules about the floating panel; they belong "
+        f"in styles.css: {forks}")
     # What stays is the part that is the page's own: the canvas padding that keeps the document
     # clear of the rail, because .word-canvas is this page's.
     assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 272px",
                      page)
     assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 0",
                      page), "below 1400px the canvas must stop reserving a lane the rail left"
+
+
+# A guard that finds nothing proves nothing until something it must catch has been put in front of
+# it: each of these is a way to fork the panel's look that the old, start-of-selector check missed.
+FORKED_PANEL_RULES = [
+    "#options-panel { top: 0; width: 300px; }",
+    "body .options-panel { position: absolute; }",
+    "aside.options-panel { width: 300px; }",
+    "[id=options-panel] { width: 300px; }",
+    ".op-drag { cursor: pointer; }",
+    ".options-panel .op-row, .elsewhere { padding: 0; }",
+    ".elsewhere, .options-panel { top: 0; }",
+    "@media (max-width: 1400px) { .options-panel { position: absolute; } }",
+    "body:has(.x) .op-row { padding: 0; }",           # a :has() elsewhere does not excuse it
+]
+
+
+@pytest.mark.parametrize("fork", FORKED_PANEL_RULES)
+def test_the_second_copy_guard_catches_a_fork_under_any_selector(fork):
+    page = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
+    assert _panel_forks_in(page) == []                # the page as shipped is clean
+    forked = page.replace("</style>", fork + "\n</style>", 1)
+    assert forked != page
+    assert _panel_forks_in(forked), f"the guard let this fork through: {fork}"
+
+
+@pytest.mark.parametrize("rule", [
+    # reads the panel, styles the canvas: exactly what the page keeps
+    ".word-canvas:has(#options-panel:not([hidden])) { padding-right: 9px; }",
+    # a comment is not a rule
+    "/* .options-panel { width: 1px } and #options-panel { top: 0 } */",
+    # a different element that merely shares a prefix
+    ".my-op-row { padding: 0; }",
+])
+def test_the_second_copy_guard_leaves_the_pages_own_rules_alone(rule):
+    page = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
+    forked = page.replace("</style>", rule + "\n</style>", 1)
+    assert forked != page
+    assert _panel_forks_in(forked) == [], rule
+
+
+def test_the_panels_own_names_are_read_from_the_stylesheet_not_guessed():
+    """If this came back empty the guard above would pass on every page for ever."""
+    owned = _panel_owned_names()
+    assert {"options-panel", "op-drag", "op-dragging", "op-row", "op-name"} <= owned
+    # `.op-hint` is also the fields panel's class, so it is not the floating panel's to own: a page
+    # that styles it for the fields panel must not be accused of forking this one.
+    assert "op-hint" not in owned
 
 
 @pytest.mark.parametrize("name", ["proposal-review.html", "estimate-review.html"])
