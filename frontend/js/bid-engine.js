@@ -401,6 +401,22 @@
     return { rates: snapshot.rates };
   }
   // ── THE CHAIN ───────────────────────────────────────────────────────────────
+  /** NIGHTS OF LODGING, the sheet's way: the labor dollars that are not travel labor, over the labor rate, over the
+   *  hours of a day (B58 on Polish: `((D45-D44)/C37)/8`; `lodgingDivisor` is the 8, or the 10 on Gyp). Per diem counts
+   *  the same figure (B59 is `=B58`). `labor` is the rounded-up labor total, `travelLabor` the travel row's dollars. A
+   *  labor rate that is not above zero counts no nights: a divide by nothing is not a number of nights. */
+  function nightsOf(quirks, labor, travelLabor, laborRate) {
+    var rate = num(laborRate);
+    if (!(rate > 0)) return 0;
+    return ((num(labor) - num(travelLabor)) / rate) / quirks.lodgingDivisor;
+  }
+
+  /** The same count for a profile and a job, for a caller that wants the nights without pricing the chain (the
+   *  estimate page's hint under Lodging and Per Diem, and the oracle's lodging cases). */
+  function lodgingNights(profileArg, labor, travelLabor, laborRate) {
+    return nightsOf(need(profileArg, "lodgingNights").quirks, labor, travelLabor, laborRate);
+  }
+
   function isBlank(v) { return v === null || v === undefined || v === ""; }
 
   function unpriceable(profile, e) {
@@ -481,7 +497,7 @@
         var laborRate = num(input.laborRate) > 0 ? num(input.laborRate) : rate("labor_rate");
         var lodgingRate = num(input.lodgingRate) > 0 ? num(input.lodgingRate) : rate("travel_lodging");
         var perDiemRate = num(input.perDiemRate) > 0 ? num(input.perDiemRate) : rate("travel_per_diem");
-        lodging_qty = ((labor - num(input.travelLabor)) / laborRate) / q.lodgingDivisor;
+        lodging_qty = nightsOf(q, labor, input.travelLabor, laborRate);
         lodging = roundUp(lodging_qty * lodgingRate);
         per_diem = roundUp(lodging_qty * perDiemRate);
       }
@@ -603,7 +619,7 @@
   return {
     BidEngineError: BidEngineError, UnpriceableError: UnpriceableError,
     resolveProfile: resolveProfile, forTab: forTab,
-    priceChain: priceChain, combine: combine,
+    priceChain: priceChain, combine: combine, lodgingNights: lodgingNights,
     compileRates: compileRates, ruleNumber: ruleNumber,
     snapshotRates: snapshotRates, ratesOf: ratesOf, SNAPSHOT_VERSION: SNAPSHOT_VERSION, UNWIRED: UNWIRED,
     rateNumber: rateNumber, defaultNumber: defaultNumber, bandsOf: bandsOf,

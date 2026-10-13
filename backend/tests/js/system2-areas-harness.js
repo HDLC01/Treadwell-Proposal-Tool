@@ -89,6 +89,8 @@ const view = (m) => ({ rows: shape(m), values: B.measuredSfValues(m.takeoff), ar
     // opened as a saved bid (the model without the pool_packs stamp) cost what they cost then.
     const saved = clone(r2.store.blob);
     delete saved.polish_estimate.pool_packs;
+    // ...and before Polish rev 2 too: a bid saved before the pool was saved before Phase 17, so it has no profile stamp
+    delete saved.polish_estimate.profile;
     const legacy = await open(saved, realAsms, realItems);
     out.packsLegacy = { total: totalOf(legacy), stamped: B.poolsPacks(r2.api.model()), legacyStamped: B.poolsPacks(legacy.api.model()) };
   }

@@ -1,7 +1,13 @@
 "use strict";
 /* Today's v2 Polish model, set beside Kyle's Polish tab as the oracle recorded it.
  *
- *   node oracle-polish-harness.js [<frontend dir>]
+ *   node oracle-polish-harness.js [<frontend dir>] [--rev2]
+ *
+ * WITHOUT --rev2 this is the model that has priced every saved bid, the profile `polish-legacy`. WITH --rev2 it is the
+ * model a bid made after Phase 17 is priced by, `polish-rev2@1`, and the departures a `closedBy` names are no longer
+ * allowed: tooling, the remodel tax base and lodging nights have to EQUAL the sheet, to the dollar, on every case,
+ * and what is left to differ is the hard bid and the bond, which are decisions. A closed departure is checked the other
+ * way too: every case where it would have applied is counted, and none may differ.
  *
  * For every Polish case in backend/tests/fixtures/oracle/polish.json this runs the model (markupChain,
  * and travelCosts for the lodging cases) on the same inputs, and compares every answer the two share.
@@ -25,7 +31,10 @@ const path = require("path");
 
 const HERE = __dirname;
 const REPO = path.resolve(HERE, "..", "..", "..");
-const FRONTEND = process.argv[2] ? path.resolve(process.argv[2]) : path.join(REPO, "frontend");
+const ARGS = process.argv.slice(2);
+const REV2 = ARGS.includes("--rev2");
+const POSITIONAL = ARGS.filter((a) => !a.startsWith("--"));
+const FRONTEND = POSITIONAL[0] ? path.resolve(POSITIONAL[0]) : path.join(REPO, "frontend");
 const ORACLE = path.join(HERE, "..", "fixtures", "oracle");
 
 const MODEL_FILE = path.join(FRONTEND, "js", "bid-model.js");
@@ -36,7 +45,13 @@ const M = require(MODEL_FILE);
 const roundUp = M.roundUp;
 const P = require(path.join(REPO, "frontend", "js", "bid-profiles.js"));
 const golden = JSON.parse(fs.readFileSync(path.join(ORACLE, "polish.json"), "utf8"));
-const dep = JSON.parse(fs.readFileSync(path.join(ORACLE, "departures.json"), "utf8"));
+const allDeps = JSON.parse(fs.readFileSync(path.join(ORACLE, "departures.json"), "utf8"));
+// The profile rev2 is held to: a departure it closes is not one of its departures any more.
+const REV2_STAMP = "polish-rev2@1";
+const dep = Object.assign({}, allDeps, {
+  departures: allDeps.departures.filter((d) => !REV2 || d.closedBy !== REV2_STAMP),
+});
+const closed = allDeps.departures.filter((d) => REV2 && d.closedBy === REV2_STAMP);
 
 /** Does a departure's `appliesWhen` hold for this case? */
 function holds(cond, v) {
@@ -107,7 +122,7 @@ function predict(v, skip) {
   const active = dep.departures.filter((d) => d.explain && d.id !== skip && holds(d.appliesWhen, v));
   let input = modelInput(v);
   for (const d of active) if (EXPLAIN[d.explain].input) input = EXPLAIN[d.explain].input(v, input);
-  let m = M.markupChain(input);
+  let m = REV2 ? M.markupChain(input, REV2_STAMP) : M.markupChain(input);
   const problems = [];
   for (const d of active) {
     const e = EXPLAIN[d.explain];
@@ -134,7 +149,8 @@ function lodgingModel(v) {
     lodging: { enabled: on, qty_auto: true, rate: P.sheets.Polish.rates.lodgingRate.value },
     per_diem: { enabled: on, qty_auto: true, rate: P.sheets.Polish.rates.perDiemRate.value },
   };
-  return M.travelCosts(travel, rows);
+  // A bid made after Phase 17 counts its nights from the labor dollars, the sheet's way (sheetNights).
+  return REV2 ? M.travelCosts(travel, rows, { sheetNights: true }) : M.travelCosts(travel, rows);
 }
 
 function lodgingDiffs(v, c) {
@@ -152,6 +168,11 @@ const summary = {
   chain: { vectors: 0, exact: 0, excused: 0, unexplained: [] },
   lodging: { vectors: 0, exact: 0, excused: 0, unexplained: [] },
   departures: Object.fromEntries(dep.departures.map((d) => [d.id, { applies: 0, seen: 0 }])),
+  profile: REV2 ? REV2_STAMP : "polish-legacy@1",
+  // A departure this profile closes: how many cases it WOULD have applied to, how many of those are `clean` (no
+  // departure that is still open applies to them either, so any difference is the closed one's), and how many of the
+  // clean ones differ now. `differ` has to be 0, and `clean` has to be more than 0, or nothing was shown.
+  closed: Object.fromEntries(closed.map((d) => [d.id, { applies: 0, clean: 0, differ: 0 }])),
 };
 
 for (const v of golden.vectors) {
@@ -159,6 +180,7 @@ for (const v of golden.vectors) {
   const bucket = lodging ? summary.lodging : summary.chain;
   bucket.vectors++;
   const mine = dep.departures.filter((d) => (d.scope === "lodging") === lodging && holds(d.appliesWhen, v));
+  const wasMine = closed.filter((d) => (d.scope === "lodging") === lodging && holds(d.appliesWhen, v));
   let diffs;
   if (lodging) {
     diffs = lodgingDiffs(v, lodgingModel(v));
@@ -169,6 +191,12 @@ for (const v of golden.vectors) {
       const without = chainDiffs(v, predict(v, d.id));
       if (without.some((x) => d.keys.includes(x.key))) summary.departures[d.id].seen++;
     }
+  }
+  for (const d of wasMine) {
+    summary.closed[d.id].applies++;
+    if (mine.length) continue;
+    summary.closed[d.id].clean++;
+    if (diffs.some((x) => d.keys.includes(x.key))) summary.closed[d.id].differ++;
   }
   const allowed = new Set();
   for (const d of mine) {

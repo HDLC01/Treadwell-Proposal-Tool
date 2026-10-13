@@ -26,7 +26,23 @@ const clearedHow = B.travelHow(cleared);
 const still = far(150);
 const stillHow = B.travelHow(still);
 
+// A bid priced by Polish rev 2 counts auto Lodging and Per Diem the sheet's way (from labor dollars), so a crew with a
+// prevailing-wage row owes more nights than it has man-days. The note has to say what the cost box and the bid charge.
+function mixed(profile) {
+  const M = B.freshModel();
+  if (profile) M.profile = profile;
+  M.takeoff = [{ assembly_id: "a", assembly_name: "Polish - S&P", measurement: 10000, unit: "SF" }];
+  M.labor = [{ id: "a", label: "A", guys: 2, days: 5, rate: 33 }, { id: "b", label: "B", guys: 2, days: 5, rate: 66 }];
+  M.travel = { lodging: { enabled: true, qty_auto: true, rate: 100 }, per_diem: { enabled: true, qty_auto: true, rate: 50 } };
+  return M;
+}
+const rev2 = mixed("polish-rev2@1"), legacy = mixed();
+const rev2Charge = B.travelCosts(rev2.travel, rev2.labor, B.travelOpts(rev2, B.ROOT_TAB));
+const legacyCharge = B.travelCosts(legacy.travel, legacy.labor, B.travelOpts(legacy, B.ROOT_TAB));
+
 console.log(JSON.stringify({
+  rev2: { lines: B.travelHow(rev2).lines, charge: rev2Charge },
+  legacy: { lines: B.travelHow(legacy).lines, charge: legacyCharge },
   travelOff: { text: offHow.text, hand: offHow.hand },
   cleared: { text: clearedHow.text },
   withMiles: { text: stillHow.text },

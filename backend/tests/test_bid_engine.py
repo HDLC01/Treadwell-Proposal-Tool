@@ -499,8 +499,8 @@ CHAIN_MUTATIONS = {
         ENGINE, "var esc_pct = (q.escalationAlwaysOn || cond.prevailing_wage) ? rate(\"esc_pct\") : 0;",
         "var esc_pct = (cond.prevailing_wage) ? rate(\"esc_pct\") : 0;", "Gyp"),
     "lodging is always divided by 8": (
-        ENGINE, "lodging_qty = ((labor - num(input.travelLabor)) / laborRate) / q.lodgingDivisor;",
-        "lodging_qty = ((labor - num(input.travelLabor)) / laborRate) / 8;", "Gyp"),
+        ENGINE, "return ((num(labor) - num(travelLabor)) / rate) / quirks.lodgingDivisor;",
+        "return ((num(labor) - num(travelLabor)) / rate) / 8;", "Gyp"),
     "the hard bid is on for every profile": (
         ENGINE, "var hardBidOn = !!q.hasHardBid && !!cond.hard_bid;", "var hardBidOn = !!cond.hard_bid;", "Gyp"),
     "the overage line is dropped": (

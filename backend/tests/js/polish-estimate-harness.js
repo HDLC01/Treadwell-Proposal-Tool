@@ -4068,9 +4068,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       material += extraMaterial(m);
       return B.markupChain({
         material: material, labor: B.laborTotal(m.labor, m.conditions),
-        travel: B.travelCosts(m.travel, m.labor).total,
+        travel: B.travelCosts(m.travel, m.labor, B.travelOpts(m, "Polish")).total,
+        tooling: B.rootTooling(m),
         contingency: m.contingency, fees: m.fees, conditions: m.conditions,
-        sf: B.takeoffSf(m.takeoff), remodel_rate: null }).total;
+        sf: B.takeoffSf(m.takeoff), remodel_rate: null }, B.rootProfile(m).stamp).total;
     };
     const total = () => p.api.bid().total;
     const switchOn = (sel) => { const e = p.doc.querySelector(sel); return e ? e.getAttribute("aria-checked") : null; };

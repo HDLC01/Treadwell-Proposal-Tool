@@ -229,7 +229,8 @@ def test_two_areas_cost_exactly_what_one_combined_floor_costs(ran):
     the fractional quantity first and rounds once, so both pairs now equal the combined floor."""
     p = ran["packs"]
     assert p["twoPriced"] == p["onePriced"] == 8000, p
-    assert p["two"] == p["one"] == 25162, p
+    # 25,162 until Phase 17 (Polish rev 2): a new bid now carries the sheet's tooling, so each is $9,331 more
+    assert p["two"] == p["one"] == 34493, p
     s = ran["packsSmall"]
     assert s["twoPriced"] == s["onePriced"] == 2000, s
     assert s["two"] == s["one"] > 0, s

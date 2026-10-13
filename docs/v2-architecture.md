@@ -97,7 +97,9 @@ The model does not carry a Renovation answer, so nothing on a v2 screen can chan
 **The engine and the profiles (Phase 8).** `js/bid-engine.js` holds one function that prices any tab,
 `priceChain(profile, input, rates)`, and `js/bid-profiles.js` (its part two) holds what makes one tab differ from
 another as data. A profile is plain JSON: an `extends` link, a closed set of thirteen named quirk flags, and rates as
-Markups formula text. There are seven: `polish` (Kyle's Polish tab exactly), `polish-legacy` (what the v2 model has
+Markups formula text. There are eight: `polish` (Kyle's Polish tab exactly), `polish-rev2` (Phase 17: `polish-legacy` with
+the tooling line in the sub-total and the remodel tax on the sheet's base; the profile a NEW bid's Polish section is
+priced by, see 7.12), `polish-legacy` (what the v2 model has
 always charged: polish with six quirks turned the other way, four of which are the chain departures of
 `departures.json` and two of which are the model's own: the Kansas floor for a missing remodel rate and no travel
 taken from lodging), `seal`
@@ -795,12 +797,12 @@ The job-level keys (`conditions`, `conditions_shown`, `cond_cov`, `travel`, `dis
 | `sectionSwitcherHtml`, the page's strip | Drawn only when the bid has more than one section. |
 
 **How a saved bid is kept from repricing.** The live Markups rules are never read when a section is priced. A section
-with no snapshot (every saved bid, and the Polish root always, for now) prices at its profile's built-ins; a section
+with no snapshot (every saved bid, and the Polish root always) prices at its profile's built-ins; a section
 activated after a rule was filed keeps that rule as text and is not moved by a later edit. The data dump of
 2026-10-12 had one production rule, `(polish, bond, '1%')`, and none the engine reads (bond is not taken, and a
-polish-layout bond rule is not a line the engine reads: its home is Global). The root has no snapshot until Phase 17
-(Polish rev 2 for new bids); a `profile`, `rates` or `kind` of base or option at the root is reserved for that and is
-not read, so no saved bid's total can move.
+polish-layout bond rule is not a line the engine reads: its home is Global). The root has no snapshot. Its `profile` key is read
+since Phase 17 (Polish rev 2 for new bids) and only when it is exactly `polish-rev2@1`; `rates` and a `kind` of base
+or option at the root are still reserved and not read, so no saved bid's total can move.
 
 **What a save writes.** A bid with only the root section writes exactly what the page always wrote, in the same
 order (`polish_estimate` with its totals stamped, `polish_sf`, `polish_2_sf`, `computed_bid`, then the condition
@@ -844,6 +846,38 @@ server's publish route both refused the draft, with nothing on any page to clear
 while the portal went on pricing the spreadsheet's rooms. A later phase that writes its own `priced_tabs`
 (every tab marked `v2: true`) is handed back whole by both functions.
 
+### 7.12 Polish rev 2 (Phase 17)
+
+**Problem, as it was.** The v2 Polish model differed from Kyle's Polish tab in five places (`departures.json`): no
+tooling line (the tab's D55 is at least $150 and counts slurry hardener and plastic), a remodel tax base that left out
+tooling and travel, lodging nights counted in people-days, no hard bid and no bond. Hanz decided on 2026-10-07 that the
+fixes apply to NEW bids only and that a saved bid keeps its total, and on 2026-10-12 that a new bid's Lodging nights and
+Per Diem days start empty and are typed.
+
+**Done.**
+
+| What | Where |
+|---|---|
+| The profile `polish-rev2@1`: `polish-legacy` with `toolingInSubTotal: true` and `remodelBase: "sheet"`. No new quirk, no new rate | `js/bid-profiles.js` |
+| Who is priced by it: a root whose own `profile` key is exactly `polish-rev2@1`. Written once, when a new bid is seeded (the same gate as `pool_packs`) and when a Polish section that never held a takeoff is brought into a bid by a job type change. Never on a saved bid, never on an Epoxy-only bid's off root. Any other value of the key, or none, is `polish-legacy@1` | `rootProfile`, `seedNewSections`, `sectionsForJob` in `js/bid-model.js` |
+| The tooling: `polishTooling(sf, lf, {dye, reno, system, traditional})`. $150 minimum on D51, the validation tab's cost per square foot by size and polish system (+$0.20 traditional, +8%), slurry hardener by the bag, plastic by the foot. Held to the real workbook on 1,056 recorded cases | `js/bid-model.js`, `backend/tests/fixtures/polish_tooling_oracle.json` (recorded by `backend/tests/js/polish-tooling-oracle.js`, which needs hyperformula@2.7.1) |
+| The lodging nights, the sheet's way: `sheetNights` = (labor dollars less travel labor) / the first crew row's rate / the profile's `lodgingDivisor`. The engine's `lodgingNights` is the one formula, and `priceChain` calls it | `js/bid-engine.js`, `js/bid-model.js` |
+| The page prices the root with `B.markupChain(input, B.rootProfile(ROOT).stamp)`, passes `tooling: B.rootTooling(ROOT)`, counts auto nights through `B.travelOpts`, and shows the Lodging and Per Diem hint through `B.lodgingHint` | `js/polish-estimate.js` |
+| The proof: `oracle-polish-harness.js --rev2` requires equality with the oracle's Polish vectors on every case the three closed departures applied to; `departures.json` marks them `closedBy: polish-rev2@1` and keeps all five for the legacy profile, because saved bids still depart | `backend/tests/test_polish_rev2.py` |
+
+**What rev 2 still does differently, on purpose** (`decisions` in `departures.json`): the Lodging and Per Diem
+quantity is typed, not derived; a bid with no area has no tooling (the tab charges its $150 anyway, as Epoxy's tooling
+does not); the polish system and kind are read from the takeoff's assembly names, where the tab asks F36 and G36; plastic's
+renovation leg cannot be reached because the model carries no Renovation answer; and a remodel job with no rate typed
+pays the Kansas floor. The hard bid and the bond stay out.
+
+**`pricing.py` and `/api/price` are not retired, and why.** Nothing in `frontend/` posts to `/api/price` (the Reference Bid
+engine was removed from Estimate Review; `estimate-review.js` nulls `computed_bid` and `alternate_computed_bid`), so the
+route could go. But `backend/pricing.py` is still imported by `main.py` and `GET /api/pricing/systems` is called live by
+`estimate-review.js` (the epoxy system and cove lists), and six test modules use `/api/price` as a handy authenticated
+route. Removing the route and the functions only it uses (`compute_full_bid`, `compute_polish`, `compute_system`,
+`compute_cove`, `roll_up`) while keeping `list_systems`, `list_cove_options` and `recipes_version` is its own change.
+
 ## 8. The phases, and where each touches this document
 
 The phases, as the program plan numbers them. Each is its own pull request to staging.
@@ -867,7 +901,7 @@ The phases, as the program plan numbers them. Each is its own pull request to st
 | 13 | Combo end to end |
 | 14 | Gyp end to end: the five presets, the three areas, labor by the hour, the seven GP tiers |
 | 15 and 16 | the Seal option, the Leveling option |
-| 17 | Polish rev2 for new bids only; retire `pricing.py` and `/api/price` |
+| 17 | Done for Polish rev2 (new bids only, 7.12). `pricing.py` and `/api/price` are NOT retired: see 7.12 |
 
 v2 bids stay test copies until Kyle signs off each work type. Where each phase touches this document:
 

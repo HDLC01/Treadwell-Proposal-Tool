@@ -99,9 +99,10 @@ function byHand(model, remodelRate) {
   const rootMaterial = bought.reduce((t, p) => t + (p ? p.total : 0), 0);
   const polish = B.markupChain({
     material: rootMaterial, labor: B.laborTotal(model.labor, model.conditions),
-    travel: B.travelCosts(model.travel, model.labor).total, contingency: model.contingency, fees: model.fees,
+    travel: B.travelCosts(model.travel, model.labor, B.travelOpts(model, "Polish")).total,
+    tooling: B.rootTooling(model), contingency: model.contingency, fees: model.fees,
     conditions: model.conditions, sf: B.takeoffSf(model.takeoff), remodel_rate: remodelRate,
-  });
+  }, B.rootProfile(model).stamp);
   const epoxy = B.priceSection(model, "Epoxy", {
     material: (e) => {
       const t = e.section.takeoff;
