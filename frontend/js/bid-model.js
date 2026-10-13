@@ -120,6 +120,10 @@
   // number lives in one file. The cell each came from is still named beside it.
   var engine = deps.engine;
   var LEGACY = engine.resolveProfile("polish-legacy");
+  // POLISH REV 2 (Phase 17), the profile a NEW bid's Polish section is stamped with. The root section is priced by
+  // exactly one of these two, and by REV2 only when its own `profile` key says so (rootProfile): a bid saved before
+  // Phase 17 has no such key and prices as it always has.
+  var REV2 = engine.resolveProfile("polish-rev2");
 
   var RATES = {
     SHIPPING: engine.rateNumber(LEGACY.rates.ship_pct),         // B32
@@ -181,6 +185,21 @@
     if (auto) return "Man-days from the tasks above.";
     if (manDays === undefined || manDays === null) return "Typed by you.";
     return "Man-days from the tasks above: " + (Math.round(num(manDays) * 100) / 100) + ".";
+  }
+
+  /** The hint under a Lodging or Per Diem box. A bid priced by Polish rev 2 says what the SHEET counts, which is worked
+   *  out from the labor dollars (sheetNights) and so can be more than the man-days; every other bid says the man-days as
+   *  it always has (manDaysHint), and so does a rev 2 bid while the sheet's count and the man-days are the same figure.
+   *  Text only: the box stays the estimator's to type. `rows` are the labor rows of the
+   *  section on show. */
+  function lodgingHint(model, tab, auto, rows) {
+    var opts = travelOpts(model, tab);
+    if (!opts) return manDaysHint(auto, travelManDays(rows));
+    var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);
+    // While every row is paid the same rate the two counts are one figure and the words are the ones every bid shows.
+    if (Math.abs(nights - days) < 1e-9) return manDaysHint(auto, days);
+    if (auto) return "Nights counted from the labor above, as the sheet does.";
+    return "Nights from the labor above, as the sheet counts them: " + (Math.round(nights * 100) / 100) + ".";
   }
 
   /** Is this row counted? `enabled` is absent on every row saved before the slider existed and on
@@ -482,25 +501,43 @@
     return (isFinite(n) && n > 0) ? n : shipped;
   }
 
-  /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. */
-  function travelQty(line, rows) {
+  /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. `opts.sheetNights` (a
+   *  polish-rev2 bid's) counts the auto quantity the sheet's way instead: from the labor dollars (sheetNights). */
+  function travelQty(line, rows, opts) {
     line = line || {};
     if (line.qty_auto === false) return num(line.qty);
+    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions);
     return travelManDays(rows);
+  }
+
+  /** NIGHTS OF LODGING THE WAY KYLE'S SHEET COUNTS THEM (Polish!B58 `=IF(B4="No",((D45-D44)/C37)/8)`, and B59 is `=B58`
+   *  for the per diem): the labor dollars that are not travel labor, over the rate of the first crew row (C37), over
+   *  an 8 hour day. It is guys x days (travelManDays) while every row is paid that rate, and more once a row is paid
+   *  another (a prevailing wage row), because the extra pay reads as extra days. The divide is the engine's own, so
+   *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2 only. */
+  function sheetNights(rows, conditions) {
+    rows = rows || [];
+    var travelLabor = 0, rate = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit === "hours") { travelLabor += laborCost(r); continue; }
+      if (!rate && rowOn(r) && laborRateOf(r) > 0) rate = laborRateOf(r);
+    }
+    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions)), travelLabor, rate || SHIPPED_LABOR_RATE);
   }
 
   /** One travel line's cost, ROUNDED UP TO THE DOLLAR like pricing.py's D68 (each of lodging and
    *  food is its own ROUNDUP there). An off line is 0. */
-  function travelLineCost(line, rows) {
+  function travelLineCost(line, rows, opts) {
     if (!line || !rowOn(line)) return 0;
-    return roundUp(travelQty(line, rows) * num(line.rate));
+    return roundUp(travelQty(line, rows, opts) * num(line.rate));
   }
 
   /** Both lines and their sum. `travel` may be absent (an old model that never migrated). */
-  function travelCosts(travel, rows) {
+  function travelCosts(travel, rows, opts) {
     var t = travel || {};
-    var lodging = travelLineCost(t.lodging, rows);
-    var per_diem = travelLineCost(t.per_diem, rows);
+    var lodging = travelLineCost(t.lodging, rows, opts);
+    var per_diem = travelLineCost(t.per_diem, rows, opts);
     return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
   }
 
@@ -1290,6 +1327,109 @@
     return kits * RATES.JOINT_FILLER_KIT_COST;
   }
 
+  /** WHICH PROFILE PRICES THE ROOT (Polish) SECTION OF A BID, as a resolved profile. The model's own `profile` key at
+   *  the root, and only when it is exactly the stamp of polish-rev2: every other value, and no value at all, is
+   *  polish-legacy, so a saved bid (which never had the key) prices as it always did and a stray value cannot move a
+   *  total. The key is written once, when a new bid is seeded (seedNewSections). */
+  function rootProfile(model) {
+    return isObject(model) && model.profile === REV2.stamp ? REV2 : LEGACY;
+  }
+
+  /** The profile markupChain prices with: nothing means polish-legacy (every caller that predates Phase 17), a stamp
+   *  or a model names one of the two root profiles. Anything else THROWS: pricing a bid by a profile nobody named is
+   *  the wrong bid made quietly. */
+  function chainProfile(which) {
+    if (which === undefined || which === null) return LEGACY;
+    if (typeof which === "string") {
+      if (which === LEGACY.stamp) return LEGACY;
+      if (which === REV2.stamp) return REV2;
+      throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + " or " + REV2.stamp + ", not " + JSON.stringify(which));
+    }
+    if (isObject(which)) return rootProfile(which);
+    throw new Error("markupChain needs a profile stamp or the model, not " + String(which));
+  }
+
+  /** POLISH TOOLING AND CONSUMABLES, the sheet's D51 to D55, for a profile that charges them (polish-rev2). Four lines:
+   *
+   *    D51 tooling and consumables   ROUNDUP(IF(sf * C51 > 150, sf * C51, 150), 0): a $150 minimum, whatever the size.
+   *                                  C51 = (V10 + W10) * 1.08 (the calculator's figure, "+8%"). V10 is the tooling cost a
+   *                                  square foot of the polish system costs at this size, from the template's
+   *                                  `validation` tab (E32:E34 cream, I32:I34 salt and pepper, M32:M34 aggregate
+   *                                  exposure; below 4,000 SF, below 7,000 SF, above), and W10 adds $0.20 a square foot
+   *                                  for a traditional polish.
+   *    D52 demo tooling              a typed square footage at $0.33 ("/sf"); the model has no such box, so 0.
+   *    D53 slurry hardener           ROUNDUP(sf / 5000, 0) bags at $210
+   *    D54 plastic                   LF at $0.25, when Dye is on, or when the job is 5,000 SF or more AND a renovation.
+   *                                  The model has no Renovation answer, so only the Dye leg is reachable (`reno` is the
+   *                                  caller's, false when it does not know).
+   *
+   *  `sf` is the polished area (B35 = E18), `lf` the linear feet (D35 = E19). `opts.system` is the polish system the
+   *  sheet picks in F36 ("cream", "sp" or "full"; the template ships "sp"), and `opts.traditional` is G36. THE ONE
+   *  DIFFERENCE FROM THE SHEET is a bid with no area at all: the sheet charges its $150 even then, and this charges
+   *  nothing (the same call as Epoxy's toolingCost, epoxy-takeoff.js: a bid for nothing has no tooling, and an
+   *  Epoxy-only job's Polish root, which is off and empty, must not carry $150).
+   *  Answers { consumables, demo, slurry, plastic, rate, total }, whole dollars (`rate` is C51). */
+  var POLISH_TOOLING = {
+    // validation!E32:E34, I32:I34 and M32:M34, by the size of the job: up to 4,000 SF, under 7,000 SF, and above.
+    rates: { cream: [0.6, 0.2, 0.2], sp: [0.85, 0.4, 0.45], full: [1.5, 0.65, 0.75] },
+    tiers: [4000, 7000], traditionalPerSf: 0.2, markup: 1.08, min: 150, demoPerSf: 0.33,
+    slurryEverySf: 5000, slurryBag: 210, plasticPerLf: 0.25, plasticFromSf: 4999, defaultSystem: "sp"
+  };
+
+  function polishTooling(sf, lf, opts) {
+    var area = num(sf), run = num(lf), o = opts || {};
+    var none = { consumables: 0, demo: 0, slurry: 0, plastic: 0, rate: 0, total: 0 };
+    if (!(area > 0)) return none;
+    var T = POLISH_TOOLING;
+    var system = has.call(T.rates, o.system) ? o.system : T.defaultSystem;
+    var tier = area <= T.tiers[0] ? 0 : (area < T.tiers[1] ? 1 : 2);
+    var rate = (T.rates[system][tier] + (o.traditional ? T.traditionalPerSf : 0)) * T.markup;
+    var perSf = area * rate;
+    var consumables = roundUp(perSf > T.min ? perSf : T.min);
+    var slurry = roundUp(roundUp(area / T.slurryEverySf) * T.slurryBag);
+    var plasticLf = (o.dye || (area > T.plasticFromSf && o.reno)) ? run : 0;
+    var plastic = roundUp(plasticLf * T.plasticPerLf);
+    return { consumables: consumables, demo: 0, slurry: slurry, plastic: plastic, rate: rate,
+             total: consumables + slurry + plastic };
+  }
+
+  /** The polish system and kind a takeoff says it is, the way the sheet's F36 and G36 say it: the first row that is on
+   *  and names one. "aggregate" is full aggregate exposure, "s&p", "salt" or "pepper" is salt and pepper, "cream" is
+   *  cream (the order backend/info_sheet_writer.py reads a polish floor in), and "traditional" in a name is a traditional
+   *  polish. A takeoff that names no system gets the template's own, salt and pepper, hybrid. */
+  function polishSystemOf(rows) {
+    var system = null, traditional = false;
+    (rows || []).forEach(function (r) {
+      if (!r || !rowOn(r)) return;
+      var name = String(r.assembly_name || r.item_name || "").toLowerCase();
+      if (!name) return;
+      if (/traditional/.test(name)) traditional = true;
+      if (system) return;
+      if (/aggregate/.test(name)) system = "full";
+      else if (/s&p|salt|pepper/.test(name)) system = "sp";
+      else if (/cream/.test(name)) system = "cream";
+    });
+    return { system: system || POLISH_TOOLING.defaultSystem, traditional: traditional };
+  }
+
+  /** The options travelCosts takes for the section `tab` of this model: the sheet's way of counting nights (sheetNights) for
+   *  the ROOT section of a bid priced by polish-rev2, and none for every other section, which count as they always did. */
+  function travelOpts(model, tab) {
+    if (tab !== ROOT_TAB || rootProfile(model) !== REV2) return undefined;
+    return { sheetNights: true, conditions: model.conditions };
+  }
+
+  /** The tooling of a model's ROOT section: the sheet's, for a bid priced by polish-rev2, and 0 for every other (the
+   *  legacy bid has no tooling line, and its chain would ignore a figure anyway). Reads the same area and linear feet
+   *  the chain's sf is read from. */
+  function rootTooling(model) {
+    if (!rootProfile(model).quirks.toolingInSubTotal) return 0;
+    var rows = model.takeoff || [];
+    var kind = polishSystemOf(rows);
+    return polishTooling(takeoffSf(rows), takeoffLf(rows), {
+      dye: !!(model.conditions && model.conditions.dye), system: kind.system, traditional: kind.traditional }).total;
+  }
+
   /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
    *
    *  `material` is the raw sum of the takeoff assemblies and `labor` the raw sum of the labor
@@ -1301,9 +1441,10 @@
    *  always returned: backend/tests/fixtures/polish_chain_golden.json is the proof, vector by vector. The
    *  notes that used to sit in this body (the remodel rate's null against zero, the fees line being marked
    *  up, the bond base counting the taxes twice) are in the engine beside the lines they explain. */
-  function markupChain(input) {
-    var r = engine.priceChain(LEGACY, input);
-    return {
+  function markupChain(input, which) {
+    var profile = chainProfile(which);
+    var r = engine.priceChain(profile, input);
+    var out = {
       material: r.material, shipping: r.shipping, material_total: r.material_total,
       labor: r.labor, escalation: r.escalation, burden: r.burden, labor_total: r.labor_total,
       travel: r.travel,
@@ -1317,6 +1458,10 @@
       sf: r.sf,
       per_sf: r.per_sf
     };
+    // The tooling line is part of the bid only on a profile that charges it, so the key is not there on the
+    // legacy answer (every saved bid keeps exactly the keys it always had).
+    if (profile.quirks.toolingInSubTotal) out.tooling = r.tooling;
+    return out;
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
@@ -2658,9 +2803,10 @@
   // still `polish_estimate` at `version: 2` and no saved bid is rewritten.
   //
   // `sectionsOf` is the ONE place that knows root from tabs; everything else asks it and gets the section BY
-  // REFERENCE. THE ROOT SECTION is always priced by `polish-legacy@1`'s built-ins, as it has been since the model
-  // was written, and no snapshot is written for it: its totals must not move, and Phase 17 (Polish rev 2 for NEW
-  // bids) is where it gains one. A `profile`, `rates` or `kind: "base"` at the root is reserved for that and is not
+  // REFERENCE. THE ROOT SECTION is priced by `polish-legacy@1`'s built-ins, as it has been since the model was
+  // written, unless its own `profile` key is exactly `polish-rev2@1` (Phase 17): a NEW bid is stamped so when it is
+  // seeded (seedNewSections), and a saved bid has no such key and never will, so its totals cannot move (rootProfile).
+  // No snapshot is written for the root either way. A `rates` or `kind: "base"` at the root is reserved and is not
   // read (`kind: "off"` is: a root Polish section that is not part of the bid, which is what an Epoxy-only job
   // will hold).
   //
@@ -2686,7 +2832,7 @@
     // root is priced through bid(), which always charges the job's travel, so an "option" root would carry it twice.
     var rootKind = model.kind === "off" ? "off" : "base";
     var out = [{ tab: ROOT_TAB, root: true, section: model, layout: "polish", kind: rootKind,
-                 profile: LEGACY.stamp, role: "polish" }];
+                 profile: rootProfile(model).stamp, role: "polish" }];
     var tabs = model.tabs;
     if (tabs === undefined || tabs === null) return out;
     if (!isObject(tabs)) throw new Error("model.tabs must be an object of sections keyed by workbook tab id");
@@ -2764,6 +2910,7 @@
     var out = model;
     var baseTabs = tabs.map(function (key) { return types.tab(key); });
     var needsRoot = baseTabs.some(function (rec) { return rec.sheets.indexOf(ROOT_TAB) >= 0; });
+    var rootLifted = needsRoot && model.kind === "off";
     var wanted = [];
     baseTabs.forEach(function (rec) {
       var id = rec.sheets[0];
@@ -2787,6 +2934,9 @@
     // The root is part of this job type again (a saved Epoxy bid switched to Combo or Polish): only its "off" is
     // lifted. The key is dropped rather than written as "base", so a bid that never left Polish saves as it did.
     if (needsRoot && out.kind === "off") { out = Object.assign({}, out); delete out.kind; }
+    // A Polish section that has never held a takeoff is new to the bid, so it is priced by Polish rev 2 like any other new
+    // one (Phase 17). A root that was priced before and is coming back keeps the profile it had, or none.
+    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });
     return out;
   }
 
@@ -2941,6 +3091,10 @@
     };
     // An OPTION carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does.
     if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;
+    // The root carries the job's travel counted the sheet's way when a profile asks for it (polish-rev2).
+    if (carrier && e.root) input.travel = travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;
+    // The root's tooling is the sheet's D55 on a profile that charges it. Another section brings its own, in `mat`.
+    if (e.root && profile.quirks.toolingInSubTotal) input.tooling = rootTooling(model);
     var mat = ctx.material(e);
     // A material that says why it cannot be worked out (a Gyp area with no thickness) is no price, in its own
     // words, and never a bid priced on the part that could be.
@@ -3246,6 +3400,11 @@
     // when it is made (activateSection), so this is the root's half: it is new on exactly the gate that seeds its
     // labor or its conditions, and a saved root never passes it, so a bid saved before the pool keeps its pricing.
     if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.pool_packs === undefined) out.pool_packs = true;
+
+    // 6. THE NEW ROOT IS PRICED BY POLISH REV 2 (Phase 17, Hanz 2026-10-07: Kyle's Polish fixes apply to NEW bids only).
+    // Stamped on the same gate as the pool above, so a saved root never gains it and keeps pricing as polish-legacy.
+    // A root that already carries a `profile` of any kind is left exactly as it is.
+    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV2.stamp;
     return out;
   }
 
@@ -3569,7 +3728,7 @@
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
-    rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,
+    rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
     measuredSfValues: measuredSfValues, setAreaSf: setAreaSf,
@@ -3579,7 +3738,8 @@
     takeoffUnitView: takeoffUnitView,
     validTakeoffUnit: validTakeoffUnit, adoptTakeoffUnit: adoptTakeoffUnit,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
-    markupChain: markupChain,
+    markupChain: markupChain, rootProfile: rootProfile, rootTooling: rootTooling, travelOpts: travelOpts,
+    polishTooling: polishTooling, polishSystemOf: polishSystemOf, POLISH_TOOLING: POLISH_TOOLING, sheetNights: sheetNights,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
     // The model's safety (Phase 4): the keys migrateModel owns, what the intake may state on a saved
     // model, and the ONE composition of everything the estimate page saves.

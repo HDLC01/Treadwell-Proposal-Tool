@@ -691,6 +691,17 @@
         bondInput: false, travelFromLodging: false
       }
     },
+    "polish-rev2": {
+      rev: 1, layout: "polish", extends: "polish-legacy",
+      label: "Polish for new bids: tooling, slurry and plastic in the sub-total, the sheet's remodel tax base, nights from labor hours",
+      // THREE OF THE FIVE DEPARTURES CLOSED, for bids made after Phase 17 and for no other (Hanz, 2026-10-07: saved
+      // bids keep their totals). The tooling line is back in the sub-total (D55 into D64), the remodel tax is taken
+      // on the sheet's base (D75 counts tooling and travel), and the lodging nights are worked out the sheet's way, from
+      // labor dollars over the labor rate over 8 hours, by bid-model's sheetNights (the chain reads the same divisor).
+      // The other two stay as they are on purpose: no hard bid (2026-09-22) and no bond input (it ships at 0), and the
+      // Kansas floor for a remodel job with no rate typed is the tool's own choice (2026-08-18), not the sheet's 10%.
+      quirks: { toolingInSubTotal: true, remodelBase: "sheet" }
+    },
     "seal": {
       rev: 1, layout: "seal", extends: "polish",
       label: "Seal and Seal (+Jnts): Polish with a sixth gross profit rung",

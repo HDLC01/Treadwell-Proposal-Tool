@@ -8,6 +8,7 @@
   "newBid_recut3": "the newBid records were re-recorded again on 2026-10-13 on the tree that buys each material once for the whole section (Hanz, 'Buy packs for the whole job'): a NEW Polish bid's model now carries `pool_packs: true`, the stamp that makes its takeoff price as one purchase (bid-model.js poolsPacks, library-core.js pricePool). That key is the ONLY difference in all seven records (no total moved), and `savedEmptyTakeoff`, a bid that was already saved, is unstamped and byte-identical. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
   "phase14_recut": "re-recorded on 2026-10-13 on the Phase 14 tree: the Local condition also writes the Gyp base's B5 and Gyp (FR)'s own B5 (they are literals nothing wrote, and the sheet's travel lines read them), so every blob's `cell_values` gains those two keys, `\"Gyp (USG 1-8\\\")!B5\"` and `\"Gyp (FR)!B5\"`, and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key when it was recut).",
   "phase15_recut": "re-recorded on 2026-10-13 on the Phase 15 tree: Local also writes Seal!B4 (Seal (+Jnts)!B4 mirrors it, and Seal's lodging line reads it) and Renovation also writes Seal!B10 (Seal's patch rate is IF(B10=\"New\",0.05,0.15)), so every blob's `cell_values` gains those two keys and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key, order included, when it was recut: 118 additions, no change and no removal)."
+  "newBid_recut4": "the newBid records were re-recorded again on 2026-10-13 on the tree that prices a NEW Polish bid with the profile polish-rev2@1 (Phase 17, Hanz 2026-10-07: Kyle's Polish fixes apply to new bids only): the model carries `profile: \"polish-rev2@1\"`, the stamp that makes its root charge the sheet's tooling and consumables ($150 minimum, slurry hardener and plastic, bid-model.js polishTooling) and take the remodel tax on the sheet's base, and the bid carries a `tooling` key. The bid's totals follow from the tooling and nothing else moved (checked key by key when it was recut: the only differences from the previous record are `profile`, `tooling`, and the chain figures that tooling feeds: sub_total, gp_pct, gp, super_pto, soft_costs, remodel_tax, taxes, total, per_sf, and the three computed_bid figures that repeat the total). `noSf` has no area so its tooling is 0, and `savedEmptyTakeoff`, a bid that was already saved, is unstamped and byte-identical. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
  },
  "golden": {
   "saved": {
@@ -8632,7 +8633,8 @@
      },
      "totals": {},
      "conditions_shown": {},
-     "pool_packs": true
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 4300,
@@ -8643,11 +8645,11 @@
      "burden": 0,
      "labor_total": 0,
      "travel": 0,
-     "sub_total": 4386,
-     "gp_pct": 0.52,
-     "gp": 5203,
-     "super_pto": 271,
-     "soft_costs": 1645,
+     "sub_total": 9666,
+     "gp_pct": 0.45,
+     "gp": 8249,
+     "super_pto": 495,
+     "soft_costs": 3013,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 416,
@@ -8658,9 +8660,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 11921,
+     "total": 21839,
      "sf": 10000,
-     "per_sf": 1.1921
+     "per_sf": 2.1839,
+     "tooling": 5280
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -8852,11 +8855,11 @@
        "burden": 0,
        "labor_total": 0,
        "travel": 0,
-       "sub_total": 4386,
-       "gp_pct": 0.52,
-       "gp": 5203,
-       "super_pto": 271,
-       "soft_costs": 1645,
+       "sub_total": 9666,
+       "gp_pct": 0.45,
+       "gp": 8249,
+       "super_pto": 495,
+       "soft_costs": 3013,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 416,
@@ -8867,12 +8870,14 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 11921,
+       "total": 21839,
        "sf": 10000,
-       "per_sf": 1.1921
+       "per_sf": 2.1839,
+       "tooling": 5280
       },
       "conditions_shown": {},
-      "pool_packs": true
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -8895,11 +8900,11 @@
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 11921,
-      "price_per_sf": 1.1921,
+      "lump_sum": 21839,
+      "price_per_sf": 2.1839,
       "polish_sf": 10000,
       "full_bid": {
-       "total_base_bid": 11921,
+       "total_base_bid": 21839,
        "sales_tax": 416,
        "remodel_tax": 0
       }
@@ -9010,7 +9015,8 @@
      },
      "totals": {},
      "conditions_shown": {},
-     "pool_packs": true
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 0,
@@ -9021,11 +9027,11 @@
      "burden": 0,
      "labor_total": 0,
      "travel": 0,
-     "sub_total": 0,
+     "sub_total": 5280,
      "gp_pct": 0.52,
-     "gp": 0,
-     "super_pto": 0,
-     "soft_costs": 0,
+     "gp": 5720,
+     "super_pto": 297,
+     "soft_costs": 1808,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 0,
@@ -9036,9 +9042,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 0,
+     "total": 13105,
      "sf": 10000,
-     "per_sf": 0
+     "per_sf": 1.3105,
+     "tooling": 5280
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -9156,11 +9163,11 @@
        "burden": 0,
        "labor_total": 0,
        "travel": 0,
-       "sub_total": 0,
+       "sub_total": 5280,
        "gp_pct": 0.52,
-       "gp": 0,
-       "super_pto": 0,
-       "soft_costs": 0,
+       "gp": 5720,
+       "super_pto": 297,
+       "soft_costs": 1808,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 0,
@@ -9171,12 +9178,14 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 0,
+       "total": 13105,
        "sf": 10000,
-       "per_sf": 0
+       "per_sf": 1.3105,
+       "tooling": 5280
       },
       "conditions_shown": {},
-      "pool_packs": true
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -9199,11 +9208,11 @@
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 0,
-      "price_per_sf": 0,
+      "lump_sum": 13105,
+      "price_per_sf": 1.3105,
       "polish_sf": 10000,
       "full_bid": {
-       "total_base_bid": 0,
+       "total_base_bid": 13105,
        "sales_tax": 0,
        "remodel_tax": 0
       }
@@ -9449,7 +9458,8 @@
      },
      "totals": {},
      "conditions_shown": {},
-     "pool_packs": true
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 4090,
@@ -9460,11 +9470,11 @@
      "burden": 0,
      "labor_total": 0,
      "travel": 0,
-     "sub_total": 4172,
-     "gp_pct": 0.52,
-     "gp": 4949,
-     "super_pto": 257,
-     "soft_costs": 1564,
+     "sub_total": 9088,
+     "gp_pct": 0.45,
+     "gp": 7760,
+     "super_pto": 466,
+     "soft_costs": 2834,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 396,
@@ -9475,9 +9485,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 11338,
+     "total": 20544,
      "sf": 9250,
-     "per_sf": 1.2257297297297298
+     "per_sf": 2.220972972972973,
+     "tooling": 4916
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -9731,11 +9742,11 @@
        "burden": 0,
        "labor_total": 0,
        "travel": 0,
-       "sub_total": 4172,
-       "gp_pct": 0.52,
-       "gp": 4949,
-       "super_pto": 257,
-       "soft_costs": 1564,
+       "sub_total": 9088,
+       "gp_pct": 0.45,
+       "gp": 7760,
+       "super_pto": 466,
+       "soft_costs": 2834,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 396,
@@ -9746,12 +9757,14 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 11338,
+       "total": 20544,
        "sf": 9250,
-       "per_sf": 1.2257297297297298
+       "per_sf": 2.220972972972973,
+       "tooling": 4916
       },
       "conditions_shown": {},
-      "pool_packs": true
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -9773,11 +9786,11 @@
       "Seal!B10": "New"
      },
      "computed_bid": {
-      "lump_sum": 11338,
-      "price_per_sf": 1.2257297297297298,
+      "lump_sum": 20544,
+      "price_per_sf": 2.220972972972973,
       "polish_sf": 9250,
       "full_bid": {
-       "total_base_bid": 11338,
+       "total_base_bid": 20544,
        "sales_tax": 396,
        "remodel_tax": 0
       }
@@ -9962,7 +9975,8 @@
      },
      "totals": {},
      "conditions_shown": {},
-     "pool_packs": true
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 2800,
@@ -9973,11 +9987,11 @@
      "burden": 0,
      "labor_total": 0,
      "travel": 0,
-     "sub_total": 2856,
-     "gp_pct": 0.52,
-     "gp": 3388,
-     "super_pto": 176,
-     "soft_costs": 1071,
+     "sub_total": 8136,
+     "gp_pct": 0.45,
+     "gp": 6879,
+     "super_pto": 413,
+     "soft_costs": 2512,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 271,
@@ -9988,9 +10002,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 7762,
+     "total": 18211,
      "sf": 10000,
-     "per_sf": 0.7762
+     "per_sf": 1.8211,
+     "tooling": 5280
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -10203,11 +10218,11 @@
        "burden": 0,
        "labor_total": 0,
        "travel": 0,
-       "sub_total": 2856,
-       "gp_pct": 0.52,
-       "gp": 3388,
-       "super_pto": 176,
-       "soft_costs": 1071,
+       "sub_total": 8136,
+       "gp_pct": 0.45,
+       "gp": 6879,
+       "super_pto": 413,
+       "soft_costs": 2512,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 271,
@@ -10218,20 +10233,22 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 7762,
+       "total": 18211,
        "sf": 10000,
-       "per_sf": 0.7762
+       "per_sf": 1.8211,
+       "tooling": 5280
       },
       "conditions_shown": {},
-      "pool_packs": true
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 7762,
-      "price_per_sf": 0.7762,
+      "lump_sum": 18211,
+      "price_per_sf": 1.8211,
       "polish_sf": 10000,
       "full_bid": {
-       "total_base_bid": 7762,
+       "total_base_bid": 18211,
        "sales_tax": 271,
        "remodel_tax": 0
       }
@@ -10397,7 +10414,8 @@
      },
      "totals": {},
      "conditions_shown": {},
-     "pool_packs": true
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 0,
@@ -10425,7 +10443,8 @@
      "fees_and_bond": 0,
      "total": 0,
      "sf": 0,
-     "per_sf": null
+     "per_sf": null,
+     "tooling": 0
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -10615,10 +10634,12 @@
        "fees_and_bond": 0,
        "total": 0,
        "sf": 0,
-       "per_sf": null
+       "per_sf": null,
+       "tooling": 0
       },
       "conditions_shown": {},
-      "pool_packs": true
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
@@ -11071,7 +11092,8 @@
        "rate_default": 77
       }
      },
-     "pool_packs": true
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 0,
@@ -11082,24 +11104,25 @@
      "burden": 0,
      "labor_total": 0,
      "travel": 0,
-     "sub_total": 0,
+     "sub_total": 4794,
      "gp_pct": 0.52,
-     "gp": 0,
-     "super_pto": 0,
-     "soft_costs": 0,
+     "gp": 5194,
+     "super_pto": 270,
+     "soft_costs": 1642,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 0,
      "remodel_pct": 0.065,
-     "remodel_tax": 0,
-     "taxes": 0,
+     "remodel_tax": 774,
+     "taxes": 774,
      "fees": 0,
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 0,
+     "total": 12674,
      "sf": 9000,
-     "per_sf": 0
+     "per_sf": 1.4082222222222223,
+     "tooling": 4794
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -11272,24 +11295,25 @@
        "burden": 0,
        "labor_total": 0,
        "travel": 0,
-       "sub_total": 0,
+       "sub_total": 4794,
        "gp_pct": 0.52,
-       "gp": 0,
-       "super_pto": 0,
-       "soft_costs": 0,
+       "gp": 5194,
+       "super_pto": 270,
+       "soft_costs": 1642,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 0,
        "remodel_pct": 0.065,
-       "remodel_tax": 0,
-       "taxes": 0,
+       "remodel_tax": 774,
+       "taxes": 774,
        "fees": 0,
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 0,
+       "total": 12674,
        "sf": 9000,
-       "per_sf": 0
+       "per_sf": 1.4082222222222223,
+       "tooling": 4794
       },
       "conditions_shown": {
        "dye": false
@@ -11312,7 +11336,8 @@
         "rate_default": 77
        }
       },
-      "pool_packs": true
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "polish_sf": 9000,
      "cell_values": {
@@ -11336,13 +11361,13 @@
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 0,
-      "price_per_sf": 0,
+      "lump_sum": 12674,
+      "price_per_sf": 1.4082222222222223,
       "polish_sf": 9000,
       "full_bid": {
-       "total_base_bid": 0,
+       "total_base_bid": 12674,
        "sales_tax": 0,
-       "remodel_tax": 0
+       "remodel_tax": 774
       }
      }
     }

@@ -150,7 +150,10 @@ def test_an_old_intake_blob_seeds_from_system_one_exactly_as_before(ran):
     # 1102 until 2026-10-12: that was the shipped Mock-up half day (3 guys x 0.5 day) priced under the
     # markups. This blob has no polish_estimate, so it opens as a NEW bid, and a new bid's labor
     # quantities start empty now (Hanz). The SF is still seeded from System 1; the labor is $0.
-    assert got["total"] == 0
+    # And since Phase 17 (Polish rev 2) a new bid carries the sheet's tooling the moment it has an area: 8,250 SF of
+    # salt and pepper is $4,430 (8,250 x $0.486 = $4,010, plus two bags of slurry hardener at $210) taken through the
+    # markups, which is the whole of this figure. No material, no labor, no travel.
+    assert got["total"] == 10997
 
 
 @needs_node

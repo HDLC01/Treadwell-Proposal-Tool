@@ -579,13 +579,15 @@
       material: rootMaterial(),
       labor: B.laborTotal(ROOT.labor, ROOT.conditions),
       // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
-      travel: B.travelCosts(ROOT.travel, ROOT.labor).total,
+      travel: B.travelCosts(ROOT.travel, ROOT.labor, B.travelOpts(ROOT, B.ROOT_TAB)).total,
+      // The sheet's tooling and consumables (D55) for a bid priced by Polish rev 2; 0 for every saved bid.
+      tooling: B.rootTooling(ROOT),
       contingency: ROOT.contingency,
       fees: ROOT.fees,
       conditions: ROOT.conditions,
       sf: B.takeoffSf(ROOT.takeoff),
       remodel_rate: remodelRate(),
-    });
+    }, B.rootProfile(ROOT).stamp);
   }
 
   /** The raw material of a section that is not the root: its takeoff rows priced from the library, the rows
@@ -2151,7 +2153,7 @@
     var isNight = key === "lodging";
     var inert = travelInert(l);
     var unitWord = isNight ? "Nights" : "Days";
-    var cost = B.travelLineCost(l, M.labor);
+    var cost = B.travelLineCost(l, M.labor, B.travelOpts(ROOT, activeTab));
     return '<div class="tk trv' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
       '" data-trv-card="' + key + '"><div class="tk-h">' +
       '<span class="labname static">' + esc(l.label || (isNight ? "Lodging" : "Per Diem")) + '</span>' +
@@ -2162,7 +2164,7 @@
       '<div class="f"><label>' + unitWord + '</label>' +
       '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
       (auto ? ' data-auto="1"' : '') + '>' +
-      '<p class="hint" data-hint-trv="' + key + '">' + B.manDaysHint(auto, B.travelManDays(M.labor)) + '</p></div>' +
+      '<p class="hint" data-hint-trv="' + key + '">' + B.lodgingHint(ROOT, activeTab, auto, M.labor) + '</p></div>' +
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
       esc(nv(l.rate)) + '"></span>' +
@@ -2342,7 +2344,7 @@
       html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
       html += travelRows + travelCard("lodging") + travelCard("per_diem");
       html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
-        esc(moneyAuto(B.travelCosts(M.travel, M.labor).total)) + '</b>, added before the markups.</p>';
+        esc(moneyAuto(B.travelCosts(M.travel, M.labor, B.travelOpts(ROOT, activeTab)).total)) + '</b>, added before the markups.</p>';
     }
 
     var pw = !!(M.conditions || {}).prevailing_wage;
@@ -2542,7 +2544,8 @@
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
       trvRows.push(ownTravel
         ? [name, B.num(B.travelManDays(M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.optionTravelCosts(M.travel, M.labor)[k]))]
-        : [name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
+        : [name, B.num(B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab))) + " × " + B.money2(tl.rate),
+           esc(moneyAuto(B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab))))]);
     });
     if (!carries) {
       trvRows.push([travelNote(), "", ""]);
@@ -2553,11 +2556,13 @@
     html += card("Hotel and Per Diem", 1, "travel", revTable(trvRows));
 
     // TOOLING AND CONSUMABLES, for a section whose chain has the line (Epoxy: the moisture test, and $0.33 a
-    // square foot with a $150 floor). The root's chain has none, so a Polish bid draws nothing here.
+    // square foot with a $150 floor; a Polish bid made after Phase 17: tooling with its $150 minimum, slurry hardener
+    // and plastic). A saved Polish bid's chain has none, so it draws nothing here.
     // The card header carries no figure now; the total is the card's own last row. It takes the takeoff colour.
     if (b.tooling > 0) {
+      var toolingWords = activeTab === B.ROOT_TAB ? "Tooling, slurry hardener and plastic" : "Moisture test, tooling and consumables";
       html += card("Tooling and consumables", 0, "takeoff",
-        revTable([["Moisture test, tooling and consumables", "", mkAmt(b, "tooling"), "tot"]]));
+        revTable([[toolingWords, "", mkAmt(b, "tooling"), "tot"]]));
     }
 
     html += '<div data-rev="markup" class="rev">' + markupTable(b) + '</div>';
@@ -2829,10 +2834,10 @@
         paintDfltWarn(el, travelRateDefaultText(M.travel[el.getAttribute("data-trvdflt-for")]));
       });
       document.querySelectorAll("[data-trvcost-for]").forEach(function (el) {
-        el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor));
+        el.textContent = moneyAuto(B.travelLineCost(M.travel[el.getAttribute("data-trvcost-for")], M.labor, B.travelOpts(ROOT, activeTab)));
       });
       document.querySelectorAll("[data-trvcostbox-for]").forEach(function (el) {
-        var c = B.travelLineCost(M.travel[el.getAttribute("data-trvcostbox-for")], M.labor);
+        var c = B.travelLineCost(M.travel[el.getAttribute("data-trvcostbox-for")], M.labor, B.travelOpts(ROOT, activeTab));
         el.textContent = moneyAuto(c);
         el.className = "costbox" + (c > 0 ? "" : " empty");
       });
@@ -2845,7 +2850,7 @@
       });
       document.querySelectorAll("[data-hint-trv]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-hint-trv")];
-        if (l) el.textContent = B.manDaysHint(l.qty_auto !== false, B.travelManDays(M.labor));
+        if (l) el.textContent = B.lodgingHint(ROOT, activeTab, l.qty_auto !== false, M.labor);
       });
       document.querySelectorAll("[data-trv-card]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv-card")];
@@ -2908,7 +2913,7 @@
     }
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions)));
-    one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor).total));
+    one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor, B.travelOpts(ROOT, activeTab)).total));
     one("[data-trv-how]", B.travelHow(M).text);
     one("[data-mk-persf]", perSfText(b));
 
