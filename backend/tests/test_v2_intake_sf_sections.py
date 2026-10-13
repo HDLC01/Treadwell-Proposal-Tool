@@ -15,8 +15,13 @@ section that is off is never touched) and applies, for EVERY section, what the P
   * Gyp job: soft, hard and corridor are the Gyp section's three areas (a missing area row is added).
   * Combo: the Polish boxes edit the root, the Epoxy boxes the Epoxy section.
   * Never read-only. Only a box the estimator TYPED writes (a mark good for one save); a figure above zero; blank, 0
-    and negative write nothing and delete nothing; areas 3 and on are left to the Takeoff with a note and a link; a
-    section with nothing measured yet is not touched, its boxes seed it on the estimate page like any new bid.
+    and negative write nothing and delete nothing; areas 3 and on are left to the Takeoff with a note and a link.
+  * A section with nothing measured yet: the root and a NEW section are left alone, their boxes seed them on the
+    estimate page like any new bid (with the library's default takeoff). A section that was STARTED (the estimator
+    edited it: it holds a labor line, a picked assembly or a figure) is never seeded by the estimate page again, so
+    the figure typed into it is written into the row it fills here: the first blank row of its unit (a picked row
+    before a bare one, never one that is switched off), else a new row. A cove length goes INTO a picked cove row
+    whose length is blank, never beside it as a second row that leaves the picked one unpriced.
   * The estimate page, opened on that bid, saves once when ANY live section's price snapshot (the root's polish_sf and
     computed_bid, another section's priced_tabs entry) is behind its takeoff, and writes nothing when they agree.
 
@@ -205,6 +210,57 @@ def check_the_door_never_edits_the_model_it_was_handed(a):
     assert a["direct"]["pure"] is True
 
 
+def check_a_started_section_nobody_measured_is_seeded_by_the_intake(a):
+    s = a["started"]
+    # THE BUG: Epoxy held Travel and a blank takeoff, so the estimate page would never seed it; System 1 = 5000 stayed
+    # in the draft key and the estimate priced nothing.
+    assert s["sys1"]["isNew"] is False, "the fixture must be a section the estimate page would not seed"
+    assert s["sys1"]["rows"] == ["-|SF|5000|"], s["sys1"]
+    assert s["sys1"]["draft"] == {"s1": 5000, "s2": ""} and s["sys1"]["shown"] == "5000", s["sys1"]
+    # all four boxes in one save: System 1 fills the blank row, System 2 and both cove lengths are added after it
+    assert s["all"]["sf"] == [5000, 3000] and s["all"]["lf"] == [80, 40] and s["all"]["count"] == 4, s["all"]
+    assert s["all"]["draft"] == {"s1": 5000, "s2": 3000, "c1": 80, "c2": 40}, s["all"]["draft"]
+    # picked rows with no figure yet take the figures, and no row is added beside them
+    assert s["pickedBoth"]["rows"] == ["s1|SF|5000|", "s3|LF|150|"], s["pickedBoth"]
+    # a row switched off never carries the floor (a bare row is added to), and follows it, as a new bid's off default does
+    assert s["off"]["rows"] == ["s1|SF|900|off", "-|SF|900|"], s["off"]
+    # THE DEFAULTS of a bid opened with no floor are one floor, as a new bid seeds them: the first line carries it, the
+    # other follows it (same_floor, not counted twice), and a second area gets its own copy of the lines.
+    d1, d2 = s["defaults1"], s["defaults2"]
+    assert d1["rows"] == ["s1|SF|5000|area1|", "s3|LF|||", "e2|SF|5000||of1"], d1
+    assert d1["priced"] == 5000 and d1["sf"] == [5000], d1
+    assert d2["fresh"][1] == "s3|LF|||", d2["fresh"]
+    assert d2["rows"] == d2["fresh"][:1] + ["s3|LF|150||"] + d2["fresh"][2:], "not what a new bid is given: %r" % d2
+    assert d2["priced"] == 8000 and d2["sf"] == [5000, 3000] and d2["lf"] == 150, d2
+    g = s["gyp"]
+    assert g["areas"] == [["soft", 4000], ["hard", 2000]] and g["draft"] == {"g1": 4000, "g2": 2000, "g3": ""}, g
+    # the Epoxy half of a Combo bid is the same section, and its measured Polish root is not touched
+    assert s["combo"] == {"epoxy": ["-|SF|5000|"], "root": [7000]}, s["combo"]
+
+
+def check_the_polish_root_is_left_to_the_estimate_page_even_when_nothing_is_measured(a):
+    # The estimate page seeds a new root with the library's default takeoff; a figure written here would stop it.
+    assert a["started"]["root"] == {"rows": ["-|SF||"], "draft": "5000"}, a["started"]["root"]
+
+
+def check_a_cove_length_goes_into_the_picked_row_and_never_beside_it(a):
+    s = a["started"]
+    # THE BUG: the picked cove row stayed blank (unpriced) and a second, blank-assembly row held the figure
+    assert s["picked"]["rows"] == ["s1|SF|1000|", "s3|LF|150|"], s["picked"]
+    assert s["picked"]["shown"] == "150" and s["picked"]["lf"] == 150, s["picked"]
+    # a row the estimator picked is preferred to a bare blank one
+    assert s["prefer"]["rows"] == ["s1|SF|1000|", "-|LF||", "s3|LF|150|"], s["prefer"]
+
+
+def check_a_second_cove_length_goes_below_the_first_and_one_with_no_first_is_counted_once(a):
+    s = a["started"]
+    # the blank picked row ABOVE the measured one is not filled: it would become Cove 1 and swap the two boxes
+    assert s["second"]["rows"] == ["s1|SF|1000|", "s3|LF||", "s4|LF|120|", "-|LF|40|"], s["second"]
+    assert s["second"]["lf"] == [120, 40] and s["second"]["shown"][0] == 120, s["second"]
+    # no cove is measured: there is no second cove without a first, so the figure is counted once, as the first
+    assert s["lone"] == {"lf": 123, "values": [123]}, s["lone"]
+
+
 INTAKE_CHECKS = [
     check_the_mapping_names_the_section_unit_and_place_of_every_box,
     check_the_gyp_area_constants_are_the_librarys,
@@ -218,6 +274,10 @@ INTAKE_CHECKS = [
     check_a_box_nobody_typed_in_never_writes_and_a_mark_lasts_one_save,
     check_a_third_area_is_left_alone_with_a_note_and_a_link,
     check_an_unmeasured_section_is_seeded_by_the_estimate_page_not_written_here,
+    check_a_started_section_nobody_measured_is_seeded_by_the_intake,
+    check_the_polish_root_is_left_to_the_estimate_page_even_when_nothing_is_measured,
+    check_a_cove_length_goes_into_the_picked_row_and_never_beside_it,
+    check_a_second_cove_length_goes_below_the_first_and_one_with_no_first_is_counted_once,
     check_a_gyp_job_boxes_are_the_three_areas,
     check_a_combo_job_polish_boxes_edit_the_root_and_epoxy_boxes_the_epoxy_section,
     check_a_polish_job_is_what_it_was,
@@ -272,6 +332,25 @@ def check_the_snapshot_check_reads_a_gyp_section_too(e):
     assert g["agrees"] is False and g["moved"] is True and g["noSnapshot"] is False, g
 
 
+def check_a_floor_typed_into_a_started_section_nobody_measured_is_priced(e):
+    s = e["started"]
+    # THE BUG: the section held Travel and the library's blank lines, so this page never seeded it again; the draft said
+    # 5000 and the estimate said 0.
+    assert s["isNew"] is False, "the fixture must be a section this page would not seed: %r" % s
+    assert s["before"] == {"sf": 0, "total": 0}, s["before"]
+    assert s["after"]["sf"] == 5000 and s["after"]["total"] > 0, s["after"]
+    # priced exactly as the same floor typed before the estimate was opened, every default line included
+    assert s["after"]["total"] == s["fresh"], s
+    assert s["after"]["snap"] == {"epoxy_sf": 5000, "cove_lf": 0}, s["after"]
+
+
+def check_a_cove_length_typed_on_the_intake_prices_the_picked_cove_line(e):
+    c = e["startedCove"]
+    # THE BUG: the figure went into a new blank-assembly row and the picked cove line stayed unmeasured, so unpriced
+    assert c["rows"] == c["rowsBefore"] == 3, c
+    assert c["typed"] == c["right"] and c["typed"] > c["without"], c
+
+
 ESTIMATE_CHECKS = [
     check_an_epoxy_floor_typed_on_the_intake_reaches_the_estimate_and_its_snapshot,
     check_a_cove_length_typed_on_the_intake_reprices_the_epoxy_snapshot,
@@ -279,6 +358,8 @@ ESTIMATE_CHECKS = [
     check_a_combo_bid_is_checked_for_each_section,
     check_a_polish_bid_still_reprices_on_open,
     check_the_snapshot_check_reads_a_gyp_section_too,
+    check_a_floor_typed_into_a_started_section_nobody_measured_is_priced,
+    check_a_cove_length_typed_on_the_intake_prices_the_picked_cove_line,
 ]
 
 
@@ -293,6 +374,11 @@ INTAKE_JS = "js/polish-intake.js"
 PAGE = "js/polish-estimate.js"
 TYPES = "js/work-types.js"
 
+_UNMEASURED_GATE = "      if (!measured && (hit.entry.root || isNewSection(hit.entry.section, false))) return;"
+_BLANK_UNIT = '      if (!(r.unit === unit || (unit === "SF" && !r.unit))) return;'
+_PREFER_PICKED = "      if (at < 0 || (!(rows[at].assembly_id || rows[at].item_id) && (r.assembly_id || r.item_id))) at = i;"
+_AFTER_FIRST = "      if (i <= after || !r || r.same_floor || !rowOn(r) || num(r.measurement) > 0) return;"
+_FOLLOWERS = "      if (i === at || !pickedBlankSf(r)) return;"
 _BOX_LOOKUP = '      if (list[i].kind !== "off" && sheets.indexOf(list[i].tab) >= 0) return { entry: list[i], home: home };'
 
 # name -> (harness, file, old line, new line, check)
@@ -325,8 +411,8 @@ BREAKS = {
         INTAKE, MODEL, '    var vals = h.unit === "SF" ? measuredSfValues(rows) : measuredLfValues(rows);',
         "    var vals = measuredSfValues(rows);", check_an_epoxy_job_boxes_mirror_the_epoxy_section),
     "a cove box writes a floor area": (
-        INTAKE, MODEL, '      else if (h.unit === "SF") setAreaSf(view, h.index, v);',
-        "      else if (true) setAreaSf(view, h.index, v);", check_system_2_and_both_cove_boxes_map_to_their_own_rows),
+        INTAKE, MODEL, '      else if (h.unit === "LF") setAreaLf(view, h.index, v);',
+        "      else if (false) setAreaLf(view, h.index, v);", check_system_2_and_both_cove_boxes_map_to_their_own_rows),
     "a zero cove figure is written into its row": (
         INTAKE, MODEL, "    if (!(v > 0)) return false;", "    if (false) return false;",
         check_the_door_refuses_a_figure_that_is_not_above_zero),
@@ -335,8 +421,8 @@ BREAKS = {
         "    if (!(rows instanceof Array) || GYP_BUCKETS.indexOf(bucket) < 0) return false;",
         check_the_door_refuses_a_figure_that_is_not_above_zero),
     "a cove box with no row to change adds nothing": (
-        INTAKE, MODEL, '    else rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "LF" });',
-        "    else return false;", check_a_cove_box_adds_the_row_it_has_none_for),
+        INTAKE, MODEL, '    if (at < 0) { rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: unit }); return; }',
+        "    if (at < 0) return;", check_a_cove_box_adds_the_row_it_has_none_for),
     "a Gyp area with no row is dropped": (
         INTAKE, MODEL, '    rows.push({ assembly_id: asm.id, assembly_name: asm.name, measurement: v, unit: "SF", bucket: bucket });',
         "    return false;", check_a_gyp_job_boxes_are_the_three_areas),
@@ -362,8 +448,44 @@ BREAKS = {
         "      if (n > 3) out.push({ tab: hit.entry.tab, areas: n, total: measuredSf(rows) });",
         check_a_third_area_is_left_alone_with_a_note_and_a_link),
     "a section nobody measured is written by the intake": (
-        INTAKE, MODEL, "      if (!hit || !boxMeasured(hit)) return;", "      if (!hit) return;",
+        INTAKE, MODEL, _UNMEASURED_GATE, "      if (false) return;",
         check_an_unmeasured_section_is_seeded_by_the_estimate_page_not_written_here),
+    "a NEW section is written by the intake, so the library's defaults are skipped": (
+        INTAKE, MODEL, _UNMEASURED_GATE, "      if (!measured && hit.entry.root) return;",
+        check_an_unmeasured_section_is_seeded_by_the_estimate_page_not_written_here),
+    "the Polish root is written by the intake before the estimate seeds it": (
+        INTAKE, MODEL, _UNMEASURED_GATE, "      if (!measured && isNewSection(hit.entry.section, false)) return;",
+        check_the_polish_root_is_left_to_the_estimate_page_even_when_nothing_is_measured),
+    "a started section nobody measured is left for an estimate page that never seeds it": (
+        INTAKE, MODEL, _UNMEASURED_GATE, "      if (!measured) return;",
+        check_a_started_section_nobody_measured_is_seeded_by_the_intake),
+    "the estimate prices nothing of a floor typed into a started section": (
+        ESTIMATE, MODEL, _UNMEASURED_GATE, "      if (!measured) return;",
+        check_a_floor_typed_into_a_started_section_nobody_measured_is_priced),
+    "a picked cove row is never filled, a second row is added beside it": (
+        INTAKE, MODEL, _BLANK_UNIT, "      return;",
+        check_a_cove_length_goes_into_the_picked_row_and_never_beside_it),
+    "the estimate leaves the picked cove line unmeasured": (
+        ESTIMATE, MODEL, _BLANK_UNIT, "      return;",
+        check_a_cove_length_typed_on_the_intake_prices_the_picked_cove_line),
+    "a bare blank row is preferred to a picked one": (
+        INTAKE, MODEL, _PREFER_PICKED, "      if (at < 0) at = i;",
+        check_a_cove_length_goes_into_the_picked_row_and_never_beside_it),
+    "a second cove fills a blank row above the first and swaps the two boxes": (
+        INTAKE, MODEL, _AFTER_FIRST, "      if (!r || r.same_floor || !rowOn(r) || num(r.measurement) > 0) return;",
+        check_a_second_cove_length_goes_below_the_first_and_one_with_no_first_is_counted_once),
+    "a row that is switched off carries the floor": (
+        INTAKE, MODEL, _AFTER_FIRST, "      if (i <= after || !r || r.same_floor || num(r.measurement) > 0) return;",
+        check_a_started_section_nobody_measured_is_seeded_by_the_intake),
+    "the other picked lines of a floor are left blank": (
+        INTAKE, MODEL, _FOLLOWERS, "      return;",
+        check_a_started_section_nobody_measured_is_seeded_by_the_intake),
+    "the estimate leaves the second default line unpriced": (
+        ESTIMATE, MODEL, _FOLLOWERS, "      return;",
+        check_a_floor_typed_into_a_started_section_nobody_measured_is_priced),
+    "a second area gets no copy of the lines": (
+        INTAKE, MODEL, "    carrier.floor_area = tag;", "    void tag;",
+        check_a_started_section_nobody_measured_is_seeded_by_the_intake),
     "the page paints no box": (
         INTAKE, INTAKE_JS, "      if (box && shown !== null) box.value = shown;", "      if (false) box.value = shown;",
         check_an_epoxy_job_boxes_mirror_the_epoxy_section),
@@ -441,5 +563,5 @@ def test_the_harness_ran_each_job_type_it_claims():
     leave its check asserting on nothing."""
     require_node()
     ran = _run(INTAKE)
-    for key in ("sys1", "gyp", "comboBoth", "polish", "offRoot", "unmeasured", "blurRace", "direct"):
+    for key in ("sys1", "gyp", "comboBoth", "polish", "offRoot", "unmeasured", "started", "blurRace", "direct"):
         assert key in ran, key

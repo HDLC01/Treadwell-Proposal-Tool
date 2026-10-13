@@ -151,6 +151,37 @@ const snapOf = (blb, tab) => (blb.priced_tabs || []).filter((t) => t.id === tab)
       noSnapshot: B.snapshotBehind(typed, {}) };
   }
 
+  // ── 5. A SECTION THE ESTIMATOR STARTED BUT NEVER MEASURED (this page seeds a NEW section only) ────────────────────────
+  // The bid is opened with no floor typed and edited once, so the Epoxy section holds Travel and a blank takeoff row. The
+  // page will never seed it again; a floor typed on the intake afterwards has to be in the takeoff already.
+  {
+    const first = await opened(blob({ work_type: "epoxy", polish_estimate: null }));
+    const savedBlob = clone(first.store.blob);
+    const sec = savedBlob.polish_estimate.tabs.Epoxy;
+    const base = await open(savedBlob);
+    const page = await open(intakeTyped(savedBlob, { system_1_sf: 5000 }));
+    page.clock.fire();
+    // what the same floor is priced at when it is typed BEFORE the estimate is ever opened (a new bid)
+    const fresh = await open(blob({ work_type: "epoxy", polish_estimate: null, system_1_sf: 5000 }));
+    out.started = { labor: (sec.labor || []).map((r) => r.id), isNew: B.isNewSection(sec, false), fresh: fresh.api.activeBid().total,
+      before: { sf: B.takeoffSf(base.api.model().takeoff), total: base.api.activeBid().total },
+      after: { sf: B.takeoffSf(page.api.model().takeoff), total: page.api.activeBid().total, snap: (snapOf(page.store.blob, "Epoxy") || {}).sf } };
+
+    // the same bid with a floor and a cove assembly picked, its length not typed yet: the intake's figure prices it
+    const withFloor = await opened(blob({ work_type: "epoxy", polish_estimate: null, system_1_sf: 5000 }));
+    const sv = clone(withFloor.store.blob);
+    const rowsOf = (x) => x.polish_estimate.tabs.Epoxy.takeoff;
+    rowsOf(sv).push({ assembly_id: "s3", assembly_name: "Cove E", measurement: "", unit: "LF" });
+    const baseCove = await open(sv);
+    const right = clone(sv);
+    rowsOf(right)[rowsOf(right).length - 1].measurement = 150;
+    const rightCove = await open(right);
+    const typedBlob = intakeTyped(sv, { cove_1_lf: 150 });
+    const typedCove = await open(typedBlob);
+    out.startedCove = { rows: rowsOf(typedBlob).length, rowsBefore: rowsOf(sv).length, without: baseCove.api.activeBid().total,
+      right: rightCove.api.activeBid().total, typed: typedCove.api.activeBid().total };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
 `;

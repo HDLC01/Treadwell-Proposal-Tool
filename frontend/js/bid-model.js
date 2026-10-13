@@ -1307,7 +1307,9 @@
   //   * a box mirrors its row of the takeoff once the section has a measured floor, and is never read-only;
   //   * only a box the estimator typed in writes, a figure above zero, and clearing or typing 0 deletes nothing;
   //   * area 3 and on of an SF group are left to the Takeoff;
-  //   * a section with nothing measured is not touched: its boxes seed it on the estimate page, as for any new bid.
+  //   * a section with nothing measured is left to the estimate page when it is NEW (its boxes seed it there, with
+  //     the library's defaults, as for any new bid), and written here when it was started, because the estimate page
+  //     seeds only a new one (see applyBoxes).
   var GYP_BUCKETS = ["soft", "hard", "corridor"];
   // The three area assemblies the library seeds (js/gyp-takeoff.js AREA_ASSEMBLIES holds the same, and a test holds
   // the two equal). Here only to give an area the takeoff has no row for yet its row.
@@ -1371,9 +1373,38 @@
     return measuredLfRows(rows).map(function (i) { return num(rows[i].measurement); });
   }
 
-  /** TYPE A LENGTH FOR COVE ROW `k` (0 = the first measured linear-foot row, 1 = the second). The row changes,
-   *  and when there is no such row a blank-assembly row is ADDED, as the intake's seeding adds one. Only 0 and 1,
-   *  and only a figure above zero. Changes `model.takeoff` in place. True when it wrote. */
+  /** THE ROW A FIGURE TYPED INTO THE INTAKE FILLS WHEN NO MEASURED ROW IS THERE FOR IT: the first row of `unit` that is
+   *  on, follows no other row and holds no measurement, in the takeoff AFTER row `after` (-1 for anywhere), preferring
+   *  one the estimator already picked an assembly or a material for. -1 when there is none. A picked row whose length
+   *  is still blank is the row the figure is for: adding another row beside it would count the figure in the
+   *  takeoff's total while the picked line stayed unmeasured, and so unpriced. "After" keeps the order the boxes read
+   *  in (the first measured row is box 1, the second box 2): a figure for box 2 must not land above box 1's row. */
+  function blankRowFor(rows, unit, after) {
+    var at = -1;
+    (rows || []).forEach(function (r, i) {
+      if (i <= after || !r || r.same_floor || !rowOn(r) || num(r.measurement) > 0) return;
+      if (!(r.unit === unit || (unit === "SF" && !r.unit))) return;
+      if (at < 0 || (!(rows[at].assembly_id || rows[at].item_id) && (r.assembly_id || r.item_id))) at = i;
+    });
+    return at;
+  }
+
+  /** Put `v` in the blank row blankRowFor names, or add a blank-assembly row of `unit` when there is none. */
+  function putFigure(rows, unit, v, after) {
+    var at = blankRowFor(rows, unit, after);
+    if (at < 0) { rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: unit }); return; }
+    rows[at].measurement = v;
+    rows[at].unit = unit;
+  }
+
+  /** TYPE A LENGTH FOR COVE ROW `k` (0 = the first measured linear-foot row, 1 = the second). The row changes. With
+   *  no such row the figure goes into a linear-foot row that is picked but not yet measured (after the first
+   *  measured one, for the second), and only when there is none is a blank-assembly row ADDED, as the intake's
+   *  seeding adds one. Only 0 and 1, and only a figure above zero. Changes `model.takeoff` in place. True when it wrote.
+   *
+   *  The boxes read the MEASURED rows in order, so a second length typed while no cove row is measured is the first
+   *  measured row afterwards, and the box repaints it as Cove 1. There is no second cove without a first to put it
+   *  after, and the figure is counted once. */
   function setAreaLf(model, k, lf) {
     var v = num(lf);
     var rows = model && model.takeoff;
@@ -1381,7 +1412,43 @@
     if (!(v > 0)) return false;
     var held = measuredLfRows(rows);
     if (k < held.length) rows[held[k]].measurement = v;
-    else rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "LF" });
+    else putFigure(rows, "LF", v, held.length ? held[held.length - 1] : -1);
+    return true;
+  }
+
+  /** Is row `r` a square-foot line that was picked (an assembly or a material) and has no figure yet? */
+  function pickedBlankSf(r) {
+    return !!r && !r.same_floor && (r.unit === "SF" || !r.unit) && !!(r.assembly_id || r.item_id) && !(num(r.measurement) > 0);
+  }
+
+  /** TYPE A FLOOR SIZE INTO A SECTION THAT HAS NONE YET (nothing measured, so setAreaSf has no area to change), and
+   *  the takeoff is seeded the way a new bid's is (seedDefaultTakeoff): ONE row carries the floor, the first blank
+   *  square-foot row that is on (a picked one before a bare one, else a blank-assembly row is added), and every OTHER
+   *  picked square-foot row with no figure is the same floor, so it carries the number marked `same_floor` and the
+   *  area is not counted twice. The library's defaults of a bid opened with no floor are exactly such rows, and
+   *  filling only the first would leave the second unpriced. A row switched off follows too (measured, so switching
+   *  it on needs nothing typed) but never carries the floor. The area is marked `floor_area` so a second area typed
+   *  after it (setAreaSf) gets its own copy of the rows. Only a figure above zero. Changes `model.takeoff` in
+   *  place. True when it wrote. */
+  function seedAreaSf(model, sf) {
+    var v = num(sf);
+    var rows = model && model.takeoff;
+    if (!(v > 0) || !(rows instanceof Array)) return false;
+    var at = blankRowFor(rows, "SF", -1);
+    if (at < 0) { rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" }); at = rows.length - 1; }
+    var tag = 1;
+    rows.forEach(function (x) { tag = Math.max(tag, carrierTag(x) + 1, followerTag(x) + 1); });
+    var carrier = rows[at];
+    carrier.measurement = v;
+    carrier.unit = "SF";
+    carrier.floor_area = tag;
+    rows.forEach(function (r, i) {
+      if (i === at || !pickedBlankSf(r)) return;
+      r.measurement = v;
+      r.unit = "SF";
+      r.same_floor = true;
+      r.same_floor_of = tag;
+    });
     return true;
   }
 
@@ -1476,24 +1543,36 @@
   }
 
   /** The figures typed into the intake's boxes, written to the sections that own them. `boxes` is
-   *  { boxName: figure }, only the boxes the estimator typed in. A figure that is not above zero, a box whose
-   *  section is not part of the bid, and a section with nothing measured yet write nothing (each writer below
-   *  refuses a figure that is not above zero). Boxes are taken in the vocabulary's order, so System 1 goes before
-   *  System 2 and the second area is added after the first is set. Returns a NEW model when a figure reached a
-   *  section and the one handed in when none did. */
+   *  { boxName: figure }, only the boxes the estimator typed in. A figure that is not above zero and a box whose
+   *  section is not part of the bid write nothing (each writer below refuses a figure that is not above zero).
+   *  Boxes are taken in the vocabulary's order, so System 1 goes before System 2 and the second area is added
+   *  after the first is set. Returns a NEW model when a figure reached a section and the one handed in when
+   *  none did.
+   *
+   *  A SECTION WITH NOTHING MEASURED. The estimate page seeds the root, and a NEW section, from the draft's box keys
+   *  when it opens (seedNewSections), so for those the intake writes nothing here: the library's default takeoff is
+   *  still to be laid down, and a figure written first would stop it. But a section that was STARTED (it holds a
+   *  labor line, a picked assembly or a figure, so isNewSection says no) is never seeded again, and its takeoff
+   *  would stay empty under a draft key that says 5,000 SF: the estimate would price nothing, which is the bug
+   *  this function exists to end. So the figure typed into a started, unmeasured section is written here, into the
+   *  row it fills (seedAreaSf, setAreaLf, setGypArea) and a figure is written only because the estimator just typed
+   *  it, never re-read from a draft key on a later open. */
   function applyBoxes(model, boxes) {
     var copied = [];
     types.FIELDS.forEach(function (f) {
       if (!has.call(boxes, f.name)) return;
       var v = num(boxes[f.name]);
       var hit = boxEntry(model, f.name);
-      if (!hit || !boxMeasured(hit)) return;
+      if (!hit) return;
+      var measured = boxMeasured(hit);
+      if (!measured && (hit.entry.root || isNewSection(hit.entry.section, false))) return;
       var tab = hit.entry.tab;
       if (copied.indexOf(tab) < 0) { model = withTakeoffCopy(model, tab); copied.push(tab); }
       var view = sectionView(model, tab), h = hit.home;
       if (h.tab === "gyp") setGypArea(view, GYP_BUCKETS[h.index], v);
-      else if (h.unit === "SF") setAreaSf(view, h.index, v);
-      else setAreaLf(view, h.index, v);
+      else if (h.unit === "LF") setAreaLf(view, h.index, v);
+      else if (measured) setAreaSf(view, h.index, v);
+      else seedAreaSf(view, v);
     });
     return model;
   }
@@ -3977,6 +4056,7 @@
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
     measuredSfValues: measuredSfValues, setAreaSf: setAreaSf,
     measuredLfRows: measuredLfRows, measuredLfValues: measuredLfValues, setAreaLf: setAreaLf, setGypArea: setGypArea,
+    seedAreaSf: seedAreaSf,
     GYP_BUCKETS: GYP_BUCKETS, GYP_AREA_ASSEMBLIES: GYP_AREA_ASSEMBLIES,
     boxNames: boxNames, boxGroup: boxGroup, boxEntry: boxEntry, boxValue: boxValue, boxDraftValue: boxDraftValue, boxExtras: boxExtras,
     applyBoxes: applyBoxes, snapshotBehind: snapshotBehind,

@@ -282,6 +282,135 @@ const draftKeys = (bb) => ({ s1: bb.store.blob.system_1_sf, s2: bb.store.blob.sy
     };
   }
 
+  // ── 12. A SECTION THAT WAS STARTED BUT NEVER MEASURED (the estimate page seeds a NEW section only) ───────────────────
+  // The estimator opened the estimate before typing a floor, edited something (the section now holds Travel and a blank
+  // takeoff row), went back to the intake and typed System 1. The estimate page will never seed that section again, so
+  // the figure has to reach the takeoff from here.
+  {
+    const startedModel = (job, rows) => {
+      const m = modelFor(job, {});
+      const sec = job === "gyp" ? m.tabs[GYP_TAB] : m.tabs.Epoxy;
+      sec.labor = clone(LABOR);
+      if (rows) sec.takeoff = clone(rows);
+      return m;
+    };
+    const BLANK_SF = () => [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }];
+    const cells = (rows) => rows.map((r) => [r.assembly_id || "-", r.unit, r.measurement, r.enabled === false ? "off" : ""].join("|"));
+    out.started = {};
+
+    // System 1 alone
+    const a = await open("epoxy", startedModel("epoxy", BLANK_SF()), {});
+    typeInto(a, "system_1_sf", 5000);
+    settle(a);
+    out.started.sys1 = { rows: cells(rowsOf(a, "Epoxy")), draft: draftKeys(a), shown: shown(a).system_1_sf,
+      isNew: P.isNewSection(saved(a).tabs.Epoxy, false) };
+
+    // all four boxes, in ONE save
+    const all = await open("epoxy", startedModel("epoxy", BLANK_SF()), {});
+    typeInto(all, "system_1_sf", 5000);
+    typeInto(all, "system_2_sf", 3000);
+    typeInto(all, "cove_1_lf", 80);
+    typeInto(all, "cove_2_lf", 40);
+    settle(all);
+    out.started.all = { sf: P.measuredSfValues(rowsOf(all, "Epoxy")), lf: P.measuredLfValues(rowsOf(all, "Epoxy")),
+      count: rowsOf(all, "Epoxy").length, draft: draftKeys(all) };
+
+    // a cove assembly already picked, its length not typed: the figure goes INTO it, no row is added beside it
+    const COVE_PICKED = () => [{ assembly_id: "s3", assembly_name: "Cove E", measurement: "", unit: "LF" }];
+    const picked = await open("epoxy", startedModel("epoxy", [
+      { assembly_id: "s1", assembly_name: "System One", measurement: 1000, unit: "SF" }].concat(COVE_PICKED())), { system_1_sf: 1000 });
+    typeInto(picked, "cove_1_lf", 150);
+    settle(picked);
+    out.started.picked = { rows: cells(rowsOf(picked, "Epoxy")), shown: shown(picked).cove_1_lf, lf: P.takeoffLf(rowsOf(picked, "Epoxy")) };
+
+    // the same on a section nothing is measured in: the picked floor row and the picked cove row take the two figures
+    const pickedBoth = await open("epoxy", startedModel("epoxy", [
+      { assembly_id: "s1", assembly_name: "System One", measurement: "", unit: "SF" }].concat(COVE_PICKED())), {});
+    typeInto(pickedBoth, "system_1_sf", 5000);
+    typeInto(pickedBoth, "cove_1_lf", 150);
+    settle(pickedBoth);
+    out.started.pickedBoth = { rows: cells(rowsOf(pickedBoth, "Epoxy")) };
+
+    // THE DEFAULTS OF A BID OPENED WITH NO FLOOR: two picked square-foot lines and a picked cove line, all blank. A new bid
+    // seeds them as one floor (the first carries it, the other follows it, marked same_floor); so does this.
+    const DEFAULTS = () => [
+      { assembly_id: "s1", assembly_name: "System One", measurement: "", unit: "SF" },
+      { assembly_id: "s3", assembly_name: "Cove E", measurement: "", unit: "LF" },
+      { kind: "item", item_id: "e2", item_name: "Coat B", coverage: "", measurement: "", unit: "SF" },
+    ];
+    const marks = (rows) => rows.map((r) => [r.assembly_id || r.item_id || "-", r.unit, r.measurement,
+      r.floor_area ? "area" + r.floor_area : "", r.same_floor ? "of" + r.same_floor_of : ""].join("|"));
+    const d1 = await open("epoxy", startedModel("epoxy", DEFAULTS()), {});
+    typeInto(d1, "system_1_sf", 5000);
+    settle(d1);
+    out.started.defaults1 = { rows: marks(rowsOf(d1, "Epoxy")), priced: P.takeoffSf(rowsOf(d1, "Epoxy")),
+      sf: P.measuredSfValues(rowsOf(d1, "Epoxy")) };
+    const d2 = await open("epoxy", startedModel("epoxy", DEFAULTS()), {});
+    typeInto(d2, "system_1_sf", 5000);
+    typeInto(d2, "system_2_sf", 3000);
+    typeInto(d2, "cove_1_lf", 150);
+    settle(d2);
+    // what a NEW bid is given for the same library and the same two floors (the lines the intake just made are these)
+    const fresh = P.seedDefaultTakeoff([{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
+      [{ id: "s1", name: "System One", unit: "SF", favorite: true, default_work_types: [] },
+       { id: "s3", name: "Cove E", unit: "LF", favorite: true, default_work_types: [] }],
+      [{ id: "e2", name: "Coat B", coverage_basis: "SF", favorite: true, default_work_types: [] }], [], 5000, 3000, "epoxy");
+    out.started.defaults2 = { rows: marks(rowsOf(d2, "Epoxy")), priced: P.takeoffSf(rowsOf(d2, "Epoxy")),
+      sf: P.measuredSfValues(rowsOf(d2, "Epoxy")), lf: P.takeoffLf(rowsOf(d2, "Epoxy")), fresh: marks(fresh) };
+
+    // a picked row is preferred to a bare one, and a row that is switched off never carries the floor
+    const prefer = await open("epoxy", startedModel("epoxy", [
+      { assembly_id: "s1", assembly_name: "System One", measurement: 1000, unit: "SF" },
+      { assembly_id: "", assembly_name: "", measurement: "", unit: "LF" }].concat(COVE_PICKED())), { system_1_sf: 1000 });
+    typeInto(prefer, "cove_1_lf", 150);
+    settle(prefer);
+    out.started.prefer = { rows: cells(rowsOf(prefer, "Epoxy")) };
+    const off = await open("epoxy", startedModel("epoxy", [
+      { assembly_id: "s1", assembly_name: "System One", measurement: "", unit: "SF", enabled: false }]), {});
+    typeInto(off, "system_1_sf", 900);
+    settle(off);
+    out.started.off = { rows: cells(rowsOf(off, "Epoxy")) };
+
+    // Cove 2 goes BELOW Cove 1: a blank picked row above the measured one is not filled (it would swap the two boxes)
+    const second = await open("epoxy", startedModel("epoxy", [
+      { assembly_id: "s1", assembly_name: "System One", measurement: 1000, unit: "SF" }].concat(COVE_PICKED(),
+      [{ assembly_id: "s4", assembly_name: "Cove F", measurement: 120, unit: "LF" }])), { system_1_sf: 1000 });
+    typeInto(second, "cove_2_lf", 40);
+    settle(second);
+    out.started.second = { rows: cells(rowsOf(second, "Epoxy")), lf: P.measuredLfValues(rowsOf(second, "Epoxy")),
+      shown: [shown(second).cove_1_lf, shown(second).cove_2_lf] };
+
+    // Cove 2 typed when no cove is measured: the figure is counted ONCE and reads back as the first length
+    const lone = await open("epoxy", startedModel("epoxy", [
+      { assembly_id: "s1", assembly_name: "System One", measurement: 1000, unit: "SF" }]), { system_1_sf: 1000 });
+    typeInto(lone, "cove_2_lf", 123);
+    settle(lone);
+    out.started.lone = { lf: P.takeoffLf(rowsOf(lone, "Epoxy")), values: P.measuredLfValues(rowsOf(lone, "Epoxy")) };
+
+    // a started Gyp section: each box is its own area
+    const g = await open("gyp", startedModel("gyp"), {});
+    typeInto(g, "gyp_soft_sf", 4000);
+    typeInto(g, "gyp_hard_sf", 2000);
+    settle(g);
+    out.started.gyp = { areas: rowsOf(g, GYP_TAB).filter((r) => P.num(r.measurement) > 0).map((r) => [r.bucket, r.measurement]),
+      draft: draftKeys(g) };
+
+    // a Combo bid: the Epoxy half was started and never measured, the Polish root is measured and stays as it is
+    const cm = modelFor("combo", { root: POLISH_ROWS() });
+    cm.tabs.Epoxy.labor = clone(LABOR);
+    const cb = await open("combo", cm, { polish_sf: 7000 });
+    typeInto(cb, "system_1_sf", 5000);
+    settle(cb);
+    out.started.combo = { epoxy: cells(rowsOf(cb, "Epoxy")), root: measuresOf(rowsOf(cb, "Polish")) };
+
+    // the root is left to the estimate page even when nothing is measured: it seeds the library's default takeoff,
+    // which a figure written here first would stop
+    const root = await open("polish", null, {});
+    typeInto(root, "polish_sf", 5000);
+    settle(root);
+    out.started.root = { rows: cells(saved(root).takeoff), draft: draftKeys(root).p1 };
+  }
+
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
 `;
