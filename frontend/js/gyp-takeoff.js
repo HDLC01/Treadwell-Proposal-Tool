@@ -124,7 +124,9 @@
       bag: USG_BAG, primer: USG_PRIMER, iso: USG_ISO, isoSf: 1200 * 1.8, tape: TAPE, sand: SAND,
       mats: MATS_USG, defaultMat: MATS_USG[0].id,
       // the default thickness of each area, G10, I10, K10 (K10 is `=G10` on four tabs and typed on Gyp (FR))
-      thickness: { soft: 0.75, hard: 0.75, corridor: 0.75 }
+      thickness: { soft: 0.75, hard: 0.75, corridor: 0.75 },
+      // K10 is `=G10` on four tabs: a corridor box left blank pours at the soft surface's thickness, typed or not
+      corridorFollowsSoft: true
     }, extra);
   }
 
@@ -139,7 +141,8 @@
       bag: row("wb-gyp-treadstone-fr25-bag", 14.65, "D23"),
       primer: row("wb-gyp-treadstone-primer-tp1-gallon", 27.9, "D27"),
       iso: row("wb-gyp-iso-strip-roll", 27, "D28"), isoSf: 1200,
-      mats: MATS_FR, defaultMat: "wb-gyp-sound-mat-treadstone-r1-1-8in-roll"
+      mats: MATS_FR, defaultMat: "wb-gyp-sound-mat-treadstone-r1-1-8in-roll",
+      corridorFollowsSoft: false   // Gyp (FR)!K10 is a typed 0.75, not `=G10`
     })
   };
 
@@ -215,10 +218,14 @@
   }
 
   /** The thickness of one area, in inches: what was typed, else the preset's own. A box that is blank falls back to
-   *  the preset, exactly as a coverage box falls back to the library. 0 and negatives are not a thickness. */
+   *  the preset, exactly as a coverage box falls back to the library. 0 and negatives are not a thickness.
+   *  The one exception is the corridor on a tab whose K10 reads `=G10`: blank there is the SOFT surface's thickness
+   *  (typed, else the preset's), because that is what the workbook pours. */
   function thicknessOf(tab, settings, bucket) {
     var typed = settings && settings.thickness ? settings.thickness[bucket] : undefined;
-    var t = (typed === undefined || typed === null || typed === "") ? presetOf(tab).thickness[bucket] : num(typed);
+    var blank = (typed === undefined || typed === null || typed === "");
+    if (blank && bucket === "corridor" && presetOf(tab).corridorFollowsSoft) return thicknessOf(tab, settings, "soft");
+    var t = blank ? presetOf(tab).thickness[bucket] : num(typed);
     return t > 0 ? t : null;
   }
 

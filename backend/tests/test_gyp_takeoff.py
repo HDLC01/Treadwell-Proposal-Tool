@@ -116,6 +116,8 @@ def check_presets(mod):
                                   "corridor": float(_v(tab, "K10"))}, tab
         # the two tabs that type K10 are the two that do not follow G10 (here only Gyp (FR)); the rest read `=G10`
         assert (_f(tab, "K10") == "=G10") == (tab != FR), tab
+        # ... and the preset says so, because a blank corridor box follows the soft thickness exactly there
+        assert p["corridorFollowsSoft"] == (_f(tab, "K10") == "=G10"), tab
         # the label the proposal prints is the tab's own A1, `=B16` + C16 (Gyp (FR) has none and reads its mat)
         label = tabs[tab].get("label")
         assert label, tab
@@ -304,6 +306,33 @@ def test_a_blank_thickness_is_the_presets_and_a_typed_one_wins(mod):
     assert got["thin"] == pytest.approx(4000 / (240 / 3) * 1.03), "3/8 inch is 3 eighths, so a bag covers 80 SF"
 
 
+def test_a_blank_corridor_thickness_follows_the_soft_surface_where_the_sheet_says_k10_is_g10(mod):
+    # Gyp (USG 1-8")!K10 is `=G10`: type 1.25 for the soft surface, leave the corridor blank, and the workbook pours
+    # the corridor at 1.25 too. Gyp (FR)!K10 is a typed 0.75, so there a blank corridor stays 0.75.
+    got = node("""
+      const G = require(%s);
+      const corridor = [{ assembly_id: G.AREA_ASSEMBLIES.corridor.id, measurement: 1000, unit: "SF" }];
+      const bags = (tab, set) => G.figures(corridor, set, tab, []).bags.corridor;
+      const soft = { thickness: { soft: 1.25 } };
+      console.log(JSON.stringify({
+        usg: G.thicknessOf(%s, soft, "corridor"), fr: G.thicknessOf(%s, soft, "corridor"),
+        n25: G.thicknessOf(%s, { thickness: { soft: 0.5 } }, "corridor"),
+        typed: G.thicknessOf(%s, { thickness: { soft: 1.25, corridor: 0.5 } }, "corridor"),
+        blankSoft: G.thicknessOf(%s, { thickness: { soft: "", corridor: "" } }, "corridor"),
+        zeroSoft: G.thicknessOf(%s, { thickness: { soft: 0 } }, "corridor"),
+        usgBags: bags(%s, soft), frBags: bags(%s, soft),
+      }));
+    """ % ((json.dumps(str(MODULE)),) + (json.dumps(FIRST), json.dumps("Gyp (FR)"), json.dumps('Gyp (USG N25 1-4")'),
+                                          json.dumps(FIRST), json.dumps(FIRST), json.dumps(FIRST), json.dumps(FIRST),
+                                          json.dumps("Gyp (FR)"))))
+    assert got["usg"] == 1.25 and got["fr"] == 0.75
+    assert got["n25"] == 0.5, "the corridor follows what is typed for the soft surface, not the tab's 1.25"
+    assert got["typed"] == 0.5, "a typed corridor thickness still wins"
+    assert got["blankSoft"] == 0.75 and got["zeroSoft"] is None
+    assert got["usgBags"] == pytest.approx(1000 / (240 / 10) * 1.03), "1 1/4 inch is 10 eighths: 42.92 bags, not 25.75"
+    assert got["frBags"] == pytest.approx(1000 / (240 / 6) * 1.03)
+
+
 def test_an_area_with_no_usable_thickness_is_no_price_and_says_why(mod):
     got = node("""
       const G = require(%s);
@@ -467,6 +496,8 @@ PIN_BREAKS = {
         'bag: row("wb-gyp-treadstone-fr25-bag", 14.65, "D23"),', 'bag: row("wb-gyp-treadstone-fr25-bag", 14.65, "D24"),', check_prices),
     "the N25 tab opens on a thinner soft area": (
         "thickness: { soft: 1.25, hard: 1, corridor: 1.25 } }),", "thickness: { soft: 1, hard: 1, corridor: 1.25 } }),", check_presets),
+    "a blank corridor stops following the soft surface": (
+        "corridorFollowsSoft: true", "corridorFollowsSoft: false", check_presets),
     "the ULTRA tab opens on the wrong mat": (
         'defaultMat: "wb-gyp-sound-mat-sam-n12-ultra-3-16in-roll" }),', 'defaultMat: "wb-gyp-sound-mat-sam-n25-1-4in-roll" }),', check_presets),
     "a truckload is wrong": (

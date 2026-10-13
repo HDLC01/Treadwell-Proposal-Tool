@@ -1715,10 +1715,13 @@
     }).join("");
     var thick = G.BUCKETS.map(function (b) {
       var typed = set.thickness ? set.thickness[b] : "";
+      var follows = b === "corridor" && preset.corridorFollowsSoft;
+      var shown = follows ? G.thicknessOf(entry.tab, set, "soft") : preset.thickness[b];
       return '<div class="f"><label>' + esc(GYP_AREA_LABELS[b]) + ' thickness</label>' +
         '<input class="n" data-gyp="thickness.' + b + '" inputmode="decimal" value="' + esc(nv(typed)) +
-        '" placeholder="' + esc(String(preset.thickness[b])) + '">' +
-        '<p class="hint">Inches. Blank is the sheet\'s ' + esc(String(preset.thickness[b])) + '.</p></div>';
+        '" placeholder="' + esc(String(shown === null ? preset.thickness[b] : shown)) + '">' +
+        '<p class="hint">' + (follows ? 'Inches. Blank is the soft surface thickness, as the sheet has it.'
+          : 'Inches. Blank is the sheet\'s ' + esc(String(preset.thickness[b])) + '.') + '</p></div>';
     }).join("");
     return '<div class="tk gyp" data-gyp-card>' +
       '<div class="tk-h"><span class="tag">GYPSUM</span>' +
