@@ -94,18 +94,22 @@
   // the gyp layout. `area` and `cove` name the intake fields whose quantities feed the tab: the Seal
   // sheets ARE the Polish layout and snapshot their area under the same key, which is why seal lists
   // polish_sf. `role` is what a priced tab is called on a proposal, and `markupLayout` is the
-  // markup_rules layout an admin files its rates under (both equal the key today).
+  // markup_rules layout an admin files its rates under (both equal the key today). `offered` is on the
+  // two option-only tabs and says whether Estimating Tool v2 can price the tab as an option yet: Seal is
+  // (Phase 15), Leveling is not (Phase 16). optionSheets() lists the sheets of the offered ones.
   var TABS = [
     { key: "polish",   label: "Polish",   role: "polish",   markupLayout: "polish",   optionOnly: false,
       sheets: ["Polish"],
       area: ["polish_sf"], cove: [] },
     { key: "seal",     label: "Seal",     role: "seal",     markupLayout: "seal",     optionOnly: true,
+      offered: true,
       sheets: ["Seal", "Seal (+Jnts)"],
       area: ["polish_sf"], cove: [] },
     { key: "epoxy",    label: "Epoxy",    role: "epoxy",    markupLayout: "epoxy",    optionOnly: false,
       sheets: ["Epoxy", "Epoxy blank"],
       area: ["system_1_sf", "system_2_sf"], cove: ["cove_1_lf", "cove_2_lf"] },
     { key: "leveling", label: "Leveling", role: "leveling", markupLayout: "leveling", optionOnly: true,
+      offered: false,
       sheets: ["Leveling"],
       area: [], cove: [] },
     { key: "gyp",      label: "Gyp",      role: "gyp",      markupLayout: "gyp",      optionOnly: false,
@@ -175,7 +179,11 @@
   // exists to stop. writeCellsFor() below is the one place that decides, for the live intake and for a v2 save.
   //
   // THINGS READ OUT OF THE TEMPLATE, not assumed. Polish!B4 holds its own Yes/No, so Local writes both, and
-  // since Phase 14 the Gyp base's B5 and Gyp (FR)'s own B5 (the other three Gyp tabs mirror the base).
+  // since Phase 14 the Gyp base's B5 and Gyp (FR)'s own B5 (the other three Gyp tabs mirror the base). Since
+  // Phase 15 Local also writes Seal!B4 ('Seal (+Jnts)'!B4 mirrors it; Seal's lodging line reads it) and
+  // Renovation writes Seal!B10 ('Seal (+Jnts)'!B10 mirrors it; Seal's patch rate is IF(B10="New",0.05,0.15), so
+  // a blank cell would charge the Reno rate, as Polish!C17 does), so a Seal option answers the job's questions
+  // the way the base does.
   // Polish!D5, B6 and D6 are the formulas =Epoxy!D5, =Epoxy!B6, =Epoxy!D6, so the Polish tab is never
   // written for them. Epoxy!D41 is compared against V136 and V137 by all six of its consumers, which read
   // "BULK Discount ON" and "Bulk Discount OFF", mixed case and inconsistent with each other: any other
@@ -185,7 +193,7 @@
   var CONDITIONS = [
     { key: "local", label: "Local job", scope: ALL_JOBS,
       why: "Under 70 miles. Off means travel and lodging get added.",
-      default: true, cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"], on: "Yes", off: "No", needs: null,
+      default: true, cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4"], on: "Yes", off: "No", needs: null,
       model: true, item_id: null, asked_on: { live: 1, v2Intake: 0, v2Takeoff: 0 } },
     { key: "prevailing_wage", label: "Prevailing wage", scope: ALL_JOBS,
       why: "Raises every labor line to the prevailing rate.",
@@ -214,7 +222,7 @@
       model: true, item_id: null, asked_on: { live: 0, v2Intake: 4, v2Takeoff: 0 } },
     { key: "reno", label: "Renovation", scope: ["epoxy", "polish", "combo"],
       why: "Existing floor, not new construction. Triples the patch material rate.",
-      default: false, cells: ["Epoxy!B10", "Polish!B10"], on: "Reno", off: "New", needs: null,
+      default: false, cells: ["Epoxy!B10", "Polish!B10", "Seal!B10"], on: "Reno", off: "New", needs: null,
       model: false, item_id: null, asked_on: { live: 5, v2Intake: 0, v2Takeoff: 0 } },
     { key: "dye", label: "Dye", scope: ["polish", "combo"],
       why: "Two coats of dye across the polished area.",
@@ -343,6 +351,14 @@
   function tabOfSheet(sheetId) {
     var t = tabBySheet.get(sheetId);
     return t ? t.key : null;
+  }
+
+  /** The workbook sheets Estimating Tool v2 can add to a bid as an OPTION, in the tabs' order: "Seal" and
+   *  "Seal (+Jnts)" since Phase 15 (Leveling joins in Phase 16). A new array. */
+  function optionSheets() {
+    var out = [];
+    TABS.forEach(function (t) { if (t.optionOnly && t.offered === true) t.sheets.forEach(function (s) { out.push(s); }); });
+    return out;
   }
 
   /** The quantity fields a job type shows, in the intake's order. */
@@ -492,7 +508,7 @@
     SURFACES: SURFACES, FIELDS: FIELDS, TABS: TABS, JOB_TYPES: JOB_TYPES, CONDITIONS: CONDITIONS,
     jobTypeKeys: jobTypeKeys, tabKeys: tabKeys, isJobType: isJobType, isTab: isTab,
     jobType: jobType, tab: tab, condition: condition,
-    tabsFor: tabsFor, appliesTo: appliesTo, defaultScope: defaultScope, tabOfSheet: tabOfSheet,
+    tabsFor: tabsFor, appliesTo: appliesTo, defaultScope: defaultScope, tabOfSheet: tabOfSheet, optionSheets: optionSheets,
     fieldsFor: fieldsFor, scopesFor: scopesFor,
     conditionsFor: conditionsFor, cellsFor: cellsFor, copyableCells: copyableCells,
     isSplit: isSplit, isPerSheet: isPerSheet, baseSheets: baseSheets, writeCellsFor: writeCellsFor,

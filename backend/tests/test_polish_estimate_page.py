@@ -1636,9 +1636,12 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     # two B10 cells are written too, "New" while nobody has answered: the live intake writes them for every
     # polish job, and a blank Polish!B10 is not "New" to IF(B10="New",0.05,0.15), it takes the Reno branch.
     # No price moves (test_work_types.py and the chain golden), only what a save puts in the workbook cells.
+    # SEVENTEEN SINCE PHASE 15: Local also writes Seal!B4 and Renovation Seal!B10 (the table's two Seal cells), so a Seal option
+    # answers the job's questions as the base does. No price moves.
     assert ran["save"]["cellValueKeys"] == [
         "Epoxy!B10", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5", "Epoxy!D6", "Gyp (FR)!B5", "Gyp (FR)!B8", 'Gyp (USG 1-8")!B5',
-        'Gyp (USG 1-8")!B8', "Leveling!B6", "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29"], (
+        'Gyp (USG 1-8")!B8', "Leveling!B6", "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29",
+        "Seal!B10", "Seal!B4"], (
         "the save's worksheet cells are not exactly the conditions' a polish job is asked: %r"
         % ran["save"]["cellValueKeys"])
     # And the literals are the model's own answers. The fixture has local and taxable on, the other
@@ -1646,6 +1649,7 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
     assert ran["save"]["cellValues"] == {
         # local: Epoxy and Polish, and since Phase 14 the two Gyp sheets that hold their own (the base and Gyp (FR))
         "Epoxy!B4": "Yes", "Polish!B4": "Yes", 'Gyp (USG 1-8")!B5': "Yes", "Gyp (FR)!B5": "Yes",
+        "Seal!B4": "Yes",                           # and Seal's own, since Phase 15
         "Epoxy!D5": "No",                           # prevailing_wage
         "Epoxy!B6": "Yes",                          # taxable
         "Epoxy!D6": "No",                           # remodel_tax
@@ -1661,14 +1665,15 @@ def test_the_save_writes_the_condition_cells_and_no_others(ran):
         # The fixture has taxable ON, so the three independent Taxable literals carry the same "Yes".
         "Leveling!B6": "Yes", 'Gyp (USG 1-8")!B8': "Yes", "Gyp (FR)!B8": "Yes",     # taxable
         # Nobody has answered Renovation, so it is "New" in both cells, never blank.
-        "Epoxy!B10": "New", "Polish!B10": "New",                                    # reno
+        "Epoxy!B10": "New", "Polish!B10": "New", "Seal!B10": "New",                 # reno
     }, "the condition literals do not match the model: %r" % (ran["save"]["cellValues"],)
     # A draft that already carried a worksheet map keeps it, and gains only those same conditions' cells.
     carried = ran["save"]["legacyCellValues"] or {}
     assert set(carried) == {"Polish!D82", "Epoxy!B4", "Epoxy!B6", "Epoxy!D5",
                             "Epoxy!D6", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5",
                             "Polish!E25", "Polish!E29", "Polish!F29",
-                            "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8", "Epoxy!B10", "Polish!B10"}, (
+                            "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8", "Epoxy!B10", "Polish!B10",
+                            "Seal!B4", "Seal!B10"}, (
         "the page added a worksheet cell beyond the four conditions', or dropped a carried one: %r"
         % carried)
     assert carried["Polish!D82"] == 41000, "a cell the draft already carried was overwritten"
@@ -2424,7 +2429,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/markup-core.js",
                     "/js/bid-profiles.js", "/js/bid-engine.js", "/js/bid-model.js", "/js/epoxy-takeoff.js",
-                    "/js/gyp-takeoff.js",
+                    "/js/gyp-takeoff.js", "/js/seal-takeoff.js",
                     "/js/polish-sandbox.js", "/js/library-picker.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 
@@ -4001,6 +4006,8 @@ def test_the_old_empty_row_paths_are_gone():
 from html.parser import HTMLParser
 
 REVIEW_KEYS = ("takeoff", "labor", "travel", "markup")
+# a bid with a Seal option also draws a card of its own, in its own colour (Phase 15, tests/test_v2_seal_option.py)
+OPTION_REVIEW_KEYS = ("option",)
 PAGE_HTML = FRONTEND / "polish-estimate.html"
 
 
@@ -4137,7 +4144,7 @@ def test_the_page_defines_a_darker_band_and_a_lighter_total_shade_for_every_revi
              for m in re.finditer(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6})", css)}
     ink, edit = token["ink"], token["red-dark"]
     seen = set()
-    for key in REVIEW_KEYS:
+    for key in REVIEW_KEYS + OPTION_REVIEW_KEYS:
         band, tot = token.get("rev-%s-band" % key), token.get("rev-%s-tot" % key)
         assert band and tot, "%s is missing one of its two shades" % key
         assert _luminance(band) < _luminance(tot), "%s: the title band is not the darker shade" % key

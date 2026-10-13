@@ -420,7 +420,7 @@ def test_a_price_edited_on_the_library_row_reaches_the_price_and_no_row_prices_a
       const fr = (items) => G.sectionMaterial(area, {}, %s, { items: items }).gyp;
       console.log(JSON.stringify({ rows: gyp(rows), none: gyp([]), edited: gyp(edited), primerRows: primer(rows), primerNone: primer([]),
         frRows: fr(rows), frNone: fr([]), unit: G.unitPrice(rows, G.PRESETS[%s].primer), unitNone: G.unitPrice([], G.PRESETS[%s].primer) }));
-    """ % (json.dumps(str(MODULE)), json.dumps(PLAN.as_dict()["items"]), json.dumps(FIRST), json.dumps(FIRST),
+    """ % (json.dumps(str(MODULE)), json.dumps([i for i in PLAN.as_dict()["items"] if i["id"].startswith("wb-gyp-")]), json.dumps(FIRST), json.dumps(FIRST),
            json.dumps(FR), json.dumps(FIRST), json.dumps(FIRST)))
     assert got["rows"] == pytest.approx(got["none"], abs=1e-9), "the seeded rows and the fallbacks must price the same"
     assert got["edited"] == pytest.approx(got["rows"] * 20 / 14.08)

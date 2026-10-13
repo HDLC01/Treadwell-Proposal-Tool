@@ -153,7 +153,7 @@ def test_every_cell_is_a_sheet_and_an_address_with_both_literals_written(ran):
         assert isinstance(c["default"], bool) and isinstance(c["model"], bool), c["key"]
 
 
-BLANK_IN_THE_TEMPLATE = {"Epoxy!B10", "Polish!B10"}
+BLANK_IN_THE_TEMPLATE = {"Epoxy!B10", "Polish!B10", "Seal!B10"}
 
 
 def test_every_cell_the_table_writes_is_a_literal_in_kyles_template(ran):
@@ -243,8 +243,8 @@ def test_a_sheet_belongs_to_one_tab_and_a_lookalike_belongs_to_none(ran):
 def test_the_table_cannot_be_edited_by_a_reader_and_the_readers_hand_out_copies(ran):
     for name, r in ran["frozen"].items():
         assert "threw" in r, "the table accepted an edit: %s" % name
-    # Local is a literal on four sheets: Epoxy!B4, Polish!B4 and (Phase 14) the Gyp base's B5 and Gyp (FR)'s own
-    assert ran["copies"]["cells"]["cells"] == ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"] \
+    # Local is a literal on five sheets: Epoxy!B4, Polish!B4, (Phase 14) the Gyp base's B5 and Gyp (FR)'s own, and (Phase 15) Seal!B4
+    assert ran["copies"]["cells"]["cells"] == ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4"] \
         and ran["copies"]["cells"]["on"] == "Yes"
     assert ran["copies"]["row"] == "Local job" and ran["copies"]["rows"] == 8
     assert ran["copies"]["local"] is True and ran["copies"]["reserved"] == "dye"
@@ -439,7 +439,7 @@ def test_condition_cells_is_the_table_cut_for_polish_and_the_carried_one_is_reno
     assert ran["bid"]["conditionCells"] == model
     assert list(ran["bid"]["conditionCells"]) == ["local", "prevailing_wage", "taxable", "remodel_tax", "dye",
                                                   "joint_filler", "remove_existing_jf"]
-    assert ran["bid"]["carried"] == [{"key": "reno", "cells": ["Epoxy!B10", "Polish!B10"], "on": "Reno",
+    assert ran["bid"]["carried"] == [{"key": "reno", "cells": ["Epoxy!B10", "Polish!B10", "Seal!B10"], "on": "Reno",
                                       "off": "New", "default": False}]
 
 

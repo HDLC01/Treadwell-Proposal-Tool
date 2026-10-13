@@ -730,13 +730,15 @@
 
   // THE TABS. Which profile prices each of the eleven priced tabs, and the one thing that differs between
   // tabs of a profile: a Gyp tab's truckload, in sound-mat rolls (Gyp (USG 1-8")!H36 and its copies), and its `label`,
-  // what the proposal calls the system (the tab's own A1: B16 and C16 of the sheet). The
+  // what the proposal calls the system (the tab's own A1: B16 and C16 of the sheet; the two Seal tabs have no such
+  // cell, so theirs are the words the live estimate screen has always given an option, and the joints one says so,
+  // because both can be on one proposal). The
   // oracle's `fixed.truckload` holds the same numbers, and backend/tests/test_bid_engine.py holds the two.
   var TAB_PROFILES = {
     "Epoxy": { profile: "epoxy" },
     "Polish": { profile: "polish" },
-    "Seal": { profile: "seal" },
-    "Seal (+Jnts)": { profile: "seal" },
+    "Seal": { profile: "seal", label: "Sealed Concrete" },
+    "Seal (+Jnts)": { profile: "seal", label: "Sealed Concrete with Joint Filler" },
     "Epoxy blank": { profile: "epoxy-blank" },
     "Leveling": { profile: "leveling" },
     "Gyp (USG 1-8\")": { profile: "gyp", truckload: 280, label: 'N12 1/8" + 3/4" Gyp' },

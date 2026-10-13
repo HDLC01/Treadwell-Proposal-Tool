@@ -58,6 +58,8 @@
   // The Gyp tabs' areas, bags, extras, sand and sound mat (js/gyp-takeoff.js). Bound here for the same reason; a page
   // that does not load it prices no Gyp section (priceSection says so) and every other section is untouched.
   var G = window.TWGypTakeoff;
+  // The Seal tabs' patch, tooling and starting takeoff (js/seal-takeoff.js): what a Seal option adds to its rows.
+  var SL = window.TWSealTakeoff;
   var S = window.TWPolishSandbox;  // never edit a live bid
   var P = window.TWLibraryPicker;  // the one search pop-up both "Add" buttons open (js/library-picker.js)
   var $ = function (id) { return document.getElementById(id); };
@@ -116,10 +118,19 @@
     try { return B.travelCarrier(ROOT) === activeTab; } catch (err) { return true; }
   }
 
+  /** Is the section on show an option? An option is priced apart and carries its own Hotel and Per Diem (B.optionTravelCosts). */
+  function activeIsOption() {
+    try { return B.sectionOf(ROOT, activeTab).kind === "option"; } catch (err) { return false; }
+  }
+
   /** The words on the Labor and Review steps of a section that does not carry the job's travel. */
   function travelNote() {
     var tab = B.ROOT_TAB;
     try { tab = B.travelCarrier(ROOT); } catch (err) { tab = B.ROOT_TAB; }
+    if (activeIsOption()) {
+      return "This option is priced apart, so it carries its own Hotel and Per Diem for its own crew when the job is on the road, " +
+        "at the rates set on the " + tab + " section. Open it to change them.";
+    }
     return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + tab +
       " section. Open it to change them.";
   }
@@ -492,6 +503,8 @@
     var e = openEntry();
     if (!e) return 0;
     var m = sectionMaterial(e);
+    // A section that cannot be priced (a Seal option whose takeoff did not load) shows no material, not NaN.
+    if (m && typeof m === "object" && m.material === undefined && typeof m.unpriceable === "string" && m.gyp === undefined) return 0;
     // A Gyp section's material comes as the engine's four figures (gypsum, extras, sand, sound mat), not a sum.
     if (m && typeof m === "object" && m.material === undefined) return m.gyp + m.extras + m.sand + m.soundMat;
     return m.material;
@@ -545,6 +558,20 @@
     return null;                        // nobody has picked a county yet
   }
 
+  /** Is this job a renovation? Only a Seal option reads it (the sheet's patch price is one figure for New and another for Reno). The
+   *  v2 estimate model does not carry Renovation (js/work-types.js: `model: false`), so it is read off the draft the
+   *  way the intake leaves it: the cells the condition writes (T.condition("reno").cells), the first one that holds
+   *  an answer deciding. A draft that never answered it is a new floor, the condition's own default. */
+  function jobIsReno() {
+    var cells = (state && state.cell_values && typeof state.cell_values === "object") ? state.cell_values : {};
+    var list = T.condition("reno").cells;
+    for (var i = 0; i < list.length; i++) {
+      var v = Object.prototype.hasOwnProperty.call(cells, list[i]) ? cells[list[i]] : undefined;
+      if (v === "Reno" || v === "New") return v === "Reno";
+    }
+    return false;
+  }
+
   /** The ROOT (Polish) section's bid, recomputed from the model. Cheap enough to call on every keystroke.
    *  It reads ROOT, never M: M is whichever section is on show. */
   function bid() {
@@ -575,6 +602,18 @@
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: r.material, tooling: r.tooling };
+    }
+    // A SEAL OPTION ADDS WHAT THE SEAL SHEET DOES BEFORE ITS CHAIN (js/seal-takeoff.js): the patch (a price a square
+    // foot of the whole area, the renovation price when the job is a renovation) and the tooling, which the chain
+    // takes as its own input. Without the module no Seal option is priced, and it says so: a plain sum would leave
+    // out the patch and the tooling and still call the option priceable.
+    if (entry.role === "seal") {
+      if (!SL) return { unpriceable: "the Seal takeoff did not load, so this option cannot be priced. Reload the page." };
+      var sr = SL.sectionMaterial(takeoff, {
+        items: ITEMS, sf: B.takeoffSf(takeoff), reno: jobIsReno(),
+        rowPrice: function (row) { return rowPrice(row, takeoff); }
+      });
+      return { material: sr.material, tooling: sr.tooling };
     }
     // A GYP SECTION'S MATERIAL IS SPLIT FOUR WAYS AND ITS ROLLS COUNTED (js/gyp-takeoff.js): the gypsum bags by
     // thickness, the extras (primer, ISO strip, tape, and any other row), the sand worked out from the fractional
@@ -751,6 +790,7 @@
     var b = bid();
     $("bidbar").hidden = false;
     paintSections();
+    paintOptionBar();
     if (sectionList().length > 1) { paintJobBid(); return; }
     $("bid-total").textContent = b.total ? B.money(b.total) : "—";
     $("bid-psf").textContent = (b.per_sf == null ? "" : B.money2(b.per_sf) + " / SF")
@@ -800,10 +840,124 @@
     $("bid-total").textContent = c && c.lump_sum ? B.money(c.lump_sum) : "no price";
     $("bid-psf").textContent = (c && c.price_per_sf != null ? B.money2(c.price_per_sf) + " / SF" : "");
     var bids = allBids();
-    $("maths").innerHTML = sectionList().filter(function (e) { return e.kind !== "off"; }).map(function (e) {
+    var live = sectionList().filter(function (e) { return e.kind !== "off"; });
+    var say1 = function (e) {
       var b = bids[e.tab];
       return esc(e.tab + " " + (b && b.priceable !== false && b.total ? B.money(b.total) : "no price"));
-    }).join(' <i>+</i> ');
+    };
+    // The base sections add up to the lump sum; an option is priced beside them and is never part of it.
+    var line = live.filter(function (e) { return e.kind !== "option"; }).map(say1).join(' <i>+</i> ');
+    var opts = live.filter(function (e) { return e.kind === "option"; }).map(function (e) { return say1(e) + " option"; });
+    if (opts.length) line += ' <i>·</i> ' + opts.join(' <i>·</i> ') + ' (not in the lump sum)';
+    $("maths").innerHTML = line;
+  }
+
+  // ── options on a bid (Phase 15) ─────────────────────────────────────────────
+  // "+ Add option" offers Seal and Seal (+Jnts); an option is a section of the bid with kind "option" (js/bid-model.js
+  // addOption). It is priced on its own and never added into the lump sum, and it prints under "Options & Unit Prices"
+  // on the proposal. These three are only the page's side of it: the menu, the library's answers for a new section,
+  // and taking one off again.
+  var optionMenuOpen = false;     // the "+ Add option" choices are showing
+  var optionBusy = false;         // an option is being added (the library is being read)
+  var removeArmed = null;         // the option whose Remove button has been pressed once
+  var lastOptionBar = null;       // what the option bar last drew, so a keystroke does not redraw it
+
+  /** What an option is called on a button: its workbook sheet, "Seal" or "Seal (+Jnts)". */
+  function optionLabel(tab) {
+    return String(tab);
+  }
+
+  /** The strip under the section strip: "+ Add option" (with its choices open) and a Remove for each option the bid
+   *  holds. Hidden when there is nothing to offer and nothing to remove. Redrawn only when what it says changed. */
+  function paintOptionBar() {
+    var el = $("option-bar");
+    var offers = [];
+    try { offers = B.optionsToOffer(ROOT); } catch (err) { offers = []; }
+    var held = sectionList().filter(function (e) { return e.kind === "option"; });
+    var html = "";
+    if (offers.length) {
+      html += '<button type="button" data-add-option-menu aria-expanded="' + (optionMenuOpen ? "true" : "false") + '">' +
+        (optionMenuOpen ? "Cancel" : "+ Add option") + '</button>';
+      if (optionMenuOpen) {
+        offers.forEach(function (id) {
+          html += '<button type="button" data-add-option="' + esc(id) + '"' + (optionBusy ? " disabled" : "") + '>' +
+            esc(optionLabel(id)) + '</button>';
+        });
+      }
+    }
+    held.forEach(function (e) {
+      html += '<button type="button" data-remove-option="' + esc(e.tab) + '">' +
+        (removeArmed === e.tab ? "Click again to remove " : "Remove ") + esc(optionLabel(e.tab)) + ' option</button>';
+    });
+    var empty = !html;
+    if (html === lastOptionBar && el.hidden === empty) return;
+    lastOptionBar = html;
+    el.innerHTML = html;
+    el.hidden = empty;
+  }
+
+  /** The area a new option starts on: what the job's base section measures (the section that carries the job's travel
+   *  is the first base), 0 when nothing is measured yet. */
+  function optionStartSf() {
+    try { return B.takeoffSf(B.sectionOf(ROOT, B.travelCarrier(ROOT)).section.takeoff); } catch (err) { return 0; }
+  }
+
+  /** ADD AN OPTION: the library is read (the labor lines filed under the option's work type and the calculator's
+   *  modes) and the model gets a new section, seeded like any new section. Only that section is added; nothing the
+   *  estimator typed in any other is touched (B.addOption), and the model is read AFTER the library answers, so a
+   *  figure typed while it was loading is kept. */
+  async function addOption(tab) {
+    if (optionBusy) return;
+    optionBusy = true;
+    optionMenuOpen = false;
+    paintOptionBar();
+    try {
+      if (B.optionsToOffer(ROOT).indexOf(tab) < 0) return;
+      var rules = await loadMarkupRules();
+      var laborRows = B.withCrewFallback(await loadLaborDefaults());
+      var calcRows = B.withCrewCalcFallback(await loadLaborCalc());
+      ROOT = B.addOption(ROOT, tab, {
+        rules: rules, laborRows: laborRows, laborRate: LABOR_RATE, calcRows: calcRows,
+        asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
+        cellValues: state.cell_values, split: T.isSplit(state),
+        sf: Object.fromEntries([[tab, [optionStartSf(), ""]]]), lf: {},
+        takeoffRows: function (entry, sfs) { return entry.role === "seal" && SL ? SL.seedTakeoff(entry.tab, ASMS, sfs[0]) : null; }
+      });
+      show(tab);
+      followSf = B.takeoffSf(B.sectionOf(ROOT, tab).section.takeoff);
+      saveSoon();
+      paintBid();
+      paintRail();
+      renderPanel();
+    } catch (err) {
+      say("The option could not be added: " + (err && err.message));
+    } finally {
+      optionBusy = false;
+      paintOptionBar();
+    }
+  }
+
+  /** TAKE AN OPTION OFF: the first press arms the button ("Click again to remove"), the second removes the section,
+   *  its rows included. The option's settings on the draft go with it, so an option added again starts fresh. */
+  function removeOptionPress(tab) {
+    if (removeArmed !== tab) { removeArmed = tab; paintOptionBar(); return; }
+    removeArmed = null;
+    try {
+      ROOT = B.removeOption(ROOT, tab);
+    } catch (err) {
+      say("That option could not be removed: " + (err && err.message));
+      paintOptionBar();
+      return;
+    }
+    // Everything the draft kept for the option goes (its settings, notes and the words typed over its proposal line):
+    // the id is the sheet's name, so an option added again would otherwise print the old one's leftovers.
+    var gone = B.optionLeftoverPatch(TW.getState(), tab);
+    if (Object.keys(gone).length) TW.setState(gone);
+    show(activeTab === tab ? openingTab() : activeTab);
+    saveSoon();
+    paintBid();
+    paintRail();
+    renderPanel();
   }
 
   /** Is the section on show edited on the page's own panels? Polish, Epoxy and Gyp are (their work types are `ready`
@@ -811,7 +965,7 @@
   function openSectionEditable() {
     if (activeTab === B.ROOT_TAB) return true;
     var e = openEntry();
-    return !!e && (e.role === "polish" || e.role === "epoxy" || e.role === "gyp");
+    return !!e && (e.role === "polish" || e.role === "epoxy" || e.role === "gyp" || e.role === "seal");
   }
 
   /** What the panel shows while a section that is not edited here yet is open: what it holds and how it was
@@ -1848,6 +2002,7 @@
         ? ' Default rows that share the floor carry the same square feet but are not added to ' +
           'it again.' : '') + '</p>';
     html += epoxyCaption();
+    html += sealCaption();
     html += gypSec ? gypCaption(gypSec) : "";
 
     return shell("Material",
@@ -1867,6 +2022,20 @@
       esc(B.money2(E.unitPrice(ITEMS, "patch").cost)) + ' a square foot of the whole area, whatever the system. ' +
       'A cove row is priced the way the estimate sheet prices it, from its length. Tooling and consumables, ' +
       esc(moneyAuto(r.tooling)) + ', are added on the Review step.</p>';
+  }
+
+  /** What a Seal option charges that is not one of its rows, in words: the patch (a price a square foot of the whole
+   *  area, always charged, at the renovation price when the job is a renovation) and where the tooling is. "" for any
+   *  other section. */
+  function sealCaption() {
+    var e = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (!e || e.role !== "seal" || !SL) return "";
+    var sf = B.takeoffSf(e.section.takeoff || []);
+    var reno = jobIsReno();
+    return '<p class="cap">Patch <b data-seal-patch>' + esc(moneyAuto(SL.patchCost(ITEMS, sf, reno))) + '</b> is added for you: ' +
+      esc(B.money2(SL.unitPrice(ITEMS, reno ? "patchReno" : "patchNew").cost)) + ' a square foot of the whole area (' +
+      (reno ? "a renovation" : "new concrete") + '), whatever the rows say. Tooling and consumables, ' +
+      esc(moneyAuto(SL.toolingCost(sf))) + ', are added on the Review step.</p>';
   }
 
   /** One labor task, as its own card.
@@ -2233,14 +2402,30 @@
     var live = sectionList().filter(function (e) { return e.kind !== "off"; });
     if (live.length < 2) return "";
     var bids = allBids();
-    var rows = live.map(function (e) {
-      var sb = bids[e.tab];
-      return [e.tab + (e.kind === "option" ? " (option)" : ""), "",
-              '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
+    var bases = live.filter(function (e) { return e.kind !== "option"; });
+    var html = "";
+    // The whole-bid card adds the BASE sections up. A bid with one base and an option has nothing to add (the base's
+    // own cards say its price), so it draws none.
+    if (bases.length > 1) {
+      var rows = bases.map(function (e) {
+        var sb = bids[e.tab];
+        return [e.tab, "", '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
+      });
+      rows.push(["Combined base bid", "", '<span data-job-total>' + esc(jobMoney()) + '</span>', "tot"]);
+      html += '<div data-rev="markup" class="rev" data-job-card><div class="rev-h">Whole bid</div>' + revTable(rows) + '</div>';
+    }
+    // An option is its OWN card, in its own colour, with its own total, and it says it is not in the lump sum.
+    live.filter(function (e) { return e.kind === "option"; }).forEach(function (e) {
+      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.tab) +
+        ' option <button data-section-tab="' + esc(e.tab) + '">Open</button></div>' +
+        revTable([[OPTION_NOT_IN_SUM, "", ""],
+                  [e.tab + " option total", "", '<span data-opt-sec="' + esc(e.tab) + '">' + esc(sectionMoney(bids[e.tab])) + '</span>', "tot"]]) +
+        '</div>';
     });
-    rows.push(["Combined base bid", "", '<span data-job-total>' + esc(jobMoney()) + '</span>', "tot"]);
-    return '<div data-rev="markup" class="rev" data-job-card><div class="rev-h">Whole bid</div>' + revTable(rows) + '</div>';
+    return html;
   }
+
+  var OPTION_NOT_IN_SUM = "Option, not in the lump sum";
 
   function sectionMoney(sb) {
     return sb && sb.priceable !== false && sb.total ? moneyAuto(sb.total) : "no price";
@@ -2256,10 +2441,12 @@
   /** Keep the whole-bid card's figures in step with a keystroke (repaintNumbers). */
   function repaintJob() {
     var secs = document.querySelectorAll("[data-job-sec]");
+    var optSecs = document.querySelectorAll("[data-opt-sec]");
     var tot = document.querySelector("[data-job-total]");
-    if (!secs.length && !tot) return;
+    if (!secs.length && !tot && !optSecs.length) return;
     var bids = allBids();
     secs.forEach(function (el) { el.textContent = sectionMoney(bids[el.getAttribute("data-job-sec")]); });
+    optSecs.forEach(function (el) { el.textContent = sectionMoney(bids[el.getAttribute("data-opt-sec")]); });
     if (tot) tot.textContent = jobMoney();
   }
 
@@ -2271,6 +2458,12 @@
     if (blk.length) {
       html += '<div class="blockers"><b>Not finished yet.</b><ul>' +
         blk.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + '</ul></div>';
+    }
+    // A section that is an OPTION says so first: its figure is quoted on its own and is never in the lump sum.
+    var onShow = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (onShow && onShow.kind === "option") {
+      html += '<p class="cap" data-option-note><b>' + esc(OPTION_NOT_IN_SUM) + '.</b> ' + esc(onShow.tab) +
+        ' is priced on its own and printed under Options &amp; Unit Prices. The lump sum is the base bid alone.</p>';
     }
     html += jobCard();
 
@@ -2342,12 +2535,14 @@
     // Hotel and Per Diem are charged once, on the carrier, and this card says where instead of listing lines
     // that belong to another section's crew.
     var carries = carriesTravel();
+    var ownTravel = !carries && activeIsOption();   // an option lists its own lines, for its own crew's man-days
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
       var tl = (M.travel || {})[k];
-      if (!carries || !tl || !tl.enabled) return;
+      if ((!carries && !ownTravel) || !tl || !tl.enabled) return;
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
-      trvRows.push([name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
-                    esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
+      trvRows.push(ownTravel
+        ? [name, B.num(B.travelManDays(M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.optionTravelCosts(M.travel, M.labor)[k]))]
+        : [name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
     });
     if (!carries) {
       trvRows.push([travelNote(), "", ""]);
@@ -2862,6 +3057,16 @@
 
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
+
+    // "+ Add option" and its choices, and Remove on an option the bid holds. Any other click puts an armed Remove
+    // back to what it was, so a single press never removes a section a later click has nothing to do with.
+    var optRm = t.closest("[data-remove-option]");
+    if (optRm) { removeOptionPress(optRm.getAttribute("data-remove-option")); return; }
+    if (removeArmed) { removeArmed = null; paintOptionBar(); }
+    var optMenu = t.closest("[data-add-option-menu]");
+    if (optMenu) { optionMenuOpen = !optionMenuOpen; paintOptionBar(); return; }
+    var optAdd = t.closest("[data-add-option]");
+    if (optAdd) { addOption(optAdd.getAttribute("data-add-option")); return; }
 
     // The section strip (drawn only when the bid has more than one section).
     var secTab = t.closest("[data-section-tab]");

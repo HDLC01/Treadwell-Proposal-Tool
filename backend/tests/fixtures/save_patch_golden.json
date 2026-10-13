@@ -6,7 +6,8 @@
   "newBid_recut": "the seven newBid records were re-recorded on 2026-10-12 on origin/staging 4870ae1 (a new bid's Labor step opens with every quantity empty, only the rates filled): the crew's guys and days, Travel Labor's guys and hours and Lodging's nights and Per Diem's days are empty, nothing is on auto, and the bid's totals follow. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
   "newBid_recut2": "the newBid records were re-recorded again on 2026-10-13 on the tree that makes System 1 and System 2 two separate takeoff areas (Hanz, 'Separate areas'): a new bid's defaults are now seeded once per area (System 1's lines measured with System 1, System 2's with System 2, each row marked with its area), so `library`, `twoSystems`, `conditionCells` and `mintedByIntake`, which seed defaults over two SF boxes, hold the second area's rows. `empty`, `noSf` and `savedEmptyTakeoff` and all 26 `saved` records are byte-identical to before.",
   "newBid_recut3": "the newBid records were re-recorded again on 2026-10-13 on the tree that buys each material once for the whole section (Hanz, 'Buy packs for the whole job'): a NEW Polish bid's model now carries `pool_packs: true`, the stamp that makes its takeoff price as one purchase (bid-model.js poolsPacks, library-core.js pricePool). That key is the ONLY difference in all seven records (no total moved), and `savedEmptyTakeoff`, a bid that was already saved, is unstamped and byte-identical. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
-  "phase14_recut": "re-recorded on 2026-10-13 on the Phase 14 tree: the Local condition also writes the Gyp base's B5 and Gyp (FR)'s own B5 (they are literals nothing wrote, and the sheet's travel lines read them), so every blob's `cell_values` gains those two keys, `\"Gyp (USG 1-8\\\")!B5\"` and `\"Gyp (FR)!B5\"`, and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key when it was recut)."
+  "phase14_recut": "re-recorded on 2026-10-13 on the Phase 14 tree: the Local condition also writes the Gyp base's B5 and Gyp (FR)'s own B5 (they are literals nothing wrote, and the sheet's travel lines read them), so every blob's `cell_values` gains those two keys, `\"Gyp (USG 1-8\\\")!B5\"` and `\"Gyp (FR)!B5\"`, and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key when it was recut).",
+  "phase15_recut": "re-recorded on 2026-10-13 on the Phase 15 tree: Local also writes Seal!B4 (Seal (+Jnts)!B4 mirrors it, and Seal's lodging line reads it) and Renovation also writes Seal!B10 (Seal's patch rate is IF(B10=\"New\",0.05,0.15)), so every blob's `cell_values` gains those two keys and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key, order included, when it was recut: 118 additions, no change and no removal)."
  },
  "golden": {
   "saved": {
@@ -136,6 +137,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -146,7 +148,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -285,6 +288,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -295,7 +299,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -437,6 +442,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -447,7 +453,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -586,6 +593,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -596,7 +604,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -739,6 +748,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -749,7 +759,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -889,6 +900,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -899,7 +911,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1042,6 +1055,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1052,7 +1066,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1192,6 +1207,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1202,7 +1218,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1351,6 +1368,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1361,7 +1379,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1507,6 +1526,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1517,7 +1537,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1666,6 +1687,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1676,7 +1698,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1822,6 +1845,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1832,7 +1856,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1967,6 +1992,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1977,7 +2003,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2109,6 +2136,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2119,7 +2147,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2254,6 +2283,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2264,7 +2294,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2396,6 +2427,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2406,7 +2438,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2543,6 +2576,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2553,7 +2587,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2687,6 +2722,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2697,7 +2733,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2834,6 +2871,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2844,7 +2882,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2978,6 +3017,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2988,7 +3028,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3144,6 +3185,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3154,7 +3196,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3307,6 +3350,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3317,7 +3361,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3473,6 +3518,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3483,7 +3529,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3636,6 +3683,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3646,7 +3694,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3802,6 +3851,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3812,7 +3862,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3965,6 +4016,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3975,7 +4027,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4131,6 +4184,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4141,7 +4195,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4294,6 +4349,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4304,7 +4360,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4468,6 +4525,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4478,7 +4536,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4639,6 +4698,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4649,7 +4709,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4813,6 +4874,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4823,7 +4885,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4984,6 +5047,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4994,7 +5058,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5188,6 +5253,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5198,7 +5264,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5389,6 +5456,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5399,7 +5467,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5593,6 +5662,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5603,7 +5673,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5794,6 +5865,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5804,7 +5876,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5962,6 +6035,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5973,6 +6047,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6131,6 +6206,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6142,6 +6218,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6303,6 +6380,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6314,6 +6392,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6472,6 +6551,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6483,6 +6563,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6629,6 +6710,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6639,7 +6721,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -6779,6 +6862,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6789,7 +6873,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -6932,6 +7017,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6942,7 +7028,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7082,6 +7169,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7092,7 +7180,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7239,6 +7328,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7249,7 +7339,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7393,6 +7484,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7403,7 +7495,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7550,6 +7643,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7560,7 +7654,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7704,6 +7799,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7714,7 +7810,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7860,6 +7957,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7870,7 +7968,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8013,6 +8112,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8023,7 +8123,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8169,6 +8270,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8179,7 +8281,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8322,6 +8425,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8332,7 +8436,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8774,6 +8879,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8784,7 +8890,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -9076,6 +9183,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -9086,7 +9194,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -9649,6 +9758,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -9659,7 +9769,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "computed_bid": {
       "lump_sum": 11338,
@@ -9896,6 +10007,7 @@
       "Epoxy!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -9905,7 +10017,8 @@
       "Polish!E25": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_estimate": {
       "version": 2,
@@ -10512,6 +10625,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -10522,7 +10636,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -10750,6 +10865,7 @@
       "Polish!B4": "Yes",
       "Gyp (USG 1-8\")!B5": "Yes",
       "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -10760,7 +10876,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -11203,6 +11320,7 @@
       "Polish!B4": "No",
       "Gyp (USG 1-8\")!B5": "No",
       "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -11213,7 +11331,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {

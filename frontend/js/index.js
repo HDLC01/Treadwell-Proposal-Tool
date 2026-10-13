@@ -111,10 +111,11 @@
   const CONDITIONS = [
     { key: "local", label: "Local job", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Under 70 miles. Off means travel and lodging get added.",
-      // Local is a literal on four sheets: Epoxy!B4, Polish!B4, and on the Gyp tabs the base's B5 and Gyp (FR)'s
-      // own (the other three Gyp tabs mirror the base). Writing the Gyp cells is what keeps a non-local Gyp bid
-      // from pricing as local, which its lodging line reads (Estimating Tool v2, Phase 14).
-      def: true,  cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"], on: "Yes", off: "No" },
+      // Local is a literal on five sheets: Epoxy!B4, Polish!B4, on the Gyp tabs the base's B5 and Gyp (FR)'s
+      // own (the other three Gyp tabs mirror the base), and Seal!B4 ('Seal (+Jnts)'!B4 mirrors it). Writing the Gyp
+      // cells is what keeps a non-local Gyp bid from pricing as local, which its lodging line reads (Estimating
+      // Tool v2, Phase 14), and writing Seal's does the same for a Seal option (Phase 15).
+      def: true,  cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4"], on: "Yes", off: "No" },
     // NO HARD BID. Hanz, 2026-10-03: "We also need to remove the hard bid discount. Even on
     // active projects and direct projects." The switch wrote Epoxy!B5/Polish!B5, the cell Kyle's
     // automatic 2.5% / 4% give-back reads; nothing may set it now (estimate_writer
@@ -141,7 +142,7 @@
       def: false, cells: ["Epoxy!D6"], on: "Yes", off: "No" },
     { key: "reno", label: "Renovation", scope: ["epoxy", "polish", "combo"],
       why: "Existing floor, not new construction. Triples the patch material rate.",
-      def: false, cells: ["Epoxy!B10", "Polish!B10"], on: "Reno", off: "New" },
+      def: false, cells: ["Epoxy!B10", "Polish!B10", "Seal!B10"], on: "Reno", off: "New" },
     { key: "dye", label: "Dye", scope: ["polish", "combo"],
       why: "Two coats of dye across the polished area.",
       def: false, cells: ["Polish!E25"], on: "Yes", off: "No" },

@@ -31,6 +31,12 @@ the rate and the hours a day and no longer the guys, the days or the From-SF fol
 `model/*`, `travel/*` and `labor/*` vector, the saved-bid arithmetic, and `libraryLaborRow` (still one faithful
 mapping of the library row) is as before.
 
+Phase 15 (the Seal option) re-cut it on 90be530 and 59 vectors moved, all of them the workbook cells a save writes
+and none of them a price: the constant `const/CONDITION_CELLS` (Local also writes `Seal!B4`, Renovation also
+writes `Seal!B10`) and the 35 `cond/cells/*` and 23 `cond/library/*` vectors, each of which gains exactly those
+two keys and nothing else (checked key by key when it was recut). Every `chain/*` vector, `model/*`, `newbid/*`
+and `seed/*` among them, is as before.
+
 Phases 4 to 10 move this code: the model module is renamed, ROUNDUP and the number helpers move to a
 leaf module, rates and the GP ladder become profile data, the chain becomes an engine. Each must
 leave this file's comparison green, or change it on purpose, in view, as a diff of lines somebody
