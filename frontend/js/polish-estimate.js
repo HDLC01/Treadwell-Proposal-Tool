@@ -867,6 +867,7 @@
     armed: null,        // the sheet whose Delete has been pressed once
     renaming: null,     // the sheet being renamed, with what is typed so far and the reason it was refused
     draft: "", error: "",
+    notice: null,       // { at, text }: why Copy or Add sheet was refused, drawn beside the control (at: the sheet, or "add")
     descOpen: {},       // the sheets whose description box is open
     pick: false,        // the "Add a sheet" choices are showing
     busy: false,        // a sheet is being added (the library is being read)
@@ -901,7 +902,7 @@
     return {
       open: activeTab, bids: bids, opts: multi ? TW.getState().tab_opts : undefined, sf: optionStartSf(), icon: icon,
       confirm: sheetsUi.confirm, armed: sheetsUi.armed, renaming: sheetsUi.renaming, draft: sheetsUi.draft,
-      error: sheetsUi.error, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf
+      error: sheetsUi.error, notice: sheetsUi.notice, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf
     };
   }
 
@@ -953,7 +954,7 @@
 
   /** Back to the panel's resting state: nothing waiting to be confirmed, armed or being renamed. */
   function resetSheetsUi() {
-    sheetsUi.confirm = null; sheetsUi.armed = null; sheetsUi.renaming = null; sheetsUi.error = "";
+    sheetsUi.confirm = null; sheetsUi.armed = null; sheetsUi.renaming = null; sheetsUi.error = ""; sheetsUi.notice = null;
   }
 
   /** The model was replaced (a copy, an added sheet, a rename, a base change, a delete): the panels' view of it is made
@@ -999,7 +1000,8 @@
       followSf = B.takeoffSf(B.sectionOf(ROOT, made.id).section.takeoff);
       sheetsChanged(made.id, made.id + "|open");
     } catch (err) {
-      say("The sheet could not be added: " + (err && err.message));
+      // In the panel, under the Add sheet button: the page's own alert is at the top of the page, out of sight once it has scrolled.
+      sheetsUi.notice = { at: "add", text: "The sheet could not be added: " + (err && err.message) };
     } finally {
       sheetsUi.busy = false;
       paintSheets();
@@ -1021,7 +1023,10 @@
       followSf = B.takeoffSf(B.sectionOf(ROOT, made.id).section.takeoff);
       sheetsChanged(made.id, made.id + "|open");
     } catch (err) {
-      say("The sheet could not be copied: " + (err && err.message));
+      // In the panel, under the sheet's own buttons (see addSheetPress): the 13th copy is refused where the estimator is looking.
+      sheetsUi.notice = { at: tab, text: "The sheet could not be copied: " + (err && err.message) };
+      sheetsUi.focus = tab + "|copy";
+      paintSheets();
     }
   }
 
@@ -1048,7 +1053,7 @@
     }
     ROOT = gone.model;
     if (Object.keys(gone.patch).length) TW.setState(gone.patch);
-    sheetsUi.confirm = null; sheetsUi.renaming = null; sheetsUi.error = ""; sheetsUi.descOpen = {};
+    sheetsUi.confirm = null; sheetsUi.renaming = null; sheetsUi.error = ""; sheetsUi.notice = null; sheetsUi.descOpen = {};
     var next = activeTab === tab ? openingTab() : activeTab;
     sheetsChanged(next, next + "|open");
   }
@@ -3318,6 +3323,8 @@
     var shAct = t.closest("[data-sh-act]");
     var shWhat = shAct ? shAct.getAttribute("data-sh-act") : null;
     if (sheetsUi.armed && shWhat !== "delete") { sheetsUi.armed = null; paintSheets(); }
+    // A refusal is said once: the next click, on anything but another press of Copy or Add, takes it down.
+    if (sheetsUi.notice && shWhat !== "copy" && shWhat !== "add") { sheetsUi.notice = null; paintSheets(); }
     if (shAct) {
       sheetsAct(shWhat, shAct.getAttribute("data-sh-tab"), shAct.getAttribute("data-sh-sheet"));
       return;
@@ -3465,6 +3472,12 @@
     if (key === "preset") {
       if (G.tabs().indexOf(value) < 0 || value === e.sheet) return;
       ROOT = B.moveSectionSheet(ROOT, e.tab, value);
+      // What the draft kept under the old key (the sheet's proposal settings, its notes, its own price override and its lines)
+      // follows it, or the sheet comes back with fresh settings and an option the estimator switched off prints. A copy keeps its key.
+      if (e.tab === e.sheet) {
+        var carried = B.moveSheetDraftPatch(TW.getState(), e.tab, value);
+        if (Object.keys(carried).length) TW.setState(carried);
+      }
       // A section filed under its sheet's name is re-filed under the new one; a copy keeps its Copy<N> key.
       show(e.tab === e.sheet ? value : e.tab);
       return;
@@ -4160,6 +4173,11 @@
     // moves the root, and the snapshot of whichever it was is the one that is behind. The root's is polish_sf and
     // computed_bid.polish_sf; another section's is its priced_tabs entry.
     if (B.snapshotBehind(ROOT, state)) saveSoon();
+    // A SEAL OPTION IS A TOTAL (B.optionOnlyTotalPatch): the Proposal step can leave one on Add / Deduct, which the panel has no
+    // way to show or change. Put back here, before the first paint, so the panel and the proposal say the same. Writes nothing
+    // for a bid that has no such sheet, so a plain reopen still writes nothing.
+    var sealTotals = B.optionOnlyTotalPatch(ROOT, TW.getState());
+    if (Object.keys(sealTotals).length) TW.setState(sealTotals);
 
     renderDatalist();
     $("loading").hidden = true;

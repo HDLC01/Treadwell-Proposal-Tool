@@ -180,8 +180,11 @@ function makeDom(log) {
         set(v) { _class = String(v); self.classWrites += 1; },
       },
     });
+    // A browser hands back an attribute DECODED (value="a&quot;b" reads as a"b). The stub kept the raw text, so a Gyp sheet's id,
+    // which has a quote mark in it (Gyp (USG 1-8")), came back as Gyp (USG 1-8&quot;) and no test could press its row. The selector
+    // matcher (matchesSel) still compares the raw text, so a selector spells that quote as &quot; as it always had to.
     self.getAttribute = (k) =>
-      (Object.prototype.hasOwnProperty.call(self.attrs, k) ? self.attrs[k] : null);
+      (Object.prototype.hasOwnProperty.call(self.attrs, k) ? dec(self.attrs[k]) : null);
     self.setAttribute = (k, v) => { self.attrs[k] = String(v); };
     self.matches = (sel) => matchesSel(self, sel);
     // Self-match only: every delegated handler on this page is fired at the button or field it

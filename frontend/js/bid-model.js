@@ -3722,6 +3722,10 @@
     return out;
   }
 
+  /** The maps in price_overrides whose keys are the lines of an option ("option:<tab>" and its tax rows "option:<tab>:..."):
+   *  the words typed over a line, the lines typed above and below it, and the bullets set on them. */
+  var OPTION_LINE_MAPS = ["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"];
+
   /** WHAT AN OPTION LEAVES BEHIND ON THE DRAFT WHEN IT IS TAKEN OFF, as a patch for TW.setState (a NEW object; `state`
    *  is not touched; {} when there is nothing to forget). A Seal option's id is its sheet's name, so it is the SAME id the
    *  next time the option is added, and anything kept under it would print on the new option's line of the customer's
@@ -3749,9 +3753,50 @@
       var next = Object.fromEntries(Object.keys(pov).map(function (key) {
         var map = pov[key];
         var test = key === "options" ? byTab
-          : (["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"].indexOf(key) >= 0 ? byLine : null);
+          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? byLine : null);
         if (test && holds(map, test)) { changed = true; return [key, without(map, test)]; }
         return [key, map];
+      }));
+      if (changed) patch.price_overrides = next;
+    }
+    return patch;
+  }
+
+  /** WHAT THE DRAFT KEPT UNDER ONE SHEET'S ID, MOVED TO ANOTHER ID, as a patch for TW.setState (a NEW object; `state` is not
+   *  touched; {} when there is nothing under either id). For a sheet whose KEY changes while the sheet stays: a Gyp sheet is filed
+   *  under its preset's workbook tab, so changing the preset renames the key (moveSectionSheet), and everything the draft holds
+   *  under the old key (its proposal settings tab_opts, its notes, its own price override, the words typed over its line and the
+   *  lines around it) has to follow, or the sheet comes back with fresh settings and an option the estimator switched off prints.
+   *  The same set optionLeftoverPatch forgets. Whatever the draft held under the NEW id is dropped first: nothing is a section of
+   *  this bid under it (moveSectionSheet refuses that), so it is left over from an earlier sheet of that name. Key order is kept. */
+  function moveSheetDraftPatch(state, fromTab, toTab) {
+    var st = isObject(state) ? state : {};
+    var patch = {};
+    if (fromTab === toTab) return patch;
+    var lineKey = function (id) { return "option:" + id; };
+    var byTab = function (k, id) { return k === id; };
+    var byLine = function (k, id) { return k === lineKey(id) || k.indexOf(lineKey(id) + ":") === 0; };
+    var renameTab = function () { return toTab; };
+    var renameLine = function (k) { return lineKey(toTab) + k.slice(lineKey(fromTab).length); };
+    function move(map, isMine, rename) {
+      if (!isObject(map)) return null;
+      var keys = Object.keys(map);
+      if (!keys.some(function (k) { return isMine(k, fromTab) || isMine(k, toTab); })) return null;
+      return Object.fromEntries(keys.filter(function (k) { return !isMine(k, toTab); })
+        .map(function (k) { return [isMine(k, fromTab) ? rename(k) : k, map[k]]; }));
+    }
+    ["tab_opts", "tab_notes"].forEach(function (key) {
+      var moved = move(st[key], byTab, renameTab);
+      if (moved) patch[key] = moved;
+    });
+    var pov = st.price_overrides;
+    if (isObject(pov)) {
+      var changed = false;
+      var next = Object.fromEntries(Object.keys(pov).map(function (key) {
+        var moved = key === "options" ? move(pov[key], byTab, renameTab)
+          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? move(pov[key], byLine, renameLine) : null);
+        if (moved) { changed = true; return [key, moved]; }
+        return [key, pov[key]];
       }));
       if (changed) patch.price_overrides = next;
     }
@@ -4464,6 +4509,7 @@
   //   descOpen   { sectionId: true } the description boxes that are open
   //   pick       the "Add a sheet" menu is open              busy       a sheet is being added (the library is being read)
   //   icon       function (name, size) -> svg markup, or none   sysDesc    function (sectionId) -> what the option prints now
+  //   notice     { at, text }: why a press was refused, drawn under the control that was pressed (at: a section id, or "add")
   //
   // EVERY CONTROL CARRIES A data- ATTRIBUTE THE PAGE'S ONE CLICK HANDLER READS: data-section-tab (open it), data-sh-base (the
   // radio), data-sh-act with data-sh-tab (on, desc, copy, rename, rename-save, rename-cancel, delete, base-yes, base-no,
@@ -4504,6 +4550,25 @@
     var held = isObject(st.tab_opts) ? st.tab_opts : {};
     var cur = has.call(held, id) && isObject(held[id]) ? held[id] : optionSettings(true);
     return { tab_opts: Object.assign({}, copyInto({}, held), Object.fromEntries([[id, Object.assign({}, cur, change)]])) };
+  }
+
+  /** A SEAL OPTION IS A TOTAL, NEVER AN ADD OR DEDUCT: a patch for TW.setState that sets tab_opts[id].price_mode back to "total" for
+   *  every option-only sheet (Seal and its copies) whose entry says "deduct", and {} when none does (a NEW object; `state` is not
+   *  touched). The panel offers a Seal sheet no Total / Add or Deduct pair and says it is priced as a total, but the Proposal step's
+   *  own "Price as" box can leave one on Add / Deduct, and the proposal prints what the draft says: the panel would state one
+   *  thing and the customer's document another. Everything else the entry holds is kept. */
+  function optionOnlyTotalPatch(model, state) {
+    var st = isObject(state) ? state : {};
+    if (!isObject(st.tab_opts)) return {};
+    var entries;
+    try { entries = sectionsOf(model); } catch (err) { return {}; }
+    var next = null;
+    entries.forEach(function (e) {
+      var held = has.call(st.tab_opts, e.tab) && isObject(st.tab_opts[e.tab]) ? st.tab_opts[e.tab] : null;
+      if (!held || held.price_mode !== "deduct" || !types.tab(types.tabOfSheet(e.sheet)).optionOnly) return;
+      next = Object.assign({}, next || copyInto({}, st.tab_opts), Object.fromEntries([[e.tab, Object.assign({}, held, { price_mode: "total" })]]));
+    });
+    return next ? { tab_opts: next } : {};
   }
 
   var JOB_WORDS = { polish: "Polish", epoxy: "Epoxy", gyp: "Gyp", combo: "Combo" };
@@ -4608,6 +4673,8 @@
 
     // "Add sheet" is the first thing under the hint, above the list (Hanz, 2026-10-13).
     h += '<div class="sh-add">';
+    // Why a sheet could not be added, beside the button that was pressed (the page's own alert is above the fold of a long page).
+    if (isObject(v.notice) && v.notice.at === "add") h += noticeHtml(v.notice);
     if (!v.pick) {
       h += '<button type="button" class="btn ghost sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
         ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button>';
@@ -4660,6 +4727,11 @@
       h += '<p class="sh-empty">Add a sheet to price an option. Options never change the lump sum.</p>';
     }
     return h;
+
+    /** Why a press was refused, in the model's own words, as a line of the panel (the page sets view.notice = { at, text }). */
+    function noticeHtml(n) {
+      return '<p class="sh-note warn" role="alert" data-sh-notice>' + escHtml(n.text) + '</p>';
+    }
 
     function confirmHtml(m, view2) {
       var words;
@@ -4737,6 +4809,7 @@
           else if (r.inBase) s += '<p class="sh-note">' + escHtml(e.label) + ' is part of the base bid, so it can\'t be deleted. Pick a different base first.</p>';
           else if (e.root) s += '<p class="sh-note">' + escHtml(e.label) + ' is where this bid starts, so it can\'t be deleted. Switch it off above to keep it off the proposal.</p>';
           if (armed) s += '<p class="sh-note warn">Deletes ' + escHtml(e.label) + ' and everything typed on it.</p>';
+          if (isObject(v.notice) && v.notice.at === t) s += noticeHtml(v.notice);
         }
         s += '</div>';
       }
@@ -4889,7 +4962,9 @@
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
     sheetsPanelHtml: sheetsPanelHtml, sheetNowHtml: sheetNowHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
-    optionIsOn: optionIsOn, tabOptPatch: tabOptPatch,
+    optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
+    // A Gyp sheet's key changes with its preset: what the draft kept under the old key follows (see moveSheetDraftPatch).
+    moveSheetDraftPatch: moveSheetDraftPatch,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
     // labor default that already exists. It is exported rather than re-typed there for the reason

@@ -36,7 +36,9 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 SECTIONS = ["list", "copy", "add", "seal", "baseSwitch", "combined", "deleting", "renaming", "options", "reopen", "unreadable", "focus",
-            "markup", "floating"]
+            "markup", "floating", "gypPreset", "limit", "sealMode", "demote", "resets", "unstated", "hiddenOption"]
+GYP1, GYP2 = 'Gyp (USG 1-8")', "Gyp (USG N12ULTRA)"
+LIMIT = "A bid can hold 12 copied sheets at most."
 EM_DASH, EN_DASH = chr(0x2014), chr(0x2013)
 
 
@@ -336,6 +338,112 @@ def test_no_new_copy_in_the_panel_uses_a_dash(ran):
         assert EM_DASH not in text and EN_DASH not in text
 
 
+# ── 13. review findings (Sheets phase 3): the Gyp preset, the limit, Seal, and what a press clears ───────────────
+def test_a_gyp_sheet_is_added_from_the_menu_by_its_id_with_the_quote_mark_in_it(ran):
+    """The stub DOM now hands an attribute back DECODED, as a browser does: the Add menu's Gyp row says Gyp (USG 1-8&quot;) in the markup
+    and the page has to read Gyp (USG 1-8"). Before, no test could press that row ('cannot be added to a bid')."""
+    assert ran["gypPreset"]["added"] == {"rows": ["Polish", GYP1], "open": GYP1, "on": True, "alert": ""}
+
+
+def test_changing_a_gyp_sheets_preset_keeps_its_proposal_settings_its_words_and_everything_else_the_draft_held_for_it(ran):
+    """THE DEFECT. Add menu, Gyp (it adds the FIRST preset), the switch OFF, words typed in Description, then another preset on the Material
+    step. The preset renames the sheet's key, and nothing carried the draft's tab_opts, notes, price override or typed line across: the sheet
+    came back with fresh settings and an option the estimator had switched OFF printed on the customer's proposal."""
+    g = ran["gypPreset"]
+    assert g["before"]["is_option"] is False and g["before"]["desc"] == "my gyp words"
+    assert g["open"] == GYP2
+    assert g["keys"] == {"opts": [GYP2], "notes": [GYP2, "Other"], "options": [GYP2, "Other"], "lines": ["option:" + GYP2]}, (
+        "everything follows the new key and nothing is left under the old preset")
+    assert g["opt"] == g["before"], "OFF stays OFF, with its words"
+    assert g["notes"] == ["a note"] and g["option"] == {"label": "mine"} and g["line"] == "my line"
+    assert g["otherKept"] == [["kept"], {"label": "kept"}], "another sheet's are left alone"
+    assert g["row"]["switchOff"] is True and g["row"]["switchOn"] is False and g["row"]["preview"] == "my gyp words", (
+        "and the panel shows it: the switch is off and the words are there")
+    assert g["saved"]["tabs"] == [GYP2] and g["saved"]["opts"] == [GYP2] and g["saved"]["entry"]["is_option"] is False, (
+        "the next save finds an entry for the sheet, so it writes none: no second, fresh one that is ON")
+
+
+def test_switching_back_to_the_first_preset_brings_the_same_settings_back_with_nothing_left_behind(ran):
+    g = ran["gypPreset"]
+    b = g["back"]
+    assert b["opts"] == [GYP1] and b["entry"] == g["before"] and b["notes"] == [GYP1, "Other"] and b["options"] == [GYP1, "Other"]
+
+
+def test_the_add_menu_lists_each_type_once_and_gyp_is_one_row(ran):
+    assert ran["add"]["menuLabels"] == ["Polish", "Epoxy", "Gyp", "Seal", "Seal (+Jnts)"]
+
+
+def test_the_excel_hint_is_drawn_only_when_the_bid_holds_a_copy(ran):
+    assert ran["add"]["excel"] == [False, False, True], "none on a bid of one sheet or with an added sheet, there once a copy exists"
+
+
+def test_at_twelve_copies_the_refusal_is_said_in_the_panel_beside_the_button_not_at_the_top_of_the_page(ran):
+    """With the panel floating and the page scrolled, the page's own alert is out of sight (it measured -90px). The refusal is a line of
+    the panel: under the sheet's own buttons for Copy, under the Add sheet button for Add."""
+    l = ran["limit"]
+    assert l["last"] == "Copy12"
+    c = l["copyRefused"]
+    assert c["copies"] == 12 and c["inRow"] == "The sheet could not be copied: " + LIMIT
+    assert c["inAddBlock"] is None and c["alert"] == "", "said once, in the row that was pressed"
+    a = l["addRefused"]
+    assert a["inAddBlock"] == "The sheet could not be added: " + LIMIT and a["inRow"] is None and a["alert"] == ""
+    assert a["menuOpen"] is True, "the menu stays open so another type can be chosen"
+
+
+def test_a_refusal_goes_on_the_next_click_and_when_a_sheet_goes_in(ran):
+    """It used to stay at the top of the page through every later successful action."""
+    l = ran["limit"]
+    assert l["copyRefused"]["inRow"] is not None and l["addRefused"]["inAddBlock"] is not None, "it was there to be taken down"
+    assert l["afterClick"] is None
+    assert l["added"] == {"inAddBlock": None, "epoxy": True}
+
+
+def test_a_seal_option_the_proposal_step_left_on_add_or_deduct_is_a_total_when_the_page_opens(ran):
+    """The panel offers a Seal sheet no Total / Add or Deduct pair and says it is priced as a total, while the proposal printed what the draft
+    said. Put back before the first paint; the words stay, and a copy of Polish keeps its Add / Deduct."""
+    s = ran["sealMode"]
+    assert s["written"]["Seal"] == {"show_system": True, "show_diff": False, "is_option": True, "show": True, "price_mode": "total",
+                                    "desc": "seal words"}
+    assert s["written"]["Copy1"]["price_mode"] == "deduct"
+    assert s["noPair"] is True and s["writesOnOpen"] == 1
+    assert s["plainWritesOnOpen"] == 0, "a bid with its Seal on a total writes nothing on open"
+
+
+def test_the_old_base_goes_on_the_proposal_as_a_total_with_its_words_whatever_it_had_held(ran):
+    """The fixture's old base used to hold nothing, so forcing the total was never seen: here it held Add / Deduct and was hidden."""
+    d = ran["demote"]
+    assert d["written"] == dict(d["before"], is_option=True, show=True, price_mode="total")
+    assert d["summary"] == "Option, total"
+
+
+def test_a_press_clears_a_base_change_waiting_for_its_yes_and_a_name_being_typed_and_its_refusal(ran):
+    r = ran["resets"]
+    assert r["askedA"] is True and r["afterOpen"] is False, "opening another sheet drops a base change that was asked for"
+    assert r["refused"] == {"input": True, "error": True} and r["afterOpenName"] == {"input": False, "error": False}
+    assert r["askedC"] is True and r["afterCopy"] is False, "copying a sheet does too"
+    assert r["withMenu"] is True and r["afterAdd"] is False, "so does adding one, though opening the menu alone does not"
+
+
+def test_an_option_the_draft_has_said_nothing_about_is_priced_as_a_total_and_opening_it_writes_nothing(ran):
+    u = ran["unstated"]
+    for case in ("noEntry", "noMode"):
+        assert u[case] == {"total": True, "deduct": False, "summary": "Option, total", "saves": 0}, case
+
+
+def test_the_switch_brings_back_an_option_the_proposal_step_had_hidden(ran):
+    h = ran["hiddenOption"]
+    assert h["hidden"] == {"on": False, "summary": "Not on the proposal"}
+    assert h["shown"] == {"on": True, "summary": "Option, total"}
+    assert h["written"] == {"show_system": True, "show_diff": False, "is_option": True, "show": True, "price_mode": "total", "desc": "kept words"}, (
+        "on means shown too: a switch that left show false would stay stuck on Not on the proposal")
+    assert h["off"]["on"] is False and h["off"]["opt"]["is_option"] is False and h["off"]["opt"]["desc"] == "kept words"
+
+
+def test_the_caret_goes_to_the_name_box_when_a_name_is_refused_and_back_to_rename_when_it_is_saved(ran):
+    f = ran["focus"]
+    assert f["afterRefusedName"] == ["Copy2|name"] and f["afterSavedName"] == ["Copy2|rename"]
+
+
 # ── red without the code ─────────────────────────────────────────────────────────────────────────────────────
 BREAKS = {
     "a base change writes no work type": (
@@ -407,6 +515,55 @@ BREAKS = {
     "the page keeps no lane for the panel": (
         "polish-estimate.html", "      body{padding-right:288px}", "      body{padding-right:0}",
         lambda r: "body{padding-right:288px}" not in r["floating"]["wide"].replace(" ", "")),
+    # --- the review findings ---
+    "a preset change leaves the sheet's settings under the old key": (
+        "js/polish-estimate.js", "        if (Object.keys(carried).length) TW.setState(carried);", "        void carried;",
+        lambda r: r["gypPreset"].get("opt") != r["gypPreset"]["before"] or r["gypPreset"]["saved"]["entry"]["is_option"] is not False),
+    "the Add menu lists no Gyp": (
+        "js/bid-model.js", '        .filter(function (k) { if (k.role !== "gyp") return true; var first = !seenGyp; seenGyp = true; return first; })',
+        '        .filter(function (k) { return k.role !== "gyp"; })',
+        lambda r: "Gyp" not in r["add"]["menuLabels"]),
+    "the Excel hint is always drawn": (
+        "js/bid-model.js", "    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {", "    if (true) {",
+        lambda r: r["add"]["excel"][0] is not False),
+    "an option with no stored mode is priced as an Add or Deduct": (
+        "js/bid-model.js", '      var mode = !optOnly && held.price_mode === "deduct" ? "deduct" : "total";',
+        '      var mode = !optOnly && held.price_mode !== "total" ? "deduct" : "total";',
+        lambda r: r["unstated"]["noEntry"]["total"] is not True or r["unstated"]["noMode"]["total"] is not True),
+    "the old base keeps the mode it held": (
+        "js/bid-model.js", '      var kept = Object.assign(optionSettings(true), entryOf(id), { is_option: true, show: true, price_mode: "total" });',
+        '      var kept = Object.assign(optionSettings(true), entryOf(id), { is_option: true, show: true });',
+        lambda r: r["demote"]["written"].get("price_mode") != "total"),
+    "the old base stays hidden": (
+        "js/bid-model.js", '      var kept = Object.assign(optionSettings(true), entryOf(id), { is_option: true, show: true, price_mode: "total" });',
+        '      var kept = Object.assign(optionSettings(true), entryOf(id), { is_option: true, price_mode: "total" });',
+        lambda r: r["demote"]["written"].get("show") is not True),
+    "the switch leaves a hidden option hidden": (
+        "js/polish-estimate.js", "    TW.setState(B.tabOptPatch(st, tab, on ? { is_option: false } : { is_option: true, show: true }));",
+        "    TW.setState(B.tabOptPatch(st, tab, on ? { is_option: false } : { is_option: true }));",
+        lambda r: r["hiddenOption"]["shown"]["on"] is not True),
+    "a press clears nothing waiting in the panel": (
+        "js/polish-estimate.js", '    sheetsUi.confirm = null; sheetsUi.armed = null; sheetsUi.renaming = null; sheetsUi.error = ""; sheetsUi.notice = null;',
+        "    void 0;",
+        lambda r: r["resets"]["afterOpen"] is not False or r["resets"]["afterOpenName"]["input"] is not False or r["resets"]["afterCopy"] is not False
+        or r["resets"]["afterAdd"] is not False),
+    "a saved name leaves the caret nowhere": (
+        "js/polish-estimate.js", '    sheetsChanged(activeTab, tab + "|rename");', "    sheetsChanged(activeTab);",
+        lambda r: r["focus"]["afterSavedName"] != ["Copy2|rename"]),
+    "a refused copy is said at the top of the page": (
+        "js/polish-estimate.js", '      sheetsUi.notice = { at: tab, text: "The sheet could not be copied: " + (err && err.message) };',
+        '      say("The sheet could not be copied: " + (err && err.message));',
+        lambda r: r["limit"]["copyRefused"]["inRow"] is None),
+    "a refused add is said at the top of the page": (
+        "js/polish-estimate.js", '      sheetsUi.notice = { at: "add", text: "The sheet could not be added: " + (err && err.message) };',
+        '      say("The sheet could not be added: " + (err && err.message));',
+        lambda r: r["limit"]["addRefused"]["inAddBlock"] is None),
+    "a refusal stays through the next click": (
+        "js/polish-estimate.js", '    if (sheetsUi.notice && shWhat !== "copy" && shWhat !== "add") { sheetsUi.notice = null; paintSheets(); }',
+        "    void 0;", lambda r: r["limit"]["afterClick"] is not None),
+    "a Seal option on add or deduct is left as it was": (
+        "js/polish-estimate.js", "    if (Object.keys(sealTotals).length) TW.setState(sealTotals);", "    void sealTotals;",
+        lambda r: r["sealMode"]["written"]["Seal"]["price_mode"] != "total"),
 }
 
 
@@ -417,10 +574,10 @@ def test_the_checks_go_red_when_the_code_changes(tmp_path, name):
     frontend = break_source(tmp_path, rel, old, new)
     copy_unmodified(frontend, PAGE_FILES)
     proc = run_node(HARNESS, frontend)
-    if proc.returncode != 0:
-        return   # the break stopped the page outright: noticed
-    try:
-        seen = noticed(last_json_line(proc.stdout))
-    except (KeyError, TypeError, IndexError, AttributeError):
-        return   # a section that crashed reports { error } and has none of its facts: noticed
-    assert seen, "the checks did not notice: " + name
+    # A BREAK IS NOTICED BY A FACT THAT CHANGED, never by a crash. A page that fails to boot, or a section that throws, has no facts to
+    # compare, and counting that as noticed let three entries pass without a single assertion having seen the behaviour they break.
+    assert proc.returncode == 0, "the break stopped the page outright, so no fact noticed it: " + name
+    got = last_json_line(proc.stdout)
+    crashed = sorted(k for k, v in got.items() if isinstance(v, dict) and "error" in v)
+    assert not crashed, "the break crashed %s instead of changing a fact: %s" % (", ".join(crashed), name)
+    assert noticed(got), "the checks did not notice: " + name

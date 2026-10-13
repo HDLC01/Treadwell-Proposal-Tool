@@ -21,6 +21,7 @@ const B = require(path.join(ROOT, "js", "bid-model.js"));
 const LIB = require(path.join(ROOT, "js", "library-core.js"));
 const X = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
 const PRICE = require(path.join(ROOT, "js", "price-lines-core.js"));
+const GYP = require(path.join(ROOT, "js", "gyp-takeoff.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -36,7 +37,7 @@ function loadPrelude(file, exportNames) {
   return m.exports;
 }
 
-const P = loadPrelude("polish-estimate-harness.js", ["build", "blob", "typeInto", "clickEl", "need", "MODEL", "ITEMS", "ASMS"]);
+const P = loadPrelude("polish-estimate-harness.js", ["build", "blob", "typeInto", "clickEl", "changeTo", "need", "MODEL", "ITEMS", "ASMS"]);
 
 const flush = () => new Promise((r) => setImmediate(r));
 const settle = async () => { for (let i = 0; i < 12; i++) await flush(); };
@@ -78,12 +79,20 @@ function epoxyByHand(model, tab) {
   });
 }
 
-const rowsOf = (h) => (h.match(/data-sh-row="([^"]*)"/g) || []).map((s) => /"([^"]*)"/.exec(s)[1]);
-const tabsOf = (h) => (h.match(/data-section-tab="([^"]*)"/g) || []).map((s) => /"([^"]*)"/.exec(s)[1]);
-const openTab = (h) => ((/data-section-tab="([^"]*)"[^>]*aria-current="true"/.exec(h)) || [])[1] || null;
-const sel = (act, tab) => '[data-sh-act="' + act + '"]' + (tab === undefined ? "" : '[data-sh-tab="' + tab + '"]');
+/** How a quote mark in a sheet's id (Gyp (USG 1-8")) reads in the panel's markup, which is what the stub's selector matcher compares. */
+const attr = (s) => String(s).replace(/"/g, "&quot;");
+/** ...and back: what a browser hands the page. */
+const unattr = (s) => String(s).replace(/&quot;/g, '"');
+const rowsOf = (h) => (h.match(/data-sh-row="([^"]*)"/g) || []).map((s) => unattr(/"([^"]*)"/.exec(s)[1]));
+const tabsOf = (h) => (h.match(/data-section-tab="([^"]*)"/g) || []).map((s) => unattr(/"([^"]*)"/.exec(s)[1]));
+const openTab = (h) => { const m = /data-section-tab="([^"]*)"[^>]*aria-current="true"/.exec(h); return m ? unattr(m[1]) : null; };
+const sel = (act, tab) => '[data-sh-act="' + act + '"]' + (tab === undefined ? "" : '[data-sh-tab="' + attr(tab) + '"]');
 const click = (b, selector) => P.clickEl(b, P.need(b, selector));
-const openSheet = (b, tab) => click(b, '[data-section-tab="' + tab + '"]');
+/** A press on a control that may not be there. A break that removes a control must change a FACT the section reads, never crash the section:
+ *  test_the_checks_go_red counts a crash as no fact noticed, so every step after the first thing a break can remove presses through these. */
+const clickIf = (b, selector) => { const el = b.doc.querySelector(selector); if (el) P.clickEl(b, el); return !!el; };
+const textIf = (b, selector) => { const el = b.doc.querySelector(selector); return el ? el.textContent : null; };
+const openSheet = (b, tab) => click(b, '[data-section-tab="' + attr(tab) + '"]');
 /** What the browser sends when a radio is picked: a change event on it. */
 function pick(b, selector) { const el = P.need(b, selector); b.doc.fire("change", { target: el }); return el; }
 function typeName(b, tab, value) { const el = P.need(b, '[data-sh-name="' + tab + '"]'); el.value = value; b.doc.fire("input", { target: el }); return el; }
@@ -94,12 +103,13 @@ function key(b, tab, k) {
   return prevented;
 }
 const panel = (b) => html(b, "sheets-panel");
+const hasExcelHint = (h) => /The Excel download does not include them/.test(h);
 /** The words of a base change waiting for its yes, read out of the row that holds them. */
 const confirmOf = (h) => { const m = /<div class="sh-confirm"[^>]*><b>([^<]*)<\/b><p>([^<]*)<\/p>/.exec(h); return m ? { title: m[1], body: m[2] } : null; };
 /** The model the page holds NOW: the debounced save is flushed and the model is read back out of it. (api.state() is the blob the page
  *  opened on, and api.model() is the sheet on show, so neither is the whole bid after an edit.) */
 const modelOf = (b) => { b.clock.fire(); return clone(last(b.rec.saves.filter((x) => x.polish_estimate)).polish_estimate); };
-const rowHtml = (b, tab) => { const h = panel(b); const at = h.indexOf('data-sh-row="' + tab + '"'); if (at < 0) return ""; const end = h.indexOf("</li>", at); return h.slice(at, end); };
+const rowHtml = (b, tab) => { const h = panel(b); const at = h.indexOf('data-sh-row="' + attr(tab) + '"'); if (at < 0) return ""; const end = h.indexOf("</li>", at); return h.slice(at, end); };
 const sumOf = (b, tab) => ((/class="sh-sum[^"]*">([^<]*)(?:<b>([^<]*)<\/b>)?/.exec(rowHtml(b, tab))) || []).slice(1, 3).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 
 async function main() {
@@ -107,6 +117,7 @@ async function main() {
   const sections = [
     ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["combined", combined], ["deleting", deleting],
     ["renaming", renaming], ["options", options], ["reopen", reopen], ["unreadable", unreadable], ["focus", focus], ["markup", markup], ["floating", floating],
+    ["gypPreset", gypPreset], ["limit", limit], ["sealMode", sealMode], ["demote", demote], ["resets", resets], ["unstated", unstated], ["hiddenOption", hiddenOption],
   ];
   for (const [name, fn] of sections) {
     try { out[name] = await fn(); } catch (e) { out[name] = { error: String(e && e.stack || e) }; }
@@ -163,6 +174,7 @@ async function add() {
   const menu = panel(b);
   click(b, '[data-sh-act="add"][data-sh-sheet="Epoxy"]');
   await settle();
+  const excelAfterEpoxy = hasExcelHint(panel(b));
   const model = modelOf(b);
   const afterEpoxy = { tabs: Object.keys(model.tabs), kind: model.tabs.Epoxy.kind, tabOpts: clone(b.store.blob.tab_opts), summary: sumOf(b, "Epoxy"),
                        switchOn: /role="switch" aria-checked="true"/.test(rowHtml(b, "Epoxy")), open: openTab(panel(b)), menuClosed: /data-sh-act="add-menu"[^>]*aria-expanded="false"/.test(panel(b)), busy: /sh-pick-row/.test(panel(b)) };
@@ -173,6 +185,9 @@ async function add() {
   b.clock.fire();
   const saved = last(b.rec.saves);
   return {
+    // the types on the menu, in order (Gyp is one row: it adds the first preset), and when the hint about the Excel download is drawn
+    menuLabels: (menu.match(/class="sh-pick-row" data-sh-act="add"[^>]*><span>([^<]*)<\/span>/g) || []).map((x) => unattr(/<span>([^<]*)<\/span>/.exec(x)[1])),
+    excel: [hasExcelHint(menu), excelAfterEpoxy, hasExcelHint(panel(b))],
     menuHasClose: /data-sh-act="add-close"/.test(menu), menuTagged: (menu.match(/Option only/g) || []).length, startsFrom: /It starts from this bid's [\d,]+ SF\./.exec(menu) && /It starts from this bid's [\d,]+ SF\./.exec(menu)[0],
     afterEpoxy: afterEpoxy,
     secondPolish: { tabs: Object.keys(m2.tabs), sheet: m2.tabs.Copy1.sheet, label: m2.tabs.Copy1.label, kind: m2.tabs.Copy1.kind, tabOpts: clone(b.store.blob.tab_opts).Copy1 },
@@ -218,10 +233,10 @@ async function baseSwitch() {
                     nothingChanged: b.store.blob.work_type === "polish" && B.baseOf(b.api.model()).jobType === "polish",
                     saves: b.rec.saves.length - savesBefore };
   // Cancel puts it back without writing anything
-  click(b, '[data-sh-act="base-no"]');
+  clickIf(b, '[data-sh-act="base-no"]');
   const cancelled = { confirmGone: rowHtml(b, "Epoxy").indexOf("sh-confirm") < 0, saves: b.rec.saves.length - savesBefore };
   pick(b, '[data-sh-base="Epoxy"]');
-  click(b, '[data-sh-act="base-yes"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
   // what the PICK wrote, before the save that follows it gets to restate the snapshot
   const written = clone(b.store.blob);
   b.clock.fire();
@@ -252,7 +267,7 @@ async function combined() {
   pick(b, '[data-sh-base="combined"]');
   const row = rowHtml(b, "combined");
   const confirm = confirmOf(row);
-  click(b, '[data-sh-act="base-yes"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
   const written = clone(b.store.blob);
   b.clock.fire();
   const saved = last(b.rec.saves);
@@ -267,7 +282,7 @@ async function combined() {
   // and back to Epoxy alone: Polish leaves the base, as an option on the proposal, priced as a total
   pick(b, '[data-sh-base="Epoxy"]');
   const back = { body: (confirmOf(rowHtml(b, "Epoxy")) || {}).body };
-  click(b, '[data-sh-act="base-yes"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
   const blob2 = clone(b.store.blob);
   b.clock.fire();
   out.back = { body: back.body, work_type: blob2.work_type, base_tab_id: blob2.base_tab_id, polishOpt: clone(blob2.tab_opts.Polish),
@@ -290,11 +305,11 @@ async function deleting() {
   // an option: the first press arms, a click elsewhere puts it back, two presses delete it and the draft forgets it
   openSheet(b, "Copy1");
   click(b, sel("delete", "Copy1"));
-  const armed = { label: P.need(b, sel("delete", "Copy1")).textContent, warns: /Deletes Polish copy and everything typed on it\./.test(rowHtml(b, "Copy1")), still: Object.keys(b.api.model().tabs) };
+  const armed = { label: textIf(b, sel("delete", "Copy1")), warns: /Deletes Polish copy and everything typed on it\./.test(rowHtml(b, "Copy1")), still: Object.keys(b.api.model().tabs) };
   // a click on something that does not itself clear the arming (the Description toggle), so it is the page's rule that puts it back
-  click(b, sel("desc", "Copy1"));
-  const disarmed = P.need(b, sel("delete", "Copy1")).textContent;
-  click(b, sel("delete", "Copy1")); click(b, sel("delete", "Copy1"));
+  clickIf(b, sel("desc", "Copy1"));
+  const disarmed = textIf(b, sel("delete", "Copy1"));
+  clickIf(b, sel("delete", "Copy1")); clickIf(b, sel("delete", "Copy1"));
   b.clock.fire();
   const saved = last(b.rec.saves);
   return {
@@ -394,7 +409,7 @@ async function reopen() {
   const model = polishModel({ tabs: { Epoxy: epoxySection("option") } });
   const b = await open(draft(model, { tab_opts: { Epoxy: B.optionSettings(true) } }));
   pick(b, '[data-sh-base="Epoxy"]');
-  click(b, '[data-sh-act="base-yes"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
   b.clock.fire();
   const again = await open(clone(b.store.blob));
   const m = clone(again.api.state().polish_estimate);
@@ -440,7 +455,17 @@ async function focus() {
   const afterCancel = focused.splice(0);
   click(b, sel("copy", "Copy1"));
   const afterCopy = focused.splice(0);
-  return { afterSwitch: afterSwitch, afterRename: afterRename, afterCancel: afterCancel, afterCopy: afterCopy };
+  // a name that will not do keeps the caret in the box; a saved name puts it back on Rename
+  click(b, sel("rename", "Copy2"));
+  focused.splice(0);
+  typeName(b, "Copy2", "   ");
+  key(b, "Copy2", "Enter");
+  const afterRefusedName = focused.splice(0);
+  typeName(b, "Copy2", "Garage");
+  key(b, "Copy2", "Enter");
+  const afterSavedName = focused.splice(0);
+  return { afterSwitch: afterSwitch, afterRename: afterRename, afterCancel: afterCancel, afterCopy: afterCopy,
+           afterRefusedName: afterRefusedName, afterSavedName: afterSavedName };
 }
 
 // ── 13. the pure markup: escaping, no dash, nothing for a bid with no sheets to say ─────────────────────────
@@ -493,6 +518,166 @@ async function floating() {
     oldStripGone: css.indexOf('id="sections"') < 0 && css.indexOf('id="option-bar"') < 0,
     loadsPriceRule: /<script src="\/js\/price-lines-core\.js"><\/script>/.test(css),
   };
+}
+
+// ── 15. a Gyp sheet's preset keeps what the draft held for it ────────────────────────────────────────────────
+// THE DEFECT (Sheets phase 3 review): the Add menu always adds the FIRST Gyp preset, so anyone who wants another changes it on the
+// Material step, which renames the sheet's key. Nothing carried the draft's settings across: the sheet came back ON the proposal with no words.
+async function gypPreset() {
+  const FIRST = GYP.tabs()[0], NEXT = GYP.tabs()[1];
+  const b = await open(draft(polishModel()));
+  click(b, '[data-sh-act="add-menu"]');
+  // pressed by its id as a browser hands it over: the row's data-sh-sheet reads Gyp (USG 1-8"), quote mark and all
+  if (!clickIf(b, '[data-sh-act="add"][data-sh-sheet="' + attr(FIRST) + '"]')) return { noRow: true };
+  await settle();
+  const added = { rows: rowsOf(panel(b)), open: openTab(panel(b)), on: B.optionIsOn(b.store.blob.tab_opts, FIRST), alert: text(b, "alert") };
+  // The estimator switches it OFF the proposal and types the words it should print; the draft also holds a note, a price override
+  // and a line typed on the Proposal step for it.
+  click(b, sel("on", FIRST));
+  click(b, sel("desc", FIRST));
+  const box = P.need(b, '[data-sh-desc="' + attr(FIRST) + '"]');
+  box.value = "my gyp words";
+  b.doc.fire("input", { target: box });
+  b.TW.setState({
+    tab_notes: Object.fromEntries([[FIRST, ["a note"]], ["Other", ["kept"]]]),
+    price_overrides: { options: Object.fromEntries([[FIRST, { label: "mine" }], ["Other", { label: "kept" }]]),
+                       lines2: Object.fromEntries([["option:" + FIRST, "my line"]]) },
+  });
+  const before = clone(b.store.blob.tab_opts[FIRST]);
+  // The Material step's Gyp card moves the sheet to another preset.
+  P.changeTo(b, '[data-gyp="preset"]', NEXT);
+  const blob = clone(b.store.blob);
+  const row = rowHtml(b, NEXT);
+  const openNow = openTab(panel(b));
+  b.clock.fire();
+  const saved = last(b.rec.saves.filter((x) => x.polish_estimate));
+  // and back again: the settings come back under the first preset, with nothing left behind
+  P.changeTo(b, '[data-gyp="preset"]', FIRST);
+  const back = clone(b.store.blob);
+  return {
+    added: added, before: before, open: openNow,
+    keys: { opts: Object.keys(blob.tab_opts), notes: Object.keys(blob.tab_notes), options: Object.keys(blob.price_overrides.options),
+            lines: Object.keys(blob.price_overrides.lines2) },
+    opt: blob.tab_opts[NEXT], notes: blob.tab_notes[NEXT], option: blob.price_overrides.options[NEXT], line: blob.price_overrides.lines2["option:" + NEXT],
+    otherKept: [blob.tab_notes.Other, blob.price_overrides.options.Other],
+    row: { switchOn: /role="switch" aria-checked="true"/.test(row), switchOff: /role="switch" aria-checked="false"/.test(row),
+           preview: ((/sh-desc-prev">([^<]*)</.exec(row)) || [])[1] || null, summary: sumOf(b, NEXT) },
+    saved: { tabs: Object.keys(saved.polish_estimate.tabs), opts: Object.keys(saved.tab_opts), entry: saved.tab_opts[NEXT] },
+    back: { opts: Object.keys(back.tab_opts), entry: back.tab_opts[FIRST], notes: Object.keys(back.tab_notes), options: Object.keys(back.price_overrides.options) },
+  };
+}
+
+// ── 16. at the limit of twelve copies the refusal is said in the panel, beside the button that was pressed ──────────
+const noticeOf = (h) => { const m = /<p class="sh-note warn" role="alert" data-sh-notice>([^<]*)<\/p>/.exec(h); return m ? m[1] : null; };
+const addBlock = (h) => h.slice(h.indexOf('class="sh-add"'), h.indexOf('class="sh-list"'));
+async function limit() {
+  const b = await open(draft(polishModel()));
+  for (let i = 0; i < 12; i++) click(b, sel("copy", openTab(panel(b))));
+  const last12 = openTab(panel(b));
+  click(b, sel("copy", last12));                                  // the 13th
+  const copyRefused = { copies: Object.keys(modelOf(b).tabs).length, inRow: noticeOf(rowHtml(b, last12)), inAddBlock: noticeOf(addBlock(panel(b))),
+                        alert: text(b, "alert") };
+  // the next click, on anything but Copy or Add, takes it down
+  click(b, sel("desc", last12));
+  const afterClick = noticeOf(rowHtml(b, last12));
+  // Add sheet: a second Polish is a copy too, so it is refused; the notice is under the button and the menu stays open for another type
+  click(b, '[data-sh-act="add-menu"]');
+  click(b, '[data-sh-act="add"][data-sh-sheet="Polish"]');
+  await settle();
+  const addRefused = { inAddBlock: noticeOf(addBlock(panel(b))), inRow: noticeOf(rowHtml(b, last12)), menuOpen: /sh-pick-row/.test(panel(b)), alert: text(b, "alert") };
+  // a type that is not a copy goes in, which says the refusal is over
+  click(b, '[data-sh-act="add"][data-sh-sheet="Epoxy"]');
+  await settle();
+  const added = { inAddBlock: noticeOf(addBlock(panel(b))), epoxy: Object.keys(modelOf(b).tabs).indexOf("Epoxy") >= 0 };
+  return { last: last12, copyRefused: copyRefused, afterClick: afterClick, addRefused: addRefused, added: added };
+}
+
+// ── 17. a Seal option the Proposal step left on Add / Deduct is put back to a total when the page opens ─────────────
+async function sealMode() {
+  const seal = { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {},
+                 rates: { version: 1, profile: "seal@1", rates: {}, fees_default: null, notes: EPOXY_NOTES.slice() } };
+  const c = B.copySection(polishModel({ tabs: { Seal: seal } }), "Polish", {});
+  const held = (mode) => ({ Seal: { show_system: true, show_diff: false, is_option: true, show: true, price_mode: mode, desc: "seal words" },
+                            Copy1: Object.assign(B.optionSettings(true), { price_mode: "deduct" }) });
+  const b = await open(draft(c.model, { tab_opts: held("deduct") }));
+  const written = clone(b.store.blob.tab_opts);
+  const writesOnOpen = b.rec.saves.length;
+  openSheet(b, "Seal");
+  const row = rowHtml(b, "Seal");
+  const plain = await open(draft(c.model, { tab_opts: held("total") }));
+  return { written: written, writesOnOpen: writesOnOpen, noPair: row.indexOf("data-sh-mode") < 0, plainWritesOnOpen: plain.rec.saves.length };
+}
+
+// ── 18. the old base keeps its words and goes on the proposal as a total, whatever it held ──────────────────────────
+async function demote() {
+  const model = polishModel({ tabs: { Epoxy: epoxySection("option") } });
+  const held = { show_system: true, show_diff: false, is_option: false, show: false, price_mode: "deduct", desc: "my polish words" };
+  const b = await open(draft(model, { tab_opts: { Polish: held, Epoxy: B.optionSettings(true) } }));
+  pick(b, '[data-sh-base="Epoxy"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
+  return { before: held, written: clone(b.store.blob.tab_opts.Polish), summary: sumOf(b, "Polish") };
+}
+
+// ── 19. what a press clears: a base change waiting for its yes, a name being typed and the refusal under it ─────────
+async function resets() {
+  const c = B.copySection(polishModel({ tabs: { Epoxy: epoxySection("option") } }), "Polish", {});
+  const b = await open(draft(c.model, { tab_opts: Object.assign({ Epoxy: B.optionSettings(true) }, c.patch.tab_opts) }));
+  const asked = () => confirmOf(rowHtml(b, "Epoxy")) !== null;
+  const renaming = () => ({ input: rowHtml(b, "Copy1").indexOf("sh-ren-in") >= 0, error: rowHtml(b, "Copy1").indexOf("data-sh-error") >= 0 });
+  openSheet(b, "Copy1");
+  // a base change waiting for its yes goes when another sheet is opened
+  pick(b, '[data-sh-base="Epoxy"]');
+  const askedA = asked();
+  openSheet(b, "Polish");
+  const afterOpen = asked();
+  // a name being typed, and the refusal under it, go when another sheet is opened
+  openSheet(b, "Copy1");
+  click(b, sel("rename", "Copy1"));
+  typeName(b, "Copy1", "Po:");
+  key(b, "Copy1", "Enter");
+  const refused = renaming();
+  openSheet(b, "Polish");
+  openSheet(b, "Copy1");
+  const afterOpenName = renaming();
+  // a base change waiting for its yes goes when a sheet is copied
+  pick(b, '[data-sh-base="Epoxy"]');
+  const askedC = asked();
+  clickIf(b, sel("copy", "Copy1"));
+  const afterCopy = asked();
+  // ... and when a sheet is added (opening the menu alone does not)
+  pick(b, '[data-sh-base="Epoxy"]');
+  click(b, '[data-sh-act="add-menu"]');
+  const withMenu = asked();
+  click(b, '[data-sh-act="add"][data-sh-sheet="Seal"]');
+  await settle();
+  const afterAdd = asked();
+  return { askedA: askedA, afterOpen: afterOpen, refused: refused, afterOpenName: afterOpenName, askedC: askedC, afterCopy: afterCopy, withMenu: withMenu, afterAdd: afterAdd };
+}
+
+// ── 20. an option the draft has said nothing about is priced as a Total ──────────────────────────────────────────────
+async function unstated() {
+  const c = B.copySection(polishModel(), "Polish", {});
+  const read = async (extra) => {
+    const b = await open(draft(c.model, extra));
+    openSheet(b, "Copy1");
+    const h = rowHtml(b, "Copy1");
+    return { total: /value="total"[^>]*checked/.test(h), deduct: /value="deduct"[^>]*checked/.test(h), summary: sumOf(b, "Copy1"), saves: b.rec.saves.length };
+  };
+  return { noEntry: await read(), noMode: await read({ tab_opts: { Copy1: { is_option: true, show: true } } }) };
+}
+
+// ── 21. the switch brings back an option the Proposal step had hidden ────────────────────────────────────────────────
+async function hiddenOption() {
+  const c = B.copySection(polishModel(), "Polish", {});
+  const b = await open(draft(c.model, { tab_opts: { Copy1: { show_system: true, show_diff: false, is_option: true, show: false, price_mode: "total", desc: "kept words" } } }));
+  openSheet(b, "Copy1");
+  const state = () => ({ on: /role="switch" aria-checked="true"/.test(rowHtml(b, "Copy1")), summary: sumOf(b, "Copy1") });
+  const hidden = state();
+  click(b, sel("on", "Copy1"));
+  const shown = state();
+  const written = clone(b.store.blob.tab_opts.Copy1);
+  click(b, sel("on", "Copy1"));
+  return { hidden: hidden, shown: shown, written: written, off: Object.assign(state(), { opt: clone(b.store.blob.tab_opts.Copy1) }) };
 }
 
 main().then((out) => { process.stdout.write(JSON.stringify(out) + "\n"); }, (e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });
