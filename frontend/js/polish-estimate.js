@@ -3880,11 +3880,11 @@
     // the SF it was priced on, still says the old figure. A snapshot priced on another floor is
     // stale: save once so computed_bid and the stamped totals come from the model as it is.
     // Only when a snapshot exists and names an SF, so a draft that never had one still writes nothing.
-    var tkSf = B.takeoffSf(M.takeoff);
-    var snapSf = state.computed_bid ? B.num(state.computed_bid.polish_sf) : 0;
-    // polish_sf is the ROOT section's total, so only a Polish-led bid is behind it; another section keeps what
-    // the first edit saves, and a plain reopen of it writes nothing.
-    if (activeTab === B.ROOT_TAB && tkSf > 0 && (tkSf !== B.num(state.polish_sf) || (snapSf > 0 && snapSf !== tkSf))) saveSoon();
+    // EVERY SECTION THAT IS PART OF THE BID IS ASKED (B.snapshotBehind): the intake's boxes edit the takeoff of the
+    // section that owns each quantity, so an Epoxy job's System 1 moves the Epoxy section and a Combo bid's Polish box
+    // moves the root, and the snapshot of whichever it was is the one that is behind. The root's is polish_sf and
+    // computed_bid.polish_sf; another section's is its priced_tabs entry.
+    if (B.snapshotBehind(ROOT, state)) saveSoon();
 
     renderDatalist();
     $("loading").hidden = true;

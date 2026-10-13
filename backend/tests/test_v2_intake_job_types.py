@@ -215,8 +215,9 @@ def test_the_old_copy_of_the_county_picker_is_gone_from_the_page():
     assert html.index("/js/work-types.js") < html.index("/js/intake-scope.js") < html.index("/js/polish-intake.js")
     # 760 until 2026-10-12, when the SF boxes' mirror of the takeoff (paintSfBoxes, the typed-box guard in
     # save()) added ~45 lines of the page's own. The ceiling is for the county picker's old inline copy,
-    # which was hundreds of lines; it moves with a named feature, not by habit.
-    assert len(src.splitlines()) < 820, "the page grew back toward its old size"
+    # which was hundreds of lines; it moves with a named feature, not by habit. 830 from 2026-10-13: the county box
+    # filling itself from the address (+5) and every quantity box mirroring the takeoff of its own section (+6).
+    assert len(src.splitlines()) < 830, "the page grew back toward its old size"
 
 
 # ── the checks go red when the code changes ─────────────────────────────────────────────────────
