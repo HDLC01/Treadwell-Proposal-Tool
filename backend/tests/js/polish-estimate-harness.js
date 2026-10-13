@@ -2002,7 +2002,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const lm = loaded.api.model();
     out.defaultsLoad = { rows: shape(lm), area: B.takeoffSf(lm.takeoff),
       i1Price: loaded.api.rowPrice(lm.takeoff[2]).total,
-      i1Expected: L.priceLine({ item_id: "i1" }, dItems, 8000).cost,
+      // THE ROW'S SHARE OF ONE PURCHASE. OPF (i1) is bought by four rows of this takeoff: the Polish assembly's OPF
+      // line and the OPF row, once in each area (8,000 and 2,000 SF). The section buys it once: 20,000 SF at 333 SF
+      // a gallon with 5% waste, up to whole gallons, and this row (8,000 of the 20,000) pays its share of that.
+      i1Expected: (() => {
+        const need = [8000, 2000, 8000, 2000].reduce((t, sf) => t + sf / 333 * 1.05, 0);
+        return Math.ceil(parseFloat(need.toPrecision(12))) * 85.3827 * (8000 / 20000);
+      })(),
       i1CoverageBox: lm.takeoff[2].coverage,
       offPrice: B.takeoffSf([lm.takeoff[3]]) };
     loaded.clock.fire();

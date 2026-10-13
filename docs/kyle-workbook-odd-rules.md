@@ -176,6 +176,20 @@ Cells: `Seal!B67`, `Polish!B67`.
 Polish and Seal share the same ladder up to $32,500. Polish pays 30% from there. Seal pays 30% up to $42,500 and
 28% from $42,500.
 
+### Flake and quartz: each line rounds to its own bags, the price break looks at both lines together
+
+Cells: `Epoxy!O201`, `Epoxy!O202`, `Epoxy!P201`.
+
+A system's two flake or quartz lines each round up to whole 40 lb bags on their own. The small-lot or the large-lot
+price is then chosen on the two lines added together (`IF((O201+O202)<240, ...)`). So a small job that needs, say, 0.4
+of a bag on each line buys two bags in the workbook.
+
+In v2 (Hanz's decision, 2026-10-13) each material is bought once for the whole job: the quantity every line needs is
+added first, rounded up to whole bags once, and the price break is judged once. The same goes for a primer or a system
+that appears in both System 1 and System 2. The price break is read exactly as the workbook reads it. The one difference
+is the rounding: v2 can come out a bag or more BELOW the workbook on a small job, never above it. On the 440 jobs we
+recorded it is 110 jobs, by $79 to $476 of material. Is the workbook's bag-by-bag rounding on purpose?
+
 ## What we need from you
 
 For each rule above: is it on purpose? If yes, v2 keeps it. If it is a leftover you would like fixed, say so and

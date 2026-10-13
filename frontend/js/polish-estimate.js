@@ -273,8 +273,42 @@
    *  item's own default, same as before.
    *
    *  The return is shaped like priceAssembly's so every caller -- rowCost, materialTotal, the
-   *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got. */
+   *  broken-line warning, the per-unit hint -- keeps working without knowing which kind it got.
+   *
+   *  THE ROW AS THE SECTION BUYS IT. A section that pools (B.poolsPacks) buys each material once for the
+   *  whole section, so the cost of one row is its share of the pooled purchase (rawRowPrice below prices the
+   *  row alone, which is what the pool starts from). `takeoff` is the list the row sits in; any other list,
+   *  or a row that is not in it, prices alone as it always did. EVERY reader of a row's price goes through
+   *  here -- the cost box, the section's material sum and the save -- so none of them can disagree. */
   function rowPrice(row, takeoff) {
+    var list = takeoff || (M && M.takeoff);
+    var i = (list instanceof Array && row) ? list.indexOf(row) : -1;
+    if (i < 0 || !poolsList(list)) return rawRowPrice(row, takeoff);
+    return pooledRows(list)[i];
+  }
+
+  /** Does the section that owns this takeoff list pool? Found by identity: the root's own list, or one of the
+   *  sections' under `tabs`. A list no section owns does not. */
+  function poolsList(list) {
+    if (!ROOT) return false;
+    if (ROOT.takeoff === list) return B.poolsPacks(ROOT);
+    var tabs = ROOT.tabs;
+    if (!tabs || typeof tabs !== "object") return false;
+    return Object.keys(tabs).some(function (k) { return !!tabs[k] && tabs[k].takeoff === list && B.poolsPacks(tabs[k]); });
+  }
+
+  /** Every row of a pooling takeoff priced as one purchase: library-core's pricePool over each row priced
+   *  alone. An OFF row buys nothing and takes no share; Dye and Joint Filler are never pooled. Index for
+   *  index with `list`. */
+  function pooledRows(list) {
+    var alone = list.map(function (r) { return rawRowPrice(r, list); });
+    var on = list.map(function (r) { return B.rowOn(r); });
+    var pooled = L.pricePool(alone, { on: on, skip: RESERVED_ITEM_IDS });
+    // a cove on two areas is one length, priced once (the library's pool has no item to add up for it)
+    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });
+  }
+
+  function rawRowPrice(row, takeoff) {
     var r = row || {};
     if (r.item_id) return priceMaterialRow(r);
     var asm = asmById(r.assembly_id);
@@ -320,7 +354,8 @@
       if (!real) return ln;
       any = true;
       var tmp = "__cov" + j;
-      items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov })]);
+      // `pool_of` keeps the typed-over copy the same material for the section's pool (library-core pricePool)
+      items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov, pool_of: real.id })]);
       return Object.assign({}, ln, { item_id: tmp, item: undefined });
     });
     if (!any) return L.priceAssembly(asm, ITEMS, area);
@@ -521,7 +556,7 @@
     var takeoff = entry.section.takeoff || [];
     if (entry.role === "epoxy") {
       var r = E.sectionMaterial(takeoff, {
-        items: ITEMS, sf: B.takeoffSf(takeoff),
+        items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: r.material, tooling: r.tooling };

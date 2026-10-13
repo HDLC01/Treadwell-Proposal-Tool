@@ -71,7 +71,7 @@ function priceByHand(rows, over) {
   return B.priceSection(m, "Epoxy", {
     material: (e) => {
       const t = e.section.takeoff;
-      const r = X.sectionMaterial(t, { items: items, sf: B.takeoffSf(t),
+      const r = X.sectionMaterial(t, { items: items, sf: B.takeoffSf(t), pool: B.poolsPacks(e.section),
         rowPrice: (row) => { const a = asms.find((x) => x.id === row.assembly_id); return a ? LIB.priceAssembly(a, items, B.num(row.measurement)) : null; } });
       return { material: r.material, tooling: r.tooling };
     },

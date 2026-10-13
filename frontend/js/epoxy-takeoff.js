@@ -212,23 +212,82 @@
     };
   }
 
+  /** THE COVE, BOUGHT ONCE FOR THE SECTION (the cove half of library-core's pricePool, which cannot do it: a cove row
+   *  has no library item). `results[i]` is what takeoff row `rows[i]` priced to (priceCoveRow's answer for a cove row,
+   *  anything else for the rest); the answer is a new array of the same length. Every cove assembly that sits on
+   *  two or more ON rows is priced ONCE at the lengths ADDED TOGETHER (the sheet's two ROUNDUPs happen on the whole
+   *  length, as they do for one cove of that length), and each line of that cove (liquids, aggregate, cap) goes back to
+   *  the rows in proportion to their length, in whole ten-thousandths (library-core allocate), so the rows add up to
+   *  the pooled cove exactly. A cove on one row, an OFF row, a row with no length and every other row come back as the
+   *  very object they went in as. `ctx` is `{ items, quartz, on }` (`on[i] === false` leaves row i out). */
+  function poolCoves(results, rows, ctx) {
+    var out = results.slice();
+    var items = (ctx && ctx.items) || [];
+    var quartz = !!(ctx && ctx.quartz);
+    var groups = new Map();
+    results.forEach(function (res, i) {
+      var r = rows[i];
+      if (!res || !res.cove || !r || r.item_id || typeof r.assembly_id !== "string" || !coveVariant(r.assembly_id)) return;
+      if (ctx && ctx.on && ctx.on[i] === false) return;
+      var lf = num(r.measurement);
+      if (!(lf > 0)) return;
+      var key = r.assembly_id;                      // one purchase per cove assembly
+      var g = groups.get(key);
+      if (!g) { g = { id: r.assembly_id, list: [] }; groups.set(key, g); }
+      g.list.push({ i: i, lf: lf });
+    });
+    groups.forEach(function (g) {
+      var list = g.list;
+      if (list.length < 2) return;
+      var lf = list.reduce(function (t, l) { return t + l.lf; }, 0);
+      var whole = priceCoveRow(g.id, lf, { items: items, quartz: quartz });
+      var weights = list.map(function (l) { return l.lf; });
+      var split = whole.rows.map(function (line) { return lib.allocate(line.cost, weights); });
+      list.forEach(function (l, k) {
+        var share = l.lf / lf, total = 0;
+        var lines = whole.rows.map(function (line, j) {
+          total += split[j][k];
+          return { ok: true, priced: true, role: line.role, qty: line.qty * share, cost: split[j][k] };
+        });
+        out[l.i] = { rows: lines, total: total, per_unit: total / l.lf, priced_lines: lines.length, broken_lines: 0, cove: true,
+                     pooled: { lines: list.length, lf: lf, cost: whole.total, share: share } };
+      });
+    });
+    return out;
+  }
+
   // ── the section's material ────────────────────────────────────────────────────
   /** The Epoxy section's material and tooling: its takeoff priced, the patch, and the tooling.
    *
    *  `ctx.rowPrice(row)` prices an ordinary row (the page's own, so a coverage typed on a bid still counts) and
    *  answers what priceAssembly does or null; a cove row is priced HERE, because the library cannot. `ctx.items`
    *  is the library's materials, `ctx.sf` the area the bid prices (the page's takeoffSf). Answers
-   *  { material, tooling, patch, cove, rows } where `material` is the raw sum the chain rounds up (D40). */
+   *  { material, tooling, patch, cove, rows } where `material` is the raw sum the chain rounds up (D40).
+   *
+   *  `ctx.pool` BUYS EACH MATERIAL ONCE FOR THE WHOLE SECTION (library-core's pricePool): the rows that are on are
+   *  priced first (a cove by its own formula, an ordinary row by `ctx.rowPrice`, which must then answer each row
+   *  ALONE), and the pool then adds up what the rows buy of the same material. A cove is pooled the same way by
+   *  `poolCoves` (the same cove on two areas is one length), since the library's pool has no item to add up.
+   *  `ctx.poolCoves` alone pools just the cove.
+   *  `ctx.skip` are item ids never pooled (pricePool's). A caller whose `ctx.rowPrice` already answers pooled
+   *  figures (the estimate page's does) does not set `pool`. */
   function sectionMaterial(takeoff, ctx) {
     var rows = takeoff instanceof Array ? takeoff : [];
     var items = (ctx && ctx.items) || [];
     var quartz = systemOneIsQuartz(rows);
     var sum = 0, cove = 0;
-    rows.forEach(function (r) {
-      if (!r || !isOn(r)) return;
+    var priced = rows.map(function (r) {
+      if (!r || !isOn(r)) return null;
       var id = r.assembly_id;
-      var p = coveVariant(id) ? priceCoveRow(id, r.measurement, { items: items, quartz: quartz })
-                              : ctx.rowPrice(r);
+      return coveVariant(id) ? priceCoveRow(id, r.measurement, { items: items, quartz: quartz })
+                             : ctx.rowPrice(r);
+    });
+    var on = rows.map(function (r) { return !!r && isOn(r); });
+    if (ctx && ctx.pool) priced = lib.pricePool(priced, { on: on, skip: ctx.skip });
+    // `ctx.poolCoves` pools only the cove (a caller whose `ctx.rowPrice` already answers pooled figures for the
+    // ordinary rows, as the estimate page's does, still has its cove priced HERE, so it must be pooled here too)
+    if (ctx && (ctx.pool || ctx.poolCoves)) priced = poolCoves(priced, rows, { items: items, quartz: quartz, on: on });
+    priced.forEach(function (p) {
       if (!p) return;
       sum += p.total;
       if (p.cove) cove += p.total;
@@ -241,7 +300,7 @@
     PRICE_ROWS: PRICE_ROWS, COVE: COVE, QUARTZ_SYSTEMS: QUARTZ_SYSTEMS, TOOLING: TOOLING,
     SYSTEM_PREFIX: SYSTEM_PREFIX, WALL_PREFIX: WALL_PREFIX,
     CAP_STICK_LF: CAP_STICK_LF, AGGREGATE_BAG_LB: AGGREGATE_BAG_LB,
-    unitPrice: unitPrice, coveVariant: coveVariant, coveCost: coveCost, priceCoveRow: priceCoveRow,
+    unitPrice: unitPrice, coveVariant: coveVariant, coveCost: coveCost, priceCoveRow: priceCoveRow, poolCoves: poolCoves,
     systemOneIsQuartz: systemOneIsQuartz, toolingCost: toolingCost, patchCost: patchCost,
     sectionMaterial: sectionMaterial
   };

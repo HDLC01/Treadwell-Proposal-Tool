@@ -241,19 +241,32 @@
     }
 
     var needed = (a / cov) * (1 + waste / 100);
+    return purchase(base, needed, roundup, bulk, packCost);
+  }
+
+  /** WHAT BUYING `needed` UNITS OF ONE MATERIAL COSTS. The one place a fractional quantity becomes packs
+   *  and a price, shared by a single line (priceLine) and by a purchase that several lines make together
+   *  (pricePool), so the two cannot disagree about a rounding or a break.
+   *
+   *  `base` is the line being answered (`item`, `buy_qty`, and the pack cost and unit price a price break
+   *  rewrites); `packCost` is the pack cost BEFORE any break; `bulk` says the bulk cost is what that is.
+   *  `judged`, when given, is the quantity the price break is judged on instead of this purchase's own: it
+   *  is how a pool of lines on one price ladder is read together (see pricePool). Mutates and returns `base`. */
+  function purchase(base, needed, roundup, bulk, packCost, judged) {
+    var pack = base.buy_qty, item = base.item;
     if (roundup) {
       // CEIL, but not on a float's rounding error. 27,500 ÷ 275 × 1.10 is 110.00000000000001 in
       // IEEE-754, and a bare ceil() there buys a 111th gallon nobody needs — on exactly the round
       // numbers an estimator checks by hand. Twelve significant figures is far finer than any
       // coverage anybody types and coarser than the error.
       var packs = Math.ceil(parseFloat((needed / pack).toPrecision(12)));
-      var brk = breakAt(item, packs * pack);
+      var brk = breakAt(item, judged === undefined ? packs * pack : judged);
       if (brk && breakHelps(bulk, packCost, brk)) packCost = withBreak(base, brk);
       return Object.assign(base, { priced: true, needed: needed, packs: packs,
                                    units: packs * pack, qty: packs, cost: packs * packCost });
     }
     // Fractional: buy exactly what is needed, at the price of one unit rather than one pack.
-    var brk2 = breakAt(item, needed);
+    var brk2 = breakAt(item, judged === undefined ? needed : judged);
     if (brk2 && breakHelps(bulk, packCost, brk2)) packCost = withBreak(base, brk2);
     return Object.assign(base, { priced: true, needed: needed, packs: null,
                                  units: needed, qty: needed,
@@ -300,6 +313,159 @@
       priced_lines: priced,
       broken_lines: broken,
     };
+  }
+
+  // ── ONE PURCHASE FOR THE WHOLE JOB (Hanz, 2026-10-13, "Buy packs for the whole job") ────────────────
+  //
+  // A material used on several takeoff rows is bought ONCE. Priced row by row, each row rounded its own
+  // fractional quantity up to whole packs, so System 1 5,000 SF plus System 2 3,000 SF bought up to one
+  // more pack per material than one 8,000 SF floor does (+$1,580, 6%, on the real library; 1,000 + 1,000
+  // is +17%). The pool sums the FRACTIONAL quantity of the same material across every row and line that
+  // buys it, applies the roundup and the price break ONCE, and hands the pooled cost back to the rows in
+  // proportion to what each needed, so a row still shows a cost and the rows add up to the pooled total.
+  //
+  // TWO LEVELS, because Kyle's sheet does two different things.
+  //   1. THE SAME MATERIAL (one library item id; a coverage typed on a bid is the same item, see `pool_of`):
+  //      its fractional quantities are added first, then waste, roundup and the break happen once.
+  //   2. A PRICE LADDER SHARED BY DIFFERENT MATERIALS. The sheet judges a flake or quartz break on a system's
+  //      two broadcast lines ADDED TOGETHER (`IF((O201+O202)<240, ...)`), and each line still rounds to its own
+  //      bags. The library holds those two lines as two items (the name carries the pounds per SF), so they
+  //      are pooled for the BREAK ONLY: each keeps its own packs, and the break is judged on every pack
+  //      bought across the ladder. A ladder is DERIVED, not stored: identical price breaks, pack cost, bulk
+  //      cost, pack size, unit and roundup. That is exactly the sheet's reading (both lines point at the same
+  //      two price cells), it needs no new column and no reseed, and it holds for rows already in the library.
+
+  /** The item a priced line belongs to for pooling: the real one when a bid typed its own coverage on a
+   *  throwaway copy (`pool_of`), else the item itself. */
+  function poolId(item) {
+    var it = item || {};
+    return (it.pool_of !== undefined && it.pool_of !== null && it.pool_of !== "") ? it.pool_of : it.id;
+  }
+
+  /** A price ladder as one string, or null for a material with no price breaks (those pool at level 1 only). */
+  function ladderKey(item, roundup) {
+    var brks = priceBreaks(item);
+    if (!brks.length) return null;
+    brks.sort(function (x, y) { return x.min_qty - y.min_qty; });
+    return JSON.stringify([brks, num(item.unit_cost), num(item.bulk_cost), buyQty(item),
+                           String((item || {}).unit || ""), !!roundup]);
+  }
+
+  /** `total` split in proportion to `weights` so the parts add up to `total` exactly. A library cost has four
+   *  decimals, so a pooled cost lands on a ten-thousandth of a dollar and is split in whole ten-thousandths by
+   *  the LARGEST REMAINDER (each part is rounded down, and the leftover ten-thousandths go to the parts with
+   *  the biggest fractions, the earlier one first on a tie). A total that is not on a ten-thousandth (a
+   *  fractional purchase at an odd unit price) is split exactly in proportion and the last part takes what is
+   *  left, so the parts still add up. */
+  function allocate(total, weights) {
+    var n = weights.length, sum = 0, i;
+    for (i = 0; i < n; i++) sum += weights[i];
+    if (n === 0) return [];
+    if (!(sum > 0)) return weights.map(function (w, k) { return k === 0 ? total : 0; });
+    var grain = 1e4, scaled = total * grain, whole = Math.round(scaled);
+    var out = [];
+    // "On a ten-thousandth" is judged against float noise only (a few ulps of the scaled figure). A looser, size-
+    // relative tolerance read every total above about $5 as on the grain and snapped a fractional purchase to it.
+    if (Math.abs(scaled - whole) > Math.max(1e-6, 1e-12 * Math.abs(scaled))) {
+      var rest = total;
+      for (i = 0; i < n - 1; i++) { out.push(total * weights[i] / sum); rest -= out[i]; }
+      out.push(rest);
+      return out;
+    }
+    var parts = weights.map(function (w, k) {
+      var q = whole * w / sum, f = Math.floor(q);
+      return { k: k, f: f, frac: q - f };
+    });
+    var left = whole - parts.reduce(function (t, p) { return t + p.f; }, 0);
+    parts.slice().sort(function (x, y) { return (y.frac - x.frac) || (x.k - y.k); }).forEach(function (p, r) {
+      if (r < left) p.f += 1;
+    });
+    return parts.map(function (p) { return p.f / grain; });
+  }
+
+  /** PRICE SEVERAL PRICED TAKEOFF ROWS AS ONE PURCHASE. `results[i]` is what a row priced to (the shape
+   *  priceAssembly answers: `rows` of priceLine answers, `total`, `per_unit`, ...) or null; the answer is a new
+   *  array of the same length, where every row that buys a material another row (or another line of its own)
+   *  also buys has that material's cost replaced by its share of the pooled purchase. A row nothing pools with
+   *  comes back as the very object it went in as, so a bid with nothing to pool prices to the cent as it did.
+   *
+   *  `opts.on[i] === false` leaves row i out (an OFF row buys nothing). `opts.skip` is a list of item ids that
+   *  are never pooled (Dye, Joint Filler: each is owned by its own condition card and priced as it always was).
+   *  A line that cannot price (no material, no coverage) is left exactly as it is. Whether the bid has Bulk
+   *  Discount on is read off the priced lines themselves (`bulk`), so the pool buys at the same cost they did.
+   *
+   *  EVERY ROW HANDED IN IS ONE PURCHASE: the caller decides what "the section" is by what it passes. The
+   *  estimate page passes the whole takeoff of one section (one priced tab of a bid).
+   *
+   *  The pooled line says so: `line.pooled = { lines, needed, packs, units, cost, share }` (the whole
+   *  purchase and this line's share of it), and its `packs`, `units` and `qty` are that share. */
+  function pricePool(results, opts) {
+    opts = opts || {};
+    var list = Array.isArray(results) ? results : [];
+    var skip = Array.isArray(opts.skip) ? opts.skip : [];
+    var groups = new Map();                 // level 1: material -> every line that buys it
+    list.forEach(function (res, i) {
+      if (!res || !Array.isArray(res.rows)) return;
+      if (opts.on && opts.on[i] === false) return;
+      res.rows.forEach(function (r, j) {
+        if (!r || !r.ok || !r.priced || !r.item) return;
+        var id = poolId(r.item);
+        if (id === undefined || id === null || id === "" || skip.indexOf(id) >= 0) return;
+        var g = groups.get(id);
+        if (!g) { g = { rep: r, lines: [], needed: 0 }; groups.set(id, g); }
+        g.lines.push({ i: i, j: j, r: r });
+        g.needed += r.needed;
+      });
+    });
+    // what each material's own purchase comes to, and which price ladders more than one of them sit on
+    var ladders = new Map();
+    groups.forEach(function (g) {
+      var rep = g.rep, bulk = rep.bulk === true;
+      g.bulk = bulk;
+      g.cost0 = num(bulk ? rep.item.bulk_cost : rep.item.unit_cost);
+      g.own = purchase({ item: rep.item, buy_qty: rep.buy_qty, pack_cost: g.cost0, unit_price: g.cost0 / rep.buy_qty },
+                       g.needed, rep.roundup, bulk, g.cost0);
+      var lk = ladderKey(rep.item, rep.roundup);
+      if (lk === null) return;
+      var lad = ladders.get(lk);
+      if (!lad) { lad = { groups: [], units: 0 }; ladders.set(lk, lad); }
+      lad.groups.push(g);
+      lad.units += g.own.units;
+      g.ladder = lad;
+    });
+    var out = list.slice(), changed = new Map();         // row index -> its lines, copied
+    groups.forEach(function (g) {
+      var shared = g.ladder && g.ladder.groups.length > 1;
+      if (g.lines.length < 2 && !shared) return;           // nothing pools with it: leave the row alone
+      var rep = g.rep, fin = g.own;
+      if (shared) {
+        fin = purchase({ item: rep.item, buy_qty: rep.buy_qty, pack_cost: g.cost0, unit_price: g.cost0 / rep.buy_qty },
+                       g.needed, rep.roundup, g.bulk, g.cost0, g.ladder.units);
+      }
+      var share = allocate(fin.cost, g.lines.map(function (l) { return l.r.needed; }));
+      var wsum = g.needed;
+      g.lines.forEach(function (l, k) {
+        var f = wsum > 0 ? l.r.needed / wsum : 0;
+        var line = Object.assign({}, l.r, {
+          cost: share[k], pack_cost: fin.pack_cost, unit_price: fin.unit_price,
+          packs: rep.roundup ? fin.packs * f : null, units: fin.units * f, qty: (rep.roundup ? fin.packs : fin.qty) * f,
+          pooled: { lines: g.lines.length, needed: g.needed, packs: fin.packs, units: fin.units, cost: fin.cost, share: f }
+        });
+        if (fin.price_break) line.price_break = fin.price_break; else delete line.price_break;
+        var copy = changed.get(l.i);
+        if (!copy) { copy = list[l.i].rows.slice(); changed.set(l.i, copy); }
+        copy[l.j] = line;
+      });
+    });
+    changed.forEach(function (rows, i) {
+      var was = list[i], total = 0;
+      rows.forEach(function (r) { if (r && r.ok && r.priced) total += r.cost; });
+      var next = Object.assign({}, was, { rows: rows, total: total });
+      // per unit is the total over the area the row was measured at, which the row no longer carries: recover it
+      if (was.per_unit !== null && was.per_unit !== undefined && was.total > 0) next.per_unit = was.per_unit * (total / was.total);
+      out[i] = next;
+    });
+    return out;
   }
 
   /** Money for display: two decimals, thousands separated. */
@@ -483,6 +649,7 @@
     wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
     qtyLabel: qtyLabel, costWorking: costWorking,
     coverageBasis: coverageBasis, areaFor: areaFor, priceBreaks: priceBreaks, breakAt: breakAt,
+    pricePool: pricePool, poolId: poolId, allocate: allocate,
     materialPriceText: materialPriceText, assemblyPriceText: assemblyPriceText,
     REFERENCE_AREA: REFERENCE_AREA,
   };
