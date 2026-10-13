@@ -9629,51 +9629,15 @@
   // it (so it never has to sit over the document or the top controls). One-time
   // init — the panel element is stable; its .op-drag header is rebuilt on each
   // render, so pointerdown is delegated. Position persists in localStorage.
+  //
+  // The drag, the remembered position and the clamp that keeps a restored panel on screen now live
+  // in TW.floatPanel (shared.js), which this rail, the polish-intake cheat sheet and the v2
+  // estimate's Sheets panel all call. 240 is this panel's CSS width.
   (function initOptionsPanelDrag() {
     const panel = document.getElementById("options-panel");
     if (!panel) return;
-    try {
-      const p = JSON.parse(localStorage.getItem("tw_opts_pos") || "null");
-      // Clamped on the way back in, not only during the drag -- TW.clampPanelPos. Dragged to the
-      // far side of a wide monitor and reopened on a laptop, this restored past the edge with
-      // .op-drag off screen: no handle to grab, and no way back without clearing site data. Found
-      // on the polish-intake cheat sheet, which copies this panel; it was the same hole here.
-      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)
-          && getComputedStyle(panel).position === "fixed") {
-        const at = TW.clampPanelPos(p.left, p.top, panel.offsetWidth);
-        panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
-        panel.style.right = "auto";
-      }
-    } catch {}
-    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
-    panel.addEventListener("pointerdown", (e) => {
-      const h = e.target.closest && e.target.closest(".op-drag");
-      if (!h || !panel.contains(h)) return;
-      const r = panel.getBoundingClientRect();
-      dragging = true; ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
-      panel.style.left = ox + "px"; panel.style.top = oy + "px"; panel.style.right = "auto";
-      panel.classList.add("op-dragging");
-      try { h.setPointerCapture(e.pointerId); } catch {}
-      e.preventDefault();
-    });
-    panel.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const w = panel.offsetWidth || 240;
-      let nl = ox + (e.clientX - sx), nt = oy + (e.clientY - sy);
-      nl = Math.max(4, Math.min(nl, window.innerWidth - w - 4));
-      nt = Math.max(4, Math.min(nt, window.innerHeight - 40));      // keep the drag header on-screen
-      panel.style.left = nl + "px"; panel.style.top = nt + "px";
-    });
-    const end = () => {
-      if (!dragging) return;
-      dragging = false; panel.classList.remove("op-dragging");
-      try {
-        localStorage.setItem("tw_opts_pos", JSON.stringify({
-          left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 }));
-      } catch {}
-    };
-    panel.addEventListener("pointerup", end);
-    panel.addEventListener("pointercancel", end);
+    TW.floatPanel(panel, { handle: "op-drag", draggingClass: "op-dragging",
+      key: "tw_opts_pos", width: 240 });
   })();
 
   // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the

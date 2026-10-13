@@ -14,8 +14,14 @@
  * A source assertion can see a Math.min in the drag handler and conclude the geometry is guarded,
  * because it cannot tell which of the two code paths that Math.min is on.
  *
- * So this lifts BOTH shipped initialisers and TW.clampPanelPos out of the real files, seeds
- * localStorage with a position from a bigger screen, and reads where the panel actually lands.
+ * So this lifts BOTH shipped initialisers, TW.clampPanelPos and TW.floatPanel out of the real files,
+ * seeds localStorage with a position from a bigger screen, and reads where the panel actually lands.
+ *
+ * TW.floatPanel (shared.js) is the one copy of the drag / remember / restore logic that the two
+ * initialisers above now call, and that the v2 estimate's Sheets panel will too. Sections 2-6 reach
+ * it through those initialisers, so they prove each caller passes its own key, classes and width;
+ * sections 7-8 call it directly with names nothing else uses, so they prove it is a helper and not
+ * a function that only works under its first two callers' names.
  *
  * DELIBERATELY NOT A FULL DOM, for the reason board-render-harness.js gives: jsdom would let a
  * missing binding hide behind a stub. What is shimmed is only what the gesture touches, and the two
@@ -122,30 +128,47 @@ function makeEnv(panel, key, saved, win) {
       setItem: (k, v) => { store[k] = String(v); },
     },
     document: { getElementById: (id) => (id === panel.id ? panel : null) },
-    getComputedStyle: () => ({ position: panel.position }),
+    // Answers for the element it is asked about, as the browser does, so two panels can share one env.
+    getComputedStyle: (el) => ({ position: (el || panel).position }),
     store,
   };
 }
 
-/** Runs a lifted initialiser inside its own scope with only what the page really gives it. */
-function runInit(body, callExpr, env) {
-  const src = `
+// clampPanelPos and floatPanel are lifted from shared.js, so every panel is tested against the
+// shipped bounds and the shipped drag rather than against a copy of them that could drift.
+// floatPanel is the one copy of the drag/remember/restore logic that the step-3 rail, the cheat
+// sheet and the v2 Sheets panel share; the two page initialisers lifted below are now thin calls
+// into it, and what they do is only observable by running it.
+const CLAMP_SRC = fn(SHARED, "clampPanelPos", "shared.js");
+const FLOAT_SRC = fn(SHARED, "floatPanel", "shared.js");
+
+/** The scope a lifted function runs in: only what a page really gives it. The shared helpers are
+ *  declared INSIDE it, so their `window` / `localStorage` / `getComputedStyle` are this env's. */
+function scopeSrc() {
+  return `
     "use strict";
     const window = ENV.window, localStorage = ENV.localStorage, document = ENV.document;
     const getComputedStyle = ENV.getComputedStyle;
     const $ = (id) => document.getElementById(id);
-    const TW = { clampPanelPos: CLAMP };
-    ${body}
-    ${callExpr}
+    ${CLAMP_SRC}
+    ${FLOAT_SRC}
+    const TW = { clampPanelPos, floatPanel };
   `;
-  // eslint-disable-next-line no-new-func
-  new Function("ENV", "CLAMP", src)(env, CLAMP);
 }
 
-// clampPanelPos is itself lifted, so the two panels are tested against the shipped bounds rather
-// than against a copy of them that could drift.
-const CLAMP = new Function(
-  `${fn(SHARED, "clampPanelPos", "shared.js")}\nreturn clampPanelPos;`)();
+/** Runs a lifted initialiser inside its own scope with only what the page really gives it. */
+function runInit(body, callExpr, env) {
+  // eslint-disable-next-line no-new-func
+  new Function("ENV", `${scopeSrc()}\n${body}\n${callExpr}`)(env);
+}
+
+/** The shipped TW helpers bound to one env, for calling floatPanel directly. */
+function loadTW(env) {
+  // eslint-disable-next-line no-new-func
+  return new Function("ENV", `${scopeSrc()}\nreturn TW;`)(env);
+}
+
+const CLAMP = new Function(`${CLAMP_SRC}\nreturn clampPanelPos;`)();
 
 const out = {};
 
@@ -235,6 +258,205 @@ const out = {};
     at: panel.at(),
     onScreen: parseFloat(panel.style.left) + 240 <= 1750 && parseFloat(panel.style.top) <= 1125 - 40,
   };
+}
+
+// -- 7. TW.floatPanel directly, under a key and class names nothing else uses ----
+// A helper that only worked under "op-drag" / "vc-drag" would pass sections 2-6 and fail the first
+// time a third panel reached for it. Everything here uses the names a new panel would bring.
+const WIN = { w: 1750, h: 1125 };
+const OPTS = { handle: "sh-drag", draggingClass: "sh-dragging", key: "tw_probe_pos" };
+const keysOf = (env) => Object.keys(env.store).sort();
+out.float = {};
+{
+  // restored from a bigger screen: back on screen, against THIS panel's rendered width (256)
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", { left: 3400, top: 2600 }, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  out.float.restoreFar = panel.at();
+}
+{
+  // a legal saved position is left exactly where the estimator put it
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", { left: 600, top: 300 }, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  out.float.restoreLegal = panel.at();
+}
+{
+  // in the flow the restore stands down: left/top are inert and offsetWidth is the whole column
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  panel.position = "static";
+  const env = makeEnv(panel, "tw_probe_pos", { left: 600, top: 300 }, { w: 1100, h: 900 });
+  loadTW(env).floatPanel(panel, OPTS);
+  out.float.restoreInFlow = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+}
+{
+  // a full drag: follows the pointer, clamps at the bounds, ends clean, saves under ITS key only
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  const classDuring = panel.classList.contains("sh-dragging");
+  panel.fire("pointermove", { clientX: 1110, clientY: 260 });       // 100 right, 50 down, in bounds
+  const followed = panel.at();
+  panel.fire("pointermove", { clientX: 9000, clientY: 9000 });      // hurled off the bottom-right
+  const clamped = panel.at();
+  panel.fire("pointerup", {});
+  out.float.drag = {
+    classDuring,
+    classAfter: panel.classList.contains("sh-dragging"),
+    followed,
+    clamped,
+    saved: JSON.parse(env.store["tw_probe_pos"] || "null"),
+    keys: keysOf(env),
+  };
+  // and what was saved is what a fresh page load restores
+  const again = makePanel("sheets", 256, 1000, "sh-drag");
+  const env2 = makeEnv(again, "tw_probe_pos", out.float.drag.saved, WIN);
+  loadTW(env2).floatPanel(again, OPTS);
+  out.float.reloaded = again.at();
+}
+{
+  // pointerdown anywhere but the header does not start a drag, so nothing moves and nothing saves
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210, target: { closest: () => null } });
+  panel.fire("pointermove", { clientX: 1500, clientY: 800 });
+  panel.fire("pointerup", {});
+  out.float.offHandle = {
+    at: panel.at(),
+    classes: [...panel.classes],
+    keys: keysOf(env),
+  };
+}
+{
+  // pointercancel (a touch interrupted, the window lost the pointer) ends the drag exactly as up does
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  panel.fire("pointermove", { clientX: 1060, clientY: 230 });
+  panel.fire("pointercancel", {});
+  out.float.cancel = {
+    classAfter: panel.classList.contains("sh-dragging"),
+    saved: JSON.parse(env.store["tw_probe_pos"] || "null"),
+  };
+}
+{
+  // no key: it still drags, but it neither reads a stored position nor writes one
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", { left: 600, top: 300 }, WIN);
+  loadTW(env).floatPanel(panel, { handle: "sh-drag", draggingClass: "sh-dragging" });
+  const restored = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  panel.fire("pointermove", { clientX: 1110, clientY: 260 });
+  panel.fire("pointerup", {});
+  // the position seeded under the key is still the only thing in storage, and still the seeded one
+  out.float.noKey = { restored, moved: panel.at(), keys: keysOf(env), stored: env.store["tw_probe_pos"] };
+}
+{
+  // a wiped or corrupt stored value just means it opens where the CSS put it
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  env.store["tw_probe_pos"] = "{not json";
+  let threw = false;
+  try { loadTW(env).floatPanel(panel, OPTS); } catch (err) { threw = true; }
+  out.float.corrupt = { threw, left: panel.style.left, top: panel.style.top, right: panel.style.right };
+}
+{
+  // storage that throws (private mode, blocked site data) must not stop the panel being movable
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  env.localStorage = {
+    getItem() { throw new Error("blocked"); },
+    setItem() { throw new Error("blocked"); },
+  };
+  let threw = false;
+  try {
+    loadTW(env).floatPanel(panel, OPTS);
+    panel.style.left = "1000"; panel.style.top = "200";
+    panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+    panel.fire("pointermove", { clientX: 1110, clientY: 260 });
+    panel.fire("pointerup", {});
+  } catch (err) { threw = true; }
+  out.float.blocked = { threw, moved: panel.at(), classAfter: panel.classList.contains("sh-dragging") };
+}
+{
+  // not laid out yet (offsetWidth 0): the declared width stands in, and 250 when none is declared
+  const panelA = makePanel("sheets", 0, 0, "sh-drag");
+  const envA = makeEnv(panelA, "tw_probe_pos", undefined, WIN);
+  loadTW(envA).floatPanel(panelA, Object.assign({ width: 300 }, OPTS));
+  panelA.style.left = "1000"; panelA.style.top = "200";
+  panelA.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  panelA.fire("pointermove", { clientX: 9000, clientY: 200 });
+  const declared = panelA.at().left;
+  panelA.fire("pointerup", {});
+  const panelB = makePanel("sheets", 0, 0, "sh-drag");
+  const envB = makeEnv(panelB, "tw_probe_pos", undefined, WIN);
+  loadTW(envB).floatPanel(panelB, OPTS);
+  panelB.style.left = "1000"; panelB.style.top = "200";
+  panelB.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  panelB.fire("pointermove", { clientX: 9000, clientY: 200 });
+  out.float.unlaidOut = { declared, byDefault: panelB.at().left };
+}
+{
+  // two panels on one page, one storage: each restores from and saves to its OWN key
+  const a = makePanel("a", 256, 1000, "sh-drag");
+  const b = makePanel("b", 256, 1000, "sh-drag");
+  const env = makeEnv(a, "tw_a_pos", { left: 100, top: 120 }, WIN);
+  env.store["tw_b_pos"] = JSON.stringify({ left: 900, top: 700 });
+  const TWx = loadTW(env);
+  TWx.floatPanel(a, { handle: "sh-drag", draggingClass: "sh-dragging", key: "tw_a_pos" });
+  TWx.floatPanel(b, { handle: "sh-drag", draggingClass: "sh-dragging", key: "tw_b_pos" });
+  const restored = { a: a.at(), b: b.at() };
+  a.fire("pointerdown", { clientX: 110, clientY: 130 });
+  a.fire("pointermove", { clientX: 210, clientY: 230 });
+  a.fire("pointerup", {});
+  out.float.twoPanels = {
+    restored,
+    a: JSON.parse(env.store["tw_a_pos"]),
+    b: JSON.parse(env.store["tw_b_pos"]),
+  };
+}
+
+// -- 8. each page caller hands the helper its OWN key, classes and width ---------------------
+// Sections 2-6 cover the cheat sheet's restore and drag. These close the other gaps: the step-3
+// rail's drag (it was only ever restored here), and both callers' fallback widths, which differ
+// (240 and 250) and only show when the panel has not been laid out. A caller that dropped its
+// `width`, or sent the other panel's key, would pass every restore test above and fail here.
+{
+  const panel = makePanel("options-panel", 0, 0, "op-drag");
+  const env = makeEnv(panel, "tw_opts_pos", undefined, WIN);
+  global.window = env.window;
+  runInit("const RAW = " + iife(REVIEW, "initOptionsPanelDrag", "proposal-review.js") + ";",
+    "RAW();", env);
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  const classDuring = panel.classList.contains("op-dragging");
+  panel.fire("pointermove", { clientX: 9000, clientY: 9000 });
+  const clamped = panel.at();
+  panel.fire("pointerup", {});
+  out.optsDrag = {
+    classDuring,
+    classAfter: panel.classList.contains("op-dragging"),
+    clamped,
+    saved: JSON.parse(env.store["tw_opts_pos"] || "null"),
+    keys: keysOf(env),
+  };
+}
+{
+  const panel = makePanel("verbal-cheat", 0, 0, "vc-drag");
+  const env = makeEnv(panel, "tw_vcheat_pos", undefined, WIN);
+  global.window = env.window;
+  runInit(fn(VERBAL, "initCheatDrag", "polish-verbal.js"), "initCheatDrag();", env);
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  panel.fire("pointermove", { clientX: 9000, clientY: 200 });
+  out.cheatUnlaidOut = { left: panel.at().left };
 }
 
 process.stdout.write(JSON.stringify(out) + "\n");

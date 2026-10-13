@@ -222,3 +222,210 @@ def test_the_step_three_rail_keeps_the_lane_it_always_kept():
                      css), "the step-3 rail stopped reserving its lane"
     assert re.search(r"@media \(max-width:\s*1400px\)", css), (
         "the step-3 rail's breakpoint moved — the 1400 asserted above came from matching it")
+
+
+# ══ TW.floatPanel: the one copy of the drag / remember / restore logic ══════════
+# The step-3 rail and the cheat sheet each carried their own copy (the cheat sheet was built as a
+# copy of the rail, and the restore clamp was missing from both for a release). The v2 estimate's
+# Sheets panel is the third panel that moves, so the logic is one helper in shared.js and the two
+# initialisers above are thin calls into it. The sections above prove each caller still behaves as
+# before; these call the helper directly, under a key and class names nothing else uses.
+SHEETS_W = 256                     # the width the v2 Sheets panel will have
+PROBE = "tw_probe_pos"
+
+
+def test_the_helper_restores_a_far_away_position_onto_the_screen(ran):
+    """3400x2600 saved on a wide monitor, reopened on a 1750x1125 window: back on screen, against
+    THIS panel's own rendered width, and the same `right: auto` the callers always wrote."""
+    f = ran["float"]
+    assert f["restoreFar"] == {"left": WIN_W - SHEETS_W - 4, "top": WIN_H - 40, "right": "auto"}
+
+
+def test_the_helper_leaves_a_position_that_fits_alone_and_stands_down_in_the_flow(ran):
+    f = ran["float"]
+    assert f["restoreLegal"] == {"left": 600, "top": 300, "right": "auto"}
+    # Below the breakpoint the CSS returns the panel to the flow: left/top are inert and the width
+    # is the whole column, so the restore must not run at all.
+    assert f["restoreInFlow"] == {"left": "", "top": "", "right": "16px"}
+
+
+def test_the_helper_drags_clamps_and_saves_under_its_own_key_only(ran):
+    """The whole gesture on a helper that nothing else calls this way: the dragging class is on
+    during the drag and off after it, the panel follows the pointer while it fits, stops at the same
+    bounds the restore uses when hurled, and what is saved is the clamped spot under the key it was
+    given and no other. A fresh page load then opens exactly there."""
+    d = ran["float"]["drag"]
+    assert d["classDuring"] is True and d["classAfter"] is False
+    assert d["followed"] == {"left": 1100, "top": 250, "right": "auto"}      # +100 right, +50 down
+    assert d["clamped"] == {"left": WIN_W - SHEETS_W - 4, "top": WIN_H - 40, "right": "auto"}
+    assert d["saved"] == {"left": WIN_W - SHEETS_W - 4, "top": WIN_H - 40}
+    assert d["keys"] == [PROBE]
+    assert ran["float"]["reloaded"] == {
+        "left": WIN_W - SHEETS_W - 4, "top": WIN_H - 40, "right": "auto"}
+
+
+def test_a_press_that_is_not_on_the_header_moves_nothing(ran):
+    """The panel is full of inputs and buttons. Only the header drags; pressing anything else must
+    not start a drag, add the class, move the panel or write a position."""
+    o = ran["float"]["offHandle"]
+    assert o["at"] == {"left": 1000, "top": 200, "right": "16px"}
+    assert o["classes"] == []
+    assert o["keys"] == []
+
+
+def test_a_cancelled_drag_ends_the_same_way_a_released_one_does(ran):
+    c = ran["float"]["cancel"]
+    assert c["classAfter"] is False
+    assert c["saved"] == {"left": 1050, "top": 220}
+
+
+def test_without_a_key_the_panel_moves_but_remembers_nothing(ran):
+    k = ran["float"]["noKey"]
+    assert k["restored"] == {"left": "", "top": "", "right": "16px"}, (
+        "a panel with no key read somebody else's saved position")
+    assert k["moved"] == {"left": 1100, "top": 250, "right": "auto"}
+    assert k["keys"] == [PROBE]
+    assert k["stored"] == '{"left":600,"top":300}', "a panel with no key wrote a position"
+
+
+def test_a_corrupt_or_blocked_store_never_breaks_the_panel(ran):
+    """A wiped, corrupt or blocked localStorage means it opens where the CSS put it, and it can
+    still be moved. Nothing may throw out of the page's own init."""
+    corrupt = ran["float"]["corrupt"]
+    assert corrupt == {"threw": False, "left": "", "top": "", "right": "16px"}
+    blocked = ran["float"]["blocked"]
+    assert blocked["threw"] is False
+    assert blocked["moved"] == {"left": 1100, "top": 250, "right": "auto"}
+    assert blocked["classAfter"] is False
+
+
+def test_a_panel_not_laid_out_yet_is_clamped_against_its_declared_width(ran):
+    """offsetWidth is 0 until the panel is laid out. The width the caller declared stands in, and
+    250 (clampPanelPos's own) when none is, so the lane is never computed from the full window."""
+    u = ran["float"]["unlaidOut"]
+    assert u["declared"] == WIN_W - 300 - 4
+    assert u["byDefault"] == WIN_W - 250 - 4
+
+
+def test_two_panels_on_one_page_never_share_a_position(ran):
+    """One shared key would teleport each panel to wherever the other was last left. Each restores
+    from its own key, and dragging one leaves the other's saved spot untouched."""
+    t = ran["float"]["twoPanels"]
+    assert t["restored"]["a"] == {"left": 100, "top": 120, "right": "auto"}
+    assert t["restored"]["b"] == {"left": 900, "top": 700, "right": "auto"}
+    assert t["a"] == {"left": 200, "top": 220}
+    assert t["b"] == {"left": 900, "top": 700}
+
+
+# ── each page caller hands the helper its own key, classes and width ──────────────
+def test_the_step_three_rail_drags_with_its_own_key_and_class(ran):
+    """Until the helper existed this rail's DRAG was never run by a test, only its restore. Its key
+    is tw_opts_pos and its class op-dragging; a caller that sent the cheat sheet's, or dropped one,
+    fails here and nowhere above."""
+    d = ran["optsDrag"]
+    assert d["classDuring"] is True and d["classAfter"] is False
+    assert d["clamped"] == {"left": WIN_W - OPTS_W - 4, "top": WIN_H - 40, "right": "auto"}, (
+        "the rail's declared width (240) did not reach the clamp")
+    assert d["saved"] == {"left": WIN_W - OPTS_W - 4, "top": WIN_H - 40}
+    assert d["keys"] == ["tw_opts_pos"]
+
+
+def test_the_cheat_sheet_keeps_its_own_declared_width(ran):
+    """Its width (250) differs from the rail's (240) and only shows before layout."""
+    assert ran["cheatUnlaidOut"]["left"] == WIN_W - CHEAT_W - 4
+
+
+# ── the rail's CSS moved into the shared stylesheet, rule for rule ────────────────
+def _block_at(text, open_at):
+    """The text between the brace at `open_at` and its match. Counts braces only, so a comment
+    holding a stray one would unbalance it; the media block read here holds none."""
+    depth = 0
+    for i in range(open_at, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_at + 1:i]
+    raise AssertionError("unbalanced braces in styles.css")
+
+
+def _norm(decls):
+    return " ".join(decls.split())
+
+
+def test_the_options_panel_rules_live_in_the_shared_stylesheet():
+    """The v2 estimate's Sheets panel is `.options-panel` too, so the look moved to styles.css.
+    Asserted as the declarations that make it a floating, bounded, draggable widget rather than as a
+    snapshot of the file: a headless run has no layout engine, so the rules are read as text."""
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+
+    base = re.search(r"(?m)^\.options-panel \{([^}]*)\}", css)
+    assert base, "the floating base rule is not in styles.css"
+    for decl in ("position: fixed", "right: 16px", "top: 150px", "width: 240px",
+                 "max-height: calc(100vh - 170px)", "overflow-y: auto", "z-index: 40"):
+        assert decl in _norm(base.group(1)), f".options-panel lost `{decl}`"
+
+    drag = re.search(r"(?m)^\.options-panel \.op-drag \{([^}]*)\}", css)
+    assert drag, "the drag header rule is not in styles.css"
+    for decl in ("cursor: move", "user-select: none", "position: sticky", "top: -12px"):
+        assert decl in _norm(drag.group(1)), f".op-drag lost `{decl}`"
+    assert re.search(r"(?m)^\.options-panel\.op-dragging \{", css), "the dragging look is gone"
+
+    # The rest of the rail's own rules came with it.
+    for sel in (".options-panel h3", ".options-panel .op-hint", ".options-panel .pr-inert-warn",
+                ".options-panel .op-row", ".options-panel .op-name", ".options-panel .op-price",
+                ".options-panel label", ".options-panel .op-notes", ".options-panel select",
+                ".options-panel .pr-baserow", ".options-panel .pr-optsub",
+                ".options-panel .pr-addsys-btn"):
+        assert re.search(r"(?m)^" + re.escape(sel) + r"\s*\{", css), f"{sel} is not in styles.css"
+
+
+def test_the_inline_breakpoint_for_the_panel_is_in_the_shared_stylesheet():
+    """Below 1400px the panel drops into the flow, bounded so a long list cannot push the ribbon off
+    screen. Found by block, not by line: the fields panel has its own 1400px media block in the
+    same file, and the one under test is the one holding `.options-panel`."""
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    blocks = [_block_at(css, m.end() - 1)
+              for m in re.finditer(r"@media \(max-width: 1400px\) \{", css)]
+    mine = [b for b in blocks if re.search(r"(?m)^\s*\.options-panel \{", b)]
+    assert len(mine) == 1, "expected exactly one 1400px media block holding .options-panel"
+    rule = re.search(r"(?m)^\s*\.options-panel \{([^}]*)\}", mine[0]).group(1)
+    for decl in ("position: static", "width: auto", "max-height: 40vh", "overflow-y: auto",
+                 "box-shadow: none"):
+        assert decl in _norm(rule), f"the inline panel lost `{decl}`"
+
+
+def test_the_proposal_page_no_longer_carries_a_second_copy_of_the_panel_rules():
+    """A copy left behind in the page would quietly fork the look the day someone edits one."""
+    page = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^\s*\.options-panel[^{\n]*\{", page), (
+        "proposal-review.html still defines .options-panel rules; they belong in styles.css")
+    # What stays is the part that is the page's own: the canvas padding that keeps the document
+    # clear of the rail, because .word-canvas is this page's.
+    assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 272px",
+                     page)
+    assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 0",
+                     page), "below 1400px the canvas must stop reserving a lane the rail left"
+
+
+@pytest.mark.parametrize("name", ["proposal-review.html", "estimate-review.html"])
+def test_each_page_that_floats_the_panel_loads_the_shared_stylesheet_first(name):
+    """The panel's look is only in styles.css now. The step-3 page uses it today and the v2
+    estimate page will, so both must load it, and before their own <style> so a page rule still
+    wins a tie as it always has."""
+    page = (FRONTEND / name).read_text(encoding="utf-8")
+    link = page.find('<link rel="stylesheet" href="/styles.css"')
+    inline = page.find("<style")
+    assert link != -1, f"{name} does not load /styles.css"
+    assert inline == -1 or link < inline, f"{name} loads /styles.css after its own <style>"
+
+
+def test_the_shared_helper_is_exported_for_every_page():
+    """Pages reach it as TW.floatPanel; the page initialisers keep their own names."""
+    shared = (FRONTEND / "shared.js").read_text(encoding="utf-8")
+    assert re.search(r"window\.TW = \{[^}]*\bfloatPanel,", shared, re.S)
+    assert "function initCheatDrag()" in (FRONTEND / "js" / "polish-verbal.js").read_text(
+        encoding="utf-8")
+    assert "(function initOptionsPanelDrag()" in (
+        FRONTEND / "js" / "proposal-review.js").read_text(encoding="utf-8")
