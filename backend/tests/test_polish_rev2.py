@@ -79,6 +79,26 @@ def test_the_recorded_cases_move_every_line_of_the_block(tooling):
         assert seen.get(key, 0) >= 40, (key, seen)
 
 
+def test_the_polish_system_is_read_from_the_takeoff_the_way_the_sheet_reads_it(tooling):
+    s = tooling["system"]
+    sp, full, cream = {"system": "sp", "traditional": False}, {"system": "full", "traditional": False}, \
+        {"system": "cream", "traditional": False}
+    assert s["none"] == s["empty"] == s["sp"] == s["salt"] == sp, "no named system is the template's own, salt and pepper"
+    assert s["cream"] == cream and s["aggregate"] == full
+    assert s["firstNamedWins"] == cream, "the first row that names a system decides"
+    assert s["traditional"] == {"system": "sp", "traditional": True}, "'traditional' marks the kind, not the system"
+    assert s["offRowIgnored"] == full, "a switched-off row names nothing"
+
+
+def test_the_root_tooling_follows_the_system_and_the_dye_condition(tooling):
+    r = tooling["root"]
+    assert r["rev2"] == r["rev2ByHand"] == 5280
+    assert r["rev2Dye"] == r["rev2DyeByHand"] == 2146, "Dye's plastic reaches the root's tooling through the model's conditions"
+    assert r["rev2Cream"] == r["rev2CreamByHand"], "the root reads the system the takeoff names"
+    assert r["rev2Cream"] < r["rev2"], "cream over 7,000 SF is cheaper than salt and pepper"
+    assert r["rev2Traditional"] == r["rev2TraditionalByHand"] > r["rev2"], "a traditional polish adds its per-SF charge"
+
+
 def test_a_bid_with_no_area_is_the_one_case_the_model_does_not_copy(tooling):
     """The sheet charges its $150 even for no square footage; the model charges nothing, as Epoxy's tooling does, so an
     Epoxy-only job's empty Polish root carries no $150. Every no-area case shows the sheet's minimum, and none shows the model's."""
@@ -336,6 +356,8 @@ def test_nights_are_counted_from_labor_dollars_the_sheets_way_on_rev2_only(model
     assert n["autoSheet"] > n["autoLegacy"], "mixed rates: the sheet counts more nights than there are people-days"
     assert n["typedLegacy"] == n["typedSheet"] == 505, "a typed quantity is the estimator's, whatever the profile"
     assert n["optsLegacyRoot"] and n["optsRev2Root"] and n["optsRev2Section"]
+    # 3 guys x 5 days at $33 = 15 nights; Remove Existing Joint Filler adds a 4th hand (5 more nights) to the dollars
+    assert n["optsConditionsNights"] == {"on": 2000, "off": 1500}, "travelOpts hands the model's conditions to the night count"
     assert n["engineByHand"] == pytest.approx(5496 / 33 / 8) and n["engineBadRate"] == 0 and n["engineGyp"] == 10
     assert n["hintLegacy"] == "Man-days from the tasks above: 19."
     assert n["hintRev2"] == "Nights from the labor above, as the sheet counts them: 20.82."

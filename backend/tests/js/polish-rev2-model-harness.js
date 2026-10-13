@@ -142,6 +142,16 @@ out.nights = part(() => {
     optsLegacyRoot: B.travelOpts(polishBid(), "Polish") === undefined,
     optsRev2Root: !!rev2Opts && rev2Opts.sheetNights === true,
     optsRev2Section: B.travelOpts(polishBid({ profile: REV2 }), "Epoxy") === undefined,
+    // the model's conditions reach the night count: Remove Existing Joint Filler adds a fourth hand's dollars to the labor
+    // the sheet's B58 divides, so the nights through travelOpts are 1 hand's worth more than the nights without them
+    optsConditionsNights: (() => {
+      const jf = [{ id: "jointfill", guys: 3, days: 5, rate: 33 }];
+      const on = polishBid({ profile: REV2, conditions: { joint_filler: true, remove_existing_jf: true } });
+      const off = polishBid({ profile: REV2, conditions: { joint_filler: true, remove_existing_jf: false } });
+      const line = { lodging: { enabled: true, qty_auto: true, rate: 100 }, per_diem: { enabled: false } };
+      return { on: B.travelCosts(line, jf, B.travelOpts(on, "Polish")).lodging,
+               off: B.travelCosts(line, jf, B.travelOpts(off, "Polish")).lodging };
+    })(),
     engineByHand: E.lodgingNights("polish-rev2", 5496, 0, 33),
     engineBadRate: E.lodgingNights("polish-rev2", 5496, 0, 0),
     engineGyp: E.lodgingNights("gyp", 5500, 0, 55),

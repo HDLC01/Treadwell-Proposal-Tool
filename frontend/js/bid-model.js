@@ -820,6 +820,9 @@
 
     var lines = [];
     var usesAuto = false;
+    // The travel panel is the root section's: a bid priced by Polish rev 2 counts auto nights the sheet's way, so the
+    // working lines count them the same way the cost box and the bid do.
+    var trvOpts = travelOpts(M, ROOT_TAB);
     // Set when a travel line that is on is not on auto: the man-days the sheet would count are then shown as text.
     var showManDays = false;
     if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
@@ -843,9 +846,9 @@
     TRAVEL_LINE_KEYS.forEach(function (k) {
       var l = trv[k];
       if (!l || !rowOn(l)) { lines.push(names[k] + ": off, $0"); return; }
-      var q = travelQty(l, rows);
+      var q = travelQty(l, rows, trvOpts);
       var prod = q * num(l.rate);
-      var cost = travelLineCost(l, rows);
+      var cost = travelLineCost(l, rows, trvOpts);
       if (l.qty_auto !== false) usesAuto = true;
       var typedQty = l.qty_auto === false && filledIn(l.qty);
       if (l.qty_auto === false) showManDays = true;
@@ -854,7 +857,10 @@
         (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)) +
         (typedQty || l.qty_auto !== false ? "" : ". Type the " + (k === "lodging" ? "nights." : "days.")));
     });
-    if (usesAuto) {
+    if (usesAuto && trvOpts && Math.abs(sheetNights(rows, trvOpts.conditions) - travelManDays(rows)) >= 1e-9) {
+      lines.push("Nights = the labor dollars above over the first crew rate over 8 hours, as the sheet counts them (" +
+        qty(sheetNights(rows, trvOpts.conditions)) + " now). Guys x days is " + qty(travelManDays(rows)) + ".");
+    } else if (usesAuto) {
       lines.push("Man-days = guys x days on the labor lines above (" + qty(travelManDays(rows)) +
         " now).");
     } else if (showManDays) {
