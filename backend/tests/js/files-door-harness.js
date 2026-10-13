@@ -132,6 +132,7 @@ const PROPOSAL_UNITS = [
   grab(PROPOSAL, /^  const liveKey = \(name\) => \{[\s\S]*?\n  \};$/m, "liveKey", P),
   fn(PROPOSAL, "repaintNote", P),
   fn(PROPOSAL, "sayTheSaveIsBlocked", P),
+  fn(PROPOSAL, "sayTheBaseHasNoPrice", P),
   grab(PROPOSAL, /^  let _persistTimer = .*$/m, "_persistTimer", P),
   // The cover letter's one resolver, which the composer and continueToDone both ask.
   fn(PROPOSAL, "coverLetterOn", P),
@@ -153,13 +154,16 @@ const loadState = new Function("TW", STATE_LOAD + "\nreturn state;");
 const LUMP = iifeBody(PROPOSAL, "// Lump sum = the estimate sheet's own TOTAL LUMP SUM", "(() => {", P);
 // The page-init block that puts a name on the signature line, verbatim.
 const PREFILL = iifeBody(PROPOSAL, "(function prefillEstimator() {", "(function prefillEstimator() {", P);
+// The page-init line that says a v2 base has no price, as the page opens, verbatim.
+const NO_PRICE_LINE = grab(PROPOSAL, /^  sayTheBaseHasNoPrice\(\);$/m, "the page-init no-price line", P);
 
 const PAGE_BODY = [
   "let templateVersion = __tv0;",
   PROPOSAL_UNITS,
   "function __initLump() {" + LUMP + "}",
   "function __prefillEstimator() {" + PREFILL + "}",
-  "return { rebuildPricing, continueToDone, composeForFiles, fitPayload, __initLump, __prefillEstimator,",
+  "function __initNote() {" + NO_PRICE_LINE + "}",
+  "return { rebuildPricing, continueToDone, composeForFiles, fitPayload, __initLump, __prefillEstimator, __initNote,",
   "  setTemplateVersion: (v) => { templateVersion = v; },",
   // The form's debounced persist, as the page arms it: it writes a patch of the module snapshot's
   // payload. Armed from here so the scenario can put one in flight when Continue runs.
@@ -2125,6 +2129,48 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
     };
     out.v2StaleCopy = { total: V2_TOTAL, clean: await one(v2Clean()), stale: await one(v2Stale()),
                         staleOption: await one(v2StaleOption()), sheet: await one(draft()) };
+  }
+
+  // S18. A v2 BID WHOSE BASE THE ESTIMATE COULD NOT PRICE (Sheets phase 4, review of the Proposal step). The estimate saves such
+  //      a sheet with total: null and an `unpriceable` reason, shows "no price", and lets the estimator go on. The Proposal step
+  //      read the null as 0 and built a proposal around it ("$0 - Total", every option an Add against nothing). Now the page says
+  //      so as it opens and Continue stops: nothing composed, nothing saved, no navigation, the button as it was, and the
+  //      document the draft already held is not rewritten to $0. The same bid with the base priced goes through as it always did.
+  {
+    const REASON = "The Polish takeoff did not load, so this sheet cannot be priced.";
+    const v2Tab = (id, role, kind, total, extra) => Object.assign({
+      id, name: id, role, kind, total, sales_tax: total ? 300 : null, remodel: total ? 0 : null, system_desc: id + " system",
+      notes_auto: [], sf: {}, taxable: true, remodel_on: false, v2: true }, extra || {});
+    const priced = () => [v2Tab("Polish", "polish", "base", 8000), v2Tab("Epoxy", "epoxy", "option", 9000)];
+    const unpriced = () => [v2Tab("Polish", "polish", "base", null, { unpriceable: REASON }), v2Tab("Epoxy", "epoxy", "option", 9000)];
+    const bid = (tabsOf, lump) => Object.assign(draft(), {
+      work_type: "polish", base_tab_id: "Polish", priced_tabs: tabsOf, proposal_lump_sum: lump, proposal_sales_tax: lump ? 300 : null,
+      tab_opts: { Epoxy: { is_option: true, show: true, price_mode: "total", show_system: true, show_diff: false } },
+    });
+    const run = async (d) => {
+      const b = browser(d);
+      const stored = () => JSON.stringify(local(b).proposal_payload);
+      const payloadBefore = stored();
+      const p = await openProposal(b, "/proposal-review.html?d=d1");
+      const opened = { lump: p.state.proposal_lump_sum, tb: p.tbText(), rooms: (p.state.rooms || []).length, tax: p.state.proposal_sales_tax };
+      p.scope.__initNote();                                // the page's own init line
+      const note = { head: p.nodes["resync-note-head"].textContent, doIt: p.nodes["resync-note-do"].textContent,
+                     shown: p.nodes["resync-note"].hidden === false };
+      // An option ticked or a note typed on the page runs the pricing again, now with #tb-total on the page: the sync of the
+      // document the draft already holds is no longer refused for want of it. On a priced base it brings that document up to the
+      // page's figures; on an unpriced one it must leave it as it was.
+      p.scope.rebuildPricing();
+      const rebuildMovedPayload = stored() !== payloadBefore;
+      const payloadAtOpen = stored();
+      const putsBefore = b.server.puts.length;
+      const went = await p.scope.continueToDone(null);
+      return { opened, note, went, nav: p.page.nav.slice(), button: { disabled: p.nodes["generate-btn"].disabled,
+               text: p.nodes["generate-btn"].textContent }, rebuildMovedPayload,
+               payloadKept: stored() === payloadAtOpen && payloadAtOpen === payloadBefore,
+               putsByContinue: b.server.puts.length - putsBefore, composed: stored() !== payloadAtOpen };
+    };
+    out.v2NoBasePrice = { reason: REASON, unpriced: await run(bid(unpriced(), null)), priced: await run(bid(priced(), 8000)),
+                          sheet: await run(draft()) };
   }
 
   process.stdout.write(JSON.stringify(out));

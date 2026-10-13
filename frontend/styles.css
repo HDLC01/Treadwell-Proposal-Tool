@@ -1765,6 +1765,10 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .options-panel .op-desc .op-hint { display: block; margin: 2px 0 0; }
 .options-panel select { width: 100%; font-size: 12px; margin-top: 2px; padding: 3px 4px; }
 .options-panel .pr-baserow { display: block; font-weight: 700; margin: 8px 0 2px; cursor: pointer; }
+/* A v2 estimate picks the base, so this page draws the base radios disabled and says where to pick it. */
+.options-panel .pr-baserow input.pr-base:disabled { cursor: not-allowed; }
+.options-panel .pr-base-locked { color: #444; }
+.options-panel .pr-base-locked a { color: #c8102e; font-weight: 600; }
 .options-panel .pr-optsub { margin: 2px 0 0 18px; padding-left: 8px; border-left: 2px solid #eee; }
 .options-panel .pr-addsys-btn { margin-top: 10px; border: 1px dashed #c8102e; background: transparent;
   color: #c8102e; font: inherit; font-weight: 600; cursor: pointer; padding: 5px 9px; border-radius: 6px; width: 100%; }

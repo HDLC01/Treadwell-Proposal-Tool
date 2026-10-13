@@ -188,6 +188,7 @@ function spreadsheetBlob(workType) {
     tab_notes: {}, tab_structs: [], lock_overrides: {}, tax_flags_per_sheet: true,
     system_name: "Treadwell MACRO Flake", texture: "Smooth", scope_notes: "Grind and coat.",
     schedule_notes: "One week.", exclusions: "Moving furniture.", notes_text: "A note",
+    notes_seed: { work_type: "epoxy", text: "A note" },
     estimator_name: "Kyle Loseke", tax_layout: "BROKEN_OUT", tax_inclusion: "INCLUDED",
     price_overrides: { lines: {} }, price_lines: [{ label: "Joint filler", amount: 1500 }],
     extras: [], paragraph_overrides: [], paragraph_overrides_all: {},
