@@ -555,7 +555,7 @@
           <label for="county-input">County <span class="c-unit">remodel tax</span></label>
           <div class="c-box">
             <input type="text" id="county-input" autocomplete="off" data-county-keep
-                   placeholder="Search counties — Johnson, Wyandotte, Jackson…">
+                   placeholder="Search counties: Johnson, Wyandotte, Jackson…">
             <button type="button" class="c-clear" id="county-clear" hidden>Clear</button>
             <div class="c-results" id="county-results" data-county-keep hidden></div>
           </div>
@@ -605,6 +605,9 @@
      nothing may be rendered until it has settled which draft this page may write to. -->
 <script src="/js/polish-sandbox.js"></script>
 <script src="/js/county-picker.js"></script>
+<!-- Fills the county box from the job address. After county-picker.js, which it drives, and before
+     polish-intake.js, which mounts it with the address lookup. -->
+<script src="/js/county-autofill.js"></script>
 <!-- Shows the Drawings &amp; specs box only for a GC. BEFORE polish-intake.js, which calls window.TWAudienceBox.sync()
      once it has filled the Audience radios from the draft. -->
 <script src="/js/audience-box.js"></script>

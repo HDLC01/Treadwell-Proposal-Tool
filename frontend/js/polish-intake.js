@@ -729,12 +729,17 @@
     // row fires `input` on City, State and Zip, which the listener above turns into a save. The
     // guard is for a page served without the script; the lookup is a convenience, not a gate.
     if (window.TWAddress && form) {
+      // The county box fills from the address (js/county-autofill.js); null when a script is missing.
+      var countyAuto = (county && window.TWCountyAutofill) ? window.TWCountyAutofill.mount({
+        county: county, address: $("address-input"), city: $("city-input"),
+        state: $("state-input"), zip: $("zip-input") }) : null;
       window.TWAddress.mount({
         address:  $("address-input"),
         business: $("business-input"),
         city:     $("city-input"),
         state:    $("state-input"),
         zip:      $("zip-input"),
+        onPick:   countyAuto ? countyAuto.onPick : undefined
       });
     }
     if (county) county.wire(false);         // the search box's own listeners; the click is onClick's

@@ -45,8 +45,19 @@
   "use strict";
 
   var COUNTY_LIMIT = 12;               // rows offered at once; the estimator types, not scrolls
+  // Said under the box while the county on screen came from the job address (autoFill below).
+  var AUTO_NOTE = "Filled from the address. Change it if it's wrong.";
 
   function $(id) { return document.getElementById(id); }
+
+  /** "Johnson County", "johnson", " Sedgwick  County " -> "johnson", "sedgwick". Also drops a
+   *  " County" / " Parish" / " Borough" tail (never " city": Kansas City is a name), so one
+   *  comparison serves a name from the Census, one from Photon and one from the list. Case and
+   *  spacing never decide a match. */
+  function bareName(s) {
+    return String(s == null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase()
+      .replace(/ (county|parish|borough)$/, "");
+  }
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) {
@@ -87,9 +98,16 @@
     // The pick, held as the four DRAFT keys rather than as an API row: hydration reads exactly
     // these four off the draft, so what a reopened project shows is what a fresh pick would write.
     var pick = null;
+    // True only while the pick on screen was put there by autoFill() from the job address, and
+    // nobody has touched it since. A hand pick, a Clear, or a county read back off a saved draft
+    // all set it false, which is what makes "never overwrite the estimator's county" one flag
+    // rather than a rule scattered across the host pages. In memory on purpose: a reopened draft
+    // cannot tell a fill from a pick, so it treats its county as chosen and leaves it alone.
+    var autoPick = false;
+    var loadPromise = null;
     var ksState = opts.ksState == null ? null : Number(opts.ksState);
 
-    async function load() {
+    async function loadList() {
       try {
         if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
         var res = await fetch(window.TW.resolveApiBase() + "/api/reference/counties",
@@ -111,6 +129,21 @@
       // re-said now that there is a number to say.
       renderNote();
       return counties;
+    }
+
+    /** Start the list fetch and remember it, so an auto-fill that fires before the list lands can
+     *  wait for it (whenLoaded) instead of finding no rows and giving up. */
+    function load() {
+      loadPromise = loadList();
+      return loadPromise;
+    }
+
+    /** Resolves once the list is here (or failed). Never rejects; resolves at once when load()
+     *  was never called, which leaves whatever the host injected through _counties(). */
+    function whenLoaded() {
+      return loadPromise ? loadPromise.then(function () { return counties; },
+                                            function () { return counties; })
+                         : Promise.resolve(counties);
     }
 
     /** The two-letter state out of "Johnson County, KS".
@@ -208,8 +241,12 @@
                county_notes: pick.county_notes };
     }
 
-    function choose(c) {
+    /** A pick made by a person: from a row, by click or keyboard. */
+    function choose(c) { apply(c, false); }
+
+    function apply(c, auto) {
       if (!c || !c.name) return;
+      autoPick = !!auto;
       pick = {
         // The live screen's shape (city "Overland Park, KS" or county "Johnson County, KS") — its
         // own restore path replays this label verbatim rather than parsing it back apart.
@@ -230,6 +267,7 @@
 
     function clear() {
       pick = null;
+      autoPick = false;
       matches = [];
       close();                               // which now empties the box, pick being null
       renderNote();
@@ -251,7 +289,7 @@
      *  Kyle's sheet expects a flat 10% on this line; naming the real rate, the county it came
      *  from, and the fallback when there is no county is what stops the difference reading as a
      *  bug. */
-    function noteText() {
+    function baseNote() {
       var on = !!remodelTaxOn();
       var ksRate = ksPhrase();
       if (!pick) {
@@ -286,6 +324,66 @@
         : " — but the Remodel tax toggle is off, so it is not affecting the price yet.");
     }
 
+    /** The sentence above, plus one more while the pick is a fill from the address and nobody has
+     *  touched it: the estimator has to be told this was not their own choice. */
+    function noteText() {
+      return baseNote() + (pick && autoPick ? " " + AUTO_NOTE : "");
+    }
+
+    /** Which row of the list a job address sits in, or null.
+     *
+     *  Two inputs, in this order. A CITY row first: when the Census (or Photon) names the city the
+     *  address is in AND the list has a verified row for that city in that state, the city row is
+     *  the right one, because a county row is only the floor rate for unincorporated land (see
+     *  rowLabel). A city row that names its own county must agree with the county found, so
+     *  Shawnee, KS (Johnson) is never filled for an address in Shawnee County. Then the COUNTY
+     *  row: name equal ignoring case, with or without " County", same state, kind "county".
+     *  Anything else is null: a county the list does not have is left empty, never approximated. */
+    function resolveArea(countyName, state, place) {
+      var st = String(state || "").trim().toUpperCase();
+      var cn = bareName(countyName);
+      var pl = bareName(place);
+      var i, c;
+      if (!st) return null;
+      if (pl) {
+        for (i = 0; i < counties.length; i++) {
+          c = counties[i];
+          if (c.kind !== "city" || c.state !== st || bareName(c.name) !== pl) continue;
+          if (cn && c.county && bareName(c.county) !== cn) continue;
+          return c;
+        }
+      }
+      if (!cn) return null;
+      for (i = 0; i < counties.length; i++) {
+        c = counties[i];
+        if (c.kind !== "city" && c.state === st && bareName(c.name) === cn) return c;
+      }
+      return null;
+    }
+
+    /** Fill the box from a job address's county (and city), when and only when that is safe.
+     *
+     *  Returns what happened, so the caller can tell the estimator or stay quiet:
+     *    "hand"    -- somebody picked (or a saved draft holds) a county. NEVER overwritten.
+     *    "filled"  -- an empty box, or one this function filled earlier, now holds the match.
+     *    "same"    -- the box already holds exactly that fill; nothing was written or saved.
+     *    "none"    -- the list has no row for this place. An earlier FILL is cleared (it belonged
+     *                 to the old address), an empty box stays empty.
+     *    "pending" -- the list is not loaded, so there is nothing to match against yet.
+     *  Saves through the host's own onChange, like a pick does. */
+    function autoFill(countyName, state, place) {
+      if (pick && !autoPick) return "hand";
+      if (!counties.length) return "pending";
+      var row = resolveArea(countyName, state, place);
+      if (!row) {
+        if (pick && autoPick) clear();
+        return "none";
+      }
+      if (pick && autoPick && pick.county === rowLabel(row)) return "same";
+      apply(row, true);
+      return "filled";
+    }
+
     /** Text, not markup: every word of this is composed above, and the only variable in it is a
      *  county name from the server's own table. Nothing to escape and nothing to get wrong. */
     function renderNote() {
@@ -300,6 +398,7 @@
      *  twice and the second pick is the one that counts. */
     function hydrate(state) {
       state = state || {};
+      autoPick = false;                      // a saved county is treated as chosen, never refilled
       pick = state.county
         ? { county: String(state.county),
             county_tax_rate: state.county_tax_rate == null ? null : state.county_tax_rate,
@@ -382,6 +481,8 @@
       rowLabel: rowLabel, rowRate: rowRate, filter: filter, stateOf: stateOf,
       renderResults: renderResults, paintHighlight: paintHighlight,
       hasPick: function () { return !!pick; },
+      autoFill: autoFill, resolveArea: resolveArea, whenLoaded: whenLoaded,
+      isAuto: function () { return !!pick && autoPick; },
       // Read-only windows for a harness that needs to see what the control is holding, rather
       // than reaching into a closure it cannot.
       _matches: function () { return matches.slice(); },

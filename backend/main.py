@@ -3736,6 +3736,25 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
 
 
+@app.post("/api/county")
+def api_county(payload: DistanceIn, request: Request) -> Dict[str, Any]:
+    """The county (and incorporated city) a job address sits in, from the US Census geocoder, so the
+    intake's County remodel tax box can fill itself (Hanz, 2026-10-13).
+
+    ALWAYS 200, never raises: every case that cannot produce a real answer -- address too thin, no
+    match, a service slow or down, rate limit -- is `{ok: false, reason}` and the page leaves the box
+    as it was. Same permission rule as /api/distance: any signed-in user (the auth gate above), no
+    tab owns it, and it is deliberately not in nav_access.TABS, because the intake that calls it is
+    open to every estimator. Its own rate counter (bucket "county:<user>") so a burst of county
+    lookups can never use up the distance lookup's allowance. A sync handler, so the threadpool
+    carries a slow Census answer."""
+    who = getattr(request.state, "user_email", None) or "anon"
+    if distance.rate_limited("county:" + who):
+        return {"ok": False, "county": "", "state": "", "fips": "", "place": "", "place_sure": True,
+                "reason": "busy"}
+    return distance.county_lookup(payload.address, payload.city, payload.state, payload.zip)
+
+
 @app.post("/api/price")
 def api_price(payload: PriceIn) -> Dict[str, Any]:
     """Compute MATERIAL pricing from selections — the tool's own pricing

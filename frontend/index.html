@@ -300,7 +300,7 @@
         <label for="county-input">County <span class="c-unit">remodel tax</span></label>
         <div class="c-box">
           <input type="text" id="county-input" autocomplete="off" data-county-keep
-                 placeholder="Search counties &mdash; Johnson, Wyandotte, Jackson&hellip;">
+                 placeholder="Search counties: Johnson, Wyandotte, Jackson&hellip;">
           <button type="button" class="c-clear" id="county-clear" hidden>Clear</button>
           <div class="c-results" id="county-results" data-county-keep hidden></div>
         </div>
@@ -345,6 +345,9 @@
      Reads /api/reference/counties and writes the four county_* draft keys; must precede
      the page script, which calls TWCounty.mount() as it boots. -->
 <script src="/js/county-picker.js"></script>
+<!-- Fills the county box from the job address (shared with the polish intake). After the picker it
+     drives, before the page script that mounts it. -->
+<script src="/js/county-autofill.js"></script>
 <script src="/js/address-lookup.js"></script>
 <!-- The one vocabulary of work types and job conditions. The page script reads it for the rule that says which
      cells the two tax switches write once a draft is split per sheet, the same rule a v2 save follows, and it

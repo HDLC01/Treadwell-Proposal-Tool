@@ -1115,6 +1115,8 @@ def test_the_page_loads_no_formula_engine(html):
                     "/js/markup-core.js", "/js/bid-profiles.js", "/js/bid-engine.js",
                     "/js/bid-model.js", "/js/address-lookup.js",
                     "/js/polish-sandbox.js", "/js/county-picker.js",
+                        # 2026-10-13: fills the county box from the job address. After the picker it drives.
+                        "/js/county-autofill.js",
                     # 2026-10-12: shows the Drawings & specs box only for a GC. BEFORE polish-intake.js,
                     # which calls window.TWAudienceBox.sync() once it has filled the Audience radios.
                     "/js/audience-box.js", "/js/polish-intake.js",
