@@ -225,13 +225,16 @@ def test_the_sidebar_and_the_server_name_every_tab_the_same(ran):
 
 def test_the_server_table_renames_the_two_tabs_and_moves_nothing_else():
     """LABELS ONLY. The table is keyed on href; what a denied role is refused, and which API routes
-    the tab owns, are what a rename must not touch."""
+    the tab owns, are what a rename must not touch. (The one deliberate change since the rename: on
+    2026-10-13 the v2 Estimates row took ownership of its own board feed, /api/v2/pipeline, so a
+    member kept off the page cannot read the data; test_nav_access.py holds that claim.)"""
     tabs = nav_access.TABS
     assert tabs[INTAKE_HREF]["label"] == TOOL
     assert tabs[DATABASE_HREF]["label"] == DATABASE
     assert tuple(tabs[INTAKE_HREF]["pages"]) == (INTAKE_HREF, ESTIMATE_HREF)
     assert tuple(tabs[DATABASE_HREF]["pages"]) == (DATABASE_HREF,)
-    assert tuple(tabs[INTAKE_HREF]["api"]) == () and tuple(tabs[DATABASE_HREF]["api"]) == ()
+    assert tuple(tabs[INTAKE_HREF]["api"]) == ()
+    assert tuple(tabs[DATABASE_HREF]["api"]) == ("/api/v2/pipeline",)
     served = {t["href"]: t["label"] for t in nav_access.capability_table()}
     assert served[INTAKE_HREF] == TOOL and served[DATABASE_HREF] == DATABASE
 
@@ -246,7 +249,10 @@ def test_the_admin_matrix_draws_the_new_names_from_the_real_capability_table(ran
     assert len(hidden_only) == 1, ran["admin"]["notes"]
     listed = hidden_only[0].split("not sealed:")[1].split(". Every API route")[0]
     names = [n.strip() for n in listed.split(",")]
-    assert TOOL in names and DATABASE in names, names      # the server's labels, in the server's order
+    assert TOOL in names, names                            # the server's label, in the server's order
+    # v2 Estimates owns its board feed since 2026-10-13, so a switch there blocks its data and the
+    # row leaves the "can only be hidden" list; the matrix still draws it under its new name
+    assert DATABASE not in names, names
     assert "the Item Library's assemblies also price %s," % TOOL in hidden_only[0], hidden_only[0]
     assert "Polish" not in hidden_only[0]
 

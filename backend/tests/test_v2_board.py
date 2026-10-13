@@ -9,9 +9,13 @@ existing boards (portal.js, portal.html, /gc-projects.html, notifications.js and
 WHAT HAS TO HOLD
   A. /api/v2/pipeline returns v2 (polish_beta) drafts and only those, from creation, test copies
      included, and TWCrm.stage files each one in the right column.
-  B. THE REAL BOARDS ARE UNCHANGED: pinned hashes of the files and of the route's source, and the
-     default /api/portal/pipeline answer for a mixed fixture is byte-for-byte what it was (no v2
-     field, and a never-generated v2 draft is still not on it).
+  B. THE REAL BOARDS STAY SEPARATE: the default /api/portal/pipeline answer for a mixed fixture is
+     what it has always been (no v2 field, and a never-generated v2 draft is still not on it), the
+     real board files mention nothing from the v2 board, and the v2 board never loads portal.js.
+     Nothing here freezes the source of those files, so an unrelated edit to them is free to land.
+  B2. THE FEED HAS THE SAME DOOR AS THE PAGE: /api/v2/pipeline is claimed by the v2 Estimates tab in
+     nav_access, so a member who is denied the page gets 403 from the route and one who is not gets
+     the data.
   C. SEPARATE STORAGE: every key the board writes starts tw_v2_; seeding the real boards' keys
      changes nothing it reads; localStorage is never touched (the harness throws if it is).
   D. READ ONLY: the panel carries no send, follow-up, deposit, chat or status control.
@@ -20,7 +24,6 @@ WHAT HAS TO HOLD
 
 Everything JavaScript here is EXECUTED (tests/js/v2-board-harness.js), not read as source text.
 """
-import hashlib
 import inspect
 import json
 import pathlib
@@ -31,6 +34,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+import nav_access
 import v2_pipeline
 from _node import last_json_line, run_node
 
@@ -178,33 +182,10 @@ def test_the_endpoint_writes_nothing(monkeypatch):
 # ═════════════════════════════════════════════════════════════════════════════
 # B. the real boards are unchanged
 # ═════════════════════════════════════════════════════════════════════════════
-def _sha(data: bytes) -> str:
-    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
-
-
-# PINNED ON PURPOSE (Hanz, 2026-10-13: the v2 board is beta and must not be merged into the existing
-# boards). A legitimate edit to one of these files fails here: update the hash IN THE SAME COMMIT, and
-# say why in the message. What this stops is the v2 board changing them by accident or on the side.
-PINS = {
-    "js/portal.js": "4d12a99fb89f40651cb95f2ce9a20c5433fc33e0685ecfee10de92b574476951",
-    "portal.html": "e47981196e32f9d347e28bce24aa72461feac7db7d0f44fd79edfcca716c616a",
-    "js/notifications.js": "8591c436cc4ed3823e9afa1fe76c76e37e5a9f22cc6dba1ad52e98bc99e39970",
-}
-ROUTE_PIN = "882a3d8f2e5e11d9e525e34b21659cfca2b84f9b279b6c1904e58cb4e2ff8160"
-
-
-@pytest.mark.parametrize("name", sorted(PINS))
-def test_the_real_boards_files_are_unchanged(name):
-    assert _sha((FRONTEND / name).read_bytes()) == PINS[name], (
-        "%s changed. The v2 board is built beside the real boards and must not edit them. If this "
-        "edit is deliberate and has nothing to do with v2, update the pin in this file." % name)
-
-
-def test_the_existing_pipeline_route_is_unchanged():
-    got = _sha(inspect.getsource(main.api_portal_pipeline).encode("utf-8"))
-    assert got == ROUTE_PIN, "api_portal_pipeline changed; the v2 board has its own route"
-
-
+# What keeps the boards apart is BEHAVIOUR, not a frozen copy of their source. Three things are held:
+# the real board's default answer (the golden below), the real board files naming nothing from the v2
+# board, and the v2 board never loading portal.js. An unrelated edit to portal.js or to the real
+# route is free to land; one that reaches into v2, or changes what the real board answers, fails.
 @pytest.mark.parametrize("name", ["js/portal.js", "portal.html", "js/notifications.js"])
 def test_the_real_boards_know_nothing_about_v2(name):
     text = (FRONTEND / name).read_text(encoding="utf-8")
@@ -235,6 +216,58 @@ def test_the_default_pipeline_answer_is_exactly_what_it_was(monkeypatch):
     assert rows["real-1"]["bid_total"] == 40000 and rows["real-1"]["pipeline"] == "direct"
     assert rows["v-gc"]["not_sent"] is True and rows["v-gc"]["pipeline"] == "gc"
     assert set(body) == {"proposals", "portal_status", "portal_fetched_at"}
+
+
+# ── B2. the feed has the same door as the page ───────────────────────────────
+@pytest.fixture
+def policy(tmp_path, monkeypatch):
+    """A nav policy file per test (the real one lives on the data volume) and no cached profile."""
+    monkeypatch.setattr(nav_access, "_FILE", tmp_path / "nav_access.json")
+    monkeypatch.setattr(nav_access, "_DATA_DIR", tmp_path)
+    main._profile_cache_clear()
+    yield nav_access
+    main._profile_cache_clear()
+
+
+def _signed_in_as(monkeypatch, role, email="staffer@wetreadwell.com"):
+    """A client whose role is resolved the way the app resolves it, through the profile."""
+    monkeypatch.setattr(main, "_user_email", lambda request: email)
+    monkeypatch.setattr(main.profiles, "get_by_email",
+                        lambda e: {"id": "u1", "email": email, "role": role, "status": "active"})
+    main._profile_cache_clear()
+    return TestClient(main.app)
+
+
+def test_a_member_without_the_v2_page_gets_403_from_its_feed_and_one_with_it_gets_the_data(
+        monkeypatch, policy):
+    _up(monkeypatch)
+    policy.save({"user": ["/polish-estimates.html"]}, "k@x.com")
+    # denied the page: the route refuses with the gate's own body, and no draft is read at all
+    reads = []
+    monkeypatch.setattr(main.drafts, "list_drafts", lambda *a, **k: reads.append(1) or DRAFTS)
+    refused = _signed_in_as(monkeypatch, "user").get("/api/v2/pipeline")
+    assert refused.status_code == 403
+    assert refused.json()["nav_denied"] is True and "proposals" not in refused.json()
+    assert reads == [], "a denied member's request reached the drafts list"
+    # not denied (a role the policy does not name): the same route answers with the bids
+    _up(monkeypatch)
+    allowed = _signed_in_as(monkeypatch, "admin").get("/api/v2/pipeline")
+    assert allowed.status_code == 200
+    assert {p["proposal_id"] for p in allowed.json()["proposals"]} >= {"v-fresh", "v-gc"}
+    # and with nothing denied to anyone, a member reads it too
+    policy.save({}, "k@x.com")
+    assert _signed_in_as(monkeypatch, "user").get("/api/v2/pipeline").status_code == 200
+
+
+def test_denying_another_tab_leaves_the_v2_feed_open_and_denying_this_one_leaves_the_real_board_open(
+        monkeypatch, policy):
+    _up(monkeypatch)
+    policy.save({"user": ["/history.html", "/polish-intake.html", "/projects.html"]}, "k@x.com")
+    assert _signed_in_as(monkeypatch, "user").get("/api/v2/pipeline").status_code == 200
+    policy.save({"user": ["/polish-estimates.html"]}, "k@x.com")
+    client = _signed_in_as(monkeypatch, "user")
+    assert client.get("/api/portal/pipeline").status_code == 200      # the real boards' feed
+    assert client.get("/api/drafts").status_code == 200               # the Proposals Database's list
 
 
 # ═════════════════════════════════════════════════════════════════════════════

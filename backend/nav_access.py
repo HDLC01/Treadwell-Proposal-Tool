@@ -200,18 +200,22 @@ TABS: Dict[str, Dict[str, Any]] = {
     "/polish-estimates.html": {
         # WAS "Polish Estimate Database" until 2026-10-07. Same href; see the note above.
         "label": "v2 Estimates",
-        # api: () DELIBERATELY. The page reads /api/drafts and NOTHING else, and that route is the
-        # Proposals Database's own list — claiming it here would 403 a page nobody restricted the
-        # moment anyone switched this row off, which is the single-caller rule this whole table is
-        # built on (test_no_tab_claims_a_shared_prefix, and the note on /followups.html above
-        # spelling out the four routes left unlisted for exactly this reason). Denying this row
-        # therefore refuses the PAGE and leaves the data alone — the same shape as /projects.html.
+        # OWNS /api/v2/pipeline, THE BETA BOARD'S OWN FEED (2026-10-13). Until the board was built the
+        # page read /api/drafts and nothing else, which is the Proposals Database's own list and so
+        # could not be claimed (that is why this row used to carry api: ()). The board now reads
+        # /api/v2/pipeline and nothing else, and no other page calls it (grep frontend/ for the
+        # string; test_nav_access.py re-takes that measurement), so it passes the single-caller rule
+        # this table is built on. Without this entry a signed-in member who was denied the page could
+        # still read every v2 bid, with its price, by typing the URL.
+        #
+        # Exact match, no trailing slash: the route has no children, and a slashless prefix is what
+        # keeps this from reaching anything else under /api/v2/ if one is ever added.
         #
         # ONE PAGE, unlike its neighbour above: there is no second door into this list. It is
         # reached from the sidebar, and its rows lead OUT to /polish-intake.html, which that row
         # already governs.
         "pages": ("/polish-estimates.html",),
-        "api": (),
+        "api": ("/api/v2/pipeline",),
     },
     "/analytics.html": {
         "label": "Analytics",
