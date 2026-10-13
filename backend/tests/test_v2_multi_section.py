@@ -374,7 +374,9 @@ def test_a_bid_with_several_sections_writes_the_complete_derived_set(ran):
     assert c["frozenThrew"] is None, c["frozenThrew"]
     assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs",
                          "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
-                         "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price"]
+                         "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
+        "tab_opts is written only because this bid holds an option (Phase 15): the proposal side prints a priced tab "
+        "under Options & Unit Prices only when it says is_option")
     assert c["savePatchMultiKeys"] == ["polish_estimate", "cell_values"] + c["keys"][1:]
     assert c["savePatchEqualsComposer"] is True, "buildSavePatch is the composer plus the condition cells"
     assert c["pricedTabs"] == [["Polish", "polish", "base", True, 33798], ["Epoxy", "epoxy", "base", True, 27340],
@@ -509,8 +511,11 @@ def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ra
     # Epoxy is edited on the page's own panels now (Phase 12): its Material panel is the takeoff, with the patch
     # that the sheet always charges, not a summary. A section not edited here yet keeps the summary.
     assert "data-epoxy-patch" in m["panelEpoxy"] and "Priced with epoxy@1" not in m["panelEpoxy"]
-    assert "Seal" in m["panelSeal"] and "Priced with seal@1" in m["panelSeal"]
-    assert "blank, so the built-in rate is charged" in m["panelSeal"], "the Markups notes are shown, not hidden"
+    # The Seal option is edited on the page's own panels since Phase 15 (its Material panel is the takeoff, with the
+    # patch); the Leveling option, which Phase 16 brings, is the section that still shows the summary.
+    assert "data-seal-patch" in m["panelSeal"] and "Priced with seal@1" not in m["panelSeal"]
+    assert "Leveling" in m["panelLeveling"] and "Priced with leveling@1" in m["panelLeveling"]
+    assert "blank, so the built-in rate is charged" in m["panelLeveling"], "the Markups notes are shown, not hidden"
     assert 'aria-current="true">Epoxy' in m["stripAfterClick"]
     assert m["panelRootIsTakeoff"] is True, "choosing Polish again brings the takeoff panel back"
     assert m["maths"].startswith("Polish $") and "+ Epoxy $" in m["maths"]

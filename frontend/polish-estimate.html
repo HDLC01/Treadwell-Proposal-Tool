@@ -62,6 +62,16 @@
           font:600 12.5px var(--sans);white-space:nowrap}
     .rail button:hover{background:var(--surf-low)}
     .rail button[aria-current="true"]{background:var(--red-tint);color:var(--red-dark)}
+    /* "+ Add option" and the options a bid holds. Small, quiet buttons under the section strip: an option is a
+       side trip from the base bid, not a step of it. */
+    .optbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:-6px 0 14px;font:600 12px var(--sans);
+            color:var(--ink-v)}
+    .optbar button{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:6px 12px;
+            cursor:pointer;font:600 12px var(--sans);color:var(--ink-v)}
+    .optbar button:hover{background:var(--surf-low)}
+    .optbar button[data-remove-option]{border-color:transparent;background:none;color:var(--red-dark);
+            text-decoration:underline;padding:6px 6px}
+    .optbar button[disabled]{opacity:.55;cursor:default}
     .pip{width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;
          font:700 10.5px var(--mono);border:1.5px solid var(--line);color:var(--ink-3)}
     .rail button[aria-current="true"] .pip{background:var(--red);color:#fff;border-color:transparent}
@@ -370,11 +380,14 @@
       --rev-takeoff-band:#cddcc7; --rev-takeoff-tot:#e6efe2;
       --rev-labor-band:#c9d8e8;   --rev-labor-tot:#e4edf6;
       --rev-travel-band:#e8d8ae;  --rev-travel-tot:#f5eed7;
-      --rev-markup-band:#dccadb;  --rev-markup-tot:#f0e7ef}
+      --rev-markup-band:#dccadb;  --rev-markup-tot:#f0e7ef;
+      /* An option's own card (Phase 15): a clay tint, apart from the four above. Same AA checks. */
+      --rev-option-band:#e3cbbf;  --rev-option-tot:#f3e6df}
     .rev[data-rev="takeoff"]{--rev-band:var(--rev-takeoff-band);--rev-tot:var(--rev-takeoff-tot)}
     .rev[data-rev="labor"]{--rev-band:var(--rev-labor-band);--rev-tot:var(--rev-labor-tot)}
     .rev[data-rev="travel"]{--rev-band:var(--rev-travel-band);--rev-tot:var(--rev-travel-tot)}
     .rev[data-rev="markup"]{--rev-band:var(--rev-markup-band);--rev-tot:var(--rev-markup-tot)}
+    .rev[data-rev="option"]{--rev-band:var(--rev-option-band);--rev-tot:var(--rev-option-tot)}
     .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;
            background:var(--rev-band,var(--surf-low));font:600 12.5px var(--sans)}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
@@ -470,6 +483,9 @@
     <div id="main" hidden>
       <!-- Drawn only when the bid has more than one section (js/polish-estimate.js paintSections). -->
       <div class="rail" id="sections" aria-label="Sections of this bid" hidden></div>
+      <!-- "+ Add option" and the options this bid holds (js/polish-estimate.js paintOptionBar). It sits with the
+           strip above, and is its own element so the strip keeps hiding itself on a bid with one section. -->
+      <div class="optbar" id="option-bar" aria-label="Options on this bid" hidden></div>
       <div class="rail" id="rail"></div>
       <div id="panels"></div>
     </div>
@@ -527,6 +543,8 @@
   <script src="/js/epoxy-takeoff.js"></script>
   <!-- The Gyp tabs' areas, bags, extras, sand and sound mat, and the five presets. Same reads as above. -->
   <script src="/js/gyp-takeoff.js"></script>
+  <!-- The Seal tabs' patch and tooling, the Seal option's own takeoff. Same reads as above. -->
+  <script src="/js/seal-takeoff.js"></script>
   <script src="/js/polish-sandbox.js"></script>
   <!-- The search pop-up both Add buttons open. Pure logic plus a small mount; the page reads
        window.TWLibraryPicker at parse time, so it goes before the page script. -->

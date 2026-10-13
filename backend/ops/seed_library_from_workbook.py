@@ -7,7 +7,9 @@ systems and six wall systems and its primers (as library_assemblies), the price 
 formulas read (a patch, the cove materials), one epoxy crew line (library_labor and library_labor_calc),
 and the Gyp tabs: their material products (library_items; the USG and GrassWorx ones from the first Gyp tab, the
 Treadstone ones from Gyp (FR)), the three area rows a Gyp takeoff is made of (library_assemblies) and the five crew
-lines priced by the hour (library_labor).
+lines priced by the hour (library_labor), and the two Seal tabs, the Seal option of a bid (Phase 15): the sealer, the
+joint filler kit and the patch's two prices (library_items), the four assemblies a new option opens with (one coat or
+two, with and without joint filler) and the three crew lines priced by the day (library_labor and library_labor_calc).
 
 DRY RUN IS THE DEFAULT. With no flag it prints the plan and writes nothing. `--apply --target staging`
 writes it, and nothing else is accepted: PRODUCTION IS NOT APPROVED (Hanz, 2026-10-12: staging only).
@@ -48,7 +50,7 @@ WHAT A LIBRARY ROW CANNOT SAY (named modelling gaps, listed for Kyle and Hanz in
 
 Usage (from backend/):
     python ops/seed_library_from_workbook.py                       print the plan, write nothing
-    python ops/seed_library_from_workbook.py --only epoxy          one tab's rows
+    python ops/seed_library_from_workbook.py --only epoxy          one tab's rows (epoxy, gyp or seal)
     python ops/seed_library_from_workbook.py --sql                 print the statements it would run
     python ops/seed_library_from_workbook.py --apply --target staging
 """
@@ -77,6 +79,10 @@ GYP_FR_SHEET = "Gyp (FR)"
 # The five Gyp tabs, in the workbook's order. The plan reads the first and Gyp (FR); the others are loaded too so a
 # test can hold the code's presets to every one of them.
 GYP_SHEETS = [GYP_SHEET, "Gyp (USG N12ULTRA)", 'Gyp (USG N25 1-4")', "Gyp (GWorx SC190)", GYP_FR_SHEET]
+# The two Seal tabs (the Seal option of a v2 bid, Phase 15). Seal (+Jnts) reads almost everything from Seal.
+SEAL_SHEET = "Seal"
+SEAL_JNTS_SHEET = "Seal (+Jnts)"
+SEAL_SHEETS = [SEAL_SHEET, SEAL_JNTS_SHEET]
 
 # What the staging database is, and how this script reaches it. The staging stack is a Postgres container
 # on the VPS (see the memory note on the staging data store). Nothing here names a password: the psql runs
@@ -118,7 +124,7 @@ def load(path: pathlib.Path = TEMPLATE_PATH) -> Dict[str, Sheet]:
         wf = openpyxl.load_workbook(path)
         wv = openpyxl.load_workbook(path, data_only=True)
     names = {n: d.attr_text for n, d in wf.defined_names.items()}
-    return {s: Sheet(s, wf[s], wv[s], names) for s in [EPOXY_SHEET] + GYP_SHEETS}
+    return {s: Sheet(s, wf[s], wv[s], names) for s in [EPOXY_SHEET] + GYP_SHEETS + SEAL_SHEETS}
 
 
 def _col_index(col: str) -> int:
@@ -655,12 +661,104 @@ def plan_gyp(sheets: Dict[str, Sheet], plan: Plan) -> None:
              "tab is a typed 448 whichever mat is picked, where the other four tabs follow the mat.")
 
 
+# ── Seal: the sealer, the joint filler, the patch's two prices, and the crew ──
+SEAL_NOTE = "Seeded from Kyle's estimate workbook, %s tab, cell %s. %s"
+# The Seal tab's own formulas, checked by text, so a sheet that Kyle changes stops the run with the cell named instead
+# of seeding a price for a rule the code no longer matches.
+SEAL_PATCH_FORMULA = re.compile(r'^=IF\(B10="New",(\d*\.?\d+),(\d*\.?\d+)\)$')
+SEAL_JF_FORMULA = '=ROUNDUP(IF(E29="yes",(E18/3500),0),0)'
+SEAL_JF_COVERAGE = 3500.0
+SEAL_JF_GUYS_FORMULA = '=IF(F29="NO",2,4)'
+
+# The four assemblies a Seal option is made of, by name: the sheet ships with both sealer lines filled in (D20, D21:
+# "Grind + Seal = 2 Coats"; delete the second for "Clean + Seal = 1 Coat"), and Seal (+Jnts) adds the joint filler kit.
+SEAL_ASSEMBLIES = [
+    ("wb-seal-1-coat", "Seal, 1 coat (clean + seal)", 1, False),
+    ("wb-seal-2-coats", "Seal, 2 coats (grind + seal)", 2, False),
+    ("wb-seal-jnts-1-coat", "Seal + joint filler, 1 coat (clean + seal)", 1, True),
+    ("wb-seal-jnts-2-coats", "Seal + joint filler, 2 coats (grind + seal)", 2, True),
+]
+# The crew: the sheet's three crew lines (A37, A40 and A42), at the Seal sheet's rate. Guys and days are the estimator's,
+# so only the line and its rate are seeded, as for the Epoxy and Gyp crews.
+SEAL_CREW = [("seal-install", "Seal install", "A37", 20), ("seal-mockup", "Mock-up", "A40", 21),
+             ("seal-jointfill", "Joint filler", "A42", 22)]
+
+
+def _seal_price_row(plan: Plan, id_: str, name: str, unit: str, cost: float, coverage: float, roundup: bool,
+                    where: str, how: str) -> None:
+    row = _item(id_, name, unit, 1.0, _money4(cost), coverage, "Polished Concrete", "seal",
+                SEAL_NOTE % (SEAL_SHEET, where, how))
+    row["roundup"] = roundup
+    plan.add_item(row)
+
+
+def plan_seal(sheets: Dict[str, Sheet], plan: Plan) -> None:
+    sh = sheets[SEAL_SHEET]
+    jn = sheets[SEAL_JNTS_SHEET]
+    # the patch: one formula, two prices (a new floor and a renovation), read by js/seal-takeoff.js
+    f = sh.formula("C17")
+    m = SEAL_PATCH_FORMULA.match(f) if isinstance(f, str) else None
+    if not m:
+        raise PlanError('Seal!C17 should be =IF(B10="New",<new price>,<reno price>), found %r' % (f,))
+    new_price, reno_price = float(m.group(1)), float(m.group(2))
+    howp = "Price source for a formula in js/seal-takeoff.js. Edit the price here; the formula is code."
+    _seal_price_row(plan, "wb-seal-patch-new", "Patch, new concrete, per SF", "SF", new_price, 1.0, False, "C17", howp)
+    _seal_price_row(plan, "wb-seal-patch-reno", "Patch, renovation, per SF", "SF", reno_price, 1.0, False, "C17", howp)
+    # the sealer: the two lines of the sheet are the same product at the same price
+    c20, c21 = _number(sh.value("C20"), SEAL_SHEET + "!C20"), _number(sh.value("C21"), SEAL_SHEET + "!C21")
+    if c20 != c21:
+        raise PlanError("Seal!C20 is %r and C21 is %r: the two sealer lines no longer cost the same" % (c20, c21))
+    if sh.text("A20") != "Sealer" or sh.text("A21") != "Sealer":
+        raise PlanError("Seal!A20 and A21 should both name the sealer, found %r and %r" % (sh.text("A20"), sh.text("A21")))
+    _seal_price_row(plan, "wb-seal-sealer", "Sealer, per coat, per SF", "SF", c20, 1.0, False, "C20 and C21",
+                    "One coat of sealer over one square foot. Edit the price here.")
+    # the joint filler kit: Seal (+Jnts) buys one kit (a 10 gallon kit, $500) for every 3,500 SF
+    if jn.formula("B29") != SEAL_JF_FORMULA:
+        raise PlanError("%s!B29 should be %s, found %r" % (SEAL_JNTS_SHEET, SEAL_JF_FORMULA, jn.formula("B29")))
+    kit = _number(jn.value("C29"), SEAL_JNTS_SHEET + "!C29")
+    jf = _item("wb-seal-joint-filler-kit", "Joint filler, 10 gal kit (Seal)", "Kit", 1.0, _money4(kit), SEAL_JF_COVERAGE,
+               "Polished Concrete", "seal", SEAL_NOTE % (SEAL_JNTS_SHEET, "C29", "One kit for every 3,500 SF, rounded up."))
+    plan.add_item(jf)
+    # the four assemblies
+    for id_, name, coats, joints in SEAL_ASSEMBLIES:
+        lines = [{"role": "Sealer coat %d" % (n + 1), "item_id": "wb-seal-sealer"} for n in range(coats)]
+        if joints:
+            lines.append({"role": "Joint filler", "item_id": "wb-seal-joint-filler-kit"})
+        plan.add_assembly({
+            "id": id_, "name": name, "unit": "SF", "category": "Polished Concrete",
+            "description": "Seeded from Kyle's estimate workbook, Seal tabs. A new Seal option opens with %s. The patch "
+                           "and the tooling are added by js/seal-takeoff.js, not listed here." % (
+                               "the sealer" + (" and the joint filler" if joints else "")),
+            "lines": lines, "default_work_types": ["seal"],
+        })
+    # the crew
+    rate = _number(sh.value("C37"), SEAL_SHEET + "!C37")
+    if jn.formula("A42") != SEAL_JF_GUYS_FORMULA:
+        raise PlanError("%s!A42 should be %s, found %r" % (SEAL_JNTS_SHEET, SEAL_JF_GUYS_FORMULA, jn.formula("A42")))
+    guys = {"A37": _number(sh.value("A37"), SEAL_SHEET + "!A37"), "A40": _number(sh.value("A40"), SEAL_SHEET + "!A40"),
+            "A42": 2.0}     # two guys on the joint filler unless existing joint filler is removed, which makes it four
+    for id_, name, cell, sort in SEAL_CREW:
+        plan.labor[id_] = {"id": id_, "name": name, "rate": rate, "unit": "days", "guys_auto": False, "sort": sort,
+                           "favorite": True, "default_work_types": ["seal"]}
+        plan.labor_calc[id_] = {"line_id": id_, "mode": "fixed", "hours_per_day": 8, "guys": guys[cell]}
+    plan.gap("The Seal patch is charged on the whole area, always, at the new-concrete price or the renovation price by the "
+             "job's Renovation answer (Seal!B10), as the sheet does. v2 reads that answer off the draft; the sheet's "
+             "'Exclude Patching?' note is a typed edit of the price, which v2 does not carry.")
+    plan.gap("Tooling and consumables are $0.27 a square foot with a $150 floor, in code (js/seal-takeoff.js). The sheet's "
+             "demo tooling, slurry hardener and plastic are typed quantities that v2 does not carry.")
+    plan.gap("The Seal sheets work the joint filler crew's days out of the area (Seal (+Jnts)!B42) and the mock-up is half a "
+             "day by default. v2 seeds the three crew lines (guys 3, 3 and 2 on the sheet) at $%s a day and leaves the days "
+             "to be typed." % _g(rate))
+    plan.gap("The Seal sheets charge their OWN lodging, per diem and travel labor (the drive hours are copied from the Polish "
+             "tab). v2 charges the job's travel once, on the base bid, and the option carries none.")
+
+
 # ── the whole plan ───────────────────────────────────────────────────────────
 def make_plan(path: pathlib.Path = TEMPLATE_PATH, only: str = "all", sheets: Optional[Dict[str, Sheet]] = None) -> Plan:
     """The plan for the workbook at `path`. `sheets` is for a caller that has already read it (reading the template
     takes several seconds, planning takes a tenth of one) and wants to plan from it again."""
-    if only not in ("all", "epoxy", "gyp"):
-        raise PlanError("--only is epoxy, gyp or all")
+    if only not in ("all", "epoxy", "gyp", "seal"):
+        raise PlanError("--only is epoxy, gyp, seal or all")
     if sheets is None:
         sheets = load(path)
     plan = Plan()
@@ -668,6 +766,8 @@ def make_plan(path: pathlib.Path = TEMPLATE_PATH, only: str = "all", sheets: Opt
         plan_epoxy(sheets, plan)
     if only in ("all", "gyp"):
         plan_gyp(sheets, plan)
+    if only in ("all", "seal"):
+        plan_seal(sheets, plan)
     return plan
 
 
@@ -758,7 +858,7 @@ def describe(plan: Plan) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--only", default="all", choices=["all", "epoxy", "gyp"])
+    ap.add_argument("--only", default="all", choices=["all", "epoxy", "gyp", "seal"])
     ap.add_argument("--sql", action="store_true", help="print the statements, write nothing")
     ap.add_argument("--json", action="store_true", help="print the plan as JSON, write nothing (what the tests read)")
     ap.add_argument("--apply", action="store_true", help="write the plan (needs --target staging)")

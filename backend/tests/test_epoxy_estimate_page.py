@@ -146,7 +146,7 @@ def test_the_strip_lists_what_the_bid_is_made_of_and_never_the_polish_root_of_an
     s = ran["strip"]
     assert s["hidden"] is False
     assert s["tabs"] == ['data-section-tab="Epoxy"', 'data-section-tab="Seal"']
-    assert s["sealPanelIsSummary"] is True and s["epoxyPanelIsTakeoff"] is True
+    assert s["sealPanelIsTakeoff"] is True and s["epoxyPanelIsTakeoff"] is True, "both are edited on the page's own panels (Seal since Phase 15)"
 
 
 # ── the model pieces, run on the real model ─────────────────────────────────────────────────────

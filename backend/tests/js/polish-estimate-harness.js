@@ -52,6 +52,10 @@ const L = require(path.join(ROOT, "js", "library-core.js"));
 const EPOXY = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
 // The Gyp tabs' areas, bags, extras, sand and sound mat (js/gyp-takeoff.js): the page prices a Gyp section with it.
 const GYP = require(path.join(ROOT, "js", "gyp-takeoff.js"));
+// The Seal tabs' patch, tooling and starting takeoff (js/seal-takeoff.js). A scratch copy that lacks the file (a
+// mutation run built from an older list) simply has no Seal pricing, which the page says rather than guesses.
+const SEAL_FILE = path.join(ROOT, "js", "seal-takeoff.js");
+const SEAL = fs.existsSync(SEAL_FILE) ? require(SEAL_FILE) : undefined;
 // The one vocabulary (js/work-types.js): the page builds its Takeoff cards off it as it parses.
 const W = require(path.join(ROOT, "js", "work-types.js"));
 // The one search pop-up both Add buttons open: the REAL module, mounted on this file's stub DOM.
@@ -83,6 +87,7 @@ const EXPORTS = `
     itemByName: itemByName, setPick: setPick, rowKind: rowKind,
     rowPrice: rowPrice, materialTotal: materialTotal, bid: bid, activeBid: activeBid,
     addPickedTakeoffRow: addPickedTakeoffRow, show: show, sectionBids: sectionBids,
+    addOption: addOption, removeOptionPress: removeOptionPress, paintOptionBar: paintOptionBar, jobIsReno: jobIsReno,
     condLine: condLine, conditionLibrary: conditionLibrary,
     moneyAuto: moneyAuto, measureText: measureText, asmHint: asmHint,
     repaintNumbers: repaintNumbers, renderPanel: renderPanel, stepStatus: stepStatus,
@@ -440,7 +445,7 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWGypTakeoff: GYP, TWPolishSandbox: S, TWLibraryPicker: PICKER,
+    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWGypTakeoff: GYP, TWSealTakeoff: SEAL, TWPolishSandbox: S, TWLibraryPicker: PICKER,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },

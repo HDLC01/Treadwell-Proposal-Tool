@@ -408,7 +408,7 @@ def test_the_local_job_condition_writes_the_gyp_sheets_own_local_cells_so_a_far_
       console.log(JSON.stringify({ local: T.condition("local").cells, gypLocal: T.writeCellsFor("local", "gyp", false),
         polishLocal: T.writeCellsFor("local", "polish", false) }));
     """)
-    assert got["local"] == ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5"]
+    assert got["local"] == ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4"]
     assert 'Gyp (USG 1-8")!B5' in got["gypLocal"] and "Gyp (FR)!B5" in got["gypLocal"]
 
 
@@ -449,7 +449,7 @@ MUTATIONS = {
         '    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };',
         lambda r: r["priced"]["sheetArea"] != {"gyp_soft_sf": 9000, "gyp_hard_sf": 6000, "gyp_corridor_sf": 2000}),
     "the proposal names a Gyp system by its first row": (
-        "js/bid-model.js", '    if (entry && entry.role === "gyp") {', "    if (false) {",
+        "js/bid-model.js", '    if (entry && (entry.role === "gyp" || entry.role === "seal")) {', "    if (false) {",
         lambda r: r["priced"]["pricedTabs"][0][5] != 'N12 1/8" + 3/4" Gyp'),
 }
 

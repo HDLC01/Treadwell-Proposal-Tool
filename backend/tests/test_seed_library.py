@@ -51,9 +51,9 @@ def test_the_plan_is_the_same_every_time_and_ids_come_from_names(plan):
     assert json.dumps(plan.as_dict(), sort_keys=True) == json.dumps(again.as_dict(), sort_keys=True)
     assert seed.statements(plan) == seed.statements(again)
     for it in plan.as_dict()["items"]:
-        assert re.fullmatch(r"wb-(epoxy|gyp)-[a-z0-9-]+", it["id"]), it["id"]
+        assert re.fullmatch(r"wb-(epoxy|gyp|seal)-[a-z0-9-]+", it["id"]), it["id"]
     for a in plan.as_dict()["assemblies"]:
-        assert re.fullmatch(r"wb-(epoxy-(sys|primer|cove)|gyp-area)-[a-z0-9-]+", a["id"]), a["id"]
+        assert re.fullmatch(r"wb-(epoxy-(sys|primer|cove)|gyp-area|seal)-[a-z0-9-]+", a["id"]), a["id"]
     # an id is its name's slug, so renaming a product in the workbook is a NEW row and never an overwrite
     assert plan.items["wb-epoxy-glaze-4-125-sf-gallon"]["name"] == "Glaze #4, 125 SF/Gallon"
 
@@ -72,8 +72,14 @@ def test_the_counts_are_the_workbooks(plan):
     # 2 ISO strips, tape, sand, and 10 sound mats (the USG and GrassWorx table's 7 and Gyp (FR)'s 3 Treadstone ones)
     assert sum(i.startswith("wb-gyp-") for i in items) == 20
     assert sum(a.startswith("wb-gyp-area-") for a in asm) == 3
-    assert set(plan.labor) == {"epoxy-install", "gyp-prepour", "gyp-prep", "gyp-mat", "gyp-pour", "gyp-unload"}
-    assert list(plan.labor_calc) == ["epoxy-install"], "the Gyp crew is priced by the hour and has no calculator line"
+    # the Seal tabs' 4 materials (the two patch prices, the sealer, the joint filler kit) and 4 assemblies (one coat or two, with
+    # and without joint filler); their three crew lines are priced by the day and have a calculator line each
+    assert sum(i.startswith("wb-seal-") for i in items) == 4
+    assert sum(a.startswith("wb-seal-") for a in asm) == 4
+    assert set(plan.labor) == {"epoxy-install", "gyp-prepour", "gyp-prep", "gyp-mat", "gyp-pour", "gyp-unload",
+                               "seal-install", "seal-mockup", "seal-jointfill"}
+    assert list(plan.labor_calc) == ["epoxy-install", "seal-install", "seal-mockup", "seal-jointfill"], (
+        "the Gyp crew is priced by the hour and has no calculator line")
 
 
 # ── the rows are the library's own kind of row ───────────────────────────────
@@ -99,7 +105,7 @@ def test_every_item_and_assembly_passes_the_librarys_own_validation(plan):
 def test_every_line_points_at_a_material_the_plan_holds_and_every_material_is_used(plan):
     used = {ln["item_id"] for a in plan.as_dict()["assemblies"] for ln in a["lines"]}
     assert used <= set(plan.items), "a line points at a material that is not in the plan: %s" % sorted(used - set(plan.items))
-    price_rows = set(seed.RESERVED_PRICE_ROWS)
+    price_rows = set(seed.RESERVED_PRICE_ROWS) | {"wb-seal-patch-new", "wb-seal-patch-reno"}
     gyp = {i for i in plan.items if i.startswith("wb-gyp-")}
     unused = set(plan.items) - used - price_rows - gyp
     # a price row nothing prices through is deliberate; a floor product no assembly buys is a parsing mistake

@@ -1670,7 +1670,21 @@
    *  type THROWS from tabsFor rather than answering "no" quietly. */
   function workTypeApplies(row, workType) {
     var list = row && row.default_work_types;
+    // A SECTION IS ONE TAB, and an option tab (Seal, Leveling) is not a job type, so a section is named by
+    // `{ tab: "seal" }`, never by the bare string: a bare tab key still THROWS from tabsFor, which is the guard
+    // against reading a job's defaults under the wrong name. The object says "exactly this tab", and `types.tab`
+    // refuses anything that is not one. A Seal option is seeded with it, from the defaults filed under the Seal pill.
+    if (workType && typeof workType === "object") {
+      return types.appliesTo(list, types.tab(String(workType.tab)).key);
+    }
     return types.tabsFor(workType || "polish").some(function (tab) { return types.appliesTo(list, tab); });
+  }
+
+  /** What to hand workTypeApplies, seedLibraryLabor, seedDefaultTakeoff and travelDeclined for a SECTION of a bid:
+   *  the section's layout, which is a job type for Polish, Epoxy and Gyp (so those read exactly what they always
+   *  read, a job type's defaults) and a bare tab for an option (Seal), named as `{ tab }`. */
+  function kindOfSection(layout) {
+    return types.isJobType(layout) ? layout : { tab: layout };
   }
 
   /** Does the stored Travel row (library_labor id `travel`) put Travel on a NEW bid of this work
@@ -2602,7 +2616,9 @@
     // EVERY KEY THE PROPOSAL SIDE READS, AND THE MODEL WITH ITS TOTALS STAMPED, IS composePricingSnapshot's.
     // For a bid with one section (all of them today) that is exactly what this function wrote by hand until
     // Phase 10: polish_estimate, polish_sf, polish_2_sf, computed_bid, in that order.
-    var derived = composePricingSnapshot(model, ctx);
+    // The draft's own tab_opts ride along, so an option's proposal settings are kept (see composePricingSnapshot).
+    var derived = composePricingSnapshot(model, isObject(state) && isObject(state.tab_opts)
+      ? Object.assign({}, ctx, { tabOpts: state.tab_opts }) : ctx);
     var rest = Object.assign({}, derived);
     delete rest.polish_estimate;
     return Object.assign({
@@ -2976,6 +2992,50 @@
     return out;
   }
 
+  // ── options on a bid (Phase 15) ─────────────────────────────────────────────
+  /** THE OPTIONS THIS BID CAN STILL TAKE: the sheets Estimating Tool v2 prices as an option (Seal and Seal (+Jnts)
+   *  today, js/work-types.js optionSheets) that the bid has no section for yet, in the vocabulary's order. A new array. */
+  function optionsToOffer(model) {
+    var held = isObject(model) && isObject(model.tabs) ? model.tabs : {};
+    return types.optionSheets().filter(function (id) { return !has.call(held, id); });
+  }
+
+  /** ADD AN OPTION TO A BID: an option section for one offered sheet, priced separately and never part of the lump sum.
+   *  A NEW model; the one handed in is not touched. The section is made as activateSection makes any (its profile
+   *  stamped, the Markups rules filed at this moment kept as text) and then given the library's defaults like a new
+   *  section of a new bid (seedNewSections): its own crew from the labor lines filed under its work type, the labor
+   *  calculator's fills, and a starting takeoff over `ctx.sf[tabId]`. ONLY THE NEW SECTION IS TAKEN from that seeding:
+   *  every other key of the model, the root and the job's travel included, is as it was handed in, so adding an option
+   *  to a bid somebody has worked on can never reseed what they typed.
+   *
+   *  `ctx` is seedNewSections' (rules, laborRows, laborRate, calcRows, asms, items, reserved, sf, lf, takeoffRows), and
+   *  its `saved` is never read: the model handed in is the saved state. THROWS for a sheet that is not offered as an
+   *  option and for one the bid already holds. */
+  function addOption(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("addOption needs the model");
+    if (types.optionSheets().indexOf(tabId) < 0) {
+      throw new Error(JSON.stringify(String(tabId)) + " is not offered as an option (" + types.optionSheets().join(", ") + ")");
+    }
+    var c = isObject(ctx) ? ctx : {};
+    var withSection = activateSection(model, tabId, "option", { rules: c.rules });
+    var seeded = seedNewSections(withSection, Object.assign({}, c, { saved: model }));
+    var out = jsonCopy(withSection);
+    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[tabId, seeded.tabs[tabId]]]));
+    return out;
+  }
+
+  /** TAKE AN OPTION OFF A BID, rows and all. A NEW model. The bid keeps an (empty) `tabs` object, so its next save
+   *  still writes the whole price snapshot and the proposal side stops listing the option. THROWS unless the bid has
+   *  that section and it is an OPTION: a base is never removed this way (a job type's sections follow the job type). */
+  function removeOption(model, tabId) {
+    var e = sectionOf(model, tabId);
+    if (e.root || e.kind !== "option") throw new Error(JSON.stringify(String(tabId)) + " is not an option of this bid");
+    var out = jsonCopy(model);
+    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).filter(function (id) { return id !== tabId; })
+      .map(function (id) { return [id, out.tabs[id]]; })));
+    return out;
+  }
+
 
 
   /** Keep the Travel row's Guys (and Lodging and Per Diem's quantity) in step with the crew's man-days while
@@ -3064,7 +3124,7 @@
       // A model that states no rows reads as the four shipped ones, so keep only Travel and let the library put
       // the rest on. Another section than the carrier has no Travel of its own.
       var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];
-      var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, e.layout), ctx.laborRate));
+      var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, kindOfSection(e.layout)), ctx.laborRate));
       // Every row opens with no guys, days or hours, and on neither auto nor the distance (see laborRowStartsEmpty).
       rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });
       s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
@@ -3072,7 +3132,7 @@
     if (asked) {
       // Travel is a default like any other: if the library says this bid does not get it, say so on the model so
       // a reload does not append the "missing" row back (migrateModel).
-      if (travelDeclined(ctx.laborRows, sectionOf(out, carrierTab).layout)) out = Object.assign(out, { no_travel_labor: true });
+      if (travelDeclined(ctx.laborRows, kindOfSection(sectionOf(out, carrierTab).layout))) out = Object.assign(out, { no_travel_labor: true });
       syncAutoGuys(out);
       out.travel = travelLinesStartEmpty(applyTravelRates(out.travel, ctx.travelRates));
       if (carrierTab === ROOT_TAB) {
@@ -3103,7 +3163,7 @@
         return;
       }
       s.takeoff = (e.root ? (condGate || laborGate) : true)
-        ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], e.layout)
+        ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], kindOfSection(e.layout))
         : seedTakeoffSf(s.takeoff, sfs[0], sfs[1]);
       // The intake's cove lengths, as takeoff rows of their own (Epoxy has a cove, Polish does not). A blank
       // assembly the estimator picks a cove for, never over a row that is already measured in linear feet.
@@ -3190,8 +3250,10 @@
 
   function systemDesc(s, entry) {
     // A Gyp section is named by the tab it is filed under (the sheet's own A1: "N12 1/8" + 3/4" Gyp"), not by its
-    // first row, which is an area.
-    if (entry && entry.role === "gyp") {
+    // first row, which is an area. A Seal option is named by its sheet too, in the live estimate's own words
+    // ("Sealed Concrete", "Sealed Concrete with Joint Filler"): two options can be on one proposal, and the joints
+    // one must not read as the plain one.
+    if (entry && (entry.role === "gyp" || entry.role === "seal")) {
       var label = engine.forTab(entry.tab).label;
       if (label) return label;
     }
@@ -3229,6 +3291,9 @@
    *    sheet_area          the base sections' areas, summed key by key
    *    cost_snapshot       the base sections' costs (sub-total, taxes, fees and bond) and man hours
    *    phase_price         0: v2 has no phase surcharge, and the proposal falls back to its own default
+   *    tab_opts            ONLY when the bid has an option: the draft's own tab_opts, with an entry added (is_option and
+   *                        show on, price_mode total) for every option section the draft holds none for. The proposal
+   *                        side prints a priced tab as an option only when this says so; an entry already there is kept
    *    computed_bid        { lump_sum, price_per_sf, polish_sf, full_bid } as above, for the combined base
    *  A section that cannot price (a profile rev that has moved, a rate that cannot be read) is listed with a null
    *  total and the reason, and takes the combined price with it: there is NO price rather than a wrong one, so
@@ -3264,7 +3329,10 @@
       out.polish_sf = rootLive.sf > 0 ? rootLive.sf : measuredSf(model.takeoff);
       out.polish_2_sf = "";
     }
-    var single = entries.length === 1 && root.kind === "base";
+    // A bid whose model holds a `tabs` object is never "single", even when its last option was just removed: the
+    // draft still holds the price snapshot that option was in (priced_tabs, the lump sum), and only the complete set
+    // below overwrites it. A bid that never had a second section has no `tabs` and writes what it always wrote.
+    var single = entries.length === 1 && root.kind === "base" && !isObject(model.tabs);
     var rootComputed = rootLive ? {
       lump_sum: rootLive.total, price_per_sf: rootLive.per_sf, polish_sf: rootLive.sf,
       full_bid: { total_base_bid: rootLive.total, sales_tax: rootLive.sales_tax, remodel_tax: rootLive.remodel_tax }
@@ -3311,6 +3379,24 @@
       man_hours: Math.round(base.reduce(function (t, x) { return t + sectionManHours(x.e.section); }, 0))
     } : { costs: 0, man_hours: 0 };
     out.phase_price = 0;
+    // AN OPTION IS AN OPTION ON THE PROPOSAL SIDE ONLY WHEN THE DRAFT SAYS SO (tab_opts[id].is_option, the key the
+    // Estimate step's "add as option" tick and the Proposal step's sidebar both write; proposal-review.js reads it to
+    // put the section under "Options & Unit Prices"). A v2 option has no tick on this page, so the first save of it
+    // writes the entry with the option on and shown, as a total (its own price). An entry the draft already holds is
+    // never rewritten, so what the estimator did in the Proposal step's sidebar (hide it, turn it into a deduction,
+    // type its words) survives the next save of this page. `ctx.tabOpts` is the draft's own tab_opts.
+    var optionIds = bids.filter(function (x) { return x.e.kind === "option"; }).map(function (x) { return x.e.tab; });
+    if (optionIds.length) {
+      var heldOpts = isObject(ctx.tabOpts) ? ctx.tabOpts : {};
+      var opts = copyInto({}, heldOpts);
+      optionIds.forEach(function (id) {
+        if (has.call(heldOpts, id)) return;
+        opts = Object.assign({}, opts, Object.fromEntries([[id, {
+          show_system: true, show_diff: false, is_option: true, show: true, price_mode: "total"
+        }]]));
+      });
+      out.tab_opts = opts;
+    }
     return out;
   }
 
@@ -3410,7 +3496,7 @@
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,
     CONDITION_CELLS: CONDITION_CELLS, CARRIED_CELLS: CARRIED_CELLS, conditionCellWrites: conditionCellWrites,
-    workTypeApplies: workTypeApplies,
+    workTypeApplies: workTypeApplies, kindOfSection: kindOfSection,
     LIBRARY_LINE_CELLS: LIBRARY_LINE_CELLS,
     conditionsFromCells: conditionsFromCells,
     // The library's answer for a condition, and the gate that decides whether it may be
@@ -3454,6 +3540,7 @@
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
     moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
+    optionsToOffer: optionsToOffer, addOption: addOption, removeOption: removeOption,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,

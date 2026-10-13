@@ -204,7 +204,8 @@ async function main() {
   };
   const sealBtn = two.doc.querySelector('[data-section-tab="Seal"]');
   P.clickEl(two, sealBtn);
-  out.strip.sealPanelIsSummary = html(two, "panels").indexOf("Priced with seal@1") >= 0;
+  // the Seal option is edited on the page's own panels since Phase 15: its Material step is the takeoff with the patch
+  out.strip.sealPanelIsTakeoff = html(two, "panels").indexOf("data-seal-patch") >= 0 && html(two, "panels").indexOf("Priced with seal@1") < 0;
   P.clickEl(two, two.doc.querySelector('[data-section-tab="Epoxy"]'));
   out.strip.epoxyPanelIsTakeoff = html(two, "panels").indexOf("data-epoxy-patch") >= 0;
 

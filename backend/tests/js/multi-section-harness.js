@@ -514,9 +514,19 @@ async function page() {
   P.clickEl(b, P.need(b, '[data-section-tab="Epoxy"]'));
   const panelEpoxy = b.doc.getElementById("panels").innerHTML;
   const stripAfter = seg(b);
-  // A section that is not edited on this page yet (the Seal option) still shows its summary
+  // The Seal option is edited on the page's own panels since Phase 15: its Material panel is the takeoff, with the patch
+  // the sheet always charges
   P.clickEl(b, P.need(b, '[data-section-tab="Seal"]'));
   const panelSeal = b.doc.getElementById("panels").innerHTML;
+  // A section that is not edited on this page yet (the Leveling option, Phase 16) still shows its summary
+  const levelingModel = clone(model);
+  levelingModel.tabs = { Leveling: { layout: "leveling", kind: "option", profile: "leveling@1", takeoff: [], labor: [], contingency: 0,
+    fees: 0, totals: {}, rates: { version: 1, profile: "leveling@1", rates: {}, fees_default: null,
+      notes: ["Soft costs: the rule filed on the Markups page is blank, so the built-in rate is charged."] } } };
+  const lv = P.build({ blob: P.blob({ polish_estimate: clone(levelingModel), polish_sf: 17500 }) });
+  await lv.api.init();
+  P.clickEl(lv, P.need(lv, '[data-section-tab="Leveling"]'));
+  const panelLeveling = lv.doc.getElementById("panels").innerHTML;
   P.clickEl(b, P.need(b, '[data-section-tab="Polish"]'));
   const panelRoot = b.doc.getElementById("panels").innerHTML;
   P.typeInto(b, '[data-tk="0"][data-k="measurement"]', "12000");
@@ -556,6 +566,7 @@ async function page() {
                  computed: !!gypSaved.computed_bid, lump: gypSaved.proposal_lump_sum },
     one: { strip: oneStrip, keys: Object.keys(oneSave).sort(), hasSnapshot: has(oneSave, "priced_tabs"), alert: one.doc.getElementById("alert").textContent },
     multi: { strip: strip, total: total, maths: maths, rootOnlyTotal: rootOnly, panelEpoxy: panelEpoxy, panelSeal: panelSeal,
+             panelLeveling: panelLeveling,
              stripAfterClick: stripAfter.html, panelRootIsTakeoff: panelRoot.indexOf("Polish 800 Grit") >= 0,
              savedKeys: Object.keys(saved).sort(), pricedTabs: saved.priced_tabs.map((t) => [t.id, t.v2, t.kind]),
              savedLump: saved.computed_bid.lump_sum, proposalLump: saved.proposal_lump_sum,

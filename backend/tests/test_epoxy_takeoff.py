@@ -105,7 +105,7 @@ def test_a_price_edited_on_the_library_row_reaches_the_price_and_no_row_prices_a
       console.log(JSON.stringify({ rows: price(rows), none: price([]), edited: price(edited),
         patchRow: X.patchCost(rows, 1000), patchNone: X.patchCost([], 1000),
         unit: X.unitPrice(rows, "silica"), unitNone: X.unitPrice([], "silica") }));
-    """ % (json.dumps(str(MODULE)), json.dumps(PLAN.as_dict()["items"])))
+    """ % (json.dumps(str(MODULE)), json.dumps([i for i in PLAN.as_dict()["items"] if i["id"].startswith("wb-epoxy-")])))
     assert got["rows"] == pytest.approx(got["none"], abs=1e-9), "the seeded rows and the fallbacks must price the same"
     assert got["edited"] > got["rows"] + 50, "300 LF of 4 inch cove buys 5 resin units: $100 against $88.83 each"
     assert got["patchRow"] == pytest.approx(got["patchNone"]) == pytest.approx(100.0)
