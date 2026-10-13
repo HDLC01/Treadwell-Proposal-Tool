@@ -121,7 +121,8 @@ def test_a_bid_that_never_had_an_option_still_writes_what_it_always_wrote_and_on
     assert s["afterRemoveKeys"][:5] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs"]
     assert s["afterRemoveTabs"] == ["Polish"] and s["afterRemoveHasOpts"] is False, (
         "the price snapshot the removed option was in is overwritten, so the proposal stops listing it")
-    assert s["keys"][-1] == "tab_opts" and s["keys"][:13] == s["afterRemoveKeys"]
+    assert s["keys"][-1] == "tab_opts" and s["keys"][:14] == s["afterRemoveKeys"]
+    assert s["afterRemoveKeys"][5] == "base_tab_id", "the base's id is written with the rest of the price snapshot (Sheets phase 1)"
 
 
 def test_the_seal_tabs_own_flag_cells_are_written_from_the_shared_job_conditions_so_it_answers_as_the_base_does(page):
@@ -352,8 +353,8 @@ def test_the_option_and_the_base_both_go_to_the_customers_portal_as_rooms_the_op
 PAGE_BREAKS = {
     "an option is added into the lump sum": (
         "js/bid-model.js",
-        '    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };',
-        '    var isBase = function (e) { return e.kind !== "off"; };',
+        '    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;',
+        '    return e.kind !== "off";',
         lambda r: r["priced"]["lump"] != r["priced"]["pagePolish"] or r["model"]["snapshot"]["lump"] != r["model"]["snapshot"]["handLump"]),
     "the save does not say the option is an option": (
         "js/bid-model.js", "      out.tab_opts = opts;", "      void opts;",
@@ -389,8 +390,8 @@ PAGE_BREAKS = {
         "js/work-types.js", "      offered: true,", "      offered: false,",
         lambda r: r["menu"]["choices"] != ["Seal", "Seal (+Jnts)"]),
     "the option's card is coloured as the markup card": (
-        "js/polish-estimate.js", """      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.tab) +""",
-        """      html += '<div data-rev="markup" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.tab) +""",
+        "js/polish-estimate.js", """      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +""",
+        """      html += '<div data-rev="markup" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +""",
         lambda r: r["review"]["keys"] != ["option", "takeoff", "labor", "travel", "takeoff", "markup"]),
     "the card does not say the option is not in the lump sum": (
         "js/polish-estimate.js", '  var OPTION_NOT_IN_SUM = "Option, not in the lump sum";', '  var OPTION_NOT_IN_SUM = "Option";',

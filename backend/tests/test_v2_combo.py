@@ -286,12 +286,12 @@ PAGE_BREAKS = {
         "      sums = Object.assign({}, sums, Object.fromEntries([[key, tabs.slice(0, 1).reduce(function (t, x) { return t + num(x.result[key]); }, 0)]]));",
         lambda r: r["priced"]["lump"] != r["priced"]["handCombined"]),
     "the Polish root is taken out of a combo": (
-        "js/bid-model.js", "    var needsRoot = baseTabs.some(function (rec) { return rec.sheets.indexOf(ROOT_TAB) >= 0; });",
-        "    var needsRoot = false;",
+        "js/bid-model.js", "      if (e.kind !== \"base\" || picked.indexOf(e.tab) >= 0 || !leavesWithJob(e)) return;",
+        "      if (e.kind !== \"base\" || !leavesWithJob(e)) return;",
         lambda r: r["model"]["kinds"] != [["Polish", "base"], ["Epoxy", "base"]] or r["opened"]["rootKind"] != "base"),
     "the Epoxy tab is saved under another role": (
-        "js/bid-model.js", "        id: x.e.tab, name: x.e.tab, role: x.e.role, kind: x.e.kind,",
-        '        id: x.e.tab, name: x.e.tab, role: "other", kind: x.e.kind,',
+        "js/bid-model.js", "        id: x.e.tab, name: x.e.label, role: x.e.role, kind: x.e.kind,",
+        '        id: x.e.tab, name: x.e.label, role: "other", kind: x.e.kind,',
         lambda r: [t[1] for t in r["saved"]["pricedTabs"]] != ["polish", "epoxy"]),
     "the review step has no whole bid card": (
         "js/polish-estimate.js", '    if (live.length < 2) return "";', '    if (true) return "";',
@@ -300,11 +300,11 @@ PAGE_BREAKS = {
         "js/polish-estimate.js", "    repaintJob();", "    void 0;",
         lambda r: r["review"]["afterContingency"]["job"] != r["review"]["afterContingency"]["handJob"]),
     "a saved Epoxy job switched to Combo keeps the Polish root off": (
-        "js/bid-model.js", '    if (needsRoot && out.kind === "off") { out = Object.assign({}, out); delete out.kind; }',
-        "    void 0;",
+        "js/bid-model.js", '        if (out.kind === "off" || out.kind === "option") { out = Object.assign({}, out); delete out.kind; }',
+        "        void 0;",
         lambda r: r["switched"]["epoxyToCombo"]["kinds"] != [["Polish", "base"], ["Epoxy", "base"]]),
     "a saved Combo job switched to Polish keeps Epoxy as a base": (
-        "js/bid-model.js", 'isObject(s) && s.kind === "base";', 'isObject(s) && s.kind === "never";',
+        "js/bid-model.js", 'return !e.root && e.kind === "base" && mine.indexOf(', 'return !e.root && e.kind === "never" && mine.indexOf(',
         lambda r: r["switched"]["comboToPolish"]["kinds"] != [["Polish", "base"], ["Epoxy", "off"]]),
     "a section added to a saved bid is not crewed": (
         "js/polish-estimate.js", "    var laborDefaults = (newBid || addsSection) ? loadLaborDefaults() : null;",

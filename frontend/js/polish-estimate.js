@@ -512,20 +512,27 @@
 
   /** The raw material of the ROOT (Polish) section, which is what bid() prices. */
   function rootMaterial() {
+    return polishMaterial(ROOT.takeoff);
+  }
+
+  /** The raw material of ONE Polish section's takeoff, the root's or a copy's or a sheet added to the bid: what rootMaterial
+   *  has always answered for the root, so every Polish section is bought the same way (B.polishBid prices them alike). */
+  function polishMaterial(takeoff) {
     var sum = 0;
-    ROOT.takeoff.forEach(function (r) {
+    takeoff.forEach(function (r) {
       // OFF ROWS ARE SKIPPED HERE, in the raw sum, so the chain rounds only what the bid really
       // buys (D31 is ROUNDUP of the sum -- zeroing a row after that would drift the total).
       if (!B.rowOn(r)) return;
-      var p = rowPrice(r, ROOT.takeoff);
+      var p = rowPrice(r, takeoff);
       if (p) sum += p.total;
     });
     // Dye and Joint Filler are keyed on the polished area (Polish!E25/E29), not on a row's own
-    // measurement. `area` is the SAME B.takeoffSf(ROOT.takeoff) that bid() below uses for the
+    // measurement. `area` is the SAME B.takeoffSf(takeoff) that the section's bid uses for the
     // sheet's SF, so the Material total and the price-per-SF divisor can never disagree about
     // what "the area" is. Each prices off its reserved library row, or off the shipped formula
-    // when that row is not there -- see condLine. Off means nothing, as it always has.
-    var area = B.takeoffSf(ROOT.takeoff);
+    // when that row is not there -- see condLine. Off means nothing, as it always has. The two
+    // are the JOB's conditions, so they are charged on every Polish section.
+    var area = B.takeoffSf(takeoff);
     if (ROOT.conditions.dye) sum += condLine("dye", area).cost;
     if (ROOT.conditions.joint_filler) sum += condLine("joint_filler", area).cost;
     return sum;
@@ -575,19 +582,10 @@
   /** The ROOT (Polish) section's bid, recomputed from the model. Cheap enough to call on every keystroke.
    *  It reads ROOT, never M: M is whichever section is on show. */
   function bid() {
-    return B.markupChain({
-      material: rootMaterial(),
-      labor: B.laborTotal(ROOT.labor, ROOT.conditions),
-      // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
-      travel: B.travelCosts(ROOT.travel, ROOT.labor, B.travelOpts(ROOT, B.ROOT_TAB)).total,
-      // The sheet's tooling and consumables (D55) for a bid priced by Polish rev 2; 0 for every saved bid.
-      tooling: B.rootTooling(ROOT),
-      contingency: ROOT.contingency,
-      fees: ROOT.fees,
-      conditions: ROOT.conditions,
-      sf: B.takeoffSf(ROOT.takeoff),
-      remodel_rate: remodelRate(),
-    }, B.rootProfile(ROOT).stamp);
+    // B.polishBid prices every Polish section the same way, the root and a copy under `tabs` alike (the model's own
+    // markupChain call with the section's rows, travel by its role, and tooling on a rev 2 profile). The page hands it the
+    // library's raw material, which is the one thing the model cannot know.
+    return B.polishBid(ROOT, B.ROOT_TAB, { material: rootMaterial, remodel_rate: remodelRate() });
   }
 
   /** The raw material of a section that is not the root: its takeoff rows priced from the library, the rows
@@ -598,6 +596,8 @@
    *  as its own input. It answers { material, tooling }, the engine's material inputs. */
   function sectionMaterial(entry) {
     var takeoff = entry.section.takeoff || [];
+    // A POLISH SECTION UNDER `tabs` (a copy of the Polish sheet, or a Polish sheet added to the bid) is bought like the root.
+    if (entry.role === "polish") return { material: polishMaterial(takeoff) };
     if (entry.role === "epoxy") {
       var r = E.sectionMaterial(takeoff, {
         items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
@@ -622,7 +622,7 @@
     // bags, and the sound mat with its rolls, which decide whether the mat ships free. Without the module no Gyp
     // section is priced: a plain sum is refused by priceSection, never charged as the gypsum alone.
     if (entry.role === "gyp" && G) {
-      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.tab, {
+      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.sheet, {
         items: ITEMS, rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       var figures = { gyp: g.gyp, extras: g.extras, sand: g.sand, soundMat: g.soundMat,
@@ -845,7 +845,7 @@
     var live = sectionList().filter(function (e) { return e.kind !== "off"; });
     var say1 = function (e) {
       var b = bids[e.tab];
-      return esc(e.tab + " " + (b && b.priceable !== false && b.total ? B.money(b.total) : "no price"));
+      return esc(e.label + " " + (b && b.priceable !== false && b.total ? B.money(b.total) : "no price"));
     };
     // The base sections add up to the lump sum; an option is priced beside them and is never part of it.
     var line = live.filter(function (e) { return e.kind !== "option"; }).map(say1).join(' <i>+</i> ');
@@ -923,7 +923,7 @@
         asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
         cellValues: state.cell_values, split: T.isSplit(state),
         sf: Object.fromEntries([[tab, [optionStartSf(), ""]]]), lf: {},
-        takeoffRows: function (entry, sfs) { return entry.role === "seal" && SL ? SL.seedTakeoff(entry.tab, ASMS, sfs[0]) : null; }
+        takeoffRows: function (entry, sfs) { return entry.role === "seal" && SL ? SL.seedTakeoff(entry.sheet, ASMS, sfs[0]) : null; }
       });
       show(tab);
       followSf = B.takeoffSf(B.sectionOf(ROOT, tab).section.takeoff);
@@ -986,7 +986,7 @@
         "Priced with " + e.profile + ".") + '</p>' +
       (rates.length ? '<p>Markups rules that were not used when this section was added:</p><ul>' +
         rates.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join("") + '</ul>' : "");
-    return '<section class="sec"><div class="sec-h"><h2>' + esc(e.tab) + '</h2><p>' +
+    return '<section class="sec"><div class="sec-h"><h2>' + esc(e.label) + '</h2><p>' +
       esc(e.kind === "option" ? "An option on this bid." : e.kind === "off" ? "Not part of this bid." : "Part of the base bid.") +
       '</p></div><div class="sec-b">' + body + '</div></section>';
   }
@@ -1843,7 +1843,7 @@
 
   /** What the Gyp sheet works out from the section on show, for the card, the caption and the Review step. */
   function gypFigures(entry) {
-    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.tab, ITEMS);
+    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.sheet, ITEMS);
   }
 
   /** Text for a quantity of a thing the sheet buys in fractions: two places, no trailing zeros. */
@@ -1856,23 +1856,23 @@
    *  is the library's. The boxes are keyed `data-gyp` and handled in the delegated listeners below. */
   function gypCard(entry) {
     var set = entry.section.gyp || {};
-    var preset = G.presetOf(entry.tab);
+    var preset = G.presetOf(entry.sheet);
     var opt = function (value, label, on) {
       return '<option value="' + esc(value) + '"' + (on ? " selected" : "") + '>' + esc(label) + '</option>';
     };
     var sheets = G.tabs().map(function (tab) {
-      return opt(tab, B.sheetLabel(tab), tab === entry.tab);
+      return opt(tab, B.sheetLabel(tab), tab === entry.sheet);
     }).join("");
     var mixes = G.MIXES.map(function (m) { return opt(String(m.mix), m.label, m.mix === G.mixOf(set)); }).join("");
-    var matId = G.matIdOf(entry.tab, set);
-    var mats = G.matList(entry.tab).map(function (m) {
+    var matId = G.matIdOf(entry.sheet, set);
+    var mats = G.matList(entry.sheet).map(function (m) {
       var item = itemById(m.id);
       return opt(m.id, item ? item.name : m.id, m.id === matId);
     }).join("");
     var thick = G.BUCKETS.map(function (b) {
       var typed = set.thickness ? set.thickness[b] : "";
       var follows = b === "corridor" && preset.corridorFollowsSoft;
-      var shown = follows ? G.thicknessOf(entry.tab, set, "soft") : preset.thickness[b];
+      var shown = follows ? G.thicknessOf(entry.sheet, set, "soft") : preset.thickness[b];
       return '<div class="f"><label>' + esc(GYP_AREA_LABELS[b]) + ' thickness</label>' +
         '<input class="n" data-gyp="thickness.' + b + '" inputmode="decimal" value="' + esc(nv(typed)) +
         '" placeholder="' + esc(String(shown === null ? preset.thickness[b] : shown)) + '">' +
@@ -2411,17 +2411,17 @@
     if (bases.length > 1) {
       var rows = bases.map(function (e) {
         var sb = bids[e.tab];
-        return [e.tab, "", '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
+        return [e.label, "", '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
       });
       rows.push(["Combined base bid", "", '<span data-job-total>' + esc(jobMoney()) + '</span>', "tot"]);
       html += '<div data-rev="markup" class="rev" data-job-card><div class="rev-h">Whole bid</div>' + revTable(rows) + '</div>';
     }
     // An option is its OWN card, in its own colour, with its own total, and it says it is not in the lump sum.
     live.filter(function (e) { return e.kind === "option"; }).forEach(function (e) {
-      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.tab) +
+      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +
         ' option <button data-section-tab="' + esc(e.tab) + '">Open</button></div>' +
         revTable([[OPTION_NOT_IN_SUM, "", ""],
-                  [e.tab + " option total", "", '<span data-opt-sec="' + esc(e.tab) + '">' + esc(sectionMoney(bids[e.tab])) + '</span>', "tot"]]) +
+                  [e.label + " option total", "", '<span data-opt-sec="' + esc(e.tab) + '">' + esc(sectionMoney(bids[e.tab])) + '</span>', "tot"]]) +
         '</div>';
     });
     return html;
@@ -3211,9 +3211,10 @@
     if (!e) return;
     var held = e.section.gyp || {};
     if (key === "preset") {
-      if (G.tabs().indexOf(value) < 0 || value === e.tab) return;
+      if (G.tabs().indexOf(value) < 0 || value === e.sheet) return;
       ROOT = B.moveSectionSheet(ROOT, e.tab, value);
-      show(value);
+      // A section filed under its sheet's name is re-filed under the new one; a copy keeps its Copy<N> key.
+      show(e.tab === e.sheet ? value : e.tab);
       return;
     }
     var next = null;

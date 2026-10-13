@@ -384,8 +384,8 @@ MODEL_BREAKS = {
         "    void rootProfile;",
         lambda m: m["pricing"]["rootToolingSaved"] != 0 or m["pricing"]["savedTooling"] != 0 or m["pricing"]["sameAsMarkupChain"] is False),
     "the root is always priced by legacy": (
-        MODEL, "                 profile: rootProfile(model).stamp, role: \"polish\" }];",
-        "                 profile: LEGACY.stamp, role: \"polish\" }];",
+        MODEL, "                 layout: \"polish\", kind: rootKind, profile: rootProfile(model).stamp, role: \"polish\" }];",
+        "                 layout: \"polish\", kind: rootKind, profile: LEGACY.stamp, role: \"polish\" }];",
         lambda m: m["pricing"]["stampedProfile"] != REV2),
     "a lifted root is never stamped": (
         MODEL, "    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });",
@@ -444,11 +444,14 @@ def test_the_page_saves_every_saved_bid_as_it_did_and_stamps_every_new_one(page)
         assert rec["saved"]["polish_estimate"]["totals"]["tooling"] == tooling, name
 
 
+# Since Sheets phase 1 the page's bid() hands the root to the model's polishBid, so the two lines that make the page
+# price the root by its profile, with its tooling, are the model's. The recorded page is still what must notice.
 PAGE_BREAKS = {
     "the page leaves the tooling out of the bid": (
-        PAGE, "      tooling: B.rootTooling(ROOT),", "      tooling: 0,"),
+        MODEL, "      tooling: profile.quirks.toolingInSubTotal ? takeoffTooling(s.takeoff, model.conditions) : 0,",
+        "      tooling: 0,"),
     "the page prices every root as legacy": (
-        PAGE, "    }, B.rootProfile(ROOT).stamp);", "    });"),
+        MODEL, "    }, profile.stamp);", "    }, LEGACY.stamp);"),
 }
 
 
