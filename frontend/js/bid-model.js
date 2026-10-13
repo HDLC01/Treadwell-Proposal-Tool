@@ -1293,6 +1293,211 @@
     return true;
   }
 
+  // ══ THE INTAKE'S QUANTITY BOXES, AND THE TAKEOFF EACH ONE EDITS (Hanz, 2026-10-13) ═══════════════════════
+  //
+  // WHAT WENT WRONG. The v2 intake's floor SF boxes were wired to the takeoff, but only the ROOT (Polish) one:
+  // setAreaSf, measuredSfValues and patchModel's sf_areas all worked on `model.takeoff`. Since an Epoxy job's
+  // floor lives in tabs["Epoxy"] and a Gyp job's in its Gyp tab, "Epoxy floor SF" typed 331,133 on an Epoxy job was
+  // saved as system_1_sf and never reached the takeoff the estimate prices from.
+  //
+  // THE ONE MAPPING is work-types.js fieldHome: a quantity field -> the tab whose takeoff owns it, its unit (SF or
+  // LF) and its place in that group (System 1 is 0, System 2 is 1; Gyp's soft, hard and corridor are 0, 1, 2). Here
+  // the tab becomes the job's SECTION (sectionsOf, so a section that is off is never touched), and the rest is the
+  // rule the Polish boxes always had, for every section:
+  //   * a box mirrors its row of the takeoff once the section has a measured floor, and is never read-only;
+  //   * only a box the estimator typed in writes, a figure above zero, and clearing or typing 0 deletes nothing;
+  //   * area 3 and on of an SF group are left to the Takeoff;
+  //   * a section with nothing measured is not touched: its boxes seed it on the estimate page, as for any new bid.
+  var GYP_BUCKETS = ["soft", "hard", "corridor"];
+  // The three area assemblies the library seeds (js/gyp-takeoff.js AREA_ASSEMBLIES holds the same, and a test holds
+  // the two equal). Here only to give an area the takeoff has no row for yet its row.
+  var GYP_AREA_ASSEMBLIES = [
+    { bucket: "soft", id: "wb-gyp-area-soft", name: "Gypsum: soft surfaces" },
+    { bucket: "hard", id: "wb-gyp-area-hard", name: "Gypsum: hard surfaces over the sound mat" },
+    { bucket: "corridor", id: "wb-gyp-area-corridor", name: "Gypsum: corridors" }
+  ];
+
+  /** The Gyp area a takeoff row is: its `bucket` mark, else the area its assembly names, else null (an extra). */
+  function gypBucketOf(r) {
+    if (!r) return null;
+    if (GYP_BUCKETS.indexOf(r.bucket) >= 0) return r.bucket;
+    for (var i = 0; i < GYP_AREA_ASSEMBLIES.length; i++) if (GYP_AREA_ASSEMBLIES[i].id === r.assembly_id) return GYP_AREA_ASSEMBLIES[i].bucket;
+    return null;
+  }
+
+  /** The row indexes of Gyp area `bucket` that hold a measurement, in takeoff order (the on/off slider is ignored,
+   *  as measuredSfRows ignores it). */
+  function measuredGypRows(rows, bucket) {
+    var out = [];
+    (rows || []).forEach(function (r, i) {
+      if (r && r.unit !== "LF" && !r.same_floor && gypBucketOf(r) === bucket && num(r.measurement) > 0) out.push(i);
+    });
+    return out;
+  }
+
+  function gypMeasured(rows) {
+    return GYP_BUCKETS.some(function (b) { return measuredGypRows(rows, b).length > 0; });
+  }
+
+  /** TYPE A FIGURE FOR GYP AREA `bucket`. The area's measured row changes; an area with a blank row of its own
+   *  fills it; an area with no row is ADDED as the library's area assembly. True when it wrote. */
+  function setGypArea(model, bucket, sf) {
+    var v = num(sf);
+    var rows = model && model.takeoff;
+    if (!(v > 0) || !(rows instanceof Array) || GYP_BUCKETS.indexOf(bucket) < 0) return false;
+    var held = measuredGypRows(rows, bucket);
+    if (held.length) { rows[held[0]].measurement = v; return true; }
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r && r.unit !== "LF" && !r.same_floor && gypBucketOf(r) === bucket) { r.measurement = v; return true; }
+    }
+    var asm = GYP_AREA_ASSEMBLIES.filter(function (a) { return a.bucket === bucket; })[0];
+    rows.push({ assembly_id: asm.id, assembly_name: asm.name, measurement: v, unit: "SF", bucket: bucket });
+    return true;
+  }
+
+  /** The row indexes of the linear-foot rows (cove) that hold a measurement, in takeoff order. */
+  function measuredLfRows(rows) {
+    var out = [];
+    (rows || []).forEach(function (r, i) {
+      if (r && r.unit === "LF" && !r.same_floor && num(r.measurement) > 0) out.push(i);
+    });
+    return out;
+  }
+
+  /** The measurement of each measured linear-foot row, in order (what the Cove LF boxes show). */
+  function measuredLfValues(rows) {
+    rows = rows || [];
+    return measuredLfRows(rows).map(function (i) { return num(rows[i].measurement); });
+  }
+
+  /** TYPE A LENGTH FOR COVE ROW `k` (0 = the first measured linear-foot row, 1 = the second). The row changes,
+   *  and when there is no such row a blank-assembly row is ADDED, as the intake's seeding adds one. Only 0 and 1,
+   *  and only a figure above zero. Changes `model.takeoff` in place. True when it wrote. */
+  function setAreaLf(model, k, lf) {
+    var v = num(lf);
+    var rows = model && model.takeoff;
+    if (!(rows instanceof Array) || (k !== 0 && k !== 1)) return false;
+    if (!(v > 0)) return false;
+    var held = measuredLfRows(rows);
+    if (k < held.length) rows[held[k]].measurement = v;
+    else rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "LF" });
+    return true;
+  }
+
+  /** The names of every intake quantity box, in the vocabulary's order. */
+  function boxNames() {
+    return types.FIELDS.map(function (f) { return f.name; });
+  }
+
+  /** The boxes that share `name`'s tab and unit (its group: System 1 and 2, the two cove boxes, the gypsum three), in
+   *  the vocabulary's order. A typed box rewrites its group-mates' draft keys too, so the intake asks for the group. */
+  function boxGroup(name) {
+    var home = types.fieldHome(name);
+    return boxNames().filter(function (n) {
+      var h = types.fieldHome(n);
+      return !!home && h.tab === home.tab && h.unit === home.unit;
+    });
+  }
+
+  /** The section that owns quantity box `name`, and where in it the box lives: { entry, home }, or null when the
+   *  name is not a box or the bid has no live section for it (a section that is off is not part of the bid). */
+  function boxEntry(model, name) {
+    var home = types.fieldHome(name);
+    if (!home || !isObject(model)) return null;
+    var sheets = types.tab(home.tab).sheets;
+    var list;
+    try { list = sectionsOf(model); } catch (err) { return null; }
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].kind !== "off" && sheets.indexOf(list[i].tab) >= 0) return { entry: list[i], home: home };
+    }
+    return null;
+  }
+
+  /** Has the section behind `hit` (boxEntry's answer) been measured, so its boxes mirror it? SF rows count,
+   *  on or off; a section of linear feet alone has no floor to disagree about. Gyp counts any area row. */
+  function boxMeasured(hit) {
+    var rows = hit.entry.section.takeoff;
+    return hit.home.tab === "gyp" ? gypMeasured(rows) : measuredSfAreas(rows) > 0;
+  }
+
+  /** WHAT BOX `name` SHOWS: the figure of its row in the section's takeoff, "" when the section is measured and
+   *  has no such row (System 2 of a one-area floor), or null when there is nothing to mirror (the section is not
+   *  part of the bid, or not measured yet): then the box keeps what the draft holds and seeds the takeoff. */
+  function boxValue(model, name) {
+    var hit = boxEntry(model, name);
+    if (!hit || !boxMeasured(hit)) return null;
+    var rows = hit.entry.section.takeoff, h = hit.home;
+    if (h.tab === "gyp") {
+      var at = measuredGypRows(rows, GYP_BUCKETS[h.index]);
+      return at.length ? num(rows[at[0]].measurement) : "";
+    }
+    var vals = h.unit === "SF" ? measuredSfValues(rows) : measuredLfValues(rows);
+    return h.index < vals.length ? vals[h.index] : "";
+  }
+
+  /** WHAT THE DRAFT HOLDS UNDER `name` once a figure typed there has gone into the takeoff, so the draft says what
+   *  the takeoff says. The same as boxValue, except for a POOLED group (Polish: one area cell): its first box is
+   *  the whole priced area (an off row is out of it; when nothing is on, the measured floor) and the later boxes are
+   *  blank, as js/polish-estimate.js leaves them. null when there is nothing to mirror. */
+  function boxDraftValue(model, name) {
+    var v = boxValue(model, name);
+    if (v === null) return null;
+    var hit = boxEntry(model, name);
+    if (!hit.home.pooled) return v;
+    if (hit.home.index > 0) return "";
+    var rows = hit.entry.section.takeoff;
+    var priced = takeoffSf(rows);
+    return priced > 0 ? priced : measuredSf(rows);
+  }
+
+  /** The floors with more measured areas than the two boxes reach: [{ tab, areas, total }], one per section. The
+   *  intake says so in a plain line and links to the Takeoff. */
+  function boxExtras(model) {
+    var out = [];
+    types.FIELDS.forEach(function (f) {
+      var hit = boxEntry(model, f.name);
+      if (!hit || hit.home.unit !== "SF" || hit.home.tab === "gyp" || hit.home.index !== 0 || !boxMeasured(hit)) return;
+      var rows = hit.entry.section.takeoff;
+      var n = measuredSfAreas(rows);
+      if (n > 2) out.push({ tab: hit.entry.tab, areas: n, total: measuredSf(rows) });
+    });
+    return out;
+  }
+
+  /** `model` with section `tab`'s takeoff replaced by a copy the caller may edit. A NEW model; the one handed in
+   *  (migrateModel's, which holds the SAVED rows) is not touched. `tab` came from sectionsOf over this very model. */
+  function withTakeoffCopy(model, tab) {
+    var out = Object.assign({}, model);
+    if (tab === ROOT_TAB) { out.takeoff = jsonCopy(model.takeoff); return out; }
+    var sec = model.tabs[tab];
+    out.tabs = Object.assign({}, model.tabs, Object.fromEntries([[tab, Object.assign({}, sec, { takeoff: jsonCopy(sec.takeoff) })]]));
+    return out;
+  }
+
+  /** The figures typed into the intake's boxes, written to the sections that own them. `boxes` is
+   *  { boxName: figure }, only the boxes the estimator typed in. A figure that is not above zero, a box whose
+   *  section is not part of the bid, and a section with nothing measured yet write nothing (each writer below
+   *  refuses a figure that is not above zero). Boxes are taken in the vocabulary's order, so System 1 goes before
+   *  System 2 and the second area is added after the first is set. Returns a NEW model when a figure reached a
+   *  section and the one handed in when none did. */
+  function applyBoxes(model, boxes) {
+    var copied = [];
+    types.FIELDS.forEach(function (f) {
+      if (!has.call(boxes, f.name)) return;
+      var v = num(boxes[f.name]);
+      var hit = boxEntry(model, f.name);
+      if (!hit || !boxMeasured(hit)) return;
+      var tab = hit.entry.tab;
+      if (copied.indexOf(tab) < 0) { model = withTakeoffCopy(model, tab); copied.push(tab); }
+      var view = sectionView(model, tab), h = hit.home;
+      if (h.tab === "gyp") setGypArea(view, GYP_BUCKETS[h.index], v);
+      else if (h.unit === "SF") setAreaSf(view, h.index, v);
+      else setAreaLf(view, h.index, v);
+    });
+    return model;
+  }
+
   /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
    *  both =IF(E25="Yes",E18) at 0.14 a square foot, switched by the one E25 answer. So with dye
    *  on his sheet charges $0.28/SF, and backend/pricing.py (dye_coats 2) always agreed.
@@ -2672,6 +2877,9 @@
 
   function isObject(v) { return !!v && typeof v === "object" && !(v instanceof Array); }
 
+  // (patchModel also reads `boxes`: { boxName: figure } for the intake's quantity boxes the estimator typed in, any
+  //  of the nine of work-types.js FIELDS, each written to the takeoff of the section that owns it (applyBoxes). The
+  //  `sf_areas` described below is the Polish pair of them, polish_sf and polish_2_sf.)
   /** The saved model with ONE writer's fields laid over it, and everything else left as it was.
    *
    *  THE INTAKE PAGE'S SAVE. It used to migrate what was saved and then overlay its own answers by
@@ -2720,13 +2928,14 @@
     var p = isObject(patch) ? patch : {};
     if (isObject(p.conditions)) model.conditions = Object.assign({}, model.conditions, p.conditions);
     if (isObject(p.conditions_shown)) model.conditions_shown = copyInto({}, p.conditions_shown);
-    if (p.sf_areas instanceof Array && measuredSfAreas(model.takeoff) > 0 &&
-        (num(p.sf_areas[0]) > 0 || num(p.sf_areas[1]) > 0)) {
-      // A COPY of the rows: migrateModel hands back the SAVED array, and this function is pure.
-      model.takeoff = JSON.parse(JSON.stringify(model.takeoff));
-      setAreaSf(model, 0, p.sf_areas[0]);
-      setAreaSf(model, 1, p.sf_areas[1]);
+    // THE BOXES THE ESTIMATOR TYPED IN, to the takeoff of the section that owns each (applyBoxes works on COPIES of
+    // the rows: migrateModel hands back the SAVED arrays, and this function is pure). `sf_areas` is the Polish
+    // pair as it was first written, kept as the same two boxes.
+    var boxes = isObject(p.boxes) ? p.boxes : {};
+    if (p.sf_areas instanceof Array) {
+      boxes = Object.assign({}, boxes, Object.fromEntries([["polish_sf", p.sf_areas[0]], ["polish_2_sf", p.sf_areas[1]]]));
     }
+    model = applyBoxes(model, boxes);
     if (laborUnstated(existing)) delete model.labor;
     return model;
   }
@@ -3616,6 +3825,35 @@
     return out;
   }
 
+  /** IS THE PRICE THE DRAFT HOLDS BEHIND THE ROWS THE MODEL HOLDS? True when a section that is part of the bid was
+   *  priced on another floor than its takeoff now says, so the page should save once and let computed_bid, the
+   *  stamped totals and priced_tabs come from the model as it is.
+   *
+   *  WHY IT EXISTS. The intake's boxes edit the takeoff rows (patchModel's `boxes`) but cannot reprice, because the
+   *  library lives on the estimate page. So after a figure is typed there, the draft's snapshot still says the old
+   *  floor. This is asked for EVERY live section: the root's snapshot is polish_sf and computed_bid.polish_sf, any
+   *  other section's is its entry in priced_tabs (the area and cove it was priced on). A section the draft holds no
+   *  snapshot for is not behind (a draft that never had one writes nothing on open), and neither is one whose
+   *  snapshot agrees, so a plain reopen writes nothing. Reads only; false for a model whose sections cannot be read. */
+  function snapshotBehind(model, state) {
+    if (!isObject(model) || !isObject(state)) return false;
+    var list;
+    try { list = activeSections(model); } catch (err) { return false; }
+    var snap = isObject(state.computed_bid) ? state.computed_bid : null;
+    var priced = state.priced_tabs instanceof Array ? state.priced_tabs : [];
+    return list.some(function (e) {
+      if (e.root) {
+        var tk = takeoffSf(e.section.takeoff);
+        var snapSf = snap ? num(snap.polish_sf) : 0;
+        return tk > 0 && (tk !== num(state.polish_sf) || (snapSf > 0 && snapSf !== tk));
+      }
+      var held = priced.filter(function (x) { return isObject(x) && x.id === e.tab; })[0];
+      if (!held || !isObject(held.sf)) return false;
+      var now = areaFields(e);
+      return Object.keys(now).some(function (k) { return has.call(held.sf, k) && num(held.sf[k]) !== now[k]; });
+    });
+  }
+
   /** The strip that switches between a bid's sections, or "" when there is only one (every bid today), so a
    *  single-section estimate looks exactly as it did. One button per section, naming it, its kind and its price;
    *  `active` is the tab id on show and `bids` the { tabId: bid } the page priced (the root's under its own tab
@@ -3738,6 +3976,10 @@
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
     measuredSfValues: measuredSfValues, setAreaSf: setAreaSf,
+    measuredLfRows: measuredLfRows, measuredLfValues: measuredLfValues, setAreaLf: setAreaLf, setGypArea: setGypArea,
+    GYP_BUCKETS: GYP_BUCKETS, GYP_AREA_ASSEMBLIES: GYP_AREA_ASSEMBLIES,
+    boxNames: boxNames, boxGroup: boxGroup, boxEntry: boxEntry, boxValue: boxValue, boxDraftValue: boxDraftValue, boxExtras: boxExtras,
+    applyBoxes: applyBoxes, snapshotBehind: snapshotBehind,
     seedTakeoffSf: seedTakeoffSf,
     seedDefaultTakeoff: seedDefaultTakeoff,
     takeoffUnit: takeoffUnit,

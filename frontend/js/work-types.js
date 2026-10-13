@@ -504,12 +504,42 @@
   /** The reserved library item id that prices one condition, or null when it has none. */
   function itemIdOf(conditionKey) { return condition(conditionKey).item_id; }
 
+  // ── where an intake quantity box lives ───────────────────────────────────────────────────────
+  // The tab whose takeoff owns each scope of quantity field. Cove is an Epoxy quantity (Polish has no cove).
+  var SCOPE_TAB = new Map([["epoxy", "epoxy"], ["cove", "epoxy"], ["polish", "polish"], ["gyp", "gyp"]]);
+
+  /** THE ONE MAPPING FROM AN INTAKE QUANTITY FIELD TO THE TAKEOFF IT EDITS (Hanz, 2026-10-13: the System 1 box of an
+   *  Epoxy job did nothing to the estimate, because only the Polish boxes were wired to a takeoff).
+   *
+   *  `name` is a quantity field of FIELDS. Answers { name, tab, unit, index, pooled }, or null for a name that is not
+   *  one: `tab` is the TAB KEY whose takeoff owns the quantity ("epoxy", "polish", "gyp"), `unit` is "SF" or "LF", and
+   *  `index` is the field's place among the fields of the same tab and unit, in FIELDS' order (System 1 is 0,
+   *  System 2 is 1; Gyp's soft, hard and corridor boxes are 0, 1, 2). `pooled` is true when the later boxes of that
+   *  group have no cell of their own (snapshot null: Polish has ONE area cell), so the group's figure is one total
+   *  and not one number per box. Read off FIELDS, so a field added there is mapped here without a second table. */
+  function fieldHome(name) {
+    var seen = new Map();
+    for (var i = 0; i < FIELDS.length; i++) {
+      var f = FIELDS[i];
+      var tab = SCOPE_TAB.get(f.scope);
+      if (!tab) throw new Error("work-types.js: the quantity field " + said(f.name) + " has scope " + said(f.scope) + ", which no tab owns");
+      var key = tab + "/" + f.unit;
+      var at = seen.has(key) ? seen.get(key) : 0;
+      seen.set(key, at + 1);
+      if (f.name !== name) continue;
+      var later = FIELDS.filter(function (g) { return SCOPE_TAB.get(g.scope) === tab && g.unit === f.unit; }).slice(1);
+      return { name: f.name, tab: tab, unit: f.unit, index: at,
+               pooled: later.length > 0 && later.every(function (g) { return g.snapshot === null; }) };
+    }
+    return null;
+  }
+
   return {
     SURFACES: SURFACES, FIELDS: FIELDS, TABS: TABS, JOB_TYPES: JOB_TYPES, CONDITIONS: CONDITIONS,
     jobTypeKeys: jobTypeKeys, tabKeys: tabKeys, isJobType: isJobType, isTab: isTab,
     jobType: jobType, tab: tab, condition: condition,
     tabsFor: tabsFor, appliesTo: appliesTo, defaultScope: defaultScope, tabOfSheet: tabOfSheet, optionSheets: optionSheets,
-    fieldsFor: fieldsFor, scopesFor: scopesFor,
+    fieldsFor: fieldsFor, scopesFor: scopesFor, fieldHome: fieldHome,
     conditionsFor: conditionsFor, cellsFor: cellsFor, copyableCells: copyableCells,
     isSplit: isSplit, isPerSheet: isPerSheet, baseSheets: baseSheets, writeCellsFor: writeCellsFor,
     modelDefaults: modelDefaults, reservedItems: reservedItems, itemIdOf: itemIdOf
