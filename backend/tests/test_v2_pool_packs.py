@@ -9,14 +9,18 @@ jobs priced $10 to $38 high.
 
 THE RULE (js/library-core.js pricePool, one function; js/polish-estimate.js and js/epoxy-takeoff.js call it, and the save reads
 what they priced, so no second formula exists):
-  * Within ONE priced section (one tab of a bid) the purchase of the SAME material, one library item id, is pooled across every
-    takeoff row and every assembly line that buys it: the fractional quantity is added first, then waste, roundup to whole packs
-    and the price break happen ONCE.
+  * Within ONE priced section (one tab of a bid) the purchase of the SAME COAT is pooled across every takeoff row that holds it
+    (Hanz, 2026-10-13, "Round each coat like Kyle"). A coat is one line of one assembly, so System 1 and System 2 copies of the
+    default lines, or the same cove assembly on two areas, are one purchase: the fractional quantity is added first, then waste,
+    roundup to whole packs and the price break happen ONCE. TWO DIFFERENT LINES of one assembly that buy the same item (Shop
+    Floor Double Broadcast is three lines of Shop Floor) are two coats, each rounded to its own whole packs as Kyle's sheet does,
+    so a single-area, single-system job prices to the workbook to the cent. A material row (no assembly) is its own coat by item.
   * The pooled cost goes back to the rows in proportion to what each needed, in whole ten-thousandths of a dollar by the
     LARGEST REMAINDER, so every row still shows a cost and the rows add up to the pooled total exactly.
   * Different materials on one price LADDER (identical price breaks, pack cost, bulk cost, pack size, unit and roundup, which is
     how the sheet reads a system's two flake lines) pool for the BREAK only: each keeps its own packs and the break is judged
-    on every pack bought across the ladder. A ladder is derived, not stored: it needs no column and no reseed.
+    on every pack bought across the ladder (two coats of one item sit on one ladder too). A ladder is derived, not stored: it
+    needs no column and no reseed.
   * Dye, Joint Filler and Remove Existing are never pooled. A cove is priced by its own formula, but the same cove on two or more
     rows is one length priced once (epoxy-takeoff poolCoves) and split back by length. An OFF row buys
     nothing. A coverage typed on one bid is the same material.
@@ -131,6 +135,43 @@ def check_a_coverage_typed_on_one_bid_is_the_same_material(r):
     assert p.get("packs") == 4 and near(sum(p["pooled"]), 400) and p["withoutPoolOf"] == [200, 200], p
     t = r["page"]["typedCoverage"]
     assert near(t["rowSum"], t["expected"], 1e-3) and (t["gallons"], t["kits"]) == (29, 11), t
+
+
+def check_each_coat_of_an_assembly_keeps_its_own_whole_pack_rounding(r):
+    """Two lines of one assembly that buy the same item are two coats, rounded one by one like Kyle's sheet, and only the same
+    line of the same assembly pools across rows. Three coats of 1.2 gallons are 2 + 2 + 2 = 6 gallons (not 3.6 bought as 4), and
+    on two such rows each coat is 2.4 gallons bought as 3, nine gallons (not 7.2 bought as 8, and not 12 row by row)."""
+    c = r["unit"]["coats"]
+    assert c["one"] == 600 and c["oneUntouched"] is True, "a single area must keep each line's own roundup: %r" % c
+    assert c["twoRowsAlone"] == 1200 and c["twoTotal"] == 900 and c["exact"] is True, c
+    assert c["packsOfCoat"] == [3, 3, 3] and c["linesPooled"] == [2, 2, 2], c
+    assert c["costs"] == [[150, 150, 150], [150, 150, 150]], c
+    # a material row (no assembly) pools with another material row of the item, never with an assembly's line; and the
+    # same item on two DIFFERENT assemblies is two coats
+    assert c["materialRows"] == [160.7143, 139.2857] and c["materialPacks"] == 3, c
+    assert c["materialVsAssembly"] == [200, 200] and c["otherAssembly"] == [200, 200], c
+
+
+def check_two_coats_on_one_price_ladder_still_have_the_break_judged_on_both(r):
+    l = r["unit"]["coatLadder"]
+    # 4 bags in each coat: neither reaches the break of 6 alone, the two together do, and each coat keeps its own 4 bags
+    assert l["alone"] == 800 and l["pooled"] == 720 and l["packs"] == [4, 4], l
+    assert l["breakNamed"] == {"min_qty": 6, "unit_cost": 90}, l
+
+
+def check_a_single_area_system_prices_to_the_workbook_and_the_same_coat_on_two_areas_pools(r):
+    """Shop Floor Double Broadcast at 250 SF: three coats of Shop Floor, 100 SF/Gallon, each 2.5 gallons bought as 3. The
+    workbook and the library before the pool read $1,270.01 of system; buying the item once for the whole system read
+    $1,188.53 (8 gallons), $81.48 under the sheet with no second area involved. The same system in two 125 SF areas is the
+    same coats on two rows, one purchase each, and costs what one 250 SF floor costs."""
+    c = r["page"]["coats"]
+    assert c["shopFloorLines"] == 3 and c["shopFloorPacks"] == [3, 3, 3], c
+    assert near(c["sheetSystem"], 1270.009, 1e-3) and near(c["rowCost"], c["sheetSystem"], 1e-6), c
+    assert near(c["wholeMaterial"], c["unstampedMaterial"], 1e-6), "a single area must price as a saved bid does: %r" % c
+    assert near(c["wholeMaterial"], c["sheetSystem"] + c["patch"], 1e-6), c
+    assert c["wholeMaterial"] > 1188.53 + 70, c
+    assert near(c["halvesMaterial"], c["wholeMaterial"], 1e-6) and c["rowsAdd"] is True, c
+    assert c["halvesAloneMaterial"] > c["halvesMaterial"] + 100, "row by row (a saved bid) must still pay the split: %r" % c
 
 
 def check_a_fractional_purchase_judges_its_break_on_the_whole(r):
@@ -272,6 +313,9 @@ CHECKS = [
     check_an_off_row_buys_nothing_and_takes_no_share,
     check_a_reserved_material_is_never_pooled,
     check_a_coverage_typed_on_one_bid_is_the_same_material,
+    check_each_coat_of_an_assembly_keeps_its_own_whole_pack_rounding,
+    check_two_coats_on_one_price_ladder_still_have_the_break_judged_on_both,
+    check_a_single_area_system_prices_to_the_workbook_and_the_same_coat_on_two_areas_pools,
     check_a_fractional_purchase_judges_its_break_on_the_whole,
     check_two_materials_on_one_price_ladder_pool_for_the_break_only,
     check_a_different_price_is_not_the_same_ladder,
@@ -320,7 +364,8 @@ BREAKS = {
         [check_the_leftover_goes_to_the_largest_remainder, check_the_rows_add_up_to_the_pooled_cost_exactly]),
     "a price ladder adds up no packs": (
         CORE, "      lad.units += g.own.units;", "      lad.units += 0;",
-        [check_two_materials_on_one_price_ladder_pool_for_the_break_only]),
+        [check_two_materials_on_one_price_ladder_pool_for_the_break_only,
+         check_two_coats_on_one_price_ladder_still_have_the_break_judged_on_both]),
     "the ladder ignores the pack cost": (
         CORE, "    return JSON.stringify([brks, num(item.unit_cost), num(item.bulk_cost), buyQty(item),",
         "    return JSON.stringify([brks, 0, num(item.bulk_cost), buyQty(item),",
@@ -348,8 +393,22 @@ BREAKS = {
         '      return MODEL_KEYS.indexOf(e[0]) < 0 && e[0] !== "pool_packs" && !Object.prototype.hasOwnProperty.call(out, e[0]);',
         [check_the_stamp_survives_a_save_and_a_reload]),
     "a material is bought once per row, not once per section": (
-        CORE, "        var id = poolId(r.item);", '        var id = poolId(r.item) + "#" + i;',
+        CORE, "        var ck = coatKey(res, j, id);", '        var ck = coatKey(res, j, id) + "#" + i;',
         [check_two_different_systems_that_share_a_primer_buy_it_once, check_two_areas_cost_what_one_floor_costs_on_the_real_library]),
+    "a coat is the item alone again (every line of the item pools, as #662 did)": (
+        CORE, '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, j, id]);',
+        '    return JSON.stringify(["m", id]);',
+        [check_each_coat_of_an_assembly_keeps_its_own_whole_pack_rounding,
+         check_a_single_area_system_prices_to_the_workbook_and_the_same_coat_on_two_areas_pools]),
+    "two lines of one assembly are one coat": (
+        CORE, '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, j, id]);',
+        '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, id]);',
+        [check_each_coat_of_an_assembly_keeps_its_own_whole_pack_rounding,
+         check_a_single_area_system_prices_to_the_workbook_and_the_same_coat_on_two_areas_pools]),
+    "the same line of two assemblies is one coat": (
+        CORE, '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", a, j, id]);',
+        '    return (a === undefined || a === null || a === "") ? JSON.stringify(["m", id]) : JSON.stringify(["a", j, id]);',
+        [check_each_coat_of_an_assembly_keeps_its_own_whole_pack_rounding]),
     "the pooled cost is not handed back to its rows": (
         CORE, "          cost: share[k], pack_cost: fin.pack_cost,", "          cost: 0, pack_cost: fin.pack_cost,",
         [check_every_rows_cost_still_shows_and_the_rows_add_up_to_the_sections_material]),
@@ -359,7 +418,8 @@ BREAKS = {
         [check_a_line_that_cannot_price_is_left_as_it_is]),
     "a break is judged on the pool's own quantity, not the ladder's": (
         CORE, "      var brk = breakAt(item, judged === undefined ? packs * pack : judged);",
-        "      var brk = breakAt(item, packs * pack);", [check_two_materials_on_one_price_ladder_pool_for_the_break_only]),
+        "      var brk = breakAt(item, packs * pack);",
+        [check_two_materials_on_one_price_ladder_pool_for_the_break_only, check_two_coats_on_one_price_ladder_still_have_the_break_judged_on_both]),
     "a pooled row keeps the total it priced alone": (
         CORE, "      rows.forEach(function (r) { if (r && r.ok && r.priced) total += r.cost; });",
         "      rows.forEach(function (r) { if (r && r.ok && r.priced) total += 0; });",

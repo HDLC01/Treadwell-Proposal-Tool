@@ -32,11 +32,12 @@ WHAT A LIBRARY ROW CANNOT SAY (named modelling gaps, listed for Kyle and Hanz in
     planner rounds a coverage UP, which on a whole number of square feet can never buy a bag the sheet does
     not (see _round_up_3); an area typed to two decimals within 0.003 SF past a bag edge buys one fewer.
   * a flake or quartz price break is judged on the TWO broadcast lines added together in the sheet, and the
-    library now reads it the same way: the estimate buys each material ONCE for the section (js/library-core.js
-    pricePool, Hanz 2026-10-13), and a system's two broadcast lines, which are two library rows on one price
-    ladder, are pooled for the break. What is left of that gap runs the other way: the pool also rounds the
-    packs once where the sheet rounds each broadcast line to its own bags, so a small flake or quartz job is a
-    pack or more BELOW the workbook, never above it (see test_epoxy_v2_proof.py).
+    library now reads it the same way: the estimate buys each COAT (one line of one assembly) once for the
+    section (js/library-core.js pricePool, Hanz 2026-10-13, "Round each coat like Kyle"), and a system's two
+    broadcast lines, which are two library rows on one price ladder, are pooled for the break. Each coat keeps
+    its own whole-pack rounding as the sheet does, so a single-area job is the workbook to the cent on every
+    recorded job and nothing is left of this gap (see test_epoxy_v2_proof.py). Only the SAME coat on two
+    areas is pooled across them, which the sheet cannot say.
   * a library cost is kept to four places and the sheet's prices have more, so at a few sizes (about 5 jobs
     in 1,500 scanned) a sum lands a hair either side of a whole dollar and ROUNDUP differs by one.
   * the cove is two ROUNDUPs deep and its aggregate follows System 1 (Kyle's odd rule 11); a library line
@@ -461,10 +462,9 @@ def plan_epoxy(sheets: Dict[str, Sheet], plan: Plan) -> None:
 
     if plan.combined_breaks:
         plan.gap("A price break the sheet judges on two broadcast lines added together is read the same way by the "
-                 "estimate: it buys each material once for the section, and the two lines, two library rows on one "
-                 "price ladder, are pooled for the break. The pool also rounds the packs once where the sheet rounds "
-                 "each broadcast line to its own bags, so a small job prices a pack or more below the workbook and "
-                 "never above it. Materials: %s." % ", ".join(sorted(plan.combined_breaks)))
+                 "estimate: the two lines, two library rows on one price ladder, are pooled for the break, and each "
+                 "coat keeps its own whole-pack rounding as the sheet does, so a single-area job is the workbook's "
+                 "price. Materials: %s." % ", ".join(sorted(plan.combined_breaks)))
     plan.gap("Coverage is kept to three places (a bag of flake that covers 266.6667 SF is stored as 266.667, "
              "rounded up so it cannot buy a bag the sheet does not).")
     plan.gap("Cove is two ROUNDUPs deep and its aggregate follows System 1 (Kyle's odd rule 11): it is priced by "

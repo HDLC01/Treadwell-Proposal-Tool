@@ -184,11 +184,12 @@ A system's two flake or quartz lines each round up to whole 40 lb bags on their 
 price is then chosen on the two lines added together (`IF((O201+O202)<240, ...)`). So a small job that needs, say, 0.4
 of a bag on each line buys two bags in the workbook.
 
-In v2 (Hanz's decision, 2026-10-13) each material is bought once for the whole job: the quantity every line needs is
-added first, rounded up to whole bags once, and the price break is judged once. The same goes for a primer or a system
-that appears in both System 1 and System 2. The price break is read exactly as the workbook reads it. The one difference
-is the rounding: v2 can come out a bag or more BELOW the workbook on a small job, never above it. On the 440 jobs we
-recorded it is 110 jobs, by $79 to $476 of material. Is the workbook's bag-by-bag rounding on purpose?
+In v2 (Hanz's decisions, 2026-10-13) each coat keeps its own whole-pack rounding, as the workbook does: every line of a
+system rounds up to whole bags on its own, and the price break is judged on a system's two broadcast lines added together,
+exactly as the workbook reads it. A single-area job therefore matches the workbook to the cent, on every one of the 440
+jobs we recorded. The one thing v2 does that the workbook cannot is buy the SAME coat once across areas: a system or a
+primer that appears in both System 1 and System 2 adds its quantity first and rounds up once, so 5,000 + 3,000 SF costs
+what 8,000 SF costs. The workbook rounds each area on its own. Is the workbook's area-by-area rounding on purpose?
 
 ## What we need from you
 

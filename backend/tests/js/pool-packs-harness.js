@@ -36,6 +36,9 @@ const item = (over) => Object.assign({ id: "A", name: "Coat A", unit: "Gal", buy
   waste_pct: 0, roundup: true }, over || {});
 const asmOf = (id) => ({ id: "asm-" + id, name: "Asm " + id, unit: "SF", lines: [{ item_id: id }] });
 const priceAt = (items, id, area) => LIB.priceAssembly(asmOf(id), items, area);
+// ONE assembly (so one coat) whose line buys `itemId`: the same coat on two takeoff rows, or its typed-coverage copy
+const coatAsm = (asmId, itemId) => ({ id: "asm-" + asmId, name: "Asm " + asmId, unit: "SF", lines: [{ item_id: itemId }] });
+const priceCoat = (items, asmId, itemId, area) => LIB.priceAssembly(coatAsm(asmId, itemId), items, area);
 const costs = (results) => results.map((r) => (r ? r.total : null));
 const sum = (xs) => xs.reduce((t, x) => t + (x || 0), 0);
 
@@ -101,12 +104,13 @@ function unit() {
     const real = item();
     const copy = Object.assign({}, real, { id: "__cov0", pool_of: "A", coverage: 50 });
     const items = [real, copy];
-    const a = priceAt(items, "A", 150);                // 1.5 gallons
-    const b = priceAt(items, "__cov0", 100);           // 100 / 50 = 2 gallons
+    // the same line of the same assembly on two rows, the second with a coverage typed over it
+    const a = priceCoat(items, "A", "A", 150);         // 1.5 gallons
+    const b = priceCoat(items, "A", "__cov0", 100);    // 100 / 50 = 2 gallons
     const pooled = LIB.pricePool([a, b]);
+    const plain = Object.assign({}, copy, { pool_of: undefined });
     out.poolOf = { alone: [a.total, b.total], pooled: costs(pooled), packs: (pooled[0].rows[0].pooled || {}).packs,
-      withoutPoolOf: costs(LIB.pricePool([priceAt([real, Object.assign({}, copy, { pool_of: undefined })], "A", 150),
-        priceAt([real, Object.assign({}, copy, { pool_of: undefined })], "__cov0", 100)])) };
+      withoutPoolOf: costs(LIB.pricePool([priceCoat([real, plain], "A", "A", 150), priceCoat([real, plain], "A", "__cov0", 100)])) };
   }
 
   // a fractional purchase (roundup off) has no packs to round, but its break is judged on the whole
@@ -139,8 +143,9 @@ function unit() {
   // a line that cannot price is left exactly as it is, and the rest still pool
   {
     const items = [item()];
-    const broken = LIB.priceAssembly({ id: "x", name: "X", unit: "SF", lines: [{ item_id: "gone" }, { item_id: "A" }] }, items, 150);
-    const other = priceAt(items, "A", 130);
+    const xAsm = { id: "x", name: "X", unit: "SF", lines: [{ item_id: "gone" }, { item_id: "A" }] };
+    const broken = LIB.priceAssembly(xAsm, items, 150);
+    const other = LIB.priceAssembly(xAsm, items, 130);       // the same assembly on a second row: its second line is the same coat
     const pooled = LIB.pricePool([broken, other]);
     out.brokenLine = { reasons: pooled[0].rows.map((r) => r.reason || "ok"), broken: pooled[0].broken_lines, costs: costs(pooled) };
   }
@@ -151,6 +156,46 @@ function unit() {
     const alone = [LIB.priceAssembly(asmOf("A"), items, 150, { bulk: true }), LIB.priceAssembly(asmOf("A"), items, 130, { bulk: true })];
     const pooled = LIB.pricePool(alone);
     out.bulk = { alone: sum(costs(alone)), pooled: sum(costs(pooled)), bulk: pooled[0].rows[0].bulk };
+  }
+
+  // EACH COAT KEEPS ITS OWN WHOLE-PACK ROUNDING (Hanz, 2026-10-13, "Round each coat like Kyle"): two lines of one assembly
+  // that buy the same item are two coats, as Kyle's sheet rounds each line. Only the same line of the same assembly
+  // (the System 1 and System 2 copies of one system) pools across rows.
+  {
+    const items = [item()];
+    const three = { id: "three", name: "Three coats", unit: "SF", lines: [{ item_id: "A" }, { item_id: "A" }, { item_id: "A" }] };
+    // one area: each coat is 1.2 gallons and is bought as 2 (Kyle's three ROUNDUPs), not 3.6 gallons bought as 4
+    const one = LIB.priceAssembly(three, items, 120);
+    const alone = LIB.pricePool([one]);
+    // two areas: each coat is 2.4 gallons across them, bought as 3, three coats, nine gallons (not 7.2 bought as 8, and not 12)
+    const twoRows = [LIB.priceAssembly(three, items, 120), LIB.priceAssembly(three, items, 120)];
+    const two = LIB.pricePool(twoRows);
+    const lineCosts = (res) => res.map((x) => x.rows.map((l) => l.cost));
+    out.coats = { one: one.total, oneUntouched: alone[0] === one, twoTotal: sum(costs(two)), twoRowsAlone: sum(costs(twoRows)),
+      packsOfCoat: two[0].rows.map((l) => (l.pooled || {}).packs), linesPooled: two[0].rows.map((l) => (l.pooled || {}).lines),
+      costs: lineCosts(two), exact: tenThousandths(sum(costs(two))) === 9000000,
+      // an assembly row that has the same item as a MATERIAL ROW is another purchase; two material rows of one item are one
+      ...(() => {
+        const mat = (area) => { const l = LIB.priceLine({ item_id: "A" }, items, area);
+          return { rows: [l], total: l.cost, priced_lines: 1, broken_lines: 0, per_unit: l.cost / area }; };
+        const m = LIB.pricePool([mat(150), mat(130)]);                          // 2.8 gallons: 3 bought
+        const mixed = LIB.pricePool([mat(150), priceAt(items, "A", 130)]);      // a material row and an assembly line
+        // the same item on line 0 of two DIFFERENT assemblies is two coats too
+        const other = LIB.pricePool([priceAt(items, "A", 150), priceCoat(items, "other", "A", 130)]);
+        return { materialRows: costs(m), materialPacks: (m[0].rows[0].pooled || {}).packs, otherAssembly: costs(other),
+                 materialVsAssembly: costs(mixed), materialVsAssemblySame: mixed[0] !== undefined };
+      })() };
+  }
+
+  // two coats of one assembly that sit on one PRICE LADDER still have the break judged on both (the sheet's reading)
+  {
+    const ladder = { unit: "Bag", unit_cost: 100, coverage: 50, price_breaks: [{ min_qty: 6, unit_cost: 90 }], waste_pct: 0 };
+    const items = [item(Object.assign({ id: "N" }, ladder))];
+    const two = { id: "twocoat", name: "Two coats", unit: "SF", lines: [{ item_id: "N" }, { item_id: "N" }] };
+    const r = LIB.priceAssembly(two, items, 200);        // 4 bags each: neither coat reaches 6 bags
+    const pooled = LIB.pricePool([r]);
+    out.coatLadder = { alone: r.total, pooled: pooled[0].total, packs: pooled[0].rows.map((l) => l.packs),
+      breakNamed: pooled[0].rows[0].price_break || null };
   }
 
   // the exports a caller reads
@@ -222,6 +267,7 @@ const SYSTEM = asmNamed("MACRO Flake Single Broadcast");
 const DOUBLE = asmNamed("micro Flake Double Broadcast");
 const QUARTZ = asmNamed("40-S (Q28) Quartz Double Broadcast");
 const PRIMER = asmNamed("Primer: MVP (@ 12 mils)");
+const SHOP = asmNamed("Shop Floor Double Broadcast");      // three lines of ONE item (Shop Floor, 100 SF/Gallon): three coats
 
 /** A takeoff the way the seeding writes it: each area is its OWN copy of the lines, the first carrying the floor. */
 function areaRows(systemAsm, areas, withPrimer) {
@@ -292,6 +338,22 @@ async function page() {
       { assembly_id: PRIMER.id, assembly_name: PRIMER.name, measurement: 3000, unit: "SF", same_floor: true, same_floor_of: 2 }];
     const m = await epoxyPrice(mixed, true), n = await epoxyPrice(mixed, false);
     out.mixed = { pooled: m.material, rowByRow: n.material, rowsSumToMaterial: near(m.rowSum + m.patch, m.material) };
+  }
+
+  // EACH COAT KEEPS ITS OWN WHOLE-PACK ROUNDING, like Kyle's sheet (Hanz, 2026-10-13, "Round each coat like Kyle"). Shop Floor
+  // Double Broadcast is three coats of one item: on ONE area the pool must leave it to the cent where the workbook has it
+  // ($1,270.01 at 250 SF, not the $1,188.53 that buying the item once for the whole system would have cost), and the same
+  // coat on two areas (125 + 125) is still one purchase, costing what one 250 SF floor costs.
+  {
+    const whole = await epoxyPrice(areaRows(SHOP, [250], false), true);
+    const unstamped = await epoxyPrice(areaRows(SHOP, [250], false), false);
+    const halves = await epoxyPrice(areaRows(SHOP, [125, 125], false), true);
+    const halvesAlone = await epoxyPrice(areaRows(SHOP, [125, 125], false), false);
+    const sheet = LIB.priceAssembly(SHOP, items, 250).total;      // each line to its own packs: the workbook's way
+    const shopLines = LIB.priceAssembly(SHOP, items, 250).rows.filter((l) => l.ok && l.priced && /shop-floor-100/.test(l.item.id));
+    out.coats = { wholeMaterial: whole.material, unstampedMaterial: unstamped.material, halvesMaterial: halves.material,
+      halvesAloneMaterial: halvesAlone.material, patch: whole.patch, sheetSystem: sheet, rowCost: whole.rowCosts[0],
+      shopFloorLines: shopLines.length, shopFloorPacks: shopLines.map((l) => l.packs), rowsAdd: near(halves.rowSum + halves.patch, halves.material) };
   }
 
   // THE ROWS ADD UP TO THE SECTION: every row shows its share, and the shares and the patch are the section's material

@@ -264,9 +264,9 @@
    *  is the library's materials, `ctx.sf` the area the bid prices (the page's takeoffSf). Answers
    *  { material, tooling, patch, cove, rows } where `material` is the raw sum the chain rounds up (D40).
    *
-   *  `ctx.pool` BUYS EACH MATERIAL ONCE FOR THE WHOLE SECTION (library-core's pricePool): the rows that are on are
+   *  `ctx.pool` BUYS EACH COAT ONCE FOR THE WHOLE SECTION (library-core's pricePool): the rows that are on are
    *  priced first (a cove by its own formula, an ordinary row by `ctx.rowPrice`, which must then answer each row
-   *  ALONE), and the pool then adds up what the rows buy of the same material. A cove is pooled the same way by
+   *  ALONE), and the pool then adds up what the rows buy of the same coat (one line of one assembly). A cove is pooled the same way by
    *  `poolCoves` (the same cove on two areas is one length), since the library's pool has no item to add up.
    *  `ctx.poolCoves` alone pools just the cove.
    *  `ctx.skip` are item ids never pooled (pricePool's). A caller whose `ctx.rowPrice` already answers pooled
