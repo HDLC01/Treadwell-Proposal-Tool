@@ -86,6 +86,7 @@ import nav_access
 import notifications
 import pdf_writer
 import pipelines
+import v2_pipeline
 import price_rules
 import pricing
 import profiles
@@ -7830,6 +7831,29 @@ def api_list_drafts() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("list_drafts failed: %s", exc)
         return {"ok": False, "error": "Couldn't load the projects.", "projects": []}
+
+
+@app.get("/api/v2/pipeline")
+def api_v2_pipeline() -> Dict[str, Any]:
+    """The v2 Estimates board (BETA): every Estimating Tool v2 bid as a pipeline-shaped row.
+
+    Its OWN route, deliberately beside and not inside /api/portal/pipeline: Hanz, 2026-10-13, "the
+    V2 pipeline is still in beta ... so do not merge it to the existing". Read only: it writes no
+    draft and no portal row. (`_pipeline_snapshot` refreshes its own in-memory cache on a good
+    read, as it does for every reader.) See v2_pipeline.py.
+
+    An unreadable drafts list answers ok:false with no rows, the same shape /api/drafts uses, so the
+    page can tell a failed read from an empty board."""
+    try:
+        summaries = drafts.list_drafts()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("v2 pipeline drafts unavailable: %s", exc)
+        return {"ok": False, "error": "Couldn't load the v2 estimates.", "proposals": []}
+    portal_rows, portal_status = _pipeline_snapshot()
+    return {"ok": True,
+            "proposals": v2_pipeline.build_rows(summaries, portal_rows, portal_status),
+            "portal_status": portal_status,
+            "read_ceiling": v2_pipeline.READ_CEILING}
 
 
 @app.get("/api/trash")
