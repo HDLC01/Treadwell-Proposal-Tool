@@ -60,7 +60,7 @@ def ran():
 
 
 SECTIONS = ["identity", "copies", "polishCopies", "baseBid", "combinedBase", "refusals", "idReuse", "baseOfCases", "renaming",
-            "presets", "adding", "jobTypes", "snapshots", "page"]
+            "labelsStayUnique", "presets", "adding", "jobTypes", "snapshots", "page"]
 
 
 @pytest.mark.parametrize("section", SECTIONS)
@@ -230,6 +230,14 @@ def test_the_page_prices_a_gyp_section_that_is_a_copy_by_its_sheet_and_not_its_k
     assert g["totals"][0] == g["totals"][1] > 0 and g["jobType"] == "gyp"
 
 
+def test_a_gyp_area_row_on_a_copy_is_priced_and_drawn_like_the_one_on_its_source(ran):
+    """The per-row path (the Material panel, the repaint of the numbers and rowPrice) must say the workbook SHEET to the Gyp
+    pricing and not the Copy<N> key, which is not a Gyp tab. Before, all three threw on a copy of a Gyp sheet."""
+    a = ran["page"]["gypAreaRowOnCopy"]
+    assert a["rows"]["source"] == a["rows"]["copy"] and isinstance(a["rows"]["copy"], (int, float)) and a["rows"]["copy"] > 0, a
+    assert a["shown"] == {"Copy1": {"panel": True, "repaint": True}, 'Gyp (USG 1-8")': {"panel": True, "repaint": True}}, a
+
+
 # ── 4. everything follows the base ───────────────────────────────────────────────────────────────
 def test_picking_another_base_moves_the_lump_sum_and_the_travel(ran):
     """A Polish base with an Epoxy option, on a job 70 miles out with ten nights typed at $100. The Polish root carries the
@@ -396,6 +404,33 @@ def test_the_words_a_name_may_not_be_are_plain_and_a_label_is_never_a_key(ran):
         assert got == {"keys": ["Epoxy", "Copy1"], "label": word, "protoClean": True}, word
     assert r["copyLabels"] == ["Polish", "Polish copy", "Polish copy 2", "Polish copy 3"]
     assert r["longCopyLabel"] == [31, 31, " 3"], "a copy's name is made free and cut to 31 characters with room for its number"
+
+
+def test_no_two_sheets_of_a_bid_ever_share_a_name_whichever_way_the_second_arrives(ran):
+    """A rename can give a sheet the name of one the bid does not hold yet. The sheet that arrives later, by hand, by a job type, as
+    an option, or by a preset move, takes a free name ('Epoxy 2'), because two of one name would print twice on the proposal."""
+    u = ran["labelsStayUnique"]
+    assert u["addSheet"]["names"] == [["Polish", "Epoxy"], ["Epoxy", "Epoxy 2"]] and u["addSheet"]["key"] == "Epoxy 2"
+    assert u["addSheet"]["priced"] == ["Epoxy", "Epoxy 2"], "the proposal is given the names, and they differ"
+    assert u["jobType"] == [["Polish", "Epoxy"], ["Epoxy", "Epoxy 2"]]
+    assert u["addOption"]["names"] == [["Polish", "Polish"], ["Copy1", "Seal"], ["Seal", "Seal 2"]] and u["addOption"]["key"] == "Seal 2"
+    assert u["preset"]["names"] == [["Polish", "Polish"], ["Gyp (FR)", "Gyp (FR) 2"], ["Copy1", "Gyp (FR)"]]
+
+
+def test_a_name_that_is_free_is_never_written_so_a_saved_bid_keeps_no_label_key(ran):
+    u = ran["labelsStayUnique"]
+    assert u["free"] == {"addSheet": None, "activate": None, "other": None}
+    assert u["preset"]["plain"] == [["Polish", "Polish"], ["Gyp (FR)", "Gyp (FR)"]] and u["preset"]["plainKey"] is None
+
+
+def test_a_sheet_may_keep_the_name_it_has_even_the_one_the_tool_made_and_no_other_sheet_may_take_it(ran):
+    """A Gyp sheet's own name has a quote mark in it, and so does its copy's ('Gyp (USG 1-8") copy'), a mark a typed name may not
+    have. Pressing Enter on the rename box without a change used to be refused for it."""
+    o = ran["labelsStayUnique"]["ownName"]
+    assert o["label"] == 'Gyp (USG 1-8") copy' and o["same"] is None and o["otherCase"] is None and o["rename"] is True
+    for key in ("typedQuote", "forAnother", "unreadable"):
+        assert "cannot have any of these" in o[key], key
+    assert "31 characters" in o["tooLong"]
 
 
 # ── 7. a Gyp copy's preset ───────────────────────────────────────────────────────────────────────
@@ -609,6 +644,11 @@ BREAKS = {
         PAGE, "      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.sheet, {",
         "      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.tab, {",
         lambda r: _all(r, "page") or r["page"]["gypCopyOnPage"]["priceable"] != [True, True]),
+    "the page prices a Gyp copy's area row on its key": (
+        PAGE, "        { items: ITEMS, tab: gyp.sheet, settings: gyp.section.gyp });",
+        "        { items: ITEMS, tab: gyp.tab, settings: gyp.section.gyp });",
+        lambda r: _all(r, "page") or r["page"]["gypAreaRowOnCopy"]["rows"]["copy"] != r["page"]["gypAreaRowOnCopy"]["rows"]["source"]
+        or r["page"]["gypAreaRowOnCopy"]["shown"]["Copy1"] != {"panel": True, "repaint": True}),
     # --- pick the base ---
     "the prior base stays a base": (
         MODEL, '      var next = want.indexOf(e.tab) >= 0 ? "base" : (isBaseEntry(e) ? "option" : e.kind);',
@@ -687,10 +727,10 @@ BREAKS = {
         MODEL, "    if (why) throw new Error(why);", "    void why;",
         lambda r: r["renaming"]["refused"]["dup"] is None),
     "a name can be any length": (
-        MODEL, '    if (n.length > 31) return "A sheet name can have 31 characters at most.";', "    void n;",
+        MODEL, '    if (n.length > 31 && !keepsItsName(model, n, exceptId)) return "A sheet name can have 31 characters at most.";', "    void n;",
         lambda r: r["renaming"]["all"]["long32"] is None),
     "a name can have the characters a workbook refuses": (
-        MODEL, '    if (/[!:\\\\/?*\\[\\]"]/.test(n)) return', '    if (false) return',
+        MODEL, '    if (/[!:\\\\/?*\\[\\]"]/.test(n) && !keepsItsName(model, n, exceptId)) return', '    if (false) return',
         lambda r: r["renaming"]["all"]["char !"] is None),
     "a name can be another sheet's": (
         MODEL, "    return taken ? '\"' + n + '\" is already the name of a sheet.' : null;", "    return null;",
@@ -704,6 +744,28 @@ BREAKS = {
     "the root's name is not read": (
         MODEL, '    return typeof model.label === "string" && model.label.trim() ? model.label : ROOT_TAB;', "    return ROOT_TAB;",
         lambda r: r["renaming"]["rootRenamed"]["label"] != "Main floor"),
+    "a sheet added under its own name takes a name another sheet has": (
+        MODEL, "    body = Object.assign(body, ownKey ? labelIfTaken(model, sheet) : { sheet: sheet, label: uniqueLabel(model, sheet) });",
+        "    body = Object.assign(body, ownKey ? {} : { sheet: sheet, label: uniqueLabel(model, sheet) });",
+        lambda r: _all(r, "labelsStayUnique") or r["labelsStayUnique"]["addSheet"]["names"][1] != ["Epoxy", "Epoxy 2"]),
+    "an activated section takes a name another sheet has": (
+        MODEL, "Object.assign(newSectionBody(tabId, kind, ctx), labelIfTaken(model, tabId)));", "newSectionBody(tabId, kind, ctx));",
+        lambda r: _all(r, "labelsStayUnique") or r["labelsStayUnique"]["addOption"]["key"] != "Seal 2"
+        or r["labelsStayUnique"]["jobType"][1] != ["Epoxy", "Epoxy 2"]),
+    "a preset move gives the section a name another sheet has": (
+        MODEL, '    if (!(typeof moved.label === "string" && moved.label.trim())) moved = Object.assign(moved, labelIfTaken(out, toTab));',
+        "    void labelIfTaken;",
+        lambda r: _all(r, "labelsStayUnique") or r["labelsStayUnique"]["preset"]["key"] != "Gyp (FR) 2"),
+    "a name that is free is written anyway": (
+        MODEL, "    return free === sheet ? {} : { label: free };", "    return { label: free };",
+        lambda r: _all(r, "labelsStayUnique") or r["labelsStayUnique"]["free"]["addSheet"] is not None),
+    "a sheet cannot keep the name it has": (
+        MODEL, '    if (/[!:\\\\/?*\\[\\]"]/.test(n) && !keepsItsName(model, n, exceptId)) return', '    if (/[!:\\\\/?*\\[\\]"]/.test(n)) return',
+        lambda r: _all(r, "labelsStayUnique") or r["labelsStayUnique"]["ownName"]["same"] is not None),
+    "any sheet may take a name with a bad character": (
+        MODEL, "      return sectionsOf(model).some(function (e) { return e.tab === id && e.label.toLowerCase() === name.toLowerCase(); });",
+        "      return true;",
+        lambda r: _all(r, "labelsStayUnique") or r["labelsStayUnique"]["ownName"]["typedQuote"] is None),
     # --- preset on a copy ---
     "a copy's preset change renames its key": (
         MODEL, "    if (COPY_ID.test(fromTab)) return withSectionPatch(model, fromTab, { sheet: toTab, profile: profile.stamp });", "    void profile;",

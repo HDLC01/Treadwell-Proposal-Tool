@@ -340,7 +340,7 @@
     if (G && G.bucketOfAssembly(asm.id)) {
       var gyp = gypEntryOf(takeoff || M.takeoff);
       if (gyp) return G.priceAreaRow(asm.id, B.num(r.measurement),
-        { items: ITEMS, tab: gyp.tab, settings: gyp.section.gyp });
+        { items: ITEMS, tab: gyp.sheet, settings: gyp.section.gyp });
     }
     return priceAssemblyRow(asm, r, B.num(r.measurement));
   }

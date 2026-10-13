@@ -456,6 +456,40 @@ function renaming() {
   };
 }
 
+// ── 7a. a name stays ONE sheet's over the life of the bid ─────────────────────────────────────
+function labelsStayUnique() {
+  const g1 = 'Gyp (USG 1-8")', fr = "Gyp (FR)";
+  const names = (m) => B.sectionsOf(m).map((e) => [e.tab, e.label]);
+  const labelKey = (m, id) => (has(m.tabs[id], "label") ? m.tabs[id].label : null);
+  const out = {};
+  // the root is renamed to the name of a sheet the bid does not hold yet, and that sheet is then added, by hand and by a job type
+  const renamed = B.renameSection(polish(), "Polish", "Epoxy");
+  const added = B.addSheet(renamed, "Epoxy", {});
+  out.addSheet = { names: names(added.model), priced: snapshot(added.model).priced_tabs.map((t) => t.name), key: labelKey(added.model, "Epoxy") };
+  out.jobType = names(B.sectionsForJob(renamed, "combo", {}));
+  // a copy named "Seal" meets the Seal option
+  const sealed = B.renameSection(B.copySection(polish(), "Polish", {}).model, "Copy1", "Seal");
+  const opt = B.addOption(sealed, "Seal", {});
+  out.addOption = { names: names(opt), key: labelKey(opt, "Seal") };
+  // a Gyp copy named for the preset the base then moves to
+  const gm = B.activateSection(polish(), g1, "base", {});
+  const gc = B.copySection(gm, g1, {});
+  const onFr = B.renameSection(B.moveSectionSheet(gc.model, gc.id, fr), gc.id, fr);
+  const moved = B.moveSectionSheet(onFr, g1, fr);
+  out.preset = { names: names(moved), key: labelKey(moved, fr), plain: names(B.moveSectionSheet(gm, g1, fr)), plainKey: labelKey(B.moveSectionSheet(gm, g1, fr), fr) };
+  // a name that is free is not written: a saved bid keeps no `label` for a sheet filed under its own name
+  out.free = { addSheet: labelKey(B.addSheet(polish(), "Epoxy", {}).model, "Epoxy"),
+               activate: labelKey(B.activateSection(polish(), "Epoxy", "option", {}), "Epoxy"),
+               other: labelKey(B.activateSection(renamed, "Seal", "option", {}), "Seal") };
+  // a sheet may keep the name it has, even the one the tool made (a quote mark in it), and nobody else may type one
+  const own = gc.model.tabs[gc.id].label;
+  out.ownName = { label: own, same: B.validateLabel(gc.model, own, gc.id), otherCase: B.validateLabel(gc.model, own.toUpperCase(), gc.id),
+                  rename: B.renameSection(gc.model, gc.id, own) === gc.model, typedQuote: B.validateLabel(gc.model, 'a"b', gc.id),
+                  forAnother: B.validateLabel(gc.model, own, "Polish"), tooLong: B.validateLabel(gc.model, "a".repeat(32), gc.id),
+                  unreadable: B.validateLabel({ tabs: { Epoxy: {} } }, 'a"b', "Polish") };
+  return out;
+}
+
 // ── 7b. the Gyp preset, on a section filed under its sheet's name and on a copy ───────────────
 function presets() {
   const g1 = 'Gyp (USG 1-8")', fr = "Gyp (FR)";
@@ -718,12 +752,33 @@ async function page() {
   const gb = g.api.sectionBids();
   out.gypCopyOnPage = { tabs: Object.keys(gb), priceable: Object.keys(gb).map((k) => gb[k].priceable !== false),
                         totals: Object.keys(gb).map((k) => gb[k].total), jobType: B.baseOf(g.api.model()).jobType };
+  // ...and a real Gyp AREA row on the copy is priced on the page's per-row path (the Material panel, the repaint of the numbers
+  // and rowPrice itself), which is where the page must say the workbook SHEET and not the Copy<N> key: the first scenario above
+  // never reaches it, because a Polish assembly is not an area row.
+  const GYP_AREA = { id: "wb-gyp-area-soft", name: "Gypsum: soft surfaces", unit: "SF", lines: [] };
+  const am = clone(gm);
+  am.tabs[GYPSHEET].takeoff = [{ assembly_id: GYP_AREA.id, assembly_name: GYP_AREA.name, measurement: 9000, unit: "SF" }];
+  const acopy = B.copySection(am, GYPSHEET, {}).model;
+  const a = P.build({ blob: P.blob({ work_type: "gyp", polish_estimate: clone(acopy), polish_sf: 12500 }), asms: P.ASMS.concat([clone(GYP_AREA)]) });
+  await a.api.init();
+  const attempt = (fn) => { try { return { value: fn() }; } catch (e) { return { threw: String(e && e.message || e) }; } };
+  const rowOn = (id) => a.api.model().tabs[id].takeoff;
+  const rowTotal = (id) => { const r = attempt(() => a.api.rowPrice(rowOn(id)[0], rowOn(id))); return r.threw ? r : r.value && r.value.total; };
+  const rows = { source: rowTotal(GYPSHEET), copy: rowTotal("Copy1") };
+  const shown = {};
+  ["Copy1", GYPSHEET].forEach((id) => {
+    a.api.show(id);
+    const painted = attempt(() => { a.api.renderPanel(); return a.doc.getElementById("panels").innerHTML.length; });
+    const repainted = attempt(() => { a.api.repaintNumbers(); return true; });
+    shown[id] = { panel: painted.threw || (painted.value > 0), repaint: repainted.threw || repainted.value };
+  });
+  out.gypAreaRowOnCopy = { rows: rows, shown: shown };
   return out;
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────────────────────
 (async function () {
-  const sections = { identity, copies, polishCopies, baseBid, combinedBase, refusals, idReuse, baseOfCases, renaming, presets, adding, jobTypes, snapshots };
+  const sections = { identity, copies, polishCopies, baseBid, combinedBase, refusals, idReuse, baseOfCases, renaming, labelsStayUnique, presets, adding, jobTypes, snapshots };
   const done = Object.keys(sections).map((name) => {
     try { return [name, sections[name]()]; } catch (e) { return [name, { error: String(e && e.stack || e) }]; }
   });

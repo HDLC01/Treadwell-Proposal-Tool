@@ -3397,6 +3397,8 @@
     if (has.call(model.tabs, toTab)) throw new Error(JSON.stringify(toTab) + " is already a section of this bid");
     var out = jsonCopy(model);
     var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });
+    // A section with no name of its own is called by its key, and the key is changing: it must not take a name another section has.
+    if (!(typeof moved.label === "string" && moved.label.trim())) moved = Object.assign(moved, labelIfTaken(out, toTab));
     out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).map(function (id) {
       return id === fromTab ? [toTab, moved] : [id, out.tabs[id]];
     })));
@@ -3636,7 +3638,7 @@
     var rec = types.tab(tabKey);
     if (kind === "base" && rec.optionOnly) throw new Error(rec.label + " is an option on a bid, never the base");
     if (isObject(model.tabs) && has.call(model.tabs, tabId)) throw new Error(JSON.stringify(tabId) + " is already a section of this bid");
-    return withSectionPut(model, tabId, newSectionBody(tabId, kind, ctx));
+    return withSectionPut(model, tabId, Object.assign(newSectionBody(tabId, kind, ctx), labelIfTaken(model, tabId)));
   }
 
   /** A BLANK SECTION for a workbook sheet, as activateSection and addSheet make it: its layout, its kind, the profile that
@@ -3800,10 +3802,29 @@
   function validateLabel(model, label, exceptId) {
     var n = String(label == null ? "" : label).trim();
     if (!n) return "Enter a sheet name.";
-    if (n.length > 31) return "A sheet name can have 31 characters at most.";
-    if (/[!:\\/?*\[\]"]/.test(n)) return 'A sheet name cannot have any of these: ! : \\ / ? * [ ] "';
+    if (n.length > 31 && !keepsItsName(model, n, exceptId)) return "A sheet name can have 31 characters at most.";
+    if (/[!:\\/?*\[\]"]/.test(n) && !keepsItsName(model, n, exceptId)) return 'A sheet name cannot have any of these: ! : \\ / ? * [ ] "';
     var taken = sectionsOf(model).some(function (e) { return e.tab !== exceptId && e.label.toLowerCase() === n.toLowerCase(); });
     return taken ? '"' + n + '" is already the name of a sheet.' : null;
+  }
+
+  /** Is `name` the name the sheet `id` already has (any case)? A sheet may keep its name even when it is one the tool made for it that
+   *  a typed name could not be: a Gyp sheet's own name has a quote mark in it, and so does the name of its copy. False for a bid
+   *  whose sections cannot be read. */
+  function keepsItsName(model, name, id) {
+    try {
+      return sectionsOf(model).some(function (e) { return e.tab === id && e.label.toLowerCase() === name.toLowerCase(); });
+    } catch (err) { return false; }
+  }
+
+  /** What a section filed under its own sheet's name needs beside its key, as keys to lay over it: nothing when that name is free (it is
+   *  called by its key, which is the form every saved bid has), else a `label` that is free. A rename can have given the name to another
+   *  section, and two sheets of one name would print twice on the proposal. A bid whose sections cannot be read has nothing to compare
+   *  with and is left as it was. */
+  function labelIfTaken(model, sheet) {
+    var free;
+    try { free = uniqueLabel(model, sheet); } catch (err) { return {}; }
+    return free === sheet ? {} : { label: free };
   }
 
   /** `base` as a sheet name that is free: itself when it is, else with " 2", " 3" and so on, cut to leave room. */
@@ -3886,7 +3907,7 @@
     if (!ownKey) requireRoomForCopy(model);
     var id = ownKey ? sheet : nextCopyId(model);
     var body = newSectionBody(sheet, "option", { rules: c.rules });
-    if (!ownKey) body = Object.assign(body, { sheet: sheet, label: uniqueLabel(model, sheet) });
+    body = Object.assign(body, ownKey ? labelIfTaken(model, sheet) : { sheet: sheet, label: uniqueLabel(model, sheet) });
     var withSection = withSectionPut(model, id, body);
     var seeded = seedNewSections(withSection, Object.assign({}, c, { saved: model }));
     return { model: withSectionPut(withSection, id, seeded.tabs[id]), id: id,
