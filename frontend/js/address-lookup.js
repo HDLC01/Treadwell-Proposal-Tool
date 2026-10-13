@@ -5,7 +5,10 @@
  * types, a free public OSM database (Photon) is queried and the picked row fills Address, City,
  * State and Zip. No API key, nothing hosted by us.
  *
- *   TWAddress.mount({ address, business, city, state, zip })
+ *   TWAddress.mount({ address, business, city, state, zip, onPick })
+ *
+ * `onPick({county, state, place})` is optional: called after a picked row has filled the boxes
+ * (js/county-autofill.js hooks the county remodel tax box onto it).
  *
  * Each value is an element (or null for the optional `business`). The two dropdowns are looked up
  * by the ids the markup has always used: #address-results and #business-results.
@@ -106,6 +109,13 @@
       stateInput.value = stateOf(p);
       zipInput.value   = p.postcode || "";
       ping(cityInput); ping(stateInput); ping(zipInput);
+      // The page's own hook, after the boxes are filled: js/county-autofill.js uses it to fill the
+      // county from this pick. Photon's county rides along as an instant first guess. A hook that
+      // throws must not undo the pick, so it is fenced here.
+      if (typeof els.onPick === "function") {
+        try { els.onPick({ county: p.county || "", state: stateOf(p), place: p.city || "" }); }
+        catch (e) { /* the pick stands */ }
+      }
     }
 
     function renderAddr(features) {

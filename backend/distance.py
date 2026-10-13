@@ -314,3 +314,132 @@ def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "") ->
         _cache_put(ck, None, "not_found", _CACHE_TTL_MISS)
     out["reason"] = reason
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# COUNTY FROM THE ADDRESS (Hanz, 2026-10-13: "shouldn't this autofill based on the address?").
+#
+# The intake's "County remodel tax" box was picked by hand. The Census geocoder that already
+# places the job for the distance lookup also answers "which county, and which city" from the
+# SAME address, through its geographies endpoint (free, no key). Same rules as the distance
+# lookup: server-side, short timeouts, one shared time budget, a 24 h cache, an answer that is
+# ALWAYS a plain dict, and never a guess. A failure is `ok: false` with a reason and the page
+# leaves the box exactly as it was.
+#
+# Two layers are asked for in the one call: Counties, and Incorporated Places. The picker's own
+# list says a county row is the county-only FLOOR rate, correct for unincorporated land, and that
+# a job inside a city's limits needs that city's full rate (js/county-picker.js, reference_tax.py).
+# So the answer carries the city as `place` too and the page prefers a verified city row when the
+# picker has one; Overland Park filled as "Johnson County" would under-tax the bid by 1.5 points.
+# ---------------------------------------------------------------------------------------------
+GEOGRAPHIES_URL = "https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress"
+_county_cache: Dict[str, tuple] = {}   # key -> (expires_at, result dict | None, reason)
+
+
+def _census_geographies_get(addr: str, timeout: httpx.Timeout) -> httpx.Response:
+    params = {"address": addr, "benchmark": "Public_AR_Current", "vintage": "Current_Current",
+              "layers": "Counties,Incorporated Places", "format": "json"}
+    with httpx.Client(timeout=timeout, transport=_TRANSPORT) as c:
+        return c.get(GEOGRAPHIES_URL, params=params, headers={"User-Agent": USER_AGENT})
+
+
+def _county_cache_get(k: str):
+    with _cache_lock:
+        hit = _county_cache.get(k)
+        if hit and hit[0] > time.time():
+            return hit
+        _county_cache.pop(k, None)
+    return None
+
+
+def _county_cache_put(k: str, found: Optional[dict], reason: str, ttl: int) -> None:
+    with _cache_lock:
+        if len(_county_cache) >= _CACHE_MAX:
+            _county_cache.clear()
+        _county_cache[k] = (time.time() + ttl, found, reason)
+
+
+def _first_name(rows: Any, key: str) -> str:
+    """The `key` of the first row of a geographies layer, or "" for anything else."""
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        return ""
+    v = rows[0].get(key)
+    return re.sub(r"\s+", " ", v).strip() if isinstance(v, str) else ""
+
+
+def _geography(addr: str, state: str, zip5: str, deadline: float) -> tuple:
+    """({county, state, fips, place, place_sure} | None, reason). reason is "" on success, else
+    not_found | error. `place_sure` is False when a zip was typed and the Census matched the street in
+    a DIFFERENT zip: the geocoder then found another stretch of the same street name (it put
+    701 N 7th St, Kansas City KS 66101 in Edwardsville, 66111). The county is still right, but the
+    city is not to be trusted, and the page falls back to the city the estimator typed.
+
+    No match, a match in another state than the one typed, or no county layer is "not_found";
+    anything that is not the promised JSON shape is "error"."""
+    timeout = _timeout(deadline)
+    if timeout is None:
+        return None, "error"
+    try:
+        resp = _census_geographies_get(addr, timeout)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("census geographies failed: %s", type(exc).__name__)
+        return None, "error"
+    if resp.status_code != 200:
+        log.warning("census geographies answered %s", resp.status_code)
+        return None, "error"
+    try:
+        matches = ((resp.json() or {}).get("result") or {}).get("addressMatches") or []
+        if not matches:
+            return None, "not_found"
+        m = matches[0] or {}
+        geos = m.get("geographies") or {}
+        counties = geos.get("Counties")
+        county = _first_name(counties, "NAME")
+        fips = _first_name(counties, "GEOID")
+        place_row = _first_name(geos.get("Incorporated Places"), "BASENAME")
+        comps = m.get("addressComponents") or {}
+        got = str(comps.get("state") or "").upper()
+        got_zip = re.sub(r"\D", "", str(comps.get("zip") or ""))[:5]
+    except Exception:  # noqa: BLE001 -- not JSON / not an object: the service is misbehaving
+        return None, "error"
+    if not county:
+        return None, "not_found"
+    if state and got and got != state.upper():
+        return None, "not_found"          # a street the typed town does not have
+    sure = not (zip5 and got_zip and got_zip != zip5)
+    return {"county": county, "state": got or state.upper(), "fips": fips, "place": place_row,
+            "place_sure": sure}, ""
+
+
+def county_lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "") -> Dict[str, Any]:
+    """`{ok, county, state, fips, place, reason, address}`. `county` is the Census name as it
+    stands ("Sedgwick County"); `place` is the incorporated city ("" when the address is in none);
+    `place_sure` is False when the Census matched the street in another zip than the one typed;
+    `reason` is "" on success, else incomplete | not_found | error. Never raises."""
+    addr = clean_address(address, city, state, zip_code)
+    out: Dict[str, Any] = {"ok": False, "county": "", "state": "", "fips": "", "place": "",
+                           "place_sure": True, "reason": "", "address": addr}
+    if not addr:
+        out["reason"] = "incomplete"
+        return out
+    ck = _key(addr)
+    hit = _county_cache_get(ck)
+    if hit:
+        if hit[1]:
+            out.update(hit[1])
+            out["ok"] = True
+        else:
+            out["reason"] = hit[2]
+        return out
+    st = str(state or "").strip()[:2]
+    zip5 = re.sub(r"\D", "", str(zip_code or ""))[:5]
+    found, reason = _geography(addr, st, zip5, _now() + TOTAL_BUDGET_SECONDS)
+    if found:
+        _county_cache_put(ck, found, "", _CACHE_TTL_OK)
+        out.update(found)
+        out["ok"] = True
+        return out
+    if reason == "not_found":
+        _county_cache_put(ck, None, "not_found", _CACHE_TTL_MISS)
+    out["reason"] = reason or "error"
+    return out

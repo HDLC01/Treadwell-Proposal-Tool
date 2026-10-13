@@ -521,12 +521,23 @@
 
   // ── Address autocomplete (keyless — OpenStreetMap via Photon) ──────
   // Moved to js/address-lookup.js so the beta polish intake shares it. Same behaviour.
+  // The county box fills itself from this address (js/county-autofill.js, shared with the polish
+  // intake): a picked suggestion gives an instant first guess, the Census answer confirms it, and a
+  // typed address is looked up when a field is committed. A county picked by hand is never touched.
+  const countyAuto = (county && window.TWCountyAutofill) ? window.TWCountyAutofill.mount({
+    county,
+    address: document.getElementById("address-input"),
+    city:    document.getElementById("city-input"),
+    state:   document.getElementById("state-input"),
+    zip:     document.getElementById("zip-input"),
+  }) : null;
   window.TWAddress.mount({
     address:  document.getElementById("address-input"),
     business: document.getElementById("business-input"),
     city:     document.getElementById("city-input"),
     state:    document.getElementById("state-input"),
     zip:      document.getElementById("zip-input"),
+    onPick:   countyAuto ? countyAuto.onPick : undefined,
   });
 
   form.addEventListener("submit", (e) => {
