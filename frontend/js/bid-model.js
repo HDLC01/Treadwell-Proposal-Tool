@@ -3722,6 +3722,10 @@
     return out;
   }
 
+  /** The maps in price_overrides whose keys are the lines of an option ("option:<tab>" and its tax rows "option:<tab>:..."):
+   *  the words typed over a line, the lines typed above and below it, and the bullets set on them. */
+  var OPTION_LINE_MAPS = ["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"];
+
   /** WHAT AN OPTION LEAVES BEHIND ON THE DRAFT WHEN IT IS TAKEN OFF, as a patch for TW.setState (a NEW object; `state`
    *  is not touched; {} when there is nothing to forget). A Seal option's id is its sheet's name, so it is the SAME id the
    *  next time the option is added, and anything kept under it would print on the new option's line of the customer's
@@ -3749,9 +3753,50 @@
       var next = Object.fromEntries(Object.keys(pov).map(function (key) {
         var map = pov[key];
         var test = key === "options" ? byTab
-          : (["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"].indexOf(key) >= 0 ? byLine : null);
+          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? byLine : null);
         if (test && holds(map, test)) { changed = true; return [key, without(map, test)]; }
         return [key, map];
+      }));
+      if (changed) patch.price_overrides = next;
+    }
+    return patch;
+  }
+
+  /** WHAT THE DRAFT KEPT UNDER ONE SHEET'S ID, MOVED TO ANOTHER ID, as a patch for TW.setState (a NEW object; `state` is not
+   *  touched; {} when there is nothing under either id). For a sheet whose KEY changes while the sheet stays: a Gyp sheet is filed
+   *  under its preset's workbook tab, so changing the preset renames the key (moveSectionSheet), and everything the draft holds
+   *  under the old key (its proposal settings tab_opts, its notes, its own price override, the words typed over its line and the
+   *  lines around it) has to follow, or the sheet comes back with fresh settings and an option the estimator switched off prints.
+   *  The same set optionLeftoverPatch forgets. Whatever the draft held under the NEW id is dropped first: nothing is a section of
+   *  this bid under it (moveSectionSheet refuses that), so it is left over from an earlier sheet of that name. Key order is kept. */
+  function moveSheetDraftPatch(state, fromTab, toTab) {
+    var st = isObject(state) ? state : {};
+    var patch = {};
+    if (fromTab === toTab) return patch;
+    var lineKey = function (id) { return "option:" + id; };
+    var byTab = function (k, id) { return k === id; };
+    var byLine = function (k, id) { return k === lineKey(id) || k.indexOf(lineKey(id) + ":") === 0; };
+    var renameTab = function () { return toTab; };
+    var renameLine = function (k) { return lineKey(toTab) + k.slice(lineKey(fromTab).length); };
+    function move(map, isMine, rename) {
+      if (!isObject(map)) return null;
+      var keys = Object.keys(map);
+      if (!keys.some(function (k) { return isMine(k, fromTab) || isMine(k, toTab); })) return null;
+      return Object.fromEntries(keys.filter(function (k) { return !isMine(k, toTab); })
+        .map(function (k) { return [isMine(k, fromTab) ? rename(k) : k, map[k]]; }));
+    }
+    ["tab_opts", "tab_notes"].forEach(function (key) {
+      var moved = move(st[key], byTab, renameTab);
+      if (moved) patch[key] = moved;
+    });
+    var pov = st.price_overrides;
+    if (isObject(pov)) {
+      var changed = false;
+      var next = Object.fromEntries(Object.keys(pov).map(function (key) {
+        var moved = key === "options" ? move(pov[key], byTab, renameTab)
+          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? move(pov[key], byLine, renameLine) : null);
+        if (moved) { changed = true; return [key, moved]; }
+        return [key, pov[key]];
       }));
       if (changed) patch.price_overrides = next;
     }
@@ -4452,6 +4497,338 @@
         (e.tab === active ? "true" : "false") + '">' + esc(e.label) + esc(kind) + " · " + esc(price) + "</button>";
     }).join("");
   }
+  // ══ THE SHEETS PANEL (Sheets phase 3): what the floating widget on the estimate page draws ═══════════════════
+  //
+  // sectionSwitcherHtml above is the strip the panel replaced on the page. These are PURE, like it: they answer markup and
+  // change nothing, so the page's handlers and a test read the very same text. The page hands in a `view`:
+  //
+  //   open       the sheet on show (a section id)            bids       { sectionId: bid } the page priced
+  //   opts       the draft's tab_opts                        sf         the area a new sheet starts from, or 0
+  //   confirm    { row, ids } a base change waiting for its yes, or null
+  //   armed      the sheet whose Delete was pressed once     renaming   the sheet being renamed, with `draft` and `error`
+  //   descOpen   { sectionId: true } the description boxes that are open
+  //   pick       the "Add a sheet" menu is open              busy       a sheet is being added (the library is being read)
+  //   icon       function (name, size) -> svg markup, or none   sysDesc    function (sectionId) -> what the option prints now
+  //   notice     { at, text }: why a press was refused, drawn under the control that was pressed (at: a section id, or "add")
+  //
+  // EVERY CONTROL CARRIES A data- ATTRIBUTE THE PAGE'S ONE CLICK HANDLER READS: data-section-tab (open it), data-sh-base (the
+  // radio), data-sh-act with data-sh-tab (on, desc, copy, rename, rename-save, rename-cancel, delete, base-yes, base-no,
+  // add-menu, add-close, add with data-sh-sheet), data-sh-mode (the Total / Add or Deduct pair), data-sh-desc and data-sh-name (the
+  // two boxes). data-sh-key names a control so the page can put the caret back on it after a repaint.
+
+  /** THE PAIR A COMBINED BASE WOULD BE, as [epoxyId, polishId], or null when the bid has no Epoxy or no Polish sheet that is part
+   *  of it. The pair the bid already has when it is combined; otherwise the Epoxy and the Polish sheet a job type would take (one
+   *  that already is a base, else the sheet's own, else the first copy). Never throws. */
+  function combinedPair(model) {
+    var entries = readableSections(model);
+    if (entries === null) return null;
+    var bases = entries.filter(isBaseEntry);
+    if (baseTypeOf(entries) === "combo" && bases.length === 2) {
+      return bases.slice().sort(function (a, b) { return a.role === "epoxy" ? -1 : (b.role === "epoxy" ? 1 : 0); })
+        .map(function (e) { return e.tab; });
+    }
+    var live = entries.filter(function (e) { return e.kind !== "off"; });
+    var one = function (role) {
+      var mine = live.filter(function (e) { return e.role === role; });
+      return mine.length ? preferredSection(mine) : null;
+    };
+    var epoxy = one("epoxy"), polish = one("polish");
+    return epoxy && polish ? [epoxy.tab, polish.tab] : null;
+  }
+
+  /** Is this option ON the proposal? tab_opts says so when it is an option and not hidden. An option the draft holds no entry for
+   *  yet is ON: the first save writes its entry that way (composePricingSnapshot). */
+  function optionIsOn(opts, id) {
+    var o = isObject(opts) && has.call(opts, id) && isObject(opts[id]) ? opts[id] : null;
+    return o ? (o.is_option === true && o.show !== false) : true;
+  }
+
+  /** The draft's side of one sheet's proposal settings: a patch for TW.setState that lays `change` over tab_opts[id] (made as
+   *  optionSettings(true) when the draft holds none yet). A NEW object; `state` is not touched. */
+  function tabOptPatch(state, id, change) {
+    var st = isObject(state) ? state : {};
+    var held = isObject(st.tab_opts) ? st.tab_opts : {};
+    var cur = has.call(held, id) && isObject(held[id]) ? held[id] : optionSettings(true);
+    return { tab_opts: Object.assign({}, copyInto({}, held), Object.fromEntries([[id, Object.assign({}, cur, change)]])) };
+  }
+
+  /** A SEAL OPTION IS A TOTAL, NEVER AN ADD OR DEDUCT: a patch for TW.setState that sets tab_opts[id].price_mode back to "total" for
+   *  every option-only sheet (Seal and its copies) whose entry says "deduct", and {} when none does (a NEW object; `state` is not
+   *  touched). The panel offers a Seal sheet no Total / Add or Deduct pair and says it is priced as a total, but the Proposal step's
+   *  own "Price as" box can leave one on Add / Deduct, and the proposal prints what the draft says: the panel would state one
+   *  thing and the customer's document another. Everything else the entry holds is kept. */
+  function optionOnlyTotalPatch(model, state) {
+    var st = isObject(state) ? state : {};
+    if (!isObject(st.tab_opts)) return {};
+    var entries;
+    try { entries = sectionsOf(model); } catch (err) { return {}; }
+    var next = null;
+    entries.forEach(function (e) {
+      var held = has.call(st.tab_opts, e.tab) && isObject(st.tab_opts[e.tab]) ? st.tab_opts[e.tab] : null;
+      if (!held || held.price_mode !== "deduct" || !types.tab(types.tabOfSheet(e.sheet)).optionOnly) return;
+      next = Object.assign({}, next || copyInto({}, st.tab_opts), Object.fromEntries([[e.tab, Object.assign({}, held, { price_mode: "total" })]]));
+    });
+    return next ? { tab_opts: next } : {};
+  }
+
+  var JOB_WORDS = { polish: "Polish", epoxy: "Epoxy", gyp: "Gyp", combo: "Combo" };
+  function jobWord(jobType) { return has.call(JOB_WORDS, jobType) ? JOB_WORDS[jobType] : String(jobType == null ? "" : jobType); }
+  function anWord(w) { return /^[AEIOU]/i.test(w) ? "an" : "a"; }
+  function escHtml(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /** WHAT THE PANEL SAYS ABOUT EACH SHEET, worked out once for the panel and the "Open sheet" line. Every sheet that is part of
+   *  the bid, as { e, base, inBase, opt, optOnly, canBase, price, on, mode, typeLabel, lead, figure, off }; the base bid(s)' ids
+   *  and total; the combined pair and its total. A bid whose sections cannot be read is the root alone, with `unreadable` set. */
+  function sheetsFacts(model, view) {
+    var v = isObject(view) ? view : {};
+    var unreadable = false, entries;
+    try { entries = sectionsOf(model); } catch (err) {
+      unreadable = true;
+      entries = [{ tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+                   layout: "polish", kind: "base", profile: "", role: "polish" }];
+    }
+    var list = entries.filter(function (e) { return e.kind !== "off"; });
+    var baseIds = entries.filter(isBaseEntry).map(function (e) { return e.tab; });
+    var priceOf = function (id) {
+      var b = isObject(v.bids) && has.call(v.bids, id) ? v.bids[id] : null;
+      return b && b.priceable !== false && num(b.total) > 0 ? num(b.total) : null;
+    };
+    var sumOf = function (ids) {
+      var t = 0;
+      for (var i = 0; i < ids.length; i++) { var p = priceOf(ids[i]); if (p === null) return null; t += p; }
+      return ids.length ? t : null;
+    };
+    var baseTotal = sumOf(baseIds);
+    var pair = unreadable ? null : combinedPair(model);
+    var rows = list.map(function (e) {
+      var rec = types.tab(types.tabOfSheet(e.sheet));
+      var base = baseIds.length === 1 && baseIds[0] === e.tab;
+      var inBase = baseIds.length === 2 && baseIds.indexOf(e.tab) >= 0;
+      var opt = !base && !inBase;
+      var optOnly = !!rec.optionOnly;
+      var price = priceOf(e.tab);
+      var on = opt && optionIsOn(v.opts, e.tab);
+      var held = isObject(v.opts) && has.call(v.opts, e.tab) && isObject(v.opts[e.tab]) ? v.opts[e.tab] : {};
+      var mode = !optOnly && held.price_mode === "deduct" ? "deduct" : "total";
+      var lead = "", figure = "", off = false;
+      if (opt) {
+        if (price === null) { lead = "Option, no price yet"; off = true; }
+        else if (!on) { lead = "Not on the proposal"; off = true; }
+        else if (mode === "deduct") {
+          // The proposal's own rule (proposal-review.js): the option's total less the base's, cheaper is a Deduct.
+          if (baseTotal === null) lead = "Option, add or deduct";
+          else {
+            var d = Math.round(price) - Math.round(baseTotal);
+            lead = "Option,";
+            figure = d < 0 ? "Deduct (" + money(-d) + ")" : (d > 0 ? "Add " + money(d) : "No change");
+          }
+        } else lead = "Option, total";
+      }
+      return { e: e, base: base, inBase: inBase, opt: opt, optOnly: optOnly, canBase: !optOnly, price: price, on: on, mode: mode,
+               desc: typeof held.desc === "string" ? held.desc : "", typeLabel: e.role === "seal" ? e.sheet : rec.label,
+               lead: lead, figure: figure, off: off };
+    });
+    return { view: v, unreadable: unreadable, entries: entries, rows: rows, baseIds: baseIds, baseTotal: baseTotal,
+             pair: pair, pairTotal: pair ? sumOf(pair) : null };
+  }
+
+  /** What a base change says before it is made: { title, body } for pressing `ids` (one sheet, or the combined pair). The base
+   *  the bid has now stays ON the proposal as an option, priced as a total, which is said where it is asked. */
+  function baseChangeWords(model, ids) {
+    var entries = sectionsOf(model);
+    var nameOf = function (id) { return entries.filter(function (e) { return e.tab === id; })[0]; };
+    var now = baseOf(model);
+    var combined = ids.length === 2;
+    var next = combined ? "combo" : (nameOf(ids[0]) && types.isJobType(nameOf(ids[0]).role) ? nameOf(ids[0]).role : null);
+    var leaving = entries.filter(function (e) { return isBaseEntry(e) && ids.indexOf(e.tab) < 0; })
+      .map(function (e) { return e.label; });
+    var title = "Make " + (combined ? "Epoxy + Polish (combined)" : nameOf(ids[0]).label) + " the base bid?";
+    var word = jobWord(next);
+    var body = next === now.jobType
+      ? "The job stays " + word + ". "
+      : "The job becomes " + anWord(word) + " " + word + " job and the proposal switches to the " + word + " format. ";
+    if (leaving.length) body += leaving.join(" and ") + (leaving.length > 1 ? " become options" : " becomes an option") +
+      " on the proposal, priced as a total.";
+    return { title: title, body: body.trim() };
+  }
+
+  /** The "Sheets" panel, as the markup inside its <aside>. See the block comment above for `view`. */
+  function sheetsPanelHtml(model, view) {
+    var f = sheetsFacts(model, view);
+    var v = f.view;
+    var ic = typeof v.icon === "function" ? v.icon : function () { return ""; };
+    var key = function (id, what) { return ' data-sh-key="' + escHtml(id + "|" + what) + '"'; };
+    var h = '<div class="sh-head"><span class="sh-grip">' + ic("menu", 14) + '</span>Sheets</div>' +
+      '<p class="sh-hint"><span class="rdot" aria-hidden="true"></span> marks the base bid, which sets the lump sum and the job type. ' +
+      'Click a sheet to open it.</p>';
+    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {
+      h += '<p class="sh-hint sh-excel">Copies print on the proposal. The Excel download does not include them.</p>';
+    }
+    if (f.unreadable) {
+      h += '<div class="sh-warn" role="alert">' + ic("warning", 14) + '<span>This bid\'s other sheets can\'t be read, so only ' +
+        escHtml(rootLabel(model)) + ' shows. ' + escHtml(rootLabel(model)) + ' still prices and saves. Reload to try again.</span></div>';
+    }
+
+    // "Add sheet" is the first thing under the hint, above the list (Hanz, 2026-10-13).
+    h += '<div class="sh-add">';
+    // Why a sheet could not be added, beside the button that was pressed (the page's own alert is above the fold of a long page).
+    if (isObject(v.notice) && v.notice.at === "add") h += noticeHtml(v.notice);
+    if (!v.pick) {
+      h += '<button type="button" class="btn ghost sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
+        ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button>';
+      if (f.unreadable) h += '<p class="sh-cap">Adding a sheet is off until the other sheets can be read.</p>';
+    } else {
+      // One row a type. Gyp's five presets are one product (the Gyp card on the Material step switches between them), so the menu
+      // lists "Gyp" once and adds the first preset; Seal and Seal (+Jnts) are two different sheets and are both listed.
+      var rank = { polish: 0, epoxy: 1, gyp: 2, seal: 3 };
+      var seenGyp = false;
+      var kinds = sheetsToAdd().map(function (s, i) { return { s: s, i: i, role: types.tab(types.tabOfSheet(s)).role }; })
+        .filter(function (k) { if (k.role !== "gyp") return true; var first = !seenGyp; seenGyp = true; return first; })
+        .sort(function (a, b) { return (rank[a.role] - rank[b.role]) || (a.i - b.i); });
+      h += '<div class="sh-pick" role="group" aria-label="Add a sheet"><div class="sh-pick-h">Add a sheet' +
+        '<button type="button" class="x" aria-label="Close" data-sh-act="add-close"' + key("add", "close") + '>' + ic("x", 14) +
+        '</button></div><p class="sh-cap">' + (num(v.sf) > 0 ? "It starts from this bid's " + fmtSf(num(v.sf)) + " SF."
+          : "It starts empty. Measure it on its Material step.") + '</p><ul class="sh-pick-l">';
+      kinds.forEach(function (k) {
+        var only = types.tab(types.tabOfSheet(k.s)).optionOnly;
+        h += '<li><button type="button" class="sh-pick-row" data-sh-act="add" data-sh-sheet="' + escHtml(k.s) + '"' +
+          key("add", k.s) + (v.busy ? " disabled" : "") + '><span>' + escHtml(k.role === "gyp" ? types.tab(types.tabOfSheet(k.s)).label : k.s) + '</span>' +
+          (only ? '<span class="pill">Option only</span>' : "") + '</button></li>';
+      });
+      // A sheet type the tool does not price yet is listed so nobody wonders where it went.
+      types.tabKeys().forEach(function (tk) {
+        var rec = types.tab(tk);
+        if (rec.optionOnly && rec.offered !== true) {
+          h += '<li><button type="button" class="sh-pick-row" disabled><span>' + escHtml(rec.label) +
+            '</span><span class="pill">Coming</span></button></li>';
+        }
+      });
+      h += '</ul></div>';
+    }
+    h += '</div>';
+
+    var rows = [];
+    if (f.pair && !f.unreadable) {
+      var combined = f.baseIds.length === 2;
+      var confirmHere = isObject(v.confirm) && v.confirm.row === "combined";
+      rows.push('<li class="sh" data-sh-row="combined"><div class="sh-top"><span class="sh-slot">' +
+        '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
+        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid"></span>' +
+        '<span class="sh-name static"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
+        (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></div>' +
+        '<div class="sh-meta"><span class="sh-type">COMBINED</span>' + (combined ? '<span class="pill base">Base bid</span>' : "") + '</div>' +
+        (confirmHere ? confirmHtml(model, v) : "") + '</li>');
+    }
+    f.rows.forEach(function (r, i) { rows.push(rowHtml(r, i)); });
+    h += '<ul class="sh-list">' + rows.join("") + '</ul>';
+    if (f.rows.length === 1 && !f.unreadable) {
+      h += '<p class="sh-empty">Add a sheet to price an option. Options never change the lump sum.</p>';
+    }
+    return h;
+
+    /** Why a press was refused, in the model's own words, as a line of the panel (the page sets view.notice = { at, text }). */
+    function noticeHtml(n) {
+      return '<p class="sh-note warn" role="alert" data-sh-notice>' + escHtml(n.text) + '</p>';
+    }
+
+    function confirmHtml(m, view2) {
+      var words;
+      try { words = baseChangeWords(m, view2.confirm.ids); } catch (err) { return ""; }
+      return '<div class="sh-confirm" role="group" aria-label="Confirm the base bid"><b>' + escHtml(words.title) + '</b><p>' +
+        escHtml(words.body) + '</p><div class="sh-btns"><button type="button" class="btn sm" data-sh-act="base-yes"' +
+        key("confirm", "yes") + '>Make it the base</button><button type="button" class="btn ghost sm" data-sh-act="base-no"' +
+        key("confirm", "no") + '>Cancel</button></div></div>';
+    }
+
+    function rowHtml(r, i) {
+      var e = r.e, t = e.tab, open = t === v.open, ren = open && v.renaming === t;
+      var tabAttr = ' data-sh-tab="' + escHtml(t) + '"';
+      var s = '<li class="sh' + (open ? " open" : "") + '" data-sh-row="' + escHtml(t) + '"><div class="sh-top">' +
+        '<span class="sh-slot"' + (r.canBase ? "" : ' title="Seal sheets price as options only, never as the base bid"') + '>' +
+        (r.canBase ? '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="' + escHtml(t) + '"' + key(t, "base") +
+          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid">' : "") + '</span>';
+      if (ren) {
+        s += '<input type="text" class="sh-ren-in" data-sh-name="' + escHtml(t) + '"' + key(t, "name") + ' value="' +
+          escHtml(v.draft) + '" aria-label="Sheet name">';
+      } else {
+        s += '<button type="button" class="sh-name" data-section-tab="' + escHtml(t) + '"' + key(t, "open") + ' aria-current="' +
+          (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) + '</span><span class="sh-price' +
+          (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span></button>';
+      }
+      s += '</div><div class="sh-meta"><span class="sh-type">' + escHtml(String(r.typeLabel).toUpperCase()) + '</span>';
+      if (r.base) s += '<span class="pill base">Base bid</span>';
+      else if (r.inBase) s += '<span class="pill">In the base bid</span>';
+      else s += '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) +
+        (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>';
+      s += '</div>';
+      if (isObject(v.confirm) && v.confirm.row === t) s += confirmHtml(model, v);
+      if (open) {
+        s += '<div class="sh-body">';
+        if (ren) {
+          s += '<div class="sh-btns"><button type="button" class="btn sm" data-sh-act="rename-save"' + tabAttr + key(t, "save") +
+            '>Save name</button><button type="button" class="btn ghost sm" data-sh-act="rename-cancel"' + tabAttr + key(t, "cancel") +
+            '>Cancel</button></div><p class="sh-note">Enter saves, Esc cancels. The name is only a label: nothing is repriced.</p>';
+          if (v.error) s += '<p class="sh-note warn" role="alert" data-sh-error>' + escHtml(v.error) + '</p>';
+        } else {
+          if (r.opt) {
+            s += '<button type="button" class="mw-sw' + (r.on ? " on" : "") + '" role="switch" aria-checked="' + (r.on ? "true" : "false") +
+              '" data-sh-act="on"' + tabAttr + key(t, "on") + '><span class="track"></span>On the proposal as an option</button>' +
+              '<div class="sh-ctl' + (r.on ? "" : " inert") + '">';
+            if (!r.optOnly) {
+              s += '<div class="sh-mode"><span class="sh-lbl">Price as</span><span class="seg" role="radiogroup" aria-label="Price as">' +
+                '<input type="radio" id="sh-m' + i + '-t" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="total"' +
+                key(t, "mode-total") + (r.mode === "total" ? " checked" : "") + '><label for="sh-m' + i + '-t">Total</label>' +
+                '<input type="radio" id="sh-m' + i + '-d" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="deduct"' +
+                key(t, "mode-deduct") + (r.mode === "deduct" ? " checked" : "") + '><label for="sh-m' + i + '-d">Add / Deduct</label>' +
+                '</span></div>';
+            }
+            var dOpen = isObject(v.descOpen) && v.descOpen[t] === true;
+            s += '<div class="sh-desc"><button type="button" class="sh-desc-t" data-sh-act="desc"' + tabAttr + key(t, "desc") +
+              ' aria-expanded="' + (dOpen ? "true" : "false") + '">' + ic("chev-right", 12) + 'Description <span class="opt">optional</span></button>';
+            if (dOpen) {
+              var ph = typeof v.sysDesc === "function" ? v.sysDesc(t) : "";
+              s += '<textarea class="sh-desc-in" rows="3" maxlength="400" data-sh-desc="' + escHtml(t) + '"' + key(t, "desc-box") +
+                ' aria-label="Description" placeholder="' + escHtml(ph) + '">' + escHtml(r.desc) + '</textarea>' +
+                '<p class="sh-cap">Prints as the option line. Left empty, the grey text prints.</p>';
+            } else if (r.desc) {
+              s += '<span class="sh-desc-prev">' + escHtml(r.desc) + '</span>';
+            }
+            s += '</div></div>';
+            if (r.optOnly) s += '<p class="sh-note">Seal sheets are options only. They are priced as a total and can\'t be the base bid.</p>';
+          }
+          var locked = r.base || r.inBase || e.root;
+          var armed = v.armed === t && !locked;
+          s += '<div class="sh-acts"><button type="button" class="kindpick" data-sh-act="copy"' + tabAttr + key(t, "copy") + '>' +
+            ic("copy", 12) + 'Copy</button><button type="button" class="kindpick" data-sh-act="rename"' + tabAttr + key(t, "rename") + '>' +
+            ic("pencil", 12) + 'Rename</button><button type="button" class="kindpick' + (armed ? " armed" : "") +
+            '" data-sh-act="delete"' + tabAttr + key(t, "delete") + (locked ? " disabled" : "") + '>' + ic("trash", 12) +
+            (armed ? "Click again to delete" : "Delete") + '</button></div>';
+          if (r.base) s += '<p class="sh-note">The base bid can\'t be deleted. Make another sheet the base first.</p>';
+          else if (r.inBase) s += '<p class="sh-note">' + escHtml(e.label) + ' is part of the base bid, so it can\'t be deleted. Pick a different base first.</p>';
+          else if (e.root) s += '<p class="sh-note">' + escHtml(e.label) + ' is where this bid starts, so it can\'t be deleted. Switch it off above to keep it off the proposal.</p>';
+          if (armed) s += '<p class="sh-note warn">Deletes ' + escHtml(e.label) + ' and everything typed on it.</p>';
+          if (isObject(v.notice) && v.notice.at === t) s += noticeHtml(v.notice);
+        }
+        s += '</div>';
+      }
+      return s + '</li>';
+    }
+  }
+
+  /** The "Open sheet" line above the step rail: the sheet on show, its type, and whether it is the base or what it is as an
+   *  option. "" for a bid with one sheet, which has nothing to tell apart. */
+  function sheetNowHtml(model, view) {
+    var f = sheetsFacts(model, view);
+    if (f.rows.length < 2) return "";
+    var r = f.rows.filter(function (x) { return x.e.tab === f.view.open; })[0] || f.rows[0];
+    return '<span class="sn-k">Open sheet</span><h2>' + escHtml(r.e.label) + '</h2><span class="sh-type">' +
+      escHtml(String(r.typeLabel).toUpperCase()) + '</span>' +
+      (r.base ? '<span class="pill base">Base bid</span>' : (r.inBase ? '<span class="pill">In the base bid</span>' :
+        '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) + (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>'));
+  }
+
   /** What is stopping this model being priced, in plain words. [] when nothing is.
    *
    *  Written for estimators, not for the console: every line names the row it is about, so the
@@ -4583,6 +4960,11 @@
     validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
+    // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
+    sheetsPanelHtml: sheetsPanelHtml, sheetNowHtml: sheetNowHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
+    optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
+    // A Gyp sheet's key changes with its preset: what the draft kept under the old key follows (see moveSheetDraftPatch).
+    moveSheetDraftPatch: moveSheetDraftPatch,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
     // labor default that already exists. It is exported rather than re-typed there for the reason

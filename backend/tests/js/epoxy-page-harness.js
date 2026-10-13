@@ -59,6 +59,9 @@ function epoxyDraft(extra) {
 const flush = () => new Promise((r) => setImmediate(r));
 const text = (built, id) => built.doc.getElementById(id).textContent;
 const html = (built, id) => built.doc.getElementById(id).innerHTML;
+// THE SHEETS PANEL replaced the strip of section buttons (Sheets phase 3): it lists every sheet that is part of the bid, one
+// data-section-tab each, and is drawn for a bid with one sheet too. Only the "Open sheet" line above the step rail hides for one.
+const panelTabs = (built) => (html(built, "sheets-panel").match(/data-section-tab="([^"]*)"/g) || []);
 
 /** The same job priced without the page: a section built by hand, the engine and the library, nothing of the page in it. */
 function priceByHand(rows, over) {
@@ -97,7 +100,7 @@ async function main() {
   out.opened = {
     tabs: Object.keys(m0.tabs || {}), rootKind: m0.kind, takeoff: clone(m0.takeoff),
     laborIds: m0.labor.map((r) => r.id), laborGuys: m0.labor.map((r) => r.guys),
-    strip: { hidden: !!b.doc.getElementById("sections").hidden },
+    strip: { hidden: !!b.doc.getElementById("sheet-now").hidden, tabs: panelTabs(b) },
     panelHasPatch: html(b, "panels").indexOf("data-epoxy-patch") >= 0,
     panelHasPolishCards: /Dye|Joint filler/.test(html(b, "panels")),
     profile: m0.tabs ? undefined : null, savesOnOpen: b.rec.saves.length,
@@ -184,7 +187,7 @@ async function main() {
   out.polish = {
     tabs: pol.api.model().tabs === undefined ? "none" : Object.keys(pol.api.model().tabs),
     kind: pol.api.model().kind === undefined ? "base" : pol.api.model().kind,
-    strip: !!pol.doc.getElementById("sections").hidden,
+    strip: !!pol.doc.getElementById("sheet-now").hidden,
     bid: pol.api.bid().total, activeBid: pol.api.activeBid().total,
   };
 
@@ -198,9 +201,9 @@ async function main() {
     contingency: 0, fees: 0, totals: {} };
   const two = await open(withSeal);
   out.strip = {
-    html: html(two, "sections"),
-    tabs: (html(two, "sections").match(/data-section-tab="([^"]*)"/g) || []),
-    hidden: !!two.doc.getElementById("sections").hidden,
+    html: html(two, "sheets-panel"),
+    tabs: panelTabs(two),
+    hidden: !!two.doc.getElementById("sheet-now").hidden,
   };
   const sealBtn = two.doc.querySelector('[data-section-tab="Seal"]');
   P.clickEl(two, sealBtn);
@@ -234,7 +237,7 @@ async function main() {
     rootBefore: rootBefore.map((r) => [r.assembly_name, r.measurement]),
     epoxyMeasurement: savedBoth.tabs.Epoxy.takeoff[0].measurement,
     rootLaborIds: savedBoth.labor.map((r) => r.id), epoxyLaborIds: savedBoth.tabs.Epoxy.labor.map((r) => r.id),
-    stripTabs: (html(w, "sections").match(/data-section-tab="([^"]*)"/g) || []),
+    stripTabs: panelTabs(w),
   };
 
   // ── 12. the add pop-up offers the work type's own assemblies and materials first, in a section other than the root ──

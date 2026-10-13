@@ -738,7 +738,7 @@ async function page() {
   const named = B.renameSection(copied.model, "Copy1", "Garage floor");
   const n = P.build({ blob: P.blob({ polish_estimate: clone(named), polish_sf: 12500 }) });
   await n.api.init();
-  out.renamedOnPage = { strip: n.doc.getElementById("sections").innerHTML, maths: n.doc.getElementById("maths").innerHTML };
+  out.renamedOnPage = { strip: n.doc.getElementById("sheets-panel").innerHTML, maths: n.doc.getElementById("maths").innerHTML };
   // a Gyp section that is a copy is read from its `sheet` and not from its Copy<N> key: the page prices both alike
   const GYPSHEET = 'Gyp (USG 1-8")';
   const gm = clone(P.MODEL);
@@ -777,8 +777,54 @@ async function page() {
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────────────────────
+// ── 9. what the draft kept under a sheet's key follows the key when the key changes (a Gyp sheet's preset) ──────────────────────
+function draftMoves() {
+  const g1 = 'Gyp (USG 1-8")', fr = "Gyp (FR)";
+  const line = (id, rest) => "option:" + id + (rest || "");
+  const state = {
+    work_type: "polish",
+    tab_opts: { Other: { keep: 1 }, [g1]: { show_system: true, is_option: false, show: true, price_mode: "deduct", desc: "my gyp words" } },
+    tab_notes: { Other: ["kept"], [g1]: ["a note"] },
+    price_overrides: {
+      options: { Other: { label: "kept" }, [g1]: { label: "mine" } },
+      lines: { [line(g1)]: "legacy words" },
+      lines2: { base: "base words", [line("Other")]: "kept", [line(g1)]: "my line", [line(g1, ":sales_tax")]: "my tax row", [line(g1, " x")]: "not a row of this sheet" },
+      before: { [line(g1)]: ["above"] }, after: { [line(g1, ":remodel")]: ["below"] },
+      line_props: { [line(g1)]: { bullet: "o" } }, before_props: {}, after_props: { [line(g1)]: { bullet: "o" } },
+      single_bid: { [g1]: "not a line map, so it stays" },
+    },
+  };
+  const frozen = deepFreeze(clone(state));
+  const patch = B.moveSheetDraftPatch(frozen, g1, fr);
+  const pov = patch.price_overrides || {};
+  const keysOf = (o) => Object.keys(o || {});
+  // nothing was held under the old key, but a stale entry sits under the new one (left by an earlier sheet of that name)
+  const stale = B.moveSheetDraftPatch({ tab_opts: { [fr]: { is_option: true, stale: true }, Other: { keep: 1 } }, tab_notes: { Other: ["kept"] } }, g1, fr);
+  const sealed = B.activateSection(polish(), "Seal", "option", {});
+  const held = (mode) => ({ tab_opts: { Seal: { is_option: true, show: false, price_mode: mode, desc: "seal words" }, Polish: { price_mode: "deduct" } } });
+  const total = B.optionOnlyTotalPatch(sealed, deepFreeze(held("deduct")));
+  const copyOfSeal = B.copySection(sealed, "Seal", {});
+  const copyHeld = { tab_opts: { Seal: { price_mode: "total" }, Copy1: { is_option: true, price_mode: "deduct" } } };
+  return {
+    keys: keysOf(patch).sort(), tabOpts: keysOf(patch.tab_opts), opt: patch.tab_opts && patch.tab_opts[fr], otherOpt: patch.tab_opts && patch.tab_opts.Other,
+    notes: patch.tab_notes, options: pov.options, lines: pov.lines, lines2: pov.lines2, before: pov.before, after: pov.after,
+    lineProps: pov.line_props, afterProps: pov.after_props, beforeProps: pov.before_props, single: pov.single_bid,
+    inputUntouched: JSON.stringify(frozen) === JSON.stringify(state),
+    stale: { keys: keysOf(stale).sort(), tabOpts: stale.tab_opts, notes: stale.tab_notes },
+    nothing: [B.moveSheetDraftPatch({ tab_opts: { Other: {} } }, g1, fr), B.moveSheetDraftPatch(state, g1, g1), B.moveSheetDraftPatch(undefined, g1, fr),
+              B.moveSheetDraftPatch({ tab_opts: [1], price_overrides: "x" }, g1, fr)],
+    // a Seal option is a total
+    // (the draft handed in is frozen, so a write into it would throw and the section would report an error)
+    sealTotal: { patch: total, polishUntouched: total.tab_opts && total.tab_opts.Polish.price_mode === "deduct" },
+    sealAlready: B.optionOnlyTotalPatch(sealed, held("total")), sealNoEntry: B.optionOnlyTotalPatch(sealed, { tab_opts: { Other: {} } }),
+    sealNoOpts: [B.optionOnlyTotalPatch(sealed, {}), B.optionOnlyTotalPatch(sealed, undefined), B.optionOnlyTotalPatch({ tabs: "nonsense" }, held("deduct"))],
+    sealCopy: B.optionOnlyTotalPatch(copyOfSeal.model, copyHeld),
+    polishDeduct: B.optionOnlyTotalPatch(B.copySection(polish(), "Polish", {}).model, { tab_opts: { Copy1: { price_mode: "deduct" } } }),
+  };
+}
+
 (async function () {
-  const sections = { identity, copies, polishCopies, baseBid, combinedBase, refusals, idReuse, baseOfCases, renaming, labelsStayUnique, presets, adding, jobTypes, snapshots };
+  const sections = { identity, copies, polishCopies, baseBid, combinedBase, refusals, idReuse, baseOfCases, renaming, labelsStayUnique, presets, draftMoves, adding, jobTypes, snapshots };
   const done = Object.keys(sections).map((name) => {
     try { return [name, sections[name]()]; } catch (e) { return [name, { error: String(e && e.stack || e) }]; }
   });

@@ -60,7 +60,7 @@ def ran():
 
 
 SECTIONS = ["identity", "copies", "polishCopies", "baseBid", "combinedBase", "refusals", "idReuse", "baseOfCases", "renaming",
-            "labelsStayUnique", "presets", "adding", "jobTypes", "snapshots", "page"]
+            "labelsStayUnique", "presets", "draftMoves", "adding", "jobTypes", "snapshots", "page"]
 
 
 @pytest.mark.parametrize("section", SECTIONS)
@@ -215,7 +215,7 @@ def test_the_page_prices_a_copy_of_the_polish_sheet_as_the_root_dye_included_and
     assert s["baseTabId"] == "Polish" and s["tabOpts"] == {"Copy1": OFF_THE_PROPOSAL}, "the draft's own entry is kept"
     assert s["lump"] == s["rootTotal"], "a copy is never in the lump sum"
     r = p["renamedOnPage"]
-    assert "Garage floor (option)" in r["strip"] and "Garage floor" in r["maths"]
+    assert '<span class="sh-nm">Garage floor</span>' in r["strip"] and "Garage floor" in r["maths"], "the Sheets panel names it, and so does the bar"
 
 
 def test_the_page_charges_a_root_that_is_an_option_its_own_travel_and_the_base_the_jobs(ran):
@@ -447,6 +447,61 @@ def test_changing_the_preset_of_a_gyp_copy_rewrites_its_sheet_and_keeps_its_key(
     assert p["priceOnCopy"] == [True, True]
     assert p["truckload"][0] == 448 and p["truckload"][1][0] != p["truckload"][1][1], \
         "the copy is priced on its own sheet's truckload, not on a sheet its key names"
+
+
+# ── 7b. what the draft kept under a Gyp sheet's key follows the key when the preset changes ──────
+def test_what_the_draft_kept_under_a_sheets_key_moves_with_the_key_in_place(ran):
+    """THE DEFECT (Sheets phase 3 review). A Gyp sheet is filed under its preset's workbook tab, so changing the preset renames its
+    key, and nothing re-keyed what the draft held under the old one: the sheet came back with fresh settings (an option the estimator had
+    switched OFF printed on the customer's proposal) and the old entry stayed behind. B.moveSheetDraftPatch carries the same set
+    optionLeftoverPatch forgets: tab_opts, tab_notes, price_overrides.options and the line maps under "option:<tab>"."""
+    d = ran["draftMoves"]
+    assert d["keys"] == ["price_overrides", "tab_notes", "tab_opts"]
+    assert d["tabOpts"] == ["Other", "Gyp (FR)"], "the sheet's own entry took the new key where it stood, and the old key is gone"
+    assert d["opt"] == {"show_system": True, "is_option": False, "show": True, "price_mode": "deduct", "desc": "my gyp words"}, (
+        "OFF stays OFF, and the words typed on it stay")
+    assert d["otherOpt"] == {"keep": 1}
+    assert d["notes"] == {"Other": ["kept"], "Gyp (FR)": ["a note"]}
+    assert d["options"] == {"Other": {"label": "kept"}, "Gyp (FR)": {"label": "mine"}}
+
+
+def test_the_words_typed_over_an_options_line_and_around_it_follow_the_key_and_a_lookalike_does_not(ran):
+    d = ran["draftMoves"]
+    assert d["lines"] == {"option:Gyp (FR)": "legacy words"}
+    assert d["lines2"] == {"base": "base words", "option:Other": "kept", "option:Gyp (FR)": "my line",
+                           "option:Gyp (FR):sales_tax": "my tax row", 'option:Gyp (USG 1-8") x': "not a row of this sheet"}, (
+        "its tax rows follow too; another sheet's, the base line, and a key that only STARTS with the old id are not its own")
+    assert d["before"] == {"option:Gyp (FR)": ["above"]} and d["after"] == {"option:Gyp (FR):remodel": ["below"]}
+    assert d["lineProps"] == {"option:Gyp (FR)": {"bullet": "o"}} and d["afterProps"] == {"option:Gyp (FR)": {"bullet": "o"}}
+    assert d["beforeProps"] == {}
+    assert d["single"] == {'Gyp (USG 1-8")': "not a line map, so it stays"}, "a map that is not keyed by option lines is left alone"
+    assert d["inputUntouched"] is True
+
+
+def test_what_an_earlier_sheet_of_the_new_name_left_behind_is_dropped_and_nothing_to_move_is_nothing(ran):
+    d = ran["draftMoves"]
+    assert d["stale"] == {"keys": ["tab_opts"], "tabOpts": {"Other": {"keep": 1}}}, (
+        "a stale entry under the new id would print on the moved sheet's line; another sheet's is kept")
+    assert d["nothing"] == [{}, {}, {}, {}], "no entry under either id, the same id twice, no draft, a draft of the wrong shapes"
+
+
+# ── 7c. a Seal option is a total ─────────────────────────────────────────────────────────────────
+def test_a_seal_option_left_on_add_or_deduct_by_the_proposal_step_is_put_back_to_a_total(ran):
+    """The panel offers a Seal sheet no Total / Add or Deduct pair and says it is priced as a total, but the Proposal step's own
+    'Price as' box can leave one on Add / Deduct and the proposal prints what the draft says. Only the mode changes."""
+    d = ran["draftMoves"]
+    assert d["sealTotal"]["patch"] == {"tab_opts": {"Seal": {"is_option": True, "show": False, "price_mode": "total", "desc": "seal words"},
+                                                    "Polish": {"price_mode": "deduct"}}}, "its words and its hidden state are kept"
+    assert d["sealTotal"]["polishUntouched"] is True, "a Polish sheet is still free to be an Add / Deduct"
+    assert d["sealCopy"] == {"tab_opts": {"Seal": {"price_mode": "total"}, "Copy1": {"is_option": True, "price_mode": "total"}}}, (
+        "a copy of a Seal sheet is a Seal sheet")
+    assert d["polishDeduct"] == {}
+
+
+def test_a_draft_with_no_seal_on_add_or_deduct_writes_nothing(ran):
+    d = ran["draftMoves"]
+    assert d["sealAlready"] == {} and d["sealNoEntry"] == {} and d["sealNoOpts"] == [{}, {}, {}], (
+        "so a plain reopen of any bid that has none still writes nothing")
 
 
 # ── 8. adding a fresh sheet ──────────────────────────────────────────────────────────────────────
@@ -716,6 +771,28 @@ BREAKS = {
     "a new sheet inherits what the draft kept under its id": (
         MODEL, "    var gone = optionLeftoverPatch(st, id);", "    var gone = {};",
         lambda r: r["idReuse"]["staleScrubbed"]["words"] is not True),
+    "a preset change leaves the draft's settings under the old key": (
+        MODEL, "      var moved = move(st[key], byTab, renameTab);", "      var moved = null;",
+        lambda r: r["draftMoves"]["tabOpts"] != ["Other", "Gyp (FR)"]),
+    "a preset change leaves the words typed over the line under the old key": (
+        MODEL, "          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? move(pov[key], byLine, renameLine) : null);", "          : null;",
+        lambda r: r["draftMoves"]["lines2"].get("option:Gyp (FR)") != "my line"),
+    "a preset change moves a key that only starts with the old id": (
+        MODEL, '    var byLine = function (k, id) { return k === lineKey(id) || k.indexOf(lineKey(id) + ":") === 0; };',
+        '    var byLine = function (k, id) { return k.indexOf(lineKey(id)) === 0; };',
+        lambda r: 'option:Gyp (USG 1-8") x' not in r["draftMoves"]["lines2"]),
+    "a preset change keeps what an earlier sheet of the new name left": (
+        MODEL, "      return Object.fromEntries(keys.filter(function (k) { return !isMine(k, toTab); })",
+        "      return Object.fromEntries(keys",
+        lambda r: r["draftMoves"]["stale"]["tabOpts"] != {"Other": {"keep": 1}}),
+    "a Seal option can stay on add or deduct": (
+        MODEL, '      if (!held || held.price_mode !== "deduct" || !types.tab(types.tabOfSheet(e.sheet)).optionOnly) return;',
+        "      return;",
+        lambda r: r["draftMoves"]["sealTotal"]["patch"] != {"tab_opts": {"Seal": {"is_option": True, "show": False, "price_mode": "total", "desc": "seal words"}, "Polish": {"price_mode": "deduct"}}}),
+    "a Polish option is forced to a total": (
+        MODEL, '      if (!held || held.price_mode !== "deduct" || !types.tab(types.tabOfSheet(e.sheet)).optionOnly) return;',
+        '      if (!held || held.price_mode !== "deduct") return;',
+        lambda r: r["draftMoves"]["polishDeduct"] != {}),
     "the smallest free id is not handed out": (
         MODEL, '    while (used.has("Copy" + i)) i++;', "    i = used.size + 1;",
         lambda r: r["idReuse"]["order"]["next"] != "Copy2"),

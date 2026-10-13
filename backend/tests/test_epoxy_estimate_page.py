@@ -47,7 +47,8 @@ def ran(tmp_path_factory):
 def test_a_new_epoxy_job_opens_as_an_epoxy_section_with_the_polish_root_off(ran):
     o = ran["opened"]
     assert o["tabs"] == ["Epoxy"] and o["rootKind"] == "off"
-    assert o["strip"]["hidden"] is True, "the bid is one section, so there is no strip to switch with"
+    assert o["strip"]["hidden"] is True, "the bid is one sheet, so the Open sheet line has nothing to tell apart"
+    assert o["strip"]["tabs"] == ['data-section-tab="Epoxy"'], "the Sheets panel is drawn for one sheet too, and lists only Epoxy"
     assert o["savesOnOpen"] == 0, "opening a job writes nothing until somebody edits it"
 
 
@@ -259,9 +260,9 @@ BREAKS = {
     "a cove row is priced like a library assembly": (
         "js/polish-estimate.js", "    if (E.coveVariant(asm.id)) {", "    if (false) {",
         lambda r: abs(r["cove"]["row"] - r["cove"]["direct"]) > 1),
-    "the strip lists the off root": (
-        "js/polish-estimate.js", "    el.innerHTML = B.sectionSwitcherHtml(ROOT, activeTab, allBids(), { skipOff: true });",
-        "    el.innerHTML = B.sectionSwitcherHtml(ROOT, activeTab, allBids());",
+    "the panel lists the off root": (
+        "js/bid-model.js", '    var list = entries.filter(function (e) { return e.kind !== "off"; });',
+        "    var list = entries.slice();",
         lambda r: "Polish" in "".join(r["strip"]["tabs"])),
     "the work type's own rows are not offered first": (
         "js/polish-estimate.js", "      if (layout !== null && (row.default_work_types || []).indexOf(layout) >= 0) entry.first = true;",

@@ -116,8 +116,17 @@ const crewOn = (w, id, guys, days) => {
   P.typeInto(w, '[data-lab="' + at + '"][data-k="days"]', days);
 };
 const tabsIn = (h) => (h.match(/data-section-tab="([^"]*)"/g) || []).map((s) => /"([^"]*)"/.exec(s)[1]);
-const addButtons = (h) => (h.match(/data-add-option="([^"]*)"/g) || []).map((s) => /"([^"]*)"/.exec(s)[1]);
-const removeButtons = (h) => (h.match(/data-remove-option="([^"]*)"/g) || []).map((s) => /"([^"]*)"/.exec(s)[1]);
+// THE SHEETS PANEL (Sheets phase 3) replaced the strip of section buttons and the "+ Add option" bar. The choices in its "Add sheet" menu
+// carry data-sh-sheet (every sheet the tool prices, not only the options), a sheet's own Delete button is on its row once that row is
+// open, and the panel is drawn on every bid, so what hides for one sheet is the "Open sheet" line.
+const addButtons = (h) => (h.match(/data-sh-sheet="([^"]*)"/g) || []).map((s) => /"([^"]*)"/.exec(s)[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+const deleteSel = (tab) => '[data-sh-act="delete"][data-sh-tab="' + tab + '"]';
+const openSheet = (b, tab) => P.clickEl(b, P.need(b, '[data-section-tab="' + tab + '"]'));
+const openTab = (h) => ((/data-section-tab="([^"]*)"[^>]*aria-current="true"/.exec(h)) || [])[1] || null;
+const pressAdd = (b, sheet) => {
+  P.clickEl(b, P.need(b, '[data-sh-act="add-menu"]'));
+  return P.clickEl(b, P.need(b, '[data-sh-act="add"][data-sh-sheet="' + sheet + '"]'));
+};
 
 async function main() {
   const out = {};
@@ -135,9 +144,9 @@ async function main() {
   const savesBeforeOption = b.rec.saves.length;
   const baseLump = api.bid().total;
   out.fresh = {
-    stripHidden: !!b.doc.getElementById("sections").hidden, barHidden: !!b.doc.getElementById("option-bar").hidden,
-    barButtons: b.doc.getElementById("option-bar").querySelectorAll("button").map((e) => e.textContent),
-    choicesShown: addButtons(html(b, "option-bar")), baseLump: baseLump,
+    stripHidden: !!b.doc.getElementById("sheet-now").hidden, rows: tabsIn(html(b, "sheets-panel")),
+    addButton: P.need(b, '[data-sh-act="add-menu"]').textContent,
+    choicesShown: addButtons(html(b, "sheets-panel")), baseLump: baseLump,
     noTabsKey: api.model().tabs === undefined,
   };
   // the same page opened and left alone writes nothing
@@ -145,9 +154,13 @@ async function main() {
   out.fresh.savesOnOpen = quiet.rec.saves.length; out.fresh.armedOnOpen = quiet.clock.armed();
 
   // ── 2. "+ Add option" offers the two Seal sheets; choosing one adds a seeded option section ──
-  P.clickEl(b, P.need(b, "[data-add-option-menu]"));
-  out.menu = { choices: addButtons(html(b, "option-bar")), toggleLabel: /data-add-option-menu[^>]*>([^<]*)</.exec(html(b, "option-bar"))[1] };
-  P.clickEl(b, P.need(b, '[data-add-option="Seal"]'));
+  P.clickEl(b, P.need(b, '[data-sh-act="add-menu"]'));
+  const menuHtml = html(b, "sheets-panel");
+  out.menu = { choices: addButtons(menuHtml), hasClose: /aria-label="Close" data-sh-act="add-close"/.test(menuHtml),
+               onlyOptionsAreTaggedSo: (menuHtml.match(/<span class="pill">Option only<\/span>/g) || []).length,
+               levelingComing: /disabled><span>Leveling<\/span><span class="pill">Coming<\/span>/.test(menuHtml),
+               gypLabel: (/data-sh-sheet="Gyp[^"]*"[^>]*><span>([^<]*)</.exec(menuHtml) || [])[1] };
+  P.clickEl(b, P.need(b, '[data-sh-act="add"][data-sh-sheet="Seal"]'));
   await settle();
   const m1 = api.model();
   const tabs1 = b.api.model();
@@ -158,11 +171,10 @@ async function main() {
     snapshot: sealSec.rates && sealSec.rates.profile, pooled: sealSec.pool_packs === true,
     takeoff: sealSec.takeoff.map((r) => [r.assembly_id, r.measurement, r.unit]),
     laborIds: sealSec.labor.map((r) => r.id), noTravelRow: !sealSec.labor.some((r) => r.id === "travel"),
-    strip: tabsIn(html(b, "sections")), stripHidden: !!b.doc.getElementById("sections").hidden,
-    activeIsSeal: /aria-current="true">Seal/.test(html(b, "sections")),
-    stripLabel: b.doc.getElementById("sections").querySelectorAll("button").map((e) => e.textContent).join(" | "),
-    barAfter: { remove: removeButtons(html(b, "option-bar")), choices: addButtons(html(b, "option-bar")),
-                menuClosed: /aria-expanded="false"/.test(html(b, "option-bar")) },
+    strip: tabsIn(html(b, "sheets-panel")), stripHidden: !!b.doc.getElementById("sheet-now").hidden,
+    activeIsSeal: openTab(html(b, "sheets-panel")) === "Seal",
+    stripLabel: text(b, "sheet-now"),
+    barAfter: { choices: addButtons(html(b, "sheets-panel")), menuClosed: /data-sh-act="add-menu"[^>]*aria-expanded="false"/.test(html(b, "sheets-panel")) },
     saved: b.clock.armed() > 0,
   };
   // the page now shows the Seal section; its panels are the ordinary takeoff and labor panels
@@ -248,15 +260,21 @@ async function main() {
 
   // ── 7. the second Seal sheet, added beside the first ──
   api.show("Polish");
-  P.clickEl(b, P.need(b, "[data-add-option-menu]"));
-  out.second = { choicesBefore: addButtons(html(b, "option-bar")) };
-  P.clickEl(b, P.need(b, '[data-add-option="Seal (+Jnts)"]'));
+  P.clickEl(b, P.need(b, '[data-sh-act="add-menu"]'));
+  out.second = { choicesBefore: addButtons(html(b, "sheets-panel")) };
+  P.clickEl(b, P.need(b, '[data-sh-act="add"][data-sh-sheet="Seal (+Jnts)"]'));
   await settle();
+  out.second.alert = text(b, "alert");
   api.show("Polish");
   const m2 = api.model();
   out.second.tabs = Object.keys(m2.tabs);
-  out.second.jntsTakeoff = m2.tabs["Seal (+Jnts)"].takeoff.map((r) => [r.assembly_id, r.measurement]);
-  out.second.bar = { remove: removeButtons(html(b, "option-bar")), addMenu: /data-add-option-menu/.test(html(b, "option-bar")) };
+  // The second Seal-type sheet is filed under a Copy<N> id, with its sheet and its name in its own keys (the bid already has a section of
+  // the Seal tab, so the sheet's own name is not its key): everything the draft keeps for it is keyed by that id.
+  const jntsId = Object.keys(m2.tabs).filter((k) => k !== "Seal")[0];
+  out.second.id = jntsId;
+  out.second.sheet = m2.tabs[jntsId].sheet; out.second.label = m2.tabs[jntsId].label;
+  out.second.jntsTakeoff = m2.tabs[jntsId].takeoff.map((r) => [r.assembly_id, r.measurement]);
+  out.second.bar = { rows: tabsIn(html(b, "sheets-panel")), addStillThere: /data-sh-act="add-menu"/.test(html(b, "sheets-panel")) };
   b.clock.fire();
   const savedTwo = last(b.rec.saves);
   out.second.pricedTabs = (savedTwo.priced_tabs || []).map((t) => [t.id, t.kind, t.system_desc]);
@@ -264,24 +282,26 @@ async function main() {
 
   // ── 8. taking an option off: the first press arms, the second removes; the proposal side forgets it ──
   // The Proposal step has left things under both options' ids, and under a manual line that is neither's.
-  b.store.blob.tab_notes = { Seal: ["Old manual note from the removed option"], "Seal (+Jnts)": ["The other option's note"] };
+  b.store.blob.tab_notes = Object.fromEntries([["Seal", ["Old manual note from the removed option"]], [jntsId, ["The other option's note"]]]);
   b.store.blob.price_overrides = {
-    options: { Seal: { label: "Mine", amount: 9999 }, "Seal (+Jnts)": { label: "Other", amount: 1 } },
+    options: Object.fromEntries([["Seal", { label: "Mine", amount: 9999 }], [jntsId, { label: "Other", amount: 1 }]]),
     lines: { "option:Seal": "old words" },
-    lines2: { "option:Seal": "$9,999 – Sealed Concrete, my old words", "option:Seal:sales_tax": "old tax words",
-              "option:Seal (+Jnts)": "the other line", "manual:0": "a manual line" },
-    before: { "option:Seal": ["typed above"], "option:Seal (+Jnts)": ["typed above the other"] },
+    lines2: Object.fromEntries([["option:Seal", "$9,999 – Sealed Concrete, my old words"], ["option:Seal:sales_tax", "old tax words"],
+              ["option:" + jntsId, "the other line"], ["manual:0", "a manual line"]]),
+    before: Object.fromEntries([["option:Seal", ["typed above"]], ["option:" + jntsId, ["typed above the other"]]]),
     after: { "option:Seal:total": ["typed below"] },
     line_props: { "option:Seal": { bullet: true } }, before_props: {}, after_props: {},
   };
-  P.clickEl(b, P.need(b, '[data-remove-option="Seal"]'));
-  out.remove = { armedLabel: /data-remove-option="Seal">([^<]*)</.exec(html(b, "option-bar"))[1], stillThere: Object.keys(api.model().tabs) };
-  // a click somewhere else puts it back
-  P.clickEl(b, P.need(b, '[data-section-tab="Polish"]'));
-  out.remove.disarmedLabel = /data-remove-option="Seal">([^<]*)</.exec(html(b, "option-bar"))[1];
-  out.remove.nothingToOffer = !/data-add-option-menu/.test(html(b, "option-bar"));
-  P.clickEl(b, P.need(b, '[data-remove-option="Seal"]'));
-  P.clickEl(b, P.need(b, '[data-remove-option="Seal"]'));
+  // A sheet's Delete is on its own row once that row is open.
+  openSheet(b, "Seal");
+  P.clickEl(b, P.need(b, deleteSel("Seal")));
+  out.remove = { armedLabel: P.need(b, deleteSel("Seal")).textContent, stillThere: Object.keys(api.model().tabs) };
+  // a click anywhere else on the panel puts it back
+  P.clickEl(b, P.need(b, '[data-sh-act="desc"][data-sh-tab="Seal"]'));
+  out.remove.disarmedLabel = P.need(b, deleteSel("Seal")).textContent;
+  out.remove.addStillOffered = /data-sh-act="add-menu"/.test(html(b, "sheets-panel"));
+  P.clickEl(b, P.need(b, deleteSel("Seal")));
+  P.clickEl(b, P.need(b, deleteSel("Seal")));
   b.clock.fire();
   out.remove.leftovers = { tabNotes: clone(b.store.blob.tab_notes), price: clone(b.store.blob.price_overrides) };
   const savedRm = last(b.rec.saves);
@@ -289,17 +309,18 @@ async function main() {
   out.remove.after = {
     tabs: Object.keys(mr.tabs), pricedTabs: (savedRm.priced_tabs || []).map((t) => t.id),
     tabOptsKeys: Object.keys(savedRm.tab_opts || {}), lump: savedRm.proposal_lump_sum, baseLump: polishByHand(mr).total,
-    activeIsJnts: /aria-current="true">Seal \(\+Jnts\)/.test(html(b, "sections")) || /aria-current="true">Polish/.test(html(b, "sections")),
+    openAfter: openTab(html(b, "sheets-panel")), rows: tabsIn(html(b, "sheets-panel")),
   };
-  // and the last one, then the strip hides itself again and the price snapshot still covers the base
-  P.clickEl(b, P.need(b, '[data-remove-option="Seal (+Jnts)"]'));
-  P.clickEl(b, P.need(b, '[data-remove-option="Seal (+Jnts)"]'));
+  // and the last one, then the Open sheet line hides itself again and the price snapshot still covers the base
+  openSheet(b, jntsId);
+  P.clickEl(b, P.need(b, deleteSel(jntsId)));
+  P.clickEl(b, P.need(b, deleteSel(jntsId)));
   b.clock.fire();
   const savedNone = last(b.rec.saves);
   out.remove.none = {
-    stripHidden: !!b.doc.getElementById("sections").hidden, tabsKey: clone(api.model().tabs), pricedTabs: (savedNone.priced_tabs || []).map((t) => [t.id, t.kind]),
-    lump: savedNone.proposal_lump_sum, offered: addButtons(html(b, "option-bar")).length,
-    menuOffers: /data-add-option-menu/.test(html(b, "option-bar")), tabOptsKeys: Object.keys(savedNone.tab_opts || {}),
+    stripHidden: !!b.doc.getElementById("sheet-now").hidden, tabsKey: clone(api.model().tabs), pricedTabs: (savedNone.priced_tabs || []).map((t) => [t.id, t.kind]),
+    lump: savedNone.proposal_lump_sum, rows: tabsIn(html(b, "sheets-panel")),
+    addOffered: /data-sh-act="add-menu"/.test(html(b, "sheets-panel")), tabOptsKeys: Object.keys(savedNone.tab_opts || {}),
     bar: text(b, "bid-total"),
   };
 
@@ -309,8 +330,8 @@ async function main() {
   const withOpt = clone(saved);
   const wb = await open(P.blob(Object.assign({ work_type: "polish", polish_sf: 10000 }, { polish_estimate: clone(withOpt.polish_estimate), tab_opts: clone(withOpt.tab_opts) })));
   out.reopenedWithOption = {
-    saves: wb.rec.saves.length, armed: wb.clock.armed(), strip: tabsIn(html(wb, "sections")),
-    remove: removeButtons(html(wb, "option-bar")), bar: text(wb, "bid-total"),
+    saves: wb.rec.saves.length, armed: wb.clock.armed(), strip: tabsIn(html(wb, "sheets-panel")),
+    bar: text(wb, "bid-total"),
     handBar: money(polishByHand(clone(withOpt.polish_estimate)).total),
   };
 
@@ -320,8 +341,7 @@ async function main() {
   epx.api.go(0);
   epx.api.setAssembly(0, asmNamed("MACRO Flake Single Broadcast").name);
   epx.api.changed(true);
-  P.clickEl(epx, P.need(epx, "[data-add-option-menu]"));
-  P.clickEl(epx, P.need(epx, '[data-add-option="Seal (+Jnts)"]'));
+  pressAdd(epx, "Seal (+Jnts)");
   await settle();
   epx.api.show("Epoxy");
   const me = epx.api.model();
@@ -334,14 +354,12 @@ async function main() {
   // ── 11. a renovation pays the renovation patch ──
   const rn = await open(polishDraft({ cell_values: { "Polish!B10": "Reno" } }));
   rn.api.go(0); rn.api.setAssembly(0, polishAsm.name); rn.api.changed(true);
-  P.clickEl(rn, P.need(rn, "[data-add-option-menu]"));
-  P.clickEl(rn, P.need(rn, '[data-add-option="Seal"]'));
+  pressAdd(rn, "Seal");
   await settle();
   rn.api.show("Seal");
   const nw = await open(polishDraft({ cell_values: { "Polish!B10": "New" } }));
   nw.api.go(0); nw.api.setAssembly(0, polishAsm.name); nw.api.changed(true);
-  P.clickEl(nw, P.need(nw, "[data-add-option-menu]"));
-  P.clickEl(nw, P.need(nw, '[data-add-option="Seal"]'));
+  pressAdd(nw, "Seal");
   await settle();
   nw.api.show("Seal");
   const sf10k = 10000;
@@ -355,8 +373,7 @@ async function main() {
 
   // ── 12. the library cannot be read: the option is still added, with the shipped defaults and a reason nowhere hidden ──
   const bare = await open(polishDraft(), { items: [], asms: [], labor: [], laborCalc: [] });
-  P.clickEl(bare, P.need(bare, "[data-add-option-menu]"));
-  P.clickEl(bare, P.need(bare, '[data-add-option="Seal"]'));
+  pressAdd(bare, "Seal");
   await settle();
   out.bare = { tabs: Object.keys(bare.api.model().tabs || {}), alert: text(bare, "alert") };
 

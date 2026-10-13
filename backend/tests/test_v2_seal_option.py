@@ -144,15 +144,22 @@ def test_each_seal_sheet_is_named_in_the_live_estimates_words_and_the_joints_one
 
 
 # ── 2. the page ──────────────────────────────────────────────────────────────────────────────────
-def test_a_bid_with_no_option_hides_its_strip_offers_add_option_and_writes_nothing_by_being_opened(page):
+def test_a_bid_with_no_option_draws_one_row_offers_add_sheet_and_writes_nothing_by_being_opened(page):
+    """The Sheets panel is on every bid (Sheets phase 3): a bid with one sheet has its one row and "Add sheet", and the Open sheet
+    line, which would have nothing to tell apart, hides itself."""
     f = page["fresh"]
-    assert f["stripHidden"] is True and f["barHidden"] is False and f["barButtons"] == ["+ Add option"]
+    assert f["stripHidden"] is True and f["rows"] == ["Polish"] and f["addButton"] == "Add sheet"
     assert f["choicesShown"] == [] and f["noTabsKey"] is True
     assert f["savesOnOpen"] == 0 and f["armedOnOpen"] == 0
 
 
-def test_add_option_opens_a_menu_of_the_two_seal_sheets(page):
-    assert page["menu"] == {"choices": ["Seal", "Seal (+Jnts)"], "toggleLabel": "Cancel"}
+def test_add_sheet_opens_a_menu_of_every_sheet_the_tool_prices_and_says_which_are_options_only(page):
+    """Seal and Seal (+Jnts) are two of five rows: Polish, Epoxy and Gyp can be added too, and Leveling is listed as coming so nobody
+    wonders where it went. Gyp is one row, which adds the first of its five presets: the Gyp card on the Material step switches between
+    them, as it does on a new Gyp job."""
+    m = page["menu"]
+    assert m["choices"] == ["Polish", "Epoxy", 'Gyp (USG 1-8")', "Seal", "Seal (+Jnts)"] and m["gypLabel"] == "Gyp"
+    assert m["hasClose"] is True and m["onlyOptionsAreTaggedSo"] == 2 and m["levelingComing"] is True
 
 
 def test_choosing_seal_adds_an_option_seeded_like_a_new_section_that_carries_no_travel(page):
@@ -162,8 +169,8 @@ def test_choosing_seal_adds_an_option_seeded_like_a_new_section_that_carries_no_
     assert a["takeoff"] == [["wb-seal-2-coats", 10000, "SF"]], "the sheet's own default, over what the base measures"
     assert a["laborIds"] == ["seal-install", "seal-jointfill", "seal-mockup"] and a["noTravelRow"] is True
     assert a["strip"] == ["Polish", "Seal"] and a["stripHidden"] is False and a["activeIsSeal"] is True
-    assert "Seal (option)" in a["stripLabel"]
-    assert a["barAfter"] == {"remove": ["Seal"], "choices": [], "menuClosed": True} and a["saved"] is True
+    assert "Open sheet" in a["stripLabel"] and "Option, total" in a["stripLabel"], "a new sheet starts ON the proposal, priced as a total"
+    assert a["barAfter"] == {"choices": [], "menuClosed": True} and a["saved"] is True, "the menu closes once a sheet is added"
     assert a["materialPanel"] == {"hasPatchCaption": True, "hasRow": True, "noDyeCard": True}, (
         "the option's Material step is the ordinary takeoff, with the patch the sheet always charges, and none of Polish's cards")
     assert a["laborPanel"]["noTravelBlock"] is True and (
@@ -224,35 +231,42 @@ def test_what_the_estimator_set_on_the_option_in_the_proposal_step_survives_the_
                                                  "price_mode": "deduct", "desc": "My own words"}}
 
 
-def test_seal_with_joints_can_be_added_beside_seal_and_opens_on_the_joint_filler_assembly(page):
+def test_seal_with_joints_can_be_added_beside_seal_as_a_copy_id_and_opens_on_the_joint_filler_assembly(page):
+    """The bid already holds a section of the Seal tab, so the second Seal-type sheet is filed under a Copy<N> id with its sheet and
+    its name beside it (Sheets phase 1): the sheet's own name is not free to be its key. Everything the draft keeps for it is keyed
+    by that id."""
     s = page["second"]
-    assert s["choicesBefore"] == ["Seal (+Jnts)"] and s["tabs"] == ["Seal", "Seal (+Jnts)"]
+    assert "Seal (+Jnts)" in s["choicesBefore"] and s["tabs"] == ["Seal", "Copy1"]
+    assert (s["id"], s["sheet"], s["label"]) == ("Copy1", "Seal (+Jnts)", "Seal (+Jnts)")
     assert s["jntsTakeoff"] == [["wb-seal-jnts-2-coats", 10000]]
-    assert s["bar"] == {"remove": ["Seal", "Seal (+Jnts)"], "addMenu": False}, "with both held there is nothing left to offer"
+    assert s["bar"] == {"rows": ["Polish", "Seal", "Copy1"],
+                        "addStillThere": True}, "every sheet type can be added again, as a copy, so Add sheet never runs out"
     assert s["pricedTabs"] == [["Polish", "base", "Seal-page Polish 800 Grit"], ["Seal", "option", "Sealed Concrete"],
-                               ["Seal (+Jnts)", "option", "Sealed Concrete with Joint Filler"]]
+                               ["Copy1", "option", "Sealed Concrete with Joint Filler"]]
     assert _money(s["lump"]) == page["review"]["live"]["base"], "the lump sum is the base priced by hand, neither option is in it"
 
 
-def test_removing_an_option_takes_two_presses_and_the_proposal_side_forgets_it(page):
+def test_deleting_a_sheet_takes_two_presses_and_the_proposal_side_forgets_it(page):
     r = page["remove"]
-    assert r["armedLabel"] == "Click again to remove Seal option" and r["stillThere"] == ["Seal", "Seal (+Jnts)"]
-    assert r["disarmedLabel"] == "Remove Seal option", "a click anywhere else puts it back"
-    assert r["nothingToOffer"] is True
+    assert r["armedLabel"] == "Click again to delete" and r["stillThere"] == ["Seal", "Copy1"]
+    assert r["disarmedLabel"] == "Delete", "a click anywhere else on the panel puts it back"
+    assert r["addStillOffered"] is True
     a = r["after"]
-    assert a["tabs"] == ["Seal (+Jnts)"] and a["pricedTabs"] == ["Polish", "Seal (+Jnts)"] and a["tabOptsKeys"] == ["Seal (+Jnts)"]
+    assert a["tabs"] == ["Copy1"] and a["pricedTabs"] == ["Polish", "Copy1"] and a["tabOptsKeys"] == ["Copy1"]
     assert a["lump"] == a["baseLump"], "removing an option does not move the lump sum"
+    assert a["openAfter"] == "Polish" and a["rows"] == ["Polish", "Copy1"], (
+        "the deleted sheet was the open one, so the base opens")
     left = r["leftovers"]
-    assert left["tabNotes"] == {"Seal (+Jnts)": ["The other option's note"]}, "the removed option's manual note goes with it"
+    assert left["tabNotes"] == {"Copy1": ["The other option's note"]}, "the removed option's manual note goes with it"
     p = left["price"]
-    assert p["options"] == {"Seal (+Jnts)": {"label": "Other", "amount": 1}}, "so does its own price override"
+    assert p["options"] == {"Copy1": {"label": "Other", "amount": 1}}, "so does its own price override"
     assert p["lines"] == {} and p["line_props"] == {}
-    assert p["lines2"] == {"option:Seal (+Jnts)": "the other line", "manual:0": "a manual line"}, (
+    assert p["lines2"] == {"option:Copy1": "the other line", "manual:0": "a manual line"}, (
         "the words typed over its line and its tax rows go, the other option's and a manual line stay")
-    assert p["before"] == {"option:Seal (+Jnts)": ["typed above the other"]} and p["after"] == {}
+    assert p["before"] == {"option:Copy1": ["typed above the other"]} and p["after"] == {}
     n = r["none"]
     assert n["stripHidden"] is True and n["tabsKey"] == {} and n["pricedTabs"] == [["Polish", "base"]]
-    assert n["tabOptsKeys"] == [] and n["menuOffers"] is True
+    assert n["rows"] == ["Polish"] and n["tabOptsKeys"] == [] and n["addOffered"] is True
     assert n["lump"] == a["lump"] and n["bar"] == _money(n["lump"])
 
 
@@ -268,7 +282,7 @@ def test_an_option_on_a_job_on_the_road_carries_its_own_lodging_and_per_diem_as_
 
 def test_a_saved_bid_that_holds_an_option_opens_as_saved_and_writes_nothing(page):
     r = page["reopenedWithOption"]
-    assert r["saves"] == 0 and r["armed"] == 0 and r["strip"] == ["Polish", "Seal"] and r["remove"] == ["Seal"]
+    assert r["saves"] == 0 and r["armed"] == 0 and r["strip"] == ["Polish", "Seal"]
     assert r["bar"] == r["handBar"], "the reopened bar is the saved base priced by hand, without the option"
     assert page["reopened"] == {"saves": 0, "armed": 0}
 
@@ -388,7 +402,7 @@ PAGE_BREAKS = {
         lambda r: r["model"]["cells"]["reno"][0] != "New"),
     "seal is not offered in the vocabulary": (
         "js/work-types.js", "      offered: true,", "      offered: false,",
-        lambda r: r["menu"]["choices"] != ["Seal", "Seal (+Jnts)"]),
+        lambda r: "Seal" in r["menu"]["choices"] or "Seal (+Jnts)" in r["menu"]["choices"]),
     "the option's card is coloured as the markup card": (
         "js/polish-estimate.js", """      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +""",
         """      html += '<div data-rev="markup" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +""",
@@ -396,9 +410,9 @@ PAGE_BREAKS = {
     "the card does not say the option is not in the lump sum": (
         "js/polish-estimate.js", '  var OPTION_NOT_IN_SUM = "Option, not in the lump sum";', '  var OPTION_NOT_IN_SUM = "Option";',
         lambda r: "Option, not in the lump sum" not in r["review"]["optionCardText"]),
-    "an option is removed by one press": (
-        "js/polish-estimate.js", "    if (removeArmed !== tab) { removeArmed = tab; paintOptionBar(); return; }", "    void 0;",
-        lambda r: r["remove"]["stillThere"] != ["Seal", "Seal (+Jnts)"]),
+    "a sheet is deleted by one press": (
+        "js/polish-estimate.js", "    if (sheetsUi.armed !== tab) { sheetsUi.armed = tab; paintSheets(); return; }", "    void 0;",
+        lambda r: r["remove"]["stillThere"] != ["Seal", "Copy1"]),
     "a removed option's typed words stay on the draft": (
         "js/bid-model.js", '    function byLine(k) { return k === mine || k.indexOf(mine + ":") === 0; }', "    function byLine(k) { return false; }",
         lambda r: "option:Seal" in r["remove"]["leftovers"]["price"]["lines2"]),
