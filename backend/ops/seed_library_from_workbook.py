@@ -750,7 +750,9 @@ def plan_seal(sheets: Dict[str, Sheet], plan: Plan) -> None:
              "day by default. v2 seeds the three crew lines (guys 3, 3 and 2 on the sheet) at $%s a day and leaves the days "
              "to be typed." % _g(rate))
     plan.gap("The Seal sheets charge their OWN lodging, per diem and travel labor (the drive hours are copied from the Polish "
-             "tab). v2 charges the job's travel once, on the base bid, and the option carries none.")
+             "tab). v2 charges the job's travel once, on the base bid; an option carries its own Lodging and Per Diem for its own "
+             "crew when the job is on the road (the sheet works its nights out from labor dollars, v2 from the crew's man-days, "
+             "so a crew on mixed rates differs by a night or two), and its drive hours are typed.")
 
 
 # ── the whole plan ───────────────────────────────────────────────────────────

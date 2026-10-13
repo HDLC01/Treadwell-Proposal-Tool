@@ -118,10 +118,19 @@
     try { return B.travelCarrier(ROOT) === activeTab; } catch (err) { return true; }
   }
 
+  /** Is the section on show an option? An option is priced apart and carries its own Hotel and Per Diem (B.optionTravelCosts). */
+  function activeIsOption() {
+    try { return B.sectionOf(ROOT, activeTab).kind === "option"; } catch (err) { return false; }
+  }
+
   /** The words on the Labor and Review steps of a section that does not carry the job's travel. */
   function travelNote() {
     var tab = B.ROOT_TAB;
     try { tab = B.travelCarrier(ROOT); } catch (err) { tab = B.ROOT_TAB; }
+    if (activeIsOption()) {
+      return "This option is priced apart, so it carries its own Hotel and Per Diem for its own crew when the job is on the road, " +
+        "at the rates set on the " + tab + " section. Open it to change them.";
+    }
     return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + tab +
       " section. Open it to change them.";
   }
@@ -940,11 +949,10 @@
       paintOptionBar();
       return;
     }
-    var held = TW.getState().tab_opts;
-    if (held && typeof held === "object" && !(held instanceof Array)) {
-      TW.setState({ tab_opts: Object.fromEntries(Object.keys(held).filter(function (k) { return k !== tab; })
-        .map(function (k) { return [k, held[k]]; })) });
-    }
+    // Everything the draft kept for the option goes (its settings, notes and the words typed over its proposal line):
+    // the id is the sheet's name, so an option added again would otherwise print the old one's leftovers.
+    var gone = B.optionLeftoverPatch(TW.getState(), tab);
+    if (Object.keys(gone).length) TW.setState(gone);
     show(activeTab === tab ? openingTab() : activeTab);
     saveSoon();
     paintBid();
@@ -2527,12 +2535,14 @@
     // Hotel and Per Diem are charged once, on the carrier, and this card says where instead of listing lines
     // that belong to another section's crew.
     var carries = carriesTravel();
+    var ownTravel = !carries && activeIsOption();   // an option lists its own lines, for its own crew's man-days
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
       var tl = (M.travel || {})[k];
-      if (!carries || !tl || !tl.enabled) return;
+      if ((!carries && !ownTravel) || !tl || !tl.enabled) return;
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
-      trvRows.push([name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate),
-                    esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
+      trvRows.push(ownTravel
+        ? [name, B.num(B.travelManDays(M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.optionTravelCosts(M.travel, M.labor)[k]))]
+        : [name, B.num(B.travelQty(tl, M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.travelLineCost(tl, M.labor)))]);
     });
     if (!carries) {
       trvRows.push([travelNote(), "", ""]);

@@ -504,6 +504,20 @@
     return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
   }
 
+  /** AN OPTION'S OWN LODGING AND PER DIEM. The job's two lines are charged once, on the carrier section, for the carrier's
+   *  crew. An option is priced apart and the workbook charges it its own: the Seal tabs read Local = No and bill Lodging and
+   *  Per Diem for their own man-days (Seal!B58 and B59). So an OPTION takes the job's two lines AS THEY ARE SWITCHED (on for a
+   *  job 70 miles out, gray for a local one, a hand flip kept) at the job's rates, for the option's own crew's man-days. The
+   *  typed quantity belongs to the carrier's crew and is not used here. */
+  function optionTravelCosts(travel, rows) {
+    var t = travel || {};
+    var days = travelManDays(rows);
+    function ownLineCost(line) { return (line && rowOn(line)) ? roundUp(days * num(line.rate)) : 0; }
+    var lodging = ownLineCost(t.lodging);
+    var per_diem = ownLineCost(t.per_diem);
+    return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
+  }
+
   /** The Lodging and Per Diem rates out of GET /api/markup/rules' `rules`, as
    *  `{lodging, per_diem}`, each null when none is filed (or switched off, or not a plain dollar
    *  figure). Null, not the shipped number: the caller decides what nothing-filed means. */
@@ -2898,7 +2912,8 @@
    *  ({ material } or { gyp, extras, sand, soundMat, soundMatRolls }). `ctx.remodel_rate` is the county's, or
    *  nothing for the profile's own default.
    *
-   *  The job's travel is charged to the carrier section only (travelCarrier); the others carry none. A profile
+   *  The job's travel is charged to the carrier section only (travelCarrier); the other bases carry none. An OPTION
+   *  carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does. A profile
    *  that is not the one the section was saved with (an unknown id, or a rev that has moved) is not priced: the
    *  answer is unpriceable with the reason, never a silent reprice at the new rules. */
   function priceSection(model, tabId, ctx) {
@@ -2924,6 +2939,8 @@
       contingency: s.contingency, fees: s.fees, conditions: model.conditions,
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate
     };
+    // An OPTION carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does.
+    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;
     var mat = ctx.material(e);
     // A material that says why it cannot be worked out (a Gyp area with no thickness) is no price, in its own
     // words, and never a bid priced on the part that could be.
@@ -3036,7 +3053,41 @@
     return out;
   }
 
-
+  /** WHAT AN OPTION LEAVES BEHIND ON THE DRAFT WHEN IT IS TAKEN OFF, as a patch for TW.setState (a NEW object; `state`
+   *  is not touched; {} when there is nothing to forget). A Seal option's id is its sheet's name, so it is the SAME id the
+   *  next time the option is added, and anything kept under it would print on the new option's line of the customer's
+   *  proposal: the words typed over the old option's line (price_overrides.lines / .lines2 under "option:<tab>" and its
+   *  tax rows "option:<tab>:..."), the lines typed above and below it and the bullets set on them, its own price display
+   *  override (price_overrides.options), its manual notes (tab_notes) and its option settings (tab_opts). The estimate
+   *  page's deleteTab forgets the same set for a deleted copy. */
+  function optionLeftoverPatch(state, tab) {
+    var st = isObject(state) ? state : {};
+    var mine = "option:" + tab;
+    var patch = {};
+    function without(map, isMine) {
+      return Object.fromEntries(Object.keys(map).filter(function (k) { return !isMine(k); })
+        .map(function (k) { return [k, map[k]]; }));
+    }
+    function holds(map, isMine) { return isObject(map) && Object.keys(map).some(isMine); }
+    function byTab(k) { return k === tab; }
+    function byLine(k) { return k === mine || k.indexOf(mine + ":") === 0; }
+    ["tab_opts", "tab_notes"].forEach(function (key) {
+      if (holds(st[key], byTab)) patch[key] = without(st[key], byTab);
+    });
+    var pov = st.price_overrides;
+    if (isObject(pov)) {
+      var changed = false;
+      var next = Object.fromEntries(Object.keys(pov).map(function (key) {
+        var map = pov[key];
+        var test = key === "options" ? byTab
+          : (["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"].indexOf(key) >= 0 ? byLine : null);
+        if (test && holds(map, test)) { changed = true; return [key, without(map, test)]; }
+        return [key, map];
+      }));
+      if (changed) patch.price_overrides = next;
+    }
+    return patch;
+  }
 
   /** Keep the Travel row's Guys (and Lodging and Per Diem's quantity) in step with the crew's man-days while
    *  they are on auto. The estimate page's syncAutoGuys, as a function of the model, because the seeding below
@@ -3512,7 +3563,7 @@
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
     travelCostsSeed: travelCostsSeed, travelQty: travelQty, travelLineCost: travelLineCost,
-    travelCosts: travelCosts, travelRatesFromRules: travelRatesFromRules,
+    travelCosts: travelCosts, optionTravelCosts: optionTravelCosts, travelRatesFromRules: travelRatesFromRules,
     applyTravelRates: applyTravelRates, normalizeTravel: normalizeTravel,
     // Distance decides "local" (see LOCAL_MILES).
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
@@ -3540,7 +3591,7 @@
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
     moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
-    optionsToOffer: optionsToOffer, addOption: addOption, removeOption: removeOption,
+    optionsToOffer: optionsToOffer, addOption: addOption, removeOption: removeOption, optionLeftoverPatch: optionLeftoverPatch,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,

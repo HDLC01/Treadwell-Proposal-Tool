@@ -262,6 +262,17 @@ async function main() {
   out.second.lump = savedTwo.proposal_lump_sum;
 
   // ── 8. taking an option off: the first press arms, the second removes; the proposal side forgets it ──
+  // The Proposal step has left things under both options' ids, and under a manual line that is neither's.
+  b.store.blob.tab_notes = { Seal: ["Old manual note from the removed option"], "Seal (+Jnts)": ["The other option's note"] };
+  b.store.blob.price_overrides = {
+    options: { Seal: { label: "Mine", amount: 9999 }, "Seal (+Jnts)": { label: "Other", amount: 1 } },
+    lines: { "option:Seal": "old words" },
+    lines2: { "option:Seal": "$9,999 – Sealed Concrete, my old words", "option:Seal:sales_tax": "old tax words",
+              "option:Seal (+Jnts)": "the other line", "manual:0": "a manual line" },
+    before: { "option:Seal": ["typed above"], "option:Seal (+Jnts)": ["typed above the other"] },
+    after: { "option:Seal:total": ["typed below"] },
+    line_props: { "option:Seal": { bullet: true } }, before_props: {}, after_props: {},
+  };
   P.clickEl(b, P.need(b, '[data-remove-option="Seal"]'));
   out.remove = { armedLabel: /data-remove-option="Seal">([^<]*)</.exec(html(b, "option-bar"))[1], stillThere: Object.keys(api.model().tabs) };
   // a click somewhere else puts it back
@@ -271,6 +282,7 @@ async function main() {
   P.clickEl(b, P.need(b, '[data-remove-option="Seal"]'));
   P.clickEl(b, P.need(b, '[data-remove-option="Seal"]'));
   b.clock.fire();
+  out.remove.leftovers = { tabNotes: clone(b.store.blob.tab_notes), price: clone(b.store.blob.price_overrides) };
   const savedRm = last(b.rec.saves);
   const mr = clone(savedRm.polish_estimate);
   out.remove.after = {
@@ -395,6 +407,21 @@ function modelFacts() {
       removeBase: threw(() => B.removeOption(B.sectionsForJob(base, "combo", {}), "Epoxy")),
     },
     removed: { tabs: emptyTabs.tabs, offered: B.optionsToOffer(emptyTabs) },
+    // an option on a job on the road carries its own Lodging and Per Diem (the Seal tab's B58 and B59): 3 men for 5 days
+    // of crew, no material, $70 and $45. The workbook's answers for that job are 11,011 local and 15,293 away.
+    lodging: (() => {
+      const price = (away, typedQty) => {
+        const m = B.activateSection(B.freshModel(), "Seal", "option", {});
+        m.conditions = Object.assign({}, m.conditions, { local: !away, taxable: true, prevailing_wage: false, remodel_tax: false });
+        m.tabs.Seal.takeoff = [{ assembly_id: "", assembly_name: "", measurement: 10000, unit: "SF" }];
+        m.tabs.Seal.labor = [{ id: "crew", label: "Crew", guys: 3, days: 5, rate: 33 }];
+        m.travel = B.travelCostsSeed(70, 45);
+        m.travel.lodging = Object.assign({}, m.travel.lodging, { enabled: away, qty_auto: false, qty: typedQty });
+        m.travel.per_diem = Object.assign({}, m.travel.per_diem, { enabled: away, qty_auto: false, qty: typedQty });
+        return B.priceSection(m, "Seal", { material: () => ({ material: 0, tooling: 0 }) }).total;
+      };
+      return { local: price(false, 1), away: price(true, 1), awayOtherTypedQty: price(true, 40) };
+    })(),
     workTypes: { sealOwn: B.workTypeApplies({ default_work_types: ["seal"] }, { tab: "seal" }),
                  polishRowOnSeal: B.workTypeApplies({ default_work_types: ["polish"] }, { tab: "seal" }),
                  emptyOnSeal: B.workTypeApplies({ default_work_types: [] }, { tab: "seal" }),

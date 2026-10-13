@@ -165,7 +165,9 @@ def test_choosing_seal_adds_an_option_seeded_like_a_new_section_that_carries_no_
     assert a["barAfter"] == {"remove": ["Seal"], "choices": [], "menuClosed": True} and a["saved"] is True
     assert a["materialPanel"] == {"hasPatchCaption": True, "hasRow": True, "noDyeCard": True}, (
         "the option's Material step is the ordinary takeoff, with the patch the sheet always charges, and none of Polish's cards")
-    assert a["laborPanel"]["noTravelBlock"] is True and "charged once for the whole job, on the Polish section" in a["laborPanel"]["note"]
+    assert a["laborPanel"]["noTravelBlock"] is True and (
+        "carries its own Hotel and Per Diem for its own crew" in a["laborPanel"]["note"]
+        and "rates set on the Polish section" in a["laborPanel"]["note"])
 
 
 def test_the_option_is_priced_apart_by_the_seal_profile_and_the_lump_sum_is_the_base_alone(page):
@@ -239,10 +241,28 @@ def test_removing_an_option_takes_two_presses_and_the_proposal_side_forgets_it(p
     a = r["after"]
     assert a["tabs"] == ["Seal (+Jnts)"] and a["pricedTabs"] == ["Polish", "Seal (+Jnts)"] and a["tabOptsKeys"] == ["Seal (+Jnts)"]
     assert a["lump"] == a["baseLump"], "removing an option does not move the lump sum"
+    left = r["leftovers"]
+    assert left["tabNotes"] == {"Seal (+Jnts)": ["The other option's note"]}, "the removed option's manual note goes with it"
+    p = left["price"]
+    assert p["options"] == {"Seal (+Jnts)": {"label": "Other", "amount": 1}}, "so does its own price override"
+    assert p["lines"] == {} and p["line_props"] == {}
+    assert p["lines2"] == {"option:Seal (+Jnts)": "the other line", "manual:0": "a manual line"}, (
+        "the words typed over its line and its tax rows go, the other option's and a manual line stay")
+    assert p["before"] == {"option:Seal (+Jnts)": ["typed above the other"]} and p["after"] == {}
     n = r["none"]
     assert n["stripHidden"] is True and n["tabsKey"] == {} and n["pricedTabs"] == [["Polish", "base"]]
     assert n["tabOptsKeys"] == [] and n["menuOffers"] is True
     assert n["lump"] == a["lump"] and n["bar"] == _money(n["lump"])
+
+
+def test_an_option_on_a_job_on_the_road_carries_its_own_lodging_and_per_diem_as_the_workbook_does(page):
+    """Seal!B58 and B59 charge the tab its own Lodging and Per Diem when the job is not local. The job's two lines are charged
+    once, on the base; an option takes them for its own crew. The two figures are Kyle's workbook's (oracle vectors
+    lodging/one/local1 and lodging/one/local0): 3 men for 5 days, no material, $70 and $45, the typed quantity not read."""
+    lodging = page["model"]["lodging"]
+    assert lodging["local"] == 11011, "a local job's option carries nothing"
+    assert lodging["away"] == 15293, "10,000 SF away, three men for five days"
+    assert lodging["awayOtherTypedQty"] == lodging["away"], "the quantity typed for the base's crew is not the option's"
 
 
 def test_a_saved_bid_that_holds_an_option_opens_as_saved_and_writes_nothing(page):
@@ -378,8 +398,14 @@ PAGE_BREAKS = {
     "an option is removed by one press": (
         "js/polish-estimate.js", "    if (removeArmed !== tab) { removeArmed = tab; paintOptionBar(); return; }", "    void 0;",
         lambda r: r["remove"]["stillThere"] != ["Seal", "Seal (+Jnts)"]),
+    "a removed option's typed words stay on the draft": (
+        "js/bid-model.js", '    function byLine(k) { return k === mine || k.indexOf(mine + ":") === 0; }', "    function byLine(k) { return false; }",
+        lambda r: "option:Seal" in r["remove"]["leftovers"]["price"]["lines2"]),
+    "an option carries none of the job's lodging": (
+        "js/bid-model.js", '    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;', "    void 0;",
+        lambda r: r["model"]["lodging"]["away"] != 15293),
     "a removed option's settings stay on the draft": (
-        "js/polish-estimate.js", "Object.keys(held).filter(function (k) { return k !== tab; })", "Object.keys(held).filter(function (k) { return true; })",
+        "js/bid-model.js", "    function byTab(k) { return k === tab; }", "    function byTab(k) { return false; }",
         lambda r: "Seal" in r["remove"]["after"]["tabOptsKeys"]),
     "the patch ignores a renovation on the page": (
         "js/polish-estimate.js", "        items: ITEMS, sf: B.takeoffSf(takeoff), reno: jobIsReno(),", "        items: ITEMS, sf: B.takeoffSf(takeoff), reno: false,",
