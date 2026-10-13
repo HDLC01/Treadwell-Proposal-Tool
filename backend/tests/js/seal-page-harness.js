@@ -103,9 +103,10 @@ function polishByHand(model) {
   const bought = B.poolsPacks(model) ? LIB.pricePool(alone, { on: model.takeoff.map((r) => B.rowOn(r)) }) : alone;
   return B.markupChain({
     material: bought.reduce((t, p) => t + (p ? p.total : 0), 0), labor: B.laborTotal(model.labor, model.conditions),
-    travel: B.travelCosts(model.travel, model.labor).total, contingency: model.contingency, fees: model.fees,
+    travel: B.travelCosts(model.travel, model.labor, B.travelOpts(model, "Polish")).total,
+    tooling: B.rootTooling(model), contingency: model.contingency, fees: model.fees,
     conditions: model.conditions, sf: B.takeoffSf(model.takeoff),
-  });
+  }, B.rootProfile(model).stamp);
 }
 
 const last = (l) => l[l.length - 1];

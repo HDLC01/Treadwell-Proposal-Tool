@@ -201,7 +201,7 @@ def test_review_shows_each_option_as_its_own_card_with_its_own_total_and_says_it
     assert r["hasOptionCard"] is True
     assert "Option, not in the lump sum" in r["optionCardText"] and "Seal option total" in r["optionCardText"]
     assert r["figure"] == r["handFigure"] == _money(page["priced"]["handSeal"])
-    assert r["keys"] == ["option", "takeoff", "labor", "travel", "markup"], "the option's card has its own colour key"
+    assert r["keys"] == ["option", "takeoff", "labor", "travel", "takeoff", "markup"], "the option's card has its own colour key (the last takeoff-coloured card is the new bid's tooling)"
     assert r["noWholeBidCard"] is True, "one base and an option have nothing to add up"
     assert r["markupTotal"] == _money(page["priced"]["handPolish"]), "the base's own card says the base's price"
     assert r["openButton"] is True
@@ -391,7 +391,7 @@ PAGE_BREAKS = {
     "the option's card is coloured as the markup card": (
         "js/polish-estimate.js", """      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.tab) +""",
         """      html += '<div data-rev="markup" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.tab) +""",
-        lambda r: r["review"]["keys"] != ["option", "takeoff", "labor", "travel", "markup"]),
+        lambda r: r["review"]["keys"] != ["option", "takeoff", "labor", "travel", "takeoff", "markup"]),
     "the card does not say the option is not in the lump sum": (
         "js/polish-estimate.js", '  var OPTION_NOT_IN_SUM = "Option, not in the lump sum";', '  var OPTION_NOT_IN_SUM = "Option";',
         lambda r: "Option, not in the lump sum" not in r["review"]["optionCardText"]),
