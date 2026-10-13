@@ -215,7 +215,7 @@ def test_the_page_prices_a_copy_of_the_polish_sheet_as_the_root_dye_included_and
     assert s["baseTabId"] == "Polish" and s["tabOpts"] == {"Copy1": OFF_THE_PROPOSAL}, "the draft's own entry is kept"
     assert s["lump"] == s["rootTotal"], "a copy is never in the lump sum"
     r = p["renamedOnPage"]
-    assert "Garage floor (option)" in r["strip"] and "Garage floor" in r["maths"]
+    assert '<span class="sh-nm">Garage floor</span>' in r["strip"] and "Garage floor" in r["maths"], "the Sheets panel names it, and so does the bar"
 
 
 def test_the_page_charges_a_root_that_is_an_option_its_own_travel_and_the_base_the_jobs(ran):

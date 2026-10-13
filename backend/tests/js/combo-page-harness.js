@@ -76,6 +76,11 @@ function comboDraft(extra) {
 const flush = () => new Promise((r) => setImmediate(r));
 const html = (built, id) => built.doc.getElementById(id).innerHTML;
 const text = (built, id) => built.doc.getElementById(id).textContent;
+// THE SHEETS PANEL replaced the strip of section buttons (Sheets phase 3). It lists every sheet that is part of the bid, one
+// data-section-tab each, in the model's order, and it is there for a bid with one sheet too. The "Open sheet" line above the step rail
+// is the part that hides itself for one.
+const panelTabs = (built) => (html(built, "sheets-panel").match(/data-section-tab="([^"]*)"/g) || []);
+const openSheet = (built) => ((/data-section-tab="([^"]*)"[^>]*aria-current="true"/.exec(html(built, "sheets-panel"))) || [])[1] || null;
 
 async function open(draft, extra) {
   const b = P.build(Object.assign({ blob: draft, asms: asms, items: items, labor: laborRows, laborCalc: calcRows }, extra || {}));
@@ -130,8 +135,8 @@ async function main() {
   out.opened = {
     tabs: Object.keys(m0.tabs || {}), rootKind: m0.kind === undefined ? "base" : m0.kind,
     epoxyKind: m0.tabs && m0.tabs.Epoxy && m0.tabs.Epoxy.kind,
-    strip: (html(b, "sections").match(/data-section-tab="([^"]*)"/g) || []), stripHidden: !!b.doc.getElementById("sections").hidden,
-    activeIs: html(b, "sections").indexOf('aria-current="true">Polish') >= 0 ? "Polish" : "other",
+    strip: panelTabs(b), stripHidden: !!b.doc.getElementById("sheet-now").hidden,
+    activeIs: openSheet(b) === "Polish" ? "Polish" : "other",
     rootTakeoff: clone(m0.takeoff).map((r) => [r.measurement, r.unit]),
     epoxyTakeoff: clone(m0.tabs.Epoxy.takeoff).map((r) => [r.measurement, r.unit]),
     rootLaborIds: m0.labor.map((r) => r.id), epoxyLaborIds: m0.tabs.Epoxy.labor.map((r) => r.id),
@@ -257,7 +262,7 @@ async function main() {
   out.reopened = {
     handBar: Math.round(reopenedHand.polish.total + reopenedHand.epoxy.total),
     saves: reopen.rec.saves.length, armed: reopen.clock.armed(), tabs: Object.keys(reopen.api.model().tabs || {}),
-    strip: (html(reopen, "sections").match(/data-section-tab="([^"]*)"/g) || []),
+    strip: panelTabs(reopen),
     bar: text(reopen, "bid-total"),
   };
 
@@ -312,7 +317,7 @@ async function main() {
     const last = w.rec.saves.length ? w.rec.saves[w.rec.saves.length - 1] : null;
     const shown = last ? clone(last.polish_estimate) : clone(m);
     return {
-      bar: text(w, "bid-total"), strip: (html(w, "sections").match(/data-section-tab="([^"]*)"/g) || []),
+      bar: text(w, "bid-total"), strip: panelTabs(w),
       kinds: B.sectionsOf(m).map((e) => [e.tab, e.kind]), saves: w.rec.saves.length,
       handBar: money((() => { const h = byHand(shown, undefined); return B.activeSections(shown).reduce((t, e) => t + (e.root ? h.polish.total : h.epoxy.total), 0); })()),
       epoxyLabor: m.tabs && m.tabs.Epoxy ? m.tabs.Epoxy.labor.map((r) => r.id) : null,

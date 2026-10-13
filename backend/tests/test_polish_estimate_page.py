@@ -2429,7 +2429,7 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
                     "/js/icons.js", "/auth.js", "/shared.js", "/js/tab-memo.js",
                     "/js/library-core.js", "/js/excel-math.js", "/js/work-types.js", "/js/markup-core.js",
                     "/js/bid-profiles.js", "/js/bid-engine.js", "/js/bid-model.js", "/js/epoxy-takeoff.js",
-                    "/js/gyp-takeoff.js", "/js/seal-takeoff.js",
+                    "/js/gyp-takeoff.js", "/js/seal-takeoff.js", "/js/price-lines-core.js",
                     "/js/polish-sandbox.js", "/js/library-picker.js", "/js/polish-estimate.js"], (
         "the page's script list has changed: %r" % srcs)
 

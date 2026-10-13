@@ -738,7 +738,7 @@ async function page() {
   const named = B.renameSection(copied.model, "Copy1", "Garage floor");
   const n = P.build({ blob: P.blob({ polish_estimate: clone(named), polish_sf: 12500 }) });
   await n.api.init();
-  out.renamedOnPage = { strip: n.doc.getElementById("sections").innerHTML, maths: n.doc.getElementById("maths").innerHTML };
+  out.renamedOnPage = { strip: n.doc.getElementById("sheets-panel").innerHTML, maths: n.doc.getElementById("maths").innerHTML };
   // a Gyp section that is a copy is read from its `sheet` and not from its Copy<N> key: the page prices both alike
   const GYPSHEET = 'Gyp (USG 1-8")';
   const gm = clone(P.MODEL);

@@ -62,6 +62,10 @@
   var SL = window.TWSealTakeoff;
   var S = window.TWPolishSandbox;  // never edit a live bid
   var P = window.TWLibraryPicker;  // the one search pop-up both "Add" buttons open (js/library-picker.js)
+  // The base-pick rule for the lines typed on the Proposal step (js/price-lines-core.js): the Sheets panel applies it when the
+  // estimator changes the base bid, as the live estimate and the proposal's own base picker do. A page that lacks it
+  // changes the base and leaves those lines as they were, which is what the page did before the panel could.
+  var PR = window.TWPrice;
   var $ = function (id) { return document.getElementById(id); };
 
   // The draft this page is working ON, and the model derived from it. Reassigned together by
@@ -792,7 +796,6 @@
     var b = bid();
     $("bidbar").hidden = false;
     paintSections();
-    paintOptionBar();
     if (sectionList().length > 1) { paintJobBid(); return; }
     $("bid-total").textContent = b.total ? B.money(b.total) : "—";
     $("bid-psf").textContent = (b.per_sf == null ? "" : B.money2(b.per_sf) + " / SF")
@@ -819,19 +822,14 @@
     return Object.assign({}, sectionBids(), Object.fromEntries([[B.ROOT_TAB, bid()]]));
   }
 
-  /** The strip that switches between sections: drawn only when the bid is made of more than one. A section that
-   *  is not part of the bid (an Epoxy job's Polish root) is not on it. */
+  /** Keep the sheet on show one that is part of the bid (an Epoxy job's Polish root is not), then draw the Sheets panel.
+   *  The name is the strip's, which this replaced: the strip hid itself for one section, the panel is there on every bid. */
   function paintSections() {
-    var el = $("sections");
     var live = sectionList().filter(function (e) { return e.kind !== "off"; });
     if (live.length < 2) {
       if (!live.length || live[0].tab !== activeTab) show(live.length ? live[0].tab : B.ROOT_TAB);
-      if (!el.hidden) { el.innerHTML = ""; el.hidden = true; }
-      return;
-    }
-    if (!live.some(function (e) { return e.tab === activeTab; })) show(live[0].tab);
-    el.innerHTML = B.sectionSwitcherHtml(ROOT, activeTab, allBids(), { skipOff: true });
-    el.hidden = false;
+    } else if (!live.some(function (e) { return e.tab === activeTab; })) show(live[0].tab);
+    paintSheets();
   }
 
   /** The bar for a bid priced on several sections: the combined base bid (the same figure a save writes as the
@@ -854,112 +852,353 @@
     $("maths").innerHTML = line;
   }
 
-  // ── options on a bid (Phase 15) ─────────────────────────────────────────────
-  // "+ Add option" offers Seal and Seal (+Jnts); an option is a section of the bid with kind "option" (js/bid-model.js
-  // addOption). It is priced on its own and never added into the lump sum, and it prints under "Options & Unit Prices"
-  // on the proposal. These three are only the page's side of it: the menu, the library's answers for a new section,
-  // and taking one off again.
-  var optionMenuOpen = false;     // the "+ Add option" choices are showing
-  var optionBusy = false;         // an option is being added (the library is being read)
-  var removeArmed = null;         // the option whose Remove button has been pressed once
-  var lastOptionBar = null;       // what the option bar last drew, so a keystroke does not redraw it
+  // ── the Sheets panel (Sheets phase 3) ───────────────────────────────────────
+  // Every sheet of the bid, the base bid marked, and what each option does on the proposal, in one floating panel
+  // (aside#sheets-panel). It took the place of the strip of section buttons and the "+ Add option" bar. The markup is
+  // B.sheetsPanelHtml's (js/bid-model.js, pure); this is the page's side of it: the state the panel is in (a base change
+  // waiting for its yes, a Delete pressed once, a name being typed), what each control writes, and the repaint.
+  //
+  // WHAT EACH CONTROL WRITES. The model is the sheets, their kinds and their names (B.copySection, B.addSheet,
+  // B.renameSection, B.deleteSection, B.pickBase). The DRAFT is what the proposal reads around it: tab_opts (on the
+  // proposal, Total or Add / Deduct, the words), and on a base change work_type and base_tab_id with the Proposal step's own
+  // edited lines moved to the new base (TWPrice.applyBasePick). The model functions answer the draft's side as a `patch`.
+  var sheetsUi = {
+    confirm: null,      // { row, ids }: a base change the estimator has asked for and not yet confirmed
+    armed: null,        // the sheet whose Delete has been pressed once
+    renaming: null,     // the sheet being renamed, with what is typed so far and the reason it was refused
+    draft: "", error: "",
+    descOpen: {},       // the sheets whose description box is open
+    pick: false,        // the "Add a sheet" choices are showing
+    busy: false,        // a sheet is being added (the library is being read)
+    focus: null         // the control to put the caret back on after the next repaint (data-sh-key)
+  };
+  var lastSheets = null;     // the panel markup last drawn, so a keystroke elsewhere redraws nothing that did not change
+  var lastSheetNow = null;   // and the "Open sheet" line
 
-  /** What an option is called on a button: its workbook sheet, "Seal" or "Seal (+Jnts)". */
-  function optionLabel(tab) {
-    return String(tab);
-  }
-
-  /** The strip under the section strip: "+ Add option" (with its choices open) and a Remove for each option the bid
-   *  holds. Hidden when there is nothing to offer and nothing to remove. Redrawn only when what it says changed. */
-  function paintOptionBar() {
-    var el = $("option-bar");
-    var offers = [];
-    try { offers = B.optionsToOffer(ROOT); } catch (err) { offers = []; }
-    var held = sectionList().filter(function (e) { return e.kind === "option"; });
-    var html = "";
-    if (offers.length) {
-      html += '<button type="button" data-add-option-menu aria-expanded="' + (optionMenuOpen ? "true" : "false") + '">' +
-        (optionMenuOpen ? "Cancel" : "+ Add option") + '</button>';
-      if (optionMenuOpen) {
-        offers.forEach(function (id) {
-          html += '<button type="button" data-add-option="' + esc(id) + '"' + (optionBusy ? " disabled" : "") + '>' +
-            esc(optionLabel(id)) + '</button>';
-        });
-      }
-    }
-    held.forEach(function (e) {
-      html += '<button type="button" data-remove-option="' + esc(e.tab) + '">' +
-        (removeArmed === e.tab ? "Click again to remove " : "Remove ") + esc(optionLabel(e.tab)) + ' option</button>';
-    });
-    var empty = !html;
-    if (html === lastOptionBar && el.hidden === empty) return;
-    lastOptionBar = html;
-    el.innerHTML = html;
-    el.hidden = empty;
-  }
-
-  /** The area a new option starts on: what the job's base section measures (the section that carries the job's travel
+  /** The area a new sheet starts on: what the job's base section measures (the section that carries the job's travel
    *  is the first base), 0 when nothing is measured yet. */
   function optionStartSf() {
     try { return B.takeoffSf(B.sectionOf(ROOT, B.travelCarrier(ROOT)).section.takeoff); } catch (err) { return 0; }
   }
 
-  /** ADD AN OPTION: the library is read (the labor lines filed under the option's work type and the calculator's
-   *  modes) and the model gets a new section, seeded like any new section. Only that section is added; nothing the
-   *  estimator typed in any other is touched (B.addOption), and the model is read AFTER the library answers, so a
-   *  figure typed while it was loading is kept. */
-  async function addOption(tab) {
-    if (optionBusy) return;
-    optionBusy = true;
-    optionMenuOpen = false;
-    paintOptionBar();
+  /** What the option prints now, for the grey text in an open description box: the system's own words, off the priced
+   *  tabs of a save. "" when they cannot be worked out, which leaves the box with no grey text. */
+  function sysDescOf(tab) {
     try {
-      if (B.optionsToOffer(ROOT).indexOf(tab) < 0) return;
-      var rules = await loadMarkupRules();
-      var laborRows = B.withCrewFallback(await loadLaborDefaults());
-      var calcRows = B.withCrewCalcFallback(await loadLaborCalc());
-      ROOT = B.addOption(ROOT, tab, {
-        rules: rules, laborRows: laborRows, laborRate: LABOR_RATE, calcRows: calcRows,
-        asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
-        cellValues: state.cell_values, split: T.isSplit(state),
-        sf: Object.fromEntries([[tab, [optionStartSf(), ""]]]), lf: {},
-        takeoffRows: function (entry, sfs) { return entry.role === "seal" && SL ? SL.seedTakeoff(entry.sheet, ASMS, sfs[0]) : null; }
-      });
-      show(tab);
-      followSf = B.takeoffSf(B.sectionOf(ROOT, tab).section.takeoff);
-      saveSoon();
-      paintBid();
-      paintRail();
-      renderPanel();
-    } catch (err) {
-      say("The option could not be added: " + (err && err.message));
-    } finally {
-      optionBusy = false;
-      paintOptionBar();
+      var tabs = B.composePricingSnapshot(ROOT, priceCtx()).priced_tabs || [];
+      for (var i = 0; i < tabs.length; i++) if (tabs[i].id === tab) return String(tabs[i].system_desc || "");
+    } catch (err) { /* nothing to show */ }
+    return "";
+  }
+
+  /** Everything the panel is drawn from. The draft's tab_opts are read only when the bid has more than one sheet: they
+   *  are what the option controls show, a bid with one sheet has none, and a read parses the whole draft. */
+  function sheetsView() {
+    var multi = !!ROOT.tabs;
+    // A bid whose other sheets cannot be read still prices its first sheet (the panel says so and offers nothing else).
+    var bids;
+    try { bids = allBids(); } catch (err) { bids = Object.fromEntries([[B.ROOT_TAB, bid()]]); }
+    return {
+      open: activeTab, bids: bids, opts: multi ? TW.getState().tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      confirm: sheetsUi.confirm, armed: sheetsUi.armed, renaming: sheetsUi.renaming, draft: sheetsUi.draft,
+      error: sheetsUi.error, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf
+    };
+  }
+
+  /** The control the caret is on, by its data-sh-key, when it is inside the panel; null otherwise. */
+  function sheetsFocusKey(el) {
+    var ae = document.activeElement;
+    if (!ae || !ae.getAttribute || typeof el.contains !== "function" || !el.contains(ae)) return null;
+    return ae.getAttribute("data-sh-key");
+  }
+
+  /** Put the caret on the control with this data-sh-key. A repaint rebuilds every control, and a rebuilt control has no
+   *  caret: without this a keyboard user who presses a switch is dropped back to the top of the page. */
+  function focusSheetsKey(key) {
+    var el = $("sheets-panel");
+    if (!el || !key) return;
+    var all = el.querySelectorAll("[data-sh-key]");
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].getAttribute("data-sh-key") !== key) continue;
+      if (all[i].focus) all[i].focus();
+      // A box gets the caret at the end of what is in it, never the start.
+      try { if (all[i].setSelectionRange && all[i].value) all[i].setSelectionRange(all[i].value.length, all[i].value.length); } catch (err) { /* a switch has none */ }
+      return;
     }
   }
 
-  /** TAKE AN OPTION OFF: the first press arms the button ("Click again to remove"), the second removes the section,
-   *  its rows included. The option's settings on the draft go with it, so an option added again starts fresh. */
-  function removeOptionPress(tab) {
-    if (removeArmed !== tab) { removeArmed = tab; paintOptionBar(); return; }
-    removeArmed = null;
-    try {
-      ROOT = B.removeOption(ROOT, tab);
-    } catch (err) {
-      say("That option could not be removed: " + (err && err.message));
-      paintOptionBar();
-      return;
+  /** Draw the Sheets panel and the "Open sheet" line. Redrawn only when what they say changed. */
+  function paintSheets() {
+    var el = $("sheets-panel");
+    if (!el) return;
+    var view = sheetsView();
+    var html = B.sheetsPanelHtml(ROOT, view);
+    var want = sheetsUi.focus;
+    sheetsUi.focus = null;
+    if (html !== lastSheets) {
+      var keep = want || sheetsFocusKey(el);
+      el.innerHTML = html;
+      lastSheets = html;
+      want = keep;
     }
-    // Everything the draft kept for the option goes (its settings, notes and the words typed over its proposal line):
-    // the id is the sheet's name, so an option added again would otherwise print the old one's leftovers.
-    var gone = B.optionLeftoverPatch(TW.getState(), tab);
-    if (Object.keys(gone).length) TW.setState(gone);
-    show(activeTab === tab ? openingTab() : activeTab);
+    if (want) focusSheetsKey(want);
+    var now = B.sheetNowHtml(ROOT, view);
+    var nowEl = $("sheet-now");
+    if (now !== lastSheetNow) { lastSheetNow = now; nowEl.innerHTML = now; }
+    if (nowEl.hidden === !!now) nowEl.hidden = !now;
+  }
+
+  /** Kept under its old name: the harnesses (and anything else that asked the page to redraw "the option bar") still do. */
+  function paintOptionBar() { paintSheets(); }
+
+  /** Back to the panel's resting state: nothing waiting to be confirmed, armed or being renamed. */
+  function resetSheetsUi() {
+    sheetsUi.confirm = null; sheetsUi.armed = null; sheetsUi.renaming = null; sheetsUi.error = "";
+  }
+
+  /** The model was replaced (a copy, an added sheet, a rename, a base change, a delete): the panels' view of it is made
+   *  again, and the bid, the rail and the draft catch up. */
+  function sheetsChanged(tab, focusKey) {
+    show(tab);
+    syncAutoGuys();
+    sheetsUi.focus = focusKey || null;
     saveSoon();
     paintBid();
     paintRail();
     renderPanel();
+  }
+
+  /** ADD A SHEET: any type the tool prices (B.sheetsToAdd), as an option that starts ON the proposal. The library is read first
+   *  (the labor lines filed under the sheet's work type and the calculator's modes) and the model is read AFTER it answers, so
+   *  a figure typed while it was loading is kept. Only the new sheet is added; nothing typed on any other is touched. */
+  async function addSheetPress(sheet) {
+    if (sheetsUi.busy) return;
+    sheetsUi.busy = true;
+    paintSheets();
+    try {
+      var rules = await loadMarkupRules();
+      var laborRows = B.withCrewFallback(await loadLaborDefaults());
+      var calcRows = B.withCrewCalcFallback(await loadLaborCalc());
+      var sf = optionStartSf();
+      var made = B.addSheet(ROOT, sheet, {
+        rules: rules, laborRows: laborRows, laborRate: LABOR_RATE, calcRows: calcRows,
+        asms: ASMS, items: ITEMS, reserved: RESERVED_ITEM_IDS,
+        cellValues: state.cell_values, split: T.isSplit(state), state: TW.getState(),
+        sf: Object.fromEntries([[sheet, [sf, "", ""]]]), lf: {},
+        takeoffRows: function (entry, sfs) {
+          if (entry.role === "seal" && SL) return SL.seedTakeoff(entry.sheet, ASMS, sfs[0]);
+          if (entry.role === "gyp" && G) return G.seedTakeoff(ASMS, sfs[0], sfs[1], sfs[2]);
+          return null;
+        }
+      });
+      ROOT = made.model;
+      if (Object.keys(made.patch).length) TW.setState(made.patch);
+      resetSheetsUi();
+      sheetsUi.pick = false;
+      show(made.id);
+      followSf = B.takeoffSf(B.sectionOf(ROOT, made.id).section.takeoff);
+      sheetsChanged(made.id, made.id + "|open");
+    } catch (err) {
+      say("The sheet could not be added: " + (err && err.message));
+    } finally {
+      sheetsUi.busy = false;
+      paintSheets();
+    }
+  }
+
+  /** Kept under its old name for the harnesses: the "+ Add option" button is "Add sheet" now, and every sheet it adds is
+   *  an option that starts on the proposal, as the options it used to add did. */
+  function addOption(tab) { return addSheetPress(tab); }
+
+  /** COPY A SHEET: a copy of everything on it, prices exactly as it does, filed as an option that starts OFF the proposal. */
+  function copySheet(tab) {
+    try {
+      var made = B.copySection(ROOT, tab, { state: TW.getState() });
+      ROOT = made.model;
+      if (Object.keys(made.patch).length) TW.setState(made.patch);
+      resetSheetsUi();
+      show(made.id);
+      followSf = B.takeoffSf(B.sectionOf(ROOT, made.id).section.takeoff);
+      sheetsChanged(made.id, made.id + "|open");
+    } catch (err) {
+      say("The sheet could not be copied: " + (err && err.message));
+    }
+  }
+
+  /** DELETE A SHEET: the first press arms the button ("Click again to delete"), the second removes it, rows included. What the
+   *  draft kept for it goes too (B.deleteSection's patch), because a Copy id is handed out again. The base bid and the
+   *  sheet a bid starts on are refused by the model and their button is disabled with the reason beside it. */
+  function deletePress(tab) {
+    var held;
+    try { held = B.sectionOf(ROOT, tab); } catch (err) { return; }
+    // The base bid and the sheet a bid starts on are refused in the model's own words, never armed.
+    if (held.root || held.kind === "base") {
+      try { B.deleteSection(ROOT, tab, { state: TW.getState() }); } catch (err) { say("That sheet could not be deleted: " + (err && err.message)); }
+      return;
+    }
+    if (sheetsUi.armed !== tab) { sheetsUi.armed = tab; paintSheets(); return; }
+    sheetsUi.armed = null;
+    var gone;
+    try {
+      gone = B.deleteSection(ROOT, tab, { state: TW.getState() });
+    } catch (err) {
+      say("That sheet could not be deleted: " + (err && err.message));
+      paintSheets();
+      return;
+    }
+    ROOT = gone.model;
+    if (Object.keys(gone.patch).length) TW.setState(gone.patch);
+    sheetsUi.confirm = null; sheetsUi.renaming = null; sheetsUi.error = ""; sheetsUi.descOpen = {};
+    var next = activeTab === tab ? openingTab() : activeTab;
+    sheetsChanged(next, next + "|open");
+  }
+
+  /** Kept under its old name for the harnesses: the first press arms, the second deletes. */
+  function removeOptionPress(tab) { deletePress(tab); }
+
+  /** RENAME: what the sheet is called on screen and on the proposal. Checked when the name is committed (Save name or Enter),
+   *  never while it is being typed; the reason it was refused (B.validateLabel) is shown under the box and the box keeps what
+   *  was typed. The key of the sheet never changes, so nothing the draft keeps for it moves. */
+  function commitRename(tab) {
+    var why = null;
+    try { why = B.validateLabel(ROOT, sheetsUi.draft, tab); } catch (err) { why = (err && err.message) || "That name will not do."; }
+    if (why) {
+      sheetsUi.error = why;
+      sheetsUi.focus = tab + "|name";
+      paintSheets();
+      return;
+    }
+    try { ROOT = B.renameSection(ROOT, tab, sheetsUi.draft); } catch (err) {
+      sheetsUi.error = (err && err.message) || "That name will not do.";
+      sheetsUi.focus = tab + "|name";
+      paintSheets();
+      return;
+    }
+    sheetsUi.renaming = null; sheetsUi.error = "";
+    sheetsChanged(activeTab, tab + "|rename");
+  }
+
+  function cancelRename(tab) {
+    sheetsUi.renaming = null; sheetsUi.error = "";
+    sheetsUi.focus = tab + "|rename";
+    paintSheets();
+  }
+
+  /** The base bid was asked for: one sheet, or the combined Epoxy and Polish pair. Nothing changes until the estimator says
+   *  yes, because it moves the lump sum, the job type and what the proposal prints. */
+  function askBase(row) {
+    var ids = row === "combined" ? B.combinedPair(ROOT) : [row];
+    var now = null;
+    try { now = B.baseOf(ROOT).ids; } catch (err) { now = null; }
+    if (!ids || (now && now.length === ids.length && ids.every(function (id) { return now.indexOf(id) >= 0; }))) {
+      sheetsUi.confirm = null;
+      paintSheets();
+      return;
+    }
+    sheetsUi.confirm = { row: row, ids: ids };
+    sheetsUi.armed = null;
+    paintSheets();
+  }
+
+  /** MAKE THE ASKED-FOR SHEET(S) THE BASE BID. Everything follows the base: B.pickBase moves the kinds (the old base goes ON
+   *  the proposal as an option, priced as a total) and answers the draft's side, work_type (a combined base is "combo") and
+   *  base_tab_id (null for the pair) with the old base's tab_opts; the lines the estimator typed on the Proposal step follow the
+   *  new base by the rule the other two base pickers run (TWPrice.applyBasePick); and the save that comes next stamps the lump
+   *  sum, the priced tabs and the proposal's figures from the new base. */
+  function makeBase() {
+    var asked = sheetsUi.confirm;
+    sheetsUi.confirm = null;
+    if (!asked) { paintSheets(); return; }
+    var st = TW.getState();
+    var made, before;
+    try {
+      before = B.baseOf(ROOT);
+      made = B.pickBase(ROOT, asked.ids, { state: st });
+    } catch (err) {
+      say("The base bid could not be changed: " + (err && err.message));
+      paintSheets();
+      return;
+    }
+    var patch = Object.assign({}, made.patch);
+    var from = before.ids.length === 1 ? before.ids[0] : null;
+    var to = made.patch.base_tab_id === undefined ? null : made.patch.base_tab_id;
+    if (PR && from !== to && st.price_overrides && typeof st.price_overrides === "object") {
+      var pov = JSON.parse(JSON.stringify(st.price_overrides));
+      var roles = {};
+      try { B.sectionsOf(made.model).forEach(function (e) { roles = Object.assign({}, roles, Object.fromEntries([[e.tab, e.role]])); }); } catch (err) { roles = {}; }
+      var moved = PR.applyBasePick(pov, from, to, st.priced_tabs, {
+        workType: made.patch.work_type, roles: roles, basePhrase: PR.draftBasePhrase(st)
+      });
+      if (moved) patch.price_overrides = pov;
+    }
+    ROOT = made.model;
+    TW.setState(patch);
+    sheetsChanged(activeTab, (asked.row === "combined" ? "combined" : asked.row) + "|base");
+  }
+
+  /** The "On the proposal as an option" switch. Off keeps the sheet on the bid and priced, and takes it off the proposal. */
+  function toggleOnProposal(tab) {
+    var st = TW.getState();
+    var on = B.optionIsOn(st.tab_opts, tab);
+    TW.setState(B.tabOptPatch(st, tab, on ? { is_option: false } : { is_option: true, show: true }));
+    paintSheets();
+  }
+
+  /** Total, or Add / Deduct. A Seal sheet is priced as a total only, so the page refuses the other even if it is asked. */
+  function setPriceMode(tab, mode) {
+    var e = null;
+    try { e = B.sectionOf(ROOT, tab); } catch (err) { return; }
+    var want = mode === "deduct" && e.role !== "seal" ? "deduct" : "total";
+    TW.setState(B.tabOptPatch(TW.getState(), tab, { price_mode: want }));
+    paintSheets();
+  }
+
+  /** The words an option prints as its line. Saved as they are typed, never repainted under the caret. */
+  function setOptionDesc(tab, text) {
+    TW.setState(B.tabOptPatch(TW.getState(), tab, { desc: String(text || "").slice(0, 400) }));
+  }
+
+  /** What each button in the panel does. `tab` is the sheet it is on, `sheet` the type chosen in the Add menu. */
+  function sheetsAct(act, tab, sheet) {
+    if (act === "on") { toggleOnProposal(tab); return; }
+    if (act === "desc") {
+      var wasOpen = sheetsUi.descOpen[tab] === true;
+      sheetsUi.descOpen = Object.assign({}, sheetsUi.descOpen, Object.fromEntries([[tab, !wasOpen]]));
+      sheetsUi.focus = tab + (wasOpen ? "|desc" : "|desc-box");
+      paintSheets();
+      return;
+    }
+    if (act === "copy") { copySheet(tab); return; }
+    if (act === "rename") {
+      var label = "";
+      try { label = B.sectionOf(ROOT, tab).label; } catch (err) { return; }
+      sheetsUi.renaming = tab; sheetsUi.draft = label; sheetsUi.error = ""; sheetsUi.armed = null; sheetsUi.confirm = null;
+      sheetsUi.focus = tab + "|name";
+      paintSheets();
+      return;
+    }
+    if (act === "rename-save") { commitRename(tab); return; }
+    if (act === "rename-cancel") { cancelRename(tab); return; }
+    if (act === "delete") { deletePress(tab); return; }
+    if (act === "base-yes") { makeBase(); return; }
+    if (act === "base-no") {
+      var row = sheetsUi.confirm ? sheetsUi.confirm.row : null;
+      sheetsUi.confirm = null;
+      sheetsUi.focus = row ? row + "|base" : null;
+      paintSheets();
+      return;
+    }
+    if (act === "add-menu") { sheetsUi.pick = true; sheetsUi.armed = null; sheetsUi.focus = "add|close"; paintSheets(); return; }
+    if (act === "add-close") { sheetsUi.pick = false; sheetsUi.focus = "add|menu"; paintSheets(); return; }
+    if (act === "add") { addSheetPress(sheet); return; }
+  }
+
+  /** The panel is a floating, movable widget above 1400px: drag its header to put it wherever it is not in the way, and it
+   *  opens there next time. TW.floatPanel (shared.js) is the one copy of the drag, the remembered position and the clamp that
+   *  keeps a restored panel on screen; this panel has its own key, because one shared key would teleport each of them to
+   *  wherever another was last left. Below the breakpoint the CSS puts it back in the flow and the restore does not run. */
+  function initSheetsPanelDrag() {
+    TW.floatPanel($("sheets-panel"), { handle: "sh-head", draggingClass: "sh-dragging", key: "tw_v2sheets_pos", width: 256 });
   }
 
   /** Is the section on show edited on the page's own panels? Polish, Epoxy and Gyp are (their work types are `ready`
@@ -3046,6 +3285,17 @@
     return dfltWarnText(true, field === "hours_per_day" ? v + " hours" : (v === "" ? "blank" : v));
   }
 
+  // Enter saves a sheet's new name and Esc drops it (the Sheets panel's rename box). The panel's own buttons are real
+  // <button>s, so Space and Enter already work them; only this box needed a key.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (!t || !t.getAttribute) return;
+    var name = t.getAttribute("data-sh-name");
+    if (name === null) return;
+    if (e.key === "Enter") { e.preventDefault(); commitRename(name); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelRename(name); }
+  });
+
   // Space and Enter work the on/off slider from the keyboard, as they would a button.
   document.addEventListener("keydown", function (e) {
     var t = e.target;
@@ -3063,20 +3313,22 @@
     var go_ = t.closest("[data-go]");
     if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
 
-    // "+ Add option" and its choices, and Remove on an option the bid holds. Any other click puts an armed Remove
-    // back to what it was, so a single press never removes a section a later click has nothing to do with.
-    var optRm = t.closest("[data-remove-option]");
-    if (optRm) { removeOptionPress(optRm.getAttribute("data-remove-option")); return; }
-    if (removeArmed) { removeArmed = null; paintOptionBar(); }
-    var optMenu = t.closest("[data-add-option-menu]");
-    if (optMenu) { optionMenuOpen = !optionMenuOpen; paintOptionBar(); return; }
-    var optAdd = t.closest("[data-add-option]");
-    if (optAdd) { addOption(optAdd.getAttribute("data-add-option")); return; }
+    // THE SHEETS PANEL's buttons (see sheetsAct). Any other click puts an armed Delete back to what it was, so a single
+    // press never deletes a sheet that a later click has nothing to do with.
+    var shAct = t.closest("[data-sh-act]");
+    var shWhat = shAct ? shAct.getAttribute("data-sh-act") : null;
+    if (sheetsUi.armed && shWhat !== "delete") { sheetsUi.armed = null; paintSheets(); }
+    if (shAct) {
+      sheetsAct(shWhat, shAct.getAttribute("data-sh-tab"), shAct.getAttribute("data-sh-sheet"));
+      return;
+    }
 
-    // The section strip (drawn only when the bid has more than one section).
+    // A sheet's name in the panel (and the Open button on an option's Review card): put that sheet on show.
     var secTab = t.closest("[data-section-tab]");
     if (secTab) {
+      resetSheetsUi();
       show(secTab.getAttribute("data-section-tab"));
+      sheetsUi.focus = secTab.getAttribute("data-sh-key");
       paintSections();
       renderPanel();
       return;
@@ -3381,6 +3633,23 @@
     var el = e.target;
     if (!el || !el.matches) return;
 
+    // THE SHEETS PANEL's two boxes. A name being typed is held and checked when it is committed, never mid-word; the
+    // reason shown under it from an earlier refusal is taken down as soon as typing starts again. The words an option
+    // prints are saved as they are typed and the panel is NOT redrawn, which would take the caret out of the box.
+    var shName = el.getAttribute("data-sh-name");
+    if (shName !== null) {
+      sheetsUi.draft = el.value;
+      if (sheetsUi.error) {
+        sheetsUi.error = "";
+        var shErr = document.querySelector("[data-sh-error]");
+        if (shErr) shErr.hidden = true;
+        lastSheets = null;
+      }
+      return;
+    }
+    var shDesc = el.getAttribute("data-sh-desc");
+    if (shDesc !== null) { setOptionDesc(shDesc, el.value); return; }
+
     if (el.matches("[data-contingency]")) {
       M.contingency = el.value;
       changed(false);
@@ -3537,6 +3806,11 @@
   document.addEventListener("change", function (e) {
     var el = e.target;
     if (!el || !el.getAttribute) return;
+    // THE SHEETS PANEL's two radio groups: which sheet is the base bid (asked, then confirmed), and Total or Add / Deduct.
+    var shBase = el.getAttribute("data-sh-base");
+    if (shBase !== null) { askBase(shBase); return; }
+    var shMode = el.getAttribute("data-sh-mode");
+    if (shMode !== null) { setPriceMode(shMode, el.value); return; }
     // The Gyp card's three selects (sheet, mix, sound mat). The sheet moves the section to another workbook tab, so
     // the whole page is repainted; the other two reprice and repaint the panel.
     var gypSel = el.getAttribute("data-gyp");
@@ -3902,6 +4176,10 @@
     // keeps what it was saved with and offers the button. See lookupDistance.
     if (newBid && laborDefaults && !M.distance) lookupDistance(false);
   }
+
+  // The Sheets panel floats above 1400px. At parse time, like the page's own delegated listeners: the panel is in the
+  // markup already, and its drag is delegated to the header, which is redrawn with every repaint.
+  initSheetsPanelDrag();
 
   init();
 })();

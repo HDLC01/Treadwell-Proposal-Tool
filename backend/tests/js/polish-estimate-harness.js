@@ -60,6 +60,11 @@ const SEAL = fs.existsSync(SEAL_FILE) ? require(SEAL_FILE) : undefined;
 const W = require(path.join(ROOT, "js", "work-types.js"));
 // The one search pop-up both Add buttons open: the REAL module, mounted on this file's stub DOM.
 const PICKER = require(path.join(ROOT, "js", "library-picker.js"));
+// The base-pick rule for the lines typed on the Proposal step (js/price-lines-core.js): the page reads it as it parses. A scratch
+// copy that lacks the file (a mutation run built from an older list of files) simply changes the base without moving those lines,
+// which is what the page does when the script fails to load.
+const PRICE_FILE = path.join(ROOT, "js", "price-lines-core.js");
+const PRICE = fs.existsSync(PRICE_FILE) ? require(PRICE_FILE) : undefined;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -420,6 +425,9 @@ function build(opts) {
     withDraft: (p) => p + (p.indexOf("?") >= 0 ? "&" : "?") + "d=" + store.id,
     getDraftId: () => store.id,
     draftReady: Promise.resolve(),
+    // shared.js's drag-and-remember helper (its own harness, panel-restore-harness.js, runs the real one). Here it only records
+    // what the page asked for, so "the Sheets panel floats under its own key" is a fact read off the page.
+    floatPanel: (panel, floatOpts) => { (rec.floats = rec.floats || []).push({ id: panel && panel.attrs && panel.attrs.id, opts: clone(floatOpts) }); },
     authHeaders: (hs) => Object.assign({}, hs || {}),
     resolveApiBase: () => "",
     // The pagehide flush calls this after pushing the pending save through synchronously --
@@ -446,6 +454,8 @@ function build(opts) {
   const winListeners = [];
   const win = {
     TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWGypTakeoff: GYP, TWSealTakeoff: SEAL, TWPolishSandbox: S, TWLibraryPicker: PICKER,
+    // The base-pick rule the Sheets panel applies to the lines typed on the Proposal step: the REAL module.
+    TWPrice: PRICE,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },

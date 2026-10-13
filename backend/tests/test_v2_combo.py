@@ -225,7 +225,8 @@ def test_a_saved_combo_job_switched_to_polish_prices_polish_alone_and_keeps_the_
     sw = page["switched"]
     s = sw["comboToPolish"]
     assert s["kinds"] == [["Polish", "base"], ["Epoxy", "off"]]
-    assert s["strip"] == [], "a job with one section has no section strip"
+    assert s["strip"] == ['data-section-tab="Polish"'], (
+        "the Sheets panel lists only what the job is made of now: the Epoxy section that left it is not a row, and Polish is the one")
     assert s["bar"] == s["handBar"] and _digits(s["bar"]) < _digits(sw["comboBefore"])
     assert s["savedPricedTabs"] == [["Polish", "base"]] and s["savedLump"] == _digits(s["bar"])
     back = sw["comboToPolishAndBack"]

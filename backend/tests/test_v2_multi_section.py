@@ -34,6 +34,7 @@ notice, and `break_source` refuses an anchor that is not in the file exactly onc
 """
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -499,9 +500,14 @@ def test_the_strip_is_empty_for_one_section_and_one_button_each_for_several(ran)
     assert s["prices"] and s["optionLabelled"] and s["escapes"] and s["noPriceSaysSo"] and s["noEmDash"]
 
 
-def test_the_page_draws_no_strip_for_one_section_and_saves_what_it_always_saved(ran):
+def test_the_page_draws_the_panel_with_one_row_and_no_open_sheet_line_for_one_section_and_saves_what_it_always_saved(ran):
+    """The Sheets panel is on every bid (Sheets phase 3), so a bid with one sheet has the panel with its one row, which is the base
+    bid, and nothing to switch to. What hides is the "Open sheet" line above the step rail: with one sheet there is nothing to tell
+    apart. What the save writes is the five keys it always wrote."""
     one = ran["page"]["one"]
-    assert one["strip"] == {"hidden": True, "html": "", "htmlWrites": 0}, "a single-section bid must look as it did"
+    assert one["strip"]["hidden"] is True and one["strip"]["now"] == "", "the Open sheet line is not drawn for one sheet"
+    assert one["strip"]["rows"] == 1 and "Base bid" in one["strip"]["html"]
+    assert "Add a sheet to price an option" in one["strip"]["html"], "the empty state says how to get an option"
     assert one["keys"] == sorted(["__draft_id", "cell_values", "city", "computed_bid", "polish_2_sf",
                                   "polish_estimate", "polish_sf", "project_name", "state", "work_type"])
     assert one["hasSnapshot"] is False and one["alert"] == ""
@@ -509,7 +515,7 @@ def test_the_page_draws_no_strip_for_one_section_and_saves_what_it_always_saved(
 
 def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ran):
     m = ran["page"]["multi"]
-    assert m["strip"]["hidden"] is False
+    assert m["strip"]["hidden"] is False and "Open sheet" in m["strip"]["now"]
     assert m["strip"]["html"].count("data-section-tab=") == 3
     # Epoxy is edited on the page's own panels now (Phase 12): its Material panel is the takeoff, with the patch
     # that the sheet always charges, not a summary. A section not edited here yet keeps the summary.
@@ -519,7 +525,7 @@ def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ra
     assert "data-seal-patch" in m["panelSeal"] and "Priced with seal@1" not in m["panelSeal"]
     assert "Leveling" in m["panelLeveling"] and "Priced with leveling@1" in m["panelLeveling"]
     assert "blank, so the built-in rate is charged" in m["panelLeveling"], "the Markups notes are shown, not hidden"
-    assert 'aria-current="true">Epoxy' in m["stripAfterClick"]
+    assert re.search(r'data-section-tab="Epoxy"[^>]*aria-current="true"', m["stripAfterClick"]), "clicking a sheet opens it"
     assert m["panelRootIsTakeoff"] is True, "choosing Polish again brings the takeoff panel back"
     assert m["maths"].startswith("Polish $") and "+ Epoxy $" in m["maths"]
 
