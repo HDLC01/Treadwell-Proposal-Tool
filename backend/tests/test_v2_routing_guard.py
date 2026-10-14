@@ -359,8 +359,8 @@ DOORS = [
     ("js/portal.js", "&edit=1", 2, INTAKE, "the board's drawer: Open"),
     ("js/projects.js", "&edit=1", 1, INTAKE, "a Projects card (a v2 card goes to the v2 intake first)"),
     ("js/proposal-review.js", 'href="/?edit=1"', 1, INTAKE, "Go to Intake on the no-project card"),
-    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 1, SHEET,
-     "Back from the proposal step"),
+    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 2, SHEET,
+     "Back from the proposal step, and the Pricing options panel's link to the estimate on a v2 draft"),
     ("shared.js", 'searchParams.has("edit")', 1, NOT_A_DOOR,
      "the step-link rewriter reads the parameter, it opens nothing"),
 ]
@@ -492,7 +492,7 @@ DERIVED = [
     "tab_opts", "tab_copies", "tab_labels", "tab_order", "tab_notes", "tab_structs", "lock_overrides",
     "tax_layout", "tax_inclusion", "price_overrides", "price_lines", "extras",
     "paragraph_overrides", "paragraph_overrides_all", "system_name", "texture", "scope_notes",
-    "schedule_notes", "exclusions", "notes_text", "estimator_name",
+    "schedule_notes", "exclusions", "notes_text", "notes_seed", "estimator_name",
     "dropbox_result", "portal_message", "portal_emails", "require_deposit", "job_number",
     "info_cell_values", "notify_picks", "won", "handed_off", "closed_lost", "on_hold",
 ]

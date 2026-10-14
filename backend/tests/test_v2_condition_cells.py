@@ -56,7 +56,7 @@ DOC = ROOT / "docs" / "v2-architecture.md"
 # What each page harness reads out of a frontend directory (they do not fall back to the real one), so a
 # scratch copy that breaks ONE file can be completed with the rest.
 TAKEOFF_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js"]
+                 "js/work-types.js", "js/polish-sandbox.js", "js/library-picker.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 INTAKE_FILES = ["polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 BETA_FILES = ["js/index.js", "index.html", "shared.js", "js/projects.js", "js/county-picker.js",
@@ -184,7 +184,9 @@ def test_a_caller_that_knows_the_base_better_replaces_the_tables_cells_and_only_
     assert own["filtered"] == {"ok": ["Polish!B6", "Gyp (FR)!B8"]}, "an address that is no cell got through"
     assert own["empty"] == {"ok": []}
     assert own["ignoredWhenUnsplit"] == {"ok": FAN_OUT}
-    assert own["ignoredForAConditionNoSheetOwns"] == {"ok": ["Epoxy!B4", "Polish!B4"]}
+    # Local is a literal on five sheets: Epoxy, Polish, the Gyp base's and Gyp (FR)'s own B5 (Phase 14) and Seal's B4 (Phase 15)
+    assert own["ignoredForAConditionNoSheetOwns"] == {
+        "ok": ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4"]}
     assert own["notAList"] == {"ok": ["Polish!B6"]}, "something that is not a list was read as one"
 
 
@@ -239,8 +241,9 @@ def test_a_save_on_a_split_draft_writes_the_base_sheets_own_cells_and_no_other_t
                                "Polish!B6": "No", "Epoxy!D6": None, "Polish!D6": "Yes", GYP + "!D8": None}
     # every other condition writes the same cells whether or not the draft is split
     assert w["otherCells"]["same"] is True
-    assert w["otherCells"]["keys"] == ["Epoxy!B10", "Epoxy!B4", "Epoxy!D5", "Polish!B10", "Polish!B4",
-                                       "Polish!E25", "Polish!E29", "Polish!F29"]
+    assert w["otherCells"]["keys"] == ["Epoxy!B10", "Epoxy!B4", "Epoxy!D5", "Gyp (FR)!B5", 'Gyp (USG 1-8")!B5',
+                                       "Polish!B10", "Polish!B4", "Polish!E25", "Polish!E29", "Polish!F29",
+                                       "Seal!B10", "Seal!B4"]
 
 
 def test_a_save_is_idempotent_and_leaves_its_inputs_alone(ran):
@@ -523,32 +526,21 @@ def _readers(book, sheet, cell):
 NOT_WRITTEN_LIVE = " The live intake does not write it either."
 # cell -> (the phase that will write it, whether a formula on its sheet reads it today, why it is not written)
 KNOWN_GAPS = {
-    "Seal!B4": ("Phase 15", True,
-                "Local? is Seal's own literal ('Seal (+Jnts)'!B4 mirrors it) and Seal's travel line reads it. "
-                "No Seal option is priced in v2 yet." + NOT_WRITTEN_LIVE),
-    "Seal!B10": ("Phase 15", True,
-                 "New / Reno: is a blank input on Seal ('Seal (+Jnts)'!B10 mirrors it) and Seal's patch material "
-                 "rate reads it. No Seal option is priced in v2 yet." + NOT_WRITTEN_LIVE),
     "Leveling!B4": ("Phase 16", True,
                     "Local? is Leveling's own literal and its travel line reads it. No Leveling option is priced "
                     "in v2 yet." + NOT_WRITTEN_LIVE),
     "Leveling!B10": ("Phase 16", False,
                      "New / Reno: is a blank input on Leveling that no formula on the sheet reads today. No "
                      "Leveling option is priced in v2 yet." + NOT_WRITTEN_LIVE),
-    GYP + "!B5": ("Phase 14", True,
-                  "Local? is the gyp base's own literal (three of the other four gyp sheets mirror it) and the "
-                  "sheet's travel and markup lines read it. Gyp is not priced in v2 yet." + NOT_WRITTEN_LIVE),
-    "Gyp (FR)!B5": ("Phase 14", True,
-                    "Local? is Gyp (FR)'s own literal, not a mirror of the gyp base's, and its travel and markup "
-                    "lines read it. Gyp is not priced in v2 yet." + NOT_WRITTEN_LIVE),
     GYP + "!B12": ("Phase 14", False,
-                   "New / Reno: is the gyp base's own 'New' and no formula on the sheet reads it today. Gyp is "
-                   "not priced in v2 yet." + NOT_WRITTEN_LIVE),
+                   "New / Reno: is the gyp base's own 'New' and no formula on the sheet reads it. Gyp is priced "
+                   "in v2 now, and it has no renovation question (its scope is epoxy, polish and combo)." + NOT_WRITTEN_LIVE),
     "Gyp (FR)!B12": ("Phase 14", False,
-                     "New / Reno: is Gyp (FR)'s own 'New' and no formula on the sheet reads it today. Gyp is not "
-                     "priced in v2 yet." + NOT_WRITTEN_LIVE),
+                     "New / Reno: is Gyp (FR)'s own 'New' and no formula on the sheet reads it. Gyp is priced in "
+                     "v2 now, and it has no renovation question (its scope is epoxy, polish and combo)." + NOT_WRITTEN_LIVE),
 }
-PHASE_OF_SHEET = {"Seal": "Phase 15", "Leveling": "Phase 16", "Gyp": "Phase 14"}
+# Seal's two (B4 and B10) were the Phase 15 gaps and are written by the table now, so a Seal cell on this list would be stale
+PHASE_OF_SHEET = {"Leveling": "Phase 16", "Gyp": "Phase 14"}
 
 
 def _written(ran):
@@ -623,7 +615,7 @@ def test_the_table_writes_no_hard_bid_cell_and_every_one_of_them_is_accounted_fo
 
 def test_the_scan_can_fail_a_new_unlisted_literal_and_a_gap_that_has_closed(ran):
     """The scan is only worth having if it goes red. A mirror that becomes a literal ('Seal (+Jnts)'!B4 typed
-    over) is an unlisted literal flag cell. A gap the table now writes (here, Seal!B4 added to what it writes)
+    over) is an unlisted literal flag cell. A gap the table now writes (here, Leveling!B4 added to what it writes)
     is a stale entry. The real template is clean, and each of these is not."""
     written, sheets = _written(ran), ran["sheets"]
     assert _unlisted(_template(), sheets, written, KNOWN_GAPS) == []
@@ -633,7 +625,7 @@ def test_the_scan_can_fail_a_new_unlisted_literal_and_a_gap_that_has_closed(ran)
     new_row = _template()
     new_row["Leveling"]["D6"] = "No"          # Remodel Tax? on Leveling was a mirror of Epoxy's; now its own
     assert _unlisted(new_row, sheets, written, KNOWN_GAPS) == ["Leveling!D6"]
-    assert _stale(_template(), sheets, written | {"Seal!B4"}, KNOWN_GAPS) == ["Seal!B4"]
+    assert _stale(_template(), sheets, written | {"Leveling!B4"}, KNOWN_GAPS) == ["Leveling!B4"]
     assert _stale(_template(), sheets, written, {**KNOWN_GAPS, "Epoxy blank!B4": ("Phase 99", False, "x")}) == [
         "Epoxy blank!B4"]
     # and a template that moves a flag row is refused rather than scanned wrong
@@ -698,7 +690,7 @@ PATCH_LINE = "      cell_values: conditionCellWrites(model.conditions, cells, ct
 RENO_LINE = "      var first = firstFilled(carried.cells, out, isBlank);"
 MARK_LINE = '    "polish_estimate", "cell_values", "tax_flags_per_sheet",'
 COPY_BASE_LINE = "    if (WT.isSplit(srcData) && WT.isJobType(srcData.work_type)) {"
-ESTIMATE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
+ESTIMATE_ADOPT = "    ROOT.conditions = B.conditionsFromCells(ROOT.conditions, state.cell_values, T.isSplit(state));"
 ESTIMATE_SEEDED = "      split: T.isSplit(state),"
 INTAKE_ADOPT = "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values, T.isSplit(state));"
 INTAKE_SAVE = "    return B.conditionCellWrites(M.conditions, draft.cell_values, undefined, T.isSplit(draft));"
@@ -767,7 +759,7 @@ BREAKS = {
         test_a_v2_copy_of_a_split_project_that_is_not_polish_opens_at_the_source_bases_own_tax_answer),
     "the Takeoff step reads the draft as unsplit": (
         "takeoff", ESTIMATE, ESTIMATE_ADOPT,
-        "    M.conditions = B.conditionsFromCells(M.conditions, state.cell_values);", [],
+        "    ROOT.conditions = B.conditionsFromCells(ROOT.conditions, state.cell_values);", [],
         test_the_takeoff_step_saves_a_split_copy_without_touching_its_options),
     "the Takeoff step's seeded read ignores the mark": (
         "takeoff", ESTIMATE, ESTIMATE_SEEDED,

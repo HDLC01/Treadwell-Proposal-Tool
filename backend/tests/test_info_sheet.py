@@ -368,6 +368,33 @@ def test_the_second_block_ignores_a_tab_the_customer_did_not_buy():
     assert isw.build_prefill(d2)["B48"] == 4200
 
 
+def test_the_second_block_ignores_a_v2_option_that_is_not_on_the_proposal():
+    """The v2 estimate writes each section's own kind. A copy made off the base starts OFF the proposal
+    (tab_opts is_option false), so the flag alone cannot be the guard: an Epoxy copy beside a Polish base was
+    handed to ops as the job's second system, with crews and material booked for scope nobody quoted."""
+    def draft(copy_kind):
+        return _draft(
+            work_type="polish", base_tab_id="Polish", sheet_area={"polish_sf": 10000},
+            priced_tabs=[
+                {"id": "Polish", "kind": "base", "role": "polish", "system_desc": "Treadwell Polished Concrete",
+                 "sf": {"polish_sf": 10000}},
+                {"id": "Epoxy", "kind": "option", "role": "epoxy", "system_desc": "Flake",
+                 "sf": {"epoxy_sf": 4000, "cove_lf": 300}},
+                {"id": "Copy1", "kind": copy_kind, "role": "epoxy", "system_desc": "Flake",
+                 "sf": {"epoxy_sf": 4000, "cove_lf": 300}},
+            ],
+            tab_opts={"Epoxy": {"is_option": True, "show": True, "price_mode": "total"},
+                      "Copy1": {"is_option": False, "show": True, "price_mode": "total"}})
+
+    pf = isw.build_prefill(draft("option"))
+    for addr in ("B46", "B48", "D48"):
+        assert addr not in pf, f"{addr} reported an option that is off the proposal as sold scope"
+    # The same draft with the copy's kind "base" DOES report it: the kind is what does the work here, and a
+    # draft from before v2 (every tab kind "base", a v1 copy kind "copy") reads exactly as it did.
+    assert isw.build_prefill(draft("base"))["B48"] == 4000
+    assert isw.build_prefill(draft("copy"))["B48"] == 4000
+
+
 def test_cove_is_not_reported_on_a_gypsum_handoff():
     """Gyp is a mobilization-based underlayment with no cove product, and its
     sheet snapshot has no cove cells — so any cove figure is a leftover intake

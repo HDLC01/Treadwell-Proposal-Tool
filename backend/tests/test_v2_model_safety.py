@@ -350,7 +350,7 @@ def test_an_intake_save_after_an_estimate_save_leaves_tabs_byte_identical(ran):
 # ── red without the code: break a COPY and watch each law notice ─────────────────────────────────
 SCRATCH_FRONTEND_FILES = ["polish-estimate.html", "polish-intake.html", "js/polish-estimate.js",
                           "js/polish-intake.js", "js/bid-model.js", "js/library-core.js", "js/library-picker.js",
-                          "js/intake-scope.js", "js/county-picker.js", "js/work-types.js"]
+                          "js/intake-scope.js", "js/county-picker.js", "js/work-types.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 MUTATIONS = {
     "migrate stops carrying the keys it does not know": (
@@ -395,7 +395,7 @@ MUTATIONS = {
         "js/bid-model.js", "if (laborUnstated(existing)) delete model.labor;", "void 0;",
         lambda r: r["patch"]["mint"]["undef"]["hasLabor"] is True),
     "the intake rebuilds the model from nothing": (
-        "js/polish-intake.js", "var model = B.patchModel(cur.polish_estimate, {", "var model = B.patchModel({}, {",
+        "js/polish-intake.js", "var model = B.patchModel(cur.polish_estimate, patch);", "var model = B.patchModel({}, patch);",
         lambda r: r["intake"]["alone"]["takeoffKept"] is False and r["intake"]["alone"]["tabsIdentical"] is False),
     "an estimate save stops carrying what the model holds": (
         "js/bid-model.js", "var stamped = Object.assign(copyInto({}, model), rootLive ? { totals: rootLive } : {});",

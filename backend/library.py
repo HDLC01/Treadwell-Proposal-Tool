@@ -89,7 +89,7 @@ LABOR = "library_labor"
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
                  "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types",
-                 "default_on")
+                 "default_on", "price_breaks", "bulk_cost", "coverage_basis")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types",
                 "default_on")
 VENDOR_WRITABLE = ("name", "notes")
@@ -175,6 +175,14 @@ _MAX_LINES = 60                 # a system with 60 coats is a mistake, not a sys
 _MAX_UNIT_COST = 1e7            # $10M for one gallon is a typo
 _MAX_COVERAGE = 1e6             # SF covered by one unit
 _MAX_BUY_QTY = 1e5              # a 100,000-unit pack is a typo, not a pallet
+_MAX_BREAK_QTY = 1e8            # a price break past 100 million units is a typo
+_MAX_BREAKS = 12                # Kyle's sheet has one; a dozen is already a lot of tiers
+COVERAGE_BASES = ("sf", "lf", "each")   # what a coverage is quoted per: area, length, or a count
+# THE THREE PHASE 11 FIELDS, AND WHO MAY SET THEM. They decide how a price is reached (a cheaper pack
+# past a quantity, a bulk price, which measure the coverage divides), so the routes require an admin
+# for a request that carries any of them, the same rule the Items tab's More panel follows. An
+# ordinary edit to a material's name or cost is open to every estimator, as before.
+ITEM_ADMIN_ONLY = ("price_breaks", "bulk_cost", "coverage_basis")
 _MAX_LABOR_RATE = 1e5           # $100,000 an hour is a typo (numeric(10,2) holds it)
 _MAX_SORT = 10000               # a position in a short list, not a quantity
 
@@ -321,6 +329,83 @@ def _number(raw: Any, *, field: str, maximum: float) -> Optional[float]:
     if num > maximum:
         raise ValidationError("%s is implausibly large — check the figure." % field)
     return num
+
+
+def _coerce_price_breaks(raw: Any) -> Optional[List[Dict[str, float]]]:
+    """A material's price breaks, checked: `[{"min_qty": 240, "unit_cost": 90}, ...]`, or None.
+
+    A break says "from this many units bought, the pack costs this instead" (inclusive: Kyle's
+    flake pays the bulk price AT 240 lb, not above it). They must be listed smallest first with
+    every quantity larger than the one before, and every quantity and cost must be a positive
+    number. Anything else is a 400 with a plain message rather than a quietly repaired list: a
+    price table that was silently re-sorted or trimmed would price bids off numbers nobody typed.
+
+    Blank, an empty list and null all mean "no breaks" and are stored as NULL, so a row never
+    holds a list that says nothing."""
+    if raw is None or raw == "" or raw == []:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise ValidationError("The price breaks could not be read. Give each one a quantity "
+                                  "and a cost.")
+        if raw is None or raw == []:
+            return None
+    if not isinstance(raw, list):
+        raise ValidationError("The price breaks must be a list of quantities and costs.")
+    if len(raw) > _MAX_BREAKS:
+        raise ValidationError("A material can have at most %d price breaks." % _MAX_BREAKS)
+    out: List[Dict[str, float]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValidationError("Each price break needs a quantity and a cost.")
+        qty = _number(entry.get("min_qty"), field="A price break quantity",
+                      maximum=_MAX_BREAK_QTY)
+        cost = _number(entry.get("unit_cost"), field="A price break cost",
+                       maximum=_MAX_UNIT_COST)
+        if qty is None or qty <= 0:
+            raise ValidationError("Each price break needs a quantity above zero.")
+        if cost is None or cost <= 0:
+            raise ValidationError("Each price break needs a cost above zero.")
+        if out and qty <= out[-1]["min_qty"]:
+            raise ValidationError("Price break quantities must go up. Each one has to be larger "
+                                  "than the one before it.")
+        out.append({"min_qty": qty, "unit_cost": cost})
+    return out
+
+
+def _shape_price_breaks(raw: Any) -> Optional[List[Dict[str, float]]]:
+    """Price breaks as read from the database: the clean entries, or None. Lenient where the
+    writer is strict, because a row already stored is not ours to refuse to show."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    if not isinstance(raw, list):
+        return None
+    out: List[Dict[str, float]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        qty, cost = _as_float(entry.get("min_qty")), _as_float(entry.get("unit_cost"))
+        if qty is None or qty <= 0 or cost is None or cost < 0:
+            continue
+        out.append({"min_qty": qty, "unit_cost": cost})
+    return out or None
+
+
+def _coerce_coverage_basis(raw: Any) -> Optional[str]:
+    """What the coverage is quoted per: "sf", "lf" or "each". Blank is None, meaning "the area the
+    caller measured". Case is forgiven; an unknown word is refused, because a basis the pricer
+    does not know would be silently ignored and the line would price off the wrong measure."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    word = str(raw).strip().lower() if isinstance(raw, str) else ""
+    if word not in COVERAGE_BASES:
+        raise ValidationError("Coverage is measured per SF, LF or Each.")
+    return word
 
 
 # ── administration reference lists ───────────────────────────────────────────
@@ -518,6 +603,22 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         ru = payload.get("roundup")
         out["roundup"] = None if ru is None else bool(ru)
 
+    # PHASE 11 OF THE ESTIMATING PROGRAM: price breaks, a bulk cost and a coverage basis, all three
+    # NULL by default and all three read by library-core.js. WRITTEN ONLY WHEN THE REQUEST CARRIES
+    # THEM, never on create or an ordinary edit, for the same reason as `default_on` below: a
+    # database that has not had backend/ops/library_price_breaks.sql applied (production, today)
+    # must never be sent a column it lacks. NULL means "this material has none" and survives the
+    # round trip; do not coerce it to an empty list or a zero.
+    if "price_breaks" in payload:
+        out["price_breaks"] = _coerce_price_breaks(payload.get("price_breaks"))
+    if "bulk_cost" in payload:
+        # The pack cost when the bid has Bulk Discount on. Zero is "not set", as with coverage:
+        # a bulk price of nothing would price the whole material as free.
+        bulk = _number(payload.get("bulk_cost"), field="The bulk cost", maximum=_MAX_UNIT_COST)
+        out["bulk_cost"] = bulk if (bulk is None or bulk > 0) else None
+    if "coverage_basis" in payload:
+        out["coverage_basis"] = _coerce_coverage_basis(payload.get("coverage_basis"))
+
     for col, limit in (("category", _MAX_TEXT), ("sku", 80),
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
         if col == "category" and "divisions" in out:
@@ -573,6 +674,13 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         # it did then. Read-shaped rather than backfilled: rewriting somebody's hand-typed rows to
         # add a column is a migration that can go wrong, and this cannot.
         "buy_qty": _as_float(row.get("buy_qty")) or 1.0,
+        # Phase 11. Always present, None when the material has none (and for every row read from a
+        # database that does not have the columns yet): library-core.js prices a row with all
+        # three empty exactly as it did before they existed.
+        "price_breaks": _shape_price_breaks(row.get("price_breaks")),
+        "bulk_cost": _as_float(row.get("bulk_cost")),
+        "coverage_basis": (row.get("coverage_basis")
+                           if row.get("coverage_basis") in COVERAGE_BASES else None),
         "sku": row.get("sku") or "",
         "vendor": row.get("vendor") or "",
         "notes": row.get("notes") or "",
@@ -716,7 +824,9 @@ def update_item(item_id: str, payload: Dict[str, Any],
     patch["updated_at"] = _now_iso()
     patch["updated_by"] = _actor(editor_email)
     sb = get_client()
-    cur = (sb.table(ITEMS).select("id,unit_cost")
+    # "*" rather than a column list: the price columns of Phase 11 are not on every database yet,
+    # and PostgREST refuses a select that names one that is missing.
+    cur = (sb.table(ITEMS).select("*")
            .eq("id", item_id).is_("deleted_at", "null").limit(1).execute())
     rows = cur.data or []
     if not rows:
@@ -732,6 +842,12 @@ def update_item(item_id: str, payload: Dict[str, Any],
     # not when the name is corrected, and not when the same cost is saved again by the debounced
     # PATCH that fires as somebody tabs out of the field.
     if "unit_cost" in patch and _as_float(patch["unit_cost"]) != _as_float(rows[0].get("unit_cost")):
+        patch["cost_updated_at"] = patch["updated_at"]
+    # A bulk cost and a price break are prices too: moving either is a price revision.
+    elif (("bulk_cost" in patch
+           and _as_float(patch["bulk_cost"]) != _as_float(rows[0].get("bulk_cost")))
+          or ("price_breaks" in patch
+              and patch["price_breaks"] != _shape_price_breaks(rows[0].get("price_breaks")))):
         patch["cost_updated_at"] = patch["updated_at"]
     sb.table(ITEMS).update(patch).eq("id", item_id).execute()
     return get_item(item_id)

@@ -460,7 +460,8 @@ function pins() {
   const gd = B.composePricingSnapshot(g, { bid: rootBid(g, MATERIAL.Polish), bids: B.priceTabs(g, gctx) });
   let carrier = B.activateSection(Object.assign(polishBid(), { kind: "off" }), "Epoxy", "option", {});
   carrier = B.activateSection(carrier, GYP, "base", {});
-  // a root kind of "option" is reserved, not read: the root stays a base and the job's travel is charged once
+  // a root kind of "option" is read since Sheets phase 1: the root is an option, the carrier moves to Epoxy (the first base), and each
+  // is charged by its role, the carrier the job's Lodging and Per Diem and the option its own for its own crew
   const rootOpt = withEpoxy([]);
   rootOpt.kind = "option";
   rootOpt.conditions.local = false;
@@ -476,7 +477,8 @@ function pins() {
     carrierRootOff: B.travelCarrier(carrier),
     rootOption: { kind: B.sectionsOf(rootOpt)[0].kind, carrier: B.travelCarrier(rootOpt),
                   epoxyTravel: B.priceSection(rootOpt, "Epoxy", ctxOf()).travel,
-                  rootTravel: B.priceSection(rootOpt, "Polish", ctxOf()).travel },
+                  rootTravel: B.priceSection(rootOpt, "Polish", ctxOf()).travel,
+                  polishBidTravel: B.polishBid(rootOpt, "Polish", { material: () => MATERIAL.Polish }).travel },
   };
 }
 
@@ -487,9 +489,13 @@ const est = () => ESTIMATE || (ESTIMATE = loadPrelude("polish-estimate-harness.j
 async function page() {
   const P = est();
   const last = (l) => l[l.length - 1];
-  const seg = (b) => ({ hidden: !!b.doc.getElementById("sections").hidden, html: b.doc.getElementById("sections").innerHTML,
-                        htmlWrites: b.doc.getElementById("sections").htmlWrites });
-  // one section (every bid today): the strip is never drawn and a save writes the five keys
+  // THE SHEETS PANEL replaced the strip (Sheets phase 3): it is drawn on every bid, one row per sheet; the "Open sheet" line above the
+  // step rail is what hides for a bid with one sheet.
+  const seg = (b) => {
+    const panel = b.doc.getElementById("sheets-panel"), now = b.doc.getElementById("sheet-now");
+    return { hidden: !!now.hidden, now: now.innerHTML, html: panel.innerHTML, rows: (panel.innerHTML.match(/data-sh-row="/g) || []).length };
+  };
+  // one section (every bid today): the panel has its one row, the Open sheet line is not drawn, and a save writes the five keys
   const one = P.build({ blob: P.blob({ polish_estimate: clone(P.MODEL), polish_sf: 17500 }) });
   await one.api.init();
   P.typeInto(one, '[data-tk="0"][data-k="measurement"]', "12000");
@@ -504,15 +510,29 @@ async function page() {
       labor: [{ id: "installing", label: "Installing", guys: 3, days: 4, rate: 33 }],
       contingency: 0, fees: 0, totals: {},
       rates: { version: 1, profile: "epoxy@1", rates: {}, fees_default: null, notes: ["Soft costs: the rule filed on the Markups page is blank, so the built-in rate is charged."] } },
-    Seal: { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {} },
+    Seal: { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {},
+      rates: { version: 1, profile: "seal@1", rates: {}, fees_default: null, notes: ["Soft costs: the rule filed on the Markups page is blank, so the built-in rate is charged."] } },
   } });
-  const b = P.build({ blob: P.blob({ polish_estimate: clone(model), polish_sf: 17500 }) });
+  const b = P.build({ blob: P.blob({ work_type: "combo", polish_estimate: clone(model), polish_sf: 17500 }) });
   await b.api.init();
   const strip = seg(b);
   const rootOnly = b.api.bid().total;
   P.clickEl(b, P.need(b, '[data-section-tab="Epoxy"]'));
   const panelEpoxy = b.doc.getElementById("panels").innerHTML;
   const stripAfter = seg(b);
+  // The Seal option is edited on the page's own panels since Phase 15: its Material panel is the takeoff, with the patch
+  // the sheet always charges
+  P.clickEl(b, P.need(b, '[data-section-tab="Seal"]'));
+  const panelSeal = b.doc.getElementById("panels").innerHTML;
+  // A section that is not edited on this page yet (the Leveling option, Phase 16) still shows its summary
+  const levelingModel = clone(model);
+  levelingModel.tabs = { Leveling: { layout: "leveling", kind: "option", profile: "leveling@1", takeoff: [], labor: [], contingency: 0,
+    fees: 0, totals: {}, rates: { version: 1, profile: "leveling@1", rates: {}, fees_default: null,
+      notes: ["Soft costs: the rule filed on the Markups page is blank, so the built-in rate is charged."] } } };
+  const lv = P.build({ blob: P.blob({ polish_estimate: clone(levelingModel), polish_sf: 17500 }) });
+  await lv.api.init();
+  P.clickEl(lv, P.need(lv, '[data-section-tab="Leveling"]'));
+  const panelLeveling = lv.doc.getElementById("panels").innerHTML;
   P.clickEl(b, P.need(b, '[data-section-tab="Polish"]'));
   const panelRoot = b.doc.getElementById("panels").innerHTML;
   P.typeInto(b, '[data-tk="0"][data-k="measurement"]', "12000");
@@ -526,7 +546,7 @@ async function page() {
 
   // a bid whose sections cannot be read still saves what was typed, and keeps the sections as they were
   const broken = clone(model); delete broken.tabs.Epoxy.layout;
-  const c = P.build({ blob: P.blob({ polish_estimate: clone(broken), polish_sf: 17500 }) });
+  const c = P.build({ blob: P.blob({ work_type: "combo", polish_estimate: clone(broken), polish_sf: 17500 }) });
   await c.api.init();
   P.typeInto(c, '[data-tk="0"][data-k="measurement"]', "12000");
   c.clock.fire();
@@ -538,7 +558,8 @@ async function page() {
   gypModel.tabs = { [GYP]: { layout: "gyp", kind: "base", profile: "gyp@1",
     takeoff: [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 9000, unit: "SF" }],
     labor: [{ id: "inst", label: "Install", guys: 4, days: 3, rate: 33.66 }], contingency: 0, fees: 0, totals: {} } };
-  const gb = P.build({ blob: P.blob({ polish_estimate: clone(gypModel), polish_sf: 17500 }) });
+  // (a Gyp job: since Phase 14 Gyp is ready, so a Polish bid holding a Gyp base section would have it marked off)
+  const gb = P.build({ blob: P.blob({ work_type: "gyp", polish_estimate: clone(gypModel), polish_sf: 17500 }) });
   await gb.api.init();
   P.typeInto(gb, '[data-tk="0"][data-k="measurement"]', "12000");
   gb.clock.fire();
@@ -550,7 +571,8 @@ async function page() {
     gypOnPage: { priceable: gypStamp.priceable !== false, material: gypStamp.material, total: gypStamp.total,
                  computed: !!gypSaved.computed_bid, lump: gypSaved.proposal_lump_sum },
     one: { strip: oneStrip, keys: Object.keys(oneSave).sort(), hasSnapshot: has(oneSave, "priced_tabs"), alert: one.doc.getElementById("alert").textContent },
-    multi: { strip: strip, total: total, maths: maths, rootOnlyTotal: rootOnly, panelEpoxy: panelEpoxy,
+    multi: { strip: strip, total: total, maths: maths, rootOnlyTotal: rootOnly, panelEpoxy: panelEpoxy, panelSeal: panelSeal,
+             panelLeveling: panelLeveling,
              stripAfterClick: stripAfter.html, panelRootIsTakeoff: panelRoot.indexOf("Polish 800 Grit") >= 0,
              savedKeys: Object.keys(saved).sort(), pricedTabs: saved.priced_tabs.map((t) => [t.id, t.v2, t.kind]),
              savedLump: saved.computed_bid.lump_sum, proposalLump: saved.proposal_lump_sum,

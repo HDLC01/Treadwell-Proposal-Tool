@@ -113,8 +113,8 @@ def test_each_departure_names_cells_that_really_say_it(departures):
 
 # ── the comparison can fail: break the model and watch it ────────────────────
 def test_a_wrong_burden_turns_it_red(tmp_path):
-    frontend = break_source(tmp_path, ENGINE, 'var burden = roundUp((labor + escalation) * rate("burden_pct"));',
-                            'var burden = roundUp((labor) * rate("burden_pct"));', also=[MODEL])
+    frontend = break_source(tmp_path, ENGINE, 'var burden = roundUp((labor + escalation) * burden_pct);',
+                            'var burden = roundUp((labor) * burden_pct);', also=[MODEL])
     summary = run(frontend)
     keys = {d["key"] for u in summary["chain"]["unexplained"] for d in u["diffs"]}
     assert summary["chain"]["unexplained"] and "burden" in keys, "burden must differ wherever prevailing wage adds an escalation"

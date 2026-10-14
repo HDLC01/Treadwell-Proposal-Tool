@@ -438,54 +438,12 @@
   function initCheatDrag() {
     var panel = $("verbal-cheat");
     if (!panel) return;
-    try {
-      var saved = JSON.parse(localStorage.getItem("tw_vcheat_pos") || "null");
-      // Clamped on the way back IN, not just on the way out -- see TW.clampPanelPos. A position
-      // saved on a wide monitor restores off screen on a laptop, and the handle goes with it.
-      //
-      // Only while it is actually floating: below the breakpoint the CSS returns the panel to the
-      // flow, where left/top are inert and its width is the whole column, so clamping against that
-      // width would compute a lane for a panel four times too wide. Widen the window later and it
-      // simply opens where the CSS puts it, which is a fine place to be.
-      if (saved && isFinite(saved.left) && isFinite(saved.top)
-          && getComputedStyle(panel).position === "fixed") {
-        var at = TW.clampPanelPos(saved.left, saved.top, panel.offsetWidth);
-        panel.style.left = at.left + "px";
-        panel.style.top = at.top + "px";
-        panel.style.right = "auto";
-      }
-    } catch (err) { /* a wiped or corrupt value just means it opens where the CSS put it */ }
-    var dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
-    panel.addEventListener("pointerdown", function (e) {
-      var h = e.target.closest && e.target.closest(".vc-drag");
-      if (!h || !panel.contains(h)) return;
-      var r = panel.getBoundingClientRect();
-      dragging = true; ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
-      panel.style.left = ox + "px"; panel.style.top = oy + "px"; panel.style.right = "auto";
-      panel.classList.add("vc-dragging");
-      try { h.setPointerCapture(e.pointerId); } catch (err) { /* older browsers still drag */ }
-      e.preventDefault();
-    });
-    panel.addEventListener("pointermove", function (e) {
-      if (!dragging) return;
-      var w = panel.offsetWidth || 250;
-      var left = Math.max(4, Math.min(ox + (e.clientX - sx), window.innerWidth - w - 4));
-      // The header has to stay reachable: dragged off the bottom there would be nothing left to
-      // grab it by, and the panel could not be brought back without clearing storage.
-      var top = Math.max(4, Math.min(oy + (e.clientY - sy), window.innerHeight - 40));
-      panel.style.left = left + "px"; panel.style.top = top + "px";
-    });
-    var end = function () {
-      if (!dragging) return;
-      dragging = false;
-      panel.classList.remove("vc-dragging");
-      try {
-        localStorage.setItem("tw_vcheat_pos", JSON.stringify({
-          left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 }));
-      } catch (err) { /* private mode: it just will not be remembered */ }
-    };
-    panel.addEventListener("pointerup", end);
-    panel.addEventListener("pointercancel", end);
+    // The drag, the remembered position and the clamp that keeps a restored panel on screen are
+    // TW.floatPanel's (shared.js), the one copy this panel, the step-3 rail and the v2 Sheets
+    // panel share. It restores only while the panel is really floating: below the breakpoint the
+    // CSS returns it to the flow, where left/top are inert, so a narrow screen never reaches it.
+    TW.floatPanel(panel, { handle: "vc-drag", draggingClass: "vc-dragging",
+      key: "tw_vcheat_pos", width: 250 });
   }
 
   if (document.readyState === "loading") {

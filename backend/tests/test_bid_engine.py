@@ -499,8 +499,8 @@ CHAIN_MUTATIONS = {
         ENGINE, "var esc_pct = (q.escalationAlwaysOn || cond.prevailing_wage) ? rate(\"esc_pct\") : 0;",
         "var esc_pct = (cond.prevailing_wage) ? rate(\"esc_pct\") : 0;", "Gyp"),
     "lodging is always divided by 8": (
-        ENGINE, "lodging_qty = ((labor - num(input.travelLabor)) / laborRate) / q.lodgingDivisor;",
-        "lodging_qty = ((labor - num(input.travelLabor)) / laborRate) / 8;", "Gyp"),
+        ENGINE, "return ((num(labor) - num(travelLabor)) / rate) / quirks.lodgingDivisor;",
+        "return ((num(labor) - num(travelLabor)) / rate) / 8;", "Gyp"),
     "the hard bid is on for every profile": (
         ENGINE, "var hardBidOn = !!q.hasHardBid && !!cond.hard_bid;", "var hardBidOn = !!cond.hard_bid;", "Gyp"),
     "the overage line is dropped": (
@@ -535,7 +535,7 @@ CHAIN_MUTATIONS = {
         PROFILES, 'var SHIP_TIERS = "0.05+IF(material<=5000,0.1,IF(material<=10000,0.06,0.04))";',
         'var SHIP_TIERS = "0.05+IF(material<5000,0.1,IF(material<=10000,0.06,0.04))";', "Epoxy"),
     "a Gyp truckload is wrong": (
-        PROFILES, '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 280 },', '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 281 },', "truckload"),
+        PROFILES, '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 280,', '"Gyp (USG 1-8\\")": { profile: "gyp", truckload: 281,', "truckload"),
     "Epoxy's super and PTO is 3.1 percent": (
         PROFILES, 'rates: { ship_pct: SHIP_TIERS, super_pto: "3%", soft_costs: "13%" }',
         'rates: { ship_pct: SHIP_TIERS, super_pto: "3.1%", soft_costs: "13%" }', "Epoxy"),

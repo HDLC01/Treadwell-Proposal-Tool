@@ -212,7 +212,12 @@ def test_the_calculator_never_touches_travel_or_unconfigured_rows_and_returns_ne
                 "var out=B.applyLaborCalc(rows,[{line_id:'polishing',mode:'fixed',guys:4,days:2},"
                 "{line_id:'travel',mode:'fixed',guys:9,days:9}],1000,33);"
                 "return {out:out,untouched:JSON.stringify(rows)}})()")
-    assert got["out"][0]["guys"] == 4 and got["out"][0]["days"] == 2
+    # The calculator no longer fills guys and days on a new bid (2026-10-12); it stamps the rate and
+    # hours a day, and keeps what it would have filled as nothing: the default is an empty box.
+    assert got["out"][0]["guys"] == "" and got["out"][0]["days"] == ""
+    assert got["out"][0]["rate"] == 33 and got["out"][0]["hours_per_day"] == 8
+    assert got["out"][0]["calc_default"] == {"guys": "", "days": "", "rate": 33, "hours_per_day": 8}
     assert got["out"][1] == {"id": "travel", "unit": "hours", "guys": 0, "days": "", "rate": 33}
     assert "calc_default" not in got["out"][2]
-    assert '"guys":4' not in got["untouched"]            # the input rows were not mutated
+    assert "calc_default" not in got["untouched"]         # the input rows were not mutated
+    assert '"guys":3,"days":""' in got["untouched"]

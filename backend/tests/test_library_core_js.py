@@ -476,3 +476,40 @@ def test_quantities_read_without_trailing_zeros():
     assert run("out(L.qtyText(10.9773))") == "10.98"
     assert run("out(L.qtyText(1250.5))") == "1,250.5"
     assert run("out(L.qtyText('abc'))") == "—"
+
+
+# -- what the search pop-up says an assembly costs (assemblyPriceText) ---------------------------
+
+PRICE_ITEMS = """[
+  {id:'a', unit:'Gal', unit_cost:85.38, coverage:275, waste_pct:0, roundup:false},
+  {id:'z', unit:'Gal', unit_cost:0, coverage:100, waste_pct:0},
+  {id:'kit', unit:'Kit', unit_cost:1200, buy_qty:2.5, coverage:775, waste_pct:0, roundup:true}
+]"""
+
+
+def price_text(asm_js: str) -> str:
+    return run("const I = %s; out(L.assemblyPriceText(%s, I))" % (PRICE_ITEMS, asm_js))
+
+
+def test_an_assembly_with_one_dead_line_is_no_price_set_not_a_partial_figure():
+    """Mutation: go back to reading per_unit alone. A priced line plus a deleted material then
+    quotes the priced line by itself ($0.31 per SF), leaving the dead line's cost out."""
+    assert price_text("{lines:[{item_id:'a'}]}") == "$0.31 per SF"
+    assert price_text("{lines:[{item_id:'a'},{item_id:'gone'}]}") == "No price set"
+    # a line the estimator has not filled in yet leaves the figure just as short
+    assert price_text("{lines:[{item_id:'a'},{}]}") == "No price set"
+
+
+def test_an_assembly_that_prices_at_zero_is_no_price_set_like_its_material():
+    """Mutation: test only for null. A $0 material reads No price set; the assembly made of it
+    must not read $0.00 per SF."""
+    assert run("out(L.materialPriceText({unit:'Gal', unit_cost:0}))") == "No price set"
+    assert price_text("{lines:[{item_id:'z'}]}") == "No price set"
+
+
+def test_an_area_sensitive_assembly_names_the_area_it_was_priced_at():
+    """Mutation: drop the area qualifier. A roundup kit is $1.20/SF at 1,000 SF and $0.72/SF at
+    10,000, so a bare figure matches no real bid. A steady one stays unqualified."""
+    assert price_text("{lines:[{item_id:'kit'}]}") == "$1.20 per SF at 1,000 SF"
+    assert price_text("{unit:'LF', lines:[{item_id:'kit'}]}") == "$1.20 per LF at 1,000 LF"
+    assert price_text("{lines:[{item_id:'a'}]}") == "$0.31 per SF"

@@ -1783,9 +1783,87 @@
     };
   }
 
+  /** Make a panel a FLOATING, MOVABLE widget: drag its header to put it wherever it is not in the
+   *  way, and it opens there next time.
+   *
+   *  This is the one copy of what the Pricing options rail on step 3 and the polish-intake cheat
+   *  sheet each carried for themselves (the cheat sheet was built as a copy of the rail, and the
+   *  v2 estimate's Sheets panel is the third). Three hand-kept copies is how the restore clamp
+   *  came to be missing from two of them; a third panel gets this one.
+   *
+   *  opts.handle        the header's CSS class, no dot ("op-drag"). Delegated: pointerdown is
+   *                     caught on the panel and matched with closest(), so a header that is
+   *                     rebuilt on every render still works.
+   *  opts.draggingClass added to the panel while it is being dragged ("op-dragging").
+   *  opts.key           localStorage key the position is saved under. Its own key per panel: one
+   *                     shared key would teleport each panel to wherever another was last left.
+   *                     No key means the position is simply not remembered.
+   *  opts.width         width to clamp against while the panel has not been laid out and reports
+   *                     offsetWidth 0, on the restore and on the drag alike (the rail is hidden at
+   *                     init, so its restore is exactly where this matters). The panel's CSS width;
+   *                     defaults to clampPanelPos's own 250.
+   *
+   *  The restore only runs while the panel really is `position: fixed`. Below the breakpoint the
+   *  CSS puts it back in the flow, where left/top are inert and offsetWidth is the whole column;
+   *  clamping against that would compute a lane for a panel four times too wide. Nothing here
+   *  throws on a wiped, corrupt or blocked localStorage: the panel just opens where the CSS put it. */
+  function floatPanel(panel, opts) {
+    if (!panel) return;
+    opts = opts || {};
+    const handleSel = "." + (opts.handle || "op-drag");
+    const draggingClass = opts.draggingClass || "op-dragging";
+    const key = opts.key || "";
+    const fallbackWidth = opts.width || 250;
+    if (key) {
+      try {
+        const p = JSON.parse(localStorage.getItem(key) || "null");
+        // Clamped on the way back IN, not only during the drag -- see clampPanelPos.
+        if (p && Number.isFinite(p.left) && Number.isFinite(p.top)
+            && getComputedStyle(panel).position === "fixed") {
+          // Against the same width the drag uses. A panel hidden at init (the rail) has no layout
+          // yet, and without the declared width this clamped it against clampPanelPos's own 250.
+          const at = clampPanelPos(p.left, p.top, panel.offsetWidth || fallbackWidth);
+          panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
+          panel.style.right = "auto";
+        }
+      } catch {}
+    }
+    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    panel.addEventListener("pointerdown", (e) => {
+      const h = e.target.closest && e.target.closest(handleSel);
+      if (!h || !panel.contains(h)) return;
+      const r = panel.getBoundingClientRect();
+      dragging = true; ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
+      panel.style.left = ox + "px"; panel.style.top = oy + "px"; panel.style.right = "auto";
+      panel.classList.add(draggingClass);
+      try { h.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+    });
+    panel.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      // The header has to stay reachable: dragged off the bottom there would be nothing left to
+      // grab it by, and the panel could not be brought back without clearing storage.
+      const at = clampPanelPos(ox + (e.clientX - sx), oy + (e.clientY - sy),
+        panel.offsetWidth || fallbackWidth);
+      panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
+    });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false; panel.classList.remove(draggingClass);
+      if (!key) return;
+      try {
+        localStorage.setItem(key, JSON.stringify({
+          left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 }));
+      } catch {}
+    };
+    panel.addEventListener("pointerup", end);
+    panel.addEventListener("pointercancel", end);
+  }
+
   // ─── Expose ───────────────────────────────────────────────────────
   window.TW = {
     clampPanelPos,
+    floatPanel,
     getState,
     setState,
     setLocalState,

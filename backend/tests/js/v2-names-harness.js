@@ -11,8 +11,7 @@
  *   * admin.js's own roleMatrixHtml(), handed the REAL capability table (nav_access.py's, passed in
  *     on the command line), so the server's labels and the sidebar's meet in one rendered table
  *     and the paragraph under it, which names the tool, is written for real;
- *   * polish-estimates.js, the whole file, against a stub page and a stubbed /api/drafts: the loaded
- *     table, the empty states, the failure, the footnote at the read ceiling;
+ *   * (the v2 Estimates page is now a board with its own code; test_v2_board.py runs that.)
  *   * projects.js's own paint(), renderChips() and filter chain, for the "v2 Estimates" tab;
  *   * polish-sandbox.js, the whole file, driven down each of its stop-and-say-so paths.
  *
@@ -134,91 +133,7 @@ function stubElement() {
   };
 }
 
-// ── 2. the v2 Estimates page: polish-estimates.js, all of it, run ────────────
-async function runDatabasePage(projects, opts) {
-  const o = opts || {};
-  const opened = [];                           // every address the page sent the browser to
-  const els = new Map();
-  const getEl = function (id) {
-    if (!els.has(id)) els.set(id, stubElement());
-    return els.get(id);
-  };
-  const session = new Map(Object.entries(o.session || {}));
-  // Only what a browser adds. The language's own built-ins already exist inside a VM context, and
-  // handing in the outer realm's copies is how an `instanceof` starts lying.
-  const box = {
-    console, setTimeout, clearTimeout,
-    setInterval() { return 0; },
-    document: { hidden: false, getElementById: getEl, addEventListener() {} },
-    sessionStorage: {
-      getItem(k) { return session.has(k) ? session.get(k) : null; },
-      setItem(k, v) { session.set(k, String(v)); },
-      removeItem(k) { session.delete(k); },
-    },
-    TW: {
-      fmtBizDate(iso) { return String(iso || "").slice(0, 10); },
-      bizYM(iso) { return String(iso || "").slice(0, 7); },
-      fmtUsd(n) { return "$" + Math.round(n).toLocaleString("en-US"); },
-      bizMonthLabel(ym) { return ym; },
-      authHeaders() { return {}; },
-    },
-    TWCrm: { nameOf(e) { return String(e).split("@")[0]; }, avatarHtml() { return ""; } },
-    __TW_TOKEN: "token",
-    location: { assign(url) { opened.push(String(url)); } },
-    fetch: async function () {
-      return { json: async function () { return o.answer ? o.answer : { ok: true, projects: projects }; } };
-    },
-  };
-  box.window = box;
-  vm.createContext(box);
-  vm.runInContext(source("js", "polish-estimates.js"), box, { filename: "polish-estimates.js" });
-  await new Promise(function (r) { setTimeout(r, 40); });
-  const list = getEl("list");
-  const heads = [];
-  const headRe = /<th[^>]*>([\s\S]*?)<\/th>/g;
-  let h;
-  while ((h = headRe.exec(list.innerHTML))) heads.push(plain(h[1]));
-  // Press a row, the way the page's own delegated listener is pressed: the event only has to say
-  // which row it landed on. Whatever address that sends the browser to is recorded.
-  const press = list.listeners.get("click");
-  if (press && o.pressRow) {
-    press({ target: { closest(sel) { return sel === ".trow" ? { dataset: { id: o.pressRow } } : null; } } });
-  }
-  return {
-    opened: opened,
-    listHtml: list.innerHTML,
-    listText: plain(list.innerHTML),
-    heads: heads,
-    count: getEl("count").textContent,
-    toolbarHidden: getEl("toolbar").hidden,
-    ceilingHidden: getEl("ceiling").hidden,
-    ceilingText: getEl("ceiling").textContent,
-  };
-}
-
-function betaRow(n, extra) {
-  return Object.assign({
-    id: "p" + n, project_name: "Job " + n, polish_beta: true, is_test: true, total: 10000 + n,
-    updated_at: "2026-10-0" + ((n % 9) + 1) + "T12:00:00Z", owner_email: "kyle@wetreadwell.com",
-    has_files: false, work_type: "polish", deadline: "2026-11-01",
-  }, extra || {});
-}
-
-async function databaseScenarios() {
-  const s = {};
-  s.loaded = await runDatabasePage([betaRow(1), betaRow(2, { total: null, is_test: false }),
-    { id: "x", project_name: "Not beta", polish_beta: false }], { pressRow: "p1" });
-  s.empty = await runDatabasePage([]);
-  s.emptyBecauseNoneMatch = await runDatabasePage([betaRow(1), betaRow(2)],
-    { session: { tw_polishdb_q: "zzz-matches-nothing" } });
-  s.failed = await runDatabasePage([], { answer: { ok: false, error: "the server could not read the list" } });
-  const many = [];
-  for (let i = 1; i <= 300; i++) many.push(betaRow(i));
-  s.atTheReadCeiling = await runDatabasePage(many);
-  return s;
-}
-
-// ── 3. the Proposals Database's v2 Estimates tab: projects.js's own code ─────
+// ── 2. the Proposals Database's v2 Estimates tab: projects.js's own code ─────
 function projectsPage(filter, rows) {
   const src = source("js", "projects.js");
   const indent = { indent: "    ", where: "projects.js" };
@@ -407,7 +322,6 @@ function sweep() {
 }
 
 async function main() {
-  out.database = await databaseScenarios();
   out.projects = projectsScenarios();
   out.sandbox = await sandboxScenarios();
   out.sweep = sweep();

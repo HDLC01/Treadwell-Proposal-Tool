@@ -119,6 +119,16 @@
     return repaintNote(b.say, b.fix);
   }
 
+  /** Say, on the same strip, that a v2 bid's base has no price, and stop. The estimate shows "no price" for a sheet it cannot
+   *  price and still lets the estimator on; this page read that as $0 and would have built a proposal around it. It paints when
+   *  the page opens and again when Continue is pressed, so the estimator is told before and after. Returns true when it painted,
+   *  i.e. when the caller must NOT proceed (TWPrice.noBasePrice in price-lines-core.js is the question, asked of the page's own
+   *  draft after rebuildPricing has priced it). */
+  function sayTheBaseHasNoPrice() {
+    const p = TWPrice.noBasePrice(state);
+    return p ? repaintNote(p.say, p.fix) : false;
+  }
+
   // THE TAX CONTROL: LAYOUT ONLY. Hanz, 2026-09-25: the estimate sheet decides WHETHER there is
   // tax (Taxable? for material sales tax, Remodel Tax? for remodel tax, per priced tab); this picks
   // how it is shown, "One line" or "Broken out". It is stored as `tax_layout` only when somebody
@@ -379,15 +389,17 @@
 
   // Fetch the EFFECTIVE work type's default notes (auth-gated — wait for the
   // Supabase token, else authHeaders() has no Bearer yet and it 401s) and hand
-  // the joined text to `onText`. Shared by the initial prefill + the base re-seed.
+  // the joined text to `onText`, with the work type they are for. Shared by the
+  // initial prefill + the base re-seed.
   function fetchDefaultNotes(onText) {
     return (async () => {
       try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
       try {
-        const r = await fetch("/api/default-notes?work_type=" + encodeURIComponent(effectiveWorkType()),
+        const wt = effectiveWorkType();
+        const r = await fetch("/api/default-notes?work_type=" + encodeURIComponent(wt),
                               { headers: TW.authHeaders() });
         const j = await r.json();
-        if (Array.isArray(j.notes)) onText(j.notes.join("\n"));
+        if (Array.isArray(j.notes)) onText(j.notes.join("\n"), wt);
       } catch {}
     })();
   }
@@ -405,12 +417,23 @@
       try { scheduleFit(); } catch {}
     };
     if (Array.isArray(state.notes) && state.notes.length) { applyAndPreview(state.notes.join("\n")); return; }
-    if (String(ta.value || "").trim()) { syncPhaseNote(); return; }
+    if (String(ta.value || "").trim()) {
+      // Asked BEFORE the phase line is re-synced: the saved notes are compared as they were saved. A
+      // re-seed syncs the line itself when its words arrive; this is for when it never comes.
+      const again = reseedNotesIfBaseChangedElsewhere();
+      if (!again) { syncPhaseNote(); return; }
+      return again.then(() => syncPhaseNote());
+    }
     // Brand-new project: pull this work type's boilerplate scope/schedule/exclusions.
-    return fetchDefaultNotes((text) => {
+    return fetchDefaultNotes((text, wt) => {
       if (String(ta.value || "").trim()) return;   // user typed during the fetch
       applyAndPreview(text);
       _seededNotes = text;
+      // Written down WITH the notes: which work type these words are the boilerplate of, so a later
+      // visit can tell them from a hand edit after the base was changed somewhere else.
+      const seed = { work_type: wt, text: ta.value };
+      state.notes_seed = seed;
+      try { TW.setState({ notes_text: ta.value, notes_seed: seed }); } catch {}
     });
   })();
 
@@ -422,13 +445,35 @@
     if (!ta) return;
     const cur = String(ta.value || "");
     if (cur.trim() && cur !== _seededNotes) return;   // hand-edited / saved → keep
-    fetchDefaultNotes((text) => {
+    return fetchDefaultNotes((text, wt) => {
+      if (String(ta.value || "") !== cur) return;     // typed during the fetch → theirs wins
       ta.value = text; _seededNotes = text; syncPhaseNote();
       try { renderNotesPreview(); } catch {}
-      try { TW.setState({ notes_text: ta.value }); } catch {}
+      const reseeded = { work_type: wt, text: ta.value };
+      state.notes_seed = reseeded;
+      try { TW.setState({ notes_text: ta.value, notes_seed: reseeded }); } catch {}
       // Arrives after the base flip's own fit was answered: ask again, for the new notes.
       try { scheduleFit(); } catch {}
     });
+  }
+
+  // THE BASE CAN BE PICKED SOMEWHERE ELSE. On a v2 draft this page only reads the base (the radios are
+  // read-only), so the base changes on the estimate and this page opens on the new one. The in-page
+  // switch above never runs, so the NOTES kept the old work type's boilerplate for good: an Epoxy base
+  // printed the Polish notes and left out the Epoxy warranty line. The boilerplate is written down when
+  // it is seeded (state.notes_seed: its work type and its exact text), so an open page can tell untouched
+  // boilerplate of ANOTHER work type from a hand edit, and re-seeds only the first. A draft saved before
+  // the record existed has none and is left as it was. Returns the re-seed's promise (the Files page's
+  // door waits on it), or nothing.
+  function reseedNotesIfBaseChangedElsewhere() {
+    const ta = document.getElementById("notes-text");
+    const seed = state.notes_seed;
+    if (!ta || !seed || typeof seed !== "object" || !seed.work_type) return;
+    if (seed.work_type === effectiveWorkType()) return;        // the base is the one they were seeded for
+    const cur = String(ta.value || "");
+    if (!cur.trim() || cur !== String(seed.text || "")) return; // hand-edited since → keep
+    _seededNotes = cur;
+    return reseedNotesForWorkType();
   }
 
   // Pre-fill the Estimator (signature) with the signed-in user's name unless
@@ -1016,6 +1061,7 @@
   function rebuildPricing() {
     const all = Array.isArray(state.priced_tabs) ? state.priced_tabs : [];
     if (!all.length) return;   // older draft w/o the snapshot — leave state.rooms as-is
+    const v2Snapshot = TWPrice.allV2(all);   // written by the v2 estimate, not the spreadsheet (price-lines-core.js)
     // Reconcile per-option PRICE overrides against the live tabs: drop any
     // price_overrides.options[id] whose tab no longer exists (deleted, or a
     // "Copy<N>" id freed then reused by a different copy). Belt-and-suspenders
@@ -1062,6 +1108,8 @@
     const tFlag = (t, k) => (t && typeof t[k] === "boolean") ? t[k] : undefined;
     const orFlag = (a, b) => (a === undefined && b === undefined) ? undefined : (a === true || b === true);
     let baseTaxable, baseRemodelOn;
+    // The systems a COMBINED base is made of, named for "in lieu of ...": a Deduct taken against the pair is against both.
+    let combinedDesc = "";
     if (baseTab) {
       shownBase = N(baseTab.total); salesTax = N(baseTab.sales_tax); remodelTax = N(baseTab.remodel);
       baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
@@ -1094,16 +1142,25 @@
           : orFlag(tFlag(eB, "taxable"), tFlag(pB, "taxable"));
         baseRemodelOn = printed.length ? printed.some(r => r.remodel_on)
           : orFlag(tFlag(eB, "remodel_on"), tFlag(pB, "remodel_on"));
+        // Both systems, in the order the document prints them. A Deduct against this base is against the pair, and a line
+        // that said "in lieu of Flake" alone read as the epoxy's price being what the customer saves.
+        combinedDesc = [eB, pB].filter(t => t && N(t.total) > 0).map(t => t.system_desc || t.name).join(" and ");
       } else {
         baseTaxable = tFlag(baseTab, "taxable"); baseRemodelOn = tFlag(baseTab, "remodel_on");
       }
     }
+    // A v2 base the estimate could not price comes in as total: null, which N() reads as 0: the document printed "$0 - Total"
+    // and every option as an Add against it. There is no price to print, so none is kept: the base is 0 on this page (the
+    // page says so and Continue stops, see sayTheBaseHasNoPrice), and no option is printed against it (rooms, below). A combined
+    // base with one of its two sheets unpriced is the same: the other sheet's price alone would read as the whole.
+    const baseless = v2Snapshot && !!TWPrice.noBasePrice({ priced_tabs: all, proposal_lump_sum: shownBase });
+    if (baseless) { shownBase = 0; salesTax = 0; remodelTax = 0; }
     state.proposal_lump_sum = shownBase;
     state.proposal_sales_tax = salesTax;
     state.proposal_remodel_tax = remodelTax;
     state.proposal_taxable = baseTaxable;
     state.proposal_remodel_on = baseRemodelOn;
-    const baseDesc = baseTab ? (baseTab.system_desc || "") : "";
+    const baseDesc = combinedDesc || (baseTab ? (baseTab.system_desc || "") : "");
     const mkRoom = (t, isBase) => {
       const total = isBase ? shownBase : N(t.total);
       const o = opts[t.id] || {};
@@ -1135,7 +1192,12 @@
       opts[t.id] && opts[t.id].is_option && opts[t.id].show !== false &&
       !inCombinedBase(t));
     const shown = optionTabs.map(t => mkRoom(t, false)).filter(o => o.bid.total > 0);
-    state.rooms = (shown.length && baseTab) ? [mkRoom(baseTab, true), ...shown] : [];
+    // A v2 Seal option is priced as a total and never an Add or Deduct (the estimate's panel offers it nothing else, and
+    // bid-model.js optionOnlyTotalPatch sets one back), so a stale "deduct" left on it does not print as one. Done HERE and not in
+    // mkRoom, which a harness lifts on its own (option-desc-harness.js) with only the names it closes over. A bid from the
+    // spreadsheet is read as it always was.
+    if (v2Snapshot) shown.forEach(room => { if (isOptionOnlyTab(byId(room.id))) room.price_mode = "total"; });
+    state.rooms = (shown.length && baseTab && !baseless) ? [mkRoom(baseTab, true), ...shown] : [];
     // Recompute Area from the base tab(s) so a base switch / option toggle HERE
     // re-derives the proposal's SF without the sheet engine (mirrors the
     // estimate snapshot; combo default = the epoxy + polish base-kind tabs).
@@ -1226,6 +1288,9 @@
   function syncPayloadPricing() {
     const pp = state.proposal_payload;
     if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") return null;
+    // A v2 base with no price is not money either: the document it made before keeps the figures it had, rather than
+    // being rewritten to "$0 - Total" (the page says why, and Continue stops).
+    if (TWPrice.noBasePrice(state)) return null;
     // NEVER WRITE MONEY WE CANNOT CORROBORATE. computeTokenValues reads the lump sum from
     // #tb-total — and that element does not exist in proposal-review.html at all: the init block
     // near the bottom of this file CREATES it, which happens AFTER the page-init rebuildPricing()
@@ -1774,9 +1839,20 @@
           const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option);
           const defaultVis = (t) => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
                                                     : (t.role !== "gyp" || engaged(t));
+          // A v2 estimate wrote this snapshot (every tab marked v2): the BASE is picked on the estimate and only read here.
+          // Each v2 option was priced with its own travel beside the base it was priced against, so a base switched on
+          // this page would print a price nobody worked out. Option on/off, total or add/deduct and the description stay
+          // editable, and write the same tab_opts keys they always did. A v2 bid holds only the sheets somebody put in it,
+          // so every one is listed and there is no "+ Add another system" to reveal the rest.
+          const v2Locked = TWPrice.allV2(allTabs);
+          // The Estimate step's own door, the one the Back button uses: estimate-review.js sends a v2 draft on to the v2 estimate. It is not
+          // linked to directly, because the v2 estimate page has exactly two doors and test_nav_access.py pins that (a third would be a way
+          // past a role the Admin matrix keeps off Estimating Tool v2). Asked only when the panel is read-only: the draft id helper is not
+          // needed, or present in every harness, for any other panel.
+          const estimateHref = v2Locked ? TW.withDraft("/estimate-review.html") : "";
           const revealSystems = !!state.reveal_systems;
-          const visTabs = revealSystems ? allTabs.slice() : allTabs.filter(defaultVis);
-          const hasHiddenSystems = allTabs.some(t => !defaultVis(t));
+          const visTabs = (revealSystems || v2Locked) ? allTabs.slice() : allTabs.filter(defaultVis);
+          const hasHiddenSystems = !v2Locked && allTabs.some(t => !defaultVis(t));
           // Auto base = epoxy/polish base-kind tab(s). For gyp the base is shown
           // explicitly (via effectiveBaseId), so nothing is "part of" a hidden auto-base.
           // Same rule as rebuildPricing's inCombinedBase, and for the same reason: `role !== "gyp"`
@@ -1789,9 +1865,13 @@
           // A "Base bid" radio toggle per sheet. Combo additionally retains its
           // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
+          const baseRO = v2Locked ? " disabled" : "";
           let h = `<div class="op-drag" title="Drag to move">Pricing options</div>` +
-            `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>` +
-            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
+            (v2Locked
+              ? `<p class="op-hint pr-base-locked">Pick the base bid on the estimate. <a class="pr-est-link" href="${esc(estimateHref)}">Open the estimate</a></p>` +
+                `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
+              : `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>`) +
+            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}${baseRO}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = effectiveBaseId === t.id;
@@ -1800,10 +1880,12 @@
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
             // No Base-bid radio on an option-only sheet — the same suppression the Estimate strip
             // applies, so the two screens cannot offer different answers to "can this be the base?".
-            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${fmtUSDdoc(N(t.total))}</span></span>`;
+            // A sheet the estimate could not price has no figure (total: null), and is not listed as $0.
+            const priceText = (typeof t.unpriceable === "string" && t.unpriceable) ? "no price" : fmtUSDdoc(N(t.total));
+            const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${priceText}</span></span>`;
             r += isOptionOnlyTab(t)
               ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
-              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}> ` +
+              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}${baseRO}> ` +
                 nameRow + `</label>`;
             if (isBase) {
               r += `<div class="pr-optsub"><span class="op-hint">This sheet is the Base bid.</span></div>`;
@@ -1823,13 +1905,19 @@
                    + `appears in neither the PDF nor the customer portal until “Show in `
                    + `proposal” is ticked.</span>`;
               }
-              r += `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
+              // A v2 Seal sheet is priced as a total and only that (rebuildPricing reads it so), so there is no choice to draw.
+              const totalOnly = v2Locked && isOptionOnlyTab(t);
+              r += totalOnly
+                ? `<span class="op-hint pr-total-only">Seal is priced as a total only.</span>`
+                : `<label>Price as <select class="pr-mode"><option value="total"${mode === "total" ? " selected" : ""}>total amount</option><option value="deduct"${mode === "deduct" ? " selected" : ""}>add/deduct (VE)</option></select></label>`;
               // Deduct only reads as a "($savings) – Deduct VE …" line when it SAVES
               // vs the base; add/deduct now self-labels by sign (option − base):
               // cheaper prints "Deduct ($X)", costlier prints "Add $X" — surface
               // which one this option will be so the estimator isn't surprised.
               const savings = N(state.proposal_lump_sum) - N(t.total);
-              r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
+              if (!totalOnly) {
+                r += `<span class="op-hint pr-deduct-hint"${(mode === "deduct" && savings <= 0) ? "" : ' style="display:none"'}>Costs more than the base — will print as an Add.</span>`;
+              }
               // The option's own long description. Empty = the option prints the system name
               // (shown as the placeholder: what it prints now).
               r += `<label class="op-notes op-desc">Description<textarea class="room-desc" rows="3" maxlength="400" placeholder="${esc(t.system_desc || t.name)}">${esc(o.desc || "")}</textarea><span class="op-hint">Prints as the option line.</span></label>`;
@@ -1856,7 +1944,8 @@
           const ensureOpt = (id) => { if (!opts[id]) opts[id] = { show_system: true, show_diff: false, is_option: false, show: true, price_mode: "total" }; return opts[id]; };
           const applyAndRefresh = () => { rebuildPricing(); refreshPriceDisplay(); scheduleFit(); };
           // Base-bid radios — turning one on sets the base.
-          optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
+          // On a v2 draft the radios are drawn disabled and wired to nothing: a base is not picked on this page.
+          if (!v2Locked) optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
             if (!rb.checked) return;
             const priorBaseId = state.base_tab_id;
             state.base_tab_id = rb.value || null;
@@ -2489,6 +2578,13 @@
     Object.keys(d).forEach((k) => {
       if (String(out[k] == null ? "" : out[k]).trim() === "") out[k] = String(d[k]);
     });
+    // The GC spec line's "(NO spec)" is the one default that depends on another field: a typed spec
+    // section takes it off the line. Judged on what the intake holds, not on the spec default just
+    // applied above. Same rule as proposal_writer._with_token_defaults (NO_SPEC_TOKEN).
+    if (Object.prototype.hasOwnProperty.call(d, "no_spec_note")
+        && String(tokens.spec_section == null ? "" : tokens.spec_section).trim() !== "") {
+      out.no_spec_note = "";
+    }
     return out;
   }
 
@@ -9622,51 +9718,15 @@
   // it (so it never has to sit over the document or the top controls). One-time
   // init — the panel element is stable; its .op-drag header is rebuilt on each
   // render, so pointerdown is delegated. Position persists in localStorage.
+  //
+  // The drag, the remembered position and the clamp that keeps a restored panel on screen now live
+  // in TW.floatPanel (shared.js), which this rail, the polish-intake cheat sheet and the v2
+  // estimate's Sheets panel all call. 240 is this panel's CSS width.
   (function initOptionsPanelDrag() {
     const panel = document.getElementById("options-panel");
     if (!panel) return;
-    try {
-      const p = JSON.parse(localStorage.getItem("tw_opts_pos") || "null");
-      // Clamped on the way back in, not only during the drag -- TW.clampPanelPos. Dragged to the
-      // far side of a wide monitor and reopened on a laptop, this restored past the edge with
-      // .op-drag off screen: no handle to grab, and no way back without clearing site data. Found
-      // on the polish-intake cheat sheet, which copies this panel; it was the same hole here.
-      if (p && Number.isFinite(p.left) && Number.isFinite(p.top)
-          && getComputedStyle(panel).position === "fixed") {
-        const at = TW.clampPanelPos(p.left, p.top, panel.offsetWidth);
-        panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
-        panel.style.right = "auto";
-      }
-    } catch {}
-    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
-    panel.addEventListener("pointerdown", (e) => {
-      const h = e.target.closest && e.target.closest(".op-drag");
-      if (!h || !panel.contains(h)) return;
-      const r = panel.getBoundingClientRect();
-      dragging = true; ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
-      panel.style.left = ox + "px"; panel.style.top = oy + "px"; panel.style.right = "auto";
-      panel.classList.add("op-dragging");
-      try { h.setPointerCapture(e.pointerId); } catch {}
-      e.preventDefault();
-    });
-    panel.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const w = panel.offsetWidth || 240;
-      let nl = ox + (e.clientX - sx), nt = oy + (e.clientY - sy);
-      nl = Math.max(4, Math.min(nl, window.innerWidth - w - 4));
-      nt = Math.max(4, Math.min(nt, window.innerHeight - 40));      // keep the drag header on-screen
-      panel.style.left = nl + "px"; panel.style.top = nt + "px";
-    });
-    const end = () => {
-      if (!dragging) return;
-      dragging = false; panel.classList.remove("op-dragging");
-      try {
-        localStorage.setItem("tw_opts_pos", JSON.stringify({
-          left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 }));
-      } catch {}
-    };
-    panel.addEventListener("pointerup", end);
-    panel.addEventListener("pointercancel", end);
+    TW.floatPanel(panel, { handle: "op-drag", draggingClass: "op-dragging",
+      key: "tw_opts_pos", width: 240 });
   })();
 
   // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the
@@ -9707,6 +9767,8 @@
     el.textContent = fmtUSD(lump);
     refreshPriceDisplay();
   })();
+  // A v2 base with no price is said on the page as it opens (the strip Continue also uses), not first when Continue is pressed.
+  sayTheBaseHasNoPrice();
 
   // Default the bid date to today if intake didn't carry one through.
   // Use the local timezone so the displayed date matches what the user
@@ -9888,6 +9950,8 @@
     // RESOLVES TRUE ONLY WHEN IT LEFT FOR THE FILES PAGE, false when it stopped and said why: the
     // Files page's door, which presses this unattended, has to know the page is still here.
     if (sayTheSaveIsBlocked()) return false;
+    // AND A BASE WITH NO PRICE has no proposal to build: nothing is composed, saved or left for.
+    if (sayTheBaseHasNoPrice()) return false;
     const btn = document.getElementById("generate-btn");
     btn.disabled = true;
     btn.textContent = "Generating…";

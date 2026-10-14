@@ -269,6 +269,14 @@ alter table public.library_items      add column if not exists default_on boolea
 alter table public.library_assemblies add column if not exists default_on boolean;
 alter table public.library_labor      add column if not exists default_on boolean;
 
+-- PHASE 11 (2026-10-12): price breaks, a bulk cost and a coverage basis on a material -- same columns
+-- as backend/ops/library_price_breaks.sql, which is how an already-running database gets them. All
+-- nullable, no default: a row with none of them prices exactly as before.
+alter table public.library_items add column if not exists price_breaks    jsonb;
+alter table public.library_items add column if not exists bulk_cost       numeric(12,4);
+alter table public.library_items add column if not exists coverage_basis  text
+  check (coverage_basis in ('sf', 'lf', 'each'));
+
 -- THE LABOR CALCULATOR'S PER-LINE MODES, 2026-10-06 -- same table as backend/ops/labor_calc.sql,
 -- which is how an already-running database gets it. One row per default labor line (a built-in
 -- crew id or a library_labor uuid); `mode` is 'sf' (crew + sf_per_day) or 'fixed' (guys + days);

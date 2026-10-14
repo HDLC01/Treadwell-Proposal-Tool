@@ -120,6 +120,10 @@
   // number lives in one file. The cell each came from is still named beside it.
   var engine = deps.engine;
   var LEGACY = engine.resolveProfile("polish-legacy");
+  // POLISH REV 2 (Phase 17), the profile a NEW bid's Polish section is stamped with. The root section is priced by
+  // exactly one of these two, and by REV2 only when its own `profile` key says so (rootProfile): a bid saved before
+  // Phase 17 has no such key and prices as it always has.
+  var REV2 = engine.resolveProfile("polish-rev2");
 
   var RATES = {
     SHIPPING: engine.rateNumber(LEGACY.rates.ship_pct),         // B32
@@ -173,10 +177,29 @@
   // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
   /** The hint under a Guys / Lodging / Per Diem box: one wording, drawn by the card builders and
-   *  repainted in place when clearing the box hands the figure back to the man-days. */
-  function manDaysHint(auto) {
-    return auto ? "Man-days from the tasks above."
-      : "Typed by you. Clear it to use the man-days from the tasks above.";
+   *  repainted in place as the tasks above change. A box on auto (a bid saved before 2026-10-12)
+   *  says the figure IS the man-days. Any other box says what the sheet would count, as text and
+   *  never as a value: the box itself is the estimator's to type. `manDays` is travelManDays of the
+   *  rows; left out, the hint says only that the box is typed. */
+  function manDaysHint(auto, manDays) {
+    if (auto) return "Man-days from the tasks above.";
+    if (manDays === undefined || manDays === null) return "Typed by you.";
+    return "Man-days from the tasks above: " + (Math.round(num(manDays) * 100) / 100) + ".";
+  }
+
+  /** The hint under a Lodging or Per Diem box. A bid priced by Polish rev 2 says what the SHEET counts, which is worked
+   *  out from the labor dollars (sheetNights) and so can be more than the man-days; every other bid says the man-days as
+   *  it always has (manDaysHint), and so does a rev 2 bid while the sheet's count and the man-days are the same figure.
+   *  Text only: the box stays the estimator's to type. `rows` are the labor rows of the
+   *  section on show. */
+  function lodgingHint(model, tab, auto, rows) {
+    var opts = travelOpts(model, tab);
+    if (!opts) return manDaysHint(auto, travelManDays(rows));
+    var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);
+    // While every row is paid the same rate the two counts are one figure and the words are the ones every bid shows.
+    if (Math.abs(nights - days) < 1e-9) return manDaysHint(auto, days);
+    if (auto) return "Nights counted from the labor above, as the sheet does.";
+    return "Nights from the labor above, as the sheet counts them: " + (Math.round(nights * 100) / 100) + ".";
   }
 
   /** Is this row counted? `enabled` is absent on every row saved before the slider existed and on
@@ -288,11 +311,13 @@
     return { guys: guys, days: days, hours_per_day: hpd, rate: rate };
   }
 
-  /** `labor` with each row that has a saved mode filled from it -- NEW BIDS ONLY (the caller's gate
-   *  is laborUnstated, the same one that guards every other default). A NEW array of NEW rows.
+  /** `labor` with each row that has a saved mode given its RATE and hours a day -- NEW BIDS ONLY (the
+   *  caller's gate is laborUnstated, the same one that guards every other default). A NEW array of
+   *  NEW rows. Guys and Days are NOT filled (Hanz, 2026-10-12): they start empty and are typed.
    *  The values written are also kept on the row as `calc_default`, which is what the estimate's
-   *  "Default value: N" warning compares against: once saved, the bid keeps its own numbers and
-   *  nothing here ever runs on it again. Travel (an hours row) is never touched. */
+   *  "Default value: N" warning compares against (an empty default names nothing): once saved, the
+   *  bid keeps its own numbers and nothing here ever runs on it again. Travel (an hours row) is
+   *  never touched. */
   function applyLaborCalc(labor, cfgs, sf, dflt) {
     var out = (labor instanceof Array) ? labor.slice() : [];
     if (!(cfgs instanceof Array)) return out;
@@ -303,13 +328,15 @@
       if (!r || r.unit === "hours" || r.id === "travel") continue;
       var v = laborCalcValues(byId[String(r.id)], sf, dflt);
       if (!v) continue;
+      // GUYS AND DAYS ARE NOT FILLED (Hanz, 2026-10-12: "nights, days, guys and hours should have
+      // nothing when it starts"). A new bid takes the calculator's RATE and hours a day and nothing
+      // else; how many guys and how many days is the estimator's to type. So the "From SF" marker
+      // (sf_per_day, which made Days follow the takeoff) is not written either: there is no filled
+      // Days for it to follow. laborCalcValues still works the full figures out for the Calculator
+      // page's "Try it" box.
       var copy = copyInto({}, r);
-      copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
-      copy.calc_default = { guys: v.guys, days: v.days, rate: v.rate, hours_per_day: v.hours_per_day };
-      // THE UNTOUCHED-FOLLOW MARKER (G2): a "From SF" line keeps its production rate so its days can
-      // keep following the takeoff (followLaborDays). Fixed lines carry none and never move.
-      var cfg = byId[String(r.id)];
-      if (cfg.mode === "sf" && num(cfg.sf_per_day) > 0) copy.calc_default.sf_per_day = num(cfg.sf_per_day);
+      copy.guys = ""; copy.days = ""; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;
+      copy.calc_default = { guys: "", days: "", rate: v.rate, hours_per_day: v.hours_per_day };
       out[i] = copy;
     }
     return out;
@@ -439,10 +466,13 @@
    *  `{lodging: line, per_diem: line}`, each `{label, enabled, qty, qty_auto, rate}`, and not as rows
    *  of M.labor, because a labor row is guys x days x rate x 8 and neither of these is.
    *
-   *  THE QUANTITY. Nights (and days of food) are the crew's man-days, the way backend/pricing.py
-   *  works them out (`nights = labor man-days`, one lodging and one meal charge per man per night).
-   *  `qty_auto` follows travelManDays until the estimator types a number; typing is how you leave
-   *  auto, and clearing the box is how you come back. An OFF line, or an absent `travel`, is $0.
+   *  THE QUANTITY. Nights (and days of food) are the crew's man-days on Kyle's sheet and in
+   *  backend/pricing.py (`nights = labor man-days`, one lodging and one meal charge per man per
+   *  night). A NEW bid does NOT count them (Hanz, 2026-10-12): its lines open with an empty quantity
+   *  and `qty_auto` false (travelLinesStartEmpty), and a line switched on with nothing typed is $0.
+   *  A bid SAVED before then keeps `qty_auto` true and still follows travelManDays until the
+   *  estimator types a number; typing is how you leave auto, and clearing the box leaves it empty.
+   *  An OFF line, or an absent `travel`, is $0.
    *
    *  THE RATES are the Global markup_rules rows (set on Items & Assemblies -> Labor) `travel_lodging` ($70) and `travel_per_diem` ($45),
    *  copied onto a NEW bid when it opens (applyTravelRates) and never again, so a rate edited later
@@ -471,25 +501,57 @@
     return (isFinite(n) && n > 0) ? n : shipped;
   }
 
-  /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. */
-  function travelQty(line, rows) {
+  /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. `opts.sheetNights` (a
+   *  polish-rev2 bid's) counts the auto quantity the sheet's way instead: from the labor dollars (sheetNights). */
+  function travelQty(line, rows, opts) {
     line = line || {};
     if (line.qty_auto === false) return num(line.qty);
+    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions);
     return travelManDays(rows);
+  }
+
+  /** NIGHTS OF LODGING THE WAY KYLE'S SHEET COUNTS THEM (Polish!B58 `=IF(B4="No",((D45-D44)/C37)/8)`, and B59 is `=B58`
+   *  for the per diem): the labor dollars that are not travel labor, over the rate of the first crew row (C37), over
+   *  an 8 hour day. It is guys x days (travelManDays) while every row is paid that rate, and more once a row is paid
+   *  another (a prevailing wage row), because the extra pay reads as extra days. The divide is the engine's own, so
+   *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2 only. */
+  function sheetNights(rows, conditions) {
+    rows = rows || [];
+    var travelLabor = 0, rate = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit === "hours") { travelLabor += laborCost(r); continue; }
+      if (!rate && rowOn(r) && laborRateOf(r) > 0) rate = laborRateOf(r);
+    }
+    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions)), travelLabor, rate || SHIPPED_LABOR_RATE);
   }
 
   /** One travel line's cost, ROUNDED UP TO THE DOLLAR like pricing.py's D68 (each of lodging and
    *  food is its own ROUNDUP there). An off line is 0. */
-  function travelLineCost(line, rows) {
+  function travelLineCost(line, rows, opts) {
     if (!line || !rowOn(line)) return 0;
-    return roundUp(travelQty(line, rows) * num(line.rate));
+    return roundUp(travelQty(line, rows, opts) * num(line.rate));
   }
 
   /** Both lines and their sum. `travel` may be absent (an old model that never migrated). */
-  function travelCosts(travel, rows) {
+  function travelCosts(travel, rows, opts) {
     var t = travel || {};
-    var lodging = travelLineCost(t.lodging, rows);
-    var per_diem = travelLineCost(t.per_diem, rows);
+    var lodging = travelLineCost(t.lodging, rows, opts);
+    var per_diem = travelLineCost(t.per_diem, rows, opts);
+    return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
+  }
+
+  /** AN OPTION'S OWN LODGING AND PER DIEM. The job's two lines are charged once, on the carrier section, for the carrier's
+   *  crew. An option is priced apart and the workbook charges it its own: the Seal tabs read Local = No and bill Lodging and
+   *  Per Diem for their own man-days (Seal!B58 and B59). So an OPTION takes the job's two lines AS THEY ARE SWITCHED (on for a
+   *  job 70 miles out, gray for a local one, a hand flip kept) at the job's rates, for the option's own crew's man-days. The
+   *  typed quantity belongs to the carrier's crew and is not used here. */
+  function optionTravelCosts(travel, rows) {
+    var t = travel || {};
+    var days = travelManDays(rows);
+    function ownLineCost(line) { return (line && rowOn(line)) ? roundUp(days * num(line.rate)) : 0; }
+    var lodging = ownLineCost(t.lodging);
+    var per_diem = ownLineCost(t.per_diem);
     return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
   }
 
@@ -534,6 +596,36 @@
     // G3: each line remembers the rate it was filled with (the Items & Assemblies -> Labor figure, or the
     // shipped one when none is filed), which is what the "Default value" warning compares against.
     TRAVEL_LINE_KEYS.forEach(function (k) { out[k].rate_default = num(out[k].rate); });
+    return out;
+  }
+
+  /** A NEW bid's Lodging and Per Diem with their quantities empty (Hanz, 2026-10-12: "nights, days,
+   *  guys and hours should have nothing when it starts"). The rate stays; the quantity is typed, and
+   *  a line switched on with nothing typed prices $0. Not on auto, so the man-days never fill it in
+   *  behind the estimator's back. This departs from Kyle's sheet, which counts nights and days from
+   *  the man-days. A NEW object; the one handed in is never touched. */
+  function travelLinesStartEmpty(travel) {
+    var out = copyInto({}, travel || {});
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      if (!out[k] || typeof out[k] !== "object") return;
+      var line = copyInto({}, out[k]);
+      line.qty_auto = false;
+      line.qty = "";
+      out[k] = line;
+    });
+    return out;
+  }
+
+  /** A NEW bid's labor row with its quantities empty: no guys, no days or hours, and not on auto
+   *  (guys_auto false is what stops syncAutoGuys writing the man-days into an hours row), and no
+   *  hours_seed (the distance answer no longer fills the hours). The library row's own guys_auto
+   *  stays what the library says (libraryLaborRow is one faithful mapping); it is this step, the
+   *  one that opens a new bid, that decides the man-days fill nothing. The rate and the rest of the
+   *  row stay. A copy; the row handed in is never touched. */
+  function laborRowStartsEmpty(row) {
+    var out = copyInto({}, row);
+    out.guys = ""; out.days = ""; out.guys_auto = false;
+    delete out.hours_seed;
     return out;
   }
 
@@ -634,36 +726,21 @@
       var l = model.travel[k];
       if (l && l.hand !== true) l.enabled = far;
     });
-    seedTravelHours(model, miles);
     return model;
   }
 
-  /** THE DRIVE HOURS A NEW BID'S TRAVEL LABOR STARTS WITH (walk 2026-10-06: 150 miles typed, travel
-   *  on, and the card read "7.5 x 0 x $33 = $0"). The 7.5 is Guys: the crew's man-days (Polish A44),
-   *  filled by syncAutoGuys. The 0 is Hours, Polish B44 = Epoxy!B52, which Kyle's sheet leaves at 0
-   *  with the note "Drive Time: ?" -- so a travel job priced nothing until somebody typed the hours.
-   *  Now the distance answer fills it: a round trip at DRIVE_MPH, to the half hour (150 mi -> 5).
-   *
-   *  NEW BIDS ONLY: the row opts in with `hours_seed` (freshModel writes it; a saved bid never has
-   *  it), so no saved bid's total can move. `hours_seed` remembers what was written, so the figure
-   *  follows a changed distance until the estimator types their own hours, which is then theirs. */
+  /** THE DISTANCE NO LONGER FILLS THE DRIVE HOURS (Hanz, 2026-10-12). From 2026-10-06 the distance
+   *  answer wrote a round trip at DRIVE_MPH into a new bid's Travel Labor hours (150 mi -> 5). It
+   *  does not any more: "nights, days, guys and hours should have nothing when it starts". The
+   *  distance still decides local or travel (the lines gray or come on); the hours are typed.
+   *  driveHoursFor stays as the pure arithmetic (a round trip to the half hour); nothing on a bid
+   *  calls it. A bid saved with the old `hours_seed` marker keeps the hours it was saved with, and
+   *  travelHow still words them as the round trip they were. */
   var DRIVE_MPH = 60;
   function driveHoursFor(miles) {
     var m = milesOrNull(miles);
     if (m === null || m < LOCAL_MILES) return "";
     return Math.ceil((2 * m / DRIVE_MPH) * 2) / 2;
-  }
-  function seedTravelHours(model, miles) {
-    var labor = (model && model.labor) || [];
-    for (var i = 0; i < labor.length; i++) {
-      var r = labor[i];
-      if (!r || r.id !== "travel" || !Object.prototype.hasOwnProperty.call(r, "hours_seed")) continue;
-      var untouched = isBlank(r.days) || (!isBlank(r.hours_seed) && num(r.days) === num(r.hours_seed));
-      if (!untouched) continue;
-      var h = driveHoursFor(miles);
-      r.days = h;
-      r.hours_seed = h;
-    }
   }
 
   /** Back to "unknown": the estimator cleared the miles they had typed. Local again (the shipped
@@ -743,6 +820,11 @@
 
     var lines = [];
     var usesAuto = false;
+    // The travel panel is the root section's: a bid priced by Polish rev 2 counts auto nights the sheet's way, so the
+    // working lines count them the same way the cost box and the bid do.
+    var trvOpts = travelOpts(M, ROOT_TAB);
+    // Set when a travel line that is on is not on auto: the man-days the sheet would count are then shown as text.
+    var showManDays = false;
     if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
       var hrs = "";
       if (!isBlank(tr.days) && num(tr.days) > 0) {
@@ -754,7 +836,8 @@
           : " (typed)";
       }
       if (tr.guys_auto) usesAuto = true;
-      lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + (tr.guys_auto ? "" : " (typed)") +
+      if (!tr.guys_auto) showManDays = true;
+      lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + ((tr.guys_auto || !filledIn(tr.guys)) ? "" : " (typed)") +
         " x " + qty(tr.days) + " drive hours" + hrs + " x " + money2(tr.rate) + " = " +
         money2(laborCost(tr)) + (num(tr.days) > 0 ? "" : ". Type the drive hours."));
     } else {
@@ -763,17 +846,26 @@
     TRAVEL_LINE_KEYS.forEach(function (k) {
       var l = trv[k];
       if (!l || !rowOn(l)) { lines.push(names[k] + ": off, $0"); return; }
-      var q = travelQty(l, rows);
+      var q = travelQty(l, rows, trvOpts);
       var prod = q * num(l.rate);
-      var cost = travelLineCost(l, rows);
+      var cost = travelLineCost(l, rows, trvOpts);
       if (l.qty_auto !== false) usesAuto = true;
+      var typedQty = l.qty_auto === false && filledIn(l.qty);
+      if (l.qty_auto === false) showManDays = true;
       lines.push(names[k] + ": " + qty(q) + (k === "lodging" ? " nights" : " days") +
-        (l.qty_auto === false ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
-        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)));
+        (typedQty ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
+        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)) +
+        (typedQty || l.qty_auto !== false ? "" : ". Type the " + (k === "lodging" ? "nights." : "days.")));
     });
-    if (usesAuto) {
+    if (usesAuto && trvOpts && Math.abs(sheetNights(rows, trvOpts.conditions) - travelManDays(rows)) >= 1e-9) {
+      lines.push("Nights = the labor dollars above over the first crew rate over 8 hours, as the sheet counts them (" +
+        qty(sheetNights(rows, trvOpts.conditions)) + " now). Guys x days is " + qty(travelManDays(rows)) + ".");
+    } else if (usesAuto) {
       lines.push("Man-days = guys x days on the labor lines above (" + qty(travelManDays(rows)) +
         " now).");
+    } else if (showManDays) {
+      // Text only: the figure is not used anywhere until the estimator types it into a box.
+      lines.push("For reference, the man-days on the labor lines above are " + qty(travelManDays(rows)) + ".");
     }
     return { decision: decision, hand: hand, lines: lines,
              text: [decision].concat(hand, lines).join("\n") };
@@ -817,6 +909,86 @@
     return rows;
   }
 
+  /** THE UNIT A TAKEOFF ROW IS MEASURED IN COMES FROM ITEMS & ASSEMBLIES (Hanz, 2026-10-12: "Unit
+   *  should be pulled from the items and assemblies tab").
+   *
+   *  An ASSEMBLY declares its own unit, SF or LF. A MATERIAL is measured by its COVERAGE BASIS,
+   *  never by `item.unit`: that one is the unit the material is BOUGHT in (Gallon, Kit, Pail) and
+   *  has nothing to do with how the floor is measured. A takeoff only prices SF and LF (takeoffSf
+   *  and takeoffLf are the two measures the bid reads), so a basis of "each" cannot be priced as a
+   *  count here and is read as SF; `state` says so, so the screen can too.
+   *
+   *  `kind` is "asm" or "item"; `lib` is that library row. Returns null when there is no row, and
+   *  otherwise `{unit: "SF"|"LF", state}`: "set" when the library said, "unset" when it did not
+   *  (priced as SF, today's default), "each" for a count. Lives in this file, not in
+   *  js/polish-estimate.js, because the harness for that file lifts functions BY NAME and a new
+   *  local helper called from one of them is a ReferenceError in every scenario. */
+  function takeoffUnit(kind, lib) {
+    if (!lib || typeof lib !== "object") return null;
+    var word = kind === "asm" ? lib.unit : lib.coverage_basis;
+    word = String(word == null ? "" : word).trim().toUpperCase();
+    if (word === "SF" || word === "LF") return { unit: word, state: "set" };
+    if (kind !== "asm" && word === "EACH") return { unit: "SF", state: "each" };
+    return { unit: "SF", state: "unset" };
+  }
+
+  /** True for exactly "SF" or "LF": the only two units takeoffSf and takeoffLf count. */
+  function validTakeoffUnit(u) {
+    return u === "SF" || u === "LF";
+  }
+
+  /** Give takeoff row `i` the unit a pick on Items & Assemblies decided, without quietly turning a
+   *  number into a different kind of number.
+   *
+   *  A measurement is a count of ONE unit. Moving a row that holds one from SF to LF (or back) would
+   *  keep the digits and change what they mean: a 5,000 SF floor becomes 5,000 LF of cove and drops
+   *  out of the area. So when the unit really changes and the row holds a measurement, the
+   *  measurement is cleared (through setMeasurement, so a floor's same-floor rows follow it and a
+   *  follower stops following) and the estimator types the new one. A row whose saved unit was not
+   *  SF or LF counted nowhere, so its number belongs to no unit and is kept. Returns true when the
+   *  unit changed. */
+  function adoptTakeoffUnit(rows, i, unit) {
+    var r = rows && rows[i];
+    if (!r || r.unit === unit) return false;
+    var held = String(r.measurement == null ? "" : r.measurement).trim() !== "";
+    if (held && validTakeoffUnit(r.unit)) setMeasurement(rows, i, "");
+    delete r.same_floor;
+    delete r.same_floor_of;
+    delete r.floor_area;
+    r.unit = unit;
+    return true;
+  }
+
+  /** What a takeoff row's Unit box shows and the line under it says.
+   *
+   *  `row` is the takeoff row, `kind` and `lib` as takeoffUnit. The row's SAVED unit is what it
+   *  prices with, so that is what shows; when it differs from the library's the line says so
+   *  instead of repricing a saved bid behind the estimator's back. No library row (nothing picked
+   *  yet) is a dash. Returns `{text, hint, note}`; `note` is true only for the saved-differs
+   *  case, which the page draws louder than the ordinary line. */
+  function takeoffUnitView(row, kind, lib) {
+    var lu = takeoffUnit(kind, lib);
+    if (!lu) return { text: "—", hint: "From Items & Assemblies.", note: false };
+    var saved = (row || {}).unit;
+    // A SAVED UNIT THAT IS NOT EXACTLY "SF" OR "LF" IS COUNTED IN NEITHER MEASURE: takeoffSf and
+    // takeoffLf compare strictly. Showing the library's unit there would say the row is measured in
+    // a unit the totals ignore, so the box says what is true instead.
+    if (!validTakeoffUnit(saved)) {
+      return { text: "—", note: true,
+        hint: "No unit is saved on this row, so the bid does not count it. Retype the name to take " +
+              "the unit from Items & Assemblies." };
+    }
+    var ordinary = lu.state === "set" ? "From Items & Assemblies."
+      : (lu.state === "each"
+        ? "Items & Assemblies says Each, which a takeoff prices as SF."
+        : "Not set in Items & Assemblies, so SF.");
+    if (saved === lu.unit) return { text: saved, hint: ordinary, note: false };
+    var now = lu.state === "set" ? "Items & Assemblies now says " + lu.unit + "."
+      : (lu.state === "each" ? "Items & Assemblies now says Each, which prices as SF."
+        : "Items & Assemblies has no unit set, so it would be SF.");
+    return { text: saved, hint: "Saved as " + saved + "; " + now, note: true };
+  }
+
   /** THE DEFAULTS, LOADED INTO A NEW ESTIMATE'S TAKEOFF (Hanz, 2026-10-05: "each default becomes its
    *  own Takeoff row, measured with the intake polish SF").
    *
@@ -833,16 +1005,28 @@
    *
    *  HOW IT COMBINES WITH seedTakeoffSf WITHOUT COUNTING THE FLOOR TWICE. takeoffSf adds every SF
    *  row, so ten defaults each measured with the intake 8,250 SF would read as 82,500 SF of floor,
-   *  and polish_sf, the price per SF and every area-driven condition would follow it. They are all
-   *  the SAME floor, so:
+   *  and polish_sf, the price per SF and every area-driven condition would follow it. The defaults
+   *  of ONE area are all the SAME floor, so:
    *    - ONE row carries the area: the first ENABLED SF-unit default. Counted as always.
    *    - every other default carries the same number for pricing but is marked `same_floor`, which
    *      takeoffSf skips. The marker is data on the row, so it survives save and reload.
    *    - no enabled SF default (all off, all LF, or the library has none): the intake boxes seed
    *      plain area rows exactly as seedTakeoffSf always did (System 1 / System 2, one row each),
    *      appended after the defaults, and every default is marked `same_floor`.
-   *  With both intake systems filled, the defaults take the SUM (the whole floor each default
-   *  covers) and the carrier counts it once.
+   *
+   *  SYSTEM 1 AND SYSTEM 2 ARE TWO AREAS FROM THE START (Hanz, 2026-10-13, "Separate areas"). Each
+   *  positive intake box is its OWN area, and each area gets its OWN copy of the default lines: the
+   *  System 1 lines measured with System 1, the System 2 lines with System 2, the floor being the
+   *  two added. Before this, one carrier held the SUM and System 2 read blank, so typing System 2
+   *  added a third row on top (a double count). A line costs its rate times its measurement, so the
+   *  two copies price the same as one copy on the combined floor. A material bought in whole packs
+   *  used to round up once per area; a section made now buys each material once for the whole
+   *  section (poolsPacks, library-core pricePool), so the two areas cost what one floor costs.
+   *  The marker that says which area a row belongs to is data on the row, so it survives save and
+   *  reload: the carrier holds `floor_area: n`, every row that follows it `same_floor: true` and
+   *  `same_floor_of: n` (n = 1 for the first area, 2 for the second). A saved takeoff made before
+   *  this has neither, and keeps behaving as one area. An LF default is not a floor: it is seeded
+   *  once, blank, with the first area.
    *
    *  A default switched OFF (default_on === false) is kept, grayed (`enabled:false`), measured too
    *  so flipping it on needs nothing typed; rowOn already gives it $0 and leaves it out of area.
@@ -872,53 +1056,71 @@
     });
     if (!picks.length) return seedTakeoffSf(rows, sf1, sf2);
 
-    var total = (num(sf1) > 0 ? num(sf1) : 0) + (num(sf2) > 0 ? num(sf2) : 0);
+    // One pass per measured area, in box order. With nothing measured there is one pass of blank rows.
+    var areas = [num(sf1), num(sf2)].filter(function (v) { return v > 0; });
     var out = [];
-    var carried = false;
-    picks.forEach(function (p) {
-      var on = p.row.default_on !== false;
-      var unit = "SF";
-      if (p.kind === "asm") {
-        var u = String(p.row.unit == null ? "" : p.row.unit).toUpperCase();
-        if (u === "LF") unit = "LF";
+    var plain = [];
+    (areas.length ? areas : [0]).forEach(function (sf, a) {
+      var tag = sf > 0 ? a + 1 : 0;
+      var carried = false;
+      picks.forEach(function (p) {
+        var on = p.row.default_on !== false;
+        // The unit is Items & Assemblies' say: an assembly's own unit, a material's coverage basis.
+        var unit = takeoffUnit(p.kind, p.row).unit;
+        // A linear-foot default measures something else than a floor: one row, with the first area.
+        if (unit !== "SF" && a > 0) return;
+        var r;
+        if (p.kind === "asm") {
+          r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
+        } else {
+          r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
+                measurement: "", unit: unit };
+        }
+        if (unit === "SF" && sf > 0) {
+          r.measurement = sf;
+          if (on && !carried) { carried = true; r.floor_area = tag; }
+          else { r.same_floor = true; r.same_floor_of = tag; }
+        }
+        if (!on) r.enabled = false;
+        out.push(r);
+      });
+      if (!carried && sf > 0) {
+        plain.push({ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF", floor_area: tag });
       }
-      var r;
-      if (p.kind === "asm") {
-        r = { assembly_id: p.row.id, assembly_name: p.row.name, measurement: "", unit: unit };
-      } else {
-        r = { kind: "item", item_id: p.row.id, item_name: p.row.name, coverage: "",
-              measurement: "", unit: "SF" };
-      }
-      if (unit === "SF" && total > 0) {
-        r.measurement = total;
-        if (on && !carried) carried = true;
-        else r.same_floor = true;
-      }
-      if (!on) r.enabled = false;
-      out.push(r);
     });
-    if (!carried && total > 0) {
-      seedTakeoffSf([], sf1, sf2).forEach(function (r) { out.push(r); });
-    }
+    // No default carried an area: the plain System rows seedTakeoffSf makes, after the defaults.
+    plain.forEach(function (r) { out.push(r); });
     return out;
   }
+
+  /** The area a takeoff row belongs to, as seedDefaultTakeoff marks it: a carrier holds `floor_area`,
+   *  a row that follows it holds `same_floor_of`, both the same whole number (1, 2, ...). 0 = no mark,
+   *  which is every row of a bid saved before the areas were separate: they all read as one area. */
+  function areaTagOf(n) {
+    var v = Number(n);
+    return v > 0 && v === Math.floor(v) ? v : 0;
+  }
+  function carrierTag(r) { return r ? areaTagOf(r.floor_area) : 0; }
+  function followerTag(r) { return r ? areaTagOf(r.same_floor_of) : 0; }
 
   /** Type `value` into row `i`'s measurement, keeping the same-floor rows honest.
    *  - A `same_floor` row the estimator types its OWN number into stops sharing: the marker is
    *    cleared, so takeoffSf counts what it was told rather than ignoring it for good.
    *  - The carrier (an enabled SF row that is not same_floor) moving drags every same_floor row
-   *    still holding its old number along, so the rows the default load made as one floor keep
-   *    pricing one floor. A same_floor row already set to something else is left alone. */
+   *    of ITS OWN area still holding its old number along, so the rows the default load made as
+   *    one floor keep pricing one floor. A same_floor row already set to something else is left
+   *    alone, and so is a row that follows the OTHER area (two areas can hold the same number). */
   function setMeasurement(rows, i, value) {
     var r = rows && rows[i];
     if (!r) return;
     var old = r.measurement;
     r.measurement = value;
-    if (r.same_floor) { delete r.same_floor; return; }
+    if (r.same_floor) { delete r.same_floor; delete r.same_floor_of; return; }
     if (r.unit !== "SF" || !rowOn(r)) return;
+    var tag = carrierTag(r);
     for (var k = 0; k < rows.length; k++) {
       var o = rows[k];
-      if (k !== i && o && o.same_floor && num(o.measurement) === num(old)) o.measurement = value;
+      if (k !== i && o && o.same_floor && followerTag(o) === tag && num(o.measurement) === num(old)) o.measurement = value;
     }
   }
 
@@ -945,17 +1147,434 @@
    *
    *  Counted the way takeoffSf counts (SF rows, a same_floor row not added on top of its carrier),
    *  minus the on/off test. When the carrier itself is off and only same_floor rows remain they
-   *  all carry the one floor's number, so the largest of them is the answer. */
+   *  all carry the one floor's number, so the largest of them is the answer.
+   *
+   *  PER AREA, FOR A BID SEEDED WITH SEPARATE AREAS. An area whose carrier is gone but whose
+   *  same_floor rows (marked `same_floor_of`) remain still counts, once, as the largest of them,
+   *  added to the other areas. A takeoff with no marks reads exactly as it always did. */
   function measuredSf(rows) {
     rows = rows || [];
-    var t = 0, same = 0;
+    var t = 0, same = 0, carriers = [], held = [];
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.unit !== "SF") continue;
-      if (r.same_floor) { if (num(r.measurement) > same) same = num(r.measurement); }
-      else t += num(r.measurement);
+      var m = num(r.measurement);
+      if (r.same_floor) {
+        var ft = followerTag(r);
+        if (!ft) { if (m > same) same = m; continue; }
+        var g = null;
+        for (var h = 0; h < held.length; h++) if (held[h].tag === ft) g = held[h];
+        if (!g) { g = { tag: ft, max: 0 }; held.push(g); }
+        if (m > g.max) g.max = m;
+      } else {
+        t += m;
+        if (carrierTag(r) && m > 0) carriers.push(carrierTag(r));
+      }
     }
+    held.forEach(function (g) { if (carriers.indexOf(g.tag) < 0) t += g.max; });
     return t > 0 ? t : same;
+  }
+
+  /** THE SEPARATE MEASURED AREAS OF A TAKEOFF, in takeoff order: the row index of each (the rows
+   *  measuredSf adds up). Intake's System 1 box mirrors the first, System 2 the second.
+   *
+   *  Counted exactly the way measuredSf counts: SF rows with a number on them, the on/off slider
+   *  ignored, and a same_floor row not counted on top of its carrier. When the carrier has no
+   *  number and only same_floor rows hold the floor, they are all the one floor: that is one area,
+   *  shown by the first of them.
+   *
+   *  A bid seeded with separate areas marks which area a row belongs to (seedDefaultTakeoff). An
+   *  area whose carrier is gone but whose marked same_floor rows remain is still an area, shown by
+   *  the first of those rows. An unmarked same_floor row is the one-floor case above. */
+  function measuredSfRows(rows) {
+    rows = rows || [];
+    var carriers = [];
+    for (var j = 0; j < rows.length; j++) {
+      var c = rows[j] || {};
+      if (c.unit === "SF" && !c.same_floor && num(c.measurement) > 0 && carrierTag(c)) carriers.push(carrierTag(c));
+    }
+    var areas = [], seen = [], same = -1;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || {};
+      if (r.unit !== "SF" || !(num(r.measurement) > 0)) continue;
+      if (!r.same_floor) { areas.push(i); continue; }
+      var ft = followerTag(r);
+      if (!ft) { if (same < 0) same = i; continue; }
+      if (carriers.indexOf(ft) < 0 && seen.indexOf(ft) < 0) { seen.push(ft); areas.push(i); }
+    }
+    return areas.length ? areas : (same >= 0 ? [same] : []);
+  }
+
+  /** How many separate measured areas the takeoff holds. */
+  function measuredSfAreas(rows) {
+    return measuredSfRows(rows).length;
+  }
+
+  /** The measurement of each separate area, in order (what the two intake boxes show). */
+  function measuredSfValues(rows) {
+    rows = rows || [];
+    return measuredSfRows(rows).map(function (i) { return num(rows[i].measurement); });
+  }
+
+  /** TYPE A FLOOR SIZE FOR AREA `k` (0 = the first measured area, 1 = the second). Returns true when
+   *  it wrote, false when it left the model alone (no positive number, k not 0 or 1, or nothing
+   *  measured yet: then intake's boxes SEED the takeoff instead).
+   *
+   *  Area 0 and 1 change that row's measurement and nothing else. Asking for area 1 when only one
+   *  area is measured ADDS the area. Rows after the second are never touched. Changes
+   *  `model.takeoff` in place; callers hand it a copy (patchModel does).
+   *
+   *  TWO KINDS OF TAKEOFF.
+   *  - SEPARATE AREAS (a new bid, seeded by seedDefaultTakeoff: the carrier holds `floor_area: n`,
+   *    the rows that follow it `same_floor_of: n`). Typing an area moves its carrier and the rows
+   *    following THAT area that still held its old number, and nothing of the other area. Adding the
+   *    second area gives it its own copy of the first area's rows (the same assemblies and materials,
+   *    the typed floor on each), so the defaults price the new floor as they price the first.
+   *  - ONE FLOOR (a bid saved before the areas were separate: one carrier holding the whole floor,
+   *    unmarked same_floor rows carrying the same number). Behaves as it always did: the carrier is
+   *    area 0, the second area is a plain row added after it, and the same_floor rows that carried the
+   *    whole floor move with it, on or off, so the on/off slider never decides which number the bid
+   *    is built on. */
+  function setAreaSf(model, k, sf) {
+    var v = num(sf);
+    var rows = model && model.takeoff;
+    if (!(v > 0) || !(rows instanceof Array) || (k !== 0 && k !== 1)) return false;
+    var areas = measuredSfRows(rows);
+    if (!areas.length) return false;
+    var before = measuredSf(rows);
+    var isRow = function (x) { return x && x.unit === "SF"; };
+    if (k < areas.length) {
+      var row = rows[areas[k]];
+      if (row.same_floor) {
+        // Only same_floor rows hold this area (its carrier is gone): they are all the one number, so all move.
+        var ft = followerTag(row);
+        rows.forEach(function (x) {
+          if (isRow(x) && x.same_floor && followerTag(x) === ft && num(x.measurement) > 0) x.measurement = v;
+        });
+        return true;
+      }
+      var old = num(row.measurement);
+      row.measurement = v;
+      var ct = carrierTag(row);
+      if (ct) {
+        rows.forEach(function (x) {
+          if (isRow(x) && x.same_floor && followerTag(x) === ct && num(x.measurement) === old) x.measurement = v;
+        });
+        return true;
+      }
+    } else {
+      var first = rows[areas[0]];
+      var tag = first.same_floor ? followerTag(first) : carrierTag(first);
+      if (tag) {
+        // A SEPARATE-AREAS bid: promote a carrier-less area's first row, then copy the area under a new tag.
+        if (first.same_floor) { delete first.same_floor; delete first.same_floor_of; first.floor_area = tag; }
+        var next = 1;
+        rows.forEach(function (x) { next = Math.max(next, carrierTag(x) + 1, followerTag(x) + 1); });
+        var group = rows.filter(function (x) { return isRow(x) && (carrierTag(x) === tag || (x.same_floor && followerTag(x) === tag)); });
+        group.forEach(function (x) {
+          var c = JSON.parse(JSON.stringify(x));
+          c.measurement = v;
+          if (c.same_floor) c.same_floor_of = next; else c.floor_area = next;
+          rows.push(c);
+        });
+        return true;
+      }
+      // Only same_floor rows hold the floor (the carrier was deleted or has no number), and
+      // measuredSf counts them only while no row of the takeoff's own does. Adding a plain row
+      // would make that row the whole floor and the old figure vanish (8,000 + 3,000 read as
+      // 3,000). So the first of them becomes the counted row, as the carrier is, and the rest follow.
+      if (first.same_floor) delete first.same_floor;
+      rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" });
+    }
+    var after = measuredSf(rows);
+    rows.forEach(function (x) {
+      if (isRow(x) && x.same_floor && !followerTag(x) && num(x.measurement) === before) x.measurement = after;
+    });
+    return true;
+  }
+
+  // ══ THE INTAKE'S QUANTITY BOXES, AND THE TAKEOFF EACH ONE EDITS (Hanz, 2026-10-13) ═══════════════════════
+  //
+  // WHAT WENT WRONG. The v2 intake's floor SF boxes were wired to the takeoff, but only the ROOT (Polish) one:
+  // setAreaSf, measuredSfValues and patchModel's sf_areas all worked on `model.takeoff`. Since an Epoxy job's
+  // floor lives in tabs["Epoxy"] and a Gyp job's in its Gyp tab, "Epoxy floor SF" typed 331,133 on an Epoxy job was
+  // saved as system_1_sf and never reached the takeoff the estimate prices from.
+  //
+  // THE ONE MAPPING is work-types.js fieldHome: a quantity field -> the tab whose takeoff owns it, its unit (SF or
+  // LF) and its place in that group (System 1 is 0, System 2 is 1; Gyp's soft, hard and corridor are 0, 1, 2). Here
+  // the tab becomes the job's SECTION (sectionsOf, so a section that is off is never touched), and the rest is the
+  // rule the Polish boxes always had, for every section:
+  //   * a box mirrors its row of the takeoff once the section has a measured floor, and is never read-only;
+  //   * only a box the estimator typed in writes, a figure above zero, and clearing or typing 0 deletes nothing;
+  //   * area 3 and on of an SF group are left to the Takeoff;
+  //   * a section with nothing measured is left to the estimate page when it is NEW (its boxes seed it there, with
+  //     the library's defaults, as for any new bid), and written here when it was started, because the estimate page
+  //     seeds only a new one (see applyBoxes).
+  var GYP_BUCKETS = ["soft", "hard", "corridor"];
+  // The three area assemblies the library seeds (js/gyp-takeoff.js AREA_ASSEMBLIES holds the same, and a test holds
+  // the two equal). Here only to give an area the takeoff has no row for yet its row.
+  var GYP_AREA_ASSEMBLIES = [
+    { bucket: "soft", id: "wb-gyp-area-soft", name: "Gypsum: soft surfaces" },
+    { bucket: "hard", id: "wb-gyp-area-hard", name: "Gypsum: hard surfaces over the sound mat" },
+    { bucket: "corridor", id: "wb-gyp-area-corridor", name: "Gypsum: corridors" }
+  ];
+
+  /** The Gyp area a takeoff row is: its `bucket` mark, else the area its assembly names, else null (an extra). */
+  function gypBucketOf(r) {
+    if (!r) return null;
+    if (GYP_BUCKETS.indexOf(r.bucket) >= 0) return r.bucket;
+    for (var i = 0; i < GYP_AREA_ASSEMBLIES.length; i++) if (GYP_AREA_ASSEMBLIES[i].id === r.assembly_id) return GYP_AREA_ASSEMBLIES[i].bucket;
+    return null;
+  }
+
+  /** The row indexes of Gyp area `bucket` that hold a measurement, in takeoff order (the on/off slider is ignored,
+   *  as measuredSfRows ignores it). */
+  function measuredGypRows(rows, bucket) {
+    var out = [];
+    (rows || []).forEach(function (r, i) {
+      if (r && r.unit !== "LF" && !r.same_floor && gypBucketOf(r) === bucket && num(r.measurement) > 0) out.push(i);
+    });
+    return out;
+  }
+
+  function gypMeasured(rows) {
+    return GYP_BUCKETS.some(function (b) { return measuredGypRows(rows, b).length > 0; });
+  }
+
+  /** TYPE A FIGURE FOR GYP AREA `bucket`. The area's measured row changes; an area with a blank row of its own
+   *  fills it; an area with no row is ADDED as the library's area assembly. True when it wrote. */
+  function setGypArea(model, bucket, sf) {
+    var v = num(sf);
+    var rows = model && model.takeoff;
+    if (!(v > 0) || !(rows instanceof Array) || GYP_BUCKETS.indexOf(bucket) < 0) return false;
+    var held = measuredGypRows(rows, bucket);
+    if (held.length) { rows[held[0]].measurement = v; return true; }
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r && r.unit !== "LF" && !r.same_floor && gypBucketOf(r) === bucket) { r.measurement = v; return true; }
+    }
+    var asm = GYP_AREA_ASSEMBLIES.filter(function (a) { return a.bucket === bucket; })[0];
+    rows.push({ assembly_id: asm.id, assembly_name: asm.name, measurement: v, unit: "SF", bucket: bucket });
+    return true;
+  }
+
+  /** The row indexes of the linear-foot rows (cove) that hold a measurement, in takeoff order. */
+  function measuredLfRows(rows) {
+    var out = [];
+    (rows || []).forEach(function (r, i) {
+      if (r && r.unit === "LF" && !r.same_floor && num(r.measurement) > 0) out.push(i);
+    });
+    return out;
+  }
+
+  /** The measurement of each measured linear-foot row, in order (what the Cove LF boxes show). */
+  function measuredLfValues(rows) {
+    rows = rows || [];
+    return measuredLfRows(rows).map(function (i) { return num(rows[i].measurement); });
+  }
+
+  /** THE ROW A FIGURE TYPED INTO THE INTAKE FILLS WHEN NO MEASURED ROW IS THERE FOR IT: the first row of `unit` that is
+   *  on, follows no other row and holds no measurement, in the takeoff AFTER row `after` (-1 for anywhere), preferring
+   *  one the estimator already picked an assembly or a material for. -1 when there is none. A picked row whose length
+   *  is still blank is the row the figure is for: adding another row beside it would count the figure in the
+   *  takeoff's total while the picked line stayed unmeasured, and so unpriced. "After" keeps the order the boxes read
+   *  in (the first measured row is box 1, the second box 2): a figure for box 2 must not land above box 1's row. */
+  function blankRowFor(rows, unit, after) {
+    var at = -1;
+    (rows || []).forEach(function (r, i) {
+      if (i <= after || !r || r.same_floor || !rowOn(r) || num(r.measurement) > 0) return;
+      if (!(r.unit === unit || (unit === "SF" && !r.unit))) return;
+      if (at < 0 || (!(rows[at].assembly_id || rows[at].item_id) && (r.assembly_id || r.item_id))) at = i;
+    });
+    return at;
+  }
+
+  /** Put `v` in the blank row blankRowFor names, or add a blank-assembly row of `unit` when there is none. */
+  function putFigure(rows, unit, v, after) {
+    var at = blankRowFor(rows, unit, after);
+    if (at < 0) { rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: unit }); return; }
+    rows[at].measurement = v;
+    rows[at].unit = unit;
+  }
+
+  /** TYPE A LENGTH FOR COVE ROW `k` (0 = the first measured linear-foot row, 1 = the second). The row changes. With
+   *  no such row the figure goes into a linear-foot row that is picked but not yet measured (after the first
+   *  measured one, for the second), and only when there is none is a blank-assembly row ADDED, as the intake's
+   *  seeding adds one. Only 0 and 1, and only a figure above zero. Changes `model.takeoff` in place. True when it wrote.
+   *
+   *  The boxes read the MEASURED rows in order, so a second length typed while no cove row is measured is the first
+   *  measured row afterwards, and the box repaints it as Cove 1. There is no second cove without a first to put it
+   *  after, and the figure is counted once. */
+  function setAreaLf(model, k, lf) {
+    var v = num(lf);
+    var rows = model && model.takeoff;
+    if (!(rows instanceof Array) || (k !== 0 && k !== 1)) return false;
+    if (!(v > 0)) return false;
+    var held = measuredLfRows(rows);
+    if (k < held.length) rows[held[k]].measurement = v;
+    else putFigure(rows, "LF", v, held.length ? held[held.length - 1] : -1);
+    return true;
+  }
+
+  /** Is row `r` a square-foot line that was picked (an assembly or a material) and has no figure yet? */
+  function pickedBlankSf(r) {
+    return !!r && !r.same_floor && (r.unit === "SF" || !r.unit) && !!(r.assembly_id || r.item_id) && !(num(r.measurement) > 0);
+  }
+
+  /** TYPE A FLOOR SIZE INTO A SECTION THAT HAS NONE YET (nothing measured, so setAreaSf has no area to change), and
+   *  the takeoff is seeded the way a new bid's is (seedDefaultTakeoff): ONE row carries the floor, the first blank
+   *  square-foot row that is on (a picked one before a bare one, else a blank-assembly row is added), and every OTHER
+   *  picked square-foot row with no figure is the same floor, so it carries the number marked `same_floor` and the
+   *  area is not counted twice. The library's defaults of a bid opened with no floor are exactly such rows, and
+   *  filling only the first would leave the second unpriced. A row switched off follows too (measured, so switching
+   *  it on needs nothing typed) but never carries the floor. The area is marked `floor_area` so a second area typed
+   *  after it (setAreaSf) gets its own copy of the rows. Only a figure above zero. Changes `model.takeoff` in
+   *  place. True when it wrote. */
+  function seedAreaSf(model, sf) {
+    var v = num(sf);
+    var rows = model && model.takeoff;
+    if (!(v > 0) || !(rows instanceof Array)) return false;
+    var at = blankRowFor(rows, "SF", -1);
+    if (at < 0) { rows.push({ assembly_id: "", assembly_name: "", measurement: v, unit: "SF" }); at = rows.length - 1; }
+    var tag = 1;
+    rows.forEach(function (x) { tag = Math.max(tag, carrierTag(x) + 1, followerTag(x) + 1); });
+    var carrier = rows[at];
+    carrier.measurement = v;
+    carrier.unit = "SF";
+    carrier.floor_area = tag;
+    rows.forEach(function (r, i) {
+      if (i === at || !pickedBlankSf(r)) return;
+      r.measurement = v;
+      r.unit = "SF";
+      r.same_floor = true;
+      r.same_floor_of = tag;
+    });
+    return true;
+  }
+
+  /** The names of every intake quantity box, in the vocabulary's order. */
+  function boxNames() {
+    return types.FIELDS.map(function (f) { return f.name; });
+  }
+
+  /** The boxes that share `name`'s tab and unit (its group: System 1 and 2, the two cove boxes, the gypsum three), in
+   *  the vocabulary's order. A typed box rewrites its group-mates' draft keys too, so the intake asks for the group. */
+  function boxGroup(name) {
+    var home = types.fieldHome(name);
+    return boxNames().filter(function (n) {
+      var h = types.fieldHome(n);
+      return !!home && h.tab === home.tab && h.unit === home.unit;
+    });
+  }
+
+  /** The section that owns quantity box `name`, and where in it the box lives: { entry, home }, or null when the
+   *  name is not a box or the bid has no live section for it (a section that is off is not part of the bid). */
+  function boxEntry(model, name) {
+    var home = types.fieldHome(name);
+    if (!home || !isObject(model)) return null;
+    var sheets = types.tab(home.tab).sheets;
+    var list;
+    try { list = sectionsOf(model); } catch (err) { return null; }
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].kind !== "off" && sheets.indexOf(list[i].tab) >= 0) return { entry: list[i], home: home };
+    }
+    return null;
+  }
+
+  /** Has the section behind `hit` (boxEntry's answer) been measured, so its boxes mirror it? SF rows count,
+   *  on or off; a section of linear feet alone has no floor to disagree about. Gyp counts any area row. */
+  function boxMeasured(hit) {
+    var rows = hit.entry.section.takeoff;
+    return hit.home.tab === "gyp" ? gypMeasured(rows) : measuredSfAreas(rows) > 0;
+  }
+
+  /** WHAT BOX `name` SHOWS: the figure of its row in the section's takeoff, "" when the section is measured and
+   *  has no such row (System 2 of a one-area floor), or null when there is nothing to mirror (the section is not
+   *  part of the bid, or not measured yet): then the box keeps what the draft holds and seeds the takeoff. */
+  function boxValue(model, name) {
+    var hit = boxEntry(model, name);
+    if (!hit || !boxMeasured(hit)) return null;
+    var rows = hit.entry.section.takeoff, h = hit.home;
+    if (h.tab === "gyp") {
+      var at = measuredGypRows(rows, GYP_BUCKETS[h.index]);
+      return at.length ? num(rows[at[0]].measurement) : "";
+    }
+    var vals = h.unit === "SF" ? measuredSfValues(rows) : measuredLfValues(rows);
+    return h.index < vals.length ? vals[h.index] : "";
+  }
+
+  /** WHAT THE DRAFT HOLDS UNDER `name` once a figure typed there has gone into the takeoff, so the draft says what
+   *  the takeoff says. The same as boxValue, except for a POOLED group (Polish: one area cell): its first box is
+   *  the whole priced area (an off row is out of it; when nothing is on, the measured floor) and the later boxes are
+   *  blank, as js/polish-estimate.js leaves them. null when there is nothing to mirror. */
+  function boxDraftValue(model, name) {
+    var v = boxValue(model, name);
+    if (v === null) return null;
+    var hit = boxEntry(model, name);
+    if (!hit.home.pooled) return v;
+    if (hit.home.index > 0) return "";
+    var rows = hit.entry.section.takeoff;
+    var priced = takeoffSf(rows);
+    return priced > 0 ? priced : measuredSf(rows);
+  }
+
+  /** The floors with more measured areas than the two boxes reach: [{ tab, areas, total }], one per section. The
+   *  intake says so in a plain line and links to the Takeoff. */
+  function boxExtras(model) {
+    var out = [];
+    types.FIELDS.forEach(function (f) {
+      var hit = boxEntry(model, f.name);
+      if (!hit || hit.home.unit !== "SF" || hit.home.tab === "gyp" || hit.home.index !== 0 || !boxMeasured(hit)) return;
+      var rows = hit.entry.section.takeoff;
+      var n = measuredSfAreas(rows);
+      if (n > 2) out.push({ tab: hit.entry.tab, areas: n, total: measuredSf(rows) });
+    });
+    return out;
+  }
+
+  /** `model` with section `tab`'s takeoff replaced by a copy the caller may edit. A NEW model; the one handed in
+   *  (migrateModel's, which holds the SAVED rows) is not touched. `tab` came from sectionsOf over this very model. */
+  function withTakeoffCopy(model, tab) {
+    var out = Object.assign({}, model);
+    if (tab === ROOT_TAB) { out.takeoff = jsonCopy(model.takeoff); return out; }
+    var sec = model.tabs[tab];
+    out.tabs = Object.assign({}, model.tabs, Object.fromEntries([[tab, Object.assign({}, sec, { takeoff: jsonCopy(sec.takeoff) })]]));
+    return out;
+  }
+
+  /** The figures typed into the intake's boxes, written to the sections that own them. `boxes` is
+   *  { boxName: figure }, only the boxes the estimator typed in. A figure that is not above zero and a box whose
+   *  section is not part of the bid write nothing (each writer below refuses a figure that is not above zero).
+   *  Boxes are taken in the vocabulary's order, so System 1 goes before System 2 and the second area is added
+   *  after the first is set. Returns a NEW model when a figure reached a section and the one handed in when
+   *  none did.
+   *
+   *  A SECTION WITH NOTHING MEASURED. The estimate page seeds the root, and a NEW section, from the draft's box keys
+   *  when it opens (seedNewSections), so for those the intake writes nothing here: the library's default takeoff is
+   *  still to be laid down, and a figure written first would stop it. But a section that was STARTED (it holds a
+   *  labor line, a picked assembly or a figure, so isNewSection says no) is never seeded again, and its takeoff
+   *  would stay empty under a draft key that says 5,000 SF: the estimate would price nothing, which is the bug
+   *  this function exists to end. So the figure typed into a started, unmeasured section is written here, into the
+   *  row it fills (seedAreaSf, setAreaLf, setGypArea) and a figure is written only because the estimator just typed
+   *  it, never re-read from a draft key on a later open. */
+  function applyBoxes(model, boxes) {
+    var copied = [];
+    types.FIELDS.forEach(function (f) {
+      if (!has.call(boxes, f.name)) return;
+      var v = num(boxes[f.name]);
+      var hit = boxEntry(model, f.name);
+      if (!hit) return;
+      var measured = boxMeasured(hit);
+      if (!measured && (hit.entry.root || isNewSection(hit.entry.section, false))) return;
+      var tab = hit.entry.tab;
+      if (copied.indexOf(tab) < 0) { model = withTakeoffCopy(model, tab); copied.push(tab); }
+      var view = sectionView(model, tab), h = hit.home;
+      if (h.tab === "gyp") setGypArea(view, GYP_BUCKETS[h.index], v);
+      else if (h.unit === "LF") setAreaLf(view, h.index, v);
+      else if (measured) setAreaSf(view, h.index, v);
+      else seedAreaSf(view, v);
+    });
+    return model;
   }
 
   /** HOW MANY COATS OF DYE A JOB BUYS: Kyle's Polish tab has TWO "Dye" lines, rows 25 and 26,
@@ -998,6 +1617,128 @@
     return kits * RATES.JOINT_FILLER_KIT_COST;
   }
 
+  /** WHICH PROFILE PRICES THE ROOT (Polish) SECTION OF A BID, as a resolved profile. The model's own `profile` key at
+   *  the root, and only when it is exactly the stamp of polish-rev2: every other value, and no value at all, is
+   *  polish-legacy, so a saved bid (which never had the key) prices as it always did and a stray value cannot move a
+   *  total. The key is written once, when a new bid is seeded (seedNewSections). */
+  function rootProfile(model) {
+    return isObject(model) && model.profile === REV2.stamp ? REV2 : LEGACY;
+  }
+
+  /** The profile markupChain prices with: nothing means polish-legacy (every caller that predates Phase 17), a stamp
+   *  or a model names one of the two root profiles. Anything else THROWS: pricing a bid by a profile nobody named is
+   *  the wrong bid made quietly. */
+  function chainProfile(which) {
+    if (which === undefined || which === null) return LEGACY;
+    if (typeof which === "string") {
+      if (which === LEGACY.stamp) return LEGACY;
+      if (which === REV2.stamp) return REV2;
+      throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + " or " + REV2.stamp + ", not " + JSON.stringify(which));
+    }
+    if (isObject(which)) return rootProfile(which);
+    throw new Error("markupChain needs a profile stamp or the model, not " + String(which));
+  }
+
+  /** POLISH TOOLING AND CONSUMABLES, the sheet's D51 to D55, for a profile that charges them (polish-rev2). Four lines:
+   *
+   *    D51 tooling and consumables   ROUNDUP(IF(sf * C51 > 150, sf * C51, 150), 0): a $150 minimum, whatever the size.
+   *                                  C51 = (V10 + W10) * 1.08 (the calculator's figure, "+8%"). V10 is the tooling cost a
+   *                                  square foot of the polish system costs at this size, from the template's
+   *                                  `validation` tab (E32:E34 cream, I32:I34 salt and pepper, M32:M34 aggregate
+   *                                  exposure; below 4,000 SF, below 7,000 SF, above), and W10 adds $0.20 a square foot
+   *                                  for a traditional polish.
+   *    D52 demo tooling              a typed square footage at $0.33 ("/sf"); the model has no such box, so 0.
+   *    D53 slurry hardener           ROUNDUP(sf / 5000, 0) bags at $210
+   *    D54 plastic                   LF at $0.25, when Dye is on, or when the job is 5,000 SF or more AND a renovation.
+   *                                  The model has no Renovation answer, so only the Dye leg is reachable (`reno` is the
+   *                                  caller's, false when it does not know).
+   *
+   *  `sf` is the polished area (B35 = E18), `lf` the linear feet (D35 = E19). `opts.system` is the polish system the
+   *  sheet picks in F36 ("cream", "sp" or "full"; the template ships "sp"), and `opts.traditional` is G36. THE ONE
+   *  DIFFERENCE FROM THE SHEET is a bid with no area at all: the sheet charges its $150 even then, and this charges
+   *  nothing (the same call as Epoxy's toolingCost, epoxy-takeoff.js: a bid for nothing has no tooling, and an
+   *  Epoxy-only job's Polish root, which is off and empty, must not carry $150).
+   *  Answers { consumables, demo, slurry, plastic, rate, total }, whole dollars (`rate` is C51). */
+  var POLISH_TOOLING = {
+    // validation!E32:E34, I32:I34 and M32:M34, by the size of the job: up to 4,000 SF, under 7,000 SF, and above.
+    rates: { cream: [0.6, 0.2, 0.2], sp: [0.85, 0.4, 0.45], full: [1.5, 0.65, 0.75] },
+    tiers: [4000, 7000], traditionalPerSf: 0.2, markup: 1.08, min: 150, demoPerSf: 0.33,
+    slurryEverySf: 5000, slurryBag: 210, plasticPerLf: 0.25, plasticFromSf: 4999, defaultSystem: "sp"
+  };
+
+  function polishTooling(sf, lf, opts) {
+    var area = num(sf), run = num(lf), o = opts || {};
+    var none = { consumables: 0, demo: 0, slurry: 0, plastic: 0, rate: 0, total: 0 };
+    if (!(area > 0)) return none;
+    var T = POLISH_TOOLING;
+    var system = has.call(T.rates, o.system) ? o.system : T.defaultSystem;
+    var tier = area <= T.tiers[0] ? 0 : (area < T.tiers[1] ? 1 : 2);
+    var rate = (T.rates[system][tier] + (o.traditional ? T.traditionalPerSf : 0)) * T.markup;
+    var perSf = area * rate;
+    var consumables = roundUp(perSf > T.min ? perSf : T.min);
+    var slurry = roundUp(roundUp(area / T.slurryEverySf) * T.slurryBag);
+    var plasticLf = (o.dye || (area > T.plasticFromSf && o.reno)) ? run : 0;
+    var plastic = roundUp(plasticLf * T.plasticPerLf);
+    return { consumables: consumables, demo: 0, slurry: slurry, plastic: plastic, rate: rate,
+             total: consumables + slurry + plastic };
+  }
+
+  /** The polish system and kind a takeoff says it is, the way the sheet's F36 and G36 say it: the first row that is on
+   *  and names one. "aggregate" is full aggregate exposure, "s&p", "salt" or "pepper" is salt and pepper, "cream" is
+   *  cream (the order backend/info_sheet_writer.py reads a polish floor in), and "traditional" in a name is a traditional
+   *  polish. A takeoff that names no system gets the template's own, salt and pepper, hybrid. */
+  function polishSystemOf(rows) {
+    var system = null, traditional = false;
+    (rows || []).forEach(function (r) {
+      if (!r || !rowOn(r)) return;
+      var name = String(r.assembly_name || r.item_name || "").toLowerCase();
+      if (!name) return;
+      if (/traditional/.test(name)) traditional = true;
+      if (system) return;
+      if (/aggregate/.test(name)) system = "full";
+      else if (/s&p|salt|pepper/.test(name)) system = "sp";
+      else if (/cream/.test(name)) system = "cream";
+    });
+    return { system: system || POLISH_TOOLING.defaultSystem, traditional: traditional };
+  }
+
+  /** The options travelCosts takes for the section `tab` of this model: the sheet's way of counting nights (sheetNights) for
+   *  a Polish section priced by polish-rev2 (the root of a bid stamped so, or a Polish section under `tabs` that was made
+   *  with the stamp), and none for every other section, which count as they always did. */
+  function travelOpts(model, tab) {
+    if (!isRev2Polish(model, tab)) return undefined;
+    return { sheetNights: true, conditions: model.conditions };
+  }
+
+  /** Is the section `tab` of this model a Polish section priced by polish-rev2? The root is when its own `profile` key
+   *  says so (rootProfile). A Polish section under `tabs` (a copy, or a sheet added to the bid) is when its own profile
+   *  stamp is exactly REV2's. Reads the model without throwing: a tab the model does not hold, or a section that is not
+   *  one, is not. */
+  function isRev2Polish(model, tab) {
+    if (!isObject(model)) return false;
+    if (tab === ROOT_TAB) return rootProfile(model) === REV2;
+    if (!isObject(model.tabs) || !has.call(model.tabs, tab)) return false;
+    var s = model.tabs[tab];
+    return isObject(s) && s.layout === "polish" && s.profile === REV2.stamp;
+  }
+
+  /** The tooling of a model's ROOT section: the sheet's, for a bid priced by polish-rev2, and 0 for every other (the
+   *  legacy bid has no tooling line, and its chain would ignore a figure anyway). Reads the same area and linear feet
+   *  the chain's sf is read from. */
+  function rootTooling(model) {
+    if (!rootProfile(model).quirks.toolingInSubTotal) return 0;
+    return takeoffTooling(model.takeoff, model.conditions);
+  }
+
+  /** The sheet's tooling for ONE Polish section's takeoff, on a profile that charges it: the same figure rootTooling gives
+   *  the root, for a Polish section under `tabs`. `conditions` are the job's (Dye is the job's, not a section's). */
+  function takeoffTooling(takeoff, conditions) {
+    var rows = takeoff || [];
+    var kind = polishSystemOf(rows);
+    return polishTooling(takeoffSf(rows), takeoffLf(rows), {
+      dye: !!(conditions && conditions.dye), system: kind.system, traditional: kind.traditional }).total;
+  }
+
   /** THE CHAIN. Materials and labor in, a bid out, one key per cell of Kyle's markup column.
    *
    *  `material` is the raw sum of the takeoff assemblies and `labor` the raw sum of the labor
@@ -1009,9 +1750,10 @@
    *  always returned: backend/tests/fixtures/polish_chain_golden.json is the proof, vector by vector. The
    *  notes that used to sit in this body (the remodel rate's null against zero, the fees line being marked
    *  up, the bond base counting the taxes twice) are in the engine beside the lines they explain. */
-  function markupChain(input) {
-    var r = engine.priceChain(LEGACY, input);
-    return {
+  function markupChain(input, which) {
+    var profile = chainProfile(which);
+    var r = engine.priceChain(profile, input);
+    var out = {
       material: r.material, shipping: r.shipping, material_total: r.material_total,
       labor: r.labor, escalation: r.escalation, burden: r.burden, labor_total: r.labor_total,
       travel: r.travel,
@@ -1025,6 +1767,10 @@
       sf: r.sf,
       per_sf: r.per_sf
     };
+    // The tooling line is part of the bid only on a profile that charges it, so the key is not there on the
+    // legacy answer (every saved bid keeps exactly the keys it always had).
+    if (profile.quirks.toolingInSubTotal) out.tooling = r.tooling;
+    return out;
   }
 
   // ── the model the page holds ────────────────────────────────────────────────
@@ -1211,7 +1957,11 @@
                ? !!r.guys_auto : true };
   }
 
-  /** A NEW bid's Travel row, opted in to distance-filled hours (seedTravelHours). */
+  /** The Travel row's `hours_seed` marker, written on the shipped model's Travel row only. Since
+   *  2026-10-12 nothing READS it to fill the hours (the distance answer no longer does, see
+   *  driveHoursFor), and a new bid's Travel row has it taken off again (laborRowStartsEmpty). It
+   *  stays on freshModel() because that model's exact shape is pinned by the polish chain golden,
+   *  and travelHow still words the hours of a bid saved with the marker as the round trip they were. */
   function withHoursSeed(row) { row.hours_seed = ""; return row; }
 
   /** One row of `public.library_labor`, read as one of THIS model's labor rows.
@@ -1253,7 +2003,25 @@
    *  blank-rate fallback behave on a picked line exactly as on a seeded one. Guys and days start
    *  empty. A NEW object. */
   function laborRowFromLibrary(row, dflt) {
-    return stampRateDefaults([libraryLaborRow(row, dflt)])[0];
+    // A line picked for a bid never takes its Guys from the man-days (2026-10-12), whatever the
+    // library row's guys_auto says.
+    return stampRateDefaults([laborRowStartsEmpty(libraryLaborRow(row, dflt))])[0];
+  }
+
+  /** WHAT THE LABOR POP-UP SAYS A LINE COSTS (Hanz, 2026-10-12): the rate the line will start at,
+   *  in plain words. A rate is ALWAYS dollars an hour, on a "Days" line too (laborCost multiplies
+   *  guys x days x rate x hours in a day), so it never reads "a day": "$33.00 a day" would be an
+   *  eighth of what the card charges. A line with no rate of its own starts at the company labor
+   *  rate (libraryLaborRow's rule, asked of libraryRateIsOwn, not restated) and says so. */
+  function laborPriceText(row, companyRate) {
+    var r = row || {};
+    if (libraryRateIsOwn(r, isCrewId(r.id))) return money2(Number(r.rate)) + " an hour";
+    return money2(laborRateOrShipped(companyRate)) + " an hour (labor rate)";
+  }
+
+  /** The note under the pop-up's One-off line: where a typed line starts. */
+  function oneOffRateText(companyRate) {
+    return "Starts at the company labor rate, " + money2(laborRateOrShipped(companyRate)) + " an hour.";
   }
 
   /** `labor` with the library's default lines standing beside it. A NEW array; the one handed in
@@ -1370,7 +2138,21 @@
    *  type THROWS from tabsFor rather than answering "no" quietly. */
   function workTypeApplies(row, workType) {
     var list = row && row.default_work_types;
+    // A SECTION IS ONE TAB, and an option tab (Seal, Leveling) is not a job type, so a section is named by
+    // `{ tab: "seal" }`, never by the bare string: a bare tab key still THROWS from tabsFor, which is the guard
+    // against reading a job's defaults under the wrong name. The object says "exactly this tab", and `types.tab`
+    // refuses anything that is not one. A Seal option is seeded with it, from the defaults filed under the Seal pill.
+    if (workType && typeof workType === "object") {
+      return types.appliesTo(list, types.tab(String(workType.tab)).key);
+    }
     return types.tabsFor(workType || "polish").some(function (tab) { return types.appliesTo(list, tab); });
+  }
+
+  /** What to hand workTypeApplies, seedLibraryLabor, seedDefaultTakeoff and travelDeclined for a SECTION of a bid:
+   *  the section's layout, which is a job type for Polish, Epoxy and Gyp (so those read exactly what they always
+   *  read, a job type's defaults) and a bare tab for an option (Seal), named as `{ tab }`. */
+  function kindOfSection(layout) {
+    return types.isJobType(layout) ? layout : { tab: layout };
   }
 
   /** Does the stored Travel row (library_labor id `travel`) put Travel on a NEW bid of this work
@@ -2193,6 +2975,9 @@
 
   function isObject(v) { return !!v && typeof v === "object" && !(v instanceof Array); }
 
+  // (patchModel also reads `boxes`: { boxName: figure } for the intake's quantity boxes the estimator typed in, any
+  //  of the nine of work-types.js FIELDS, each written to the takeoff of the section that owns it (applyBoxes). The
+  //  `sf_areas` described below is the Polish pair of them, polish_sf and polish_2_sf.)
   /** The saved model with ONE writer's fields laid over it, and everything else left as it was.
    *
    *  THE INTAKE PAGE'S SAVE. It used to migrate what was saved and then overlay its own answers by
@@ -2215,9 +3000,18 @@
    *                      answer the patch does not mention stays as it was saved
    *    conditions_shown  which condition cards this bid shows, replaced when the patch states one
    *
+   *  and ONE more, read only as positive numbers:
+   *
+   *    sf_areas          [first, second]: the floor sizes typed into intake's System 1 and System 2
+   *                      boxes, each null when that box was not typed in. Written to the first and
+   *                      second measured SF rows of the takeoff (setAreaSf; the second is ADDED when
+   *                      the takeoff has only one) and to nothing else, so the boxes and the takeoff
+   *                      cannot disagree. Ignored while nothing is measured: then the boxes seed.
+   *
    *  Anything else in `patch` is ignored. The takeoff, the labor rows and `tabs` belong to the
    *  estimate page, and a patch that could overwrite them is how recording one toggle deletes a
-   *  finished takeoff.
+   *  finished takeoff. sf_areas is the one narrow, named way in: it changes one number on a row, or
+   *  adds the second area.
    *
    *  A PATCH NEVER STATES LABOR ON A BID THAT NEVER STATED IT. migrateModel fills a missing `labor`
    *  in from freshModel(), and the intake used to persist those four rows: that made the library's
@@ -2232,6 +3026,14 @@
     var p = isObject(patch) ? patch : {};
     if (isObject(p.conditions)) model.conditions = Object.assign({}, model.conditions, p.conditions);
     if (isObject(p.conditions_shown)) model.conditions_shown = copyInto({}, p.conditions_shown);
+    // THE BOXES THE ESTIMATOR TYPED IN, to the takeoff of the section that owns each (applyBoxes works on COPIES of
+    // the rows: migrateModel hands back the SAVED arrays, and this function is pure). `sf_areas` is the Polish
+    // pair as it was first written, kept as the same two boxes.
+    var boxes = isObject(p.boxes) ? p.boxes : {};
+    if (p.sf_areas instanceof Array) {
+      boxes = Object.assign({}, boxes, Object.fromEntries([["polish_sf", p.sf_areas[0]], ["polish_2_sf", p.sf_areas[1]]]));
+    }
+    model = applyBoxes(model, boxes);
     if (laborUnstated(existing)) delete model.labor;
     return model;
   }
@@ -2286,7 +3088,9 @@
     // EVERY KEY THE PROPOSAL SIDE READS, AND THE MODEL WITH ITS TOTALS STAMPED, IS composePricingSnapshot's.
     // For a bid with one section (all of them today) that is exactly what this function wrote by hand until
     // Phase 10: polish_estimate, polish_sf, polish_2_sf, computed_bid, in that order.
-    var derived = composePricingSnapshot(model, ctx);
+    // The draft's own tab_opts ride along, so an option's proposal settings are kept (see composePricingSnapshot).
+    var derived = composePricingSnapshot(model, isObject(state) && isObject(state.tab_opts)
+      ? Object.assign({}, ctx, { tabOpts: state.tab_opts }) : ctx);
     var rest = Object.assign({}, derived);
     delete rest.polish_estimate;
     return Object.assign({
@@ -2311,12 +3115,20 @@
   // travel, distance, fees_default (and no_travel_labor). The root keys keep today's meaning, so the model is
   // still `polish_estimate` at `version: 2` and no saved bid is rewritten.
   //
+  // A SECTION'S KEY IS ITS WORKBOOK SHEET, OR A Copy<N> ID (Sheets phase 1). A copy of a sheet, and any second section of
+  // a type, is filed under "Copy1", "Copy2" and so on and says its workbook sheet in `sheet`, what it is called in `label`
+  // and what it was copied from in `source`. The key never changes and a label is never a key. Code that means "the
+  // workbook sheet" (the engine's tab, a Gyp preset, a truckload) reads the entry's `sheet`; code that means "this section"
+  // (a price, a proposal setting, a click) reads its `tab`. The root's own `kind` is read in full (base, option, off; a
+  // missing key is base), so the Polish sheet can be an option when something else is the base.
+  //
   // `sectionsOf` is the ONE place that knows root from tabs; everything else asks it and gets the section BY
-  // REFERENCE. THE ROOT SECTION is always priced by `polish-legacy@1`'s built-ins, as it has been since the model
-  // was written, and no snapshot is written for it: its totals must not move, and Phase 17 (Polish rev 2 for NEW
-  // bids) is where it gains one. A `profile`, `rates` or `kind: "base"` at the root is reserved for that and is not
-  // read (`kind: "off"` is: a root Polish section that is not part of the bid, which is what an Epoxy-only job
-  // will hold).
+  // REFERENCE. THE ROOT SECTION is priced by `polish-legacy@1`'s built-ins, as it has been since the model was
+  // written, unless its own `profile` key is exactly `polish-rev2@1` (Phase 17): a NEW bid is stamped so when it is
+  // seeded (seedNewSections), and a saved bid has no such key and never will, so its totals cannot move (rootProfile).
+  // No snapshot is written for the root either way. A `rates` at the root is reserved and is not read. Its `kind` is:
+  // "off" is a root Polish section that is not part of the bid (what an Epoxy-only job holds), "option" is a Polish sheet
+  // that is not the base (since Sheets phase 1; it is then charged its own travel), and base is a missing key.
   //
   // PRICING NEVER READS THE LIVE MARKUPS RULES. A section prices with its own profile (resolved by the stamp it
   // was saved with) and the rates it kept when it was first used. A section with no snapshot prices at the
@@ -2327,6 +3139,12 @@
   var SECTION_KINDS = ["base", "option", "off"];
   var PROFILE_STAMP = /^([a-z0-9-]+)@(\d+)$/;
   var has = Object.prototype.hasOwnProperty;
+  /** A SECTION'S KEY IS EITHER ITS WORKBOOK SHEET OR A Copy<N> ID (Sheets phase 1). A copy of a sheet, and any second section
+   *  of a type, is filed under "Copy1", "Copy2" and so on, and says which workbook sheet it is in its own `sheet` key, so a
+   *  key is never a label somebody typed and a rename moves nothing. A key that is a sheet's own name is the old,
+   *  unchanged form every saved bid uses. At most MAX_COPIES sections hold a Copy id, the live estimate's own limit. */
+  var COPY_ID = /^Copy[1-9]\d*$/;
+  var MAX_COPIES = 12;
 
   /** Every section of the model, root first, then `tabs` in the order they were added, as
    *  { tab, root, section, layout, kind, profile, role }. `section` is the live object (the root section IS
@@ -2336,11 +3154,12 @@
    *  layout, and "polish" is never assumed. */
   function sectionsOf(model) {
     if (!isObject(model)) throw new Error("sectionsOf needs the model");
-    // Only "off" is read at the root. A root kind of base or option is reserved (Phase 17) and means base: the
-    // root is priced through bid(), which always charges the job's travel, so an "option" root would carry it twice.
-    var rootKind = model.kind === "off" ? "off" : "base";
-    var out = [{ tab: ROOT_TAB, root: true, section: model, layout: "polish", kind: rootKind,
-                 profile: LEGACY.stamp, role: "polish" }];
+    // The root's kind is read in full since the Sheets work (Sheets phase 1): "off" (an Epoxy job's Polish, not part of
+    // the bid), "option" (a Polish sheet that is no longer the base, priced apart like any option) and base, which is what a
+    // missing key means, so a bid saved before any of this reads as it always did. Anything else is base.
+    var rootKind = model.kind === "off" ? "off" : (model.kind === "option" ? "option" : "base");
+    var out = [{ tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+                 layout: "polish", kind: rootKind, profile: rootProfile(model).stamp, role: "polish" }];
     var tabs = model.tabs;
     if (tabs === undefined || tabs === null) return out;
     if (!isObject(tabs)) throw new Error("model.tabs must be an object of sections keyed by workbook tab id");
@@ -2348,9 +3167,14 @@
       var s = tabs[id];
       var where = "section " + JSON.stringify(id);
       if (id === ROOT_TAB) throw new Error(where + " is the root section's own tab: it lives at the root of the model, not under tabs");
-      var tabKey = types.tabOfSheet(id);
-      if (!tabKey) throw new Error(where + " is not a priced workbook tab");
+      // A key is either a workbook sheet ("Epoxy", "Seal (+Jnts)") or a Copy<N> id, which names its sheet in `sheet`.
+      var copy = COPY_ID.test(id);
+      if (copy && !isObject(s)) throw new Error(where + " is not a section");
+      var sheet = copy ? (typeof s.sheet === "string" ? s.sheet : "") : id;
+      var tabKey = types.tabOfSheet(sheet);
+      if (!tabKey) throw new Error(where + (copy ? " does not name a priced workbook sheet" : " is not a priced workbook tab"));
       if (!isObject(s)) throw new Error(where + " is not a section");
+      if (!copy && s.sheet !== undefined && s.sheet !== id) throw new Error(where + " says it is the sheet " + JSON.stringify(s.sheet));
       if (typeof s.layout !== "string" || s.layout === "") throw new Error(where + " does not say its layout (there is no default)");
       var rec = types.tab(tabKey);
       if (s.layout !== rec.markupLayout) throw new Error(where + " says layout " + JSON.stringify(s.layout) + ", but that tab is " + rec.markupLayout);
@@ -2362,9 +3186,16 @@
       if (known && known.layout !== s.layout) {
         throw new Error(where + " is priced by profile " + stamp[1] + ", which belongs to another layout");
       }
-      out.push({ tab: id, root: false, section: s, layout: s.layout, kind: s.kind, profile: s.profile, role: rec.role });
+      out.push({ tab: id, sheet: sheet, label: typeof s.label === "string" && s.label.trim() ? s.label : id,
+                 source: typeof s.source === "string" ? s.source : null,
+                 root: false, section: s, layout: s.layout, kind: s.kind, profile: s.profile, role: rec.role });
     });
     return out;
+  }
+
+  /** What the root section is called on screen: its own `label` when it was renamed, else its workbook sheet. */
+  function rootLabel(model) {
+    return typeof model.label === "string" && model.label.trim() ? model.label : ROOT_TAB;
   }
 
   /** The sections that are part of the bid: every kind but "off". */
@@ -2379,6 +3210,226 @@
     throw new Error("the model has no section for " + JSON.stringify(String(tabId)));
   }
 
+  /** The five keys that are a SECTION's own: what a panel edits when a section other than the root is on show. */
+  var SECTION_KEYS = ["takeoff", "labor", "contingency", "fees", "totals"];
+
+  /** THE MODEL AS THE PANELS SEE IT while one section is on show (Phase 12). The estimate page's Material,
+   *  Labor and Review panels have always edited `M.takeoff`, `M.labor`, `M.contingency` and `M.fees`, which is
+   *  right for the root (Polish) section because those ARE the root's keys. For any other section the same four
+   *  keys live in `model.tabs[tab]`, and a second copy of every panel for them is what this avoids: the view
+   *  answers those keys from the section and every other key (the conditions, the travel, the distance, the
+   *  fees default) from the model, and a write goes to the same place a read came from. It holds NOTHING of its
+   *  own, so the model underneath is always the one that is saved. The root's view is the model itself.
+   *  THROWS for a tab the model has no section for. */
+  function sectionView(model, tabId) {
+    var e = sectionOf(model, tabId);
+    if (e.root) return model;
+    var sec = e.section;
+    // Reflect, so a write is never `object[name] = value` with a name that came from outside (CodeQL's
+    // remote-property-injection rule, and the repo's rule 5): the keys are the five of SECTION_KEYS or the model's own.
+    var ownerOf = function (target, key) { return SECTION_KEYS.indexOf(key) >= 0 ? sec : target; };
+    return new Proxy(model, {
+      get: function (target, key) { return Reflect.get(ownerOf(target, key), key); },
+      set: function (target, key, value) { return Reflect.set(ownerOf(target, key), key, value); }
+    });
+  }
+
+  /** WHICH SECTIONS A JOB TYPE NEEDS (Phase 12). A job type's base tab is a section of the bid, and the model
+   *  holds the Polish section as its root, so an Epoxy job is: the root marked "off" (it is not part of the bid)
+   *  and an Epoxy section as the base. Polish returns the model it was given, unchanged (no saved bid moves).
+   *  Idempotent: a section the model already has is left as it is, and the root's kind is only ever written
+   *  here, never read back to decide anything else. Returns a NEW model when it changes anything, else the one
+   *  handed in. A job type that is not ready in the vocabulary THROWS, because pricing it would be a guess.
+   *
+   *  BASE-AWARE (Sheets phase 1). A bid whose base already IS this job type (baseOf) is left exactly as it is, which
+   *  is what lets the estimator make a copy or a second sheet the base without the intake's job type undoing it.
+   *  When the job type really moved, each tab it is priced on gets its base from the sections the bid HAS, found by
+   *  their workbook sheet and not by their key: one that is already a base, else the sheet's own section, else a
+   *  copy. A section that was an option or off is made the base (it keeps its rows); only a tab with no section at
+   *  all is added. Bases the new job type does not use are marked off, rows kept, as since Phase 12, and an option
+   *  stays an option. A bid whose sections cannot be read is returned as it is. */
+  function sectionsForJob(model, jobType, ctx) {
+    if (!isObject(model)) throw new Error("sectionsForJob needs the model");
+    var job = types.jobType(jobType);
+    if (!job) throw new Error(JSON.stringify(String(jobType)) + " is not a job type");
+    if (job.ready !== true) throw new Error(job.label + " is not ready in Estimating Tool v2 yet");
+    var held = readableSections(model);
+    if (held === null) return model;
+    if (baseTypeOf(held) === jobType) return model;
+    var out = model;
+    var baseTabs = types.tabsFor(jobType).map(function (key) { return types.tab(key); });
+    var picked = [];
+    baseTabs.forEach(function (rec) {
+      // A tab that has several sheets (Gyp's five presets) is ONE section, filed under the sheet the estimator
+      // chose, so "does the bid have it" asks every sheet of the tab and not the first alone.
+      var mine = held.filter(function (e) { return types.tabOfSheet(e.sheet) === rec.key; });
+      if (!mine.length) {
+        out = activateSection(out, rec.sheets[0], "base", ctx);
+        picked.push(rec.sheets[0]);
+        return;
+      }
+      // A saved bid whose job type moved back to this tab: the section was marked off when it left, and its
+      // rows are kept, so bringing it back is only turning it on.
+      picked.push(preferredSection(mine).tab);
+    });
+    var rootLifted = model.kind === "off" && picked.indexOf(ROOT_TAB) >= 0;
+    picked.forEach(function (id) {
+      // The root is part of this job type again (a saved Epoxy bid switched to Combo or Polish): only its "off" (or
+      // "option") is lifted. The key is dropped rather than written as "base", so a bid that never left Polish saves as it did.
+      if (id === ROOT_TAB) {
+        if (out.kind === "off" || out.kind === "option") { out = Object.assign({}, out); delete out.kind; }
+      } else if (out.tabs[id].kind !== "base") out = withSectionKind(out, id, "base");
+    });
+    // A saved bid whose job type moved to one that does not use a base section it has: that section is marked
+    // off, never deleted, so the estimator's rows survive a switch back.
+    held.forEach(function (e) {
+      if (e.kind !== "base" || picked.indexOf(e.tab) >= 0 || !leavesWithJob(e)) return;
+      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");
+    });
+    // A Polish section that has never held a takeoff is new to the bid, so it is priced by Polish rev 2 like any other new
+    // one (Phase 17). A root that was priced before and is coming back keeps the profile it had, or none.
+    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });
+    return out;
+  }
+
+  /** The model's sections, or null when they cannot be read (sectionsOf throws). The job-type functions below never throw
+   *  for a bid whose `tabs` are malformed: the page opens such a bid as it is and says why. */
+  function readableSections(model) {
+    try { return sectionsOf(model); } catch (err) { return null; }
+  }
+
+  /** Is this entry a BASE of the bid: a section that is part of it as a base, and on a tab that can be one (Seal and
+   *  Leveling never are, even if a saved model says so). */
+  function isBaseEntry(e) {
+    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;
+  }
+
+  /** The job type a list of section entries is a bid for: the one base's own work type, "combo" for exactly one Epoxy and one
+   *  Polish base, and null for anything else (no base, two bases that are not that pair). */
+  function baseTypeOf(entries) {
+    var bases = entries.filter(isBaseEntry);
+    if (bases.length === 1) return types.isJobType(bases[0].role) ? bases[0].role : null;
+    if (bases.length === 2) {
+      var roles = bases.map(function (e) { return e.role; }).sort();
+      if (roles[0] === "epoxy" && roles[1] === "polish") return "combo";
+    }
+    return null;
+  }
+
+  /** WHICH SECTIONS ARE THE BASE BID AND WHAT JOB TYPE THAT MAKES IT (Sheets phase 1): `{ ids, jobType }`. `ids` are the
+   *  section ids of the bases in the model's order (one, or the Epoxy and Polish pair, or none), and `jobType` is
+   *  the intake's job type they amount to: polish, epoxy or gyp for one base, "combo" for the pair, null when there is
+   *  no base or the bases are not a job type. THROWS for sections that cannot be read, like sectionsOf. */
+  function baseOf(model) {
+    var entries = sectionsOf(model);
+    return { ids: entries.filter(isBaseEntry).map(function (e) { return e.tab; }), jobType: baseTypeOf(entries) };
+  }
+
+  /** Of several sections of one tab, the one a job type takes as its base: one that already is a base, else the
+   *  sheet's own section (the root, or the one filed under its sheet's name), else the first copy. */
+  function preferredSection(entries) {
+    var base = entries.filter(function (e) { return e.kind === "base"; });
+    if (base.length) return base[0];
+    var named = entries.filter(function (e) { return !COPY_ID.test(e.tab); });
+    return named.length ? named[0] : entries[0];
+  }
+
+  /** Does a base section stop being one when the job type moves away from its tab? Only on a tab Estimating Tool v2
+   *  prices (a job type that is ready) and that can be a base: Leveling, until its phase, is never touched. */
+  function leavesWithJob(e) {
+    var tabKey = types.tabOfSheet(e.sheet);
+    return !types.tab(tabKey).optionOnly && tabIsReady(tabKey);
+  }
+
+  /** Is this workbook tab part of a job type that Estimating Tool v2 prices yet? */
+  function tabIsReady(tabKey) {
+    return types.jobTypeKeys().some(function (k) {
+      return types.jobType(k).ready === true && types.tabsFor(k).indexOf(tabKey) >= 0;
+    });
+  }
+
+  /** The sheet of tab record `rec` that the model already holds a section under, or null. A tab has several sheets
+   *  only for Gyp (its five presets); every other tab has the one, so for them this is the plain "is there a
+   *  section called that". The sheets are asked in the tab's own order. */
+  function sheetHeld(model, rec) {
+    if (!isObject(model) || !isObject(model.tabs)) return null;
+    for (var i = 0; i < rec.sheets.length; i++) if (has.call(model.tabs, rec.sheets[i])) return rec.sheets[i];
+    return null;
+  }
+
+  /** The base sections a model has that a job type does not use, and that Estimating Tool v2 can price (a job
+   *  type that is ready): the ones sectionsForJob marks off. An option stays an option, and a section v2 cannot
+   *  price (Leveling, until its phase) is never touched. Reads only, and never throws. */
+  function sectionsLeaving(model, jobType) {
+    if (!isObject(model) || !isObject(model.tabs) || !types.jobType(jobType)) return [];
+    var held = readableSections(model);
+    if (held === null) return [];
+    var mine = types.tabsFor(jobType);
+    return held.filter(function (e) {
+      return !e.root && e.kind === "base" && mine.indexOf(types.tabOfSheet(e.sheet)) < 0 && tabIsReady(types.tabOfSheet(e.sheet));
+    }).map(function (e) { return e.tab; });
+  }
+
+  /** What a workbook tab is called on screen: the name the proposal gives its system (a Gyp tab's "N12 1/8" + 3/4" Gyp"),
+   *  else the tab id itself. Never throws. */
+  function sheetLabel(tab) {
+    try { return engine.forTab(tab).label || String(tab); } catch (err) { return String(tab); }
+  }
+
+  /** MOVE A SECTION TO ANOTHER SHEET OF ITS OWN TAB: the Gyp preset. A Gyp bid is priced on one of five Gyp sheets
+   *  and its section is filed under that sheet's workbook tab id, so changing the preset renames the section's key
+   *  and keeps everything inside it (rows, settings, rates). The profile is restamped from the new sheet, which is
+   *  the same profile for all five Gyp tabs, so no price changes except the ones the preset itself makes. A NEW
+   *  model; the order of the sections is kept. THROWS for a section the model does not have, a sheet of another
+   *  tab, and a sheet the model already holds a section under. Moving to the sheet it is already on returns the
+   *  model it was given. */
+  function moveSectionSheet(model, fromTab, toTab) {
+    var e = sectionOf(model, fromTab);
+    if (e.root) throw new Error("the " + ROOT_TAB + " section is the root of the model and has no other sheet");
+    // A copy keeps its Copy<N> key and names its sheet in `sheet`, so a preset change on one rewrites that and leaves the key.
+    if (e.sheet === toTab) return model;
+    var tabKey = types.tabOfSheet(toTab);
+    if (!tabKey || tabKey !== types.tabOfSheet(e.sheet)) {
+      throw new Error(JSON.stringify(String(toTab)) + " is not another sheet of the " + e.layout + " tab");
+    }
+    var profile = engine.forTab(toTab).profile;
+    if (COPY_ID.test(fromTab)) return withSectionPatch(model, fromTab, { sheet: toTab, profile: profile.stamp });
+    if (has.call(model.tabs, toTab)) throw new Error(JSON.stringify(toTab) + " is already a section of this bid");
+    var out = jsonCopy(model);
+    var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });
+    // A section with no name of its own is called by its key, and the key is changing: it must not take a name another section has.
+    if (!(typeof moved.label === "string" && moved.label.trim())) moved = Object.assign(moved, labelIfTaken(out, toTab));
+    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).map(function (id) {
+      return id === fromTab ? [toTab, moved] : [id, out.tabs[id]];
+    })));
+    return out;
+  }
+
+  /** A NEW model with one existing section's kind changed. The section's rows are the same objects' contents. */
+  function withSectionKind(model, tabId, kind) {
+    var out = jsonCopy(model);
+    // The root's kind is the model's own `kind` key, and base is a missing key, so a bid that never left Polish saves as it did.
+    if (tabId === ROOT_TAB) {
+      if (kind === "base") delete out.kind; else out.kind = kind;
+      return out;
+    }
+    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[tabId, Object.assign({}, model.tabs[tabId], { kind: kind })]]));
+    return out;
+  }
+
+  /** The tabs sectionsForJob would ADD to this model for a job type: the base tabs it has no section for yet.
+   *  The estimate page asks it before it loads the library, because a section added to a SAVED bid is a new
+   *  section and is given the library's crew like one. [] for a job type that is not ready. */
+  function sectionsToAdd(model, jobType) {
+    var job = types.jobType(jobType);
+    if (!isObject(model) || !job || job.ready !== true) return [];
+    var held = readableSections(model);
+    if (held === null) return [];
+    return types.tabsFor(jobType).map(function (key) { return types.tab(key); }).filter(function (rec) {
+      return rec.sheets[0] !== ROOT_TAB && !held.some(function (e) { return types.tabOfSheet(e.sheet) === rec.key; });
+    }).map(function (rec) { return rec.sheets[0]; });
+  }
+
   function takeoffStated(rows) {
     return rows instanceof Array && rows.some(function (r) {
       return !!r && (!!r.assembly_id || !!r.item_id || !isBlank(r.measurement));
@@ -2391,6 +3442,14 @@
    *  activateSection hands back; its rates snapshot says nothing either way (activating writes it). A section
    *  that the library gave no default rows stays new until somebody types in it, as the root does when it has
    *  no labor, and only ever receives what is in the library at that moment. */
+  /** DOES THIS SECTION BUY EACH MATERIAL ONCE FOR THE WHOLE SECTION? (Hanz, 2026-10-13, "Buy packs for the whole job".)
+   *  True only for a section stamped `pool_packs: true`, which is stamped when a section is made or seeded
+   *  (activateSection, seedNewSections). A section saved before that carries no stamp and keeps pricing each
+   *  takeoff row's packs on its own, so no saved bid moves. The pool itself is library-core's pricePool. */
+  function poolsPacks(section) {
+    return isObject(section) && section.pool_packs === true;
+  }
+
   function isNewSection(section, isRoot) {
     if (isRoot) return laborUnstated(section);
     if (!isObject(section)) return true;
@@ -2418,7 +3477,8 @@
    *  ({ material } or { gyp, extras, sand, soundMat, soundMatRolls }). `ctx.remodel_rate` is the county's, or
    *  nothing for the profile's own default.
    *
-   *  The job's travel is charged to the carrier section only (travelCarrier); the others carry none. A profile
+   *  The job's travel is charged to the carrier section only (travelCarrier); the other bases carry none. An OPTION
+   *  carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does. A profile
    *  that is not the one the section was saved with (an unknown id, or a rev that has moved) is not priced: the
    *  answer is unpriceable with the reason, never a silent reprice at the new rules. */
   function priceSection(model, tabId, ctx) {
@@ -2426,6 +3486,8 @@
       throw new Error("priceSection needs ctx.material(entry): the page prices a takeoff from its library");
     }
     var e = sectionOf(model, tabId);
+    // A Polish section under `tabs` (a copy, or a sheet added to the bid) is priced exactly as the root is: polishBid.
+    if (e.layout === "polish" && !e.root) return polishBid(model, tabId, ctx);
     var s = e.section;
     var stamp = PROFILE_STAMP.exec(e.profile);
     var profile;
@@ -2444,22 +3506,110 @@
       contingency: s.contingency, fees: s.fees, conditions: model.conditions,
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate
     };
+    // An OPTION carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does.
+    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;
+    // The root carries the job's travel counted the sheet's way when a profile asks for it (polish-rev2).
+    if (carrier && e.root) input.travel = travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;
+    // The root's tooling is the sheet's D55 on a profile that charges it. Another section brings its own, in `mat`.
+    if (e.root && profile.quirks.toolingInSubTotal) input.tooling = rootTooling(model);
     var mat = ctx.material(e);
+    // A material that says why it cannot be worked out (a Gyp area with no thickness) is no price, in its own
+    // words, and never a bid priced on the part that could be.
+    if (isObject(mat) && typeof mat.unpriceable === "string" && mat.unpriceable) {
+      return unpriceableSection(e.profile, "material", mat.unpriceable);
+    }
     if (isObject(mat)) copyInto(input, mat); else input.material = num(mat);
     // A gyp-split profile reads the engine's material inputs (gyp, extras, sand, soundMat), never a plain sum:
     // a number would price the material at $0 and still call the section priceable. No price rather than a wrong one.
     if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {
-      return unpriceableSection(e.profile, "material", "the " + e.tab + " material has to come as gyp, extras, sand " +
+      return unpriceableSection(e.profile, "material", "the " + e.label + " material has to come as gyp, extras, sand " +
         "and sound mat figures. A single material total cannot be priced here.");
     }
     try {
-      if (profile.quirks.shippingRule === "gyp-split") input.truckload = engine.forTab(e.tab).truckload;
+      // A Gyp tab's truckload is the tab's own (H36), unless the page says the sound mat chosen has another: on
+      // four of the five tabs the truckload follows the product (js/gyp-takeoff.js).
+      if (profile.quirks.shippingRule === "gyp-split" && !(num(input.truckload) > 0)) {
+        input.truckload = engine.forTab(e.sheet).truckload;
+      }
       // The root keeps no snapshot (see above): it prices at the built-ins.
       return engine.priceChain(profile, input, e.root ? undefined : engine.ratesOf(s.rates));
     } catch (err) {
       if (err && err.name === "BidEngineError") return unpriceableSection(e.profile, "profile", err.message);
       throw err;
     }
+  }
+
+  /** THE BID OF A POLISH SECTION, the root's or one under `tabs` (Sheets phase 1): markupChain over the section's own rows, so a
+   *  copy of the Polish sheet, or a Polish sheet added to the bid, prices exactly as the root does. The estimate page's
+   *  bid() calls it for the root, and priceSection calls it for every other Polish section.
+   *
+   *  `ctx.material(entry)` is the page's: the raw material of the section's takeoff (a number, or an object holding
+   *  `material`), because the library belongs to the page. Dye and Joint Filler are the JOB's conditions and the Polish
+   *  tab's lines, so the page adds them to the material of every Polish section. `ctx.remodel_rate` is the county's.
+   *
+   *  THE PROFILE is the one the section was made with: the root's by rootProfile (a saved bid has no key and prices
+   *  as polish-legacy), a section under `tabs` by its own stamp, polish-legacy@1 or polish-rev2@1, which is what
+   *  a copy keeps from its source. Any other stamp is unpriceable with the reason, never repriced. No rates snapshot
+   *  is read, as for the root: a Polish section prices at the profile's built-ins.
+   *
+   *  THE JOB'S TRAVEL goes by the section's role. The carrier (the first base) takes the job's Lodging and Per Diem, counted
+   *  the sheet's way on rev2. An option takes its own, for its own crew (optionTravelCosts). Any other base takes none.
+   *  A root that is off (an Epoxy job's) still answers with the job's travel, as bid() always has; nothing reads it.
+   *
+   *  Answers markupChain's keys, so what a save stamps into `totals` is what it always was. THROWS for a section that is not
+   *  Polish and for a section the model does not have, except the root, which a bid whose sections cannot be read still has. */
+  function polishBid(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("polishBid needs the model");
+    if (!isObject(ctx) || typeof ctx.material !== "function") {
+      throw new Error("polishBid needs ctx.material(entry): the page prices a takeoff from its library");
+    }
+    var e = polishEntry(model, tabId);
+    var s = e.section;
+    var profile = e.profile === LEGACY.stamp ? LEGACY : (e.profile === REV2.stamp ? REV2 : null);
+    if (!profile) {
+      return unpriceableSection(e.profile, "profile", "this section was priced with " + e.profile +
+        ", which a Polish section is not priced with. Its saved figures are kept.");
+    }
+    var mat = ctx.material(e);
+    var labor = laborTotal(s.labor, model.conditions);
+    return markupChain({
+      material: isObject(mat) ? mat.material : mat,
+      labor: labor,
+      // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
+      travel: polishTravel(model, e),
+      // The sheet's tooling and consumables (D55) for a profile that charges it; 0 for every saved bid.
+      tooling: profile.quirks.toolingInSubTotal ? takeoffTooling(s.takeoff, model.conditions) : 0,
+      contingency: s.contingency,
+      fees: s.fees,
+      conditions: model.conditions,
+      sf: takeoffSf(s.takeoff),
+      remodel_rate: ctx.remodel_rate
+    }, profile.stamp);
+  }
+
+  /** The entry polishBid prices. The root of a bid whose `tabs` cannot be read is still the root, as it was when bid() read
+   *  only the model's own keys: a bid like that opens as it is and saves what was typed. */
+  function polishEntry(model, tabId) {
+    var e;
+    try { e = sectionOf(model, tabId); } catch (err) {
+      if (tabId !== ROOT_TAB) throw err;
+      e = { tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+            layout: "polish", kind: "base", profile: rootProfile(model).stamp, role: "polish" };
+    }
+    if (e.layout !== "polish") {
+      throw new Error("the " + e.label + " section is a " + e.layout + " section, and polishBid prices Polish sections");
+    }
+    return e;
+  }
+
+  /** What a Polish section is charged for the job's travel, by its role (see polishBid). */
+  function polishTravel(model, e) {
+    var s = e.section;
+    var carrier = true;
+    try { carrier = travelCarrier(model) === e.tab; } catch (err) { carrier = true; }
+    if (carrier || (e.root && e.kind === "off")) return travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;
+    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor).total;
+    return 0;
   }
 
   /** The bids of every section that is NOT the root and is part of the bid, as { tabId: bid }. {} when the
@@ -2488,21 +3638,428 @@
     var rec = types.tab(tabKey);
     if (kind === "base" && rec.optionOnly) throw new Error(rec.label + " is an option on a bid, never the base");
     if (isObject(model.tabs) && has.call(model.tabs, tabId)) throw new Error(JSON.stringify(tabId) + " is already a section of this bid");
-    var profile = engine.forTab(tabId).profile;
+    return withSectionPut(model, tabId, Object.assign(newSectionBody(tabId, kind, ctx), labelIfTaken(model, tabId)));
+  }
+
+  /** A BLANK SECTION for a workbook sheet, as activateSection and addSheet make it: its layout, its kind, the profile that
+   *  prices it stamped, an empty takeoff and labor, and `pool_packs`, so it buys each material once for the whole
+   *  section (see poolsPacks). A Polish sheet is stamped polish-rev2 (Phase 17: what a NEW Polish section is priced
+   *  by) and keeps no rates snapshot, because a Polish section prices at its profile's built-ins (polishBid). Every
+   *  other sheet keeps `snapshotRates` of `ctx.rules`, the Markups rules filed at this moment, as text. */
+  function newSectionBody(sheet, kind, ctx) {
+    var rec = types.tab(types.tabOfSheet(sheet));
+    var polish = rec.markupLayout === "polish";
+    var profile = polish ? REV2 : engine.forTab(sheet).profile;
     var section = {
       layout: rec.markupLayout, kind: kind, profile: profile.stamp,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
-      labor: [], contingency: 0, fees: 0,
-      rates: engine.snapshotRates(profile, isObject(ctx) ? ctx.rules : undefined),
-      totals: {}
+      labor: [], contingency: 0, fees: 0
     };
+    if (!polish) section.rates = engine.snapshotRates(profile, isObject(ctx) ? ctx.rules : undefined);
+    section.totals = {};
+    section.pool_packs = true;      // a section made now buys each material once for the whole section (see poolsPacks)
+    return section;
+  }
+
+  /** A NEW model with `section` filed under `id` in `tabs` (added, or replacing the one there). The model handed in is not touched. */
+  function withSectionPut(model, id, section) {
     var out = jsonCopy(model);
     var tabs = isObject(out.tabs) ? out.tabs : {};
-    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[tabId, section]]));
+    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[id, section]]));
     return out;
   }
 
+  /** A NEW model with some keys of one section laid over it. The root is the model itself, so for it they land on the
+   *  model's own keys. The model handed in is not touched. */
+  function withSectionPatch(model, id, patch) {
+    var out = jsonCopy(model);
+    if (id === ROOT_TAB) return Object.assign(out, patch);
+    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[id, Object.assign({}, out.tabs[id], patch)]]));
+    return out;
+  }
 
+  // ── options on a bid (Phase 15) ─────────────────────────────────────────────
+  /** THE OPTIONS THIS BID CAN STILL TAKE: the sheets Estimating Tool v2 prices as an option (Seal and Seal (+Jnts)
+   *  today, js/work-types.js optionSheets) that the bid has no section for yet, in the vocabulary's order. A new array. */
+  function optionsToOffer(model) {
+    var held = isObject(model) && isObject(model.tabs) ? model.tabs : {};
+    return types.optionSheets().filter(function (id) { return !has.call(held, id); });
+  }
+
+  /** ADD AN OPTION TO A BID: an option section for one offered sheet, priced separately and never part of the lump sum.
+   *  A NEW model; the one handed in is not touched. The section is made as activateSection makes any (its profile
+   *  stamped, the Markups rules filed at this moment kept as text) and then given the library's defaults like a new
+   *  section of a new bid (seedNewSections): its own crew from the labor lines filed under its work type, the labor
+   *  calculator's fills, and a starting takeoff over `ctx.sf[tabId]`. ONLY THE NEW SECTION IS TAKEN from that seeding:
+   *  every other key of the model, the root and the job's travel included, is as it was handed in, so adding an option
+   *  to a bid somebody has worked on can never reseed what they typed.
+   *
+   *  `ctx` is seedNewSections' (rules, laborRows, laborRate, calcRows, asms, items, reserved, sf, lf, takeoffRows), and
+   *  its `saved` is never read: the model handed in is the saved state. THROWS for a sheet that is not offered as an
+   *  option and for one the bid already holds. */
+  function addOption(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("addOption needs the model");
+    if (types.optionSheets().indexOf(tabId) < 0) {
+      throw new Error(JSON.stringify(String(tabId)) + " is not offered as an option (" + types.optionSheets().join(", ") + ")");
+    }
+    var c = isObject(ctx) ? ctx : {};
+    var withSection = activateSection(model, tabId, "option", { rules: c.rules });
+    var seeded = seedNewSections(withSection, Object.assign({}, c, { saved: model }));
+    var out = jsonCopy(withSection);
+    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[tabId, seeded.tabs[tabId]]]));
+    return out;
+  }
+
+  /** TAKE AN OPTION OFF A BID, rows and all. A NEW model. The bid keeps an (empty) `tabs` object, so its next save
+   *  still writes the whole price snapshot and the proposal side stops listing the option. THROWS unless the bid has
+   *  that section and it is an OPTION: a base is never removed this way (a job type's sections follow the job type). */
+  function removeOption(model, tabId) {
+    var e = sectionOf(model, tabId);
+    if (e.root || e.kind !== "option") throw new Error(JSON.stringify(String(tabId)) + " is not an option of this bid");
+    var out = jsonCopy(model);
+    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).filter(function (id) { return id !== tabId; })
+      .map(function (id) { return [id, out.tabs[id]]; })));
+    return out;
+  }
+
+  /** The maps in price_overrides whose keys are the lines of an option ("option:<tab>" and its tax rows "option:<tab>:..."):
+   *  the words typed over a line, the lines typed above and below it, and the bullets set on them. */
+  var OPTION_LINE_MAPS = ["lines", "lines2", "before", "after", "line_props", "before_props", "after_props"];
+
+  /** WHAT AN OPTION LEAVES BEHIND ON THE DRAFT WHEN IT IS TAKEN OFF, as a patch for TW.setState (a NEW object; `state`
+   *  is not touched; {} when there is nothing to forget). A Seal option's id is its sheet's name, so it is the SAME id the
+   *  next time the option is added, and anything kept under it would print on the new option's line of the customer's
+   *  proposal: the words typed over the old option's line (price_overrides.lines / .lines2 under "option:<tab>" and its
+   *  tax rows "option:<tab>:..."), the lines typed above and below it and the bullets set on them, its own price display
+   *  override (price_overrides.options), its manual notes (tab_notes) and its option settings (tab_opts). The estimate
+   *  page's deleteTab forgets the same set for a deleted copy. */
+  function optionLeftoverPatch(state, tab) {
+    var st = isObject(state) ? state : {};
+    var mine = "option:" + tab;
+    var patch = {};
+    function without(map, isMine) {
+      return Object.fromEntries(Object.keys(map).filter(function (k) { return !isMine(k); })
+        .map(function (k) { return [k, map[k]]; }));
+    }
+    function holds(map, isMine) { return isObject(map) && Object.keys(map).some(isMine); }
+    function byTab(k) { return k === tab; }
+    function byLine(k) { return k === mine || k.indexOf(mine + ":") === 0; }
+    ["tab_opts", "tab_notes"].forEach(function (key) {
+      if (holds(st[key], byTab)) patch[key] = without(st[key], byTab);
+    });
+    var pov = st.price_overrides;
+    if (isObject(pov)) {
+      var changed = false;
+      var next = Object.fromEntries(Object.keys(pov).map(function (key) {
+        var map = pov[key];
+        var test = key === "options" ? byTab
+          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? byLine : null);
+        if (test && holds(map, test)) { changed = true; return [key, without(map, test)]; }
+        return [key, map];
+      }));
+      if (changed) patch.price_overrides = next;
+    }
+    return patch;
+  }
+
+  /** WHAT THE DRAFT KEPT UNDER ONE SHEET'S ID, MOVED TO ANOTHER ID, as a patch for TW.setState (a NEW object; `state` is not
+   *  touched; {} when there is nothing under either id). For a sheet whose KEY changes while the sheet stays: a Gyp sheet is filed
+   *  under its preset's workbook tab, so changing the preset renames the key (moveSectionSheet), and everything the draft holds
+   *  under the old key (its proposal settings tab_opts, its notes, its own price override, the words typed over its line and the
+   *  lines around it) has to follow, or the sheet comes back with fresh settings and an option the estimator switched off prints.
+   *  The same set optionLeftoverPatch forgets. Whatever the draft held under the NEW id is dropped first: nothing is a section of
+   *  this bid under it (moveSectionSheet refuses that), so it is left over from an earlier sheet of that name. Key order is kept. */
+  function moveSheetDraftPatch(state, fromTab, toTab) {
+    var st = isObject(state) ? state : {};
+    var patch = {};
+    if (fromTab === toTab) return patch;
+    var lineKey = function (id) { return "option:" + id; };
+    var byTab = function (k, id) { return k === id; };
+    var byLine = function (k, id) { return k === lineKey(id) || k.indexOf(lineKey(id) + ":") === 0; };
+    var renameTab = function () { return toTab; };
+    var renameLine = function (k) { return lineKey(toTab) + k.slice(lineKey(fromTab).length); };
+    function move(map, isMine, rename) {
+      if (!isObject(map)) return null;
+      var keys = Object.keys(map);
+      if (!keys.some(function (k) { return isMine(k, fromTab) || isMine(k, toTab); })) return null;
+      return Object.fromEntries(keys.filter(function (k) { return !isMine(k, toTab); })
+        .map(function (k) { return [isMine(k, fromTab) ? rename(k) : k, map[k]]; }));
+    }
+    ["tab_opts", "tab_notes"].forEach(function (key) {
+      var moved = move(st[key], byTab, renameTab);
+      if (moved) patch[key] = moved;
+    });
+    var pov = st.price_overrides;
+    if (isObject(pov)) {
+      var changed = false;
+      var next = Object.fromEntries(Object.keys(pov).map(function (key) {
+        var moved = key === "options" ? move(pov[key], byTab, renameTab)
+          : (OPTION_LINE_MAPS.indexOf(key) >= 0 ? move(pov[key], byLine, renameLine) : null);
+        if (moved) { changed = true; return [key, moved]; }
+        return [key, pov[key]];
+      }));
+      if (changed) patch.price_overrides = next;
+    }
+    return patch;
+  }
+
+  // ══ SHEETS (Sheets phase 1): copy, add, rename and delete a sheet, and pick the base bid ═══════════════════════
+  //
+  // A BID IS MADE OF SHEETS, each a section (see the block above). The root is the Polish one. Any sheet can be copied, a
+  // fresh one of any ready type can be added, and exactly one thing is the BASE BID: one sheet, or the combined Epoxy and Polish
+  // pair. Everything else is an option, priced apart with its own travel and never in the lump sum. Everything follows the
+  // base: the lump sum, the job's travel (the first base carries it), the job type baseOf answers, and what the proposal
+  // reads (composePricingSnapshot writes `base_tab_id`).
+  //
+  // Every function here is pure: it answers a NEW model and never touches the one it was handed. A function that also changes
+  // what the DRAFT holds around the model (the proposal's per-sheet settings, `tab_opts`, and the words typed over an option's
+  // line) answers `patch`, for TW.setState, built from `ctx.state`, the draft as it stands.
+
+  /** THE SHEETS A BID CAN TAKE (workbook sheet ids): Polish, Epoxy, the five Gyp presets, Seal and Seal (+Jnts), in the
+   *  vocabulary's order. Leveling is not offered until it is priced, and Epoxy blank is not a sheet v2 uses. A new array. */
+  function sheetsToAdd() {
+    var out = [];
+    types.tabKeys().forEach(function (key) {
+      var rec = types.tab(key);
+      if (!(rec.optionOnly ? rec.offered === true : tabIsReady(key))) return;
+      rec.sheets.forEach(function (sheet) { if (sheet !== "Epoxy blank") out.push(sheet); });
+    });
+    return out;
+  }
+
+  /** The next free Copy<N> id: the smallest N not used as a key. A deleted copy's id is handed out again, which is why
+   *  deleteSection forgets everything the draft kept under it. */
+  function nextCopyId(model) {
+    var used = new Set(isObject(model) && isObject(model.tabs) ? Object.keys(model.tabs) : []);
+    var i = 1;
+    while (used.has("Copy" + i)) i++;
+    return "Copy" + i;
+  }
+
+  function requireRoomForCopy(model) {
+    var held = isObject(model.tabs) ? Object.keys(model.tabs).filter(function (id) { return COPY_ID.test(id); }).length : 0;
+    if (held >= MAX_COPIES) throw new Error("A bid can hold " + MAX_COPIES + " copied sheets at most.");
+  }
+
+  /** WHY A SHEET NAME WILL NOT DO, in plain words, or null when it will: not blank, 31 characters at most, none of
+   *  ! : \ / ? * [ ] " (a workbook's own limits), and not another sheet's name (the check ignores case). `exceptId` is the
+   *  sheet being renamed, which may keep its own name. THROWS for sections that cannot be read, like sectionsOf. */
+  function validateLabel(model, label, exceptId) {
+    var n = String(label == null ? "" : label).trim();
+    if (!n) return "Enter a sheet name.";
+    if (n.length > 31 && !keepsItsName(model, n, exceptId)) return "A sheet name can have 31 characters at most.";
+    if (/[!:\\/?*\[\]"]/.test(n) && !keepsItsName(model, n, exceptId)) return 'A sheet name cannot have any of these: ! : \\ / ? * [ ] "';
+    var taken = sectionsOf(model).some(function (e) { return e.tab !== exceptId && e.label.toLowerCase() === n.toLowerCase(); });
+    return taken ? '"' + n + '" is already the name of a sheet.' : null;
+  }
+
+  /** Is `name` the name the sheet `id` already has (any case)? A sheet may keep its name even when it is one the tool made for it that
+   *  a typed name could not be: a Gyp sheet's own name has a quote mark in it, and so does the name of its copy. False for a bid
+   *  whose sections cannot be read. */
+  function keepsItsName(model, name, id) {
+    try {
+      return sectionsOf(model).some(function (e) { return e.tab === id && e.label.toLowerCase() === name.toLowerCase(); });
+    } catch (err) { return false; }
+  }
+
+  /** What a section filed under its own sheet's name needs beside its key, as keys to lay over it: nothing when that name is free (it is
+   *  called by its key, which is the form every saved bid has), else a `label` that is free. A rename can have given the name to another
+   *  section, and two sheets of one name would print twice on the proposal. A bid whose sections cannot be read has nothing to compare
+   *  with and is left as it was. */
+  function labelIfTaken(model, sheet) {
+    var free;
+    try { free = uniqueLabel(model, sheet); } catch (err) { return {}; }
+    return free === sheet ? {} : { label: free };
+  }
+
+  /** `base` as a sheet name that is free: itself when it is, else with " 2", " 3" and so on, cut to leave room. */
+  function uniqueLabel(model, base) {
+    var used = new Set(sectionsOf(model).map(function (e) { return e.label.toLowerCase(); }));
+    var root = base.slice(0, 31);
+    if (!used.has(root.toLowerCase())) return root;
+    for (var i = 2; ; i++) {
+      var suffix = " " + i;
+      var label = base.slice(0, 31 - suffix.length) + suffix;
+      if (!used.has(label.toLowerCase())) return label;
+    }
+  }
+
+  /** THE DRAFT'S SIDE OF A NEW OPTION: a patch that forgets everything the draft kept under this id (a Copy<N> id is handed
+   *  out again after a delete) and lays the option's proposal settings (`settings`) in its tab_opts. A NEW object. */
+  function newOptionPatch(state, id, settings) {
+    var st = isObject(state) ? state : {};
+    var gone = optionLeftoverPatch(st, id);
+    var held = isObject(gone.tab_opts) ? gone.tab_opts : (isObject(st.tab_opts) ? st.tab_opts : {});
+    return Object.assign({}, gone, { tab_opts: Object.assign(copyInto({}, held), Object.fromEntries([[id, settings]])) });
+  }
+
+  /** COPY A SHEET (Sheets phase 1). Answers `{ model, id, patch }`: a NEW model holding the copy under the next free Copy<N> id,
+   *  that id, and the draft's side (`patch`, from `ctx.state`).
+   *
+   *  A COPY PRICES EXACTLY LIKE THE SHEET IT CAME FROM: it takes everything the source holds (takeoff, labor, contingency, fees,
+   *  and for Gyp its settings), and keeps the source's PROFILE and pool_packs stamps, so a copy of a bid saved before Polish
+   *  rev 2 or before the purchase pool is still priced the way its source is, whatever is stamped on new bids today. A section
+   *  under `tabs` also keeps its rates snapshot. The copy is an OPTION that starts OFF the proposal (`patch.tab_opts[id]` says
+   *  is_option false), so copying a sheet to try something prints nothing until the estimator turns it on. Its totals start
+   *  empty, because a save stamps them. Its name is "<source name> copy", made free. The root can be copied, and so can a sheet
+   *  that is off.
+   *
+   *  Money by role is not copied: an option carries its own travel (optionTravelCosts), so the copy matches its source in
+   *  every figure but the job's Lodging and Per Diem, which only the carrier takes. Made the base (pickBase) it prices like the
+   *  source. THROWS for a sheet the bid does not have, and at the limit of twelve copies. */
+  function copySection(model, sourceId, ctx) {
+    if (!isObject(model)) throw new Error("copySection needs the model");
+    var src = sectionOf(model, sourceId);
+    requireRoomForCopy(model);
+    var id = nextCopyId(model);
+    var body;
+    if (src.root) {
+      // The root's own keys are its section. Read the way migrateModel reads them, so a model that states none copies the shipped rows.
+      var fresh = freshModel();
+      var pick = function (key) { return jsonCopy(model[key] !== undefined ? model[key] : fresh[key]); };
+      body = { layout: "polish", profile: rootProfile(model).stamp, takeoff: pick("takeoff"), labor: pick("labor"),
+               contingency: pick("contingency"), fees: pick("fees") };
+      if (model.pool_packs !== undefined) body.pool_packs = model.pool_packs;
+    } else {
+      body = jsonCopy(src.section);
+    }
+    body = Object.assign(body, { kind: "option", sheet: src.sheet, label: uniqueLabel(model, src.label + " copy"),
+                                 source: sourceId, totals: {} });
+    return { model: withSectionPut(model, id, body), id: id,
+             patch: newOptionPatch(isObject(ctx) ? ctx.state : undefined, id, optionSettings(false)) };
+  }
+
+  /** ADD A FRESH SHEET (Sheets phase 1): one of sheetsToAdd, as an OPTION that starts ON the proposal, priced as a total. Answers
+   *  `{ model, id, patch }` like copySection.
+   *
+   *  The id is the sheet's own name when the bid has no section of that tab yet (the form every saved bid uses), else the next
+   *  Copy<N> with `sheet` and `label`, so a second Epoxy sheet, or any Polish one (the root is the first), is a Copy. The section is made as
+   *  activateSection makes one (a Polish sheet stamped polish-rev2, every sheet pool_packs) and then given the library's
+   *  defaults like a new section of a new bid (seedNewSections): its own crew from the labor lines filed under its work type, the
+   *  calculator's fills, and a starting takeoff over the area in `ctx.sf`, keyed by the new id or by the sheet's name. ONLY THE NEW
+   *  SECTION IS TAKEN from that seeding, so nothing the estimator typed anywhere else is reseeded (see addOption). `ctx` is
+   *  seedNewSections' (rules, laborRows, laborRate, calcRows, asms, items, reserved, sf, lf, takeoffRows), and `ctx.state` the draft.
+   *  THROWS for a sheet that is not offered, and at the limit of twelve copies. */
+  function addSheet(model, sheet, ctx) {
+    if (!isObject(model)) throw new Error("addSheet needs the model");
+    if (sheetsToAdd().indexOf(sheet) < 0) {
+      throw new Error(JSON.stringify(String(sheet)) + " cannot be added to a bid (" + sheetsToAdd().join(", ") + ")");
+    }
+    var c = isObject(ctx) ? ctx : {};
+    var tabKey = types.tabOfSheet(sheet);
+    var held = sectionsOf(model);
+    var ownKey = !held.some(function (e) { return types.tabOfSheet(e.sheet) === tabKey; }) && !has.call(model.tabs || {}, sheet) && sheet !== ROOT_TAB;
+    if (!ownKey) requireRoomForCopy(model);
+    var id = ownKey ? sheet : nextCopyId(model);
+    var body = newSectionBody(sheet, "option", { rules: c.rules });
+    body = Object.assign(body, ownKey ? labelIfTaken(model, sheet) : { sheet: sheet, label: uniqueLabel(model, sheet) });
+    var withSection = withSectionPut(model, id, body);
+    var seeded = seedNewSections(withSection, Object.assign({}, c, { saved: model }));
+    return { model: withSectionPut(withSection, id, seeded.tabs[id]), id: id,
+             patch: newOptionPatch(c.state, id, optionSettings(true)) };
+  }
+
+  /** RENAME A SHEET: what it is called on screen and on the proposal. A NEW model. The id is never changed and the label is never used as a
+   *  key, so nothing the draft keeps for the sheet is orphaned. Answers the model it was handed when the name is the one it has.
+   *  THROWS with validateLabel's words for a name that will not do, and for a sheet the bid does not have. */
+  function renameSection(model, id, label) {
+    var e = sectionOf(model, id);
+    var next = String(label == null ? "" : label).trim();
+    var why = validateLabel(model, next, id);
+    if (why) throw new Error(why);
+    if (next === e.label) return model;
+    return withSectionPatch(model, id, { label: next });
+  }
+
+  /** DELETE A SHEET, rows and all. Answers `{ model, patch }`: a NEW model without it, and the draft's side, which is
+   *  optionLeftoverPatch, ALWAYS: a Copy<N> id is handed out again, so anything the draft kept under it (its proposal settings,
+   *  notes, and the words typed over its line) would print on the next sheet to take the id. A bid keeps an (empty) `tabs`
+   *  object, so its next save still writes the whole price snapshot. THROWS for the BASE bid (pick another base first), for
+   *  the root, which is where a bid starts and cannot be removed from itself, and for a sheet the bid does not have. */
+  function deleteSection(model, id, ctx) {
+    var e = sectionOf(model, id);
+    if (e.root) throw new Error("The " + e.label + " sheet is where this bid starts, so it cannot be deleted. Take it off the proposal instead.");
+    if (e.kind === "base") throw new Error("Pick another base bid before you delete " + e.label + ".");
+    var out = jsonCopy(model);
+    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).filter(function (k) { return k !== id; })
+      .map(function (k) { return [k, out.tabs[k]]; })));
+    return { model: out, patch: optionLeftoverPatch(isObject(ctx) ? ctx.state : undefined, id) };
+  }
+
+  /** PICK THE BASE BID (Sheets phase 1): one sheet, or the combined pair, one Epoxy and one Polish. Answers `{ model, patch }`: a
+   *  NEW model and the draft's side. THE PRIOR BASE BECOMES AN OPTION that is ON the proposal, priced as a total, and the new
+   *  base is no option, so nothing is dropped from what the customer sees. Every other sheet keeps its kind. The job's
+   *  travel follows the carrier (the first base): when it moves, the Travel Labor row moves with it to the new carrier, unless
+   *  the new carrier has its own, so the base the job is priced on is the one that drives. `patch` carries `work_type` (what baseOf
+   *  says the base amounts to: a combined base is "combo"), `base_tab_id` (the one base, null for the pair) and, when it changed,
+   *  `tab_opts` from `ctx.state`. THROWS for Seal and Leveling (an option on a bid, never the base), for two sheets
+   *  that are not one Epoxy and one Polish, and for a sheet the bid does not have. Picking the base it already has changes
+   *  nothing but still answers the patch. */
+  function pickBase(model, ids, ctx) {
+    if (!isObject(model)) throw new Error("pickBase needs the model");
+    var want = ids instanceof Array ? ids.slice() : [ids];
+    if (want.length < 1 || want.length > 2 || (want.length === 2 && want[0] === want[1])) {
+      throw new Error("The base bid is one sheet, or one Epoxy sheet and one Polish sheet together.");
+    }
+    var list = sectionsOf(model);
+    var chosen = want.map(function (id) {
+      var found = list.filter(function (e) { return e.tab === id; })[0];
+      if (!found) throw new Error("the model has no section for " + JSON.stringify(String(id)));
+      var rec = types.tab(types.tabOfSheet(found.sheet));
+      if (rec.optionOnly) throw new Error(rec.label + " is an option on a bid, never the base");
+      return found;
+    });
+    if (chosen.length === 2) {
+      var roles = chosen.map(function (e) { return e.role; }).sort();
+      if (roles[0] !== "epoxy" || roles[1] !== "polish") throw new Error("A combined base is one Epoxy sheet and one Polish sheet.");
+    }
+    var carrierBefore = travelCarrier(model);
+    var out = model;
+    var demoted = [];
+    list.forEach(function (e) {
+      var next = want.indexOf(e.tab) >= 0 ? "base" : (isBaseEntry(e) ? "option" : e.kind);
+      if (next === e.kind) return;
+      if (next === "option") demoted.push(e.tab);
+      out = withSectionKind(out, e.tab, next);
+    });
+    var carrierAfter = travelCarrier(out);
+    if (carrierAfter !== carrierBefore) out = moveTravelLabor(out, carrierBefore, carrierAfter);
+    var st = isObject(ctx) && isObject(ctx.state) ? ctx.state : {};
+    var held = isObject(st.tab_opts) ? st.tab_opts : {};
+    var opts = copyInto({}, held);
+    var touched = false;
+    var entryOf = function (id) { return has.call(held, id) && isObject(held[id]) ? held[id] : {}; };
+    demoted.forEach(function (id) {
+      touched = true;
+      var kept = Object.assign(optionSettings(true), entryOf(id), { is_option: true, show: true, price_mode: "total" });
+      opts = Object.assign({}, opts, Object.fromEntries([[id, kept]]));
+    });
+    want.forEach(function (id) {
+      if (!has.call(held, id) || !isObject(held[id]) || held[id].is_option !== true) return;
+      touched = true;
+      opts = Object.assign({}, opts, Object.fromEntries([[id, Object.assign({}, held[id], { is_option: false })]]));
+    });
+    var patch = { work_type: baseOf(out).jobType, base_tab_id: want.length === 1 ? want[0] : null };
+    if (touched) patch.tab_opts = opts;
+    return { model: out, patch: patch };
+  }
+
+  /** The job's Travel Labor row follows the carrier. The row (labor id `travel`) is the job's drive, and only the carrier holds one,
+   *  so when the base moves to another sheet the row moves with it. Moved only when the old carrier has one, the new carrier has
+   *  none, and the old one keeps at least one other row (a root with no labor reads as the four shipped rows, so it is
+   *  copied instead). A NEW model; the one handed in when nothing moves. */
+  function moveTravelLabor(model, fromTab, toTab) {
+    var out = jsonCopy(model);
+    var from = sectionOf(out, fromTab).section, to = sectionOf(out, toTab).section;
+    var isTravel = function (r) { return !!r && r.id === "travel"; };
+    var mine = (from.labor instanceof Array ? from.labor : []).filter(isTravel);
+    var theirs = (to.labor instanceof Array ? to.labor : []).filter(isTravel);
+    if (!mine.length || theirs.length) return model;
+    var rest = from.labor.filter(function (r) { return !isTravel(r); });
+    if (rest.length) from.labor = rest;
+    to.labor = (to.labor instanceof Array ? to.labor : []).concat(mine);
+    return out;
+  }
 
   /** Keep the Travel row's Guys (and Lodging and Per Diem's quantity) in step with the crew's man-days while
    *  they are on auto. The estimate page's syncAutoGuys, as a function of the model, because the seeding below
@@ -2552,7 +4109,8 @@
    *    conditionRows  the stored condition defaults, or null
    *    cellValues, split   the draft's cell_values and isSplit(draft): a condition answer a cell holds wins
    *    asms, items, reserved   the library, for the default takeoff
-   *    sf             { tabId: [sf1, sf2] }, intake's two area boxes for each section
+   *    sf             { tabId: [sf1, sf2] }, intake's two area boxes for each section (Gyp's are three)
+   *    takeoffRows    function (entry, sfs), optional: a section's own starting takeoff (Gyp), else null
    *
    *  THE ORDER IS THE PAGE'S, step for step: labor and Travel, the job's lodging and per diem rates and fees
    *  default, then the job's conditions, then each takeoff, then the labor calculator, with the Travel guys kept
@@ -2577,8 +4135,16 @@
       return sectionsOf(out).filter(function (e) { return names.indexOf(e.tab) >= 0; });
     };
     names.forEach(function (tab) { requireLayout(sectionOf(out, tab).layout); });
-    var sfOf = function (tab) {
-      return isObject(ctx.sf) && has.call(ctx.sf, tab) && ctx.sf[tab] instanceof Array ? ctx.sf[tab] : [undefined, undefined];
+    // A section's two area boxes, by its id, else by its workbook sheet: the caller of a NEW sheet does not know the Copy<N>
+    // id the model is about to give it, only the sheet it is adding.
+    var byTabOrSheet = function (map, e) {
+      if (!isObject(map)) return undefined;
+      if (has.call(map, e.tab) && map[e.tab] instanceof Array) return map[e.tab];
+      return has.call(map, e.sheet) && map[e.sheet] instanceof Array ? map[e.sheet] : undefined;
+    };
+    var sfOf = function (e) {
+      var v = byTabOrSheet(ctx.sf, e);
+      return v ? v : [undefined, undefined];
     };
     var asked = laborGate && !!ctx.laborRows;
 
@@ -2589,15 +4155,17 @@
       // A model that states no rows reads as the four shipped ones, so keep only Travel and let the library put
       // the rest on. Another section than the carrier has no Travel of its own.
       var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];
-      var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, e.layout), ctx.laborRate));
+      var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, kindOfSection(e.layout)), ctx.laborRate));
+      // Every row opens with no guys, days or hours, and on neither auto nor the distance (see laborRowStartsEmpty).
+      rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });
       s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
     });
     if (asked) {
       // Travel is a default like any other: if the library says this bid does not get it, say so on the model so
       // a reload does not append the "missing" row back (migrateModel).
-      if (travelDeclined(ctx.laborRows, sectionOf(out, carrierTab).layout)) out = Object.assign(out, { no_travel_labor: true });
+      if (travelDeclined(ctx.laborRows, kindOfSection(sectionOf(out, carrierTab).layout))) out = Object.assign(out, { no_travel_labor: true });
       syncAutoGuys(out);
-      out.travel = applyTravelRates(out.travel, ctx.travelRates);
+      out.travel = travelLinesStartEmpty(applyTravelRates(out.travel, ctx.travelRates));
       if (carrierTab === ROOT_TAB) {
         out = applyFeesDefault(out, ctx.feesDefault);
       } else {
@@ -2616,10 +4184,26 @@
     now().forEach(function (e) {
       var s = e.section;
       if (takeoffSf(s.takeoff)) return;
-      var sfs = sfOf(e.tab);
+      var sfs = sfOf(e);
+      // A section whose takeoff is not "System 1 and System 2" (Gyp's three areas) asks the page for its own rows:
+      // `ctx.takeoffRows(entry, sfs)` answers a list of rows, or null to take the ordinary path. An empty list
+      // leaves the section's blank row as it is.
+      var own = typeof ctx.takeoffRows === "function" ? ctx.takeoffRows(e, sfs) : null;
+      if (own instanceof Array) {
+        if (own.length) s.takeoff = own;
+        return;
+      }
       s.takeoff = (e.root ? (condGate || laborGate) : true)
-        ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], e.layout)
+        ? seedDefaultTakeoff(s.takeoff, ctx.asms, ctx.items, ctx.reserved, sfs[0], sfs[1], kindOfSection(e.layout))
         : seedTakeoffSf(s.takeoff, sfs[0], sfs[1]);
+      // The intake's cove lengths, as takeoff rows of their own (Epoxy has a cove, Polish does not). A blank
+      // assembly the estimator picks a cove for, never over a row that is already measured in linear feet.
+      var lfs = byTabOrSheet(ctx.lf, e) || [];
+      if (!(takeoffLf(s.takeoff) > 0)) {
+        lfs.forEach(function (v) {
+          if (num(v) > 0) s.takeoff.push({ assembly_id: "", assembly_name: "", measurement: num(v), unit: "LF" });
+        });
+      }
     });
 
     // 4. the labor calculator, after the takeoff (a "from SF" line needs the area)
@@ -2637,6 +4221,16 @@
       });
       if (calculated) syncAutoGuys(out);
     }
+
+    // 5. THE NEW ROOT BUYS ITS MATERIAL ONCE FOR THE WHOLE SECTION (see poolsPacks). A tab section is stamped
+    // when it is made (activateSection), so this is the root's half: it is new on exactly the gate that seeds its
+    // labor or its conditions, and a saved root never passes it, so a bid saved before the pool keeps its pricing.
+    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.pool_packs === undefined) out.pool_packs = true;
+
+    // 6. THE NEW ROOT IS PRICED BY POLISH REV 2 (Phase 17, Hanz 2026-10-07: Kyle's Polish fixes apply to NEW bids only).
+    // Stamped on the same gate as the pool above, so a saved root never gains it and keeps pricing as polish-legacy.
+    // A root that already carries a `profile` of any kind is left exactly as it is.
+    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV2.stamp;
     return out;
   }
 
@@ -2652,15 +4246,29 @@
     return t;
   }
 
+  /** A Gyp section's three area figures, the keys the proposal's Area line sums (gyp_soft_sf, gyp_hard_sf,
+   *  gyp_corridor_sf). A row says which area it is with its `bucket` mark; a square-foot row that names none is the
+   *  soft surface's, which is what the single figure it replaces always was. */
+  function gypAreaFields(rows) {
+    var out = { gyp_soft_sf: 0, gyp_hard_sf: 0, gyp_corridor_sf: 0 };
+    (rows || []).forEach(function (r) {
+      if (!r || !rowOn(r) || r.unit === "LF" || r.same_floor) return;
+      // An explicit branch for each area (never `out[name] +=`): the mark came out of a saved draft.
+      if (r.bucket === "hard") out.gyp_hard_sf += num(r.measurement);
+      else if (r.bucket === "corridor") out.gyp_corridor_sf += num(r.measurement);
+      else out.gyp_soft_sf += num(r.measurement);
+    });
+    return out;
+  }
+
   /** The area fields a section's priced tab carries (the keys the Estimate step's snapshot uses, which the
    *  proposal's Area line sums from the base tabs): Polish and Seal one SF figure, Epoxy its area and cove,
-   *  Gyp its one bucket so far (the soft area; the hard and corridor buckets come with Gyp's own phase), Leveling
-   *  none. */
+   *  Gyp its three areas (soft, hard, corridor), Leveling none. */
   function areaFields(e) {
     var rows = e.section.takeoff;
     if (e.role === "polish" || e.role === "seal") return { polish_sf: takeoffSf(rows) };
     if (e.role === "epoxy") return { epoxy_sf: takeoffSf(rows), cove_lf: takeoffLf(rows) };
-    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };
+    if (e.role === "gyp") return gypAreaFields(rows);
     return {};
   }
 
@@ -2676,7 +4284,15 @@
     return t;
   }
 
-  function systemDesc(s) {
+  function systemDesc(s, entry) {
+    // A Gyp section is named by the tab it is filed under (the sheet's own A1: "N12 1/8" + 3/4" Gyp"), not by its
+    // first row, which is an area. A Seal option is named by its sheet too, in the live estimate's own words
+    // ("Sealed Concrete", "Sealed Concrete with Joint Filler"): two options can be on one proposal, and the joints
+    // one must not read as the plain one.
+    if (entry && (entry.role === "gyp" || entry.role === "seal")) {
+      var label = engine.forTab(entry.sheet).label;
+      if (label) return label;
+    }
     var rows = s.takeoff || [];
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -2711,6 +4327,9 @@
    *    sheet_area          the base sections' areas, summed key by key
    *    cost_snapshot       the base sections' costs (sub-total, taxes, fees and bond) and man hours
    *    phase_price         0: v2 has no phase surcharge, and the proposal falls back to its own default
+   *    tab_opts            ONLY when the bid has an option: the draft's own tab_opts, with an entry added (is_option and
+   *                        show on, price_mode total) for every option section the draft holds none for. The proposal
+   *                        side prints a priced tab as an option only when this says so; an entry already there is kept
    *    computed_bid        { lump_sum, price_per_sf, polish_sf, full_bid } as above, for the combined base
    *  A section that cannot price (a profile rev that has moved, a rate that cannot be read) is listed with a null
    *  total and the reason, and takes the combined price with it: there is NO price rather than a wrong one, so
@@ -2746,7 +4365,10 @@
       out.polish_sf = rootLive.sf > 0 ? rootLive.sf : measuredSf(model.takeoff);
       out.polish_2_sf = "";
     }
-    var single = entries.length === 1 && root.kind === "base";
+    // A bid whose model holds a `tabs` object is never "single", even when its last option was just removed: the
+    // draft still holds the price snapshot that option was in (priced_tabs, the lump sum), and only the complete set
+    // below overwrites it. A bid that never had a second section has no `tabs` and writes what it always wrote.
+    var single = entries.length === 1 && root.kind === "base" && !isObject(model.tabs);
     var rootComputed = rootLive ? {
       lump_sum: rootLive.total, price_per_sf: rootLive.per_sf, polish_sf: rootLive.sf,
       full_bid: { total_base_bid: rootLive.total, sales_tax: rootLive.sales_tax, remodel_tax: rootLive.remodel_tax }
@@ -2756,8 +4378,7 @@
     // ── more than one section: the complete derived set ──
     var cond = isObject(model.conditions) ? model.conditions : {};
     var priceable = function (b) { return b.priceable !== false; };
-    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };
-    var base = bids.filter(function (x) { return isBase(x.e); });
+    var base = bids.filter(function (x) { return isBaseEntry(x.e); });
     var ok = base.length > 0 && base.every(function (x) { return priceable(x.b); });
     var sums = ok ? engine.combine(base.map(function (x) { return { layout: x.e.layout, result: x.b }; })).sums : null;
     var area = {};
@@ -2775,13 +4396,17 @@
     out.priced_tabs = bids.map(function (x) {
       var b = x.b, good = priceable(b);
       return Object.assign({
-        id: x.e.tab, name: x.e.tab, role: x.e.role, kind: x.e.kind,
+        id: x.e.tab, name: x.e.label, role: x.e.role, kind: x.e.kind,
         total: good ? b.total : null, sales_tax: good ? b.sales_tax : null, remodel: good ? b.remodel_tax : null,
-        system_desc: systemDesc(x.e.section), notes_auto: [],
+        system_desc: systemDesc(x.e.section, x.e), notes_auto: [],
         sf: areaFields(x.e), sys_names: [],
         taxable: !!cond.taxable, remodel_on: !!cond.remodel_tax, v2: true
       }, good ? {} : { unpriceable: String(b.reason || "") });
     });
+    // THE BASE'S ID, for the Proposal step (Sheets phase 1): the one base's own id, and null for a combined base (Epoxy and
+    // Polish together), which the proposal tells by role. The proposal reads `base_tab_id` to know which priced tab IS the
+    // base, so a copy or a second sheet made the base is named here, and a bid with no base names none.
+    out.base_tab_id = base.length === 1 ? base[0].e.tab : null;
     out.proposal_lump_sum = ok ? sums.total : null;
     out.proposal_sales_tax = ok ? sums.sales_tax : null;
     out.proposal_remodel_tax = ok ? sums.remodel_tax : null;
@@ -2793,15 +4418,72 @@
       man_hours: Math.round(base.reduce(function (t, x) { return t + sectionManHours(x.e.section); }, 0))
     } : { costs: 0, man_hours: 0 };
     out.phase_price = 0;
+    // AN OPTION IS AN OPTION ON THE PROPOSAL SIDE ONLY WHEN THE DRAFT SAYS SO (tab_opts[id].is_option, the key the
+    // Estimate step's "add as option" tick and the Proposal step's sidebar both write; proposal-review.js reads it to
+    // put the section under "Options & Unit Prices"). A v2 option has no tick on this page, so the first save of it
+    // writes the entry with the option on and shown, as a total (its own price). An entry the draft already holds is
+    // never rewritten, so what the estimator did in the Proposal step's sidebar (hide it, turn it into a deduction,
+    // type its words) survives the next save of this page. `ctx.tabOpts` is the draft's own tab_opts.
+    // Every option the bid holds, a Copy<N> one and the root as an option included, has an entry here. What the model WRITES is
+    // always a total (optionSettings), so a Seal option, which has no Add or Deduct, is never written as one.
+    var optionIds = bids.filter(function (x) { return x.e.kind === "option"; }).map(function (x) { return x.e.tab; });
+    if (optionIds.length) {
+      var heldOpts = isObject(ctx.tabOpts) ? ctx.tabOpts : {};
+      var opts = copyInto({}, heldOpts);
+      optionIds.forEach(function (id) {
+        if (has.call(heldOpts, id)) return;
+        opts = Object.assign({}, opts, Object.fromEntries([[id, optionSettings(true)]]));
+      });
+      out.tab_opts = opts;
+    }
     return out;
+  }
+
+  /** IS THE PRICE THE DRAFT HOLDS BEHIND THE ROWS THE MODEL HOLDS? True when a section that is part of the bid was
+   *  priced on another floor than its takeoff now says, so the page should save once and let computed_bid, the
+   *  stamped totals and priced_tabs come from the model as it is.
+   *
+   *  WHY IT EXISTS. The intake's boxes edit the takeoff rows (patchModel's `boxes`) but cannot reprice, because the
+   *  library lives on the estimate page. So after a figure is typed there, the draft's snapshot still says the old
+   *  floor. This is asked for EVERY live section: the root's snapshot is polish_sf and computed_bid.polish_sf, any
+   *  other section's is its entry in priced_tabs (the area and cove it was priced on). A section the draft holds no
+   *  snapshot for is not behind (a draft that never had one writes nothing on open), and neither is one whose
+   *  snapshot agrees, so a plain reopen writes nothing. Reads only; false for a model whose sections cannot be read. */
+  function snapshotBehind(model, state) {
+    if (!isObject(model) || !isObject(state)) return false;
+    var list;
+    try { list = activeSections(model); } catch (err) { return false; }
+    var snap = isObject(state.computed_bid) ? state.computed_bid : null;
+    var priced = state.priced_tabs instanceof Array ? state.priced_tabs : [];
+    return list.some(function (e) {
+      if (e.root) {
+        var tk = takeoffSf(e.section.takeoff);
+        var snapSf = snap ? num(snap.polish_sf) : 0;
+        return tk > 0 && (tk !== num(state.polish_sf) || (snapSf > 0 && snapSf !== tk));
+      }
+      var held = priced.filter(function (x) { return isObject(x) && x.id === e.tab; })[0];
+      if (!held || !isObject(held.sf)) return false;
+      var now = areaFields(e);
+      return Object.keys(now).some(function (k) { return has.call(held.sf, k) && num(held.sf[k]) !== now[k]; });
+    });
+  }
+
+  /** The proposal's own settings for a section that is an option (tab_opts[id]): the keys the Estimate step's tick and the
+   *  Proposal step's sidebar both write. `on` is whether the option prints on the proposal (is_option); it always starts
+   *  shown, as a total, with its system named and no difference line. */
+  function optionSettings(on) {
+    return { show_system: true, show_diff: false, is_option: !!on, show: true, price_mode: "total" };
   }
 
   /** The strip that switches between a bid's sections, or "" when there is only one (every bid today), so a
    *  single-section estimate looks exactly as it did. One button per section, naming it, its kind and its price;
    *  `active` is the tab id on show and `bids` the { tabId: bid } the page priced (the root's under its own tab
    *  id). The page's delegated click handler reads `data-section-tab`. */
-  function sectionSwitcherHtml(model, active, bids) {
+  function sectionSwitcherHtml(model, active, bids, opts) {
     var list = sectionsOf(model);
+    // `opts.skipOff`: leave out a section that is not part of the bid (an Epoxy job's Polish root), so the strip
+    // lists only what the bid is made of. Without it every section is listed, as it always was.
+    if (opts && opts.skipOff) list = list.filter(function (e) { return e.kind !== "off"; });
     if (list.length < 2) return "";
     var esc = function (s) {
       return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -2812,9 +4494,341 @@
       var price = b && b.priceable !== false && b.total ? money(b.total) : "no price";
       var kind = e.kind === "base" ? "" : (e.kind === "option" ? " (option)" : " (off)");
       return '<button type="button" data-section-tab="' + esc(e.tab) + '" aria-current="' +
-        (e.tab === active ? "true" : "false") + '">' + esc(e.tab) + esc(kind) + " · " + esc(price) + "</button>";
+        (e.tab === active ? "true" : "false") + '">' + esc(e.label) + esc(kind) + " · " + esc(price) + "</button>";
     }).join("");
   }
+  // ══ THE SHEETS PANEL (Sheets phase 3): what the floating widget on the estimate page draws ═══════════════════
+  //
+  // sectionSwitcherHtml above is the strip the panel replaced on the page. These are PURE, like it: they answer markup and
+  // change nothing, so the page's handlers and a test read the very same text. The page hands in a `view`:
+  //
+  //   open       the sheet on show (a section id)            bids       { sectionId: bid } the page priced
+  //   opts       the draft's tab_opts                        sf         the area a new sheet starts from, or 0
+  //   confirm    { row, ids } a base change waiting for its yes, or null
+  //   armed      the sheet whose Delete was pressed once     renaming   the sheet being renamed, with `draft` and `error`
+  //   descOpen   { sectionId: true } the description boxes that are open
+  //   pick       the "Add a sheet" menu is open              busy       a sheet is being added (the library is being read)
+  //   icon       function (name, size) -> svg markup, or none   sysDesc    function (sectionId) -> what the option prints now
+  //   notice     { at, text }: why a press was refused, drawn under the control that was pressed (at: a section id, or "add")
+  //
+  // EVERY CONTROL CARRIES A data- ATTRIBUTE THE PAGE'S ONE CLICK HANDLER READS: data-section-tab (open it), data-sh-base (the
+  // radio), data-sh-act with data-sh-tab (on, desc, copy, rename, rename-save, rename-cancel, delete, base-yes, base-no,
+  // add-menu, add-close, add with data-sh-sheet), data-sh-mode (the Total / Add or Deduct pair), data-sh-desc and data-sh-name (the
+  // two boxes). data-sh-key names a control so the page can put the caret back on it after a repaint.
+
+  /** THE PAIR A COMBINED BASE WOULD BE, as [epoxyId, polishId], or null when the bid has no Epoxy or no Polish sheet that is part
+   *  of it. The pair the bid already has when it is combined; otherwise the Epoxy and the Polish sheet a job type would take (one
+   *  that already is a base, else the sheet's own, else the first copy). Never throws. */
+  function combinedPair(model) {
+    var entries = readableSections(model);
+    if (entries === null) return null;
+    var bases = entries.filter(isBaseEntry);
+    if (baseTypeOf(entries) === "combo" && bases.length === 2) {
+      return bases.slice().sort(function (a, b) { return a.role === "epoxy" ? -1 : (b.role === "epoxy" ? 1 : 0); })
+        .map(function (e) { return e.tab; });
+    }
+    var live = entries.filter(function (e) { return e.kind !== "off"; });
+    var one = function (role) {
+      var mine = live.filter(function (e) { return e.role === role; });
+      return mine.length ? preferredSection(mine) : null;
+    };
+    var epoxy = one("epoxy"), polish = one("polish");
+    return epoxy && polish ? [epoxy.tab, polish.tab] : null;
+  }
+
+  /** Is this option ON the proposal? tab_opts says so when it is an option and not hidden. An option the draft holds no entry for
+   *  yet is ON: the first save writes its entry that way (composePricingSnapshot). */
+  function optionIsOn(opts, id) {
+    var o = isObject(opts) && has.call(opts, id) && isObject(opts[id]) ? opts[id] : null;
+    return o ? (o.is_option === true && o.show !== false) : true;
+  }
+
+  /** The draft's side of one sheet's proposal settings: a patch for TW.setState that lays `change` over tab_opts[id] (made as
+   *  optionSettings(true) when the draft holds none yet). A NEW object; `state` is not touched. */
+  function tabOptPatch(state, id, change) {
+    var st = isObject(state) ? state : {};
+    var held = isObject(st.tab_opts) ? st.tab_opts : {};
+    var cur = has.call(held, id) && isObject(held[id]) ? held[id] : optionSettings(true);
+    return { tab_opts: Object.assign({}, copyInto({}, held), Object.fromEntries([[id, Object.assign({}, cur, change)]])) };
+  }
+
+  /** A SEAL OPTION IS A TOTAL, NEVER AN ADD OR DEDUCT: a patch for TW.setState that sets tab_opts[id].price_mode back to "total" for
+   *  every option-only sheet (Seal and its copies) whose entry says "deduct", and {} when none does (a NEW object; `state` is not
+   *  touched). The panel offers a Seal sheet no Total / Add or Deduct pair and says it is priced as a total, but the Proposal step's
+   *  own "Price as" box can leave one on Add / Deduct, and the proposal prints what the draft says: the panel would state one
+   *  thing and the customer's document another. Everything else the entry holds is kept. */
+  function optionOnlyTotalPatch(model, state) {
+    var st = isObject(state) ? state : {};
+    if (!isObject(st.tab_opts)) return {};
+    var entries;
+    try { entries = sectionsOf(model); } catch (err) { return {}; }
+    var next = null;
+    entries.forEach(function (e) {
+      var held = has.call(st.tab_opts, e.tab) && isObject(st.tab_opts[e.tab]) ? st.tab_opts[e.tab] : null;
+      if (!held || held.price_mode !== "deduct" || !types.tab(types.tabOfSheet(e.sheet)).optionOnly) return;
+      next = Object.assign({}, next || copyInto({}, st.tab_opts), Object.fromEntries([[e.tab, Object.assign({}, held, { price_mode: "total" })]]));
+    });
+    return next ? { tab_opts: next } : {};
+  }
+
+  var JOB_WORDS = { polish: "Polish", epoxy: "Epoxy", gyp: "Gyp", combo: "Combo" };
+  function jobWord(jobType) { return has.call(JOB_WORDS, jobType) ? JOB_WORDS[jobType] : String(jobType == null ? "" : jobType); }
+  function anWord(w) { return /^[AEIOU]/i.test(w) ? "an" : "a"; }
+  function escHtml(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /** WHAT THE PANEL SAYS ABOUT EACH SHEET, worked out once for the panel and the "Open sheet" line. Every sheet that is part of
+   *  the bid, as { e, base, inBase, opt, optOnly, canBase, price, on, mode, typeLabel, lead, figure, off }; the base bid(s)' ids
+   *  and total; the combined pair and its total. A bid whose sections cannot be read is the root alone, with `unreadable` set. */
+  function sheetsFacts(model, view) {
+    var v = isObject(view) ? view : {};
+    var unreadable = false, entries;
+    try { entries = sectionsOf(model); } catch (err) {
+      unreadable = true;
+      entries = [{ tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+                   layout: "polish", kind: "base", profile: "", role: "polish" }];
+    }
+    var list = entries.filter(function (e) { return e.kind !== "off"; });
+    var baseIds = entries.filter(isBaseEntry).map(function (e) { return e.tab; });
+    var priceOf = function (id) {
+      var b = isObject(v.bids) && has.call(v.bids, id) ? v.bids[id] : null;
+      return b && b.priceable !== false && num(b.total) > 0 ? num(b.total) : null;
+    };
+    var sumOf = function (ids) {
+      var t = 0;
+      for (var i = 0; i < ids.length; i++) { var p = priceOf(ids[i]); if (p === null) return null; t += p; }
+      return ids.length ? t : null;
+    };
+    var baseTotal = sumOf(baseIds);
+    var pair = unreadable ? null : combinedPair(model);
+    var rows = list.map(function (e) {
+      var rec = types.tab(types.tabOfSheet(e.sheet));
+      var base = baseIds.length === 1 && baseIds[0] === e.tab;
+      var inBase = baseIds.length === 2 && baseIds.indexOf(e.tab) >= 0;
+      var opt = !base && !inBase;
+      var optOnly = !!rec.optionOnly;
+      var price = priceOf(e.tab);
+      var on = opt && optionIsOn(v.opts, e.tab);
+      var held = isObject(v.opts) && has.call(v.opts, e.tab) && isObject(v.opts[e.tab]) ? v.opts[e.tab] : {};
+      var mode = !optOnly && held.price_mode === "deduct" ? "deduct" : "total";
+      var lead = "", figure = "", off = false;
+      if (opt) {
+        if (price === null) { lead = "Option, no price yet"; off = true; }
+        else if (!on) { lead = "Not on the proposal"; off = true; }
+        else if (mode === "deduct") {
+          // The proposal's own rule (proposal-review.js): the option's total less the base's, cheaper is a Deduct.
+          if (baseTotal === null) lead = "Option, add or deduct";
+          else {
+            var d = Math.round(price) - Math.round(baseTotal);
+            lead = "Option,";
+            figure = d < 0 ? "Deduct (" + money(-d) + ")" : (d > 0 ? "Add " + money(d) : "No change");
+          }
+        } else lead = "Option, total";
+      }
+      return { e: e, base: base, inBase: inBase, opt: opt, optOnly: optOnly, canBase: !optOnly, price: price, on: on, mode: mode,
+               desc: typeof held.desc === "string" ? held.desc : "", typeLabel: e.role === "seal" ? e.sheet : rec.label,
+               lead: lead, figure: figure, off: off };
+    });
+    return { view: v, unreadable: unreadable, entries: entries, rows: rows, baseIds: baseIds, baseTotal: baseTotal,
+             pair: pair, pairTotal: pair ? sumOf(pair) : null };
+  }
+
+  /** What a base change says before it is made: { title, body } for pressing `ids` (one sheet, or the combined pair). The base
+   *  the bid has now stays ON the proposal as an option, priced as a total, which is said where it is asked. */
+  function baseChangeWords(model, ids) {
+    var entries = sectionsOf(model);
+    var nameOf = function (id) { return entries.filter(function (e) { return e.tab === id; })[0]; };
+    var now = baseOf(model);
+    var combined = ids.length === 2;
+    var next = combined ? "combo" : (nameOf(ids[0]) && types.isJobType(nameOf(ids[0]).role) ? nameOf(ids[0]).role : null);
+    var leaving = entries.filter(function (e) { return isBaseEntry(e) && ids.indexOf(e.tab) < 0; })
+      .map(function (e) { return e.label; });
+    var title = "Make " + (combined ? "Epoxy + Polish (combined)" : nameOf(ids[0]).label) + " the base bid?";
+    var word = jobWord(next);
+    var body = next === now.jobType
+      ? "The job stays " + word + ". "
+      : "The job becomes " + anWord(word) + " " + word + " job and the proposal switches to the " + word + " format. ";
+    if (leaving.length) body += leaving.join(" and ") + (leaving.length > 1 ? " become options" : " becomes an option") +
+      " on the proposal, priced as a total.";
+    return { title: title, body: body.trim() };
+  }
+
+  /** The "Sheets" panel, as the markup inside its <aside>. See the block comment above for `view`. */
+  function sheetsPanelHtml(model, view) {
+    var f = sheetsFacts(model, view);
+    var v = f.view;
+    var ic = typeof v.icon === "function" ? v.icon : function () { return ""; };
+    var key = function (id, what) { return ' data-sh-key="' + escHtml(id + "|" + what) + '"'; };
+    var h = '<div class="sh-head"><span class="sh-grip">' + ic("menu", 14) + '</span>Sheets</div>' +
+      '<p class="sh-hint"><span class="rdot" aria-hidden="true"></span> marks the base bid, which sets the lump sum and the job type. ' +
+      'Click a sheet to open it.</p>';
+    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {
+      h += '<p class="sh-hint sh-excel">Copies print on the proposal. The Excel download does not include them.</p>';
+    }
+    if (f.unreadable) {
+      h += '<div class="sh-warn" role="alert">' + ic("warning", 14) + '<span>This bid\'s other sheets can\'t be read, so only ' +
+        escHtml(rootLabel(model)) + ' shows. ' + escHtml(rootLabel(model)) + ' still prices and saves. Reload to try again.</span></div>';
+    }
+
+    // "Add sheet" is the first thing under the hint, above the list (Hanz, 2026-10-13).
+    h += '<div class="sh-add">';
+    // Why a sheet could not be added, beside the button that was pressed (the page's own alert is above the fold of a long page).
+    if (isObject(v.notice) && v.notice.at === "add") h += noticeHtml(v.notice);
+    if (!v.pick) {
+      h += '<button type="button" class="btn ghost sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
+        ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button>';
+      if (f.unreadable) h += '<p class="sh-cap">Adding a sheet is off until the other sheets can be read.</p>';
+    } else {
+      // One row a type. Gyp's five presets are one product (the Gyp card on the Material step switches between them), so the menu
+      // lists "Gyp" once and adds the first preset; Seal and Seal (+Jnts) are two different sheets and are both listed.
+      var rank = { polish: 0, epoxy: 1, gyp: 2, seal: 3 };
+      var seenGyp = false;
+      var kinds = sheetsToAdd().map(function (s, i) { return { s: s, i: i, role: types.tab(types.tabOfSheet(s)).role }; })
+        .filter(function (k) { if (k.role !== "gyp") return true; var first = !seenGyp; seenGyp = true; return first; })
+        .sort(function (a, b) { return (rank[a.role] - rank[b.role]) || (a.i - b.i); });
+      h += '<div class="sh-pick" role="group" aria-label="Add a sheet"><div class="sh-pick-h">Add a sheet' +
+        '<button type="button" class="x" aria-label="Close" data-sh-act="add-close"' + key("add", "close") + '>' + ic("x", 14) +
+        '</button></div><p class="sh-cap">' + (num(v.sf) > 0 ? "It starts from this bid's " + fmtSf(num(v.sf)) + " SF."
+          : "It starts empty. Measure it on its Material step.") + '</p><ul class="sh-pick-l">';
+      kinds.forEach(function (k) {
+        var only = types.tab(types.tabOfSheet(k.s)).optionOnly;
+        h += '<li><button type="button" class="sh-pick-row" data-sh-act="add" data-sh-sheet="' + escHtml(k.s) + '"' +
+          key("add", k.s) + (v.busy ? " disabled" : "") + '><span>' + escHtml(k.role === "gyp" ? types.tab(types.tabOfSheet(k.s)).label : k.s) + '</span>' +
+          (only ? '<span class="pill">Option only</span>' : "") + '</button></li>';
+      });
+      // A sheet type the tool does not price yet is listed so nobody wonders where it went.
+      types.tabKeys().forEach(function (tk) {
+        var rec = types.tab(tk);
+        if (rec.optionOnly && rec.offered !== true) {
+          h += '<li><button type="button" class="sh-pick-row" disabled><span>' + escHtml(rec.label) +
+            '</span><span class="pill">Coming</span></button></li>';
+        }
+      });
+      h += '</ul></div>';
+    }
+    h += '</div>';
+
+    var rows = [];
+    if (f.pair && !f.unreadable) {
+      var combined = f.baseIds.length === 2;
+      var confirmHere = isObject(v.confirm) && v.confirm.row === "combined";
+      rows.push('<li class="sh" data-sh-row="combined"><div class="sh-top"><span class="sh-slot">' +
+        '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
+        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid"></span>' +
+        '<span class="sh-name static"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
+        (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></div>' +
+        '<div class="sh-meta"><span class="sh-type">COMBINED</span>' + (combined ? '<span class="pill base">Base bid</span>' : "") + '</div>' +
+        (confirmHere ? confirmHtml(model, v) : "") + '</li>');
+    }
+    f.rows.forEach(function (r, i) { rows.push(rowHtml(r, i)); });
+    h += '<ul class="sh-list">' + rows.join("") + '</ul>';
+    if (f.rows.length === 1 && !f.unreadable) {
+      h += '<p class="sh-empty">Add a sheet to price an option. Options never change the lump sum.</p>';
+    }
+    return h;
+
+    /** Why a press was refused, in the model's own words, as a line of the panel (the page sets view.notice = { at, text }). */
+    function noticeHtml(n) {
+      return '<p class="sh-note warn" role="alert" data-sh-notice>' + escHtml(n.text) + '</p>';
+    }
+
+    function confirmHtml(m, view2) {
+      var words;
+      try { words = baseChangeWords(m, view2.confirm.ids); } catch (err) { return ""; }
+      return '<div class="sh-confirm" role="group" aria-label="Confirm the base bid"><b>' + escHtml(words.title) + '</b><p>' +
+        escHtml(words.body) + '</p><div class="sh-btns"><button type="button" class="btn sm" data-sh-act="base-yes"' +
+        key("confirm", "yes") + '>Make it the base</button><button type="button" class="btn ghost sm" data-sh-act="base-no"' +
+        key("confirm", "no") + '>Cancel</button></div></div>';
+    }
+
+    function rowHtml(r, i) {
+      var e = r.e, t = e.tab, open = t === v.open, ren = open && v.renaming === t;
+      var tabAttr = ' data-sh-tab="' + escHtml(t) + '"';
+      var s = '<li class="sh' + (open ? " open" : "") + '" data-sh-row="' + escHtml(t) + '"><div class="sh-top">' +
+        '<span class="sh-slot"' + (r.canBase ? "" : ' title="Seal sheets price as options only, never as the base bid"') + '>' +
+        (r.canBase ? '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="' + escHtml(t) + '"' + key(t, "base") +
+          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid">' : "") + '</span>';
+      if (ren) {
+        s += '<input type="text" class="sh-ren-in" data-sh-name="' + escHtml(t) + '"' + key(t, "name") + ' value="' +
+          escHtml(v.draft) + '" aria-label="Sheet name">';
+      } else {
+        s += '<button type="button" class="sh-name" data-section-tab="' + escHtml(t) + '"' + key(t, "open") + ' aria-current="' +
+          (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) + '</span><span class="sh-price' +
+          (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span></button>';
+      }
+      s += '</div><div class="sh-meta"><span class="sh-type">' + escHtml(String(r.typeLabel).toUpperCase()) + '</span>';
+      if (r.base) s += '<span class="pill base">Base bid</span>';
+      else if (r.inBase) s += '<span class="pill">In the base bid</span>';
+      else s += '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) +
+        (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>';
+      s += '</div>';
+      if (isObject(v.confirm) && v.confirm.row === t) s += confirmHtml(model, v);
+      if (open) {
+        s += '<div class="sh-body">';
+        if (ren) {
+          s += '<div class="sh-btns"><button type="button" class="btn sm" data-sh-act="rename-save"' + tabAttr + key(t, "save") +
+            '>Save name</button><button type="button" class="btn ghost sm" data-sh-act="rename-cancel"' + tabAttr + key(t, "cancel") +
+            '>Cancel</button></div><p class="sh-note">Enter saves, Esc cancels. The name is only a label: nothing is repriced.</p>';
+          if (v.error) s += '<p class="sh-note warn" role="alert" data-sh-error>' + escHtml(v.error) + '</p>';
+        } else {
+          if (r.opt) {
+            s += '<button type="button" class="mw-sw' + (r.on ? " on" : "") + '" role="switch" aria-checked="' + (r.on ? "true" : "false") +
+              '" data-sh-act="on"' + tabAttr + key(t, "on") + '><span class="track"></span>On the proposal as an option</button>' +
+              '<div class="sh-ctl' + (r.on ? "" : " inert") + '">';
+            if (!r.optOnly) {
+              s += '<div class="sh-mode"><span class="sh-lbl">Price as</span><span class="seg" role="radiogroup" aria-label="Price as">' +
+                '<input type="radio" id="sh-m' + i + '-t" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="total"' +
+                key(t, "mode-total") + (r.mode === "total" ? " checked" : "") + '><label for="sh-m' + i + '-t">Total</label>' +
+                '<input type="radio" id="sh-m' + i + '-d" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="deduct"' +
+                key(t, "mode-deduct") + (r.mode === "deduct" ? " checked" : "") + '><label for="sh-m' + i + '-d">Add / Deduct</label>' +
+                '</span></div>';
+            }
+            var dOpen = isObject(v.descOpen) && v.descOpen[t] === true;
+            s += '<div class="sh-desc"><button type="button" class="sh-desc-t" data-sh-act="desc"' + tabAttr + key(t, "desc") +
+              ' aria-expanded="' + (dOpen ? "true" : "false") + '">' + ic("chev-right", 12) + 'Description <span class="opt">optional</span></button>';
+            if (dOpen) {
+              var ph = typeof v.sysDesc === "function" ? v.sysDesc(t) : "";
+              s += '<textarea class="sh-desc-in" rows="3" maxlength="400" data-sh-desc="' + escHtml(t) + '"' + key(t, "desc-box") +
+                ' aria-label="Description" placeholder="' + escHtml(ph) + '">' + escHtml(r.desc) + '</textarea>' +
+                '<p class="sh-cap">Prints as the option line. Left empty, the grey text prints.</p>';
+            } else if (r.desc) {
+              s += '<span class="sh-desc-prev">' + escHtml(r.desc) + '</span>';
+            }
+            s += '</div></div>';
+            if (r.optOnly) s += '<p class="sh-note">Seal sheets are options only. They are priced as a total and can\'t be the base bid.</p>';
+          }
+          var locked = r.base || r.inBase || e.root;
+          var armed = v.armed === t && !locked;
+          s += '<div class="sh-acts"><button type="button" class="kindpick" data-sh-act="copy"' + tabAttr + key(t, "copy") + '>' +
+            ic("copy", 12) + 'Copy</button><button type="button" class="kindpick" data-sh-act="rename"' + tabAttr + key(t, "rename") + '>' +
+            ic("pencil", 12) + 'Rename</button><button type="button" class="kindpick' + (armed ? " armed" : "") +
+            '" data-sh-act="delete"' + tabAttr + key(t, "delete") + (locked ? " disabled" : "") + '>' + ic("trash", 12) +
+            (armed ? "Click again to delete" : "Delete") + '</button></div>';
+          if (r.base) s += '<p class="sh-note">The base bid can\'t be deleted. Make another sheet the base first.</p>';
+          else if (r.inBase) s += '<p class="sh-note">' + escHtml(e.label) + ' is part of the base bid, so it can\'t be deleted. Pick a different base first.</p>';
+          else if (e.root) s += '<p class="sh-note">' + escHtml(e.label) + ' is where this bid starts, so it can\'t be deleted. Switch it off above to keep it off the proposal.</p>';
+          if (armed) s += '<p class="sh-note warn">Deletes ' + escHtml(e.label) + ' and everything typed on it.</p>';
+          if (isObject(v.notice) && v.notice.at === t) s += noticeHtml(v.notice);
+        }
+        s += '</div>';
+      }
+      return s + '</li>';
+    }
+  }
+
+  /** The "Open sheet" line above the step rail: the sheet on show, its type, and whether it is the base or what it is as an
+   *  option. "" for a bid with one sheet, which has nothing to tell apart. */
+  function sheetNowHtml(model, view) {
+    var f = sheetsFacts(model, view);
+    if (f.rows.length < 2) return "";
+    var r = f.rows.filter(function (x) { return x.e.tab === f.view.open; })[0] || f.rows[0];
+    return '<span class="sn-k">Open sheet</span><h2>' + escHtml(r.e.label) + '</h2><span class="sh-type">' +
+      escHtml(String(r.typeLabel).toUpperCase()) + '</span>' +
+      (r.base ? '<span class="pill base">Base bid</span>' : (r.inBase ? '<span class="pill">In the base bid</span>' :
+        '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) + (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>'));
+  }
+
   /** What is stopping this model being priced, in plain words. [] when nothing is.
    *
    *  Written for estimators, not for the console: every line names the row it is about, so the
@@ -2889,7 +4903,7 @@
     HOURS_PER_DAY: HOURS_PER_DAY, RATES: RATES, GP_BANDS: GP_BANDS, DYE_COATS: DYE_COATS,
     gpPct: gpPct,
     CONDITION_CELLS: CONDITION_CELLS, CARRIED_CELLS: CARRIED_CELLS, conditionCellWrites: conditionCellWrites,
-    workTypeApplies: workTypeApplies,
+    workTypeApplies: workTypeApplies, kindOfSection: kindOfSection,
     LIBRARY_LINE_CELLS: LIBRARY_LINE_CELLS,
     conditionsFromCells: conditionsFromCells,
     // The library's answer for a condition, and the gate that decides whether it may be
@@ -2905,19 +4919,29 @@
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,
     travelCostsSeed: travelCostsSeed, travelQty: travelQty, travelLineCost: travelLineCost,
-    travelCosts: travelCosts, travelRatesFromRules: travelRatesFromRules,
+    travelCosts: travelCosts, optionTravelCosts: optionTravelCosts, travelRatesFromRules: travelRatesFromRules,
     applyTravelRates: applyTravelRates, normalizeTravel: normalizeTravel,
     // Distance decides "local" (see LOCAL_MILES).
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
-    rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint,
+    rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
-    takeoffSf: takeoffSf, measuredSf: measuredSf,
+    takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
+    measuredSfValues: measuredSfValues, setAreaSf: setAreaSf,
+    measuredLfRows: measuredLfRows, measuredLfValues: measuredLfValues, setAreaLf: setAreaLf, setGypArea: setGypArea,
+    seedAreaSf: seedAreaSf,
+    GYP_BUCKETS: GYP_BUCKETS, GYP_AREA_ASSEMBLIES: GYP_AREA_ASSEMBLIES,
+    boxNames: boxNames, boxGroup: boxGroup, boxEntry: boxEntry, boxValue: boxValue, boxDraftValue: boxDraftValue, boxExtras: boxExtras,
+    applyBoxes: applyBoxes, snapshotBehind: snapshotBehind,
     seedTakeoffSf: seedTakeoffSf,
     seedDefaultTakeoff: seedDefaultTakeoff,
+    takeoffUnit: takeoffUnit,
+    takeoffUnitView: takeoffUnitView,
+    validTakeoffUnit: validTakeoffUnit, adoptTakeoffUnit: adoptTakeoffUnit,
     dyeCost: dyeCost, jointFillerCost: jointFillerCost,
-    markupChain: markupChain,
+    markupChain: markupChain, rootProfile: rootProfile, rootTooling: rootTooling, travelOpts: travelOpts,
+    polishTooling: polishTooling, polishSystemOf: polishSystemOf, POLISH_TOOLING: POLISH_TOOLING, sheetNights: sheetNights,
     freshModel: freshModel, migrateModel: migrateModel, blockers: blockers,
     // The model's safety (Phase 4): the keys migrateModel owns, what the intake may state on a saved
     // model, and the ONE composition of everything the estimate page saves.
@@ -2925,9 +4949,22 @@
     // Sections (Phase 10): a bid priced on several workbook tabs. See the block above blockers().
     ROOT_TAB: ROOT_TAB, SECTION_KINDS: SECTION_KINDS, sectionsOf: sectionsOf, activeSections: activeSections,
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
+    // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
+    SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
+    moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
-    seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys,
+    optionsToOffer: optionsToOffer, addOption: addOption, removeOption: removeOption, optionLeftoverPatch: optionLeftoverPatch,
+    // Sheets (Sheets phase 1): the bid's sheets, its base, and how a Polish section is priced.
+    MAX_COPIES: MAX_COPIES, polishBid: polishBid, baseOf: baseOf, pickBase: pickBase, sheetsToAdd: sheetsToAdd,
+    copySection: copySection, addSheet: addSheet, renameSection: renameSection, deleteSection: deleteSection,
+    validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
+    seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
+    // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
+    sheetsPanelHtml: sheetsPanelHtml, sheetNowHtml: sheetNowHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
+    optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
+    // A Gyp sheet's key changes with its preset: what the draft kept under the old key follows (see moveSheetDraftPatch).
+    moveSheetDraftPatch: moveSheetDraftPatch,
     takeoffLf: takeoffLf, sectionManHours: sectionManHours,
     // EXPORTED 2026-09-16 for a THIRD reader: the library page's Defaults tab lists Travel as the
     // labor default that already exists. It is exported rather than re-typed there for the reason
@@ -2955,6 +4992,7 @@
     dropEmptyLaborRows: dropEmptyLaborRows, crewFirst: crewFirst,
     // The company labor rate (Items & Assemblies -> Labor): read, applied to a new bid, and the fallback.
     SHIPPED_LABOR_RATE: SHIPPED_LABOR_RATE, laborRateOrShipped: laborRateOrShipped,
+    laborPriceText: laborPriceText, oneOffRateText: oneOffRateText,
     laborRateFromRules: laborRateFromRules, applyLaborRate: applyLaborRate,
     stampRateDefaults: stampRateDefaults, followLaborDays: followLaborDays,
     // The Fees + Textura default (Markups -> Global `fees_textura`), read and applied to a new bid.

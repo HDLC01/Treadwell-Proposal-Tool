@@ -176,6 +176,21 @@ Cells: `Seal!B67`, `Polish!B67`.
 Polish and Seal share the same ladder up to $32,500. Polish pays 30% from there. Seal pays 30% up to $42,500 and
 28% from $42,500.
 
+### Flake and quartz: each line rounds to its own bags, the price break looks at both lines together
+
+Cells: `Epoxy!O201`, `Epoxy!O202`, `Epoxy!P201`.
+
+A system's two flake or quartz lines each round up to whole 40 lb bags on their own. The small-lot or the large-lot
+price is then chosen on the two lines added together (`IF((O201+O202)<240, ...)`). So a small job that needs, say, 0.4
+of a bag on each line buys two bags in the workbook.
+
+In v2 (Hanz's decisions, 2026-10-13) each coat keeps its own whole-pack rounding, as the workbook does: every line of a
+system rounds up to whole bags on its own, and the price break is judged on a system's two broadcast lines added together,
+exactly as the workbook reads it. A single-area job therefore matches the workbook to the cent, on every one of the 440
+jobs we recorded. The one thing v2 does that the workbook cannot is buy the SAME coat once across areas: a system or a
+primer that appears in both System 1 and System 2 adds its quantity first and rounds up once, so 5,000 + 3,000 SF costs
+what 8,000 SF costs. The workbook rounds each area on its own. Is the workbook's area-by-area rounding on purpose?
+
 ## What we need from you
 
 For each rule above: is it on purpose? If yes, v2 keeps it. If it is a leftover you would like fixed, say so and

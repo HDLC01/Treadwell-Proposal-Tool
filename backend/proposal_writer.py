@@ -115,19 +115,27 @@ TEMPLATE_TOKEN_DEFAULTS: dict[str, dict[str, str]] = {
     "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": {
         "spec_section": "033543", "architect": "xx Architects",
         "drawings_dated_formatted": "8/1/26", "finish_tag": "PC", "plan_sheet": "A900",
-        "addenda_count": "0",
+        "addenda_count": "0", "no_spec_note": " (NO spec)",
     },
     "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": {
         "spec_section": "096723", "architect": "xx Architects",
         "drawings_dated_formatted": "8/1/26", "finish_tag": "RESx", "plan_sheet": "A900",
-        "addenda_count": "0",
+        "addenda_count": "0", "no_spec_note": " (NO spec)",
     },
     "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": {
         "spec_section": "03xx", "architect": "xx Architects",
         "drawings_dated_formatted": "8/1/26", "finish_tag": "SC", "plan_sheet": "A900",
-        "addenda_count": "0",
+        "addenda_count": "0", "no_spec_note": " (NO spec)",
     },
 }
+
+# THE ONE DEFAULT THAT DEPENDS ON ANOTHER FIELD (2026-10-12). Kyle's spec line ends "(NO spec)",
+# which says there is no spec section. It printed after a spec the estimator had typed, so the line
+# read "per Spec 033543-A & Drawings by Gould dated 8/1/26 (NO spec)". The words are now the token
+# {{no_spec_note}} (annotate_templates.GC_SPAN_RULES), and it prints its default only while
+# `spec_section` is blank; once a spec is typed it prints nothing. The editor applies the same rule
+# in proposal-review.js withTokenDefaults, from the same table.
+NO_SPEC_TOKEN = "no_spec_note"
 
 
 def _template_rel(path: Path) -> str:
@@ -154,6 +162,12 @@ def _with_token_defaults(values: Mapping[str, Any], defaults: Mapping[str, str])
         cur = out.get(key)
         if not str("" if cur is None else cur).strip():
             out[key] = default
+    # A typed spec section takes the "(NO spec)" caveat off the spec line (NO_SPEC_TOKEN). Judged
+    # on what the CALLER sent, not on the spec's own default just applied above.
+    if NO_SPEC_TOKEN in defaults:
+        spec = values.get("spec_section")
+        if str("" if spec is None else spec).strip():
+            out[NO_SPEC_TOKEN] = ""
     return out
 
 

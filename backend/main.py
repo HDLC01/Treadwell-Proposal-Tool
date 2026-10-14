@@ -86,6 +86,7 @@ import nav_access
 import notifications
 import pdf_writer
 import pipelines
+import v2_pipeline
 import price_rules
 import pricing
 import profiles
@@ -1020,6 +1021,12 @@ class LibraryItemIn(BaseModel):
     # updated_at. `Any`, like unit_cost and buy_qty, because both arrive as text from an input.
     waste_pct: Optional[Any] = None
     roundup: Optional[bool] = None
+    # PHASE 11: price breaks (a list of {min_qty, unit_cost}), a bulk cost, and what the coverage
+    # is quoted per (sf / lf / each). `Any` because library.validate_item is the one authority and
+    # answers a 400 with a plain message; declared here or the API drops them without a word.
+    price_breaks: Optional[Any] = None
+    bulk_cost: Optional[Any] = None
+    coverage_basis: Optional[Any] = None
     # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
     # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
     # single authority on the answer.
@@ -1060,8 +1067,11 @@ def api_library_items() -> Dict[str, Any]:
 
 @app.post("/api/library/items")
 def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
+    body = payload.model_dump(exclude_unset=True)
+    if any(k in body for k in library.ITEM_ADMIN_ONLY):
+        _require_admin(request)
     try:
-        row = library.create_item(payload.model_dump(exclude_unset=True), _user_email(request))
+        row = library.create_item(body, _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True, "item": row}
@@ -1070,11 +1080,14 @@ def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[st
 @app.patch("/api/library/items/{item_id}")
 def api_library_item_update(item_id: str, payload: LibraryItemIn,
                             request: Request) -> Dict[str, Any]:
+    body = payload.model_dump(exclude_unset=True)
+    # Price breaks, a bulk cost and a coverage basis are an admin's to set (Phase 11).
+    if any(k in body for k in library.ITEM_ADMIN_ONLY):
+        _require_admin(request)
     try:
         # The caller's identity is the ONLY source of "who edited it" — the payload model has no
         # such field and validate_item would drop it, so a client cannot sign somebody else's name.
-        row = library.update_item(item_id, payload.model_dump(exclude_unset=True),
-                                  _user_email(request))
+        row = library.update_item(item_id, body, _user_email(request))
     except library.ValidationError as exc:
         raise HTTPException(400, str(exc))
     if row is None:
@@ -3705,10 +3718,11 @@ class DistanceIn(BaseModel):
 
 @app.post("/api/distance")
 def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
-    """Driving miles from the Olathe office to the job address (Google Routes, server-side).
+    """Driving miles from the Olathe office to the job address (server-side; US Census geocoder +
+    OSRM by default, Google Routes first when GOOGLE_MAPS_API_KEY is set).
 
-    ALWAYS 200. Every case that cannot produce a real figure -- no key configured, address not
-    found, Google slow or down, address too thin, rate limit -- answers `{ok: false, miles: null,
+    ALWAYS 200. Every case that cannot produce a real figure -- address not found, a service slow
+    or down, address too thin, rate limit -- answers `{ok: false, miles: null,
     reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
 
     PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
@@ -3720,6 +3734,25 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     if distance.rate_limited(bucket):
         return {"ok": False, "miles": None, "reason": "busy", "office": distance.OFFICE_LABEL}
     return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
+
+
+@app.post("/api/county")
+def api_county(payload: DistanceIn, request: Request) -> Dict[str, Any]:
+    """The county (and incorporated city) a job address sits in, from the US Census geocoder, so the
+    intake's County remodel tax box can fill itself (Hanz, 2026-10-13).
+
+    ALWAYS 200, never raises: every case that cannot produce a real answer -- address too thin, no
+    match, a service slow or down, rate limit -- is `{ok: false, reason}` and the page leaves the box
+    as it was. Same permission rule as /api/distance: any signed-in user (the auth gate above), no
+    tab owns it, and it is deliberately not in nav_access.TABS, because the intake that calls it is
+    open to every estimator. Its own rate counter (bucket "county:<user>") so a burst of county
+    lookups can never use up the distance lookup's allowance. A sync handler, so the threadpool
+    carries a slow Census answer."""
+    who = getattr(request.state, "user_email", None) or "anon"
+    if distance.rate_limited("county:" + who):
+        return {"ok": False, "county": "", "state": "", "fips": "", "place": "", "place_sure": True,
+                "reason": "busy"}
+    return distance.county_lookup(payload.address, payload.city, payload.state, payload.zip)
 
 
 @app.post("/api/price")
@@ -7817,6 +7850,31 @@ def api_list_drafts() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("list_drafts failed: %s", exc)
         return {"ok": False, "error": "Couldn't load the projects.", "projects": []}
+
+
+@app.get("/api/v2/pipeline")
+def api_v2_pipeline() -> Dict[str, Any]:
+    """The v2 Estimates board (BETA): every Estimating Tool v2 bid as a pipeline-shaped row.
+
+    Its OWN route, deliberately beside and not inside /api/portal/pipeline: Hanz, 2026-10-13, "the
+    V2 pipeline is still in beta ... so do not merge it to the existing". Read only: it writes no
+    draft and no portal row. (`_pipeline_snapshot` refreshes its own in-memory cache on a good
+    read, as it does for every reader.) See v2_pipeline.py.
+
+    An unreadable drafts list answers ok:false with no rows, the same shape /api/drafts uses, so the
+    page can tell a failed read from an empty board."""
+    try:
+        summaries = drafts.list_drafts()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("v2 pipeline drafts unavailable: %s", exc)
+        return {"ok": False, "error": "Couldn't load the v2 estimates.", "proposals": []}
+    portal_rows, portal_status = _pipeline_snapshot()
+    return {"ok": True,
+            "proposals": v2_pipeline.build_rows(summaries, portal_rows, portal_status),
+            "portal_status": portal_status,
+            # The cache's stamp, null when "offline": the page dates a "stale" notice with it.
+            "portal_fetched_at": _PIPELINE_CACHE["fetched_at"],
+            "read_ceiling": v2_pipeline.READ_CEILING}
 
 
 @app.get("/api/trash")

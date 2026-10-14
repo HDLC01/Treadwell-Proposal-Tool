@@ -372,14 +372,16 @@ def test_nothing_to_print_is_not_a_warning(caplog):
 
 # ── 6. the GC files are untouched, and a saved edit still lands where it was made ────────────────
 GC_PINS = {
-    # Kyle's 2026-09-11 forms as installed by #601. The sha256 of the bytes, and the content
-    # version the editor and the generate guard stamp saved edits with (template_versions).
-    POLISH: ("0fae245d7494a255b71107f2b3e219de484cc5ad5b73f9eca4723c340eea1c95",
-             "sha256:00df2b19da129697"),
-    RESINOUS: ("3337cd2ebc336ec682e921b074c4a1008b03d2835b882a4deb01800a59e24f51",
-               "sha256:d6b9ceca38014714"),
-    SEALER: ("64579bcb708d4da151a71a61b2ee9ac05c219afc9b24b5f27ffb141a8391c433",
-             "sha256:138dfc2c3113df3d"),
+    # Kyle's 2026-09-11 forms as installed by #601, with the spec line's "(NO spec)" turned into the
+    # {{no_spec_note}} token on 2026-10-13 (annotate_templates.GC_SPAN_RULES; the paragraph walk and the
+    # ids are unchanged, and the previous hashes are PREDECESSOR_VERSIONS). The sha256 of the bytes, and
+    # the content version the editor and the generate guard stamp saved edits with (template_versions).
+    POLISH: ("2dcc8c0b36a0a07ec5e3fda7246299f92b18549e92bb4d738fa1391ee5400089",
+             "sha256:ace1152f5eb4aa4a"),
+    RESINOUS: ("1d953a1e57e1dc1feca817b57eb054b2be070081ddef3035e99130c05b1e315c",
+               "sha256:cd88e044319f0cd1"),
+    SEALER: ("2bdc0140c600396e53ea6bc5365ec8c49290c1cdac5f8fe6645d3d97dc5388e7",
+             "sha256:7d5ab14a57209a41"),
 }
 
 

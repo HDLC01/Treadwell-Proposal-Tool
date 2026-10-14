@@ -193,9 +193,51 @@
       .filter(function (n) { return shown.indexOf(n) === -1; });
   }
 
+  // ── the Drawings & specs box (both intakes) ───────────────────────────────────────────────────
+  // The spec, drawings and addenda lines print on a General Contractor proposal only: Kyle's Direct
+  // forms have no such lines (Will, 2026-10-12: "the drawings and specs should only be for the general
+  // contractor"). So the box is asked for only when the Audience box says GC. HIDE, NEVER REMOVE, for
+  // the same reason a quantity field is: the names are what the draft and the estimate sheet key on,
+  // and a value typed under GC is still there if somebody switches to Direct and back.
+
+  /** True when the audience is a General Contractor. Anything else, including nothing, is Direct. */
+  function isGcAudience(audience) {
+    return String(audience == null ? "" : audience).trim().toUpperCase() === "GC";
+  }
+
+  /** Shows `box` (the Drawings & specs fieldset) for a GC audience and hides it otherwise. The page may not
+   *  have the box, so a missing one is a no-op. Inline display, as applyScope does it: a class rule that
+   *  sets `display` would beat the `hidden` attribute, and this box must go away for real. */
+  function applyAudience(audience, box) {
+    if (!box) return;
+    var gc = isGcAudience(audience);
+    box.style.display = gc ? "" : "none";
+    paintLimits(box, gc);
+  }
+
+  // A hidden number box still takes part in the form's native check on Continue. A value like 2.5 or -1
+  // typed under GC would make the browser cancel the submit on a field nobody can see, with no message.
+  // So while the box is hidden its range and step limits are set aside, and put back when it shows.
+  var LIMITS = ["min", "max", "step"];
+  function paintLimits(box, shown) {
+    if (!box.querySelectorAll) return;
+    Array.prototype.forEach.call(box.querySelectorAll("input[type='number']"), function (el) {
+      LIMITS.forEach(function (k) {
+        var held = "data-held-" + k;
+        if (shown) {
+          if (el.hasAttribute(held)) { el.setAttribute(k, el.getAttribute(held)); el.removeAttribute(held); }
+        } else if (el.hasAttribute(k)) {
+          el.setAttribute(held, el.getAttribute(k));
+          el.removeAttribute(k);
+        }
+      });
+    });
+  }
+
   return {
     systemFieldNames: systemFieldNames, systemCount: systemCount, scopesFor: scopesFor,
     systemsMarkup: systemsMarkup, renderSystems: renderSystems, applyScope: applyScope,
+    isGcAudience: isGcAudience, applyAudience: applyAudience,
     DEFAULT_JOB: DEFAULT_JOB, isPickable: isPickable, chosenJobType: chosenJobType,
     jobTypeChoices: jobTypeChoices, jobTypeNote: jobTypeNote, jobTypesMarkup: jobTypesMarkup,
     hiddenNames: hiddenNames
