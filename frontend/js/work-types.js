@@ -12,8 +12,8 @@
 // THREE WORDS, AND THEY ARE NOT THE SAME THING.
 //
 //   JOB TYPE   what the intake's Work Type radios pick and what a project is called: epoxy, polish, combo,
-//              gyp. A job type is priced on one or more TABS (a combo job is Epoxy plus Polish). Only
-//              polish is `ready` in Estimating Tool v2 so far; the others wait for their phase.
+//              gyp. A job type is priced on one or more TABS (a combo job is Epoxy plus Polish). All four are
+//              `ready` in Estimating Tool v2 (Gyp was the last, Phase 14).
 //   TAB        a family of sheets in Kyle's workbook that share one markup layout: polish, seal, epoxy,
 //              leveling, gyp. The Markups page files its rules by tab, and the Defaults tab of Items and
 //              Assemblies scopes a default by tab. Seal and Leveling are `optionOnly`: they are priced as
@@ -94,18 +94,22 @@
   // the gyp layout. `area` and `cove` name the intake fields whose quantities feed the tab: the Seal
   // sheets ARE the Polish layout and snapshot their area under the same key, which is why seal lists
   // polish_sf. `role` is what a priced tab is called on a proposal, and `markupLayout` is the
-  // markup_rules layout an admin files its rates under (both equal the key today).
+  // markup_rules layout an admin files its rates under (both equal the key today). `offered` is on the
+  // two option-only tabs and says whether Estimating Tool v2 can price the tab as an option yet: Seal is
+  // (Phase 15), Leveling is not (Phase 16). optionSheets() lists the sheets of the offered ones.
   var TABS = [
     { key: "polish",   label: "Polish",   role: "polish",   markupLayout: "polish",   optionOnly: false,
       sheets: ["Polish"],
       area: ["polish_sf"], cove: [] },
     { key: "seal",     label: "Seal",     role: "seal",     markupLayout: "seal",     optionOnly: true,
+      offered: true,
       sheets: ["Seal", "Seal (+Jnts)"],
       area: ["polish_sf"], cove: [] },
     { key: "epoxy",    label: "Epoxy",    role: "epoxy",    markupLayout: "epoxy",    optionOnly: false,
       sheets: ["Epoxy", "Epoxy blank"],
       area: ["system_1_sf", "system_2_sf"], cove: ["cove_1_lf", "cove_2_lf"] },
     { key: "leveling", label: "Leveling", role: "leveling", markupLayout: "leveling", optionOnly: true,
+      offered: false,
       sheets: ["Leveling"],
       area: [], cove: [] },
     { key: "gyp",      label: "Gyp",      role: "gyp",      markupLayout: "gyp",      optionOnly: false,
@@ -121,17 +125,17 @@
   // is the GC resinous document, for want of a GC combo one. `fields` are the intake quantity fields the
   // job shows, `thickness` is whether the intake asks for a system thickness (a resin question).
   var JOB_TYPES = [
-    { key: "epoxy",  label: "Epoxy",  tabs: ["epoxy"], ready: false,
+    { key: "epoxy",  label: "Epoxy",  tabs: ["epoxy"], ready: true,
       proposalKey: "epoxy", audiences: ["Direct", "GC"],
       fields: ["system_1_sf", "cove_1_lf", "system_2_sf", "cove_2_lf"], thickness: true },
     { key: "polish", label: "Polish", tabs: ["polish"], ready: true,
       proposalKey: "polish", audiences: ["Direct", "GC"],
       fields: ["polish_sf", "polish_2_sf"], thickness: false },
-    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: false,
+    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: true,
       proposalKey: "combo", audiences: ["Direct", "GC"],
       fields: ["system_1_sf", "polish_sf", "cove_1_lf", "system_2_sf", "polish_2_sf", "cove_2_lf"],
       thickness: true },
-    { key: "gyp",    label: "Gyp (Gypsum Underlayment)", tabs: ["gyp"], ready: false,
+    { key: "gyp",    label: "Gyp (Gypsum Underlayment)", tabs: ["gyp"], ready: true,
       proposalKey: "gyp", audiences: [null],
       fields: ["gyp_soft_sf", "gyp_hard_sf", "gyp_corridor_sf"], thickness: false }
   ];
@@ -174,7 +178,12 @@
   // `cells` on a split draft would put the base's answer over every option's, which is the defect this rule
   // exists to stop. writeCellsFor() below is the one place that decides, for the live intake and for a v2 save.
   //
-  // THINGS READ OUT OF THE TEMPLATE, not assumed. Polish!B4 holds its own Yes/No, so Local writes both.
+  // THINGS READ OUT OF THE TEMPLATE, not assumed. Polish!B4 holds its own Yes/No, so Local writes both, and
+  // since Phase 14 the Gyp base's B5 and Gyp (FR)'s own B5 (the other three Gyp tabs mirror the base). Since
+  // Phase 15 Local also writes Seal!B4 ('Seal (+Jnts)'!B4 mirrors it; Seal's lodging line reads it) and
+  // Renovation writes Seal!B10 ('Seal (+Jnts)'!B10 mirrors it; Seal's patch rate is IF(B10="New",0.05,0.15), so
+  // a blank cell would charge the Reno rate, as Polish!C17 does), so a Seal option answers the job's questions
+  // the way the base does.
   // Polish!D5, B6 and D6 are the formulas =Epoxy!D5, =Epoxy!B6, =Epoxy!D6, so the Polish tab is never
   // written for them. Epoxy!D41 is compared against V136 and V137 by all six of its consumers, which read
   // "BULK Discount ON" and "Bulk Discount OFF", mixed case and inconsistent with each other: any other
@@ -184,7 +193,7 @@
   var CONDITIONS = [
     { key: "local", label: "Local job", scope: ALL_JOBS,
       why: "Under 70 miles. Off means travel and lodging get added.",
-      default: true, cells: ["Epoxy!B4", "Polish!B4"], on: "Yes", off: "No", needs: null,
+      default: true, cells: ["Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4"], on: "Yes", off: "No", needs: null,
       model: true, item_id: null, asked_on: { live: 1, v2Intake: 0, v2Takeoff: 0 } },
     { key: "prevailing_wage", label: "Prevailing wage", scope: ALL_JOBS,
       why: "Raises every labor line to the prevailing rate.",
@@ -213,7 +222,7 @@
       model: true, item_id: null, asked_on: { live: 0, v2Intake: 4, v2Takeoff: 0 } },
     { key: "reno", label: "Renovation", scope: ["epoxy", "polish", "combo"],
       why: "Existing floor, not new construction. Triples the patch material rate.",
-      default: false, cells: ["Epoxy!B10", "Polish!B10"], on: "Reno", off: "New", needs: null,
+      default: false, cells: ["Epoxy!B10", "Polish!B10", "Seal!B10"], on: "Reno", off: "New", needs: null,
       model: false, item_id: null, asked_on: { live: 5, v2Intake: 0, v2Takeoff: 0 } },
     { key: "dye", label: "Dye", scope: ["polish", "combo"],
       why: "Two coats of dye across the polished area.",
@@ -342,6 +351,14 @@
   function tabOfSheet(sheetId) {
     var t = tabBySheet.get(sheetId);
     return t ? t.key : null;
+  }
+
+  /** The workbook sheets Estimating Tool v2 can add to a bid as an OPTION, in the tabs' order: "Seal" and
+   *  "Seal (+Jnts)" since Phase 15 (Leveling joins in Phase 16). A new array. */
+  function optionSheets() {
+    var out = [];
+    TABS.forEach(function (t) { if (t.optionOnly && t.offered === true) t.sheets.forEach(function (s) { out.push(s); }); });
+    return out;
   }
 
   /** The quantity fields a job type shows, in the intake's order. */
@@ -487,12 +504,42 @@
   /** The reserved library item id that prices one condition, or null when it has none. */
   function itemIdOf(conditionKey) { return condition(conditionKey).item_id; }
 
+  // ── where an intake quantity box lives ───────────────────────────────────────────────────────
+  // The tab whose takeoff owns each scope of quantity field. Cove is an Epoxy quantity (Polish has no cove).
+  var SCOPE_TAB = new Map([["epoxy", "epoxy"], ["cove", "epoxy"], ["polish", "polish"], ["gyp", "gyp"]]);
+
+  /** THE ONE MAPPING FROM AN INTAKE QUANTITY FIELD TO THE TAKEOFF IT EDITS (Hanz, 2026-10-13: the System 1 box of an
+   *  Epoxy job did nothing to the estimate, because only the Polish boxes were wired to a takeoff).
+   *
+   *  `name` is a quantity field of FIELDS. Answers { name, tab, unit, index, pooled }, or null for a name that is not
+   *  one: `tab` is the TAB KEY whose takeoff owns the quantity ("epoxy", "polish", "gyp"), `unit` is "SF" or "LF", and
+   *  `index` is the field's place among the fields of the same tab and unit, in FIELDS' order (System 1 is 0,
+   *  System 2 is 1; Gyp's soft, hard and corridor boxes are 0, 1, 2). `pooled` is true when the later boxes of that
+   *  group have no cell of their own (snapshot null: Polish has ONE area cell), so the group's figure is one total
+   *  and not one number per box. Read off FIELDS, so a field added there is mapped here without a second table. */
+  function fieldHome(name) {
+    var seen = new Map();
+    for (var i = 0; i < FIELDS.length; i++) {
+      var f = FIELDS[i];
+      var tab = SCOPE_TAB.get(f.scope);
+      if (!tab) throw new Error("work-types.js: the quantity field " + said(f.name) + " has scope " + said(f.scope) + ", which no tab owns");
+      var key = tab + "/" + f.unit;
+      var at = seen.has(key) ? seen.get(key) : 0;
+      seen.set(key, at + 1);
+      if (f.name !== name) continue;
+      var later = FIELDS.filter(function (g) { return SCOPE_TAB.get(g.scope) === tab && g.unit === f.unit; }).slice(1);
+      return { name: f.name, tab: tab, unit: f.unit, index: at,
+               pooled: later.length > 0 && later.every(function (g) { return g.snapshot === null; }) };
+    }
+    return null;
+  }
+
   return {
     SURFACES: SURFACES, FIELDS: FIELDS, TABS: TABS, JOB_TYPES: JOB_TYPES, CONDITIONS: CONDITIONS,
     jobTypeKeys: jobTypeKeys, tabKeys: tabKeys, isJobType: isJobType, isTab: isTab,
     jobType: jobType, tab: tab, condition: condition,
-    tabsFor: tabsFor, appliesTo: appliesTo, defaultScope: defaultScope, tabOfSheet: tabOfSheet,
-    fieldsFor: fieldsFor, scopesFor: scopesFor,
+    tabsFor: tabsFor, appliesTo: appliesTo, defaultScope: defaultScope, tabOfSheet: tabOfSheet, optionSheets: optionSheets,
+    fieldsFor: fieldsFor, scopesFor: scopesFor, fieldHome: fieldHome,
     conditionsFor: conditionsFor, cellsFor: cellsFor, copyableCells: copyableCells,
     isSplit: isSplit, isPerSheet: isPerSheet, baseSheets: baseSheets, writeCellsFor: writeCellsFor,
     modelDefaults: modelDefaults, reservedItems: reservedItems, itemIdOf: itemIdOf

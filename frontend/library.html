@@ -145,6 +145,14 @@
     .morefield { display:inline-flex; align-items:center; gap:6px; font-size:12.5px;
        color:var(--ink-v); margin-right:20px; }
     .morefield input[type="number"] { width:70px; }
+    /* THE ITEMS TAB'S "MORE" ROW, admin only: price breaks, bulk cost and what the coverage is
+       measured per. A second <tr> under the material, like the labor one above. */
+    .item-more > td { background:var(--surf-low); padding:8px 12px; }
+    .item-more .morefield .money { margin-left:2px; }
+    .item-more .breaks { margin-top:8px; font-size:12.5px; color:var(--ink-v); }
+    .item-more .breakhead { font-weight:600; margin-bottom:4px; }
+    .item-more .brk { display:flex; align-items:center; gap:6px; margin:4px 0; }
+    .item-more .brk input.num { width:90px; }
     /* A SUB-HEADING INSIDE THE TABLE, not a row pretending to be one. Left-aligned and
        quiet: it is a signpost over rows that carry the actual content, so it must not
        out-shout the names beneath it. The first one drops its top border -- a rule directly
@@ -464,6 +472,11 @@
       background:none; }
     .money input:hover { border-color:transparent; }
     .money:focus-within { outline:2px solid var(--red); outline-offset:2px; }
+    /* ONE ring, on the wrapper. The global :focus-visible rule drew a second one on the input, and
+       its offset put that ring over the $. */
+    .money input:focus-visible { outline:none; }
+    /* The Labor rate box, the same width as the Hotel and Per Diem boxes beside it on the next tab. */
+    .areaband .money input { width:92px; }
 
     /* Two dates, both muted: when the material was added, and when its price last moved. The
        second is the one an estimator actually asks about. */
@@ -630,8 +643,8 @@
       box-shadow:0 18px 48px rgba(92,64,63,.22); text-align:left; }
     .bulk-head { display:grid; grid-template-columns:1fr auto; align-items:start;
       gap:4px 10px; padding:16px 16px 12px; border-bottom:1px solid var(--line); }
-    .bulk-head h2 { margin:0; font:700 15px var(--ui); letter-spacing:-.01em; }
-    .bulk-head .icon { grid-row:1 / span 2; align-self:center; }
+    .bulk-head h2 { grid-column:1; margin:0; font:700 15px var(--ui); letter-spacing:-.01em; }
+    .bulk-head .icon { grid-column:2; grid-row:1 / span 2; align-self:center; }
     .bulk-sub { grid-column:1; margin:0; color:var(--ink-v); font-size:12.5px; }
     .bulk-filters { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px;
       padding:12px 16px; background:var(--surf-low); border-bottom:1px solid var(--line); }
@@ -990,7 +1003,9 @@
     <!-- ── Labor Calculator ───────────────────────────────────────────── -->
     <section id="pane-labcalc" role="tabpanel" aria-labelledby="tab-labcalc" hidden>
       <p class="paneintro"><b>How the labor lines a new estimate opens with are worked out.</b>
-        Travel is first: Travel Labor. The Hotel and Per Diem rates are set on the Labor tab.</p>
+        A new estimate takes only the rate and the hours a day from here. Guys and days start
+        empty and are typed on the estimate. Travel is first: Travel Labor. The Hotel and Per Diem
+        rates are set on the Labor tab.</p>
       <p class="ronote" id="labcalc-ro" hidden>You can see these figures. Changing them is
         admin-only - ask Hanz or Kyle.</p>
       <p class="alert" id="labcalc-alert" role="status" aria-live="polite"></p>

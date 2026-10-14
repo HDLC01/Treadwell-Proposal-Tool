@@ -115,6 +115,11 @@ KS_STATE_RATE: float = 0.065
 # caveat to every KS county's notes at serve time so it can't be missed
 # by anyone reading the dropdown, without needing to hand-edit all 12
 # rows below.
+#
+# `city_ok` (optional, a list of city names): cities INSIDE this county for which the county-only
+# rate is verified to be the right one, because the city levies no sales tax of its own. The intake's
+# address autofill fills this county row for an address in such a city without telling the estimator
+# the city may charge more. Only Wichita, so far (see the Sedgwick row's note).
 
 COUNTIES: list[dict] = [
     # Missouri — KC metro core
@@ -152,7 +157,7 @@ COUNTIES: list[dict] = [
     {"name": "Shawnee",     "state": "KS", "fips": "20177", "rate": 0.0135,  "county_portion": 0.0135,  "remodel_rate": 0.0785,  "notes": "Topeka."},
     {"name": "Atchison",    "state": "KS", "fips": "20005", "rate": 0.01,    "county_portion": 0.01,    "remodel_rate": 0.075,   "notes": ""},
     {"name": "Jefferson",   "state": "KS", "fips": "20087", "rate": 0.01,    "county_portion": 0.01,    "remodel_rate": 0.075,   "notes": ""},
-    {"name": "Sedgwick",    "state": "KS", "fips": "20173", "rate": 0.01,    "county_portion": 0.01,    "remodel_rate": 0.075,   "notes": "Wichita currently levies no general city sales tax, so this county-only rate is also correct for a Wichita address specifically — NOT for other Sedgwick County cities, which may have their own add-on."},
+    {"name": "Sedgwick",    "state": "KS", "fips": "20173", "rate": 0.01,    "county_portion": 0.01,    "remodel_rate": 0.075,   "city_ok": ["Wichita"], "notes": "Wichita currently levies no general city sales tax, so this county-only rate is also correct for a Wichita address specifically — NOT for other Sedgwick County cities, which may have their own add-on."},
     {"name": "Riley",       "state": "KS", "fips": "20161", "rate": 0.007,   "county_portion": 0.007,   "remodel_rate": 0.072,   "notes": "Manhattan, Ft. Riley."},
     {"name": "Geary",       "state": "KS", "fips": "20061", "rate": 0.0125,  "county_portion": 0.0125,  "remodel_rate": 0.0775,  "notes": "Junction City."},
 ]

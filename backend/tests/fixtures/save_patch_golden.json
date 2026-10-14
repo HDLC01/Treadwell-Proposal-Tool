@@ -2,7 +2,13 @@
  "meta": {
   "commit": "28a5d1f",
   "note": "recorded from origin/staging 28a5d1f (git archive of its frontend/), BEFORE Phase 10 changed the model or the page: node tests/js/save-patch-golden-harness.js <that frontend>",
-  "harness": "tests/js/save-patch-golden-harness.js"
+  "harness": "tests/js/save-patch-golden-harness.js",
+  "newBid_recut": "the seven newBid records were re-recorded on 2026-10-12 on origin/staging 4870ae1 (a new bid's Labor step opens with every quantity empty, only the rates filled): the crew's guys and days, Travel Labor's guys and hours and Lodging's nights and Per Diem's days are empty, nothing is on auto, and the bid's totals follow. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
+  "newBid_recut2": "the newBid records were re-recorded again on 2026-10-13 on the tree that makes System 1 and System 2 two separate takeoff areas (Hanz, 'Separate areas'): a new bid's defaults are now seeded once per area (System 1's lines measured with System 1, System 2's with System 2, each row marked with its area), so `library`, `twoSystems`, `conditionCells` and `mintedByIntake`, which seed defaults over two SF boxes, hold the second area's rows. `empty`, `noSf` and `savedEmptyTakeoff` and all 26 `saved` records are byte-identical to before.",
+  "newBid_recut3": "the newBid records were re-recorded again on 2026-10-13 on the tree that buys each material once for the whole section (Hanz, 'Buy packs for the whole job'): a NEW Polish bid's model now carries `pool_packs: true`, the stamp that makes its takeoff price as one purchase (bid-model.js poolsPacks, library-core.js pricePool). That key is the ONLY difference in all seven records (no total moved), and `savedEmptyTakeoff`, a bid that was already saved, is unstamped and byte-identical. The 26 `saved` records are untouched and still byte-identical to 28a5d1f.",
+  "phase14_recut": "re-recorded on 2026-10-13 on the Phase 14 tree: the Local condition also writes the Gyp base's B5 and Gyp (FR)'s own B5 (they are literals nothing wrote, and the sheet's travel lines read them), so every blob's `cell_values` gains those two keys, `\"Gyp (USG 1-8\\\")!B5\"` and `\"Gyp (FR)!B5\"`, and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key when it was recut).",
+  "phase15_recut": "re-recorded on 2026-10-13 on the Phase 15 tree: Local also writes Seal!B4 (Seal (+Jnts)!B4 mirrors it, and Seal's lodging line reads it) and Renovation also writes Seal!B10 (Seal's patch rate is IF(B10=\"New\",0.05,0.15)), so every blob's `cell_values` gains those two keys and nothing else in any of the 26 `saved` or 7 `newBid` records moved (checked key by key, order included, when it was recut: 118 additions, no change and no removal).",
+  "newBid_recut4": "the newBid records were re-recorded again on 2026-10-13 on the tree that prices a NEW Polish bid with the profile polish-rev2@1 (Phase 17, Hanz 2026-10-07: Kyle's Polish fixes apply to new bids only): the model carries `profile: \"polish-rev2@1\"`, the stamp that makes its root charge the sheet's tooling and consumables ($150 minimum, slurry hardener and plastic, bid-model.js polishTooling) and take the remodel tax on the sheet's base, and the bid carries a `tooling` key. The bid's totals follow from the tooling and nothing else moved (checked key by key when it was recut: the only differences from the previous record are `profile`, `tooling`, and the chain figures that tooling feeds: sub_total, gp_pct, gp, super_pto, soft_costs, remodel_tax, taxes, total, per_sf, and the three computed_bid figures that repeat the total). `noSf` has no area so its tooling is 0, and `savedEmptyTakeoff`, a bid that was already saved, is unstamped and byte-identical. The 26 `saved` records are untouched and still byte-identical to 28a5d1f."
  },
  "golden": {
   "saved": {
@@ -130,6 +136,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -140,7 +149,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -277,6 +287,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -287,7 +300,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -427,6 +441,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -437,7 +454,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -574,6 +592,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -584,7 +605,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -725,6 +747,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -735,7 +760,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -873,6 +899,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -883,7 +912,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1024,6 +1054,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1034,7 +1067,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1172,6 +1206,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1182,7 +1219,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1329,6 +1367,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1339,7 +1380,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1483,6 +1525,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1493,7 +1538,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1640,6 +1686,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1650,7 +1699,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1794,6 +1844,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1804,7 +1857,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -1937,6 +1991,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -1947,7 +2004,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2077,6 +2135,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2087,7 +2148,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2220,6 +2282,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2230,7 +2295,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2360,6 +2426,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2370,7 +2439,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2505,6 +2575,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2515,7 +2588,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2647,6 +2721,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2657,7 +2734,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2792,6 +2870,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2802,7 +2883,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -2934,6 +3016,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -2944,7 +3029,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3098,6 +3184,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3108,7 +3197,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3259,6 +3349,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3269,7 +3362,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3423,6 +3517,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3433,7 +3530,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3584,6 +3682,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3594,7 +3695,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3748,6 +3850,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3758,7 +3863,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -3909,6 +4015,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -3919,7 +4028,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4073,6 +4183,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4083,7 +4196,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4234,6 +4348,9 @@
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4244,7 +4361,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4406,6 +4524,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4416,7 +4537,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4575,6 +4697,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4585,7 +4710,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4747,6 +4873,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4757,7 +4886,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -4916,6 +5046,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -4926,7 +5059,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5118,6 +5252,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5128,7 +5265,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5317,6 +5455,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5327,7 +5468,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5519,6 +5661,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5529,7 +5674,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5718,6 +5864,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5728,7 +5877,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -5884,6 +6034,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -5895,6 +6048,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6051,6 +6205,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6062,6 +6219,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6221,6 +6379,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6232,6 +6393,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6388,6 +6550,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6399,6 +6564,7 @@
       "Polish!F29": "No",
       "Epoxy!B10": "New",
       "Polish!B10": "New",
+      "Seal!B10": "New",
       "Polish!C25": 0.07,
       "Polish!C26": 0.07,
       "Polish!C29": 500,
@@ -6543,6 +6709,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6553,7 +6722,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -6691,6 +6861,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6701,7 +6874,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -6842,6 +7016,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -6852,7 +7029,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -6990,6 +7168,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7000,7 +7181,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7145,6 +7327,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7155,7 +7340,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7297,6 +7483,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7307,7 +7496,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7452,6 +7642,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7462,7 +7655,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7604,6 +7798,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7614,7 +7811,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7758,6 +7956,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7768,7 +7969,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -7909,6 +8111,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -7919,7 +8124,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8063,6 +8269,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8073,7 +8282,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8214,6 +8424,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8224,7 +8437,8 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -8252,6 +8466,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8267,6 +8482,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8275,6 +8491,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8283,6 +8500,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8291,6 +8509,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -8299,45 +8518,46 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 10000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       }
      ],
      "labor": [
       {
        "id": "polishing",
        "label": "Polishing",
-       "guys": 5,
-       "days": 10,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 10,
        "calc_default": {
-        "guys": 5,
-        "days": 10,
+        "guys": "",
+        "days": "",
         "rate": 50,
-        "hours_per_day": 10,
-        "sf_per_day": 1000
+        "hours_per_day": 10
        }
       },
       {
        "id": "mockup",
        "label": "Mock-up",
-       "guys": 3,
-       "days": 0.5,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "hours_per_day": 8
        }
@@ -8345,14 +8565,14 @@
       {
        "id": "jointfill",
        "label": "Joint filler",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "hours_per_day": 8
@@ -8361,13 +8581,12 @@
       {
        "id": "travel",
        "label": "Travel Labor",
-       "guys": 51.5,
+       "guys": "",
        "days": "",
        "rate": 41,
        "unit": "hours",
-       "guys_auto": true,
+       "guys_auto": false,
        "enabled": false,
-       "hours_seed": "",
        "rate_default": 41
       },
       {
@@ -8398,37 +8617,39 @@
       "lodging": {
        "label": "Lodging",
        "enabled": false,
-       "qty": 51.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 99,
        "rate_default": 99
       },
       "per_diem": {
        "label": "Per Diem",
        "enabled": false,
-       "qty": 51.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 77,
        "rate_default": 77
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 4300,
      "shipping": 86,
      "material_total": 4386,
-     "labor": 25600,
+     "labor": 0,
      "escalation": 0,
-     "burden": 3072,
-     "labor_total": 28672,
+     "burden": 0,
+     "labor_total": 0,
      "travel": 0,
-     "sub_total": 33058,
-     "gp_pct": 0.3,
-     "gp": 14346,
-     "super_pto": 1292,
-     "soft_costs": 7858,
+     "sub_total": 9666,
+     "gp_pct": 0.45,
+     "gp": 8249,
+     "super_pto": 495,
+     "soft_costs": 3013,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 416,
@@ -8439,9 +8660,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 56970,
+     "total": 21839,
      "sf": 10000,
-     "per_sf": 5.697
+     "per_sf": 2.1839,
+     "tooling": 5280
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -8459,6 +8681,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8474,6 +8697,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8482,6 +8706,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8490,6 +8715,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8498,6 +8724,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -8506,45 +8733,46 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 10000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        }
       ],
       "labor": [
        {
         "id": "polishing",
         "label": "Polishing",
-        "guys": 5,
-        "days": 10,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 10,
         "calc_default": {
-         "guys": 5,
-         "days": 10,
+         "guys": "",
+         "days": "",
          "rate": 50,
-         "hours_per_day": 10,
-         "sf_per_day": 1000
+         "hours_per_day": 10
         }
        },
        {
         "id": "mockup",
         "label": "Mock-up",
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
-         "days": 0.5,
+         "guys": "",
+         "days": "",
          "rate": 50,
          "hours_per_day": 8
         }
@@ -8552,14 +8780,14 @@
        {
         "id": "jointfill",
         "label": "Joint filler",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 50,
          "hours_per_day": 8
@@ -8568,13 +8796,12 @@
        {
         "id": "travel",
         "label": "Travel Labor",
-        "guys": 51.5,
+        "guys": "",
         "days": "",
         "rate": 41,
         "unit": "hours",
-        "guys_auto": true,
+        "guys_auto": false,
         "enabled": false,
-        "hours_seed": "",
         "rate_default": 41
        },
        {
@@ -8605,16 +8832,16 @@
        "lodging": {
         "label": "Lodging",
         "enabled": false,
-        "qty": 51.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 99,
         "rate_default": 99
        },
        "per_diem": {
         "label": "Per Diem",
         "enabled": false,
-        "qty": 51.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 77,
         "rate_default": 77
        }
@@ -8623,16 +8850,16 @@
        "material": 4300,
        "shipping": 86,
        "material_total": 4386,
-       "labor": 25600,
+       "labor": 0,
        "escalation": 0,
-       "burden": 3072,
-       "labor_total": 28672,
+       "burden": 0,
+       "labor_total": 0,
        "travel": 0,
-       "sub_total": 33058,
-       "gp_pct": 0.3,
-       "gp": 14346,
-       "super_pto": 1292,
-       "soft_costs": 7858,
+       "sub_total": 9666,
+       "gp_pct": 0.45,
+       "gp": 8249,
+       "super_pto": 495,
+       "soft_costs": 3013,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 416,
@@ -8643,15 +8870,21 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 56970,
+       "total": 21839,
        "sf": 10000,
-       "per_sf": 5.697
+       "per_sf": 2.1839,
+       "tooling": 5280
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8662,15 +8895,16 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 56970,
-      "price_per_sf": 5.697,
+      "lump_sum": 21839,
+      "price_per_sf": 2.1839,
       "polish_sf": 10000,
       "full_bid": {
-       "total_base_bid": 56970,
+       "total_base_bid": 21839,
        "sales_tax": 416,
        "remodel_tax": 0
       }
@@ -8693,14 +8927,14 @@
       {
        "id": "polishing",
        "label": "Polishing",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 33,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 33,
         "hours_per_day": 8
@@ -8709,15 +8943,15 @@
       {
        "id": "mockup",
        "label": "Mock-up",
-       "guys": 3,
-       "days": 0.5,
+       "guys": "",
+       "days": "",
        "rate": 33,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 33,
         "hours_per_day": 8
        }
@@ -8725,14 +8959,14 @@
       {
        "id": "jointfill",
        "label": "Joint filler",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 33,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 33,
         "hours_per_day": 8
@@ -8741,12 +8975,11 @@
       {
        "id": "travel",
        "label": "Travel Labor",
-       "guys": 1.5,
+       "guys": "",
        "days": "",
        "rate": 33,
        "unit": "hours",
-       "guys_auto": true,
-       "hours_seed": "",
+       "guys_auto": false,
        "rate_default": 33
       }
      ],
@@ -8766,37 +8999,39 @@
       "lodging": {
        "label": "Lodging",
        "enabled": false,
-       "qty": 1.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 70,
        "rate_default": 70
       },
       "per_diem": {
        "label": "Per Diem",
        "enabled": false,
-       "qty": 1.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 45,
        "rate_default": 45
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 0,
      "shipping": 0,
      "material_total": 0,
-     "labor": 396,
+     "labor": 0,
      "escalation": 0,
-     "burden": 48,
-     "labor_total": 444,
+     "burden": 0,
+     "labor_total": 0,
      "travel": 0,
-     "sub_total": 444,
+     "sub_total": 5280,
      "gp_pct": 0.52,
-     "gp": 481,
-     "super_pto": 25,
-     "soft_costs": 152,
+     "gp": 5720,
+     "super_pto": 297,
+     "soft_costs": 1808,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 0,
@@ -8807,9 +9042,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 1102,
+     "total": 13105,
      "sf": 10000,
-     "per_sf": 0.1102
+     "per_sf": 1.3105,
+     "tooling": 5280
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -8832,14 +9068,14 @@
        {
         "id": "polishing",
         "label": "Polishing",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 33,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 33,
          "hours_per_day": 8
@@ -8848,15 +9084,15 @@
        {
         "id": "mockup",
         "label": "Mock-up",
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 33,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
-         "days": 0.5,
+         "guys": "",
+         "days": "",
          "rate": 33,
          "hours_per_day": 8
         }
@@ -8864,14 +9100,14 @@
        {
         "id": "jointfill",
         "label": "Joint filler",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 33,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 33,
          "hours_per_day": 8
@@ -8880,12 +9116,11 @@
        {
         "id": "travel",
         "label": "Travel Labor",
-        "guys": 1.5,
+        "guys": "",
         "days": "",
         "rate": 33,
         "unit": "hours",
-        "guys_auto": true,
-        "hours_seed": "",
+        "guys_auto": false,
         "rate_default": 33
        }
       ],
@@ -8905,16 +9140,16 @@
        "lodging": {
         "label": "Lodging",
         "enabled": false,
-        "qty": 1.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 70,
         "rate_default": 70
        },
        "per_diem": {
         "label": "Per Diem",
         "enabled": false,
-        "qty": 1.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 45,
         "rate_default": 45
        }
@@ -8923,16 +9158,16 @@
        "material": 0,
        "shipping": 0,
        "material_total": 0,
-       "labor": 396,
+       "labor": 0,
        "escalation": 0,
-       "burden": 48,
-       "labor_total": 444,
+       "burden": 0,
+       "labor_total": 0,
        "travel": 0,
-       "sub_total": 444,
+       "sub_total": 5280,
        "gp_pct": 0.52,
-       "gp": 481,
-       "super_pto": 25,
-       "soft_costs": 152,
+       "gp": 5720,
+       "super_pto": 297,
+       "soft_costs": 1808,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 0,
@@ -8943,15 +9178,21 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 1102,
+       "total": 13105,
        "sf": 10000,
-       "per_sf": 0.1102
+       "per_sf": 1.3105,
+       "tooling": 5280
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -8962,15 +9203,16 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 1102,
-      "price_per_sf": 0.1102,
+      "lump_sum": 13105,
+      "price_per_sf": 1.3105,
       "polish_sf": 10000,
       "full_bid": {
-       "total_base_bid": 1102,
+       "total_base_bid": 13105,
        "sales_tax": 0,
        "remodel_tax": 0
       }
@@ -8985,9 +9227,10 @@
       {
        "assembly_id": "a1",
        "assembly_name": "Polish 800 Grit",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9000,86 +9243,146 @@
       {
        "assembly_id": "a5",
        "assembly_name": "Densifier Only",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a3",
        "assembly_name": "Grind & Seal",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a4",
        "assembly_name": "GRIND & SEAL",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a6",
        "assembly_name": "Grout Compound",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "a9",
        "assembly_name": "Orphaned System",
-       "measurement": 9250,
+       "measurement": 8250,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a1",
+       "assembly_name": "Polish 800 Grit",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a5",
+       "assembly_name": "Densifier Only",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a3",
+       "assembly_name": "Grind & Seal",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a4",
+       "assembly_name": "GRIND & SEAL",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a6",
+       "assembly_name": "Grout Compound",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
+       "enabled": false
+      },
+      {
+       "assembly_id": "a9",
+       "assembly_name": "Orphaned System",
+       "measurement": 1000,
+       "unit": "SF",
+       "same_floor": true,
+       "same_floor_of": 2,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 8250,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 1000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 2
       }
      ],
      "labor": [
       {
        "id": "polishing",
        "label": "Polishing",
-       "guys": 5,
-       "days": 10,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 10,
        "calc_default": {
-        "guys": 5,
-        "days": 10,
+        "guys": "",
+        "days": "",
         "rate": 50,
-        "hours_per_day": 10,
-        "sf_per_day": 1000
+        "hours_per_day": 10
        }
       },
       {
        "id": "mockup",
        "label": "Mock-up",
-       "guys": 3,
-       "days": 0.5,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "hours_per_day": 8
        }
@@ -9087,14 +9390,14 @@
       {
        "id": "jointfill",
        "label": "Joint filler",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "hours_per_day": 8
@@ -9103,13 +9406,12 @@
       {
        "id": "travel",
        "label": "Travel Labor",
-       "guys": 51.5,
+       "guys": "",
        "days": "",
        "rate": 41,
        "unit": "hours",
-       "guys_auto": true,
+       "guys_auto": false,
        "enabled": false,
-       "hours_seed": "",
        "rate_default": 41
       },
       {
@@ -9140,37 +9442,39 @@
       "lodging": {
        "label": "Lodging",
        "enabled": false,
-       "qty": 51.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 99,
        "rate_default": 99
       },
       "per_diem": {
        "label": "Per Diem",
        "enabled": false,
-       "qty": 51.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 77,
        "rate_default": 77
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 4090,
      "shipping": 82,
      "material_total": 4172,
-     "labor": 25600,
+     "labor": 0,
      "escalation": 0,
-     "burden": 3072,
-     "labor_total": 28672,
+     "burden": 0,
+     "labor_total": 0,
      "travel": 0,
-     "sub_total": 32844,
-     "gp_pct": 0.3,
-     "gp": 14246,
-     "super_pto": 1283,
-     "soft_costs": 7804,
+     "sub_total": 9088,
+     "gp_pct": 0.45,
+     "gp": 7760,
+     "super_pto": 466,
+     "soft_costs": 2834,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 396,
@@ -9181,9 +9485,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 56573,
+     "total": 20544,
      "sf": 9250,
-     "per_sf": 6.116
+     "per_sf": 2.220972972972973,
+     "tooling": 4916
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -9199,9 +9504,10 @@
        {
         "assembly_id": "a1",
         "assembly_name": "Polish 800 Grit",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9214,86 +9520,146 @@
        {
         "assembly_id": "a5",
         "assembly_name": "Densifier Only",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a3",
         "assembly_name": "Grind & Seal",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a4",
         "assembly_name": "GRIND & SEAL",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a6",
         "assembly_name": "Grout Compound",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "a9",
         "assembly_name": "Orphaned System",
-        "measurement": 9250,
+        "measurement": 8250,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a1",
+        "assembly_name": "Polish 800 Grit",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a5",
+        "assembly_name": "Densifier Only",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a3",
+        "assembly_name": "Grind & Seal",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a4",
+        "assembly_name": "GRIND & SEAL",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a6",
+        "assembly_name": "Grout Compound",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
+        "enabled": false
+       },
+       {
+        "assembly_id": "a9",
+        "assembly_name": "Orphaned System",
+        "measurement": 1000,
+        "unit": "SF",
+        "same_floor": true,
+        "same_floor_of": 2,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 8250,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 1000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 2
        }
       ],
       "labor": [
        {
         "id": "polishing",
         "label": "Polishing",
-        "guys": 5,
-        "days": 10,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 10,
         "calc_default": {
-         "guys": 5,
-         "days": 10,
+         "guys": "",
+         "days": "",
          "rate": 50,
-         "hours_per_day": 10,
-         "sf_per_day": 1000
+         "hours_per_day": 10
         }
        },
        {
         "id": "mockup",
         "label": "Mock-up",
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
-         "days": 0.5,
+         "guys": "",
+         "days": "",
          "rate": 50,
          "hours_per_day": 8
         }
@@ -9301,14 +9667,14 @@
        {
         "id": "jointfill",
         "label": "Joint filler",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 50,
          "hours_per_day": 8
@@ -9317,13 +9683,12 @@
        {
         "id": "travel",
         "label": "Travel Labor",
-        "guys": 51.5,
+        "guys": "",
         "days": "",
         "rate": 41,
         "unit": "hours",
-        "guys_auto": true,
+        "guys_auto": false,
         "enabled": false,
-        "hours_seed": "",
         "rate_default": 41
        },
        {
@@ -9354,16 +9719,16 @@
        "lodging": {
         "label": "Lodging",
         "enabled": false,
-        "qty": 51.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 99,
         "rate_default": 99
        },
        "per_diem": {
         "label": "Per Diem",
         "enabled": false,
-        "qty": 51.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 77,
         "rate_default": 77
        }
@@ -9372,16 +9737,16 @@
        "material": 4090,
        "shipping": 82,
        "material_total": 4172,
-       "labor": 25600,
+       "labor": 0,
        "escalation": 0,
-       "burden": 3072,
-       "labor_total": 28672,
+       "burden": 0,
+       "labor_total": 0,
        "travel": 0,
-       "sub_total": 32844,
-       "gp_pct": 0.3,
-       "gp": 14246,
-       "super_pto": 1283,
-       "soft_costs": 7804,
+       "sub_total": 9088,
+       "gp_pct": 0.45,
+       "gp": 7760,
+       "super_pto": 466,
+       "soft_costs": 2834,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 396,
@@ -9392,15 +9757,21 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 56573,
+       "total": 20544,
        "sf": 9250,
-       "per_sf": 6.116
+       "per_sf": 2.220972972972973,
+       "tooling": 4916
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -9411,14 +9782,15 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "computed_bid": {
-      "lump_sum": 56573,
-      "price_per_sf": 6.116,
+      "lump_sum": 20544,
+      "price_per_sf": 2.220972972972973,
       "polish_sf": 9250,
       "full_bid": {
-       "total_base_bid": 56573,
+       "total_base_bid": 20544,
        "sales_tax": 396,
        "remodel_tax": 0
       }
@@ -9436,6 +9808,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9451,6 +9824,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9459,6 +9833,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9467,6 +9842,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9475,6 +9851,7 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -9483,45 +9860,46 @@
        "measurement": 10000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 10000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       }
      ],
      "labor": [
       {
        "id": "polishing",
        "label": "Polishing",
-       "guys": 5,
-       "days": 10,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 10,
        "calc_default": {
-        "guys": 5,
-        "days": 10,
+        "guys": "",
+        "days": "",
         "rate": 50,
-        "hours_per_day": 10,
-        "sf_per_day": 1000
+        "hours_per_day": 10
        }
       },
       {
        "id": "mockup",
        "label": "Mock-up",
-       "guys": 3,
-       "days": 0.5,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "hours_per_day": 8
        }
@@ -9529,14 +9907,14 @@
       {
        "id": "jointfill",
        "label": "Joint filler",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "hours_per_day": 8
@@ -9545,13 +9923,12 @@
       {
        "id": "travel",
        "label": "Travel Labor",
-       "guys": 51.5,
+       "guys": "",
        "days": "",
        "rate": 41,
        "unit": "hours",
-       "guys_auto": true,
+       "guys_auto": false,
        "enabled": false,
-       "hours_seed": "",
        "rate_default": 41
       },
       {
@@ -9582,37 +9959,39 @@
       "lodging": {
        "label": "Lodging",
        "enabled": false,
-       "qty": 51.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 99,
        "rate_default": 99
       },
       "per_diem": {
        "label": "Per Diem",
        "enabled": false,
-       "qty": 51.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 77,
        "rate_default": 77
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 2800,
      "shipping": 56,
      "material_total": 2856,
-     "labor": 25600,
+     "labor": 0,
      "escalation": 0,
-     "burden": 3072,
-     "labor_total": 28672,
+     "burden": 0,
+     "labor_total": 0,
      "travel": 0,
-     "sub_total": 31528,
-     "gp_pct": 0.32,
-     "gp": 14965,
-     "super_pto": 1263,
-     "soft_costs": 7685,
+     "sub_total": 8136,
+     "gp_pct": 0.45,
+     "gp": 6879,
+     "super_pto": 413,
+     "soft_costs": 2512,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 271,
@@ -9623,9 +10002,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 55712,
+     "total": 18211,
      "sf": 10000,
-     "per_sf": 5.5712
+     "per_sf": 1.8211,
+     "tooling": 5280
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -9640,6 +10020,9 @@
       "Polish!B4": "No",
       "Polish!E29": "No",
       "Epoxy!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -9649,7 +10032,8 @@
       "Polish!E25": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_estimate": {
       "version": 2,
@@ -9660,6 +10044,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9675,6 +10060,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9683,6 +10069,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9691,6 +10078,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9699,6 +10087,7 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -9707,45 +10096,46 @@
         "measurement": 10000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 10000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        }
       ],
       "labor": [
        {
         "id": "polishing",
         "label": "Polishing",
-        "guys": 5,
-        "days": 10,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 10,
         "calc_default": {
-         "guys": 5,
-         "days": 10,
+         "guys": "",
+         "days": "",
          "rate": 50,
-         "hours_per_day": 10,
-         "sf_per_day": 1000
+         "hours_per_day": 10
         }
        },
        {
         "id": "mockup",
         "label": "Mock-up",
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
-         "days": 0.5,
+         "guys": "",
+         "days": "",
          "rate": 50,
          "hours_per_day": 8
         }
@@ -9753,14 +10143,14 @@
        {
         "id": "jointfill",
         "label": "Joint filler",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 50,
          "hours_per_day": 8
@@ -9769,13 +10159,12 @@
        {
         "id": "travel",
         "label": "Travel Labor",
-        "guys": 51.5,
+        "guys": "",
         "days": "",
         "rate": 41,
         "unit": "hours",
-        "guys_auto": true,
+        "guys_auto": false,
         "enabled": false,
-        "hours_seed": "",
         "rate_default": 41
        },
        {
@@ -9806,16 +10195,16 @@
        "lodging": {
         "label": "Lodging",
         "enabled": false,
-        "qty": 51.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 99,
         "rate_default": 99
        },
        "per_diem": {
         "label": "Per Diem",
         "enabled": false,
-        "qty": 51.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 77,
         "rate_default": 77
        }
@@ -9824,16 +10213,16 @@
        "material": 2800,
        "shipping": 56,
        "material_total": 2856,
-       "labor": 25600,
+       "labor": 0,
        "escalation": 0,
-       "burden": 3072,
-       "labor_total": 28672,
+       "burden": 0,
+       "labor_total": 0,
        "travel": 0,
-       "sub_total": 31528,
-       "gp_pct": 0.32,
-       "gp": 14965,
-       "super_pto": 1263,
-       "soft_costs": 7685,
+       "sub_total": 8136,
+       "gp_pct": 0.45,
+       "gp": 6879,
+       "super_pto": 413,
+       "soft_costs": 2512,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 271,
@@ -9844,19 +10233,22 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 55712,
+       "total": 18211,
        "sf": 10000,
-       "per_sf": 5.5712
+       "per_sf": 1.8211,
+       "tooling": 5280
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 55712,
-      "price_per_sf": 5.5712,
+      "lump_sum": 18211,
+      "price_per_sf": 1.8211,
       "polish_sf": 10000,
       "full_bid": {
-       "total_base_bid": 55712,
+       "total_base_bid": 18211,
        "sales_tax": 271,
        "remodel_tax": 0
       }
@@ -9922,32 +10314,31 @@
       {
        "id": "polishing",
        "label": "Polishing",
-       "guys": 5,
+       "guys": "",
        "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 10,
        "calc_default": {
-        "guys": 5,
+        "guys": "",
         "days": "",
         "rate": 50,
-        "hours_per_day": 10,
-        "sf_per_day": 1000
+        "hours_per_day": 10
        }
       },
       {
        "id": "mockup",
        "label": "Mock-up",
-       "guys": 3,
-       "days": 0.5,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "hours_per_day": 8
        }
@@ -9955,14 +10346,14 @@
       {
        "id": "jointfill",
        "label": "Joint filler",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "hours_per_day": 8
@@ -9971,13 +10362,12 @@
       {
        "id": "travel",
        "label": "Travel Labor",
-       "guys": 1.5,
+       "guys": "",
        "days": "",
        "rate": 41,
        "unit": "hours",
-       "guys_auto": true,
+       "guys_auto": false,
        "enabled": false,
-       "hours_seed": "",
        "rate_default": 41
       },
       {
@@ -10008,37 +10398,39 @@
       "lodging": {
        "label": "Lodging",
        "enabled": false,
-       "qty": 1.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 99,
        "rate_default": 99
       },
       "per_diem": {
        "label": "Per Diem",
        "enabled": false,
-       "qty": 1.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 77,
        "rate_default": 77
       }
      },
      "totals": {},
-     "conditions_shown": {}
+     "conditions_shown": {},
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 0,
      "shipping": 0,
      "material_total": 0,
-     "labor": 600,
+     "labor": 0,
      "escalation": 0,
-     "burden": 72,
-     "labor_total": 672,
+     "burden": 0,
+     "labor_total": 0,
      "travel": 0,
-     "sub_total": 672,
+     "sub_total": 0,
      "gp_pct": 0.52,
-     "gp": 728,
-     "super_pto": 38,
-     "soft_costs": 231,
+     "gp": 0,
+     "super_pto": 0,
+     "soft_costs": 0,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 0,
@@ -10049,9 +10441,10 @@
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 1669,
+     "total": 0,
      "sf": 0,
-     "per_sf": null
+     "per_sf": null,
+     "tooling": 0
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -10117,32 +10510,31 @@
        {
         "id": "polishing",
         "label": "Polishing",
-        "guys": 5,
+        "guys": "",
         "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 10,
         "calc_default": {
-         "guys": 5,
+         "guys": "",
          "days": "",
          "rate": 50,
-         "hours_per_day": 10,
-         "sf_per_day": 1000
+         "hours_per_day": 10
         }
        },
        {
         "id": "mockup",
         "label": "Mock-up",
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
-         "days": 0.5,
+         "guys": "",
+         "days": "",
          "rate": 50,
          "hours_per_day": 8
         }
@@ -10150,14 +10542,14 @@
        {
         "id": "jointfill",
         "label": "Joint filler",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 50,
          "hours_per_day": 8
@@ -10166,13 +10558,12 @@
        {
         "id": "travel",
         "label": "Travel Labor",
-        "guys": 1.5,
+        "guys": "",
         "days": "",
         "rate": 41,
         "unit": "hours",
-        "guys_auto": true,
+        "guys_auto": false,
         "enabled": false,
-        "hours_seed": "",
         "rate_default": 41
        },
        {
@@ -10203,16 +10594,16 @@
        "lodging": {
         "label": "Lodging",
         "enabled": false,
-        "qty": 1.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 99,
         "rate_default": 99
        },
        "per_diem": {
         "label": "Per Diem",
         "enabled": false,
-        "qty": 1.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 77,
         "rate_default": 77
        }
@@ -10221,16 +10612,16 @@
        "material": 0,
        "shipping": 0,
        "material_total": 0,
-       "labor": 600,
+       "labor": 0,
        "escalation": 0,
-       "burden": 72,
-       "labor_total": 672,
+       "burden": 0,
+       "labor_total": 0,
        "travel": 0,
-       "sub_total": 672,
+       "sub_total": 0,
        "gp_pct": 0.52,
-       "gp": 728,
-       "super_pto": 38,
-       "soft_costs": 231,
+       "gp": 0,
+       "super_pto": 0,
+       "soft_costs": 0,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 0,
@@ -10241,15 +10632,21 @@
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 1669,
+       "total": 0,
        "sf": 0,
-       "per_sf": null
+       "per_sf": null,
+       "tooling": 0
       },
-      "conditions_shown": {}
+      "conditions_shown": {},
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -10260,15 +10657,16 @@
       "Polish!E29": "Yes",
       "Polish!F29": "Yes",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 1669,
+      "lump_sum": 0,
       "price_per_sf": null,
       "polish_sf": 0,
       "full_bid": {
-       "total_base_bid": 1669,
+       "total_base_bid": 0,
        "sales_tax": 0,
        "remodel_tax": 0
       }
@@ -10486,6 +10884,9 @@
      "cell_values": {
       "Epoxy!B4": "Yes",
       "Polish!B4": "Yes",
+      "Gyp (USG 1-8\")!B5": "Yes",
+      "Gyp (FR)!B5": "Yes",
+      "Seal!B4": "Yes",
       "Epoxy!D5": "No",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -10496,7 +10897,8 @@
       "Polish!E29": "Yes",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
@@ -10521,6 +10923,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10536,6 +10939,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10544,6 +10948,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10552,6 +10957,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10560,6 +10966,7 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
@@ -10568,45 +10975,46 @@
        "measurement": 9000,
        "unit": "SF",
        "same_floor": true,
+       "same_floor_of": 1,
        "enabled": false
       },
       {
        "assembly_id": "",
        "assembly_name": "",
        "measurement": 9000,
-       "unit": "SF"
+       "unit": "SF",
+       "floor_area": 1
       }
      ],
      "labor": [
       {
        "id": "polishing",
        "label": "Polishing",
-       "guys": 5,
-       "days": 9,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 10,
        "calc_default": {
-        "guys": 5,
-        "days": 9,
+        "guys": "",
+        "days": "",
         "rate": 50,
-        "hours_per_day": 10,
-        "sf_per_day": 1000
+        "hours_per_day": 10
        }
       },
       {
        "id": "mockup",
        "label": "Mock-up",
-       "guys": 3,
-       "days": 0.5,
+       "guys": "",
+       "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "hours_per_day": 8
        }
@@ -10614,14 +11022,14 @@
       {
        "id": "jointfill",
        "label": "Joint filler",
-       "guys": 3,
+       "guys": "",
        "days": "",
        "rate": 50,
        "unit": "days",
        "guys_auto": false,
        "hours_per_day": 8,
        "calc_default": {
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "hours_per_day": 8
@@ -10630,13 +11038,12 @@
       {
        "id": "travel",
        "label": "Travel Labor",
-       "guys": 46.5,
+       "guys": "",
        "days": "",
        "rate": 41,
        "unit": "hours",
-       "guys_auto": true,
+       "guys_auto": false,
        "enabled": false,
-       "hours_seed": "",
        "rate_default": 41
       },
       {
@@ -10671,48 +11078,51 @@
       "lodging": {
        "label": "Lodging",
        "enabled": false,
-       "qty": 46.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 99,
        "rate_default": 99
       },
       "per_diem": {
        "label": "Per Diem",
        "enabled": false,
-       "qty": 46.5,
-       "qty_auto": true,
+       "qty": "",
+       "qty_auto": false,
        "rate": 77,
        "rate_default": 77
       }
-     }
+     },
+     "pool_packs": true,
+     "profile": "polish-rev2@1"
     },
     "bid": {
      "material": 0,
      "shipping": 0,
      "material_total": 0,
-     "labor": 23100,
-     "escalation": 1155,
-     "burden": 2911,
-     "labor_total": 27166,
+     "labor": 0,
+     "escalation": 0,
+     "burden": 0,
+     "labor_total": 0,
      "travel": 0,
-     "sub_total": 27166,
-     "gp_pct": 0.32,
-     "gp": 12784,
-     "super_pto": 1079,
-     "soft_costs": 6565,
+     "sub_total": 4794,
+     "gp_pct": 0.52,
+     "gp": 5194,
+     "super_pto": 270,
+     "soft_costs": 1642,
      "contingency": 0,
      "sales_tax_pct": 0.09475,
      "sales_tax": 0,
      "remodel_pct": 0.065,
-     "remodel_tax": 3094,
-     "taxes": 3094,
+     "remodel_tax": 774,
+     "taxes": 774,
      "fees": 0,
      "bond": 0,
      "bond_pct": 0,
      "fees_and_bond": 0,
-     "total": 50688,
+     "total": 12674,
      "sf": 9000,
-     "per_sf": 5.632
+     "per_sf": 1.4082222222222223,
+     "tooling": 4794
     },
     "saved": {
      "__draft_id": "proj-1",
@@ -10729,6 +11139,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10744,6 +11155,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10752,6 +11164,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10760,6 +11173,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10768,6 +11182,7 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
@@ -10776,45 +11191,46 @@
         "measurement": 9000,
         "unit": "SF",
         "same_floor": true,
+        "same_floor_of": 1,
         "enabled": false
        },
        {
         "assembly_id": "",
         "assembly_name": "",
         "measurement": 9000,
-        "unit": "SF"
+        "unit": "SF",
+        "floor_area": 1
        }
       ],
       "labor": [
        {
         "id": "polishing",
         "label": "Polishing",
-        "guys": 5,
-        "days": 9,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 10,
         "calc_default": {
-         "guys": 5,
-         "days": 9,
+         "guys": "",
+         "days": "",
          "rate": 50,
-         "hours_per_day": 10,
-         "sf_per_day": 1000
+         "hours_per_day": 10
         }
        },
        {
         "id": "mockup",
         "label": "Mock-up",
-        "guys": 3,
-        "days": 0.5,
+        "guys": "",
+        "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
-         "days": 0.5,
+         "guys": "",
+         "days": "",
          "rate": 50,
          "hours_per_day": 8
         }
@@ -10822,14 +11238,14 @@
        {
         "id": "jointfill",
         "label": "Joint filler",
-        "guys": 3,
+        "guys": "",
         "days": "",
         "rate": 50,
         "unit": "days",
         "guys_auto": false,
         "hours_per_day": 8,
         "calc_default": {
-         "guys": 3,
+         "guys": "",
          "days": "",
          "rate": 50,
          "hours_per_day": 8
@@ -10838,13 +11254,12 @@
        {
         "id": "travel",
         "label": "Travel Labor",
-        "guys": 46.5,
+        "guys": "",
         "days": "",
         "rate": 41,
         "unit": "hours",
-        "guys_auto": true,
+        "guys_auto": false,
         "enabled": false,
-        "hours_seed": "",
         "rate_default": 41
        },
        {
@@ -10875,29 +11290,30 @@
        "material": 0,
        "shipping": 0,
        "material_total": 0,
-       "labor": 23100,
-       "escalation": 1155,
-       "burden": 2911,
-       "labor_total": 27166,
+       "labor": 0,
+       "escalation": 0,
+       "burden": 0,
+       "labor_total": 0,
        "travel": 0,
-       "sub_total": 27166,
-       "gp_pct": 0.32,
-       "gp": 12784,
-       "super_pto": 1079,
-       "soft_costs": 6565,
+       "sub_total": 4794,
+       "gp_pct": 0.52,
+       "gp": 5194,
+       "super_pto": 270,
+       "soft_costs": 1642,
        "contingency": 0,
        "sales_tax_pct": 0.09475,
        "sales_tax": 0,
        "remodel_pct": 0.065,
-       "remodel_tax": 3094,
-       "taxes": 3094,
+       "remodel_tax": 774,
+       "taxes": 774,
        "fees": 0,
        "bond": 0,
        "bond_pct": 0,
        "fees_and_bond": 0,
-       "total": 50688,
+       "total": 12674,
        "sf": 9000,
-       "per_sf": 5.632
+       "per_sf": 1.4082222222222223,
+       "tooling": 4794
       },
       "conditions_shown": {
        "dye": false
@@ -10906,25 +11322,30 @@
        "lodging": {
         "label": "Lodging",
         "enabled": false,
-        "qty": 46.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 99,
         "rate_default": 99
        },
        "per_diem": {
         "label": "Per Diem",
         "enabled": false,
-        "qty": 46.5,
-        "qty_auto": true,
+        "qty": "",
+        "qty_auto": false,
         "rate": 77,
         "rate_default": 77
        }
-      }
+      },
+      "pool_packs": true,
+      "profile": "polish-rev2@1"
      },
      "polish_sf": 9000,
      "cell_values": {
       "Epoxy!B4": "No",
       "Polish!B4": "No",
+      "Gyp (USG 1-8\")!B5": "No",
+      "Gyp (FR)!B5": "No",
+      "Seal!B4": "No",
       "Epoxy!D5": "Yes",
       "Epoxy!B6": "Yes",
       "Leveling!B6": "Yes",
@@ -10935,17 +11356,18 @@
       "Polish!E29": "No",
       "Polish!F29": "No",
       "Epoxy!B10": "New",
-      "Polish!B10": "New"
+      "Polish!B10": "New",
+      "Seal!B10": "New"
      },
      "polish_2_sf": "",
      "computed_bid": {
-      "lump_sum": 50688,
-      "price_per_sf": 5.632,
+      "lump_sum": 12674,
+      "price_per_sf": 1.4082222222222223,
       "polish_sf": 9000,
       "full_bid": {
-       "total_base_bid": 50688,
+       "total_base_bid": 12674,
        "sales_tax": 0,
-       "remodel_tax": 3094
+       "remodel_tax": 774
       }
      }
     }

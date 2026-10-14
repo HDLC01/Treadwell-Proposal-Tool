@@ -57,16 +57,20 @@ const IS = require(path.join(ROOT, "js", "intake-scope.js"));
 const COUNTY_SRC = read(path.join(ROOT, "js", "county-picker.js"));
 
 /** The REAL work-types.js and intake-scope.js, evaluated from source with the named job types set to
- *  `ready: true`. This is how "a later phase enables a type by flipping data, not code" is executed: nothing
- *  else in the files changes, so whatever the page does with the flipped type it does from the data. */
-function vocabularyWith(readyKeys) {
+ *  `ready: true` (readyKeys) or `ready: false` (notReadyKeys). This is how "a later phase enables a type by flipping
+ *  data, not code" is executed: nothing else in the files changes, so whatever the page does with the flipped type it
+ *  does from the data. Every job type is ready now (Gyp was the last, Phase 14), so the not-ready case is the one a
+ *  test has to make: it marks Gyp not ready and the page must go on treating a type that is not ready as one. */
+function vocabularyWith(readyKeys, notReadyKeys) {
   let wsrc = read(path.join(ROOT, "js", "work-types.js"));
-  readyKeys.forEach((k) => {
+  const flip = (keys, from, to) => keys.forEach((k) => {
     if (!/^[a-z]+$/.test(k)) throw new Error("a job type key is lower-case letters: " + k);
-    const re = new RegExp('(key: "' + k + '",[^\n]*ready: )false');
-    if (!re.test(wsrc)) throw new Error("no not-ready job type " + k + " in work-types.js");
-    wsrc = wsrc.replace(re, "$1true");
+    const re = new RegExp('(key: "' + k + '",[^\n]*ready: )' + from);
+    if (!re.test(wsrc)) throw new Error("no job type " + k + " with ready: " + from + " in work-types.js");
+    wsrc = wsrc.replace(re, "$1" + to);
   });
+  flip(readyKeys || [], "false", "true");
+  flip(notReadyKeys || [], "true", "false");
   const load = (src, req) => {
     const mod = { exports: {} };
     new Function("module", "exports", "require", "self", src)(mod, mod.exports, req, {});
@@ -221,7 +225,7 @@ function makeDom(log, formValues) {
   const fields = {};
   Object.keys(formValues || {}).forEach((k) => { fields[k] = { name: k, value: "" }; });
   if (!fields.bid_date) fields.bid_date = { name: "bid_date", value: "" };
-  // The two SF boxes the page finds by NAME (paintSfLock): js/intake-scope.js draws them, so a lookup that
+  // The two SF boxes the page finds by NAME (paintSfBoxes): js/intake-scope.js draws them, so a lookup that
   // asked for an id would find nothing.
   ["polish_sf", "polish_2_sf"].forEach((k) => { if (!fields[k]) fields[k] = { name: k, value: "" }; });
 
@@ -321,8 +325,8 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("countyKeys")}
   ${fn("paintProjLine")}
   ${fn("saveSoon")}
-  ${fn("sfLocked")}
-  ${fn("paintSfLock")}
+  ${fn("sfMeasured")}
+  ${fn("paintSfBoxes")}
   ${fn("save")}
   ${fn("paintSaveBlocked")}
   ${fn("renderJobTypes")}
@@ -333,7 +337,7 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   ${fn("onSubmit")}
   ${fn("wire")}
   ${fn("boot")}
-  return { boot: boot, save: save, sfLocked: sfLocked, paintSfLock: paintSfLock, saveSoon: saveSoon, toggleCondition: toggleCondition,
+  return { boot: boot, save: save, sfMeasured: sfMeasured, paintSfBoxes: paintSfBoxes, saveSoon: saveSoon, toggleCondition: toggleCondition,
            renderConditions: renderConditions, adoptModel: adoptModel, hydrate: hydrate,
            onClick: onClick, onSubmit: onSubmit, CONDITIONS: CONDITIONS,
            DEFAULT_CONDITIONS: DEFAULT_CONDITIONS, COUNTY_LIMIT: window.TWCounty.LIMIT,
@@ -399,7 +403,15 @@ function build(opts) {
       store.blob = Object.assign(store.blob, JSON.parse(JSON.stringify(partial)));
       return store.blob;
     },
-    readForm: opts.readForm || (() => Object.assign({}, opts.formValues || FORM_VALUES)),
+    // A box the page's own `input` listener saw typed into (fromUser, set by a test's typeInto) hands
+    // over what is in it NOW, as a real form would; every other field is the fixture's.
+    readForm: opts.readForm || (() => {
+      const v = Object.assign({}, opts.formValues || FORM_VALUES);
+      ["polish_sf", "polish_2_sf"].forEach((k) => {
+        if (dom.fields[k] && dom.fields[k].fromUser) v[k] = dom.fields[k].value;
+      });
+      return v;
+    }),
     writeForm: (f, values) => { rec.written.push({ isForm: f === dom.nodes["intake-form"],
                                                    values: values }); },
     withDraft: (p) => p + (p.indexOf("?") >= 0 ? "&" : "?") + "d=" + store.id,
@@ -432,7 +444,8 @@ function build(opts) {
 
   const clock = makeClock();
   const winListeners = [];
-  const vocab = opts.fakeReady ? vocabularyWith(opts.fakeReady) : { W: W, IS: IS };
+  const vocab = (opts.fakeReady || opts.fakeNotReady)
+    ? vocabularyWith(opts.fakeReady, opts.fakeNotReady) : { W: W, IS: IS };
   const win = {
     TWAuth: { ready: Promise.resolve() },
     // The REAL pricing core, under the real global name. The page's own
@@ -450,6 +463,7 @@ function build(opts) {
     fire(type, event) { winListeners.filter((l) => l.type === type).forEach((l) => l.handler(event)); },
   };
   win.TW = TW;                         // js/county-picker.js reads window.TW, not an injected parameter
+  if (opts.winExtra) Object.assign(win, opts.winExtra);   // e.g. TWAudienceBox, which js/audience-box.js publishes
   doc.getElementById = dom.el;         // ... and document.getElementById, for the field it fills
   // THE REAL SHARED CONTROL, executed from its own file the way the browser loads it: it sets
   // window.TWCounty, which the page's mountCounty() reads.
@@ -1040,13 +1054,13 @@ out.engineMoves = (function () {
     await b.api.boot();
     const fire = (t) => b.dom.nodes["intake-form"].listeners
       .filter((l) => l.type === "focusin").forEach((l) => l.handler({ target: t }));
-    const mk = (over) => Object.assign({ type: "number", value: "0", readOnly: false, selected: 0,
+    const mk = (over) => Object.assign({ type: "number", value: "0", selected: 0,
       select() { this.selected++; } }, over);
-    const zero = mk({}), typed = mk({ value: "8000" }), locked = mk({ readOnly: true });
-    fire(zero); fire(typed); fire(locked);
+    const zero = mk({}), typed = mk({ value: "8000" });
+    fire(zero); fire(typed);
     out.zeroTrap = {
       wired: b.dom.nodes["intake-form"].listeners.some((l) => l.type === "focusin"),
-      zeroSelected: zero.selected, typedSelected: typed.selected, lockedSelected: locked.selected,
+      zeroSelected: zero.selected, typedSelected: typed.selected,
     };
   }
 
@@ -1299,28 +1313,35 @@ out.engineMoves = (function () {
       radios: radios(b), note: noteOf(b), current: b.api.jobType(),
       savedOnOpen: b.rec.saves.length, armedOnOpen: b.clock.armed(),
     };
-    const markupBefore = b.dom.nodes["job-type"].innerHTML;
+    // EVERY JOB TYPE IS READY NOW (Gyp was the last, Phase 14), so a type that is not ready has to be made: the same
+    // page, with a vocabulary that marks Gyp not ready. It is shown and disabled with the plain note, a click or a key
+    // on it does nothing, and nothing is saved.
+    const d = build({ fakeNotReady: ["gyp"] });
+    await d.api.boot();
+    const markupBefore = d.dom.nodes["job-type"].innerHTML;
     const attempts = {};
-    ["epoxy", "combo", "gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
-      jobClick(b, key, 1);                    // the mouse
-      jobClick(b, key, 0);                    // the keyboard
-      attempts[key || "(empty)"] = { current: b.api.jobType(), armed: b.clock.armed(), saves: b.rec.saves.length };
+    ["gyp", "seal", "leveling", "nonsense", ""].forEach((key) => {
+      jobClick(d, key, 1);                    // the mouse
+      jobClick(d, key, 0);                    // the keyboard
+      attempts[key || "(empty)"] = { current: d.api.jobType(), armed: d.clock.armed(), saves: d.rec.saves.length };
     });
     out.jobTypes.disabledClicks = {
-      attempts: attempts, markupUnchanged: b.dom.nodes["job-type"].innerHTML === markupBefore,
+      attempts: attempts, markupUnchanged: d.dom.nodes["job-type"].innerHTML === markupBefore,
     };
+    out.jobTypes.notReady = { radios: radios(d), note: noteOf(d), current: d.api.jobType() };
 
-    // The same page, with a vocabulary that marks Epoxy ready: nothing in the page changes.
-    const f = build({ fakeReady: ["epoxy"] });
+    // The page as it ships: Gyp is ready, so a click on it picks it and saves it, and a name that is not a job type is
+    // still refused.
+    const f = build({});
     await f.api.boot();
     out.jobTypes.fakeReady = { radios: radios(f), note: noteOf(f), before: f.api.jobType() };
-    jobClick(f, "epoxy", 1);
+    jobClick(f, "gyp", 1);
     const armed = f.clock.armed();
     f.clock.fire();
     out.jobTypes.fakeReady.afterPick = { current: f.api.jobType(), armed: armed, radios: radios(f),
       savedWorkType: (f.rec.saves[f.rec.saves.length - 1] || {}).work_type };
-    jobClick(f, "combo", 0);
-    out.jobTypes.fakeReady.comboStillDisabled = f.api.jobType();
+    jobClick(f, "seal", 0);
+    out.jobTypes.fakeReady.sealStillRefused = f.api.jobType();
 
     // Saved drafts open unchanged: no job type reads as Polish, one v2 cannot price yet reads as Polish,
     // and opening writes nothing. The county the draft holds is still shown.
@@ -1328,8 +1349,15 @@ out.engineMoves = (function () {
                      county_notes: "KCK, Bonner Springs." };
     const none = build({ blob: blob(picked) });                  // no work_type at all
     await none.api.boot();
-    const combo = build({ blob: blob(Object.assign({ work_type: "combo" }, picked)) });
+    const combo = build({ blob: blob(Object.assign({ work_type: "gyp" }, picked)), fakeNotReady: ["gyp"] });
     await combo.api.boot();
+    const realGyp = build({ blob: blob(Object.assign({ work_type: "gyp" }, picked)) });
+    await realGyp.api.boot();
+    const realCombo = build({ blob: blob(Object.assign({ work_type: "combo" }, picked)) });
+    await realCombo.api.boot();
+    // THE GYPSUM BOX (Phase 14): the live intake's three area boxes, shown for a Gyp job and hidden for the rest, with
+    // the two-system block the other way round.
+    const gypBox = (x) => ({ gyp: x.dom.nodes["gyp-sf-container"].style.display, systems: x.dom.nodes["systems-container"].style.display });
     const noneOpenSaves = none.rec.saves.length;
     none.api.save();
     out.jobTypes.savedDrafts = {
@@ -1339,6 +1367,11 @@ out.engineMoves = (function () {
       combo: { current: combo.api.jobType(), checked: radios(combo).filter((r) => r.checked).map((r) => r.value),
                county: readCountyField(combo).input, savedOnOpen: combo.rec.saves.length,
                armedOnOpen: combo.clock.armed() },
+      gypBoxes: { gypJob: gypBox(realGyp), polishJob: gypBox(none) },
+      readyGyp: { current: realGyp.api.jobType(), checked: radios(realGyp).filter((r) => r.checked).map((r) => r.value),
+                  savedOnOpen: realGyp.rec.saves.length, armedOnOpen: realGyp.clock.armed() },
+      readyCombo: { current: realCombo.api.jobType(), checked: radios(realCombo).filter((r) => r.checked).map((r) => r.value),
+                    savedOnOpen: realCombo.rec.saves.length, armedOnOpen: realCombo.clock.armed() },
     };
 
     // The quantity boxes a polish job does not ask for are drawn (hidden, never removed) and so are swept
@@ -1788,22 +1821,23 @@ out.engineMoves = (function () {
     };
   }
 
-  // ── Scope (quick): the SF boxes, seeded and then locked (Hanz, 2026-10-05) ─────
+  // ── Scope (quick): the two SF boxes mirror the takeoff's first and second measured areas ─────────
   //
-  // "Add SF, seed the takeoff". Intake carries System 1 / System 2 Polish SF; step 2 seeds the
-  // takeoff from them; and once the takeoff holds a measurement the boxes lock and intake's save
-  // can no longer touch polish_sf, which is the takeoff TOTAL the proposal and /api/generate read.
+  // Hanz, 2026-10-05: "Add SF, seed the takeoff". Hanz, 2026-10-12: the boxes stay editable once the
+  // takeoff is measured, so they are NEVER read-only. System 1 mirrors the first measured SF row
+  // of the takeoff and System 2 the second; typing changes that row (System 2 adds one when there is
+  // none); a third area and beyond is left alone with a note and a link; polish_sf always ends as
+  // the takeoff total, and a box nobody typed in never writes.
   {
-    // The REAL readForm, lifted out of shared.js. Whether a locked box can leak into the save
-    // turns on what this function does with readonly and disabled inputs, so a stub that returns
-    // whatever the test says would prove nothing about it.
+    // The REAL readForm, lifted out of shared.js: it takes every NAMED input, so what a stale or
+    // untyped box could leak turns on what this function hands to save(), not on a stub.
     const shared = read(path.join(ROOT, "shared.js"));
     const rf = /function readForm\(formEl\) \{[\s\S]*?\n  \}/.exec(shared);
     if (!rf) throw new Error("readForm() is gone from shared.js — rewrite this, don't stub it");
     const realReadForm = new Function(rf[0] + " return readForm;")();
     const fakeForm = { elements: [
-      { name: "polish_sf", type: "number", value: "999", readOnly: true },
-      { name: "polish_2_sf", type: "number", value: "5", disabled: true },
+      { name: "polish_sf", type: "number", value: "999" },
+      { name: "polish_2_sf", type: "number", value: "5" },
       { name: "", type: "number", value: "77" },
       { name: "project_name", type: "text", value: "Nearman Creek" },
     ] };
@@ -1811,86 +1845,275 @@ out.engineMoves = (function () {
 
     const sfOf = (st) => ({ sf1: st.polish_sf, sf2: st.polish_2_sf });
     const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
+    const clone = (x) => JSON.parse(JSON.stringify(x));
+    const sfRows = (model) => model.takeoff.filter((r) => r.unit === "SF").map((r) => r.measurement);
+    const savedModel = (bb) => bb.store.blob.polish_estimate;
+    const modelWith = (takeoff) => ({ version: 2, takeoff: clone(takeoff), labor: clone(LABOR),
+      conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } });
+    const SF_ROW = { assembly_id: "asm-sp", assembly_name: "Salt & Pepper polish", measurement: 12500, unit: "SF" };
+    const SF_2 = { assembly_id: "asm-sp", assembly_name: "Dock", measurement: 11000, unit: "SF" };
+    const SF_3 = { assembly_id: "asm-sp", assembly_name: "Mezzanine", measurement: 4000, unit: "SF" };
+    const LF_ROW = { assembly_id: "asm-edge", assembly_name: "Edge grind", measurement: 900, unit: "LF" };
+    const withSf = (sf, rows) => blob({ polish_sf: sf, polish_2_sf: "", polish_estimate: modelWith(rows) });
+    const typedBox = (v1, v2) => Object.assign({}, FORM_VALUES, { polish_sf: v1, polish_2_sf: v2 });
+    // What an estimator does: the box takes the text, the page's own `input` listener sees it.
+    const typeInto = (bb, name, value) => {
+      bb.dom.fields[name].value = value;
+      bb.dom.fields[name].fromUser = true;
+      bb.dom.nodes["intake-form"].listeners.filter((l) => l.type === "input")
+        .forEach((l) => l.handler({ target: bb.dom.fields[name] }));
+    };
+    // ...and leaving the box: a `change` event.
+    const blur = (bb, name) => bb.dom.nodes["intake-form"].listeners.filter((l) => l.type === "change")
+      .forEach((l) => l.handler({ target: bb.dom.fields[name] }));
+    const priceOf = (model) => P.priceSection(P.migrateModel(model), P.ROOT_TAB,
+      { material: (e) => 0.5 * P.takeoffSf(e.section.takeoff) }).total;
+    const boxes = (bb) => ({ v1: bb.dom.fields.polish_sf.value, v2: bb.dom.fields.polish_2_sf.value,
+      ro1: bb.dom.fields.polish_sf.readOnly === true, ro2: bb.dom.fields.polish_2_sf.readOnly === true });
+    const note = (bb) => ({ hidden: bb.dom.nodes["sf-areas-note"].hidden !== false,
+      text: bb.dom.nodes["sf-areas-note"].textContent || "",
+      linkRowHidden: bb.dom.nodes["sf-takeoff-row"].hidden !== false,
+      href: bb.dom.nodes["sf-takeoff-link"].href || "" });
+    const settle = (bb) => { bb.clock.fire(); };
 
-    // 1. unlocked: nothing measured. Both boxes editable, and what is typed round-trips.
+    // ── 0 measured areas: the boxes seed, exactly as before ──
     const fresh = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
-      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 4000, polish_2_sf: 1500 }) });
+      formValues: typedBox(4000, 1500) });
     await fresh.api.boot();
-    const n1 = fresh.dom.fields.polish_sf, n2 = fresh.dom.fields.polish_2_sf;
-    const unlockedPaint = { ro1: n1.readOnly, ro2: n2.readOnly,
-      noteHidden: fresh.dom.nodes["sf-locked-note"].hidden !== false };
+    const freshPaint = Object.assign(boxes(fresh), { noteHidden: note(fresh).hidden });
     const hydratedWith = fresh.rec.written.map((w) => sfOf(w.values))[0];
     fresh.api.save();
-    const freshSave = lastSave(fresh);
-    // reload: a second page over the blob the first one saved
+    const freshSaved = sfOf(lastSave(fresh));
     const reload = build({ blob: fresh.store.blob, formValues: FORM_VALUES });
     await reload.api.boot();
     const reloadWritten = reload.rec.written.map((w) => sfOf(w.values))[0];
+    const seedB = build({ blob: blob({ polish_estimate: null, polish_sf: 4000, polish_2_sf: 1500 }),
+      formValues: typedBox(52000, 1500) });
+    await seedB.api.boot();
+    typeInto(seedB, "polish_sf", 52000);
+    settle(seedB);
+    const seeded = sfOf(lastSave(seedB));
+    // a takeoff of linear-foot rows alone has no SF to mirror: still seeding
+    const lfOnly = build({ blob: blob({ polish_estimate: modelWith([LF_ROW]), polish_sf: 0 }) });
+    await lfOnly.api.boot();
 
-    // 2. locked: the takeoff measures 12,500 SF. Boxes read-only, showing the TOTAL, with a note;
-    //    a save whose form hands over a different number cannot move polish_sf.
-    const lockedB = build({ blob: blob({ polish_sf: 12500, polish_2_sf: 800 }),
-      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 999, polish_2_sf: 5 }) });
-    await lockedB.api.boot();
-    lockedB.api.save();
-    const lockedSave = lastSave(lockedB);
+    // ── 1 measured area (plus an LF row, which has no SF) ──
+    const oneBlob = withSf(12500, [SF_ROW, LF_ROW]);
+    const oneB = build({ blob: oneBlob, formValues: typedBox(50000, "") });
+    await oneB.api.boot();
+    const oneBoot = Object.assign(boxes(oneB), { note: note(oneB), writesAtBoot: oneB.rec.saves.length });
+    const totalBefore = priceOf(oneBlob.polish_estimate);
+    typeInto(oneB, "polish_sf", 50000);
+    const armed = oneB.clock.armed();
+    settle(oneB);
+    const oneModel = savedModel(oneB);
+    const oneAfter = { sf: sfRows(oneModel), lf: oneModel.takeoff.filter((r) => r.unit === "LF").map((r) => r.measurement),
+      rows: oneModel.takeoff.length, polishSf: oneB.store.blob.polish_sf, polishSf2: oneB.store.blob.polish_2_sf,
+      totalBefore, totalAfter: priceOf(oneModel), pageInput: oneBlob.polish_estimate.takeoff[0].measurement };
+    oneB.api.save();
+    const oneSecond = { sf: sfRows(savedModel(oneB)), polishSf: oneB.store.blob.polish_sf };
 
-    // 3. the same, through the REAL readForm over a form whose SF boxes are readonly/disabled:
-    //    the real function still reads them (the reason the guard lives in save()).
-    const realB = build({ blob: blob({ polish_sf: 12500 }),
+    // System 2 on a one-area takeoff ADDS the second area (the seed's own row shape)
+    const addB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(12500, 8000) });
+    await addB.api.boot();
+    typeInto(addB, "polish_2_sf", 8000);
+    settle(addB);
+    const addModel = savedModel(addB);
+    const addReload = build({ blob: addB.store.blob, formValues: FORM_VALUES });
+    await addReload.api.boot();
+    const added = { rows: addModel.takeoff.map((r) => [r.unit, r.measurement]),
+      newRow: addModel.takeoff[addModel.takeoff.length - 1], polishSf: addB.store.blob.polish_sf,
+      polishSf2: addB.store.blob.polish_2_sf, totalBefore: priceOf(oneBlob.polish_estimate), totalAfter: priceOf(addModel),
+      reloadBoxes: boxes(addReload) };
+
+    // clearing System 2 while it mirrors a row deletes nothing and shows the row's figure back
+    const clearB = build({ blob: withSf(20500, [SF_ROW, Object.assign({}, SF_2, { measurement: 8000 }), LF_ROW]),
+      formValues: typedBox(12500, "") });
+    await clearB.api.boot();
+    typeInto(clearB, "polish_2_sf", "");
+    settle(clearB);
+    const clearedSave = lastSave(clearB);
+    const beforeBlur = clearB.dom.fields.polish_2_sf.value;
+    blur(clearB, "polish_2_sf");
+    const cleared = { rows: clearB.rec.saves.length ? sfRows(savedModel(clearB)) : null,
+      saveHasSf: clearedSave ? ("polish_sf" in clearedSave || "polish_2_sf" in clearedSave) : null,
+      beforeBlur, afterBlur: clearB.dom.fields.polish_2_sf.value };
+
+    // ── 2 measured areas: both mirror, both editable ──
+    const twoBlob = withSf(23500, [SF_ROW, Object.assign({}, SF_2, { measurement: 11000 }), LF_ROW]);
+    const twoB = build({ blob: twoBlob, formValues: typedBox(12500, 9000) });
+    await twoB.api.boot();
+    const twoBoot = Object.assign(boxes(twoB), { note: note(twoB) });
+    typeInto(twoB, "polish_2_sf", 9000);
+    settle(twoB);
+    const twoAfter2 = { sf: sfRows(savedModel(twoB)), polishSf: twoB.store.blob.polish_sf };
+    typeInto(twoB, "polish_sf", 30000);
+    settle(twoB);
+    const twoAfter1 = { sf: sfRows(savedModel(twoB)), polishSf: twoB.store.blob.polish_sf,
+      polishSf2: twoB.store.blob.polish_2_sf, rowCount: savedModel(twoB).takeoff.length };
+
+    // ── 3 measured areas: both boxes editable, the third left alone, a note and a link ──
+    const threeBlob = withSf(27500, [SF_ROW, SF_2, SF_3, LF_ROW]);
+    const threeB = build({ blob: threeBlob, formValues: typedBox(70000, "") });
+    await threeB.api.boot();
+    const threeBoot = Object.assign(boxes(threeB), { note: note(threeB) });
+    typeInto(threeB, "polish_sf", 70000);
+    settle(threeB);
+    const threeAfter = { sf: sfRows(savedModel(threeB)), polishSf: threeB.store.blob.polish_sf,
+      rowCount: savedModel(threeB).takeoff.length };
+    const fourB = build({ blob: withSf(40500, [SF_ROW, SF_2, SF_3, Object.assign({}, SF_3, { measurement: 13000 })]),
+      formValues: FORM_VALUES });
+    await fourB.api.boot();
+    const fourNote = note(fourB).text;
+
+    // ── same_floor rows (a defaults load): they follow the total they carried ──
+    const SAME = { kind: "item", item_id: "i-1", item_name: "Densifier", measurement: 12500, unit: "SF", same_floor: true };
+    const sameB = build({ blob: withSf(12500, [SF_ROW, SAME, LF_ROW]), formValues: typedBox(30000, "") });
+    await sameB.api.boot();
+    typeInto(sameB, "polish_sf", 30000);
+    settle(sameB);
+    const sameRows = savedModel(sameB).takeoff.map((r) => [r.unit, r.measurement, !!r.same_floor]);
+    const samePolishSf = sameB.store.blob.polish_sf;
+    const same2B = build({ blob: withSf(12500, [SF_ROW, SAME, LF_ROW]), formValues: typedBox(12500, 5000) });
+    await same2B.api.boot();
+    typeInto(same2B, "polish_2_sf", 5000);
+    settle(same2B);
+    const same2Rows = savedModel(same2B).takeoff.map((r) => [r.unit, r.measurement, !!r.same_floor]);
+    const same2PolishSf = same2B.store.blob.polish_sf;
+
+    // ── a box nobody typed in, or typed after another tab moved the takeoff ──
+    const untouchedB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(999, 888) });
+    await untouchedB.api.boot();
+    untouchedB.api.save();
+    const untouchedSave = lastSave(untouchedB);
+    const untouched = { sf: sfRows(savedModel(untouchedB)), saveHasSf: "polish_sf" in untouchedSave || "polish_2_sf" in untouchedSave,
+      polishSf: untouchedB.store.blob.polish_sf };
+    // another tab made it three areas after this one painted: an UNTYPED stale box writes nothing
+    const staleB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(999, 888) });
+    await staleB.api.boot();
+    staleB.store.blob.polish_estimate = modelWith([SF_ROW, SF_2, SF_3]);
+    staleB.store.blob.polish_sf = 27500;
+    staleB.api.save();
+    const stale = { sf: sfRows(savedModel(staleB)), saveHasSf: "polish_sf" in lastSave(staleB), polishSf: staleB.store.blob.polish_sf };
+    // ...and a TYPED one goes to the first row of what is saved NOW, and polish_sf is that takeoff's total
+    const staleTypedB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(999, "") });
+    await staleTypedB.api.boot();
+    staleTypedB.store.blob.polish_estimate = modelWith([SF_ROW, SF_2, SF_3]);
+    staleTypedB.store.blob.polish_sf = 27500;
+    typeInto(staleTypedB, "polish_sf", 999);
+    settle(staleTypedB);
+    const staleTyped = { sf: sfRows(savedModel(staleTypedB)), polishSf: staleTypedB.store.blob.polish_sf };
+    // A TYPED MARK IS GOOD FOR ONE SAVE. Typed while the takeoff is EMPTY (the seed save), the mark
+    // used to stay on. The takeoff is then measured elsewhere, and this page (not re-booted: Back,
+    // a second tab) saves for an unrelated edit: the old box figure went over the first row.
+    const emptyB = build({ blob: blob({ polish_estimate: null, polish_sf: "", polish_2_sf: "" }),
+      formValues: typedBox(4000, "") });
+    await emptyB.api.boot();
+    typeInto(emptyB, "polish_sf", 4000);
+    settle(emptyB);
+    const emptySeeded = emptyB.store.blob.polish_sf;
+    emptyB.store.blob.polish_estimate = modelWith([SF_ROW]);
+    emptyB.store.blob.polish_sf = 12500;
+    typeInto(emptyB, "project_name", "Renamed");
+    settle(emptyB);
+    const staleMark = { seeded: emptySeeded, sf: sfRows(savedModel(emptyB)), polishSf: emptyB.store.blob.polish_sf };
+    // ...and a box typed AGAIN after that save is a fresh figure and does reach the row
+    typeInto(emptyB, "polish_sf", 7000);
+    settle(emptyB);
+    staleMark.retyped = { sf: sfRows(savedModel(emptyB)), polishSf: emptyB.store.blob.polish_sf };
+    // Only same_floor rows hold the floor (the carrier was deleted): System 2 ADDS an area, and the
+    // floor grows by it rather than shrinking to it.
+    const SAME_A = { assembly_id: "asm-sp", assembly_name: "Floor", measurement: 8000, unit: "SF", same_floor: true };
+    const onlySameB = build({ blob: withSf(8000, [SAME_A, Object.assign({}, SAME_A)]), formValues: typedBox(8000, 3000) });
+    await onlySameB.api.boot();
+    typeInto(onlySameB, "polish_2_sf", 3000);
+    settle(onlySameB);
+    const onlySame = { rows: savedModel(onlySameB).takeoff.map((r) => [r.unit, r.measurement, !!r.same_floor]),
+      polishSf: onlySameB.store.blob.polish_sf };
+    const onlySameReload = build({ blob: onlySameB.store.blob, formValues: FORM_VALUES });
+    await onlySameReload.api.boot();
+    onlySame.reloadBoxes = boxes(onlySameReload);
+    // the REAL readForm hands over 999 / 5 for the two boxes; untyped, neither reaches the draft
+    const realB = build({ blob: withSf(12500, [SF_ROW, LF_ROW]),
       readForm: () => Object.assign({}, FORM_VALUES, viaReal) });
     await realB.api.boot();
     realB.api.save();
     const realSave = lastSave(realB);
-    // ...and the pagehide flush goes through the same save(), so it cannot leak either.
     realB.api.saveSoon();
     realB.win.fire("pagehide", {});
     const flushSave = lastSave(realB);
 
-    // 4. a takeoff of LINEAR-foot rows only has no SF to disagree about: not locked.
-    const lfOnly = build({ blob: blob({ polish_estimate: { version: 2,
-      takeoff: [{ assembly_id: "a", assembly_name: "Edge", measurement: 900, unit: "LF" }],
-      labor: [], conditions: {}, contingency: 0, fees: 0, totals: {} }, polish_sf: 0 }) });
-    await lfOnly.api.boot();
+    // blank, 0 or negative is not a figure: nothing is written, no row is wiped
+    const junk = {};
+    for (const v of ["", 0, -5]) {
+      const jb = build({ blob: withSf(12500, [SF_ROW, LF_ROW]), formValues: typedBox(v, v) });
+      await jb.api.boot();
+      typeInto(jb, "polish_sf", v);
+      typeInto(jb, "polish_2_sf", v);
+      settle(jb);
+      junk[String(v === "" ? "blank" : v)] = { sf: sfRows(savedModel(jb)),
+        hasKey: "polish_sf" in lastSave(jb) || "polish_2_sf" in lastSave(jb) };
+    }
 
-    out.sfBoxes = {
-      unlockedPaint, hydratedWith,
-      freshSaved: sfOf(freshSave),
-      reloadWritten,
-      reloadReadOnly: reload.dom.fields.polish_sf.readOnly,
-      lockedPaint: { ro1: lockedB.dom.fields.polish_sf.readOnly,
-        ro2: lockedB.dom.fields.polish_2_sf.readOnly,
-        v1: lockedB.dom.fields.polish_sf.value, v2: lockedB.dom.fields.polish_2_sf.value,
-        note: lockedB.dom.nodes["sf-locked-note"].textContent,
-        noteHidden: lockedB.dom.nodes["sf-locked-note"].hidden },
-      lockedSaveKeys: { hasSf1: "polish_sf" in lockedSave, hasSf2: "polish_2_sf" in lockedSave },
-      lockedBlobAfter: sfOf(lockedB.store.blob),
-      realReadFormLeaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf,
-        unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
-      realSaveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
-      flushSaveKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
-      realBlobAfter: sfOf(realB.store.blob),
-      lfOnlyReadOnly: lfOnly.dom.fields.polish_sf.readOnly,
-    };
+    // the F5 case: the only SF row switched OFF is still a measured floor, and still editable
+    const offRow = Object.assign({}, SF_ROW, { enabled: false });
+    const offB = build({ blob: withSf(12500, [offRow]), formValues: typedBox(40000, "") });
+    await offB.api.boot();
+    const offBoot = boxes(offB);
+    typeInto(offB, "polish_sf", 40000);
+    settle(offB);
+    const offAfter = { sf: sfRows(savedModel(offB)), enabled: savedModel(offB).takeoff[0].enabled,
+      polishSf: offB.store.blob.polish_sf };
+
+    // SEPARATE AREAS (Hanz, 2026-10-13): a new bid seeded with System 1 5,000 and System 2 3,000 holds two
+    // areas, each a carrier plus the rows that follow it. The boxes show 5,000 and 3,000, and typing into
+    // one changes that area (its follower too) and nothing of the other, even when both hold one number.
+    const area = (n, m, over) => Object.assign({ assembly_id: "asm-sp", assembly_name: "Floor " + n, measurement: m,
+      unit: "SF", floor_area: n }, over || {});
+    const follow = (n, m) => ({ kind: "item", item_id: "i-1", item_name: "Densifier " + n, coverage: "", measurement: m,
+      unit: "SF", same_floor: true, same_floor_of: n });
+    const areaRows = (a, b) => [area(1, a), follow(1, a), area(2, b), follow(2, b)];
+    const rowsOf = (bb) => savedModel(bb).takeoff.map((r) => [r.measurement, r.floor_area || 0, r.same_floor_of || 0]);
+    const sepBoot = build({ blob: withSf(8000, areaRows(5000, 3000)), formValues: typedBox(5000, 3000) });
+    await sepBoot.api.boot();
+    const separate = { boot: boxes(sepBoot) };
+    const sep2 = build({ blob: withSf(8000, areaRows(5000, 3000)), formValues: typedBox(5000, 3500) });
+    await sep2.api.boot();
+    typeInto(sep2, "polish_2_sf", 3500);
+    settle(sep2);
+    separate.sys2 = { rows: rowsOf(sep2), polishSf: sep2.store.blob.polish_sf, total: priceOf(savedModel(sep2)) };
+    const sep2Reload = build({ blob: sep2.store.blob, formValues: FORM_VALUES });
+    await sep2Reload.api.boot();
+    separate.sys2.reloadBoxes = boxes(sep2Reload);
+    const sep1 = build({ blob: withSf(8000, areaRows(5000, 3000)), formValues: typedBox(4000, 3000) });
+    await sep1.api.boot();
+    typeInto(sep1, "polish_sf", 4000);
+    settle(sep1);
+    separate.sys1 = { rows: rowsOf(sep1), polishSf: sep1.store.blob.polish_sf };
+    const sepEq = build({ blob: withSf(8000, areaRows(4000, 4000)), formValues: typedBox(5000, 4000) });
+    await sepEq.api.boot();
+    typeInto(sepEq, "polish_sf", 5000);
+    settle(sepEq);
+    separate.equal = { rows: rowsOf(sepEq), polishSf: sepEq.store.blob.polish_sf };
+
+    out.sfAreas = { freshPaint, hydratedWith, freshSaved, reloadWritten, seeded, separate,
+      lfOnly: boxes(lfOnly),
+      one: { boot: oneBoot, armed, after: oneAfter, second: oneSecond }, added, cleared,
+      two: { boot: twoBoot, after2: twoAfter2, after1: twoAfter1 },
+      three: { boot: threeBoot, after: threeAfter, fourNote },
+      same: { rows: sameRows, polishSf: samePolishSf, rows2: same2Rows, polishSf2: same2PolishSf },
+      untouched, stale, staleTyped, staleMark, onlySame,
+      real: { leaks: { sf1: viaReal.polish_sf, sf2: viaReal.polish_2_sf, unnamedRead: Object.keys(viaReal).indexOf("") >= 0 },
+        saveKeys: { hasSf1: "polish_sf" in realSave, hasSf2: "polish_2_sf" in realSave },
+        flushKeys: { hasSf1: "polish_sf" in flushSave, hasSf2: "polish_2_sf" in flushSave },
+        blobAfter: sfOf(realB.store.blob) },
+      junk, off: { boot: offBoot, after: offAfter } };
   }
 
   // ── F5: saved-bid safety on the intake page ────────────────────────────────────
   {
     const lastSave = (bb) => bb.rec.saves[bb.rec.saves.length - 1];
-    // (a) THE ONLY SF ROW IS SWITCHED OFF. The floor is still measured, so the boxes stay locked
-    //     and a save cannot hand polish_sf over to whatever they show.
-    const offBlob = blob({ polish_sf: 12500, polish_2_sf: "",
-      polish_estimate: { version: 2,
-        takeoff: [{ assembly_id: "a1", assembly_name: "Polish", measurement: 12500, unit: "SF",
-                    enabled: false }],
-        labor: JSON.parse(JSON.stringify(LABOR)),
-        conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } });
-    const offB = build({ blob: offBlob,
-      formValues: Object.assign({}, FORM_VALUES, { polish_sf: 1, polish_2_sf: 2 }) });
-    await offB.api.boot();
-    offB.api.save();
-    const offSave = lastSave(offB);
-    // (b) AN OLD INTAKE BLOB: no Drawings fields, no local answer in the model, blank Project name.
+    // AN OLD INTAKE BLOB: no Drawings fields, no local answer in the model, blank Project name.
     //     The two `required` attributes are the browser's gate on the Continue button only; this
     //     page's autosave and save() never ask for validity, so nothing is withheld from a draft.
     const oldBlob = { __draft_id: "old-intake", address: "1 Water Works Dr", city: "Kansas City",
@@ -1911,16 +2134,67 @@ out.engineMoves = (function () {
     await subB.api.boot();
     subB.api.onSubmit({ preventDefault() {} });
     out.f5 = {
-      offLocked: { ro1: offB.dom.fields.polish_sf.readOnly, ro2: offB.dom.fields.polish_2_sf.readOnly,
-        v1: offB.dom.fields.polish_sf.value,
-        noteHidden: offB.dom.nodes["sf-locked-note"].hidden !== false,
-        saveHasSf: ("polish_sf" in offSave) || ("polish_2_sf" in offSave),
-        blobSf: offB.store.blob.polish_sf, takeoffEnabled: offSave.polish_estimate.takeoff[0].enabled },
       oldBlob: { threw: threw, saved: !!oldSave, dateAfterBoot: dateAfterBoot,
         savedName: oldSave && oldSave.project_name,
         localInModel: oldSave && oldSave.polish_estimate.conditions.local,
         takeoffKept: oldSave && oldSave.polish_estimate.takeoff.length,
         navigated: subB.rec.navigated.length, submitSaved: subB.rec.saves.length > 0 },
+    };
+  }
+
+  // ── the Drawings & specs box: a typed Spec section reaches the saved draft (Will, 2026-10-12) ──
+  //
+  // Through the REAL readForm (lifted from shared.js) over a form whose named inputs are the REAL
+  // polish-intake.html's, so a field renamed or pulled out of #intake-form, or a save that stopped
+  // spreading the form, shows up as a spec that never reaches the draft. Then a second page over the
+  // saved blob, which is what the proposal step and a reopened intake read.
+  {
+    const shared = read(path.join(ROOT, "shared.js"));
+    const rf = /function readForm\(formEl\) \{[\s\S]*?\n  \}/.exec(shared);
+    if (!rf) throw new Error("readForm() is gone from shared.js — rewrite this, don't stub it");
+    const realReadForm = new Function(rf[0] + " return readForm;")();
+    const from = pageHtml.indexOf('<form id="intake-form">');
+    const to = pageHtml.indexOf("</form>", from);
+    if (from < 0 || to < 0) throw new Error("#intake-form is gone from polish-intake.html");
+    const inputs = pageHtml.slice(from, to).match(/<input\b[^>]*>/g) || [];
+    const attr = (tag, k) => {
+      const i = tag.indexOf(" " + k + '="');
+      if (i < 0) return null;
+      const start = i + k.length + 3;
+      return tag.slice(start, tag.indexOf('"', start));
+    };
+    const elements = inputs.map((t) => ({ name: attr(t, "name") || "", type: attr(t, "type") || "text",
+      value: attr(t, "value") || "", checked: /\schecked\b/.test(t) }))
+      .filter((e) => e.name);
+    const el = (name) => elements.filter((e) => e.name === name)[0];
+    const specBox = el("spec_section");
+    if (!specBox) throw new Error("polish-intake.html has no spec_section input in #intake-form");
+    specBox.value = "033543-A";
+    elements.filter((e) => e.name === "audience").forEach((e) => { e.checked = e.value === "GC"; });
+    el("project_name").value = "Spec QA";
+    el("bid_date").value = "2026-10-12";
+
+    let syncs = 0;
+    const b = build({ blob: blob({ polish_estimate: null }),
+      readForm: () => realReadForm({ elements: elements }),
+      winExtra: { TWAudienceBox: { sync: () => { syncs++; } } } });
+    await b.api.boot();
+    const syncsAfterBoot = syncs;
+    b.api.save();
+    const saved = JSON.parse(JSON.stringify(b.store.blob));
+    // A second page over what was saved: the form is written back from it.
+    const again = build({ blob: saved, readForm: () => ({}) });
+    await again.api.boot();
+    // Blanking the box saves a blank: the draft does not hang on to the old spec.
+    specBox.value = "";
+    b.api.save();
+    out.gcSpec = {
+      savedSpec: saved.spec_section, savedAudience: saved.audience,
+      reopenedWith: again.rec.written.map((w) => w.values.spec_section)[0],
+      reopenedAudience: again.rec.written.map((w) => w.values.audience)[0],
+      blankSaved: b.store.blob.spec_section,
+      syncsAfterBoot: syncsAfterBoot,
+      formNames: elements.map((e) => e.name),
     };
   }
 

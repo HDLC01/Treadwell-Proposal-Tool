@@ -93,10 +93,19 @@ LEGACY_MTIME_FLOOR_S: dict[str, tuple[str, int]] = {
 # and test_gc_template_tokens.py re-walks them against the new ones). The words that changed: the
 # job header lines and the spec / finish / addenda lines carry tokens now, the spec line's date is
 # Kyle's 8/1/26, and Resinous reads "Decorative Flake (macro sizes: 1/4”+)".
+#
+# 2026-10-12: the spec line's trailing "(NO spec)" became a token, {{no_spec_note}}, so a typed spec
+# no longer prints beside it (annotate_templates.GC_SPAN_RULES). Same walk again: every block keeps its
+# id, kind, box and region, and the only words that moved are the spec line's own tail (the 2026-10-02
+# files, byte for byte, are in tests/fixtures/gc_predecessors_2026_10_02/ and test_gc_template_tokens.py
+# re-walks them against these). So edits stamped with the 2026-10-02 hashes replay too, and the
+# 2026-10-02 hashes are listed after the original predecessors. This is the chosen way over a fill-time
+# rule in proposal_writer: the editor and the document read ONE template, so a saved edit to any other
+# line is untouched and no second copy of the rule has to agree with the page.
 PREDECESSOR_VERSIONS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:00df2b19da129697", ("sha256:1718cfc8beccd7fc",)),
-    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:d6b9ceca38014714", ("sha256:efce3be0bb01b30b",)),
-    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:138dfc2c3113df3d", ("sha256:b6314baffaa0f725",)),
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:ace1152f5eb4aa4a", ("sha256:1718cfc8beccd7fc", "sha256:00df2b19da129697")),
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:cd88e044319f0cd1", ("sha256:efce3be0bb01b30b", "sha256:d6b9ceca38014714")),
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:7d5ab14a57209a41", ("sha256:b6314baffaa0f725", "sha256:138dfc2c3113df3d")),
 }
 
 # Relative template path -> (the content version the file has NOW, the LEGACY mtime floor its
@@ -105,9 +114,9 @@ PREDECESSOR_VERSIONS: dict[str, tuple[str, tuple[str, ...]]] = {
 # honoured on the same terms: only while the file still has the content the entry names. The floors
 # are the deleted LEGACY_MTIME_FLOOR_S values for these paths (origin/staging, 2026-10-01).
 PREDECESSOR_LEGACY_FLOOR_S: dict[str, tuple[str, int]] = {
-    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:00df2b19da129697", 1788900501),
-    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:d6b9ceca38014714", 1788900501),
-    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:138dfc2c3113df3d", 1783698162),
+    "GC/xx TREADWELL POLISH PROPOSAL - xx.docx": ("sha256:ace1152f5eb4aa4a", 1788900501),
+    "GC/xx TREADWELL RESINOUS PROPOSAL - xx.docx": ("sha256:cd88e044319f0cd1", 1788900501),
+    "GC/xx TREADWELL SEALER PROPOSAL - xx.docx": ("sha256:7d5ab14a57209a41", 1783698162),
 }
 
 # Hashing a template is ~1 ms, and /api/proposal-template needs the version before it can answer a

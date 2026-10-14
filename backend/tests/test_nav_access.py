@@ -250,6 +250,37 @@ def test_the_follow_ups_feed_really_is_a_single_caller_route():
         "%s also read /api/portal/followups, so the Follow-ups tab may no longer own it" % js)
 
 
+def test_denying_v2_estimates_takes_its_feed_and_leaves_the_shared_routes_open():
+    """The v2 Estimates board (BETA, 2026-10-13) reads /api/v2/pipeline, so the row owns it. Denying
+    the row refuses the page AND the data: a member who was kept off the page cannot read every v2
+    bid and its price by typing the URL. Everything the wider tool shares stays open."""
+    assert nav_access.TABS["/polish-estimates.html"]["api"] == ("/api/v2/pipeline",)
+    nav_access.save({"user": ["/polish-estimates.html"]}, "k@x.com")
+    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is True
+    assert nav_access.page_denied("user", "/polish-estimates.html") == "/polish-estimates.html"
+    # exact match: it claims this route and nothing near it
+    assert nav_access.is_api_denied("user", "/api/v2/pipeline/x") is False
+    assert nav_access.is_api_denied("user", "/api/v2/pipelines") is False
+    # a role the policy does not name keeps it, and so do the routes every other page shares
+    assert nav_access.is_api_denied("admin", "/api/v2/pipeline") is False
+    for shared in ("/api/drafts", "/api/portal/pipeline", "/api/library/items", "/api/estimators"):
+        assert nav_access.is_api_denied("user", shared) is False, shared
+    # and with the row left on, the feed answers
+    nav_access.save({"user": []}, "k@x.com")
+    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is False
+
+
+def test_the_v2_estimates_feed_really_is_a_single_caller_route():
+    """The measurement behind the entry, re-taken here because nothing else re-takes it. If a second
+    page ever reads /api/v2/pipeline, the prefix has to come out of TABS or that page goes blank for
+    a role somebody only meant to keep off the v2 board."""
+    callers = sorted(p.name for folder in (FRONTEND, FRONTEND / "js")
+                     for p in list(folder.glob("*.js")) + list(folder.glob("*.html"))
+                     if "/api/v2/pipeline" in p.read_text(encoding="utf-8"))
+    assert callers == ["v2-board.js"], (
+        "%s also read /api/v2/pipeline, so the v2 Estimates tab may no longer own it" % callers)
+
+
 # ── the shared prefixes are never gated ───────────────────────────────────────
 # Measured by grepping frontend/ for every /api/ string: each of these is read by more than one
 # sidebar tab, or by the wizard, which has no sidebar row. Gating any of them breaks a page nobody
@@ -292,10 +323,11 @@ def test_the_page_refusal_only_tabs_own_no_api():
     hides the tab and blocks the page and leaves the data reachable — and the Admin page says so on
     screen. If one of them ever gains a private route, this fails and the wording changes with it.
 
-    /polish-estimates.html JOINED THE LIST on 2026-09-10 and belongs here for the reason the list
-    exists: the Polish Estimate Database reads /api/drafts and nothing else, and that route is the
-    Proposals Database's own list. Claiming it would 403 a page nobody restricted, so the row buys
-    a page refusal and no data refusal — exactly the trade every other name here makes. The Admin
+    /polish-estimates.html JOINED THE LIST on 2026-09-10 and LEFT IT on 2026-10-13. It was here
+    because the Polish Estimate Database read /api/drafts and nothing else, and that route is the
+    Proposals Database's own list. The v2 Estimates board reads its own feed, /api/v2/pipeline,
+    which nothing else calls, so the row now owns it and denying the row is a real data refusal
+    (test_denying_v2_estimates_takes_its_feed_and_leaves_the_shared_routes_open below). The Admin
     page needs no edit alongside it: js/admin.js:167 derives the "hides the tab only" wording from
     the row's own empty `api` at render time rather than from a second copy of this list.
 
@@ -304,7 +336,7 @@ def test_the_page_refusal_only_tabs_own_no_api():
     page's wording for this row changes accordingly — see test_denying_the_board_takes_the_deposit_
     reveal_and_nothing_shared below for the data half of that claim."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/gc-projects.html", "/polish-intake.html", "/polish-estimates.html", "/projects.html",
+        "/gc-projects.html", "/polish-intake.html", "/projects.html",
         "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")

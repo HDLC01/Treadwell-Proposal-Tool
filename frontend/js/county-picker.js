@@ -45,8 +45,19 @@
   "use strict";
 
   var COUNTY_LIMIT = 12;               // rows offered at once; the estimator types, not scrolls
+  // Said under the box while the county on screen came from the job address (autoFill below).
+  var AUTO_NOTE = "Filled from the address. Change it if it's wrong.";
 
   function $(id) { return document.getElementById(id); }
+
+  /** "Johnson County", "johnson", " Sedgwick  County " -> "johnson", "sedgwick". Also drops a
+   *  " County" / " Parish" / " Borough" tail (never " city": Kansas City is a name), so one
+   *  comparison serves a name from the Census, one from Photon and one from the list. Case and
+   *  spacing never decide a match. */
+  function bareName(s) {
+    return String(s == null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase()
+      .replace(/ (county|parish|borough)$/, "");
+  }
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) {
@@ -87,9 +98,22 @@
     // The pick, held as the four DRAFT keys rather than as an API row: hydration reads exactly
     // these four off the draft, so what a reopened project shows is what a fresh pick would write.
     var pick = null;
+    // True only while the pick on screen was put there by autoFill() from the job address, and
+    // nobody has touched it since. A hand pick, a Clear, or a county read back off a saved draft
+    // all set it false, which is what makes "never overwrite the estimator's county" one flag
+    // rather than a rule scattered across the host pages. In memory on purpose: a reopened draft
+    // cannot tell a fill from a pick, so it treats its county as chosen and leaves it alone.
+    var autoPick = false;
+    // The city the address is in, while the fill on screen is a county FLOOR row for a city the list
+    // has no row for ("" otherwise): the note must say the city may charge more. See autoFill.
+    var autoGap = "";
+    // True after the estimator pressed Clear. An empty box they emptied on purpose is theirs as much
+    // as a county they picked: a later address edit must not fill it again. In memory, like autoPick.
+    var handCleared = false;
+    var loadPromise = null;
     var ksState = opts.ksState == null ? null : Number(opts.ksState);
 
-    async function load() {
+    async function loadList() {
       try {
         if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
         var res = await fetch(window.TW.resolveApiBase() + "/api/reference/counties",
@@ -111,6 +135,21 @@
       // re-said now that there is a number to say.
       renderNote();
       return counties;
+    }
+
+    /** Start the list fetch and remember it, so an auto-fill that fires before the list lands can
+     *  wait for it (whenLoaded) instead of finding no rows and giving up. */
+    function load() {
+      loadPromise = loadList();
+      return loadPromise;
+    }
+
+    /** Resolves once the list is here (or failed). Never rejects; resolves at once when load()
+     *  was never called, which leaves whatever the host injected through _counties(). */
+    function whenLoaded() {
+      return loadPromise ? loadPromise.then(function () { return counties; },
+                                            function () { return counties; })
+                         : Promise.resolve(counties);
     }
 
     /** The two-letter state out of "Johnson County, KS".
@@ -208,8 +247,14 @@
                county_notes: pick.county_notes };
     }
 
-    function choose(c) {
+    /** A pick made by a person: from a row, by click or keyboard. */
+    function choose(c) { handCleared = false; apply(c, false); }
+
+    /** `gap` (a fill only): the city the address is in when the list has no row for it. */
+    function apply(c, auto, gap) {
       if (!c || !c.name) return;
+      autoPick = !!auto;
+      autoGap = auto && gap ? String(gap) : "";
       pick = {
         // The live screen's shape (city "Overland Park, KS" or county "Johnson County, KS") — its
         // own restore path replays this label verbatim rather than parsing it back apart.
@@ -228,12 +273,30 @@
       onChange();                            // the host's own debounced save, which MERGES
     }
 
-    function clear() {
+    /** Take whatever is picked away. NOT a statement by the estimator: autoFill uses it to remove a fill
+     *  that belonged to an address they have left, and that must leave the box free to fill again. */
+    function reset() {
       pick = null;
+      autoPick = false;
+      autoGap = "";
       matches = [];
       close();                               // which now empties the box, pick being null
       renderNote();
       onChange();
+    }
+
+    /** The estimator's Clear. The box is theirs from here: an address edit does not fill it again. */
+    function clear() {
+      handCleared = true;
+      reset();
+    }
+
+    /** Remove a county the address filled, and ONLY that: a county picked or cleared by hand stays. For
+     *  the host to call when the address that justified the fill has gone. Returns whether it cleared. */
+    function clearFill() {
+      if (!(pick && autoPick)) return false;
+      reset();
+      return true;
     }
 
     /** The fallback rate, named only when it is actually known. Writing "6.5%" into this file
@@ -251,7 +314,7 @@
      *  Kyle's sheet expects a flat 10% on this line; naming the real rate, the county it came
      *  from, and the fallback when there is no county is what stops the difference reading as a
      *  bug. */
-    function noteText() {
+    function baseNote() {
       var on = !!remodelTaxOn();
       var ksRate = ksPhrase();
       if (!pick) {
@@ -286,6 +349,89 @@
         : " — but the Remodel tax toggle is off, so it is not affecting the price yet.");
     }
 
+    /** The sentence above, plus one more while the pick is a fill from the address and nobody has
+     *  touched it: the estimator has to be told this was not their own choice. */
+    function noteText() {
+      if (!(pick && autoPick)) return baseNote();
+      // A county row is the floor rate for land outside any city. When the address IS inside a city the
+      // list has no row for, that floor is what gets filled, and it can be too low: say so. Missouri
+      // labor is exempt, so there is no rate for a city to add to.
+      var gap = autoGap && stateOf(pick) !== "MO"
+        ? " " + autoGap + " is not on the list, so this is the county rate only. A city can charge its own tax on top."
+        : "";
+      return baseNote() + gap + " " + AUTO_NOTE;
+    }
+
+    /** Which row of the list a job address sits in, or null.
+     *
+     *  Two inputs, in this order. A CITY row first: when the Census (or Photon) names the city the
+     *  address is in AND the list has a verified row for that city in that state, the city row is
+     *  the right one, because a county row is only the floor rate for unincorporated land (see
+     *  rowLabel). A city row that names its own county must agree with the county found, so
+     *  Shawnee, KS (Johnson) is never filled for an address in Shawnee County. Then the COUNTY
+     *  row: name equal ignoring case, with or without " County", same state, kind "county".
+     *  Anything else is null: a county the list does not have is left empty, never approximated. */
+    function resolveArea(countyName, state, place) {
+      var st = String(state || "").trim().toUpperCase();
+      var cn = bareName(countyName);
+      var pl = bareName(place);
+      var i, c;
+      if (!st) return null;
+      if (pl) {
+        for (i = 0; i < counties.length; i++) {
+          c = counties[i];
+          if (c.kind !== "city" || c.state !== st || bareName(c.name) !== pl) continue;
+          if (cn && c.county && bareName(c.county) !== cn) continue;
+          return c;
+        }
+      }
+      if (!cn) return null;
+      for (i = 0; i < counties.length; i++) {
+        c = counties[i];
+        if (c.kind !== "city" && c.state === st && bareName(c.name) === cn) return c;
+      }
+      return null;
+    }
+
+    /** Fill the box from a job address's county (and city), when and only when that is safe.
+     *
+     *  Returns what happened, so the caller can tell the estimator or stay quiet:
+     *    "hand"    -- somebody picked (or a saved draft holds) a county, or pressed Clear. The box is
+     *                 theirs: NEVER overwritten.
+     *    "filled"  -- an empty box, or one this function filled earlier, now holds the match.
+     *    "same"    -- the box already holds exactly that fill; nothing was written or saved.
+     *    "none"    -- the list has no row for this place. An earlier FILL is cleared (it belonged
+     *                 to the old address), an empty box stays empty.
+     *    "pending" -- the list is not loaded, so there is nothing to match against yet.
+     *    "busy"    -- the estimator is typing in the county search box right now; their text stays.
+     *  "pending" and "busy" wrote nothing and may be tried again.
+     *  Saves through the host's own onChange, like a pick does. */
+    function autoFill(countyName, state, place) {
+      if ((pick && !autoPick) || handCleared) return "hand";
+      if (!counties.length) return "pending";
+      // The box shows the pick (close() keeps it so) or is empty; anything else is a search in progress,
+      // and filling now would overwrite half a word and close the list under their cursor.
+      var input = $("county-input");
+      if (input && String(input.value || "") !== (pick ? pick.county : "")) return "busy";
+      var row = resolveArea(countyName, state, place);
+      if (!row) {
+        if (pick && autoPick) reset();
+        return "none";
+      }
+      var placeName = String(place == null ? "" : place).replace(/\s+/g, " ").trim();
+      // A county row for an address inside a city: the city may add its own tax, unless the row itself
+      // says the county rate is the right one there (city_ok: Wichita levies none).
+      var verified = (row.city_ok || []).some(function (n) { return bareName(n) === bareName(placeName); });
+      var gap = row.kind !== "city" && !verified ? placeName : "";
+      if (pick && autoPick && pick.county === rowLabel(row)) {
+        // The same county again, but this answer may know the city and the last one did not.
+        if (autoGap !== gap) { autoGap = gap; renderNote(); }
+        return "same";
+      }
+      apply(row, true, gap);
+      return "filled";
+    }
+
     /** Text, not markup: every word of this is composed above, and the only variable in it is a
      *  county name from the server's own table. Nothing to escape and nothing to get wrong. */
     function renderNote() {
@@ -300,6 +446,9 @@
      *  twice and the second pick is the one that counts. */
     function hydrate(state) {
       state = state || {};
+      autoPick = false;                      // a saved county is treated as chosen, never refilled
+      autoGap = "";
+      handCleared = false;                   // a reopened draft cannot tell an empty box from a Clear
       pick = state.county
         ? { county: String(state.county),
             county_tax_rate: state.county_tax_rate == null ? null : state.county_tax_rate,
@@ -382,6 +531,11 @@
       rowLabel: rowLabel, rowRate: rowRate, filter: filter, stateOf: stateOf,
       renderResults: renderResults, paintHighlight: paintHighlight,
       hasPick: function () { return !!pick; },
+      autoFill: autoFill, resolveArea: resolveArea, whenLoaded: whenLoaded, clearFill: clearFill,
+      isAuto: function () { return !!pick && autoPick; },
+      // The box belongs to the estimator: a county they picked (or a saved draft holds), or one they
+      // emptied with Clear. The address autofill leaves it alone and does not even ask.
+      isTheirs: function () { return (!!pick && !autoPick) || handCleared; },
       // Read-only windows for a harness that needs to see what the control is holding, rather
       // than reaching into a closure it cannot.
       _matches: function () { return matches.slice(); },

@@ -1,8 +1,9 @@
-"""Travel Labor on a NEW bid prices once the job is far (walk 2026-10-06: "7.5 x 0 x $33 = $0").
+"""The distance answer fills NO drive hours on a bid (Hanz, 2026-10-12: "nights, days, guys and hours
+should have nothing when it starts").
 
-The 7.5 was Guys (the crew's man-days), the 0 was Hours (Polish B44 = Epoxy!B52, which Kyle's sheet
-leaves at 0, "Drive Time: ?"). The distance answer now fills the hours with a round trip at 60 mph
-to the half hour -- new bids only (the Travel row opts in with `hours_seed`). Runs the real engine.
+From 2026-10-06 the distance answer wrote a round trip at 60 mph into a new bid's Travel Labor hours
+(150 miles -> 5), after the walk that read "7.5 x 0 x $33 = $0". That is gone: the answer still decides
+local or far (the travel lines gray or come on), and the hours are typed. Runs the real engine.
 """
 import json
 import pathlib
@@ -24,13 +25,13 @@ def ran():
     return json.loads(p.stdout.strip().splitlines()[-1])
 
 
-def test_a_new_far_bid_prices_travel_labor(ran):
-    # 150 mi -> 5 h round trip; 16.5 man-days (3x5 + 3x0.5) x 5 h x $33 = $2,722.50, not $0.
-    assert ran["newAt150"] == {"hours": 5, "cost": 2722.5}
+def test_a_far_distance_turns_the_lines_on_but_fills_no_hours(ran):
+    """Mutation: put the seedTravelHours call back in applyDistance (hours become 5) and this goes red."""
+    assert ran["newAt150"] == {"hours": "", "local": False, "lodging": True, "perDiem": True}
+    assert ran["stillEmptyAt200"] == ""
 
 
-def test_the_hours_follow_the_distance_until_the_estimator_types_their_own(ran):
-    assert ran["followsDistance"] == 7
+def test_hours_the_estimator_typed_stay_theirs(ran):
     assert ran["typedStays"] == 3
 
 
@@ -39,5 +40,13 @@ def test_a_local_job_and_a_return_to_local_carry_no_hours(ran):
     assert ran["backToLocal"] == ""
 
 
-def test_a_saved_travel_row_is_never_filled(ran):
-    assert ran["saved"] == ""
+def test_a_bid_saved_with_distance_filled_hours_keeps_them(ran):
+    """5 hours saved with the old `hours_seed` marker: a new distance answer does not move it."""
+    assert ran["savedKeepsItsHours"] == 5
+
+
+def test_travel_labor_prices_nothing_until_the_hours_are_typed(ran):
+    # The harness gives Travel the crew's 16.5 man-days (3 x 5 + 3 x 0.5) as its guys: no hours is $0,
+    # and 5 typed hours is 16.5 x 5 x $33 = $2,722.50.
+    assert ran["costWithNoHours"] == 0
+    assert ran["costWithTypedHours"] == 2722.5

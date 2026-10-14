@@ -48,10 +48,23 @@ const src = read(path.join(ROOT, "js", "polish-estimate.js"));
 const pageHtml = read(path.join(ROOT, "polish-estimate.html"));
 const B = require(path.join(ROOT, "js", "bid-model.js"));
 const L = require(path.join(ROOT, "js", "library-core.js"));
+// The Epoxy tab's patch, cove and tooling (js/epoxy-takeoff.js): the page reads it as it parses.
+const EPOXY = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
+// The Gyp tabs' areas, bags, extras, sand and sound mat (js/gyp-takeoff.js): the page prices a Gyp section with it.
+const GYP = require(path.join(ROOT, "js", "gyp-takeoff.js"));
+// The Seal tabs' patch, tooling and starting takeoff (js/seal-takeoff.js). A scratch copy that lacks the file (a
+// mutation run built from an older list) simply has no Seal pricing, which the page says rather than guesses.
+const SEAL_FILE = path.join(ROOT, "js", "seal-takeoff.js");
+const SEAL = fs.existsSync(SEAL_FILE) ? require(SEAL_FILE) : undefined;
 // The one vocabulary (js/work-types.js): the page builds its Takeoff cards off it as it parses.
 const W = require(path.join(ROOT, "js", "work-types.js"));
 // The one search pop-up both Add buttons open: the REAL module, mounted on this file's stub DOM.
 const PICKER = require(path.join(ROOT, "js", "library-picker.js"));
+// The base-pick rule for the lines typed on the Proposal step (js/price-lines-core.js): the page reads it as it parses. A scratch
+// copy that lacks the file (a mutation run built from an older list of files) simply changes the base without moving those lines,
+// which is what the page does when the script fails to load.
+const PRICE_FILE = path.join(ROOT, "js", "price-lines-core.js");
+const PRICE = fs.existsSync(PRICE_FILE) ? require(PRICE_FILE) : undefined;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -77,7 +90,9 @@ const EXPORTS = `
     init: init, adopt: adopt, go: go, changed: changed, saveSoon: saveSoon,
     assemblyByName: assemblyByName, setAssembly: setAssembly,
     itemByName: itemByName, setPick: setPick, rowKind: rowKind,
-    rowPrice: rowPrice, materialTotal: materialTotal, bid: bid,
+    rowPrice: rowPrice, materialTotal: materialTotal, bid: bid, activeBid: activeBid,
+    addPickedTakeoffRow: addPickedTakeoffRow, show: show, sectionBids: sectionBids,
+    addOption: addOption, removeOptionPress: removeOptionPress, paintOptionBar: paintOptionBar, jobIsReno: jobIsReno,
     condLine: condLine, conditionLibrary: conditionLibrary,
     moneyAuto: moneyAuto, measureText: measureText, asmHint: asmHint,
     repaintNumbers: repaintNumbers, renderPanel: renderPanel, stepStatus: stepStatus,
@@ -165,8 +180,11 @@ function makeDom(log) {
         set(v) { _class = String(v); self.classWrites += 1; },
       },
     });
+    // A browser hands back an attribute DECODED (value="a&quot;b" reads as a"b). The stub kept the raw text, so a Gyp sheet's id,
+    // which has a quote mark in it (Gyp (USG 1-8")), came back as Gyp (USG 1-8&quot;) and no test could press its row. The selector
+    // matcher (matchesSel) still compares the raw text, so a selector spells that quote as &quot; as it always had to.
     self.getAttribute = (k) =>
-      (Object.prototype.hasOwnProperty.call(self.attrs, k) ? self.attrs[k] : null);
+      (Object.prototype.hasOwnProperty.call(self.attrs, k) ? dec(self.attrs[k]) : null);
     self.setAttribute = (k, v) => { self.attrs[k] = String(v); };
     self.matches = (sel) => matchesSel(self, sel);
     // Self-match only: every delegated handler on this page is fired at the button or field it
@@ -410,6 +428,9 @@ function build(opts) {
     withDraft: (p) => p + (p.indexOf("?") >= 0 ? "&" : "?") + "d=" + store.id,
     getDraftId: () => store.id,
     draftReady: Promise.resolve(),
+    // shared.js's drag-and-remember helper (its own harness, panel-restore-harness.js, runs the real one). Here it only records
+    // what the page asked for, so "the Sheets panel floats under its own key" is a fact read off the page.
+    floatPanel: (panel, floatOpts) => { (rec.floats = rec.floats || []).push({ id: panel && panel.attrs && panel.attrs.id, opts: clone(floatOpts) }); },
     authHeaders: (hs) => Object.assign({}, hs || {}),
     resolveApiBase: () => "",
     // The pagehide flush calls this after pushing the pending save through synchronously --
@@ -435,7 +456,9 @@ function build(opts) {
 
   const winListeners = [];
   const win = {
-    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWPolishSandbox: S, TWLibraryPicker: PICKER,
+    TWBidModel: B, TWWorkTypes: W, TWLib: L, TWEpoxyTakeoff: EPOXY, TWGypTakeoff: GYP, TWSealTakeoff: SEAL, TWPolishSandbox: S, TWLibraryPicker: PICKER,
+    // The base-pick rule the Sheets panel applies to the lines typed on the Proposal step: the REAL module.
+    TWPrice: PRICE,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
     location: { href: "https://x/polish-estimate.html?d=proj-1" },
@@ -770,14 +793,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const before = v.api.model().takeoff[2].unit;                       // "SF"
     v.api.setAssembly(2, "Cove Base");                                  // an LF assembly
     const afterPick = { unit: v.api.model().takeoff[2].unit,
-                        select: need(v, 'select[data-tk="2"][data-k="unit"]').value };
-    // The estimator overrides it by hand, through the page's own change handler.
-    const sel = need(v, 'select[data-tk="2"][data-k="unit"]');
-    sel.value = "SF";
-    v.doc.fire("change", { target: sel });
+                        select: txt(v, '[data-unit-for="2"]') };
+    // The unit is read-only (it comes from Items & Assemblies), so there is no control to override
+    // it with. A SAVED row is the case that differs from the library: set it straight on the model,
+    // the way a saved bid arrives, and re-type the SAME assembly. The pick has not changed, so the
+    // unit must not be re-stamped back to the library's.
+    v.api.model().takeoff[2].unit = "SF";
     const afterHand = v.api.model().takeoff[2].unit;
-    // …and re-types the SAME assembly. The pick has not changed, so the unit must not be
-    // re-stamped back to the library's.
     v.api.setAssembly(2, "Cove Base");
     out.unit = {
       before: before,
@@ -852,7 +874,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
         // The pick still took effect, which is what the rebuild was there for.
         idNow: (c.api.model().takeoff[0] || {}).assembly_id,
         expectedId: ASMS[1].id,
-        unitSyncedInPlace: need(c, 'select[data-tk="0"][data-k="unit"]').value,
+        unitSyncedInPlace: txt(c, '[data-unit-for="0"]'),
         expectedUnit: ASMS[1].unit,
         hintNow: txt(c, '[data-asmhint-for="0"]'),
       };
@@ -992,30 +1014,24 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const midBackspace = { guys: travelRow().guys, auto: travelRow().guys_auto };
       typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "2");
       const afterRetype = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      // CLEARING THE BOX LEAVES IT EMPTY (2026-10-12): it no longer hands the figure back to the
+      // man-days. A real clear is an input event (the box goes empty) and then a change event.
+      typeInto(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "");
       const writesBefore = cp.htmlWrites;
       changeTo(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]', "   ");
       const clearRebuilds = cp.htmlWrites - writesBefore;
-      const afterBackToAuto = { guys: travelRow().guys, auto: travelRow().guys_auto };
-      const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value);
-      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent
-        === "Man-days from the tasks above.";
-      const costAuto = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
-      // And the cost is the one the same man-days price on a never-touched row.
-      const fresh = build();
-      await fresh.api.init();
-      fresh.api.go(1);
-      typeInto(fresh, '[data-lab="0"][data-k="days"]', "9");
-      const freshIdx = fresh.api.model().labor.findIndex((r) => r.id === "travel");
-      typeInto(fresh, '[data-lab="' + freshIdx + '"][data-k="days"]', "10");
-      const costFresh = txt(fresh, '[data-lcost-for="' + freshIdx + '"]');
-      // Typing "2" over the man-days priced differently from the man-days.
+      const afterClear = { guys: travelRow().guys, auto: travelRow().guys_auto };
+      const clearedBox = String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value).trim();
+      const clearedHint = need(c, '[data-hint-lab="' + travelIdx() + '"]').textContent;
+      const costCleared = txt(c, '[data-lcost-for="' + travelIdx() + '"]');
       out.travelClear = { costTyped: costTyped, midBackspace: midBackspace,
-        afterRetype: afterRetype, costAuto: costAuto, costFresh: costFresh,
-        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds };
+        afterRetype: afterRetype, costCleared: costCleared,
+        clearedBox: clearedBox, clearedHint: clearedHint, clearRebuilds: clearRebuilds,
+        manDaysNow: B.travelManDays(c.api.model().labor) };
       out.travelGuys = {
         seeded: before, afterCrewEdit: afterCrewEdit,
         afterTyping: afterTyping, stickyAfterCrewMoves: stickyAfterCrewMoves,
-        afterBackToAuto: afterBackToAuto,
+        afterClear: afterClear,
         // The box shows the derived figure rather than sitting empty next to a priced row.
         boxShowsIt: String(need(c, '[data-lab="' + travelIdx() + '"][data-k="guys"]').value),
       };
@@ -1027,7 +1043,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // cells and the totals, and nothing repainted the derived INPUT. The model was right the whole
     // time, which is exactly why every existing test passed.
     {
-      const f = build({ blob: blob({ polish_estimate: null, polish_sf: 9000 }) });
+      // A bid SAVED on auto (a new bid no longer starts there, 2026-10-12): Polishing's days still
+      // blank, Mock-up's half a day, so the man-days are 1.5 until days go into Polishing.
+      const f = build({ blob: blob({ polish_sf: 9000, polish_estimate: {
+        version: 2, takeoff: clone(MODEL.takeoff),
+        labor: [
+          { id: "polishing", label: "Polishing", guys: 3, days: "", rate: 33 },
+          { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+          { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: true },
+        ],
+        conditions: clone(MODEL.conditions), contingency: 0, totals: {} } }) });
       await f.api.init();
       f.api.go(1);
       const ti = () => f.api.model().labor.findIndex((r) => r.id === "travel");
@@ -1167,7 +1192,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
       sv.api.go(1);
       const svH = sv.dom.get("panels").innerHTML;
       out.savedTypedRow = {
-        typedHint: svH.indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1,
+        // Typed, not auto: the hint names the man-days of the (here empty) crew as text.
+        typedHint: svH.indexOf("Man-days from the tasks above: 0.") !== -1,
         guys: sv.api.model().labor[0].guys, auto: sv.api.model().labor[0].guys_auto,
         box: String(need(sv, '[data-lab="0"][data-k="guys"]').value),
         cost: txt(sv, '[data-lcost-for="0"]'),
@@ -1952,6 +1978,21 @@ const rendered = [];      // every string the page put on screen, for the Labour
       polish_sf: 5000 }) });
     await inLine.api.init();
     out.migration.savesWhenInLine = lastSave(inLine) ? 1 : 0;
+    // THE PRICE SNAPSHOT. Intake's SF boxes edit a measured takeoff and polish_sf together, so the two agree
+    // while computed_bid still holds the SF it was priced on. Reopening must reprice and save it once; a
+    // snapshot already on this floor writes nothing.
+    const snapModel = (sf) => ({ version: 2,
+      takeoff: [{ assembly_id: "", assembly_name: "", measurement: sf, unit: "SF" }],
+      labor: [], conditions: {}, contingency: 0, fees: 0, totals: { total: 111111 } });
+    const staleSnap = build({ blob: blob({ polish_estimate: snapModel(50000), polish_sf: 50000,
+      computed_bid: { lump_sum: 111111, polish_sf: 12500 } }) });
+    await staleSnap.api.init();
+    const sSnap = lastSave(staleSnap);
+    out.migration.staleSnapshot = sSnap && { sf: sSnap.polish_sf, bidSf: sSnap.computed_bid.polish_sf };
+    const freshSnap = build({ blob: blob({ polish_estimate: snapModel(50000), polish_sf: 50000,
+      computed_bid: { lump_sum: 111111, polish_sf: 50000 } }) });
+    await freshSnap.api.init();
+    out.migration.savesWhenSnapshotInLine = lastSave(freshSnap) ? 1 : 0;
     // The helper's own guard, which init's !takeoffSf check hides: an LF-only measurement is still
     // a measurement, so neither intake number may be seeded beside it.
     const lfRows = [{ assembly_id: "", assembly_name: "", measurement: 900, unit: "LF" }];
@@ -1981,7 +2022,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const lm = loaded.api.model();
     out.defaultsLoad = { rows: shape(lm), area: B.takeoffSf(lm.takeoff),
       i1Price: loaded.api.rowPrice(lm.takeoff[2]).total,
-      i1Expected: L.priceLine({ item_id: "i1" }, dItems, 10000).cost,
+      // THE ROW'S SHARE OF ONE PURCHASE. OPF (i1) is bought by four rows of this takeoff: the Polish assembly's OPF
+      // line and the OPF row, once in each area (8,000 and 2,000 SF). The section buys it once: 20,000 SF at 333 SF
+      // a gallon with 5% waste, up to whole gallons, and this row (8,000 of the 20,000) pays its share of that.
+      i1Expected: (() => {
+        const need = [8000, 2000, 8000, 2000].reduce((t, sf) => t + sf / 333 * 1.05, 0);
+        return Math.ceil(parseFloat(need.toPrecision(12))) * 85.3827 * (8000 / 20000);
+      })(),
       i1CoverageBox: lm.takeoff[2].coverage,
       offPrice: B.takeoffSf([lm.takeoff[3]]) };
     loaded.clock.fire();
@@ -2510,7 +2557,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     };
 
     // A MATERIAL ROW and an ASSEMBLY ROW, as a loaded default would arrive: the row carries NO
-    // coverage of its own, so the box must show the LIBRARY's figure (275, 775) and price with it.
+    // coverage of its own. The material's box shows the LIBRARY's figure (275); the ASSEMBLY row has
+    // no coverage boxes at all (Hanz, 2026-10-12) and prices every line at the library's figure.
     {
       const model = clone(MODEL);
       model.takeoff = [
@@ -2523,12 +2571,26 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const html = () => b.dom.get("panels").innerHTML;
       const matBox = () => (/data-tk="0" data-k="coverage" value="([^"]*)" placeholder="([^"]*)"/
         .exec(html()) || []).slice(1);
-      const asmBoxes = () => (html().match(/data-asmcov="1" data-line="\d+" value="[^"]*" placeholder="[^"]*"/g)
-        || []);
+      const asmBoxes = () => (html().match(/data-asmcov=/g) || []).length;
+      // The card's own markup, cut out of the panel's HTML (the stub only nests what was set on an
+      // element itself, so a freshly built panel cannot be queried card by card).
+      const cardHtml = (bb, i) => {
+        const h = bb.dom.get("panels").innerHTML;
+        const a = h.indexOf('data-row-card="' + i + '"');
+        // up to the next card of any kind (rows and condition cards all open `<div class="tk"` or `tk `)
+        const rest = h.slice(a + 1);
+        const m = /<div class="tk[ "]/.exec(rest);
+        return h.slice(a, m ? a + 1 + m.index : h.length);
+      };
+      // What the card is made of: its labels, and the keyed boxes inside it.
+      const labelsOf = (bb, i) => Array.from(cardHtml(bb, i).matchAll(/<label[^>]*>([^<]*)<\/label>/g), (m) => m[1]);
+      const boxKeysOf = (bb, i) => (cardHtml(bb, i).match(/data-tk="\d+" data-k="\w+"/g) || [])
+        .map((x) => /data-k="(\w+)"/.exec(x)[1]);
       const cost = (i) => txt(b, '[data-cost-for="' + i + '"]');
       const first = { matBox: matBox(), matHint: txt(b, '[data-covhint-for="0"]'),
-                      asmBoxes: asmBoxes(), asmHint0: txt(b, '[data-asmcovhint="1:0"]'),
-                      asmHint1: txt(b, '[data-asmcovhint="1:1"]'),
+                      asmBoxes: asmBoxes(), asmLabels: labelsOf(b, 1), asmKeys: boxKeysOf(b, 1),
+                      asmNote: !!b.doc.querySelector("[data-asmcov-note]"),
+                      matLabels: labelsOf(b, 0),
                       matCost: cost(0), asmCost: cost(1) };
       // The expected money, from library-core against the SAME library with the figure swapped.
       const swap = (id, cov) => ITEMS.map((it) => it.id === id ? Object.assign({}, it, { coverage: cov }) : it);
@@ -2537,24 +2599,80 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const matTyped = { cost: cost(0), hint: txt(b, '[data-covhint-for="0"]'),
                          warn: warn(b, '[data-covwarn-for="0"]'),
                          expected: L.priceLine({ item_id: "i1" }, swap("i1", 300), 5500).cost };
-      typeInto(b, '[data-asmcov="1"][data-line="0"]', "300");
-      const asmTyped = { cost: cost(1), hint0: txt(b, '[data-asmcovhint="1:0"]'),
-                         warn0: warn(b, '[data-asmcovwarn="1:0"]'),
-                         warn1: warn(b, '[data-asmcovwarn="1:1"]'),
-                         hint1: txt(b, '[data-asmcovhint="1:1"]'),
-                         expected: asmWith(swap("i1", 300)),
-                         libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage,
-                         line_cov: clone(b.api.model().takeoff[1].line_cov),
-                         matTotal: b.api.materialTotal() };
       typeInto(b, '[data-tk="0"][data-k="coverage"]', "275");
       const matBackToLib = { hint: txt(b, '[data-covhint-for="0"]'),
                              warn: warn(b, '[data-covwarn-for="0"]') };
-      // Switching the row to a different assembly drops the old lines' coverage.
+      // A row SAVED with coverage typed on its lines still prices with it (that figure priced a bid
+      // that may have gone out), draws no boxes for it, and says so with one way back.
+      const saved = clone(MODEL);
+      saved.takeoff = [
+        { kind: "item", item_id: "i1", item_name: "OPF", coverage: "", measurement: 5500, unit: "SF" },
+        { assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 12500, unit: "SF",
+          line_cov: { 0: "300" } },
+      ];
+      const sb = build({ blob: blob({ polish_estimate: saved }) });
+      await sb.api.init();
+      sb.api.go(0);
+      const savedBefore = { cost: txt(sb, '[data-cost-for="1"]'), boxes: (sb.dom.get("panels").innerHTML.match(/data-asmcov=/g) || []).length,
+                            labels: labelsOf(sb, 1), keys: boxKeysOf(sb, 1),
+                            note: ((/data-asmcov-note="1"><p class="hint">([^<]*)<\/p>/.exec(cardHtml(sb, 1))) || [])[1] || null,
+                            resetLabel: ((/data-asmcov-reset="1">([^<]*)</.exec(cardHtml(sb, 1))) || [])[1] || null,
+                            line_cov: clone(sb.api.model().takeoff[1].line_cov),
+                            materialRowHasReset: /data-asmcov-reset="0"/.test(cardHtml(sb, 0)),
+                            matTotal: sb.api.materialTotal() };
+      // Nothing removes it by itself: retyping the measurement keeps it.
+      typeInto(sb, '[data-tk="1"][data-k="measurement"]', "12500");
+      const afterEdit = { line_cov: clone(sb.api.model().takeoff[1].line_cov), note: /data-asmcov-note=/.test(cardHtml(sb, 1)) };
+      // (absent on a page that still draws boxes: report that, rather than crash every test)
+      // Which boxes the page asked to focus while the click ran: the button is gone after it, so
+      // focus must land on Measurement and not fall to <body>.
+      const focused = [];
+      const realQs = sb.doc.querySelector;
+      sb.doc.querySelector = (sel) => {
+        const el = realQs(sel);
+        if (el) el.focus = () => { focused.push(sel); };
+        return el;
+      };
+      if (sb.doc.querySelector("[data-asmcov-reset]")) clickOn(sb, "[data-asmcov-reset]");
+      sb.doc.querySelector = realQs;
+      // the card element itself: reset redraws that one card in place, not the panel
+      const liveCard = sb.doc.querySelector('[data-row-card="1"]').innerHTML;
+      const savedAfter = { focused: focused, cost: txt(sb, '[data-cost-for="1"]'), line_cov: sb.api.model().takeoff[1].line_cov === undefined,
+                           note: /data-asmcov-note=/.test(liveCard), noteWas: /data-asmcov-note=/.test(cardHtml(sb, 1)),
+                           labels: Array.from(liveCard.matchAll(/<label[^>]*>([^<]*)<\/label>/g), (m) => m[1]), matTotal: sb.api.materialTotal(),
+                           libraryUntouched: ITEMS.find((i) => i.id === "i1").coverage };
+
+      // A line_cov holding no positive figure prices like none, so there is no note about it.
+      const blanks = clone(saved);
+      blanks.takeoff[1].line_cov = { 0: "", 1: "0" };
+      const bb = build({ blob: blob({ polish_estimate: blanks }) });
+      await bb.api.init();
+      bb.api.go(0);
+      const blankRow = { note: !!bb.doc.querySelector("[data-asmcov-note]"), cost: txt(bb, '[data-cost-for="1"]') };
+
+      // A figure keyed to a line the assembly does not have prices nothing, so it earns no note.
+      const stale = clone(saved);
+      stale.takeoff[1].line_cov = { 7: "300" };
+      const stb = build({ blob: blob({ polish_estimate: stale }) });
+      await stb.api.init();
+      stb.api.go(0);
+      const staleRow = { note: !!stb.doc.querySelector("[data-asmcov-note]"), cost: txt(stb, '[data-cost-for="1"]') };
+
+      // Switching a saved row to a different assembly drops the old lines' coverage and its note.
+      const sw = build({ blob: blob({ polish_estimate: clone(saved) }) });
+      await sw.api.init();
+      sw.api.go(0);
+      typeInto(sw, '[data-tk="1"][data-k="pick"]', "Cove Base");
+      const swCard = sw.doc.querySelector('[data-row-card="1"]').innerHTML;
+      const switched = { line_cov: sw.api.model().takeoff[1].line_cov === undefined,
+                         note: /data-asmcov-note=/.test(swCard),
+                         boxes: (swCard.match(/data-asmcov=/g) || []).length };
       typeInto(b, '[data-tk="1"][data-k="pick"]', "Cove Base");
-      const switched = { line_cov: b.api.model().takeoff[1].line_cov === undefined,
-                         boxes: b.doc.querySelector('[data-row-card="1"]').querySelectorAll('[data-asmcov]').length };
+      const asmSwitched = { boxes: (b.doc.querySelector('[data-row-card="1"]').innerHTML.match(/data-asmcov=/g) || []).length };
+      const asmTyped = { savedBefore: savedBefore, afterEdit: afterEdit, savedAfter: savedAfter,
+                         blankRow: blankRow, staleRow: staleRow, expectedSaved: asmWith(swap("i1", 300)) };
       out.rowCoverage = { first: first, matTyped: matTyped, asmTyped: asmTyped,
-                          matBackToLib: matBackToLib, switched: switched,
+                          matBackToLib: matBackToLib, switched: switched, asmSwitched: asmSwitched,
                           expectedFirstAsm: asmWith(ITEMS),
                           expectedFirstMat: L.priceLine({ item_id: "i1" }, ITEMS, 5500).cost };
     }
@@ -2899,6 +3017,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
           .filter((r) => r.id === "lab-night").map((r) => r.guys),
         travelGuys: brandNew.api.model().labor
           .filter((r) => r.id === "travel").map((r) => r.guys),
+        // guys_auto on the two lines that used to be filled from the man-days (Travel, and the
+        // library's hours default that carries guys_auto): both false on a new bid.
+        autoFlags: brandNew.api.model().labor
+          .filter((r) => r.id === "travel" || r.id === "lab-night").map((r) => r.guys_auto),
         // A default must not quietly put money on the bid.
         laborTotal: B.laborTotal(brandNew.api.model().labor),
         builtInTotal: B.laborTotal(B.freshModel().labor),
@@ -3343,8 +3465,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const typedLodging = clone(old.api.model().travel.lodging);
     const typedBid = old.api.bid();
     const typedCostCell = txt(old, '[data-trvcost-for="lodging"]');
-    // And back to auto by CLEARING the box (the "Type my own" switch is gone). An empty box on
-    // input stays typed; the change commits it.
+    // CLEARING the box leaves it EMPTY and typed (2026-10-12: it used to hand the figure back to
+    // the man-days). The line then prices $0 until somebody types a number again.
     typeInto(old, '[data-trv="lodging"][data-k="qty"]', "");
     const midClearLodging = clone(old.api.model().travel.lodging);
     const lodgeWrites = old.dom.get("panels").htmlWrites;
@@ -3355,14 +3477,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const clearedLodgingCost = txt(old, '[data-trvcost-for="lodging"]');
     const lodgingHtml = old.dom.get("panels").innerHTML;
     const lodgingHints = {
-      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above.",
+      // Typed (the box was cleared, which is not auto): the hint names the man-days as TEXT.
+      auto: need(old, '[data-hint-trv="lodging"]').textContent === "Man-days from the tasks above: 16.5.",
       noTypeMyOwn: lodgingHtml.indexOf("Type my own") === -1 &&
         lodgingHtml.indexOf("data-trv-manual") === -1 && lodgingHtml.indexOf("data-trv-auto") === -1,
     };
     typeInto(old, '[data-trv="lodging"][data-k="qty"]', "10");
     const typedHintLodging = old.dom.get("panels").innerHTML
-      .indexOf("Typed by you. Clear it to use the man-days from the tasks above.") !== -1;
-    changeTo(old, '[data-trv="lodging"][data-k="qty"]', "");
+      .indexOf("Man-days from the tasks above: 16.5.") !== -1;
+    // The nights the sheet would count, typed in by hand: the same $1,155 the old auto line priced.
+    typeInto(old, '[data-trv="lodging"][data-k="qty"]', "16.5");
 
     // Per Diem ON as well, rate typed over.
     clickOn(old, '[data-on-trv="per_diem"]');
@@ -3440,6 +3564,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       both: hotelShape(hotelBoth), renamed: hotelShape(hotelRenamed),
       oldTitleAnywhere: [hotelOff, hotelOne, hotelBoth].some((r) => r.html.indexOf("Lodging and Per Diem") !== -1),
     };
+
+    // THE REVIEW CARDS, as the real renderer drew them with both travel lines on, plus the bid
+    // the same render priced. The python side parses the html; the figures come from here.
+    out.reviewCards = { html: hotelBoth.html, bid: hotelBoth.bid };
 
     out.travelCosts = {
       // layout
@@ -3539,6 +3667,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const unkSnap = snap(unk);
     typeInto(unk, "[data-dist-miles]", "85");
     const typed85 = snap(unk);
+    // Per Diem's days are the estimator's to type now (a new bid opens them empty): 3 days.
+    typeInto(unk, '[data-trv="per_diem"][data-k="qty"]', "3");
     // A hand flip on Lodging, then the miles move around: the line the estimator flipped stays.
     clickOn(unk, '[data-on-trv="lodging"]');                 // on -> OFF, by hand
     typeInto(unk, "[data-dist-miles]", "20");
@@ -3602,7 +3732,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // TYPED NIGHTS on a far job, and a repaint after the miles move (the note must follow).
     const nights = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
     await nights.api.init(); nights.api.go(1); await settle();
+    // Straight after the lookup nothing is typed: every quantity is empty and the distance filled no hours.
     const nightsAuto = snap(nights);
+    nightsAuto.travelRow = clone(nights.api.model().labor.find((r) => r.id === "travel"));
+    nightsAuto.travelBoxes = {
+      guys: need(nights, '[data-lab="' + nights.api.model().labor.findIndex((r) => r.id === "travel") + '"][data-k="guys"]').value,
+      hours: need(nights, '[data-lab="' + nights.api.model().labor.findIndex((r) => r.id === "travel") + '"][data-k="days"]').value,
+      nights: need(nights, '[data-trv="lodging"][data-k="qty"]').value,
+      days: need(nights, '[data-trv="per_diem"][data-k="qty"]').value,
+    };
+    // Every quantity typed by hand: Travel Labor 2 guys x 5 hours, 10 nights, 8 days of meals.
+    const nTi = nights.api.model().labor.findIndex((r) => r.id === "travel");
+    typeInto(nights, '[data-lab="' + nTi + '"][data-k="guys"]', "2");
+    typeInto(nights, '[data-lab="' + nTi + '"][data-k="days"]', "5");
+    typeInto(nights, '[data-trv="per_diem"][data-k="qty"]', "8");
     typeInto(nights, '[data-trv="lodging"][data-k="qty"]', "10");
     const nightsTyped = snap(nights);
     // Miles typed over the looked-up figure: 150 -> 20, in place.
@@ -3612,6 +3755,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // in-place repaint can move the man-days and dollars in the note.
     const nights2 = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
     await nights2.api.init(); nights2.api.go(1); await settle();
+    // The quantities are typed (nothing follows the man-days now); the crew is 3 guys, so the
+    // man-days the note quotes are 3 x days.
+    typeInto(nights2, '[data-lab="0"][data-k="guys"]', "3");
+    typeInto(nights2, '[data-lab="0"][data-k="days"]', "2");
+    typeInto(nights2, '[data-trv="lodging"][data-k="qty"]', "4");
+    typeInto(nights2, '[data-trv="per_diem"][data-k="qty"]', "4");
     const daysBefore = snap(nights2);
     typeInto(nights2, '[data-lab="0"][data-k="days"]', "20");
     const daysAfter = snap(nights2);
@@ -3669,6 +3818,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const over = warn(nb, pi + ":days");
     typeInto(nb, '[data-lab="' + pi + '"][data-k="days"]', "5");
     const back = warn(nb, pi + ":days");
+    // The crew is typed by hand now (a new bid's Guys opens empty): 3 guys x 5 days x $40 x 10 hours.
+    typeInto(nb, '[data-lab="' + pi + '"][data-k="guys"]', "3");
+    const typedCost = B.laborCost(rowOf(nb, "polishing"));
+    const guysWarn = warn(nb, pi + ":guys");
     // hours a day 10 -> 8 reprices and warns
     const hsel = need(nb, '[data-lab="' + pi + '"][data-k="hours_per_day"]');
     hsel.value = "8";
@@ -3771,6 +3924,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       travelWarn: travelWarn,
       followed: followed,
       first: first, over: over, back: back, hrs: hrs, mockRateBefore: mockRateBefore,
+      typedCost: typedCost, guysWarn: guysWarn,
       mockRateAfter: mockRateAfter,
       saved: { polishing: clone(rowOf(sv, "polishing")), asked: sv.rec.fetches.some((u) => /labor-calc/.test(u)) },
       noSf: noSfRow, noSfWarn: noSfWarn,
@@ -3885,10 +4039,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const p = build({ blob: nb, asms: FAV_ASMS, items: FAV_ITEMS, labor: PLABOR, laborCalc: PCALC,
                       markupRules: PRULES, conditionDefaults: PCONDS });
     await p.api.init();
-    // Travel's hours, typed by the estimator (it is the one default whose quantity is theirs).
+    // EVERY quantity is the estimator's to type (a new bid opens them all empty, 2026-10-12), so a
+    // switch has money to move: the crew's guys and days (the calculator's figures, typed by hand),
+    // Travel's 2 guys x 2 hours, 4 nights of Lodging and 4 days of Per Diem.
     p.api.go(1);
     const ti = p.api.model().labor.findIndex((r) => r.id === "travel");
-    typeInto(p, '[data-lab="' + ti + '"][data-k="days"]', "2");
+    const typeCrew = (id, guys, days) => {
+      const i = p.api.model().labor.findIndex((r) => r.id === id);
+      typeInto(p, '[data-lab="' + i + '"][data-k="guys"]', guys);
+      typeInto(p, '[data-lab="' + i + '"][data-k="days"]', days);
+    };
+    typeCrew("polishing", "3", "5"); typeCrew("mockup", "3", "1"); typeCrew("jointfill", "3", "2");
+    typeCrew("c1", "2", "3"); typeCrew("travel", "2", "2");
+    typeInto(p, '[data-trv="lodging"][data-k="qty"]', "4");
+    typeInto(p, '[data-trv="per_diem"][data-k="qty"]', "4");
     const M0 = () => p.api.model();
     const asmIdx = M0().takeoff.findIndex((r) => r.assembly_id === "a1");
     const itemIdx = M0().takeoff.findIndex((r) => r.item_id === "i4");
@@ -3917,9 +4081,10 @@ const rendered = [];      // every string the page put on screen, for the Labour
       material += extraMaterial(m);
       return B.markupChain({
         material: material, labor: B.laborTotal(m.labor, m.conditions),
-        travel: B.travelCosts(m.travel, m.labor).total,
+        travel: B.travelCosts(m.travel, m.labor, B.travelOpts(m, "Polish")).total,
+        tooling: B.rootTooling(m),
         contingency: m.contingency, fees: m.fees, conditions: m.conditions,
-        sf: B.takeoffSf(m.takeoff), remodel_rate: null }).total;
+        sf: B.takeoffSf(m.takeoff), remodel_rate: null }, B.rootProfile(m).stamp).total;
     };
     const total = () => p.api.bid().total;
     const switchOn = (sel) => { const e = p.doc.querySelector(sel); return e ? e.getAttribute("aria-checked") : null; };
@@ -4138,6 +4303,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     d.api.go(1);
     const pi = idx(d, "polishing");
     const rateSel = '[data-lab="' + pi + '"][data-k="rate"]';
+    // The 4 guys the calculator used to fill are typed by hand now (a new bid's Guys opens empty).
+    const guysOnOpen = rowOf(d, "polishing").guys;
+    typeInto(d, '[data-lab="' + pi + '"][data-k="guys"]', "4");
     typeInto(d, '[data-lab="' + pi + '"][data-k="days"]', "5");
     const priced = B.laborCost(rowOf(d, "polishing"));
     const cardBefore = d.doc.querySelector('[data-lab-card="' + pi + '"]');
@@ -4155,7 +4323,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     changeTo(d, rateSel, "");
     const off = clone(rowOf(d, "polishing"));
     off.rate = ""; off.enabled = false;
-    out.ls1Blank = { priced: priced, whileEmpty: whileEmpty, afterChange: afterChange, zero: zero,
+    out.ls1Blank = { guysOnOpen: guysOnOpen, priced: priced, whileEmpty: whileEmpty, afterChange: afterChange, zero: zero,
                      offCost: B.laborCost(off), unstampedBlank: B.laborCost({ guys: 3, days: 5, rate: "" }),
                      stampedBlank: B.laborCost({ guys: 3, days: 5, rate: "", rate_default: 33 }),
                      calcBlank: B.laborCost({ guys: 3, days: 5, rate: "", calc_default: { rate: 50 }, rate_default: 33 }),
@@ -4378,6 +4546,63 @@ const rendered = [];      // every string the page put on screen, for the Labour
     pressAdd(dp);
     pop.dupName = dp.api.model().takeoff.slice(dBefore).map((r) => ({ id: r.assembly_id, unit: r.unit }));
 
+    // N15. THE PRICE ON EVERY ROW (Hanz, 2026-10-12). Each row names what it costs, in words, from
+    // data the page already holds: a material per what it is bought in, an assembly per SF or LF
+    // through the library's own priceAssembly, a labor line at its own rate or the company's.
+    const pricesOf = (b) => {
+      const keys = keysOf(b);
+      const costs = popup(b).querySelectorAll("span")
+        .filter((e) => /(^| )bulk-cost( |$)/.test(e.className)).map((e) => e.textContent);
+      const m = {};
+      keys.forEach((k, i) => { m[k] = costs[i]; });
+      return { map: m, rows: keys.length, costs: costs.length };
+    };
+    const noteOf = (b) => {
+      const el = popup(b).querySelector('[data-pk-el="oneoff-note"]');
+      return el ? el.textContent : null;
+    };
+    const priced = build({ items: clone(ITEMS).concat([
+      { id: "i9", name: "Unpriced Thing", unit: "Pail", buy_qty: 1, unit_cost: null, coverage: 100 },
+      { id: "i10", name: "Zero Thing", unit: "Pail", buy_qty: 1, unit_cost: 0, coverage: 100 }]) });
+    await priced.api.init();
+    priced.api.go(0);
+    clickOn(priced, "[data-add-row]");
+    const tp = pricesOf(priced);
+    const refArea = L.REFERENCE_AREA;
+    const perSf = (id) => L.money(L.priceAssembly(ASMS.filter((a) => a.id === id)[0], ITEMS,
+                                                  refArea).per_unit);
+    pop.takeoffPrices = {
+      rows: tp.rows, costs: tp.costs, prices: tp.map,
+      expectA1: perSf("a1") + " per SF", expectA2: perSf("a2") + " per LF",
+      noRawTag: Object.keys(tp.map).every((k) => tp.map[k] !== "Assembly" && tp.map[k] !== "Material") };
+    esc(priced);
+
+    // Labor: own rate, no rate (company rate), and a company rate that is not $33.
+    const LIB2 = LIB.concat([{ id: "L4", name: "Zero rate", rate: 0, unit: "days",
+                               default_work_types: [], sort: 6 }]);
+    const lp = build({ labor: LIB2, markupRules: [{ id: "mk1", layout: "global", line_key: "labor_rate",
+                                                    formula: "40", applies: true }] });
+    await lp.api.init();
+    lp.api.go(1);
+    await openLaborPopup(lp);
+    const lpp = pricesOf(lp);
+    pop.laborPrices = { rows: lpp.rows, costs: lpp.costs, prices: lpp.map,
+                        note: noteOf(lp) };
+    tick(lp, "lab:L1"); pressAdd(lp);
+    await openLaborPopup(lp);
+    const lockedHtml = popup(lp).querySelector('[data-pk-el="list"]').innerHTML;
+    const lockedRow = lockedHtml.slice(lockedHtml.indexOf('data-pk="lab:L1"'));
+    const lockedEnd = lockedRow.indexOf("</label>");
+    pop.laborLockedPrice = { row: lockedRow.slice(0, lockedEnd) };
+    esc(lp);
+    // the same pop-up on the default company rate
+    const lq = build({ labor: LIB });
+    await lq.api.init();
+    lq.api.go(1);
+    await openLaborPopup(lq);
+    pop.laborDefaultNote = noteOf(lq);
+    esc(lq);
+
     out.addPopup = pop;
   }
 
@@ -4439,6 +4664,112 @@ const rendered = [];      // every string the page put on screen, for the Labour
     typeInto(c, '[data-lab="0"][data-k="rate"]', "41");
     rows.rebuilds = c.dom.get("panels").htmlWrites - writes;
     out.costBoxRepaint = rows;
+  }
+
+  // ── R. EVERY QUANTITY STARTS EMPTY; ONLY THE RATES ARE FILLED (Hanz, 2026-10-12) ──────────────────
+  // "Whatever the default values are for the rate that should be it; nights, days, guys and hours
+  // should have nothing when it starts." EXECUTED THROUGH THE PAGE'S OWN INIT, with a library that
+  // would have filled every box before: a calculator that gives each crew line guys and days, a
+  // library Travel that asks for guys_auto, an hours default that does too, and a distance answer
+  // that used to write the drive hours. A saved bid on auto is the other half: it opens unchanged.
+  {
+    const settleQ = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
+    const crewQ = (id, name, sort) => ({ id: id, name: name, rate: 33, unit: "days", guys_auto: false,
+      favorite: true, default_work_types: ["polish"], sort: sort, notes: "" });
+    const LIBQ = [
+      { id: "travel", name: "Travel", rate: 36, unit: "hours", guys_auto: true, favorite: true,
+        default_work_types: [], sort: -1, notes: "" },
+      crewQ("polishing", "Polishing", 1), crewQ("mockup", "Mock-up", 2), crewQ("jointfill", "Joint filler", 3),
+      { id: "lab-night", name: "Night shift", rate: 12.5, unit: "hours", guys_auto: true, favorite: true,
+        default_work_types: [], sort: 4, notes: "" },
+      { id: "lab-saw", name: "Saw cutting", rate: 45, unit: "days", guys_auto: false, favorite: false,
+        default_work_types: [], sort: 5, notes: "" },
+    ];
+    const CALCQ = [
+      { line_id: "polishing", mode: "fixed", guys: 3, days: 5, hours_per_day: 8, rate: null },
+      { line_id: "mockup", mode: "fixed", guys: 3, days: 0.5, hours_per_day: 8, rate: 50 },
+      { line_id: "jointfill", mode: "sf", crew: 3, sf_per_day: 2500, hours_per_day: 8, rate: null }];
+    const RULESQ = [
+      { id: "q1", layout: "global", line_key: "labor_rate", formula: "40", applies: true },
+      { id: "q2", layout: "global", line_key: "travel_lodging", formula: "80", applies: true },
+      { id: "q3", layout: "global", line_key: "travel_per_diem", formula: "50", applies: true }];
+    const ADDR = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
+    const nbQ = blob(Object.assign({ polish_estimate: null, polish_sf: 12000 }, ADDR));
+    const q = build({ blob: nbQ, labor: LIBQ, laborCalc: CALCQ, markupRules: RULESQ,
+                      distance: { ok: true, miles: 150, reason: "" } });
+    await q.api.init(); q.api.go(1); await settleQ();
+    const boxOf = (built, sel) => String(need(built, sel).value);
+    const qm = q.api.model();
+    const cards = qm.labor.map((r, i) => ({
+      id: r.id, auto: !!r.guys_auto,
+      guys: boxOf(q, '[data-lab="' + i + '"][data-k="guys"]'),
+      days: boxOf(q, '[data-lab="' + i + '"][data-k="days"]'),
+      rate: boxOf(q, '[data-lab="' + i + '"][data-k="rate"]'),
+      cost: B.laborCost(r) }));
+    const travelBoxes = { lodging: boxOf(q, '[data-trv="lodging"][data-k="qty"]'),
+      per_diem: boxOf(q, '[data-trv="per_diem"][data-k="qty"]'),
+      lodgingRate: boxOf(q, '[data-trv="lodging"][data-k="rate"]'),
+      perDiemRate: boxOf(q, '[data-trv="per_diem"][data-k="rate"]') };
+    const openState = { lodgingOn: qm.travel.lodging.enabled, perDiemOn: qm.travel.per_diem.enabled,
+      lodgingAuto: qm.travel.lodging.qty_auto, perDiemAuto: qm.travel.per_diem.qty_auto,
+      local: qm.conditions.local, bid: q.api.bid().travel, labor: B.laborTotal(qm.labor) };
+    // Lodging is on (150 miles), nights empty: $0. Type 2 nights: 2 x $80.
+    const nightsEmpty = { cost: txt(q, '[data-trvcost-for="lodging"]'), travel: q.api.bid().travel };
+    typeInto(q, '[data-trv="lodging"][data-k="qty"]', "2");
+    const nightsTwo = { cost: txt(q, '[data-trvcost-for="lodging"]'), travel: q.api.bid().travel,
+      expected: 2 * 80, box: boxOf(q, '[data-trv="lodging"][data-k="qty"]') };
+    // The crew is typed, and the typed crew moves NOTHING in Lodging, Per Diem or Travel's Guys
+    // (they no longer follow the man-days). The hint names the man-days as text.
+    typeInto(q, '[data-lab="0"][data-k="guys"]', "3");
+    typeInto(q, '[data-lab="0"][data-k="days"]', "5");
+    const tIdxQ = q.api.model().labor.findIndex((r) => r.id === "travel");
+    const afterCrew = { nights: q.api.model().travel.lodging.qty,
+      perDiemBox: boxOf(q, '[data-trv="per_diem"][data-k="qty"]'),
+      travelGuys: q.api.model().labor[tIdxQ].guys,
+      travelGuysBox: boxOf(q, '[data-lab="' + tIdxQ + '"][data-k="guys"]'),
+      hint: need(q, '[data-hint-trv="lodging"]').textContent };
+
+    // A SAVED bid on auto opens unchanged: its nights follow the man-days as they always did.
+    const SAVEDQ = { version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
+              { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+              { id: "travel", label: "Travel Labor", guys: "", days: 5, rate: 33, unit: "hours", guys_auto: true }],
+      conditions: Object.assign(clone(MODEL.conditions), { local: false }),
+      travel: { lodging: { label: "Lodging", enabled: true, qty: 16.5, qty_auto: true, rate: 70 },
+                per_diem: { label: "Per Diem", enabled: true, qty: 16.5, qty_auto: true, rate: 45 } },
+      contingency: 0, fees: 0, totals: {} };
+    const svq = build({ blob: blob({ polish_estimate: clone(SAVEDQ) }), labor: LIBQ, laborCalc: CALCQ, markupRules: RULESQ });
+    await svq.api.init(); svq.api.go(1);
+    const svm = svq.api.model();
+    const tIdx = svm.labor.findIndex((r) => r.id === "travel");
+    const savedAuto = { nights: svm.travel.lodging.qty, auto: svm.travel.lodging.qty_auto,
+      perDiem: svm.travel.per_diem.qty, nightsBox: boxOf(svq, '[data-trv="lodging"][data-k="qty"]'),
+      guys: svm.labor[tIdx].guys, guysAuto: svm.labor[tIdx].guys_auto,
+      guysBox: boxOf(svq, '[data-lab="' + tIdx + '"][data-k="guys"]'),
+      hours: svm.labor[tIdx].days, travel: svq.api.bid().travel,
+      expectedTravel: B.travelCosts(SAVEDQ.travel, SAVEDQ.labor).total,
+      hint: need(svq, '[data-hint-trv="lodging"]').textContent,
+      fetched: svq.rec.fetches.some((u) => /\/labor/.test(u)) };
+    // ...and typing over it leaves auto, exactly as before.
+    typeInto(svq, '[data-trv="lodging"][data-k="qty"]', "3");
+    savedAuto.afterTyping = { auto: svq.api.model().travel.lodging.qty_auto, qty: svq.api.model().travel.lodging.qty };
+
+    // A line ADDED FROM THE POP-UP: empty Guys and Days, the line's own rate.
+    await openLaborPopup(q);
+    tick(q, "lab:lab-saw");
+    pressAdd(q);
+    const addedIdx = q.api.model().labor.length - 1;
+    const added = q.api.model().labor[addedIdx];
+    const addedLine = { id: added.id, guys: added.guys, days: added.days, rate: added.rate, auto: !!added.guys_auto,
+      guysBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="guys"]'),
+      daysBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="days"]'),
+      rateBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="rate"]') };
+    // The library's hours default that asks for guys_auto, added from the pop-up, is empty too.
+    const viaLib = B.laborRowFromLibrary(LIBQ[4], 40);
+    out.qtyEmpty = { cards: cards, travelBoxes: travelBoxes, openState: openState, nightsEmpty: nightsEmpty,
+      nightsTwo: nightsTwo, afterCrew: afterCrew, savedAuto: savedAuto, addedLine: addedLine,
+      viaLib: { guys: viaLib.guys, days: viaLib.days, auto: viaLib.guys_auto, rate: viaLib.rate },
+      travelRow: clone(q.api.model().labor[tIdxQ]) };
   }
 
   console.log(JSON.stringify(out));

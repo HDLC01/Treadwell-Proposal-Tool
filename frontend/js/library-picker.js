@@ -19,7 +19,9 @@
 //   key    a string that is unique within the list (the caller decides, e.g. "asm:" + id)
 //   name   what the row is called; search matches it and `sub`
 //   sub    the small line under the name
-//   tag    the small label at the right ("Assembly", "Material", a rate)
+//   tag    the line's price in plain words at the right ("$2.41 per SF", "$33.00 an hour", or
+//          "No price set"); the caller builds it from data the page already holds. A row that is
+//          `on` shows it too, with the "On this bid" tag beside it (2026-10-12)
 //   first  true lists the row above the rest (a labor line meant for this bid's work type)
 //   on     true shows the row ticked and locked ("already on this bid")
 (function (root, factory) {
@@ -94,7 +96,9 @@
         (locked ? " disabled checked" : (isOn ? " checked" : "")) + ">" +
       '<span class="bulk-box"></span>' +
       '<span class="bulk-nm"><b>' + esc(e.name) + "</b><span>" + esc(e.sub) + "</span></span>" +
-      (locked ? '<span class="bulk-in">' + esc(e.onText || "Already added") + "</span>"
+      (locked ? '<span class="bulk-side">' +
+                  (e.tag ? '<span class="bulk-cost">' + esc(e.tag) + "</span>" : "") +
+                  '<span class="bulk-in">' + esc(e.onText || "Already added") + "</span></span>"
               : '<span class="bulk-cost">' + esc(e.tag) + "</span>") +
       "</label>";
   }
@@ -106,7 +110,8 @@
    *    opener                        the button that opened it; it gets the focus back on close
    *    onClose()                     called once when it is gone, however it went
    *    onAdd(pickedEntries)          called once with the ticked rows when Add is pressed
-   *    oneOff { label, placeholder, button, onAdd(name) }   optional "type your own" entry
+   *    oneOff { label, placeholder, button, note, onAdd(name) }   optional "type your own" entry;
+   *                                  `note` is a small line under it (where a typed line starts)
    *  Returns { close, element }. Closing never calls onAdd. */
   function open(doc, cfg) {
     cfg = cfg || {};
@@ -141,7 +146,9 @@
               esc(cfg.oneOff.placeholder || "Name this line") + '" aria-label="' +
               esc(cfg.oneOff.label || "One-off line") + '" autocomplete="off" />' +
             '<button class="btn ghost" type="button" data-pk-oneoff="1" disabled>' +
-              esc(cfg.oneOff.button || "Add line") + "</button></div>"
+              esc(cfg.oneOff.button || "Add line") + "</button>" +
+            (cfg.oneOff.note ? '<p class="bulk-oneoff-note" data-pk-el="oneoff-note">' +
+              esc(cfg.oneOff.note) + "</p>" : "") + "</div>"
           : "") +
         '<div class="bulk-foot">' +
           '<span class="bulk-count" data-pk-el="count"></span>' +

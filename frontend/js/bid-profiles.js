@@ -691,6 +691,17 @@
         bondInput: false, travelFromLodging: false
       }
     },
+    "polish-rev2": {
+      rev: 1, layout: "polish", extends: "polish-legacy",
+      label: "Polish for new bids: tooling, slurry and plastic in the sub-total, the sheet's remodel tax base, nights from labor hours",
+      // THREE OF THE FIVE DEPARTURES CLOSED, for bids made after Phase 17 and for no other (Hanz, 2026-10-07: saved
+      // bids keep their totals). The tooling line is back in the sub-total (D55 into D64), the remodel tax is taken
+      // on the sheet's base (D75 counts tooling and travel), and the lodging nights are worked out the sheet's way, from
+      // labor dollars over the labor rate over 8 hours, by bid-model's sheetNights (the chain reads the same divisor).
+      // The other two stay as they are on purpose: no hard bid (2026-09-22) and no bond input (it ships at 0), and the
+      // Kansas floor for a remodel job with no rate typed is the tool's own choice (2026-08-18), not the sheet's 10%.
+      quirks: { toolingInSubTotal: true, remodelBase: "sheet" }
+    },
     "seal": {
       rev: 1, layout: "seal", extends: "polish",
       label: "Seal and Seal (+Jnts): Polish with a sixth gross profit rung",
@@ -729,20 +740,23 @@
   };
 
   // THE TABS. Which profile prices each of the eleven priced tabs, and the one thing that differs between
-  // tabs of a profile: a Gyp tab's truckload, in sound-mat rolls (Gyp (USG 1-8")!H36 and its copies). The
+  // tabs of a profile: a Gyp tab's truckload, in sound-mat rolls (Gyp (USG 1-8")!H36 and its copies), and its `label`,
+  // what the proposal calls the system (the tab's own A1: B16 and C16 of the sheet; the two Seal tabs have no such
+  // cell, so theirs are the words the live estimate screen has always given an option, and the joints one says so,
+  // because both can be on one proposal). The
   // oracle's `fixed.truckload` holds the same numbers, and backend/tests/test_bid_engine.py holds the two.
   var TAB_PROFILES = {
     "Epoxy": { profile: "epoxy" },
     "Polish": { profile: "polish" },
-    "Seal": { profile: "seal" },
-    "Seal (+Jnts)": { profile: "seal" },
+    "Seal": { profile: "seal", label: "Sealed Concrete" },
+    "Seal (+Jnts)": { profile: "seal", label: "Sealed Concrete with Joint Filler" },
     "Epoxy blank": { profile: "epoxy-blank" },
     "Leveling": { profile: "leveling" },
-    "Gyp (USG 1-8\")": { profile: "gyp", truckload: 280 },
-    "Gyp (USG N12ULTRA)": { profile: "gyp", truckload: 260 },
-    "Gyp (USG N25 1-4\")": { profile: "gyp", truckload: 208 },
-    "Gyp (GWorx SC190)": { profile: "gyp", truckload: 384 },
-    "Gyp (FR)": { profile: "gyp", truckload: 448 }
+    "Gyp (USG 1-8\")": { profile: "gyp", truckload: 280, label: 'N12 1/8" + 3/4" Gyp' },
+    "Gyp (USG N12ULTRA)": { profile: "gyp", truckload: 260, label: "N12 ULTRA + 3/4\" Gyp" },
+    "Gyp (USG N25 1-4\")": { profile: "gyp", truckload: 208, label: 'N25 1/4" + 1" Gyp' },
+    "Gyp (GWorx SC190)": { profile: "gyp", truckload: 384, label: "G-Worx SC 190 + 3/4\" Gyp" },
+    "Gyp (FR)": { profile: "gyp", truckload: 448, label: "Treadstone FR25 + R1 mat" }
   };
 
   /** What the Markups page shows as the built-in for each layout and for Global, as { layout: { line:

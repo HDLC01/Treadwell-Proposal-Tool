@@ -1723,3 +1723,65 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   .addr-row:hover { background: rgba(192,57,43,.18); }
   .addr-l1 { font-weight: 600; }
   .addr-l2 { font-size: 12px; color: var(--ink-variant, #9aa0a6); }
+
+/* ── The floating options panel ────────────────────────────────────────────
+   Moved here from proposal-review.html's own <style>, rule for rule, so a second page can use it:
+   the Pricing options rail on step 3 and the v2 estimate's Sheets panel are both `.options-panel`
+   and both move with TW.floatPanel (shared.js). Kept at the END of this file on purpose -- on the
+   proposal page these rules used to come after everything here, and still do.
+
+   A RIGHT-side rail; the LEFT side holds the "Proposal fields" rail (#fields-panel, above). */
+.options-panel {
+  position: fixed; right: 16px; top: 150px; width: 240px;
+  max-height: calc(100vh - 170px); overflow-y: auto;
+  background: #fff; border: 1px solid #ccc; border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+  z-index: 40; font-size: 13px; color: #222;
+}
+/* Draggable header — the panel is a FLOATING, MOVABLE widget. Starts below the
+   top ribbon (top:150px) so it never covers the Back / TAX / Generate controls;
+   the estimator can then drag it anywhere. Position persists in localStorage. */
+.options-panel .op-drag {
+  cursor: move; user-select: none; font-size: 12px; font-weight: 700; color: #c8102e;
+  margin: -12px -14px 8px; padding: 7px 14px; border-bottom: 1px solid #eee;
+  border-radius: 8px 8px 0 0; background: #faf7f7; display: flex; align-items: center; gap: 6px;
+  position: sticky; top: -12px;
+}
+.options-panel .op-drag::before { content: "\2630"; font-size: 12px; opacity: .7; }  /* ☰ grip */
+.options-panel.op-dragging { opacity: .93; box-shadow: 0 6px 20px rgba(0,0,0,.28); }
+.options-panel h3 { margin: 0 0 2px; font-size: 13px; color: #c8102e; }
+.options-panel .op-hint { margin: 0 0 8px; font-size: 11px; color: #777; }
+/* Same amber as the estimate strip's .bb-inert — an option configured into thin air is a
+   mistake to correct, so it must not read as one more grey hint. */
+.options-panel .pr-inert-warn { display: block; margin: 2px 0 4px; font-weight: 600;
+  color: #7a5c00; background: #fdf6e3; border: 1px solid #e8d9a8;
+  border-radius: 6px; padding: 4px 7px; }
+.options-panel .op-row { border-top: 1px solid #eee; padding: 8px 0; }
+.options-panel .op-name { font-weight: 700; margin-bottom: 4px; }
+.options-panel .op-price { font-weight: 400; color: #777; }
+.options-panel label { display: block; margin: 3px 0; cursor: pointer; }
+.options-panel .op-notes { margin-top: 4px; font-size: 11px; color: #777; cursor: default; }
+.options-panel textarea.room-notes, .options-panel textarea.room-desc { width: 100%; font-size: 12px; }
+.options-panel .op-desc .op-hint { display: block; margin: 2px 0 0; }
+.options-panel select { width: 100%; font-size: 12px; margin-top: 2px; padding: 3px 4px; }
+.options-panel .pr-baserow { display: block; font-weight: 700; margin: 8px 0 2px; cursor: pointer; }
+/* A v2 estimate picks the base, so this page draws the base radios disabled and says where to pick it. */
+.options-panel .pr-baserow input.pr-base:disabled { cursor: not-allowed; }
+.options-panel .pr-base-locked { color: #444; }
+.options-panel .pr-base-locked a { color: #c8102e; font-weight: 600; }
+.options-panel .pr-optsub { margin: 2px 0 0 18px; padding-left: 8px; border-left: 2px solid #eee; }
+.options-panel .pr-addsys-btn { margin-top: 10px; border: 1px dashed #c8102e; background: transparent;
+  color: #c8102e; font: inherit; font-weight: 600; cursor: pointer; padding: 5px 9px; border-radius: 6px; width: 100%; }
+.options-panel .pr-addsys-btn:hover { background: rgba(200,16,46,.06); }
+/* Below ~1400px the page is too narrow for both floating rails — drop them
+   inline above the document (matches #fields-panel's own breakpoint). */
+@media (max-width: 1400px) {
+  .options-panel {
+    /* Bounded even when inline. `max-height: none` on a normal-flow panel between the ribbon
+       and the canvas is the one thing that can still outgrow the column: a long options list
+       made the body taller than the viewport, the page scrolled, and the ribbon went with it.
+       It scrolls itself now. */
+    position: static; width: auto; max-height: 40vh; overflow-y: auto;
+    margin: 12px 16px 0; box-shadow: none;
+  }
+}

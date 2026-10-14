@@ -25,6 +25,18 @@ argument and the new rule: a split draft (`split`, the fourth argument of `condi
 moved: all of `chain/*`, and every `cond/cells/*` and `cond/fromCells/*` that was already there bar the one
 above, answer as before (2,228 - 1 + 1 + 19 = 2,247).
 
+The v2 quantities-start-empty change (2026-10-12) re-cut it on 632355a and FOUR vectors moved, all of them
+new-bid seeding and none of them a price: `calc/apply/{all,noSf,nullEntries,numericIds}` (applyLaborCalc fills
+the rate and the hours a day and no longer the guys, the days or the From-SF follow marker). Every `chain/*`,
+`model/*`, `travel/*` and `labor/*` vector, the saved-bid arithmetic, and `libraryLaborRow` (still one faithful
+mapping of the library row) is as before.
+
+Phase 15 (the Seal option) re-cut it on 90be530 and 59 vectors moved, all of them the workbook cells a save writes
+and none of them a price: the constant `const/CONDITION_CELLS` (Local also writes `Seal!B4`, Renovation also
+writes `Seal!B10`) and the 35 `cond/cells/*` and 23 `cond/library/*` vectors, each of which gains exactly those
+two keys and nothing else (checked key by key when it was recut). Every `chain/*` vector, `model/*`, `newbid/*`
+and `seed/*` among them, is as before.
+
 Phases 4 to 10 move this code: the model module is renamed, ROUNDUP and the number helpers move to a
 leaf module, rates and the GP ladder become profile data, the chain becomes an engine. Each must
 leave this file's comparison green, or change it on purpose, in view, as a diff of lines somebody
@@ -305,11 +317,11 @@ MUTATIONS = {
         "for (var k = 1; k < rows.length; k++) {",
         ["seed/setMeasurement/sameFloorAbove", ".after[0][0].measurement: golden 12000, now 10000"]),
     "a plain row holding the same number is dragged along": (
-        "o && o.same_floor && num(o.measurement) === num(old)",
+        "o && o.same_floor && followerTag(o) === tag && num(o.measurement) === num(old)",
         "o && (o.same_floor || num(o.measurement) === num(old))",
         ["seed/setMeasurement/plainRowsSameNumber", ".after[0][1].measurement: golden 10000, now 12000"]),
     "a same-floor row holding another number is dragged anyway": (
-        "o.same_floor && num(o.measurement) === num(old)",
+        "o.same_floor && followerTag(o) === tag && num(o.measurement) === num(old)",
         "o.same_floor",
         ["seed/setMeasurement/sameFloorHoldsOther", ".after[0][2].measurement: golden 7500, now 12000"]),
     "rows are compared as text, not as numbers": (

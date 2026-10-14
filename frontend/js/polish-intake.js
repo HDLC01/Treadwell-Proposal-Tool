@@ -419,47 +419,52 @@
     saveTimer = setTimeout(function () { saveTimer = null; save(); }, 600);
   }
 
-  /** Has the step-2 takeoff been measured? Then it, not intake, owns the SF.
+  /** Has any section of the bid been measured, so that a quantity box mirrors its takeoff? Then the takeoff,
+   *  not the box, is where that figure lives.
    *
-   *  Asked of a MODEL, so save() can ask it of the freshest saved one and paintSfLock() of the one
-   *  this page holds. B.takeoffSf counts SF rows only, which is the number polish_sf is the total
-   *  of: a takeoff of linear-foot rows alone has no SF to disagree about, so it does not lock.
+   *  Asked of a MODEL, so save() can ask it of the freshest saved one. Which section owns which box is
+   *  B.boxValue's business (one mapping, work-types.js fieldHome): the Polish boxes belong to the Polish
+   *  section, System 1 and 2 and the cove boxes to the Epoxy section, the three gypsum boxes to the Gyp
+   *  section. A section counts once it holds a measured SF row, on or off (F5: switching the only SF row
+   *  OFF must not hand the figure back to the box), and a takeoff of linear-foot rows alone has no SF to
+   *  disagree about, so it does not.
    *
-   *  WHY THE GUARANTEE IS IN save() AND NOT IN THE DOM. TW.readForm (shared.js) walks
-   *  form.elements and takes every input that has a `name` -- readonly AND disabled included. So a
-   *  locked box that kept its name would still hand its value to the spread below and overwrite
-   *  polish_sf (the takeoff TOTAL) with whatever the box happened to show. Readonly is the cue for
-   *  the estimator; stripping the two keys in save() is what actually keeps the number safe.
-   *  Pinned by polish-intake-harness.js against the REAL readForm lifted out of shared.js. */
-  function sfLocked(model) {
-    // MEASURED, NOT PRICED (F5): switching the only SF row OFF must not unlock these boxes and let
-    // a stale figure overwrite polish_sf. B.measuredSf ignores the on/off slider; see its note.
-    return !!model && B.measuredSf(model.takeoff) > 0;
+   *  The boxes are NEVER read-only (Hanz, 2026-10-12). What keeps the two places from disagreeing is
+   *  save(): while a box is mirrored, its value reaches the draft only through the takeoff (patchModel's
+   *  `boxes`), and only for a box the estimator actually typed in. A box that was merely painted, or
+   *  painted from a takeoff another tab has since changed, writes nothing. TW.readForm (shared.js) takes
+   *  every NAMED input, so the guard has to be the keys save() drops, not anything about the DOM. */
+  function sfMeasured(model) {
+    return !!model && B.boxNames().some(function (name) { return B.boxValue(model, name) !== null; });
   }
 
-  /** Paint the SF boxes for the current model: editable and seeded from the draft, or locked
-   *  read-only with the takeoff total and a line saying where to change it. */
-  function paintSfLock() {
-    var locked = sfLocked(M);
-    // By NAME, because the boxes are drawn by js/intake-scope.js, which gives a field its name and no id.
-    var one = form ? form.querySelector('[name="polish_sf"]') : null;
-    var two = form ? form.querySelector('[name="polish_2_sf"]') : null;
-    var note = $("sf-locked-note");
-    [one, two].forEach(function (el) { if (el) el.readOnly = locked; });
-    if (locked) {
-      var total = B.measuredSf(M.takeoff);
-      // The total sits in System 1 and System 2 is blank: the takeoff may have any number of SF
-      // rows by now, and two boxes cannot show them. The note says so.
-      if (one) one.value = total;
-      if (two) two.value = "";
-      if (note) {
-        note.textContent = "Measured on the takeoff (step 2): " + B.fmtSf(total) +
-          " SF in total. Change it there — these boxes are locked so the two can never disagree.";
-        note.hidden = false;
+  /** Paint the quantity boxes from the takeoff. Always editable. A box whose section has nothing measured
+   *  keeps what the draft holds and seeds the takeoff on step 2. Once its section is measured, System 1
+   *  shows the FIRST measured SF row of that section and System 2 the SECOND (blank when there is none),
+   *  the cove boxes the first and second measured length, and each gypsum box its own area; typing in one
+   *  changes that row (System 2 adds the row when there is none). A third area and beyond is not reachable
+   *  from two boxes, so a plain line says how many there are and a link goes to the Takeoff. */
+  function paintSfBoxes() {
+    B.boxNames().forEach(function (name) {
+      // By NAME, because the boxes are drawn by js/intake-scope.js, which gives a field its name and no id.
+      var box = form ? form.querySelector('[name="' + name + '"]') : null;
+      var shown = M ? B.boxValue(M, name) : null;
+      if (box && shown !== null) box.value = shown;
+    });
+    var note = $("sf-areas-note");
+    var row = $("sf-takeoff-row");
+    var link = $("sf-takeoff-link");
+    var extra = M ? B.boxExtras(M)[0] : null;
+    var more = !!extra;
+    if (note) {
+      if (more) {
+        note.textContent = "The takeoff has " + extra.areas + " measured areas, " +
+          B.fmtSf(extra.total) + " SF in total. Areas 3 and on are changed on the Takeoff.";
       }
-    } else if (note) {
-      note.hidden = true;
+      note.hidden = !more;
     }
+    if (row) row.hidden = !more;
+    if (link && more) link.href = TW.withDraft("/polish-estimate.html");
   }
 
   function save() {
@@ -491,17 +496,50 @@
     // brand-new project used to persist four crew rows nobody had been shown. That made the Labor
     // step's own defaults unreachable (B.laborUnstated is the gate they are seeded behind), so
     // patchModel takes the key back off -- ONLY when what is already saved never stated it.
-    var model = B.patchModel(cur.polish_estimate, {
-      conditions: M.conditions,
-      conditions_shown: M.conditions_shown
+    //
+    // THE ONE NARROW WAY THE BOXES REACH THE TAKEOFF (Hanz, 2026-10-12: the boxes stay editable once the takeoff
+    // is measured; 2026-10-13: for EVERY section, not the Polish one alone). Once a section is measured, a figure
+    // the estimator TYPED into one of its boxes goes to the row that box mirrors, as `boxes`; which section owns
+    // which box is B.boxValue's business, not this page's. "Typed" is a mark the input listener in wire() puts
+    // on the box: a box merely PAINTED, or painted from a takeoff another tab has since changed, is stale and
+    // writes nothing. A blank or zero is not a figure and writes nothing either, so clearing a box never
+    // deletes a row. The takeoff is read off the saved model (as patchModel reads it), never off the DOM.
+    var patch = { conditions: M.conditions, conditions_shown: M.conditions_shown };
+    var boxOf = function (name) { return form ? form.querySelector('[name="' + name + '"]') : null; };
+    var typedOf = function (name) {
+      var box = boxOf(name), v = B.num(values[name]);
+      return box && box.sfTyped && v > 0 ? [name, v] : null;
+    };
+    var typedBoxes = Object.fromEntries(B.boxNames().map(typedOf).filter(Boolean));
+    patch.boxes = typedBoxes;
+    // A MARK IS GOOD FOR ONE SAVE. Whatever the box held was just read, and from here the draft holds it, so the
+    // box is PAINTED again, not typed. A mark that outlived this save was the stale-number trap: typed while the
+    // takeoff was empty, the mark stayed on; the takeoff was then measured elsewhere, and the next unrelated
+    // save from this page wrote the old number over the first row.
+    B.boxNames().forEach(function (name) {
+      var box = boxOf(name);
+      if (box) box.sfTyped = false;
     });
+    var model = B.patchModel(cur.polish_estimate, patch);
 
-    // ONE SOURCE OF TRUTH FOR SF. Once the takeoff holds a measurement, polish_sf is the takeoff
-    // total (js/polish-estimate.js writes it) and is not this page's to state -- see sfLocked().
-    // Deleted from `values`, so the merge in setState leaves the saved polish_sf and polish_2_sf
-    // exactly as the takeoff wrote them. Decided from the saved model, read just now, not from the
-    // DOM: a stale locked/unlocked paint cannot let a partial value through.
-    if (sfLocked(model)) { delete values.polish_sf; delete values.polish_2_sf; }
+    // ONE SOURCE OF TRUTH FOR EACH FIGURE. Once a section's takeoff holds a measurement, its figure is the
+    // takeoff's (js/polish-estimate.js writes it) and is not this page's to state -- see sfMeasured(). A box
+    // nobody typed in is deleted from `values`, so the merge in setState leaves the saved key as the takeoff wrote
+    // it. A GROUP with a typed box is written whole (a Polish pair is one area cell: the first box holds the
+    // priced area, the second is blank; Epoxy's boxes hold their own areas), so the draft says what the takeoff
+    // now says, as the estimate page's own save does.
+    if (sfMeasured(model)) {
+      B.boxNames().forEach(function (name) {
+        var now = B.boxDraftValue(model, name);
+        if (now === null) return;                    // not mirrored: the draft keeps what the box holds
+        var written = B.boxGroup(name).some(function (n) { return Object.prototype.hasOwnProperty.call(typedBoxes, n); });
+        if (written) Object.assign(values, Object.fromEntries([[name, now]]));
+        else delete values[name];
+      });
+      // paintSfBoxes reads M; keep it the takeoffs that were just saved, but only after a typed figure moved them:
+      // a save with nothing typed leaves M as the page loaded it, so a stale paint stays visibly stale.
+      if (Object.keys(typedBoxes).length) { M.takeoff = model.takeoff; M.tabs = model.tabs; }
+    }
     // A quantity the job type does not ask for is drawn (hidden, never removed) and so is swept into `values`
     // with its 0. Left off unless the draft already holds it: opening a bid and saving it must not add a
     // quantity the bid never had.
@@ -515,9 +553,8 @@
     // county on the other screen writes the same values back rather than losing them here.
     TW.setState(Object.assign({}, values, {
       city_state: cs,
-      // The chosen job type. Polish is the only one Estimating Tool v2 prices so far, so this is "polish" until
-      // the vocabulary marks another ready; a draft opened here with no job type, or one v2 cannot price,
-      // saves as the default.
+      // The chosen job type: any the vocabulary marks ready (all four now); a draft opened here with no job
+      // type, or one v2 cannot price, saves as the default.
       work_type: JOB,
       // Mirrored the way the live intake mirrors it: the Projects list, the bell's due-date
       // reminders and the Dropbox folder date all read `deadline`.
@@ -596,7 +633,7 @@
     var box = $("systems-container");
     if (!box) return;
     S.renderSystems(box, S.systemCount());
-    S.applyScope(JOB, { systems: box });
+    S.applyScope(JOB, { systems: box, gyp: $("gyp-sf-container") });
   }
 
   /** Pick a job type. A type the vocabulary has not marked ready does nothing: not changed, not saved. The
@@ -606,7 +643,7 @@
     JOB = key;
     renderJobTypes();
     var box = $("systems-container");
-    if (box) S.applyScope(JOB, { systems: box });
+    if (box) S.applyScope(JOB, { systems: box, gyp: $("gyp-sf-container") });
     saveSoon();
   }
 
@@ -622,11 +659,14 @@
       bid.value = now.getFullYear() + "-" + (m.length < 2 ? "0" + m : m) + "-" +
         (d.length < 2 ? "0" + d : d);
     }
-    paintSfLock();                          // after writeForm: a locked box shows the takeoff total
+    paintSfBoxes();                         // after writeForm: the boxes show the takeoff's measured areas
     renderJobTypes();                       // after writeForm, which would tick a radio the draft names
     renderConditions();
     if (county) county.hydrate(state);      // after the toggles: the note quotes Remodel tax
     paintProjLine();
+    // After writeForm, which ticks the Audience radio the draft names: the Drawings & specs box shows
+    // for a GC only (js/audience-box.js). A page served without that script has nothing to repaint.
+    if (window.TWAudienceBox) window.TWAudienceBox.sync();
   }
 
   function onClick(e) {
@@ -664,25 +704,48 @@
     // the eight text boxes reached the draft until Continue: saveSoon()'s own docstring named this
     // exact gap, and a step-nav tab or a reload in between silently lost everything typed.
     if (form) form.addEventListener("input", function (e) {
-      if (e.target && e.target.name) saveSoon();
+      if (e.target && e.target.name) {
+        // Marks an SF box as TYPED IN, which is what lets save() send it to the takeoff. A mark on
+        // the element, not a page variable: only an `input` event, never a repaint or a reload,
+        // puts it there.
+        if (T.fieldHome(e.target.name)) e.target.sfTyped = true;
+        saveSoon();
+      }
     });
     // THE "0" TRAP. The two SF boxes ship with value="0". A programmatic focus (a test driver, a
     // screen reader jump) leaves the caret at position 0, so typing 8000 gives "8000"+"0" = 80000.
     // Selecting a lone "0" on focus makes the first keystroke replace it, as a click or Tab would.
     if (form) form.addEventListener("focusin", function (e) {
       var t = e.target;
-      if (t && t.type === "number" && t.value === "0" && !t.readOnly && t.select) t.select();
+      if (t && t.type === "number" && t.value === "0" && t.select) t.select();
+    });
+    // A box left blank (or at 0) while it mirrors a takeoff row writes nothing, so on blur it shows
+    // that row's figure back rather than sitting empty over a row that still holds a number.
+    // A FIGURE JUST TYPED IS STILL WAITING ON THE 600ms SAVE when the box loses focus (typing a number and
+    // tabbing away takes well under that). Repainting first would put the OLD row figure back over it, and the
+    // save would then read the old figure from the box. So a pending save runs first: the typed figure reaches
+    // the takeoff, and the repaint shows the takeoff.
+    if (form) form.addEventListener("change", function (e) {
+      if (e.target && T.fieldHome(e.target.name)) {
+        if (saveTimer) save();
+        paintSfBoxes();
+      }
     });
     // The address / business lookup, shared with the live intake (js/address-lookup.js). A picked
     // row fires `input` on City, State and Zip, which the listener above turns into a save. The
     // guard is for a page served without the script; the lookup is a convenience, not a gate.
     if (window.TWAddress && form) {
+      // The county box fills from the address (js/county-autofill.js); null when a script is missing.
+      var countyAuto = (county && window.TWCountyAutofill) ? window.TWCountyAutofill.mount({
+        county: county, address: $("address-input"), city: $("city-input"),
+        state: $("state-input"), zip: $("zip-input") }) : null;
       window.TWAddress.mount({
         address:  $("address-input"),
         business: $("business-input"),
         city:     $("city-input"),
         state:    $("state-input"),
         zip:      $("zip-input"),
+        onPick:   countyAuto ? countyAuto.onPick : undefined
       });
     }
     if (county) county.wire(false);         // the search box's own listeners; the click is onClick's

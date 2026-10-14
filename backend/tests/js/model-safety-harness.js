@@ -97,7 +97,9 @@ const TABS = {
     totals: { total: 18250, sf: 4000 }, preset: null,
   },
   'Gyp (USG 1-8")': {
-    layout: "gyp", kind: "base", profile: "gyp@1",
+    // An OPTION, not a base: this is a combo bid (Epoxy and Polish), and a Gyp base section on a bid whose job type does
+    // not use it is marked off by sectionsForJob since Gyp became ready (Phase 14). The section's own keys are the point.
+    layout: "gyp", kind: "option", profile: "gyp@1",
     takeoff: [{ assembly_id: "g1", assembly_name: "Underlayment", measurement: 9000, unit: "SF" }],
     labor: [], contingency: 150, fees: 0, rates: { version: 1 }, totals: {}, preset: "usg-n12-1/8",
   },
@@ -362,7 +364,7 @@ async function estimateSection() {
    *  "both" (the timer fires, THEN the tab closes). The page never clears its timer handle once the
    *  timer has fired, so its pagehide handler runs after every edit, not only inside the window. */
   async function run(sc, way) {
-    const b = E.build({ blob: E.blob({ polish_estimate: clone(sc.model), polish_sf: sc.sf }),
+    const b = E.build({ blob: E.blob({ work_type: "combo", polish_estimate: clone(sc.model), polish_sf: sc.sf }),
                         items: sc.items });
     await b.api.init();
     const before = b.rec.saves.length;
@@ -418,7 +420,7 @@ async function intakeSection() {
 
   // (b) the cross-page law: an estimate save, then an intake save, over one draft
   const start = Object.assign(clone(E.MODEL), clone(EVERYTHING));
-  const e = E.build({ blob: E.blob({ polish_estimate: clone(start), polish_sf: 17500 }) });
+  const e = E.build({ blob: E.blob({ work_type: "combo", polish_estimate: clone(start), polish_sf: 17500 }) });
   await e.api.init();
   E.typeInto(e, '[data-tk="0"][data-k="measurement"]', "12000");
   e.clock.fire();

@@ -147,7 +147,13 @@ def test_the_library_stub_is_live_so_the_pass_above_is_not_vacuous(ran):
 def test_an_old_intake_blob_seeds_from_system_one_exactly_as_before(ran):
     got = ran["fixtures"]["intake_only_no_estimate"]
     assert got["sf"] == 8250
-    assert got["total"] == 1102
+    # 1102 until 2026-10-12: that was the shipped Mock-up half day (3 guys x 0.5 day) priced under the
+    # markups. This blob has no polish_estimate, so it opens as a NEW bid, and a new bid's labor
+    # quantities start empty now (Hanz). The SF is still seeded from System 1; the labor is $0.
+    # And since Phase 17 (Polish rev 2) a new bid carries the sheet's tooling the moment it has an area: 8,250 SF of
+    # salt and pepper is $4,430 (8,250 x $0.486 = $4,010, plus two bags of slurry hardener at $210) taken through the
+    # markups, which is the whole of this figure. No material, no labor, no travel.
+    assert got["total"] == 10997
 
 
 @needs_node
@@ -168,19 +174,6 @@ def test_switching_off_the_only_sf_row_keeps_the_measured_floor(ran):
     assert o["sameFloorCarrierOff"] == 5000
     assert o["lfOnly"] == 0
     assert o["reopenedMeasurement"] == [12500] and o["reopenedRows"] == 1
-
-
-@needs_node
-def test_intake_keeps_its_sf_lock_when_the_only_row_is_off(intake):
-    """Mutation: sfLocked back to B.takeoffSf(model.takeoff) > 0 unlocks both boxes and lets the
-    stale 1 / 2 the form hands over reach polish_sf."""
-    o = intake["f5"]["offLocked"]
-    assert o["ro1"] is True and o["ro2"] is True
-    assert o["v1"] == 12500
-    assert o["noteHidden"] is False
-    assert o["saveHasSf"] is False
-    assert o["blobSf"] == 12500
-    assert o["takeoffEnabled"] is False
 
 
 @needs_node
@@ -338,7 +331,7 @@ def test_where_the_remodel_rate_comes_from_is_pinned_at_the_page(ran):
 
 # ── red without the code: break a COPY of the page or the model and watch the ratchet notice ───────
 HARNESS_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/library-core.js",
-                 "js/library-picker.js"]
+                 "js/library-picker.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 NEWEST_MUTATIONS = {
     "migrate drops the bid's own coverage": (

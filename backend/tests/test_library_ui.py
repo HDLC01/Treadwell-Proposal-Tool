@@ -575,7 +575,9 @@ def test_a_rate_that_arrives_as_a_string_still_reads_as_money(ran):
         "a rate that came back as a string is not rendered as money, so it reads as unpriced")
     assert s["notTheRawString"], "the raw string is printed into the cell"
     assert s["guysAutoIsExplained"], (
-        "a line whose man-days come off the crew rows does not say so")
+        "a guys_auto line does not say it is typed on a new estimate and only older ones follow the crew")
+    assert s["noFillPromise"], (
+        "the Defaults list still says man-days come off the crew rows, but a new estimate opens empty")
 
 
 @needs_node
@@ -1199,7 +1201,9 @@ def test_the_editor_is_a_server_owned_field_so_cancel_cannot_put_a_stale_one_bac
 
 @needs_node
 def test_the_pack_size_is_on_the_numeric_field_list(ran):
-    assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty", "waste_pct"]
+    # bulk_cost joined it with Phase 11: it is a money figure typed beside the cost, and a string
+    # "58.18" would concatenate the first time anything multiplied it.
+    assert ran["numericFields"] == ["unit_cost", "coverage", "buy_qty", "waste_pct", "bulk_cost"]
 
 
 @needs_node
@@ -4043,6 +4047,65 @@ def test_the_open_assemblys_save_stays_on_screen_in_a_sticky_title_bar():
     assert float(margin["scroll-margin-top"][:-2]) >= 150, margin
 
 
+def _specificity(selector):
+    """(ids, classes+attributes+pseudo-classes, tags) of ONE compound selector list entry, with
+    :where(...) counted as zero, which is what the cascade does with it."""
+    import re
+    sel = selector
+    while ":where(" in sel:
+        a = sel.index(":where(")
+        depth, j = 0, a + len(":where")
+        while True:
+            if sel[j] == "(":
+                depth += 1
+            elif sel[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        sel = sel[:a] + sel[j + 1:]
+    ids = len(re.findall(r"#[\w-]+", sel))
+    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]|(?<!:):[\w-]+", sel))
+    tags = len(re.findall(r"(?:^|[\s>+~])[a-zA-Z][\w-]*", sel))
+    return (ids, classes, tags)
+
+
+def test_a_money_box_draws_one_focus_ring_and_the_labor_rate_box_matches_its_neighbours():
+    """Hanz, 2026-10-12: click the Labor rate box on Items & Assemblies -> Labor and it drew TWO red
+    rings, the inner one over the "$". The wrapper's `.money:focus-within` ring is the intended one;
+    the page-wide `:where(...input...):focus-visible` rule added a second on the input itself.
+
+    This pins the fix by resolving the cascade for an input inside .money: the input's own rule must
+    be `outline: none` and must out-rank the global one (specificity, :where counting zero); the
+    wrapper must still draw its ring; every cost box on the page (Items cost, Labor rate, Hotel and
+    Per Diem) must sit inside a .money wrapper, so each of them still shows exactly one ring when
+    focused. The Labor rate box is 92px like the others rather than the band's 116px.
+
+    Mutations: delete the `.money input:focus-visible` rule; give it an outline; weaken its selector
+    to one the global rule out-ranks; delete `.areaband .money input`; take the wrapper's focus-within
+    ring out; render any cell-cost input outside a .money wrapper -> each assert goes red."""
+    import re
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8")
+    own = _css_rule(html, ".money input:focus-visible")
+    assert own == {"outline": "none"}, own
+    glob = re.search(r"^    (:where\([^{]*\):focus-visible) \{ outline:", html, re.M)
+    assert glob and "input" in glob.group(1), "the page-wide focus rule moved; update this test"
+    assert _specificity(".money input:focus-visible") > _specificity(glob.group(1)), (
+        "the global ring would out-rank the .money rule again")
+    ring = _css_rule(html, ".money:focus-within")
+    assert ring.get("outline", "").startswith("2px solid"), "the wrapper lost its one ring: " + str(ring)
+    band = _css_rule(html, ".areaband .money input")
+    assert band == {"width": "92px"}, band
+    assert _specificity(".areaband .money input") > _specificity(".areaband input")
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    wrapper = '<span class="money"><span>$</span>'
+    boxes = [m.start() for m in re.finditer(r"<input[^>]*cell-cost", js)]
+    assert len(boxes) >= 4, boxes
+    for at in boxes:
+        assert js[max(0, at - len(wrapper)):at] == wrapper, (
+            "a cost box outside the .money wrapper would show NO ring now", js[at - 60:at + 40])
+
+
 # ── the Defaults tab's Global pill (Hanz, 2026-10-09) ─────────────────────────────────────────────
 class _Pills(HTMLParser):
     """The work-type pills as markup."""
@@ -4336,3 +4399,87 @@ def test_each_administration_card_opens_with_its_add_button(ran):
     assert m["laborHeaderSaveFirst"], "the Labor table header has no Save column first"
     assert m["laborAddStillTop"], "Labor's Add moved off the top"
     assert m["cssForTheTick"], "the Saved tick and the rate box's Save cell have no styles"
+
+
+# ── PHASE 11: THE ITEMS TAB'S MORE PANEL (price breaks, bulk cost, coverage basis) ─────────────
+@needs_node
+def test_the_more_panel_is_an_admins_and_draws_what_the_material_holds(ran):
+    """Rendered by the page's own renderItems. An admin gets a More button on every row and, once it
+    is open, a second row under the material with the bulk cost, the coverage basis and one line per
+    price break. A non-admin gets neither, even if the open set says otherwise: the server refuses
+    them anyway, so offering the controls would be a button that always 403s.
+
+    Mutations: drop the ADMIN test on the button or on the panel (nonAdminHas* red); stop drawing the
+    break lines (breakQtys red)."""
+    u = ran["priceBreaksUi"]
+    assert u["closedAdminHasMore"] and u["closedAdminHasNoPanel"]
+    assert u["nonAdminHasNoMore"] and u["nonAdminHasNoPanel"]
+    assert u["panelIsItsOwnRow"], "the panel is a second <tr> carrying data-item-more, not a cell of the row"
+    assert u["bulkShown"] and u["basisShown"] and u["toggleSaysLess"]
+    assert u["breakQtys"] == ["240", "480"] and u["breakCosts"] == ["90", "88"]
+
+
+@needs_node
+def test_typing_in_the_panel_reaches_the_model_and_the_queue(ran):
+    """EXECUTED THROUGH onItemEdit. A break's quantity and cost land on the right break; the bulk cost
+    goes in as a number (it is on the numeric list); the basis goes in as the word. Each is queued as
+    a field-level PATCH body for the Save press, and a typed break goes out exactly as typed (the
+    server tolerates a pasted $).
+
+    Mutation: delete the brk_qty/brk_cost branch of onItemEdit (the break stays at 240 and the generic
+    path writes it_brk_qty onto the material); drop bulk_cost from NUMERIC_ITEM_FIELDS (bulkType red)."""
+    t = ran["priceBreaksUi"]["typed"]
+    assert t["breaks"] == [{"min_qty": "300", "unit_cost": "$89.5"}]
+    assert (t["bulkType"], t["bulk"], t["basis"]) == ("number", 88.25, "each")
+    assert t["queued"][-1] == 'items:m1:{"coverage_basis":"each"}'
+    assert t["queued"][-2] == 'items:m1:{"bulk_cost":"$88.25"}'
+    assert t["queued"][1] == 'items:m1:{"price_breaks":[{"min_qty":"300","unit_cost":"$89.5"}]}'
+
+
+@needs_node
+def test_a_break_nobody_filled_in_is_never_sent_and_a_half_filled_one_is(ran):
+    """"Add a price break" draws a blank line. Sending it would be a 400 for something nobody typed, so
+    a line with both boxes empty is left off the body; one box filled goes out, and the server says what
+    is missing. Removing a break queues the shorter list, and the last one queues an empty list (which
+    the server stores as NULL)."""
+    a = ran["priceBreaksUi"]["add"]
+    assert a["afterAdd"][-1] == {"min_qty": "", "unit_cost": ""}
+    assert a["queuedCount"] == 2, "adding a blank break must not queue a save by itself"
+    assert a["blankOnly"] == []
+    assert a["halfTyped"][-1] == {"min_qty": "480", "unit_cost": ""}
+    assert a["afterRemove"] == [{"min_qty": "480", "unit_cost": ""}]
+    assert a["removedLastBreak"] == [[]]
+
+
+@needs_node
+def test_the_more_toggle_opens_and_closes_the_panel_and_a_bare_material_draws_it_empty(ran):
+    assert ran["priceBreaksUi"]["toggle"] == {"opened": True, "closedAgain": True}
+    b = ran["priceBreaksUi"]["bare"]
+    assert b["noBreakInputs"] and b["queued"] == 0 and b["basisBlankSelected"]
+
+
+def test_the_more_panel_is_wired_to_the_page_and_styled():
+    """The click router reaches the three handlers, tabbing into the panel is not leaving the row, and
+    library.html styles the panel's row. (The handlers themselves are executed above; this is the wiring
+    a lifted function cannot show.)"""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    html = (FRONTEND / "library.html").read_text(encoding="utf-8")
+    assert 'toggleItemMore(itemMore.getAttribute("data-item-more-toggle"))' in js
+    assert 'addPriceBreak(addBrk.getAttribute("data-add-break"))' in js
+    assert 'removePriceBreak(delBrk.getAttribute("data-del-break")' in js
+    assert 'e.target.closest("[data-item-more]")' in js, "an edit inside the panel must find its material"
+    assert ".item-more > td" in html and ".item-more .brk" in html
+
+
+@needs_node
+def test_tabbing_between_a_row_and_its_more_panel_is_not_leaving_the_material(ran):
+    """The panel is a second <tr>. Moving from the Cost box into a price break (or back) must not ask
+    "Save this change?" mid-edit, while leaving the pair for anywhere else still saves.
+
+    Mutation: make onItemRowFocusOut look only for [data-item] on the target (panelToElsewhereSends
+    red: an edit made in the panel never saves on leaving) or drop the same-material check on the
+    destination (rowToPanelStays red)."""
+    f = ran["moreRowFocus"]
+    assert f["rowToPanelStays"] and f["panelToRowStays"]
+    assert f["panelToElsewhereSends"] and f["rowToAnotherMaterialSends"]
+    assert f["noErrors"]

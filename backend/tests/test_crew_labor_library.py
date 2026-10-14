@@ -75,8 +75,11 @@ def test_a_new_bid_takes_its_crew_lines_from_the_library(page):
     assert lib["polishing"]["rate"] == 41 and lib["polishing"]["calc_default"]["rate"] == 41
     # a name he typed is the card's name; the starting crew comes from the calculator row
     assert lib["mockup"]["label"] == "Mock-up crew"
-    assert (lib["polishing"]["guys"], lib["polishing"]["days"]) == (4, "")
-    assert (lib["mockup"]["guys"], lib["mockup"]["days"]) == (3, 0.5)
+    # The calculator's starting crew (4 guys; 3 guys and half a day) is NOT filled in any more
+    # (2026-10-12): every line opens with Guys and Days empty and only the rate filled.
+    assert (lib["polishing"]["guys"], lib["polishing"]["days"]) == ("", "")
+    assert (lib["mockup"]["guys"], lib["mockup"]["days"]) == ("", "")
+    assert (lib["jointfill"]["guys"], lib["jointfill"]["days"]) == ("", "")
     # a line still on the shipped $33 follows the company rate
     assert lib["mockup"]["rate"] == 40 and lib["jointfill"]["rate"] == 40
 
@@ -84,7 +87,7 @@ def test_a_new_bid_takes_its_crew_lines_from_the_library(page):
 def test_when_the_library_cannot_answer_the_shipped_crew_stands_in(page):
     fb = page["ls1Fallback"]
     assert fb["ids"] == ["polishing", "mockup", "jointfill", "travel"]
-    assert fb["rows"][:3] == [["polishing", 3, "", 40], ["mockup", 3, 0.5, 40], ["jointfill", 3, "", 40]]
+    assert fb["rows"][:3] == [["polishing", "", "", 40], ["mockup", "", "", 40], ["jointfill", "", "", 40]]
 
 
 def test_a_line_taken_off_the_defaults_is_not_brought_back_by_the_fallback(page):
@@ -145,6 +148,7 @@ def test_the_fallback_rule_and_the_old_four_rows_are_one_list(model):
 # -- 2. a blank rate is the line's own rate ------------------------------------------------------------
 def test_a_cleared_rate_box_prices_at_the_lines_own_rate_and_the_box_shows_it_again(page):
     b = page["ls1Blank"]
+    assert b["guysOnOpen"] == ""                                    # the 4 guys are typed, not filled in
     assert b["priced"] == 6560                                      # 4 guys x 5 days x $41 x 8
     assert b["whileEmpty"]["rate"] == "" and b["whileEmpty"]["total"] == 6560, "an empty box priced at $0"
     assert b["whileEmpty"]["cost"] == "$6,560"

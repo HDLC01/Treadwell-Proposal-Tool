@@ -34,6 +34,7 @@ notice, and `break_source` refuses an anchor that is not in the file exactly onc
 """
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -48,7 +49,7 @@ GOLDEN = TESTS / "fixtures" / "save_patch_golden.json"
 
 SCRATCH_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js",
                  "js/bid-profiles.js", "js/markup-core.js", "js/library-core.js", "js/library-picker.js",
-                 "js/work-types.js", "js/excel-math.js"]
+                 "js/work-types.js", "js/excel-math.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
 
 
 def _run(script, frontend=FRONTEND):
@@ -90,6 +91,9 @@ def test_what_the_page_saves_and_what_a_new_bid_opens_holding_is_the_golden_byte
     Mutations: see test_the_golden_goes_red_when_the_code_changes."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert want["meta"]["commit"] == "28a5d1f"
+    # The 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
+    # re-recorded on 2026-10-12 (meta.newBid_recut): a new bid's Labor step opens with every quantity empty.
+    assert "newBid_recut" in want["meta"]
     assert len(want["golden"]["saved"]) == 26 and len(want["golden"]["newBid"]) == 7
     assert json.dumps(recorded) == json.dumps(want["golden"])
 
@@ -134,25 +138,30 @@ def test_an_off_section_is_part_of_the_model_and_not_of_the_bid(ran):
 
 
 def test_the_roots_profile_is_always_the_legacy_one_whatever_the_root_keys_say(ran):
-    """`profile`, `rates` and a `kind` of base or option at the root are reserved for Polish rev 2 (Phase 17)
-    and are not read: the root prices at polish-legacy@1's built-ins, so no saved bid's total can move."""
+    """A `profile` at the root other than polish-rev2@1 (and a `rates` snapshot) is not read: the root prices at
+    polish-legacy@1's built-ins, so no saved bid's total can move. The root's `kind` IS read since Sheets phase 1, and
+    that is the one thing this test's model also says (an option), which moves no profile."""
     assert ran["sections"]["rootProfileKeyIsReserved"] == "polish-legacy@1"
 
 
 def test_the_page_prices_a_gyp_section_from_its_takeoff(ran):
     """The page's sectionMaterial answered a number for every tab. A Gyp section needs the gyp-split inputs,
-    so it gets them: a priced section with a material, and a combined price, never a $0 material."""
+    so it gets them (js/gyp-takeoff.js splits the takeoff into gypsum, extras, sand and sound mat): a priced
+    section with a material, and a combined price, never a $0 material. This section's one row is not an area, so
+    the sheet buys it as an extra."""
     g = ran["page"]["gypOnPage"]
     assert g["priceable"] is True and g["material"] > 0 and g["total"] > 0
     assert g["computed"] is True and g["lump"] > 0
 
 
-def test_a_root_kind_of_option_is_not_read_so_the_jobs_travel_is_charged_once(ran):
-    """Only `kind: "off"` is read at the root. An "option" root used to move the travel carrier to Epoxy while
-    the page still charged the root the job's travel through bid(): the same travel on both sections."""
+def test_a_root_kind_of_option_is_read_and_each_section_is_charged_travel_by_its_role(ran):
+    """The root's `kind` is read in full since Sheets phase 1 (base, option, off). An "option" root moves the travel carrier to
+    the first base, Epoxy, and the page's bid() prices the root through polishBid, which charges it by its role too: the job's
+    Lodging and Per Diem once, on the carrier (10 x $100), and the option its own for its own crew (15 man-days x $100)."""
     r = ran["pins"]["rootOption"]
-    assert r["kind"] == "base" and r["carrier"] == "Polish"
-    assert r["rootTravel"] > 0 and r["epoxyTravel"] == 0
+    assert r["kind"] == "option" and r["carrier"] == "Epoxy"
+    assert r["epoxyTravel"] == 1000 and r["rootTravel"] == 1500
+    assert r["polishBidTravel"] == r["rootTravel"], "bid() and priceSection charge the option root alike"
 
 
 def test_the_combined_tax_figures_are_each_sections_own_sales_and_remodel_tax_summed(ran):
@@ -172,8 +181,9 @@ def test_a_tab_sections_contingency_fees_and_labor_conditions_reach_its_own_pric
 
 def test_a_gyp_base_section_writes_its_area_and_a_base_tab_carries_travel_when_the_root_is_off(ran):
     p = ran["pins"]
-    assert p["gypArea"] == {"polish_sf": 10000, "gyp_soft_sf": 9000}
-    assert p["gypTabArea"] == {"gyp_soft_sf": 9000}
+    # a Gyp section's area line is its three areas (a row with no area mark is the soft surface's)
+    assert p["gypArea"] == {"polish_sf": 10000, "gyp_soft_sf": 9000, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}
+    assert p["gypTabArea"] == {"gyp_soft_sf": 9000, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}
     assert p["carrierRootOff"] == 'Gyp (USG 1-8")', "the first BASE section carries it, not the first section"
 
 
@@ -210,7 +220,7 @@ def test_activating_a_section_stamps_its_profile_and_keeps_the_rules_filed_at_th
     a = ran["activation"]
     assert a["frozenThrew"] is None, "activateSection edited a frozen input: %s" % a["frozenThrew"]
     assert a["shape"] == {"keys": ["layout", "kind", "profile", "takeoff", "labor", "contingency", "fees", "rates",
-                                   "totals"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
+                                   "totals", "pool_packs"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
                           "takeoffRows": 1, "contingency": 0, "fees": 0}
     assert a["snapshot"] == {"version": 1, "profile": "epoxy@1", "rates": {"soft_costs": "10%"},
                              "fees_default": None, "notes": []}
@@ -366,9 +376,11 @@ def test_a_bid_with_one_section_writes_exactly_the_four_keys_it_always_wrote(ran
 def test_a_bid_with_several_sections_writes_the_complete_derived_set(ran):
     c = ran["composer"]
     assert c["frozenThrew"] is None, c["frozenThrew"]
-    assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs",
+    assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs", "base_tab_id",
                          "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
-                         "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price"]
+                         "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
+        "tab_opts is written only because this bid holds an option (Phase 15): the proposal side prints a priced tab "
+        "under Options & Unit Prices only when it says is_option")
     assert c["savePatchMultiKeys"] == ["polish_estimate", "cell_values"] + c["keys"][1:]
     assert c["savePatchEqualsComposer"] is True, "buildSavePatch is the composer plus the condition cells"
     assert c["pricedTabs"] == [["Polish", "polish", "base", True, 33798], ["Epoxy", "epoxy", "base", True, 27340],
@@ -488,9 +500,14 @@ def test_the_strip_is_empty_for_one_section_and_one_button_each_for_several(ran)
     assert s["prices"] and s["optionLabelled"] and s["escapes"] and s["noPriceSaysSo"] and s["noEmDash"]
 
 
-def test_the_page_draws_no_strip_for_one_section_and_saves_what_it_always_saved(ran):
+def test_the_page_draws_the_panel_with_one_row_and_no_open_sheet_line_for_one_section_and_saves_what_it_always_saved(ran):
+    """The Sheets panel is on every bid (Sheets phase 3), so a bid with one sheet has the panel with its one row, which is the base
+    bid, and nothing to switch to. What hides is the "Open sheet" line above the step rail: with one sheet there is nothing to tell
+    apart. What the save writes is the five keys it always wrote."""
     one = ran["page"]["one"]
-    assert one["strip"] == {"hidden": True, "html": "", "htmlWrites": 0}, "a single-section bid must look as it did"
+    assert one["strip"]["hidden"] is True and one["strip"]["now"] == "", "the Open sheet line is not drawn for one sheet"
+    assert one["strip"]["rows"] == 1 and "Base bid" in one["strip"]["html"]
+    assert "Add a sheet to price an option" in one["strip"]["html"], "the empty state says how to get an option"
     assert one["keys"] == sorted(["__draft_id", "cell_values", "city", "computed_bid", "polish_2_sf",
                                   "polish_estimate", "polish_sf", "project_name", "state", "work_type"])
     assert one["hasSnapshot"] is False and one["alert"] == ""
@@ -498,11 +515,17 @@ def test_the_page_draws_no_strip_for_one_section_and_saves_what_it_always_saved(
 
 def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ran):
     m = ran["page"]["multi"]
-    assert m["strip"]["hidden"] is False
+    assert m["strip"]["hidden"] is False and "Open sheet" in m["strip"]["now"]
     assert m["strip"]["html"].count("data-section-tab=") == 3
-    assert "Epoxy" in m["panelEpoxy"] and "Priced with epoxy@1" in m["panelEpoxy"]
-    assert "blank, so the built-in rate is charged" in m["panelEpoxy"], "the Markups notes are shown, not hidden"
-    assert 'aria-current="true">Epoxy' in m["stripAfterClick"]
+    # Epoxy is edited on the page's own panels now (Phase 12): its Material panel is the takeoff, with the patch
+    # that the sheet always charges, not a summary. A section not edited here yet keeps the summary.
+    assert "data-epoxy-patch" in m["panelEpoxy"] and "Priced with epoxy@1" not in m["panelEpoxy"]
+    # The Seal option is edited on the page's own panels since Phase 15 (its Material panel is the takeoff, with the
+    # patch); the Leveling option, which Phase 16 brings, is the section that still shows the summary.
+    assert "data-seal-patch" in m["panelSeal"] and "Priced with seal@1" not in m["panelSeal"]
+    assert "Leveling" in m["panelLeveling"] and "Priced with leveling@1" in m["panelLeveling"]
+    assert "blank, so the built-in rate is charged" in m["panelLeveling"], "the Markups notes are shown, not hidden"
+    assert re.search(r'data-section-tab="Epoxy"[^>]*aria-current="true"', m["stripAfterClick"]), "clicking a sheet opens it"
     assert m["panelRootIsTakeoff"] is True, "choosing Polish again brings the takeoff panel back"
     assert m["maths"].startswith("Polish $") and "+ Epoxy $" in m["maths"]
 
@@ -574,13 +597,13 @@ BREAKS = {
         lambda r: r["composer"]["singleHasNoSnapshot"] is False),
     "an option is added into the base bid": (
         "js/bid-model.js",
-        '    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };',
-        '    var isBase = function (e) { return e.kind !== "off"; };',
+        '    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;',
+        '    return e.kind !== "off";',
         lambda r: r["composer"]["sealIsNotInTheLump"] is False),
     "an option-only tab declared a base is believed": (
         "js/bid-model.js",
-        '    var isBase = function (e) { return e.kind === "base" && !types.tab(types.tabOfSheet(e.root ? ROOT_TAB : e.tab)).optionOnly; };',
-        '    var isBase = function (e) { return e.kind === "base"; };',
+        '    return e.kind === "base" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;',
+        '    return e.kind === "base";',
         lambda r: r["composer"]["sealDeclaredBaseIsNeverBase"] is False),
     "a section that cannot price is priced as zero": (
         "js/bid-model.js", "    var priceable = function (b) { return b.priceable !== false; };",
@@ -595,7 +618,7 @@ BREAKS = {
         "    var stamped = Object.assign(model, rootLive ? { totals: rootLive } : {});",
         lambda r: r["composer"]["inputsUntouched"] is False or r["composer"]["frozenThrew"] is not None),
     "the area of an option is added to the proposal's": (
-        "js/bid-model.js", "    var base = bids.filter(function (x) { return isBase(x.e); });",
+        "js/bid-model.js", "    var base = bids.filter(function (x) { return isBaseEntry(x.e); });",
         "    var base = bids;",
         lambda r: r["composer"]["area"] != {"polish_sf": 10000, "epoxy_sf": 4000, "cove_lf": 300}
         or r["composer"]["lump"] != r["composer"]["sumOfBaseParts"]),
@@ -626,10 +649,10 @@ BREAKS = {
     "the strip is drawn for one section": (
         "js/bid-model.js", "    if (list.length < 2) return \"\";", "    if (list.length < 1) return \"\";",
         lambda r: r["switcher"]["single"] != ""),
-    "a root kind of option is read": (
-        "js/bid-model.js", '    var rootKind = model.kind === "off" ? "off" : "base";',
-        '    var rootKind = SECTION_KINDS.indexOf(model.kind) >= 0 ? model.kind : "base";',
-        lambda r: r["pins"]["rootOption"]["epoxyTravel"] != 0 or r["pins"]["rootOption"]["kind"] != "base"),
+    "a root kind of option is not read": (
+        "js/bid-model.js", '    var rootKind = model.kind === "off" ? "off" : (model.kind === "option" ? "option" : "base");',
+        '    var rootKind = model.kind === "off" ? "off" : "base";',
+        lambda r: r["pins"]["rootOption"]["kind"] != "option" or r["pins"]["rootOption"]["epoxyTravel"] != 1000),
     "a gyp section is priced from a plain number": (
         "js/bid-model.js", '    if (profile.quirks.shippingRule === "gyp-split" && !isObject(mat)) {',
         "    if (false) {",
@@ -643,9 +666,9 @@ BREAKS = {
         "    out.proposal_sales_tax = ok ? sums.taxes : null;",
         lambda r: r["pins"]["taxes"]["sales"] != r["pins"]["taxes"]["rootSales"] + r["pins"]["taxes"]["epoxySales"]),
     "the gyp area is forgotten": (
-        "js/bid-model.js", '    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };',
+        "js/bid-model.js", '    if (e.role === "gyp") return gypAreaFields(rows);',
         '    if (e.role === "gyp") return {};',
-        lambda r: r["pins"]["gypArea"] != {"polish_sf": 10000, "gyp_soft_sf": 9000}),
+        lambda r: r["pins"]["gypArea"] != {"polish_sf": 10000, "gyp_soft_sf": 9000, "gyp_hard_sf": 0, "gyp_corridor_sf": 0}),
     "the travel carrier is the first section": (
         "js/bid-model.js", '    for (var i = 0; i < list.length; i++) if (list[i].kind === "base") return list[i].tab;',
         "    for (var i = 0; i < list.length; i++) if (i >= 0) return list[i].tab;",
@@ -663,12 +686,12 @@ BREAKS = {
         "      contingency: s.contingency, fees: 0, conditions: model.conditions,",
         lambda r: r["pins"]["feesMove"] is False),
     "the page hands a gyp section a plain number": (
-        "js/polish-estimate.js", '    if (entry.role === "gyp") return { gyp: sum, extras: 0, sand: 0, soundMat: 0, soundMatRolls: 0 };',
-        "    void 0;",
+        "js/polish-estimate.js", '    if (entry.role === "gyp" && G) {',
+        "    if (false) {",
         lambda r: r["page"]["gypOnPage"]["priceable"] is False or not r["page"]["gypOnPage"].get("material")),
     "the page saves without pricing its other sections": (
-        "js/polish-estimate.js", "      return B.buildSavePatch(M, now, priceCtx());",
-        "      return B.buildSavePatch(M, now, { bid: bid(), library: conditionLibrary() });",
+        "js/polish-estimate.js", "      return B.buildSavePatch(ROOT, now, priceCtx());",
+        "      return B.buildSavePatch(ROOT, now, { bid: bid(), library: conditionLibrary() });",
         lambda r: "error" in r["page"] or "priced_tabs" not in r["page"]["multi"]["savedKeys"]),
 }
 
@@ -694,8 +717,15 @@ GOLDEN_BREAKS = {
         "js/bid-model.js", "    if (single) { out.computed_bid = rootComputed; return out; }",
         "    if (false) { out.computed_bid = rootComputed; return out; }"),
     "the seeding forgets the travel rates": (
-        "js/bid-model.js", "      out.travel = applyTravelRates(out.travel, ctx.travelRates);",
+        "js/bid-model.js", "      out.travel = travelLinesStartEmpty(applyTravelRates(out.travel, ctx.travelRates));",
         "      void ctx.travelRates;"),
+    "the seeding leaves every labor row filled in by the man-days": (
+        "js/bid-model.js",
+        "      rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });",
+        "      void laborRowStartsEmpty;"),
+    "the calculator fills the days again": (
+        "js/bid-model.js", '      copy.guys = ""; copy.days = ""; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;',
+        "      copy.guys = v.guys; copy.days = v.days; copy.rate = v.rate; copy.hours_per_day = v.hours_per_day;"),
     "the seeding forgets which cards a bid shows": (
         "js/bid-model.js", "      out.conditions_shown = seedConditionsShown(ctx.conditionRows);", "      void ctx.conditionRows;"),
     "the seeding lets the library beat the intake's cell": (

@@ -925,6 +925,16 @@ def _page_style(selector):
     return "\n".join(found)
 
 
+def _shared_style(selector):
+    """Declarations of a rule in styles.css at ANY depth, @media blocks included. `_css_rule`
+    anchors at column 0 and cannot see the indented copy inside a media query, which is the copy
+    that decides how the options panel behaves below 1400px."""
+    found = [m.group(1) for m in
+             re.finditer(r"(?m)^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", CSS)]
+    assert found, "%s has no rule in styles.css" % selector
+    return "\n".join(found)
+
+
 def test_the_canvas_is_the_scroller_so_the_ribbon_needs_no_sticky():
     """The reason there is no `position: sticky` on the ribbon row: the page body does not scroll.
 
@@ -953,12 +963,14 @@ def test_the_canvas_is_the_scroller_so_the_ribbon_needs_no_sticky():
     # The one normal-flow element between the ribbon and the canvas. Unbounded, a long options
     # list grows the body past the viewport and the page scrolls — the same failure by a
     # different route, and the reason `max-height: none` is not acceptable here.
-    # `_page_style` catches BOTH the floating base rule and the @media one that drops the panel
-    # inline below 1400px -- its leading-whitespace match reaches inside the media block.
-    # Comments stripped first. This file explains its own rules in prose, and the phrase being
+    # The panel's rules moved from this page's <style> into styles.css (the v2 estimate's Sheets
+    # panel is `.options-panel` too), so they are read from there. `_shared_style` catches BOTH the
+    # floating base rule and the @media one that drops the panel inline below 1400px -- its
+    # leading-whitespace match reaches inside the media block.
+    # Comments stripped first. That file explains its own rules in prose, and the phrase being
     # searched for ("max-height: none") is exactly what that prose has to quote to say why it is
     # wrong -- so a raw scan reads the explanation as the offence.
-    opts = re.sub(r"/\*.*?\*/", "", _page_style(".options-panel"), flags=re.S)
+    opts = re.sub(r"/\*.*?\*/", "", _shared_style(".options-panel"), flags=re.S)
     assert "max-height" in opts, "no rule bounds the options panel"
     assert not re.search(r"max-height\s*:\s*none", opts), (
         "the inline options panel is unbounded and can push the ribbon off screen")

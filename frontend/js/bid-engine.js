@@ -11,7 +11,7 @@
 // holds no work type, no rate and no cell address of its own.
 //
 //   resolveProfile(id)           a profile with everything it extends folded in, frozen
-//   forTab(tab)                  the profile that prices a workbook tab, and that tab's truckload
+//   forTab(tab)                  the profile that prices a workbook tab, and that tab's truckload and label
 //   priceChain(profile, input, rates)   the bid: every line of the chain, one key per cell of the markup column
 //   compileRates(profile, rules)        the Markups rules filed for a profile's layout, read into rates
 //   ruleNumber(rules, layout, line)     one filed rule as a number, or "unpriceable" with the reason
@@ -204,11 +204,14 @@
     return resolved;
   }
 
-  /** The profile that prices a workbook tab, and what is particular to the tab: { tab, profile, truckload }. */
+  /** The profile that prices a workbook tab, and what is particular to the tab: { tab, profile, truckload, label }.
+   *  `truckload` and `label` are the Gyp tabs' (the rolls of sound mat in a truckload, and what the proposal calls
+   *  the system); null on a tab that has none. */
   function forTab(tab) {
     if (typeof tab !== "string" || !has.call(P.tabs, tab)) throw new BidEngineError("no profile prices a tab called " + String(tab));
     var entry = P.tabs[tab];
-    return { tab: tab, profile: resolveProfile(entry.profile), truckload: has.call(entry, "truckload") ? entry.truckload : null };
+    return { tab: tab, profile: resolveProfile(entry.profile), truckload: has.call(entry, "truckload") ? entry.truckload : null,
+             label: has.call(entry, "label") ? entry.label : null };
   }
 
   function need(profile, who) {
@@ -398,6 +401,22 @@
     return { rates: snapshot.rates };
   }
   // ── THE CHAIN ───────────────────────────────────────────────────────────────
+  /** NIGHTS OF LODGING, the sheet's way: the labor dollars that are not travel labor, over the labor rate, over the
+   *  hours of a day (B58 on Polish: `((D45-D44)/C37)/8`; `lodgingDivisor` is the 8, or the 10 on Gyp). Per diem counts
+   *  the same figure (B59 is `=B58`). `labor` is the rounded-up labor total, `travelLabor` the travel row's dollars. A
+   *  labor rate that is not above zero counts no nights: a divide by nothing is not a number of nights. */
+  function nightsOf(quirks, labor, travelLabor, laborRate) {
+    var rate = num(laborRate);
+    if (!(rate > 0)) return 0;
+    return ((num(labor) - num(travelLabor)) / rate) / quirks.lodgingDivisor;
+  }
+
+  /** The same count for a profile and a job, for a caller that wants the nights without pricing the chain (the
+   *  estimate page's hint under Lodging and Per Diem, and the oracle's lodging cases). */
+  function lodgingNights(profileArg, labor, travelLabor, laborRate) {
+    return nightsOf(need(profileArg, "lodgingNights").quirks, labor, travelLabor, laborRate);
+  }
+
   function isBlank(v) { return v === null || v === undefined || v === ""; }
 
   function unpriceable(profile, e) {
@@ -468,7 +487,8 @@
       var labor = roundUp(input.labor);
       var esc_pct = (q.escalationAlwaysOn || cond.prevailing_wage) ? rate("esc_pct") : 0;
       var escalation = roundUp(labor * esc_pct);
-      var burden = roundUp((labor + escalation) * rate("burden_pct"));
+      var burden_pct = rate("burden_pct");
+      var burden = roundUp((labor + escalation) * burden_pct);
       var labor_total = labor + escalation + burden;
 
       // ── lodging and per diem: nights worked out of the labor dollars (odd rule 2 lives in the divisor) ──
@@ -477,7 +497,7 @@
         var laborRate = num(input.laborRate) > 0 ? num(input.laborRate) : rate("labor_rate");
         var lodgingRate = num(input.lodgingRate) > 0 ? num(input.lodgingRate) : rate("travel_lodging");
         var perDiemRate = num(input.perDiemRate) > 0 ? num(input.perDiemRate) : rate("travel_per_diem");
-        lodging_qty = ((labor - num(input.travelLabor)) / laborRate) / q.lodgingDivisor;
+        lodging_qty = nightsOf(q, labor, input.travelLabor, laborRate);
         lodging = roundUp(lodging_qty * lodgingRate);
         per_diem = roundUp(lodging_qty * perDiemRate);
       }
@@ -511,7 +531,8 @@
       }
       var contingency = num(input.contingency);
 
-      var super_pto = roundUp((sub_total + gp + hard_bid + contingency + sales_tax + fees) * rate("super_pto"));
+      var super_pct = rate("super_pto");
+      var super_pto = roundUp((sub_total + gp + hard_bid + contingency + sales_tax + fees) * super_pct);
       var soft_pct = rate("soft_costs");
       var soft_costs = roundUp((sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * soft_pct);
 
@@ -542,13 +563,13 @@
         priceable: true, profile: profile.stamp,
         material: material, overage: overage, material_escalation: material_escalation,
         ship_pct: ship_pct, shipping: shipping, material_total: material_total,
-        labor: labor, esc_pct: esc_pct, escalation: escalation, burden: burden, labor_total: labor_total,
+        labor: labor, esc_pct: esc_pct, escalation: escalation, burden_pct: burden_pct, burden: burden, labor_total: labor_total,
         lodging_qty: lodging_qty, lodging: lodging, per_diem_qty: per_diem_qty, per_diem: per_diem,
         travel: travel, tooling: tooling,
         sub_total: sub_total,
         gp_pct: gp_pct, gp: gp,
         hard_bid_pct: hard_bid_pct, hard_bid: hard_bid,
-        super_pto: super_pto, soft_pct: soft_pct, soft_costs: soft_costs, contingency: contingency,
+        super_pct: super_pct, super_pto: super_pto, soft_pct: soft_pct, soft_costs: soft_costs, contingency: contingency,
         sales_tax_pct: sales_tax_pct, sales_tax: sales_tax,
         remodel_pct: remodel_pct, remodel_tax: remodel_tax, taxes: taxes,
         fees: fees, bond: bond, bond_pct: bond_pct, fees_and_bond: fees_and_bond,
@@ -598,7 +619,7 @@
   return {
     BidEngineError: BidEngineError, UnpriceableError: UnpriceableError,
     resolveProfile: resolveProfile, forTab: forTab,
-    priceChain: priceChain, combine: combine,
+    priceChain: priceChain, combine: combine, lodgingNights: lodgingNights,
     compileRates: compileRates, ruleNumber: ruleNumber,
     snapshotRates: snapshotRates, ratesOf: ratesOf, SNAPSHOT_VERSION: SNAPSHOT_VERSION, UNWIRED: UNWIRED,
     rateNumber: rateNumber, defaultNumber: defaultNumber, bandsOf: bandsOf,
