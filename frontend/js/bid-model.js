@@ -195,7 +195,8 @@
   function lodgingHint(model, tab, auto, rows) {
     var opts = travelOpts(model, tab);
     if (!opts) return manDaysHint(auto, travelManDays(rows));
-    var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);
+    // The prevailing rate in force rides in opts (travelOpts), so the count here is the one the page prices with.
+    var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions, opts.prevailing);
     // While every row is paid the same rate the two counts are one figure and the words are the ones every bid shows.
     if (Math.abs(nights - days) < 1e-9) return manDaysHint(auto, days);
     if (auto) return "Nights counted from the labor above, as the sheet does.";
@@ -287,14 +288,30 @@
     return null;
   }
 
-  /** A rate the estimator TYPED on this bid: a box that is not blank and not the line's own default.
-   *  Typing 0 counts (0 means zero). A row with no default to compare to (a saved bid from before the
-   *  stamp) holds a rate that cannot be told from a typed one, so it is treated as typed and no
-   *  prevailing wage moves it. */
+  /** A rate the estimator TYPED on this bid: a box that is not blank and either not the line's own default or
+   *  marked typed (`rate_typed`, see setLaborRate: the one case a number alone cannot tell, a typed rate that
+   *  IS the line's default). Typing 0 counts (0 means zero). A row with no default to compare to (a saved bid
+   *  from before the stamp) holds a rate that cannot be told from a typed one, so it is treated as typed and
+   *  no prevailing wage moves it. */
   function rateTypedByHand(row) {
     if (!row || isBlank(row.rate)) return false;
+    if (row.rate_typed === true) return true;
     var own = ownDefaultRate(row);
     return own === null || num(row.rate) !== own;
+  }
+
+  /** THE ESTIMATOR TYPES A RATE ON A LABOR LINE: the one place the Rate box is written into a row.
+   *  The rate goes in as typed. A rate that differs from the line's own default is already known as typed
+   *  (rateTypedByHand reads the two numbers), but a rate typed to the line's own default looks exactly like a
+   *  line that is following it, and while a prevailing wage is in force a following line is repriced. So
+   *  that one case is marked on the row (`rate_typed`), and the mark goes the moment the rate is anything
+   *  else, blank included: nothing is written onto a row whose rate says it all by itself. */
+  function setLaborRate(row, value) {
+    if (!row || typeof row !== "object") return;
+    row.rate = value;
+    var own = ownDefaultRate(row);
+    if (!isBlank(value) && own !== null && num(value) === own) row.rate_typed = true;
+    else delete row.rate_typed;
   }
 
   /** Is this the Travel Labor row? It is the one labor line the prevailing wage never touches: the
@@ -5033,7 +5050,7 @@
     PREVAILING: PREVAILING, PREVAILING_TRADES: PREVAILING_TRADES, normalizePrevailing: normalizePrevailing,
     prevailingTotal: prevailingTotal, entryHalfWage: entryHalfWage, prevailingApplied: prevailingApplied,
     laborFollowsPrevailing: laborFollowsPrevailing, laborRateBox: laborRateBox, rateTypedByHand: rateTypedByHand,
-    ownDefaultRate: ownDefaultRate, isTravelRow: isTravelRow,
+    ownDefaultRate: ownDefaultRate, isTravelRow: isTravelRow, setLaborRate: setLaborRate,
     // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,

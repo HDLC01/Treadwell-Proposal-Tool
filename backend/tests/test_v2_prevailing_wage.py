@@ -61,7 +61,7 @@ def _run(frontend=FRONTEND):
 @pytest.fixture(scope="module")
 def ran():
     got = _run()
-    for name in ("figures", "rates", "sections", "saved", "page", "sectionPage"):
+    for name in ("figures", "rates", "sections", "saved", "page", "sectionPage", "typedAtDefaultPage", "lodging", "steps"):
         assert "error" not in got[name], "%s section failed: %s" % (name, got[name].get("error"))
     return got
 
@@ -434,11 +434,108 @@ def test_the_card_and_the_rate_are_on_every_sections_labor_step(ran):
         assert d["sectionBidLabor"] == sp["expected"][tab], tab
 
 
-def test_the_conditions_own_words_say_what_it_does(ran):
-    """The words under the switch on the intake were 'Raises every labor line to the prevailing rate', which the
-    sheet never did. They say what it does now (js/work-types.js; js/index.js keeps the same literal, and
-    test_work_types holds the two equal)."""
-    assert ran["figures"]["why"] == "Sets the labor lines to the prevailing rate and adds the 5% labor escalation."
+def test_the_conditions_own_words_say_only_what_each_screen_does(ran):
+    """The words under the switch were 'Raises every labor line to the prevailing rate', which the sheet never did
+    (Polish C46 only adds the 5% escalation; the estimator types the rate into the labor lines). Only the v2 Labor
+    step's card sets the rate, so the live intake says what the workbook does and tells the estimator to type the
+    rate, and the v2 intake says the lines follow the rate typed on the Labor step. js/work-types.js holds both
+    (`why` for the live screen, `wording.v2Intake`); js/index.js keeps the live literal and test_work_types holds
+    the two equal.
+
+    Mutation: the live sentence goes back to claiming the lines are set (a screen where nothing sets them)."""
+    w = ran["figures"]["words"]
+    assert w["live"] == "Adds the 5% labor escalation. Type the prevailing rate on the labor lines yourself."
+    assert w["v2Intake"] == "Adds the 5% labor escalation. Type the prevailing rate on the Labor step and the labor lines follow it."
+    assert ran["figures"]["why"] == w["live"]
+    for text in w.values():
+        assert "\u2014" not in text and "\u2013" not in text, "no em or en dash in the words"
+
+
+# ══ a typed rate that IS the line's default, the nights hint, and the step pips ═══════════════════════
+def test_a_rate_typed_to_the_lines_own_default_is_marked_so_the_numbers_need_not_say_it(ran):
+    """Typing 33 on a line whose default is 33 looks exactly like a line that follows its default, so the one
+    place a Rate box is written (B.setLaborRate) marks that case on the row (`rate_typed`). The mark makes the line
+    the estimator's own: it prices at 33 while the card says 52, its box says 33, and it survives a reload. Any
+    other rate says it already by the numbers, so no mark is written on it, and the mark goes the moment the rate
+    is something else (a different number, blank). A saved bid's row with no default to compare to is never
+    marked: its rate is already read as typed.
+
+    Mutation: do not mark it; do not read the mark."""
+    r = ran["rates"]["typedAtDefault"]
+    a = r["atDefault"]
+    assert a["mark"] is True and a["rate"] == "33"
+    assert a["atPrevailing"] == 33 and a["follows"] is False and a["box"] == "33" and a["isTyped"] is True
+    assert a["cost"] == 3 * 5 * 33 * 8 and a["atZero"] == 33
+    assert r["other"] == {"marked": False, "atPrevailing": 34}
+    assert r["cleared"] == {"marked": False, "rate": "", "follows": True, "atPrevailing": 52}
+    assert r["backTo"] == {"mark": True, "atPrevailing": 33}, "typed 34 then 33 again is typed 33"
+    assert r["noDefault"] == {"marked": False, "atPrevailing": 33}
+    assert r["calcRow"] == {"mark": True, "atPrevailing": 50}, "a Labor Calculator line, typed to its filled rate"
+    assert r["notARow"] == "no throw"
+    assert r["reopened"] == {"mark": True, "rate": "33", "atPrevailing": 33, "bidLabor": 3960, "expected": 3960}, \
+        "the mark rides the saved row through migrateModel, and the reloaded bid prices the typed 33"
+
+
+def test_typing_the_default_on_the_page_keeps_the_line_at_that_rate_while_the_prevailing_wage_is_on(ran):
+    """THE REVIEWER'S SCENARIO. Prevailing wage on, 40 + 12 = 52, Polishing 3 x 5. Type 33 into its Rate box: the
+    box, the cost, the labor total and the bid all say 33 (3 x 5 x 33 x 8 = $3,960), not the 52 the box used to flip
+    back to; the note under the box names the default it differs from; a move of the card's rate leaves it alone
+    (and the note follows); Review, the save and a panel drawn afresh agree; the mark goes with a cleared box
+    (whether `input` fired or only `change`), a different number is typed on the numbers alone, and typing 33
+    again marks it once more.
+
+    Mutation: the Rate box skips B.setLaborRate (the page); the mark is not written or not read (the model);
+    the change handler leaves the mark on a cleared box."""
+    p = ran["typedAtDefaultPage"]
+    assert p["following"]["box"] == "52" and p["following"]["cost"] == "$6,240" and p["following"]["mark"] is None
+    # (the card's fringes go from 12 to 13 after "blurred", so the default the line differs from is $52.00, then $53.00)
+    for step, default in (("typing", "$52.00"), ("blurred", "$52.00"), ("cardMoved", "$53.00"), ("afterReturn", "$53.00")):
+        s = p[step]
+        assert (s["box"], s["cost"], s["costBox"], s["laborTotal"]) == ("33", "$3,960", "$3,960", "$3,960"), step
+        assert s["bidLabor"] == 3960 and s["rate"] == "33" and s["mark"] is True, step
+        assert s["warn"] == "Default value: " + default and s["warnHidden"] is False, step
+    assert p["review"]["typed"] is True, p["review"]["sample"]
+    assert p["saved"] == {"rate": "33", "mark": True}, "the save carries the typed rate and its mark"
+    for step in ("clearedByChange", "clearedByTyping"):
+        s = p[step]
+        assert (s["box"], s["cost"], s["bidLabor"]) == ("53", "$6,360", 6360), step
+        assert s["mark"] is None and s["rate"] == 33 and s["warnHidden"] is True, step
+    assert p["typedAgain"]["mark"] is True and p["typedAgain"]["cost"] == "$3,960"
+    assert p["thirtyFour"]["mark"] is None and p["thirtyFour"]["cost"] == "$4,080" and p["thirtyFour"]["box"] == "34"
+    assert p["backToThirtyThree"]["mark"] is True and p["backToThirtyThree"]["cost"] == "$3,960"
+    off = p["cardOff"]
+    assert (off["box"], off["cost"], off["bidLabor"], off["warnHidden"]) == ("33", "$3,960", 3960, True), \
+        "switched off, the line is still at 33 and no prevailing note is shown"
+
+
+def test_the_lodging_hint_counts_nights_over_the_prevailing_rate_like_the_page_prices_them(ran):
+    """Polish rev 2, not local, 40 + 12, Polishing following the card (52) and Mock-up typed at 40: the sheet counts
+    (6,240 + 480) / 52 / 8 = 16.15 nights, and that is what the Lodging hint says under a typed box, the same as
+    the working lines and the price. It said 16.82 (the count at $33) because lodgingHint left the prevailing rate
+    out of sheetNights. With the switch off the count is the old one, 16.82.
+
+    Mutation: leave opts.prevailing out of the call in lodgingHint."""
+    d = ran["lodging"]
+    assert d["on"]["count"] == pytest.approx(d["expectedOn"]) and round(d["expectedOn"], 2) == 16.15
+    assert d["on"]["hint"] == "Nights from the labor above, as the sheet counts them: 16.15."
+    assert d["on"]["auto"] == "Nights counted from the labor above, as the sheet does."
+    assert d["page"]["on"] == d["on"]["hint"], "the page draws the same hint"
+    assert d["off"]["count"] == pytest.approx(d["expectedOff"]) and round(d["expectedOff"], 2) == 16.82
+    assert d["off"]["hint"] == d["page"]["off"] == "Nights from the labor above, as the sheet counts them: 16.82."
+
+
+def test_the_step_pips_count_a_line_the_prevailing_wage_prices(ran):
+    """A saved bid from before the rate stamp has a labor line with guys 3, days 5 and a BLANK rate, which only
+    the prevailing wage prices (the card is on at 52, so $6,240, and blockers() asks for nothing). The Labor and
+    Review pips are ok then, as they would be for any priced line; with the switch off the same line prices
+    nothing, blockers() asks for its rate, and both pips stay grey.
+
+    Mutation: stepStatus prices the labor without the prevailing rate."""
+    s = ran["steps"]
+    assert s["on"]["bidLabor"] == 6240 and s["on"]["blockers"] == [] and s["on"]["rate"] == ""
+    assert s["on"]["step"] == {"takeoff": "ok", "labor": "ok", "review": "ok"}
+    assert s["off"]["bidLabor"] == 0 and s["off"]["blockers"] == ["Add the rate for Polishing"]
+    assert s["off"]["step"] == {"takeoff": "ok", "labor": "", "review": ""}
 
 
 # ══ red without the code: break a COPY and watch each fact notice ═══════════════════════════════════
@@ -562,6 +659,30 @@ MUTATIONS = {
         PAGE, 'document.querySelectorAll("[data-pw-state]").forEach(function (el) { el.textContent = pwOn ? "on" : "off"; });',
         "void pwOn;",
         lambda r: r["page"]["opened"]["card"]["caption"]["state"] == "off"),
+    "a rate typed to the line's default is not marked": (
+        MODEL, "    if (!isBlank(value) && own !== null && num(value) === own) row.rate_typed = true;",
+        "    if (false) row.rate_typed = true;",
+        lambda r: r["rates"]["typedAtDefault"]["atDefault"]["atPrevailing"] == 52
+        and r["typedAtDefaultPage"]["typing"]["cost"] == "$6,240"),
+    "the typed mark is not read": (
+        MODEL, "    if (row.rate_typed === true) return true;", "    void row;",
+        lambda r: r["rates"]["typedAtDefault"]["atDefault"]["atPrevailing"] == 52
+        and r["typedAtDefaultPage"]["blurred"]["cost"] == "$6,240"),
+    "the Rate box does not go through setLaborRate": (
+        PAGE, 'if (k === "rate") B.setLaborRate(M.labor[j], el.value);', 'if (false) B.setLaborRate(M.labor[j], el.value);',
+        lambda r: r["typedAtDefaultPage"]["typing"]["cost"] == "$6,240" and r["typedAtDefaultPage"]["afterReturn"]["mark"] is None),
+    "a cleared box keeps the typed mark": (
+        PAGE, "delete rateRow.rate_typed;", "void rateRow;",
+        lambda r: r["typedAtDefaultPage"]["clearedByChange"]["mark"] is True
+        and r["typedAtDefaultPage"]["clearedByChange"]["box"] == "33"),
+    "the step pips price the labor without the prevailing rate": (
+        PAGE, "M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
+        "M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });",
+        lambda r: r["steps"]["on"]["step"]["labor"] == "" and r["steps"]["on"]["step"]["review"] == ""),
+    "the lodging hint counts nights without the prevailing rate": (
+        MODEL, "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions, opts.prevailing);",
+        "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);",
+        lambda r: r["lodging"]["on"]["hint"].endswith("16.82.") and r["lodging"]["page"]["on"].endswith("16.82.")),
 }
 
 

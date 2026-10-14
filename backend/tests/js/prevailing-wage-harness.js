@@ -50,6 +50,9 @@ function figuresSection() {
   return {
     constants: { foreman: B.PREVAILING.FOREMAN_MIN, entry: B.PREVAILING.ENTRY_MIN },
     why: W.CONDITIONS.filter((c) => c.key === "prevailing_wage")[0].why,
+    // the words each screen shows under the switch
+    words: { live: W.conditionsFor("polish", "live").filter((c) => c.key === "prevailing_wage")[0].why,
+             v2Intake: W.conditionsFor("polish", "v2Intake").filter((c) => c.key === "prevailing_wage")[0].why },
     trades: B.PREVAILING_TRADES.map((t) => [t.key, t.label]),
     // rate 40 + fringes 12 = 52, and half of it is 26 (above the $23 floor)
     fortyTwelve: { total: B.prevailingTotal({ rate: 40, fringes: 12 }), entry: B.entryHalfWage(52) },
@@ -85,6 +88,38 @@ function crew() {
 }
 const cost = (row, pw) => B.laborCost(row, pw);
 
+/** A rate TYPED TO THE LINE'S OWN DEFAULT (B.setLaborRate): the one typed rate a number alone cannot tell from a
+ *  line that is following its default. It is marked on the row, and the mark goes when the rate is anything else. */
+function typedAtDefaultRates() {
+  const typedTo = (value) => { const row = crew()[0]; B.setLaborRate(row, value); return row; };
+  const atDefault = typedTo("33");                    // typed 33 on a line whose default is 33
+  const other = typedTo("34");                        // a different number: the numbers already say it was typed
+  const cleared = typedTo("33"); B.setLaborRate(cleared, "");
+  const backTo = typedTo("34"); B.setLaborRate(backTo, "33");
+  const noDefault = { id: "polishing", guys: 3, days: 5, rate: 33 };      // a saved bid's row: nothing to compare to
+  B.setLaborRate(noDefault, "33");
+  const calcRow = { id: "mockup", guys: 3, days: 1, rate: 50, calc_default: { rate: 50 } };
+  B.setLaborRate(calcRow, "50");
+  const m = job({ trade: "cement_mason", rate: 40, fringes: 12 });
+  B.setLaborRate(m.labor[0], "33");
+  const reopened = B.migrateModel(clone(m));
+  return {
+    atDefault: { mark: atDefault.rate_typed, rate: atDefault.rate, atPrevailing: B.laborRateOf(atDefault, 52),
+                 follows: B.laborFollowsPrevailing(atDefault, 52), box: B.laborRateBox(atDefault, 52),
+                 cost: cost(atDefault, 52), atZero: B.laborRateOf(atDefault, 0), isTyped: B.rateTypedByHand(atDefault) },
+    other: { marked: has(other, "rate_typed"), atPrevailing: B.laborRateOf(other, 52) },
+    cleared: { marked: has(cleared, "rate_typed"), rate: cleared.rate, follows: B.laborFollowsPrevailing(cleared, 52),
+               atPrevailing: B.laborRateOf(cleared, 52) },
+    backTo: { mark: backTo.rate_typed, atPrevailing: B.laborRateOf(backTo, 52) },
+    noDefault: { marked: has(noDefault, "rate_typed"), atPrevailing: B.laborRateOf(noDefault, 52) },
+    calcRow: { mark: calcRow.rate_typed, atPrevailing: B.laborRateOf(calcRow, 52) },
+    notARow: (() => { try { B.setLaborRate(null, "33"); B.setLaborRate("x", "33"); return "no throw"; } catch (e) { return "threw"; } })(),
+    reopened: { mark: reopened.labor[0].rate_typed, rate: reopened.labor[0].rate,
+                atPrevailing: B.laborRateOf(reopened.labor[0], B.prevailingApplied(reopened)),
+                bidLabor: B.polishBid(reopened, "Polish", ctxOf()).labor, expected: 3 * 5 * 33 * 8 },
+  };
+}
+
 function ratesSection() {
   const rows = crew();
   const at = (pw) => rows.map((r) => B.laborRateOf(r, pw));
@@ -115,6 +150,7 @@ function ratesSection() {
     // the Rate box shows what the line prices at
     box: { following: B.laborRateBox(rows[0], 52), typed: B.laborRateBox(typed[1], 52), travel: B.laborRateBox(rows[3], 52),
            noPw: B.laborRateBox(rows[0], 0) },
+    typedAtDefault: typedAtDefaultRates(),
     // a switched-off row is still off
     offRow: cost(Object.assign(crew()[0], { enabled: false }), 52),
     // a pw that is not a positive number is no prevailing wage
@@ -416,11 +452,108 @@ async function sectionPageSection() {
   return out;
 }
 
+/** A RATE TYPED TO THE LINE'S OWN DEFAULT, on the real page, while the prevailing wage is on. Typing 33 on a line whose
+ *  default is 33 used to be read as "following the default", so the line went on pricing at the prevailing rate while its
+ *  box said 33 (and showed 52 again on the next repaint). The line is the estimator's own now: box, cost, total, note,
+ *  Review and the save all say 33, the card's rate moving does not touch it, and clearing the box hands it back. */
+async function typedAtDefaultPageSection() {
+  const q = P.build({ blob: P.blob({ polish_estimate: null, polish_sf: 12000 }), labor: LIB });
+  await q.api.init(); q.api.go(1); await settle();
+  const iP = q.api.model().labor.findIndex((r) => r.id === "polishing");
+  const sel = '[data-lab="' + iP + '"][data-k="rate"]';
+  const row = () => q.api.model().labor[iP];
+  const warn = () => P.need(q, '[data-ratedflt-for="' + iP + '"]');
+  const read = () => ({ box: String(P.need(q, sel).value), cost: P.txt(q, '[data-lcost-for="' + iP + '"]'),
+    costBox: P.txt(q, '[data-lcostbox-for="' + iP + '"]'), laborTotal: P.txt(q, "[data-labor-total]"), bidLabor: q.api.bid().labor,
+    warn: warn().textContent, warnHidden: !!warn().hidden, rate: row().rate, mark: has(row(), "rate_typed") ? row().rate_typed : null });
+  P.clickOn(q, '[data-cond="prevailing_wage"]');
+  P.typeInto(q, '[data-pw="rate"]', "40"); P.typeInto(q, '[data-pw="fringes"]', "12");
+  P.typeInto(q, '[data-lab="' + iP + '"][data-k="guys"]', "3"); P.typeInto(q, '[data-lab="' + iP + '"][data-k="days"]', "5");
+  const out = { following: read() };
+  P.typeInto(q, sel, "33"); out.typing = read();
+  P.changeTo(q, sel, "33"); out.blurred = read();
+  // the card's rate moves: a repaint of every figure, and the typed line still says 33
+  P.typeInto(q, '[data-pw="fringes"]', "13"); out.cardMoved = read();
+  q.api.go(2);
+  const review = L.stripTags(q.dom.get("panels").innerHTML);
+  out.review = { typed: /Polishing\s*3 × 5 × \$33\.00\s*\$3,960/.test(review), sample: review.slice(review.indexOf("Polishing"), review.indexOf("Polishing") + 80) };
+  q.api.go(1);
+  out.afterReturn = read();
+  q.clock.fire();
+  const last = q.rec.saves[q.rec.saves.length - 1] || {};
+  const saved = ((last.polish_estimate || {}).labor || []).filter((r) => r.id === "polishing")[0] || {};
+  out.saved = { rate: saved.rate, mark: saved.rate_typed };
+  // clearing the box. ONLY `change` fires here (no `input` before it: an autofill, a paste): the line is handed back
+  P.changeTo(q, sel, ""); out.clearedByChange = read();
+  // typed again, then cleared the ordinary way (input, then change)
+  P.typeInto(q, sel, "33"); out.typedAgain = read();
+  P.typeInto(q, sel, ""); P.changeTo(q, sel, ""); out.clearedByTyping = read();
+  // another number: 34 is a typed rate on the numbers alone, and typing 33 again marks it once more
+  P.typeInto(q, sel, "34"); out.thirtyFour = read();
+  P.typeInto(q, sel, "33"); out.backToThirtyThree = read();
+  // the card is switched off: the line is still 33, and the note names no prevailing rate
+  P.clickOn(q, '[data-cond="prevailing_wage"]'); out.cardOff = read();
+  return out;
+}
+
+/** The Lodging hint on a polish-rev2 bid with a prevailing wage. It says what the sheet counts, worked out from the labor
+ *  dollars over the first labor rate, so it must read the prevailing rate the totals use. Model and page. */
+async function lodgingSection() {
+  const mk = (flag) => {
+    const x = B.freshModel(); x.profile = "polish-rev2@1"; x.conditions.prevailing_wage = flag; x.conditions.local = false;
+    x.prevailing = { trade: "cement_mason", rate: 40, fringes: 12 };
+    x.takeoff = [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 10000, unit: "SF" }];
+    // Polishing follows the card (52), Mock-up was typed at 40, Travel keeps its own
+    x.labor = [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33, rate_default: 33 },
+               { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 40, rate_default: 33 },
+               { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 36, rate_default: 36, unit: "hours", guys_auto: false }];
+    x.travel.lodging.enabled = true; x.travel.lodging.qty_auto = false; x.travel.lodging.qty = "";
+    return x;
+  };
+  const on = mk(true), off = mk(false);
+  const q = P.build({ blob: P.blob({ polish_estimate: clone(on) }), labor: [] });
+  await q.api.init(); q.api.go(1); await settle();
+  const qOff = P.build({ blob: P.blob({ polish_estimate: clone(off) }), labor: [] });
+  await qOff.api.init(); qOff.api.go(1); await settle();
+  return {
+    // labor dollars over the first rate (52) over 8 hours: (6240 + 480) / 52 / 8
+    on: { hint: B.lodgingHint(on, "Polish", false, on.labor), auto: B.lodgingHint(on, "Polish", true, on.labor),
+          count: B.sheetNights(on.labor, on.conditions, B.prevailingApplied(on)), manDays: B.travelManDays(on.labor) },
+    expectedOn: roundUp(3 * 5 * 52 * 8 + 3 * 0.5 * 40 * 8) / 52 / 8,
+    // switched off, the same lines are priced at their own rates and the count is the old one
+    off: { hint: B.lodgingHint(off, "Polish", false, off.labor), count: B.sheetNights(off.labor, off.conditions, 0) },
+    expectedOff: roundUp(3 * 5 * 33 * 8 + 3 * 0.5 * 40 * 8) / 33 / 8,
+    page: { on: String(P.need(q, '[data-hint-trv="lodging"]').textContent), off: String(P.need(qOff, '[data-hint-trv="lodging"]').textContent) },
+  };
+}
+
+/** The rail's two pips (Labor, Review) on a saved bid with a blank-rate labor line and no stamp, which only the prevailing
+ *  wage prices. blockers() and the totals already read the prevailing rate; the pips must say the same. */
+async function stepsSection() {
+  const mk = (flag) => {
+    const m = B.freshModel();
+    m.takeoff = [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 10000, unit: "SF" }];
+    m.labor = [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: "" }];
+    m.conditions.prevailing_wage = flag; m.prevailing = { trade: "cement_mason", rate: 40, fringes: 12 };
+    return m;
+  };
+  const out = {};
+  for (const [name, flag] of [["on", true], ["off", false]]) {
+    const q = P.build({ blob: P.blob({ polish_estimate: clone(mk(flag)) }), labor: [] });
+    await q.api.init(); await settle();
+    out[name] = { step: q.api.stepStatus(), bidLabor: q.api.bid().labor, blockers: B.blockers(q.api.model()),
+                  rate: q.api.model().labor[0].rate };
+  }
+  return out;
+}
+
 (async function () {
   const attempt = async (fn) => { try { return await fn(); } catch (e) { return { error: String((e && e.stack) || e) }; } };
   const done = {};
   for (const [name, fn] of [["figures", figuresSection], ["rates", ratesSection], ["sections", sectionsSection],
-                            ["saved", savedSection], ["page", pageSection], ["sectionPage", sectionPageSection]]) {
+                            ["saved", savedSection], ["page", pageSection], ["sectionPage", sectionPageSection],
+                            ["typedAtDefaultPage", typedAtDefaultPageSection], ["lodging", lodgingSection],
+                            ["steps", stepsSection]]) {
     done[name] = await attempt(fn);
   }
   // the words the page may never put on screen (Labour, Crew), over what the card rendered

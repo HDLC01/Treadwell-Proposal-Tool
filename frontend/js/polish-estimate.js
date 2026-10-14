@@ -1252,7 +1252,10 @@
       else if (picked || measured) half += 1;
     });
     var lab = 0;
-    M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });
+    // The Labor step is done when a line prices, and a line the prevailing wage prices counts (the same rate the
+    // totals and the blockers use), so a blank-rate line the card is pricing does not leave the pips grey.
+    var pwStep = B.prevailingApplied(M);
+    M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });
     return {
       takeoff: half ? "att" : (priced ? "ok" : ""),
       labor: lab ? "ok" : "",
@@ -3946,7 +3949,10 @@
           refocus('[data-lab="' + j + '"][data-k="guys"]');
           return;
         }
-        M.labor[j][k] = el.value;
+        // A typed RATE goes in through B.setLaborRate: a rate typed to the line's own default is marked as typed,
+        // so a prevailing wage in force does not take it back (the number alone cannot say it was typed).
+        if (k === "rate") B.setLaborRate(M.labor[j], el.value);
+        else M.labor[j][k] = el.value;
       }
       changed(false);
       return;
@@ -4018,6 +4024,7 @@
         // the box shows what the line prices at now: the prevailing rate while the card has one in force.
         var back = B.laborRateOf(rateRow);
         rateRow.rate = back;
+        delete rateRow.rate_typed;     // the line follows its default again (the prevailing rate, while one is in force)
         el.value = String(B.laborRateBox(rateRow, B.prevailingApplied(M)));
         changed(false);
         return;
