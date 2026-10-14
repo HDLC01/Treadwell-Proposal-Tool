@@ -386,20 +386,20 @@
     if (!p || typeof p !== "object" || p instanceof Array) return null;
     var box = function (v) { return (typeof v === "number" || typeof v === "string") && !isBlank(v) ? v : ""; };
     var saved = p.trades instanceof Array ? p.trades : [];
-    // Only a key this card can have is ever written (a built-in, or one minted as "t" + digits), into a map with no
-    // prototype: a saved blob is data a person can hand-edit, and "__proto__" as a key must stay a string.
-    var byKey = Object.create(null);
+    // Only a key this card can have is kept (a built-in, or one minted as "t" + digits), in a Map rather than an
+    // object: a saved blob is data a person can hand-edit, and a key such as "__proto__" must never become a property.
+    var byKey = new Map();
     saved.forEach(function (t) {
       if (!t || typeof t !== "object" || typeof t.key !== "string") return;
       if (!isBuiltinTrade(t.key) && !PREVAILING_OWN_KEY.test(t.key)) return;
-      if (!byKey[t.key]) byKey[t.key] = t;
+      if (!byKey.has(t.key)) byKey.set(t.key, t);
     });
     var trades = PREVAILING_TRADES.map(function (b) {
-      var t = byKey[b.key] || {};
+      var t = byKey.get(b.key) || {};
       return { key: b.key, label: b.label, rate: box(t.rate), fringes: box(t.fringes) };
     });
     saved.forEach(function (t) {
-      if (!t || typeof t !== "object" || byKey[t.key] !== t || isBuiltinTrade(t.key)) return;
+      if (!t || typeof t !== "object" || byKey.get(t.key) !== t || isBuiltinTrade(t.key)) return;
       if (typeof t.key !== "string" || !PREVAILING_OWN_KEY.test(t.key)) return;
       var label = typeof t.label === "string" ? t.label.slice(0, PREVAILING_LABEL_MAX) : "";
       trades.push({ key: t.key, label: label, rate: box(t.rate), fringes: box(t.fringes) });
