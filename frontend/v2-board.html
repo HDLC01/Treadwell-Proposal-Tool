@@ -71,6 +71,9 @@
       margin:2px 4px 10px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
     @media (max-width:767px) {
       .wrap { padding:14px 12px 64px; }
+      /* New estimate drops to its own full-width row: beside the title it covered the Beta tag. */
+      .top { flex-wrap:wrap; }
+      .top .btn { flex:1 0 100%; text-align:center; }
       .board { scroll-snap-type:x mandatory; }
       .board > .col { flex:0 0 86%; scroll-snap-align:start; }
     }
