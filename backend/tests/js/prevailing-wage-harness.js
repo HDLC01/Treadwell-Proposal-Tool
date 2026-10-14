@@ -74,6 +74,8 @@ function figuresSection() {
         { key: "cement_mason", label: "Renamed?", rate: 40, fringes: 12 }] }),
       ownCrewTotal: B.prevailingTotal({ trade: "t2", trades: [{ key: "t2", label: "Laborer", rate: "25", fringes: 8 }] }),
       goneCrew: B.normalizePrevailing({ trade: "t9", trades: [] }).trade,
+      hostile: B.normalizePrevailing({ trade: "__proto__", trades: [{ key: "__proto__", label: "x", rate: 1 },
+        { key: "constructor", rate: 2 }, { key: "toString", rate: 3 }] }).trades.map((t) => t.key),
       newKey: B.newPrevailingTradeKey({ trades: [{ key: "t1", label: "a" }, { key: "t2", label: "b" }] }),
     },
     // the rate in force: switch on AND a rate set

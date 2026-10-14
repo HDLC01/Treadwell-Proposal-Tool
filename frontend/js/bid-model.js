@@ -386,9 +386,13 @@
     if (!p || typeof p !== "object" || p instanceof Array) return null;
     var box = function (v) { return (typeof v === "number" || typeof v === "string") && !isBlank(v) ? v : ""; };
     var saved = p.trades instanceof Array ? p.trades : [];
-    var byKey = {};
+    // Only a key this card can have is ever written (a built-in, or one minted as "t" + digits), into a map with no
+    // prototype: a saved blob is data a person can hand-edit, and "__proto__" as a key must stay a string.
+    var byKey = Object.create(null);
     saved.forEach(function (t) {
-      if (t && typeof t === "object" && typeof t.key === "string" && !byKey[t.key]) byKey[t.key] = t;
+      if (!t || typeof t !== "object" || typeof t.key !== "string") return;
+      if (!isBuiltinTrade(t.key) && !PREVAILING_OWN_KEY.test(t.key)) return;
+      if (!byKey[t.key]) byKey[t.key] = t;
     });
     var trades = PREVAILING_TRADES.map(function (b) {
       var t = byKey[b.key] || {};

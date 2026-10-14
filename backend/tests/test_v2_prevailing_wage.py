@@ -113,6 +113,8 @@ def test_every_trade_has_a_box_and_the_crew_is_paid_one(ran):
     assert n["ownCrewTotal"] == 33, "the crew is paid the trade it picked, one of our own included"
     assert n["goneCrew"] == "cement_mason", "a crew trade that is not on the card reads as the first"
     assert n["newKey"] == "t3"
+    # a hand-edited blob: only keys this card can have are read (CodeQL js/remote-property-injection)
+    assert n["hostile"] == ["cement_mason", "painter"]
 
 
 def test_the_rate_is_in_force_only_with_the_switch_on_and_a_rate_set(ran):
