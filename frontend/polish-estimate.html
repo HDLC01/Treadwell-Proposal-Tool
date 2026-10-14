@@ -391,10 +391,8 @@
        min-width:0;flex:1 1 auto}
     .labname:hover{border-color:var(--line);background:var(--card)}
     .lab .tk-sub,.trv .tk-sub,.pwcard .tk-sub{font-variant-numeric:tabular-nums;color:var(--ink-v)}
-    /* The Prevailing wage card: a labor-style card above the labor lines. Trade, Rate, Fringes, then the two
-       figures the sheet works out (the rate they add up to, and the entry half wage), so five columns; the
-       entry box is the widest because its hint is the longest. Dimmed while the job's switch is off, like
-       the other cards, and every box stays typeable. */
+    /* The Prevailing wage card: a labor-style card at the bottom of the Labor step. Dimmed while the job's switch
+       is off, like the other cards, and every box stays typeable. */
     /* The prevailing wage trades: one box per trade, side by side like the sheet's two (Polish!I47:L54). */
     .pwtrades{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
     .pwtrade{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff}

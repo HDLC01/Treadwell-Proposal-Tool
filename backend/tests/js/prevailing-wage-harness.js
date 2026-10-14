@@ -584,13 +584,52 @@ async function stepsSection() {
   return out;
 }
 
+// A FRESH card: typing the Painter box while Cement Mason is empty makes Painter the trade the lines use, and the
+// note names the trade. Then a name with markup in it is drawn as text, and removing a trade from the MIDDLE of the
+// list leaves every later box writing to its own trade.
+async function tradesSection() {
+  const q = P.build({ blob: P.blob({ polish_estimate: null, polish_sf: 12000 }), labor: LIB });
+  await q.api.init(); q.api.go(1); await settle();
+  const idx = (id) => q.api.model().labor.findIndex((r) => r.id === id);
+  const iP = idx("polishing");
+  const box = (i, k) => String(P.need(q, '[data-lab="' + i + '"][data-k="' + k + '"]').value);
+  const out = {};
+  P.clickOn(q, '[data-cond="prevailing_wage"]');
+  out.noRate = { note: P.txt(q, "[data-pw-note]") };
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="1"]', "30");
+  P.typeInto(q, '[data-pw="fringes"][data-pw-i="1"]', "10");
+  const m = B.normalizePrevailing(q.api.model().prevailing);
+  out.autoPick = { trade: m.trade, box: box(iP, "rate"), note: P.txt(q, "[data-pw-note]"),
+    sub: P.txt(q, "[data-pw-sub]"), paid: P.need(q, '[data-pw-trade="1"]').className };
+  // Cement Mason's figures now move nothing: the picked trade has a rate
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="0"]', "50");
+  out.afterOther = { trade: B.normalizePrevailing(q.api.model().prevailing).trade, box: box(iP, "rate") };
+  // a hostile name, drawn again on a rebuild
+  P.clickOn(q, "[data-pw-add]");
+  P.typeInto(q, '[data-pw="label"][data-pw-i="2"]', '"><img src=x onerror=alert(1)>');
+  P.clickOn(q, "[data-pw-add]");
+  P.clickOn(q, "[data-pw-add]");
+  const html = q.dom.get("panels").innerHTML;
+  out.hostile = { rawImg: html.indexOf("<img") >= 0, escaped: html.indexOf("&lt;img") >= 0,
+    sub: P.txt(q, "[data-pw-sub]") };
+  // the middle trade (t2, index 3) goes; t3 moves to index 3 and its boxes write to t3
+  P.typeInto(q, '[data-pw="label"][data-pw-i="4"]', "Third");
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="4"]', "20");
+  P.clickOn(q, '[data-pw-del="3"]');
+  P.typeInto(q, '[data-pw="fringes"][data-pw-i="3"]', "5");
+  const after = B.normalizePrevailing(q.api.model().prevailing);
+  out.middle = { keys: after.trades.map((x) => x.key), third: after.trades[3],
+    removes: q.doc.querySelectorAll("[data-pw-del]").length };
+  return out;
+}
+
 (async function () {
   const attempt = async (fn) => { try { return await fn(); } catch (e) { return { error: String((e && e.stack) || e) }; } };
   const done = {};
   for (const [name, fn] of [["figures", figuresSection], ["rates", ratesSection], ["sections", sectionsSection],
                             ["saved", savedSection], ["page", pageSection], ["sectionPage", sectionPageSection],
                             ["typedAtDefaultPage", typedAtDefaultPageSection], ["lodging", lodgingSection],
-                            ["steps", stepsSection]]) {
+                            ["steps", stepsSection], ["trades", tradesSection]]) {
     done[name] = await attempt(fn);
   }
   // the words the page may never put on screen (Labour, Crew), over what the card rendered

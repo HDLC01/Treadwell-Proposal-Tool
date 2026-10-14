@@ -2287,7 +2287,7 @@
       esc(moneyAuto(SL.toolingCost(sf))) + ', are added on the Review step.</p>';
   }
 
-  /** THE PREVAILING WAGE CALCULATOR, as a card above the labor lines (Hanz, 2026-10-15).
+  /** THE PREVAILING WAGE CALCULATOR, as a card at the bottom of the Labor step (Hanz, 2026-10-15).
    *
    *  Kyle's workbook has this calculator on every priced tab (Polish!I47:L54): a Rate box, a Fringes box,
    *  the Prevailing Wage Rate they add up to (J48) and the 1:1 "Entry" Half Wage (J53, half the rate and
@@ -2298,18 +2298,21 @@
    *
    *  The switch is the JOB's prevailing wage answer (conditions.prevailing_wage), the same flag the
    *  intake and the Review step use, so there is one source. Every trade has its own box (Cement Mason and
-   *  Painter always, plus any the estimator adds and names, Hanz 2026-10-15), and the one marked "Crew is paid
-   *  this rate" is the rate the lines follow. Rate and fringes start EMPTY on a new bid, like every quantity.
+   *  Painter always, plus any the estimator adds and names, Hanz 2026-10-15), and the one marked "Labor lines
+   *  use this rate" is the rate the lines follow. Rate and fringes start EMPTY on a new bid, like every quantity.
    *  The figures are the job's, so the card reads the same on every section of the bid.
    *
    *  OFF IS ONE LINE (Hanz, 2026-10-15): the title, the switch and the words "Off. Labor lines keep their own rates."
-   *  Switching it on opens the Trade, Rate, Fringes and the two figures. What was typed is kept while it is closed
+   *  Switching it on opens the trade boxes and + Add a trade. What was typed is kept while it is closed
    *  (the boxes are still there, only hidden), and the switch repaints the card IN PLACE (repaintNumbers), never a
    *  rebuild of the panel, so the focus stays on the switch and the keyboard can press it again. */
   function pwNote(total) {
     var on = !!(M.conditions || {}).prevailing_wage;
     if (!on) return "";
-    if (!(total > 0)) return "On, with no rate yet. Type the rate and fringes to set the labor lines.";
+    // NAMES THE TRADE the lines use: "no rate yet" with figures typed on ANOTHER trade would be a sentence that
+    // reads as false, and the bid would go out at the lines' own rates.
+    if (!(total > 0)) return pwTradeLabel(M.prevailing) + " has no rate yet. Type its rate and fringes, or pick another " +
+      "trade with Labor lines use this rate.";
     return "Labor lines price at " + B.money2(total) + " an hour. Travel Labor, and any rate you type on a line, keep their own." +
       (gypOpen() ? "" : " The 5% labor escalation is added on the review step.");
   }
@@ -2403,6 +2406,12 @@
     else if (field === "fringes") t.fringes = value;
     else if (field === "label" && pwOwnTrade(t)) t.label = value;
     else return;
+    // THE FIRST FIGURES TYPED PICK THEIR TRADE. While the trade the lines use has no rate, typing a rate or fringes on
+    // another one makes that one the trade the lines use: an estimator on a painting job who types the Painter box and
+    // never looks at the radio must not send the bid out at the lines' own rates. Once the picked trade has a rate,
+    // typing another trade's figures moves nothing; picking is then the radio's job.
+    if ((field === "rate" || field === "fringes") && t.key !== cur.trade && B.prevailingTotal(t) > 0 &&
+        !(B.prevailingTotal(B.prevailingCrewTrade(cur)) > 0)) cur.trade = t.key;
     M.prevailing = B.normalizePrevailing(cur);
   }
 

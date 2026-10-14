@@ -295,7 +295,8 @@ def test_switching_it_on_opens_the_card_in_place_with_the_same_switch_node(ran):
     assert o["card"]["bodyHidden"] is False and o["card"]["cls"] == "tk pwcard"
     assert o["card"]["sw"] == "true" and o["card"]["swClass"] == "mw-sw on"
     assert o["card"]["sub"] == "Cement Mason"
-    assert o["card"]["note"] == "On, with no rate yet. Type the rate and fringes to set the labor lines."
+    assert o["card"]["note"] == ("Cement Mason has no rate yet. Type its rate and fringes, or pick another trade "
+                                  "with Labor lines use this rate.")
     assert o["card"]["caption"]["state"] == "on" and "5% escalation" in o["card"]["caption"]["esc"]
     assert o["flag"] is True and o["hasBlock"] is False
     assert o["rateBoxes"] == ["33", "33", "33", "36"], "no rate typed, so no line moved"
@@ -444,6 +445,33 @@ def test_the_crew_is_paid_the_trade_picked_and_typing_another_trade_moves_nothin
     assert t["model"]["trade"] == "painter" and t["card"]["trade"] == "painter" and t["card"]["sub"].startswith("Painter")
     assert t["box"] == "40" and t["travel"] == "36" and t["movedBid"] is True
     assert t["crewClass"] == ["pwtrade", "pwtrade paid"]
+
+
+def test_the_first_figures_typed_pick_their_trade_and_the_note_names_it(ran):
+    """Found in review: with Cement Mason picked and empty, typing only the Painter box moved nothing and the note
+    said "no rate yet", so a painting job went out at the lines' own rates. Now the first figures typed pick their
+    trade; once the picked trade has a rate, another trade's figures move nothing.
+
+    Mutation: drop the auto-pick in setPrevailing; the note stops naming the trade."""
+    t = ran["trades"]
+    assert t["noRate"]["note"].startswith("Cement Mason has no rate yet."), t["noRate"]
+    a = t["autoPick"]
+    assert a["trade"] == "painter" and a["box"] == "40" and a["paid"] == "pwtrade paid"
+    assert a["note"].startswith("Labor lines price at $40.00") and a["sub"].startswith("Painter")
+    assert t["afterOther"] == {"trade": "painter", "box": "40"}
+
+
+def test_a_trade_name_with_markup_in_it_is_drawn_as_text(ran):
+    h = ran["trades"]["hostile"]
+    assert h["rawImg"] is False and h["escaped"] is True
+    assert h["sub"].startswith("Painter"), "the header names the trade the lines use, not the newest"
+
+
+def test_removing_a_trade_from_the_middle_leaves_every_later_box_on_its_own_trade(ran):
+    m = ran["trades"]["middle"]
+    assert m["keys"] == ["cement_mason", "painter", "t1", "t3"]
+    assert m["third"] == {"key": "t3", "label": "Third", "rate": "20", "fringes": "5"}
+    assert m["removes"] == 2, "only the estimator's own trades can be removed"
 
 
 def test_a_trade_of_our_own_can_be_added_named_paid_and_removed(ran):
@@ -749,6 +777,14 @@ MUTATIONS = {
     "+ Add a trade does nothing": (
         PAGE, "      var at = addPrevailingTrade();", "      var at = 2;",
         lambda r: "error" in r["page"] or r["page"]["added"]["model"]["trades"][2:] == []),
+    "typing another trade's figures never picks it": (
+        PAGE, "        !(B.prevailingTotal(B.prevailingCrewTrade(cur)) > 0)) cur.trade = t.key;",
+        "        false) cur.trade = t.key;",
+        lambda r: r["trades"]["autoPick"]["trade"] != "painter"),
+    "the note does not name the trade": (
+        PAGE, 'if (!(total > 0)) return pwTradeLabel(M.prevailing) + " has no rate yet.',
+        'if (!(total > 0)) return "On, with no rate yet." + " has no rate yet.',
+        lambda r: not r["trades"]["noRate"]["note"].startswith("Cement Mason")),
     "the lodging hint counts nights without the prevailing rate": (
         MODEL, "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions, opts.prevailing);",
         "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);",
