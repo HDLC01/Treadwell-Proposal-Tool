@@ -1,5 +1,7 @@
-// The v2 Estimates board: pure logic and markup, no DOM access, no fetch, no storage.
-// Externalized so it runs under node (CSP: no inline scripts). js/v2-board.js owns the page.
+// The Estimating Tool v2 board: pure logic and markup, no DOM access, no fetch, no storage.
+// Externalized so it runs under node (CSP: no inline scripts). js/v2-board.js owns the page,
+// /v2-board.html, which is what the Estimating Tool v2 sidebar row opens since 2026-10-15 (it lived
+// on v2 Estimates, /polish-estimates.html, from 2026-10-13 until then; that page is a list again).
 //
 // BETA, AND SEPARATE ON PURPOSE. Hanz, 2026-10-13: "the V2 pipeline is still in beta ... so do not
 // merge it to the existing". This file READS the shared, DOM-free js/crm-core.js (stage, group,
@@ -7,9 +9,10 @@
 // exactly, and it changes none of it. It does not call into js/portal.js, which draws the real
 // boards, and the real boards do not know this file exists.
 //
-// READ ONLY. Nothing built here is a control that reaches a customer: no send, no follow-up, no
-// deposit, no chat, no won/lost/hand-off buttons. A card opens a small panel with facts and ONE
-// link, to the Estimating Tool v2 intake, where the bid is actually worked on.
+// THE CARDS CARRY THE DIRECT PROJECTS OUTCOME BUTTONS since 2026-10-15 (Hanz: "Yes, same buttons"):
+// Mark as won/approved, Mark as lost, Hand it off, posted by v2-board.js to the routes the real board
+// uses. Still nothing that reaches a customer: no send, no follow-up, no deposit, no chat. A card
+// opens a small panel with facts and ONE link, to the Estimating Tool v2 intake.
 //
 // ITS OWN STORAGE KEYS (KEYS below, all `tw_v2_*`). The real boards keep theirs under `tw_crm_*`, and
 // `tw_crm_view_<tab>` is not even per-pipeline, so nothing here may read or write any of them.
@@ -165,6 +168,25 @@
       + esc(C.nameOf(email)) + (on ? "" : "?") + "</span>";
   }
 
+  /** THE OUTCOME BUTTONS, the Direct Projects card's own pair (portal.js cardActions). Hanz,
+   *  2026-10-15, asked whether v2 cards get Mark as won/approved, Mark as lost and Hand it off:
+   *  "Yes, same buttons". Same labels, same rule for which shows, same data-* names, and v2-board.js
+   *  posts them to the same two routes, so a v2 bid closes out exactly the way a real one does.
+   *
+   *  Nothing on a card that is already decided: a lost or handed-off card is finished, and the way
+   *  back is the drawer's bring-back on Direct Projects. wonOrApproved, not isWon: isWon also
+   *  demands the deposit, which would leave an approved-but-unpaid card offering to be won again. */
+  function cardActions(p) {
+    if (C.isLost(p) || C.isHandedOff(p)) return "";
+    var id = esc(encodeURIComponent(String(p.proposal_id)));
+    var first = C.wonOrApproved(p)
+      ? '<button type="button" class="deal-act" data-handoff="' + id + '" title="Operations has it. Moves this off the board onto Handed off">Hand it off</button>'
+      : '<button type="button" class="deal-act" data-won="' + id + '" title="We won it. Moves this to the Won/Approved column">Mark as won/approved</button>';
+    return '<div class="deal-acts">' + first
+      + '<button type="button" class="deal-act" data-lost="' + id + '" title="Not going ahead. Pick a reason and say what happened">Mark as lost</button>'
+      + "</div>";
+  }
+
   function cardHtml(p, env) {
     var act = C.lastActivity(p);
     var total = C.cardTotal(p);
@@ -178,6 +200,7 @@
       // A bid with no price yet shows a dash, never $0: a v2 bid is saved before it has a price.
       + (total != null ? '<div class="val" title="The same figure the Direct Projects board shows">' + esc(money(total)) + "</div>"
                        : '<div class="val val-none" title="Not priced yet">&mdash;</div>')
+      + cardActions(p)
       + "</div>";
   }
 
@@ -189,7 +212,12 @@
     var by = groupFor(C.sort(items, "activity", "desc"), tab);
     return cols.map(function (c) {
       var cards = by[c].map(function (p) { return cardHtml(p, env); }).join("") || '<div class="empty">&mdash;</div>';
-      return '<div class="col"><h2>' + esc(c) + "<span>" + by[c].length + "</span></h2>" + cards + "</div>";
+      // "+ New" where the Direct Projects board has it: only the Created-but-not-sent column, and
+      // only on the live tabs. A new bid on the Lost or Handed off tab would be filed as neither.
+      var add = (tab === "direct" || tab === "gc") && c === C.STAGE_CREATED
+        ? '<button type="button" class="col-add" data-new-v2 title="Start a new estimate in Estimating Tool v2">+ New</button>'
+        : "";
+      return '<div class="col"><h2>' + esc(c) + "<span>" + by[c].length + "</span>" + add + "</h2>" + cards + "</div>";
     }).join("");
   }
 
@@ -201,11 +229,11 @@
         + '<p class="empty-p">Clear the search or the estimator, or look at the other tab.</p></div>';
     }
     return '<div class="card-empty"><p class="empty-h">No v2 estimates yet.</p>'
-      + '<p class="empty-p">A bid lands here the moment it is created in <b>Estimating Tool v2</b>. '
+      + '<p class="empty-p">Press <b>New estimate</b> to start one. A bid lands here the moment it is created. '
       + "Bids priced on the spreadsheet stay on the Direct Projects and GC Projects boards.</p></div>";
   }
 
-  // ── the read-only panel ─────────────────────────────────────────────────────
+  // ── the facts panel ─────────────────────────────────────────────────────────
   // Facts and ONE link. The only button is Close. test_v2_board.py reads this markup and fails if a
   // send, follow-up, deposit, chat or status control ever appears in it.
   function panelHtml(p, env) {
@@ -217,7 +245,7 @@
     var chips = chipsHtml(p);
     return '<div class="v2p-head"><h2>' + esc(p.project_name || "Untitled") + '</h2>'
       + '<button type="button" class="v2p-close" data-v2-close aria-label="Close">Close</button></div>'
-      + '<p class="v2p-beta"><span class="tag">Beta</span> Read only. Nothing on this panel reaches a customer.</p>'
+      + '<p class="v2p-beta"><span class="tag">Beta</span> Nothing on this panel reaches a customer.</p>'
       + (chips ? '<div class="chips">' + chips + "</div>" : "")
       + "<dl>"
       + row("Project", esc(p.project_name || "Untitled"))
@@ -239,7 +267,7 @@
     pool: pool, counts: counts, tabsToShow: tabsToShow, normTab: normTab,
     columnsFor: columnsFor, groupFor: groupFor,
     filterSearch: filterSearch, filterEstimator: filterEstimator, estimatorCounts: estimatorCounts,
-    chipsHtml: chipsHtml, cardHtml: cardHtml, boardHtml: boardHtml, emptyHtml: emptyHtml,
+    chipsHtml: chipsHtml, cardActions: cardActions, cardHtml: cardHtml, boardHtml: boardHtml, emptyHtml: emptyHtml,
     panelHtml: panelHtml,
   };
 });

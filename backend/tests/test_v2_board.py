@@ -1,4 +1,8 @@
-"""The v2 Estimates board (BETA): its own route, its own code, separate from the real boards.
+"""The Estimating Tool v2 board (BETA): its own route, its own code, separate from the real boards.
+
+Built 2026-10-13 on the v2 Estimates page. Moved 2026-10-15 to /v2-board.html, the page the Estimating
+Tool v2 sidebar row opens (Hanz: "It should be here not V2 estimates"; v2 Estimates is a list again,
+test_v2_names.py), and given the Direct Projects card buttons (Hanz: "Yes, same buttons").
 
 Hanz, 2026-10-13: "make the V2 have a pipeline like the ones we have for active projects", "make sure
 they are separate tho", then "the V2 pipeline is still in beta ... so do not merge it to the
@@ -13,13 +17,18 @@ WHAT HAS TO HOLD
      what it has always been (no v2 field, and a never-generated v2 draft is still not on it), the
      real board files mention nothing from the v2 board, and the v2 board never loads portal.js.
      Nothing here freezes the source of those files, so an unrelated edit to them is free to land.
-  B2. THE FEED HAS THE SAME DOOR AS THE PAGE: /api/v2/pipeline is claimed by the v2 Estimates tab in
-     nav_access, so a member who is denied the page gets 403 from the route and one who is not gets
-     the data.
+  B2. THE FEED HAS THE SAME DOOR AS THE PAGE: /api/v2/pipeline is claimed by the Estimating Tool v2
+     tab in nav_access, so a member who is denied the page gets 403 from the route and one who is not
+     gets the data.
   C. SEPARATE STORAGE: every key the board writes starts tw_v2_; seeding the real boards' keys
-     changes nothing it reads; localStorage is never touched (the harness throws if it is).
-  D. READ ONLY: the panel carries no send, follow-up, deposit, chat or status control, and the page's
-     code, executed, makes exactly one GET (to its own feed) however it is walked.
+     changes nothing it reads; localStorage is never touched (the harness throws if it is) except by
+     "+ New", which clears the three keys every "start a project" door clears.
+  D. THE PANEL STAYS FACTS: it carries no send, follow-up, deposit, chat or status control, and the
+     page's code, executed, makes exactly one GET (to its own feed) however it is walked, as long as
+     nobody presses a card button.
+  D2. THE CARD BUTTONS ARE THE DIRECT PROJECTS ONES: same labels, same rule for which shows, and,
+     pressed for real, the same requests to the same routes, with the same close-out dialog and
+     hand-off prompt in front of them. "+ New" starts a fresh bid in the intake.
   E. THE PAGE: Direct and GC tabs by audience, test copies on the board with a chip, no price is a
      dash and never $0, search kept, month and sort gone. It says so when the customer portal is
      stale or down, and "v2 total" is only ever what v2 priced.
@@ -298,7 +307,7 @@ def test_the_real_boards_know_nothing_about_v2(name):
 
 
 def test_the_v2_code_never_loads_or_calls_portal_js():
-    html = (FRONTEND / "polish-estimates.html").read_text(encoding="utf-8")
+    html = (FRONTEND / "v2-board.html").read_text(encoding="utf-8")
     assert "/js/portal.js" not in html and "/js/v2-board.js" in html
     for name in ("v2-board.js", "v2-board-core.js"):
         code = (FRONTEND / "js" / name).read_text(encoding="utf-8")
@@ -345,7 +354,7 @@ def _signed_in_as(monkeypatch, role, email="staffer@wetreadwell.com"):
 def test_a_member_without_the_v2_page_gets_403_from_its_feed_and_one_with_it_gets_the_data(
         monkeypatch, policy):
     _up(monkeypatch)
-    policy.save({"user": ["/polish-estimates.html"]}, "k@x.com")
+    policy.save({"user": ["/v2-board.html"]}, "k@x.com")
     # denied the page: the route refuses with the gate's own body, and no draft is read at all
     reads = []
     monkeypatch.setattr(main.drafts, "list_drafts", lambda *a, **k: reads.append(1) or DRAFTS)
@@ -366,9 +375,10 @@ def test_a_member_without_the_v2_page_gets_403_from_its_feed_and_one_with_it_get
 def test_denying_another_tab_leaves_the_v2_feed_open_and_denying_this_one_leaves_the_real_board_open(
         monkeypatch, policy):
     _up(monkeypatch)
-    policy.save({"user": ["/history.html", "/polish-intake.html", "/projects.html"]}, "k@x.com")
+    # v2 Estimates is a different row now (a list on /api/drafts): denying it leaves the board's feed
+    policy.save({"user": ["/history.html", "/polish-estimates.html", "/projects.html"]}, "k@x.com")
     assert _signed_in_as(monkeypatch, "user").get("/api/v2/pipeline").status_code == 200
-    policy.save({"user": ["/polish-estimates.html"]}, "k@x.com")
+    policy.save({"user": ["/v2-board.html"]}, "k@x.com")
     client = _signed_in_as(monkeypatch, "user")
     assert client.get("/api/portal/pipeline").status_code == 200      # the real boards' feed
     assert client.get("/api/drafts").status_code == 200               # the Proposals Database's list
@@ -467,7 +477,7 @@ def _with_portal(payload, status, fetched_at):
 def test_the_board_says_so_when_the_portals_answer_is_old_or_missing(payload):
     """Placement is right in every mode (the server decides it); what the page owed was a sentence
     saying the figures may be behind. Said once, outside the board, and gone when the portal is back."""
-    html = (FRONTEND / "polish-estimates.html").read_text(encoding="utf-8")
+    html = (FRONTEND / "v2-board.html").read_text(encoding="utf-8")
     assert 'id="v2-degraded" class="v2-degraded" role="status" hidden>' in html
     assert ".v2-degraded[hidden] { display:none; }" in html       # a class display rule outranks [hidden]
     live = _run(_with_portal(payload, "live", STAMP), [{"name": "l", "actions": []}])["runs"][0]["first"]
@@ -606,15 +616,17 @@ def test_an_empty_board_explains_where_bids_come_from(monkeypatch):
 
 
 def test_the_page_has_no_month_or_sort_controls_and_says_beta():
-    html = (FRONTEND / "polish-estimates.html").read_text(encoding="utf-8")
+    html = (FRONTEND / "v2-board.html").read_text(encoding="utf-8")
     assert 'id="month"' not in html and 'id="sort"' not in html and 'id="dir"' not in html
     assert '<span class="tag">Beta</span>' in html
-    assert 'href="/polish-intake.html">Open Estimating Tool v2</a>' in html
+    assert "<h1>Estimating Tool v2</h1>" in html
+    assert "<title>Estimating Tool v2 · Treadwell Proposal Generator</title>" in html
+    assert '<button type="button" class="btn" id="new-v2">New estimate</button>' in html
     # house rule: no em dash in copy. Read with a parser, so a comment or the stylesheet is not copy.
     assert "—" not in markup(html, attrs_as_text=True).text
 
 
-# ── D. read only ─────────────────────────────────────────────────────────────
+# ── D. the panel stays facts ─────────────────────────────────────────────────
 FORBIDDEN = re.compile(r"send|follow|deposit|invoice|chat|message|reply|portal|approve (it|this)|hand it off|"
                        r"mark as|mark won|lost reason|data-won|data-lost|data-handoff", re.I)
 
@@ -632,7 +644,7 @@ def test_clicking_a_card_opens_a_read_only_panel_with_one_link(payload):
     assert re.findall(r'href="([^"]*)"', panel) == ["/polish-intake.html?d=v-deposit"]
     assert "Open in Estimating Tool v2" in panel
     assert opened["urls"][-1].endswith("?open=v-deposit")
-    assert escaped["last"]["panelOpen"] is False and escaped["urls"][-1] == "/polish-estimates.html"
+    assert escaped["last"]["panelOpen"] is False and escaped["urls"][-1] == "/v2-board.html"
 
 
 def test_the_panel_has_no_customer_facing_or_status_controls(payload):
@@ -646,12 +658,194 @@ def test_the_panel_has_no_customer_facing_or_status_controls(payload):
         # The project's own name, its stage ("Deposit received") and chips are facts about the bid.
         text = markup(html, skip=lambda tag, attrs: tag in ("dd", "h2")
                       or (tag == "div" and "chips" in (attrs.get("class") or "").split())).text
-        # "Read only. Nothing on this panel reaches a customer." is the one sentence allowed to say so
+        # "Nothing on this panel reaches a customer." is the one sentence allowed to say so
         text = text.replace("Nothing on this panel reaches a customer.", "")
         assert not FORBIDDEN.search(text.replace("Open in Estimating Tool v2", "")), (pid, text)
-    # and the cards carry no action buttons either
+
+
+# ── D2. the card buttons are the Direct Projects ones ────────────────────────
+def _buttons(card):
+    return re.findall(r"<button[^>]*>([^<]*)</button>", card)
+
+
+def test_each_card_carries_the_direct_projects_outcome_pair(payload):
+    """portal.js cardActions, rule for rule: a live card offers Mark as won/approved and Mark as lost;
+    a won or approved one offers Hand it off in place of the win; a lost or handed-off card is
+    finished and offers nothing."""
     cards = _run(payload, [])["core"]["cards"]
-    assert not any("<button" in c for c in cards.values())
+    for pid in ("v-fresh", "v-gc", "v-test-real", "v-unpriced", "v-viewed"):
+        assert _buttons(cards[pid]) == ["Mark as won/approved", "Mark as lost"], pid
+    for pid in ("v-won", "v-deposit"):
+        assert _buttons(cards[pid]) == ["Hand it off", "Mark as lost"], pid
+    for pid in ("v-lost", "v-handed"):
+        assert "<button" not in cards[pid], pid
+    # the attributes the page's click listener finds them by, carrying the bid's own id
+    assert 'data-won="v-fresh"' in cards["v-fresh"] and 'data-lost="v-fresh"' in cards["v-fresh"]
+    assert 'data-handoff="v-won"' in cards["v-won"]
+
+
+def test_plus_new_sits_only_in_created_but_not_sent_on_the_live_tabs(payload):
+    run = _run(payload, [{"name": "d", "actions": []},
+                         {"name": "g", "actions": [{"type": "tab", "tab": "gc"}]},
+                         {"name": "l", "actions": [{"type": "tab", "tab": "lost"}]},
+                         {"name": "h", "actions": [{"type": "tab", "tab": "handed_off"}]}])["runs"]
+    for live in run[:2]:
+        board = live["last"]["list"]
+        assert board.count("data-new-v2") == 1, live["name"]
+        head = board.split("data-new-v2")[0].rsplit("<h2>", 1)[1]
+        assert head.startswith("Created but not sent"), head
+    for dead in run[2:]:
+        assert "data-new-v2" not in dead["last"]["list"], dead["name"]
+
+
+def test_a_card_button_does_its_own_job_and_does_not_also_open_the_card(payload):
+    """The buttons sit inside a .deal, and the card's own click opens the panel. Each button handler
+    has to return first, or pressing Mark as won also throws the panel up over the board."""
+    run = _run(payload, [{"name": "b", "actions": [
+        {"type": "won", "id": "v-fresh"}, {"type": "handoff", "id": "v-won"},
+        {"type": "lost-cancel", "id": "v-viewed"}]}])["runs"][0]
+    assert run["last"]["panelOpen"] is False
+    assert not [u for u in run["urls"] if "open=" in u], run["urls"]
+
+
+def test_enter_on_a_card_button_is_the_buttons_and_enter_or_space_on_a_card_opens_it(payload):
+    on_button = _run(payload, [{"name": "b", "actions": [
+        {"type": "key", "key": "Enter", "on": "button", "id": "v-fresh"}]}])["runs"][0]
+    assert on_button["last"]["panelOpen"] is False
+    assert on_button["seen"] == [{"key": "Enter", "on": "button", "prevented": False}]
+    for key in ("Enter", " "):
+        on_card = _run(payload, [{"name": "c", "actions": [
+            {"type": "key", "key": key, "on": "card", "id": "v-fresh"}]}])["runs"][0]
+        assert on_card["last"]["panelOpen"] is True, key
+        assert on_card["seen"][0]["prevented"] is True, key
+
+
+def test_escape_closes_the_close_out_dialog_and_writes_nothing(payload):
+    run = _run(payload, [{"name": "e", "actions": [
+        {"type": "lost-cancel", "id": "v-fresh", "escape": True}]}])["runs"][0]
+    assert run["dialogs"][0]["removed"] is True
+    assert [f for f in run["fetches"] if f["method"] != "GET"] == []
+
+
+def test_mark_as_won_posts_the_won_mark_to_the_draft_and_moves_the_card(payload):
+    run = _run(payload, [{"name": "w", "actions": [{"type": "won", "id": "v-fresh"}]}])["runs"][0]
+    writes = [f for f in run["fetches"] if f["method"] != "GET"]
+    assert writes == [{"url": "/api/draft/v-fresh/status", "method": "POST", "body": {"status": "won"}}]
+    # no prompt, as on Direct Projects, and the board re-reads after the write
+    assert run["confirms"] == [] and run["dialogs"] == []
+    assert run["fetches"][-1] == {"url": "/api/v2/pipeline", "method": "GET"}
+    assert run["opened"] == [], "a card button sent the browser somewhere"
+
+
+def test_hand_it_off_asks_when_the_contacts_are_not_in_and_posts_only_on_yes(payload):
+    yes = _run(payload, [{"name": "y", "actions": [{"type": "handoff", "id": "v-won"}]}])["runs"][0]
+    assert [c["title"] for c in yes["confirms"]] == ["Hand it off anyway?"]
+    assert [f for f in yes["fetches"] if f["method"] != "GET"] == [
+        {"url": "/api/draft/v-won/status", "method": "POST", "body": {"status": "handed_off"}}]
+    no = _run(payload, [{"name": "n", "confirm": False,
+                         "actions": [{"type": "handoff", "id": "v-won"}]}])["runs"][0]
+    assert len(no["confirms"]) == 1
+    assert [f for f in no["fetches"] if f["method"] != "GET"] == [], "Not yet still handed it off"
+
+
+def test_hand_it_off_does_not_ask_once_the_contacts_are_in(payload):
+    rows = [dict(p, contacts_status="received") if p["proposal_id"] == "v-deposit" else p
+            for p in payload["proposals"]]
+    run = _run(dict(payload, proposals=rows),
+               [{"name": "r", "actions": [{"type": "handoff", "id": "v-deposit"}]}])["runs"][0]
+    assert run["confirms"] == []
+    assert [f["body"] for f in run["fetches"] if f["method"] != "GET"] == [{"status": "handed_off"}]
+
+
+def test_mark_as_lost_on_an_unsent_bid_closes_the_draft_with_the_reason_and_the_note(payload):
+    run = _run(payload, [{"name": "l", "actions": [
+        {"type": "lost", "id": "v-fresh", "reason": "price", "note": "Wilson was 12% under."}]}])["runs"][0]
+    assert [f for f in run["fetches"] if f["method"] != "GET"] == [
+        {"url": "/api/draft/v-fresh/status", "method": "POST",
+         "body": {"status": "closed_lost", "reason": "price", "note": "Wilson was 12% under."}}]
+    seen = run["seen"][0]
+    assert seen["go"] == "Close it out" and seen["goDisabled"] is False
+    assert "It was never sent, so nothing changes for the customer." in seen["sub"]
+    assert run["dialogs"][0]["removed"] is True
+    # every close-out reason the real dialog offers
+    assert run["dialogs"][0]["html"].count("<option ") == _close_choice_count()
+
+
+def test_mark_as_lost_on_a_sent_bid_goes_to_the_portal_route_that_stops_the_chasing(payload):
+    run = _run(payload, [{"name": "l", "actions": [
+        {"type": "lost", "id": "v-viewed", "reason": "price", "note": "Went with Wilson."}]}])["runs"][0]
+    assert [f for f in run["fetches"] if f["method"] != "GET"] == [
+        {"url": "/api/portal/proposal/v-viewed/status", "method": "POST",
+         "body": {"status": "closed_lost", "reason": "price", "note": "Went with Wilson."}}]
+    assert "all follow-ups stop" in run["seen"][0]["sub"]
+
+
+def test_a_hold_reason_pauses_instead_of_closing_on_both_routes(payload):
+    hold = next(c["key"] for c in _close_choices() if c["outcome"] == "hold")
+    run = _run(payload, [{"name": "h", "actions": [
+        {"type": "lost", "id": "v-fresh", "reason": hold, "note": "GC went quiet."},
+        {"type": "lost", "id": "v-viewed", "reason": hold, "note": "Owner paused the job."}]}])["runs"][0]
+    writes = [f for f in run["fetches"] if f["method"] != "GET"]
+    assert writes == [
+        {"url": "/api/draft/v-fresh/status", "method": "POST",
+         "body": {"status": "on_hold", "reason": hold, "note": "GC went quiet."}},
+        {"url": "/api/portal/proposal/v-viewed/status", "method": "POST",
+         "body": {"status": "delayed", "months": main.HOLD_PAUSE_MONTHS, "reason": hold,
+                  "note": "Owner paused the job."}}]
+    assert run["seen"][0]["go"] == "Put it on hold"
+
+
+def test_the_close_out_needs_a_note_and_cancel_writes_nothing(payload):
+    run = _run(payload, [{"name": "c", "actions": [
+        {"type": "lost", "id": "v-fresh", "reason": "price", "note": "   "},
+        {"type": "lost-cancel", "id": "v-fresh"}]}])["runs"][0]
+    assert run["seen"][0]["goDisabled"] is True
+    assert [f for f in run["fetches"] if f["method"] != "GET"] == []
+    assert run["dialogs"][-1]["removed"] is True
+
+
+def test_the_hold_length_is_the_one_the_real_board_and_the_server_use():
+    board = (FRONTEND / "js" / "v2-board.js").read_text(encoding="utf-8")
+    real = (FRONTEND / "js" / "portal.js").read_text(encoding="utf-8")
+    ours = int(re.search(r"var HOLD_MONTHS = (\d+);", board).group(1))
+    theirs = int(re.search(r"const HOLD_MONTHS = (\d+);", real).group(1))
+    assert ours == theirs == main.HOLD_PAUSE_MONTHS
+
+
+@pytest.mark.parametrize("action,tab,audience", [("new", "direct", None), ("new-top", "direct", None),
+                                                 ("new", "gc", "GC")])
+def test_plus_new_opens_the_intake_on_a_fresh_bid(payload, action, tab, audience):
+    """The three keys every "start a project" door clears (projects.js, portal.js), so the intake mints
+    a new bid instead of resuming the last one; from the GC tab the new bid starts as a GC one."""
+    acts = ([{"type": "tab", "tab": tab}] if tab != "direct" else []) + [{"type": action}]
+    run = _run(payload, [{"name": "n", "local": {"treadwell.proposal_tool.state": "{\"job_name\":\"Old\"}",
+                                                 "treadwell.proposal_tool.draft_id": "old-id"},
+                          "actions": acts}])["runs"][0]
+    assert run["opened"] == ["/polish-intake.html"]
+    assert "treadwell.proposal_tool.draft_id" not in run["local"]
+    assert ["treadwell.proposal_tool.hydrated_once", None] in run["writes"]
+    if audience:
+        assert json.loads(run["local"]["treadwell.proposal_tool.state"]) == {"audience": audience}
+    else:
+        assert "treadwell.proposal_tool.state" not in run["local"]
+    assert [f for f in run["fetches"] if f["method"] != "GET"] == []
+
+
+def _close_choices():
+    out = run_node_eval("JSON.stringify(require(process.argv[1] + '/js/crm-core.js').CLOSE_CHOICES)")
+    return json.loads(out)
+
+
+def _close_choice_count():
+    return len(_close_choices())
+
+
+def run_node_eval(expr):
+    import subprocess
+    proc = subprocess.run(["node", "-e", "process.stdout.write(" + expr + ")", str(FRONTEND)],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
 
 
 def test_the_page_makes_one_get_to_its_own_feed_and_nothing_else(payload):

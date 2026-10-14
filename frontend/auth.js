@@ -250,7 +250,7 @@
     // point of Hanz choosing real blocking: the server refuses this tab's own routes too, so a
     // present-but-hidden link would be a link to a page that says no.
     if (RENDER_DENY.indexOf(href) !== -1) return "";
-    const active = location.pathname.toLowerCase().endsWith(href.toLowerCase());
+    const active = location.pathname.toLowerCase().endsWith(href.toLowerCase()) || alsoActive(href);
     // `tag` marks a page as not-yet-finished. Optional so the other twelve callers are
     // untouched, and rendered as a chip rather than folded into the label so it reads as a
     // status on the page rather than part of its name.
@@ -258,6 +258,16 @@
       '<span class="tw-nav-ico" data-ico="' + glyph + '">' + icon(glyph, 17) + '</span>' +
       '<span class="tw-nav-label">' + label + '</span>' +
       (tag ? '<span class="tw-nav-tag">' + tag + '</span>' : "") + '</a>';
+  }
+
+  // A row's OTHER pages, which light it as well as its own href. Estimating Tool v2 opens on its
+  // board since 2026-10-15, and its intake and estimate are still the same tab to the person working
+  // in them. Keyed on href, like everything else about a row. The map lives INSIDE the function, a
+  // hoisted declaration, so no call order can reach it before it exists.
+  function alsoActive(href) {
+    const ALSO_ACTIVE_ON = { "/v2-board.html": ["/polish-intake.html", "/polish-estimate.html"] };
+    const here = location.pathname.toLowerCase();
+    return (ALSO_ACTIVE_ON[href] || []).some((p) => here.endsWith(p));
   }
 
   // Every role this app has, least privileged first. profiles.py stores exactly one of these
@@ -525,7 +535,11 @@
       // Permissions key on the href, never on this label, so nothing about who sees it moved.
       // backend/nav_access.py carries the same label for the Admin page, and
       // test_v2_names.py fails if the two ever disagree.
-      navItem("/polish-intake.html", "calculator", "Estimating Tool v2", "BETA") +
+      // OPENS ON ITS BOARD SINCE 2026-10-15 (/v2-board.html), Hanz: "It should be here not V2
+      // estimates". The board's "+ New" and its cards lead into the intake and the estimate, which
+      // light this row too (ALSO_ACTIVE_ON). The href moved, so backend/nav_access.py maps a policy
+      // saved under the old /polish-intake.html onto this one (LEGACY_HREFS).
+      navItem("/v2-board.html", "calculator", "Estimating Tool v2", "BETA") +
       // The beta's own filing cabinet, immediately after the calculator that fills it. Hanz,
       // 2026-09-10: "the polish estimate database ... the beta polish estimates that does not add up
       // to the analytics, just something to test and save the polish projects."

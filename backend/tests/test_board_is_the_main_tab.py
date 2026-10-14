@@ -125,6 +125,10 @@ def test_nothing_else_left_the_sidebar():
     have been seen. The calculator is still reachable — from the beta's own step nav and from the
     toolbar link on Estimate Review — so what this list guards is the DOOR, not every page.
 
+    THE DOOR MOVED AGAIN ON 2026-10-15, to the beta's board (/v2-board.html). Hanz: "It should be
+    here not V2 estimates". The intake is one click further in, from the board's "+ New" or a card,
+    and is still the same row's page for permissions and for the highlight.
+
     FOLLOW-UPS JOINED THIS LIST ON 2026-08-24, under Sales, one row below Active Projects. It had
     been unlinked since 2026-08-10 and Hanz reversed that: "make sure all follow up emails are shown
     in the Chat box and in the Follow Ups section." It is asserted here as well as in
@@ -144,7 +148,7 @@ def test_nothing_else_left_the_sidebar():
     below pins that, because deleting the entry is the cheap way to keep a list like this green."""
     bar = _sidebar()
     for href in ("/portal.html", "/followups.html", "/projects.html", "/leads.html", "/crm.html",
-                 "/calendar.html", "/polish-intake.html", "/analytics.html", "/library.html",
+                 "/calendar.html", "/v2-board.html", "/analytics.html", "/library.html",
                  "/history.html", "/trash.html", "/notifications.html",
                  "/followup-settings.html", "/admin.html"):
         assert '"%s"' % href in bar, "%s is no longer reachable from the sidebar" % href
