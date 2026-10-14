@@ -352,7 +352,7 @@ BREAKS = {
         "js/library-core.js", "      if (list[i].min_qty <= u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];",
         "      if (list[i].min_qty < u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];"),
     "the section's labor is not read": (
-        MODEL, "      labor: laborTotal(s.labor, model.conditions),", "      labor: 0,"),
+        MODEL, "      labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),", "      labor: 0,"),
     "a price break is judged on each line alone again": (
         "js/library-core.js", "                       g.needed, rep.roundup, g.bulk, g.cost0, g.ladder.units);",
         "                       g.needed, rep.roundup, g.bulk, g.cost0);"),

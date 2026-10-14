@@ -241,7 +241,7 @@
    *  field, and so a custom "+ Add a labor line" row could be hours-based later without this
    *  function learning another name. Absent `unit` means days, which is every row written before
    *  this existed and every custom row an estimator adds today. */
-  function laborCost(row) {
+  function laborCost(row, pw) {
     row = row || {};
     // A ROW SWITCHED OFF ADDS NOTHING (Kyle's on/off slider, 2026-10-05). Zero HERE, at the one
     // function every total goes through, so the figure is skipped in laborTotal BEFORE markupChain
@@ -250,7 +250,7 @@
     // A DAY IS 8 HOURS UNLESS THE ROW SAYS 10 (the Labor Calculator's "hours a day", 2026-10-06).
     // Only 8 and 10 are honoured, so a stray value in a saved blob prices as the sheet does.
     var perDay = row.unit === "hours" ? 1 : dayHours(row);
-    return num(row.guys) * num(row.days) * laborRateOf(row) * perDay;
+    return num(row.guys) * num(row.days) * laborRateOf(row, pw) * perDay;
   }
 
   /** THE RATE A LABOR ROW PRICES AT, the one place a blank Rate box is resolved (Hanz, 2026-10-09).
@@ -259,14 +259,117 @@
    *  when the Labor Calculator filled it, else the `rate_default` stamp a new bid carries on every
    *  row). A row with no stamp (a saved bid from before the stamp, which was never filled from
    *  anything) keeps pricing a blank rate at 0, so no saved bid's total moves. laborCost, the
-   *  Review lines and the box on the card all read this, so the screen and the totals agree. */
-  function laborRateOf(row) {
+   *  Review lines and the box on the card all read this, so the screen and the totals agree.
+   *
+   *  THE PREVAILING WAGE IS A LINE'S DEFAULT RATE (Hanz, 2026-10-15). `pw` is the job's prevailing
+   *  rate IN FORCE (prevailingApplied(model): the Labor step's card is on and a rate is set), 0 or
+   *  absent when there is none. A crew line that follows its default prices at `pw` instead of its
+   *  own default; a line whose rate was typed by hand on this bid keeps what was typed, and Travel
+   *  Labor keeps its own rate (laborFollowsPrevailing). Every total, the Review lines and the Rate
+   *  box on the card pass the same `pw`, so they cannot disagree, and a caller that passes none
+   *  prices exactly as before. */
+  function laborRateOf(row, pw) {
     row = row || {};
+    if (laborFollowsPrevailing(row, pw)) return num(pw);
     if (!isBlank(row.rate)) return num(row.rate);
-    var d = row.calc_default;
+    var own = ownDefaultRate(row);
+    return own === null ? 0 : own;
+  }
+
+  /** The rate a row was FILLED with and falls back to, or null when it has none: the Labor
+   *  Calculator's (`calc_default.rate`), else the stamp a new bid carries on every row
+   *  (`rate_default`). A saved bid from before the stamp has neither, and a null here is what keeps
+   *  its rates exactly as it saved them. */
+  function ownDefaultRate(row) {
+    var d = row && row.calc_default;
     if (d && !isBlank(d.rate) && isFinite(Number(d.rate))) return num(d.rate);
-    if (!isBlank(row.rate_default) && isFinite(Number(row.rate_default))) return num(row.rate_default);
-    return 0;
+    if (row && !isBlank(row.rate_default) && isFinite(Number(row.rate_default))) return num(row.rate_default);
+    return null;
+  }
+
+  /** A rate the estimator TYPED on this bid: a box that is not blank and not the line's own default.
+   *  Typing 0 counts (0 means zero). A row with no default to compare to (a saved bid from before the
+   *  stamp) holds a rate that cannot be told from a typed one, so it is treated as typed and no
+   *  prevailing wage moves it. */
+  function rateTypedByHand(row) {
+    if (!row || isBlank(row.rate)) return false;
+    var own = ownDefaultRate(row);
+    return own === null || num(row.rate) !== own;
+  }
+
+  /** Is this the Travel Labor row? It is the one labor line the prevailing wage never touches: the
+   *  sheet keeps its own rate (Polish C44 and Epoxy C52 are $33), and a drive is not paid as a trade. */
+  function isTravelRow(row) { return !!row && String(row.id) === "travel"; }
+
+  /** DOES THIS LINE'S RATE FOLLOW THE PREVAILING WAGE? Yes when a prevailing rate is in force, the line
+   *  is a crew line (anything but Travel Labor, a Gyp pour included) and nobody typed a rate over it. */
+  function laborFollowsPrevailing(row, pw) {
+    return num(pw) > 0 && !isTravelRow(row) && !rateTypedByHand(row);
+  }
+
+  /** What the Rate box on a labor card holds: the prevailing rate while the line follows it, else the
+   *  rate as stored (a blank stays blank). The box and the cost beside it are one figure. */
+  function laborRateBox(row, pw) {
+    return laborFollowsPrevailing(row, pw) ? num(pw) : (row || {}).rate;
+  }
+
+  // ── THE PREVAILING WAGE CALCULATOR (Hanz, 2026-10-15) ───────────────────────
+  // Kyle's workbook has a small calculator on every priced tab (Polish!I47:L54, Epoxy!I55:L62, Gyp K54:N66),
+  // two identical boxes, Cement Mason and Painter:
+  //   J48  Prevailing Wage Rate     =SUM(J49:J50)             rate (J49) + fringes (J50)
+  //   J53  1:1 "Entry" Half Wage    =IF((J48/2)<23,23,(J48/2))   "Entry" Laborer for MO "State" Wage ONLY,
+  //                                                              NOT davis-bacon
+  //   I51/I52  notes: Foreman *min. $32, (Entry *min. $23)
+  // NOTHING in the sheet reads those cells: the estimator types the rate into the labor Rate box (Polish C37,
+  // Epoxy C47) by hand, and D5 PrevailingWage? only adds the 5% escalation (C46). The v2 Labor step's card
+  // does what the estimator did by hand: it works the rate out and sets the crew lines to it.
+  // ONE trade per bid, no crew blending (Hanz: "we dont need specifics, just the calculator").
+  /** The two figures of the calculator that are not typed, as named constants: the "Entry" wage floor
+   *  (J53) and the foreman minimum (the note beside it). Shown as text; the foreman figure prices nothing. */
+  var PREVAILING = Object.freeze({ ENTRY_MIN: 23, FOREMAN_MIN: 32 });
+  /** The two boxes the workbook draws. One is picked per bid. */
+  var PREVAILING_TRADES = Object.freeze([
+    Object.freeze({ key: "cement_mason", label: "Cement Mason" }),
+    Object.freeze({ key: "painter", label: "Painter" })
+  ]);
+
+  /** The trade key for a stored value: a known one as it is, anything else the first (Cement Mason). */
+  function prevailingTradeKey(key) {
+    for (var i = 0; i < PREVAILING_TRADES.length; i++) if (PREVAILING_TRADES[i].key === key) return key;
+    return PREVAILING_TRADES[0].key;
+  }
+
+  /** A saved `prevailing` block read as a full one, or null when the model has none (and then nothing
+   *  is added: a bid that never used the card prices and saves exactly as before). Rate and fringes
+   *  are kept AS TYPED (a half-typed "12." must not snap back to 12), or "" when blank. Never throws. */
+  function normalizePrevailing(p) {
+    if (!p || typeof p !== "object" || p instanceof Array) return null;
+    var box = function (v) { return (typeof v === "number" || typeof v === "string") && !isBlank(v) ? v : ""; };
+    return { trade: prevailingTradeKey(p.trade), rate: box(p.rate), fringes: box(p.fringes) };
+  }
+
+  /** J48: the prevailing wage rate, rate plus fringes. 0 while nothing is typed. */
+  function prevailingTotal(p) {
+    if (!p || typeof p !== "object") return 0;
+    return parseFloat((num(p.rate) + num(p.fringes)).toPrecision(12));
+  }
+
+  /** J53: the 1:1 "Entry" half wage, half the prevailing rate and never under the $23 floor. The
+   *  sheet's own formula, so an empty calculator reads 23 here as it does there; the card shows it
+   *  only once a prevailing rate is set. */
+  function entryHalfWage(total) {
+    var half = num(total) / 2;
+    return half < PREVAILING.ENTRY_MIN ? PREVAILING.ENTRY_MIN : half;
+  }
+
+  /** THE PREVAILING RATE IN FORCE for a job: the card's rate plus fringes while the job's prevailing
+   *  wage switch is on (conditions.prevailing_wage, the one flag the intake and the Review step use),
+   *  and 0 otherwise. 0 means "no prevailing wage", and every labor price then reads as it always has. */
+  function prevailingApplied(model) {
+    if (!model || typeof model !== "object") return 0;
+    if (!(model.conditions && model.conditions.prevailing_wage)) return 0;
+    var total = prevailingTotal(model.prevailing);
+    return total > 0 ? total : 0;
   }
 
   /** The built-in crew lines the Labor Calculator can configure (the ids freshModel() gives them).
@@ -434,11 +537,11 @@
 
   /** The labor rows added up, UNROUNDED. D45 is where the rounding happens
    *  (`=ROUNDUP(SUM(D37:D44),0)`), and markupChain does it — rounding twice would drift. */
-  function laborTotal(rows, conditions) {
+  function laborTotal(rows, conditions, pw) {
     rows = rows || [];
     var t = 0;
-    for (var i = 0; i < rows.length; i++) t += laborCost(rows[i]);
-    return t + removeExistingHand(rows, conditions);
+    for (var i = 0; i < rows.length; i++) t += laborCost(rows[i], pw);
+    return t + removeExistingHand(rows, conditions, pw);
   }
 
   /** REMOVE EXISTING JOINT FILLER = A FOURTH HAND ON THE JOINT-FILLER LINE (Polish A42 is
@@ -447,13 +550,15 @@
    *  filler ON (no filler, no crew to add a hand to), and it follows the row's own on/off switch
    *  because laborCost does. Absent `conditions` adds nothing, so every caller that predates this
    *  prices exactly as before. */
-  function removeExistingHand(rows, conditions) {
+  function removeExistingHand(rows, conditions, pw) {
     if (!conditions || !conditions.joint_filler || !conditions.remove_existing_jf) return 0;
     rows = rows || [];
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
       if (r.id !== "jointfill") continue;
-      return laborCost({ guys: 1, days: r.days, rate: laborRateOf(r), unit: r.unit,
+      // The extra hand is paid the line's rate, the prevailing one included: it is read here, so the
+      // copy below carries a typed number and never has to say whether it was typed.
+      return laborCost({ guys: 1, days: r.days, rate: laborRateOf(r, pw), unit: r.unit,
                          hours_per_day: r.hours_per_day, enabled: r.enabled });
     }
     return 0;
@@ -506,7 +611,7 @@
   function travelQty(line, rows, opts) {
     line = line || {};
     if (line.qty_auto === false) return num(line.qty);
-    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions);
+    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions, opts.prevailing);
     return travelManDays(rows);
   }
 
@@ -515,15 +620,15 @@
    *  an 8 hour day. It is guys x days (travelManDays) while every row is paid that rate, and more once a row is paid
    *  another (a prevailing wage row), because the extra pay reads as extra days. The divide is the engine's own, so
    *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2 only. */
-  function sheetNights(rows, conditions) {
+  function sheetNights(rows, conditions, pw) {
     rows = rows || [];
     var travelLabor = 0, rate = 0;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
-      if (r.unit === "hours") { travelLabor += laborCost(r); continue; }
-      if (!rate && rowOn(r) && laborRateOf(r) > 0) rate = laborRateOf(r);
+      if (r.unit === "hours") { travelLabor += laborCost(r, pw); continue; }
+      if (!rate && rowOn(r) && laborRateOf(r, pw) > 0) rate = laborRateOf(r, pw);
     }
-    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions)), travelLabor, rate || SHIPPED_LABOR_RATE);
+    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);
   }
 
   /** One travel line's cost, ROUNDED UP TO THE DOLLAR like pricing.py's D68 (each of lodging and
@@ -857,9 +962,9 @@
         (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)) +
         (typedQty || l.qty_auto !== false ? "" : ". Type the " + (k === "lodging" ? "nights." : "days.")));
     });
-    if (usesAuto && trvOpts && Math.abs(sheetNights(rows, trvOpts.conditions) - travelManDays(rows)) >= 1e-9) {
+    if (usesAuto && trvOpts && Math.abs(sheetNights(rows, trvOpts.conditions, trvOpts.prevailing) - travelManDays(rows)) >= 1e-9) {
       lines.push("Nights = the labor dollars above over the first crew rate over 8 hours, as the sheet counts them (" +
-        qty(sheetNights(rows, trvOpts.conditions)) + " now). Guys x days is " + qty(travelManDays(rows)) + ".");
+        qty(sheetNights(rows, trvOpts.conditions, trvOpts.prevailing)) + " now). Guys x days is " + qty(travelManDays(rows)) + ".");
     } else if (usesAuto) {
       lines.push("Man-days = guys x days on the labor lines above (" + qty(travelManDays(rows)) +
         " now).");
@@ -1707,7 +1812,12 @@
    *  with the stamp), and none for every other section, which count as they always did. */
   function travelOpts(model, tab) {
     if (!isRev2Polish(model, tab)) return undefined;
-    return { sheetNights: true, conditions: model.conditions };
+    // The prevailing rate in force rides along only when there is one, so a bid with none gets exactly the
+    // two keys it always did. The nights divide the labor dollars by the crew's rate, and that rate is it.
+    var opts = { sheetNights: true, conditions: model.conditions };
+    var pw = prevailingApplied(model);
+    if (pw > 0) opts.prevailing = pw;
+    return opts;
   }
 
   /** Is the section `tab` of this model a Polish section priced by polish-rev2? The root is when its own `profile` key
@@ -2734,7 +2844,7 @@
    *  states all of these comes back with. A key added to the OUTPUT without being added HERE would
    *  be carried raw over its own normalisation, which is the one mistake this list exists to stop. */
   var MODEL_KEYS = Object.freeze(["version", "takeoff", "labor", "conditions", "contingency", "fees",
-    "totals", "no_travel_labor", "conditions_shown", "cond_cov", "travel", "distance", "fees_default"]);
+    "totals", "no_travel_labor", "conditions_shown", "cond_cov", "travel", "prevailing", "distance", "fees_default"]);
 
   /** `out` with every own key of `saved` that is not in MODEL_KEYS copied on, unchanged.
    *
@@ -2890,6 +3000,10 @@
       // absent reads as "unknown" -- the page then asks the server once.
       var dist = normalizeDistance(model.distance);
       if (dist) out.distance = dist;
+      // THE PREVAILING WAGE CALCULATOR's trade, rate and fringes (Labor step). Absent on every bid that never
+      // used the card, and then absent stays absent: nothing is added, so such a bid prices and saves as before.
+      var pwBlock = normalizePrevailing(model.prevailing);
+      if (pwBlock) out.prevailing = pwBlock;
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
@@ -3112,7 +3226,7 @@
   //     rates: <the snapshot, see snapshotRates>, totals }
   //
   // JOB-LEVEL KEYS STAY AT THE ROOT and are shared by every section: conditions, conditions_shown, cond_cov,
-  // travel, distance, fees_default (and no_travel_labor). The root keys keep today's meaning, so the model is
+  // travel, distance, fees_default, prevailing (and no_travel_labor). The root keys keep today's meaning, so the model is
   // still `polish_estimate` at `version: 2` and no saved bid is rewritten.
   //
   // A SECTION'S KEY IS ITS WORKBOOK SHEET, OR A Copy<N> ID (Sheets phase 1). A copy of a sheet, and any second section of
@@ -3501,7 +3615,7 @@
     }
     var carrier = travelCarrier(model) === e.tab;
     var input = {
-      labor: laborTotal(s.labor, model.conditions),
+      labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),
       travel: carrier ? travelCosts(model.travel, s.labor).total : 0,
       contingency: s.contingency, fees: s.fees, conditions: model.conditions,
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate
@@ -3571,7 +3685,7 @@
         ", which a Polish section is not priced with. Its saved figures are kept.");
     }
     var mat = ctx.material(e);
-    var labor = laborTotal(s.labor, model.conditions);
+    var labor = laborTotal(s.labor, model.conditions, prevailingApplied(model));
     return markupChain({
       material: isObject(mat) ? mat.material : mat,
       labor: labor,
@@ -4886,7 +5000,7 @@
       var missing = [];
       if (!filledIn(row.guys)) missing.push("guys");
       if (!filledIn(row.days)) missing.push(row.unit === "hours" ? "hours" : "days");
-      if (!filledIn(row.rate) && !(laborRateOf(row) > 0)) missing.push("rate");
+      if (!filledIn(row.rate) && !(laborRateOf(row, prevailingApplied(m)) > 0)) missing.push("rate");
       if (missing.length > 0 && missing.length < 3) {
         var which = missing.length === 1 ? missing[0]
           : missing.slice(0, -1).join(", ") + " and " + missing[missing.length - 1];
@@ -4915,6 +5029,11 @@
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    // The prevailing wage calculator (Labor step): the constants, the card's two figures, and the rate in force.
+    PREVAILING: PREVAILING, PREVAILING_TRADES: PREVAILING_TRADES, normalizePrevailing: normalizePrevailing,
+    prevailingTotal: prevailingTotal, entryHalfWage: entryHalfWage, prevailingApplied: prevailingApplied,
+    laborFollowsPrevailing: laborFollowsPrevailing, laborRateBox: laborRateBox, rateTypedByHand: rateTypedByHand,
+    ownDefaultRate: ownDefaultRate, isTravelRow: isTravelRow,
     // Lodging and Per Diem, the two travel costs beside Travel Labor (see travelCostsSeed).
     SHIPPED_LODGING_RATE: SHIPPED_LODGING_RATE, SHIPPED_PER_DIEM_RATE: SHIPPED_PER_DIEM_RATE,
     TRAVEL_LINE_KEYS: TRAVEL_LINE_KEYS, TRAVEL_LABEL: TRAVEL_LABEL, travelLabel: travelLabel,

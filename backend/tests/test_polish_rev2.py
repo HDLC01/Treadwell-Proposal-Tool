@@ -256,10 +256,10 @@ REV2_BREAKS = {
         PROFILES, 'quirks: { toolingInSubTotal: true, remodelBase: "sheet" }',
         'quirks: { toolingInSubTotal: true, remodelBase: "model" }', "remodel-base-widened"),
     "rev2 counts nights in people-days": (
-        MODEL, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        MODEL, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
         "    return travelManDays(rows);", "lodging-by-man-days"),
     "rev2 forgets to ask for the sheet's nights": (
-        MODEL, "    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions);",
+        MODEL, "    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions, opts.prevailing);",
         "    void opts;", "lodging-by-man-days"),
     "the nights are divided by ten hours": (
         "js/bid-engine.js", "    return ((num(labor) - num(travelLabor)) / rate) / quirks.lodgingDivisor;",
