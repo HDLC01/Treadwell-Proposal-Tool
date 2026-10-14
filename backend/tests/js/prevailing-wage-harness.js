@@ -65,7 +65,18 @@ function figuresSection() {
       none: B.normalizePrevailing(undefined), notAnObject: B.normalizePrevailing("52"), list: B.normalizePrevailing([1]),
       empty: B.normalizePrevailing({}), badTrade: B.normalizePrevailing({ trade: "plumber", rate: 5 }).trade,
       painter: B.normalizePrevailing({ trade: "painter", rate: "40", fringes: 12 }),
-      keepsHalfTyped: B.normalizePrevailing({ rate: "12." }).rate,
+      keepsHalfTyped: B.prevailingCrewTrade({ rate: "12." }).rate,
+      // the estimator's own trades: kept in order with their names; a bad key, a duplicate, a builtin twice,
+      // and a name past the limit are all handled; the crew may be one of them
+      own: B.normalizePrevailing({ trade: "t2", trades: [
+        { key: "painter", rate: 30, fringes: 9 }, { key: "t2", label: "Laborer", rate: "25", fringes: 8 },
+        { key: "t2", label: "dupe" }, { key: "../x", label: "bad key" }, { key: "t3", label: "x".repeat(80) },
+        { key: "cement_mason", label: "Renamed?", rate: 40, fringes: 12 }] }),
+      ownCrewTotal: B.prevailingTotal({ trade: "t2", trades: [{ key: "t2", label: "Laborer", rate: "25", fringes: 8 }] }),
+      goneCrew: B.normalizePrevailing({ trade: "t9", trades: [] }).trade,
+      hostile: B.normalizePrevailing({ trade: "__proto__", trades: [{ key: "__proto__", label: "x", rate: 1 },
+        { key: "constructor", rate: 2 }, { key: "toString", rate: 3 }] }).trades.map((t) => t.key),
+      newKey: B.newPrevailingTradeKey({ trades: [{ key: "t1", label: "a" }, { key: "t2", label: "b" }] }),
     },
     // the rate in force: switch on AND a rate set
     applied: {
@@ -290,7 +301,7 @@ async function pageSection() {
   const card = () => ({ total: t("[data-pw-total]"), entry: t("[data-pw-entry]"), sub: t("[data-pw-sub]"),
     note: t("[data-pw-note]"), cls: P.need(q, "[data-pw-card]").className,
     rate: String(P.need(q, '[data-pw="rate"]').value), fringes: String(P.need(q, '[data-pw="fringes"]').value),
-    trade: String(P.need(q, '[data-pw="trade"]').value),
+    trade: (B.normalizePrevailing(q.api.model().prevailing) || B.normalizePrevailing({})).trade,
     sw: P.need(q, '[data-cond="prevailing_wage"]').attrs["aria-checked"],
     swClass: P.need(q, '[data-cond="prevailing_wage"]').className,
     bodyHidden: !!P.need(q, "[data-pw-body]").hidden,
@@ -312,7 +323,7 @@ async function pageSection() {
   // a NEW bid: the card is there, empty, and nothing was written to the model by opening it
   out.fresh = { card: card(), hasBlock: has(q.api.model(), "prevailing"), flag: q.api.model().conditions.prevailing_wage,
     rateBoxes: [box(iP, "rate"), box(iM, "rate"), box(idx("jointfill"), "rate"), box(iT, "rate")],
-    order: Array.from(q.dom.get("panels").innerHTML.matchAll(/data-pw-card|data-lab-card="0"/g)).map((x) => x[0]),
+    order: Array.from(q.dom.get("panels").innerHTML.matchAll(/data-pw-card|data-lab-card="0"|data-travel-total|data-pw-state/g)).map((x) => x[0]),
     saves: q.rec.saves.length };
 
   // the foreman and entry hints, plain words
@@ -414,10 +425,38 @@ async function pageSection() {
   out.cleared.afterOff = { stored: q.api.model().labor[iP].rate, box: box(iP, "rate"), cost: t('[data-lcost-for="' + iP + '"]') };
   press("click");
 
-  // the trade is a label: picking one changes nothing that prices
+  // TRADES. Typing a painter's figures moves nothing (the crew is paid as a cement mason); paying the crew as a
+  // painter moves every following line to the painter's rate and leaves Travel Labor alone.
+  const pick = (i) => {
+    const el = P.need(q, '[data-pw-pick="' + i + '"]');
+    el.checked = true;
+    q.doc.fire("change", { target: el });
+  };
   const bidBefore = q.api.bid().total;
-  P.changeTo(q, '[data-pw="trade"]', "painter");
-  out.trade = { model: clone(q.api.model().prevailing), card: card(), sameBid: q.api.bid().total === bidBefore };
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="1"]', "30");
+  P.typeInto(q, '[data-pw="fringes"][data-pw-i="1"]', "10");
+  const typedPainter = { sameBid: q.api.bid().total === bidBefore, box: box(iP, "rate"),
+    painterTotal: t('[data-pw-total][data-pw-i="1"]'), painterEntry: t('[data-pw-entry][data-pw-i="1"]') };
+  pick(1);
+  out.trade = { typedPainter: typedPainter, model: clone(q.api.model().prevailing), card: card(),
+    box: box(iP, "rate"), travel: box(iT, "rate"), movedBid: q.api.bid().total !== bidBefore,
+    crewClass: [P.need(q, '[data-pw-trade="0"]').className, P.need(q, '[data-pw-trade="1"]').className] };
+  // ADD ONE OF OUR OWN: + Add a trade, name it, give it figures, pay the crew it, then remove it
+  P.clickOn(q, "[data-pw-add]");
+  const added = { names: q.doc.querySelectorAll('[data-pw="label"]').length,
+    model: clone(q.api.model().prevailing) };
+  P.typeInto(q, '[data-pw="label"][data-pw-i="2"]', "Laborer");
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="2"]', "25");
+  P.typeInto(q, '[data-pw="fringes"][data-pw-i="2"]', "8");
+  pick(2);
+  added.picked = { box: box(iP, "rate"), sub: t("[data-pw-sub]"), total: t('[data-pw-total][data-pw-i="2"]'),
+    model: clone(q.api.model().prevailing) };
+  P.clickOn(q, '[data-pw-del="2"]');
+  added.removed = { box: box(iP, "rate"), model: clone(q.api.model().prevailing),
+    boxes: q.doc.querySelectorAll("[data-pw-trade]").length,
+    builtinsHaveNoRemove: q.doc.querySelectorAll("[data-pw-del]").length };
+  out.added = added;
+  pick(1);
 
   // the switch answers the keyboard (Space) like the other switches, and keeps its node and its focus the same way
   const before = q.api.model().conditions.prevailing_wage;
@@ -547,13 +586,52 @@ async function stepsSection() {
   return out;
 }
 
+// A FRESH card: typing the Painter box while Cement Mason is empty makes Painter the trade the lines use, and the
+// note names the trade. Then a name with markup in it is drawn as text, and removing a trade from the MIDDLE of the
+// list leaves every later box writing to its own trade.
+async function tradesSection() {
+  const q = P.build({ blob: P.blob({ polish_estimate: null, polish_sf: 12000 }), labor: LIB });
+  await q.api.init(); q.api.go(1); await settle();
+  const idx = (id) => q.api.model().labor.findIndex((r) => r.id === id);
+  const iP = idx("polishing");
+  const box = (i, k) => String(P.need(q, '[data-lab="' + i + '"][data-k="' + k + '"]').value);
+  const out = {};
+  P.clickOn(q, '[data-cond="prevailing_wage"]');
+  out.noRate = { note: P.txt(q, "[data-pw-note]") };
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="1"]', "30");
+  P.typeInto(q, '[data-pw="fringes"][data-pw-i="1"]', "10");
+  const m = B.normalizePrevailing(q.api.model().prevailing);
+  out.autoPick = { trade: m.trade, box: box(iP, "rate"), note: P.txt(q, "[data-pw-note]"),
+    sub: P.txt(q, "[data-pw-sub]"), paid: P.need(q, '[data-pw-trade="1"]').className };
+  // Cement Mason's figures now move nothing: the picked trade has a rate
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="0"]', "50");
+  out.afterOther = { trade: B.normalizePrevailing(q.api.model().prevailing).trade, box: box(iP, "rate") };
+  // a hostile name, drawn again on a rebuild
+  P.clickOn(q, "[data-pw-add]");
+  P.typeInto(q, '[data-pw="label"][data-pw-i="2"]', '"><img src=x onerror=alert(1)>');
+  P.clickOn(q, "[data-pw-add]");
+  P.clickOn(q, "[data-pw-add]");
+  const html = q.dom.get("panels").innerHTML;
+  out.hostile = { rawImg: html.indexOf("<img") >= 0, escaped: html.indexOf("&lt;img") >= 0,
+    sub: P.txt(q, "[data-pw-sub]") };
+  // the middle trade (t2, index 3) goes; t3 moves to index 3 and its boxes write to t3
+  P.typeInto(q, '[data-pw="label"][data-pw-i="4"]', "Third");
+  P.typeInto(q, '[data-pw="rate"][data-pw-i="4"]', "20");
+  P.clickOn(q, '[data-pw-del="3"]');
+  P.typeInto(q, '[data-pw="fringes"][data-pw-i="3"]', "5");
+  const after = B.normalizePrevailing(q.api.model().prevailing);
+  out.middle = { keys: after.trades.map((x) => x.key), third: after.trades[3],
+    removes: q.doc.querySelectorAll("[data-pw-del]").length };
+  return out;
+}
+
 (async function () {
   const attempt = async (fn) => { try { return await fn(); } catch (e) { return { error: String((e && e.stack) || e) }; } };
   const done = {};
   for (const [name, fn] of [["figures", figuresSection], ["rates", ratesSection], ["sections", sectionsSection],
                             ["saved", savedSection], ["page", pageSection], ["sectionPage", sectionPageSection],
                             ["typedAtDefaultPage", typedAtDefaultPageSection], ["lodging", lodgingSection],
-                            ["steps", stepsSection]]) {
+                            ["steps", stepsSection], ["trades", tradesSection]]) {
     done[name] = await attempt(fn);
   }
   // the words the page may never put on screen (Labour, Crew), over what the card rendered

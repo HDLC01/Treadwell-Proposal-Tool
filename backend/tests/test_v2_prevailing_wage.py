@@ -81,15 +81,40 @@ def test_the_card_works_out_the_sheets_two_figures(ran):
     assert f["nothingTyped"] == {"total": 0, "none": 0}
 
 
-def test_one_trade_per_bid_and_it_is_only_a_label(ran):
+def _trades(**rates):
+    """The two built-in boxes with these figures (key -> (rate, fringes)), as normalizePrevailing returns them."""
+    out = []
+    for key, label in (("cement_mason", "Cement Mason"), ("painter", "Painter")):
+        r, f = rates.get(key, ("", ""))
+        out.append({"key": key, "label": label, "rate": r, "fringes": f})
+    return out
+
+
+def test_every_trade_has_a_box_and_the_crew_is_paid_one(ran):
+    """Hanz, 2026-10-15: one box per trade, Cement Mason and Painter always (the sheet's two), plus any other
+    trade the estimator adds and names. The FIRST shape, one trade per bid, is read into this one.
+
+    Mutation: the first shape's rate is dropped on the way in."""
     f = ran["figures"]
     assert f["trades"] == [["cement_mason", "Cement Mason"], ["painter", "Painter"]]
     n = f["normalised"]
     assert n["badTrade"] == "cement_mason", "an unknown trade reads as the first"
-    assert n["painter"] == {"trade": "painter", "rate": "40", "fringes": 12}
+    # the first shape, one trade per bid: its figures land on its trade, and the crew stays paid it
+    assert n["painter"] == {"trade": "painter", "trades": _trades(painter=("40", 12))}
     assert n["keepsHalfTyped"] == "12.", "a half typed number must not snap while somebody is typing it"
     assert n["none"] is None and n["notAnObject"] is None and n["list"] is None
-    assert n["empty"] == {"trade": "cement_mason", "rate": "", "fringes": ""}
+    assert n["empty"] == {"trade": "cement_mason", "trades": _trades()}
+    # the estimator's own: in order, named, keys minted not typed, built-ins keep their names
+    own = n["own"]
+    assert own["trade"] == "t2"
+    assert own["trades"] == _trades(cement_mason=(40, 12), painter=(30, 9)) + [
+        {"key": "t2", "label": "Laborer", "rate": "25", "fringes": 8},
+        {"key": "t3", "label": "x" * 60, "rate": "", "fringes": ""}], own["trades"]
+    assert n["ownCrewTotal"] == 33, "the crew is paid the trade it picked, one of our own included"
+    assert n["goneCrew"] == "cement_mason", "a crew trade that is not on the card reads as the first"
+    assert n["newKey"] == "t3"
+    # a hand-edited blob: only keys this card can have are read (CodeQL js/remote-property-injection)
+    assert n["hostile"] == ["cement_mason", "painter"]
 
 
 def test_the_rate_is_in_force_only_with_the_switch_on_and_a_rate_set(ran):
@@ -188,6 +213,8 @@ def test_a_rate_typed_on_one_section_wins_there_only(ran):
 def test_a_save_carries_the_block_and_stamps_the_totals_priced_at_the_prevailing_rate(ran):
     """Mutation: migrateModel stops reading `prevailing` (the save loses the card)."""
     s = ran["sections"]["save"]
+    # the save passes the block through as the model holds it; the page's model is always the current shape,
+    # because a bid is read through normalizePrevailing when it is opened (blockKept below)
     assert s["carried"] == {"trade": "cement_mason", "rate": 40, "fringes": 12}
     assert s["totalsLabor"] == 6240 and s["epoxyTotalsLabor"] == 4992
 
@@ -217,7 +244,8 @@ def test_a_saved_bid_with_no_card_prices_and_saves_exactly_as_before(ran):
     assert s["applied"] == 0
     assert (s["labor"], s["total"], s["escalation"]) == (s["laborBefore"], s["totalBefore"], s["escalationBefore"])
     assert s["escalation"] > 0, "the saved bid has the switch on, so the 5% escalation is in this figure"
-    assert s["blockKept"] == {"trade": "painter", "rate": 40, "fringes": 12} and s["offFlagApplied"] == 0
+    # a bid saved in the FIRST shape (one trade per bid) opens in the current one, its figures on its trade
+    assert s["blockKept"] == {"trade": "painter", "trades": _trades(painter=(40, 12))} and s["offFlagApplied"] == 0
     assert s["migrateTwice"] is True
     assert s["savedRowRate"] == 33 and s["stampedRowAtZero"] == 33
     assert ran["sections"]["hasBlockOnAFreshSave"] is False, "a model that never used the card saves no block"
@@ -225,8 +253,10 @@ def test_a_saved_bid_with_no_card_prices_and_saves_exactly_as_before(ran):
 
 # ══ 5. the card on the real page ════════════════════════════════════════════════════════════════════
 def test_a_new_bid_opens_with_an_empty_card_above_the_labor_lines_and_writes_nothing(ran):
-    """Rate and fringes start EMPTY, like every quantity. The card is a container like the others, ahead of the
-    first labor line, with the job's switch in its header, and opening the step saves nothing and adds no key.
+    """Rate and fringes start EMPTY, like every quantity. The card is a container like the others, at the BOTTOM
+    of the Labor step (Hanz, 2026-10-15: "prevailing wage should be at the bottom not at the top"), after the
+    labor lines, the travel block and the prevailing-wage caption, with the job's switch in its header, and
+    opening the step saves nothing and adds no key.
 
     Mutation: do not draw the card in laborPanel."""
     f = ran["page"]["fresh"]
@@ -235,7 +265,8 @@ def test_a_new_bid_opens_with_an_empty_card_above_the_labor_lines_and_writes_not
     assert f["card"]["sw"] == "false" and f["flag"] is False
     assert f["card"]["trade"] == "cement_mason"
     assert f["hasBlock"] is False and f["saves"] == 0, "opening the Labor step wrote something"
-    assert f["order"] == ["data-pw-card", 'data-lab-card="0"'], "the card sits above the labor lines"
+    assert f["order"] == ['data-lab-card="0"', "data-travel-total", "data-pw-state", "data-pw-card"], (
+        "the card is the last thing on the Labor step: %s" % f["order"])
     assert f["rateBoxes"] == ["33", "33", "33", "36"]
     assert "tk pwcard inert off" == f["card"]["cls"], "grayed while the job's switch is off, like the other cards"
 
@@ -266,7 +297,8 @@ def test_switching_it_on_opens_the_card_in_place_with_the_same_switch_node(ran):
     assert o["card"]["bodyHidden"] is False and o["card"]["cls"] == "tk pwcard"
     assert o["card"]["sw"] == "true" and o["card"]["swClass"] == "mw-sw on"
     assert o["card"]["sub"] == "Cement Mason"
-    assert o["card"]["note"] == "On, with no rate yet. Type the rate and fringes to set the labor lines."
+    assert o["card"]["note"] == ("Cement Mason has no rate yet. Type its rate and fringes, or pick another trade "
+                                  "with Labor lines use this rate.")
     assert o["card"]["caption"]["state"] == "on" and "5% escalation" in o["card"]["caption"]["esc"]
     assert o["flag"] is True and o["hasBlock"] is False
     assert o["rateBoxes"] == ["33", "33", "33", "36"], "no rate typed, so no line moved"
@@ -276,7 +308,7 @@ def test_the_card_says_the_two_notes_in_plain_words(ran):
     text = ran["page"]["hints"]["text"]
     assert "Foreman min. $32, entry min. $23." in text
     assert "1:1 entry laborer, Missouri state wage only, not Davis-Bacon." in text
-    assert "Rate plus fringes." in text
+    assert "Rate plus fringes is the prevailing wage rate." in text
     html = ran["page"]["fresh"]["cardHtml"]
     assert "—" not in html and "–" not in html, "no em or en dash in the card's words"
     assert ran["words"]["hits"] == [], ran["words"]["hits"]
@@ -290,7 +322,7 @@ def test_the_card_works_out_52_and_26_then_40_and_23(ran):
     p = ran["page"]
     assert p["fortyTwelve"]["card"]["total"] == "$52.00" and p["fortyTwelve"]["card"]["entry"] == "$26.00"
     assert p["fortyTwelve"]["rateBoxes"] == ["52", "52"] and p["fortyTwelve"]["laborTotalText"] == "$7,080"
-    assert p["fortyTwelve"]["model"] == {"trade": "cement_mason", "rate": "40", "fringes": "12"}
+    assert p["fortyTwelve"]["model"] == {"trade": "cement_mason", "trades": _trades(cement_mason=("40", "12"))}
     assert p["thirtyTen"]["card"]["total"] == "$40.00" and p["thirtyTen"]["card"]["entry"] == "$23.00"
     assert p["thirtyTen"]["rateBoxes"] == ["40", "40"]
 
@@ -365,7 +397,8 @@ def test_switching_it_off_gives_every_following_line_its_own_rate_back(ran):
     assert o["card"]["total"] == "$52.00", "what was typed in the card stays, ready for the next time"
     assert o["card"]["bodyHidden"] is True and o["card"]["sub"] == "Off. Labor lines keep their own rates."
     assert o["card"]["sw"] == "false" and o["card"]["swClass"] == "mw-sw" and o["card"]["note"] == ""
-    assert o["block"] == {"trade": "cement_mason", "rate": "40", "fringes": "12"}, "closing it keeps what was typed"
+    assert o["block"] == {"trade": "cement_mason", "trades": _trades(cement_mason=("40", "12"))}, (
+        "closing it keeps what was typed")
     assert o["card"]["rate"] == "40" and o["card"]["fringes"] == "12", "the boxes are hidden, never emptied"
     assert o["sameNode"] is True and o["rebuilt"] == 0, "closing it rebuilt the panel and dropped the focus"
     assert o["rateBoxes"] == ["33", "40", "36"]
@@ -403,10 +436,62 @@ def test_clearing_a_following_lines_rate_never_writes_the_prevailing_rate_into_i
     assert c["afterOff"] == {"stored": 33, "box": "33", "cost": "$3,960"}
 
 
-def test_the_trade_is_a_label_that_prices_nothing(ran):
+def test_the_crew_is_paid_the_trade_picked_and_typing_another_trade_moves_nothing(ran):
+    """Each trade works out its own figures; only the one marked "Labor lines use this rate" sets the lines.
+
+    Mutation: prevailingTotal stops following the picked trade (it reads the first)."""
     t = ran["page"]["trade"]
+    typed = t["typedPainter"]
+    assert typed["sameBid"] is True and typed["box"] == "52", "typing the painter's figures moved the crew"
+    assert (typed["painterTotal"], typed["painterEntry"]) == ("$40.00", "$23.00")
     assert t["model"]["trade"] == "painter" and t["card"]["trade"] == "painter" and t["card"]["sub"].startswith("Painter")
-    assert t["sameBid"] is True
+    assert t["box"] == "40" and t["travel"] == "36" and t["movedBid"] is True
+    assert t["crewClass"] == ["pwtrade", "pwtrade paid"]
+
+
+def test_the_first_figures_typed_pick_their_trade_and_the_note_names_it(ran):
+    """Found in review: with Cement Mason picked and empty, typing only the Painter box moved nothing and the note
+    said "no rate yet", so a painting job went out at the lines' own rates. Now the first figures typed pick their
+    trade; once the picked trade has a rate, another trade's figures move nothing.
+
+    Mutation: drop the auto-pick in setPrevailing; the note stops naming the trade."""
+    t = ran["trades"]
+    assert t["noRate"]["note"].startswith("Cement Mason has no rate yet."), t["noRate"]
+    a = t["autoPick"]
+    assert a["trade"] == "painter" and a["box"] == "40" and a["paid"] == "pwtrade paid"
+    assert a["note"].startswith("Labor lines price at $40.00") and a["sub"].startswith("Painter")
+    assert t["afterOther"] == {"trade": "painter", "box": "40"}
+
+
+def test_a_trade_name_with_markup_in_it_is_drawn_as_text(ran):
+    h = ran["trades"]["hostile"]
+    assert h["rawImg"] is False and h["escaped"] is True
+    assert h["sub"].startswith("Painter"), "the header names the trade the lines use, not the newest"
+
+
+def test_removing_a_trade_from_the_middle_leaves_every_later_box_on_its_own_trade(ran):
+    m = ran["trades"]["middle"]
+    assert m["keys"] == ["cement_mason", "painter", "t1", "t3"]
+    assert m["third"] == {"key": "t3", "label": "Third", "rate": "20", "fringes": "5"}
+    assert m["removes"] == 2, "only the estimator's own trades can be removed"
+
+
+def test_a_trade_of_our_own_can_be_added_named_paid_and_removed(ran):
+    """Hanz, 2026-10-15: "there is a prevailing wage for others apart from the painter and mason ... we can label
+    it on our own". + Add a trade adds a box with a name box; paying the crew it moves the lines; removing it puts
+    the crew back on the first trade. The sheet's two cannot be removed.
+
+    Mutation: the Remove button does nothing; + Add a trade does nothing."""
+    a = ran["page"]["added"]
+    assert a["names"] == 1, "a new trade has a name box, and only it does"
+    assert a["model"]["trades"][2] == {"key": "t1", "label": "", "rate": "", "fringes": ""}
+    p = a["picked"]
+    assert p["box"] == "33" and p["sub"].startswith("Laborer") and p["total"] == "$33.00"
+    assert p["model"]["trade"] == "t1" and p["model"]["trades"][2]["label"] == "Laborer"
+    r = a["removed"]
+    assert r["boxes"] == 2 and r["builtinsHaveNoRemove"] == 0
+    assert r["model"]["trade"] == "cement_mason" and len(r["model"]["trades"]) == 2
+    assert r["box"] == "52", "with our trade gone the crew is paid the cement mason rate again"
 
 
 def test_the_switch_answers_the_keyboard_and_the_save_carries_the_card(ran):
@@ -416,7 +501,8 @@ def test_the_switch_answers_the_keyboard_and_the_save_carries_the_card(ran):
     assert (k["before"], k["after"]) == (True, False), "Space on the switch flips the job's flag"
     assert k["bodyHiddenAfter"] is True and k["caption"] == "off"
     assert k["sameNode"] is True and k["rebuilt"] == 0, "the keyboard press rebuilt the panel under the focus"
-    assert p["saved"]["block"] == {"trade": "painter", "rate": "40", "fringes": "12"}
+    assert p["saved"]["block"] == {"trade": "painter",
+                                   "trades": _trades(cement_mason=("40", "12"), painter=("30", "10"))}
 
 
 def test_the_card_and_the_rate_are_on_every_sections_labor_step(ran):
@@ -596,10 +682,10 @@ MUTATIONS = {
         PAGE, "      esc(nv(B.laborRateBox(r, pw))) + '\"></span>' +", "      esc(nv(r.rate)) + '\"></span>' +",
         lambda r: r["page"]["afterReturn"]["rateBoxes"][:1] == ["33"]),
     "the Labor step draws no card": (
-        PAGE, '    var html = prevailingCard();', '    var html = "";',
+        PAGE, '    html += prevailingCard();', '    void 0;',
         lambda r: "error" in r["page"] or r["sectionPage"]["Epoxy"]["card"] is False),
     "typing in the card stores nothing": (
-        PAGE, "      setPrevailing(pwField, el.value);", "      void pwField;",
+        PAGE, '      setPrevailing(pwField, el.value, parseInt(el.getAttribute("data-pw-i"), 10));', "      void pwField;",
         lambda r: r["page"]["fortyTwelve"]["card"]["total"] == ""),
     "the line costs do not repaint on the prevailing rate": (
         PAGE, '        el.getAttribute("data-lcost-for"), 10)], pwNow));',
@@ -613,7 +699,7 @@ MUTATIONS = {
         PAGE, "      var v = nv(B.laborRateBox(r, pwNow));", "      var v = nv(r.rate);",
         lambda r: r["page"]["moved"]["rateBoxes"] != ["54", "54"]),
     "the entry half wage does not repaint": (
-        PAGE, '      el.textContent = pwSum > 0 ? B.money2(B.entryHalfWage(pwSum)) : "";',
+        PAGE, '      el.textContent = sum > 0 ? B.money2(B.entryHalfWage(sum)) : "";',
         "      el.textContent = el.textContent;",
         lambda r: r["page"]["moved"]["card"]["entry"] != "$27.00"),
     "a cleared box writes the prevailing rate into the line": (
@@ -633,12 +719,12 @@ MUTATIONS = {
         'var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") || null; var unused =',
         lambda r: r["page"]["keyboard"]["after"] is True),
     "the card is drawn open while the switch is off": (
-        PAGE, """'</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="tk-g lab-g pw-g">' +""",
-        """'</div><div data-pw-body><div class="tk-g lab-g pw-g">' +""",
+        PAGE, """'</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="pwtrades">' +""",
+        """'</div><div data-pw-body><div class="pwtrades">' +""",
         lambda r: r["page"]["fresh"]["card"]["bodyHidden"] is False),
     "the card is always drawn closed": (
-        PAGE, """'</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="tk-g lab-g pw-g">' +""",
-        """'</div><div data-pw-body hidden><div class="tk-g lab-g pw-g">' +""",
+        PAGE, """'</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="pwtrades">' +""",
+        """'</div><div data-pw-body hidden><div class="pwtrades">' +""",
         lambda r: r["page"]["afterReturn"]["card"]["bodyHidden"] is True),
     "switching it does not show or hide the body": (
         PAGE, 'document.querySelectorAll("[data-pw-body]").forEach(function (el) { el.hidden = !pwOn; });',
@@ -679,6 +765,28 @@ MUTATIONS = {
         PAGE, "M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
         "M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });",
         lambda r: r["steps"]["on"]["step"]["labor"] == "" and r["steps"]["on"]["step"]["review"] == ""),
+    "the crew is not paid the trade picked": (
+        MODEL, "    if (p.trades instanceof Array) p = prevailingCrewTrade(p) || {};",
+        "    if (p.trades instanceof Array) p = p.trades[0] || {};",
+        lambda r: r["page"]["trade"]["box"] != "40" or r["figures"]["normalised"]["ownCrewTotal"] != 33),
+    "the first shape's rate is dropped": (
+        MODEL, "      legacy.rate = box(p.rate);", "      void legacy;",
+        lambda r: r["figures"]["normalised"]["painter"]["trades"][1]["rate"] != "40"),
+    "Remove does nothing": (
+        PAGE, "      if (removePrevailingTrade(parseInt(pwDel.getAttribute(\"data-pw-del\"), 10))) changed(true);",
+        "      void pwDel;",
+        lambda r: r["page"]["added"]["removed"]["boxes"] != 2),
+    "+ Add a trade does nothing": (
+        PAGE, "      var at = addPrevailingTrade();", "      var at = 2;",
+        lambda r: "error" in r["page"] or r["page"]["added"]["model"]["trades"][2:] == []),
+    "typing another trade's figures never picks it": (
+        PAGE, "        !(B.prevailingTotal(B.prevailingCrewTrade(cur)) > 0)) cur.trade = t.key;",
+        "        false) cur.trade = t.key;",
+        lambda r: r["trades"]["autoPick"]["trade"] != "painter"),
+    "the note does not name the trade": (
+        PAGE, 'if (!(total > 0)) return pwTradeLabel(M.prevailing) + " has no rate yet.',
+        'if (!(total > 0)) return "On, with no rate yet." + " has no rate yet.',
+        lambda r: not r["trades"]["noRate"]["note"].startswith("Cement Mason")),
     "the lodging hint counts nights without the prevailing rate": (
         MODEL, "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions, opts.prevailing);",
         "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);",

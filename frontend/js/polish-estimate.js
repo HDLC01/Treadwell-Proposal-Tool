@@ -2287,7 +2287,7 @@
       esc(moneyAuto(SL.toolingCost(sf))) + ', are added on the Review step.</p>';
   }
 
-  /** THE PREVAILING WAGE CALCULATOR, as a card above the labor lines (Hanz, 2026-10-15).
+  /** THE PREVAILING WAGE CALCULATOR, as a card at the bottom of the Labor step (Hanz, 2026-10-15).
    *
    *  Kyle's workbook has this calculator on every priced tab (Polish!I47:L54): a Rate box, a Fringes box,
    *  the Prevailing Wage Rate they add up to (J48) and the 1:1 "Entry" Half Wage (J53, half the rate and
@@ -2297,26 +2297,42 @@
    *  prevailing rate except Travel Labor and a line where somebody typed a rate (B.laborRateOf).
    *
    *  The switch is the JOB's prevailing wage answer (conditions.prevailing_wage), the same flag the
-   *  intake and the Review step use, so there is one source. The trade (Cement Mason or Painter) is one
-   *  per bid and only labels the card. Rate and fringes start EMPTY on a new bid, like every quantity.
+   *  intake and the Review step use, so there is one source. Every trade has its own box (Cement Mason and
+   *  Painter always, plus any the estimator adds and names, Hanz 2026-10-15), and the one marked "Labor lines
+   *  use this rate" is the rate the lines follow. Rate and fringes start EMPTY on a new bid, like every quantity.
    *  The figures are the job's, so the card reads the same on every section of the bid.
    *
    *  OFF IS ONE LINE (Hanz, 2026-10-15): the title, the switch and the words "Off. Labor lines keep their own rates."
-   *  Switching it on opens the Trade, Rate, Fringes and the two figures. What was typed is kept while it is closed
+   *  Switching it on opens the trade boxes and + Add a trade. What was typed is kept while it is closed
    *  (the boxes are still there, only hidden), and the switch repaints the card IN PLACE (repaintNumbers), never a
    *  rebuild of the panel, so the focus stays on the switch and the keyboard can press it again. */
   function pwNote(total) {
     var on = !!(M.conditions || {}).prevailing_wage;
     if (!on) return "";
-    if (!(total > 0)) return "On, with no rate yet. Type the rate and fringes to set the labor lines.";
+    // NAMES THE TRADE the lines use: "no rate yet" with figures typed on ANOTHER trade would be a sentence that
+    // reads as false, and the bid would go out at the lines' own rates.
+    if (!(total > 0)) return pwTradeLabel(M.prevailing) + " has no rate yet. Type its rate and fringes, or pick another " +
+      "trade with Labor lines use this rate.";
     return "Labor lines price at " + B.money2(total) + " an hour. Travel Labor, and any rate you type on a line, keep their own." +
       (gypOpen() ? "" : " The 5% labor escalation is added on the review step.");
   }
 
+  /** A trade's name as the card says it: the sheet's two by their names, one of the estimator's own by the
+   *  name typed for it, or "Other trade" while it has none. */
+  function pwTradeName(t) {
+    var name = String((t && t.label) || "").trim();
+    return name || "Other trade";
+  }
+
+  /** The name of the trade the crew is paid at. */
   function pwTradeLabel(p) {
-    var key = B.normalizePrevailing(p || {}).trade;
-    for (var i = 0; i < B.PREVAILING_TRADES.length; i++) if (B.PREVAILING_TRADES[i].key === key) return B.PREVAILING_TRADES[i].label;
-    return "";
+    var t = B.prevailingCrewTrade(p || {});
+    return t ? pwTradeName(t) : "";
+  }
+
+  function pwOwnTrade(t) {
+    for (var i = 0; i < B.PREVAILING_TRADES.length; i++) if (B.PREVAILING_TRADES[i].key === t.key) return false;
+    return true;
   }
 
   function pwSubText(p, total) {
@@ -2324,15 +2340,42 @@
     return pwTradeLabel(p) + (total > 0 ? ", " + B.money2(total) + " an hour" : "");
   }
 
+  /** ONE TRADE'S BOX on the card: its name, rate, fringes, the two figures the sheet works out, and the choice
+   *  that makes it the rate the crew is paid. `i` is the trade's place in the block's `trades`, which every
+   *  input carries (data-pw-i) so the handlers write the right one. The sheet's two trades are named by the
+   *  card; a trade the estimator added has a name box and a Remove button. */
+  function pwTradeBox(t, i, crewKey) {
+    var total = B.prevailingTotal(t);
+    var crew = t.key === crewKey;
+    var own = pwOwnTrade(t);
+    var name = pwTradeName(t);
+    var money = function (field, label) {
+      return '<div class="f"><label>' + label + '</label>' +
+        '<span class="mny">$<input class="n" inputmode="decimal" data-pw="' + field + '" data-pw-i="' + i + '" value="' +
+        esc(nv(t[field])) + '" aria-label="' + esc(name) + ' ' + label.toLowerCase() + ' per hour"></span></div>';
+    };
+    return '<div class="pwtrade' + (crew ? " paid" : "") + '" data-pw-trade="' + i + '"><div class="pwtrade-h">' +
+      (own
+        ? '<input class="pwname" data-pw="label" data-pw-i="' + i + '" value="' + esc(t.label) + '" maxlength="' +
+          B.PREVAILING_LABEL_MAX + '" placeholder="Trade name" aria-label="Trade name">' +
+          '<button class="x" data-pw-del="' + i + '" title="Remove this trade" aria-label="Remove ' + esc(name) + '">' +
+          icon("x", 12) + '</button>'
+        : '<span class="pwname static">' + esc(name) + '</span>') +
+      '</div><div class="pwtrade-g">' + money("rate", "Rate") + money("fringes", "Fringes") +
+      '<div class="f"><label>Prevailing wage rate</label>' +
+      '<div class="costbox' + (total > 0 ? "" : " empty") + '" data-pw-total data-pw-i="' + i + '">' +
+      esc(total > 0 ? B.money2(total) : "") + '</div></div>' +
+      '<div class="f"><label>Entry half wage</label>' +
+      '<div class="costbox' + (total > 0 ? "" : " empty") + '" data-pw-entry data-pw-i="' + i + '">' +
+      esc(total > 0 ? B.money2(B.entryHalfWage(total)) : "") + '</div></div></div>' +
+      '<label class="pwpay"><input type="radio" name="pw-pay" data-pw-pick="' + i + '" value="' + esc(t.key) + '"' +
+      (crew ? " checked" : "") + '> Labor lines use this rate</label></div>';
+  }
+
   function prevailingCard() {
     var p = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
     var on = !!(M.conditions || {}).prevailing_wage;
     var total = B.prevailingTotal(p);
-    var money = function (field, label) {
-      return '<div class="f"><label>' + label + '</label>' +
-        '<span class="mny">$<input class="n" inputmode="decimal" data-pw="' + field + '" value="' + esc(nv(p[field])) +
-        '" aria-label="' + label + ' per hour"></span><p class="hint">Per hour.</p></div>';
-    };
     return '<div class="tk pwcard' + (on ? "" : " inert off") + '" data-pw-card><div class="tk-h">' +
       '<span class="labname static">Prevailing wage</span>' +
       B.sliderHtml(on, 'data-cond="prevailing_wage" data-pw-sw="1"', "On", "The job's prevailing wage switch, the same one " +
@@ -2340,39 +2383,55 @@
       '<span class="tk-sub calc" data-pw-sub>' + esc(pwSubText(p, total)) + '</span>' +
       // THE BODY, hidden while the switch is off. A wrapper with nothing but the attribute on it: the page's own
       // `[hidden]{display:none!important}` hides it, and the grid inside keeps its own `display` untouched.
-      '</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="tk-g lab-g pw-g">' +
-
-      '<div class="f"><label>Trade</label><select data-pw="trade" aria-label="Trade">' +
-      B.PREVAILING_TRADES.map(function (t) {
-        return '<option value="' + esc(t.key) + '"' + (t.key === p.trade ? " selected" : "") + '>' + esc(t.label) + '</option>';
-      }).join("") + '</select><p class="hint">One trade for the whole bid.</p></div>' +
-      money("rate", "Rate") + money("fringes", "Fringes") +
-
-      '<div class="f"><label>Prevailing wage rate</label>' +
-      '<div class="costbox' + (total > 0 ? "" : " empty") + '" data-pw-total>' + esc(total > 0 ? B.money2(total) : "") + '</div>' +
-      '<p class="hint">Rate plus fringes.</p></div>' +
-
-      '<div class="f"><label>Entry half wage</label>' +
-      '<div class="costbox' + (total > 0 ? "" : " empty") + '" data-pw-entry>' +
-      esc(total > 0 ? B.money2(B.entryHalfWage(total)) : "") + '</div>' +
-      '<p class="hint">1:1 entry laborer, Missouri state wage only, not Davis-Bacon.</p></div>' +
-
-      '</div><p class="hint trvnote">Foreman min. ' + esc(B.money(B.PREVAILING.FOREMAN_MIN)) + ', entry min. ' +
-      esc(B.money(B.PREVAILING.ENTRY_MIN)) + '.</p>' +
+      '</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="pwtrades">' +
+      p.trades.map(function (t, i) { return pwTradeBox(t, i, p.trade); }).join("") +
+      '</div><button class="btn addline below" data-pw-add="1">' + icon("plus", 16) + ' Add a trade</button>' +
+      '<p class="hint trvnote">Rate plus fringes is the prevailing wage rate. Entry half wage is the 1:1 entry ' +
+      'laborer, Missouri state wage only, not Davis-Bacon. Foreman min. ' + esc(B.money(B.PREVAILING.FOREMAN_MIN)) +
+      ', entry min. ' + esc(B.money(B.PREVAILING.ENTRY_MIN)) + '.</p>' +
       '<p class="hint trvnote" data-pw-note>' + esc(pwNote(total)) + '</p></div></div>';
   }
 
   /** Write one box of the Prevailing wage card into the job (`M.prevailing`, kept at the root with the
-   *  other job-level answers). `field` is read off an attribute, so it is matched against the three names
-   *  and written to a named property, never used as a key. The first write on a bid creates the block. */
-  function setPrevailing(field, value) {
+   *  other job-level answers). `i` is the trade's place on the card. `field` is read off an attribute, so it
+   *  is matched against the names below and written to a named property, never used as a key. "pick" makes
+   *  that trade the one the crew is paid; "label" names one of the estimator's own trades (the sheet's two
+   *  keep their names). The first write on a bid creates the block. */
+  function setPrevailing(field, value, i) {
     var cur = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
-    var next = { trade: cur.trade, rate: cur.rate, fringes: cur.fringes };
-    if (field === "trade") next.trade = value;
-    else if (field === "rate") next.rate = value;
-    else if (field === "fringes") next.fringes = value;
+    var t = cur.trades[i];
+    if (!t) return;
+    if (field === "pick") cur.trade = t.key;
+    else if (field === "rate") t.rate = value;
+    else if (field === "fringes") t.fringes = value;
+    else if (field === "label" && pwOwnTrade(t)) t.label = value;
     else return;
-    M.prevailing = B.normalizePrevailing(next);
+    // THE FIRST FIGURES TYPED PICK THEIR TRADE. While the trade the lines use has no rate, typing a rate or fringes on
+    // another one makes that one the trade the lines use: an estimator on a painting job who types the Painter box and
+    // never looks at the radio must not send the bid out at the lines' own rates. Once the picked trade has a rate,
+    // typing another trade's figures moves nothing; picking is then the radio's job.
+    if ((field === "rate" || field === "fringes") && t.key !== cur.trade && B.prevailingTotal(t) > 0 &&
+        !(B.prevailingTotal(B.prevailingCrewTrade(cur)) > 0)) cur.trade = t.key;
+    M.prevailing = B.normalizePrevailing(cur);
+  }
+
+  /** + Add a trade: a new box with no name and no figures, after the others. Returns its place. */
+  function addPrevailingTrade() {
+    var cur = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
+    cur.trades.push({ key: B.newPrevailingTradeKey(cur), label: "", rate: "", fringes: "" });
+    M.prevailing = B.normalizePrevailing(cur);
+    return M.prevailing.trades.length - 1;
+  }
+
+  /** Remove one of the estimator's own trades (the sheet's two stay). When it was the one the crew was paid,
+   *  the crew goes back to the first trade, Cement Mason. */
+  function removePrevailingTrade(i) {
+    var cur = B.normalizePrevailing(M.prevailing);
+    if (!cur || !cur.trades[i] || !pwOwnTrade(cur.trades[i])) return false;
+    var gone = cur.trades.splice(i, 1)[0];
+    if (cur.trade === gone.key) cur.trade = cur.trades[0].key;
+    M.prevailing = B.normalizePrevailing(cur);
+    return true;
   }
 
   /** One labor task, as its own card.
@@ -2652,8 +2711,9 @@
     // task keeps its place above it. `i` stays the row's real index in M.labor -- the handlers
     // splice and edit by position.
     if (!M.travel) M.travel = B.normalizeTravel(null);
-    // THE PREVAILING WAGE CARD sits above the labor lines it sets the rate of, on every section's Labor step.
-    var html = prevailingCard();
+    // THE PREVAILING WAGE CARD is drawn LAST, at the bottom of every section's Labor step (Hanz, 2026-10-15:
+    // "prevailing wage should be at the bottom not at the top"), after the crew lines and the travel block.
+    var html = "";
     var travelRows = "";
     // The job's travel is charged ONCE, on the section that carries it (B.travelCarrier). Any other section of a
     // combo bid has no Travel block to draw: its crew is priced as labor and nothing else (see travelNote).
@@ -2695,6 +2755,7 @@
         '. Change it with the switch on the Prevailing wage card, or on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
         '">the intake step</a>.</p>';
     if (gypLab) html += gypHoursCaption(gypLab);
+    html += prevailingCard();
 
     return shell("Labor",
       gypLab ? "Guys × hours × rate. A Gyp crew is priced by the hour, in 10 hour days. Travel is priced per hour."
@@ -3118,17 +3179,29 @@
       var v = nv(B.laborRateBox(r, pwNow));
       if (el.value !== v) el.value = v;
     });
-    // The Prevailing wage card's own figures, live: the sum, the entry half wage, the header and the note.
+    // The Prevailing wage card's own figures, live: each trade's sum and entry half wage, which trade the crew
+    // is paid, the header and the note.
     var pwBlock = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
     var pwSum = B.prevailingTotal(pwBlock);
     var pwOn = !!(M.conditions || {}).prevailing_wage;
+    var pwOf = function (el) { return pwBlock.trades[parseInt(el.getAttribute("data-pw-i"), 10)]; };
     document.querySelectorAll("[data-pw-total]").forEach(function (el) {
-      el.textContent = pwSum > 0 ? B.money2(pwSum) : "";
-      el.className = "costbox" + (pwSum > 0 ? "" : " empty");
+      var sum = B.prevailingTotal(pwOf(el));
+      el.textContent = sum > 0 ? B.money2(sum) : "";
+      el.className = "costbox" + (sum > 0 ? "" : " empty");
     });
     document.querySelectorAll("[data-pw-entry]").forEach(function (el) {
-      el.textContent = pwSum > 0 ? B.money2(B.entryHalfWage(pwSum)) : "";
-      el.className = "costbox" + (pwSum > 0 ? "" : " empty");
+      var sum = B.prevailingTotal(pwOf(el));
+      el.textContent = sum > 0 ? B.money2(B.entryHalfWage(sum)) : "";
+      el.className = "costbox" + (sum > 0 ? "" : " empty");
+    });
+    document.querySelectorAll("[data-pw-trade]").forEach(function (el) {
+      var t = pwBlock.trades[parseInt(el.getAttribute("data-pw-trade"), 10)];
+      el.className = "pwtrade" + (t && t.key === pwBlock.trade ? " paid" : "");
+    });
+    document.querySelectorAll("[data-pw-pick]").forEach(function (el) {
+      var t = pwBlock.trades[parseInt(el.getAttribute("data-pw-pick"), 10)];
+      el.checked = !!t && t.key === pwBlock.trade;
     });
     document.querySelectorAll("[data-pw-sub]").forEach(function (el) { el.textContent = pwSubText(pwBlock, pwSum); });
     document.querySelectorAll("[data-pw-note]").forEach(function (el) { el.textContent = pwNote(pwSum); });
@@ -3540,6 +3613,20 @@
     }
     var addLab = t.closest("[data-add-lab]");
     if (addLab) { openLaborPicker(addLab); return; }
+    // + Add a trade, and the x on a trade the estimator added. The panel is redrawn (a box comes or goes), and a
+    // new trade's name box takes the focus, since naming it is the first thing it needs.
+    if (t.closest("[data-pw-add]")) {
+      var at = addPrevailingTrade();
+      changed(true);
+      var nameBox = document.querySelector('[data-pw="label"][data-pw-i="' + at + '"]');
+      if (nameBox && nameBox.focus) nameBox.focus();
+      return;
+    }
+    var pwDel = t.closest("[data-pw-del]");
+    if (pwDel) {
+      if (removePrevailingTrade(parseInt(pwDel.getAttribute("data-pw-del"), 10))) changed(true);
+      return;
+    }
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       if (M.labor.length <= 1) return;
@@ -3866,7 +3953,7 @@
     // labor line that follows the rate repaint in place, so the caret stays in the box being typed in.
     var pwField = el.getAttribute("data-pw");
     if (pwField !== null) {
-      setPrevailing(pwField, el.value);
+      setPrevailing(pwField, el.value, parseInt(el.getAttribute("data-pw-i"), 10));
       changed(false);
       return;
     }
@@ -3991,10 +4078,11 @@
       changed(true);
       return;
     }
-    // THE PREVAILING WAGE CARD's trade, a <select> (the "input" handler above only takes <input>). It prices
-    // nothing, it names the trade the card is for, so the note and the header are redrawn in place.
-    if (el.getAttribute("data-pw") === "trade") {
-      setPrevailing("trade", el.value);
+    // THE PREVAILING WAGE CARD's "Labor lines use this rate": the trade whose rate the labor lines follow. Every
+    // figure that moves with it (the lines, the header, the note) repaints in place, so the radio keeps focus.
+    var pwPick = el.getAttribute("data-pw-pick");
+    if (pwPick !== null) {
+      if (el.checked) setPrevailing("pick", el.value, parseInt(pwPick, 10));
       changed(false);
       return;
     }
