@@ -340,34 +340,91 @@
   // NOTHING in the sheet reads those cells: the estimator types the rate into the labor Rate box (Polish C37,
   // Epoxy C47) by hand, and D5 PrevailingWage? only adds the 5% escalation (C46). The v2 Labor step's card
   // does what the estimator did by hand: it works the rate out and sets the crew lines to it.
-  // ONE trade per bid, no crew blending (Hanz: "we dont need specifics, just the calculator").
+  // AS MANY TRADES AS THE JOB NEEDS (Hanz, 2026-10-15: "there is a prevailing wage for others apart from the
+  // painter and mason ... we can label it on our own"). Cement Mason and Painter are always there, the sheet's
+  // two boxes; any other trade is added with a name the estimator types. Each trade works out its own figures,
+  // and ONE of them is the rate the crew is paid (`trade`), as the sheet has one typed Rate box per tab. No crew
+  // blending (Hanz: "we dont need specifics, just the calculator").
   /** The two figures of the calculator that are not typed, as named constants: the "Entry" wage floor
    *  (J53) and the foreman minimum (the note beside it). Shown as text; the foreman figure prices nothing. */
   var PREVAILING = Object.freeze({ ENTRY_MIN: 23, FOREMAN_MIN: 32 });
-  /** The two boxes the workbook draws. One is picked per bid. */
+  /** The two boxes the workbook draws, always on the card, first and in this order. Other trades are the
+   *  estimator's own, added beside them. */
   var PREVAILING_TRADES = Object.freeze([
     Object.freeze({ key: "cement_mason", label: "Cement Mason" }),
     Object.freeze({ key: "painter", label: "Painter" })
   ]);
 
-  /** The trade key for a stored value: a known one as it is, anything else the first (Cement Mason). */
-  function prevailingTradeKey(key) {
-    for (var i = 0; i < PREVAILING_TRADES.length; i++) if (PREVAILING_TRADES[i].key === key) return key;
-    return PREVAILING_TRADES[0].key;
+  /** A trade the estimator added: its key is minted here ("t" + letters and digits), never typed. */
+  var PREVAILING_OWN_KEY = /^t[0-9a-z]{1,24}$/;
+  /** How long a trade's own name may be. */
+  var PREVAILING_LABEL_MAX = 60;
+
+  function isBuiltinTrade(key) {
+    for (var i = 0; i < PREVAILING_TRADES.length; i++) if (PREVAILING_TRADES[i].key === key) return true;
+    return false;
+  }
+
+  /** A key for a trade the estimator adds, not already used on this card. */
+  function newPrevailingTradeKey(p) {
+    var used = {};
+    ((normalizePrevailing(p) || {}).trades || []).forEach(function (t) { used[t.key] = true; });
+    for (var n = 1; ; n++) if (!used["t" + n]) return "t" + n;
   }
 
   /** A saved `prevailing` block read as a full one, or null when the model has none (and then nothing
-   *  is added: a bid that never used the card prices and saves exactly as before). Rate and fringes
-   *  are kept AS TYPED (a half-typed "12." must not snap back to 12), or "" when blank. Never throws. */
+   *  is added: a bid that never used the card prices and saves exactly as before).
+   *
+   *  { trade: <the key the crew is paid at>, trades: [{ key, label, rate, fringes }, ...] }
+   *  Cement Mason and Painter always come first; the estimator's own trades follow in the order they were
+   *  added, each with the name typed for it. Rate and fringes are kept AS TYPED (a half-typed "12." must
+   *  not snap back to 12), or "" when blank.
+   *
+   *  THE FIRST SHAPE ({ trade, rate, fringes }, one trade per bid, staging only 2026-10-15) is read into
+   *  this one: its rate and fringes go on its trade, and that trade stays the one the crew is paid. Never throws. */
   function normalizePrevailing(p) {
     if (!p || typeof p !== "object" || p instanceof Array) return null;
     var box = function (v) { return (typeof v === "number" || typeof v === "string") && !isBlank(v) ? v : ""; };
-    return { trade: prevailingTradeKey(p.trade), rate: box(p.rate), fringes: box(p.fringes) };
+    var saved = p.trades instanceof Array ? p.trades : [];
+    var byKey = {};
+    saved.forEach(function (t) {
+      if (t && typeof t === "object" && typeof t.key === "string" && !byKey[t.key]) byKey[t.key] = t;
+    });
+    var trades = PREVAILING_TRADES.map(function (b) {
+      var t = byKey[b.key] || {};
+      return { key: b.key, label: b.label, rate: box(t.rate), fringes: box(t.fringes) };
+    });
+    saved.forEach(function (t) {
+      if (!t || typeof t !== "object" || byKey[t.key] !== t || isBuiltinTrade(t.key)) return;
+      if (typeof t.key !== "string" || !PREVAILING_OWN_KEY.test(t.key)) return;
+      var label = typeof t.label === "string" ? t.label.slice(0, PREVAILING_LABEL_MAX) : "";
+      trades.push({ key: t.key, label: label, rate: box(t.rate), fringes: box(t.fringes) });
+    });
+    if (!(p.trades instanceof Array) && ("rate" in p || "fringes" in p)) {
+      var legacy = trades[0];
+      for (var i = 0; i < trades.length; i++) if (trades[i].key === p.trade) legacy = trades[i];
+      legacy.rate = box(p.rate);
+      legacy.fringes = box(p.fringes);
+    }
+    var pick = trades[0].key;
+    for (var j = 0; j < trades.length; j++) if (trades[j].key === p.trade) pick = p.trade;
+    return { trade: pick, trades: trades };
   }
 
-  /** J48: the prevailing wage rate, rate plus fringes. 0 while nothing is typed. */
+  /** The trade the crew is paid at, out of a block (normalised first), or null when there is no block. */
+  function prevailingCrewTrade(p) {
+    var n = normalizePrevailing(p);
+    if (!n) return null;
+    for (var i = 0; i < n.trades.length; i++) if (n.trades[i].key === n.trade) return n.trades[i];
+    return n.trades[0];
+  }
+
+  /** J48: the prevailing wage rate, rate plus fringes, 0 while nothing is typed. Given ONE trade
+   *  ({ rate, fringes }) it is that trade's figure; given a whole block it is the figure of the trade the
+   *  crew is paid at. */
   function prevailingTotal(p) {
     if (!p || typeof p !== "object") return 0;
+    if (p.trades instanceof Array) p = prevailingCrewTrade(p) || {};
     return parseFloat((num(p.rate) + num(p.fringes)).toPrecision(12));
   }
 
@@ -5048,6 +5105,8 @@
     pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
     // The prevailing wage calculator (Labor step): the constants, the card's two figures, and the rate in force.
     PREVAILING: PREVAILING, PREVAILING_TRADES: PREVAILING_TRADES, normalizePrevailing: normalizePrevailing,
+    prevailingCrewTrade: prevailingCrewTrade, newPrevailingTradeKey: newPrevailingTradeKey,
+    PREVAILING_LABEL_MAX: PREVAILING_LABEL_MAX,
     prevailingTotal: prevailingTotal, entryHalfWage: entryHalfWage, prevailingApplied: prevailingApplied,
     laborFollowsPrevailing: laborFollowsPrevailing, laborRateBox: laborRateBox, rateTypedByHand: rateTypedByHand,
     ownDefaultRate: ownDefaultRate, isTravelRow: isTravelRow, setLaborRate: setLaborRate,

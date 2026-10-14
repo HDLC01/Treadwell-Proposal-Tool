@@ -395,9 +395,15 @@
        figures the sheet works out (the rate they add up to, and the entry half wage), so five columns; the
        entry box is the widest because its hint is the longest. Dimmed while the job's switch is off, like
        the other cards, and every box stays typeable. */
-    .lab-g.pw-g{grid-template-columns:1fr 1fr 1fr 1.15fr 1.4fr}
-    @media (max-width:900px){ .lab-g.pw-g{grid-template-columns:1fr 1fr 1fr} }
-    @media (max-width:760px){ .lab-g.pw-g{grid-template-columns:1fr} }
+    /* The prevailing wage trades: one box per trade, side by side like the sheet's two (Polish!I47:L54). */
+    .pwtrades{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+    .pwtrade{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff}
+    .pwtrade.paid{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset}
+    .pwtrade-h{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+    .pwtrade-h .pwname{flex:1;min-width:0;font-weight:700}
+    .pwtrade-h input.pwname{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-weight:700}
+    .pwtrade-g{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .pwpay{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;font-weight:600;cursor:pointer}
     /* CLOSED (the job's switch is off) the card is its header alone, so the header keeps no gap under it. */
     .pwcard.off .tk-h{margin:0}
     /* Travel block: a dividing line, then Travel Labor, Lodging and Per Diem. Lodging and Per Diem
