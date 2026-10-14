@@ -698,6 +698,35 @@ def test_plus_new_sits_only_in_created_but_not_sent_on_the_live_tabs(payload):
         assert "data-new-v2" not in dead["last"]["list"], dead["name"]
 
 
+def test_a_card_button_does_its_own_job_and_does_not_also_open_the_card(payload):
+    """The buttons sit inside a .deal, and the card's own click opens the panel. Each button handler
+    has to return first, or pressing Mark as won also throws the panel up over the board."""
+    run = _run(payload, [{"name": "b", "actions": [
+        {"type": "won", "id": "v-fresh"}, {"type": "handoff", "id": "v-won"},
+        {"type": "lost-cancel", "id": "v-viewed"}]}])["runs"][0]
+    assert run["last"]["panelOpen"] is False
+    assert not [u for u in run["urls"] if "open=" in u], run["urls"]
+
+
+def test_enter_on_a_card_button_is_the_buttons_and_enter_or_space_on_a_card_opens_it(payload):
+    on_button = _run(payload, [{"name": "b", "actions": [
+        {"type": "key", "key": "Enter", "on": "button", "id": "v-fresh"}]}])["runs"][0]
+    assert on_button["last"]["panelOpen"] is False
+    assert on_button["seen"] == [{"key": "Enter", "on": "button", "prevented": False}]
+    for key in ("Enter", " "):
+        on_card = _run(payload, [{"name": "c", "actions": [
+            {"type": "key", "key": key, "on": "card", "id": "v-fresh"}]}])["runs"][0]
+        assert on_card["last"]["panelOpen"] is True, key
+        assert on_card["seen"][0]["prevented"] is True, key
+
+
+def test_escape_closes_the_close_out_dialog_and_writes_nothing(payload):
+    run = _run(payload, [{"name": "e", "actions": [
+        {"type": "lost-cancel", "id": "v-fresh", "escape": True}]}])["runs"][0]
+    assert run["dialogs"][0]["removed"] is True
+    assert [f for f in run["fetches"] if f["method"] != "GET"] == []
+
+
 def test_mark_as_won_posts_the_won_mark_to_the_draft_and_moves_the_card(payload):
     run = _run(payload, [{"name": "w", "actions": [{"type": "won", "id": "v-fresh"}]}])["runs"][0]
     writes = [f for f in run["fetches"] if f["method"] != "GET"]

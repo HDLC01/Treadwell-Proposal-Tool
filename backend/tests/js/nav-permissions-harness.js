@@ -324,7 +324,18 @@ async function main() {
   const readOnlyHtml = renderAdminMatrix(win, "admin", { deny: POLICY });
   const noPolicyHtml = renderAdminMatrix(win, "admin", null);
 
+  // 4. Which row is lit, standing on each page. The Estimating Tool v2 row opens on its board but
+  //    is still the tab you are in on its intake and its estimate (auth.js alsoActive).
+  const litOn = {};
+  ["/v2-board.html", "/polish-intake.html", "/polish-estimate.html", "/polish-estimates.html",
+   "/projects.html"].forEach((p) => {
+    const w = loadAuth(p);
+    const nav = navOf(w.TWAuth.sidebarMarkup("super_admin", []));
+    litOn[p] = Array.from(nav.matchAll(/<a class="tw-nav-item active" href="([^"]*)"/g)).map((m) => m[1]);
+  });
+
   process.stdout.write(JSON.stringify({
+    litOn: litOn,
     roles: roles,
     policy: POLICY,
     menus: menus,

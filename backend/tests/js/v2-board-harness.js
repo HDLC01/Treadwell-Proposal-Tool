@@ -61,7 +61,8 @@ async function run(payload, scenario) {
   const session = Object.assign({}, scenario.session || {});
   const local = scenario.local ? Object.assign({}, scenario.local) : null;
   const localWrites = [], confirms = [], dialogs = [], buttons = [], seen = [];
-  let docKeydown = null;
+  let keydowns = [];
+  const docKeydown = (e) => keydowns.slice().forEach((fn) => fn(e));
   const box = {
     console, setTimeout, clearTimeout, setInterval() { return 0; },
     URLSearchParams,
@@ -69,8 +70,8 @@ async function run(payload, scenario) {
                 querySelector() { return { focus() {} }; },
                 createElement() { const d = stub(); dialogs.push(d); return d; },
                 body: { appendChild() {} },
-                addEventListener(t, fn) { if (t === "keydown") docKeydown = fn; },
-                removeEventListener() {} },
+                addEventListener(t, fn) { if (t === "keydown") keydowns.push(fn); },
+                removeEventListener(t, fn) { keydowns = keydowns.filter((f) => f !== fn); } },
     sessionStorage: {
       getItem(k) { reads.push(k); return Object.prototype.hasOwnProperty.call(session, k) ? session[k] : null; },
       setItem(k, v) { writes.push([k, String(v)]); session[k] = String(v); },
@@ -158,7 +159,7 @@ async function run(payload, scenario) {
         const dlg = dialogs[dialogs.length - 1];
         const k = dlg.kids;
         if (a.type === "lost-cancel") {
-          k["[data-x]"].listeners.click();
+          if (a.escape) docKeydown({ key: "Escape" }); else k["[data-x]"].listeners.click();
         } else {
           k["[data-why]"].value = a.reason || "";
           k["[data-why]"].listeners.change();
@@ -170,6 +171,14 @@ async function run(payload, scenario) {
         }
       }
       await tick(60);
+    } else if (a.type === "key") {
+      // a key on the board: on a card (`on: "card"`) or on a button inside one (`on: "button"`)
+      let prevented = false;
+      el("list").listeners.keydown({ key: a.key, preventDefault() { prevented = true; },
+        target: { closest(s) {
+          if (s === "button") return a.on === "button" ? {} : null;
+          return s === ".deal" ? { dataset: { id: a.id } } : null; } } });
+      seen.push({ key: a.key, on: a.on, prevented: prevented });
     } else if (a.type === "new") {
       el("list").listeners.click({ target: { closest(s) { return s === "[data-new-v2]" ? {} : null; } } });
     } else if (a.type === "new-top") {

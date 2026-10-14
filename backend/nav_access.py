@@ -286,13 +286,14 @@ TABS: Dict[str, Dict[str, Any]] = {
 #                    somebody with a refusal card as the first thing they see after Google.
 #   /gc-projects.html Hanz, 2026-09-29: "The General Contractor board is always on, like Direct
 #                    Projects." Same board, same guarantee — not a landing page, just never denied.
+LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html", "/gc-projects.html")
+
 # A row whose href moved, keyed old -> new. A saved policy names rows by href, so without this a deny
 # saved under the old href would match no row any more and silently stop denying anything.
 # /polish-intake.html was Estimating Tool v2's href until 2026-10-15; prod's saved policy keeps the
-# `user` role off it, and that must keep meaning the tool.
+# `user` role off it, and that must keep meaning the tool. Read-side only: the file keeps the old
+# href until an admin next saves, after which a pre-2026-10-15 image would no longer recognise it.
 LEGACY_HREFS: Dict[str, str] = {"/polish-intake.html": "/v2-board.html"}
-
-LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html", "/gc-projects.html")
 
 # The super admin is bootstrapped from SUPER_ADMIN_EMAIL and cannot be granted or revoked from the
 # UI; his role exists so somebody always has a way in. A policy that can deny it is a policy that
