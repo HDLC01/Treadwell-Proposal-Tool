@@ -20,7 +20,7 @@
 FROM node:20.20.2-trixie-slim@sha256:abfbe12cc943141a0c9e8c0a57d710df1dadd95d35e8662cc02958b284d1f35b AS node
 
 # python:3.11-slim
-FROM python:3.11-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
+FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
 
 # System deps — tini for proper signal handling, curl for healthcheck, media-types for
 # /etc/mime.types. The nodesource `nodejs` package used to bring media-types in by the back
