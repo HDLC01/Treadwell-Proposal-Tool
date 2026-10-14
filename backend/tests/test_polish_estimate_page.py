@@ -2514,12 +2514,19 @@ def test_the_sidebar_entry_is_marked_beta_and_has_its_own_glyph():
     door into step 2 now starts an estimator pricing before the things that change the price have
     been seen — and on a project with no name or bid date. The mid-flow door on Estimate Review
     still goes straight to /polish-estimate.html, because there the project already exists.
+
+    SINCE 2026-10-15 THE DOOR IS THE BETA'S BOARD (/v2-board.html; Hanz: "It should be here not V2
+    estimates"), and the board's way into a NEW bid is still step 1: its "+ New" opens the intake,
+    never the calculator.
     """
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    assert 'navItem("/polish-intake.html"' in auth, (
-        "the sidebar no longer opens the beta at its first step")
-    i = auth.index('navItem("/polish-intake.html"')
+    assert 'navItem("/v2-board.html"' in auth, "the sidebar no longer opens the beta on its board"
+    assert 'navItem("/polish-estimate.html"' not in auth, "the sidebar opens the beta at pricing"
+    i = auth.index('navItem("/v2-board.html"')
     assert "BETA" in auth[i:i + 120]
+    board = (FRONTEND / "js" / "v2-board.js").read_text(encoding="utf-8")
+    starts = re.findall(r'location\.assign\("([^"]+)"\)', board)
+    assert starts == ["/polish-intake.html"], "a new v2 bid no longer starts at the intake: %s" % starts
     glyphs = re.findall(r'navItem\("[^"]+", "([^"]+)"', auth)
     assert len(glyphs) == len(set(glyphs)), "two sidebar items share a glyph: %s" % glyphs
 

@@ -1,19 +1,26 @@
-// Externalized from polish-estimates.html (CSP: script-src has no 'unsafe-inline').
+// Externalized from v2-board.html (CSP: script-src has no 'unsafe-inline').
 // Do not add inline scripts or onclick= handlers; both fail silently in production.
 //
-// THE v2 ESTIMATES BOARD (BETA). Every Estimating Tool v2 bid, from the moment it is created, in
-// the same columns as the Direct Projects board, with Direct and GC as two tabs. Hanz, 2026-10-13:
+// THE ESTIMATING TOOL v2 BOARD (BETA). Every Estimating Tool v2 bid, from the moment it is created,
+// in the same columns as the Direct Projects board, with Direct and GC as two tabs. Hanz, 2026-10-13:
 // "make the V2 have a pipeline like the ones we have for active projects", "make sure they are
 // separate tho", and "the V2 pipeline is still in beta ... so do not merge it to the existing".
+// 2026-10-15: it is the Estimating Tool v2 row's front door ("It should be here not V2 estimates"),
+// with "+ New" into the intake, and its cards carry the Direct Projects outcome buttons ("Yes, same
+// buttons").
 //
 // SO THIS PAGE OWNS ITS OWN CODE. It reads the shared DOM-free helpers (js/crm-core.js, through
 // js/v2-board-core.js) and never loads or calls js/portal.js. Its data is its own route,
 // /api/v2/pipeline. Its storage keys are all `tw_v2_*` (TWV2Board.KEYS); it never touches the real
-// boards' `tw_crm_*` keys or the `treadwell.proposal_tool.*` keys.
+// boards' `tw_crm_*` keys. The one exception is "+ New", which clears the three
+// `treadwell.proposal_tool.*` keys every "start a project" door clears (projects.js, portal.js), so
+// the intake opens on a new bid rather than the last one.
 //
-// NOTHING ON THIS PAGE WRITES. A card opens a read-only panel with an "Open in Estimating Tool v2"
-// link. There is no send, follow-up, deposit, chat or status control here, and the panel markup
-// that would carry one is pinned empty by test_v2_board.py.
+// WHAT WRITES: the three card buttons, and only to the routes the Direct Projects card posts to
+// (/api/draft/{id}/status, and /api/portal/proposal/{id}/status to close out a bid the customer
+// has). The close-out dialog and the hand-off prompt are copies of portal.js's closeOutDialog and
+// confirmHandoff, kept word for word so one act reads one way on both boards. Nothing here sends,
+// follows up, takes a deposit or chats; the panel a card opens is facts and one link.
 (function () {
   var V = window.TWV2Board;
   var KEYS = V.KEYS;
@@ -171,6 +178,182 @@
     }
   }
 
+  // ── the card buttons (the Direct Projects card's own, portal.js) ─────────────
+  // How long a hold pauses the chasing for, on a bid the customer HAS. portal.js HOLD_MONTHS, and the
+  // backend's HOLD_PAUSE_MONTHS for the unsent half; test_v2_board.py keeps the three equal.
+  var HOLD_MONTHS = 4;
+
+  function api(path, opts) {
+    var base = (window.TW && TW.resolveApiBase) ? TW.resolveApiBase() : "";
+    opts = opts || {};
+    opts.headers = Object.assign({}, TW.authHeaders(), opts.headers || {});
+    return fetch(base + path, opts);
+  }
+
+  /** The row this button belongs to, out of ALL rather than the filtered pool: the minute poll can
+   *  move a row between the paint and the click. null when the bid was trashed in another tab. */
+  function cardRowOf(btn) {
+    return rowFor(decodeURIComponent(btn.dataset.won || btn.dataset.lost || btn.dataset.handoff || ""));
+  }
+
+  /** One POST, with the button saying what it is doing, because the card moves out from under the
+   *  cursor either way and a silent wait there looks like a dead control. `patch` moves the card on
+   *  this paint instead of the next poll; load() then re-reads the truth. */
+  async function post(btn, path, body, patch) {
+    btn.disabled = true;
+    var orig = btn.textContent;
+    btn.textContent = "Saving…";
+    try {
+      var r = await api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      if (patch) { patch(); SIG = ""; render(); }
+      load();
+    } catch (err) {
+      btn.textContent = "Failed: " + (err.message || "retry");
+      btn.disabled = false;
+      setTimeout(function () { btn.textContent = orig; }, 2600);
+    }
+  }
+
+  /** Mark as won/approved. No prompt, as on Direct Projects: nothing is sent and the card stays on
+   *  the board, in Won/Approved. */
+  function markWon(btn) {
+    var row = cardRowOf(btn);
+    if (!row) return;
+    post(btn, "/api/draft/" + encodeURIComponent(row.proposal_id) + "/status", { status: "won" },
+         function () { row.won_at = new Date().toISOString(); });
+  }
+
+  /** Hand it off. Asks only when the contacts are not in (confirmHandoff below). */
+  async function markHandoff(btn) {
+    var row = cardRowOf(btn);
+    if (!row) return;
+    if (!(await confirmHandoff(row))) return;
+    post(btn, "/api/draft/" + encodeURIComponent(row.proposal_id) + "/status", { status: "handed_off" },
+         function () { row.handed_off_at = new Date().toISOString(); });
+  }
+
+  /** Mark as lost. The route follows whether the customer has the bid, the split portal.js makes: a
+   *  sent bid has a portal row whose close-out also stops the cadence; an unsent one has only the
+   *  draft. A hold is not patched onto the row: the card stays put and the pause date is the
+   *  server's. */
+  async function markLost(btn) {
+    var row = cardRowOf(btn);
+    if (!row) return;
+    var why = await closeOutDialog(row, { unsent: !!row.not_sent });
+    if (!why) return;
+    var id = encodeURIComponent(row.proposal_id);
+    var hold = why.outcome === "hold";
+    var path = row.not_sent ? "/api/draft/" + id + "/status" : "/api/portal/proposal/" + id + "/status";
+    var body = row.not_sent
+      ? (hold ? { status: "on_hold", reason: why.reason, note: why.note }
+              : { status: "closed_lost", reason: why.reason, note: why.note })
+      : (hold ? { status: "delayed", months: HOLD_MONTHS, reason: why.reason, note: why.note }
+              : { status: "closed_lost", reason: why.reason, note: why.note });
+    post(btn, path, body, hold ? null : function () {
+      row.proposal_status = "closed_lost";
+      row.followup_state = Object.assign({}, row.followup_state, { closed_lost_reason: why.reason });
+    });
+  }
+
+  /** + New: a fresh bid in the intake. The same three keys every "start a project" door clears
+   *  (projects.js, portal.js startNewProposal), so shared.js mints a new draft id instead of resuming
+   *  the last one, and polish-sandbox.js files the new bid the way it files every v2 bid. From the GC
+   *  tab the bid starts as a GC one, as it does from the GC Projects board. */
+  function startNew() {
+    try {
+      localStorage.removeItem("treadwell.proposal_tool.state");
+      localStorage.removeItem("treadwell.proposal_tool.draft_id");
+      sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
+      if (TAB === "gc") localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify({ audience: "GC" }));
+    } catch (e) { /* private mode: the intake still opens, it just will not resume */ }
+    window.location.assign("/polish-intake.html");
+  }
+
+  /** portal.js closeOutDialog, copied. Resolves { reason, note, outcome }, or null when dismissed.
+   *  The comment is required, as there: a reason alone tells the sales meeting nothing. */
+  function closeOutDialog(p, opts) {
+    var C = window.TWCrm;
+    var esc = V.esc;
+    var unsent = !!(opts && opts.unsent);
+    var name = p.project_name || "This project";
+    return new Promise(function (resolve) {
+      var ov = document.createElement("div");
+      ov.className = "inv-ov";
+      ov.innerHTML = '<div class="inv-dlg" role="dialog" aria-modal="true" aria-label="Close this bid out">'
+        + '<div class="inv-h">Close this bid out?</div>'
+        + '<p class="inv-sub" data-sub></p>'
+        + '<label class="inv-f co-f"><span>Why?</span><select data-why>'
+        + C.CLOSE_CHOICES.map(function (c) {
+          return '<option value="' + esc(c.key) + '">' + esc(c.label) + "</option>";
+        }).join("")
+        + "</select></label>"
+        + '<label class="inv-f co-f"><span>What happened? Required</span>'
+        + '<textarea data-note rows="3" maxlength="2000" placeholder="We were 12% over Wilson on the pour,'
+        + ' GC said they would call us for phase 2."></textarea></label>'
+        + '<p class="note co-err" data-err></p>'
+        + '<div class="inv-act"><button type="button" class="btn btn-s" data-x>Cancel</button>'
+        + '<button type="button" class="btn btn-p" data-go disabled>Close it out</button></div></div>';
+      document.body.appendChild(ov);
+      var sel = ov.querySelector("[data-why]");
+      var note = ov.querySelector("[data-note]");
+      var err = ov.querySelector("[data-err]");
+      var go = ov.querySelector("[data-go]");
+      var sub = ov.querySelector("[data-sub]");
+      function paint() {
+        var hold = C.closeOutcome(sel.value) === "hold";
+        go.textContent = hold ? "Put it on hold" : "Close it out";
+        sub.textContent = hold
+          ? name + " stays on the board and the reminder emails pause for about "
+            + HOLD_MONTHS + " months. Nothing is sent to the customer. You can bring it back sooner."
+          : name + (unsent
+            ? " moves to the Lost tab under the reason you pick. It was never sent, so nothing"
+              + " changes for the customer."
+            : " moves out of the pipeline and all follow-ups stop. The customer is not emailed.")
+            + " You can bring it back later.";
+        var filled = !!note.value.trim();
+        go.disabled = !filled;
+        err.textContent = filled ? ""
+          : "Say what happened. One sentence is plenty, and it is the part the sales meeting reads.";
+      }
+      paint();
+      function onKey(e) { if (e.key === "Escape") close(null); }
+      function close(v) { ov.remove(); document.removeEventListener("keydown", onKey); resolve(v); }
+      document.addEventListener("keydown", onKey);
+      sel.addEventListener("change", paint);
+      note.addEventListener("input", paint);
+      note.addEventListener("change", paint);
+      ov.querySelector("[data-x]").addEventListener("click", function () { close(null); });
+      ov.addEventListener("click", function (e) { if (e.target === ov) close(null); });
+      go.addEventListener("click", function () {
+        var text = note.value.trim();
+        if (!text) { paint(); note.focus(); return; }
+        var reason = sel.value || "other";
+        close({ reason: reason, note: text, outcome: C.closeOutcome(reason) });
+      });
+      sel.focus();
+    });
+  }
+
+  /** portal.js confirmHandoff, copied: a prompt only when the contacts are not in. */
+  function confirmHandoff(p) {
+    if (p && p.contacts_status === "received") return Promise.resolve(true);
+    return TW.confirmDanger({
+      title: "Hand it off anyway?",
+      before: "We have not recorded the contact info for ",
+      name: (p && p.project_name) || "this project",
+      after: " yet.",
+      detail: "Handing off takes it off the board and onto the Handed off tab. Operations"
+        + " will need those details from somewhere. You can bring it back.",
+      confirmText: "Hand it off", cancelText: "Not yet", tone: "warn", icon: "arrow-right",
+    });
+  }
+
   // ── wiring ────────────────────────────────────────────────────────────────
   $("v2-tabs").addEventListener("click", function (e) {
     var b = e.target.closest("[data-tab]");
@@ -181,11 +364,20 @@
   });
   $("list").addEventListener("click", function (e) {
     if (e.target.closest("#retry")) { load(); return; }
+    // The buttons sit inside a .deal, so each returns before the card's own click opens the panel.
+    var b;
+    if ((b = e.target.closest("[data-won]"))) { markWon(b); return; }
+    if ((b = e.target.closest("[data-handoff]"))) { markHandoff(b); return; }
+    if ((b = e.target.closest("[data-lost]"))) { markLost(b); return; }
+    if (e.target.closest("[data-new-v2]")) { startNew(); return; }
     var d = e.target.closest(".deal");
     if (d && d.dataset.id) openPanel(d.dataset.id);
   });
+  $("new-v2").addEventListener("click", startNew);
   $("list").addEventListener("keydown", function (e) {
     if (e.key !== "Enter" && e.key !== " ") return;
+    // Enter on a focused card button is that button's own click, not "open the card".
+    if (e.target.closest && e.target.closest("button")) return;
     var d = e.target.closest && e.target.closest(".deal");
     if (!d) return;
     e.preventDefault();

@@ -250,14 +250,18 @@ def test_the_follow_ups_feed_really_is_a_single_caller_route():
         "%s also read /api/portal/followups, so the Follow-ups tab may no longer own it" % js)
 
 
-def test_denying_v2_estimates_takes_its_feed_and_leaves_the_shared_routes_open():
-    """The v2 Estimates board (BETA, 2026-10-13) reads /api/v2/pipeline, so the row owns it. Denying
-    the row refuses the page AND the data: a member who was kept off the page cannot read every v2
-    bid and its price by typing the URL. Everything the wider tool shares stays open."""
-    assert nav_access.TABS["/polish-estimates.html"]["api"] == ("/api/v2/pipeline",)
-    nav_access.save({"user": ["/polish-estimates.html"]}, "k@x.com")
+def test_denying_estimating_tool_v2_takes_its_board_feed_and_leaves_the_shared_routes_open():
+    """The v2 board (BETA) reads /api/v2/pipeline, so the row whose page it is owns it: v2 Estimates
+    from 2026-10-13, and Estimating Tool v2 since 2026-10-15, when the board became that row's front
+    door. Denying the row refuses the page AND the data: a member who was kept off the tool cannot
+    read every v2 bid and its price by typing the URL. Everything the wider tool shares stays open."""
+    assert nav_access.TABS["/v2-board.html"]["api"] == ("/api/v2/pipeline",)
+    assert nav_access.TABS["/polish-estimates.html"]["api"] == ()
+    nav_access.save({"user": ["/v2-board.html"]}, "k@x.com")
     assert nav_access.is_api_denied("user", "/api/v2/pipeline") is True
-    assert nav_access.page_denied("user", "/polish-estimates.html") == "/polish-estimates.html"
+    assert nav_access.page_denied("user", "/v2-board.html") == "/v2-board.html"
+    # the v2 Estimates list is its own row, and reads only the shared /api/drafts
+    assert nav_access.page_denied("user", "/polish-estimates.html") is None
     # exact match: it claims this route and nothing near it
     assert nav_access.is_api_denied("user", "/api/v2/pipeline/x") is False
     assert nav_access.is_api_denied("user", "/api/v2/pipelines") is False
@@ -278,7 +282,7 @@ def test_the_v2_estimates_feed_really_is_a_single_caller_route():
                      for p in list(folder.glob("*.js")) + list(folder.glob("*.html"))
                      if "/api/v2/pipeline" in p.read_text(encoding="utf-8"))
     assert callers == ["v2-board.js"], (
-        "%s also read /api/v2/pipeline, so the v2 Estimates tab may no longer own it" % callers)
+        "%s also read /api/v2/pipeline, so the Estimating Tool v2 tab may no longer own it" % callers)
 
 
 # ── the shared prefixes are never gated ───────────────────────────────────────
@@ -323,20 +327,21 @@ def test_the_page_refusal_only_tabs_own_no_api():
     hides the tab and blocks the page and leaves the data reachable — and the Admin page says so on
     screen. If one of them ever gains a private route, this fails and the wording changes with it.
 
-    /polish-estimates.html JOINED THE LIST on 2026-09-10 and LEFT IT on 2026-10-13. It was here
-    because the Polish Estimate Database read /api/drafts and nothing else, and that route is the
-    Proposals Database's own list. The v2 Estimates board reads its own feed, /api/v2/pipeline,
-    which nothing else calls, so the row now owns it and denying the row is a real data refusal
-    (test_denying_v2_estimates_takes_its_feed_and_leaves_the_shared_routes_open below). The Admin
-    page needs no edit alongside it: js/admin.js:167 derives the "hides the tab only" wording from
-    the row's own empty `api` at render time rather than from a second copy of this list.
+    /polish-estimates.html JOINED THE LIST on 2026-09-10, LEFT IT on 2026-10-13 when it became the
+    v2 board, and is BACK since 2026-10-15: the board moved to the Estimating Tool v2 row
+    (/v2-board.html, which took /api/v2/pipeline with it) and v2 Estimates is a list again that reads
+    /api/drafts and nothing else, the Proposals Database's own list. Estimating Tool v2 LEFT the list
+    the same day, for the same reason in reverse (test_denying_estimating_tool_v2_takes_its_board_feed_
+    and_leaves_the_shared_routes_open above). The Admin page needs no edit alongside it:
+    js/admin.js:167 derives the "hides the tab only" wording from the row's own empty `api` at render
+    time rather than from a second copy of this list.
 
     /portal.html LEFT THE LIST on 2026-09-29: it now owns /api/portal/deposit/ (the bank-detail
     reveal), so denying the board is a real data refusal again, not just a page refusal. The Admin
     page's wording for this row changes accordingly — see test_denying_the_board_takes_the_deposit_
     reveal_and_nothing_shared below for the data half of that claim."""
     assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/gc-projects.html", "/polish-intake.html", "/projects.html",
+        "/gc-projects.html", "/polish-estimates.html", "/projects.html",
         "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
@@ -380,13 +385,34 @@ def test_the_deposit_reveal_prefix_has_no_caller_outside_portal_js():
         "%s also read /api/portal/deposit/, so the board may no longer own it" % js)
 
 
-def test_the_polish_beta_row_covers_both_of_its_pages():
+def test_the_polish_beta_row_covers_all_three_of_its_pages():
     """Step 2 is opened directly from the Estimate Review toolbar and from step 1's own tab strip,
     neither of which is this sidebar row — so denying the row has to cover both pages or the door is
-    simply the other one."""
-    nav_access.save({"user": ["/polish-intake.html"]}, "k@x.com")
-    assert nav_access.page_denied("user", "/polish-intake.html") == "/polish-intake.html"
-    assert nav_access.page_denied("user", "/polish-estimate.html") == "/polish-intake.html"
+    simply the other one. Since 2026-10-15 the row opens on its board, /v2-board.html, and the two
+    steps are still its pages."""
+    nav_access.save({"user": ["/v2-board.html"]}, "k@x.com")
+    assert nav_access.page_denied("user", "/v2-board.html") == "/v2-board.html"
+    assert nav_access.page_denied("user", "/polish-intake.html") == "/v2-board.html"
+    assert nav_access.page_denied("user", "/polish-estimate.html") == "/v2-board.html"
+
+
+def test_a_policy_saved_under_the_tools_old_href_still_keeps_that_role_off_it():
+    """Prod's saved policy (2026-08-28) keeps `user` off "/polish-intake.html", the Estimating Tool v2
+    row's href until 2026-10-15. A deny naming a row that no longer exists is dropped on read, which
+    would quietly hand the tool, its board and its feed to every member. LEGACY_HREFS reads it as the
+    row's new href instead, on the way in and on the way out."""
+    assert nav_access.sanitize({"user": ["/polish-intake.html", "/leads.html"]}) == {
+        "user": ["/v2-board.html", "/leads.html"]}
+    # old and new together collapse to one entry
+    assert nav_access.sanitize({"user": ["/polish-intake.html", "/v2-board.html"]}) == {
+        "user": ["/v2-board.html"]}
+    nav_access._FILE.write_text(json.dumps({"version": 1, "deny": {"user": ["/polish-intake.html"]}}),
+                                encoding="utf-8")
+    assert nav_access.get()["deny"] == {"user": ["/v2-board.html"]}
+    assert nav_access.page_denied("user", "/v2-board.html") == "/v2-board.html"
+    assert nav_access.page_denied("user", "/polish-intake.html") == "/v2-board.html"
+    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is True
+    assert nav_access.page_denied("admin", "/v2-board.html") is None
 
 
 def test_the_two_doors_into_polish_step_two_are_still_the_two_this_assumes():

@@ -232,7 +232,9 @@ function rowsFromPanel(html) {
 
 // ── the runs ─────────────────────────────────────────────────────────────────
 // Two roles denied different tabs, so "it filtered the menu" cannot pass by filtering every menu.
-const POLICY = { user: ["/leads.html", "/polish-intake.html"], admin: ["/history.html"] };
+// "/v2-board.html" is Estimating Tool v2's row since 2026-10-15 (it was "/polish-intake.html"; the
+// server reads a policy saved under the old href as this one, nav_access.LEGACY_HREFS).
+const POLICY = { user: ["/leads.html", "/v2-board.html"], admin: ["/history.html"] };
 
 // The capability table as /api/admin/nav-access serves it. Kept in step with backend/nav_access.py by
 // test_nav_permissions_ui.py, which builds this from the module rather than trusting the copy.
@@ -249,10 +251,12 @@ const CAPS = [
   { href: "/info-sheet.html", label: "Info Sheet", api: ["/api/info-sheet/"], locked: false },
   // Back in the sidebar on 2026-08-24, and gated for the first time: the feed it reads is its own.
   { href: "/followups.html", label: "Follow-ups", api: ["/api/portal/followups"], locked: false },
-  { href: "/polish-intake.html", label: "Estimating Tool v2", api: [], locked: false },
-  // The beta's project board, 2026-09-10; it owns its own feed since 2026-10-13. /api/v2/pipeline has
-  // no other caller, so denying the row refuses the data too (see the note on its nav_access.py entry).
-  { href: "/polish-estimates.html", label: "v2 Estimates", api: ["/api/v2/pipeline"], locked: false },
+  // Opens on the v2 board since 2026-10-15 and owns its feed. /api/v2/pipeline has no other caller,
+  // so denying the row refuses the data too (see the note on its nav_access.py entry).
+  { href: "/v2-board.html", label: "Estimating Tool v2", api: ["/api/v2/pipeline"], locked: false },
+  // The beta's project list, 2026-09-10 (a board from 2026-10-13 to 2026-10-15). api: [] because it
+  // reads /api/drafts and nothing else, and that route is the Proposals Database's own.
+  { href: "/polish-estimates.html", label: "v2 Estimates", api: [], locked: false },
   { href: "/analytics.html", label: "Analytics", api: ["/api/analytics/"], locked: false },
   { href: "/projects.html", label: "Proposals Database", api: [], locked: false },
   { href: "/library.html", label: "Items and Assemblies", api: [], locked: false },
@@ -295,8 +299,8 @@ async function main() {
   // 3. Real sign-ins: on a page the role may not open, on its second page, on one it may, on a
   //    container that predates the feature, and as a role denied something else entirely.
   const pages = { "/leads.html": "/leads.html",
-                  "/polish-intake.html": "/polish-intake.html",
-                  "/polish-estimate.html": "/polish-intake.html" };
+                  "/polish-intake.html": "/v2-board.html",
+                  "/polish-estimate.html": "/v2-board.html" };
   const denied = await signIn("user", { nav_denied: POLICY.user, nav_denied_pages: pages },
                               "/leads.html");
   const deniedStepTwo = await signIn("user", { nav_denied: POLICY.user, nav_denied_pages: pages },

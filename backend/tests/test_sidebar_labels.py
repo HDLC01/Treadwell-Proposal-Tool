@@ -157,8 +157,13 @@ def test_the_polish_beta_rows_are_labelled_estimating_tool_v2_and_v2_estimates(s
     Database" became "v2 Estimates". Kills reverting a label, and kills renaming a row by changing
     its href instead: permissions key on the href (nav_access.py), and the doors on Estimate Review,
     the live intake and the Proposals Database all go to these two addresses. Both keep the BETA
-    tag, which is what the Beta heading's membership is derived from."""
-    assert re.search(r'navItem\("/polish-intake\.html",\s*"[^"]+",\s*"Estimating Tool v2",\s*"BETA"\)',
+    tag, which is what the Beta heading's membership is derived from.
+
+    ONE DELIBERATE HREF MOVE: on 2026-10-15 Estimating Tool v2 started opening on its board,
+    /v2-board.html (Hanz: "It should be here not V2 estimates"). The saved policy follows it through
+    nav_access.LEGACY_HREFS, and the intake is still the row's page, so the doors that go straight to
+    the intake still land under it."""
+    assert re.search(r'navItem\("/v2-board\.html",\s*"[^"]+",\s*"Estimating Tool v2",\s*"BETA"\)',
                      sidebar), (
         "the Estimating Tool v2 item is missing or lost its BETA tag; nav items are %s"
         % (_nav_labels(sidebar),))
