@@ -674,7 +674,7 @@ BREAKS = {
         "    for (var i = 0; i < list.length; i++) if (i >= 0) return list[i].tab;",
         lambda r: r["pins"]["carrierRootOff"] != 'Gyp (USG 1-8")'),
     "a sections labor ignores the job's conditions": (
-        "js/bid-model.js", "      labor: laborTotal(s.labor, model.conditions),",
+        "js/bid-model.js", "      labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),",
         "      labor: laborTotal(s.labor),",
         lambda r: r["pins"]["laborReadsConditions"][0] <= r["pins"]["laborReadsConditions"][1]),
     "a sections contingency is dropped": (

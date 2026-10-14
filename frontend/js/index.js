@@ -121,7 +121,7 @@
     // automatic 2.5% / 4% give-back reads; nothing may set it now (estimate_writer
     // HARD_BID_FLAG_CELLS). A discount the estimator types into the sheet's own row still works.
     { key: "prevailing_wage", label: "Prevailing wage", scope: ["epoxy", "polish", "combo", "gyp"],
-      why: "Raises every labor line to the prevailing rate.",
+      why: "Adds the 5% labor escalation. Type the prevailing rate on the labor lines yourself.",
       def: false, cells: ["Epoxy!D5"], on: "Yes", off: "No" },
     { key: "taxable", label: "Taxable", scope: ["epoxy", "polish", "combo", "gyp"],
       why: "Adds sales tax. The bid you see already includes it.",
