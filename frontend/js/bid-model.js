@@ -4745,6 +4745,22 @@
    *  A section that cannot price (a profile rev that has moved, a rate that cannot be read) is listed with a null
    *  total and the reason, and takes the combined price with it: there is NO price rather than a wrong one, so
    *  computed_bid, the lump sum and the tax figures are null. */
+  /** The height of the first cove the base sections buy, in inches as text ("4", "6", "8"), read off the cove
+   *  system's id (`wb-epoxy-cove-epoxy-4in`, `wb-epoxy-cove-wr-6in-plus-cap`, ...), or "" for none. Only an LF row that
+   *  is on counts. */
+  function coveHeightOf(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      var rows = (entries[i].section && entries[i].section.takeoff) || [];
+      for (var j = 0; j < rows.length; j++) {
+        var r = rows[j];
+        if (!r || r.unit !== "LF" || !rowOn(r) || !(num(r.measurement) > 0)) continue;
+        var m = /^wb-epoxy-cove-[a-z]+-(\d+)in(?:-|$)/.exec(String(r.assembly_id || ""));
+        if (m) return m[1];
+      }
+    }
+    return "";
+  }
+
   function composePricingSnapshot(model, ctx) {
     if (!isObject(model)) throw new Error("composePricingSnapshot needs the model it is pricing");
     if (!isObject(ctx)) throw new Error("composePricingSnapshot needs ctx, the bids the page priced");
@@ -4823,6 +4839,9 @@
     out.proposal_remodel_tax = ok ? sums.remodel_tax : null;
     out.proposal_taxable = !!cond.taxable;
     out.proposal_remodel_on = !!cond.remodel_tax;
+    // THE COVE'S HEIGHT, as the base's cove system names it (2026-10-16: a 4" cove printed as 6" on the proposal, because
+    // the proposal reads `cove_height`, which a v2 bid never fills, and falls back to 6). "" when the base has no cove.
+    out.cove_height_v2 = coveHeightOf(base.map(function (x) { return x.e; }));
     out.sheet_area = area;
     out.cost_snapshot = ok ? {
       costs: sums.sub_total + sums.taxes + sums.fees_and_bond,
@@ -5381,7 +5400,7 @@
     copySection: copySection, addSheet: addSheet, renameSection: renameSection, deleteSection: deleteSection,
     validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
-    composePricingSnapshot: composePricingSnapshot, sectionSwitcherHtml: sectionSwitcherHtml,
+    composePricingSnapshot: composePricingSnapshot, coveHeightOf: coveHeightOf, sectionSwitcherHtml: sectionSwitcherHtml,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
     sheetsPanelHtml: sheetsPanelHtml, sheetNowHtml: sheetNowHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
     optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
