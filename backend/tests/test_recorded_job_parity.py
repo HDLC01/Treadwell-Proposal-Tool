@@ -90,7 +90,7 @@ MUTATIONS = {
         "js/bid-engine.js", "      var super_pto = roundUp((sub_total + gp + hard_bid + contingency + sales_tax + fees) * super_pct);",
         "      var super_pto = roundUp((sub_total + gp + contingency + sales_tax + fees) * super_pct);", ("epoxy", "super_pto")),
     "the patch line is not taken into the material": (
-        "js/bid-engine.js", "        material = roundUp(num(input.material) + (q.polishPatch ? num(input.patch) : 0));",
+        "js/bid-engine.js", "        material = roundUp(num(input.material) + (q.polishPatch && profile.layout === \"polish\" ? num(input.patch) : 0));",
         "        material = roundUp(num(input.material));", ("polish", "material")),
 }
 
