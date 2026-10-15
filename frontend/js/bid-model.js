@@ -1139,6 +1139,8 @@
     if (held && validTakeoffUnit(r.unit)) setMeasurement(rows, i, "");
     delete r.same_floor;
     delete r.same_floor_of;
+    delete r.same_floor_left;
+    delete r.same_floor_left_of;
     delete r.floor_area;
     r.unit = unit;
     return true;
@@ -1288,9 +1290,28 @@
   function carrierTag(r) { return r ? areaTagOf(r.floor_area) : 0; }
   function followerTag(r) { return r ? areaTagOf(r.same_floor_of) : 0; }
 
+  /** The floor a coat row belongs to: the row (not `i`) that carries area `tag`'s floor — an SF row that is on, carries a
+   *  floor of its own (neither follows a floor nor left one) and is that area's (`floor_area`, or no mark for a bid with
+   *  one area). The first such row, as the row was matched when it was added. Null when there is none. */
+  function floorOf(rows, i, tag) {
+    for (var j = 0; j < rows.length; j++) {
+      var q = rows[j];
+      if (j === i || !q || q.unit !== "SF" || !rowOn(q) || q.same_floor || q.same_floor_left) continue;
+      if (carrierTag(q) === tag && num(q.measurement) > 0) return q;
+    }
+    return null;
+  }
+
   /** Type `value` into row `i`'s measurement, keeping the same-floor rows honest.
    *  - A `same_floor` row the estimator types its OWN number into stops sharing: the marker is
    *    cleared, so takeoffSf counts what it was told rather than ignoring it for good.
+   *  - BUT A COAT THAT IS TYPED THE FLOOR'S OWN NUMBER IS STILL ON THAT FLOOR (2026-10-16). The re-check of a real job
+   *    found it: a primer added beside a 5,482 SF floor carried 5,482 and was the same floor, and then the estimator
+   *    typed 5,482 into it, a keystroke at a time, and the first "5" made it a second floor for good: the area doubled,
+   *    and with it the patch, the tooling and the proposal's square feet. So a row that leaves its floor this way keeps
+   *    `same_floor_left` (and `same_floor_left_of`, its area), and rejoins the floor the moment its number is the
+   *    floor's again. A row that never followed a floor is never joined to one: two rooms of the same size are two
+   *    floors.
    *  - The carrier (an enabled SF row that is not same_floor) moving drags every same_floor row
    *    of ITS OWN area still holding its old number along, so the rows the default load made as
    *    one floor keep pricing one floor. A same_floor row already set to something else is left
@@ -1300,7 +1321,23 @@
     if (!r) return;
     var old = r.measurement;
     r.measurement = value;
-    if (r.same_floor) { delete r.same_floor; delete r.same_floor_of; return; }
+    if (r.same_floor || r.same_floor_left) {
+      var ftag = r.same_floor ? followerTag(r) : areaTagOf(r.same_floor_left_of);
+      var floor = floorOf(rows, i, ftag);
+      if (floor && num(value) > 0 && num(value) === num(floor.measurement)) {
+        r.same_floor = true;
+        if (ftag) r.same_floor_of = ftag;
+        delete r.same_floor_left; delete r.same_floor_left_of;
+        return;
+      }
+      if (r.same_floor) {
+        delete r.same_floor_of;
+        delete r["same_floor"];
+        r.same_floor_left = true;
+        if (ftag) r.same_floor_left_of = ftag;
+      }
+      return;
+    }
     if (r.unit !== "SF" || !rowOn(r)) return;
     var tag = carrierTag(r);
     for (var k = 0; k < rows.length; k++) {
