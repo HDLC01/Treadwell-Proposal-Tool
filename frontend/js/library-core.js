@@ -171,15 +171,20 @@
     if (!(items instanceof Array) || !adj) return items;
     var disc = adj.discounts || {};
     var esc = num(adj.escalation) || 0;
-    var vendors = Object.keys(disc).filter(function (v) {
+    // A vendor is matched on its letters alone, so "Sherwin Williams", "sherwin-williams" and "Sherwin-Williams " typed
+    // on the Items tab are one vendor, and a hand-made row gets the same discount the seeded ones do.
+    var vkey = function (v) { return String(v == null ? "" : v).toLowerCase().replace(/[^a-z]/g, ""); };
+    var offOf = new Map();
+    Object.keys(disc).forEach(function (v) {
       var d = num(disc[v]);
-      return d !== null && d > 0 && (1 + esc - d) > 0;
+      if (d !== null && d > 0 && (1 + esc - d) > 0) offOf.set(vkey(v), d);
     });
+    var vendors = Array.from(offOf.keys());
     if (!adj.bulk && !vendors.length) return items;
     return items.map(function (it) {
       if (!it || typeof it !== "object") return it;
       var factor = 1;
-      if (vendors.indexOf(it.vendor) >= 0) factor = (1 + esc - num(disc[it.vendor])) / (1 + esc);
+      if (offOf.has(vkey(it.vendor))) factor = (1 + esc - offOf.get(vkey(it.vendor))) / (1 + esc);
       var bulkCost = num(it.bulk_cost);
       var useBulk = !!adj.bulk && bulkCost !== null && bulkCost > 0;
       if (factor === 1 && !useBulk) return it;

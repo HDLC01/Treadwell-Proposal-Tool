@@ -1983,6 +1983,7 @@
     if (input && input.adjust && Object.keys(input.adjust).length) {
       out.ship_pct = r.ship_pct; out.super_pct = r.super_pct; out.soft_pct = r.soft_pct;
       out.hard_bid = r.hard_bid; out.hard_bid_pct = r.hard_bid_pct;
+      if (r.discount_refused) out.discount_refused = true;
     }
     return out;
   }
@@ -2034,13 +2035,15 @@
    *  a plain number (an expression, "abc", "3%%"). */
   function pctFraction(v) {
     if (v === null || v === undefined) return null;
-    if (typeof v === "number") return isFinite(v) ? v / 100 : null;
+    if (typeof v === "number") return isFinite(v) ? parseFloat((v / 100).toPrecision(12)) : null;
     if (typeof v !== "string") return null;
     var t = v.replace(/\s+/g, "");
     if (t === "") return null;
     if (t.charAt(t.length - 1) === "%") t = t.slice(0, -1);
     if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return null;
-    return Number(t) / 100;
+    // To twelve significant figures HERE, the one place, so the range check and the figure the chain is handed are the
+    // same number: checked unrounded, 99.99999999999 passed as under 100% and then reached the chain as exactly 1.
+    return parseFloat((Number(t) / 100).toPrecision(12));
   }
 
   /** A dollar box as typed: "1,500", "$1500", "-1500" and 1500 all read. Null for a blank or anything else. */
@@ -2093,6 +2096,15 @@
       out.push({ key: "discount_amt", text: "not a dollar figure, so it is not used" });
     }
     return out;
+  }
+
+  /** The material overrides alone (supplier, Poly-Crete, Bulk): what a section's boxes do to its MATERIAL, without what
+   *  they do to the markup lines. The Review step greys each markup box with the rule's figure for the material the
+   *  section really buys, so the rule it shows is the one a typed figure replaces. Null when there are none. */
+  function materialOnlyAdjust(adj) {
+    var a = normalizeAdjust(adj);
+    if (!a) return null;
+    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, bulk: a.bulk });
   }
 
   /** What the markup chain takes from a section's boxes (bid-engine's `adjust`): fractions for the rates, the
@@ -5320,7 +5332,8 @@
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
     ADJUST_KEYS: ADJUST_KEYS, MATERIAL_ESCALATION: MATERIAL_ESCALATION, DISCOUNT_VENDORS: DISCOUNT_VENDORS,
-    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn, chainAdjust: chainAdjust, materialAdjust: materialAdjust,
+    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn,
+    materialOnlyAdjust: materialOnlyAdjust, chainAdjust: chainAdjust, materialAdjust: materialAdjust,
     pctFraction: pctFraction,
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
     moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,

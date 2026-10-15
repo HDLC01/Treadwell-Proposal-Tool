@@ -421,13 +421,14 @@
 
   /** THE ESTIMATOR'S OVERRIDES for one tab, checked (Hanz, 2026-10-16: "all the edge cases"). Kyle types over his own
    *  rules on a real share of bids (2026-08-16 to 10-16: a discount on 21 of 41, soft or super % on 4, GP on 1,
-   *  shipping on 1), so each of these replaces the rule's figure when it is a number, and is absent otherwise.
+   *  shipping on 1), so each of these replaces the rule's figure when it is a number, and is absent otherwise. They
+   *  arrive as FRACTIONS: bid-model.js chainAdjust turns the Review step's "3" into 0.03.
    *
    *  A RATE must be a finite fraction from 0 up to, but not including, 1: GP divides by (1 - gp), so 1 or more is no
    *  price at all, and a negative markup or shipping is not something the sheet's cells are ever typed with. A
-   *  DISCOUNT is taken as its size, whichever way it is signed, because Kyle types it as -0.03 and an estimator types
-   *  "3": both mean 3% off, and the line is always money given back. Its percentage is below 1 for the same reason a
-   *  rate is (100% off is a free floor, not a bid). The dollar figure, when there is one, wins over the percentage:
+   *  DISCOUNT is taken as its size, whichever way it is signed (the sheet holds it negative; the box takes it either
+   *  way): the line is always money given back. Its percentage is below 1 for the same reason a rate is (100% off is
+   *  a free floor, not a bid), and one that gives back the whole bid is refused below. The dollar figure, when there is one, wins over the percentage:
    *  the sheet's D-cell, typed, replaces its own formula. Anything that is not a usable number throws, so a bad box is
    *  named rather than priced as if it were blank. */
   function adjustOf(raw) {
@@ -438,7 +439,7 @@
     function fraction(name, v) {
       if (isBlank(v)) return undefined;
       var n = Number(v);
-      if (!isFinite(n)) throw new BidEngineError("the " + name + " override is not a number: " + JSON.stringify(v));
+      if (!isFinite(n)) throw new BidEngineError("the " + name + " override is not a number: " + String(v));
       if (name === "discount_pct") n = Math.abs(n);
       if (n < 0 || n >= 1) throw new BidEngineError("the " + name + " override must be from 0 to under 100%, not " + n);
       return snap(n);
@@ -576,14 +577,23 @@
       // THE DISCOUNT LINE (Kyle's "Hard Bid Discount", Epoxy B74/D74, Polish B68/D68): `=ROUNDUP(SUM(sub,gp)*pct,0)`
       // with a negative pct, ROUNDUP going away from zero. The estimator's typed dollars or percentage replace the
       // profile's own hard-bid rule, on any tab, whether or not the job is a hard bid: it is how Kyle lands a price.
-      var hard_bid_pct = 0, hard_bid = 0;
+      var hard_bid_pct = 0, hard_bid = 0, discount_refused = false;
       if (has1("discount_amt")) {
         hard_bid = adj.discount_amt ? -adj.discount_amt : 0;   // never -0, which prints as "-$0"
         hard_bid_pct = null;
       } else if (has1("discount_pct")) {
         hard_bid_pct = -adj.discount_pct;
         hard_bid = adj.discount_pct === 0 ? 0 : roundUp((sub_total + gp) * hard_bid_pct);
-      } else if (hardBidOn) {
+      }
+      // A DISCOUNT BIGGER THAN WHAT IT COMES OFF is refused, not priced. It is money given back out of the labor and the
+      // margin (the remodel tax is charged on exactly those, with the discount inside), never out of the materials: one
+      // larger than the labor, its burden and escalation, the tooling, the travel and the GP together would make a
+      // negative remodel tax, and past that a negative total, and the proposal would print it. The line is left out (the
+      // bid prices as if the box were blank) and `discount_refused` says so, for the Review step to name.
+      if (hard_bid !== 0 && -hard_bid > labor + escalation + burden + tooling + travel + gp) {
+        hard_bid = 0; hard_bid_pct = 0; discount_refused = true;
+      }
+      if (!has1("discount_amt") && !has1("discount_pct") && hardBidOn) {
         hard_bid_pct = rate("hard_bid");
         hard_bid = roundUp((sub_total + gp) * hard_bid_pct);
       }
@@ -635,6 +645,7 @@
         remodel_pct: remodel_pct, remodel_tax: remodel_tax, taxes: taxes,
         fees: fees, bond: bond, bond_pct: bond_pct, fees_and_bond: fees_and_bond,
         total: total,
+        discount_refused: discount_refused,
         sf: sf,
         // Null, not 0, without an area: 0 would read as "free" rather than "not known yet".
         per_sf: sf > 0 ? total / sf : null

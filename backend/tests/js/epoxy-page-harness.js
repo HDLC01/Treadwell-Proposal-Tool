@@ -256,7 +256,98 @@ async function main() {
   out.picker = { epoxyFirstUntagged: firstUntagged, epoxyLastTagged: lastTagged, total: epKeys.length, epoxyRows: taggedIds.size,
                  polishAaaBeforeMacro: poKeys.indexOf("asm:zz-untagged-asm") < poKeys.indexOf("asm:wb-epoxy-sys-macro-flake-single-broadcast"),
                  epoxyAaaBeforeMacro: epKeys.indexOf("asm:zz-untagged-asm") < epKeys.indexOf("asm:wb-epoxy-sys-macro-flake-single-broadcast") };
+  out.adjust = await adjustSection();
   return out;
+}
+
+/** THE OVERRIDE BOXES ON THE REVIEW STEP, driven through the page (Hanz, 2026-10-16). An Epoxy job with the flake system
+ *  and a cove: each box typed the way a person types it, and what the page then priced, showed and saved read back. The
+ *  section's price is also worked out without the page (priceSection over the library the bid buys: itemsForBid), so
+ *  every figure the page shows is held to the engines, never to a number typed into this file. */
+async function adjustSection() {
+  const flake = asmNamed("MACRO Flake Single Broadcast");
+  const cove = asmNamed("Cove: Epoxy 4\"");
+  const b = await open(epoxyDraft());
+  const api = b.api;
+  api.setAssembly(0, flake.name);
+  api.setAssembly(1, cove.name);
+  api.changed(true);
+  b.clock.fire();
+  api.go(2);
+  const section = () => api.model().tabs.Epoxy;
+  // what the step SHOWS now: the element's own text, which the repaint writes (the panel's markup is what was first drawn)
+  const mk = (key) => { const el = b.doc.querySelector('[data-mk="' + key + '"]'); return el ? el.textContent : null; };
+  const warn = (key) => { const el = b.doc.querySelector('[data-adjwarn="' + key + '"]'); return el ? { text: el.textContent, hidden: !!el.hidden } : null; };
+  const box = (key) => P.need(b, '[data-adj="' + key + '"]');
+  const hand = (adj) => {
+    const m = clone(api.model());
+    if (adj) m.tabs.Epoxy.adjust = adj; else delete m.tabs.Epoxy.adjust;
+    const lib = LIB.itemsForBid(items, B.materialAdjust(m.tabs.Epoxy.adjust));
+    const priceRow = (r) => { const a = asms.find((x) => x.id === r.assembly_id); return a ? LIB.priceAssembly(a, lib, B.num(r.measurement)) : null; };
+    return B.priceSection(m, "Epoxy", { material: (e) => {
+      const t = e.section.takeoff;
+      const r = X.sectionMaterial(t, { items: lib, sf: B.takeoffSf(t), rowPrice: priceRow, pool: B.poolsPacks(e.section) });
+      return { material: r.material, tooling: r.tooling };
+    } });
+  };
+  const o = {};
+  const before = api.activeBid();
+  o.before = { total: before.total, hand: hand(null).total, adjust: section().adjust === undefined ? "absent" : section().adjust,
+    boxes: ["ship_pct", "gp_pct", "super_pct", "soft_pct", "discount_pct", "discount_amt", "supplier_pct", "polycrete_pct"]
+      .map((k) => [k, !!b.doc.querySelector('[data-adj="' + k + '"]')]),
+    bulkSwitch: !!b.doc.querySelector("[data-adj-bulk]"),
+    gpPlaceholder: String(box("gp_pct").placeholder || box("gp_pct").attrs.placeholder || ""), gpUsed: before.gp_pct,
+    shipPlaceholder: String(box("ship_pct").placeholder || box("ship_pct").attrs.placeholder || ""), shipUsed: before.ship_pct };
+
+  // the supplier discount: the materials, the sub-total and everything under them move; the page equals the engines
+  P.typeInto(b, '[data-adj="supplier_pct"]', "20");
+  const s = api.activeBid();
+  o.supplier = { stored: clone(section().adjust), material: s.material, hand: hand({ supplier_pct: "20" }), total: s.total,
+    materialShown: mk("material"), totalShown: mk("total"), fell: s.total < before.total };
+  o.supplier.hand = { material: o.supplier.hand.material, total: o.supplier.hand.total };
+
+  // an unusable GP: named under its box, left out of the price
+  P.typeInto(b, '[data-adj="gp_pct"]', "abc");
+  o.gpBad = { warn: warn("gp_pct"), total: api.activeBid().total, sameAsBefore: api.activeBid().total === s.total };
+  P.typeInto(b, '[data-adj="gp_pct"]', "");
+  o.gpCleared = { warn: warn("gp_pct"), stored: clone(section().adjust) };
+
+  // a discount in dollars bigger than the labor and markup: refused and named; a sane one priced and shown
+  P.typeInto(b, '[data-adj="discount_amt"]', "1,000,000");
+  o.discountHuge = { warn: warn("discount_amt"), hardBid: api.activeBid().hard_bid || 0, total: api.activeBid().total,
+    refused: !!api.activeBid().discount_refused };
+  P.typeInto(b, '[data-adj="discount_amt"]', "$1,500");
+  const d = api.activeBid();
+  o.discountAmt = { hardBid: d.hard_bid, shown: (b.doc.querySelector("[data-mkdisc]") || {}).textContent, warn: warn("discount_amt"),
+    hand: hand({ supplier_pct: "20", discount_amt: "$1,500" }).total, total: d.total };
+  P.typeInto(b, '[data-adj="discount_pct"]', "3");
+  o.dollarsWin = { hardBid: api.activeBid().hard_bid };
+  P.typeInto(b, '[data-adj="discount_amt"]', "");
+  o.percent = { hardBid: api.activeBid().hard_bid, hand: hand({ supplier_pct: "20", discount_pct: "3" }).total,
+    total: api.activeBid().total };
+
+  // the Bulk Discount switch, by click and by the keyboard, repainted where it is
+  const sw = () => P.need(b, "[data-adj-bulk]");
+  const node = sw();
+  P.clickOn(b, "[data-adj-bulk]");
+  o.bulkClick = { stored: section().adjust.bulk === true, aria: sw().attrs["aria-checked"], sameNode: sw() === node,
+    total: api.activeBid().total, hand: hand(clone(section().adjust)).total };
+  node.click = function () { b.doc.fire("click", { target: node, preventDefault() {} }); };
+  b.doc.fire("keydown", { target: node, key: " ", preventDefault() {} });
+  o.bulkKey = { stored: section().adjust.bulk === true, aria: sw().attrs["aria-checked"] };
+
+  // the save carries the boxes, and the proposal's lump sum is the bid the Review step shows
+  b.clock.fire();
+  const saved = b.rec.saves[b.rec.saves.length - 1];
+  o.saved = { adjust: saved.polish_estimate.tabs.Epoxy.adjust, lump: saved.proposal_lump_sum, total: api.activeBid().total };
+
+  // every box cleared: the section holds no `adjust` and prices exactly as it did before anything was typed
+  ["supplier_pct", "discount_pct"].forEach((k) => P.typeInto(b, '[data-adj="' + k + '"]', ""));
+  b.clock.fire();
+  const last = b.rec.saves[b.rec.saves.length - 1];
+  o.cleared = { adjust: section().adjust === undefined ? "absent" : clone(section().adjust),
+    savedHasKey: Object.prototype.hasOwnProperty.call(last.polish_estimate.tabs.Epoxy, "adjust"), total: api.activeBid().total };
+  return o;
 }
 
 main().then((out) => console.log(JSON.stringify(out))).catch((e) => { console.error(e && e.stack || e); process.exit(1); });

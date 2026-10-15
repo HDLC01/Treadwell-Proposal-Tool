@@ -47,14 +47,16 @@ WHAT A LIBRARY ROW CANNOT SAY (named modelling gaps, listed for Kyle and Hanz in
     cannot say either. The cove is priced by a formula in js/epoxy-takeoff.js, and the rows seeded here
     (ids below, RESERVED_PRICE_ROWS) are its editable price sources. A constant in the code is only the
     fallback, and test_epoxy_takeoff.py pins row and constant equal.
-  * Bulk Discount is a switch the v2 model does not carry yet, so `bulk_cost` is stored and not used.
+  * Bulk Discount is a switch on an Epoxy section's Review step (2026-10-16; bid-model.js `adjust.bulk`), and
+    `bulk_cost` is the price it buys at (library-core itemsForBid).
 
 THE FOUR DELIBERATE EXCEPTIONS TO INSERT-ONLY (each behind its own flag, each in its own clearly named statement
 group, none emitted by default, each held by a test that runs it against a row Kyle edited):
   --tag-vendors         fills `vendor` on the Epoxy rows where it is still NULL ("Sherwin-Williams" or "Poly-Crete", worked
-                        out from the discount cell the row's own price cell reads: T141 or T142), and adds the two vendor
-                        names to the dropdown list unless a live vendor of that name is already there. It never changes
-                        a vendor that has a value, and it changes no other column.
+                        out from the discount cell the row's own price cell reads: T141 or T142). It never changes a
+                        vendor that has a value, and it changes no other column. (The two vendor names themselves are
+                        ordinary insert-only rows of the plan, added to the dropdown list unless a live vendor of that
+                        name is already there, so a plain --sql run includes them.)
   --gyp-sand-40         moves the Gyp sand price from 35 to 40 (Kyle's 10.01 master, Gyp (USG 1-8") D33) ONLY where it is
                         still 35, so a price Kyle edited is left alone.
   --retire-beta-sample  soft-deletes the two beta placeholder rows (the "Polish - Salt & Pepper (beta sample)" assembly and

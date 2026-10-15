@@ -2154,7 +2154,7 @@
 
   /** What the Gyp sheet works out from the section on show, for the card, the caption and the Review step. */
   function gypFigures(entry) {
-    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.sheet, ITEMS);
+    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.sheet, itemsFor(entry.section.takeoff || []));
   }
 
   /** Text for a quantity of a thing the sheet buys in fractions: two places, no trailing zeros. */
@@ -2329,7 +2329,7 @@
     if (!e || e.role !== "epoxy") return "";
     var takeoff = e.section.takeoff || [];
     var r = E.sectionMaterial(takeoff, {
-      items: ITEMS, sf: B.takeoffSf(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
+      items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
     });
     return '<p class="cap">Patch <b data-epoxy-patch>' + esc(moneyAuto(r.patch)) + '</b> is added for you: ' +
       esc(B.money2(E.unitPrice(ITEMS, "patch").cost)) + ' a square foot of the whole area, whatever the system. ' +
@@ -3150,7 +3150,8 @@
    *  shows greyed until something is typed in it. Nothing is changed: the section's boxes are put back. */
   function ruleBid() {
     var saved = M.adjust;
-    try { M.adjust = undefined; return activeBid(); } finally { M.adjust = saved; }
+    // The material boxes stay: the rule a markup box is greyed with is the rule for the material this section buys.
+    try { M.adjust = B.materialOnlyAdjust(saved) || undefined; return activeBid(); } finally { M.adjust = saved; }
   }
 
   /** A fraction as the figure a % box holds: nine percent reads "9", two point seven percent "2.7". "" for none. */
@@ -3163,6 +3164,14 @@
   function adjWarnText(key) {
     var probs = B.adjustProblems(M.adjust);
     for (var i = 0; i < probs.length; i++) if (probs[i].key === key) return probs[i].text;
+    // The chain refuses a discount that gives back the whole bid (bid-engine.js): said under whichever box is in force,
+    // the dollars when they are typed (they win), else the percentage.
+    if (key === "discount_amt" || key === "discount_pct") {
+      var typedAmt = adjTyped("discount_amt") !== "";
+      if ((key === "discount_amt") === typedAmt && activeBid().discount_refused) {
+        return "more than the labor and markup it comes off, so it is not used";
+      }
+    }
     return "";
   }
   function adjWarnHtml(key) {

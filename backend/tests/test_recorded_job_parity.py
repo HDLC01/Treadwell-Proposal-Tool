@@ -78,11 +78,11 @@ def test_the_polish_patch_line_is_the_renovation_rate_over_the_whole_floor(ran):
 
 MUTATIONS = {
     "the supplier discount is not applied to the materials": (
-        "js/library-core.js", "      if (vendors.indexOf(it.vendor) >= 0) factor = (1 + esc - num(disc[it.vendor])) / (1 + esc);",
+        "js/library-core.js", "      if (offOf.has(vkey(it.vendor))) factor = (1 + esc - offOf.get(vkey(it.vendor))) / (1 + esc);",
         "      if (false) factor = 1;", ("epoxy", "material")),
     "the discount comes off the escalation too": (
-        "js/library-core.js", "      if (vendors.indexOf(it.vendor) >= 0) factor = (1 + esc - num(disc[it.vendor])) / (1 + esc);",
-        "      if (vendors.indexOf(it.vendor) >= 0) factor = 1 - num(disc[it.vendor]);", ("epoxy", "material")),
+        "js/library-core.js", "      if (offOf.has(vkey(it.vendor))) factor = (1 + esc - offOf.get(vkey(it.vendor))) / (1 + esc);",
+        "      if (offOf.has(vkey(it.vendor))) factor = 1 - offOf.get(vkey(it.vendor));", ("epoxy", "material")),
     "a typed shipping rate is ignored": (
         "js/bid-engine.js", '        ship_pct = has1("ship_pct") ? adj.ship_pct : rate("ship_pct");',
         '        ship_pct = rate("ship_pct");', ("epoxy", "shipping")),
