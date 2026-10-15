@@ -638,9 +638,11 @@
   //                              the rest, the sound mat free from a truckload on
   //   lodgingDivisor             nights = (labor - travel labor) / labor rate / this
   //   dayHours                   hours in a crew day (8 or 10); the oracle pins it to the tab's own cell
+  //   polishPatch                a Polish section's material carries the sheet's patch line, D17: a price a square foot
+  //                              of the whole area, the New price or the Reno one (C17). Read by the estimate page.
   var QUIRKS = ["escalationInSubtotal", "escalationAlwaysOn", "gpSubtractionIncludesFees", "hasHardBid",
     "hasOverage", "toolingInSubTotal", "remodelBase", "remodelRateDefault", "bondInput", "travelFromLodging",
-    "shippingRule", "lodgingDivisor", "dayHours"];
+    "shippingRule", "lodgingDivisor", "dayHours", "polishPatch"];
 
   var GP_5 = "MARKUP(BAND(subtotal, 6500,52%, 15000,45%, 22500,35%, 32500,32%, 30%))";
   // Seal's sixth rung: 30% up to 42,500 and 28% from there (Seal!B67, odd-rules "Seal's gross profit ladder").
@@ -675,7 +677,7 @@
         escalationInSubtotal: true, escalationAlwaysOn: false, gpSubtractionIncludesFees: true,
         hasHardBid: true, hasOverage: false, toolingInSubTotal: true, remodelBase: "sheet",
         remodelRateDefault: "sheet", bondInput: true, travelFromLodging: true,
-        shippingRule: "rate", lodgingDivisor: 8, dayHours: 8
+        shippingRule: "rate", lodgingDivisor: 8, dayHours: 8, polishPatch: true
       },
       rates: {
         ship_pct: "2%", esc_pct: "5%", burden_pct: "12%", gp: GP_5, super_pto: "2.7%",
@@ -688,7 +690,7 @@
       label: "Polish as the v2 model prices it today (saved bids keep these rules)",
       quirks: {
         toolingInSubTotal: false, remodelBase: "model", remodelRateDefault: "state", hasHardBid: false,
-        bondInput: false, travelFromLodging: false
+        bondInput: false, travelFromLodging: false, polishPatch: false
       }
     },
     "polish-rev2": {
@@ -701,6 +703,14 @@
       // The other two stay as they are on purpose: no hard bid (2026-09-22) and no bond input (it ships at 0), and the
       // Kansas floor for a remodel job with no rate typed is the tool's own choice (2026-08-18), not the sheet's 10%.
       quirks: { toolingInSubTotal: true, remodelBase: "sheet" }
+    },
+    "polish-rev3": {
+      rev: 1, layout: "polish", extends: "polish-rev2",
+      label: "Polish for new bids from 2026-10-16: rev2 with the sheet's patch line",
+      // THE PATCH LINE (Polish!D17), for bids made from 2026-10-16 and for no other (Hanz, 2026-10-07: saved bids keep
+      // their totals). Found comparing the Jayhawk Compass 70 job with Kyle's 10.01 workbook: the v2 Polish material had
+      // no patch, so every v2 Polish bid was short by $0.05 or $0.15 a square foot before markup.
+      quirks: { polishPatch: true }
     },
     "seal": {
       rev: 1, layout: "seal", extends: "polish",

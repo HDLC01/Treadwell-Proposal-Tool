@@ -124,6 +124,8 @@
   // exactly one of these two, and by REV2 only when its own `profile` key says so (rootProfile): a bid saved before
   // Phase 17 has no such key and prices as it always has.
   var REV2 = engine.resolveProfile("polish-rev2");
+  // polish-rev3 (2026-10-16): rev2 with the sheet's patch line. What a NEW Polish section is priced by from that day.
+  var REV3 = engine.resolveProfile("polish-rev3");
 
   var RATES = {
     SHIPPING: engine.rateNumber(LEGACY.rates.ship_pct),         // B32
@@ -1805,7 +1807,9 @@
    *  polish-legacy, so a saved bid (which never had the key) prices as it always did and a stray value cannot move a
    *  total. The key is written once, when a new bid is seeded (seedNewSections). */
   function rootProfile(model) {
-    return isObject(model) && model.profile === REV2.stamp ? REV2 : LEGACY;
+    if (!isObject(model)) return LEGACY;
+    if (model.profile === REV3.stamp) return REV3;
+    return model.profile === REV2.stamp ? REV2 : LEGACY;
   }
 
   /** The profile markupChain prices with: nothing means polish-legacy (every caller that predates Phase 17), a stamp
@@ -1816,7 +1820,9 @@
     if (typeof which === "string") {
       if (which === LEGACY.stamp) return LEGACY;
       if (which === REV2.stamp) return REV2;
-      throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + " or " + REV2.stamp + ", not " + JSON.stringify(which));
+      if (which === REV3.stamp) return REV3;
+      throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + ", " + REV2.stamp + " or " + REV3.stamp +
+        ", not " + JSON.stringify(which));
     }
     if (isObject(which)) return rootProfile(which);
     throw new Error("markupChain needs a profile stamp or the model, not " + String(which));
@@ -1904,10 +1910,24 @@
    *  one, is not. */
   function isRev2Polish(model, tab) {
     if (!isObject(model)) return false;
-    if (tab === ROOT_TAB) return rootProfile(model) === REV2;
+    // polish-rev3 is rev2 with the patch line, so everything rev2 does it does too.
+    if (tab === ROOT_TAB) return rootProfile(model) === REV2 || rootProfile(model) === REV3;
     if (!isObject(model.tabs) || !has.call(model.tabs, tab)) return false;
     var s = model.tabs[tab];
-    return isObject(s) && s.layout === "polish" && s.profile === REV2.stamp;
+    return isObject(s) && s.layout === "polish" && (s.profile === REV2.stamp || s.profile === REV3.stamp);
+  }
+
+  /** DOES THIS POLISH SECTION CARRY THE SHEET'S PATCH LINE (Polish!D17)? Its profile says (the `polishPatch` quirk):
+   *  polish-rev3, and any later profile that keeps it. Every bid saved before 2026-10-16 is rev2 or legacy and has no
+   *  patch line, so its total does not move. Reads the model without throwing. */
+  function polishPatchOn(model, tab) {
+    if (!isObject(model)) return false;
+    if (tab === ROOT_TAB) return !!rootProfile(model).quirks.polishPatch;
+    if (!isObject(model.tabs) || !has.call(model.tabs, tab)) return false;
+    var s = model.tabs[tab];
+    if (!isObject(s) || s.layout !== "polish") return false;
+    var p = s.profile === REV3.stamp ? REV3 : (s.profile === REV2.stamp ? REV2 : (s.profile === LEGACY.stamp ? LEGACY : null));
+    return !!(p && p.quirks.polishPatch);
   }
 
   /** The tooling of a model's ROOT section: the sheet's, for a bid priced by polish-rev2, and 0 for every other (the
@@ -1958,6 +1978,13 @@
     // The tooling line is part of the bid only on a profile that charges it, so the key is not there on the
     // legacy answer (every saved bid keeps exactly the keys it always had).
     if (profile.quirks.toolingInSubTotal) out.tooling = r.tooling;
+    // THE RATES AN OVERRIDE MOVED, and the discount line, reported only when the section has overrides, so a bid that
+    // never typed one answers with exactly the keys it always did (polish_chain_golden.json is the proof).
+    if (input && input.adjust && Object.keys(input.adjust).length) {
+      out.ship_pct = r.ship_pct; out.super_pct = r.super_pct; out.soft_pct = r.soft_pct;
+      out.hard_bid = r.hard_bid; out.hard_bid_pct = r.hard_bid_pct;
+      if (r.discount_refused) out.discount_refused = true;
+    }
     return out;
   }
 
@@ -1970,6 +1997,151 @@
    *  A SAVED BID NEVER MOVES. This is a starting point, read once when a bid is first opened and
    *  never applied to a model that already states a labor row (laborUnstated is the gate). */
   var SHIPPED_LABOR_RATE = engine.defaultNumber("labor_rate");
+
+  // ── THE ESTIMATOR'S OVERRIDES ON A SECTION (Hanz, 2026-10-16) ─────────────────────────────────────────────────
+  // What Kyle types OVER his own sheet's rules, as boxes on the Review step, one set per section (a section is one
+  // workbook tab, and each tab has its own cells). Approved after a scan of the bids made from 2026-08-16 to 10-16:
+  // the discount (his "Hard Bid Discount" line, B74/D74 Epoxy, B68/D68 Polish) on 21 of 41, Bulk Discount on 11 Epoxy
+  // bids, soft or super % on 4, GP and shipping on 1 each, and his supplier discount (B41/C41) on the Jayhawk job.
+  // This REVERSES 2026-09-22 ("remove all hard bids ... and also on the markups"): the line is back as a plain
+  // per-bid discount, never tied to a hard-bid answer, and blank is no discount.
+  //
+  // STORED AS TYPED (text or a number), like contingency and fees, so a half-typed "1." is not snapped while
+  // somebody is typing it. `chainAdjust` and `materialAdjust` read them; a box that does not read as a usable figure
+  // is left out of the price and named by `adjustProblems`, never priced as zero and never allowed to break the bid.
+  //
+  //   discount_pct   % off the bid (Kyle's B74 / B68). Taken as its size: "3", "-3", "3%" are all 3% off.
+  //   discount_amt   $ off the bid (Kyle's D74 / D68 typed). Wins over the % when both are typed.
+  //   ship_pct, gp_pct, super_pct, soft_pct   the rate, in %, that replaces the sheet's rule for that line
+  //   supplier_pct   % off the Sherwin-Williams liquids (Epoxy B41); the escalation is kept (see MATERIAL_ESCALATION)
+  //   polycrete_pct  % off the Poly-Crete liquids (Epoxy C41); blank follows supplier_pct, as C41 = B41 does
+  //   bulk           the Bulk Discount switch (Epoxy D41): a material's bulk cost is its price
+  var ADJUST_PCT_KEYS = Object.freeze(["discount_pct", "ship_pct", "gp_pct", "super_pct", "soft_pct",
+                                       "supplier_pct", "polycrete_pct"]);
+  var ADJUST_KEYS = Object.freeze(ADJUST_PCT_KEYS.concat(["discount_amt", "bulk"]));
+
+  /** THE ESCALATION BAKED INTO EVERY LIBRARY COST the workbook seed wrote: Kyle's Epoxy!U140, +6%. A library cost is
+   *  the list price x 1.06; the sheet's discounted price is list x (1 + 0.06 - discount). So a discount is applied as
+   *  (1 + E - d) / (1 + E) of the library cost, which is the sheet's figure exactly, rather than as (1 - d), which
+   *  would also take the discount off the escalation. */
+  var MATERIAL_ESCALATION = 0.06;
+
+  /** The discount groups of Kyle's sheet, by the vendor a library material names (the seed tags them from each
+   *  material's price column): the Epoxy discount takes the Sherwin-Williams liquids (column T, T141), the Poly-Crete
+   *  discount takes SL, MD and WR (T142). Sand, flake, quartz and the rest name neither and are never discounted. */
+  var DISCOUNT_VENDORS = Object.freeze({ supplier_pct: "Sherwin-Williams", polycrete_pct: "Poly-Crete" });
+
+  /** A box as typed, as a fraction: "3", "3%", " 3 % " and 3 are all 0.03. Null for a blank or anything that is not
+   *  a plain number (an expression, "abc", "3%%"). */
+  function pctFraction(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "number") return isFinite(v) ? parseFloat((v / 100).toPrecision(12)) : null;
+    if (typeof v !== "string") return null;
+    var t = v.replace(/\s+/g, "");
+    if (t === "") return null;
+    if (t.charAt(t.length - 1) === "%") t = t.slice(0, -1);
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return null;
+    // To twelve significant figures HERE, the one place, so the range check and the figure the chain is handed are the
+    // same number: checked unrounded, 99.99999999999 passed as under 100% and then reached the chain as exactly 1.
+    return parseFloat((Number(t) / 100).toPrecision(12));
+  }
+
+  /** A dollar box as typed: "1,500", "$1500", "-1500" and 1500 all read. Null for a blank or anything else. */
+  function dollars(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "number") return isFinite(v) ? v : null;
+    if (typeof v !== "string") return null;
+    var t = v.replace(/[\s,$]/g, "");
+    if (t === "") return null;
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return null;
+    return Number(t);
+  }
+
+  /** The highest a % box may say, and the lowest. GP divides by (1 - gp), so 100% is no price at all; a discount of
+   *  100% or more is a free floor; a negative markup, shipping or supplier discount is not what any of these boxes is
+   *  for (the supplier discount is money off, never a surcharge). */
+  function pctInRange(key, f) {
+    if (key === "discount_pct") f = Math.abs(f);
+    return f >= 0 && f < 1;
+  }
+
+  /** A saved `adjust` as the model keeps it: only the known keys, each as it was typed, with blanks, `false` and
+   *  anything that is not text, a number or (for `bulk`) `true` dropped. Null when nothing is left, so a section that
+   *  never used the boxes saves no key at all and prices exactly as before. Never throws. */
+  function normalizeAdjust(raw) {
+    if (!isObject(raw)) return null;
+    var out = {}, any = false;
+    ADJUST_KEYS.forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(raw, k)) return;
+      var v = raw[k];
+      if (k === "bulk") { if (v === true) { out.bulk = true; any = true; } return; }
+      if (typeof v === "number" && isFinite(v)) { out[k] = v; any = true; return; }
+      if (typeof v === "string" && v.trim() !== "") { out[k] = v.slice(0, 32); any = true; }
+    });
+    return any ? out : null;
+  }
+
+  /** The boxes that are typed but cannot be used, as `{key, text}` in the order the Review step draws them. A box here
+   *  is left OUT of the price (the rule's own figure stands) and the page says so beside it. */
+  function adjustProblems(adj) {
+    var a = normalizeAdjust(adj) || {};
+    var out = [];
+    ADJUST_PCT_KEYS.forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(a, k)) return;
+      var f = pctFraction(a[k]);
+      if (f === null) out.push({ key: k, text: "not a number, so it is not used" });
+      else if (!pctInRange(k, f)) out.push({ key: k, text: "must be from 0 to under 100%, so it is not used" });
+    });
+    if (Object.prototype.hasOwnProperty.call(a, "discount_amt") && dollars(a.discount_amt) === null) {
+      out.push({ key: "discount_amt", text: "not a dollar figure, so it is not used" });
+    }
+    return out;
+  }
+
+  /** The material overrides alone (supplier, Poly-Crete, Bulk): what a section's boxes do to its MATERIAL, without what
+   *  they do to the markup lines. The Review step greys each markup box with the rule's figure for the material the
+   *  section really buys, so the rule it shows is the one a typed figure replaces. Null when there are none. */
+  function materialOnlyAdjust(adj) {
+    var a = normalizeAdjust(adj);
+    if (!a) return null;
+    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, bulk: a.bulk });
+  }
+
+  /** What the markup chain takes from a section's boxes (bid-engine's `adjust`): fractions for the rates, the
+   *  discount's size, the dollars. A box adjustProblems names is left out. Empty when nothing usable is typed. */
+  function chainAdjust(adj) {
+    var a = normalizeAdjust(adj) || {};
+    var out = {};
+    ["discount_pct", "ship_pct", "gp_pct", "super_pct", "soft_pct"].forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(a, k)) return;
+      var f = pctFraction(a[k]);
+      if (f === null || !pctInRange(k, f)) return;
+      out[k] = parseFloat((k === "discount_pct" ? Math.abs(f) : f).toPrecision(12));
+    });
+    if (Object.prototype.hasOwnProperty.call(a, "discount_amt")) {
+      var d = dollars(a.discount_amt);
+      if (d !== null) out.discount_amt = Math.abs(d);
+    }
+    return out;
+  }
+
+  /** What a section's boxes do to its MATERIAL prices (library-core's itemsForBid): the Bulk Discount switch, and the
+   *  fraction off each discount group's library cost. A Poly-Crete box left blank follows the supplier box, as Kyle's
+   *  C41 is `=B41`. Unusable boxes are left out, as everywhere else. */
+  function materialAdjust(adj) {
+    var a = normalizeAdjust(adj) || {};
+    var off = function (k) {
+      if (!Object.prototype.hasOwnProperty.call(a, k)) return null;
+      var f = pctFraction(a[k]);
+      return (f === null || !pctInRange(k, f)) ? null : f;
+    };
+    var sw = off("supplier_pct");
+    var pc = Object.prototype.hasOwnProperty.call(a, "polycrete_pct") ? off("polycrete_pct") : sw;
+    var discounts = {};
+    if (sw) discounts[DISCOUNT_VENDORS.supplier_pct] = sw;
+    if (pc) discounts[DISCOUNT_VENDORS.polycrete_pct] = pc;
+    return { bulk: a.bulk === true, discounts: discounts, escalation: MATERIAL_ESCALATION };
+  }
 
   /** A usable rate, or the shipped one. Anything that is not a positive finite number reads as
    *  "nothing said", because a $0 company rate would price every new line at nothing. */
@@ -2922,7 +3094,7 @@
    *  states all of these comes back with. A key added to the OUTPUT without being added HERE would
    *  be carried raw over its own normalisation, which is the one mistake this list exists to stop. */
   var MODEL_KEYS = Object.freeze(["version", "takeoff", "labor", "conditions", "contingency", "fees",
-    "totals", "no_travel_labor", "conditions_shown", "cond_cov", "travel", "prevailing", "distance", "fees_default"]);
+    "totals", "no_travel_labor", "conditions_shown", "cond_cov", "travel", "prevailing", "adjust", "distance", "fees_default"]);
 
   /** `out` with every own key of `saved` that is not in MODEL_KEYS copied on, unchanged.
    *
@@ -3082,6 +3254,10 @@
       // used the card, and then absent stays absent: nothing is added, so such a bid prices and saves as before.
       var pwBlock = normalizePrevailing(model.prevailing);
       if (pwBlock) out.prevailing = pwBlock;
+      // THE ESTIMATOR'S OVERRIDES on the Polish section's Review step. Absent on every bid that never typed one, and
+      // absent stays absent.
+      var adjBlock = normalizeAdjust(model.adjust);
+      if (adjBlock) out.adjust = adjBlock;
       if (isBlank(out.contingency)) out.contingency = 0;
       // Every v2 draft saved before the Fees line became typeable has no `fees` at all, and a
       // missing one must read as the zero the sheet ships.
@@ -3403,7 +3579,7 @@
   }
 
   /** The five keys that are a SECTION's own: what a panel edits when a section other than the root is on show. */
-  var SECTION_KEYS = ["takeoff", "labor", "contingency", "fees", "totals"];
+  var SECTION_KEYS = ["takeoff", "labor", "contingency", "fees", "totals", "adjust"];
 
   /** THE MODEL AS THE PANELS SEE IT while one section is on show (Phase 12). The estimate page's Material,
    *  Labor and Review panels have always edited `M.takeoff`, `M.labor`, `M.contingency` and `M.fees`, which is
@@ -3480,7 +3656,7 @@
     });
     // A Polish section that has never held a takeoff is new to the bid, so it is priced by Polish rev 2 like any other new
     // one (Phase 17). A root that was priced before and is coming back keeps the profile it had, or none.
-    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });
+    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV3.stamp });
     return out;
   }
 
@@ -3696,7 +3872,8 @@
       labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),
       travel: carrier ? travelCosts(model.travel, s.labor).total : 0,
       contingency: s.contingency, fees: s.fees, conditions: model.conditions,
-      sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate
+      sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate,
+      adjust: chainAdjust(s.adjust)
     };
     // An OPTION carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does.
     if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;
@@ -3757,7 +3934,7 @@
     }
     var e = polishEntry(model, tabId);
     var s = e.section;
-    var profile = e.profile === LEGACY.stamp ? LEGACY : (e.profile === REV2.stamp ? REV2 : null);
+    var profile = e.profile === LEGACY.stamp ? LEGACY : (e.profile === REV2.stamp ? REV2 : (e.profile === REV3.stamp ? REV3 : null));
     if (!profile) {
       return unpriceableSection(e.profile, "profile", "this section was priced with " + e.profile +
         ", which a Polish section is not priced with. Its saved figures are kept.");
@@ -3766,6 +3943,8 @@
     var labor = laborTotal(s.labor, model.conditions, prevailingApplied(model));
     return markupChain({
       material: isObject(mat) ? mat.material : mat,
+      // The patch line (Polish!D17), which the chain takes into the material only on a profile that carries it.
+      patch: isObject(mat) ? mat.patch : 0,
       labor: labor,
       // Lodging + Per Diem: inside the markups (the sheet's D61), not labor.
       travel: polishTravel(model, e),
@@ -3775,7 +3954,8 @@
       fees: s.fees,
       conditions: model.conditions,
       sf: takeoffSf(s.takeoff),
-      remodel_rate: ctx.remodel_rate
+      remodel_rate: ctx.remodel_rate,
+      adjust: chainAdjust(s.adjust)
     }, profile.stamp);
   }
 
@@ -3841,7 +4021,7 @@
   function newSectionBody(sheet, kind, ctx) {
     var rec = types.tab(types.tabOfSheet(sheet));
     var polish = rec.markupLayout === "polish";
-    var profile = polish ? REV2 : engine.forTab(sheet).profile;
+    var profile = polish ? REV3 : engine.forTab(sheet).profile;
     var section = {
       layout: rec.markupLayout, kind: kind, profile: profile.stamp,
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }],
@@ -4112,6 +4292,8 @@
       body = { layout: "polish", profile: rootProfile(model).stamp, takeoff: pick("takeoff"), labor: pick("labor"),
                contingency: pick("contingency"), fees: pick("fees") };
       if (model.pool_packs !== undefined) body.pool_packs = model.pool_packs;
+      // its overrides too: a copy prices exactly like the sheet it came from
+      if (normalizeAdjust(model.adjust)) body.adjust = jsonCopy(normalizeAdjust(model.adjust));
     } else {
       body = jsonCopy(src.section);
     }
@@ -4422,7 +4604,7 @@
     // 6. THE NEW ROOT IS PRICED BY POLISH REV 2 (Phase 17, Hanz 2026-10-07: Kyle's Polish fixes apply to NEW bids only).
     // Stamped on the same gate as the pool above, so a saved root never gains it and keeps pricing as polish-legacy.
     // A root that already carries a `profile` of any kind is left exactly as it is.
-    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV2.stamp;
+    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV3.stamp;
     return out;
   }
 
@@ -5149,6 +5331,10 @@
     ROOT_TAB: ROOT_TAB, SECTION_KINDS: SECTION_KINDS, sectionsOf: sectionsOf, activeSections: activeSections,
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
+    ADJUST_KEYS: ADJUST_KEYS, MATERIAL_ESCALATION: MATERIAL_ESCALATION, DISCOUNT_VENDORS: DISCOUNT_VENDORS,
+    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn,
+    materialOnlyAdjust: materialOnlyAdjust, chainAdjust: chainAdjust, materialAdjust: materialAdjust,
+    pctFraction: pctFraction,
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
     moveSectionSheet: moveSectionSheet, sheetHeld: sheetHeld, sheetLabel: sheetLabel, gypAreaFields: gypAreaFields,
     priceSection: priceSection, priceTabs: priceTabs, activateSection: activateSection,
