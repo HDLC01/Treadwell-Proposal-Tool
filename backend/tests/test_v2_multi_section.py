@@ -381,7 +381,7 @@ def test_a_bid_with_several_sections_writes_the_complete_derived_set(ran):
     assert c["frozenThrew"] is None, c["frozenThrew"]
     assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs", "base_tab_id",
                          "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
-                         "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
+                         "proposal_remodel_on", "cove_height_v2", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
         "tab_opts is written only because this bid holds an option (Phase 15): the proposal side prints a priced tab "
         "under Options & Unit Prices only when it says is_option")
     assert c["savePatchMultiKeys"] == ["polish_estimate", "cell_values"] + c["keys"][1:]

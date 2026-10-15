@@ -373,3 +373,8 @@ def test_clearing_every_box_puts_the_bid_back_exactly(ran):
     c = ran["adjust"]["cleared"]
     assert c["adjust"] == "absent" and c["savedHasKey"] is False
     assert c["total"] == ran["adjust"]["before"]["total"]
+
+
+def test_the_save_names_the_height_of_the_cove_the_bid_bought(ran):
+    """The proposal reads it before falling back to 6 (test_cove_height_v2.py)."""
+    assert ran["priced"]["coveHeight"] == "4"

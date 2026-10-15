@@ -126,6 +126,7 @@ async function main() {
     pricedTabs: (saved.priced_tabs || []).map((t) => [t.id, t.role, t.kind, t.v2, t.total, t.sf]),
     lump: saved.proposal_lump_sum, computed: saved.computed_bid && saved.computed_bid.lump_sum,
     sheetArea: saved.sheet_area, polishSf: saved.polish_sf === undefined ? "absent" : saved.polish_sf,
+    coveHeight: saved.cove_height_v2,
     rootKind: saved.polish_estimate.kind, savedTabs: Object.keys(saved.polish_estimate.tabs || {}),
     epoxyTotals: saved.polish_estimate.tabs && saved.polish_estimate.tabs.Epoxy.totals.total,
     stamp: saved.polish_estimate.tabs && saved.polish_estimate.tabs.Epoxy.profile,

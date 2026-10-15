@@ -4576,7 +4576,8 @@ def _build_epoxy_systems(cells: Dict[str, Any], values: Dict[str, Any],
     texture = str(values.get("texture") or "").strip()
     multi = len(picks) > 1
     # Cove base height (Kyle: note the cove height) — default 6", configurable per job.
-    cove_h = str(values.get("cove_height") or "6").strip() or "6"
+    # A v2 bid's own cove height (bid-model coveHeightOf) when nobody typed one on the Proposal step.
+    cove_h = str(values.get("cove_height") or values.get("cove_height_v2") or "6").strip() or "6"
     # The template keeps the bold "System:"/"Option N:" label and a separate
     # regular value run, so we emit them as distinct tokens (prefix + name)
     # rather than one combined string — preserving the sheet's column alignment.

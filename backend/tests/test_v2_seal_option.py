@@ -121,7 +121,8 @@ def test_a_bid_that_never_had_an_option_still_writes_what_it_always_wrote_and_on
     assert s["afterRemoveKeys"][:5] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs"]
     assert s["afterRemoveTabs"] == ["Polish"] and s["afterRemoveHasOpts"] is False, (
         "the price snapshot the removed option was in is overwritten, so the proposal stops listing it")
-    assert s["keys"][-1] == "tab_opts" and s["keys"][:14] == s["afterRemoveKeys"]
+    # 15 since 2026-10-16: cove_height_v2 (the base's cove height) joined the price snapshot
+    assert s["keys"][-1] == "tab_opts" and s["keys"][:15] == s["afterRemoveKeys"]
     assert s["afterRemoveKeys"][5] == "base_tab_id", "the base's id is written with the rest of the price snapshot (Sheets phase 1)"
 
 
