@@ -423,7 +423,7 @@ PAGE_BREAKS = {
         "js/bid-model.js", "    function byTab(k) { return k === tab; }", "    function byTab(k) { return false; }",
         lambda r: "Seal" in r["remove"]["after"]["tabOptsKeys"]),
     "the patch ignores a renovation on the page": (
-        "js/polish-estimate.js", "        items: ITEMS, sf: B.takeoffSf(takeoff), reno: jobIsReno(),", "        items: ITEMS, sf: B.takeoffSf(takeoff), reno: false,",
+        "js/polish-estimate.js", "        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), reno: jobIsReno(),", "        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), reno: false,",
         lambda r: r["reno"]["renoMaterial"] == r["reno"]["newMaterial"]),
     "the option section is not edited on the page's own panels": (
         "js/polish-estimate.js", '    return !!e && (e.role === "polish" || e.role === "epoxy" || e.role === "gyp" || e.role === "seal");',

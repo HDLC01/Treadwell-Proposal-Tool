@@ -315,6 +315,35 @@
     return Object.keys(tabs).some(function (k) { return !!tabs[k] && tabs[k].takeoff === list && B.poolsPacks(tabs[k]); });
   }
 
+  /** THE SECTION THAT OWNS A TAKEOFF LIST, found by identity as poolsList finds it: the root for the root's own list,
+   *  one of the sections under `tabs` for theirs, or null for a list no section owns. */
+  function sectionOfList(list) {
+    if (!ROOT || !(list instanceof Array)) return null;
+    if (ROOT.takeoff === list) return ROOT;
+    var tabs = ROOT.tabs;
+    if (!tabs || typeof tabs !== "object") return null;
+    var keys = Object.keys(tabs);
+    for (var i = 0; i < keys.length; i++) if (tabs[keys[i]] && tabs[keys[i]].takeoff === list) return tabs[keys[i]];
+    return null;
+  }
+
+  /** THE LIBRARY AS THE SECTION THAT OWNS `takeoff` BUYS IT (Hanz, 2026-10-16): ITEMS with that section's supplier
+   *  discounts and Bulk Discount switch applied (library-core's itemsForBid; the boxes are on the Review step). Every
+   *  material price on this page is read off the list this returns, so a discount reaches the row cost boxes, the
+   *  pooled coats, the cove, the Gyp area rows and the section's material sum alike. ITEMS itself when the section
+   *  typed nothing, which is every bid saved before the boxes existed. Kept until ITEMS or the boxes change. */
+  var itemsForCache = { items: null, key: "", out: null };
+  function itemsFor(takeoff) {
+    var sec = sectionOfList(takeoff || (M && M.takeoff));
+    var adj = sec ? B.materialAdjust(sec.adjust) : null;
+    if (!adj || (!adj.bulk && !Object.keys(adj.discounts).length)) return ITEMS;
+    var key = JSON.stringify(adj);
+    if (itemsForCache.items !== ITEMS || itemsForCache.key !== key) {
+      itemsForCache = { items: ITEMS, key: key, out: L.itemsForBid(ITEMS, adj) };
+    }
+    return itemsForCache.out;
+  }
+
   /** Every row of a pooling takeoff priced as one purchase: library-core's pricePool over each row priced
    *  alone. An OFF row buys nothing and takes no share; Dye and Joint Filler are never pooled. Index for
    *  index with `list`. */
@@ -323,12 +352,13 @@
     var on = list.map(function (r) { return B.rowOn(r); });
     var pooled = L.pricePool(alone, { on: on, skip: RESERVED_ITEM_IDS });
     // a cove on two areas is one length, priced once (the library's pool has no item to add up for it)
-    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });
+    return E.poolCoves(pooled, list, { items: itemsFor(list), quartz: E.systemOneIsQuartz(list), on: on });
   }
 
   function rawRowPrice(row, takeoff) {
     var r = row || {};
-    if (r.item_id) return priceMaterialRow(r);
+    var items = itemsFor(takeoff);
+    if (r.item_id) return priceMaterialRow(r, items);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
     // A COVE IS PRICED BY THE SHEET'S OWN FORMULA, NOT BY A LIBRARY LINE (js/epoxy-takeoff.js): it rounds twice,
@@ -336,7 +366,7 @@
     // list, and it is the one on show unless a caller prices another section's.
     if (E.coveVariant(asm.id)) {
       return E.priceCoveRow(asm.id, B.num(r.measurement),
-        { items: ITEMS, quartz: E.systemOneIsQuartz(takeoff || M.takeoff) });
+        { items: items, quartz: E.systemOneIsQuartz(takeoff || M.takeoff) });
     }
     // A GYP AREA ROW IS THE GYPSUM OF THAT AREA at the section's thickness and mix (js/gyp-takeoff.js), not a library
     // line: a bag's yield depends on the thickness, which the library cannot say. A takeoff that is not a Gyp
@@ -344,9 +374,9 @@
     if (G && G.bucketOfAssembly(asm.id)) {
       var gyp = gypEntryOf(takeoff || M.takeoff);
       if (gyp) return G.priceAreaRow(asm.id, B.num(r.measurement),
-        { items: ITEMS, tab: gyp.sheet, settings: gyp.section.gyp });
+        { items: items, tab: gyp.sheet, settings: gyp.section.gyp });
     }
-    return priceAssemblyRow(asm, r, B.num(r.measurement));
+    return priceAssemblyRow(asm, r, B.num(r.measurement), items);
   }
 
   /** `items` with ONE item's coverage replaced, as a copy. The library's own rows are never
@@ -367,16 +397,18 @@
    *  priceLine / priceAssembly that every other number on the page goes through does the
    *  arithmetic; there is no second pricing path to drift. With nothing typed this is exactly
    *  L.priceAssembly(asm, ITEMS, area), which is what every row saved before this existed gets. */
-  function priceAssemblyRow(asm, row, area) {
+  function priceAssemblyRow(asm, row, area, base) {
+    // `base` is the library as this row's section buys it (itemsFor); a caller that has none prices off ITEMS.
+    var lib = base || ITEMS;
     var lc = (row && row.line_cov && typeof row.line_cov === "object") ? row.line_cov : null;
     var lines = (asm && asm.lines) || [];
-    if (!lc) return L.priceAssembly(asm, ITEMS, area);
-    var items = ITEMS, any = false;
+    if (!lc) return L.priceAssembly(asm, lib, area);
+    var items = lib, any = false;
     var swapped = lines.map(function (ln, j) {
       var cov = B.num(lc[j]);
       var id = ln && (ln.item_id || ln.item);
       if (!(cov > 0) || !id) return ln;
-      var real = L.findItem(ITEMS, id);
+      var real = L.findItem(lib, id);
       if (!real) return ln;
       any = true;
       var tmp = "__cov" + j;
@@ -384,7 +416,7 @@
       items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov, pool_of: real.id })]);
       return Object.assign({}, ln, { item_id: tmp, item: undefined });
     });
-    if (!any) return L.priceAssembly(asm, ITEMS, area);
+    if (!any) return L.priceAssembly(asm, lib, area);
     return L.priceAssembly(Object.assign({}, asm, { lines: swapped }), items, area);
   }
 
@@ -393,20 +425,22 @@
    *  `broken_lines` follows library-core's own rule rather than inventing a second one: an
    *  unfilled row is work not started, not work gone wrong, so `no_item` is not a fault. Getting
    *  that wrong would put "1 line cannot price yet" under every row the moment it is added. */
-  function priceMaterialRow(r) {
+  function priceMaterialRow(r, base) {
     var area = B.num(r.measurement);
     // THE OVERRIDE LIVES HERE, not inside priceLine: waste and roundup have no box on this row and
     // come from the material either way. A typed coverage prices against a ONE-ITEM SWAP of the
     // real item -- coverage replaced, everything else (cost, pack size) untouched -- so the item
     // in the library is never mutated. Blank r.coverage leaves `items` as ITEMS, so priceLine
     // falls back to the material's own coverage exactly as it does for every assembly line.
-    var items = ITEMS;
+    // `base` is the library as this row's section buys it (itemsFor); a caller that has none prices off ITEMS.
+    var lib = base || ITEMS;
+    var items = lib;
     var cov = B.num(r.coverage);
     // TRUTHY, NOT !== null: B.num returns 0 for "", null and undefined alike (see
     // bid-model.js), which is exactly how covHint/covPlaceholder already tell "nothing
     // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
     // as broken (no_coverage) the instant it's added, before anyone touches the box.
-    if (cov) items = itemsWithCoverage(ITEMS, r.item_id, cov);
+    if (cov) items = itemsWithCoverage(lib, r.item_id, cov);
     var one = L.priceLine({ item_id: r.item_id }, items, area);
     var priced = one.ok && one.priced ? 1 : 0;
     var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
@@ -539,7 +573,36 @@
     var area = B.takeoffSf(takeoff);
     if (ROOT.conditions.dye) sum += condLine("dye", area).cost;
     if (ROOT.conditions.joint_filler) sum += condLine("joint_filler", area).cost;
+    // The patch line (Polish!D17) is NOT in this sum: it goes to the chain on its own (polishMaterialIn), and the
+    // engine adds it inside D31's round-up only on a profile that carries it (the `polishPatch` quirk).
     return sum;
+  }
+
+  /** What a Polish section's chain is handed: the raw material and, separately, the patch line (Polish!D17). The
+   *  engine takes the patch into the material only on a profile that carries it (polish-rev3 on), so a section saved
+   *  before 2026-10-16 prices exactly as it did whatever is passed here. */
+  function polishMaterialIn(takeoff) {
+    return { material: polishMaterial(takeoff), patch: polishPatchCost(takeoff) };
+  }
+
+  /** What the patch line comes to for the Polish section that owns `takeoff`, or 0 when its profile has no patch line
+   *  or the Seal module (which prices it) did not load. */
+  function polishPatchCost(takeoff) {
+    if (!SL || !polishPatchOnList(takeoff)) return 0;
+    return SL.patchCost(ITEMS, B.takeoffSf(takeoff), jobIsReno());
+  }
+
+  /** Does the Polish section that owns `takeoff` carry the patch line? Found by identity, as sectionOfList finds it. */
+  function polishPatchOnList(takeoff) {
+    if (!ROOT || !(takeoff instanceof Array)) return false;
+    if (ROOT.takeoff === takeoff) return B.polishPatchOn(ROOT, B.ROOT_TAB);
+    var tabs = ROOT.tabs;
+    if (!tabs || typeof tabs !== "object") return false;
+    var keys = Object.keys(tabs);
+    for (var i = 0; i < keys.length; i++) {
+      if (tabs[keys[i]] && tabs[keys[i]].takeoff === takeoff) return B.polishPatchOn(ROOT, keys[i]);
+    }
+    return false;
   }
 
   /** This project's REAL remodel-tax rate, or 0 when nobody has picked a county.
@@ -589,7 +652,8 @@
     // B.polishBid prices every Polish section the same way, the root and a copy under `tabs` alike (the model's own
     // markupChain call with the section's rows, travel by its role, and tooling on a rev 2 profile). The page hands it the
     // library's raw material, which is the one thing the model cannot know.
-    return B.polishBid(ROOT, B.ROOT_TAB, { material: rootMaterial, remodel_rate: remodelRate() });
+    return B.polishBid(ROOT, B.ROOT_TAB, { material: function () { return polishMaterialIn(ROOT.takeoff); },
+                                           remodel_rate: remodelRate() });
   }
 
   /** The raw material of a section that is not the root: its takeoff rows priced from the library, the rows
@@ -601,10 +665,10 @@
   function sectionMaterial(entry) {
     var takeoff = entry.section.takeoff || [];
     // A POLISH SECTION UNDER `tabs` (a copy of the Polish sheet, or a Polish sheet added to the bid) is bought like the root.
-    if (entry.role === "polish") return { material: polishMaterial(takeoff) };
+    if (entry.role === "polish") return polishMaterialIn(takeoff);
     if (entry.role === "epoxy") {
       var r = E.sectionMaterial(takeoff, {
-        items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
+        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: r.material, tooling: r.tooling };
@@ -616,7 +680,7 @@
     if (entry.role === "seal") {
       if (!SL) return { unpriceable: "the Seal takeoff did not load, so this option cannot be priced. Reload the page." };
       var sr = SL.sectionMaterial(takeoff, {
-        items: ITEMS, sf: B.takeoffSf(takeoff), reno: jobIsReno(),
+        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), reno: jobIsReno(),
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: sr.material, tooling: sr.tooling };
@@ -627,7 +691,7 @@
     // section is priced: a plain sum is refused by priceSection, never charged as the gypsum alone.
     if (entry.role === "gyp" && G) {
       var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.sheet, {
-        items: ITEMS, rowPrice: function (row) { return rowPrice(row, takeoff); }
+        items: itemsFor(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       var figures = { gyp: g.gyp, extras: g.extras, sand: g.sand, soundMat: g.soundMat,
                       soundMatRolls: g.soundMatRolls, truckload: g.truckload, tooling: g.tooling };
@@ -2786,7 +2850,8 @@
     return '<table class="rev-t"><tbody>' + rows.map(function (r) {
       var label = (r[0] && typeof r[0] === "object" && "raw" in r[0]) ? r[0].raw : esc(r[0]);
       return '<tr' + (r[3] ? ' class="' + r[3] + '"' : '') + '><td>' + label +
-        '</td><td class="r">' + esc(r[1] == null ? "" : r[1]) + '</td><td class="r">' +
+        '</td><td class="r">' + ((r[1] && typeof r[1] === "object" && "raw" in r[1]) ? r[1].raw
+          : esc(r[1] == null ? "" : r[1])) + '</td><td class="r">' +
         (r[2] == null ? "" : r[2]) + '</td></tr>';
     }).join("") + '</tbody></table>';
   }
@@ -2881,9 +2946,28 @@
                    esc(rowCost(r).text)]);
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
+    // THE PATCH LINE, said where its money is (polish-rev3 and later): the rate is the New one or the Renovation one.
+    var patchNow = polishPatchCost(M.takeoff);
+    if (patchNow > 0) {
+      tkRows.push([{ raw: 'Patch <span class="note">' + (jobIsReno() ? "renovation" : "new concrete") + ' rate</span>' },
+                   B.fmtSf(B.takeoffSf(M.takeoff)) + " SF", esc(moneyAuto(patchNow))]);
+    }
     // A Gyp section's other lines: the primer, ISO strip, tape, sand and sound mat the sheet buys from the areas.
     var gypRev = gypOpen();
     if (gypRev) gypLines(gypRev).forEach(function (l) { tkRows.push([l.label, l.qty, esc(moneyAuto(l.cost))]); });
+    // AN EPOXY SECTION'S OWN MATERIAL BOXES (Hanz, 2026-10-16): Kyle's supplier discounts (B41 on the Sherwin-Williams
+    // liquids, C41 on the Poly-Crete ones) and his Bulk Discount switch (D41). They price the materials above, so they
+    // sit with them. Only an Epoxy section has those cells; a Polish, Seal or Gyp tab has no discount groups.
+    var rb = ruleBid();
+    if (onShow && onShow.layout === "epoxy") {
+      tkRows.push([{ raw: 'Supplier discount <span class="note">Sherwin-Williams liquids</span>' },
+                   { raw: adjBox("supplier_pct", "0") }, ""]);
+      tkRows.push([{ raw: 'Poly-Crete discount <span class="note">SL, MD and WR; blank is the supplier discount</span>' },
+                   { raw: adjBox("polycrete_pct", adjTyped("supplier_pct") || "0") }, ""]);
+      tkRows.push([{ raw: 'Bulk Discount <span class="note">bulk prices where a material has one</span>' },
+                   { raw: B.sliderHtml(adjOn("bulk"), 'data-adj-bulk="1"', adjOn("bulk") ? "On" : "Off",
+                     "Kyle's Bulk Discount switch: a material that has a bulk price is bought at it") }, ""]);
+    }
     tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
     // A rate the engine reports for the section on show is the one printed (an Epoxy section ships at its tier);
     // the root's chain reports none of these, so it prints the Polish figures it always did.
@@ -2894,7 +2978,10 @@
       tkRows.push(["Material escalation", "", mkAmt(b, "material_escalation")]);
       tkRows.push(["Shipping", "", mkAmt(b, "shipping")]);
     } else {
-      tkRows.push(["Shipping", B.pct(rateOf("ship_pct", B.RATES.SHIPPING)), mkAmt(b, "shipping")]);
+      // Typed over the sheet's own rate (Kyle's B42 / B32); blank is the rule, which the box shows greyed.
+      tkRows.push(["Shipping", { raw: rateSpan(b, "ship_pct") +
+                     adjBox("ship_pct", pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING)) },
+                   mkAmt(b, "shipping")]);
     }
     tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, "takeoff", revTable(tkRows));
@@ -3016,6 +3103,98 @@
       esc(TW.withDraft("/polish-intake.html")) + '">pick a county</a> for the real one</span>';
   }
 
+  // ── THE ESTIMATOR'S OVERRIDES (Hanz, 2026-10-16) ───────────────────────────────────────────────────────────
+  // Boxes over the sheet's own rules, one set per section (`M.adjust`, which B.sectionView answers from the section on
+  // show). bid-model.js checks and converts them (normalizeAdjust, chainAdjust, materialAdjust, adjustProblems).
+
+  /** What was typed in one box, as text, or "" for nothing. */
+  function adjTyped(key) {
+    var a = B.normalizeAdjust(M.adjust);
+    if (!a) return "";
+    switch (key) {
+      case "discount_pct": return a.discount_pct == null ? "" : String(a.discount_pct);
+      case "discount_amt": return a.discount_amt == null ? "" : String(a.discount_amt);
+      case "ship_pct": return a.ship_pct == null ? "" : String(a.ship_pct);
+      case "gp_pct": return a.gp_pct == null ? "" : String(a.gp_pct);
+      case "super_pct": return a.super_pct == null ? "" : String(a.super_pct);
+      case "soft_pct": return a.soft_pct == null ? "" : String(a.soft_pct);
+      case "supplier_pct": return a.supplier_pct == null ? "" : String(a.supplier_pct);
+      case "polycrete_pct": return a.polycrete_pct == null ? "" : String(a.polycrete_pct);
+      default: return "";
+    }
+  }
+  function adjOn(key) { var a = B.normalizeAdjust(M.adjust); return key === "bulk" && !!a && a.bulk === true; }
+
+  /** Write one box into the section on show. The keys are named one by one (never `obj[key] = value` with a key off
+   *  an attribute), and the whole set goes back through normalizeAdjust, so a cleared box takes its key away and a
+   *  section left with nothing typed saves no `adjust` at all. */
+  function setAdjust(key, value) {
+    var a = Object.assign({}, B.normalizeAdjust(M.adjust) || {});
+    switch (key) {
+      case "discount_pct": a.discount_pct = value; break;
+      case "discount_amt": a.discount_amt = value; break;
+      case "ship_pct": a.ship_pct = value; break;
+      case "gp_pct": a.gp_pct = value; break;
+      case "super_pct": a.super_pct = value; break;
+      case "soft_pct": a.soft_pct = value; break;
+      case "supplier_pct": a.supplier_pct = value; break;
+      case "polycrete_pct": a.polycrete_pct = value; break;
+      case "bulk": a.bulk = value === true; break;
+      default: return;
+    }
+    var next = B.normalizeAdjust(a);
+    M.adjust = next || undefined;
+  }
+
+  /** The bid of the section on show with its boxes set aside: what the sheet's own rules give, which is what each box
+   *  shows greyed until something is typed in it. Nothing is changed: the section's boxes are put back. */
+  function ruleBid() {
+    var saved = M.adjust;
+    try { M.adjust = undefined; return activeBid(); } finally { M.adjust = saved; }
+  }
+
+  /** A fraction as the figure a % box holds: nine percent reads "9", two point seven percent "2.7". "" for none. */
+  function pctNum(f) {
+    var n = B.num(f);
+    return (f === null || f === undefined || !isFinite(n)) ? "" : String(parseFloat((n * 100).toPrecision(6)));
+  }
+
+  /** The words beside a box that is typed but cannot be used (B.adjustProblems), hidden when there are none. */
+  function adjWarnText(key) {
+    var probs = B.adjustProblems(M.adjust);
+    for (var i = 0; i < probs.length; i++) if (probs[i].key === key) return probs[i].text;
+    return "";
+  }
+  function adjWarnHtml(key) {
+    var t = adjWarnText(key);
+    return '<span class="adjwarn" data-adjwarn="' + key + '"' + (t ? '' : ' hidden') + '>' + esc(t) + '</span>';
+  }
+
+  /** THE RATE A LINE WAS PRICED WITH, override or rule, as the chain reports it (falling back to the pinned rate where
+   *  the Polish chain reports none). Keyed `data-mkrate` so the repaint refreshes it beside its box. */
+  function rateUsed(b, key) {
+    switch (key) {
+      case "ship_pct": return b.ship_pct != null ? b.ship_pct : B.RATES.SHIPPING;
+      case "super_pct": return b.super_pct != null ? b.super_pct : B.RATES.SUPER_PTO;
+      case "soft_pct": return b.soft_pct != null ? b.soft_pct : B.RATES.SOFT_COSTS;
+      case "discount_pct": return b.hard_bid_pct ? -b.hard_bid_pct : null;
+      default: return null;
+    }
+  }
+  function rateSpan(b, key) {
+    var f = rateUsed(b, key);
+    return '<span data-mkrate="' + key + '">' + esc(f == null ? "" : B.pct(f)) + '</span>';
+  }
+
+  /** One % box over a rule. `rule` is the figure the sheet's rule gives, shown greyed as the placeholder. */
+  function adjBox(key, rule) {
+    var label = { ship_pct: "Shipping", gp_pct: "GP", super_pct: "Superintendent and PTO", soft_pct: "Soft costs",
+                  discount_pct: "Discount", supplier_pct: "Supplier discount", polycrete_pct: "Poly-Crete discount" }[key] || key;
+    return '<span class="adjbox"><input data-adj="' + key + '" value="' + esc(adjTyped(key)) + '" placeholder="' +
+      esc(rule) + '" inputmode="decimal" aria-label="' + esc(label) + ' in percent; blank uses the sheet\'s rule">%' +
+      adjWarnHtml(key) + '</span>';
+  }
+
   /** Rows 64-82 of the Polish tab, in the same order, so an estimator who knows Kyle's sheet can
    *  read down it and recognise every line. Percentages are the sheet's own and not editable —
    *  the workbook locks these cells in the generated download for the same reason. Contingency is
@@ -3035,12 +3214,24 @@
       '<td class="amt" data-mk="sub_total">' + esc(moneyAuto(b.sub_total)) + '</td></tr>';
 
     r += '<tr class="band"><td colspan="3">Markup</td></tr>';
-    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct"), "gp");
-    // NO HARD BID ROW. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
-    // also on the markups" -- the switch and its row came out with the condition itself; see
-    // bid-model.js's note on bid() for where the arithmetic went.
-    r += row("Superintendent &amp; PTO", esc(B.pct(b.super_pct != null ? b.super_pct : B.RATES.SUPER_PTO)), "super_pto");
-    r += row("Soft costs", esc(B.pct(b.soft_pct != null ? b.soft_pct : B.RATES.SOFT_COSTS)), "soft_costs");
+    // THE RATES ARE BOXES OVER THE RULE (Hanz, 2026-10-16): blank is the sheet's own figure, shown greyed in the box,
+    // and a number typed is the rate (Kyle types over B73/B67, B75/B69 and B76/B70 on a share of his bids).
+    var rb = ruleBid();
+    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct") + adjBox("gp_pct", pctNum(rb.gp_pct)), "gp");
+    // THE DISCOUNT LINE IS BACK (Hanz, 2026-10-16), reversing 2026-09-22: Kyle's "Hard Bid Discount" was his
+    // price-landing line on 21 of 41 bids in the two months before, mostly on jobs that were not hard bids. It is
+    // a plain discount now, a % or a $ (the $ wins), blank is none, and nothing turns it on by itself.
+    // The discount's amount is keyed `data-mkdisc`, not `data-mk`: a bid with nothing typed has no such line in its
+    // chain, and the review's every-money-cell-is-the-chain check stays exactly as strict as it was.
+    r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span></td>' +
+      '<td class="pct">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", "0") + '</td>' +
+      '<td class="amt"><span class="adjbox adjamt">$<input data-adj="discount_amt" value="' + esc(adjTyped("discount_amt")) +
+      '" placeholder="0" inputmode="decimal" aria-label="Discount in dollars; it wins over the percentage">' +
+      adjWarnHtml("discount_amt") + '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span></td></tr>';
+    r += row("Superintendent &amp; PTO", rateSpan(b, "super_pct") +
+      adjBox("super_pct", pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO)), "super_pto");
+    r += row("Soft costs", rateSpan(b, "soft_pct") +
+      adjBox("soft_pct", pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS)), "soft_costs");
     r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +
       '<td class="pct"></td><td class="amt"><input data-contingency value="' +
       esc(nv(M.contingency)) + '" inputmode="decimal"></td></tr>';
@@ -3376,6 +3567,33 @@
     });
     // The GP band and the two tax rates move with the sub-total and the toggles, so the percentage
     // column is as computed as the money column is.
+    // The override boxes: each one's greyed rule (the rule moves with the job: GP steps down as the sub-total grows),
+    // and the warning beside a box that is typed but cannot be used. A box being typed in keeps its own text.
+    var adjEls = document.querySelectorAll("[data-adj]");
+    if (adjEls.length) {
+      var rb = ruleBid();
+      var ruleOf = {
+        ship_pct: pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING), gp_pct: pctNum(rb.gp_pct),
+        super_pct: pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO),
+        soft_pct: pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS),
+        polycrete_pct: adjTyped("supplier_pct") || "0"
+      };
+      adjEls.forEach(function (el) {
+        var k = el.getAttribute("data-adj");
+        if (Object.prototype.hasOwnProperty.call(ruleOf, k) && el.placeholder !== ruleOf[k]) el.placeholder = ruleOf[k];
+      });
+      document.querySelectorAll("[data-adjwarn]").forEach(function (el) {
+        var t = adjWarnText(el.getAttribute("data-adjwarn"));
+        el.textContent = t;
+        el.hidden = !t;
+      });
+    }
+    document.querySelectorAll("[data-mkrate]").forEach(function (el) {
+      var f = rateUsed(b, el.getAttribute("data-mkrate"));
+      el.textContent = f == null ? "" : B.pct(f);
+    });
+    document.querySelectorAll("[data-mkdisc]").forEach(function (el) { el.textContent = moneyAuto(b.hard_bid || 0); });
+    document.querySelectorAll("[data-disc-row]").forEach(function (el) { el.className = b.hard_bid ? "" : "off"; });
     document.querySelectorAll("[data-mkpct]").forEach(function (el) {
       el.textContent = B.pct(b[el.getAttribute("data-mkpct")]);
     });
@@ -3523,7 +3741,7 @@
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
     // data-cond is the job's condition switch, the Prevailing wage card's among them.
     var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") ||
-      t.closest("[data-cond]");
+      t.closest("[data-cond]") || t.closest("[data-adj-bulk]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -3640,6 +3858,18 @@
     // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
     // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
     // that has been flipped back is indistinguishable from one never touched.
+    // THE BULK DISCOUNT SWITCH (an Epoxy section's). The material and every figure under it reprice in place, and the
+    // switch is repainted where it is, so the focus stays on it and Space can press it again.
+    var bulkSw = t.closest("[data-adj-bulk]");
+    if (bulkSw) {
+      setAdjust("bulk", !adjOn("bulk"));
+      var onNow = adjOn("bulk");
+      bulkSw.className = "mw-sw" + (onNow ? " on" : "");
+      bulkSw.setAttribute("aria-checked", onNow ? "true" : "false");
+      if (bulkSw.lastChild && bulkSw.lastChild.nodeType === 3) bulkSw.lastChild.nodeValue = onNow ? "On" : "Off";
+      changed(false);
+      return;
+    }
     var gypIso = t.closest("[data-gyp-iso]");
     if (gypIso) {
       var isoSec = gypOpen();
@@ -3899,6 +4129,14 @@
 
     if (el.matches("[data-contingency]")) {
       M.contingency = el.value;
+      changed(false);
+      return;
+    }
+    // AN OVERRIDE BOX. `changed(false)`: the chain reprices and repaintNumbers refreshes the amounts, the other boxes'
+    // greyed rules and the warnings in place, so the caret stays in the box being typed in.
+    var adjKey = el.getAttribute("data-adj");
+    if (adjKey !== null) {
+      setAdjust(adjKey, el.value);
       changed(false);
       return;
     }

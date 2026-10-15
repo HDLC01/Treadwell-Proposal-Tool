@@ -575,6 +575,14 @@
         font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:5px;
         padding:4px 7px;background:var(--card);color:var(--ink)}
     .mk input:hover{border-color:var(--red)}
+    /* The override boxes over the sheet's rules (Review step): a short % box with its greyed rule, and the warning
+       beside one that is typed but cannot be used. [hidden] restated: a class display rule outranks the attribute. */
+    .adjbox{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+    .adjbox input{width:58px;text-align:right;font:inherit;font-family:var(--mono)}
+    .adjbox.adjamt input{width:86px}
+    .adjbox input::placeholder{color:var(--ink-v);opacity:.7}
+    .adjwarn{display:block;white-space:normal;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:220px}
+    .adjwarn[hidden]{display:none}
 
     /* Intake's `.sw` switch (styles.css), shrunk to sit inside a table cell instead of its own
        padded row. This page carries its own tokens and does not link styles.css, so the track

@@ -137,10 +137,10 @@ async function main() {
   const review = html(b, "panels");
   out.review = {
     hasTooling: review.indexOf("Tooling and consumables") >= 0,
-    superPct: /Superintendent[^<]*<\/td><td class="pct">([^<]*)</.exec(review.replace(/&amp;/g, "&")) &&
-      /Superintendent[^<]*<\/td><td class="pct">([^<]*)</.exec(review.replace(/&amp;/g, "&"))[1],
-    softPct: (/Soft costs<\/td><td class="pct">([^<]*)</.exec(review) || [])[1],
-    shipPct: (/Shipping<\/td><td class="r">([^<]*)</.exec(review) || [])[1],
+    // the rate each line was priced with (2026-10-16: shown in a keyed span beside its override box)
+    superPct: (/data-mkrate="super_pct">([^<]*)</.exec(review) || [])[1],
+    softPct: (/data-mkrate="soft_pct">([^<]*)</.exec(review) || [])[1],
+    shipPct: (/data-mkrate="ship_pct">([^<]*)</.exec(review) || [])[1],
     toolingAmount: (/data-mk="tooling">([^<]*)</.exec(review) || [])[1],
     total: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
     noDye: !/Dye/.test(review),
