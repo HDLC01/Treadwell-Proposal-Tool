@@ -529,7 +529,8 @@ def plan_epoxy(sheets: Dict[str, Sheet], plan: Plan) -> None:
              "rounded up so it cannot buy a bag the sheet does not).")
     plan.gap("Cove is two ROUNDUPs deep and its aggregate follows System 1 (Kyle's odd rule 11): it is priced by "
              "a formula in code, from the editable price rows this seed writes.")
-    plan.gap("Bulk Discount is stored (bulk_cost) and not used: the v2 model has no Bulk Discount switch yet.")
+    plan.gap("Bulk Discount is a switch on an Epoxy section's Review step (2026-10-16): with it on, a material is bought at "
+             "its bulk_cost, and a price break dearer than that is not used (library-core itemsForBid).")
 
 
 # the price sources the code-priced formulas read. id -> (what it is, where its price sits, the unit, the pack)
