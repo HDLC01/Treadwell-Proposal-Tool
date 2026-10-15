@@ -1,0 +1,32 @@
+{
+  "about": "A real Polish + Epoxy job Kyle priced on his estimate workbook (10.01 master) and proposed on 10/8/2026, anonymised: no name, place or contact. 'in' is what he typed; 'sheet' is what his workbook answered, cell by cell, and what the two proposals printed. Recorded 2026-10-16 for the v2 parity check (Hanz: 'the price to be the same to the centavos').",
+  "epoxy": {
+    "in": { "system": "MACRO Flake Single Broadcast", "primer": "WB", "cove": "Epoxy 4\"", "sf": 5482, "lf": 562,
+            "guys": 4, "days": 12, "rate": 33, "remodel_rate": 0.075 },
+    "adjust": { "supplier_pct": "20", "ship_pct": "6", "discount_pct": "3" },
+    "adjust_cells": { "supplier_pct": "Epoxy!B41 = -20% (C41 = B41)", "ship_pct": "Epoxy!B42 = 6% typed over the tier formula",
+                      "discount_pct": "Epoxy!B74 = -3% typed (the job was not a hard bid)" },
+    "sheet": { "raw_material": 11179.65, "material": 11180, "shipping": 671, "material_total": 11851, "labor": 12672,
+               "burden": 1521, "tooling": 2020, "sub_total": 28064, "gp": 13736, "hard_bid": -1254, "super_pto": 1251,
+               "soft_costs": 5580, "sales_tax": 1123, "remodel_tax": 2665, "total": 51165 },
+    "cells": { "material": "D40", "shipping": "D42", "material_total": "D43", "labor": "D53", "burden": "D55",
+               "tooling": "D62", "sub_total": "D70", "gp": "D73", "hard_bid": "D74", "super_pto": "D75",
+               "soft_costs": "D76", "sales_tax": "D80", "remodel_tax": "D81", "total": "D88" },
+    "proposal": { "base": 47377, "sales_tax": 1123, "remodel_tax": 2665, "total": 51165 }
+  },
+  "polish": {
+    "in": { "system": "Polish — Salt & Pepper", "sf": 4067, "dye": true, "joint_filler": true, "reno": true, "rate": 33,
+            "remodel_rate": 0.075,
+            "labor": [ { "id": "polishing", "label": "Polishing", "guys": 3, "days": 8 },
+                       { "id": "mockup", "label": "Mock-up", "guys": 3, "days": 0.5 },
+                       { "id": "jointfill", "label": "Joint filler", "guys": 3, "days": 1 } ] },
+    "adjust": null,
+    "reno_note": "Polish!B10 was blank, which C17 =IF(B10=\"New\",0.05,0.15) prices at the Renovation rate.",
+    "sheet": { "raw_material": 3440.2, "material": 3441, "shipping": 69, "labor": 7524, "burden": 903, "tooling": 1967,
+               "sub_total": 13904, "gp": 11649, "hard_bid": 0, "super_pto": 699, "soft_costs": 4254, "sales_tax": 333,
+               "remodel_tax": 2025, "total": 32864 },
+    "cells": { "material": "D31", "shipping": "D32", "labor": "D45", "burden": "D47", "tooling": "D55", "sub_total": "D64",
+               "gp": "D67", "super_pto": "D69", "soft_costs": "D70", "sales_tax": "D74", "remodel_tax": "D75", "total": "D82" },
+    "proposal": { "base": 30506, "sales_tax": 333, "remodel_tax": 2025, "total": 32864 }
+  }
+}
