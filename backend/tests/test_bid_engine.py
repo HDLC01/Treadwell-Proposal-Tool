@@ -338,7 +338,7 @@ def test_a_profile_extends_another_and_states_only_what_differs(units):
     assert e["chains"]["seal"] == ["polish", "seal"] and e["chains"]["leveling"] == ["polish", "epoxy", "epoxy-blank", "leveling"]
     assert e["chains"]["polish-legacy"] == ["polish", "polish-legacy"]
     assert e["sealOnlyDiffersInGp"] == ["gp"] and e["sealQuirksSame"]
-    assert e["legacyQuirksDiffer"] == ["bondInput", "hasHardBid", "remodelBase", "remodelRateDefault", "toolingInSubTotal", "travelFromLodging"]
+    assert e["legacyQuirksDiffer"] == ["bondInput", "hasHardBid", "polishPatch", "remodelBase", "remodelRateDefault", "toolingInSubTotal", "travelFromLodging"]
     assert e["legacyRatesSame"], "polish-legacy charges the same rates as polish: its departures are rules, not rates"
     assert e["frozen"] and e["sameObjectTwice"] and e["gypDropsShipPct"] and e["globalsFilledIn"]
     assert e["levelingLaborRate"] == "33.66"

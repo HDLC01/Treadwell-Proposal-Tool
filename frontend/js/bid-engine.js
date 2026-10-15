@@ -522,7 +522,9 @@
       } else {
         // THE PATCH LINE (Polish!D17) is inside D31's round-up, on a profile that carries it (`polishPatch`). Every
         // other profile, and every caller that passes no `patch`, buys exactly the material it always did.
-        material = roundUp(num(input.material) + (q.polishPatch ? num(input.patch) : 0));
+        // Only a POLISH-layout profile takes it: every profile inherits the quirk from the base Polish tab, and an Epoxy,
+        // Seal or Gyp section prices its own patch in its takeoff module, so a stray `patch` there would count twice.
+        material = roundUp(num(input.material) + (q.polishPatch && profile.layout === "polish" ? num(input.patch) : 0));
         state.material = material;
         ship_pct = has1("ship_pct") ? adj.ship_pct : rate("ship_pct");
         shipping = roundUp(material * ship_pct);

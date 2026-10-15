@@ -4079,8 +4079,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
         }
       });
       material += extraMaterial(m);
+      // A NEW bid is polish-rev3 since 2026-10-16: its chain takes Polish!D17, the patch line, as the page does (the
+      // Seal module's patchCost over the library the page holds, at the job's own New or Reno answer).
+      const patch = B.polishPatchOn(m, B.ROOT_TAB) ? SEAL.patchCost(FAV_ITEMS, B.takeoffSf(m.takeoff), p.api.jobIsReno()) : 0;
       return B.markupChain({
-        material: material, labor: B.laborTotal(m.labor, m.conditions),
+        material: material, patch: patch, labor: B.laborTotal(m.labor, m.conditions),
         travel: B.travelCosts(m.travel, m.labor, B.travelOpts(m, "Polish")).total,
         tooling: B.rootTooling(m),
         contingency: m.contingency, fees: m.fees, conditions: m.conditions,

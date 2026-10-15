@@ -17,7 +17,7 @@ const E = require(path.join(ROOT, "js", "bid-engine.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const threw = (fn) => { try { fn(); return null; } catch (e) { return String(e && e.message || e); } };
-const REV2 = "polish-rev2@1", LEGACY = "polish-legacy@1";
+const REV2 = "polish-rev2@1", REV3 = "polish-rev3@1", LEGACY = "polish-legacy@1";
 
 /** A Polish bid with an area, a crew and a county, the way the page writes it: root keys only. */
 function polishBid(extra) {
@@ -54,6 +54,8 @@ out.stamping = part(() => {
   const epoxySeeded = B.seedNewSections(epoxyOnly, seedCtx({ sf: { Epoxy: [4000, ""] } }));
   // A key the caller already put there is never overwritten
   const keep = B.seedNewSections(Object.assign(B.migrateModel(undefined), { profile: "polish-legacy@1" }), seedCtx({}));
+  // A saved rev2 bid (made before 2026-10-16) is seeded again and is still rev2: rev3 never reaches it
+  const keepRev2 = B.seedNewSections(Object.assign(B.migrateModel(undefined), { profile: REV2 }), seedCtx({}));
   // The job type moving: an Epoxy bid whose root never held a takeoff is switched to Polish; one that did keeps none
   const epoxyBid = Object.assign(B.activateSection(B.migrateModel(undefined), "Epoxy", "base", { rules: [] }), { kind: "off" });
   const liftedEmpty = B.sectionsForJob(epoxyBid, "polish", {});
@@ -65,6 +67,7 @@ out.stamping = part(() => {
     combo: comboSeeded.profile === undefined ? null : comboSeeded.profile, comboEpoxySection: comboSeeded.tabs.Epoxy.profile,
     epoxyOnlyRoot: epoxySeeded.profile === undefined ? null : epoxySeeded.profile,
     keptTheKeyItHad: keep.profile === undefined ? null : keep.profile,
+    keptRev2: keepRev2.profile === undefined ? null : keepRev2.profile,
     liftedEmptyRoot: liftedEmpty.profile === undefined ? null : liftedEmpty.profile,
     liftedUsedRoot: liftedUsed.profile === undefined ? null : liftedUsed.profile,
     newBidSections: B.sectionsOf(newBid).map((e) => [e.tab, e.profile]),
@@ -75,7 +78,7 @@ out.stamping = part(() => {
 out.rootProfile = part(() => {
   const stamp = (v) => B.sectionsOf(polishBid(v === undefined ? {} : { profile: v }))[0].profile;
   return {
-    none: stamp(undefined), rev2: stamp(REV2), legacy: stamp(LEGACY), reserved: stamp("polish@1"),
+    none: stamp(undefined), rev2: stamp(REV2), rev3: stamp(REV3), legacy: stamp(LEGACY), reserved: stamp("polish@1"),
     laterRev: stamp("polish-rev2@2"), junk: stamp(7), nullKey: stamp(null),
     markupChainNoStamp: threw(() => B.markupChain({ material: 1 })),
     markupChainUnknown: threw(() => B.markupChain({ material: 1 }, "epoxy@1")),
@@ -91,7 +94,15 @@ out.chain = part(() => {
   const fromModel = B.markupChain(input, { profile: REV2 });
   const noTooling = B.markupChain(Object.assign({}, input, { tooling: 0 }), REV2);
   const base = (r) => r.labor + r.escalation + r.burden + r.gp + r.super_pto + r.soft_costs + r.contingency + r.fees;
+  // THE PATCH LINE (polish-rev3, 2026-10-16): a patch handed to the chain is bought only by rev3. Saved bids are rev2 or
+  // legacy, so the same patch handed to them must change nothing, and rev3 without one must be rev2 to the key.
+  const withPatch = Object.assign({}, input, { patch: 400 });
+  const rev3 = B.markupChain(withPatch, REV3), rev3NoPatch = B.markupChain(input, REV3);
   return {
+    legacyPatchIgnored: JSON.stringify(B.markupChain(withPatch, LEGACY)) === JSON.stringify(legacy),
+    rev2PatchIgnored: JSON.stringify(B.markupChain(withPatch, REV2)) === JSON.stringify(rev2),
+    rev3NoPatchIsRev2: JSON.stringify(Object.assign({}, rev3NoPatch, { profile: 0 })) === JSON.stringify(Object.assign({}, rev2, { profile: 0 })),
+    rev3Material: rev3.material, rev2Material: rev2.material, rev3SubTotalMinusRev2: rev3.sub_total - rev2.sub_total,
     legacyIgnoresTooling: legacy.sub_total === B.markupChain(Object.assign({}, input, { tooling: 0 })).sub_total,
     legacyStampSame: JSON.stringify(legacy) === JSON.stringify(legacyStamped),
     legacyKeys: Object.keys(legacy).includes("tooling"),

@@ -39,6 +39,7 @@ MODEL = "js/bid-model.js"
 PROFILES = "js/bid-profiles.js"
 PAGE = "js/polish-estimate.js"
 REV2 = "polish-rev2@1"
+REV3 = "polish-rev3@1"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js",
               "js/bid-profiles.js", "js/markup-core.js", "js/library-core.js", "js/library-picker.js",
               "js/work-types.js", "js/excel-math.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js"]
@@ -286,8 +287,12 @@ def test_rev2_is_a_profile_that_extends_legacy_and_states_only_what_it_changes()
     rev2 = profiles["profiles"]["polish-rev2"]
     assert rev2["extends"] == "polish-legacy" and rev2["layout"] == "polish" and rev2["rev"] == 1
     assert rev2["quirks"] == {"toolingInSubTotal": True, "remodelBase": "sheet"} and "rates" not in rev2
-    # the quirk list did not grow: nothing reads a name nobody declared
-    assert len(profiles["quirks"]) == 13
+    # the quirk list grew by one, `polishPatch` (polish-rev3, 2026-10-16): nothing reads a name nobody declared
+    assert len(profiles["quirks"]) == 14 and "polishPatch" in profiles["quirks"]
+    # polish-rev3 (2026-10-16) is rev2 with the sheet's patch line and nothing else; rev2 itself never gains it
+    rev3 = profiles["profiles"]["polish-rev3"]
+    assert rev3["extends"] == "polish-rev2" and rev3["layout"] == "polish" and rev3["quirks"] == {"polishPatch": True}
+    assert "polishPatch" not in rev2["quirks"] and "rates" not in rev3
 
 
 # ═══ 3. who gets it ═════════════════════════════════════════════════════════════════════════════════════════
@@ -302,28 +307,32 @@ def test_no_part_of_the_model_harness_failed(model, part):
 
 
 def test_a_new_bid_is_stamped_rev2_and_a_saved_bid_never_is(model):
+    """Since 2026-10-16 a NEW bid is stamped polish-rev3 (rev2 plus the sheet's patch line); a saved rev2 bid stays rev2."""
     s = model["stamping"]
-    assert s["newBid"] == REV2 and s["combo"] == REV2, "a new Polish bid, and a new Combo's Polish section, are rev2"
+    assert s["newBid"] == REV3 and s["combo"] == REV3, "a new Polish bid, and a new Combo's Polish section, are rev3"
+    assert s["keptRev2"] == REV2, "a saved rev2 bid is seeded again and is still rev2: rev3 never reaches it"
     assert s["comboEpoxySection"] == "epoxy@1", "the other sections keep their own profile"
     assert s["savedAfterSeed"] is None and s["savedHasNoKey"], "seeding a saved bid writes nothing: the gates are shut"
     assert s["epoxyOnlyRoot"] is None, "an Epoxy-only bid's root is off and is not a Polish bid"
     assert s["keptTheKeyItHad"] == "polish-legacy@1", "a profile already on the model is never overwritten"
-    assert s["newBidSections"] == [["Polish", REV2]]
+    assert s["newBidSections"] == [["Polish", REV3]]
 
 
 def test_a_polish_section_brought_in_by_a_job_type_change_is_new_only_if_it_never_held_a_takeoff(model):
+    """A Polish section that is new to the bid is stamped polish-rev3 (2026-10-16), as a new bid is."""
     s = model["stamping"]
-    assert s["liftedEmptyRoot"] == REV2, "an Epoxy bid switched to Polish gets a Polish section that is new"
+    assert s["liftedEmptyRoot"] == REV3, "an Epoxy bid switched to Polish gets a Polish section that is new"
     assert s["liftedUsedRoot"] is None, "a root that was priced before comes back as it was"
 
 
 def test_the_root_reads_exactly_one_stamp_and_every_other_value_is_legacy(model):
+    """Two stamps are read since 2026-10-16, rev2 and rev3, each to its own profile; every other value is legacy."""
     r = model["rootProfile"]
-    assert r["rev2"] == REV2 and r["none"] == r["legacy"] == "polish-legacy@1"
+    assert r["rev2"] == REV2 and r["rev3"] == REV3 and r["none"] == r["legacy"] == "polish-legacy@1"
     for junk in ("reserved", "laterRev", "junk", "nullKey"):
         assert r[junk] == "polish-legacy@1", junk
     assert r["markupChainNoStamp"] is None, "no stamp is the legacy chain every older caller means"
-    assert "polish-legacy@1 or polish-rev2@1" in r["markupChainUnknown"], "an unknown stamp is refused, never priced as something else"
+    assert "polish-legacy@1, polish-rev2@1 or polish-rev3@1" in r["markupChainUnknown"], "an unknown stamp is refused, never priced as something else"
     assert "needs a profile stamp" in r["markupChainBadArg"]
 
 
@@ -334,6 +343,16 @@ def test_the_chain_charges_tooling_and_the_wider_remodel_base_on_rev2_only(model
     assert c["modelNamesTheProfile"], "handing the model names the same profile as handing its stamp"
     assert c["rev2Tax"] == c["rev2TaxByHand"] and c["legacyTax"] == c["legacyTaxByHand"]
     assert c["rev2Tax"] > c["legacyTax"], "the sheet's base is wider: tooling and travel are in it"
+
+
+def test_the_patch_line_is_bought_by_rev3_only_and_a_saved_rev2_bid_prices_with_none(model):
+    """polish-rev3 (2026-10-16): a patch handed to the chain moves the material of a rev3 bid and of no other. A saved bid is
+    rev2 or legacy and keeps its total (Hanz, 2026-10-07), so the same patch must change none of its figures."""
+    c = model["chain"]
+    assert c["legacyPatchIgnored"] and c["rev2PatchIgnored"], "a saved rev2 or legacy bid prices with no patch line"
+    assert c["rev3NoPatchIsRev2"], "with no patch, rev3 answers exactly as rev2 does"
+    assert c["rev3Material"] == c["rev2Material"] + 400, "rev3 takes the patch into D31's material"
+    assert c["rev3SubTotalMinusRev2"] > 400, "and the markups on it, so the sub-total moves by more than the patch"
 
 
 def test_a_saved_bid_prices_exactly_as_before_and_a_stamped_one_carries_the_sheets_tooling(model):
@@ -368,16 +387,16 @@ def test_nights_are_counted_from_labor_dollars_the_sheets_way_on_rev2_only(model
 
 MODEL_BREAKS = {
     "a new bid is not stamped": (
-        MODEL, "    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV2.stamp;",
-        "    void REV2;",
-        lambda m: m["stamping"]["newBid"] != REV2),
+        MODEL, "    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV3.stamp;",
+        "    void REV3;",
+        lambda m: m["stamping"]["newBid"] != REV3),
     "a saved bid is stamped too": (
-        MODEL, "    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV2.stamp;",
-        "    if (now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV2.stamp;",
-        lambda m: m["stamping"]["savedAfterSeed"] == REV2),
+        MODEL, "    if ((laborGate || condGate) && now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV3.stamp;",
+        "    if (now().some(function (e) { return e.root; }) && out.profile === undefined) out.profile = REV3.stamp;",
+        lambda m: m["stamping"]["savedAfterSeed"] == REV3),
     "any profile key at the root is read": (
-        MODEL, "    return isObject(model) && model.profile === REV2.stamp ? REV2 : LEGACY;",
-        "    return isObject(model) && model.profile ? REV2 : LEGACY;",
+        MODEL, "    return model.profile === REV2.stamp ? REV2 : LEGACY;",
+        "    return model.profile ? REV2 : LEGACY;",
         lambda m: m["rootProfile"]["junk"] == REV2 or m["rootProfile"]["reserved"] == REV2),
     "a legacy bid is charged tooling": (
         MODEL, "    if (!rootProfile(model).quirks.toolingInSubTotal) return 0;",
@@ -388,17 +407,21 @@ MODEL_BREAKS = {
         "                 layout: \"polish\", kind: rootKind, profile: LEGACY.stamp, role: \"polish\" }];",
         lambda m: m["pricing"]["stampedProfile"] != REV2),
     "a lifted root is never stamped": (
-        MODEL, "    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });",
-        "    void REV2;",
-        lambda m: m["stamping"]["liftedEmptyRoot"] != REV2),
+        MODEL, "    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV3.stamp });",
+        "    void REV3;",
+        lambda m: m["stamping"]["liftedEmptyRoot"] != REV3),
     "a used root coming back is stamped": (
-        MODEL, "    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV2.stamp });",
-        "    if (rootLifted && out.profile === undefined) out = Object.assign({}, out, { profile: REV2.stamp });",
-        lambda m: m["stamping"]["liftedUsedRoot"] == REV2),
+        MODEL, "    if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV3.stamp });",
+        "    if (rootLifted && out.profile === undefined) out = Object.assign({}, out, { profile: REV3.stamp });",
+        lambda m: m["stamping"]["liftedUsedRoot"] == REV3),
     "an unknown stamp is priced as legacy": (
-        MODEL, '      throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + " or " + REV2.stamp + ", not " + JSON.stringify(which));',
-        "      return LEGACY;",
+        MODEL, '      throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + ", " + REV2.stamp + " or " + REV3.stamp +',
+        '      return LEGACY; throw new Error("markupChain prices the Polish root with " + LEGACY.stamp + ", " + REV2.stamp + " or " + REV3.stamp +',
         lambda m: m["rootProfile"]["markupChainUnknown"] is None),
+    "a saved bid is charged the patch line": (
+        "js/bid-engine.js", "        material = roundUp(num(input.material) + (q.polishPatch && profile.layout === \"polish\" ? num(input.patch) : 0));",
+        "        material = roundUp(num(input.material) + num(input.patch));",
+        lambda m: not m["chain"]["rev2PatchIgnored"] or not m["chain"]["legacyPatchIgnored"]),
     "the chain leaves tooling out of the answer": (
         MODEL, "    if (profile.quirks.toolingInSubTotal) out.tooling = r.tooling;",
         "    void r;",
@@ -426,19 +449,20 @@ def page():
 def test_the_page_saves_every_saved_bid_as_it_did_and_stamps_every_new_one(page):
     """The REAL page (polish-estimate.js, whole) over the 26 saved-bid fixtures the ratchet pins and seven new or part-saved
     bids. A saved bid's model has no `profile` and its bid no `tooling`, and the whole record equals the one cut from
-    origin/staging 28a5d1f; a new bid's model carries polish-rev2@1 and its bid carries the tooling its area works out to."""
+    origin/staging 28a5d1f; a new bid's model carries polish-rev3@1 (rev2 plus the patch line, since 2026-10-16: it was polish-rev2@1 before) and its
+    bid carries the tooling its area works out to. No saved bid, and no saved rev2 bid, is stamped rev3 or priced with a patch."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))["golden"]
     assert json.dumps(page["saved"]) == json.dumps(want["saved"]), "a saved bid's save moved"
     assert len(page["saved"]) == 26
     for name, rec in page["saved"].items():
         for key, blob in rec.items():
             text = json.dumps(blob)
-            assert "polish-rev2" not in text, (name, key)
-    stamped = {n: r for n, r in page["newBid"].items() if r["model"].get("profile") == REV2}
+            assert "polish-rev2" not in text and "polish-rev3" not in text, (name, key)
+    stamped = {n: r for n, r in page["newBid"].items() if r["model"].get("profile") == REV3}
     assert set(stamped) == set(page["newBid"]) - {"savedEmptyTakeoff"}
     assert "profile" not in page["newBid"]["savedEmptyTakeoff"]["model"], "a bid that was already saved is not stamped"
     for name, rec in stamped.items():
-        assert rec["saved"]["polish_estimate"]["profile"] == REV2, name
+        assert rec["saved"]["polish_estimate"]["profile"] == REV3, name
         tooling = rec["bid"]["tooling"]
         assert tooling == 0 if name == "noSf" else tooling >= 150 + 210, (name, tooling)
         assert rec["saved"]["polish_estimate"]["totals"]["tooling"] == tooling, name

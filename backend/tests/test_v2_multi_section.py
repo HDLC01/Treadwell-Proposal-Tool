@@ -88,7 +88,10 @@ def test_what_the_page_saves_and_what_a_new_bid_opens_holding_is_the_golden_byte
     as the model the page holds after init() and the blob its first save writes. Compared as JSON text, so
     key order is part of it.
 
-    Mutations: see test_the_golden_goes_red_when_the_code_changes."""
+    Mutations: see test_the_golden_goes_red_when_the_code_changes.
+
+    The seven `newBid` records were cut again on 2026-10-16 (meta.polish_rev3_recut): a new bid is stamped polish-rev3 and
+    carries the sheet's patch line. The 26 `saved` records were not touched."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert want["meta"]["commit"] == "28a5d1f"
     # The 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were

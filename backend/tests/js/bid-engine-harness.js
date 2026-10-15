@@ -87,8 +87,8 @@ function diffs(v, r) {
   return out;
 }
 
-function run(profile, v, fp) {
-  try { return E.priceChain(profile, toInput(v, fp)); }
+function run(profile, v, fp, more) {
+  try { return E.priceChain(profile, Object.assign(toInput(v, fp), more || {})); }
   catch (e) { return { priceable: false, thrown: String(e && e.message) }; }
 }
 
@@ -144,8 +144,18 @@ for (const { tab, fp, golden } of TABS) {
   for (const quirk of P.quirks) {
     const other = flipped(fp.profile, quirk);
     let changed = 0;
+    // polishPatch is read only from the `patch` input, which no recorded case carries (the page works it out from the
+    // library, 2026-10-16), so its flip is given one, and is compared with the same case priced by the unflipped
+    // profile with the same patch (the oracle has no patch to compare it with). Every profile inherits the flag from
+    // `polish`, so the flip turns the patch OFF, and a case that did not move would show the flag is read by nothing.
+    const more = quirk === "polishPatch" ? { patch: 137 } : undefined;
     for (const v of golden.vectors) {
-      const r = run(other, v, fp);
+      const r = run(other, v, fp, more);
+      if (more) {
+        const base = run(fp.profile, v, fp, more);
+        if (r.priceable === false || base.priceable === false || r.total !== base.total) changed++;
+        continue;
+      }
       if (r.priceable === false || diffs(v, r).length) changed++;
     }
     out.flips[tab + " / " + quirk] = changed;
