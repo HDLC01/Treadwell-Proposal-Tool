@@ -258,7 +258,65 @@ async function main() {
                  polishAaaBeforeMacro: poKeys.indexOf("asm:zz-untagged-asm") < poKeys.indexOf("asm:wb-epoxy-sys-macro-flake-single-broadcast"),
                  epoxyAaaBeforeMacro: epKeys.indexOf("asm:zz-untagged-asm") < epKeys.indexOf("asm:wb-epoxy-sys-macro-flake-single-broadcast") };
   out.adjust = await adjustSection();
+  out.hardBid = await hardBidSection();
   return out;
+}
+
+/** THE HARD BID SWITCH on the Review step's Discount line (Hanz, 2026-10-17), driven through the page: by click and by the
+ *  keyboard, with a discount typed over the rule and cleared again. Every figure is held to priceSection over the same
+ *  section with the same `adjust`, worked out without the page. */
+async function hardBidSection() {
+  const b = await open(epoxyDraft());
+  const api = b.api;
+  api.setAssembly(0, asmNamed("MACRO Flake Single Broadcast").name);
+  api.setAssembly(1, asmNamed("Cove: Epoxy 4\"").name);
+  api.changed(true);
+  b.clock.fire();
+  api.go(2);
+  const section = () => api.model().tabs.Epoxy;
+  const hand = (adj) => {
+    const m = clone(api.model());
+    if (adj) m.tabs.Epoxy.adjust = adj; else delete m.tabs.Epoxy.adjust;
+    const lib = LIB.itemsForBid(items, B.materialAdjust(m.tabs.Epoxy.adjust));
+    const priceRow = (r) => { const a = asms.find((x) => x.id === r.assembly_id); return a ? LIB.priceAssembly(a, lib, B.num(r.measurement)) : null; };
+    return B.priceSection(m, "Epoxy", { material: (e) => {
+      const t = e.section.takeoff;
+      const r = X.sectionMaterial(t, { items: lib, sf: B.takeoffSf(t), rowPrice: priceRow, pool: B.poolsPacks(e.section) });
+      return { material: r.material, tooling: r.tooling };
+    } });
+  };
+  const box = () => P.need(b, '[data-adj="discount_pct"]');
+  const ph = () => String(box().placeholder || box().attrs.placeholder || "");
+  const note = () => (b.doc.querySelector("[data-hbnote]") || {}).textContent || null;
+  const sw = () => b.doc.querySelector("[data-adj-hb]");
+  const o = {};
+  const before = api.activeBid();
+  o.before = { switchShown: !!sw(), aria: sw() && sw().attrs["aria-checked"], placeholder: ph(), note: note(),
+    hardBid: before.hard_bid || 0, total: before.total, adjust: section().adjust === undefined ? "absent" : section().adjust };
+
+  const node = sw();
+  P.clickOn(b, "[data-adj-hb]");
+  const on = api.activeBid();
+  const want = hand({ hard_bid: true });
+  o.on = { stored: clone(section().adjust), aria: sw().attrs["aria-checked"], sameNode: sw() === node,
+    hardBid: on.hard_bid, handHardBid: want.hard_bid, rulePct: want.hard_bid_pct, total: on.total, handTotal: want.total,
+    subTotal: on.sub_total, placeholder: ph(), note: note(),
+    shown: (b.doc.querySelector("[data-mkdisc]") || {}).textContent, rowOff: (b.doc.querySelector("[data-disc-row]") || {}).className };
+
+  P.typeInto(b, '[data-adj="discount_pct"]', "3");
+  o.typed = { hardBid: api.activeBid().hard_bid, hand: hand({ hard_bid: true, discount_pct: "3" }).hard_bid,
+    ruleWas: on.hard_bid };
+  P.typeInto(b, '[data-adj="discount_pct"]', "");
+  o.cleared = { hardBid: api.activeBid().hard_bid, rule: on.hard_bid };
+
+  node.click = function () { b.doc.fire("click", { target: node, preventDefault() {} }); };
+  b.doc.fire("keydown", { target: node, key: " ", preventDefault() {} });
+  b.clock.fire();
+  const last = b.rec.saves[b.rec.saves.length - 1];
+  o.off = { aria: sw().attrs["aria-checked"], adjust: section().adjust === undefined ? "absent" : clone(section().adjust),
+    savedHasKey: Object.prototype.hasOwnProperty.call(last.polish_estimate.tabs.Epoxy, "adjust"),
+    hardBid: api.activeBid().hard_bid || 0, total: api.activeBid().total, placeholder: ph(), note: note() };
+  return o;
 }
 
 /** THE OVERRIDE BOXES ON THE REVIEW STEP, driven through the page (Hanz, 2026-10-16). An Epoxy job with the flake system

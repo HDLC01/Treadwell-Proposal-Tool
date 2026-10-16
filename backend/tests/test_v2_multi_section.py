@@ -681,12 +681,12 @@ BREAKS = {
         "      labor: laborTotal(s.labor),",
         lambda r: r["pins"]["laborReadsConditions"][0] <= r["pins"]["laborReadsConditions"][1]),
     "a sections contingency is dropped": (
-        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: model.conditions,",
-        "      contingency: 0, fees: s.fees, conditions: model.conditions,",
+        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),",
+        "      contingency: 0, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),",
         lambda r: r["pins"]["contingencyMoves"] is False),
     "a sections fees are dropped": (
-        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: model.conditions,",
-        "      contingency: s.contingency, fees: 0, conditions: model.conditions,",
+        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),",
+        "      contingency: s.contingency, fees: 0, conditions: chainConditions(model.conditions, s.adjust),",
         lambda r: r["pins"]["feesMove"] is False),
     "the page hands a gyp section a plain number": (
         "js/polish-estimate.js", '    if (entry.role === "gyp" && G) {',

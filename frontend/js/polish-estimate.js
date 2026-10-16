@@ -3123,7 +3123,13 @@
       default: return "";
     }
   }
-  function adjOn(key) { var a = B.normalizeAdjust(M.adjust); return key === "bulk" && !!a && a.bulk === true; }
+  function adjOn(key) {
+    var a = B.normalizeAdjust(M.adjust);
+    if (!a) return false;
+    if (key === "bulk") return a.bulk === true;
+    if (key === "hard_bid") return a.hard_bid === true;
+    return false;
+  }
 
   /** Write one box into the section on show. The keys are named one by one (never `obj[key] = value` with a key off
    *  an attribute), and the whole set goes back through normalizeAdjust, so a cleared box takes its key away and a
@@ -3140,6 +3146,7 @@
       case "supplier_pct": a.supplier_pct = value; break;
       case "polycrete_pct": a.polycrete_pct = value; break;
       case "bulk": a.bulk = value === true; break;
+      case "hard_bid": a.hard_bid = value === true; break;
       default: return;
     }
     var next = B.normalizeAdjust(a);
@@ -3198,6 +3205,18 @@
     return '<span class="mkused" aria-hidden="true" data-mkrate="' + key + '">' + esc(f == null ? "" : B.pct(f)) + '</span>';
   }
 
+  /** The Discount box's greyed figure: what Kyle's hard bid rule gives (the switch on), else 0. */
+  function discountRule(rb) {
+    return rb && rb.hard_bid_pct ? pctNum(-rb.hard_bid_pct) : "0";
+  }
+
+  /** The words beside the Hard bid switch: the rule while it is off, what it gives while it is on. */
+  function hardBidNote(rb) {
+    if (!adjOn("hard_bid")) return "4% off from $60,000, 2.5% on a local job from $13,000";
+    if (rb && rb.hard_bid_pct) return "the rule takes " + pctNum(-rb.hard_bid_pct) + "% off; a figure you type wins";
+    return "the rule gives nothing here: under $13,000, or not local and under $60,000";
+  }
+
   /** One % box over a rule. `rule` is the figure the sheet's rule gives, shown greyed as the placeholder. */
   function adjBox(key, rule) {
     var label = { ship_pct: "Shipping", gp_pct: "GP", super_pct: "Superintendent and PTO", soft_pct: "Soft costs",
@@ -3238,8 +3257,15 @@
     // a plain discount now, a % or a $ (the $ wins), blank is none, and nothing turns it on by itself.
     // The discount's amount is keyed `data-mkdisc`, not `data-mk`: a bid with nothing typed has no such line in its
     // chain, and the review's every-money-cell-is-the-chain check stays exactly as strict as it was.
-    r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span></td>' +
-      '<td class="pct">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", "0") + '</td>' +
+    // HARD BID (Hanz, 2026-10-17): the job's switch sits on this line, because the line is what it moves. On, the box shows
+    // Kyle's rule greyed (4% from $60,000, 2.5% local from $13,000) and the rule prices; a figure typed in either box
+    // still wins. Shown only where the section's chain has the rule.
+    var hb = B.hardBidRuleOn(ROOT, activeTab);
+    r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span>' +
+      (hb ? '<div class="hbline">' + B.sliderHtml(adjOn("hard_bid"), 'data-adj-hb="1"', "Hard bid",
+              "Kyle's Hard bid answer for this sheet: his rule fills the discount until you type one") +
+            ' <span class="note" data-hbnote>' + esc(hardBidNote(rb)) + '</span></div>' : '') + '</td>' +
+      '<td class="pct">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", discountRule(rb)) + '</td>' +
       '<td class="amt"><span class="adjbox adjamt">$<input data-adj="discount_amt" value="' + esc(adjTyped("discount_amt")) +
       '" placeholder="0" inputmode="decimal" aria-label="Discount in dollars; it wins over the percentage">' +
       adjWarnHtml("discount_amt") + '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span></td></tr>';
@@ -3591,8 +3617,10 @@
         ship_pct: pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING), gp_pct: pctNum(rb.gp_pct),
         super_pct: pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO),
         soft_pct: pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS),
-        polycrete_pct: adjTyped("supplier_pct") || "0"
+        polycrete_pct: adjTyped("supplier_pct") || "0",
+        discount_pct: discountRule(rb)
       };
+      document.querySelectorAll("[data-hbnote]").forEach(function (el) { el.textContent = hardBidNote(rb); });
       adjEls.forEach(function (el) {
         var k = el.getAttribute("data-adj");
         if (Object.prototype.hasOwnProperty.call(ruleOf, k) && el.placeholder !== ruleOf[k]) el.placeholder = ruleOf[k];
@@ -3756,7 +3784,7 @@
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
     // data-cond is the job's condition switch, the Prevailing wage card's among them.
     var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") ||
-      t.closest("[data-cond]") || t.closest("[data-adj-bulk]");
+      t.closest("[data-cond]") || t.closest("[data-adj-bulk]") || t.closest("[data-adj-hb]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -3882,6 +3910,18 @@
       bulkSw.className = "mw-sw" + (onNow ? " on" : "");
       bulkSw.setAttribute("aria-checked", onNow ? "true" : "false");
       if (bulkSw.lastChild && bulkSw.lastChild.nodeType === 3) bulkSw.lastChild.nodeValue = onNow ? "On" : "Off";
+      changed(false);
+      return;
+    }
+    // THE HARD BID SWITCH on the Discount line: the rule's figure goes into the box (greyed) and the price, and the
+    // words beside the switch say what it gives. In place, as the Bulk switch is: the repaint moves the note, the box's
+    // grey figure and the line, and the focus stays on the switch.
+    var hbSw = t.closest("[data-adj-hb]");
+    if (hbSw) {
+      setAdjust("hard_bid", !adjOn("hard_bid"));
+      var hbNow = adjOn("hard_bid");
+      hbSw.className = "mw-sw" + (hbNow ? " on" : "");
+      hbSw.setAttribute("aria-checked", hbNow ? "true" : "false");
       changed(false);
       return;
     }

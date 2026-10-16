@@ -317,6 +317,31 @@ def test_the_checks_go_red_when_the_page_or_the_model_changes(tmp_path, name):
 # ── the override boxes on the Review step (Hanz, 2026-10-16) ─────────────────────────────────────────────────────────
 # Driven through the page: each box typed as a person types it, the figures read off the step afterwards, and every
 # price held to the engines (priceSection over the library the bid buys), never to a number typed here.
+def test_the_hard_bid_switch_fills_the_discount_with_kyles_rule_and_a_typed_figure_still_wins(ran):
+    """Hanz, 2026-10-17: "lets make the hard bid have those rules but still overridable in the review tab". The switch is on
+    the Discount line of an Epoxy section's Review step; on, the box shows the rule's figure greyed and the rule prices."""
+    h = ran["hardBid"]
+    b = h["before"]
+    assert b["switchShown"] and b["aria"] == "false" and b["hardBid"] == 0 and b["adjust"] == "absent"
+    assert b["placeholder"] == "0" and "4% off from $60,000" in b["note"]
+
+    on = h["on"]
+    assert on["stored"] == {"hard_bid": True} and on["aria"] == "true" and on["sameNode"], "the switch was redrawn"
+    assert on["subTotal"] >= 13000, "the fixture is too small for the rule to give anything, so this proves nothing"
+    assert on["hardBid"] == on["handHardBid"] != 0 and on["total"] == on["handTotal"]
+    assert on["rulePct"] == pytest.approx(-0.025)
+    assert on["placeholder"] == "2.5" and "takes 2.5% off" in on["note"]
+    assert on["rowOff"] == "" and on["shown"].replace(",", "").lstrip("-$") == str(-on["hardBid"])
+
+    t = h["typed"]
+    assert t["hardBid"] == t["hand"] != t["ruleWas"], "a typed 3% did not replace the rule"
+    assert h["cleared"]["hardBid"] == h["cleared"]["rule"], "clearing the box did not go back to the rule"
+
+    off = h["off"]
+    assert off["aria"] == "false" and off["adjust"] == "absent" and not off["savedHasKey"]
+    assert off["hardBid"] == 0 and off["total"] == b["total"] and off["placeholder"] == "0"
+
+
 def test_the_review_step_offers_every_box_with_the_rule_greyed_in(ran):
     a = ran["adjust"]["before"]
     assert a["adjust"] == "absent" and a["total"] == a["hand"]

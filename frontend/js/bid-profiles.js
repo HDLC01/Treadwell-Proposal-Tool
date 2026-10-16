@@ -710,7 +710,11 @@
       // THE PATCH LINE (Polish!D17), for bids made from 2026-10-16 and for no other (Hanz, 2026-10-07: saved bids keep
       // their totals). Found comparing the Jayhawk Compass 70 job with Kyle's 10.01 workbook: the v2 Polish material had
       // no patch, so every v2 Polish bid was short by $0.05 or $0.15 a square foot before markup.
-      quirks: { polishPatch: true }
+      // AND THE HARD BID RULE (Hanz, 2026-10-17), the Hard bid switch on the Review step's Discount line (the section's
+      // `adjust.hard_bid`). Safe on this profile only because no bid made on it can have answered Hard bid: the switch
+      // did not exist, and neither database held a `hard_bid: true` (checked 2026-10-17). A rev2 or legacy Polish bid
+      // keeps no rule, and the Review step shows it no switch.
+      quirks: { polishPatch: true, hasHardBid: true }
     },
     "seal": {
       rev: 1, layout: "seal", extends: "polish",

@@ -1957,6 +1957,19 @@
   /** DOES THIS POLISH SECTION CARRY THE SHEET'S PATCH LINE (Polish!D17)? Its profile says (the `polishPatch` quirk):
    *  polish-rev3, and any later profile that keeps it. Every bid saved before 2026-10-16 is rev2 or legacy and has no
    *  patch line, so its total does not move. Reads the model without throwing. */
+  /** WHETHER A SECTION'S CHAIN HAS KYLE'S HARD BID RULE (the profile's hasHardBid): the Polish root on polish-rev3 and
+   *  later, and every Epoxy, Seal and Leveling section. Gyp, and a rev2 or legacy Polish root, have none, and the Review
+   *  step shows them no switch. */
+  function hardBidRuleOn(model, tab) {
+    if (!isObject(model)) return false;
+    if (tab === ROOT_TAB) return !!rootProfile(model).quirks.hasHardBid;
+    if (!isObject(model.tabs) || !has.call(model.tabs, tab)) return false;
+    var s = model.tabs[tab];
+    var stamp = isObject(s) && typeof s.profile === "string" ? PROFILE_STAMP.exec(s.profile) : null;
+    if (!stamp) return false;
+    try { return !!engine.resolveProfile(stamp[1]).quirks.hasHardBid; } catch (err) { return false; }
+  }
+
   function polishPatchOn(model, tab) {
     if (!isObject(model)) return false;
     if (tab === ROOT_TAB) return !!rootProfile(model).quirks.polishPatch;
@@ -2021,6 +2034,10 @@
       out.ship_pct = r.ship_pct; out.super_pct = r.super_pct; out.soft_pct = r.soft_pct;
       out.hard_bid = r.hard_bid; out.hard_bid_pct = r.hard_bid_pct;
       if (r.discount_refused) out.discount_refused = true;
+    } else if (r.hard_bid) {
+      // A DISCOUNT THE HARD BID RULE GAVE (polish-rev3, the job's Hard bid switch on), with nothing typed. Only a bid
+      // that answered Hard bid has one, so every other bid keeps its keys.
+      out.hard_bid = r.hard_bid; out.hard_bid_pct = r.hard_bid_pct;
     }
     return out;
   }
@@ -2053,9 +2070,13 @@
   //   supplier_pct   % off the Sherwin-Williams liquids (Epoxy B41); the escalation is kept (see MATERIAL_ESCALATION)
   //   polycrete_pct  % off the Poly-Crete liquids (Epoxy C41); blank follows supplier_pct, as C41 = B41 does
   //   bulk           the Bulk Discount switch (Epoxy D41): a material's bulk cost is its price
+  //   hard_bid       the Hard bid switch (Hanz, 2026-10-17; the tab's B5): Kyle's rule fills the discount, 4% from a
+  //                  $60,000 sub-total, 2.5% on a local job from $13,000, until a discount is typed. A section's own
+  //                  answer, as each of his tabs has its own B5, and kept here rather than in the job's `conditions` so a
+  //                  bid that never pressed it saves exactly what it saved before.
   var ADJUST_PCT_KEYS = Object.freeze(["discount_pct", "ship_pct", "gp_pct", "super_pct", "soft_pct",
                                        "supplier_pct", "polycrete_pct"]);
-  var ADJUST_KEYS = Object.freeze(ADJUST_PCT_KEYS.concat(["discount_amt", "bulk"]));
+  var ADJUST_KEYS = Object.freeze(ADJUST_PCT_KEYS.concat(["discount_amt", "bulk", "hard_bid"]));
 
   /** THE ESCALATION BAKED INTO EVERY LIBRARY COST the workbook seed wrote: Kyle's Epoxy!U140, +6%. A library cost is
    *  the list price x 1.06; the sheet's discounted price is list x (1 + 0.06 - discount). So a discount is applied as
@@ -2112,6 +2133,7 @@
       if (!Object.prototype.hasOwnProperty.call(raw, k)) return;
       var v = raw[k];
       if (k === "bulk") { if (v === true) { out.bulk = true; any = true; } return; }
+      if (k === "hard_bid") { if (v === true) { out.hard_bid = true; any = true; } return; }
       if (typeof v === "number" && isFinite(v)) { out[k] = v; any = true; return; }
       if (typeof v === "string" && v.trim() !== "") { out[k] = v.slice(0, 32); any = true; }
     });
@@ -2135,13 +2157,22 @@
     return out;
   }
 
-  /** The material overrides alone (supplier, Poly-Crete, Bulk): what a section's boxes do to its MATERIAL, without what
-   *  they do to the markup lines. The Review step greys each markup box with the rule's figure for the material the
-   *  section really buys, so the rule it shows is the one a typed figure replaces. Null when there are none. */
+  /** The material overrides alone (supplier, Poly-Crete, Bulk), and the Hard bid switch: what a section's boxes do to
+   *  its MATERIAL, and which rule its discount follows, without the figures typed over the markup lines. The Review step
+   *  greys each markup box with the rule's figure for the material the section really buys (and the Discount box with
+   *  the hard bid rule's), so the rule it shows is the one a typed figure replaces. Null when there are none. */
   function materialOnlyAdjust(adj) {
     var a = normalizeAdjust(adj);
     if (!a) return null;
-    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, bulk: a.bulk });
+    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, bulk: a.bulk,
+                             hard_bid: a.hard_bid });
+  }
+
+  /** The job's conditions as one section's chain reads them: the section's Hard bid switch (its `adjust`) is the
+   *  chain's `hard_bid`. The job's own object is handed back untouched when the switch is off. */
+  function chainConditions(conditions, adj) {
+    var a = normalizeAdjust(adj);
+    return a && a.hard_bid ? Object.assign({}, conditions || {}, { hard_bid: true }) : conditions;
   }
 
   /** What the markup chain takes from a section's boxes (bid-engine's `adjust`): fractions for the rates, the
@@ -3908,7 +3939,7 @@
     var input = {
       labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),
       travel: carrier ? travelCosts(model.travel, s.labor).total : 0,
-      contingency: s.contingency, fees: s.fees, conditions: model.conditions,
+      contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate,
       adjust: chainAdjust(s.adjust)
     };
@@ -3989,7 +4020,7 @@
       tooling: profile.quirks.toolingInSubTotal ? takeoffTooling(s.takeoff, model.conditions) : 0,
       contingency: s.contingency,
       fees: s.fees,
-      conditions: model.conditions,
+      conditions: chainConditions(model.conditions, s.adjust),
       sf: takeoffSf(s.takeoff),
       remodel_rate: ctx.remodel_rate,
       adjust: chainAdjust(s.adjust)
@@ -5388,7 +5419,7 @@
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
     ADJUST_KEYS: ADJUST_KEYS, MATERIAL_ESCALATION: MATERIAL_ESCALATION, DISCOUNT_VENDORS: DISCOUNT_VENDORS,
-    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn,
+    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn, hardBidRuleOn: hardBidRuleOn,
     materialOnlyAdjust: materialOnlyAdjust, chainAdjust: chainAdjust, materialAdjust: materialAdjust,
     pctFraction: pctFraction,
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,

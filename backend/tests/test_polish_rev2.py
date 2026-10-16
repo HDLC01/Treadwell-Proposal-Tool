@@ -291,7 +291,7 @@ def test_rev2_is_a_profile_that_extends_legacy_and_states_only_what_it_changes()
     assert len(profiles["quirks"]) == 14 and "polishPatch" in profiles["quirks"]
     # polish-rev3 (2026-10-16) is rev2 with the sheet's patch line and nothing else; rev2 itself never gains it
     rev3 = profiles["profiles"]["polish-rev3"]
-    assert rev3["extends"] == "polish-rev2" and rev3["layout"] == "polish" and rev3["quirks"] == {"polishPatch": True}
+    assert rev3["extends"] == "polish-rev2" and rev3["layout"] == "polish" and rev3["quirks"] == {"polishPatch": True, "hasHardBid": True}
     assert "polishPatch" not in rev2["quirks"] and "rates" not in rev3
 
 

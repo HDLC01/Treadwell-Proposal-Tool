@@ -76,7 +76,59 @@ def test_the_polish_patch_line_is_the_renovation_rate_over_the_whole_floor(ran):
     assert ran["polish"]["patch"] == pytest.approx(0.15 * RECORDED["polish"]["in"]["sf"], abs=0.005)
 
 
+# ── the same job as a hard bid (Hanz, 2026-10-17: "lets make the hard bid have those rules but still overridable in the
+#    review tab") ─────────────────────────────────────────────────────────────────────────────────────────────────────
+def _rule(r, pct):
+    """Kyle's D74 / D68: =ROUNDUP(SUM(sub_total, gp) * -pct, 0), rounded away from zero."""
+    import math
+    return -math.ceil(round((r["sub_total"] + r["gp"]) * pct, 6))
+
+
+def test_a_local_hard_bid_from_13000_takes_kyles_two_and_a_half_percent(ran):
+    r = ran["hardBid"]["epoxy"]
+    assert (r["sub_total"], r["gp"]) == (28064, 13736), "the job is not the recorded one"
+    assert r["hard_bid"] == _rule(r, 0.025) == -1045
+
+
+def test_a_typed_discount_wins_over_the_rule(ran):
+    h = ran["hardBid"]
+    assert h["epoxyTyped"]["hard_bid"] == -1254 and h["epoxyTyped"]["total"] == RECORDED["epoxy"]["sheet"]["total"], (
+        "Kyle's typed 3% with Hard bid on is still his bid")
+    assert h["epoxyDollars"]["hard_bid"] == -500
+
+
+def test_under_60000_a_job_that_is_not_local_gets_nothing(ran):
+    r = ran["hardBid"]["epoxyNotLocal"]
+    assert r["sub_total"] < 60000 and r["hard_bid"] == 0
+
+
+def test_from_60000_the_rule_is_four_percent(ran):
+    r, off = ran["hardBid"]["epoxyBig"], ran["hardBid"]["epoxyBigOff"]
+    assert r["sub_total"] >= 60000
+    assert r["hard_bid"] == _rule(r, 0.04) != 0
+    assert off["hard_bid"] == 0 and off["total"] > r["total"], "with the switch off the same job has no discount"
+
+
+def test_a_new_polish_bid_has_the_rule_and_a_saved_rev2_one_does_not(ran):
+    h = ran["hardBid"]
+    assert h["polish"]["sub_total"] >= 13000 and h["polish"]["hard_bid"] == _rule(h["polish"], 0.025) != 0
+    assert h["polishRev2"]["hard_bid"] == 0, "a bid saved on rev2 keeps its total whatever it says"
+
+
+def test_the_switch_is_shown_only_where_kyles_sheet_has_the_rule(ran):
+    assert ran["hardBid"]["ruleOn"] == {"rev3": True, "rev2": False, "epoxy": True, "gyp": False, "nothing": False}
+
+
+def test_the_switch_is_kept_only_as_true_and_survives_the_boxes_being_set_aside(ran):
+    k = ran["hardBid"]["kept"]
+    assert k["on"] == {"hard_bid": True} and k["notTrue"] is None
+    assert k["ruleKeepsIt"] == {"hard_bid": True}, "the Review step's grey Discount figure would not show the rule"
+
+
 MUTATIONS = {
+    "the hard bid switch does not reach the chain": (
+        "js/bid-model.js", "    return a && a.hard_bid ? Object.assign({}, conditions || {}, { hard_bid: true }) : conditions;",
+        "    return conditions;", ("hardBid.epoxy", "hard_bid")),
     "the supplier discount is not applied to the materials": (
         "js/library-core.js", "      if (offOf.has(vkey(it.vendor))) factor = (1 + esc - offOf.get(vkey(it.vendor))) / (1 + esc);",
         "      if (false) factor = 1;", ("epoxy", "material")),
@@ -101,4 +153,7 @@ def test_the_match_goes_red_when_the_code_changes(tmp_path, name):
     frontend = break_source(tmp_path, rel, old.strip(), new.strip())
     copy_unmodified(frontend, SCRATCH_FRONTEND_FILES)
     got = _run(frontend, tmp_path)
+    if tab == "hardBid.epoxy":
+        assert got["hardBid"]["epoxy"][key] != -1045, "the match did not notice: " + name
+        return
     assert got[tab][key] != pytest.approx(RECORDED[tab]["sheet"][key], abs=0.005), "the match did not notice: " + name
