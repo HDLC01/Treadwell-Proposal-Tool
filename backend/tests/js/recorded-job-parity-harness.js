@@ -42,10 +42,11 @@ const FIGURES = ["material", "shipping", "material_total", "labor", "burden", "t
 const pick = (r) => Object.fromEntries(FIGURES.map((k) => [k, r[k] === undefined ? 0 : r[k]]));
 
 // ── Epoxy ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-function epoxy(spec, adjust) {
+function epoxy(spec, adjust, cond) {
   const root = Object.assign({}, B.freshModel(), { kind: "off" });
   const m = B.activateSection(root, "Epoxy", "base", {});
-  m.conditions = Object.assign({}, m.conditions, { taxable: true, remodel_tax: true, prevailing_wage: false, local: true });
+  m.conditions = Object.assign({}, m.conditions, { taxable: true, remodel_tax: true, prevailing_wage: false, local: true },
+    cond || {});
   const s = m.tabs.Epoxy;
   s.takeoff = [row(asmNamed(spec.system), spec.sf, "SF")];
   if (spec.primer) s.takeoff.push(row(asmNamed("Primer: " + spec.primer), spec.sf, "SF", true));
@@ -69,9 +70,9 @@ function epoxy(spec, adjust) {
 }
 
 // ── Polish ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-function polish(spec, adjust) {
+function polish(spec, adjust, profile) {
   const m = B.freshModel();
-  m.profile = "polish-rev3@1";
+  m.profile = profile || "polish-rev3@1";
   m.conditions = Object.assign({}, m.conditions, { taxable: true, remodel_tax: true, prevailing_wage: false, local: true,
     dye: !!spec.dye, joint_filler: !!spec.joint_filler });
   m.takeoff = [row(asmNamed(spec.system), spec.sf, "SF")];
@@ -91,5 +92,31 @@ const out = {
   epoxy: epoxy(job.epoxy.in, job.epoxy.adjust),
   epoxyNoOverrides: epoxy(job.epoxy.in, null),
   polish: polish(job.polish.in, job.polish.adjust),
+};
+
+// THE SAME JOB AS A HARD BID (Hanz, 2026-10-17): the Review step's Hard bid switch (the section's adjust.hard_bid), Kyle's
+// rule in his own words: 4% from a $60,000 sub-total, 2.5% on a local job from $13,000, until a discount is typed.
+const KYLE = { supplier_pct: "20", ship_pct: "6" };
+const big = Object.assign({}, job.epoxy.in, { sf: job.epoxy.in.sf * 3, lf: job.epoxy.in.lf * 3, days: job.epoxy.in.days * 3 });
+const ruleOn = (() => {
+  const rev3 = B.freshModel(); rev3.profile = "polish-rev3@1";
+  const rev2 = B.freshModel(); rev2.profile = "polish-rev2@1";
+  const ep = B.activateSection(Object.assign({}, B.freshModel(), { kind: "off" }), "Epoxy", "base", {});
+  const gy = B.activateSection(Object.assign({}, B.freshModel(), { kind: "off" }), 'Gyp (USG 1-8")', "base", {});
+  return { rev3: B.hardBidRuleOn(rev3, B.ROOT_TAB), rev2: B.hardBidRuleOn(rev2, B.ROOT_TAB),
+           epoxy: B.hardBidRuleOn(ep, "Epoxy"), gyp: B.hardBidRuleOn(gy, 'Gyp (USG 1-8")'), nothing: B.hardBidRuleOn(rev3, "Nope") };
+})();
+out.hardBid = {
+  epoxy: epoxy(job.epoxy.in, Object.assign({ hard_bid: true }, KYLE)),
+  epoxyTyped: epoxy(job.epoxy.in, Object.assign({ hard_bid: true }, job.epoxy.adjust)),
+  epoxyDollars: epoxy(job.epoxy.in, Object.assign({ hard_bid: true, discount_amt: "500" }, KYLE)),
+  epoxyNotLocal: epoxy(job.epoxy.in, Object.assign({ hard_bid: true }, KYLE), { local: false }),
+  epoxyBig: epoxy(big, { hard_bid: true }),
+  epoxyBigOff: epoxy(big, null),
+  polish: polish(job.polish.in, { hard_bid: true }),
+  polishRev2: polish(job.polish.in, { hard_bid: true }, "polish-rev2@1"),
+  ruleOn: ruleOn,
+  kept: { on: B.normalizeAdjust({ hard_bid: true }), notTrue: B.normalizeAdjust({ hard_bid: "true" }),
+          ruleKeepsIt: B.materialOnlyAdjust({ hard_bid: true, gp_pct: "30" }) },
 };
 console.log(JSON.stringify(out));
