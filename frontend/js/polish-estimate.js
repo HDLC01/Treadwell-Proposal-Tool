@@ -3192,7 +3192,10 @@
   }
   function rateSpan(b, key) {
     var f = rateUsed(b, key);
-    return '<span data-mkrate="' + key + '">' + esc(f == null ? "" : B.pct(f)) + '</span>';
+    // NOT DRAWN (Hanz, 2026-10-17: "why do we have double values here its confusing"). It sits beside a box that already
+    // shows the same rate, greyed when it is the sheet's rule and in the box's own ink when typed; the span stays so the
+    // repaint and the checks still read the rate the chain priced with.
+    return '<span class="mkused" aria-hidden="true" data-mkrate="' + key + '">' + esc(f == null ? "" : B.pct(f)) + '</span>';
   }
 
   /** One % box over a rule. `rule` is the figure the sheet's rule gives, shown greyed as the placeholder. */
@@ -3215,18 +3218,21 @@
         '<td class="pct">' + pctHtml + '</td>' +
         '<td class="amt" data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</td></tr>';
     };
-    var keyedPct = function (key) {
-      return '<span data-mkpct="' + key + '">' + esc(B.pct(b[key])) + '</span>';
+    var keyedPct = function (key, beside) {
+      // `beside`: a box shows this rate already, so the text is kept for the repaint and not drawn (see rateSpan).
+      return '<span' + (beside ? ' class="mkused" aria-hidden="true"' : '') + ' data-mkpct="' + key + '">' +
+        esc(B.pct(b[key])) + '</span>';
     };
 
     r += '<tr class="sub"><td>Subtotal</td><td class="pct"></td>' +
       '<td class="amt" data-mk="sub_total">' + esc(moneyAuto(b.sub_total)) + '</td></tr>';
 
-    r += '<tr class="band"><td colspan="3">Markup</td></tr>';
+    r += '<tr class="band"><td colspan="3">Markup <span class="bandnote">grey is the sheet\'s own figure; ' +
+      'type over it to change it, clear the box to go back</span></td></tr>';
     // THE RATES ARE BOXES OVER THE RULE (Hanz, 2026-10-16): blank is the sheet's own figure, shown greyed in the box,
     // and a number typed is the rate (Kyle types over B73/B67, B75/B69 and B76/B70 on a share of his bids).
     var rb = ruleBid();
-    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct") + adjBox("gp_pct", pctNum(rb.gp_pct)), "gp");
+    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct", true) + adjBox("gp_pct", pctNum(rb.gp_pct)), "gp");
     // THE DISCOUNT LINE IS BACK (Hanz, 2026-10-16), reversing 2026-09-22: Kyle's "Hard Bid Discount" was his
     // price-landing line on 21 of 41 bids in the two months before, mostly on jobs that were not hard bids. It is
     // a plain discount now, a % or a $ (the $ wins), blank is none, and nothing turns it on by itself.
@@ -4370,6 +4376,7 @@
     if (ti === null) return;
     var i = parseInt(ti, 10);
     var k = el.getAttribute("data-k");
+    if (k === "measurement") { askMeasure(i); return; }
     // No `unit` branch: a takeoff row's unit is read-only now (it comes from Items & Assemblies),
     // so nothing on the page fires a change for it.
     if (k === "pick") {
@@ -4392,6 +4399,58 @@
       changed(false);
     }
   });
+
+  // A MEASUREMENT CHANGED BY ACCIDENT IS ASKED ABOUT (Hanz, 2026-10-17: "add a pop up when we accidentally edit the
+  // measurement"). The takeoff as it stood when the box was entered is kept; leaving the box (Tab, a click away or
+  // Enter) with a different number over one that was already there asks whether to keep it. "Put back" restores that
+  // takeoff whole, because the keystrokes moved more than the one number: a floor's coats follow the floor. A first
+  // number typed into an empty box is never asked about, and neither is retyping the same number.
+  var measureStart = null;
+  document.addEventListener("focusin", function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute || el.getAttribute("data-k") !== "measurement") return;
+    var ti = el.getAttribute("data-tk");
+    if (ti === null) return;
+    measureStart = { i: parseInt(ti, 10), rows: JSON.parse(JSON.stringify(M.takeoff || [])) };
+  });
+
+  function measureWords(v, unit) {
+    return v > 0 ? B.fmtSf(v) + (unit ? " " + unit : "") : "nothing";
+  }
+
+  function askMeasure(i) {
+    var start = measureStart;
+    measureStart = null;
+    if (!start || start.i !== i || !start.rows[i] || !M.takeoff[i]) return;
+    var was = B.num(start.rows[i].measurement);
+    var now = B.num(M.takeoff[i].measurement);
+    if (!(was > 0) || was === now) return;
+    if (!TW.confirmDanger || (TW.modalOpen && TW.modalOpen())) return;
+    var unit = M.takeoff[i].unit || "";
+    var rows = start.rows;
+    // After the focus has finished moving, so it goes back to wherever the estimator was going.
+    setTimeout(function () {
+      var back = document.activeElement;
+      TW.confirmDanger({
+        tone: "warn", icon: "pencil", title: "Change this measurement?",
+        name: rowName(M.takeoff[i]) || "this row", before: "Row " + (i + 1) + ", ",
+        after: ", goes from " + measureWords(was, unit) + " to " + measureWords(now, unit) + ".",
+        detail: "Every price on the bid follows it.",
+        cancelText: "Put back " + measureWords(was, unit), confirmText: "Keep " + measureWords(now, unit),
+        focus: "container", dismiss: "explicit"
+      }).then(function (keep) {
+        if (!keep) {
+          Array.prototype.splice.apply(M.takeoff, [0, M.takeoff.length].concat(rows));
+          document.querySelectorAll('[data-tk][data-k="measurement"]').forEach(function (box) {
+            var row = M.takeoff[parseInt(box.getAttribute("data-tk"), 10)];
+            if (row) box.value = row.measurement == null ? "" : row.measurement;
+          });
+          changed(false);
+        }
+        try { if (back && back !== document.body && document.contains(back)) back.focus(); } catch (err) { /* gone */ }
+      });
+    }, 0);
+  }
 
   // ── boot ────────────────────────────────────────────────────────────────────
   /** The estimator's own default labor lines, out of Library -> Default Items & Assemblies.
