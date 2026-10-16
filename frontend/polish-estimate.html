@@ -572,15 +572,26 @@
     .mk .note{font-size:11px;color:var(--ink-3);font-family:var(--sans)}
     .mk .note a{color:var(--red-dark)}
     .mk input{width:104px;text-align:right;font:inherit;font-family:var(--mono);
-        font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:5px;
-        padding:4px 7px;background:var(--card);color:var(--ink)}
+        font-variant-numeric:tabular-nums;border:1.5px solid var(--ink-3);border-radius:6px;
+        padding:5px 8px;background:var(--card);color:var(--ink)}
     .mk input:hover{border-color:var(--red)}
     /* The override boxes over the sheet's rules (Review step): a short % box with its greyed rule, and the warning
        beside one that is typed but cannot be used. [hidden] restated: a class display rule outranks the attribute. */
-    .adjbox{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
-    .adjbox input{width:58px;text-align:right;font:inherit;font-family:var(--mono)}
-    .adjbox.adjamt input{width:86px}
-    .adjbox input::placeholder{color:var(--ink-v);opacity:.7}
+    /* 2026-10-17 (Hanz: "make the editable fields more visible"): a box reads as a box -- a solid edge, a white
+       face and a focus ring -- and holds the line's ONE figure. Blank shows the sheet's rule in grey; a typed figure
+       wears the brand tint, so what somebody changed stands out from what the sheet decided. The rate the chain used
+       is kept beside it for the repaint, not drawn (.mkused). */
+    .mkused{display:none}
+    .adjbox{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+    .adjbox input,.mk .adjbox input{width:64px;text-align:right;font:600 13px var(--mono);
+        font-variant-numeric:tabular-nums;border:1.5px solid var(--ink-3);border-radius:6px;padding:5px 8px;
+        background:var(--card);color:var(--ink);box-shadow:inset 0 1px 2px rgba(27,28,28,.06)}
+    .adjbox.adjamt input,.mk .adjbox.adjamt input{width:92px}
+    .adjbox input::placeholder{color:var(--ink-3);opacity:1;font-weight:500}
+    .adjbox input:not(:placeholder-shown){background:var(--red-tint);border-color:var(--red);color:var(--red-dark)}
+    .adjbox input:hover,.mk input:hover{border-color:var(--red)}
+    .adjbox input:focus,.mk input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(200,16,46,.16)}
+    .mk tr.band .bandnote{margin-left:8px;font:500 11px var(--sans);letter-spacing:0;text-transform:none;color:var(--ink-v)}
     .adjwarn{display:block;white-space:normal;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:220px}
     .adjwarn[hidden]{display:none}
 
