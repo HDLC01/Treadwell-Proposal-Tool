@@ -521,11 +521,14 @@ def test_there_is_no_type_my_own_switch_on_the_labor_step(ran):
 def test_the_hint_says_whether_the_figure_is_typed_or_the_man_days(ran):
     """With no switch to read, the line under the box is what says which mode it is in.
 
-    Mutation: put the old 'Man-days on the road.' wording back."""
+    A box still on the older auto (a bid saved before 2026-10-12) says its figure IS the man-days. A box the estimator typed in is GUYS, and the
+    line says so: one round trip for each guy. It no longer quotes the man-days beside a typed count (2026-10-20 audit: "Man-days from the tasks
+    above: 16.5." under a typed box invited typing 16.5, which charges every man-day a round trip).
+
+    Mutation: put the old 'Man-days on the road.' wording back; put the man-days hint back under a typed Travel Labor box."""
     h = ran["labor"]["hintsAndIncluded"]
     assert h["autoHint"] == "Man-days from the tasks above."
-    # A box that is not on auto names the man-days as TEXT (the fixture's 3x5 + 3x0.5), never as a value.
-    assert h["typedHint"] == "Man-days from the tasks above: 16.5."
+    assert h["typedHint"] == "One round trip for each guy."
     # Included still toggles, and does not disturb the Guys mode.
     assert h["onBefore"] is True and h["afterOff"]["enabled"] is False
     assert h["afterOff"]["guys_auto"] is False, "Included changed the Guys mode"
@@ -537,8 +540,8 @@ def test_clearing_the_guys_box_leaves_it_empty_and_never_snaps_back_to_the_man_d
     """Hanz, 2026-10-12: "nights, days, guys and hours should have nothing when it starts". From
     2026-10-07 clearing the box handed the figure back to the man-days; that road is closed, because
     the man-days are no longer a value a box can hold. A cleared box is the estimator's own empty
-    answer: it stays empty, stays typed, and prices $0. The hint under it still says what the
-    man-days are, as text.
+    answer: it stays empty, stays typed, and prices $0. The hint under it says what its guys are
+    (one round trip for each guy; it no longer quotes the man-days beside an empty box).
 
     Mutation: put the old `guys_auto = true` on change back and `afterClear` / `clearedBox` go red."""
     t = ran["travelGuys"]
@@ -549,7 +552,7 @@ def test_clearing_the_guys_box_leaves_it_empty_and_never_snaps_back_to_the_man_d
         "retyping after a backspace did not land: %r" % c["afterRetype"])
     assert t["afterClear"] == {"guys": "", "auto": False}
     assert c["clearedBox"] == "", "the box refilled itself with the man-days: %r" % c["clearedBox"]
-    assert c["clearedHint"] == "Man-days from the tasks above: %s." % c["manDaysNow"], c["clearedHint"]
+    assert c["clearedHint"] == "One round trip for each guy.", c["clearedHint"]
     assert c["clearRebuilds"] == 0, (
         "clearing the box rebuilt the Labor panel %d time(s): the element the estimator just "
         "tabbed or clicked into is destroyed and the next click or keystroke is lost"
@@ -3613,7 +3616,9 @@ def test_the_review_shows_the_travel_labor_row_as_guys_x_hours_at_the_rate(ran):
     r = ran["travelFill"]["wichita"]["review"]
     assert r["cells"] == ["Travel Labor 6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the "
                           "labor lines above", "26 4 × 6.5", "hrs", "$33 / hr", "$858"]
-    assert r["keyed"] == {"lab.3.q": "26", "lab.3.w": "4 × 6.5", "lab.3.rate": "$33 / hr", "lab.3.tot": "$858"}
+    assert r["keyed"] == {"lab.3.q": "26", "lab.3.w": "4 × 6.5", "lab.3.rate": "$33 / hr", "lab.3.tot": "$858",
+                          "lab.3.drive": ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the "
+                                          "labor lines above")}, "the trip sentence is a keyed figure, so a late answer can repaint it"
 
 
 def test_hours_the_estimator_typed_survive_every_later_answer(ran):
@@ -3682,7 +3687,9 @@ def test_a_saved_bid_never_moves_on_open_and_an_answer_in_the_session_is_what_fi
     the session applies an answer, which fills the line (7 hours, the crew's 4 guys) and is saved. If the address changed since the
     distance was measured the page says so and still asks nothing on open; its button then asks, and the answer moves the figure
     the tool wrote (6.5 to 10) and leaves hours somebody typed. THAT saved row is on the OLDER auto (its guys are the 48 man-days,
-    exactly as it was saved), so it keeps pricing by them: a saved bid prices as it always did.
+    exactly as it was saved), so it OPENS pricing by them: a saved bid prices as it always did. The answer the estimator then asks for FILLS
+    its hours (the tool's own figure moves), so it puts the guys on the crew's size like every other row it fills: 4 x 10 x $33 (2026-10-20
+    audit; left on the man-days it priced 48 x 10 x $33 = $15,840). A row whose hours were typed is not filled: it keeps its man-days.
 
     Mutation: apply the saved distance when a bid opens, or look the distance up for a saved bid by itself."""
     sv = ran["travelFill"]["saved"]
@@ -3699,8 +3706,9 @@ def test_a_saved_bid_never_moves_on_open_and_an_answer_in_the_session_is_what_fi
     assert (mo["row"]["days"], mo["hoursBox"]) == (6.5, "6.5") and mo["saves"] == 0 and mo["asked"] == 0
     assert mo["status"] == "The address changed since this was measured. Look it up again, or type the miles."
     mf = sv["movedToolsFigure"]
-    assert (mf["row"]["days"], mf["row"]["hours_seed"], mf["hoursBox"], mf["cost"], mf["asked"]) == (10, 10, "10", 48 * 10 * 33, 1)
-    assert mf["row"]["guys"] == 48 and "guys_follow" not in mf["row"], "an older auto row keeps its man-days and takes no crew marker"
+    assert (mf["row"]["days"], mf["row"]["hours_seed"], mf["hoursBox"], mf["cost"], mf["asked"]) == (10, 10, "10", 4 * 10 * 33, 1)
+    assert (mf["row"]["guys"], mf["row"]["guys_follow"]) == (4, "crew"), "the answer filled an older auto row, so it is on the crew's size now"
+    assert mo["row"]["guys"] == 48 and "guys_follow" not in mo["row"], "opened, the same row is still on its man-days"
     mt = sv["movedTypedHours"]
     assert (mt["row"]["days"], mt["hoursBox"], mt["cost"]) == ("4", "4", 48 * 4 * 33)
 
@@ -3811,8 +3819,8 @@ PAGE_MUTATIONS = {
         lambda g: g["wichita"]["before"]["note"]["hidden"] is True),
     "the Review leaves the trip out of the Travel Labor row": (
         "js/polish-estimate.js",
-        "labRows.push([drive ? { raw: esc(lineName) + '<span class=\"note work\">' + esc(drive) + '</span>' } : lineName,",
-        "labRows.push([lineName,",
+        "? { raw: esc(lineName) + '<span class=\"note work\">' + rv(\"lab.\" + i + \".drive\", drive) + '</span>' } : lineName;",
+        "? lineName : lineName;",
         lambda g: not g["wichita"]["review"]["cells"][0].startswith("Travel Labor 6.5 hrs: one 380 mile round trip")),
     "the Guys box under the estimator's cursor is repainted": (
         "js/polish-estimate.js", "if (document.activeElement === el) return;       // the Guys box under the estimator's cursor is left alone",
@@ -3881,7 +3889,7 @@ def test_the_how_note_on_a_far_job_says_not_local_and_shows_every_sum(ran):
     assert "10 nights (typed) x $70.00" in _how_line(how, "Lodging")
     assert "8 days (typed) x $45.00" in _how_line(how, "Per Diem")
     travel = _how_line(how, "Travel Labor")
-    assert "5 drive hours (typed)" in travel and "2 man-days (typed)" in travel
+    assert "5 drive hours (typed)" in travel and "2 guys (typed)" in travel and "man-days" not in travel
     assert _last_dollars(travel) == f["cost"]["travel"] == 330 > 0
     # Nothing is on auto, so the man-days appear as a reference sentence, not as a working sum.
     assert "For reference, the man-days on the labor lines above are" in how

@@ -280,7 +280,7 @@ async function main() {
   };
 
   // ── 15. A FAR GYP JOB'S TRAVEL LABOR IS NOT FILLED, AND ITS CARD DOES NOT SAY IT IS (2026-10-20 audit). A far distance fills Travel Labor
-  //        on a Polish, Epoxy or Combo job (hours from the miles, guys the crew's size). A Gyp bid is priced by the hour and works its own
+  //        on every sheet but Gyp (hours from the miles, guys the crew's size). A Gyp bid is priced by the hour and works its own
   //        drive time, so its row is left empty and typed, and its card must not promise "the hours fill in from the miles".
   const farGyp = await open(gypDraft({ address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" }),
     { distance: { ok: true, miles: 190, reason: "" } });

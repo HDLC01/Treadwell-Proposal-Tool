@@ -858,8 +858,19 @@ the office fills the line by itself, and a scan of the estimate workbooks in Kyl
 the hours are one round trip at 60 mph to the half hour and the guys are the crew's size (the most guys on any labor line,
 over both base sheets of a Combo), so each guy is charged one round trip, as Kyle types it on 9 of 10 out-of-town sheets.
 A figure the estimator typed, or cleared, always wins; a switched-off row is left as it is; a bid saved before 2026-10-12
-that is on the old man-days auto keeps them; and a saved bid never moves on open (`followDistanceHours` in `js/bid-model.js`,
-held by `tests/test_polish_travel_hours.py`).
+that is on the old man-days auto keeps them while it merely opens; and a saved bid never moves on open (`followDistanceHours`
+in `js/bid-model.js`, held by `tests/test_polish_travel_hours.py`). An answer applied in a session puts every Travel Labor row
+it FILLS on the crew's size, the older man-days auto row included (leaving it on the man-days charged 49.5 man-days x 6.5 x $33
+= $10,617.75 for an Epoxy job switched to Polish, where Kyle types $858).
+
+The job's drive is one trip, so ONE Travel Labor row is priced for it, on the section that carries the job's travel. When the job
+type is switched in the session or the Sheets panel makes another sheet the base, the carrier moves and `followDistance(model,
+fromTab)` settles the rows (the page names the old carrier in `fromTab`; left out, the stranded row is looked for): the old
+carrier's row goes with the carrier when the new carrier has none (Combo to Epoxy), the new
+carrier's row is filled by the rule, and a row the distance filled and nobody typed in, left on a section that is still a base but
+no longer the carrier, is taken back (Epoxy to Combo), so Travel is charged once. A row somebody typed in is left as typed and its
+card says the drive is charged elsewhere. An option is priced apart: its Travel Labor row is its own and its guys follow its own
+labor lines (`ownCrewSize`). Held by `tests/test_polish_travel_switch.py`, which drives the real page.
 
 **Done.**
 

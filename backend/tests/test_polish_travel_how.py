@@ -75,11 +75,23 @@ def test_a_saved_bid_still_words_the_people_days(ran):
 
 
 def test_with_miles_the_round_trip_is_worded_from_them(ran):
-    """150 miles is a 300 mile round trip and 5 hours at 60 mph; the sum quotes the trip it was worked from. (This bid carries the
+    """150 miles is a 300 mile round trip and 5 hours at 60 mph; the sum quotes the trip it was worked from. (This bid was SAVED on the
     OLDER Travel row, on auto: its guys are still the man-days, and the line says so.)"""
     text = ran["withMiles"]["text"]
     assert "5 drive hours (one 300 mile round trip at 60 mph from the Olathe office)" in text, text
     assert "Travel Labor: 16.5 man-days x 5 drive hours" in text and "Man-days = guys x days on the labor lines above (16.5 now)." in text, text
+
+
+def test_an_answer_applied_to_the_older_row_words_the_guys_as_the_crews_size(ran):
+    """The same shipped row an answer was just applied to in the session (2026-10-20 audit): the answer fills its hours, so it goes on the crew's
+    size, and the how-note says 3 guys, one round trip each, and no man-days for the Travel guys.
+
+    Mutation: leave the older auto row on the man-days when the answer fills it."""
+    a = ran["answered"]
+    assert ("Travel Labor: 3 guys x 5 drive hours (one 300 mile round trip at 60 mph from the Olathe office, for each guy) "
+            "x $33.00 = $495.00") in a["lines"], a["lines"]
+    assert "Guys = the most guys on any one labor line above (3 now), one round trip each." in a["lines"]
+    assert "man-days x" not in a["text"]
 
 
 def test_a_new_bids_travel_guys_are_worded_as_guys_one_round_trip_each_and_never_as_man_days(ran):

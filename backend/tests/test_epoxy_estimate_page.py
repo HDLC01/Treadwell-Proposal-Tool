@@ -386,7 +386,7 @@ BREAKS = {
         "js/bid-model.js", "        holder = carrier.section;", "        holder = model;",
         lambda r: r["travelFill"]["before"]["row"]["days"] != 6.5 or r["travelFill"]["rootTravelUntouched"] is not True),
     "the distance on file is not put on the new carrier's row after a job type switch": (
-        "js/polish-estimate.js", "if (carrierMoved) B.followDistance(ROOT);", "void 0;",
+        "js/polish-estimate.js", "if (carrierMoved) B.followDistance(ROOT, carrierBefore);", "void 0;",
         lambda r: r["jobSwitch"]["switched"]["before"]["row"]["days"] != 6.5 or r["jobSwitch"]["blankSwitch"]["row"]["days"] != 6.5),
     "a box cleared on the Epoxy section's Travel Labor is refilled by the next answer": (
         "js/polish-estimate.js", 'if (k === "guys" || k === "days") B.markTypedByHand(M.labor[j], k);', "void 0;",

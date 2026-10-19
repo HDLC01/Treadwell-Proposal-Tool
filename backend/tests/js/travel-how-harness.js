@@ -4,7 +4,9 @@
 // answer writes the 5 hours of a 150 mile job here by itself, the cleared miles take them back, and
 // what is left to word is a bid SAVED while the distance wrote the hours (2026-10-06 to 10-12): its
 // figure and the old `hours_seed` marker with no distance behind them. The freshModel() bids below
-// carry the OLDER Travel row (on auto, the man-days); `crewBid` is the row a far answer fills on a
+// carry the OLDER Travel row (on auto, the man-days): an answer applied in a session puts that row on
+// the crew's size (2026-10-20 audit), so a bid SAVED on the older row is built by taking the crew marker
+// off the row the answer fills (`savedFar`). `crewBid` is the row a far answer fills on a
 // NEW bid (guys on the crew's size), and `handBid` is the 2026-10-20 audit's remove-existing case:
 // the how-note and the Lodging hint must give the same nights, and no man-days for the Travel guys.
 const path = require("path");
@@ -17,6 +19,14 @@ function far(miles) {
   return M;
 }
 
+/** A bid SAVED on the older man-days auto: the hours the distance wrote, the old `hours_seed` marker, and no crew marker. */
+function savedFar(miles) {
+  const M = far(miles);
+  M.labor.forEach((r) => { if (r.id === "travel") delete r.guys_follow; });
+  B.syncAutoGuys(M);
+  return M;
+}
+
 const off = far(150);
 off.labor.forEach((r) => { if (r.id === "travel") r.enabled = false; });
 const offHow = B.travelHow(off);
@@ -26,12 +36,15 @@ B.clearDistance(cleared);
 const clearedHow = B.travelHow(cleared);
 
 // The saved bid: the figure the distance wrote and its marker, and no distance stored.
-const earlier = far(150);
+const earlier = savedFar(150);
 delete earlier.distance;
 const earlierHow = B.travelHow(earlier);
 
-const still = far(150);
+// The same bid with its distance still on it, as saved (the older words), and the shipped row an answer was just applied to (the crew's words).
+const still = savedFar(150);
 const stillHow = B.travelHow(still);
+const answered = far(150);
+const answeredHow = B.travelHow(answered);
 
 // A bid priced by Polish rev 2 counts auto Lodging and Per Diem the sheet's way (from labor dollars), so a crew with a
 // prevailing-wage row owes more nights than it has man-days. The note has to say what the cost box and the bid charge.
@@ -99,4 +112,5 @@ console.log(JSON.stringify({
   cleared: { text: clearedHow.text },
   earlier: { text: earlierHow.text },
   withMiles: { text: stillHow.text },
+  answered: { text: answeredHow.text, lines: answeredHow.lines },
 }));

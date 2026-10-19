@@ -1208,8 +1208,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
       sv.api.go(1);
       const svH = sv.dom.get("panels").innerHTML;
       out.savedTypedRow = {
-        // Typed, not auto: the hint names the man-days of the (here empty) crew as text.
-        typedHint: svH.indexOf("Man-days from the tasks above: 0.") !== -1,
+        // Typed, not auto: the hint says what the guys are (one round trip each) and never quotes the man-days beside a typed count
+        // (2026-10-20 audit; it used to name the man-days of the (here empty) crew as text).
+        typedHint: need(sv, '[data-hint-lab="0"]').textContent === "One round trip for each guy.",
         guys: sv.api.model().labor[0].guys, auto: sv.api.model().labor[0].guys_auto,
         box: String(need(sv, '[data-lab="0"][data-k="guys"]').value),
         cost: txt(sv, '[data-lcost-for="0"]'),
@@ -1382,9 +1383,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
       labels: (function () {
         const tables = String(zt.dom.get("panels").innerHTML)
           .match(/<table class="rev-t">[\s\S]*?<\/table>/g) || [];
+        // The label cell of Travel Labor's row carries its trip sentence in a keyed note (always there, so a late answer can repaint it): the
+        // label is what stands in front of that note.
         return (tables[1] || "").split("<tr").slice(1)
           .map((c) => (/<td>([\s\S]*?)<\/td>/.exec(c) || [])[1])
-          .filter((s) => s != null);
+          .filter((s) => s != null)
+          .map((s) => s.replace(/<span class="note work">[\s\S]*$/, ""));
       })(),
       travelCost: B.laborCost(zeroTravel.labor[2]),
       jointFillerCost: B.laborCost(zeroTravel.labor[1]),
