@@ -709,7 +709,7 @@ MUTATIONS = {
         PAGE, "      var cost = B.laborCost(r, pwRev);", "      var cost = B.laborCost(r);",
         lambda r: r["page"]["review"]["polishing"] is False),
     "the review rate ignores the prevailing rate": (
-        PAGE, 'moneyAuto(B.laborRateOf(r, pwRev)) + " / hr"),', 'moneyAuto(B.laborRateOf(r)) + " / hr"),',
+        PAGE, 'rateMoney(B.laborRateOf(r, pwRev)) + " / hr"),', 'rateMoney(B.laborRateOf(r)) + " / hr"),',
         lambda r: r["page"]["review"]["polishing"] is False),
     "the default note ignores the prevailing rate": (
         PAGE, "    if (B.num(pw) > 0 && !B.isTravelRow(row)) {", "    if (false) {",

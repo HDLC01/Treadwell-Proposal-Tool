@@ -2925,6 +2925,19 @@
     return (per === null || per === undefined || !isFinite(per)) ? "" : B.money2(per) + " / " + unit;
   }
 
+  /** A Review rate that quantity x rate has to come back to: exactRate's places, not the cent the Material step's hint
+   *  rounds to (5,482 SF at "$1.85 / SF" read $25 short of a $10,166.55 row). A pack-priced row's rate is its cost over
+   *  its measurement, so it is said to four places; the row's own total stays the figure the chain priced. */
+  /** An hourly or nightly rate as typed: whole dollars or cents as typed, and a third place only when the rate has one (a prevailing rate). */
+  function rateMoney(n) {
+    var v = B.num(n);
+    return Math.abs(v * 100 - Math.round(v * 100)) < 1e-6 ? moneyAuto(v) : exactRate(v);
+  }
+
+  function reviewPerUnit(per, unit) {
+    return (per === null || per === undefined || !isFinite(per)) ? "" : exactRate(per) + " / " + unit;
+  }
+
   /** A price per unit worked to the figure it has: two places, and more only when the rate has them ($0.0987), so
    *  quantity x rate is the total the module charged. */
   function exactRate(n) {
@@ -3031,7 +3044,7 @@
       var rc = rowCost(r), p = rc.price, meas = B.num(r.measurement), unit = r.unit || "SF";
       var per = (p && p.priced_lines && meas > 0) ? (p.per_unit != null ? p.per_unit : p.total / meas) : null;
       tkRows.push([r.assembly_name || r.item_name || "(nothing picked yet)", meas ? B.fmtSf(meas) : "", meas ? unit : "",
-                   rvc("tk." + i + ".rate", perUnitText(per, unit)), rv("tk." + i + ".tot", rc.text)]);
+                   rvc("tk." + i + ".rate", reviewPerUnit(per, unit)), rv("tk." + i + ".tot", rc.text)]);
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", "", "", ""]);
     // THE PATCH LINE, said where its money is: a price a square foot of the whole area, from the same module that charged it
@@ -3063,7 +3076,7 @@
         // Dye is bought in two coats (the row prices one and the line charges both), so its rate is the cost of the line over
         // its area; the name says so.
         tkRows.push([c.material() + (c.key === "dye" ? " (" + B.DYE_COATS + " coats)" : ""), f.qty, f.unit,
-                     rvc("cond." + c.key + ".rate", cq > 0 ? B.money2(cost / cq) + " / " + c.unit(1) : ""),
+                     rvc("cond." + c.key + ".rate", cq > 0 ? exactRate(cost / cq) + " / " + c.unit(1) : ""),
                      rv("cond." + c.key + ".tot", moneyAuto(cost))]);
       });
     }
@@ -3071,7 +3084,7 @@
     var gypRev = gypOpen();
     if (gypRev) {
       gypLines(gypRev).forEach(function (l, i) {
-        tkRows.push([l.label, gypQty(l.n), l.unit, rvc("gyp." + i + ".rate", l.n > 0 ? B.money2(l.cost / l.n) + " / " + l.one : ""),
+        tkRows.push([l.label, gypQty(l.n), l.unit, rvc("gyp." + i + ".rate", l.n > 0 ? exactRate(l.cost / l.n) + " / " + l.one : ""),
                      rv("gyp." + i + ".tot", moneyAuto(l.cost))]);
       });
     }
@@ -3130,7 +3143,7 @@
       var work = B.fmtSf(B.num(r.guys)) + " × " + B.fmtSf(B.num(r.days)) + (r.unit === "hours" ? "" : " × " + perDay);
       labRows.push([r.label || "Labor line",
                     { raw: rv("lab." + i + ".q", B.fmtSf(hrs)) + '<span class="note work">' + rv("lab." + i + ".w", work) + '</span>' },
-                    "hrs", rvc("lab." + i + ".rate", moneyAuto(B.laborRateOf(r, pwRev)) + " / hr"),
+                    "hrs", rvc("lab." + i + ".rate", rateMoney(B.laborRateOf(r, pwRev)) + " / hr"),
                     rv("lab." + i + ".tot", moneyAuto(cost))]);
     });
     // The fourth hand on the joint-filler line (Remove existing joint filler) is labor too, and is in the subtotal.
@@ -3141,7 +3154,7 @@
       labRows.push(["Remove existing joint filler (one more hand)",
                     { raw: rv("hand.q", B.fmtSf(B.num(jf.days) * jfPer)) + '<span class="note work">' + rv("hand.w", "1 × " +
                       B.fmtSf(B.num(jf.days)) + (jf.unit === "hours" ? "" : " × " + jfPer)) + '</span>' },
-                    "hrs", rvc("hand.rate", moneyAuto(B.laborRateOf(jf, pwRev)) + " / hr"), rv("hand.tot", moneyAuto(handCost))]);
+                    "hrs", rvc("hand.rate", rateMoney(B.laborRateOf(jf, pwRev)) + " / hr"), rv("hand.tot", moneyAuto(handCost))]);
     }
     if (!labRows.length) labRows.push(["No labor entered yet", "", "", "", ""]);
     labRows.push(["Labor Subtotal", "", "", "", mkAmt(b, "labor")]);
@@ -3176,7 +3189,7 @@
       var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor)[k]
                            : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab));
       var per = k === "lodging" ? "night" : "day";
-      trvRows.push([name, rvc("trv." + k + ".q", B.fmtSf(B.num(qty))), per + "s", rvc("trv." + k + ".rate", moneyAuto(tl.rate) + " / " + per),
+      trvRows.push([name, rvc("trv." + k + ".q", B.fmtSf(B.num(qty))), per + "s", rvc("trv." + k + ".rate", rateMoney(tl.rate) + " / " + per),
                     rv("trv." + k + ".tot", moneyAuto(cost))]);
     });
     if (!carries) {

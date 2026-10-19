@@ -103,7 +103,8 @@ def problems(d):
                 if r["cls"] in ("tot", "sub") and any(x["text"] for x in r["cells"][1:4]):
                     why("totals", "%r shows more than its Total: %r" % (r["label"], [x["text"] for x in r["cells"]]))
 
-        # a takeoff or material row: measurement x rate per unit = its cost, to the rounding of a 2 place rate
+        # a takeoff or material row: measurement x rate per unit = its cost, to the rounding of the rate's four places (the
+        # rate is said to four places since 2026-10-20: at two, 5,482 SF x "$1.85 / SF" read $25 short of the row)
         tk = card(f, "takeoff", "Takeoff and Material")
         for rf in f["rows"]:
             if not rf["priced"] or not rf["measurement"]:
@@ -118,12 +119,12 @@ def problems(d):
             if not rate.endswith("/ " + rf["unit"]):
                 why("takeoff", "%r rate %r does not say per %s" % (rf["name"], rate, rf["unit"]))
             per = num(rate)
-            if per is None or abs(q * per - rf["total"]) > q * 0.005 + 0.01:
+            if per is None or abs(q * per - rf["total"]) > q * 0.00005 + 0.01:
                 why("takeoff", "%r: %s x %s is not its cost %s" % (rf["name"], q, rate, rf["total"]))
             if not cents(tot, rf["total"]):
                 why("takeoff", "%r total reads %s, the row costs %s" % (rf["name"], tot, rf["total"]))
-            # the same figure the Material step's hint shows (rowPrice's per_unit, two places)
-            if per is not None and not cents(per, round(rf["per_unit"] + 1e-12, 2)):
+            # the Material step's hint figure (rowPrice's per_unit), said to four places instead of two
+            if per is not None and abs(per - round(rf["per_unit"] + 1e-12, 4)) > 1e-9:
                 why("takeoff", "%r rate %s is not the Material step's %s" % (rf["name"], per, rf["per_unit"]))
         rep = tk and next((r for r in tk["rows"] if r["label"].startswith("Patch")), None)
         if not rep:
@@ -268,7 +269,7 @@ def problems(d):
         if not rf["priced"] or not rf["measurement"]:
             continue
         per, tot = num(s["live"]["rv"].get("tk.%d.rate" % rf["i"])), num(s["live"]["rv"].get("tk.%d.tot" % rf["i"]))
-        if tot is None or not cents(tot, rf["total"]) or per is None or abs(rf["measurement"] * per - rf["total"]) > rf["measurement"] * 0.005 + 0.01:
+        if tot is None or not cents(tot, rf["total"]) or per is None or abs(rf["measurement"] * per - rf["total"]) > rf["measurement"] * 0.00005 + 0.01:
             out["supplier"].append("%r after the discount reads %s x %s = %s, the row costs %s" % (rf["name"], rf["measurement"], per, tot, rf["total"]))
     sp = d["epoxy"]["shipping"]
     got = sp["live"]
@@ -287,8 +288,8 @@ def test_every_review_table_has_the_five_labelled_columns(ran):
 def test_a_takeoff_row_shows_its_measurement_unit_and_rate_per_unit(ran):
     assert problems(ran)["takeoff"] == []
     rows = {r["label"]: [x["text"] for x in r["cells"]] for r in card(ran["epoxy"], "takeoff", "Takeoff and Material")["rows"]}
-    assert rows["Cove: Epoxy 4\""][1:4] == ["562", "LF", "$1.66 / LF"], "a cove row is read per linear foot"
-    assert rows["MACRO Flake Single Broadcast"][1:4] == ["5,482", "SF", "$1.85 / SF"]
+    assert rows["Cove: Epoxy 4\""][1:4] == ["562", "LF", "$1.656 / LF"], "a cove row is read per linear foot, to the places its total needs"
+    assert rows["MACRO Flake Single Broadcast"][1:4] == ["5,482", "SF", "$1.8545 / SF"]
 
 
 def test_the_patch_row_is_the_area_times_the_rate_the_module_charged(ran):
@@ -352,14 +353,14 @@ BREAKS = {
         '      if (epPatch > 0) tkRows.push(patchRow(\'Patch <span class="note">epoxy rate</span>\', areaSf, E.unitPrice(epItems, "patch").cost * 2, epPatch));',
         "patch"),
     "a labor rate is wrong": ("js/polish-estimate.js",
-        '                    "hrs", rvc("lab." + i + ".rate", moneyAuto(B.laborRateOf(r, pwRev)) + " / hr"),',
-        '                    "hrs", rvc("lab." + i + ".rate", moneyAuto(B.laborRateOf(r, pwRev) + 1) + " / hr"),', "labor"),
+        '                    "hrs", rvc("lab." + i + ".rate", rateMoney(B.laborRateOf(r, pwRev)) + " / hr"),',
+        '                    "hrs", rvc("lab." + i + ".rate", rateMoney(B.laborRateOf(r, pwRev) + 1) + " / hr"),', "labor"),
     "burden is taken of the wrong base": ("js/polish-estimate.js",
         '    labRows.push(["Labor burden", rvc("burden.q", moneyAuto(B.num(b.labor) + B.num(b.escalation))),',
         '    labRows.push(["Labor burden", rvc("burden.q", moneyAuto(B.num(b.labor_total))),', "burden"),
     "a takeoff rate is wrong": ("js/polish-estimate.js",
-        '                   rvc("tk." + i + ".rate", perUnitText(per, unit)), rv("tk." + i + ".tot", rc.text)]);',
-        '                   rvc("tk." + i + ".rate", perUnitText(per * 1.1, unit)), rv("tk." + i + ".tot", rc.text)]);', "takeoff"),
+        '                   rvc("tk." + i + ".rate", reviewPerUnit(per, unit)), rv("tk." + i + ".tot", rc.text)]);',
+        '                   rvc("tk." + i + ".rate", reviewPerUnit(per * 1.1, unit)), rv("tk." + i + ".tot", rc.text)]);', "takeoff"),
     "a markup rate is read from the rule, not the chain": ("js/polish-estimate.js",
         '      case "super_pct": return b.super_pct != null ? b.super_pct : B.RATES.SUPER_PTO;',
         '      case "super_pct": return B.RATES.SUPER_PTO + 0.01;', "markup"),
