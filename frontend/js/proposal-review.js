@@ -18,6 +18,18 @@
   // comes back as the same object. Nothing is written: the stored draft keeps its keys. The view
   // is still taken ONCE, here, so `state` stays the one-shot snapshot it always was (see liveKey).
   const state = TW.v2PricingView(TW.getState());
+
+  // THE STEP PILLS OF A v2 DRAFT GO TO THE v2 PAGES (browser walk, 2026-10-20): the pills are written for the spreadsheet
+  // flow (/?edit=1 and /estimate-review.html), which only bounce a v2 draft on to the v2 pages and log an error doing it.
+  try {
+    if (TW.isV2Draft && TW.isV2Draft(state)) {
+      document.querySelectorAll(".progress a.step").forEach(function (a) {
+        var h = a.getAttribute("href") || "";
+        if (/^\/estimate-review\.html/.test(h)) a.setAttribute("href", TW.withDraft("/polish-estimate.html"));
+        else if (/^\/(\?edit=1)?$|^\/\?edit=1/.test(h)) a.setAttribute("href", TW.withDraft("/polish-intake.html"));
+      });
+    }
+  } catch (e) { /* a stub DOM or an old shared.js: the pills keep their spreadsheet links, which still redirect */ }
   if (!state.project_name) {
     document.querySelector(".word-canvas").innerHTML = `
       <div style="background:white;padding:40pt 30pt;border-radius:4px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.15);">

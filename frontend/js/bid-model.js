@@ -5143,10 +5143,11 @@
         (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></li>');
     }
     f.rows.forEach(function (r) { tabs.push(tabHtml(r)); });
-    if (!v.pick) {
-      tabs.push('<li class="sh-addli" role="presentation"><button type="button" class="sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
-        ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button></li>');
-    }
+    // "+ Add sheet" STAYS IN THE STRIP while its list is open (browser walk, 2026-10-20: it vanished under the cursor). Open, it
+    // closes the list again, which is what the list's own close button does.
+    tabs.push('<li class="sh-addli" role="presentation"><button type="button" class="sh-addbtn' + (v.pick ? " on" : "") +
+      '" data-sh-act="' + (v.pick ? "add-close" : "add-menu") + '"' + key("add", "menu") +
+      ' aria-expanded="' + (v.pick ? "true" : "false") + '"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button></li>');
     var strip = '<div class="sh-strip" data-sh-strip><ul class="sh-list" role="tablist" aria-label="Sheets on this bid">' + tabs.join("") + '</ul></div>';
 
     // The add picker opens just under the strip, IN THE FLOW: it pushes the open sheet's bar down and nothing is laid over it.
@@ -5231,7 +5232,9 @@
       } else {
         s += '<button type="button" class="sh-name" role="tab" aria-selected="' + (open ? "true" : "false") + '" data-section-tab="' +
           escHtml(t) + '"' + key(t, "open") + ' aria-current="' + (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) +
-          '</span><span class="sh-price' + (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span></button>';
+          '</span><span class="sh-price' + (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span>' +
+          // THE BASE SAYS SO IN WORDS (browser walk, 2026-10-20): its red edge read as a second selected tab.
+          (r.base || r.inBase ? '<span class="sh-basetag">Base</span>' : "") + '</button>';
       }
       return s + '</li>';
     }
