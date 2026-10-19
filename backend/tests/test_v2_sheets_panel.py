@@ -16,7 +16,9 @@ WHAT CHANGED. Sheets phase 1 gave the model copies, fresh sheets of any type, a 
     row and writes work_type "combo" and no base id.
   * Delete takes two presses and is disabled on the base (with the reason beside it). A name is checked when it is committed, never while
     it is typed. Seal sheets are options only: Total, never Add / Deduct, never the base.
-  * It does not float. It sits in the flow under the page heading and above the step rail, and the strip scrolls sideways on a narrow screen.
+  * It does not float. It sits in the flow, in the page's STICKY HEAD: the top bar, then this bar, one block that stays at the top of the screen
+    on Material, Labor and Review alike (2026-10-20), above the page heading. The strip scrolls sideways on a narrow screen. No legend line
+    stands under it: the base radio says what it means itself.
 
 EVERYTHING RUNS CODE. tests/js/sheets-panel-harness.js boots the real js/polish-estimate.js on the real bid-model.js, library-core.js,
 price-lines-core.js and epoxy-takeoff.js and reads every fact off the page after it ran. The CSS is the one thing a headless run cannot lay
@@ -26,6 +28,7 @@ require each fact to notice; `break_source` refuses an anchor that is not in the
 import html
 import pathlib
 import re
+from html.parser import HTMLParser
 
 import pytest
 
@@ -38,7 +41,7 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 SECTIONS = ["list", "copy", "add", "seal", "baseSwitch", "combined", "deleting", "renaming", "options", "reopen", "unreadable", "focus",
-            "markup", "floating", "gypPreset", "limit", "sealMode", "demote", "resets", "unstated", "hiddenOption"]
+            "markup", "floating", "gypPreset", "limit", "sealMode", "demote", "resets", "unstated", "hiddenOption", "stickyHead"]
 GYP1, GYP2 = 'Gyp (USG 1-8")', "Gyp (USG N12ULTRA)"
 LIMIT = "A bid can hold 12 copied sheets at most."
 EM_DASH, EN_DASH = chr(0x2014), chr(0x2013)
@@ -77,10 +80,18 @@ def test_the_panel_lists_every_sheet_that_is_part_of_the_bid_with_its_price_and_
     assert "Polish copy" in a["now"], "and the line above the step rail says which sheet that is"
 
 
-def test_a_base_radio_is_on_every_sheet_that_can_be_the_base_and_the_hint_says_what_it_means(ran):
+def test_a_base_radio_is_on_every_sheet_that_can_be_the_base_and_says_what_it_means_itself(ran):
     p = ran["list"]
     assert p["before"]["radios"] == 2, "Polish and its copy have one, the Seal sheet does not"
-    assert p["hasHint"] is True, "the hint names the base bid, and says copies are not in the Excel download"
+    lg = p["legend"]
+    assert lg["gone"] is True, "the legend line, with its red-ringed dot, is back: a footer line in a block that stays on screen is height lost to every step"
+    assert lg["radios"] == lg["titled"] == lg["named"] == 2, "each radio's title and its accessible name say what the base bid does"
+    assert ran["combined"]["radio"] == {"titled": True, "named": True}, "so does the combined Epoxy + Polish radio"
+    assert ran["markup"]["legendAnywhere"] is False, "in none of the eleven states the bar can be in"
+
+
+def test_the_one_line_under_the_bar_is_the_note_about_copies(ran):
+    assert ran["list"]["copiesNote"] is True, "a bid that holds a copy still says copies print on the proposal and are not in the Excel download"
 
 
 def test_add_sheet_is_the_last_tab_of_the_strip_and_the_picker_opens_under_it(ran):
@@ -360,11 +371,11 @@ def test_an_option_the_draft_holds_nothing_for_is_on_and_a_hidden_one_is_not(ran
 # ── 12. it does not float: a strip of tabs in the flow ──────────────────────────────────────────────────
 def test_the_bar_is_not_floated_and_keeps_no_lane_on_the_page(ran):
     """(b) Nothing registers it with TW.floatPanel (the proposal editor's use of that helper is untouched), there is no fixed rule, grip or
-    reserved lane for it, and it sits inside #main above the step rail."""
+    reserved lane for it, and it sits in the sticky head under the top bar: above the step rail, and no longer inside #main."""
     f = ran["floating"]
     assert f["floats"] == [], "no TW.floatPanel call under tw_v2sheets_pos or any other key"
     assert f["floatKeyInPage"] is False and f["fixedRule"] is False and f["gripRule"] is False and f["wideLane"] is False
-    assert f["markupHasPanelFirst"] is True and f["inMain"] is True, "in the flow it sits above the step rail"
+    assert f["markupHasPanelFirst"] is True and f["beforeMain"] is True, "in the flow it sits above the step rail, in front of #main"
 
 
 def test_the_strip_scrolls_sideways_and_the_page_does_not(ran):
@@ -488,6 +499,262 @@ def test_the_switch_brings_back_an_option_the_proposal_step_had_hidden(ran):
 def test_the_caret_goes_to_the_name_box_when_a_name_is_refused_and_back_to_rename_when_it_is_saved(ran):
     f = ran["focus"]
     assert f["afterRefusedName"] == ["Copy2|name"] and f["afterSavedName"] == ["Copy2|rename"]
+
+
+# ── 14. the sticky head: the top bar and the sheet bar, ONE block pinned to the top of the screen ─────────────────────────────────────
+# Hanz, 2026-10-20, with a screenshot: "The sheets should lie below the 4 tabs in the header nav bar ... that means its present in Material Labor
+# and review for easier navigation ... that header bar when estimating in v2 should be sticky". The bar left #main and went under the top bar, and
+# the two are one block (div.v2head) that stays at the top while the steps scroll under it. A headless run lays nothing out, so the markup and the
+# CSS are read as the page ships them, and every check below is shown to go red by breaking a copy of the page's text (STATIC_BREAKS, at the end).
+PAGE = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
+
+
+class _Node:
+    def __init__(self, tag, attrs):
+        self.tag, self.attrs, self.kids = tag, dict(attrs), []
+
+    def classes(self):
+        return (self.attrs.get("class") or "").split()
+
+    def walk(self):
+        yield self
+        for kid in self.kids:
+            yield from kid.walk()
+
+
+class _Tree(HTMLParser):
+    """The page's elements as a tree (void elements closed, comments dropped), so 'first child' and 'sibling' mean what a browser's DOM means."""
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = _Node("#root", {})
+        self.open = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        node = _Node(tag, attrs)
+        self.open[-1].kids.append(node)
+        if tag not in self.VOID:
+            self.open.append(node)
+
+    def handle_startendtag(self, tag, attrs):
+        self.open[-1].kids.append(_Node(tag, attrs))
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.open) - 1, 0, -1):
+            if self.open[i].tag == tag:
+                del self.open[i:]
+                return
+
+
+def _page_tree(page):
+    tree = _Tree()
+    tree.feed(page)
+    tree.close()
+    return tree.root
+
+
+def _style(page):
+    return page[page.index("<style>"):page.index("</style>")]
+
+
+def _css_rules(css):
+    """[(media, selector, {property: value})] for every rule, comments removed. `media` is the prelude of the @media block a rule is in (None at the
+    top level), so `(max-width:760px),(max-height:640px)` reads as one string and a rule inside it knows where it is."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    out = []
+
+    def read(text, media):
+        i, n = 0, len(text)
+        while i < n:
+            j = text.find("{", i)
+            if j < 0:
+                break
+            prelude, depth, k = text[i:j].strip(), 1, j + 1
+            while k < n and depth:
+                depth += {"{": 1, "}": -1}.get(text[k], 0)
+                k += 1
+            body = text[j + 1:k - 1]
+            if prelude.startswith("@media"):
+                read(body, re.sub(r"\s+", " ", prelude[len("@media"):].strip()))
+            elif not prelude.startswith("@"):
+                decls = {}
+                for part in body.split(";"):
+                    if ":" in part:
+                        prop, value = part.split(":", 1)
+                        decls[prop.strip()] = re.sub(r"\s+", " ", value.strip())
+                for selector in prelude.split(","):
+                    out.append((media, re.sub(r"\s+", " ", selector.strip()), decls))
+            i = k
+
+    read(css, None)
+    return out
+
+
+def _decls(rules, selector, media=None):
+    """The declarations of every rule with exactly this selector (inside exactly this @media prelude), later rules winning."""
+    merged = {}
+    for m, sel, decls in rules:
+        if sel == selector and m == media:
+            merged.update(decls)
+    return merged
+
+
+# the overlays the shell draws, where they say their z-index: the sticky head must sit under every one of them
+OVERLAYS = {"#tw-toasts": "auth.js", "#tw-sidebar": "auth.js", "#tw-notif-panel": "auth.js", ".tw-ov": "shared.js"}
+
+
+def _overlay_floor():
+    floor = {}
+    for selector, rel in OVERLAYS.items():
+        found = re.search(re.escape(selector) + r"\{[^}]*?z-index:(\d+)", (FRONTEND / rel).read_text(encoding="utf-8"))
+        assert found, "%s lost its z-index in %s: this test cannot tell what the head has to sit under" % (selector, rel)
+        floor[selector] = int(found.group(1))
+    return floor
+
+
+def check_head_structure(page):
+    """The sticky head is the first thing in the body, the top bar and then the sheet bar are its only two children, the page heading comes after
+    it, and the sheet bar is in neither #main nor the page column. Raises AssertionError naming the fact that failed."""
+    root = _page_tree(page)
+    body = next(n for n in root.walk() if n.tag == "body")
+    assert len(body.kids) >= 2, "the body is empty"
+    head, wrap = body.kids[0], body.kids[1]
+    assert head.tag == "div" and head.attrs.get("id") == "v2head" and head.classes() == ["v2head"], "the first thing in the body is not the sticky head"
+    assert [(k.tag, k.attrs.get("id"), k.classes()) for k in head.kids] == [("header", None, ["topbar"]), ("section", "sheets-panel", ["sheets"])], (
+        "the sticky head does not hold the top bar and then the sheet bar, as siblings")
+    bar, sheets = head.kids
+    assert [k.classes() for k in bar.kids] == [["brand"], ["progress"]], "nothing but .brand and .progress may be in the header: auth.js destroys the rest"
+    assert "hidden" in sheets.attrs, "the sheet bar is not hidden before init has drawn it"
+    assert wrap.tag == "div" and wrap.classes() == ["wrap"], "the page column does not come right after the sticky head"
+    title = wrap.kids[0]
+    assert title.classes() == ["head"] and any(n.tag == "h1" for n in title.walk()), "the page heading is not the first thing after the sticky head"
+    main = next(n for n in root.walk() if n.attrs.get("id") == "main")
+    assert "hidden" in main.attrs and main.kids[0].attrs.get("id") == "rail", "#main no longer opens on the step rail"
+    for outside in (main, wrap):
+        assert not any(n.attrs.get("id") == "sheets-panel" for n in outside.walk()), "the sheet bar is back inside the page column"
+
+
+def check_head_sticky_css(page):
+    """position:sticky; top:0; a background; over the page and under every overlay; running edge to edge inside the body's side padding."""
+    style = _style(page)
+    rules = _css_rules(style)
+    head = _decls(rules, ".v2head")
+    assert head.get("position") == "sticky", "the head is not position:sticky"
+    assert head.get("top") in ("0", "0px"), "the head is not pinned to the top of the screen: top is %r" % head.get("top")
+    z = int(head.get("z-index", "0"))
+    bid_bar = int(re.search(r"\.bid\{[^}]*z-index:(\d+)", style).group(1))
+    floor = _overlay_floor()
+    assert bid_bar < z < min(floor.values()), "z-index %d must be over the page (the bid bar is %d) and under every overlay %r" % (z, bid_bar, floor)
+    assert head.get("background", "").replace(" ", "") not in ("", "transparent", "none"), "page content would show through the head as it scrolls under it"
+    for prop in ("left", "right", "width", "min-width", "max-width"):
+        assert prop not in head, "the head sets %s: it has to follow the page column, which the sidebar's body margin-left moves" % prop
+    side = _decls(rules, "body")["padding"].split()[1]
+    assert head.get("margin", "").split()[1:2] == ["-" + side], "the head does not take the body's %s side padding back, so it would not run edge to edge" % side
+    assert _decls(rules, "header.topbar").get("margin") == "0", "the top bar still has a margin of its own inside the head"
+
+
+def check_head_fallback_css(page):
+    """On a narrow screen OR a short one the head is in the normal flow, and the scroll padding goes back to nothing there."""
+    rules = _css_rules(_style(page))
+    static = [m for m, sel, d in rules if sel == ".v2head" and m is not None and d.get("position") == "static"]
+    conditions = {c.replace(" ", "") for m in static for c in m.split(",")}
+    assert {"(max-width:760px)", "(max-height:640px)"} <= conditions, (
+        "the head is not in the normal flow on a narrow (760px) AND on a short (640px) screen, each on its own: %r" % sorted(conditions))
+    for media in static:
+        assert _decls(rules, "html", media).get("scroll-padding-top") == "0", "the scroll padding is not put back to nothing where the head is static"
+
+
+def check_head_compact_css(page):
+    """Everything in the head is height that never scrolls away: the top bar, the sheet bar and the open sheet's bar are padded short, the open sheet's
+    controls share a row with what the sheet is, and the notes and warnings are small and do not force a row of their own."""
+    rules = _css_rules(_style(page))
+
+    def vertical(selector):
+        value = _decls(rules, selector).get("padding", "")
+        top = value.split()[0] if value else ""
+        assert top.endswith("px"), "%s has no padding in px: %r" % (selector, value)
+        return float(top[:-2])
+
+    assert vertical("header.topbar") <= 10, "the top bar is as tall as the intake page's, which does not stay on screen"
+    assert vertical(".sheets") <= 8, "the sheet bar is padded like a page section"
+    assert vertical(".sheets .sh-open") <= 8, "the open sheet's bar is padded like a card"
+    assert _decls(rules, ".sheets .sh-body").get("display") == "contents", "the open sheet's controls have a row of their own again"
+    for selector in (".sheets .sh-hint", ".sheets .sh-empty", ".sheets .sh-note", ".sheets .sh-warn", ".sheets .sh-confirm"):
+        size = _decls(rules, selector).get("font-size", "")
+        assert size.endswith("px") and float(size[:-2]) <= 11.5, "%s is %r: not small" % (selector, size)
+    assert _decls(rules, ".sheets .sh-note").get("flex") == "1 1 auto", "a note takes a whole row to itself again"
+
+
+def check_scroll_padding_css(page):
+    """html's scroll-padding-top is derived from the head's height, which the page keeps in --v2head-h."""
+    pad = _decls(_css_rules(_style(page)), "html").get("scroll-padding-top", "")
+    assert "var(--v2head-h" in pad, "html's scroll-padding-top is not the head's height (--v2head-h): %r" % pad
+
+
+def test_the_sticky_head_holds_the_top_bar_then_the_sheets_and_sits_above_the_page_heading():
+    """Hanz asked for the sheets directly under the four steps in the top bar, above the page title, on every step. They are siblings in one block
+    because auth.js folds the burger, brand, steps and bell into header.topbar and destroys whatever else is inside it."""
+    check_head_structure(PAGE)
+
+
+def test_the_sticky_head_is_pinned_to_the_top_over_the_page_and_under_every_overlay():
+    check_head_sticky_css(PAGE)
+
+
+def test_the_head_is_in_the_normal_flow_on_a_narrow_or_a_short_screen():
+    """Pinned there it would leave the step a sliver: 760px wide and under (a phone), or 640px tall and under. The order is the same either way."""
+    check_head_fallback_css(PAGE)
+
+
+def test_scroll_padding_is_the_heads_height_so_nothing_scrolled_to_stops_behind_it():
+    check_scroll_padding_css(PAGE)
+    js = (FRONTEND / "js" / "polish-estimate.js").read_text(encoding="utf-8")
+    assert 'setProperty("--v2head-h"' in js, "nothing writes the custom property the CSS reads"
+
+
+def test_the_head_is_kept_compact_one_tight_row_for_the_open_sheet_and_small_notes():
+    """Hanz's brief for the sticky block: no legend line, the open sheet's bar one tight row while nothing is being renamed, confirmed or
+    described, and the note about copies and the warnings kept but small."""
+    check_head_compact_css(PAGE)
+
+
+def test_the_sheet_bar_is_not_shown_before_init_draws_it(ran):
+    """The page is behind "Loading the item library" until init: the bar is hidden by the page's own markup, shown the first time it has been drawn
+    (once, never hidden again), and a page that cannot read its library never shows it."""
+    s = ran["stickyHead"]
+    assert s["before"] == {"hidden": True, "empty": True, "mainHidden": True}
+    a = s["after"]
+    assert a["hidden"] is False and a["drawn"] is True and a["mainHidden"] is False
+    assert a["drawnFirst"] is True and a["shows"] == 1 and a["hides"] == 0, "shown before it was drawn, or shown and hidden again"
+    assert a["readyFirst"] is True, "the bar was shown while the page still said it was loading"
+    assert s["stayed"] == {"hidden": True, "writes": 0, "said": True}, "a page that could not load its library drew or showed the bar"
+
+
+def test_the_heads_height_is_kept_in_the_property_the_scroll_padding_reads(ran):
+    """A ResizeObserver on #v2head writes the height, rounded up, to --v2head-h on the html element; a repaint of the bar measures nothing when there
+    is an observer; a head with no height (not laid out) leaves the last good figure."""
+    s = ran["stickyHead"]
+    assert s["watched"] == {"made": 1, "targets": [["v2head"]], "resizeListeners": 0}
+    assert s["heights"] == {"idle": "", "first": "120px", "second": "151px", "none": "151px"}
+
+
+def test_a_control_in_the_head_is_focused_without_scrolling_the_page(ran):
+    """THE DEFECT A REAL BROWSER SHOWED. html's scroll-padding-top is the head's height, which puts the head's own controls inside the padded-off band, so
+    a plain focus() on one of them scrolled the page to bring it out of the band: a click on Add sheet, Rename or a tab, and the arrow keys along the
+    tabs, threw a scrolled page up by hundreds of pixels or to the top (headless Chrome on the real page, 2026-10-20). The caret goes back to the
+    control by focus({ preventScroll: true }), and the arrow keys walk the tabs the same way and bring the tab into the strip by hand (the strip
+    scrolls, the page does not)."""
+    assert ran["focus"]["options"]["n"] >= 5 and ran["focus"]["options"]["noScroll"] is True
+    k = ran["stripKeeps"]["keys"]
+    assert k["opts"] == {"n": 6, "noScroll": True}, "six arrow-key moves, none of which may scroll the page"
+    assert k["revealed"] == 350 - 300 + 8, "the strip is scrolled to the tab by hand"
+
+
+def test_a_browser_with_no_resize_observer_is_told_by_the_repaint_and_by_the_window_resize(ran):
+    s = ran["stickyHead"]
+    assert s["fallback"] == {"resizeListeners": 1, "painted": "161px", "resized": "189px"}
+    assert s["noRoot"] is True, "a document with no html element to write to threw"
 
 
 # ── red without the code ─────────────────────────────────────────────────────────────────────────────────────
@@ -628,6 +895,80 @@ BREAKS = {
     "a Seal option on add or deduct is left as it was": (
         "js/polish-estimate.js", "    if (Object.keys(sealTotals).length) TW.setState(sealTotals);", "    void sealTotals;",
         lambda r: r["sealMode"]["written"]["Seal"]["price_mode"] != "total"),
+    # --- the sticky head (2026-10-20) ---
+    "the bar is shown before init draws it": (
+        "polish-estimate.html", ' id="sheets-panel" aria-label="Sheets on this bid" hidden></section>',
+        ' id="sheets-panel" aria-label="Sheets on this bid"></section>',
+        lambda r: r["stickyHead"]["before"]["hidden"] is not True),
+    "the bar is never shown": (
+        "js/polish-estimate.js", "    if (shown) el.hidden = false;", "    void shown;",
+        lambda r: r["stickyHead"]["after"]["hidden"] is not False),
+    "the bar is shown before it is drawn": (
+        "js/polish-estimate.js", "    var drew = html !== lastSheets;", "    var drew = html !== lastSheets; el.hidden = false;",
+        lambda r: r["stickyHead"]["after"]["drawnFirst"] is not True),
+    "the bar is shown while the page is still loading": (
+        "js/polish-estimate.js", "  watchHead();", '  watchHead(); $("sheets-panel").hidden = false;',
+        lambda r: r["stickyHead"]["before"]["hidden"] is not True or r["stickyHead"]["after"]["readyFirst"] is not True),
+    "a control in the head is focused with a scrolling focus": (
+        "js/polish-estimate.js", "      if (all[i].focus) all[i].focus({ preventScroll: true });", "      if (all[i].focus) all[i].focus();",
+        lambda r: r["focus"]["options"]["noScroll"] is not True),
+    "the arrow keys focus a tab with a scrolling focus": (
+        "js/polish-estimate.js", "      tabs[to].focus({ preventScroll: true });", "      tabs[to].focus();",
+        lambda r: r["stripKeeps"]["keys"]["opts"]["noScroll"] is not True),
+    "the arrow keys do not bring the tab into the strip": (
+        "js/polish-estimate.js",
+        '      stripReveal(panel.querySelector("[data-sh-strip]"), typeof tabs[to].closest === "function" ? tabs[to].closest("li") : null);',
+        "      void 0;",
+        lambda r: r["stripKeeps"]["keys"]["revealed"] != 58),
+    "the head is not observed": (
+        "js/polish-estimate.js", "      try { headObserver = new RO(syncHeadHeight); headObserver.observe(head); } catch (err) { headObserver = null; }",
+        "      headObserver = null;",
+        lambda r: r["stickyHead"]["watched"]["made"] != 1 or r["stickyHead"]["heights"]["idle"] != ""),
+    "the head's height is never written": (
+        "js/polish-estimate.js", '    if (h > 0) root.style.setProperty("--v2head-h", h + "px");', "    void h;",
+        lambda r: r["stickyHead"]["heights"]["first"] != "120px" or r["stickyHead"]["fallback"]["painted"] != "161px"),
+    "the head's height is rounded down": (
+        "js/polish-estimate.js", '    var h = box && typeof box.height === "number" ? Math.ceil(box.height) : 0;',
+        '    var h = box && typeof box.height === "number" ? Math.floor(box.height) : 0;',
+        lambda r: r["stickyHead"]["heights"]["second"] != "151px"),
+    "a head with no height wipes the last one": (
+        "js/polish-estimate.js", '    if (h > 0) root.style.setProperty("--v2head-h", h + "px");', '    root.style.setProperty("--v2head-h", h + "px");',
+        lambda r: r["stickyHead"]["heights"]["none"] != "151px"),
+    "the window's resize is listened to even with an observer": (
+        "js/polish-estimate.js", '    if (!headObserver) window.addEventListener("resize", syncHeadHeight);',
+        '    window.addEventListener("resize", syncHeadHeight);',
+        lambda r: r["stickyHead"]["watched"]["resizeListeners"] != 0),
+    "a browser without an observer is never told of a resize": (
+        "js/polish-estimate.js", '    if (!headObserver) window.addEventListener("resize", syncHeadHeight);', "    void 0;",
+        lambda r: r["stickyHead"]["fallback"]["resized"] != "189px"),
+    "a repaint does not tell a browser without an observer": (
+        "js/polish-estimate.js", "    if (!headObserver && (drew || shown)) syncHeadHeight();", "    void drew;",
+        lambda r: r["stickyHead"]["fallback"]["painted"] != "161px"),
+    "a repaint measures the head even with an observer": (
+        "js/polish-estimate.js", "    if (!headObserver && (drew || shown)) syncHeadHeight();", "    if (drew || shown) syncHeadHeight();",
+        lambda r: r["stickyHead"]["heights"]["idle"] != ""),
+    "a document with no html element throws": (
+        "js/polish-estimate.js",
+        '    if (!head || !root || !root.style || typeof root.style.setProperty !== "function" || typeof head.getBoundingClientRect !== "function") return;',
+        '    if (!head || typeof head.getBoundingClientRect !== "function") return;',
+        lambda r: r["stickyHead"]["noRoot"] is not True),
+    "the legend line is back": (
+        "js/bid-model.js", "    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {",
+        "    h += '<p class=\"sh-hint\"><span class=\"rdot\"></span> marks the base bid, which sets the lump sum and the job type.</p>';\n"
+        "    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {",
+        lambda r: r["list"]["legend"]["gone"] is not True or r["markup"]["legendAnywhere"] is not False),
+    "the base radio no longer says what it means": (
+        "js/bid-model.js", "          '\" title=\"Base bid: ' + BASE_MEANS + '\">' : \"\") + '</span>';",
+        "          '\" title=\"Base bid\">' : \"\") + '</span>';",
+        lambda r: r["list"]["legend"]["titled"] != 2),
+    "the combined radio no longer says what it means": (
+        "js/bid-model.js", "        '\" title=\"Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '\"></span>' +",
+        "        '\" title=\"Base bid: Epoxy and Polish together\"></span>' +",
+        lambda r: r["combined"]["radio"]["titled"] is not True),
+    "the note about copies is gone": (
+        "js/bid-model.js", "      h += '<p class=\"sh-hint\">Copies print on the proposal. The Excel download does not include them.</p>';",
+        "      h += '';",
+        lambda r: r["list"]["copiesNote"] is not True),
 }
 
 
@@ -645,3 +986,62 @@ def test_the_checks_go_red_when_the_code_changes(tmp_path, name):
     crashed = sorted(k for k, v in got.items() if isinstance(v, dict) and "error" in v)
     assert not crashed, "the break crashed %s instead of changing a fact: %s" % (", ".join(crashed), name)
     assert noticed(got), "the checks did not notice: " + name
+
+
+# ── the markup and CSS checks, shown to go red: the page's text is broken in a copy, and the check that owns the fact must refuse it ───────
+def _swap(old, new):
+    def mutate(page):
+        assert page.count(old) == 1, "the mutation anchor %r appears %d times in the page, not once" % (old, page.count(old))
+        return page.replace(old, new)
+    return mutate
+
+
+_SHEETS_LINE = re.compile(r'\n *<section class="sheets" id="sheets-panel"[^\n]*</section>')
+
+
+def _sheets_into_main(page):
+    line = _SHEETS_LINE.search(page).group(0)
+    return page.replace(line, "", 1).replace('<div id="main" hidden>', '<div id="main" hidden>' + line, 1)
+
+
+def _sheets_above_the_bar(page):
+    line = _SHEETS_LINE.search(page).group(0)
+    return page.replace(line, "", 1).replace('\n    <header class="topbar">', line + '\n    <header class="topbar">', 1)
+
+
+_MEDIA = "@media (max-width:760px),(max-height:640px){"
+_HEAD = ".v2head{position:sticky;top:0;z-index:30;margin:0 -22px 22px;background:var(--surf);"
+STATIC_BREAKS = {
+    "the sheets go back inside #main": (check_head_structure, _sheets_into_main),
+    "the sheets come above the top bar": (check_head_structure, _sheets_above_the_bar),
+    "the sheets are shown before init": (check_head_structure, _swap(' id="sheets-panel" aria-label="Sheets on this bid" hidden></section>',
+                                                                     ' id="sheets-panel" aria-label="Sheets on this bid"></section>')),
+    "the head is not sticky": (check_head_sticky_css, _swap(".v2head{position:sticky;", ".v2head{position:relative;")),
+    "the head is pinned below the top": (check_head_sticky_css, _swap("top:0;z-index:30;", "top:12px;z-index:30;")),
+    "the head covers a modal": (check_head_sticky_css, _swap(_HEAD, _HEAD.replace("z-index:30", "z-index:20000"))),
+    "the head hides behind the bid bar": (check_head_sticky_css, _swap(_HEAD, _HEAD.replace("z-index:30", "z-index:5"))),
+    "content shows through the head": (check_head_sticky_css, _swap(_HEAD, _HEAD.replace("background:var(--surf);", ""))),
+    "the head does not take the body's side padding back": (check_head_sticky_css, _swap(_HEAD, _HEAD.replace("margin:0 -22px 22px", "margin:0 0 22px"))),
+    "the top bar keeps a margin of its own": (check_head_sticky_css, _swap("justify-content:space-between;gap:12px;margin:0;",
+                                                                         "justify-content:space-between;gap:12px;margin:0 -22px 22px;")),
+    "a narrow screen keeps the head pinned": (check_head_fallback_css, _swap(_MEDIA, "@media (max-height:640px){")),
+    "a short screen keeps the head pinned": (check_head_fallback_css, _swap(_MEDIA, "@media (max-width:760px){")),
+    "the head is static only when the screen is narrow AND short": (check_head_fallback_css, _swap(
+        _MEDIA, "@media (max-width:760px) and (max-height:640px){")),
+    "the scroll padding stays where the head is static": (check_head_fallback_css, _swap("      html{scroll-padding-top:0}\n", "")),
+    "the scroll padding is a fixed number": (check_scroll_padding_css, _swap("calc(var(--v2head-h,0px) + 6px)", "64px")),
+    "the top bar is as tall as the intake page's": (check_head_compact_css, _swap("padding:8px 24px;border-bottom", "padding:16px 24px;border-bottom")),
+    "the sheet bar is padded like a page section": (check_head_compact_css, _swap(".sheets{margin:0;padding:8px max(22px", ".sheets{margin:0;padding:16px max(22px")),
+    "the open sheet's bar is padded like a card": (check_head_compact_css, _swap("padding:7px 12px;box-shadow:var(--shadow)}", "padding:11px 14px;box-shadow:var(--shadow)}")),
+    "the open sheet's controls get a row of their own": (check_head_compact_css, _swap(".sheets .sh-body{display:contents}", ".sheets .sh-body{display:flex}")),
+    "a note takes a whole row": (check_head_compact_css, _swap(".sheets .sh-note{margin:0;flex:1 1 auto;", ".sheets .sh-note{margin:0;flex:1 1 100%;")),
+    "the note about copies is body-sized": (check_head_compact_css, _swap(".sheets .sh-hint{margin:5px 2px 0;font-size:11px", ".sheets .sh-hint{margin:5px 2px 0;font-size:13px")),
+}
+
+
+@pytest.mark.parametrize("name", sorted(STATIC_BREAKS))
+def test_the_markup_and_css_checks_go_red_when_the_page_changes(name):
+    check, mutate = STATIC_BREAKS[name]
+    check(PAGE)                                      # it passes on the page as shipped
+    with pytest.raises(AssertionError):
+        check(mutate(PAGE))

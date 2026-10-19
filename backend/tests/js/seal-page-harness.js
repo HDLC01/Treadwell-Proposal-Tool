@@ -177,7 +177,9 @@ async function main() {
     strip: tabsIn(html(b, "sheets-panel")),
     activeIsSeal: openTab(html(b, "sheets-panel")) === "Seal",
     // what the open sheet's bar (row 2 under the tabs) says: it was the "Open sheet" line above the step rail
-    stripLabel: (() => { const h = html(b, "sheets-panel"); const o = h.indexOf('class="sh-open"'); return o < 0 ? "" : h.slice(o, h.indexOf('<p class="sh-hint"', o)).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(); })(),
+    // (the bar ends at the line under it, the note about copies or the one-sheet hint, or at the end of the markup: the legend line that
+    // used to stand under every bar is gone, so a missing marker is not an index of -1 to slice by)
+    stripLabel: (() => { const h = html(b, "sheets-panel"); const o = h.indexOf('class="sh-open"'); const ends = ['<p class="sh-hint"', '<p class="sh-empty"'].map((s) => h.indexOf(s, o)).filter((i) => i >= 0); return o < 0 ? "" : h.slice(o, ends.length ? Math.min.apply(null, ends) : h.length).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(); })(),
     barAfter: { choices: addButtons(html(b, "sheets-panel")), menuClosed: /data-sh-act="add-menu"[^>]*aria-expanded="false"/.test(html(b, "sheets-panel")) },
     saved: b.clock.armed() > 0,
   };

@@ -109,18 +109,23 @@ const confirmOf = (h) => { const m = /<div class="sh-confirm"[^>]*><b>([^<]*)<\/
 /** The model the page holds NOW: the debounced save is flushed and the model is read back out of it. (api.state() is the blob the page
  *  opened on, and api.model() is the sheet on show, so neither is the whole bid after an edit.) */
 const modelOf = (b) => { b.clock.fire(); return clone(last(b.rec.saves.filter((x) => x.polish_estimate)).polish_estimate); };
+/** Where the open sheet's bar ends in the panel's markup: at the line under it (the note about copies, or the hint on a one-sheet bid), else at
+ *  the end of the markup. The legend line that used to stand there is gone, so a bar can be the last thing in the panel. */
+const barEnd = (h, from) => { const ends = ['<p class="sh-hint"', '<p class="sh-empty"'].map((s) => h.indexOf(s, from)).filter((i) => i >= 0); return ends.length ? Math.min.apply(null, ends) : h.length; };
+/** Every base radio in the markup, as the tags themselves. */
+const radioTags = (h) => h.match(/<input type="radio" class="sh-radio"[^>]*>/g) || [];
 /** Everything the bar says about one sheet: its TAB (the strip's <li>), the base change waiting on it, and, when it is the open sheet, its
  *  bar (row 2). The strip and the bar are two blocks now, so the three are joined here and every fact below reads them as it always did. */
 const rowHtml = (b, tab) => {
   const h = panel(b), a = attr(tab);
-  const stop = (from) => { const ends = ['<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, from)).filter((i) => i >= 0); return ends.length ? Math.min.apply(null, ends) : h.length; };
+  const stop = (from) => { const ends = ['<div class="sh-open"', '<p class="sh-hint"', '<p class="sh-empty"'].map((s) => h.indexOf(s, from)).filter((i) => i >= 0); return ends.length ? Math.min.apply(null, ends) : h.length; };
   let out = "";
   const at = h.indexOf('data-sh-row="' + a + '"');
   if (at >= 0) out += h.slice(at, h.indexOf("</li>", at));
   const cf = h.indexOf('data-sh-confirm="' + a + '"');
   if (cf >= 0) { const from = h.lastIndexOf("<div", cf); out += h.slice(from, stop(cf)); }
   const op = h.indexOf('data-sh-open="' + a + '"');
-  if (op >= 0) out += h.slice(op, h.indexOf('<p class="sh-hint"', op));
+  if (op >= 0) out += h.slice(op, barEnd(h, op));
   return out;
 };
 const stripTags = (s) => s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
@@ -129,7 +134,7 @@ const nowOf = (b) => {
   const h = panel(b);
   const t = /aria-current="true"[^>]*><span class="sh-nm">([^<]*)/.exec(h);
   const o = h.indexOf('class="sh-open"');
-  return ((t ? unattr(t[1]) : "") + " " + (o >= 0 ? stripTags(h.slice(o, h.indexOf('<p class="sh-hint"', o))) : "")).trim();
+  return ((t ? unattr(t[1]) : "") + " " + (o >= 0 ? stripTags(h.slice(o, barEnd(h, o))) : "")).trim();
 };
 const sumOf = (b, tab) => ((/class="sh-sum[^"]*">([^<]*)(?:<b>([^<]*)<\/b>)?/.exec(rowHtml(b, tab))) || []).slice(1, 3).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 
@@ -139,7 +144,7 @@ async function main() {
     ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["combined", combined], ["deleting", deleting],
     ["renaming", renaming], ["options", options], ["reopen", reopen], ["unreadable", unreadable], ["focus", focus], ["markup", markup], ["floating", floating],
     ["gypPreset", gypPreset], ["limit", limit], ["sealMode", sealMode], ["demote", demote], ["resets", resets], ["unstated", unstated], ["hiddenOption", hiddenOption],
-    ["stripKeeps", stripKeeps],
+    ["stripKeeps", stripKeeps], ["stickyHead", stickyHead],
   ];
   for (const [name, fn] of sections) {
     try { out[name] = await fn(); } catch (e) { out[name] = { error: String(e && e.stack || e) }; }
@@ -174,7 +179,12 @@ async function list() {
             selectedAfter: /aria-selected="true" data-section-tab="Copy1"/.test(h1), openBars: (h1.match(/class="sh-open"/g) || []).length,
             barIsOpenSheet: /class="sh-open" data-sh-open="Copy1"/.test(h1) },
     shown: { polish: /Polish<\/span><span class="sh-price">([^<]*)</.exec(h1)[1], copy: /Polish copy<\/span><span class="sh-price">([^<]*)</.exec(h1)[1] },
-    hasHint: /marks the base bid, which sets the lump sum and the job type/.test(h1) && /The Excel download does not include them/.test(h1),
+    // THE LEGEND LINE IS GONE (the bar is in the sticky head now): no line says what the base radio marks, the radio says it itself, and the
+    // one line under the bar is the note about copies.
+    legend: { gone: !/marks the base bid/.test(h1) && h1.indexOf("rdot") < 0, radios: radioTags(h1).length,
+              titled: radioTags(h1).filter((t) => /title="Base bid: sets the lump sum and the job type"/.test(t)).length,
+              named: radioTags(h1).filter((t) => /aria-label="Make [^"]+ the base bid, which sets the lump sum and the job type"/.test(t)).length },
+    copiesNote: /<p class="sh-hint">Copies print on the proposal\. The Excel download does not include them\.<\/p>/.test(h1),
     addAtEnd: h1.indexOf('data-sh-act="add-menu"') > h1.indexOf('data-sh-row="Seal"'),
   };
 }
@@ -294,6 +304,7 @@ async function combined() {
   const b = await open(draft(model));
   const polishTotal = b.api.bid().total, epoxyTotal = b.api.sectionBids().Epoxy.total;
   const hadRow = panel(b).indexOf('data-sh-row="combined"') >= 0;
+  const comboTag = (/<input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"[^>]*>/.exec(panel(b)) || [""])[0];
   pick(b, '[data-sh-base="combined"]');
   const row = rowHtml(b, "combined");
   const confirm = confirmOf(row);
@@ -304,6 +315,8 @@ async function combined() {
   const sm = clone(saved.polish_estimate);
   const out = {
     hadRow: hadRow, confirm: confirm, draft: { work_type: written.work_type, base_tab_id: written.base_tab_id },
+    radio: { titled: /title="Base bid: Epoxy and Polish together\. It sets the lump sum and the job type"/.test(comboTag),
+             named: /aria-label="Make Epoxy \+ Polish \(combined\) the base bid, which sets the lump sum and the job type"/.test(comboTag) },
     kinds: B.sectionsOf(sm).map((e) => [e.tab, e.kind]), jobType: B.baseOf(sm).jobType,
     lump: saved.proposal_lump_sum, polishTotal: polishTotal, epoxyTotal: epoxyTotal, savedBase: saved.base_tab_id, savedWorkType: saved.work_type,
     checked: /data-sh-base="combined"[^>]*checked/.test(panel(b)), baseTabs: (panel(b).match(/<li class="sh sh-tab(?: open)? base" data-sh-row="(?!combined)/g) || []).length, chipBase: /class="sh sh-tab combined base"/.test(panel(b)),
@@ -472,8 +485,9 @@ async function focus() {
   openSheet(b, "Copy1");
   const el = b.doc.getElementById("sheets-panel");
   const focused = [];
+  const focusOptions = [];            // how each focus() was called: the head is sticky, and a focus that scrolls would throw a scrolled page up to it
   const realAll = el.querySelectorAll;
-  el.querySelectorAll = (s) => realAll(s).map((n) => { n.focus = () => focused.push(n.attrs["data-sh-key"]); return n; });
+  el.querySelectorAll = (s) => realAll(s).map((n) => { n.focus = (o) => { focused.push(n.attrs["data-sh-key"]); focusOptions.push(o); }; return n; });
   el.contains = () => true;
   const pressWithCaretOn = (k, selector) => { b.doc.activeElement = { getAttribute: (a) => (a === "data-sh-key" ? k : null) }; click(b, selector); };
   pressWithCaretOn("Copy1|on", sel("on", "Copy1"));
@@ -494,7 +508,8 @@ async function focus() {
   key(b, "Copy2", "Enter");
   const afterSavedName = focused.splice(0);
   return { afterSwitch: afterSwitch, afterRename: afterRename, afterCancel: afterCancel, afterCopy: afterCopy,
-           afterRefusedName: afterRefusedName, afterSavedName: afterSavedName };
+           afterRefusedName: afterRefusedName, afterSavedName: afterSavedName,
+           options: { n: focusOptions.length, noScroll: focusOptions.length > 0 && focusOptions.every((o) => !!o && o.preventScroll === true) } };
 }
 
 // ── 13. the pure markup: escaping, no dash, nothing for a bid with no sheets to say ─────────────────────────
@@ -521,6 +536,7 @@ async function markup() {
   ];
   return {
     states: states,
+    legendAnywhere: states.some((s) => /marks the base bid/.test(s) || s.indexOf("rdot") >= 0),
     escaped: h.indexOf('<b>"x"</b>') < 0 && h.indexOf("&lt;b&gt;&quot;x&quot;&lt;/b&gt; &amp; more") > 0 && h.indexOf("<img") < 0 && h.indexOf("&lt;img src=x&gt;") > 0,
     placeholder: /placeholder="p&quot;h"/.test(h), icons: (h.match(/data-icon=/g) || []).length >= 5,
     noDash: h.indexOf(String.fromCharCode(0x2014)) < 0, deduct: sumFigure(h),
@@ -534,7 +550,7 @@ async function markup() {
 }
 function sumFigure(h) { return ((/class="sh-sum[^"]*">([^<]*)<b>([^<]*)<\/b>/.exec(h)) || []).slice(1, 3).join(" ").replace(/\s+/g, " ").trim(); }
 
-// ── 14. it does not float: it is a strip of tabs in the flow, above the step rail ───────────────────────────────────
+// ── 14. it does not float: it is a strip of tabs in the flow, in the sticky head under the top bar (no longer inside #main) ─────────────────
 async function floating() {
   const b = await open(draft(polishModel()));
   const css = L.read(path.join(ROOT, "polish-estimate.html"));
@@ -547,7 +563,7 @@ async function floating() {
     fixedRule: /\.sheets\{[^}]*position:\s*fixed/.test(style), gripRule: /sh-head|sh-grip|sh-dragging/.test(style) || /sh-head|sh-grip/.test(h),
     wideLane: /body\{padding-right:288px\}/.test(style),
     markupHasPanelFirst: css.indexOf('id="sheets-panel"') > 0 && css.indexOf('id="sheets-panel"') < css.indexOf('id="rail"'),
-    inMain: css.indexOf('id="main"') < css.indexOf('id="sheets-panel"'),
+    beforeMain: css.indexOf('id="sheets-panel"') < css.indexOf('id="main"'),
     scrolls: /\.sh-strip\{[^}]*overflow-x:auto/.test(style),
     oldStripGone: css.indexOf('id="sections"') < 0 && css.indexOf('id="option-bar"') < 0 && css.indexOf('id="sheet-now"') < 0,
     loadsPriceRule: /<script src="\/js\/price-lines-core\.js"><\/script>/.test(css),
@@ -745,15 +761,25 @@ async function stripKeeps() {
   const tabs = b.doc.querySelectorAll("[data-section-tab]");
   const names = tabs.map((t) => t.getAttribute("data-section-tab"));
   let focused = null;
-  tabs.forEach((t) => { t.focus = () => { focused = t.getAttribute("data-section-tab"); }; });
+  const focusOpts = [];
+  // a layout for the strip and for each tab's <li>, so "the strip was scrolled to the tab" is a number: tab i is 150 wide at 200 * i, the strip 300 wide
+  const stripNow = P.need(b, "[data-sh-strip]");
+  stripNow.clientWidth = 300; stripNow.scrollLeft = 0; stripNow.offsetLeft = 0;
+  tabs.forEach((t, i) => {
+    t.focus = (o) => { focused = t.getAttribute("data-section-tab"); focusOpts.push(o); };
+    t.closest = (s) => (s === "li" ? { offsetLeft: 200 * i, offsetWidth: 150 } : null);
+  });
   const press = (from, k) => {
     focused = null;
     let prevented = false;
     b.doc.fire("keydown", { target: tabs[from], key: k, preventDefault() { prevented = true; } });
     return { focused: focused, prevented: prevented };
   };
-  const keys = { names: names, right: press(0, "ArrowRight"), wrap: press(names.length - 1, "ArrowRight"), left: press(1, "ArrowLeft"),
-                 leftWrap: press(0, "ArrowLeft"), home: press(2, "Home"), end: press(0, "End"), enter: press(0, "Enter"), space: press(0, " ") };
+  const firstRight = press(0, "ArrowRight");
+  const revealed = stripNow.scrollLeft;               // right after the first press: tab 1 ends at 350, the strip shows 300 of it, so 350 - 300 + 8
+  const keys = { names: names, right: firstRight, wrap: press(names.length - 1, "ArrowRight"), left: press(1, "ArrowLeft"),
+                 leftWrap: press(0, "ArrowLeft"), home: press(2, "Home"), end: press(0, "End"), enter: press(0, "Enter"), space: press(0, " "),
+                 revealed: revealed, opts: { n: focusOpts.length, noScroll: focusOpts.length > 0 && focusOpts.every((o) => !!o && o.preventScroll === true) } };
 
   // 4. a refused Add is said in the flow under the strip, never inside the picker's box
   const w = await open(draft(polishModel()));
@@ -768,6 +794,72 @@ async function stripKeeps() {
   const notice = { pickerOpen: addAt >= 0, flowAfterBox: flowAt > addAt, inBox: noticeOf(box), inFlow: noticeOf(flow),
                    pickerHasList: /sh-pick-row/.test(box), openBarAfter: h.indexOf('class="sh-open"') > flowAt };
   return { kept: kept, reach: reach, keys: keys, notice: notice };
+}
+
+// ── 23. the sticky head: the bar waits until it has been drawn, and the head's height reaches the page's scroll-padding-top ──────────────────────
+/** A ResizeObserver stand-in: it remembers what it was asked to watch, and a scenario says "it changed" by firing it. */
+function observerClass() {
+  const made = [];
+  const cls = class { constructor(cb) { this.cb = cb; this.targets = []; made.push(this); } observe(t) { this.targets.push(t); } disconnect() { this.targets = []; } };
+  return { cls: cls, made: made, fire: () => made.forEach((o) => o.cb([], o)) };
+}
+/** What the page last told the browser the head's height is (--v2head-h on the html element), "" when it never has. */
+const headProp = (b) => b.doc.documentElement.style.getPropertyValue("--v2head-h");
+/** Give the head a box: the stand-in DOM has no layout, so the height a browser would measure is the one a scenario says. */
+const headBox = (b, height) => { b.dom.get("v2head").getBoundingClientRect = () => ({ height: height }); };
+async function stickyHead() {
+  // 1. HIDDEN UNTIL DRAWN. The page's own markup says hidden; init draws the bar and shows it AFTER that drawing, once, and never hides it again.
+  const ro = observerClass();
+  const b = P.build({ blob: draft(polishModel()), resizeObserver: ro.cls });
+  const bar = b.dom.get("sheets-panel");
+  const before = { hidden: bar.hidden, empty: bar.innerHTML === "", mainHidden: b.dom.get("main").hidden };
+  headBox(b, 120);
+  await b.api.init();
+  await settle();
+  const events = b.log.filter((e) => /^(html|show|hide):sheets-panel$/.test(e));
+  // the page is ready (#main shown) BEFORE the bar is: a bar shown while the page still says "Loading the item library" is the flash this guards
+  const shownOrder = b.log.filter((e) => /^show:(main|sheets-panel)$/.test(e));
+  const after = { hidden: bar.hidden, drawn: /data-section-tab=/.test(html(b, "sheets-panel")), mainHidden: b.dom.get("main").hidden,
+                  readyFirst: shownOrder.indexOf("show:main") >= 0 && shownOrder.indexOf("show:main") < shownOrder.indexOf("show:sheets-panel"),
+                  drawnFirst: events.indexOf("html:sheets-panel") >= 0 && events.indexOf("html:sheets-panel") < events.indexOf("show:sheets-panel"),
+                  shows: events.filter((e) => e === "show:sheets-panel").length, hides: events.filter((e) => e === "hide:sheets-panel").length };
+  // a page that cannot read its library never draws the bar, so it stays hidden behind the message
+  const down = P.build({ blob: draft(polishModel()), libraryFails: true });
+  await down.api.init();
+  await settle();
+  const stayed = { hidden: down.dom.get("sheets-panel").hidden, writes: down.dom.get("sheets-panel").htmlWrites,
+                   said: /Couldn't load the item library/.test(down.dom.get("loading").textContent) };
+
+  // 2. THE HEAD'S HEIGHT REACHES --v2head-h THROUGH THE OBSERVER. With one, a repaint of the bar measures nothing and the observer does,
+  //    rounding up; a head with no height leaves the last good figure.
+  const watched = { made: ro.made.length, targets: ro.made.map((o) => o.targets.map((t) => t.attrs.id)),
+                    resizeListeners: b.win.listeners.filter((l) => l.type === "resize").length };
+  const idle = headProp(b);
+  ro.fire();
+  const first = headProp(b);
+  headBox(b, 150.2);
+  ro.fire();
+  const second = headProp(b);
+  headBox(b, 0);
+  ro.fire();
+  const none = headProp(b);
+
+  // 3. A BROWSER WITH NO ResizeObserver is told by the bar's own first drawing and by the window's resize.
+  const plain = P.build({ blob: draft(polishModel()) });
+  headBox(plain, 161);
+  await plain.api.init();
+  await settle();
+  const painted = headProp(plain);
+  headBox(plain, 188.4);
+  plain.win.fire("resize");
+  const resized = headProp(plain);
+  const fallback = { resizeListeners: plain.win.listeners.filter((l) => l.type === "resize").length, painted: painted, resized: resized };
+  // a document with no html element to write to is no error either
+  delete plain.doc.documentElement;
+  let noRoot = true;
+  try { plain.win.fire("resize"); } catch (e) { noRoot = false; }
+  return { before: before, after: after, stayed: stayed, watched: watched, heights: { idle: idle, first: first, second: second, none: none },
+           fallback: fallback, noRoot: noRoot };
 }
 
 main().then((out) => { process.stdout.write(JSON.stringify(out) + "\n"); }, (e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });

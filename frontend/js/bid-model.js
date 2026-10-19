@@ -5032,6 +5032,10 @@
     return next ? { tab_opts: next } : {};
   }
 
+  // WHAT THE BASE RADIO MEANS, said on the radio itself (its title and its accessible name). It was a legend line under the
+  // sheet bar ("marks the base bid, which sets the lump sum and the job type") until 2026-10-20, when the bar moved into the
+  // page's sticky head, where every line is height that stays on screen.
+  var BASE_MEANS = "sets the lump sum and the job type";
   var JOB_WORDS = { polish: "Polish", epoxy: "Epoxy", gyp: "Gyp", combo: "Combo" };
   function jobWord(jobType) { return has.call(JOB_WORDS, jobType) ? JOB_WORDS[jobType] : String(jobType == null ? "" : jobType); }
   function anWord(w) { return /^[AEIOU]/i.test(w) ? "an" : "a"; }
@@ -5138,7 +5142,8 @@
       var combined = f.baseIds.length === 2;
       tabs.push('<li class="sh sh-tab combined' + (combined ? " base" : "") + '" data-sh-row="combined" role="presentation">' +
         '<span class="sh-slot"><input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
-        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid" title="Base bid: Epoxy and Polish together"></span>' +
+        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid, which ' + BASE_MEANS +
+        '" title="Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '"></span>' +
         '<span class="sh-name static" title="Epoxy and Polish together"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
         (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></li>');
     }
@@ -5194,11 +5199,11 @@
     // ROW 2: the open sheet.
     f.rows.forEach(function (r, i) { if (r.e.tab === v.open) h += openHtml(r, i); });
 
-    h += '<p class="sh-hint"><span class="rdot" aria-hidden="true"></span> marks the base bid, which sets the lump sum and the job type.';
+    // NO LEGEND LINE (2026-10-20). The bar lives in the page's sticky head, so a footer line is height that never scrolls away: what the
+    // base radio means is on the radio (BASE_MEANS). The one note that stays is about copies, and it is drawn only when there is one.
     if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {
-      h += ' <span class="sh-excel">Copies print on the proposal. The Excel download does not include them.</span>';
+      h += '<p class="sh-hint">Copies print on the proposal. The Excel download does not include them.</p>';
     }
-    h += '</p>';
     if (f.rows.length === 1 && !f.unreadable) {
       h += '<p class="sh-empty">Add a sheet to price an option. Options never change the lump sum.</p>';
     }
@@ -5225,7 +5230,8 @@
       var s = '<li class="sh sh-tab' + (open ? " open" : "") + (r.base || r.inBase ? " base" : "") + '" data-sh-row="' + escHtml(t) + '" role="presentation"' + (open ? ' data-sh-cur="1"' : "") + '>' +
         '<span class="sh-slot"' + (r.canBase ? "" : ' title="Seal sheets price as options only, never as the base bid"') + '>' +
         (r.canBase ? '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="' + escHtml(t) + '"' + key(t, "base") +
-          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid" title="Base bid">' : "") + '</span>';
+          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid, which ' + BASE_MEANS +
+          '" title="Base bid: ' + BASE_MEANS + '">' : "") + '</span>';
       if (ren) {
         s += '<input type="text" class="sh-ren-in" data-sh-name="' + escHtml(t) + '"' + key(t, "name") + ' value="' +
           escHtml(v.draft) + '" aria-label="Sheet name">';
