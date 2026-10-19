@@ -1775,6 +1775,20 @@ def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
         "leaving with nothing typed must not manufacture a save or a flush out of thin air")
 
 
+@needs_node
+def test_leaving_after_the_autosave_ran_writes_nothing_over_a_newer_save(ran):
+    """Hanz, 2026-10-19: "When I go back from proposal to estimate it doesnt save my values." The autosave's timer was
+    never cleared once it fired, so the pagehide save above ran on EVERY exit and rewrote the blob from the page's own
+    model. Harmless from the newest page, a rewind from an older one: a second tab on the bid, or the estimate page the
+    browser's Back restores and reloads, wrote its old takeoff over the values saved since.
+
+    Mutation: drop the `saveTimer = null;` from saveSoon's timer and the store goes back to 12000."""
+    a = ran["pagehideFlush"]["afterAutosave"]
+    assert a["autosaved"], "the fixture's autosave never ran, so this proves nothing"
+    assert a["extraSaves"] == 0 and a["flushed"] == 0, "leaving with nothing pending still saved: %r" % a
+    assert a["stored"] == 15000, "an older page's exit wrote its takeoff over the newer save: %r" % a["stored"]
+
+
 # ── G. migration ─────────────────────────────────────────────────────────────
 @needs_node
 def test_a_v1_model_becomes_v2_with_its_areas_as_measurements(ran):

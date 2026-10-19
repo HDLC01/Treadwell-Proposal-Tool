@@ -2906,6 +2906,26 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await d.api.init();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+
+    // AN EDIT ALREADY SAVED, THEN A NEWER SAVE FROM ANOTHER PAGE, THEN THIS PAGE LEAVES (2026-10-19). The autosave has
+    // run, so nothing is pending; another estimate page (a second tab, or the page the browser's Back reloads) has since
+    // saved a newer takeoff. Leaving must write nothing: before the fix the fired timer was never cleared, so pagehide
+    // rewrote this page's older model over the newer save.
+    const e = build();
+    await e.api.init();
+    typeInto(e, '[data-tk="0"][data-k="measurement"]', "12000");
+    e.clock.fire();
+    const savesAfterAutosave = e.rec.saves.length;
+    const newer = JSON.parse(JSON.stringify(e.store.blob.polish_estimate));
+    newer.takeoff[0].measurement = 15000;
+    e.store.blob = Object.assign({}, e.store.blob, { polish_estimate: newer });
+    e.win.fire("pagehide");
+    out.pagehideFlush.afterAutosave = {
+      autosaved: savesAfterAutosave > 0,
+      extraSaves: e.rec.saves.length - savesAfterAutosave,
+      flushed: e.rec.flushed,
+      stored: e.store.blob.polish_estimate.takeoff[0].measurement,
+    };
   }
 
   // ── J. the library's default labor lines ──────────────────────────────────

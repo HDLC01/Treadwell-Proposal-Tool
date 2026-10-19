@@ -363,8 +363,9 @@ async function estimateSection() {
     totalsTotal: s.polish_estimate.totals && s.polish_estimate.totals.total,
   });
   /** `way`: "autosave" (the timer fires), "pagehide" (the tab closes inside the debounce window), or
-   *  "both" (the timer fires, THEN the tab closes). The page never clears its timer handle once the
-   *  timer has fired, so its pagehide handler runs after every edit, not only inside the window. */
+   *  "both" (the timer fires, THEN the tab closes). Since 2026-10-19 the fired timer clears its handle, so the pagehide
+   *  handler saves nothing after the autosave (it used to re-save after every edit, which let an older page rewind a
+   *  newer save); "both" holds that the close leaves the draft exactly as the autosave wrote it. */
   async function run(sc, way) {
     const b = E.build({ blob: E.blob({ work_type: "combo", polish_estimate: clone(sc.model), polish_sf: sc.sf }),
                         items: sc.items });
