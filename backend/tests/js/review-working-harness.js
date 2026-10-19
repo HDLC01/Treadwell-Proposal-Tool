@@ -48,7 +48,9 @@ const html = (b, id) => b.doc.getElementById(id).innerHTML;
 // &lt; and &gt; are left as they are: decoded AFTER the tags are stripped they could rebuild a tag (CodeQL
 // js/incomplete-multi-character-sanitization), and no Review cell prints a < or a >.
 const dec = (s) => String(s).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-const text = (s) => dec(String(s).replace(/<[^>]*>/g, "")).replace(/\s+/g, " ").trim();
+// Stripped until nothing changes: one pass can leave a tag behind (`<scr<x>ipt>` -> `<script`), which CodeQL flags.
+const stripTags = (s) => { let out = String(s), was; do { was = out; out = out.replace(/<[^>]*>/g, ""); } while (out !== was); return out; };
+const text = (s) => dec(stripTags(s)).replace(/\s+/g, " ").trim();
 
 /** Every card (and the markup block) of a Review: its title, its header row's labels, and each row as { cls, cells } where a
  *  cell is { text, rv, mk }: what it says, the figures keyed data-rv inside it, and the one keyed data-mk, by key. */
