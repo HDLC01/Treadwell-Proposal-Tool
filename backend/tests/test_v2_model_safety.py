@@ -372,8 +372,9 @@ MUTATIONS = {
     "the pagehide flush saves the priced area again, as it did before": (
         "js/polish-estimate.js", "TW.setState(Object.assign({}, cur, savePatch(cur)));",
         "TW.setState(Object.assign({}, cur, Object.assign(savePatch(cur), { polish_sf: bid().sf })));",
-        lambda r: r["estimate"]["onlyRowOff"]["equal"] is False and r["estimate"]["onlyRowOff"]["settled"] is False
-        and r["estimate"]["typed"]["settled"] is True),
+        # The flush inside the debounce window is where this mutation lands. Since 2026-10-19 a close AFTER the autosave
+        # saves nothing (polish-estimate.js clears its fired timer), so `settled` holds whatever the flush says.
+        lambda r: r["estimate"]["onlyRowOff"]["equal"] is False and r["estimate"]["typed"]["settled"] is True),
     "a save keeps the priced area when the only row is off": (
         "js/bid-model.js", "out.polish_sf = rootLive.sf > 0 ? rootLive.sf : measuredSf(model.takeoff);",
         "out.polish_sf = rootLive.sf;",

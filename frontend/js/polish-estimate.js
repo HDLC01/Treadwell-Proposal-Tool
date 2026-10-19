@@ -782,6 +782,12 @@
   function saveSoon() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
+      // DISARMED ONCE IT HAS RUN (2026-10-19, "When I go back from proposal to estimate it doesnt save my values"). The
+      // pagehide save below runs only while this timer is pending, and a fired timer left `saveTimer` set, so every exit
+      // after the first autosave rewrote the blob from this page's model. An older estimate page leaving (a second tab,
+      // or one restored by the browser's Back and reloaded) wrote its old values over the newer ones. polish-intake.js
+      // has always cleared it here.
+      saveTimer = null;
       var now = TW.getState();
       TW.setState(Object.assign({}, now, savePatch(now)));
     }, 600);
