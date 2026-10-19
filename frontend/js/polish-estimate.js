@@ -328,7 +328,7 @@
   }
 
   /** THE LIBRARY AS THE SECTION THAT OWNS `takeoff` BUYS IT (Hanz, 2026-10-16): ITEMS with that section's supplier
-   *  discounts and Bulk Discount switch applied (library-core's itemsForBid; the boxes are on the Review step). Every
+   *  discounts applied (library-core's itemsForBid; the boxes are on the Review step). Every
    *  material price on this page is read off the list this returns, so a discount reaches the row cost boxes, the
    *  pooled coats, the cove, the Gyp area rows and the section's material sum alike. ITEMS itself when the section
    *  typed nothing, which is every bid saved before the boxes existed. Kept until ITEMS or the boxes change. */
@@ -336,7 +336,7 @@
   function itemsFor(takeoff) {
     var sec = sectionOfList(takeoff || (M && M.takeoff));
     var adj = sec ? B.materialAdjust(sec.adjust) : null;
-    if (!adj || (!adj.bulk && !Object.keys(adj.discounts).length)) return ITEMS;
+    if (!adj || !Object.keys(adj.discounts).length) return ITEMS;
     var key = JSON.stringify(adj);
     if (itemsForCache.items !== ITEMS || itemsForCache.key !== key) {
       itemsForCache = { items: ITEMS, key: key, out: L.itemsForBid(ITEMS, adj) };
@@ -3089,8 +3089,9 @@
       });
     }
     // AN EPOXY SECTION'S OWN MATERIAL BOXES (Hanz, 2026-10-16): Kyle's supplier discounts (B41 on the Sherwin-Williams
-    // liquids, C41 on the Poly-Crete ones) and his Bulk Discount switch (D41). They price the materials above, so they
-    // sit with them. Only an Epoxy section has those cells; a Polish, Seal or Gyp tab has no discount groups.
+    // liquids, C41 on the Poly-Crete ones). They price the materials above, so they sit with them. Only an Epoxy section has
+    // those cells; a Polish, Seal or Gyp tab has no discount groups. NO BULK DISCOUNT SWITCH (Hanz, 2026-10-20: "Remove all
+    // bulk discount toggle in the V2 estimates"): a v2 material is bought at its own price; no saved bid had it on.
     // The boxes are rates, so they sit in the Rate column.
     var rb = ruleBid();
     if (onShow && onShow.layout === "epoxy") {
@@ -3098,9 +3099,6 @@
                    { raw: adjBox("supplier_pct", "0") }, ""]);
       tkRows.push([{ raw: 'Poly-Crete discount <span class="note">SL, MD and WR; blank is the supplier discount</span>' }, "", "",
                    { raw: adjBox("polycrete_pct", adjTyped("supplier_pct") || "0") }, ""]);
-      tkRows.push([{ raw: 'Bulk Discount <span class="note">bulk prices where a material has one</span>' }, "", "",
-                   { raw: B.sliderHtml(adjOn("bulk"), 'data-adj-bulk="1"', adjOn("bulk") ? "On" : "Off",
-                     "Kyle's Bulk Discount switch: a material that has a bulk price is bought at it") }, ""]);
     }
     tkRows.push(["Material Subtotal", "", "", "", mkAmt(b, "material")]);
     // A rate the engine reports for the section on show is the one printed (an Epoxy section ships at its tier);
@@ -3285,7 +3283,6 @@
   function adjOn(key) {
     var a = B.normalizeAdjust(M.adjust);
     if (!a) return false;
-    if (key === "bulk") return a.bulk === true;
     if (key === "hard_bid") return a.hard_bid === true;
     return false;
   }
@@ -3304,7 +3301,6 @@
       case "soft_pct": a.soft_pct = value; break;
       case "supplier_pct": a.supplier_pct = value; break;
       case "polycrete_pct": a.polycrete_pct = value; break;
-      case "bulk": a.bulk = value === true; break;
       case "hard_bid": a.hard_bid = value === true; break;
       default: return;
     }
@@ -3977,7 +3973,7 @@
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
     // data-cond is the job's condition switch, the Prevailing wage card's among them.
     var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") ||
-      t.closest("[data-cond]") || t.closest("[data-adj-bulk]") || t.closest("[data-adj-hb]");
+      t.closest("[data-cond]") || t.closest("[data-adj-hb]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -4094,20 +4090,8 @@
     // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
     // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
     // that has been flipped back is indistinguishable from one never touched.
-    // THE BULK DISCOUNT SWITCH (an Epoxy section's). The material and every figure under it reprice in place, and the
-    // switch is repainted where it is, so the focus stays on it and Space can press it again.
-    var bulkSw = t.closest("[data-adj-bulk]");
-    if (bulkSw) {
-      setAdjust("bulk", !adjOn("bulk"));
-      var onNow = adjOn("bulk");
-      bulkSw.className = "mw-sw" + (onNow ? " on" : "");
-      bulkSw.setAttribute("aria-checked", onNow ? "true" : "false");
-      if (bulkSw.lastChild && bulkSw.lastChild.nodeType === 3) bulkSw.lastChild.nodeValue = onNow ? "On" : "Off";
-      changed(false);
-      return;
-    }
     // THE HARD BID SWITCH on the Discount line: the rule's figure goes into the box (greyed) and the price, and the
-    // words beside the switch say what it gives. In place, as the Bulk switch is: the repaint moves the note, the box's
+    // words beside the switch say what it gives. In place: the repaint moves the note, the box's
     // grey figure and the line, and the focus stays on the switch.
     var hbSw = t.closest("[data-adj-hb]");
     if (hbSw) {
