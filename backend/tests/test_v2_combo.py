@@ -99,7 +99,7 @@ def test_a_combo_job_is_the_polish_root_and_an_epoxy_section_both_bases_and_poli
 def test_a_new_combo_job_opens_on_polish_with_both_sections_seeded_and_writes_nothing(page):
     o = page["opened"]
     assert o["tabs"] == ["Epoxy"] and o["rootKind"] == "base" and o["epoxyKind"] == "base"
-    assert o["strip"] == ['data-section-tab="Polish"', 'data-section-tab="Epoxy"'] and o["stripHidden"] is False
+    assert o["strip"] == ['data-section-tab="Polish"', 'data-section-tab="Epoxy"']
     assert o["activeIs"] == "Polish", "the section that carries the travel is the one the bid opens on"
     assert o["rootTakeoff"] == [[10000, "SF"]], "the intake's Polish area seeds the root"
     assert o["epoxyTakeoff"] == [[6000, "SF"], [300, "LF"]], "the intake's Epoxy area and cove seed the Epoxy section"
@@ -150,20 +150,21 @@ def test_the_section_that_does_not_carry_the_travel_says_where_it_is_charged_ins
 
 
 # ── the Review step ──────────────────────────────────────────────────────────────────────────────
-def test_the_review_step_shows_both_sections_and_the_combined_figure_above_the_sections_own_cards(page):
+def test_the_review_step_shows_the_open_sheet_alone_with_no_whole_bid_card(page):
+    """Hanz, 2026-10-19: Review has ONE scope. On a combo bid the open sheet (Polish here) shows its own cards and its own total;
+    the pair's "Whole bid" card is gone (the bid bar at the foot of the page still carries the job total)."""
     r = page["review"]
-    assert r["hasCard"] is True and r["cardFirst"] is True
+    assert r["noJobCard"] is True and r["noOptionCard"] is True and r["ownCards"] is True
     t = page["travel"]
-    assert r["labels"] == ["Polish", "Epoxy", "Combined base bid"]
-    assert (r["polishFigure"], r["epoxyFigure"], r["before"]) == tuple(
-        "${:,}".format(n) for n in (t["polishAfter"], t["epoxyAfter"], t["lump"]))
+    assert r["openTotal"] == "${:,}".format(t["polishAfter"]), "the total on Review is the open sheet's, not the pair's"
+    assert r["openTotal"] != "${:,}".format(t["lump"])
     assert r["hotelHasLodging"] is True, "on the carrier, the Hotel card still lists the job's lodging"
 
 
-def test_a_figure_typed_on_review_moves_the_whole_bid_card_live(page):
+def test_a_figure_typed_on_review_moves_the_open_sheets_total_live(page):
     a = page["review"]["afterContingency"]
-    assert a["job"] == a["handJob"] and a["polish"] == a["handPolish"] and a["epoxy"] == a["handEpoxy"]
-    assert a["job"] != page["review"]["before"]
+    assert a["total"] == a["handPolish"] and a["total"] != a["handJob"]
+    assert a["total"] != page["review"]["openTotal"]
 
 
 # ── editing one section never touches the other ──────────────────────────────────────────────────
@@ -294,12 +295,13 @@ PAGE_BREAKS = {
         "js/bid-model.js", "        id: x.e.tab, name: x.e.label, role: x.e.role, kind: x.e.kind,",
         '        id: x.e.tab, name: x.e.label, role: "other", kind: x.e.kind,',
         lambda r: [t[1] for t in r["saved"]["pricedTabs"]] != ["polish", "epoxy"]),
-    "the review step has no whole bid card": (
-        "js/polish-estimate.js", '    if (live.length < 2) return "";', '    if (true) return "";',
-        lambda r: r["review"]["hasCard"] is not True),
-    "the whole bid card is not repainted on a keystroke": (
-        "js/polish-estimate.js", "    repaintJob();", "    void 0;",
-        lambda r: r["review"]["afterContingency"]["job"] != r["review"]["afterContingency"]["handJob"]),
+    "the review step draws a whole bid card again": (
+        "js/polish-estimate.js", "    // Takeoff and material",
+        "    html += '<div data-rev=\"markup\" class=\"rev\" data-job-card></div>'; // Takeoff and material",
+        lambda r: r["review"]["noJobCard"] is not True),
+    "the review total is not repainted on a keystroke": (
+        "js/polish-estimate.js", '    document.querySelectorAll("[data-mkpct]").forEach(function (el) {', '    document.querySelectorAll("[data-mkpct-off]").forEach(function (el) {',
+        lambda r: r["review"]["afterContingency"]["total"] == r["review"]["openTotal"]),
     "a saved Epoxy job switched to Combo keeps the Polish root off": (
         "js/bid-model.js", '        if (out.kind === "off" || out.kind === "option") { out = Object.assign({}, out); delete out.kind; }',
         "        void 0;",

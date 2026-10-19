@@ -95,8 +95,8 @@ async function main() {
     takeoff: m0.takeoff.map((r) => [r.assembly_name, r.measurement, r.unit, r.bucket]),
     laborIds: m0.labor.map((r) => r.id), laborUnits: m0.labor.map((r) => r.unit), laborGuys: m0.labor.map((r) => r.guys),
     laborRates: m0.labor.map((r) => r.rate),
-    // The Sheets panel (Sheets phase 3) is drawn on every bid; the "Open sheet" line above the step rail hides itself for one sheet.
-    strip: { hidden: !!b.doc.getElementById("sheet-now").hidden,
+    // The Sheets panel (Sheets phase 3) is drawn on every bid; the strip of tabs has its one tab.
+    strip: {
              tabs: (b.doc.getElementById("sheets-panel").innerHTML.match(/data-section-tab="([^"]*)"/g) || []) },
     card: html(b, "panels").indexOf("data-gyp-card") >= 0,
     cardSheets: (html(b, "panels").match(/<option value="Gyp[^"]*"/g) || []).length,
@@ -216,7 +216,7 @@ async function main() {
     escalationLabel: review.indexOf("Labor escalation (always on for Gyp)") >= 0,
     noPrevailingSwitch: review.indexOf('data-cond="prevailing_wage"') < 0,
     materialEscalationRow: review.indexOf('data-mk="material_escalation"') >= 0,
-    shippingNoRate: /Shipping<\/td><td class="r"><\/td>/.test(review),
+    shippingNoRate: /Shipping<\/td><td class="q r"><\/td><td class="u"><\/td><td class="rt r"><\/td>/.test(review),
     tooling: review.indexOf("Tooling and consumables") >= 0,
     total: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
     noDye: !/Dye/.test(review),

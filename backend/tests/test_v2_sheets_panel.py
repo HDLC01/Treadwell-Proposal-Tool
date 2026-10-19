@@ -1,13 +1,14 @@
-"""THE SHEETS PANEL: the floating widget that replaced the section strip and the "+ Add option" bar on the v2 estimate page.
+"""THE SHEET BAR: the strip of tabs (and the open sheet's controls under it) that replaced the section strip, the "+ Add option" bar
+and, on 2026-10-19, the floating Sheets panel, on the v2 estimate page.
 
 WHAT CHANGED. Sheets phase 1 gave the model copies, fresh sheets of any type, a chosen base bid, renaming and deleting
 (js/bid-model.js copySection, addSheet, pickBase, renameSection, deleteSection). Phase 2 gave pages one drag-and-remember helper
 (TW.floatPanel). This is the face of it, built from the mockup Hanz approved (2026-10-13):
 
-  * ONE PANEL, ON EVERY BID (aside#sheets-panel, drawn by B.sheetsPanelHtml, painted by paintSheets). One row per sheet that is part of
-    the bid: its name and price, a radio that makes it the base bid, "Base bid" or what it is as an option, and, for the one sheet
-    that is open, the switch "On the proposal as an option", Total or Add / Deduct, the words it prints, Copy, Rename and Delete.
-  * "Add sheet" is the first thing under the hint. Every type the tool prices is on the menu; a sheet added from it starts ON the
+  * ONE BAR, ON EVERY BID (section#sheets-panel, drawn by B.sheetsPanelHtml, painted by paintSheets). ROW 1 is a strip of tabs, one a
+    sheet that is part of the bid: a radio that makes it the base bid, its name and price. ROW 2 is the OPEN sheet only: "Base bid" or what
+    it is as an option, the switch "On the proposal as an option", Total or Add / Deduct, the words it prints, Copy, Rename and Delete.
+  * "+ Add sheet" is the last tab of the strip. Every type the tool prices is on the menu; a sheet added from it starts ON the
     proposal, and a copy starts OFF.
   * MAKING A SHEET THE BASE asks first ("Make Epoxy the base bid?"), then everything follows: B.pickBase moves the kinds and answers
     work_type, base_tab_id and the old base's tab_opts (ON the proposal, priced as a total), and the lines typed on the Proposal step
@@ -15,7 +16,7 @@ WHAT CHANGED. Sheets phase 1 gave the model copies, fresh sheets of any type, a 
     row and writes work_type "combo" and no base id.
   * Delete takes two presses and is disabled on the base (with the reason beside it). A name is checked when it is committed, never while
     it is typed. Seal sheets are options only: Total, never Add / Deduct, never the base.
-  * It floats above 1400px under its own key (tw_v2sheets_pos) and sits in the flow above the estimate below that.
+  * It does not float. It sits in the flow under the page heading and above the step rail, and the strip scrolls sideways on a narrow screen.
 
 EVERYTHING RUNS CODE. tests/js/sheets-panel-harness.js boots the real js/polish-estimate.js on the real bid-model.js, library-core.js,
 price-lines-core.js and epoxy-takeoff.js and reads every fact off the page after it ran. The CSS is the one thing a headless run cannot lay
@@ -24,6 +25,7 @@ require each fact to notice; `break_source` refuses an anchor that is not in the
 """
 import html
 import pathlib
+import re
 
 import pytest
 
@@ -81,8 +83,59 @@ def test_a_base_radio_is_on_every_sheet_that_can_be_the_base_and_the_hint_says_w
     assert p["hasHint"] is True, "the hint names the base bid, and says copies are not in the Excel download"
 
 
-def test_add_sheet_is_the_first_control_under_the_hint_above_the_list(ran):
-    assert ran["list"]["addAtTop"] is True
+def test_add_sheet_is_the_last_tab_of_the_strip_and_the_picker_opens_under_it(ran):
+    assert ran["list"]["addAtEnd"] is True
+    assert ran["list"]["tabs"]["addInStrip"] is True and ran["list"]["tabs"]["addLast"] is True
+
+
+def test_the_strip_has_one_tab_a_sheet_the_open_one_selected_and_the_base_radio_checked(ran):
+    """(b) One tab per sheet in the order the model lists them, only the open one selected, the base's radio checked and its tab
+    marked, and ROW 2 is the open sheet's bar and nobody else's."""
+    t = ran["list"]["tabs"]
+    assert t["tablist"] is True and t["roles"] == 3, "Polish, its copy and the Seal sheet: one tab each"
+    assert t["selected"] == 1 and t["polishMarked"] is True, "the open sheet is the selected tab, and it is the base"
+    assert t["polishChecked"] is True and t["copyChecked"] is False and t["copyMarked"] is False
+    assert t["selectedAfter"] is True and t["openBars"] == 1 and t["barIsOpenSheet"] is True, "opening another tab moves the selection and the bar"
+
+
+# ── the review findings on the tab strip (2026-10-19) ──────────────────────────────────────────────────────────────
+def test_a_repaint_keeps_the_strips_scroll_and_a_new_open_tab_is_scrolled_to_only_as_far_as_it_takes(ran):
+    s = ran["stripKeeps"]
+    assert s["kept"]["repainted"] and s["kept"]["newNode"], "the fixture did not rebuild the strip, so this proves nothing"
+    assert s["kept"].get("scrollLeft") == 150, "a repaint threw the strip back to the left"
+    r = s["reach"]
+    assert r["right"] == 500 + 120 - 300 + 8, "a tab off the right edge is scrolled to, with a little room"
+    assert r["left"] == 100 - 8, "a tab off the left edge is scrolled to"
+    assert r["inView"] == 50 and r["noLayout"] == 7, "a tab in view, or a node with no layout, leaves the strip alone"
+
+
+def test_the_tabs_are_walked_with_the_arrow_keys(ran):
+    k = ran["stripKeeps"]["keys"]
+    names = k["names"]
+    assert len(names) == 3
+    assert k["right"] == {"focused": names[1], "prevented": True}
+    assert k["wrap"] == {"focused": names[0], "prevented": True} and k["leftWrap"] == {"focused": names[2], "prevented": True}
+    assert k["left"] == {"focused": names[0], "prevented": True}
+    assert k["home"]["focused"] == names[0] and k["end"]["focused"] == names[2]
+    assert k["enter"] == {"focused": None, "prevented": False} and k["space"]["prevented"] is False, "Enter and Space are the button's own"
+
+
+def test_a_refused_add_is_said_in_the_flow_under_the_strip_and_the_picker_is_in_the_flow_too(ran):
+    n = ran["stripKeeps"]["notice"]
+    assert n["pickerOpen"] and n["pickerHasList"] and n["flowAfterBox"] and n["openBarAfter"]
+    assert n["inBox"] is None, "the refusal is inside the picker's box, over the open sheet"
+    assert n["inFlow"] and "could not be added" in n["inFlow"]
+    page = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
+    add_rule = re.search(r"\.sheets \.sh-add\{([^}]*)\}", page).group(1)
+    assert "position:static" in add_rule and "absolute" not in add_rule, "nothing may be laid over the open sheet's controls"
+
+
+def test_the_page_heading_does_not_repeat_the_logo_of_the_top_bar():
+    page = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
+    head = page[page.index('<div class="head">'):page.index('<span class="beta">')]
+    assert "<img" not in head and "bison" not in head, "the heading still carries its own logo"
+    assert "Estimating Tool v2" in head and 'id="proj-line"' in head
+    assert page.count("treadwell-bison.svg") == 2, "the top bar's brand and the tab icon are the only two left"
 
 
 # ── 2. Copy ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -170,7 +223,7 @@ def test_a_combined_epoxy_and_polish_base_is_its_own_row_and_writes_combo_and_no
     assert c["kinds"] == [["Polish", "base"], ["Epoxy", "base"]] and c["jobType"] == "combo"
     assert c["savedBase"] is None and c["savedWorkType"] == "combo"
     assert c["lump"] == c["polishTotal"] + c["epoxyTotal"], "the pair is summed"
-    assert c["checked"] is True and c["pills"] == 2 and c["rowPrice"] == "${:,}".format(c["lump"]) and c["rowType"] == "COMBINED"
+    assert c["checked"] is True and c["baseTabs"] == 2 and c["chipBase"] is True and c["rowPrice"] == "${:,}".format(c["lump"]) and c["rowType"] == "COMBINED"
 
 
 def test_going_from_the_combined_base_to_one_sheet_makes_the_other_an_option_on_the_proposal(ran):
@@ -197,7 +250,7 @@ def test_delete_takes_two_presses_a_click_elsewhere_puts_it_back_and_the_draft_f
     assert a["tabs"] == [] and a["rows"] == ["Polish"] and a["open"] == "Polish", "the open sheet was the one deleted, so the base opens"
     assert a["tabOpts"] == {} and a["tabNotes"] == {"Other": ["kept"]} and a["options"] == {}, (
         "its proposal settings, its notes and its own price override go; another sheet's are left")
-    assert a["pricedTabs"] == ["Polish"] and a["nowHidden"] is True, "with one sheet left the Open sheet line hides again"
+    assert a["pricedTabs"] == ["Polish"], "with one sheet left only the base's tab is there"
 
 
 # ── 7. rename ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -286,7 +339,7 @@ def test_what_a_sheet_is_called_and_what_it_prints_is_escaped_and_no_dash_is_dra
     m = ran["markup"]
     assert m["escaped"] is True and m["placeholder"] is True and m["icons"] is True and m["noDash"] is True
     assert m["gypAttr"] is True, "a Gyp sheet's own name has a quote mark in it"
-    assert m["oneSheetNow"] == "", "one sheet has nothing to tell apart"
+    assert m["noNowLine"] is True, "the Open sheet line is gone: the bar under the tabs says the same"
     assert m["deduct"] == "Option, Deduct ($20)"
 
 
@@ -304,25 +357,18 @@ def test_an_option_the_draft_holds_nothing_for_is_on_and_a_hidden_one_is_not(ran
     assert ran["markup"]["patch"]["tab_opts"]["b"]["price_mode"] == "deduct"
 
 
-# ── 12. it floats, and drops inline ──────────────────────────────────────────────────────────────────────────
-def test_the_panel_floats_under_its_own_key_and_the_page_keeps_a_lane_for_it(ran):
+# ── 12. it does not float: a strip of tabs in the flow ──────────────────────────────────────────────────
+def test_the_bar_is_not_floated_and_keeps_no_lane_on_the_page(ran):
+    """(b) Nothing registers it with TW.floatPanel (the proposal editor's use of that helper is untouched), there is no fixed rule, grip or
+    reserved lane for it, and it sits inside #main above the step rail."""
     f = ran["floating"]
-    assert f["floats"] == [{"id": "sheets-panel", "opts": {"handle": "sh-head", "draggingClass": "sh-dragging",
-                                                           "key": "tw_v2sheets_pos", "width": 256}}], (
-        "its own key: the rail on step 3 and the cheat sheet keep theirs")
-    wide = f["wide"].replace(" ", "")
-    for decl in ("body{padding-right:288px}", "position:fixed", "width:256px", "z-index:10", "overflow-y:auto",
-                 "max-height:calc(100dvh-260px)", ".sheets.sh-dragging{opacity:.93}"):
-        assert decl in wide, "above 1400px the panel lost " + decl
+    assert f["floats"] == [], "no TW.floatPanel call under tw_v2sheets_pos or any other key"
+    assert f["floatKeyInPage"] is False and f["fixedRule"] is False and f["gripRule"] is False and f["wideLane"] is False
+    assert f["markupHasPanelFirst"] is True and f["inMain"] is True, "in the flow it sits above the step rail"
 
 
-def test_below_1400px_the_panel_drops_into_the_flow_above_the_estimate_bounded_and_as_a_grid_of_cards(ran):
-    f = ran["floating"]
-    narrow = f["narrow"].replace(" ", "")
-    for decl in (".sheets{margin:0014px;max-height:40dvh;overflow-y:auto}", "grid-template-columns:repeat(auto-fill,minmax(240px,1fr))"):
-        assert decl in narrow, "below 1400px the panel lost " + decl
-    assert "position:fixed" not in narrow
-    assert f["markupHasPanelFirst"] is True, "in the flow it sits above the step rail"
+def test_the_strip_scrolls_sideways_and_the_page_does_not(ran):
+    assert ran["floating"]["scrolls"] is True
 
 
 def test_the_old_strip_and_option_bar_are_gone_and_the_page_loads_the_base_pick_rule(ran):
@@ -330,10 +376,10 @@ def test_the_old_strip_and_option_bar_are_gone_and_the_page_loads_the_base_pick_
 
 
 def test_no_new_copy_in_the_panel_uses_a_dash(ran):
-    """House rule: new words for users have no em or en dash. The harness drew the panel and the Open sheet line in twelve states (a
+    """House rule: new words for users have no em or en dash. The harness drew the bar in eleven states (a
     confirm, a name being refused, Delete armed, the Add menu, a combined base, a bid that cannot be read) and the text of all of them is read."""
     states = ran["markup"]["states"]
-    assert len(states) == 12 and all(isinstance(s, str) and s for s in states)
+    assert len(states) == 11 and all(isinstance(s, str) and s for s in states)
     for text in states:
         assert EM_DASH not in text and EN_DASH not in text
 
@@ -482,7 +528,7 @@ BREAKS = {
         "js/polish-estimate.js", '    if (held.root || held.kind === "base") {', "    if (false) {",
         lambda r: "cannot be deleted" not in r["deleting"]["base"]["alert"]),
     "the base's delete button is live": (
-        "js/bid-model.js", "          var locked = r.base || r.inBase || e.root;", "          var locked = false;",
+        "js/bid-model.js", "        var locked = r.base || r.inBase || e.root;", "        var locked = false;",
         lambda r: r["deleting"]["base"]["disabled"] is not True),
     "a sheet is deleted by one press": (
         "js/polish-estimate.js", "    if (sheetsUi.armed !== tab) { sheetsUi.armed = tab; paintSheets(); return; }", "    void 0;",
@@ -507,14 +553,32 @@ BREAKS = {
     "the caret is not put back": (
         "js/polish-estimate.js", "    if (want) focusSheetsKey(want);", "    void want;",
         lambda r: r["focus"]["afterSwitch"] != ["Copy1|on"]),
-    "the panel is not registered to float": (
-        "js/polish-estimate.js", "  initSheetsPanelDrag();", "  void 0;", lambda r: r["floating"]["floats"] == []),
-    "the panel does not drop inline": (
-        "polish-estimate.html", "      .sheets{margin:0 0 14px;max-height:40dvh;overflow-y:auto}", "      .sheets{margin:0 0 14px}",
-        lambda r: ".sheets{margin:0014px;max-height:40dvh;overflow-y:auto}" not in r["floating"]["narrow"].replace(" ", "")),
-    "the page keeps no lane for the panel": (
-        "polish-estimate.html", "      body{padding-right:288px}", "      body{padding-right:0}",
-        lambda r: "body{padding-right:288px}" not in r["floating"]["wide"].replace(" ", "")),
+    "a repaint throws the strip back to the left": (
+        "js/polish-estimate.js", "      if (newStrip && left) newStrip.scrollLeft = left;", "      void newStrip;",
+        lambda r: r["stripKeeps"]["kept"].get("scrollLeft") != 150),
+    "the open tab is never scrolled to": (
+        "js/polish-estimate.js", "    else if (end > from + strip.clientWidth) strip.scrollLeft = end - strip.clientWidth + pad;", "    else void end;",
+        lambda r: r["stripKeeps"]["reach"]["right"] != 628),
+    "the arrow keys do nothing": (
+        "js/polish-estimate.js", '    if (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "Home" && k !== "End") return;', "    return;",
+        lambda r: r["stripKeeps"]["keys"]["right"]["focused"] is None),
+    "a refused add is laid inside the picker": (
+        "js/bid-model.js", '    if (isObject(v.notice) && v.notice.at === "add") flow += noticeHtml(v.notice);',
+        '    if (isObject(v.notice) && v.notice.at === "add") add += noticeHtml(v.notice);',
+        lambda r: r["stripKeeps"]["notice"]["inBox"] is not None),
+    "the strip does not scroll": (
+        "polish-estimate.html", "    .sheets .sh-strip{overflow-x:auto;overflow-y:hidden;", "    .sheets .sh-strip{overflow-x:visible;overflow-y:hidden;",
+        lambda r: r["floating"]["scrolls"] is not True),
+    "the base's tab is not marked": (
+        "js/bid-model.js", '(r.base || r.inBase ? " base" : "")', '""',
+        lambda r: r["list"]["tabs"]["polishMarked"] is not True or r["combined"]["baseTabs"] != 2),
+    "every tab is selected": (
+        "js/bid-model.js", """'<button type="button" class="sh-name" role="tab" aria-selected="' + (open ? "true" : "false") + '" data-section-tab="'""",
+        """'<button type="button" class="sh-name" role="tab" aria-selected="true" data-section-tab="'""",
+        lambda r: r["list"]["tabs"]["selected"] != 1),
+    "the bar is floated again": (
+        "js/polish-estimate.js", "  function sheetsChanged(", "  function initSheetsPanelDrag() { TW.floatPanel($(\"sheets-panel\"), { handle: \"sh-head\", key: \"tw_v2sheets_pos\", width: 256 }); }\n  initSheetsPanelDrag();\n  function sheetsChanged(",
+        lambda r: r["floating"]["floats"] != []),
     # --- the review findings ---
     "a preset change leaves the sheet's settings under the old key": (
         "js/polish-estimate.js", "        if (Object.keys(carried).length) TW.setState(carried);", "        void carried;",

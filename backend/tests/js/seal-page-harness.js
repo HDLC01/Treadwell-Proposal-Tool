@@ -147,7 +147,7 @@ async function main() {
   const savesBeforeOption = b.rec.saves.length;
   const baseLump = api.bid().total;
   out.fresh = {
-    stripHidden: !!b.doc.getElementById("sheet-now").hidden, rows: tabsIn(html(b, "sheets-panel")),
+    rows: tabsIn(html(b, "sheets-panel")),
     addButton: P.need(b, '[data-sh-act="add-menu"]').textContent,
     choicesShown: addButtons(html(b, "sheets-panel")), baseLump: baseLump,
     noTabsKey: api.model().tabs === undefined,
@@ -174,9 +174,10 @@ async function main() {
     snapshot: sealSec.rates && sealSec.rates.profile, pooled: sealSec.pool_packs === true,
     takeoff: sealSec.takeoff.map((r) => [r.assembly_id, r.measurement, r.unit]),
     laborIds: sealSec.labor.map((r) => r.id), noTravelRow: !sealSec.labor.some((r) => r.id === "travel"),
-    strip: tabsIn(html(b, "sheets-panel")), stripHidden: !!b.doc.getElementById("sheet-now").hidden,
+    strip: tabsIn(html(b, "sheets-panel")),
     activeIsSeal: openTab(html(b, "sheets-panel")) === "Seal",
-    stripLabel: text(b, "sheet-now"),
+    // what the open sheet's bar (row 2 under the tabs) says: it was the "Open sheet" line above the step rail
+    stripLabel: (() => { const h = html(b, "sheets-panel"); const o = h.indexOf('class="sh-open"'); return o < 0 ? "" : h.slice(o, h.indexOf('<p class="sh-hint"', o)).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(); })(),
     barAfter: { choices: addButtons(html(b, "sheets-panel")), menuClosed: /data-sh-act="add-menu"[^>]*aria-expanded="false"/.test(html(b, "sheets-panel")) },
     saved: b.clock.armed() > 0,
   };
@@ -224,14 +225,13 @@ async function main() {
   api.show("Polish");
   api.go(2);
   const review = html(b, "panels");
-  const optionCard = /<div data-rev="option" class="rev" data-option-card="Seal">([^]*?)<\/table><\/div>/.exec(review);
+  // REVIEW SHOWS ONE SHEET (Hanz, 2026-10-19): with Polish open it is Polish's own cards; the Seal option has no card of its own here.
   out.review = {
-    hasOptionCard: !!optionCard, optionCardText: optionCard ? optionCard[1] : null,
-    figure: (/data-opt-sec="Seal">([^<]*)</.exec(review) || [])[1], handFigure: money(handSeal.total),
+    noOptionCard: review.indexOf("data-option-card") < 0 && review.indexOf("Seal option") < 0 && review.indexOf("data-opt-sec") < 0,
+    handFigure: money(handSeal.total),
     noWholeBidCard: review.indexOf("data-job-card") < 0,
     keys: Array.from(review.matchAll(/data-rev="([a-z]+)"/g)).map((m) => m[1]),
     markupTotal: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
-    openButton: /data-option-card="Seal"[^>]*><div class="rev-h">Seal option <button data-section-tab="Seal">Open/.test(review),
     noteOnBase: review.indexOf("data-option-note") >= 0,
   };
   api.show("Seal");
@@ -240,7 +240,7 @@ async function main() {
   out.review.onSeal = {
     note: /data-option-note><b>([^<]*)<\/b>/.exec(sealReview) ? /data-option-note><b>([^<]*)<\/b>/.exec(sealReview)[1] : null,
     markupTotal: (/data-mk="total">([^<]*)</.exec(sealReview) || [])[1], toolingCard: sealReview.indexOf("Tooling and consumables") >= 0,
-    optionCardFirst: sealReview.indexOf("data-option-card") >= 0 && sealReview.indexOf("data-option-card") < sealReview.indexOf("Takeoff and Material"),
+    noOptionCard: sealReview.indexOf("data-option-card") < 0, noteFirst: sealReview.indexOf("data-option-note") >= 0 && sealReview.indexOf("data-option-note") < sealReview.indexOf("Takeoff and Material"),
   };
   // a figure typed on Review moves the option card live
   api.show("Polish");
@@ -321,7 +321,7 @@ async function main() {
   b.clock.fire();
   const savedNone = last(b.rec.saves);
   out.remove.none = {
-    stripHidden: !!b.doc.getElementById("sheet-now").hidden, tabsKey: clone(api.model().tabs), pricedTabs: (savedNone.priced_tabs || []).map((t) => [t.id, t.kind]),
+    tabsKey: clone(api.model().tabs), pricedTabs: (savedNone.priced_tabs || []).map((t) => [t.id, t.kind]),
     lump: savedNone.proposal_lump_sum, rows: tabsIn(html(b, "sheets-panel")),
     addOffered: /data-sh-act="add-menu"/.test(html(b, "sheets-panel")), tabOptsKeys: Object.keys(savedNone.tab_opts || {}),
     bar: text(b, "bid-total"),

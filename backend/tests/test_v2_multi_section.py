@@ -508,7 +508,7 @@ def test_the_page_draws_the_panel_with_one_row_and_no_open_sheet_line_for_one_se
     bid, and nothing to switch to. What hides is the "Open sheet" line above the step rail: with one sheet there is nothing to tell
     apart. What the save writes is the five keys it always wrote."""
     one = ran["page"]["one"]
-    assert one["strip"]["hidden"] is True and one["strip"]["now"] == "", "the Open sheet line is not drawn for one sheet"
+    assert "Open sheet" not in one["strip"]["html"], "there is no Open sheet line: the bar under the tab says what is open"
     assert one["strip"]["rows"] == 1 and "Base bid" in one["strip"]["html"]
     assert "Add a sheet to price an option" in one["strip"]["html"], "the empty state says how to get an option"
     assert one["keys"] == sorted(["__draft_id", "cell_values", "city", "computed_bid", "polish_2_sf",
@@ -518,7 +518,7 @@ def test_the_page_draws_the_panel_with_one_row_and_no_open_sheet_line_for_one_se
 
 def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ran):
     m = ran["page"]["multi"]
-    assert m["strip"]["hidden"] is False and "Open sheet" in m["strip"]["now"]
+    assert "Open sheet" not in m["strip"]["html"] and m["strip"]["html"].count('role="tab"') == 3
     assert m["strip"]["html"].count("data-section-tab=") == 3
     # Epoxy is edited on the page's own panels now (Phase 12): its Material panel is the takeoff, with the patch
     # that the sheet always charges, not a summary. A section not edited here yet keeps the summary.

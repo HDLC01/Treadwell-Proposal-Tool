@@ -2481,15 +2481,37 @@ def test_the_page_loads_no_formula_engine_and_the_modules_in_order(html):
 
 
 def test_the_step_row_says_where_you_are(html):
-    """Four pills, Estimate current, and step 1 pointing at the BETA intake form rather than the
-    live one — the conditions moved there when the calculator dropped to three steps."""
-    nav = html[html.index('<nav class="steps">'):html.index("</nav>")]
+    """(a) Four pills in the shared top bar, Estimate current, and step 1 pointing at the BETA intake form rather than the
+    live one (the conditions moved there when the calculator dropped to three steps).
+
+    Moved on 2026-10-19 from this page's own `<nav class="steps">` into `<header class="topbar">`, the shell polish-intake.html
+    already has: auth.js folds the burger, `.brand`, `.progress` and the bell into that ONE row, and it finds the pills by
+    `pageHeader.querySelector(".progress")`, so a renamed container would leave them behind in a header whose children it replaces.
+    The old nav is gone, and the page's own heading (the BETA badge, the project line) stays below the bar."""
+    assert '<nav class="steps">' not in html and ".steps{" not in html, "the old step row is still on the page"
+    head = html[html.index('<header class="topbar">'):html.index("</header>")]
+    assert head.count('<div class="brand">') == 1 and 'src="/img/treadwell-bison.svg"' in head and "Proposal Generator" in head
+    nav = head[head.index('<div class="progress">'):]
     assert 'href="/polish-intake.html">1 · Intake' in nav, (
         "step 1 does not point at the beta intake form")
-    assert '<span class="on">2 · Estimate</span>' in nav, "the Estimate pill is not the current page"
+    assert '<span class="step active">2 · Estimate</span>' in nav, "the Estimate pill is not the current page"
     assert 'href="/proposal-review.html">3 · Proposal' in nav
     assert 'href="/done.html">4 · Files' in nav
     assert nav.count("<a ") == 3, "an unexpected number of links in the step row"
+    assert html.index("<header") < html.index('<div class="wrap">') < html.index('<span class="beta">BETA</span>'), (
+        "the bar is the first thing in the body and the page's own heading comes after it")
+    assert "tw-hdr" not in head and head.count("<header") == 1, "nothing but .brand and .progress goes inside the header"
+
+
+def test_the_top_bar_rules_are_ported_for_this_page_alone(html):
+    """The page does not link /styles.css, so the bar's rules are its own, in this page's tokens and scoped to header.topbar."""
+    style = html[html.index("<style>"):html.index("</style>")]
+    for sel in ("header.topbar{", "header.topbar .brand{", "header.topbar .brand-mark{", "header.topbar .brand-name{",
+                "header.topbar .brand-sub{", "header.topbar .progress{", "header.topbar .progress .step{",
+                "header.topbar .progress a.step:hover{", "header.topbar .progress .step.active{"):
+        assert sel in style, "the page lost " + sel
+    assert "var(--treadwell" not in style and "var(--surface" not in style, "a token from styles.css leaked in"
+    assert "@media (max-width:768px){" in style and "header.topbar{flex-direction:column" in style
 
 
 def test_there_is_a_datalist_for_the_search_box(html):

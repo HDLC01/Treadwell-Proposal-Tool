@@ -489,13 +489,13 @@ const est = () => ESTIMATE || (ESTIMATE = loadPrelude("polish-estimate-harness.j
 async function page() {
   const P = est();
   const last = (l) => l[l.length - 1];
-  // THE SHEETS PANEL replaced the strip (Sheets phase 3): it is drawn on every bid, one row per sheet; the "Open sheet" line above the
-  // step rail is what hides for a bid with one sheet.
+  // THE SHEET BAR replaced the strip (Sheets phase 3, then tabs on 2026-10-19): it is drawn on every bid, one tab per sheet, with the open
+  // sheet's bar under it; there is no "Open sheet" line above the step rail any more.
   const seg = (b) => {
-    const panel = b.doc.getElementById("sheets-panel"), now = b.doc.getElementById("sheet-now");
-    return { hidden: !!now.hidden, now: now.innerHTML, html: panel.innerHTML, rows: (panel.innerHTML.match(/data-sh-row="/g) || []).length };
+    const panel = b.doc.getElementById("sheets-panel");
+    return { html: panel.innerHTML, rows: (panel.innerHTML.match(/data-sh-row="/g) || []).length };
   };
-  // one section (every bid today): the panel has its one row, the Open sheet line is not drawn, and a save writes the five keys
+  // one section (every bid today): the panel has its one row, there is no Open sheet line, and a save writes the five keys
   const one = P.build({ blob: P.blob({ polish_estimate: clone(P.MODEL), polish_sf: 17500 }) });
   await one.api.init();
   P.typeInto(one, '[data-tk="0"][data-k="measurement"]', "12000");

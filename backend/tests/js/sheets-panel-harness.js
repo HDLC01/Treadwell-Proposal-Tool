@@ -109,7 +109,28 @@ const confirmOf = (h) => { const m = /<div class="sh-confirm"[^>]*><b>([^<]*)<\/
 /** The model the page holds NOW: the debounced save is flushed and the model is read back out of it. (api.state() is the blob the page
  *  opened on, and api.model() is the sheet on show, so neither is the whole bid after an edit.) */
 const modelOf = (b) => { b.clock.fire(); return clone(last(b.rec.saves.filter((x) => x.polish_estimate)).polish_estimate); };
-const rowHtml = (b, tab) => { const h = panel(b); const at = h.indexOf('data-sh-row="' + attr(tab) + '"'); if (at < 0) return ""; const end = h.indexOf("</li>", at); return h.slice(at, end); };
+/** Everything the bar says about one sheet: its TAB (the strip's <li>), the base change waiting on it, and, when it is the open sheet, its
+ *  bar (row 2). The strip and the bar are two blocks now, so the three are joined here and every fact below reads them as it always did. */
+const rowHtml = (b, tab) => {
+  const h = panel(b), a = attr(tab);
+  const stop = (from) => { const ends = ['<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, from)).filter((i) => i >= 0); return ends.length ? Math.min.apply(null, ends) : h.length; };
+  let out = "";
+  const at = h.indexOf('data-sh-row="' + a + '"');
+  if (at >= 0) out += h.slice(at, h.indexOf("</li>", at));
+  const cf = h.indexOf('data-sh-confirm="' + a + '"');
+  if (cf >= 0) { const from = h.lastIndexOf("<div", cf); out += h.slice(from, stop(cf)); }
+  const op = h.indexOf('data-sh-open="' + a + '"');
+  if (op >= 0) out += h.slice(op, h.indexOf('<p class="sh-hint"', op));
+  return out;
+};
+const stripTags = (s) => s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+/** What the page says is on show: the open tab's name and the open sheet's bar, as words. (It was the "Open sheet" line above the step rail.) */
+const nowOf = (b) => {
+  const h = panel(b);
+  const t = /aria-current="true"[^>]*><span class="sh-nm">([^<]*)/.exec(h);
+  const o = h.indexOf('class="sh-open"');
+  return ((t ? unattr(t[1]) : "") + " " + (o >= 0 ? stripTags(h.slice(o, h.indexOf('<p class="sh-hint"', o))) : "")).trim();
+};
 const sumOf = (b, tab) => ((/class="sh-sum[^"]*">([^<]*)(?:<b>([^<]*)<\/b>)?/.exec(rowHtml(b, tab))) || []).slice(1, 3).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 
 async function main() {
@@ -118,6 +139,7 @@ async function main() {
     ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["combined", combined], ["deleting", deleting],
     ["renaming", renaming], ["options", options], ["reopen", reopen], ["unreadable", unreadable], ["focus", focus], ["markup", markup], ["floating", floating],
     ["gypPreset", gypPreset], ["limit", limit], ["sealMode", sealMode], ["demote", demote], ["resets", resets], ["unstated", unstated], ["hiddenOption", hiddenOption],
+    ["stripKeeps", stripKeeps],
   ];
   for (const [name, fn] of sections) {
     try { out[name] = await fn(); } catch (e) { out[name] = { error: String(e && e.stack || e) }; }
@@ -135,17 +157,25 @@ async function list() {
   const b = await open(draft(m, { tab_opts: copyOf.patch.tab_opts }));
   const h0 = panel(b);
   const bids = b.api.sectionBids();
-  const before = { open: openTab(h0), tabs: tabsOf(h0), rows: rowsOf(h0), now: text(b, "sheet-now"), nowHidden: !!b.doc.getElementById("sheet-now").hidden,
+  const before = { open: openTab(h0), tabs: tabsOf(h0), rows: rowsOf(h0), now: nowOf(b),
                    radios: (h0.match(/data-sh-base="/g) || []).length };
   click(b, '[data-section-tab="Copy1"]');
   const h1 = panel(b);
   return {
-    before: before, after: { open: openTab(h1), now: text(b, "sheet-now"), takeoffOnShow: b.api.model().takeoff[0].measurement,
+    before: before, after: { open: openTab(h1), now: nowOf(b), takeoffOnShow: b.api.model().takeoff[0].measurement,
                              activeBid: b.api.activeBid().total, copyBid: bids.Copy1.total },
     prices: { polish: b.api.bid().total, copy: bids.Copy1.total },
+    // ONE TAB A SHEET, the open one selected, the base's radio checked, the base tab marked, + Add sheet at the END of the strip
+    tabs: { roles: (h0.match(/role="tab"/g) || []).length, selected: (h0.match(/aria-selected="true"/g) || []).length,
+            tablist: /<ul class="sh-list" role="tablist"/.test(h0), polishChecked: /data-sh-base="Polish"[^>]*checked/.test(h0),
+            copyChecked: /data-sh-base="Copy1"[^>]*checked/.test(h0), polishMarked: /<li class="sh sh-tab open base" data-sh-row="Polish"/.test(h0),
+            copyMarked: /<li class="sh sh-tab base" data-sh-row="Copy1"/.test(h0), addInStrip: /<li class="sh-addli"[^>]*><button[^>]*data-sh-act="add-menu"/.test(h0),
+            addLast: h0.indexOf('data-sh-act="add-menu"') > h0.indexOf('data-sh-row="Seal"') && h0.indexOf('data-sh-act="add-menu"') < h0.indexOf('class="sh-open"'),
+            selectedAfter: /aria-selected="true" data-section-tab="Copy1"/.test(h1), openBars: (h1.match(/class="sh-open"/g) || []).length,
+            barIsOpenSheet: /class="sh-open" data-sh-open="Copy1"/.test(h1) },
     shown: { polish: /Polish<\/span><span class="sh-price">([^<]*)</.exec(h1)[1], copy: /Polish copy<\/span><span class="sh-price">([^<]*)</.exec(h1)[1] },
     hasHint: /marks the base bid, which sets the lump sum and the job type/.test(h1) && /The Excel download does not include them/.test(h1),
-    addAtTop: h1.indexOf('data-sh-act="add-menu"') > 0 && h1.indexOf('data-sh-act="add-menu"') < h1.indexOf('data-sh-row="Polish"'),
+    addAtEnd: h1.indexOf('data-sh-act="add-menu"') > h1.indexOf('data-sh-row="Seal"'),
   };
 }
 
@@ -163,7 +193,7 @@ async function copy() {
     rootTotal: rootTotal, copyTotal: bids.Copy1.total, rows: rowsOf(panel(b)), open: openTab(panel(b)),
     tabOpts: clone(b.store.blob.tab_opts), summary: sumOf(b, "Copy1"),
     savedKinds: (saved.priced_tabs || []).map((t) => [t.id, t.name, t.kind]), lump: saved.proposal_lump_sum, baseTabId: saved.base_tab_id,
-    nowLine: text(b, "sheet-now"), copyAgain: (click(b, sel("copy", "Copy1")), Object.keys(b.api.model().tabs || {})),
+    nowLine: nowOf(b), copyAgain: (click(b, sel("copy", "Copy1")), Object.keys(b.api.model().tabs || {})),
   };
 }
 
@@ -251,7 +281,7 @@ async function baseSwitch() {
     lump: saved.proposal_lump_sum, hand: hand.total, polishTotal: polishTotal, epoxyBefore: epoxyBefore,
     bar: Number(text(b, "bid-total").replace(/[^0-9]/g, "")), maths: text(b, "maths"),
     pricedTabs: (saved.priced_tabs || []).map((t) => [t.id, t.kind, t.total]), savedBase: saved.base_tab_id, savedWorkType: saved.work_type,
-    rows: { polish: sumOf(b, "Polish"), epoxy: rowHtml(b, "Epoxy").indexOf("pill base") > 0 },
+    rows: { polish: sumOf(b, "Polish"), epoxy: /<li class="sh sh-tab(?: open)? base" data-sh-row="Epoxy"/.test(panel(b)) },
     // The Proposal step's own edited line followed the base, by the rule the other two base pickers run.
     lines2: clone(blob.price_overrides.lines2), optionsKept: clone(blob.price_overrides.options),
     open: openTab(panel(b)),
@@ -276,8 +306,8 @@ async function combined() {
     hadRow: hadRow, confirm: confirm, draft: { work_type: written.work_type, base_tab_id: written.base_tab_id },
     kinds: B.sectionsOf(sm).map((e) => [e.tab, e.kind]), jobType: B.baseOf(sm).jobType,
     lump: saved.proposal_lump_sum, polishTotal: polishTotal, epoxyTotal: epoxyTotal, savedBase: saved.base_tab_id, savedWorkType: saved.work_type,
-    checked: /data-sh-base="combined"[^>]*checked/.test(panel(b)), pills: (panel(b).match(/In the base bid/g) || []).length,
-    rowPrice: /Epoxy \+ Polish<\/span><span class="sh-price">([^<]*)</.exec(panel(b))[1], rowType: /Epoxy \+ Polish<\/span>[^]*?<span class="sh-type">([^<]*)</.exec(panel(b))[1],
+    checked: /data-sh-base="combined"[^>]*checked/.test(panel(b)), baseTabs: (panel(b).match(/<li class="sh sh-tab(?: open)? base" data-sh-row="(?!combined)/g) || []).length, chipBase: /class="sh sh-tab combined base"/.test(panel(b)),
+    rowPrice: /Epoxy \+ Polish<\/span><span class="sh-price">([^<]*)</.exec(panel(b))[1], rowType: /class="sh sh-tab combined/.test(panel(b)) ? "COMBINED" : null,
   };
   // and back to Epoxy alone: Polish leaves the base, as an option on the proposal, priced as a total
   pick(b, '[data-sh-base="Epoxy"]');
@@ -315,8 +345,7 @@ async function deleting() {
   return {
     base: base, armed: armed, disarmed: disarmed,
     after: { tabs: Object.keys(b.api.model().tabs), rows: rowsOf(panel(b)), open: openTab(panel(b)), tabOpts: clone(b.store.blob.tab_opts),
-             tabNotes: clone(b.store.blob.tab_notes), options: clone(b.store.blob.price_overrides.options), pricedTabs: (saved.priced_tabs || []).map((t) => t.id),
-             nowHidden: !!b.doc.getElementById("sheet-now").hidden },
+             tabNotes: clone(b.store.blob.tab_notes), options: clone(b.store.blob.price_overrides.options), pricedTabs: (saved.priced_tabs || []).map((t) => t.id) },
   };
 }
 
@@ -359,7 +388,7 @@ async function renaming() {
   return {
     started: started, midWord: midWord, refused: refused, retyped: retyped, cancelled: cancelled,
     saved: { label: sm.tabs.Copy1.label, key: Object.keys(sm.tabs), pricedName: (saved.priced_tabs || []).filter((t) => t.id === "Copy1").map((t) => t.name)[0] },
-    shownName: /<span class="sh-nm">Garage floor<\/span>/.test(panel(b)), now: text(b, "sheet-now"), maths: text(b, "maths"),
+    shownName: /<span class="sh-nm">Garage floor<\/span>/.test(panel(b)), now: nowOf(b), maths: text(b, "maths"),
   };
 }
 
@@ -476,12 +505,12 @@ async function markup() {
                  descOpen: { Epoxy: true }, sysDesc: () => 'p"h', sf: 0, icon: (n) => "<svg data-icon=" + n + "></svg>" };
   const h = B.sheetsPanelHtml(m, view);
   const gyp = B.sheetsPanelHtml(B.sectionsForJob(B.freshModel(), "gyp", {}), { open: 'Gyp (USG 1-8")', bids: {} });
-  // the panel and the line above the step rail in every state the page can leave them in, for the sweep for dashes
+  // the bar in every state the page can leave them in, for the sweep for dashes
   const broken = polishModel({ tabs: { Epoxy: Object.assign(epoxySection("base"), { layout: undefined }) } });
   const both = polishModel({ tabs: { Epoxy: epoxySection("base") } });
   const base = { open: "Polish", bids: { Polish: { total: 100 }, Epoxy: { total: 80 } }, sf: 100, icon: () => "" };
   const states = [
-    h, B.sheetNowHtml(m, view),
+    h,
     B.sheetsPanelHtml(m, Object.assign({}, base, { confirm: { row: "Epoxy", ids: ["Epoxy"] } })),
     B.sheetsPanelHtml(m, Object.assign({}, base, { open: "Epoxy", renaming: "Epoxy", draft: "x", error: "Enter a sheet name." })),
     B.sheetsPanelHtml(m, Object.assign({}, base, { open: "Epoxy", armed: "Epoxy" })),
@@ -493,9 +522,9 @@ async function markup() {
   return {
     states: states,
     escaped: h.indexOf('<b>"x"</b>') < 0 && h.indexOf("&lt;b&gt;&quot;x&quot;&lt;/b&gt; &amp; more") > 0 && h.indexOf("<img") < 0 && h.indexOf("&lt;img src=x&gt;") > 0,
-    placeholder: /placeholder="p&quot;h"/.test(h), icons: (h.match(/data-icon=/g) || []).length > 5,
-    noDash: h.indexOf(String.fromCharCode(0x2014)) < 0 && B.sheetNowHtml(m, view).indexOf(String.fromCharCode(0x2014)) < 0,
-    deduct: sumFigure(h), nowLine: B.sheetNowHtml(m, view), oneSheetNow: B.sheetNowHtml(polishModel(), { open: "Polish", bids: {} }),
+    placeholder: /placeholder="p&quot;h"/.test(h), icons: (h.match(/data-icon=/g) || []).length >= 5,
+    noDash: h.indexOf(String.fromCharCode(0x2014)) < 0, deduct: sumFigure(h),
+    noNowLine: typeof B.sheetNowHtml === "undefined",
     gypAttr: gyp.indexOf('data-section-tab="Gyp (USG 1-8&quot;)"') >= 0, noSf: /It starts empty/.test(B.sheetsPanelHtml(polishModel(), { pick: true })),
     pair: B.combinedPair(m), pairNone: B.combinedPair(polishModel()),
     confirmWords: { epoxy: B.baseChangeWords(m, ["Epoxy"]), same: B.baseChangeWords(B.copySection(polishModel(), "Polish", {}).model, ["Copy1"]), combo: B.baseChangeWords(m, ["Epoxy", "Polish"]) },
@@ -505,17 +534,22 @@ async function markup() {
 }
 function sumFigure(h) { return ((/class="sh-sum[^"]*">([^<]*)<b>([^<]*)<\/b>/.exec(h)) || []).slice(1, 3).join(" ").replace(/\s+/g, " ").trim(); }
 
-// ── 14. it floats under its own key, and the page keeps a lane for it ──────────────────────────────────────────
+// ── 14. it does not float: it is a strip of tabs in the flow, above the step rail ───────────────────────────────────
 async function floating() {
   const b = await open(draft(polishModel()));
   const css = L.read(path.join(ROOT, "polish-estimate.html"));
   const style = css.slice(css.indexOf("<style>"), css.indexOf("</style>"));
-  const block = (re) => { const m = re.exec(style); if (!m) return null; let depth = 1, i = m.index + m[0].length; const start = i; while (i < style.length && depth) { if (style[i] === "{") depth++; else if (style[i] === "}") depth--; i++; } return style.slice(start, i - 1); };
+  const js = L.read(path.join(ROOT, "js", "polish-estimate.js"));
+  const h = panel(b);
   return {
     floats: clone(b.rec.floats || []),
-    wide: block(/@media \(min-width:1401px\)\s*\{/), narrow: block(/@media \(max-width:1400px\)\s*\{/),
+    floatKeyInPage: js.indexOf("tw_v2sheets_pos") >= 0 || js.indexOf("initSheetsPanelDrag") >= 0,
+    fixedRule: /\.sheets\{[^}]*position:\s*fixed/.test(style), gripRule: /sh-head|sh-grip|sh-dragging/.test(style) || /sh-head|sh-grip/.test(h),
+    wideLane: /body\{padding-right:288px\}/.test(style),
     markupHasPanelFirst: css.indexOf('id="sheets-panel"') > 0 && css.indexOf('id="sheets-panel"') < css.indexOf('id="rail"'),
-    oldStripGone: css.indexOf('id="sections"') < 0 && css.indexOf('id="option-bar"') < 0,
+    inMain: css.indexOf('id="main"') < css.indexOf('id="sheets-panel"'),
+    scrolls: /\.sh-strip\{[^}]*overflow-x:auto/.test(style),
+    oldStripGone: css.indexOf('id="sections"') < 0 && css.indexOf('id="option-bar"') < 0 && css.indexOf('id="sheet-now"') < 0,
     loadsPriceRule: /<script src="\/js\/price-lines-core\.js"><\/script>/.test(css),
   };
 }
@@ -569,7 +603,7 @@ async function gypPreset() {
 
 // ── 16. at the limit of twelve copies the refusal is said in the panel, beside the button that was pressed ──────────
 const noticeOf = (h) => { const m = /<p class="sh-note warn" role="alert" data-sh-notice>([^<]*)<\/p>/.exec(h); return m ? m[1] : null; };
-const addBlock = (h) => h.slice(h.indexOf('class="sh-add"'), h.indexOf('class="sh-list"'));
+const addBlock = (h) => { const a = ['class="sh-add"', 'class="sh-flow"'].map((s) => h.indexOf(s)).filter((i) => i >= 0).sort((x, y) => x - y)[0]; if (a === undefined) return ""; const e = ['<div class="sh-confirm"', '<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, a)).filter((i) => i >= 0); return h.slice(a, e.length ? Math.min.apply(null, e) : h.length); };
 async function limit() {
   const b = await open(draft(polishModel()));
   for (let i = 0; i < 12; i++) click(b, sel("copy", openTab(panel(b))));
@@ -678,6 +712,62 @@ async function hiddenOption() {
   const written = clone(b.store.blob.tab_opts.Copy1);
   click(b, sel("on", "Copy1"));
   return { hidden: hidden, shown: shown, written: written, off: Object.assign(state(), { opt: clone(b.store.blob.tab_opts.Copy1) }) };
+}
+
+// ── 22. the strip keeps its place across a repaint, scrolls to a newly opened tab, is walked by the arrow keys, and the add notice is in the flow ──
+async function stripKeeps() {
+  const copyOf = B.copySection(polishModel(), "Polish", {});
+  const m = copyOf.model;
+  m.tabs.Seal = { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {},
+    rates: { version: 1, profile: "seal@1", rates: {}, fees_default: null, notes: EPOXY_NOTES.slice() } };
+  const b = await open(draft(m, { tab_opts: copyOf.patch.tab_opts }));
+
+  // 1. a repaint that changes the markup (a price moved) leaves the strip scrolled where it was
+  const strip0 = P.need(b, "[data-sh-strip]");
+  strip0.scrollLeft = 150;
+  const before = panel(b);
+  b.api.model().takeoff[0].measurement = 4321;
+  b.api.changed(false);
+  const repainted = panel(b) !== before;
+  const strip1 = P.need(b, "[data-sh-strip]");
+  const kept = { repainted: repainted, newNode: strip1 !== strip0, scrollLeft: strip1.scrollLeft };
+
+  // 2. scrolling to a tab: only as far as it takes, never when it is already in view, never an error without layout
+  const reveal = (strip, tab) => { b.api.stripReveal(strip, tab); return strip.scrollLeft; };
+  const reach = {
+    right: reveal({ scrollLeft: 0, clientWidth: 300, offsetLeft: 0 }, { offsetLeft: 500, offsetWidth: 120 }),
+    left: reveal({ scrollLeft: 400, clientWidth: 300, offsetLeft: 0 }, { offsetLeft: 100, offsetWidth: 120 }),
+    inView: reveal({ scrollLeft: 50, clientWidth: 300, offsetLeft: 0 }, { offsetLeft: 100, offsetWidth: 120 }),
+    noLayout: reveal({ scrollLeft: 7 }, {}),
+  };
+
+  // 3. the arrow keys walk the tabs; Enter is left to the button
+  const tabs = b.doc.querySelectorAll("[data-section-tab]");
+  const names = tabs.map((t) => t.getAttribute("data-section-tab"));
+  let focused = null;
+  tabs.forEach((t) => { t.focus = () => { focused = t.getAttribute("data-section-tab"); }; });
+  const press = (from, k) => {
+    focused = null;
+    let prevented = false;
+    b.doc.fire("keydown", { target: tabs[from], key: k, preventDefault() { prevented = true; } });
+    return { focused: focused, prevented: prevented };
+  };
+  const keys = { names: names, right: press(0, "ArrowRight"), wrap: press(names.length - 1, "ArrowRight"), left: press(1, "ArrowLeft"),
+                 leftWrap: press(0, "ArrowLeft"), home: press(2, "Home"), end: press(0, "End"), enter: press(0, "Enter"), space: press(0, " ") };
+
+  // 4. a refused Add is said in the flow under the strip, never inside the picker's box
+  const w = await open(draft(polishModel()));
+  for (let i = 0; i < 12; i++) click(w, sel("copy", openTab(panel(w))));
+  click(w, '[data-sh-act="add-menu"]');
+  click(w, '[data-sh-act="add"][data-sh-sheet="Polish"]');
+  await settle();
+  const h = panel(w);
+  const addAt = h.indexOf('class="sh-add"'), flowAt = h.indexOf('class="sh-flow"');
+  const ends = ['<div class="sh-confirm"', '<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, flowAt)).filter((i) => i >= 0);
+  const box = h.slice(addAt, flowAt), flow = h.slice(flowAt, ends.length ? Math.min.apply(null, ends) : h.length);
+  const notice = { pickerOpen: addAt >= 0, flowAfterBox: flowAt > addAt, inBox: noticeOf(box), inFlow: noticeOf(flow),
+                   pickerHasList: /sh-pick-row/.test(box), openBarAfter: h.indexOf('class="sh-open"') > flowAt };
+  return { kept: kept, reach: reach, keys: keys, notice: notice };
 }
 
 main().then((out) => { process.stdout.write(JSON.stringify(out) + "\n"); }, (e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });

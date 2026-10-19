@@ -22,22 +22,45 @@
       --r:12px; --r-s:7px; --shadow:0 1px 3px rgba(0,0,0,.05); }
     *{box-sizing:border-box}
     body{margin:0;background:var(--surf);color:var(--ink);font:400 14px/1.55 var(--sans);
-         padding:26px 22px 132px}
+         padding:0 22px 132px}
     [hidden]{display:none!important}
     .wrap{max-width:1000px;margin:0 auto}
 
-    .head{display:flex;align-items:flex-start;gap:14px;margin-bottom:4px}
-    .logo{width:52px;height:33px;display:block;flex:none}
+    .head{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px}
     .head h1{font-size:20px;margin:0 0 3px;letter-spacing:-.01em}
     .head p{margin:0;color:var(--ink-v);font-size:13px}
     .beta{font:700 10px/1 var(--sans);letter-spacing:.09em;background:var(--red-tint);
           color:var(--red-dark);border:1px solid var(--line);border-radius:20px;
           padding:5px 9px;white-space:nowrap;margin-left:auto}
 
-    .steps{display:flex;gap:5px;flex-wrap:wrap;margin:15px 0 16px;font-size:12.5px}
-    .steps span,.steps a{padding:6px 12px;border-radius:20px;border:1px solid var(--line);
-          color:var(--ink-v);background:var(--card);text-decoration:none}
-    .steps .on{background:var(--red);color:#fff;border-color:transparent;font-weight:600}
+    /* ── THE STEPS LIVE IN THE TOP BAR, as on the intake page (polish-intake.html) ─────────────────────────────
+       auth.js (initShell) finds `header.topbar` and folds the burger, .brand, .progress and the bell into ONE row;
+       it keeps only .brand and .progress and destroys anything else inside the header. This page does not link
+       styles.css, so the rules the bar needs are ported from it here in this page's own tokens, scoped to
+       header.topbar so nothing else on the page changes. The bar runs edge to edge: the body's side padding is
+       taken back with the negative margin. */
+    header.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 -22px 22px;
+      padding:16px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+    header.topbar .brand{display:flex;align-items:center;gap:12px}
+    header.topbar .brand-mark{display:block;width:58px;height:36px;flex:none}
+    header.topbar .brand-name{font-weight:800;font-size:16px}
+    header.topbar .brand-sub{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-v)}
+    header.topbar .progress{display:flex;gap:4px;flex-wrap:wrap}
+    header.topbar .progress .step{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-v);
+      padding:4px 10px;border-radius:99px;background:var(--surf-low);text-decoration:none;cursor:pointer;
+      transition:background .15s}
+    header.topbar .progress a.step:hover{background:var(--red-tint);color:var(--red-dark)}
+    header.topbar .progress .step.active{background:var(--red);color:#fff;font-weight:700;cursor:default}
+    header.topbar .progress .step.active:hover{background:var(--red);color:#fff}
+    @media (max-width:768px){
+      header.topbar{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 14px}
+      header.topbar .progress{flex-wrap:wrap;justify-content:flex-start;gap:4px}
+      header.topbar .progress .step{font-size:10px;padding:3px 8px}
+    }
+    @media (max-width:480px){
+      header.topbar .brand-sub{display:none}
+      header.topbar .progress .step{font-size:9px;letter-spacing:.03em}
+    }
 
     /* The beta works on a test COPY of a real project (see polish-sandbox.js). Silently editing a
        different project than the one that was clicked would be worse than the bug that fixes, so
@@ -68,67 +91,109 @@
     .pip.ok{background:var(--ok);border-color:transparent;color:#fff}
     .pip.att{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
 
-    /* ── THE SHEETS PANEL (js/bid-model.js sheetsPanelHtml, painted by js/polish-estimate.js) ─────────────────────
-       Every sheet of the bid, the base bid marked, and what each option does on the proposal. It replaced the strip
-       of section buttons and the "+ Add option" bar (Hanz, 2026-10-13). Above 1400px it floats at the right and can be
-       dragged (TW.floatPanel, its own key tw_v2sheets_pos) while the page keeps a lane clear for it; below that it sits
-       in the flow above the estimate, as the proposal page's Pricing options rail does.
+    /* ── THE SHEET BAR (js/bid-model.js sheetsPanelHtml, painted by js/polish-estimate.js) ────────────────────────
+       The bid's sheets as TABS, the way the live estimate draws its worksheet tabs, under the four steps in the top bar
+       (Hanz, 2026-10-19). It was a floating panel (2026-10-13), and a widget over the page is not a place an estimator
+       navigates from. In normal flow now, on every bid:
+         ROW 1  .sh-strip: one tab a sheet (the base-bid radio, the name, the price), the combined Epoxy + Polish choice
+                when the bid has the pair, and + Add sheet last. It scrolls sideways on a narrow screen, never the page.
+         ROW 2  .sh-open: the open sheet only, its type and its controls, laid out in a row that wraps.
+       The open tab is white and joined to the bar below it (its 1px overlap rubs out the strip's baseline); the base
+       sheet carries a red top edge.
 
        THE LOOK IS THIS PAGE'S OWN TOKENS. This page does not load styles.css, so the shared .options-panel rules
        are not here, and they hard-code a grey and a red this page does not use. Reused instead: .kindpick (the pill
-       button), .mw-sw (the switch), .btn and .x. Anything the page already had, restyled for the panel only, is
+       button), .mw-sw (the switch), .btn and .x. Anything the page already had, restyled for the bar only, is
        scoped under .sheets, so no other control on the page moves. The readable small lines use --ink-v: --ink-3 is
        about 4.1:1 on white, under what 11.5px text needs. */
-    .sheets{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
-      font:400 13px/1.45 var(--sans);color:var(--ink);text-align:left}
+    .sheets{margin:0 0 14px;font:400 13px/1.45 var(--sans);color:var(--ink);text-align:left}
     .sheets .tw-ico{flex:none;pointer-events:none}
-    .sheets .sh-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:7px;padding:8px 12px;
-      background:var(--surf-low);border-bottom:1px solid var(--line);border-radius:var(--r) var(--r) 0 0;
-      font:700 12.5px var(--sans);color:var(--ink)}
-    .sheets .sh-grip{display:inline-flex;color:var(--ink-3)}
-    .sheets .sh-head:hover .sh-grip{color:var(--ink-v)}
-    .sheets .sh-hint{margin:0;padding:8px 12px 7px;font-size:11.5px;line-height:1.4;color:var(--ink-v)}
-    .sheets .sh-hint.sh-excel{padding-top:0}
     .sheets .rdot{display:inline-block;width:11px;height:11px;border-radius:50%;border:3.5px solid var(--red-dark);
       background:var(--card);vertical-align:-1px}
-    .sheets .sh-warn{display:flex;gap:7px;margin:0 10px 8px;background:var(--warn-bg);border:1px solid #e8d9a8;
+    .sheets .sh-warn{display:flex;gap:7px;margin:0 0 8px;background:var(--warn-bg);border:1px solid #e8d9a8;
       border-radius:9px;padding:8px 9px;font-size:11.5px;line-height:1.4;color:var(--warn)}
     .sheets .sh-warn .tw-ico{margin-top:1px}
-    /* Add sheet is the first control under the hint, above the list. */
-    .sheets .sh-add{padding:2px 10px 10px}
-    .sheets .sh-addbtn{width:100%;justify-content:center;padding:7px 12px;font-size:12.5px}
     .sheets .btn{display:inline-flex;align-items:center;gap:7px;line-height:1.2;white-space:nowrap}
     .sheets .btn:active{transform:translateY(1px)}
     .sheets .btn.sm{padding:5px 11px;font-size:12px}
     .sheets .x{padding:3px;border-radius:var(--r-s)}
-    .sheets .sh-list{list-style:none;margin:0;padding:0}
-    .sheets .sh{padding:7px 10px 9px 6px;border-top:1px solid var(--line-2)}
-    .sheets .sh.open{background:var(--red-tint);box-shadow:inset 3px 0 0 var(--red)}
-    .sheets .sh-top{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center}
-    .sheets .sh-slot{display:flex;align-items:center;justify-content:center;height:28px}
+
+    /* ROW 1. The strip is the scroller; the list inside it is as wide as its tabs (max-content), so a long bid scrolls
+       the strip and not the page. Its last pixel row is the baseline the open tab rubs out. */
+    .sheets .sh-stripwrap{position:relative}
+    .sheets .sh-strip{overflow-x:auto;overflow-y:hidden;padding:6px 6px 1px;background:var(--surf-low);
+      background-image:linear-gradient(var(--line),var(--line));background-repeat:no-repeat;background-position:0 100%;
+      background-size:100% 1px;border:1px solid var(--line);border-bottom:0;border-radius:var(--r) var(--r) 0 0}
+    .sheets .sh-list{list-style:none;margin:0;padding:0;display:flex;align-items:flex-end;gap:3px;min-width:max-content}
+    .sheets .sh-tab{display:flex;align-items:center;padding:0 10px 0 3px;background:rgba(27,28,28,.045);
+      border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0}
+    .sheets .sh-tab:hover{background:rgba(27,28,28,.08)}
+    .sheets .sh-tab.base{box-shadow:inset 0 3px 0 var(--red)}
+    .sheets .sh-tab.open{position:relative;z-index:1;margin-bottom:-1px;padding-bottom:1px;background:var(--card)}
+    .sheets .sh-tab.combined{border-style:dashed}
+    .sheets .sh-slot{display:flex;align-items:center;justify-content:center;width:22px;height:32px}
+    .sheets .sh-slot:empty{width:8px}
     .sheets .sh-radio{width:15px;height:15px;margin:0;accent-color:var(--red-dark);cursor:pointer}
-    .sheets .sh-name{display:flex;align-items:baseline;gap:8px;width:100%;min-width:0;background:none;border:0;
-      border-radius:var(--r-s);padding:5px 6px;font:600 13px var(--sans);color:var(--ink);text-align:left;cursor:pointer}
-    .sheets .sh-name:hover{background:var(--surf-low)}
+    .sheets .sh-name{display:flex;align-items:baseline;gap:8px;min-width:0;background:none;border:0;
+      border-radius:var(--r-s);padding:8px 2px;font:600 13px var(--sans);color:var(--ink-v);text-align:left;cursor:pointer;
+      white-space:nowrap}
     .sheets .sh-name.static{cursor:default}
-    .sheets .sh-name.static:hover{background:none}
-    .sheets .sh.open .sh-name{color:var(--red-dark);cursor:default}
-    .sheets .sh.open .sh-name:hover{background:none}
-    .sheets .sh-nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .sheets .sh-price{flex:none;font:600 12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+    .sheets .sh-tab.open .sh-name{color:var(--red-dark);cursor:default}
+    .sheets .sh-name:focus-visible,.sheets .sh-radio:focus-visible{outline:2px solid var(--red);outline-offset:1px}
+    .sheets .sh-nm{max-width:20ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .sheets .sh-price{flex:none;font:600 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
     .sheets .sh-price.none{font-weight:400;color:var(--ink-v)}
-    .sheets .sh-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:1px 0 0 28px;min-height:18px}
+    .sheets .sh-ren-in{width:16ch;min-width:0;margin:3px 0;font:600 13px var(--sans);color:var(--ink);background:var(--card);
+      border:1px solid var(--red);border-radius:var(--r-s);padding:4px 6px;outline:2px solid var(--red);outline-offset:1px}
+    .sheets .sh-addli{align-self:center;margin-left:4px}
+    .sheets .sh-addbtn{display:inline-flex;align-items:center;gap:6px;background:none;border:1px dashed var(--line);
+      border-radius:8px;padding:6px 12px;font:600 12.5px var(--sans);color:var(--ink-v);cursor:pointer;white-space:nowrap}
+    .sheets .sh-addbtn:hover{color:var(--red);border-color:var(--red)}
+    .sheets .sh-addbtn[disabled]{opacity:.5;cursor:not-allowed}
+    .sheets .sh-addbtn[disabled]:hover{color:var(--ink-v);border-color:var(--line)}
+
+    /* The picker opens just under the strip IN THE FLOW (it pushes the open sheet's bar down; nothing is laid over it), and the
+       refusal of an Add, or the words that say adding is off, sit in the flow under the strip in .sh-flow. */
+    .sheets .sh-add{position:static;margin:6px 8px 4px;width:min(320px,calc(100% - 16px));
+      background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
+    .sheets .sh-flow{margin:6px 8px 0}
+    .sheets .sh-flow .sh-note,.sheets .sh-flow .sh-cap{margin:0 0 6px}
+    .sheets .sh-pick-h{display:flex;align-items:center;justify-content:space-between;font:700 12.5px var(--sans);
+      padding:0 0 0 2px}
+    .sheets .sh-pick .sh-cap{margin:0 0 4px 2px}
+    .sheets .sh-pick-l{list-style:none;margin:0 -4px;padding:0}
+    .sheets .sh-pick-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+      background:none;border:0;border-radius:var(--r-s);padding:7px 8px;font:600 13px var(--sans);color:var(--ink);
+      cursor:pointer;text-align:left}
+    .sheets .sh-pick-row:hover{background:var(--surf-low)}
+    .sheets .sh-pick-row:active{transform:translateY(1px)}
+    .sheets .sh-pick-row[disabled]{opacity:.5;cursor:not-allowed}
+    .sheets .sh-pick-row[disabled]:hover{background:none}
+    .sheets .sh-pick-row[disabled]:active{transform:none}
+
+    /* A base change waiting for its yes, whichever tab it is for: between the two rows. */
+    .sheets .sh-confirm{margin:8px 0;background:var(--warn-bg);border:1px solid #e8d9a8;border-radius:9px;
+      padding:9px 12px;font-size:11.5px;line-height:1.4;color:var(--warn)}
+    .sheets .sh-confirm b{display:block;color:var(--ink);font-size:12px;margin:0 0 3px}
+    .sheets .sh-confirm p{margin:0 0 8px}
+    .sheets .sh-btns{display:flex;flex-wrap:wrap;gap:6px}
+
+    /* ROW 2. What the open sheet is, then its controls, in a row that wraps. */
+    .sheets .sh-open{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;background:var(--card);
+      border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r) var(--r);padding:11px 14px;box-shadow:var(--shadow)}
+    .sheets .sh-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .sh-type{font:700 10px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
-    .sheets .pill,.sheet-now .pill{font:700 10px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+    .sheets .pill{font:700 10px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
       border-radius:999px;padding:3px 8px;white-space:nowrap;border:1px solid var(--line);background:var(--card);
       color:var(--ink-v)}
-    .sheets .pill.base,.sheet-now .pill.base{background:var(--ink);border-color:var(--ink);color:var(--card)}
-    .sh-sum{font-size:11.5px;color:var(--ink-v)}
-    .sh-sum b{font:600 11.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+    .sheets .pill.base{background:var(--ink);border-color:var(--ink);color:var(--card)}
+    .sh-sum{font-size:12px;color:var(--ink-v)}
+    .sh-sum b{font:600 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
     .sh-sum.off{color:var(--ink-v);font-style:italic}
-    .sheets .sh-body{margin:9px 0 0 28px;display:grid;gap:9px}
+    .sheets .sh-body{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;flex:1 1 auto;min-width:0}
     .sheets .mw-sw{background:none;border:0;padding:0;font:600 12px var(--sans);color:var(--ink);text-align:left}
-    .sheets .sh-ctl{display:grid;gap:9px}
+    .sheets .sh-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
+    .sheets .sh-ctl:has(.sh-desc-in){flex:1 1 100%}
     /* Not on the proposal: dimmed and still usable, the page's own convention for "not applying right now"
        (.tk.inert above), never a disabled control. */
     .sheets .sh-ctl.inert{opacity:.55}
@@ -143,21 +208,23 @@
     .sheets .seg label:hover{color:var(--red)}
     .sheets .seg input:checked + label{background:var(--red-dark);color:var(--card)}
     .sheets .seg input:focus-visible + label{outline:2px solid var(--red);outline-offset:1px}
+    .sheets .sh-desc{min-width:0}
+    .sheets .sh-ctl:has(.sh-desc-in) .sh-desc{flex:1 1 100%}
     .sheets .sh-desc-t{display:inline-flex;align-items:center;gap:4px;background:none;border:0;padding:0;
       font:600 11.5px var(--sans);color:var(--ink-v);cursor:pointer}
     .sheets .sh-desc-t:hover{color:var(--red)}
     .sheets .sh-desc-t .tw-ico{transition:transform .12s ease}
     .sheets .sh-desc-t[aria-expanded="true"] .tw-ico{transform:rotate(90deg)}
     .sheets .sh-desc-t .opt{font-weight:400;color:var(--ink-v)}
-    .sheets .sh-desc-prev{display:block;margin:3px 0 0 16px;font-size:11.5px;color:var(--ink);overflow:hidden;
-      text-overflow:ellipsis;white-space:nowrap}
-    .sheets .sh-desc-in{display:block;width:100%;margin:5px 0 0;font:400 12px/1.4 var(--sans);color:var(--ink);
+    .sheets .sh-desc-prev{display:inline-block;max-width:34ch;margin:0 0 0 8px;vertical-align:bottom;font-size:11.5px;color:var(--ink);
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .sheets .sh-desc-in{display:block;width:100%;max-width:640px;margin:5px 0 0;font:400 12px/1.4 var(--sans);color:var(--ink);
       background:var(--card);border:1px solid var(--line);border-radius:var(--r-s);padding:6px 8px;resize:vertical}
     .sheets .sh-desc-in:hover{border-color:var(--red)}
     .sheets .sh-desc-in:focus-visible{outline:2px solid var(--red);outline-offset:1px}
     .sheets .sh-cap{margin:4px 0 0;font-size:11px;line-height:1.4;color:var(--ink-v)}
-    .sheets .sh-acts{display:flex;flex-wrap:wrap;gap:5px;padding-top:9px;border-top:1px solid var(--line)}
-    /* .kindpick is the page's pill button (the Takeoff picker's "which one did you mean"); in the panel it is
+    .sheets .sh-acts{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}
+    /* .kindpick is the page's pill button (the Takeoff picker's "which one did you mean"); in the bar it is
        tighter and gains the two states it needs: disabled, and armed for the second press of Delete. */
     .sheets .kindpick{margin:0;gap:4px;padding:3px 7px 3px 6px;white-space:nowrap}
     .sheets .kindpick[disabled]{opacity:.5;cursor:not-allowed}
@@ -165,52 +232,13 @@
     .sheets .kindpick[disabled]:active{transform:none}
     .sheets .kindpick.armed{background:var(--red-dark);border-color:var(--red-dark);color:var(--card)}
     .sheets .kindpick.armed:hover{color:var(--card)}
-    .sheets .sh-note{margin:0;font-size:11px;line-height:1.4;color:var(--ink-v)}
+    .sheets .sh-note{margin:0;flex:1 1 100%;font-size:11px;line-height:1.4;color:var(--ink-v)}
     .sheets .sh-note.warn{color:var(--red-dark)}
-    /* A refusal under the Add sheet button (the one place a sh-note sits outside a sheet's body, which has its own gap). */
-    .sheets .sh-add .sh-note{margin:0 0 6px}
-    .sheets .sh-confirm{margin:8px 0 2px 28px;background:var(--warn-bg);border:1px solid #e8d9a8;border-radius:9px;
-      padding:9px 10px;font-size:11.5px;line-height:1.4;color:var(--warn)}
-    .sheets .sh-confirm b{display:block;color:var(--ink);font-size:12px;margin:0 0 3px}
-    .sheets .sh-confirm p{margin:0 0 8px}
-    .sheets .sh-btns{display:flex;flex-wrap:wrap;gap:6px}
-    .sheets .sh-ren-in{width:100%;min-width:0;font:600 13px var(--sans);color:var(--ink);background:var(--card);
-      border:1px solid var(--red);border-radius:var(--r-s);padding:4px 6px;outline:2px solid var(--red);outline-offset:1px}
-    .sheets .sh-empty{margin:0;padding:10px 12px 10px 36px;font-size:11.5px;line-height:1.4;color:var(--ink-v);
-      border-top:1px solid var(--line-2)}
-    .sheets .sh-pick-h{display:flex;align-items:center;justify-content:space-between;font:700 12.5px var(--sans);
-      padding:0 0 0 2px}
-    .sheets .sh-pick .sh-cap{margin:0 0 4px 2px}
-    .sheets .sh-pick-l{list-style:none;margin:0 -4px;padding:0}
-    .sheets .sh-pick-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
-      background:none;border:0;border-radius:var(--r-s);padding:7px 8px;font:600 13px var(--sans);color:var(--ink);
-      cursor:pointer;text-align:left}
-    .sheets .sh-pick-row:hover{background:var(--surf-low)}
-    .sheets .sh-pick-row:active{transform:translateY(1px)}
-    .sheets .sh-pick-row[disabled]{opacity:.5;cursor:not-allowed}
-    .sheets .sh-pick-row[disabled]:hover{background:none}
-    .sheets .sh-pick-row[disabled]:active{transform:none}
-    /* The sheet on show, above the step rail: the panel can be anywhere, so the page says which sheet the steps
-       below are about. Hidden for a bid with one sheet. */
-    .sheet-now{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px;padding:0 2px}
-    .sheet-now .sn-k{font:700 10.5px var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-v)}
-    .sheet-now h2{margin:0;font:700 16px var(--sans);letter-spacing:-.01em;text-wrap:balance}
-    .sheet-now .sh-sum,.sheet-now .sh-sum b{font-size:12.5px}
-    @media (min-width:1401px){
-      /* The lane the floating panel keeps clear (256px wide + its 16px gutter + 16px of air). */
-      body{padding-right:288px}
-      .sheets{position:fixed;right:16px;top:150px;width:256px;max-height:calc(100dvh - 260px);overflow-y:auto;
-        box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:10}
-      .sheets .sh-head{cursor:move;user-select:none}
-      .sheets.sh-dragging{opacity:.93}
-    }
-    @media (max-width:1400px){
-      .sheets{margin:0 0 14px;max-height:40dvh;overflow-y:auto}
-      .sheets .sh-grip{display:none}
-      .sheets .sh-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;
-        padding:0 12px 12px;align-items:start}
-      .sheets .sh{border:1px solid var(--line);border-radius:10px}
-      .sheets .sh-empty{padding:0 12px 12px}
+    .sheets .sh-hint{margin:8px 2px 0;font-size:11.5px;line-height:1.4;color:var(--ink-v)}
+    .sheets .sh-empty{margin:4px 2px 0;font-size:11.5px;line-height:1.4;color:var(--ink-v)}
+    @media (max-width:760px){
+      .sheets .sh-acts{margin-left:0}
+      .sheets .sh-open{padding:10px 12px}
     }
 
     .sec{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
@@ -546,6 +574,18 @@
            color:var(--ink)}
     .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink);
            background:var(--rev-tot,transparent)}
+    /* THE WORKING (Hanz, 2026-10-19): every Review table has a labelled header row, Item | Quantity | Unit | Rate | Total. The
+       table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page. */
+    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+    .rev-t,.mk{min-width:560px}
+    .rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
+           text-transform:uppercase;color:var(--ink-v);background:var(--rev-band,var(--surf-low));white-space:nowrap}
+    .rev-t th.r,.mk th.r{text-align:right}
+    .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}
+    .rev-t td.q,.rev-t td.rt,.mk td.q,.mk td.rt{white-space:nowrap}
+    .rev-t .note.work,.mk .note.work{display:block;font:11px var(--mono);color:var(--ink-3)}
+    .mk td.q,.mk td.rt{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3)}
+    .mk td.rt{min-width:96px}
     .blockers{background:var(--warn-bg);border:1px solid #e8d9a8;color:var(--warn);
            border-radius:9px;padding:11px 13px;font-size:12.5px;margin:0 0 12px}
     .blockers ul{margin:6px 0 0;padding-left:18px}
@@ -558,6 +598,7 @@
         font-variant-numeric:tabular-nums}
     .mk td.pct{color:var(--ink-3);width:104px}
     .mk td.amt{width:126px}
+    .mk tr.grand td.rt{color:var(--red-dark)}
     .mk tr.band td{background:var(--surf-low);font:700 10.5px var(--sans);letter-spacing:.06em;
         text-transform:uppercase;color:var(--ink-v);border-top:1px solid var(--line)}
     .mk tr.sub td,.mk tr.tot td{border-top:2px solid var(--line);font-weight:700;color:var(--ink)}
@@ -627,9 +668,27 @@
   </style>
 </head>
 <body>
+  <!-- THE SHARED SHELL, as polish-intake.html has it. auth.js folds the burger + brand + step pills + bell into this one
+       row instead of drawing its own white bar with only the bell. NOTHING may be added inside this header: auth.js keeps
+       only .brand and .progress and destroys the rest. The page's own heading (the BETA badge, the project line) is
+       below it. polish-sandbox.js repoints all four links onto the draft it settled on (?d=). -->
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand-mark" src="/img/treadwell-bison.svg" width="57" height="36" alt="Treadwell">
+      <div>
+        <div class="brand-name">Treadwell</div>
+        <div class="brand-sub">Proposal Generator</div>
+      </div>
+    </div>
+    <div class="progress">
+      <a class="step" href="/polish-intake.html">1 · Intake</a>
+      <span class="step active">2 · Estimate</span>
+      <a class="step" href="/proposal-review.html">3 · Proposal</a>
+      <a class="step" href="/done.html">4 · Files</a>
+    </div>
+  </header>
   <div class="wrap">
     <div class="head">
-      <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
       <div>
         <h1>Estimating Tool v2</h1>
         <p id="proj-line">Loading…</p>
@@ -637,24 +696,14 @@
       <span class="beta">BETA</span>
     </div>
 
-    <nav class="steps">
-      <a href="/polish-intake.html">1 · Intake</a>
-      <span class="on">2 · Estimate</span>
-      <a href="/proposal-review.html">3 · Proposal</a>
-      <a href="/done.html">4 · Files</a>
-    </nav>
-
     <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
     <div class="loading" id="loading">Loading the item library…</div>
 
     <div id="main" hidden>
-      <!-- THE SHEETS PANEL, on every bid (js/polish-estimate.js paintSheets, markup from B.sheetsPanelHtml). It took the
-           place of the strip of section buttons and the "+ Add option" bar. Floats at the right above 1400px, sits
-           here in the flow below that. -->
-      <aside class="sheets" id="sheets-panel" aria-label="Sheets on this bid"></aside>
-      <!-- Which sheet the steps below are about; drawn only when the bid has more than one. -->
-      <div class="sheet-now" id="sheet-now" hidden></div>
+      <!-- THE SHEET BAR, on every bid (js/polish-estimate.js paintSheets, markup from B.sheetsPanelHtml): a strip of tabs, one a
+           sheet, and under it the open sheet's controls. In the flow, above the step rail; it no longer floats. -->
+      <section class="sheets" id="sheets-panel" aria-label="Sheets on this bid"></section>
       <div class="rail" id="rail"></div>
       <div id="panels"></div>
     </div>

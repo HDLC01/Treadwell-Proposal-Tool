@@ -47,7 +47,6 @@ def ran(tmp_path_factory):
 def test_a_new_epoxy_job_opens_as_an_epoxy_section_with_the_polish_root_off(ran):
     o = ran["opened"]
     assert o["tabs"] == ["Epoxy"] and o["rootKind"] == "off"
-    assert o["strip"]["hidden"] is True, "the bid is one sheet, so the Open sheet line has nothing to tell apart"
     assert o["strip"]["tabs"] == ['data-section-tab="Epoxy"'], "the Sheets panel is drawn for one sheet too, and lists only Epoxy"
     assert o["savesOnOpen"] == 0, "opening a job writes nothing until somebody edits it"
 
@@ -137,7 +136,7 @@ def test_a_saved_epoxy_bid_opens_as_saved_and_writes_nothing(ran):
 
 
 def test_a_polish_job_is_untouched_and_a_gyp_job_is_given_its_own_section(ran):
-    assert ran["polish"] == {"tabs": "none", "kind": "base", "strip": True, "bid": ran["polish"]["bid"], "activeBid": ran["polish"]["bid"]}
+    assert ran["polish"] == {"tabs": "none", "kind": "base", "bid": ran["polish"]["bid"], "activeBid": ran["polish"]["bid"]}
     assert ran["polish"]["bid"] > 0
     # Gyp is ready since Phase 14: its job opens on a Gyp section filed under the base sheet (test_v2_gyp.py holds the rest)
     assert ran["gyp"] == {"tabs": ['Gyp (USG 1-8")']}
@@ -145,7 +144,6 @@ def test_a_polish_job_is_untouched_and_a_gyp_job_is_given_its_own_section(ran):
 
 def test_the_strip_lists_what_the_bid_is_made_of_and_never_the_polish_root_of_an_epoxy_job(ran):
     s = ran["strip"]
-    assert s["hidden"] is False
     assert s["tabs"] == ['data-section-tab="Epoxy"', 'data-section-tab="Seal"']
     assert s["sealPanelIsTakeoff"] is True and s["epoxyPanelIsTakeoff"] is True, "both are edited on the page's own panels (Seal since Phase 15)"
 
