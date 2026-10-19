@@ -92,6 +92,12 @@ def test_the_calculator_shows_the_travel_labor_rate_and_the_rule_but_no_hotel_or
     assert a["seventyMiles"], "the 70-mile rule is not stated on the tab"
     assert a["insideMarkups"], "the tab does not say Hotel and Per Diem price inside the markups"
     assert a["roHidden"] is True
+    # Travel Labor's own line says how it is worked out the way the estimate works it since 2026-10-20: guys x the round trip, one trip for
+    # each guy; filled in from the miles and the crew's size on a Polish, Epoxy or Combo job 70 miles or more out, typed on a Gyp bid.
+    assert a["travelHow"] == ("Guys times the round trip drive hours, one trip for each guy. On a Polish, Epoxy or Combo job 70 miles or more "
+                              "from the office the estimate fills the hours in from the miles (60 mph, to the half hour) and the guys as the "
+                              "most on any labor line; under 70 miles, and on a Gyp bid, the estimator types them. The rate is the Travel "
+                              "line on the Labor tab."), a["travelHow"]
 
 
 @needs_node

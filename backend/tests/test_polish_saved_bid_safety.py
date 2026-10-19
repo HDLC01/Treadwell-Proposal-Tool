@@ -257,8 +257,8 @@ def test_travel_lines_hotel_and_per_diem_stay_as_saved(ran):
 
 @needs_node
 def test_a_far_job_saved_with_travel_labor_blank_opens_blank_and_is_never_filled_by_the_open(ran):
-    """THE DISTANCE FILLS TRAVEL LABOR since 2026-10-20 (Hanz: "Every work day (Kyle's sheet math)"), when an answer is APPLIED in a
-    session. A far job saved with its distance (190 miles) and Travel Labor blank, which is what a new bid held from 2026-10-12 to
+    """THE DISTANCE FILLS TRAVEL LABOR since 2026-10-20 (Hanz; Kyle's way: the hours from the miles, the guys the crew's size), when an
+    answer is APPLIED in a session. A far job saved with its distance (190 miles) and Travel Labor blank, which is what a new bid held from 2026-10-12 to
     10-20, must not be filled by being opened: no hours, no guys, not on auto, no marker, no write, no lookup, with and without a
     library whose distance stub is waiting with 150 miles, and the same again after a save and a reopen.
 

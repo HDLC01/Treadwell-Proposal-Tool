@@ -1221,9 +1221,10 @@
     sheetsUi.confirm = null;
     if (!asked) { paintSheets(); return; }
     var st = TW.getState();
-    var made, before;
+    var made, before, carrierBefore;
     try {
       before = B.baseOf(ROOT);
+      carrierBefore = B.travelCarrier(ROOT);
       made = B.pickBase(ROOT, asked.ids, { state: st });
     } catch (err) {
       say("The base bid could not be changed: " + (err && err.message));
@@ -1243,6 +1244,10 @@
       if (moved) patch.price_overrides = pov;
     }
     ROOT = made.model;
+    // A BASE CHANGE IS A JOB TYPE SWITCHED IN THE SESSION TOO (2026-10-20 audit): when it moves the job's travel to another sheet, the
+    // Travel Labor row moves with it (B.pickBase), and a row that was left blank under a far distance on file is filled by the same
+    // rule an answer follows (B.followDistance). A base change that keeps the carrier fills nothing.
+    if (B.travelCarrier(ROOT) !== carrierBefore) B.followDistance(ROOT);
     TW.setState(patch);
     sheetsChanged(activeTab, (asked.row === "combined" ? "combined" : asked.row) + "|base");
   }
@@ -2564,9 +2569,10 @@
     var inert = laborInert(r);
     // NO "TYPE MY OWN" SWITCH (Hanz, 2026-10-07). The Guys box is editable, so a control to ask
     // for permission to type was a second way to do what the box already does. A NEW bid's box opens
-    // EMPTY and stays the estimator's (2026-10-12); only a bid saved before then, or Travel Labor on
-    // a job the distance sent far (it puts the guys on the man-days, 2026-10-20), can be on auto,
-    // and typing a number makes it the estimator's own (guys_auto false). The "Included"
+    // EMPTY and stays the estimator's (2026-10-12); only a bid saved before then (its guys are the
+    // man-days), or Travel Labor on a job the distance sent far (its guys are the crew's size,
+    // 2026-10-20), can be on auto, and typing a number makes it the estimator's own (guys_auto
+    // false, and the row is marked so no answer writes into it again). The "Included"
     // slider is a different thing and stays.
     var on = B.rowOn(r);
     // THE PREVAILING RATE IN FORCE (0 when the card is off or empty): a line that follows its default
@@ -2592,7 +2598,7 @@
       dfltWarnHtml('data-calcwarn="' + i + ':guys"', calcDefaultText(r, "guys")) +
       // "Guys", never "Crew" -- Hanz renamed that column and
       // test_nothing_on_screen_says_labour_or_crew holds the page to it.
-      '<p class="hint" data-hint-lab="' + i + '">' + (travelRow ? B.manDaysHint(auto, B.travelManDays(M.labor))
+      '<p class="hint" data-hint-lab="' + i + '">' + (travelRow ? B.travelGuysHint(M, r, M.labor)
         : 'How many on it.') + '</p></div>' +
 
       '<div class="f"><label>' + (hours ? "Hours" : "Days") + '</label>' +
@@ -2634,8 +2640,15 @@
         // and the caption, and the two cannot drift apart on a live repaint.
         '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
           'anyway if it needs drive time.</p>' +
-          '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office, where the hours fill in ' +
-          'from the miles and the guys follow the man-days. Under 70 miles this line stays gray.</p>'
+          // WHAT THE LINE PROMISES IS WHAT IT DOES. A Polish, Epoxy or Combo job fills the hours from the miles and the guys
+          // with the crew's size (B.followDistanceHours); a Gyp bid fills nothing here (the Gyp sheet works its own drive
+          // time), so its card must not say the hours "fill in".
+          '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office. ' +
+          (r.id !== "travel" ? ''
+            : gypOpen()
+              ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours. '
+              : 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ') +
+          'Under 70 miles this line stays gray.</p>'
         : "") + '</div>';
   }
 
@@ -2701,8 +2714,9 @@
   // ONLY A NEW BID LOOKS IT UP BY ITSELF. A saved bid opened later does not reprice behind
   // anybody's back: it shows what it was saved with and offers the button.
   //
-  // A FAR ANSWER ALSO FILLS TRAVEL LABOR (Hanz, 2026-10-20: "Every work day (Kyle's sheet math)"): its hours
-  // from the miles, its guys from the crew's man-days, a typed figure always winning (B.applyDistance, B.clearDistance).
+  // A FAR ANSWER ALSO FILLS TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20): its hours from the miles (one round trip), its
+  // guys the crew's size, so each guy is charged one trip as on his own sheets. A figure the estimator typed in a box, or
+  // cleared, always wins, and a switched-off row is left as it is (B.applyDistance, B.clearDistance, B.followDistanceHours).
   // It is given the WHOLE model (ROOT), not the section on show: the Travel Labor row is the carrier section's.
   var distBusy = false;
   var distReason = "";
@@ -3154,12 +3168,13 @@
       var perDay = r.unit === "hours" ? 1 : B.dayHours(r);
       var hrs = B.num(r.guys) * B.num(r.days) * perDay;
       var work = B.fmtSf(B.num(r.guys)) + " × " + B.fmtSf(B.num(r.days)) + (r.unit === "hours" ? "" : " × " + perDay);
-      // Hours the distance wrote say the trip they were worked from (Hanz, 2026-10-20), under the line's name: "6.5 hrs: a 380
-      // mile round trip at 60 mph from the Olathe office". The Quantity column is too narrow to hold it (it would run into the
-      // Unit column), so it sits in the wide one, and the working beside it stays "48 × 6.5".
-      var drive = B.driveHoursSource(M, r);
+      // Hours the distance wrote say the trip they were worked from, and who it is charged to (Hanz, 2026-10-20), under the
+      // line's name: "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the labor
+      // lines above". The Quantity column is too narrow to hold it (it would run into the Unit column), so it sits in the
+      // wide one, and the working beside it stays "4 × 6.5".
+      var drive = B.driveHoursSentence(M, r);
       var lineName = r.label || "Labor line";
-      labRows.push([drive ? { raw: esc(lineName) + '<span class="note work">' + esc(B.driveHoursSentence(drive)) + '</span>' } : lineName,
+      labRows.push([drive ? { raw: esc(lineName) + '<span class="note work">' + esc(drive) + '</span>' } : lineName,
                     { raw: rv("lab." + i + ".q", B.fmtSf(hrs)) + '<span class="note work">' + rv("lab." + i + ".w", work) + '</span>' },
                     "hrs", rvc("lab." + i + ".rate", rateMoney(B.laborRateOf(r, pwRev)) + " / hr"),
                     rv("lab." + i + ".tot", moneyAuto(cost))]);
@@ -3561,6 +3576,40 @@
     }).join("");
   }
 
+  /** The figure the model holds for one Labor box the PAGE owns: a Guys box while it is on auto (the crew's size or the
+   *  man-days, whichever the row follows), and Travel Labor's Hours box (the distance writes it). null for every other box,
+   *  which is the estimator's own and is never written from the model. */
+  function ownedBoxFigure(el) {
+    var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+    if (!r) return null;
+    var k = el.getAttribute("data-k");
+    if (k === "guys" && r.unit === "hours" && r.guys_auto) return r.guys == null ? "" : String(r.guys);
+    if (k === "days" && r.id === "travel") return r.days == null ? "" : String(r.days);
+    return null;
+  }
+
+  /** Put the model's figures into the Labor boxes the page owns (see ownedBoxFigure), in place, SKIPPING THE BOX THE ESTIMATOR IS
+   *  IN: a late distance answer used to write the crew's size into a Guys box somebody was already typing in, and the
+   *  next character went on the end of it (a 3 after the 48 read 483). The focusout handler below settles the skipped box
+   *  when they leave it. */
+  function paintTravelBoxes() {
+    document.querySelectorAll('[data-lab][data-k="guys"]').forEach(function (el) {
+      var v = ownedBoxFigure(el);
+      if (v === null) return;
+      el.setAttribute("data-auto", "1");               // cleared back to auto: the page owns it again
+      if (document.activeElement === el) return;       // the Guys box under the estimator's cursor is left alone
+      if (el.value !== v) el.value = v;
+    });
+    // A far answer fills Travel Labor's Hours box, and the lookup landing takes the `changed(false)` path that
+    // never rebuilds the card, so the box is repainted here. Hours somebody typed are never changed by an answer, so
+    // this only ever writes what the model holds.
+    document.querySelectorAll('[data-lab][data-k="days"]').forEach(function (el) {
+      var v = ownedBoxFigure(el);
+      if (v === null || document.activeElement === el) return;
+      if (el.value !== v) el.value = v;
+    });
+  }
+
   /** Refresh every computed figure in place, without rebuilding the panel.
    *
    *  Keyed by data-attribute, never by column position. The library page addressed its computed
@@ -3689,28 +3738,16 @@
     //
     // `data-auto` marks the ones the page owns. A box the estimator has taken over is not in this
     // list (typing flips it to manual and rebuilds the card), so this cannot overwrite typing.
-    document.querySelectorAll('[data-lab][data-k="guys"]').forEach(function (el) {
-      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
-      if (!r || r.unit !== "hours") return;
-      if (!r.guys_auto) return;
-      el.setAttribute("data-auto", "1");               // cleared back to auto: the page owns it again
-      var v = r.guys == null ? "" : String(r.guys);
-      if (el.value !== v) el.value = v;
-    });
+    //
+    // A BOX THE ESTIMATOR IS IN IS NEVER REPAINTED (2026-10-20 audit). A late distance answer put the crew's size into a Guys box
+    // somebody was already standing in, and the next character they typed went on the end of it (a 3 after the 48 was 483).
+    // paintTravelBoxes skips the focused box; the focusout handler below puts the model's figure in when they leave it.
+    paintTravelBoxes();
     document.querySelectorAll("[data-hint-lab]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-hint-lab"), 10)];
-      if (travelLike(r)) el.textContent = B.manDaysHint(!!r.guys_auto, B.travelManDays(M.labor));
+      if (travelLike(r)) el.textContent = B.travelGuysHint(M, r, M.labor);
     });
-    // THE HOURS THE DISTANCE WRITES (Hanz, 2026-10-20). A far answer fills Travel Labor's Hours box, and the lookup landing
-    // takes this `changed(false)` path, so the box is repainted here like the auto Guys box above -- unless the estimator is
-    // in it. Hours somebody typed are never changed by an answer, so this only ever writes what the model holds.
-    document.querySelectorAll('[data-lab][data-k="days"]').forEach(function (el) {
-      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
-      if (!r || r.id !== "travel" || document.activeElement === el) return;
-      var v = r.days == null ? "" : String(r.days);
-      if (el.value !== v) el.value = v;
-    });
-    // ...and the note under the card that says where they came from (B.driveHoursNote), shown while there is one.
+    // The note under the Travel Labor card that says where its hours came from (B.driveHoursNote), shown while there is one.
     document.querySelectorAll("[data-trv-src]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-trv-src"), 10)];
       var note = r ? B.driveHoursNote(M, r, M.labor) : "";
@@ -4545,11 +4582,14 @@
     if (li !== null && k) {
       var j = parseInt(li, 10);
       if (M.labor[j]) {
-        // TYPING IN THE AUTO BOX IS HOW YOU LEAVE AUTO. Travel's Guys follows the crew's man-days
-        // until somebody disagrees with it, and the disagreement is the keystroke -- asking them
+        // A KEYSTROKE IN A TRAVEL LABOR GUYS OR HOURS BOX MAKES THAT BOX THE ESTIMATOR'S, clearing it included (2026-10-20 audit):
+        // the row is marked (B.markTypedByHand), and no later distance answer writes into a box that is marked.
+        if (k === "guys" || k === "days") B.markTypedByHand(M.labor[j], k);
+        // TYPING IN THE AUTO BOX IS HOW YOU LEAVE AUTO. Travel's Guys follows the crew (its size, or the
+        // man-days on a bid saved before 2026-10-12) until somebody disagrees with it, and the disagreement is the keystroke -- asking them
         // to find a control first, to then be allowed to type the number they already have in
         // mind, is a worse trade than the one line it takes to notice. `changed(true)` so the
-        // hint under the box repaints from "From the crew above" to the way back.
+        // hint under the box repaints from "Most guys on one labor line above" to the way back.
         if (k === "guys" && M.labor[j].guys_auto) {
           M.labor[j].guys_auto = false;
           M.labor[j][k] = el.value;
@@ -4615,11 +4655,16 @@
       changed(false);
       return;
     }
-    // A CLEARED GUYS / NIGHTS / DAYS BOX STAYS EMPTY (Hanz, 2026-10-12: "nights, days, guys and hours
+    // A CLEARED GUYS / NIGHTS / DAYS / HOURS BOX STAYS EMPTY (Hanz, 2026-10-12: "nights, days, guys and hours
     // should have nothing when it starts"). From 2026-10-07 clearing the box handed the figure back
     // to the man-days; that is gone, because the man-days are no longer a value the box can hold.
     // Empty is the estimator's own answer and prices $0. The hint under the box says what the
     // man-days are, as text.
+    //
+    // Nothing has to run here for the Travel Labor boxes: the clearing already happened on `input`, which is
+    // where a keystroke in a Travel Labor Guys or Hours box leaves its mark on the row (B.markTypedByHand: guys_typed and
+    // hours_typed). That mark, saved with the row, is what stops a distance answer from refilling a box that was
+    // cleared. (Until 2026-10-20 an empty Travel box read as nobody's yet, and the next answer wrote into it.)
     var blankKey = el.getAttribute("data-k");
     // A CLEARED RATE BOX GOES BACK TO THE LINE'S OWN RATE (Hanz, 2026-10-09), on change, so typing
     // "3", backspace, "4" never snaps. The row was already priced at that rate while
@@ -4666,6 +4711,16 @@
       setPick(i, el.value);
       changed(false);
     }
+  });
+
+  // LEAVING A BOX THE PAGE OWNS SETTLES IT. repaintNumbers never writes into the box the estimator is in (paintTravelBoxes), so a
+  // distance answer that landed while they stood in a Travel Labor box left the model ahead of the screen. When they leave it
+  // without typing, the box shows what the model holds. A box they typed in already holds what they typed, so this writes nothing there.
+  document.addEventListener("focusout", function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute || el.getAttribute("data-lab") === null) return;
+    var v = ownedBoxFigure(el);
+    if (v !== null && el.value !== v) el.value = v;
   });
 
   // A MEASUREMENT CHANGED BY ACCIDENT IS ASKED ABOUT (Hanz, 2026-10-17: "add a pop up when we accidentally edit the
@@ -4957,8 +5012,10 @@
       // back on, Combo to Polish marks the Epoxy section off, its rows kept), and is saved once because what the
       // draft holds is behind what the page shows. A Polish bid with no other sections adds and changes nothing.
       var sectionsBefore = JSON.stringify(ROOT);
+      var carrierBefore = openingTab();
       if (jobSections) ROOT = B.sectionsForJob(ROOT, jobType, { rules: await loadMarkupRules() });
       var restructured = !newBid && JSON.stringify(ROOT) !== sectionsBefore;
+      var carrierMoved = restructured && openingTab() !== carrierBefore;
       ROOT = B.seedNewSections(ROOT, {
       saved: savedEstimate,
       laborRows: libraryLaborRows,
@@ -4982,6 +5039,13 @@
     } catch (err) {
       say("This bid's other sections cannot be read, so the library's defaults were not added: " + (err && err.message));
     }
+    // A JOB TYPE SWITCHED IN THE SESSION CAN GIVE THE BID A NEW CARRIER (2026-10-20 audit): Polish saved at 190 miles and switched to
+    // Epoxy on the intake step opens with the Epoxy section carrying the job's travel, and the seeding above gave that section a
+    // blank Travel Labor row while the distance on file still says far and Lodging and Per Diem are on. The switch is the
+    // estimator's own action, so the distance on file fills the new carrier's row by the same rule an answer does
+    // (B.followDistance). A plain reopen is not a switch (sectionsForJob hands back the model it was given, so nothing
+    // restructured and the carrier is the same) and fills nothing, and neither does a switch that keeps the carrier.
+    if (carrierMoved) B.followDistance(ROOT);
     // The model was replaced above (the seeding hands back a new one), so the panels' view of it is made again.
     show(openingTab());
     followSf = B.takeoffSf(M.takeoff);

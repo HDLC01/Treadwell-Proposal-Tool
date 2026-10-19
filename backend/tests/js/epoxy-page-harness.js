@@ -258,14 +258,15 @@ async function main() {
   out.adjust = await adjustSection();
   out.hardBid = await hardBidSection();
   out.travelFill = await travelFillSection();
+  out.jobSwitch = await jobSwitchSection();
   return out;
 }
 
-/** THE DISTANCE FILLS THE EPOXY SECTION'S TRAVEL LABOR (Hanz, 2026-10-20: "Every work day (Kyle's sheet math)"). An Epoxy job's
- *  Polish root is off and the Epoxy section carries the job's travel, so the Travel Labor row the answer fills is Epoxy's own, on
- *  Epoxy's own crew (Kyle's Epoxy row 52): 4 guys for 12 days is 48 man-days, and the line is 48 x the 6.5 hours of a 380 mile
- *  round trip x $33. Driven through the real page: the lookup lands on a new Epoxy bid, the crew is typed as a person types it,
- *  and the save is read back. The root's own Travel row, which is off with the root, is never touched. */
+/** THE DISTANCE FILLS THE EPOXY SECTION'S TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20). An Epoxy job's Polish root is off and the
+ *  Epoxy section carries the job's travel, so the Travel Labor row the answer fills is Epoxy's own, on Epoxy's own crew (Kyle's Epoxy
+ *  row 52): 4 guys for 12 days, so 4 guys x the 6.5 hours of a 380 mile round trip x $33 = $858 (each guy is charged one round trip,
+ *  as Kyle types it; the 48 man-days are not the guys). Driven through the real page: the lookup lands on a new Epoxy bid, the crew is
+ *  typed as a person types it, and the save is read back. The root's own Travel row, which is off with the root, is never touched. */
 async function travelFillSection() {
   const draft = epoxyDraft({ address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" });
   const b = await open(draft, { distance: { ok: true, miles: 190, reason: "" } });
@@ -300,6 +301,106 @@ async function travelFillSection() {
            rootTravelUntouched: rootTravel(saved) === rootTravel(controlSaved), rootTravel: rootTravel(saved),
            controlEpoxyTravel: clone(controlSaved.tabs.Epoxy.labor.filter((r) => r.id === "travel")[0]),
            distance: saved.distance };
+}
+
+/** A JOB TYPE SWITCHED IN THE SESSION GIVES THE BID A NEW CARRIER, and the distance already on file fills the new carrier's Travel Labor
+ *  (2026-10-20 audit). A Polish bid saved at 190 miles with Travel Labor filled (4 guys x 12 days on Polishing, a crew of 4) is switched to
+ *  Epoxy on the intake step and opened: the Epoxy section is the base and carries the job's travel, and its Travel Labor row is NEW. It
+ *  read blank, with the distance saying 190 and Lodging and Per Diem on, before the fix. Now it is filled by the rule an answer follows
+ *  (6.5 hours, the guys on Epoxy's crew). Held against it: the same bid opened as Polish (a plain reopen) changes and saves nothing; a
+ *  Polish bid whose Travel Labor was left BLANK is also left blank by a plain reopen; a switch that keeps the carrier (Polish to Combo)
+ *  does not fill the root's blank row; and a switched-off or typed row is left as it is. */
+async function jobSwitchSection() {
+  const ADDR = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
+  const KEY = B.distanceKey(ADDR.address, ADDR.city, ADDR.state, ADDR.zip);
+  const polishBid = (travel, extra) => Object.assign({ version: 2, takeoff: clone(P.MODEL.takeoff),
+    labor: [{ id: "polishing", label: "Polishing", guys: 4, days: 12, rate: 33 },
+            Object.assign({ id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: false, rate_default: 33 }, travel || {})],
+    conditions: Object.assign(clone(P.MODEL.conditions), { local: false }),
+    travel: { lodging: { label: "Lodging", enabled: true, qty: 12, qty_auto: false, rate: 70 },
+              per_diem: { label: "Per Diem", enabled: true, qty: 12, qty_auto: false, rate: 45 } },
+    distance: { miles: 190, source: "google", key: KEY }, contingency: 0, fees: 0, totals: {} }, extra || {});
+  const savedSf = B.takeoffSf(P.MODEL.takeoff);
+  const draftOf = (workType, estimate) => epoxyDraft(Object.assign({ work_type: workType, polish_estimate: estimate, polish_sf: savedSf }, ADDR));
+  const rowIn = (sec) => (sec.labor || []).filter((r) => r.id === "travel")[0];
+  const settle = async () => { for (let i = 0; i < 6; i++) await flush(); };
+  const opened = async (workType, estimate) => {
+    const x = await open(draftOf(workType, estimate), { distance: { ok: true, miles: 300, reason: "" } });
+    x.api.go(1); await settle();
+    return x;
+  };
+  const filledRow = { days: 6.5, hours_seed: 6.5, guys_auto: true, guys_follow: "crew", guys: 4 };
+  const report = (x) => {
+    // the WHOLE model (ROOT): api.model() is the section on show, whose `labor` is that section's and not the root's
+    const m = x.api.root();
+    const carrier = B.travelCarrier(m);
+    const sec = carrier === B.ROOT_TAB ? m : m.tabs[carrier];
+    return { carrier: carrier, rootKind: m.kind === undefined ? "base" : m.kind, tabs: Object.keys(m.tabs || {}),
+             row: clone(rowIn(sec)), rootRow: clone(rowIn(m)), distance: m.distance && m.distance.miles,
+             saves: x.rec.saves.length, asked: (x.rec.distanceBodies || []).length };
+  };
+
+  // 1. Polish with Travel Labor filled (a crew-size row, crew 4), switched to Epoxy: the new carrier's row is filled; the off root's row is untouched.
+  const sw = await opened("epoxy", polishBid(filledRow));
+  const swBefore = report(sw);
+  const ci = sw.api.root().tabs.Epoxy.labor.findIndex((r) => r.id === "epoxy-install");
+  const ti = sw.api.root().tabs.Epoxy.labor.findIndex((r) => r.id === "travel");
+  const boxOf = (x, i, k) => String(P.need(x, '[data-lab="' + i + '"][data-k="' + k + '"]').value);
+  const swBoxes = { hours: boxOf(sw, ti, "days"), guys: boxOf(sw, ti, "guys"), note: P.need(sw, "[data-trv-src]").textContent };
+  P.typeInto(sw, '[data-lab="' + ci + '"][data-k="guys"]', "4");
+  P.typeInto(sw, '[data-lab="' + ci + '"][data-k="days"]', "12");
+  const swAfter = Object.assign(report(sw), { cost: B.laborCost(rowIn(sw.api.root().tabs.Epoxy)), guysBox: boxOf(sw, ti, "guys") });
+  sw.clock.fire();
+  const swSaved = clone(rowIn(sw.api.root().tabs.Epoxy));
+  const swSavedBlob = sw.rec.saves[sw.rec.saves.length - 1].polish_estimate;
+
+  // 2. The same bid opened as it was saved (a plain reopen): nothing changes, nothing is saved, nothing is asked.
+  const plain = await opened("polish", polishBid(filledRow));
+  const plainOut = report(plain);
+  const plainWith = (extra) => ({ saves: extra.rec.saves.length });
+
+  // 3. A Polish bid whose Travel Labor was left BLANK (what a new bid held from 2026-10-12 to 10-20): a plain reopen fills nothing,
+  //    and switching it to Epoxy fills the NEW carrier's row and leaves the root's blank one alone.
+  const blankPlain = await opened("polish", polishBid());
+  const blankPlainOut = report(blankPlain);
+  const blankSwitch = await opened("epoxy", polishBid());
+  const blankSwitchOut = report(blankSwitch);
+
+  // 4. A switch that KEEPS the carrier (Polish to Combo: the root stays the first base) fills nothing into the root's blank row.
+  const combo = await opened("combo", polishBid());
+  const comboOut = report(combo);
+
+  // 5. A Polish bid with NO distance on file switched to Epoxy: the new row has nothing to follow.
+  const noDist = await opened("epoxy", polishBid(null, { distance: undefined }));
+  const noDistOut = report(noDist);
+
+  // 6. A root row switched OFF stays as it is; the new carrier (not off) is filled all the same.
+  const offRoot = await opened("epoxy", polishBid(Object.assign({ enabled: false }, filledRow)));
+  const offRootOut = report(offRoot);
+
+  // 7. The bid saved after the switch, REOPENED: the crew-size row on the Epoxy section is exactly as saved (no save, no lookup), and it keeps
+  //    following the section's crew (6 guys typed on Epoxy install = 6 on Travel Labor).
+  const reopened = await opened("epoxy", clone(swSavedBlob));
+  const reopenedOut = report(reopened);
+  const rci = reopened.api.root().tabs.Epoxy.labor.findIndex((r) => r.id === "epoxy-install");
+  const rti = reopened.api.root().tabs.Epoxy.labor.findIndex((r) => r.id === "travel");
+  P.typeInto(reopened, '[data-lab="' + rci + '"][data-k="guys"]', "6");
+  const reopenedAfter = { row: clone(rowIn(reopened.api.root().tabs.Epoxy)), guysBox: boxOf(reopened, rti, "guys"),
+    cost: B.laborCost(rowIn(reopened.api.root().tabs.Epoxy)) };
+
+  // 8. A box CLEARED on the Epoxy section's Travel Labor is marked on THAT row (the page edits the section through its view), and the next
+  //    answer (the button's 300 miles) leaves it empty; the off root's own row carries no mark.
+  const cl = await opened("epoxy", polishBid(filledRow));
+  const cti = cl.api.root().tabs.Epoxy.labor.findIndex((r) => r.id === "travel");
+  P.typeInto(cl, '[data-lab="' + cti + '"][data-k="days"]', "");
+  P.clickOn(cl, "[data-dist-lookup]"); await settle();
+  const clearedOut = { row: clone(rowIn(cl.api.root().tabs.Epoxy)), rootRow: clone(rowIn(cl.api.root())), hoursBox: boxOf(cl, cti, "days") };
+
+  return { switched: { before: swBefore, boxes: swBoxes, after: swAfter, saved: swSaved, savedKind: swSavedBlob.kind,
+                       savedTabs: Object.keys(swSavedBlob.tabs || {}), savedDistance: swSavedBlob.distance && swSavedBlob.distance.miles },
+           plain: Object.assign(plainOut, plainWith(plain)), blankPlain: blankPlainOut, blankSwitch: blankSwitchOut,
+           combo: comboOut, noDistance: noDistOut, offRoot: offRootOut,
+           reopened: Object.assign(reopenedOut, { after: reopenedAfter }), clearedOnSection: clearedOut };
 }
 
 /** THE HARD BID SWITCH on the Review step's Discount line (Hanz, 2026-10-17), driven through the page: by click and by the

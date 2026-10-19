@@ -578,6 +578,11 @@ def test_a_rate_that_arrives_as_a_string_still_reads_as_money(ran):
         "a guys_auto line does not say it is typed on a new estimate and only older ones follow the crew")
     assert s["noFillPromise"], (
         "the Defaults list still says man-days come off the crew rows, but a new estimate opens empty")
+    # Travel Labor is the one line the estimate fills itself, in what it says: hours from the miles, guys the most on any line, Gyp typed.
+    assert s["travelExplained"] == ("Typed on the estimate. On a Polish, Epoxy or Combo job 70 miles or more out, the estimate fills the "
+                                    "hours from the miles (one round trip) and the guys as the most on any labor line. A Gyp bid is typed."), (
+        s["travelExplained"])
+    assert "man-days" not in s["travelExplained"], "the Travel guys are the crew's size, not man-days"
 
 
 @needs_node

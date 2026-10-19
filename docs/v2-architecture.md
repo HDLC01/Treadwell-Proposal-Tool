@@ -854,9 +854,12 @@ tooling line (the tab's D55 is at least $150 and counts slurry hardener and plas
 tooling and travel, lodging nights counted in people-days, no hard bid and no bond. Hanz decided on 2026-10-07 that the
 fixes apply to NEW bids only and that a saved bid keeps its total, and on 2026-10-12 that a new bid's Lodging nights and
 Per Diem days start empty and are typed. On 2026-10-20 he chose, for Travel Labor alone, that a job 70 miles or more from
-the office fills the line by itself, Kyle's way ("Every work day"): the hours are one round trip at 60 mph to the half hour,
-the guys are the man-days of the labor lines, a typed figure always wins, and a saved bid never moves on open
-(`followDistanceHours` in `js/bid-model.js`, held by `tests/test_polish_travel_hours.py`).
+the office fills the line by itself, and a scan of the estimate workbooks in Kyle's Dropbox (276 out-of-town jobs) set how:
+the hours are one round trip at 60 mph to the half hour and the guys are the crew's size (the most guys on any labor line,
+over both base sheets of a Combo), so each guy is charged one round trip, as Kyle types it on 9 of 10 out-of-town sheets.
+A figure the estimator typed, or cleared, always wins; a switched-off row is left as it is; a bid saved before 2026-10-12
+that is on the old man-days auto keeps them; and a saved bid never moves on open (`followDistanceHours` in `js/bid-model.js`,
+held by `tests/test_polish_travel_hours.py`).
 
 **Done.**
 

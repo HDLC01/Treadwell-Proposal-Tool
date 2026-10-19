@@ -3807,10 +3807,11 @@
         "<td>" + esc(r.label) + (travelRo ? ' <span class="wtall">Global</span>' : "") + "</td>" +
         '<td class="n">' + esc(L.money(r.rate)) + (r.unit === "hours" ? " / hr" : " / day") +
         "</td>" +
-        // Travel Labor is the one line the estimate fills itself, and only on a job 70 miles or more out (2026-10-20),
-        // whatever the row's guys_auto says: that flag is for the estimates saved before 2026-10-12.
-        "<td>Typed on the estimate. On a job 70 miles or more out the hours come from the miles and the guys are the " +
-          "crew man-days.</td>" +
+        // Travel Labor is the one line the estimate fills itself, and only on a Polish, Epoxy or Combo job 70 miles or more
+        // out (2026-10-20), whatever the row's guys_auto says: that flag is for the estimates saved before 2026-10-12. A Gyp
+        // bid is never filled, so the words say so.
+        "<td>Typed on the estimate. On a Polish, Epoxy or Combo job 70 miles or more out, the estimate fills the hours from " +
+          "the miles (one round trip) and the guys as the most on any labor line. A Gyp bid is typed.</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
           ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN && !travelRo)
@@ -3961,9 +3962,10 @@
     html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n' +
       (ADMIN ? ' lc-fixed' : '') + '">' + esc(L.money(tl.rate)) + '</td><td>per ' +
       (tl.unit === "days" ? "day" : "hour") + '</td><td class="lc-how">' +
-      'Man-days of the labor tasks, times the round trip drive hours. On a job 70 miles or more from the ' +
-      'office the estimate fills the hours in from the miles (60 mph, to the half hour); under 70 miles ' +
-      'the estimator types them. The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
+      'Guys times the round trip drive hours, one trip for each guy. On a Polish, Epoxy or Combo job 70 miles or ' +
+      'more from the office the estimate fills the hours in from the miles (60 mph, to the half hour) and the guys ' +
+      'as the most on any labor line; under 70 miles, and on a Gyp bid, the estimator types them. ' +
+      'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
       (ADMIN ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
       '</td></tr>';
     html += '</tbody></table></div></div></div>';

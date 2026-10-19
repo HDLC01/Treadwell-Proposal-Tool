@@ -272,9 +272,30 @@ async function main() {
 
   // ── 14. the labor rows are ordinary crew lines priced by the hour: not dimmed, no drive-time words ──
   const labPanel = (() => { api.go(1); return html(b, "panels"); })();
+  const trvNoteOf = (panel) => ((panel.match(/<p class="hint trvnote">Drive time is expected[^<]*<\/p>/) || [""])[0]).replace(/<[^>]*>/g, "");
   out.laborCards = {
     pourHint: labPanel.indexOf("Hours on the job.") >= 0, driveHint: (labPanel.match(/Drive time, each way counted\./g) || []).length,
     hourCards: (labPanel.match(/data-lab-card="\d+"/g) || []).length,
+    travelNote: trvNoteOf(labPanel),
+  };
+
+  // ── 15. A FAR GYP JOB'S TRAVEL LABOR IS NOT FILLED, AND ITS CARD DOES NOT SAY IT IS (2026-10-20 audit). A far distance fills Travel Labor
+  //        on a Polish, Epoxy or Combo job (hours from the miles, guys the crew's size). A Gyp bid is priced by the hour and works its own
+  //        drive time, so its row is left empty and typed, and its card must not promise "the hours fill in from the miles".
+  const farGyp = await open(gypDraft({ address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" }),
+    { distance: { ok: true, miles: 190, reason: "" } });
+  farGyp.api.go(1);
+  for (let i = 0; i < 6; i++) await flush();
+  const gRoot = farGyp.api.root();
+  const gModel = farGyp.api.model();
+  const gi = gModel.labor.findIndex((r) => r.id === "travel");
+  const gPanel = html(farGyp, "panels");
+  out.farGyp = {
+    distance: gRoot.distance && gRoot.distance.miles, local: gRoot.conditions.local, travelCards: (gPanel.match(/data-trv-card="/g) || []).length,
+    row: clone(gModel.labor[gi]), hoursBox: String(P.need(farGyp, '[data-lab="' + gi + '"][data-k="days"]').value),
+    guysBox: String(P.need(farGyp, '[data-lab="' + gi + '"][data-k="guys"]').value), cardNote: trvNoteOf(gPanel),
+    srcNote: { text: P.need(farGyp, "[data-trv-src]").textContent, hidden: P.need(farGyp, "[data-trv-src]").hidden },
+    lodging: gRoot.travel.lodging.enabled, perDiem: gRoot.travel.per_diem.enabled,
   };
   return out;
 }

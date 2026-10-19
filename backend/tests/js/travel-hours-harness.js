@@ -1,13 +1,16 @@
 "use strict";
-/* Runs the REAL bid-model.js: THE DISTANCE FILLS TRAVEL LABOR on a job 70 miles or more out (Hanz, 2026-10-20; asked how,
- * he chose "Every work day (Kyle's sheet math)"). The hours are one round trip from the Olathe office at 60 mph, to the
- * half hour; the guys are the crew's man-days (guys_auto on); a typed figure always wins; under 70 miles, or with the miles
- * cleared, only the figure the tool wrote goes back to empty.
+/* Runs the REAL bid-model.js: THE DISTANCE FILLS TRAVEL LABOR on a job 70 miles or more out, THE WAY KYLE TYPES IT (Hanz,
+ * 2026-10-20). The hours are one round trip from the Olathe office at 60 mph, to the half hour; the guys are the CREW'S SIZE
+ * (the most guys on any labor line, the fourth hand of "Remove existing joint filler" counted, both base sheets of a Combo),
+ * so each guy is charged one round trip, as Kyle types it on 9 of 10 out-of-town sheets of the 2026-10-20 scan. A figure the
+ * estimator typed, or cleared, always wins; a switched-off row is left exactly as it is; under 70 miles, or with the miles
+ * cleared, only the hours the tool wrote go back to empty; a bid saved before 2026-10-12 on the old man-days auto keeps them.
  *
  * Every answer is asked of the model the way the page asks it: applyDistance / clearDistance on the WHOLE model, then
- * B.syncAutoGuys, which changed() runs after every answer. `wichitaBare` is the one case that leaves the sync out, to
- * show the answer fills the guys by itself. This file replaced the harness that pinned "a distance answer fills NO hours"
- * (2026-10-12): each of its cases is here again, under the new rule.
+ * B.syncAutoGuys, which changed() runs after every answer; and a keystroke is typeIn() below, which does what the page's
+ * `input` handler does (the page itself is driven in polish-estimate-harness.js). `wichitaBare` is the one case that leaves
+ * the sync out, to show the answer fills the guys by itself. The first version of this file (2026-10-20, "Every work day")
+ * filled the guys with the MAN-DAYS: 48 x 6.5 x $33 = $10,296 for the example below; it is $858 now.
  *
  * Usage: node travel-hours-harness.js <frontend-dir>   ->  one line of JSON
  */
@@ -18,11 +21,22 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 const trvOf = (m) => m.labor.filter((r) => r.id === "travel")[0];
 function ask(m, miles) { B.applyDistance(m, { miles: miles, source: "typed", key: "" }); B.syncAutoGuys(m); return m; }
 function clear(m) { B.clearDistance(m); B.syncAutoGuys(m); return m; }
+/** A keystroke in a Travel Labor box, as the page's `input` handler takes it: the row is marked, typing in an auto Guys box takes it
+ *  off auto, the box holds the text as typed, and changed() then runs the sync. `key` is "guys" or "days" (the Hours box). */
+function typeIn(m, key, text) {
+  const r = trvOf(m);
+  B.markTypedByHand(r, key);
+  if (key === "guys" && r.guys_auto) r.guys_auto = false;
+  r[key] = text;
+  B.syncAutoGuys(m);
+  return m;
+}
 function facts(m, row) {
   const r = row || trvOf(m);
-  return { hours: r.days, seed: r.hours_seed === undefined ? null : r.hours_seed, auto: !!r.guys_auto, guys: r.guys,
-           cost: B.laborCost(r), on: B.rowOn(r) };
+  return { hours: r.days, seed: r.hours_seed === undefined ? null : r.hours_seed, auto: !!r.guys_auto,
+           follow: r.guys_follow === undefined ? null : r.guys_follow, guys: r.guys, cost: B.laborCost(r), on: B.rowOn(r) };
 }
+const lineOf = (m, label) => B.travelHow(m).lines.filter((l) => l.indexOf(label) === 0)[0];
 
 // A NEW bid, made the way the page makes it: the library's labor lines seeded onto a bid nobody has saved, every quantity
 // emptied (the Travel row opens with no guys, no hours, off auto and with no marker). The crew is then typed as text.
@@ -31,9 +45,10 @@ const seedCtx = (extra) => Object.assign({ saved: undefined, laborRows: B.withCr
   travelRates: null, feesDefault: null, calcRows: null, conditionRows: null, cellValues: {}, split: false,
   asms: [], items: [], reserved: [], sf: {} }, extra || {});
 const newBid = () => B.seedNewSections(B.migrateModel(undefined), seedCtx());
-/** Polishing 4 guys for 12 days and nothing else on the crew: 48 man-days. */
+const row = (m, id) => m.labor.filter((r) => r.id === id)[0];
+/** Polishing 4 guys for 12 days and nothing else on the crew: 4 guys, 48 man-days. */
 function crewed(m) {
-  const p = m.labor.filter((r) => r.id === "polishing")[0];
+  const p = row(m, "polishing");
   p.guys = "4"; p.days = "12";
   return m;
 }
@@ -43,13 +58,13 @@ const out = {};
 out.newRow = clone(trvOf(newBid()));
 
 // 1. WICHITA: 190 miles on a new bid with the crew typed. 380 miles round trip at 60 mph is 6.33 hours, to the half hour 6.5;
-//    the guys are the 48 man-days; 48 x 6.5 x $33 = $10,296. The three travel lines come on, and the line is on, not gray.
+//    the guys are the crew's 4; 4 x 6.5 x $33 = $858 (the 48 man-days are not the guys). The three travel lines come on.
 const w = crewed(newBid()); ask(w, 190);
 out.wichita = Object.assign(facts(w), {
-  manDays: B.travelManDays(w.labor), expected: 48 * 6.5 * RATE, rate: trvOf(w).rate, local: w.conditions.local,
+  manDays: B.travelManDays(w.labor), crew: B.crewSize(w), expected: 4 * 6.5 * RATE, rate: trvOf(w).rate, local: w.conditions.local,
   lodging: w.travel.lodging.enabled, perDiem: w.travel.per_diem.enabled, source: B.driveHoursSource(w, trvOf(w)),
-  words: B.driveHoursSentence(B.driveHoursSource(w, trvOf(w))), note: B.driveHoursNote(w, trvOf(w), w.labor),
-  how: B.travelHow(w).lines[0] });
+  words: B.driveHoursSentence(w, trvOf(w)), note: B.driveHoursNote(w, trvOf(w), w.labor),
+  hint: B.travelGuysHint(w, trvOf(w), w.labor), how: B.travelHow(w).lines, howText: B.travelHow(w).text });
 // ...the answer alone, without changed()'s sync after it: it fills the guys itself.
 const wb = crewed(newBid()); B.applyDistance(wb, { miles: 190, source: "typed", key: "" });
 out.wichitaBare = facts(wb);
@@ -58,44 +73,157 @@ const sh = B.freshModel();
 sh.labor = [{ id: "polishing", label: "Polishing", guys: 4, days: 12, rate: RATE }, trvOf(sh)];
 ask(sh, 190);
 out.shippedRow = facts(sh);
-// ...no crew yet: the guys follow the man-days, so there are none, and the line prices nothing until there are.
+// ...no crew yet: the guys follow the labor lines, which have none, so the line prices nothing until they do.
 const nc = newBid(); ask(nc, 190);
-out.noCrewYet = Object.assign(facts(nc), { note: B.driveHoursNote(nc, trvOf(nc), nc.labor), how: B.travelHow(nc).lines[0] });
+out.noCrewYet = Object.assign(facts(nc), { note: B.driveHoursNote(nc, trvOf(nc), nc.labor), how: lineOf(nc, "Travel Labor"),
+  hint: B.travelGuysHint(nc, trvOf(nc), nc.labor) });
 // ...and the crew typed AFTER the answer moves the guys with it, as the page's changed() does.
 crewed(nc); B.syncAutoGuys(nc);
 out.crewAfter = facts(nc);
+// ...a crew lowered later lowers the guys: the Travel row's own guys are never part of the crew it follows.
+const lowered = crewed(newBid()); ask(lowered, 190);
+row(lowered, "polishing").guys = "2"; B.syncAutoGuys(lowered);
+out.crewLowered = facts(lowered);
+// ...one guy reads as one guy.
+const one = newBid(); row(one, "polishing").guys = "1"; ask(one, 190);
+out.oneGuy = { words: B.driveHoursSentence(one, trvOf(one)), guys: trvOf(one).guys };
 
-// 2. A TYPED FIGURE ALWAYS WINS. Hours typed over the 6.5 (text, as the box hands it over) survive a second answer.
+// 2. THE CREW'S SIZE: the most guys on any ONE labor line (not the sum, not the man-days), the fourth hand counted, off lines
+//    and the Travel row itself left out, a line with no guys counted as none, an hours line that is not Travel counted.
+const cs = crewed(newBid());
+const sizes = { polishing4: B.crewSize(cs) };
+row(cs, "mockup").guys = "6"; row(cs, "mockup").enabled = false;
+sizes.offLineLeftOut = B.crewSize(cs);
+row(cs, "mockup").enabled = true;
+sizes.mockup6 = B.crewSize(cs);
+row(cs, "mockup").guys = "";
+trvOf(cs).guys = 9;
+sizes.travelRowLeftOut = B.crewSize(cs);
+trvOf(cs).guys = "";
+cs.labor.push({ id: "night", label: "Night shift", guys: "5", days: "3", rate: RATE, unit: "hours" });
+sizes.hoursLineCounts = B.crewSize(cs);
+sizes.empty = B.crewSize(newBid());
+sizes.noModel = B.crewSize(null);
+out.sizes = sizes;
+// THE FOURTH HAND of "Remove existing joint filler" is one more guy on the joint-filler line, kept by removeExistingHand and not in
+// the line's own Guys: 3 + 1 = 4 beats a crew of 3, only while both conditions are on, only on a line that is on, and only on a line
+// that has guys (a line with no guys counts 0).
+const hand = (patch) => {
+  const m = newBid();
+  row(m, "polishing").guys = "3"; row(m, "polishing").days = "5";
+  row(m, "jointfill").guys = "3"; row(m, "jointfill").days = "2";
+  Object.assign(m.conditions, { joint_filler: true, remove_existing_jf: true });
+  if (patch) patch(m);
+  return B.crewSize(m);
+};
+out.hand = {
+  on: hand(), noRemoveExisting: hand((m) => { m.conditions.remove_existing_jf = false; }),
+  noJointFiller: hand((m) => { m.conditions.joint_filler = false; }),
+  lineOff: hand((m) => { row(m, "jointfill").enabled = false; }),
+  lineWithNoGuys: hand((m) => { row(m, "jointfill").guys = ""; row(m, "polishing").guys = "2"; }),
+  bigger: hand((m) => { row(m, "polishing").guys = "4"; }),
+};
+// ...and it reaches the line: 4 guys x 6.5 x $33 = $858, where 3 guys would be $643.50.
+const hw = newBid();
+row(hw, "polishing").guys = "3"; row(hw, "polishing").days = "5"; row(hw, "jointfill").guys = "3"; row(hw, "jointfill").days = "2";
+Object.assign(hw.conditions, { joint_filler: true, remove_existing_jf: true });
+ask(hw, 190);
+out.handLine = facts(hw);
+// A COMBO has one crew that drives once: the most over BOTH base sections (Polish 3 x 5, Epoxy 4 x 12), not the carrier's alone and not the sum.
+const EP_LIB = B.withCrewFallback([
+  { id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, favorite: true, default_on: true },
+  { id: "epoxy-install", name: "Epoxy install", rate: 33, unit: "days", guys_auto: false, favorite: true, default_on: true,
+    default_work_types: ["epoxy"] }]);
+const combo = (polishGuys, epoxyGuys) => {
+  const cj = B.seedNewSections(B.activateSection(B.migrateModel(undefined), "Epoxy", "base", {}), seedCtx({ laborRows: EP_LIB }));
+  row(cj.tabs.Epoxy, "epoxy-install").guys = String(epoxyGuys); row(cj.tabs.Epoxy, "epoxy-install").days = "12";
+  row(cj, "polishing").guys = String(polishGuys); row(cj, "polishing").days = "5";
+  return cj;
+};
+const cj = combo(3, 4); ask(cj, 190);
+out.comboJob = Object.assign(facts(cj), { crew: B.crewSize(cj), manDays: B.travelManDays(cj.labor), carrier: B.travelCarrier(cj),
+  epoxyHasTravel: cj.tabs.Epoxy.labor.some((r) => r.id === "travel"), words: B.driveHoursSentence(cj, trvOf(cj)),
+  hint: B.travelGuysHint(cj, trvOf(cj), cj.labor), howGuys: B.travelHow(cj).lines.filter((l) => l.indexOf("Guys = ") === 0)[0] });
+const cj2 = combo(5, 4); ask(cj2, 190);
+out.comboPolishBigger = facts(cj2);
+const cj3 = combo(3, 4); cj3.tabs.Epoxy.kind = "option"; B.syncAutoGuys(cj3); ask(cj3, 190);
+out.comboOptionLeftOut = Object.assign(facts(cj3), { crew: B.crewSize(cj3) });
+
+// 3. A TYPED FIGURE ALWAYS WINS. Hours typed over the 6.5 (text, as the box hands it over) survive a second answer.
 const t = crewed(newBid()); ask(t, 190);
-trvOf(t).days = "4";
+typeIn(t, "days", "4");
 ask(t, 300);
-out.typedHoursSurvive = Object.assign(facts(t), { source: B.driveHoursSource(t, trvOf(t)), note: B.driveHoursNote(t, trvOf(t), t.labor),
-  how: B.travelHow(t).lines[0] });
+out.typedHoursSurvive = Object.assign(facts(t), { marked: trvOf(t).hours_typed === true, source: B.driveHoursSource(t, trvOf(t)),
+  note: B.driveHoursNote(t, trvOf(t), t.labor), how: lineOf(t, "Travel Labor") });
 // ...even when what was typed spells the very digits the tool wrote.
 const td = crewed(newBid()); ask(td, 190);
-trvOf(td).days = "6.5";
+typeIn(td, "days", "6.5");
 ask(td, 300);
 out.typedSameDigits = facts(td);
+// ...and with no marker at all a TEXT figure is still never the tool's (a row from before the markers), even spelling its digits.
+const tm = crewed(newBid()); ask(tm, 190);
+trvOf(tm).days = "4";
+ask(tm, 300);
+out.typedTextNoMarker = facts(tm);
+const tdn = crewed(newBid()); ask(tdn, 190);
+trvOf(tdn).days = "6.5";
+ask(tdn, 300);
+out.typedSameDigitsNoMarker = facts(tdn);
 // ...guys the same: typed guys stay, the hours are filled.
-const tg = crewed(newBid()); trvOf(tg).guys = "2";
+const tg = crewed(newBid());
+typeIn(tg, "guys", "2");
 ask(tg, 190);
-out.typedGuysSurvive = facts(tg);
+out.typedGuysSurvive = Object.assign(facts(tg), { marked: trvOf(tg).guys_typed === true,
+  note: B.driveHoursNote(tg, trvOf(tg), tg.labor), how: lineOf(tg, "Travel Labor") });
 // ...typed 0 hours is an answer too (it prices nothing), not a blank to fill.
-const tz = crewed(newBid()); trvOf(tz).days = "0";
+const tz = crewed(newBid());
+typeIn(tz, "days", "0");
 ask(tz, 190);
 out.typedZeroStays = facts(tz);
+// ...typed guys from a row saved before the markers (a number in the box, off auto, no marker) are the estimator's too.
+const sg = crewed(newBid()); trvOf(sg).guys = "2";
+ask(sg, 190);
+out.savedTypedGuys = facts(sg);
 
-// 3. AN UNTOUCHED FIGURE FOLLOWS THE NEXT ANSWER: 190 miles is 6.5 hours, 300 miles is 10.
+// 3b. A CLEARED BOX STAYS EMPTY (Hanz, 2026-10-12; the 2026-10-20 audit found an answer refilling one). Clearing is typing: the
+//     marker is there, the box is empty, and no later answer writes into it.
+const ch = crewed(newBid()); ask(ch, 190);
+typeIn(ch, "days", "");
+ask(ch, 300);
+out.clearedHours = Object.assign(facts(ch), { marked: trvOf(ch).hours_typed === true, note: B.driveHoursNote(ch, trvOf(ch), ch.labor) });
+const cg = crewed(newBid()); ask(cg, 190);
+typeIn(cg, "guys", "");
+ask(cg, 300);
+out.clearedGuys = Object.assign(facts(cg), { marked: trvOf(cg).guys_typed === true });
+// ...a box typed in and cleared BEFORE the first answer is cleared all the same.
+const cb = crewed(newBid());
+typeIn(cb, "days", "5"); typeIn(cb, "days", "");
+typeIn(cb, "guys", "3"); typeIn(cb, "guys", "");
+ask(cb, 190);
+out.clearedBeforeAnswer = facts(cb);
+// ...and the mark is saved with the row: a reopened bid (migrate, sync, then an answer) still leaves the cleared boxes empty.
+const cr = B.migrateModel(clone(cb)); B.syncAutoGuys(cr);
+ask(cr, 300);
+out.clearedSurvivesReopen = facts(cr);
+// ...typing marks only the Travel row, and typing in the Guys box takes the box off the crew's size.
+const mk = crewed(newBid()); ask(mk, 190);
+const polBefore = JSON.stringify(row(mk, "polishing"));
+B.markTypedByHand(row(mk, "polishing"), "guys"); B.markTypedByHand(row(mk, "polishing"), "days");
+out.markNonTravel = { same: JSON.stringify(row(mk, "polishing")) === polBefore, nullRow: String(B.markTypedByHand(null, "guys")) };
+B.markTypedByHand(trvOf(mk), "guys");
+out.markTravel = { follow: trvOf(mk).guys_follow === undefined ? null : trvOf(mk).guys_follow, typed: trvOf(mk).guys_typed, hoursTyped: trvOf(mk).hours_typed === undefined ? null : trvOf(mk).hours_typed };
+
+// 4. AN UNTOUCHED FIGURE FOLLOWS THE NEXT ANSWER: 190 miles is 6.5 hours, 300 miles is 10.
 const u = crewed(newBid()); ask(u, 190); ask(u, 300);
 out.untouchedMoves = facts(u);
 // ...every answer in turn on one bid: 190, 300, exactly 70 (2.33 hours, to the half 2.5), 69.9 (local), 120.4 (4.01, 4.5).
 const seq = crewed(newBid());
 out.sequence = [190, 300, 70, 69.9, 120.4].map((mi) => { ask(seq, mi); return [mi, trvOf(seq).days, trvOf(seq).hours_seed, seq.conditions.local]; });
 
-// 4. GOING LOCAL takes the tool's own hours back and leaves typed ones. The line grays again (hours blank, local).
+// 5. GOING LOCAL takes the tool's own hours back and leaves typed ones. The line grays again (hours blank, local). The guys stay on the crew.
 const lc = crewed(newBid()); ask(lc, 190); ask(lc, 20);
 out.goingLocal = Object.assign(facts(lc), { local: lc.conditions.local, note: B.driveHoursNote(lc, trvOf(lc), lc.labor) });
-const lk = crewed(newBid()); ask(lk, 190); trvOf(lk).days = "4"; ask(lk, 20);
+const lk = crewed(newBid()); ask(lk, 190); typeIn(lk, "days", "4"); ask(lk, 20);
 out.localKeepsTyped = Object.assign(facts(lk), { local: lk.conditions.local });
 // ...and far again fills it again.
 ask(lc, 190);
@@ -103,11 +231,12 @@ out.backToFar = facts(lc);
 // CLEARING the miles is the same: the tool's hours go, typed ones stay.
 const cl = crewed(newBid()); ask(cl, 190); clear(cl);
 out.cleared = Object.assign(facts(cl), { local: cl.conditions.local, distance: cl.distance === undefined ? null : cl.distance });
-const ck = crewed(newBid()); ask(ck, 190); trvOf(ck).days = "4"; clear(ck);
+const ck = crewed(newBid()); ask(ck, 190); typeIn(ck, "days", "4"); clear(ck);
 out.clearedKeepsTyped = facts(ck);
 
-// 5. A BID SAVED BEFORE. A row from 2026-10-12 and after (nothing typed, off auto) is filled when an answer is applied in a
-//    session; a pre-2026-10-12 row on auto with hours typed keeps them; a row carrying the old marker follows the answer.
+// 6. A BID SAVED BEFORE. A row from 2026-10-12 and after (nothing typed, off auto) is filled when an answer is applied in a
+//    session; a pre-2026-10-12 row on the OLD auto keeps its man-days (the answer fills only its hours); a row carrying the
+//    old marker follows the answer.
 const old1 = crewed(newBid());
 trvOf(old1).days = 5; trvOf(old1).guys_auto = true; trvOf(old1).guys = 16.5;                 // typed hours, a number, no marker
 ask(old1, 300);
@@ -115,38 +244,39 @@ out.savedTypedHoursStay = facts(old1);
 const old2 = crewed(newBid());
 Object.assign(trvOf(old2), { days: 5, hours_seed: 5, guys_auto: true, guys: 16.5 });         // the 2026-10-06 era: the tool's own 5
 ask(old2, 300);
-out.savedMarkerFollows = facts(old2);
+out.savedMarkerFollows = Object.assign(facts(old2), { note: B.driveHoursNote(old2, trvOf(old2), old2.labor),
+  how: lineOf(old2, "Travel Labor"), hint: B.travelGuysHint(old2, trvOf(old2), old2.labor), howText: B.travelHow(old2).text });
+// the older auto with NO hours yet: the answer fills the hours and the guys stay the man-days (no marker is added), so it prices as it did
+const old3 = crewed(newBid());
+Object.assign(trvOf(old3), { days: "", guys_auto: true, guys: "" });
+ask(old3, 190);
+out.savedAutoBlankHours = Object.assign(facts(old3), { manDays: B.travelManDays(old3.labor), crew: B.crewSize(old3) });
 // OPENING moves nothing: migrate and sync a saved far job with Travel Labor blank, and the row is what was saved.
 const saved = crewed(newBid());
 saved.distance = { miles: 190, source: "google", key: "k" }; saved.conditions.local = false;
 const savedRow = JSON.stringify(trvOf(saved));
 const reopened = B.migrateModel(clone(saved)); B.syncAutoGuys(reopened);
 out.openMovesNothing = { same: JSON.stringify(trvOf(reopened)) === savedRow, row: trvOf(reopened) };
+// A SAVED crew-size row reopens as it was saved, and keeps following the crew.
+const sv = crewed(newBid()); ask(sv, 190);
+const svRow = JSON.stringify(trvOf(sv));
+const svOpen = B.migrateModel(clone(sv)); B.syncAutoGuys(svOpen);
+const svSame = JSON.stringify(trvOf(svOpen)) === svRow;
+row(svOpen, "polishing").guys = "6"; B.syncAutoGuys(svOpen);
+out.savedCrewRow = { sameOnOpen: svSame, afterCrewChange: facts(svOpen) };
 
-// 6. WHICH SECTION. The Travel Labor row is the carrier's, with the carrier's own crew.
-const EP_LIB = B.withCrewFallback([
-  { id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, favorite: true, default_on: true },
-  { id: "epoxy-install", name: "Epoxy install", rate: 33, unit: "days", guys_auto: false, favorite: true, default_on: true,
-    default_work_types: ["epoxy"] }]);
+// 7. WHICH SECTION. The Travel Labor row is the carrier's, with the carrier's own crew.
 // an Epoxy job: the Polish root is off and Epoxy carries the travel
 const ej = B.seedNewSections(B.activateSection(Object.assign(B.migrateModel(undefined), { kind: "off" }), "Epoxy", "base", {}),
   seedCtx({ laborRows: EP_LIB }));
-ej.tabs.Epoxy.labor.filter((r) => r.id === "epoxy-install")[0].guys = "4";
-ej.tabs.Epoxy.labor.filter((r) => r.id === "epoxy-install")[0].days = "12";
+row(ej.tabs.Epoxy, "epoxy-install").guys = "4";
+row(ej.tabs.Epoxy, "epoxy-install").days = "12";
 const epRowBefore = JSON.stringify(ej.labor.filter((r) => r.id === "travel")[0]);
 ask(ej, 190);
 const epTravel = ej.tabs.Epoxy.labor.filter((r) => r.id === "travel")[0];
-out.epoxyJob = Object.assign(facts(ej, epTravel), { manDays: B.travelManDays(ej.tabs.Epoxy.labor),
+out.epoxyJob = Object.assign(facts(ej, epTravel), { manDays: B.travelManDays(ej.tabs.Epoxy.labor), crew: B.crewSize(ej),
   rootRowUntouched: JSON.stringify(ej.labor.filter((r) => r.id === "travel")[0]) === epRowBefore, carrier: B.travelCarrier(ej) });
-// a combo job (two bases): the first base, the Polish root, carries the travel, so ITS crew is the man-days (3 x 5, not Epoxy's 48)
-const cj = B.seedNewSections(B.activateSection(B.migrateModel(undefined), "Epoxy", "base", {}), seedCtx({ laborRows: EP_LIB }));
-cj.tabs.Epoxy.labor.filter((r) => r.id === "epoxy-install")[0].guys = "4";
-cj.tabs.Epoxy.labor.filter((r) => r.id === "epoxy-install")[0].days = "12";
-const cp = cj.labor.filter((r) => r.id === "polishing")[0]; cp.guys = "3"; cp.days = "5";
-ask(cj, 190);
-out.comboJob = Object.assign(facts(cj), { manDays: B.travelManDays(cj.labor), carrier: B.travelCarrier(cj),
-  epoxyHasTravel: cj.tabs.Epoxy.labor.some((r) => r.id === "travel") });
-// a Gyp job prices its crew by the hour, so there are no man-days to follow: left exactly as it was
+// a Gyp job prices its crew by the hour and works its own drive time: left exactly as it was
 const GYP = 'Gyp (USG 1-8")';
 const gj = B.activateSection(Object.assign(B.migrateModel(undefined), { kind: "off" }), GYP, "base", {});
 gj.tabs[GYP].labor = [{ id: "pour", label: "Pour", guys: "4", days: "12", rate: 33, unit: "hours" },
@@ -160,34 +290,82 @@ let threw = null;
 try { ask(nt, 190); } catch (e) { threw = String(e); }
 out.noTravelRow = { threw: threw, distance: nt.distance, rows: nt.labor.map((r) => r.id) };
 
-// 7. THE OTHER TWO LINES ARE AS THEY WERE: switched on by the answer, a hand flip never moved.
+// 8. A SWITCHED-OFF ROW IS LEFT EXACTLY AS IT IS (the slider on its card, or its default on the Defaults tab): no fill, no take-back, no note.
+const off1 = crewed(newBid()); trvOf(off1).enabled = false;
+const off1Before = JSON.stringify(trvOf(off1));
+ask(off1, 190);
+out.offBefore = { untouched: JSON.stringify(trvOf(off1)) === off1Before, distance: off1.distance && off1.distance.miles, local: off1.conditions.local,
+  note: B.driveHoursNote(off1, trvOf(off1), off1.labor), how: B.travelHow(off1).text };
+const off2 = crewed(newBid()); ask(off2, 190); trvOf(off2).enabled = false;
+const off2Before = JSON.stringify(trvOf(off2));
+ask(off2, 300);
+// ...and an off row that still holds the figures the CURRENT distance gave says nothing in the note (it adds nothing to the bid)
+const off4 = crewed(newBid()); ask(off4, 190);
+const noteOn = B.driveHoursNote(off4, trvOf(off4), off4.labor); trvOf(off4).enabled = false;
+out.offNote = { on: noteOn, off: B.driveHoursNote(off4, trvOf(off4), off4.labor), sentenceOff: B.driveHoursSentence(off4, trvOf(off4)) };
+out.offAfterFill = { untouched: JSON.stringify(trvOf(off2)) === off2Before, hours: trvOf(off2).days };
+ask(off2, 20);
+out.offThenLocal = { untouched: JSON.stringify(trvOf(off2)) === off2Before, hours: trvOf(off2).days };
+trvOf(off2).enabled = true;
+ask(off2, 300);
+out.offThenOnAgain = facts(off2);
+// a row the library defaulted OFF (libraryLaborRow writes enabled: false): the same
+const LIB_OFF = [{ id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, favorite: true, default_on: false }];
+const off3 = B.seedNewSections(B.migrateModel(undefined), seedCtx({ laborRows: B.withCrewFallback(clone(LIB_OFF)) }));
+crewed(off3); const off3Before = JSON.stringify(trvOf(off3));
+ask(off3, 190);
+out.offByDefault = { enabled: trvOf(off3).enabled, untouched: JSON.stringify(trvOf(off3)) === off3Before };
+
+// 9. A JOB TYPE SWITCHED IN THE SESSION puts the distance already on file on the NEW carrier's blank row (B.followDistance); a bid with no
+//    distance on file, a local one, a typed or cleared box, and a switched-off row are all left as they are.
+const fd = crewed(newBid()); fd.distance = { miles: 190, source: "google", key: "k" }; fd.conditions.local = false;
+const fdBefore = JSON.stringify(trvOf(fd));
+out.followDistance = { before: facts(fd), noDistance: (() => { const m = crewed(newBid()); const b = JSON.stringify(trvOf(m)); B.followDistance(m); return JSON.stringify(trvOf(m)) === b; })() };
+B.followDistance(fd); B.syncAutoGuys(fd);
+out.followDistance.after = facts(fd);
+out.followDistance.changed = JSON.stringify(trvOf(fd)) !== fdBefore;
+const fdLocal = crewed(newBid()); fdLocal.distance = { miles: 20, source: "google", key: "k" };
+const fdLocalBefore = JSON.stringify(trvOf(fdLocal)); B.followDistance(fdLocal);
+out.followDistance.local = JSON.stringify(trvOf(fdLocal)) === fdLocalBefore;
+const fdTyped = crewed(newBid()); fdTyped.distance = { miles: 190, source: "google", key: "k" };
+typeIn(fdTyped, "days", ""); typeIn(fdTyped, "guys", "2"); B.followDistance(fdTyped);
+out.followDistance.typed = facts(fdTyped);
+const fdOff = crewed(newBid()); fdOff.distance = { miles: 190, source: "google", key: "k" }; trvOf(fdOff).enabled = false;
+const fdOffBefore = JSON.stringify(trvOf(fdOff)); B.followDistance(fdOff);
+out.followDistance.off = JSON.stringify(trvOf(fdOff)) === fdOffBefore;
+out.followDistance.noModel = String(B.followDistance(null));
+
+// 10. THE OTHER TWO LINES ARE AS THEY WERE: switched on by the answer, a hand flip never moved, quantities typed.
 const ln = crewed(newBid()); ln.travel.lodging.hand = true; ln.travel.lodging.enabled = false;
 ask(ln, 190);
 out.lines = { lodging: ln.travel.lodging.enabled, perDiem: ln.travel.per_diem.enabled, lodgingQty: ln.travel.lodging.qty,
   perDiemQty: ln.travel.per_diem.qty, lodgingAuto: ln.travel.lodging.qty_auto, perDiemAuto: ln.travel.per_diem.qty_auto };
 
-// 8. WORDS. A figure the distance wrote says the trip; one it wrote for a distance that has gone says so; a typed one says typed.
+// 11. WORDS. A figure the distance wrote says the trip and who it is charged to; one it wrote for a distance that has gone says so;
+//     a typed one says typed; a crew of none says what to type.
 const wd = crewed(newBid()); ask(wd, 190);
 const stale = crewed(newBid()); Object.assign(trvOf(stale), { days: 5, hours_seed: 5, guys_auto: true, guys: 48 });
 stale.distance = { miles: 190, source: "typed", key: "" };             // 190 miles would give 6.5, not the 5 it holds
 const gone = crewed(newBid()); Object.assign(trvOf(gone), { days: 5, hours_seed: 5, guys_auto: true, guys: 48 });
 const frac = crewed(newBid()); ask(frac, 120.4);
 out.words = {
-  tool: B.travelHow(wd).lines[0], staleSource: B.driveHoursSource(stale, trvOf(stale)), stale: B.travelHow(stale).lines[0],
-  goneSource: B.driveHoursSource(gone, trvOf(gone)), gone: B.travelHow(gone).lines[0],
+  tool: lineOf(wd, "Travel Labor"), staleSource: B.driveHoursSource(stale, trvOf(stale)), stale: lineOf(stale, "Travel Labor"),
+  goneSource: B.driveHoursSource(gone, trvOf(gone)), gone: lineOf(gone, "Travel Labor"),
   areTools: [B.driveHoursAreTools(trvOf(wd)), B.driveHoursAreTools({ days: "6.5", hours_seed: 6.5 }),
-             B.driveHoursAreTools({ days: 6.5, hours_seed: "" }), B.driveHoursAreTools({ days: 6.5 }), B.driveHoursAreTools(null)],
-  fractional: B.driveHoursSentence(B.driveHoursSource(frac, trvOf(frac))),
+             B.driveHoursAreTools({ days: 6.5, hours_seed: "" }), B.driveHoursAreTools({ days: 6.5 }), B.driveHoursAreTools(null),
+             B.driveHoursAreTools({ days: 6.5, hours_seed: 6.5, hours_typed: true })],
+  fractional: B.driveHoursSentence(frac, trvOf(frac)),
+  followsCrew: [B.followsCrew(trvOf(wd)), B.followsCrew({ guys_auto: true }), B.followsCrew({ guys_auto: false, guys_follow: "crew" }), B.followsCrew(null)],
 };
 
-// 9. BAD INPUT. An answer with no usable miles records nothing and changes nothing; no model is no model.
+// 12. BAD INPUT. An answer with no usable miles records nothing and changes nothing; no model is no model.
 const bad = crewed(newBid()); const badBefore = JSON.stringify(bad);
 B.applyDistance(bad, { miles: "abc", source: "typed", key: "" });
 B.applyDistance(bad, null);
 out.badInput = { unchanged: JSON.stringify(bad) === badBefore, nullModel: B.applyDistance(null, { miles: 190 }),
   clearNull: String(B.clearDistance(undefined)) };
 
-// 10. PRICED: no hours is $0 until the figure is there, and the cost is guys x hours x the line's own rate.
+// 13. PRICED: no hours is $0 until the figure is there, and the cost is guys x hours x the line's own rate.
 const pr = crewed(newBid());
 out.pricedBefore = B.laborCost(trvOf(pr));
 ask(pr, 190);

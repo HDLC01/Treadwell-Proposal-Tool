@@ -124,6 +124,27 @@ def test_only_travel_is_dimmed_on_a_local_job_and_a_crew_line_is_not_drive_time(
     assert c["pourHint"] is True and c["driveHint"] == 1 and c["hourCards"] == 6
 
 
+def test_a_far_gyp_jobs_travel_labor_is_not_filled_and_its_card_does_not_say_it_is(ran):
+    """The 2026-10-20 audit: the Travel card promised "where the hours fill in from the miles and the guys follow the man-days" on every
+    bid, and a Gyp bid never gets that fill (it is priced by the hour in ten hour days and the sheet works its own drive time, per
+    mobilization). A far Gyp job (190 miles) leaves Travel Labor empty and typed, says nothing under it, and its card says so in plain words
+    instead: type the guys and the hours. A Gyp bid that is not far words it the same way.
+
+    Mutation: give the Gyp card the Polish wording again (MUTATIONS below)."""
+    f = ran["farGyp"]
+    assert f["distance"] == 190 and f["local"] is False and f["lodging"] is True and f["perDiem"] is True
+    assert (f["row"]["days"], f["row"]["guys"], f["row"]["guys_auto"]) == ("", "", False), "the distance filled a Gyp bid's Travel Labor"
+    for marker in ("hours_seed", "guys_follow", "guys_typed", "hours_typed"):
+        assert marker not in f["row"], marker
+    assert (f["hoursBox"], f["guysBox"]) == ("", "") and f["srcNote"]["hidden"] is True
+    expected = ("Drive time is expected at 70 miles or more from the office. A Gyp bid does not fill this line in from the miles: type its "
+                "guys and its hours. Under 70 miles this line stays gray.")
+    assert f["cardNote"] == expected
+    assert ran["laborCards"]["travelNote"] == expected
+    for note in (f["cardNote"], ran["laborCards"]["travelNote"]):
+        assert "fill in from the miles, one round trip" not in note and "man-days" not in note and "crew" not in note.lower()
+
+
 def test_the_labor_step_quotes_the_hours_the_sheet_would_work_out(ran):
     cap = ran["priced"]["caption"]
     assert "Prep, prime and seal 0 hours (4 hours a mobilization)" in cap
@@ -448,6 +469,10 @@ MUTATIONS = {
         "js/bid-model.js", '    if (e.role === "gyp") return gypAreaFields(rows);',
         '    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };',
         lambda r: r["priced"]["sheetArea"] != {"gyp_soft_sf": 9000, "gyp_hard_sf": 6000, "gyp_corridor_sf": 2000}),
+    "a Gyp bid's Travel card promises the fill a Gyp bid never gets": (
+        "js/polish-estimate.js", "              ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours. '",
+        "              ? 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. '",
+        lambda r: "does not fill" not in r["farGyp"]["cardNote"]),
     "the proposal names a Gyp system by its first row": (
         "js/bid-model.js", '    if (entry && (entry.role === "gyp" || entry.role === "seal")) {', "    if (false) {",
         lambda r: r["priced"]["pricedTabs"][0][5] != 'N12 1/8" + 3/4" Gyp'),
