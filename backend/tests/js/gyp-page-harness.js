@@ -216,7 +216,7 @@ async function main() {
     escalationLabel: review.indexOf("Labor escalation (always on for Gyp)") >= 0,
     noPrevailingSwitch: review.indexOf('data-cond="prevailing_wage"') < 0,
     materialEscalationRow: review.indexOf('data-mk="material_escalation"') >= 0,
-    shippingNoRate: /Shipping<\/td><td class="r"><\/td>/.test(review),
+    shippingNoRate: /Shipping<\/td><td class="q r"><\/td><td class="u"><\/td><td class="rt r"><\/td>/.test(review),
     tooling: review.indexOf("Tooling and consumables") >= 0,
     total: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
     noDye: !/Dye/.test(review),

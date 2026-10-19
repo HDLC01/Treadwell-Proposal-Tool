@@ -139,6 +139,7 @@ async function main() {
     ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["combined", combined], ["deleting", deleting],
     ["renaming", renaming], ["options", options], ["reopen", reopen], ["unreadable", unreadable], ["focus", focus], ["markup", markup], ["floating", floating],
     ["gypPreset", gypPreset], ["limit", limit], ["sealMode", sealMode], ["demote", demote], ["resets", resets], ["unstated", unstated], ["hiddenOption", hiddenOption],
+    ["stripKeeps", stripKeeps],
   ];
   for (const [name, fn] of sections) {
     try { out[name] = await fn(); } catch (e) { out[name] = { error: String(e && e.stack || e) }; }
@@ -602,7 +603,7 @@ async function gypPreset() {
 
 // ── 16. at the limit of twelve copies the refusal is said in the panel, beside the button that was pressed ──────────
 const noticeOf = (h) => { const m = /<p class="sh-note warn" role="alert" data-sh-notice>([^<]*)<\/p>/.exec(h); return m ? m[1] : null; };
-const addBlock = (h) => { const a = h.indexOf('class="sh-add"'); if (a < 0) return ""; const e = ['<div class="sh-confirm"', '<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, a)).filter((i) => i >= 0); return h.slice(a, e.length ? Math.min.apply(null, e) : h.length); };
+const addBlock = (h) => { const a = ['class="sh-add"', 'class="sh-flow"'].map((s) => h.indexOf(s)).filter((i) => i >= 0).sort((x, y) => x - y)[0]; if (a === undefined) return ""; const e = ['<div class="sh-confirm"', '<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, a)).filter((i) => i >= 0); return h.slice(a, e.length ? Math.min.apply(null, e) : h.length); };
 async function limit() {
   const b = await open(draft(polishModel()));
   for (let i = 0; i < 12; i++) click(b, sel("copy", openTab(panel(b))));
@@ -711,6 +712,62 @@ async function hiddenOption() {
   const written = clone(b.store.blob.tab_opts.Copy1);
   click(b, sel("on", "Copy1"));
   return { hidden: hidden, shown: shown, written: written, off: Object.assign(state(), { opt: clone(b.store.blob.tab_opts.Copy1) }) };
+}
+
+// ── 22. the strip keeps its place across a repaint, scrolls to a newly opened tab, is walked by the arrow keys, and the add notice is in the flow ──
+async function stripKeeps() {
+  const copyOf = B.copySection(polishModel(), "Polish", {});
+  const m = copyOf.model;
+  m.tabs.Seal = { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {},
+    rates: { version: 1, profile: "seal@1", rates: {}, fees_default: null, notes: EPOXY_NOTES.slice() } };
+  const b = await open(draft(m, { tab_opts: copyOf.patch.tab_opts }));
+
+  // 1. a repaint that changes the markup (a price moved) leaves the strip scrolled where it was
+  const strip0 = P.need(b, "[data-sh-strip]");
+  strip0.scrollLeft = 150;
+  const before = panel(b);
+  b.api.model().takeoff[0].measurement = 4321;
+  b.api.changed(false);
+  const repainted = panel(b) !== before;
+  const strip1 = P.need(b, "[data-sh-strip]");
+  const kept = { repainted: repainted, newNode: strip1 !== strip0, scrollLeft: strip1.scrollLeft };
+
+  // 2. scrolling to a tab: only as far as it takes, never when it is already in view, never an error without layout
+  const reveal = (strip, tab) => { b.api.stripReveal(strip, tab); return strip.scrollLeft; };
+  const reach = {
+    right: reveal({ scrollLeft: 0, clientWidth: 300, offsetLeft: 0 }, { offsetLeft: 500, offsetWidth: 120 }),
+    left: reveal({ scrollLeft: 400, clientWidth: 300, offsetLeft: 0 }, { offsetLeft: 100, offsetWidth: 120 }),
+    inView: reveal({ scrollLeft: 50, clientWidth: 300, offsetLeft: 0 }, { offsetLeft: 100, offsetWidth: 120 }),
+    noLayout: reveal({ scrollLeft: 7 }, {}),
+  };
+
+  // 3. the arrow keys walk the tabs; Enter is left to the button
+  const tabs = b.doc.querySelectorAll("[data-section-tab]");
+  const names = tabs.map((t) => t.getAttribute("data-section-tab"));
+  let focused = null;
+  tabs.forEach((t) => { t.focus = () => { focused = t.getAttribute("data-section-tab"); }; });
+  const press = (from, k) => {
+    focused = null;
+    let prevented = false;
+    b.doc.fire("keydown", { target: tabs[from], key: k, preventDefault() { prevented = true; } });
+    return { focused: focused, prevented: prevented };
+  };
+  const keys = { names: names, right: press(0, "ArrowRight"), wrap: press(names.length - 1, "ArrowRight"), left: press(1, "ArrowLeft"),
+                 leftWrap: press(0, "ArrowLeft"), home: press(2, "Home"), end: press(0, "End"), enter: press(0, "Enter"), space: press(0, " ") };
+
+  // 4. a refused Add is said in the flow under the strip, never inside the picker's box
+  const w = await open(draft(polishModel()));
+  for (let i = 0; i < 12; i++) click(w, sel("copy", openTab(panel(w))));
+  click(w, '[data-sh-act="add-menu"]');
+  click(w, '[data-sh-act="add"][data-sh-sheet="Polish"]');
+  await settle();
+  const h = panel(w);
+  const addAt = h.indexOf('class="sh-add"'), flowAt = h.indexOf('class="sh-flow"');
+  const ends = ['<div class="sh-confirm"', '<div class="sh-open"', '<p class="sh-hint"'].map((s) => h.indexOf(s, flowAt)).filter((i) => i >= 0);
+  const box = h.slice(addAt, flowAt), flow = h.slice(flowAt, ends.length ? Math.min.apply(null, ends) : h.length);
+  const notice = { pickerOpen: addAt >= 0, flowAfterBox: flowAt > addAt, inBox: noticeOf(box), inFlow: noticeOf(flow),
+                   pickerHasList: /sh-pick-row/.test(box), openBarAfter: h.indexOf('class="sh-open"') > flowAt };
+  return { kept: kept, reach: reach, keys: keys, notice: notice };
 }
 
 main().then((out) => { process.stdout.write(JSON.stringify(out) + "\n"); }, (e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });

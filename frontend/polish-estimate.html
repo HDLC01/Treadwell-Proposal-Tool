@@ -27,7 +27,6 @@
     .wrap{max-width:1000px;margin:0 auto}
 
     .head{display:flex;align-items:flex-start;gap:14px;margin-bottom:16px}
-    .logo{width:52px;height:33px;display:block;flex:none}
     .head h1{font-size:20px;margin:0 0 3px;letter-spacing:-.01em}
     .head p{margin:0;color:var(--ink-v);font-size:13px}
     .beta{font:700 10px/1 var(--sans);letter-spacing:.09em;background:var(--red-tint);
@@ -153,11 +152,12 @@
     .sheets .sh-addbtn[disabled]{opacity:.5;cursor:not-allowed}
     .sheets .sh-addbtn[disabled]:hover{color:var(--ink-v);border-color:var(--line)}
 
-    /* The picker, and the refusal of an Add, open just under the strip over the bar (the strip's wrapper is the anchor). */
-    .sheets .sh-add{position:absolute;z-index:5;left:8px;top:100%;margin-top:4px;width:min(320px,calc(100% - 16px));
-      background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;
-      box-shadow:0 6px 20px rgba(0,0,0,.14)}
-    .sheets .sh-add .sh-note{margin:0 0 6px}
+    /* The picker opens just under the strip IN THE FLOW (it pushes the open sheet's bar down; nothing is laid over it), and the
+       refusal of an Add, or the words that say adding is off, sit in the flow under the strip in .sh-flow. */
+    .sheets .sh-add{position:static;margin:6px 8px 4px;width:min(320px,calc(100% - 16px));
+      background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
+    .sheets .sh-flow{margin:6px 8px 0}
+    .sheets .sh-flow .sh-note,.sheets .sh-flow .sh-cap{margin:0 0 6px}
     .sheets .sh-pick-h{display:flex;align-items:center;justify-content:space-between;font:700 12.5px var(--sans);
       padding:0 0 0 2px}
     .sheets .sh-pick .sh-cap{margin:0 0 4px 2px}
@@ -574,6 +574,18 @@
            color:var(--ink)}
     .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink);
            background:var(--rev-tot,transparent)}
+    /* THE WORKING (Hanz, 2026-10-19): every Review table has a labelled header row, Item | Quantity | Unit | Rate | Total. The
+       table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page. */
+    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+    .rev-t,.mk{min-width:560px}
+    .rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
+           text-transform:uppercase;color:var(--ink-v);background:var(--rev-band,var(--surf-low));white-space:nowrap}
+    .rev-t th.r,.mk th.r{text-align:right}
+    .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}
+    .rev-t td.q,.rev-t td.rt,.mk td.q,.mk td.rt{white-space:nowrap}
+    .rev-t .note.work,.mk .note.work{display:block;font:11px var(--mono);color:var(--ink-3)}
+    .mk td.q,.mk td.rt{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3)}
+    .mk td.rt{min-width:96px}
     .blockers{background:var(--warn-bg);border:1px solid #e8d9a8;color:var(--warn);
            border-radius:9px;padding:11px 13px;font-size:12.5px;margin:0 0 12px}
     .blockers ul{margin:6px 0 0;padding-left:18px}
@@ -586,6 +598,7 @@
         font-variant-numeric:tabular-nums}
     .mk td.pct{color:var(--ink-3);width:104px}
     .mk td.amt{width:126px}
+    .mk tr.grand td.rt{color:var(--red-dark)}
     .mk tr.band td{background:var(--surf-low);font:700 10.5px var(--sans);letter-spacing:.06em;
         text-transform:uppercase;color:var(--ink-v);border-top:1px solid var(--line)}
     .mk tr.sub td,.mk tr.tot td{border-top:2px solid var(--line);font-weight:700;color:var(--ink)}
@@ -676,7 +689,6 @@
   </header>
   <div class="wrap">
     <div class="head">
-      <img class="logo" src="/img/treadwell-bison.svg" alt="Treadwell" />
       <div>
         <h1>Estimating Tool v2</h1>
         <p id="proj-line">Loading…</p>

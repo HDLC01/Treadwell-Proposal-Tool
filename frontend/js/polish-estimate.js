@@ -997,7 +997,12 @@
     }
   }
 
-  /** Draw the sheet bar (the tabs and the open sheet's controls). Redrawn only when what it says changed. */
+  /** Draw the sheet bar (the tabs and the open sheet's controls). Redrawn only when what it says changed.
+   *
+   *  THE STRIP KEEPS ITS PLACE. A repaint rebuilds the strip, and a rebuilt strip starts scrolled to the far left: on a phone,
+   *  or a bid with many tabs, every price change would have thrown the open tab out of view. So the strip's scrollLeft is
+   *  read before the rebuild and put back after it, and only a CHANGE of the open tab scrolls to it (stripReveal). */
+  var lastOpenSheet = null;
   function paintSheets() {
     var el = $("sheets-panel");
     if (!el) return;
@@ -1005,14 +1010,49 @@
     var html = B.sheetsPanelHtml(ROOT, view);
     var want = sheetsUi.focus;
     sheetsUi.focus = null;
+    var openChanged = view.open !== lastOpenSheet;
+    lastOpenSheet = view.open;
     if (html !== lastSheets) {
       var keep = want || sheetsFocusKey(el);
+      var oldStrip = el.querySelector("[data-sh-strip]");
+      var left = oldStrip && typeof oldStrip.scrollLeft === "number" ? oldStrip.scrollLeft : 0;
       el.innerHTML = html;
       lastSheets = html;
       want = keep;
+      var newStrip = el.querySelector("[data-sh-strip]");
+      if (newStrip && left) newStrip.scrollLeft = left;
     }
+    if (openChanged) stripReveal(el.querySelector("[data-sh-strip]"), el.querySelector("[data-sh-cur]"));
     if (want) focusSheetsKey(want);
   }
+
+  /** Scroll the strip, and only the strip, just far enough to show `tab` (inline: nearest, with no page jump: scrollIntoView
+   *  can move the page too). A tab already in view leaves the strip where it is. Needs layout, so it does nothing when
+   *  either node cannot say where it is. */
+  function stripReveal(strip, tab) {
+    if (!strip || !tab || typeof tab.offsetLeft !== "number" || typeof strip.clientWidth !== "number") return;
+    var start = tab.offsetLeft - (strip.offsetLeft || 0), end = start + (tab.offsetWidth || 0), pad = 8;
+    var from = strip.scrollLeft || 0;
+    if (start < from) strip.scrollLeft = Math.max(0, start - pad);
+    else if (end > from + strip.clientWidth) strip.scrollLeft = end - strip.clientWidth + pad;
+  }
+
+  // The strip's tabs by keyboard: Left and Right move the caret to the neighbouring tab (Home and End to the first and the
+  // last), and Enter or Space opens the one it is on, as a button does. The tabs are real <button>s, so that part is free.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (!t || !t.closest || !t.getAttribute || t.getAttribute("data-section-tab") === null) return;
+    var k = e.key;
+    if (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "Home" && k !== "End") return;
+    var panel = $("sheets-panel");
+    var tabs = panel ? Array.prototype.slice.call(panel.querySelectorAll("[data-section-tab]")) : [];
+    var at = tabs.indexOf(t);
+    if (at < 0 || tabs.length < 2) return;
+    var to = k === "Home" ? 0 : k === "End" ? tabs.length - 1
+      : (at + (k === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    e.preventDefault();
+    if (tabs[to] && tabs[to].focus) tabs[to].focus();
+  });
 
   /** Kept under its old name: the harnesses (and anything else that asked the page to redraw "the option bar") still do. */
   function paintOptionBar() { paintSheets(); }
@@ -2213,12 +2253,14 @@
     var f = gypFigures(entry);
     var p = f.parts;
     var lines = [];
-    var add = function (label, qty, cost) { lines.push({ label: label, qty: qty, cost: cost }); };
-    if (f.primerGal > 0) add("Primer", gypQty(f.primerGal) + " gallons", p.primer);
-    if (f.isoRolls > 0) add("ISO strip", gypQty(f.isoRolls) + " rolls", p.iso);
-    if (f.tapeRolls > 0) add("Joint tape", gypQty(f.tapeRolls) + " rolls", p.tape);
-    if (f.tons > 0) add("Sand", gypQty(f.tons) + " tons", p.sand);
-    if (f.rolls > 0) add("Sound mat", f.rolls + " rolls", p.soundMat);
+    // `n`, `unit` and `one` are the same quantity as `qty` says it, apart: the number, its unit and the unit of one (the Review
+    // step's Quantity, Unit and Rate columns).
+    var add = function (label, qty, cost, n, unit, one) { lines.push({ label: label, qty: qty, cost: cost, n: n, unit: unit, one: one }); };
+    if (f.primerGal > 0) add("Primer", gypQty(f.primerGal) + " gallons", p.primer, f.primerGal, "gallons", "gallon");
+    if (f.isoRolls > 0) add("ISO strip", gypQty(f.isoRolls) + " rolls", p.iso, f.isoRolls, "rolls", "roll");
+    if (f.tapeRolls > 0) add("Joint tape", gypQty(f.tapeRolls) + " rolls", p.tape, f.tapeRolls, "rolls", "roll");
+    if (f.tons > 0) add("Sand", gypQty(f.tons) + " tons", p.sand, f.tons, "tons", "ton");
+    if (f.rolls > 0) add("Sound mat", f.rolls + " rolls", p.soundMat, f.rolls, "rolls", "roll");
     return lines;
   }
 
@@ -2832,31 +2874,136 @@
       ' <button data-go="' + step + '">Edit</button></div>' + inner + '</div>';
   }
 
-  /** rows: [label, middle, money, rowClass]. `money` may be pre-built HTML for a keyed cell.
+  /** THE REVIEW TABLES SHOW HOW EVERY FIGURE WAS WORKED OUT (Hanz, 2026-10-19: "show the break down of any thing that has a
+   *  total ... how its solved or how it got to that price. Make sure to label the columns as price/sf, SF or LF etc.").
+   *  Every card is a table with a header row and five columns: Item | Quantity | Unit | Rate | Total. A row that has a total
+   *  shows the working in front of it, and every figure in the working is the figure the chain priced with, read from the
+   *  same code that priced it (the row's own price, the module's own patch rate, the chain's own bases), never retyped.
    *
-   *  `label` is escaped by default -- most of it is user data (an assembly name, a labor line's
-   *  own typed label) and has to be. The one row that needs to embed a real control (Labor
-   *  escalation's prevailing-wage switch) passes `{ raw: "<...>" }` instead of a bare string, so
-   *  that one label opts out explicitly rather than this function guessing "looks like HTML" on
-   *  a string that could just as easily be a customer's literal `<` in an assembly name. */
+   *  rows: [label, quantity, unit, rate, total, rowClass]. Each of the first four may be text (escaped) or `{ raw: "<...>" }`;
+   *  `total` is HTML (an amount the chain computes, built by mkAmt or rv).
+   *
+   *  `label` is escaped by default -- most of it is user data (an assembly name, a labor line's own typed label) and has to
+   *  be. A label that needs a real control (Labor escalation's prevailing-wage switch) passes `{ raw }` instead of a bare
+   *  string, so that one label opts out explicitly rather than this function guessing "looks like HTML" on a string that
+   *  could just as easily be a customer's literal `<` in an assembly name.
+   *
+   *  The table sits in a box that scrolls on its own, so a narrow phone scrolls the table and never the page. */
   function revTable(rows) {
-    return '<table class="rev-t"><tbody>' + rows.map(function (r) {
-      var label = (r[0] && typeof r[0] === "object" && "raw" in r[0]) ? r[0].raw : esc(r[0]);
-      return '<tr' + (r[3] ? ' class="' + r[3] + '"' : '') + '><td>' + label +
-        '</td><td class="r">' + ((r[1] && typeof r[1] === "object" && "raw" in r[1]) ? r[1].raw
-          : esc(r[1] == null ? "" : r[1])) + '</td><td class="r">' +
-        (r[2] == null ? "" : r[2]) + '</td></tr>';
-    }).join("") + '</tbody></table>';
+    return '<div class="tscroll"><table class="rev-t"><thead>' + REV_HEAD + '</thead><tbody>' + rows.map(function (r) {
+      return '<tr' + (r[5] ? ' class="' + r[5] + '"' : '') + '><td>' + revCell(r[0]) + '</td><td class="q r">' + revCell(r[1]) +
+        '</td><td class="u">' + revCell(r[2]) + '</td><td class="rt r">' + revCell(r[3]) + '</td><td class="r">' +
+        (r[4] == null ? "" : r[4]) + '</td></tr>';
+    }).join("") + '</tbody></table></div>';
   }
+
+  var REV_HEAD = '<tr><th>Item</th><th class="r">Quantity</th><th>Unit</th><th class="r">Rate</th><th class="r">Total</th></tr>';
+
+  function revCell(v) {
+    return (v && typeof v === "object" && "raw" in v) ? v.raw : esc(v == null ? "" : v);
+  }
+
+  /** A figure of the working that moves with a keystroke on the Review step, keyed `data-rv`. Writing the Review also fills
+   *  FIGS (key -> text), and repaintNumbers writes the Review again into FIGS and copies each text onto the cell with its key:
+   *  the first paint and the repaint are one code path, so they cannot disagree, and no box being typed in is ever rebuilt. */
+  var FIGS = null;
+  function rv(key, text) {
+    var t = text == null ? "" : String(text);
+    if (FIGS) FIGS[key] = t;
+    return '<span data-rv="' + esc(key) + '">' + esc(t) + '</span>';
+  }
+  /** rv for a Quantity, Unit or Rate cell, whose strings revTable escapes: the keyed span goes in as markup. */
+  function rvc(key, text) { return { raw: rv(key, text) }; }
 
   /** An amount the chain computes, keyed so repaintNumbers can refresh it without a rebuild. */
   function mkAmt(b, key) {
     return '<span data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</span>';
   }
 
+  /** A rate per unit as the Material step's hint says it: "$1.57 / SF". Nothing when it cannot be said. */
+  function perUnitText(per, unit) {
+    return (per === null || per === undefined || !isFinite(per)) ? "" : B.money2(per) + " / " + unit;
+  }
+
+  /** A price per unit worked to the figure it has: two places, and more only when the rate has them ($0.0987), so
+   *  quantity x rate is the total the module charged. */
+  function exactRate(n) {
+    var v = parseFloat(Number(n).toFixed(4));
+    var two = v.toFixed(2);
+    return Math.abs(v - parseFloat(two)) < 1e-9 ? "$" + two : "$" + String(v);
+  }
+
+  /** The bases of the markup lines, each taken from the chain's own arithmetic (bid-engine.js priceChain) out of the bid's
+   *  own figures. A base that is not a plain sum, or that the figures cannot say (a bid with no such line), is null and the
+   *  row shows its % and its total only: the REMODEL base depends on the profile (the sheet's profiles add the tooling and
+   *  the travel), and is the one of the two sums whose rate gives the tax the chain charged.
+   *  GP is not here on purpose: it is a gross-up (price = cost / (1 - GP)), not a % of anything. */
+  function markupBases(b) {
+    var n = B.num;
+    var hb = n(b.hard_bid), sales = n(b.sales_tax), fees = n(b.fees), cont = n(b.contingency), gp = n(b.gp);
+    var sub = n(b.sub_total);
+    var out = { disc: sub + gp, sales: n(b.material_total) };
+    out.super = sub + gp + hb + cont + sales + fees;
+    out.soft = out.super + n(b.super_pto);
+    // The tax or bond the chain charged is ROUNDUP(base x rate): the base whose product rounds up to it is the base it used.
+    var gives = function (base, p, amt) { p = n(p); return p > 0 && base * p <= n(amt) + 1e-4 && base * p > n(amt) - 1 - 1e-4; };
+    var rem = n(b.labor) + n(b.escalation) + n(b.burden) + gp + hb + n(b.super_pto) + n(b.soft_costs) + cont + fees;
+    var remSheet = rem + n(b.tooling) + n(b.travel);
+    out.remodel = gives(remSheet, b.remodel_pct, b.remodel_tax) ? remSheet : (gives(rem, b.remodel_pct, b.remodel_tax) ? rem : null);
+    // The bond counts both taxes twice (the sheet's odd rule 1).
+    var bondBase = sub + gp + hb + n(b.super_pto) + n(b.soft_costs) + cont + sales + n(b.remodel_tax) + n(b.taxes) + fees;
+    out.bond = gives(bondBase, b.bond_pct, b.bond) ? bondBase : null;
+    return out;
+  }
+
+  /** The takeoff-card line the sheet charges by the square foot of the whole area: the patch. `label` is the row's words
+   *  (HTML), `rate` the module's own price of one SF (the rate its patchCost multiplied by), `cost` what the module charged. */
+  function patchRow(label, sf, rate, cost) {
+    return [{ raw: label }, B.fmtSf(sf), "SF", rvc("patch.rate", exactRate(rate) + " / SF"), rv("patch.tot", moneyAuto(cost))];
+  }
+
+  /** What the tooling card is made of, line by line, when the section's tooling module can say: [label, quantity, unit, rate,
+   *  total] rows whose totals add up to the chain's own tooling figure. null when they do not (a section the page cannot break
+   *  down, or a saved bid whose chain priced it another way): the card then shows the one total, as it always did. */
+  function toolingParts(onShow, b) {
+    var role = onShow ? onShow.role : "polish";
+    var sf = B.takeoffSf(M.takeoff);
+    var parts = null;
+    if (role === "polish") {
+      var kind = B.polishSystemOf(M.takeoff);
+      var T = B.POLISH_TOOLING;
+      var t = B.polishTooling(sf, B.takeoffLf(M.takeoff), { dye: !!(ROOT.conditions || {}).dye, system: kind.system, traditional: kind.traditional });
+      parts = [["Tooling and consumables (minimum $" + T.min + ")", B.fmtSf(sf), "SF", exactRate(t.rate) + " / SF", t.consumables]];
+      if (t.slurry > 0) parts.push(["Slurry hardener", B.fmtSf(B.roundUp(sf / T.slurryEverySf)), "bags", B.money(T.slurryBag) + " / bag", t.slurry]);
+      if (t.plastic > 0) parts.push(["Plastic", B.fmtSf(B.takeoffLf(M.takeoff)), "LF", exactRate(T.plasticPerLf) + " / LF", t.plastic]);
+    } else if (role === "epoxy" && E && E.TOOLING) {
+      var X = E.TOOLING;
+      var tests = B.roundUp(sf > X.moistureAfterSf ? sf / X.moistureEverySf : X.moistureMinTests);
+      var perSf = sf * X.consumablesPerSf;
+      parts = [["Moisture test", B.fmtSf(tests), "tests", B.money(X.moistureCost) + " / test", B.roundUp(tests * X.moistureCost)],
+               ["Consumables (minimum $" + X.consumablesMin + ")", B.fmtSf(sf), "SF", exactRate(X.consumablesPerSf) + " / SF",
+                B.roundUp(perSf > X.consumablesMin ? perSf : X.consumablesMin)]];
+    } else if (role === "seal" && SL && SL.TOOLING) {
+      parts = [["Tooling and consumables (minimum $" + SL.TOOLING.min + ")", B.fmtSf(sf), "SF", exactRate(SL.TOOLING.perSf) + " / SF",
+                SL.toolingCost(sf)]];
+    }
+    if (!parts) return null;
+    var sum = parts.reduce(function (s, p) { return s + p[4]; }, 0);
+    return Math.abs(sum - B.num(b.tooling)) < 0.005 ? parts : null;
+  }
+
   var OPTION_NOT_IN_SUM = "Option, not in the lump sum";
 
   function reviewPanel() {
+    // No blurb on Review: the figures speak for themselves, and shell() leaves out the grey
+    // line entirely when the blurb is empty, so no gap is left behind.
+    return shell("Review the bid", "", reviewBody());
+  }
+
+  /** The Review step's whole body as HTML. Pure apart from FIGS, which it refills (see rv), so repaintNumbers can call it
+   *  to learn the live figures of the working without touching the page. */
+  function reviewBody() {
+    FIGS = {};
     // The bid of the section on show: the root's chain, or the engine's answer for another section.
     var b = activeBid();
     var blk = B.blockers(M);
@@ -2873,54 +3020,92 @@
     }
     // Takeoff and material
     var tkRows = [];
-    M.takeoff.forEach(function (r) {
+    M.takeoff.forEach(function (r, i) {
       // A MATERIAL ROW HAS A NAME TOO, and it is in a different field. Reading assembly_name only
       // printed a fully priced material row as "(no assembly picked)" beside its own cost, which
       // reads as a fault in a row that has nothing wrong with it.
       if (!r.assembly_id && !r.item_id && !B.num(r.measurement)) return;
       if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
-      tkRows.push([r.assembly_name || r.item_name || "(nothing picked yet)", measureText(r),
-                   esc(rowCost(r).text)]);
+      // HOW THE ROW'S COST WAS REACHED: its measurement, its unit, and the rate per unit the Material step shows beside it
+      // ("$1.57 / SF"), which is the row's cost over its measurement (rowPrice's own per_unit).
+      var rc = rowCost(r), p = rc.price, meas = B.num(r.measurement), unit = r.unit || "SF";
+      var per = (p && p.priced_lines && meas > 0) ? (p.per_unit != null ? p.per_unit : p.total / meas) : null;
+      tkRows.push([r.assembly_name || r.item_name || "(nothing picked yet)", meas ? B.fmtSf(meas) : "", meas ? unit : "",
+                   rvc("tk." + i + ".rate", perUnitText(per, unit)), rv("tk." + i + ".tot", rc.text)]);
     });
-    if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
-    // THE PATCH LINE, said where its money is (polish-rev3 and later): the rate is the New one or the Renovation one.
+    if (!tkRows.length) tkRows.push(["Nothing measured yet", "", "", "", ""]);
+    // THE PATCH LINE, said where its money is: a price a square foot of the whole area, from the same module that charged it
+    // (the Polish and Seal rate is the New one or the Renovation one; the Epoxy rate is its own).
+    var areaSf = B.takeoffSf(M.takeoff), roleNow = onShow ? onShow.role : "polish";
     var patchNow = polishPatchCost(M.takeoff);
     if (patchNow > 0) {
-      tkRows.push([{ raw: 'Patch <span class="note">' + (jobIsReno() ? "renovation" : "new concrete") + ' rate</span>' },
-                   B.fmtSf(B.takeoffSf(M.takeoff)) + " SF", esc(moneyAuto(patchNow))]);
+      var polishReno = jobIsReno();
+      tkRows.push(patchRow('Patch <span class="note">' + (polishReno ? "renovation" : "new concrete") + ' rate</span>', areaSf,
+        SL.unitPrice(ITEMS, polishReno ? "patchReno" : "patchNew").cost, patchNow));
+    } else if (roleNow === "epoxy" && E && E.patchCost) {
+      var epItems = itemsFor(M.takeoff), epPatch = E.patchCost(epItems, areaSf);
+      if (epPatch > 0) tkRows.push(patchRow('Patch <span class="note">epoxy rate</span>', areaSf, E.unitPrice(epItems, "patch").cost, epPatch));
+    } else if (roleNow === "seal" && SL) {
+      var slItems = itemsFor(M.takeoff), slReno = jobIsReno(), slPatch = SL.patchCost(slItems, areaSf, slReno);
+      if (slPatch > 0) {
+        tkRows.push(patchRow('Patch <span class="note">' + (slReno ? "renovation" : "new concrete") + ' rate</span>', areaSf,
+          SL.unitPrice(slItems, slReno ? "patchReno" : "patchNew").cost, slPatch));
+      }
+    }
+    // DYE AND JOINT FILLER, which the Polish material buys beside its takeoff rows (the job's conditions, charged on every Polish
+    // section): their own quantity, unit and rate, as the cards on the Takeoff step say them, so the rows add up to the subtotal.
+    if (roleNow === "polish") {
+      CONDITION_CARDS.forEach(function (c) {
+        if (!c.cost || !(ROOT.conditions || {})[c.key]) return;
+        var cost = B.num(condLine(c.key, areaSf).cost);
+        if (!(cost > 0)) return;
+        var f = condFigures(c), cq = B.num(c.qty(areaSf));
+        // Dye is bought in two coats (the row prices one and the line charges both), so its rate is the cost of the line over
+        // its area; the name says so.
+        tkRows.push([c.material() + (c.key === "dye" ? " (" + B.DYE_COATS + " coats)" : ""), f.qty, f.unit,
+                     rvc("cond." + c.key + ".rate", cq > 0 ? B.money2(cost / cq) + " / " + c.unit(1) : ""),
+                     rv("cond." + c.key + ".tot", moneyAuto(cost))]);
+      });
     }
     // A Gyp section's other lines: the primer, ISO strip, tape, sand and sound mat the sheet buys from the areas.
     var gypRev = gypOpen();
-    if (gypRev) gypLines(gypRev).forEach(function (l) { tkRows.push([l.label, l.qty, esc(moneyAuto(l.cost))]); });
+    if (gypRev) {
+      gypLines(gypRev).forEach(function (l, i) {
+        tkRows.push([l.label, gypQty(l.n), l.unit, rvc("gyp." + i + ".rate", l.n > 0 ? B.money2(l.cost / l.n) + " / " + l.one : ""),
+                     rv("gyp." + i + ".tot", moneyAuto(l.cost))]);
+      });
+    }
     // AN EPOXY SECTION'S OWN MATERIAL BOXES (Hanz, 2026-10-16): Kyle's supplier discounts (B41 on the Sherwin-Williams
     // liquids, C41 on the Poly-Crete ones) and his Bulk Discount switch (D41). They price the materials above, so they
     // sit with them. Only an Epoxy section has those cells; a Polish, Seal or Gyp tab has no discount groups.
+    // The boxes are rates, so they sit in the Rate column.
     var rb = ruleBid();
     if (onShow && onShow.layout === "epoxy") {
-      tkRows.push([{ raw: 'Supplier discount <span class="note">Sherwin-Williams liquids</span>' },
+      tkRows.push([{ raw: 'Supplier discount <span class="note">Sherwin-Williams liquids</span>' }, "", "",
                    { raw: adjBox("supplier_pct", "0") }, ""]);
-      tkRows.push([{ raw: 'Poly-Crete discount <span class="note">SL, MD and WR; blank is the supplier discount</span>' },
+      tkRows.push([{ raw: 'Poly-Crete discount <span class="note">SL, MD and WR; blank is the supplier discount</span>' }, "", "",
                    { raw: adjBox("polycrete_pct", adjTyped("supplier_pct") || "0") }, ""]);
-      tkRows.push([{ raw: 'Bulk Discount <span class="note">bulk prices where a material has one</span>' },
+      tkRows.push([{ raw: 'Bulk Discount <span class="note">bulk prices where a material has one</span>' }, "", "",
                    { raw: B.sliderHtml(adjOn("bulk"), 'data-adj-bulk="1"', adjOn("bulk") ? "On" : "Off",
                      "Kyle's Bulk Discount switch: a material that has a bulk price is bought at it") }, ""]);
     }
-    tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
+    tkRows.push(["Material Subtotal", "", "", "", mkAmt(b, "material")]);
     // A rate the engine reports for the section on show is the one printed (an Epoxy section ships at its tier);
     // the root's chain reports none of these, so it prints the Polish figures it always did.
     var rateOf = function (key, fallback) { return b[key] != null ? b[key] : fallback; };
     if (b.ship_pct === null) {
       // A Gyp chain has no one shipping rate: 8% escalation on gypsum, extras and mat, and shipping of 20% on the
-      // gypsum and 10% on the rest, the sound mat free from a truckload on.
-      tkRows.push(["Material escalation", "", mkAmt(b, "material_escalation")]);
-      tkRows.push(["Shipping", "", mkAmt(b, "shipping")]);
+      // gypsum and 10% on the rest, the sound mat free from a truckload on. So no one base or rate is shown for them.
+      tkRows.push(["Material escalation", "", "", "", mkAmt(b, "material_escalation")]);
+      tkRows.push(["Shipping", "", "", "", mkAmt(b, "shipping")]);
     } else {
-      // Typed over the sheet's own rate (Kyle's B42 / B32); blank is the rule, which the box shows greyed.
-      tkRows.push(["Shipping", { raw: rateSpan(b, "ship_pct") +
-                     adjBox("ship_pct", pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING)) },
+      // Typed over the sheet's own rate (Kyle's B42 / B32); blank is the rule, which the box shows greyed. The base is the
+      // material subtotal the % is taken of.
+      tkRows.push(["Shipping", rvc("ship.q", moneyAuto(b.material)), "of material",
+                   { raw: rateSpan(b, "ship_pct") + adjBox("ship_pct", pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING)) },
                    mkAmt(b, "shipping")]);
     }
-    tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
+    tkRows.push(["Material Total", "", "", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, "takeoff", revTable(tkRows));
 
     // Labor
@@ -2935,20 +3120,39 @@
     // the one labor line an estimator is most likely to have forgotten was also the only one they
     // could not see.
     var pwRev = B.prevailingApplied(M);       // the Labor step's prevailing rate, the one the totals use
-    M.labor.forEach(function (r) {
+    M.labor.forEach(function (r, i) {
       if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
       var cost = B.laborCost(r, pwRev);
       if (!cost && (r || {}).id !== "travel") return;
+      // HOURS: guys x days x the hours of a day (guys x hours on an hours row, travel), then x the line's hourly rate.
+      var perDay = r.unit === "hours" ? 1 : B.dayHours(r);
+      var hrs = B.num(r.guys) * B.num(r.days) * perDay;
+      var work = B.fmtSf(B.num(r.guys)) + " × " + B.fmtSf(B.num(r.days)) + (r.unit === "hours" ? "" : " × " + perDay);
       labRows.push([r.label || "Labor line",
-                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(B.laborRateOf(r, pwRev)),
-                    esc(moneyAuto(cost))]);
+                    { raw: rv("lab." + i + ".q", B.fmtSf(hrs)) + '<span class="note work">' + rv("lab." + i + ".w", work) + '</span>' },
+                    "hrs", rvc("lab." + i + ".rate", moneyAuto(B.laborRateOf(r, pwRev)) + " / hr"),
+                    rv("lab." + i + ".tot", moneyAuto(cost))]);
     });
-    if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
-    labRows.push(["Labor Subtotal", "", mkAmt(b, "labor")]);
+    // The fourth hand on the joint-filler line (Remove existing joint filler) is labor too, and is in the subtotal.
+    var handCost = B.removeExistingHand(M.labor, M.conditions, pwRev);
+    if (handCost > 0) {
+      var jf = M.labor.filter(function (r) { return (r || {}).id === "jointfill"; })[0] || {};
+      var jfPer = jf.unit === "hours" ? 1 : B.dayHours(jf);
+      labRows.push(["Remove existing joint filler (one more hand)",
+                    { raw: rv("hand.q", B.fmtSf(B.num(jf.days) * jfPer)) + '<span class="note work">' + rv("hand.w", "1 × " +
+                      B.fmtSf(B.num(jf.days)) + (jf.unit === "hours" ? "" : " × " + jfPer)) + '</span>' },
+                    "hrs", rvc("hand.rate", moneyAuto(B.laborRateOf(jf, pwRev)) + " / hr"), rv("hand.tot", moneyAuto(handCost))]);
+    }
+    if (!labRows.length) labRows.push(["No labor entered yet", "", "", "", ""]);
+    labRows.push(["Labor Subtotal", "", "", "", mkAmt(b, "labor")]);
+    // The escalation and the burden are % of the labor above: the base, then the %, then what it comes to.
     labRows.push([gypRev ? "Labor escalation (always on for Gyp)" : { raw: condSwitch("prevailing_wage", "Labor escalation") },
-      b.escalation ? B.pct(rateOf("esc_pct", B.RATES.ESCALATION)) : "", mkAmt(b, "escalation")]);
-    labRows.push(["Labor burden", B.pct(rateOf("burden_pct", B.RATES.BURDEN)), mkAmt(b, "burden")]);
-    labRows.push(["Labor Total", "", mkAmt(b, "labor_total"), "tot"]);
+      rvc("esc.q", b.escalation ? moneyAuto(b.labor) : ""), "of labor",
+      rvc("esc.rate", b.escalation ? B.pct(rateOf("esc_pct", B.RATES.ESCALATION)) : ""), mkAmt(b, "escalation")]);
+    labRows.push(["Labor burden", rvc("burden.q", moneyAuto(B.num(b.labor) + B.num(b.escalation))),
+                  b.escalation ? "of labor + escalation" : "of labor",
+                  rvc("burden.rate", B.pct(rateOf("burden_pct", B.RATES.BURDEN))), mkAmt(b, "burden")]);
+    labRows.push(["Labor Total", "", "", "", mkAmt(b, "labor_total"), "tot"]);
     html += card("Labor", 1, "labor", revTable(labRows));
 
     // Hotel and Per Diem (Hanz, 2026-10-06): ALWAYS drawn, straight after Labor, because it is
@@ -2967,33 +3171,38 @@
       var tl = (M.travel || {})[k];
       if ((!carries && !ownTravel) || !tl || !tl.enabled) return;
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
-      trvRows.push(ownTravel
-        ? [name, B.num(B.travelManDays(M.labor)) + " × " + B.money2(tl.rate), esc(moneyAuto(B.optionTravelCosts(M.travel, M.labor)[k]))]
-        : [name, B.num(B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab))) + " × " + B.money2(tl.rate),
-           esc(moneyAuto(B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab))))]);
+      // Nights (lodging) or days (per diem) at the line's own rate: the quantity the chain charged, times the rate.
+      var qty = ownTravel ? B.travelManDays(M.labor) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));
+      var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor)[k]
+                           : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab));
+      var per = k === "lodging" ? "night" : "day";
+      trvRows.push([name, rvc("trv." + k + ".q", B.fmtSf(B.num(qty))), per + "s", rvc("trv." + k + ".rate", moneyAuto(tl.rate) + " / " + per),
+                    rv("trv." + k + ".tot", moneyAuto(cost))]);
     });
     if (!carries) {
-      trvRows.push([travelNote(), "", ""]);
+      trvRows.push([travelNote(), "", "", "", ""]);
     } else if (!trvRows.length) {
-      trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", ""]);
+      trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", "", "", ""]);
     }
-    trvRows.push(["Hotel and Per Diem Total", "", mkAmt(b, "travel"), "tot"]);
+    trvRows.push(["Hotel and Per Diem Total", "", "", "", mkAmt(b, "travel"), "tot"]);
     html += card("Hotel and Per Diem", 1, "travel", revTable(trvRows));
 
     // TOOLING AND CONSUMABLES, for a section whose chain has the line (Epoxy: the moisture test, and $0.33 a
     // square foot with a $150 floor; a Polish bid made after Phase 17: tooling with its $150 minimum, slurry hardener
     // and plastic). A saved Polish bid's chain has none, so it draws nothing here.
     // The card header carries no figure now; the total is the card's own last row. It takes the takeoff colour.
+    // Where the section's tooling module can break the line down, each part shows its quantity, unit and rate above the total.
     if (b.tooling > 0) {
       var toolingWords = activeTab === B.ROOT_TAB ? "Tooling, slurry hardener and plastic" : "Moisture test, tooling and consumables";
-      html += card("Tooling and consumables", 0, "takeoff",
-        revTable([[toolingWords, "", mkAmt(b, "tooling"), "tot"]]));
+      var toolRows = (toolingParts(onShow, b) || []).map(function (p, i) {
+        return [p[0], p[1], p[2], p[3], rv("tool." + i + ".tot", moneyAuto(p[4]))];
+      });
+      toolRows.push([toolingWords, "", "", "", mkAmt(b, "tooling"), "tot"]);
+      html += card("Tooling and consumables", 0, "takeoff", revTable(toolRows));
     }
 
     html += '<div data-rev="markup" class="rev">' + markupTable(b) + '</div>';
-    // No blurb on Review: the figures speak for themselves, and shell() leaves out the grey
-    // line entirely when the blurb is empty, so no gap is left behind.
-    return shell("Review the bid", "", html);
+    return html;
   }
 
   /** Any condition Intake has a toggle for and Review already talks about gets a real, clickable
@@ -3166,29 +3375,43 @@
   /** Rows 64-82 of the Polish tab, in the same order, so an estimator who knows Kyle's sheet can
    *  read down it and recognise every line. Percentages are the sheet's own and not editable —
    *  the workbook locks these cells in the generated download for the same reason. Contingency is
-   *  the one exception, because the sheet leaves D71 open too. */
+   *  the one exception, because the sheet leaves D71 open too.
+   *
+   *  THE SAME FIVE COLUMNS AS THE CARDS ABOVE (Item | Quantity | Unit | Rate | Total): a line that is a % of something shows
+   *  that something (markupBases, taken from the chain's own arithmetic) in Quantity, what it is of in Unit, and the % in Rate,
+   *  where the override boxes still sit. A line with no plain base (GP is a gross-up, Fees and Contingency are typed dollars)
+   *  shows its % or its box and its total only. */
   function markupTable(b) {
     var r = "";
-    var row = function (label, pctHtml, key, cls) {
-      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + label + '</td>' +
-        '<td class="pct">' + pctHtml + '</td>' +
-        '<td class="amt" data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</td></tr>';
+    var bases = markupBases(b);
+    // The base and what it is of, as two keyed cells that show only while the line has a rate to apply (a line at 0% has no
+    // base worth reading). Keyed so the repaint moves them with every keystroke.
+    var baseCells = function (key, base, unitWords, pctNow) {
+      var on = base !== null && base !== undefined && B.num(pctNow) !== 0;
+      return [rv("mk." + key + ".q", on ? moneyAuto(base) : ""), rv("mk." + key + ".u", on ? unitWords : "")];
     };
+    var rowOf = function (labelHtml, qty, unit, rate, total, cls) {
+      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + labelHtml + '</td><td class="q r">' + qty + '</td><td class="u">' +
+        unit + '</td><td class="rt r">' + rate + '</td>' + total + '</tr>';
+    };
+    var amtCell = function (key) { return '<td class="amt" data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</td>'; };
+    var row = function (label, qty, unit, pctHtml, key, cls) { return rowOf(label, qty, unit, pctHtml, amtCell(key), cls); };
     var keyedPct = function (key, beside) {
       // `beside`: a box shows this rate already, so the text is kept for the repaint and not drawn (see rateSpan).
       return '<span' + (beside ? ' class="mkused" aria-hidden="true"' : '') + ' data-mkpct="' + key + '">' +
         esc(B.pct(b[key])) + '</span>';
     };
 
-    r += '<tr class="sub"><td>Subtotal</td><td class="pct"></td>' +
-      '<td class="amt" data-mk="sub_total">' + esc(moneyAuto(b.sub_total)) + '</td></tr>';
+    r += rowOf("Subtotal", "", "", "", amtCell("sub_total"), "sub");
 
-    r += '<tr class="band"><td colspan="3">Markup <span class="bandnote">grey is the sheet\'s own figure; ' +
+    r += '<tr class="band"><td colspan="5">Markup <span class="bandnote">grey is the sheet\'s own figure; ' +
       'type over it to change it, clear the box to go back</span></td></tr>';
     // THE RATES ARE BOXES OVER THE RULE (Hanz, 2026-10-16): blank is the sheet's own figure, shown greyed in the box,
     // and a number typed is the rate (Kyle types over B73/B67, B75/B69 and B76/B70 on a share of his bids).
     var rb = ruleBid();
-    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct", true) + adjBox("gp_pct", pctNum(rb.gp_pct)), "gp");
+    // GP is a margin, not a % of anything: the sheet divides the cost by (1 - GP) and takes the cost back off, so no base is shown.
+    r += row("GP <span class=\"note\">before the lines below</span>", "", "margin on cost",
+      keyedPct("gp_pct", true) + adjBox("gp_pct", pctNum(rb.gp_pct)), "gp");
     // THE DISCOUNT LINE IS BACK (Hanz, 2026-10-16), reversing 2026-09-22: Kyle's "Hard Bid Discount" was his
     // price-landing line on 21 of 41 bids in the two months before, mostly on jobs that were not hard bids. It is
     // a plain discount now, a % or a $ (the $ wins), blank is none, and nothing turns it on by itself.
@@ -3197,47 +3420,57 @@
     // HARD BID (Hanz, 2026-10-17): the job's switch sits on this line, because the line is what it moves. On, the box shows
     // Kyle's rule greyed (4% from $60,000, 2.5% local from $13,000) and the rule prices; a figure typed in either box
     // still wins. Shown only where the section's chain has the rule.
+    // A DISCOUNT TYPED IN DOLLARS has no % (the chain reports none), so it has no base either.
     var hb = B.hardBidRuleOn(ROOT, activeTab);
+    var disc = baseCells("disc", b.hard_bid_pct === null ? null : bases.disc, "of subtotal + GP", b.hard_bid_pct);
     r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span>' +
       (hb ? '<div class="hbline">' + B.sliderHtml(adjOn("hard_bid"), 'data-adj-hb="1"', "Hard bid",
               "Kyle's Hard bid answer for this sheet: his rule fills the discount until you type one") +
             ' <span class="note" data-hbnote>' + esc(hardBidNote(rb)) + '</span></div>' : '') + '</td>' +
-      '<td class="pct">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", discountRule(rb)) + '</td>' +
+      '<td class="q r">' + disc[0] + '</td><td class="u">' + disc[1] + '</td>' +
+      '<td class="rt r">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", discountRule(rb)) + '</td>' +
       '<td class="amt"><span class="adjbox adjamt">$<input data-adj="discount_amt" value="' + esc(adjTyped("discount_amt")) +
       '" placeholder="0" inputmode="decimal" aria-label="Discount in dollars; it wins over the percentage">' +
       adjWarnHtml("discount_amt") + '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span></td></tr>';
-    r += row("Superintendent &amp; PTO", rateSpan(b, "super_pct") +
+    var sup = baseCells("super", bases.super, "of subtotal + markups", rateUsed(b, "super_pct"));
+    r += row("Superintendent &amp; PTO", sup[0], sup[1], rateSpan(b, "super_pct") +
       adjBox("super_pct", pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO)), "super_pto");
-    r += row("Soft costs", rateSpan(b, "soft_pct") +
+    var soft = baseCells("soft", bases.soft, "of subtotal + markups", rateUsed(b, "soft_pct"));
+    r += row("Soft costs", soft[0], soft[1], rateSpan(b, "soft_pct") +
       adjBox("soft_pct", pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS)), "soft_costs");
     r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +
-      '<td class="pct"></td><td class="amt"><input data-contingency value="' +
+      '<td class="q r"></td><td class="u"></td><td class="rt r"></td><td class="amt"><input data-contingency value="' +
       esc(nv(M.contingency)) + '" inputmode="decimal"></td></tr>';
 
-    r += '<tr class="band"><td colspan="3">Taxes &amp; fees</td></tr>';
-    r += row(condSwitch("taxable", "Sales tax") + ' <span class="note">on materials</span>',
+    r += '<tr class="band"><td colspan="5">Taxes &amp; fees</td></tr>';
+    var st = baseCells("sales", bases.sales, "of materials", b.sales_tax_pct);
+    r += row(condSwitch("taxable", "Sales tax") + ' <span class="note">on materials</span>', st[0], st[1],
       keyedPct("sales_tax_pct"), "sales_tax", b.sales_tax_pct ? "" : "off");
-    r += row(condSwitch("remodel_tax", "Remodel tax") + remodelSource(),
+    var rt = baseCells("remodel", bases.remodel, "of labor + markups", b.remodel_pct);
+    r += row(condSwitch("remodel_tax", "Remodel tax") + remodelSource(), rt[0], rt[1],
       keyedPct("remodel_pct"), "remodel_tax", b.remodel_pct ? "" : "off");
-    r += row("Total taxes", "", "taxes", "tot");
+    r += row("Total taxes", "", "", "", "taxes", "tot");
     // Typed, like Contingency above -- the sheet leaves B77 and C77 open and this is the line
     // an estimator fills them in on. Marked up by everything beneath it, which is D77's own
     // place in Kyle's column rather than a decision made here; see the note in markupChain.
     r += '<tr' + (b.fees ? '' : ' class="off"') + '><td>Fees + Textura ' +
-      '<span class="note">yours to set</span></td><td class="pct"></td>' +
+      '<span class="note">yours to set</span></td><td class="q r"></td><td class="u"></td><td class="rt r"></td>' +
       '<td class="amt"><input data-fees value="' + esc(nv(M.fees)) +
       '" inputmode="decimal">' +
       dfltWarnHtml('data-feesdflt="1"', feesDefaultText()) + '</td></tr>';
+    var bd = baseCells("bond", bases.bond, "of the bid so far", b.bond_pct);
     r += row(condSwitch("bond", "Bond") +
-      ' <span class="note">the sheet ships this at 0% either way</span>',
+      ' <span class="note">the sheet ships this at 0% either way</span>', bd[0], bd[1],
       keyedPct("bond_pct"), "bond", b.bond ? "" : "off");
-    r += row("Total fees + bond", "", "fees_and_bond", "tot");
+    r += row("Total fees + bond", "", "", "", "fees_and_bond", "tot");
 
-    r += '<tr class="grand"><td>Total lump sum</td>' +
-      '<td class="pct" data-mk-persf>' + esc(perSfText(b)) + '</td>' +
+    // THE LUMP SUM, over the area it is priced on: the area in Quantity and the price a square foot in Rate.
+    r += '<tr class="grand"><td>Total lump sum</td><td class="q r">' + rv("mk.total.q", b.sf ? B.fmtSf(b.sf) : "") +
+      '</td><td class="u">' + rv("mk.total.u", b.sf ? "SF" : "") + '</td>' +
+      '<td class="rt r" data-mk-persf>' + esc(perSfText(b)) + '</td>' +
       '<td class="amt" data-mk="total">' + esc(moneyAuto(b.total)) + '</td></tr>';
 
-    return '<table class="mk"><tbody>' + r + '</tbody></table>';
+    return '<div class="tscroll"><table class="mk"><thead>' + REV_HEAD + '</thead><tbody>' + r + '</tbody></table></div>';
   }
 
   function perSfText(b) {
@@ -3572,6 +3805,17 @@
       var f = rateUsed(b, el.getAttribute("data-mkrate"));
       el.textContent = f == null ? "" : B.pct(f);
     });
+    // THE WORKING IN FRONT OF EVERY REVIEW TOTAL (Quantity, Unit and Rate): the Review is written again, only to learn each
+    // keyed figure's text (reviewBody refills FIGS), and the text is put on the cell that has the key. Nothing is rebuilt, so
+    // the box being typed in keeps its caret. The Takeoff and Labor steps carry no such cell and skip it.
+    if (document.querySelector("[data-rv]")) {
+      reviewBody();
+      var figs = FIGS || {};
+      document.querySelectorAll("[data-rv]").forEach(function (el) {
+        var k = el.getAttribute("data-rv");
+        if (Object.prototype.hasOwnProperty.call(figs, k)) el.textContent = figs[k];
+      });
+    }
     document.querySelectorAll("[data-mkdisc]").forEach(function (el) { el.textContent = moneyAuto(b.hard_bid || 0); });
     document.querySelectorAll("[data-disc-row]").forEach(function (el) { el.className = b.hard_bid ? "" : "off"; });
     document.querySelectorAll("[data-mkpct]").forEach(function (el) {

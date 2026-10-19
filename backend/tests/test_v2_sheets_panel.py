@@ -25,6 +25,7 @@ require each fact to notice; `break_source` refuses an anchor that is not in the
 """
 import html
 import pathlib
+import re
 
 import pytest
 
@@ -95,6 +96,46 @@ def test_the_strip_has_one_tab_a_sheet_the_open_one_selected_and_the_base_radio_
     assert t["selected"] == 1 and t["polishMarked"] is True, "the open sheet is the selected tab, and it is the base"
     assert t["polishChecked"] is True and t["copyChecked"] is False and t["copyMarked"] is False
     assert t["selectedAfter"] is True and t["openBars"] == 1 and t["barIsOpenSheet"] is True, "opening another tab moves the selection and the bar"
+
+
+# ── the review findings on the tab strip (2026-10-19) ──────────────────────────────────────────────────────────────
+def test_a_repaint_keeps_the_strips_scroll_and_a_new_open_tab_is_scrolled_to_only_as_far_as_it_takes(ran):
+    s = ran["stripKeeps"]
+    assert s["kept"]["repainted"] and s["kept"]["newNode"], "the fixture did not rebuild the strip, so this proves nothing"
+    assert s["kept"].get("scrollLeft") == 150, "a repaint threw the strip back to the left"
+    r = s["reach"]
+    assert r["right"] == 500 + 120 - 300 + 8, "a tab off the right edge is scrolled to, with a little room"
+    assert r["left"] == 100 - 8, "a tab off the left edge is scrolled to"
+    assert r["inView"] == 50 and r["noLayout"] == 7, "a tab in view, or a node with no layout, leaves the strip alone"
+
+
+def test_the_tabs_are_walked_with_the_arrow_keys(ran):
+    k = ran["stripKeeps"]["keys"]
+    names = k["names"]
+    assert len(names) == 3
+    assert k["right"] == {"focused": names[1], "prevented": True}
+    assert k["wrap"] == {"focused": names[0], "prevented": True} and k["leftWrap"] == {"focused": names[2], "prevented": True}
+    assert k["left"] == {"focused": names[0], "prevented": True}
+    assert k["home"]["focused"] == names[0] and k["end"]["focused"] == names[2]
+    assert k["enter"] == {"focused": None, "prevented": False} and k["space"]["prevented"] is False, "Enter and Space are the button's own"
+
+
+def test_a_refused_add_is_said_in_the_flow_under_the_strip_and_the_picker_is_in_the_flow_too(ran):
+    n = ran["stripKeeps"]["notice"]
+    assert n["pickerOpen"] and n["pickerHasList"] and n["flowAfterBox"] and n["openBarAfter"]
+    assert n["inBox"] is None, "the refusal is inside the picker's box, over the open sheet"
+    assert n["inFlow"] and "could not be added" in n["inFlow"]
+    page = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
+    add_rule = re.search(r"\.sheets \.sh-add\{([^}]*)\}", page).group(1)
+    assert "position:static" in add_rule and "absolute" not in add_rule, "nothing may be laid over the open sheet's controls"
+
+
+def test_the_page_heading_does_not_repeat_the_logo_of_the_top_bar():
+    page = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
+    head = page[page.index('<div class="head">'):page.index('<span class="beta">')]
+    assert "<img" not in head and "bison" not in head, "the heading still carries its own logo"
+    assert "Estimating Tool v2" in head and 'id="proj-line"' in head
+    assert page.count("treadwell-bison.svg") == 2, "the top bar's brand and the tab icon are the only two left"
 
 
 # ── 2. Copy ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -512,6 +553,19 @@ BREAKS = {
     "the caret is not put back": (
         "js/polish-estimate.js", "    if (want) focusSheetsKey(want);", "    void want;",
         lambda r: r["focus"]["afterSwitch"] != ["Copy1|on"]),
+    "a repaint throws the strip back to the left": (
+        "js/polish-estimate.js", "      if (newStrip && left) newStrip.scrollLeft = left;", "      void newStrip;",
+        lambda r: r["stripKeeps"]["kept"].get("scrollLeft") != 150),
+    "the open tab is never scrolled to": (
+        "js/polish-estimate.js", "    else if (end > from + strip.clientWidth) strip.scrollLeft = end - strip.clientWidth + pad;", "    else void end;",
+        lambda r: r["stripKeeps"]["reach"]["right"] != 628),
+    "the arrow keys do nothing": (
+        "js/polish-estimate.js", '    if (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "Home" && k !== "End") return;', "    return;",
+        lambda r: r["stripKeeps"]["keys"]["right"]["focused"] is None),
+    "a refused add is laid inside the picker": (
+        "js/bid-model.js", '    if (isObject(v.notice) && v.notice.at === "add") flow += noticeHtml(v.notice);',
+        '    if (isObject(v.notice) && v.notice.at === "add") add += noticeHtml(v.notice);',
+        lambda r: r["stripKeeps"]["notice"]["inBox"] is not None),
     "the strip does not scroll": (
         "polish-estimate.html", "    .sheets .sh-strip{overflow-x:auto;overflow-y:hidden;", "    .sheets .sh-strip{overflow-x:visible;overflow-y:hidden;",
         lambda r: r["floating"]["scrolls"] is not True),

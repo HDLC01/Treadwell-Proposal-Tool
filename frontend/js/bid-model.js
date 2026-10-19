@@ -5147,13 +5147,15 @@
       tabs.push('<li class="sh-addli" role="presentation"><button type="button" class="sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
         ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button></li>');
     }
-    var strip = '<div class="sh-strip"><ul class="sh-list" role="tablist" aria-label="Sheets on this bid">' + tabs.join("") + '</ul></div>';
+    var strip = '<div class="sh-strip" data-sh-strip><ul class="sh-list" role="tablist" aria-label="Sheets on this bid">' + tabs.join("") + '</ul></div>';
 
-    // The add picker, and why a sheet could not be added, open just under the strip.
+    // The add picker opens just under the strip, IN THE FLOW: it pushes the open sheet's bar down and nothing is laid over it.
     var add = "";
-    // Why a sheet could not be added, beside the button that was pressed (the page's own alert is above the fold of a long page).
-    if (isObject(v.notice) && v.notice.at === "add") add += noticeHtml(v.notice);
-    if (f.unreadable) add += '<p class="sh-cap">Adding a sheet is off until the other sheets can be read.</p>';
+    // Why a sheet could not be added, and why adding is off, sit in the flow under the strip too, never inside the picker's box
+    // (which is only the list). The page's own alert is above the fold of a long page.
+    var flow = "";
+    if (isObject(v.notice) && v.notice.at === "add") flow += noticeHtml(v.notice);
+    if (f.unreadable) flow += '<p class="sh-cap">Adding a sheet is off until the other sheets can be read.</p>';
     if (v.pick) {
       // One row a type. Gyp's five presets are one product (the Gyp card on the Material step switches between them), so the menu
       // lists "Gyp" once and adds the first preset; Seal and Seal (+Jnts) are two different sheets and are both listed.
@@ -5182,7 +5184,8 @@
       });
       add += '</ul></div>';
     }
-    h += '<div class="sh-stripwrap">' + strip + (add ? '<div class="sh-add">' + add + '</div>' : "") + '</div>';
+    h += '<div class="sh-stripwrap">' + strip + (add ? '<div class="sh-add">' + add + '</div>' : "") + '</div>' +
+      (flow ? '<div class="sh-flow">' + flow + '</div>' : "");
 
     // A base change waiting for its yes, whichever tab it is for.
     if (isObject(v.confirm)) h += confirmHtml(model, v);
@@ -5218,7 +5221,7 @@
     /** One tab of the strip: the base radio (none for an option-only Seal sheet), the name, and the price. */
     function tabHtml(r) {
       var e = r.e, t = e.tab, open = t === v.open, ren = open && v.renaming === t;
-      var s = '<li class="sh sh-tab' + (open ? " open" : "") + (r.base || r.inBase ? " base" : "") + '" data-sh-row="' + escHtml(t) + '" role="presentation">' +
+      var s = '<li class="sh sh-tab' + (open ? " open" : "") + (r.base || r.inBase ? " base" : "") + '" data-sh-row="' + escHtml(t) + '" role="presentation"' + (open ? ' data-sh-cur="1"' : "") + '>' +
         '<span class="sh-slot"' + (r.canBase ? "" : ' title="Seal sheets price as options only, never as the base bid"') + '>' +
         (r.canBase ? '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="' + escHtml(t) + '"' + key(t, "base") +
           (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid" title="Base bid">' : "") + '</span>';

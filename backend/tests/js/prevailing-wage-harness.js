@@ -390,8 +390,8 @@ async function pageSection() {
   // the Review step reads the same rate
   q.api.go(2);
   const review = L.stripTags(q.dom.get("panels").innerHTML);
-  out.review = { polishing: /Polishing\s*3 × 5 × \$52\.00\s*\$6,240/.test(review), mockup: /Mock-up\s*3 × 0\.5 × \$40\.00\s*\$480/.test(review),
-    travel: /Travel Labor\s*2 × 3 × \$36\.00\s*\$216/.test(review), sample: review.slice(review.indexOf("Polishing"), review.indexOf("Polishing") + 80) };
+  out.review = { polishing: /Polishing\s*120\s*3 × 5 × 8\s*hrs\s*\$52 \/ hr\s*\$6,240/.test(review), mockup: /Mock-up\s*12\s*3 × 0\.5 × 8\s*hrs\s*\$40 \/ hr\s*\$480/.test(review),
+    travel: /Travel Labor\s*6\s*2 × 3\s*hrs\s*\$36 \/ hr\s*\$216/.test(review), sample: review.slice(review.indexOf("Polishing"), review.indexOf("Polishing") + 80) };
   rendered.push(cardOf(q.dom.get("panels").innerHTML));
   q.api.go(1);
   // BACK ON THE LABOR STEP the panel is drawn afresh, with the card on: its first paint, not a repaint
@@ -515,7 +515,7 @@ async function typedAtDefaultPageSection() {
   P.typeInto(q, '[data-pw="fringes"]', "13"); out.cardMoved = read();
   q.api.go(2);
   const review = L.stripTags(q.dom.get("panels").innerHTML);
-  out.review = { typed: /Polishing\s*3 × 5 × \$33\.00\s*\$3,960/.test(review), sample: review.slice(review.indexOf("Polishing"), review.indexOf("Polishing") + 80) };
+  out.review = { typed: /Polishing\s*120\s*3 × 5 × 8\s*hrs\s*\$33 \/ hr\s*\$3,960/.test(review), sample: review.slice(review.indexOf("Polishing"), review.indexOf("Polishing") + 80) };
   q.api.go(1);
   out.afterReturn = read();
   q.clock.fire();
