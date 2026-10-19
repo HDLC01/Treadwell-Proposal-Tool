@@ -659,8 +659,8 @@ def check_head_fallback_css(page):
     rules = _css_rules(_style(page))
     static = [m for m, sel, d in rules if sel == ".v2head" and m is not None and d.get("position") == "static"]
     conditions = {c.replace(" ", "") for m in static for c in m.split(",")}
-    assert {"(max-width:760px)", "(max-height:640px)"} <= conditions, (
-        "the head is not in the normal flow on a narrow (760px) AND on a short (640px) screen, each on its own: %r" % sorted(conditions))
+    assert {"(max-width:820px)", "(max-height:540px)"} <= conditions, (
+        "the head is not in the normal flow on a narrow (820px) AND on a short (540px) screen, each on its own: %r" % sorted(conditions))
     for media in static:
         assert _decls(rules, "html", media).get("scroll-padding-top") == "0", "the scroll padding is not put back to nothing where the head is static"
 
@@ -690,6 +690,20 @@ def check_scroll_padding_css(page):
     """html's scroll-padding-top is derived from the head's height, which the page keeps in --v2head-h."""
     pad = _decls(_css_rules(_style(page)), "html").get("scroll-padding-top", "")
     assert "var(--v2head-h" in pad, "html's scroll-padding-top is not the head's height (--v2head-h): %r" % pad
+    # ...and none while focus is in the head itself (2026-10-20 audit: each keystroke in Rename, and each Tab, scrolled the page ~100px up)
+    assert re.search(r"html:has\(#v2head :focus-within\)\{scroll-padding-top:0\}", _style(page)), (
+        "typing or tabbing inside the head would scroll the page: no zero padding while focus is in it")
+
+
+def check_head_height_cap(page):
+    """The head never covers most of the window: past 70% of it the head scrolls inside itself (the Add-sheet list and a description box grow it)."""
+    head = _decls(_css_rules(_style(page)), ".v2head")
+    assert head.get("max-height") == "70vh" and head.get("overflow-y") == "auto", (
+        "the head has no height cap: %r / %r" % (head.get("max-height"), head.get("overflow-y")))
+
+
+def test_the_head_never_grows_past_most_of_the_window():
+    check_head_height_cap(PAGE)
 
 
 def test_the_sticky_head_holds_the_top_bar_then_the_sheets_and_sits_above_the_page_heading():
@@ -1009,7 +1023,7 @@ def _sheets_above_the_bar(page):
     return page.replace(line, "", 1).replace('\n    <header class="topbar">', line + '\n    <header class="topbar">', 1)
 
 
-_MEDIA = "@media (max-width:760px),(max-height:640px){"
+_MEDIA = "@media (max-width:820px),(max-height:540px){"
 _HEAD = ".v2head{position:sticky;top:0;z-index:30;margin:0 -22px 22px;background:var(--surf);"
 STATIC_BREAKS = {
     "the sheets go back inside #main": (check_head_structure, _sheets_into_main),
@@ -1024,10 +1038,12 @@ STATIC_BREAKS = {
     "the head does not take the body's side padding back": (check_head_sticky_css, _swap(_HEAD, _HEAD.replace("margin:0 -22px 22px", "margin:0 0 22px"))),
     "the top bar keeps a margin of its own": (check_head_sticky_css, _swap("justify-content:space-between;gap:12px;margin:0;",
                                                                          "justify-content:space-between;gap:12px;margin:0 -22px 22px;")),
-    "a narrow screen keeps the head pinned": (check_head_fallback_css, _swap(_MEDIA, "@media (max-height:640px){")),
-    "a short screen keeps the head pinned": (check_head_fallback_css, _swap(_MEDIA, "@media (max-width:760px){")),
+    "a narrow screen keeps the head pinned": (check_head_fallback_css, _swap(_MEDIA, "@media (max-height:540px){")),
+    "a short screen keeps the head pinned": (check_head_fallback_css, _swap(_MEDIA, "@media (max-width:820px){")),
     "the head is static only when the screen is narrow AND short": (check_head_fallback_css, _swap(
-        _MEDIA, "@media (max-width:760px) and (max-height:640px){")),
+        _MEDIA, "@media (max-width:820px) and (max-height:540px){")),
+    "typing in the head scrolls the page": (check_scroll_padding_css, _swap("    html:has(#v2head :focus-within){scroll-padding-top:0}\n", "")),
+    "the head can grow past the window": (check_head_height_cap, _swap(";max-height:70vh;overflow-y:auto}", "}")),
     "the scroll padding stays where the head is static": (check_head_fallback_css, _swap("      html{scroll-padding-top:0}\n", "")),
     "the scroll padding is a fixed number": (check_scroll_padding_css, _swap("calc(var(--v2head-h,0px) + 6px)", "64px")),
     "the top bar is as tall as the intake page's": (check_head_compact_css, _swap("padding:8px 24px;border-bottom", "padding:16px 24px;border-bottom")),
@@ -1043,5 +1059,9 @@ STATIC_BREAKS = {
 def test_the_markup_and_css_checks_go_red_when_the_page_changes(name):
     check, mutate = STATIC_BREAKS[name]
     check(PAGE)                                      # it passes on the page as shipped
+    # The mutation is made OUTSIDE pytest.raises: an anchor that no longer matches has to fail this test, not pass it
+    # (2026-10-20 audit: with the anchor check inside, an edited anchor let 22 of these pass with nothing mutated).
+    mutated = mutate(PAGE)
+    assert mutated != PAGE, "the mutation changed nothing"
     with pytest.raises(AssertionError):
-        check(mutate(PAGE))
+        check(mutated)

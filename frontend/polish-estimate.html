@@ -78,19 +78,27 @@
        STACKING. 30: over the page (the bid bar at the bottom is 9) and under every overlay the shell draws: the
        toasts 9990, the sidebar 9998, the notification panel 10001 and the modal scrim 10100 (auth.js, shared.js).
 
-       STICKY ONLY WHERE IT HAS ROOM. On a phone (760px wide and under) or a short window (640px tall and under)
-       pinned it would leave the step a sliver, so it is in the normal flow there. The order is the same either way.
+       STICKY ONLY WHERE IT HAS ROOM. On a phone or a narrow window (820px wide and under, where the top bar also stacks
+       into two rows) or a short one (540px tall and under) pinned it would leave the step a sliver, so it is in the normal
+       flow there. A 1080p laptop at 150% (about 600px tall) keeps it pinned. The order is the same either way.
+       AND NEVER TALLER THAN MOST OF THE WINDOW: with the Add-sheet list or a description open it can grow, so past 70% of
+       the window it scrolls inside itself rather than covering the step.
 
        NOTHING SCROLLED TO MAY STOP BEHIND IT. html's scroll-padding-top is the block's height, kept in --v2head-h by
        js/polish-estimate.js (a ResizeObserver on #v2head, with a fallback for a browser without one) and put back to
        nothing wherever the block is static. The few pixels on top of the height keep a focus ring in view.
        ONE COST, FOUND IN A BROWSER: a control IN the head sits inside that padded-off band, so a plain focus() on it scrolls
        the page up to put it below the head (a click on Add sheet threw a scrolled page to the top). Whatever focuses a
-       control in the head passes preventScroll: focusSheetsKey and the tab arrow keys, in js/polish-estimate.js. */
+       control in the head passes preventScroll: focusSheetsKey and the tab arrow keys, in js/polish-estimate.js.
+       AND TYPING OR TABBING IN THE HEAD (2026-10-20 audit, in Chrome): every keystroke in the Rename or Description box,
+       and every Tab between the head's controls, scrolled the page about 100px up for the same reason, and preventScroll
+       cannot reach a browser's own caret-follow or Tab. So while focus is anywhere in the head the padding is nothing:
+       the head is pinned, so what is focused in it is already on screen. */
     .v2head{position:sticky;top:0;z-index:30;margin:0 -22px 22px;background:var(--surf);
-      box-shadow:0 6px 10px -8px rgba(27,28,28,.3)}
+      box-shadow:0 6px 10px -8px rgba(27,28,28,.3);max-height:70vh;overflow-y:auto}
     html{scroll-padding-top:calc(var(--v2head-h,0px) + 6px)}
-    @media (max-width:760px),(max-height:640px){
+    html:has(#v2head :focus-within){scroll-padding-top:0}
+    @media (max-width:820px),(max-height:540px){
       .v2head{position:static;box-shadow:none}
       html{scroll-padding-top:0}
     }
