@@ -62,7 +62,8 @@ def test_the_model_keeps_only_known_keys_as_typed_and_nothing_for_a_blank_set(ra
     assert n["none"] is None and n["notObject"] is None and n["list"] is None
     assert n["allBlank"] is None, "a section with nothing typed saves no adjust key"
     assert n["junkKeys"] == {"gp_pct": "30"}, "unknown keys and a __proto__ trick are dropped"
-    assert n["bulkNotTrue"] is None and n["bulkTrue"] == {"bulk": True}
+    # no Bulk Discount on v2 since 2026-10-20: a saved `bulk` is dropped whatever it says
+    assert n["bulkNotTrue"] is None and n["bulkTrue"] is None
     assert n["longText"] == 32
     assert n["numbersKept"] == {"gp_pct": 30, "discount_amt": 1500}
     assert n["objectValueDropped"] is None
@@ -92,8 +93,8 @@ def test_the_material_boxes_follow_kyles_two_discount_cells(ran):
     assert m["polycreteZero"]["discounts"] == {"Sherwin-Williams": 0.2}, "a typed 0 is no Poly-Crete discount"
     assert m["polycreteOwn"]["discounts"] == {"Sherwin-Williams": 0.2, "Poly-Crete": 0.1}
     assert m["polycreteBad"]["discounts"] == {"Sherwin-Williams": 0.2}, "an unusable Poly-Crete box is left out"
-    assert m["bulk"]["bulk"] is True and m["nothing"] == {"bulk": False, "discounts": {}, "escalation": 0.06}
-    assert m["onlyMaterial"] == {"supplier_pct": "20", "bulk": True} and m["onlyMarkup"] is None
+    assert m["bulk"]["bulk"] is False and m["nothing"] == {"bulk": False, "discounts": {}, "escalation": 0.06}
+    assert m["onlyMaterial"] == {"supplier_pct": "20"} and m["onlyMarkup"] is None
 
 
 # ── 2. the chain ────────────────────────────────────────────────────────────────────────────────────────────────────

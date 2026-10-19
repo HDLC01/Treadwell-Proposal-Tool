@@ -38,9 +38,10 @@
        it keeps only .brand and .progress and destroys anything else inside the header. This page does not link
        styles.css, so the rules the bar needs are ported from it here in this page's own tokens, scoped to
        header.topbar so nothing else on the page changes. The bar runs edge to edge: the body's side padding is
-       taken back with the negative margin. */
-    header.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 -22px 22px;
-      padding:16px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+       taken back by the sticky head around it (.v2head, below), and the bar is 8px shorter above and below than the
+       intake page's, because on this page it stays on screen. */
+    header.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;
+      padding:8px 24px;border-bottom:1px solid var(--line);background:var(--card)}
     header.topbar .brand{display:flex;align-items:center;gap:12px}
     header.topbar .brand-mark{display:block;width:58px;height:36px;flex:none}
     header.topbar .brand-name{font-weight:800;font-size:16px}
@@ -60,6 +61,46 @@
     @media (max-width:480px){
       header.topbar .brand-sub{display:none}
       header.topbar .progress .step{font-size:9px;letter-spacing:.03em}
+    }
+
+    /* ── THE STICKY HEAD (Hanz, 2026-10-20: "that header bar when estimating in v2 should be sticky") ─────────────
+       The top bar and, directly under it, the sheet bar are ONE block that stays at the top of the screen while the
+       steps scroll under it, so a sheet can be opened, copied or made the base from Material, Labor and Review alike
+       without going back up. The page runs: this block, the page heading, the step rail, the step.
+
+       THE BAR AND THE SHEETS ARE SIBLINGS IN IT. auth.js folds the burger, brand, steps and bell into header.topbar's
+       one row and destroys whatever else is in that header, so the sheets cannot live inside it.
+
+       WIDTH. It takes the body's side padding back (the negative margin) so the bar and its background run edge to
+       edge, and the sheets inside it are held to the page column (see .sheets). It is a child of body, so the
+       sidebar's body margin-left moves it with the rest of the page.
+
+       STACKING. 30: over the page (the bid bar at the bottom is 9) and under every overlay the shell draws: the
+       toasts 9990, the sidebar 9998, the notification panel 10001 and the modal scrim 10100 (auth.js, shared.js).
+
+       STICKY ONLY WHERE IT HAS ROOM. On a phone or a narrow window (820px wide and under, where the top bar also stacks
+       into two rows) or a short one (540px tall and under) pinned it would leave the step a sliver, so it is in the normal
+       flow there. A 1080p laptop at 150% (about 600px tall) keeps it pinned. The order is the same either way.
+       AND NEVER TALLER THAN MOST OF THE WINDOW: with the Add-sheet list or a description open it can grow, so past 70% of
+       the window it scrolls inside itself rather than covering the step.
+
+       NOTHING SCROLLED TO MAY STOP BEHIND IT. html's scroll-padding-top is the block's height, kept in --v2head-h by
+       js/polish-estimate.js (a ResizeObserver on #v2head, with a fallback for a browser without one) and put back to
+       nothing wherever the block is static. The few pixels on top of the height keep a focus ring in view.
+       ONE COST, FOUND IN A BROWSER: a control IN the head sits inside that padded-off band, so a plain focus() on it scrolls
+       the page up to put it below the head (a click on Add sheet threw a scrolled page to the top). Whatever focuses a
+       control in the head passes preventScroll: focusSheetsKey and the tab arrow keys, in js/polish-estimate.js.
+       AND TYPING OR TABBING IN THE HEAD (2026-10-20 audit, in Chrome): every keystroke in the Rename or Description box,
+       and every Tab between the head's controls, scrolled the page about 100px up for the same reason, and preventScroll
+       cannot reach a browser's own caret-follow or Tab. So while focus is anywhere in the head the padding is nothing:
+       the head is pinned, so what is focused in it is already on screen. */
+    .v2head{position:sticky;top:0;z-index:30;margin:0 -22px 22px;background:var(--surf);
+      box-shadow:0 6px 10px -8px rgba(27,28,28,.3);max-height:70vh;overflow-y:auto}
+    html{scroll-padding-top:calc(var(--v2head-h,0px) + 6px)}
+    html:has(#v2head :focus-within){scroll-padding-top:0}
+    @media (max-width:820px),(max-height:540px){
+      .v2head{position:static;box-shadow:none}
+      html{scroll-padding-top:0}
     }
 
     /* The beta works on a test COPY of a real project (see polish-sandbox.js). Silently editing a
@@ -94,7 +135,7 @@
     /* ── THE SHEET BAR (js/bid-model.js sheetsPanelHtml, painted by js/polish-estimate.js) ────────────────────────
        The bid's sheets as TABS, the way the live estimate draws its worksheet tabs, under the four steps in the top bar
        (Hanz, 2026-10-19). It was a floating panel (2026-10-13), and a widget over the page is not a place an estimator
-       navigates from. In normal flow now, on every bid:
+       navigates from. Since 2026-10-20 it sits in the sticky head (.v2head, above), directly under the top bar, on every bid:
          ROW 1  .sh-strip: one tab a sheet (the base-bid radio, the name, the price), the combined Epoxy + Polish choice
                 when the bid has the pair, and + Add sheet last. It scrolls sideways on a narrow screen, never the page.
          ROW 2  .sh-open: the open sheet only, its type and its controls, laid out in a row that wraps.
@@ -106,12 +147,13 @@
        button), .mw-sw (the switch), .btn and .x. Anything the page already had, restyled for the bar only, is
        scoped under .sheets, so no other control on the page moves. The readable small lines use --ink-v: --ink-3 is
        about 4.1:1 on white, under what 11.5px text needs. */
-    .sheets{margin:0 0 14px;font:400 13px/1.45 var(--sans);color:var(--ink);text-align:left}
+    /* The side padding holds the bar to the page's column (the .wrap below is 1000px and centred, with the body's 22px each side), while
+       the background and the line under it run the full width of the head. */
+    .sheets{margin:0;padding:8px max(22px,calc((100% - 1000px) / 2));background:var(--surf);border-bottom:1px solid var(--line);
+      font:400 13px/1.45 var(--sans);color:var(--ink);text-align:left}
     .sheets .tw-ico{flex:none;pointer-events:none}
-    .sheets .rdot{display:inline-block;width:11px;height:11px;border-radius:50%;border:3.5px solid var(--red-dark);
-      background:var(--card);vertical-align:-1px}
-    .sheets .sh-warn{display:flex;gap:7px;margin:0 0 8px;background:var(--warn-bg);border:1px solid #e8d9a8;
-      border-radius:9px;padding:8px 9px;font-size:11.5px;line-height:1.4;color:var(--warn)}
+    .sheets .sh-warn{display:flex;gap:7px;margin:0 0 6px;background:var(--warn-bg);border:1px solid #e8d9a8;
+      border-radius:9px;padding:5px 9px;font-size:11px;line-height:1.35;color:var(--warn)}
     .sheets .sh-warn .tw-ico{margin-top:1px}
     .sheets .btn{display:inline-flex;align-items:center;gap:7px;line-height:1.2;white-space:nowrap}
     .sheets .btn:active{transform:translateY(1px)}
@@ -177,15 +219,16 @@
     .sheets .sh-pick-row[disabled]:active{transform:none}
 
     /* A base change waiting for its yes, whichever tab it is for: between the two rows. */
-    .sheets .sh-confirm{margin:8px 0;background:var(--warn-bg);border:1px solid #e8d9a8;border-radius:9px;
-      padding:9px 12px;font-size:11.5px;line-height:1.4;color:var(--warn)}
+    .sheets .sh-confirm{margin:6px 0;background:var(--warn-bg);border:1px solid #e8d9a8;border-radius:9px;
+      padding:7px 12px;font-size:11px;line-height:1.35;color:var(--warn)}
     .sheets .sh-confirm b{display:block;color:var(--ink);font-size:12px;margin:0 0 3px}
-    .sheets .sh-confirm p{margin:0 0 8px}
+    .sheets .sh-confirm p{margin:0 0 6px}
     .sheets .sh-btns{display:flex;flex-wrap:wrap;gap:6px}
 
-    /* ROW 2. What the open sheet is, then its controls, in a row that wraps. */
-    .sheets .sh-open{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;background:var(--card);
-      border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r) var(--r);padding:11px 14px;box-shadow:var(--shadow)}
+    /* ROW 2. What the open sheet is, then its controls, in a row that wraps. ONE TIGHT ROW while nothing is being renamed, confirmed or
+       described: the sticky head carries it on every screen, so its notes (.sh-note) sit in the row when they fit, not under it. */
+    .sheets .sh-open{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;background:var(--card);
+      border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r) var(--r);padding:7px 12px;box-shadow:var(--shadow)}
     .sheets .sh-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .sh-type{font:700 10px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
     .sheets .pill{font:700 10px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
@@ -195,9 +238,11 @@
     .sh-sum{font-size:12px;color:var(--ink-v)}
     .sh-sum b{font:600 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
     .sh-sum.off{color:var(--ink-v);font-style:italic}
-    .sheets .sh-body{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;flex:1 1 auto;min-width:0}
+    /* The controls are the open bar's own flex items (display:contents), so what the sheet is and what it can do share one row and only
+       the parts that do not fit wrap onto the next. */
+    .sheets .sh-body{display:contents}
     .sheets .mw-sw{background:none;border:0;padding:0;font:600 12px var(--sans);color:var(--ink);text-align:left}
-    .sheets .sh-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px}
+    .sheets .sh-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px}
     .sheets .sh-ctl:has(.sh-desc-in){flex:1 1 100%}
     /* Not on the proposal: dimmed and still usable, the page's own convention for "not applying right now"
        (.tk.inert above), never a disabled control. */
@@ -237,10 +282,11 @@
     .sheets .kindpick[disabled]:active{transform:none}
     .sheets .kindpick.armed{background:var(--red-dark);border-color:var(--red-dark);color:var(--card)}
     .sheets .kindpick.armed:hover{color:var(--card)}
-    .sheets .sh-note{margin:0;flex:1 1 100%;font-size:11px;line-height:1.4;color:var(--ink-v)}
+    .sheets .sh-note{margin:0;flex:1 1 auto;font-size:11px;line-height:1.35;color:var(--ink-v)}
     .sheets .sh-note.warn{color:var(--red-dark)}
-    .sheets .sh-hint{margin:8px 2px 0;font-size:11.5px;line-height:1.4;color:var(--ink-v)}
-    .sheets .sh-empty{margin:4px 2px 0;font-size:11.5px;line-height:1.4;color:var(--ink-v)}
+    /* The one line under the bar, and only when it has something to say: the note about copies, or on a one-sheet bid how to add an option. */
+    .sheets .sh-hint{margin:5px 2px 0;font-size:11px;line-height:1.3;color:var(--ink-v)}
+    .sheets .sh-empty{margin:5px 2px 0;font-size:11px;line-height:1.3;color:var(--ink-v)}
     @media (max-width:760px){
       .sheets .sh-acts{margin-left:0}
       .sheets .sh-open{padding:10px 12px}
@@ -680,25 +726,35 @@
   </style>
 </head>
 <body>
-  <!-- THE SHARED SHELL, as polish-intake.html has it. auth.js folds the burger + brand + step pills + bell into this one
-       row instead of drawing its own white bar with only the bell. NOTHING may be added inside this header: auth.js keeps
-       only .brand and .progress and destroys the rest. The page's own heading (the BETA badge, the project line) is
-       below it. polish-sandbox.js repoints all four links onto the draft it settled on (?d=). -->
-  <header class="topbar">
-    <div class="brand">
-      <img class="brand-mark" src="/img/treadwell-bison.svg" width="57" height="36" alt="Treadwell">
-      <div>
-        <div class="brand-name">Treadwell</div>
-        <div class="brand-sub">Proposal Generator</div>
+  <!-- THE STICKY HEAD (2026-10-20, Hanz): the top bar, then the sheet bar under it, in ONE block that stays at the top of the screen
+       (see .v2head in the style block). They are siblings on purpose: auth.js folds the burger, brand, step pills and bell into the
+       header's one row and destroys whatever else is inside that header, so the sheets cannot live in it. The page's own heading
+       (the BETA badge, the project line) comes after the block. -->
+  <div class="v2head" id="v2head">
+    <!-- THE SHARED SHELL, as polish-intake.html has it. auth.js folds the burger + brand + step pills + bell into this one
+         row instead of drawing its own white bar with only the bell. NOTHING may be added inside this header: auth.js keeps
+         only .brand and .progress and destroys the rest. The page's own heading (the BETA badge, the project line) is
+         below it. polish-sandbox.js repoints all four links onto the draft it settled on (?d=). -->
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-mark" src="/img/treadwell-bison.svg" width="57" height="36" alt="Treadwell">
+        <div>
+          <div class="brand-name">Treadwell</div>
+          <div class="brand-sub">Proposal Generator</div>
+        </div>
       </div>
-    </div>
-    <div class="progress">
-      <a class="step" href="/polish-intake.html">1 · Intake</a>
-      <span class="step active">2 · Estimate</span>
-      <a class="step" href="/proposal-review.html">3 · Proposal</a>
-      <a class="step" href="/done.html">4 · Files</a>
-    </div>
-  </header>
+      <div class="progress">
+        <a class="step" href="/polish-intake.html">1 · Intake</a>
+        <span class="step active">2 · Estimate</span>
+        <a class="step" href="/proposal-review.html">3 · Proposal</a>
+        <a class="step" href="/done.html">4 · Files</a>
+      </div>
+    </header>
+    <!-- THE SHEET BAR, on every bid (js/polish-estimate.js paintSheets, markup from B.sheetsPanelHtml): a strip of tabs, one a
+         sheet, and under it the open sheet's controls. Hidden until the first paintSheets has drawn it, the way #main is hidden
+         until the page is ready, so it never shows as an empty bar that then jumps open. -->
+    <section class="sheets" id="sheets-panel" aria-label="Sheets on this bid" hidden></section>
+  </div>
   <div class="wrap">
     <div class="head">
       <div>
@@ -713,9 +769,6 @@
     <div class="loading" id="loading">Loading the item library…</div>
 
     <div id="main" hidden>
-      <!-- THE SHEET BAR, on every bid (js/polish-estimate.js paintSheets, markup from B.sheetsPanelHtml): a strip of tabs, one a
-           sheet, and under it the open sheet's controls. In the flow, above the step rail; it no longer floats. -->
-      <section class="sheets" id="sheets-panel" aria-label="Sheets on this bid"></section>
       <div class="rail" id="rail"></div>
       <div id="panels"></div>
     </div>

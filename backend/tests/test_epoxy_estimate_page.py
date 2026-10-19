@@ -455,7 +455,7 @@ def test_the_hard_bid_switch_fills_the_discount_with_kyles_rule_and_a_typed_figu
 def test_the_review_step_offers_every_box_with_the_rule_greyed_in(ran):
     a = ran["adjust"]["before"]
     assert a["adjust"] == "absent" and a["total"] == a["hand"]
-    assert all(present for _k, present in a["boxes"]) and a["bulkSwitch"] is True
+    assert all(present for _k, present in a["boxes"]) and a["bulkSwitch"] is False, "the Bulk switch is gone (2026-10-20)"
     assert a["gpPlaceholder"] == "35" and a["gpUsed"] == 0.35, "the greyed GP is the rule the bid is using"
     assert a["shipPlaceholder"] == "9" and a["shipUsed"] == 0.09
 
@@ -491,11 +491,12 @@ def test_the_discount_line_prices_shows_and_the_dollars_win(ran):
     assert a["percent"]["hardBid"] < 0 and a["percent"]["total"] == a["percent"]["hand"]
 
 
-def test_the_bulk_switch_answers_a_click_and_the_keyboard_in_place(ran):
-    a = ran["adjust"]
-    assert a["bulkClick"]["stored"] is True and a["bulkClick"]["aria"] == "true" and a["bulkClick"]["sameNode"] is True
-    assert a["bulkClick"]["total"] == a["bulkClick"]["hand"]
-    assert a["bulkKey"] == {"stored": False, "aria": "false"}, "Space on the switch turns it back off"
+def test_there_is_no_bulk_switch_and_a_saved_bulk_answer_buys_nothing_at_bulk(ran):
+    """Hanz, 2026-10-20: "Remove all bulk discount toggle in the V2 estimates". No bid on either database had it on."""
+    n = ran["adjust"]["noBulk"]
+    assert n["drawn"] is False, "the Review step still draws a Bulk Discount switch"
+    assert "bulk" not in (n["kept"] or {}), "the model still keeps a saved bulk answer"
+    assert n["same"] is True, "a saved bulk answer still changes the price"
 
 
 def test_the_save_carries_the_boxes_and_the_proposal_is_the_bid_shown(ran):

@@ -2358,14 +2358,14 @@
   //   ship_pct, gp_pct, super_pct, soft_pct   the rate, in %, that replaces the sheet's rule for that line
   //   supplier_pct   % off the Sherwin-Williams liquids (Epoxy B41); the escalation is kept (see MATERIAL_ESCALATION)
   //   polycrete_pct  % off the Poly-Crete liquids (Epoxy C41); blank follows supplier_pct, as C41 = B41 does
-  //   bulk           the Bulk Discount switch (Epoxy D41): a material's bulk cost is its price
+  //   (no `bulk`: the Bulk Discount switch was removed from v2 on 2026-10-20, Hanz; normalizeAdjust drops a saved one)
   //   hard_bid       the Hard bid switch (Hanz, 2026-10-17; the tab's B5): Kyle's rule fills the discount, 4% from a
   //                  $60,000 sub-total, 2.5% on a local job from $13,000, until a discount is typed. A section's own
   //                  answer, as each of his tabs has its own B5, and kept here rather than in the job's `conditions` so a
   //                  bid that never pressed it saves exactly what it saved before.
   var ADJUST_PCT_KEYS = Object.freeze(["discount_pct", "ship_pct", "gp_pct", "super_pct", "soft_pct",
                                        "supplier_pct", "polycrete_pct"]);
-  var ADJUST_KEYS = Object.freeze(ADJUST_PCT_KEYS.concat(["discount_amt", "bulk", "hard_bid"]));
+  var ADJUST_KEYS = Object.freeze(ADJUST_PCT_KEYS.concat(["discount_amt", "hard_bid"]));
 
   /** THE ESCALATION BAKED INTO EVERY LIBRARY COST the workbook seed wrote: Kyle's Epoxy!U140, +6%. A library cost is
    *  the list price x 1.06; the sheet's discounted price is list x (1 + 0.06 - discount). So a discount is applied as
@@ -2421,7 +2421,6 @@
     ADJUST_KEYS.forEach(function (k) {
       if (!Object.prototype.hasOwnProperty.call(raw, k)) return;
       var v = raw[k];
-      if (k === "bulk") { if (v === true) { out.bulk = true; any = true; } return; }
       if (k === "hard_bid") { if (v === true) { out.hard_bid = true; any = true; } return; }
       if (typeof v === "number" && isFinite(v)) { out[k] = v; any = true; return; }
       if (typeof v === "string" && v.trim() !== "") { out[k] = v.slice(0, 32); any = true; }
@@ -2446,15 +2445,14 @@
     return out;
   }
 
-  /** The material overrides alone (supplier, Poly-Crete, Bulk), and the Hard bid switch: what a section's boxes do to
+  /** The material overrides alone (supplier, Poly-Crete), and the Hard bid switch: what a section's boxes do to
    *  its MATERIAL, and which rule its discount follows, without the figures typed over the markup lines. The Review step
    *  greys each markup box with the rule's figure for the material the section really buys (and the Discount box with
    *  the hard bid rule's), so the rule it shows is the one a typed figure replaces. Null when there are none. */
   function materialOnlyAdjust(adj) {
     var a = normalizeAdjust(adj);
     if (!a) return null;
-    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, bulk: a.bulk,
-                             hard_bid: a.hard_bid });
+    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, hard_bid: a.hard_bid });
   }
 
   /** The job's conditions as one section's chain reads them: the section's Hard bid switch (its `adjust`) is the
@@ -2482,8 +2480,9 @@
     return out;
   }
 
-  /** What a section's boxes do to its MATERIAL prices (library-core's itemsForBid): the Bulk Discount switch, and the
-   *  fraction off each discount group's library cost. A Poly-Crete box left blank follows the supplier box, as Kyle's
+  /** What a section's boxes do to its MATERIAL prices (library-core's itemsForBid): the fraction off each discount
+   *  group's library cost. `bulk` is always false: v2 has no Bulk Discount switch (2026-10-20), so a material is never
+   *  bought at its bulk cost here; library-core keeps the ability for the library's own use. A Poly-Crete box left blank follows the supplier box, as Kyle's
    *  C41 is `=B41`. Unusable boxes are left out, as everywhere else. */
   function materialAdjust(adj) {
     var a = normalizeAdjust(adj) || {};
@@ -2497,7 +2496,7 @@
     var discounts = {};
     if (sw) discounts[DISCOUNT_VENDORS.supplier_pct] = sw;
     if (pc) discounts[DISCOUNT_VENDORS.polycrete_pct] = pc;
-    return { bulk: a.bulk === true, discounts: discounts, escalation: MATERIAL_ESCALATION };
+    return { bulk: false, discounts: discounts, escalation: MATERIAL_ESCALATION };
   }
 
   /** A usable rate, or the shipped one. Anything that is not a positive finite number reads as
@@ -5324,6 +5323,10 @@
     return next ? { tab_opts: next } : {};
   }
 
+  // WHAT THE BASE RADIO MEANS, said on the radio itself (its title and its accessible name). It was a legend line under the
+  // sheet bar ("marks the base bid, which sets the lump sum and the job type") until 2026-10-20, when the bar moved into the
+  // page's sticky head, where every line is height that stays on screen.
+  var BASE_MEANS = "sets the lump sum and the job type";
   var JOB_WORDS = { polish: "Polish", epoxy: "Epoxy", gyp: "Gyp", combo: "Combo" };
   function jobWord(jobType) { return has.call(JOB_WORDS, jobType) ? JOB_WORDS[jobType] : String(jobType == null ? "" : jobType); }
   function anWord(w) { return /^[AEIOU]/i.test(w) ? "an" : "a"; }
@@ -5430,7 +5433,8 @@
       var combined = f.baseIds.length === 2;
       tabs.push('<li class="sh sh-tab combined' + (combined ? " base" : "") + '" data-sh-row="combined" role="presentation">' +
         '<span class="sh-slot"><input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
-        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid" title="Base bid: Epoxy and Polish together"></span>' +
+        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid, which ' + BASE_MEANS +
+        '" title="Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '"></span>' +
         '<span class="sh-name static" title="Epoxy and Polish together"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
         (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></li>');
     }
@@ -5486,11 +5490,11 @@
     // ROW 2: the open sheet.
     f.rows.forEach(function (r, i) { if (r.e.tab === v.open) h += openHtml(r, i); });
 
-    h += '<p class="sh-hint"><span class="rdot" aria-hidden="true"></span> marks the base bid, which sets the lump sum and the job type.';
+    // NO LEGEND LINE (2026-10-20). The bar lives in the page's sticky head, so a footer line is height that never scrolls away: what the
+    // base radio means is on the radio (BASE_MEANS). The one note that stays is about copies, and it is drawn only when there is one.
     if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {
-      h += ' <span class="sh-excel">Copies print on the proposal. The Excel download does not include them.</span>';
+      h += '<p class="sh-hint">Copies print on the proposal. The Excel download does not include them.</p>';
     }
-    h += '</p>';
     if (f.rows.length === 1 && !f.unreadable) {
       h += '<p class="sh-empty">Add a sheet to price an option. Options never change the lump sum.</p>';
     }
@@ -5517,7 +5521,8 @@
       var s = '<li class="sh sh-tab' + (open ? " open" : "") + (r.base || r.inBase ? " base" : "") + '" data-sh-row="' + escHtml(t) + '" role="presentation"' + (open ? ' data-sh-cur="1"' : "") + '>' +
         '<span class="sh-slot"' + (r.canBase ? "" : ' title="Seal sheets price as options only, never as the base bid"') + '>' +
         (r.canBase ? '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="' + escHtml(t) + '"' + key(t, "base") +
-          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid" title="Base bid">' : "") + '</span>';
+          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid, which ' + BASE_MEANS +
+          '" title="Base bid: ' + BASE_MEANS + '">' : "") + '</span>';
       if (ren) {
         s += '<input type="text" class="sh-ren-in" data-sh-name="' + escHtml(t) + '"' + key(t, "name") + ' value="' +
           escHtml(v.draft) + '" aria-label="Sheet name">';

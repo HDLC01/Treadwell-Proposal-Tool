@@ -261,9 +261,17 @@ function makeDocument(dom, log) {
   // out, so "the pop-up is on screen" is `body.kids.length`.
   const body = dom.element("body", {}, "", null);
   body.removeChild = (c) => { body.kids = body.kids.filter((k) => k !== c); return c; };
+  // document.documentElement, as far as the page reads it: the sticky head's height is written onto it as the custom property
+  // --v2head-h, which the page's CSS turns into the html element's scroll-padding-top. `props` is what was written.
+  const rootStyle = {
+    props: {},
+    setProperty(k, v) { this.props[k] = String(v); },
+    getPropertyValue(k) { return this.props[k] === undefined ? "" : this.props[k]; },
+  };
   return {
     listeners,
     body,
+    documentElement: { style: rootStyle },
     getElementById: dom.get,
     createElement: (tag) => dom.element(String(tag).toLowerCase(), {}, "", null),
     createTextNode: (txt) => ({ isText: true, text: String(txt) }),
@@ -477,6 +485,10 @@ function build(opts) {
       winListeners.filter((l) => l.type === type).forEach((l) => l.handler(event));
     },
   };
+
+  // A browser's ResizeObserver, only for a scenario that hands one in (opts.resizeObserver): every other build has none, which is the
+  // browser the page must still work in. The sticky head is observed at parse time, so it has to be here when the page is built.
+  if (opts.resizeObserver) win.ResizeObserver = opts.resizeObserver;
 
   const fetchStub = async function (url, init) {
     rec.fetches.push(url);

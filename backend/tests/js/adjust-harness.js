@@ -107,8 +107,10 @@ out.items = {
   sameArrayNoAdj: L.itemsForBid(ITEMS, null) === ITEMS,
   supplier20: view(L.itemsForBid(ITEMS, B.materialAdjust({ supplier_pct: "20" }))),
   polycrete10: view(L.itemsForBid(ITEMS, B.materialAdjust({ supplier_pct: "20", polycrete_pct: "10" }))),
-  bulk: view(L.itemsForBid(ITEMS, B.materialAdjust({ bulk: true }))),
-  bulkAndDiscount: view(L.itemsForBid(ITEMS, B.materialAdjust({ bulk: true, supplier_pct: "20" }))),
+  // library-core keeps its bulk pricing for the library's own use; v2 no longer asks for it (materialAdjust's bulk is
+  // always false since 2026-10-20), so these hand it the switch directly
+  bulk: view(L.itemsForBid(ITEMS, Object.assign(B.materialAdjust({}), { bulk: true }))),
+  bulkAndDiscount: view(L.itemsForBid(ITEMS, Object.assign(B.materialAdjust({ supplier_pct: "20" }), { bulk: true }))),
   originalUntouched: JSON.stringify(ITEMS[2]),
   overDiscount: view(L.itemsForBid(ITEMS, { discounts: { "Sherwin-Williams": 1.06 }, escalation: 0.06 }))[0],
 };

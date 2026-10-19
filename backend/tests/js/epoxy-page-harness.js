@@ -526,15 +526,12 @@ async function adjustSection() {
   o.percent = { hardBid: api.activeBid().hard_bid, hand: hand({ supplier_pct: "20", discount_pct: "3" }).total,
     total: api.activeBid().total };
 
-  // the Bulk Discount switch, by click and by the keyboard, repainted where it is
-  const sw = () => P.need(b, "[data-adj-bulk]");
-  const node = sw();
-  P.clickOn(b, "[data-adj-bulk]");
-  o.bulkClick = { stored: section().adjust.bulk === true, aria: sw().attrs["aria-checked"], sameNode: sw() === node,
-    total: api.activeBid().total, hand: hand(clone(section().adjust)).total };
-  node.click = function () { b.doc.fire("click", { target: node, preventDefault() {} }); };
-  b.doc.fire("keydown", { target: node, key: " ", preventDefault() {} });
-  o.bulkKey = { stored: section().adjust.bulk === true, aria: sw().attrs["aria-checked"] };
+  // NO BULK DISCOUNT SWITCH since 2026-10-20 (Hanz): none drawn, and a bid that saved `bulk: true` before prices as if it
+  // never had (the model drops the key), so nothing is bought at a bulk cost.
+  const withBulk = clone(section().adjust || {});
+  withBulk.bulk = true;
+  o.noBulk = { drawn: !!b.doc.querySelector("[data-adj-bulk]"), kept: B.normalizeAdjust(withBulk),
+    same: hand(withBulk).total === hand(clone(section().adjust || {})).total };
 
   // the save carries the boxes, and the proposal's lump sum is the bid the Review step shows
   b.clock.fire();
