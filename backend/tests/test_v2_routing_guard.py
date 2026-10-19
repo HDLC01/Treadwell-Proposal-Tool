@@ -344,6 +344,11 @@ SHEET, INTAKE, NOT_A_DOOR = "estimate-review.js", "index.js", "not a door"
 
 # (file under frontend/, text on the line, how many lines, which destination guard covers it, why)
 DOORS = [
+    # 2026-10-20: a v2 draft's step pills are pointed AWAY from these two pages; the lines name them only to replace them.
+    ("js/done.js", r'else if (/^\/(\?edit=1)?$|^\/\?edit=1/.test(h))', 1, NOT_A_DOOR,
+     "re-points the 1 · Intake pill of a v2 draft to /polish-intake.html"),
+    ("js/proposal-review.js", r'else if (/^\/(\?edit=1)?$|^\/\?edit=1/.test(h))', 1, NOT_A_DOOR,
+     "re-points the 1 · Intake pill of a v2 draft to /polish-intake.html"),
     ("done.html", 'href="/estimate-review.html"', 1, SHEET, "the 2 · Estimate step pill"),
     ("done.html", 'href="/?edit=1"', 1, INTAKE, "the 1 · Intake step pill"),
     ("estimate-review.html", 'href="/?edit=1"', 1, INTAKE, "the 1 · Intake step pill"),

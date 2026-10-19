@@ -3028,7 +3028,7 @@
     // A section that is an OPTION says so first: its figure is quoted on its own and is never in the lump sum.
     var onShow = activeTab === B.ROOT_TAB ? null : openEntry();
     if (onShow && onShow.kind === "option") {
-      html += '<p class="cap" data-option-note><b>' + esc(OPTION_NOT_IN_SUM) + '.</b> ' + esc(onShow.tab) +
+      html += '<p class="cap" data-option-note><b>' + esc(OPTION_NOT_IN_SUM) + '.</b> ' + esc(onShow.label || onShow.tab) +
         ' is priced on its own and printed under Options &amp; Unit Prices. The lump sum is the base bid alone.</p>';
     }
     // Takeoff and material

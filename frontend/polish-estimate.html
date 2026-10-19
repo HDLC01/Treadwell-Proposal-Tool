@@ -128,8 +128,13 @@
     .sheets .sh-tab{display:flex;align-items:center;padding:0 10px 0 3px;background:rgba(27,28,28,.045);
       border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0}
     .sheets .sh-tab:hover{background:rgba(27,28,28,.08)}
-    .sheets .sh-tab.base{box-shadow:inset 0 3px 0 var(--red)}
-    .sheets .sh-tab.open{position:relative;z-index:1;margin-bottom:-1px;padding-bottom:1px;background:var(--card)}
+    /* THE OPEN TAB is the one with the red edge; the base says "Base" in its tab (2026-10-20: a red edge on the base read
+       as a second selected tab). */
+    .sheets .sh-tab.base .sh-basetag{flex:none;font:700 9.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;
+      color:var(--card);background:var(--ink);border-radius:999px;padding:2px 6px}
+    .sheets .sh-tab.open{position:relative;z-index:1;margin-bottom:-1px;padding-bottom:1px;background:var(--card);
+      box-shadow:inset 0 3px 0 var(--red)}
+    .sheets .sh-addbtn.on{background:var(--red-tint);color:var(--red-dark)}
     .sheets .sh-tab.combined{border-style:dashed}
     .sheets .sh-slot{display:flex;align-items:center;justify-content:center;width:22px;height:32px}
     .sheets .sh-slot:empty{width:8px}
@@ -578,6 +583,13 @@
        table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page. */
     .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
     .rev-t,.mk{min-width:560px}
+    /* ONE SET OF COLUMNS FOR EVERY CARD (browser walk, 2026-10-20: each card sized its own, so Quantity and Unit wandered
+       from card to card). Fixed layout takes the widths from the header row. */
+    .rev-t,.mk{table-layout:fixed}
+    .rev-t th:nth-child(2),.mk th:nth-child(2){width:20%}
+    .rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}
+    .rev-t th:nth-child(4),.mk th:nth-child(4){width:19%}
+    .rev-t th:nth-child(5),.mk th:nth-child(5){width:14%}
     .rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
            text-transform:uppercase;color:var(--ink-v);background:var(--rev-band,var(--surf-low));white-space:nowrap}
     .rev-t th.r,.mk th.r{text-align:right}
