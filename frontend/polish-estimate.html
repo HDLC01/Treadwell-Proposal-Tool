@@ -390,7 +390,20 @@
        border:1px solid transparent;border-radius:5px;padding:4px 7px;margin-left:-7px;
        min-width:0;flex:1 1 auto}
     .labname:hover{border-color:var(--line);background:var(--card)}
-    .lab .tk-sub,.trv .tk-sub{font-variant-numeric:tabular-nums;color:var(--ink-v)}
+    .lab .tk-sub,.trv .tk-sub,.pwcard .tk-sub{font-variant-numeric:tabular-nums;color:var(--ink-v)}
+    /* The Prevailing wage card: a labor-style card at the bottom of the Labor step. Dimmed while the job's switch
+       is off, like the other cards, and every box stays typeable. */
+    /* The prevailing wage trades: one box per trade, side by side like the sheet's two (Polish!I47:L54). */
+    .pwtrades{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+    .pwtrade{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff}
+    .pwtrade.paid{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset}
+    .pwtrade-h{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+    .pwtrade-h .pwname{flex:1;min-width:0;font-weight:700}
+    .pwtrade-h input.pwname{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-weight:700}
+    .pwtrade-g{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .pwpay{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;font-weight:600;cursor:pointer}
+    /* CLOSED (the job's switch is off) the card is its header alone, so the header keeps no gap under it. */
+    .pwcard.off .tk-h{margin:0}
     /* Travel block: a dividing line, then Travel Labor, Lodging and Per Diem. Lodging and Per Diem
        have three boxes (quantity, rate, cost), not four, and a fixed name rather than an input. */
     .trvsep{display:flex;align-items:center;gap:10px;margin:22px 0 8px;color:var(--ink-3);
@@ -559,9 +572,29 @@
     .mk .note{font-size:11px;color:var(--ink-3);font-family:var(--sans)}
     .mk .note a{color:var(--red-dark)}
     .mk input{width:104px;text-align:right;font:inherit;font-family:var(--mono);
-        font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:5px;
-        padding:4px 7px;background:var(--card);color:var(--ink)}
+        font-variant-numeric:tabular-nums;border:1.5px solid var(--ink-3);border-radius:6px;
+        padding:5px 8px;background:var(--card);color:var(--ink)}
     .mk input:hover{border-color:var(--red)}
+    /* The override boxes over the sheet's rules (Review step): a short % box with its greyed rule, and the warning
+       beside one that is typed but cannot be used. [hidden] restated: a class display rule outranks the attribute. */
+    /* 2026-10-17 (Hanz: "make the editable fields more visible"): a box reads as a box -- a solid edge, a white
+       face and a focus ring -- and holds the line's ONE figure. Blank shows the sheet's rule in grey; a typed figure
+       wears the brand tint, so what somebody changed stands out from what the sheet decided. The rate the chain used
+       is kept beside it for the repaint, not drawn (.mkused). */
+    .mkused{display:none}
+    .adjbox{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+    .adjbox input,.mk .adjbox input{width:64px;text-align:right;font:600 13px var(--mono);
+        font-variant-numeric:tabular-nums;border:1.5px solid var(--ink-3);border-radius:6px;padding:5px 8px;
+        background:var(--card);color:var(--ink);box-shadow:inset 0 1px 2px rgba(27,28,28,.06)}
+    .adjbox.adjamt input,.mk .adjbox.adjamt input{width:92px}
+    .adjbox input::placeholder{color:var(--ink-3);opacity:1;font-weight:500}
+    .adjbox input:not(:placeholder-shown){background:var(--red-tint);border-color:var(--red);color:var(--red-dark)}
+    .adjbox input:hover,.mk input:hover{border-color:var(--red)}
+    .adjbox input:focus,.mk input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(200,16,46,.16)}
+    .mk .hbline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+    .mk tr.band .bandnote{margin-left:8px;font:500 11px var(--sans);letter-spacing:0;text-transform:none;color:var(--ink-v)}
+    .adjwarn{display:block;white-space:normal;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:220px}
+    .adjwarn[hidden]{display:none}
 
     /* Intake's `.sw` switch (styles.css), shrunk to sit inside a table cell instead of its own
        padded row. This page carries its own tokens and does not link styles.css, so the track

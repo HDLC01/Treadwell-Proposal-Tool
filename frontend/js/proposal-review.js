@@ -342,7 +342,13 @@
   // saved (Kyle: "can't see cove base height value on Proposal sheet").
   (function guardCoveHeight() {
     const ch = form.querySelector('[name="cove_height"]');
-    if (ch && !String(ch.value).trim()) ch.value = "6";
+    if (!ch) return;
+    // A v2 bid knows its cove's height from the cove system it bought (`cove_height_v2`, bid-model coveHeightOf): the box
+    // shows it until somebody types a height of their own here, which is then kept (`cove_height_typed`).
+    const v2 = String(state.cove_height_v2 || "").trim();
+    if (v2 && !state.cove_height_typed) ch.value = v2;
+    if (!String(ch.value).trim()) ch.value = "6";
+    ch.addEventListener("input", () => { try { TW.setState({ cove_height_typed: true }); } catch {} });
   })();
 
   // Pre-fill the editable NOTES box: saved edits if any, else the standard
@@ -2361,7 +2367,7 @@
         // inherit that.
         const coveLF = Number(String(tokenValues.cove_lf || "0").replace(/[^0-9.]/g, "")) || 0;
         if (coveLF > 0) {
-          const h = String(mergedValues.cove_height || "6").trim() || "6";
+          const h = String(mergedValues.cove_height || mergedValues.cove_height_v2 || "6").trim() || "6";
           out = (out ? out + " with " : "") + h + '" Integral Cove Base';
         }
         return out;
@@ -5465,7 +5471,7 @@
       }
     }
     const texture = String(merged.texture || "").trim();
-    const coveH = String(merged.cove_height || "6").trim() || "6";
+    const coveH = String(merged.cove_height || merged.cove_height_v2 || "6").trim() || "6";
     const multi = picks.length > 1;
     const ovs = Array.isArray(state.system_overrides) ? state.system_overrides : [];
     // ONE LINE, ONE EDITABLE REGION. Kyle asked three times, and the first two answers

@@ -745,6 +745,38 @@ def test_contingency_feeds_super_pto_soft_costs_and_the_remodel_tax(ran):
 
 
 @needs_node
+def test_a_measurement_changed_over_one_already_there_is_asked_about_and_can_be_put_back(ran):
+    """Hanz, 2026-10-17: "add a pop up when we accidentally edit the measurement". Leaving a measurement box with a new
+    number over one that was already there asks; "Put back" restores the row and every price, "Keep" keeps it."""
+    a = ran["measureAsk"]
+    back = a["putBack"]
+    assert back["asked"] == 1, "changing 12,500 SF to 1,250 asked nothing"
+    q = back["q"]
+    assert q["title"] == "Change this measurement?" and q["name"] == "Polish 800 Grit"
+    assert "12,500 SF" in q["after"] and "1,250 SF" in q["after"]
+    assert q["cancelText"] == "Put back 12,500 SF" and q["confirmText"] == "Keep 1,250 SF"
+    assert q["dismiss"] == "explicit", "a stray click on the backdrop must not decide it"
+    assert back["totalTyped"] != back["total0"], "the fixture did not move the price, so the put-back proves nothing"
+    assert float(back["measurement"]) == 12500 and float(back["box"]) == 12500
+    assert back["total"] == back["total0"], "put back, but the price did not come back with it"
+
+    kept = a["kept"]
+    assert kept["asked"] == 1 and float(kept["measurement"]) == 1250 and kept["total"] == kept["totalTyped"]
+
+    cleared = a["cleared"]
+    assert cleared["asked"] == 1 and "nothing" in cleared["q"]["after"]
+    assert float(cleared["measurement"]) == 12500, "a box emptied by accident is put back too"
+
+
+@needs_node
+def test_a_first_number_or_the_same_number_asks_nothing(ran):
+    a = ran["measureAsk"]
+    assert a["firstEntry"]["asked"] == 0, "typing into an empty box is measuring, not an accident"
+    assert float(a["firstEntry"]["measurement"]) == 800
+    assert a["same"]["asked"] == 0, "retyping the number that was there changed nothing"
+
+
+@needs_node
 def test_a_sub_total_that_crosses_a_gp_band_moves_the_percentage_in_place(ran):
     """B67 is banded: 52% under $6,500, then 45%, 35%, 32%, 30%. So the percentage column is as
     computed as the money column, and repaintNumbers has to refresh it. Driven through the page's
@@ -2514,12 +2546,19 @@ def test_the_sidebar_entry_is_marked_beta_and_has_its_own_glyph():
     door into step 2 now starts an estimator pricing before the things that change the price have
     been seen — and on a project with no name or bid date. The mid-flow door on Estimate Review
     still goes straight to /polish-estimate.html, because there the project already exists.
+
+    SINCE 2026-10-15 THE DOOR IS THE BETA'S BOARD (/v2-board.html; Hanz: "It should be here not V2
+    estimates"), and the board's way into a NEW bid is still step 1: its "+ New" opens the intake,
+    never the calculator.
     """
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    assert 'navItem("/polish-intake.html"' in auth, (
-        "the sidebar no longer opens the beta at its first step")
-    i = auth.index('navItem("/polish-intake.html"')
+    assert 'navItem("/v2-board.html"' in auth, "the sidebar no longer opens the beta on its board"
+    assert 'navItem("/polish-estimate.html"' not in auth, "the sidebar opens the beta at pricing"
+    i = auth.index('navItem("/v2-board.html"')
     assert "BETA" in auth[i:i + 120]
+    board = (FRONTEND / "js" / "v2-board.js").read_text(encoding="utf-8")
+    starts = re.findall(r'location\.assign\("([^"]+)"\)', board)
+    assert starts == ["/polish-intake.html"], "a new v2 bid no longer starts at the intake: %s" % starts
     glyphs = re.findall(r'navItem\("[^"]+", "([^"]+)"', auth)
     assert len(glyphs) == len(set(glyphs)), "two sidebar items share a glyph: %s" % glyphs
 

@@ -9,7 +9,8 @@ and the Gyp tabs: their material products (library_items; the USG and GrassWorx 
 Treadstone ones from Gyp (FR)), the three area rows a Gyp takeoff is made of (library_assemblies) and the five crew
 lines priced by the hour (library_labor), and the two Seal tabs, the Seal option of a bid (Phase 15): the sealer, the
 joint filler kit and the patch's two prices (library_items), the four assemblies a new option opens with (one coat or
-two, with and without joint filler) and the three crew lines priced by the day (library_labor and library_labor_calc).
+two, with and without joint filler) and the three crew lines priced by the day (library_labor and library_labor_calc), and the Polish tab (Phase 16): the three per-SF
+materials the sheet charges (densifier, sealer, grout compound) and one assembly for each polish system it prices.
 
 DRY RUN IS THE DEFAULT. With no flag it prints the plan and writes nothing. `--apply --target staging`
 writes it, and nothing else is accepted: PRODUCTION IS NOT APPROVED (Hanz, 2026-10-12: staging only).
@@ -46,12 +47,26 @@ WHAT A LIBRARY ROW CANNOT SAY (named modelling gaps, listed for Kyle and Hanz in
     cannot say either. The cove is priced by a formula in js/epoxy-takeoff.js, and the rows seeded here
     (ids below, RESERVED_PRICE_ROWS) are its editable price sources. A constant in the code is only the
     fallback, and test_epoxy_takeoff.py pins row and constant equal.
-  * Bulk Discount is a switch the v2 model does not carry yet, so `bulk_cost` is stored and not used.
+  * Bulk Discount is a switch on an Epoxy section's Review step (2026-10-16; bid-model.js `adjust.bulk`), and
+    `bulk_cost` is the price it buys at (library-core itemsForBid).
+
+THE FOUR DELIBERATE EXCEPTIONS TO INSERT-ONLY (each behind its own flag, each in its own clearly named statement
+group, none emitted by default, each held by a test that runs it against a row Kyle edited):
+  --tag-vendors         fills `vendor` on the Epoxy rows where it is still NULL ("Sherwin-Williams" or "Poly-Crete", worked
+                        out from the discount cell the row's own price cell reads: T141 or T142). It never changes a
+                        vendor that has a value, and it changes no other column. (The two vendor names themselves are
+                        ordinary insert-only rows of the plan, added to the dropdown list unless a live vendor of that
+                        name is already there, so a plain --sql run includes them.)
+  --gyp-sand-40         moves the Gyp sand price from 35 to 40 (Kyle's 10.01 master, Gyp (USG 1-8") D33) ONLY where it is
+                        still 35, so a price Kyle edited is left alone.
+  --retire-beta-sample  soft-deletes the two beta placeholder rows (the "Polish - Salt & Pepper (beta sample)" assembly and
+                        the "OPF - 5 gal pail (beta sample)" item) by name, only where they are not already deleted.
 
 Usage (from backend/):
     python ops/seed_library_from_workbook.py                       print the plan, write nothing
-    python ops/seed_library_from_workbook.py --only epoxy          one tab's rows (epoxy, gyp or seal)
+    python ops/seed_library_from_workbook.py --only epoxy          one tab's rows (epoxy, gyp, seal or polish)
     python ops/seed_library_from_workbook.py --sql                 print the statements it would run
+    python ops/seed_library_from_workbook.py --sql --tag-vendors   ... and the vendor fill-in group
     python ops/seed_library_from_workbook.py --apply --target staging
 """
 from __future__ import annotations
@@ -83,6 +98,7 @@ GYP_SHEETS = [GYP_SHEET, "Gyp (USG N12ULTRA)", 'Gyp (USG N25 1-4")', "Gyp (GWorx
 SEAL_SHEET = "Seal"
 SEAL_JNTS_SHEET = "Seal (+Jnts)"
 SEAL_SHEETS = [SEAL_SHEET, SEAL_JNTS_SHEET]
+POLISH_SHEET = "Polish"
 
 # What the staging database is, and how this script reaches it. The staging stack is a Postgres container
 # on the VPS (see the memory note on the staging data store). Nothing here names a password: the psql runs
@@ -124,7 +140,7 @@ def load(path: pathlib.Path = TEMPLATE_PATH) -> Dict[str, Sheet]:
         wf = openpyxl.load_workbook(path)
         wv = openpyxl.load_workbook(path, data_only=True)
     names = {n: d.attr_text for n, d in wf.defined_names.items()}
-    return {s: Sheet(s, wf[s], wv[s], names) for s in [EPOXY_SHEET] + GYP_SHEETS + SEAL_SHEETS}
+    return {s: Sheet(s, wf[s], wv[s], names) for s in [EPOXY_SHEET] + GYP_SHEETS + SEAL_SHEETS + [POLISH_SHEET]}
 
 
 def _col_index(col: str) -> int:
@@ -197,6 +213,7 @@ class Plan:
         self.assemblies: Dict[str, Dict[str, Any]] = {}
         self.labor: Dict[str, Dict[str, Any]] = {}
         self.labor_calc: Dict[str, Dict[str, Any]] = {}
+        self.vendors: Dict[str, Dict[str, Any]] = {}     # the supplier names the items' `vendor` text uses (not in counts)
         self.gaps: List[str] = []
         self.combined_breaks: set = set()      # materials whose price break the sheet judges on two lines added
 
@@ -248,6 +265,11 @@ def _item(id_: str, name: str, unit: str, buy_qty: float, unit_cost: float, cove
     return row
 
 
+def _set_vendor(row: Dict[str, Any], vendor: Optional[str]) -> None:
+    if vendor is not None:
+        row["vendor"] = vendor
+
+
 # ── the price a formula points at ────────────────────────────────────────────
 _CELL = re.compile(r"^\$?([A-Z]{1,3})\$?(\d+)$")
 
@@ -289,6 +311,36 @@ def bulk_price(sh: Sheet, addr: str) -> Optional[float]:
                 return float(v)
             raise PlanError("%s: the bulk price cell %s holds %r" % (addr, m.group(1), v))
     return None
+
+
+# ── the discount group of a price cell (the `vendor` of an Epoxy row) ─────────
+# Kyle's sheet discounts a material by the price COLUMN it sits in: every T-column liquid reads the Epoxy discount in
+# T141 (B41), except the few that read the Poly-Crete discount in T142 (C41, which follows B41). A W-column material
+# (silica, flake, quartz, zinc cap, mat) is never discounted. The group is read off the price cell's own formula, so a
+# product Kyle moves to the other discount moves with it on the next plan, and the seed never keeps a list of them.
+# discount cell -> (the label the sheet puts beside it, the vendor name the library row gets)
+DISCOUNT_VENDORS: Dict[str, Tuple[str, str]] = {"T141": ("Epoxy", "Sherwin-Williams"), "T142": ("Poly-Crete", "Poly-Crete")}
+
+
+def discount_vendor(sh: Sheet, addr: str, plan: Optional[Plan] = None) -> Optional[str]:
+    """The vendor a price cell's discount group names, or None when the cell is not discounted (a W-column material, a
+    constant). A formula that reads two discount cells stops the run: the group would be a guess."""
+    for cell, (label, _vendor) in DISCOUNT_VENDORS.items():
+        if sh.text("S" + cell[1:]) != label:
+            raise PlanError("%s!S%s should label the discount %r, found %r" % (sh.name, cell[1:], label, sh.text("S" + cell[1:])))
+    f = sh.formula(addr)
+    if not isinstance(f, str):
+        return None
+    hits = sorted({"T" + n for n in re.findall(r"\$T\$(\d+)", f)} & set(DISCOUNT_VENDORS))
+    if len(hits) > 1:
+        raise PlanError("%s!%s reads two discounts (%s): its vendor would be a guess" % (sh.name, addr, ", ".join(hits)))
+    if not hits:
+        return None
+    vendor = DISCOUNT_VENDORS[hits[0]][1]
+    if plan is not None:
+        plan.vendors[vendor] = {"id": "wb-vendor-" + _slug(vendor), "name": vendor,
+                                "notes": "Added by the library seed: the discount group Kyle's workbook prices these materials in."}
+    return vendor
 
 
 # ── Epoxy: the systems ───────────────────────────────────────────────────────
@@ -334,6 +386,7 @@ def _liquid_line(sh: Sheet, row: int, off: int, area: str, plan: Plan, where: st
     name = "%s, %s SF/%s" % (product, _g(coverage), unit)
     item = _item("wb-epoxy-" + _slug(name), name, unit, 1, _money4(price), coverage, "Epoxy", "epoxy",
                  EPOXY_NOTE % addr, bulk_cost=_money4(bulk) if bulk is not None else None)
+    _set_vendor(item, discount_vendor(sh, addr, plan))
     plan.add_item(item)
     return {"role": sh.text(col("A")) or "Liquids", "item_id": item["id"]}
 
@@ -393,6 +446,7 @@ def _media_line(sh: Sheet, row: int, off: int, area: str, plan: Plan, where: str
     name = "%s, %s %s %s, %s %s per SF" % (label, _g(bag), word, unit.lower(), _g(per_sf), word)
     item = _item("wb-epoxy-" + _slug(name), name, unit, 1, _money4(unit_cost), float(coverage), "Epoxy", "epoxy",
                  EPOXY_NOTE % large_addr, price_breaks=price_breaks)
+    _set_vendor(item, discount_vendor(sh, large_addr, plan))
     plan.add_item(item)
     return {"role": "Media: " + label, "item_id": item["id"]}
 
@@ -475,7 +529,8 @@ def plan_epoxy(sheets: Dict[str, Sheet], plan: Plan) -> None:
              "rounded up so it cannot buy a bag the sheet does not).")
     plan.gap("Cove is two ROUNDUPs deep and its aggregate follows System 1 (Kyle's odd rule 11): it is priced by "
              "a formula in code, from the editable price rows this seed writes.")
-    plan.gap("Bulk Discount is stored (bulk_cost) and not used: the v2 model has no Bulk Discount switch yet.")
+    plan.gap("Bulk Discount is a switch on an Epoxy section's Review step (2026-10-16): with it on, a material is bought at "
+             "its bulk_cost, and a price break dearer than that is not used (library-core itemsForBid).")
 
 
 # the price sources the code-priced formulas read. id -> (what it is, where its price sits, the unit, the pack)
@@ -502,6 +557,7 @@ def _plan_epoxy_price_rows(sh: Sheet, plan: Plan) -> None:
             id_, spec["name"], spec["unit"], float(pack), _money4(float(v) * pack), 1.0, "Epoxy", "epoxy",
             "Price source for a formula in js/epoxy-takeoff.js (Epoxy!%s). Edit the price here; the formula is code." % addr)
         row["roundup"] = False        # a price source is read per unit by the formula; nothing is bought from it by pack
+        _set_vendor(row, discount_vendor(sh, addr, plan))
         plan.add_item(row)
 
 
@@ -755,12 +811,88 @@ def plan_seal(sheets: Dict[str, Sheet], plan: Plan) -> None:
              "so a crew on mixed rates differs by a night or two), and its drive hours are typed.")
 
 
+# ── Polish: the three per-SF materials, and one assembly for each polish system ──
+POLISH_NOTE = "Seeded from Kyle's estimate workbook, %s tab, cell %s. %s"
+# The Polish tab's material formulas, checked by text so a sheet Kyle changes stops the run with the cell named. None of
+# them reads the polish system (F36): the SYSTEM changes the labor and the tooling (the calculator at P4:W16), never the
+# material lines. The one condition is the grout, which the sheet charges when I36 says "Yes Grout" (a note at I35 says
+# "Grout for Full Agg Only").
+POLISH_AREA_FORMULA = "=E18"
+POLISH_GROUT_FORMULA = '=IF(I36="Yes Grout",E18)'
+# the polish systems the sheet's labor calculator prices (P14:P16), the name an assembly gets, and whether grout is in it
+POLISH_SYSTEMS = [
+    ("S&P", "wb-polish-sys-salt-and-pepper", "Polish — Salt & Pepper", False),
+    ("Cream", "wb-polish-sys-cream", "Polish — Cream", False),
+    ("Full", "wb-polish-sys-full-aggregate", "Polish — Full aggregate", True),
+]
+
+
+def _polish_price_row(sh: Sheet, plan: Plan, id_: str, name: str, cell: str, how: str) -> None:
+    price = _number(sh.value(cell), POLISH_SHEET + "!" + cell)
+    row = _item(id_, name, "SF", 1.0, _money4(price), 1.0, "Polished Concrete", "polish",
+                POLISH_NOTE % (POLISH_SHEET, cell, how))
+    row["roundup"] = False        # per square foot, so the cost is the area times the price and never a whole pack
+    plan.add_item(row)
+
+
+def plan_polish(sheets: Dict[str, Sheet], plan: Plan) -> None:
+    sh = sheets[POLISH_SHEET]
+    where = POLISH_SHEET + "!"
+    # the three material lines: label, the quantity formula (the whole area, never the system) and the cost formula
+    for row, label, qty in ((20, "Densifier", POLISH_AREA_FORMULA), (21, "Sealer", POLISH_AREA_FORMULA),
+                            (22, "Grout Compound", POLISH_GROUT_FORMULA)):
+        if not sh.text("A%d" % row).startswith(label):
+            raise PlanError("%sA%d should name the %s line, found %r" % (where, row, label.lower(), sh.text("A%d" % row)))
+        if sh.formula("B%d" % row) != qty:
+            raise PlanError("%sB%d should be %s, found %r: the quantity rule of the %s line has changed"
+                            % (where, row, qty, sh.formula("B%d" % row), label.lower()))
+        if sh.formula("D%d" % row) != "=B%d*C%d" % (row, row):
+            raise PlanError("%sD%d should be =B%d*C%d, found %r" % (where, row, row, row, sh.formula("D%d" % row)))
+    if "full agg" not in sh.text("I35").lower():
+        raise PlanError("%sI35 should say the grout is for Full Aggregate only, found %r" % (where, sh.text("I35")))
+    _polish_price_row(sh, plan, "wb-polish-densifier", "Densifier, per SF", "C20",
+                      "One square foot of the whole area. Edit the price here.")
+    _polish_price_row(sh, plan, "wb-polish-sealer", "Polish sealer, per SF", "C21",
+                      "One square foot of the whole area, one coat. This is the POLISH sealer; the Seal tab's sealer "
+                      "is its own row. Edit the price here.")
+    _polish_price_row(sh, plan, "wb-polish-grout-compound", "Grout compound, per SF", "C22",
+                      "One square foot of the whole area, charged by the sheet only when the floor is grouted (a "
+                      "full aggregate polish). Edit the price here.")
+    # the systems: the names come from the calculator's own labels (P14:P16), so a renamed system stops the run
+    for label, id_, name, grout in POLISH_SYSTEMS:
+        cell = {"Cream": "P14", "S&P": "P15", "Full": "P16"}[label]
+        if sh.text(cell) != label:
+            raise PlanError("%s%s should label the %s system, found %r" % (where, cell, label, sh.text(cell)))
+        lines = [{"role": "Densifier", "item_id": "wb-polish-densifier"}, {"role": "Sealer", "item_id": "wb-polish-sealer"}]
+        if grout:
+            lines.append({"role": "Grout compound", "item_id": "wb-polish-grout-compound"})
+        plan.add_assembly({
+            "id": id_, "name": name, "unit": "SF", "category": "Polished Concrete",
+            "description": "Seeded from Kyle's estimate workbook, Polish tab (%s). The per-SF materials the sheet charges for "
+                           "this system: %s. Dye and joint filler are priced by the job's conditions and the patch by the "
+                           "job's New / Reno answer, so none is listed here." % (
+                               cell, "densifier, sealer" + (" and grout compound" if grout else "")),
+            "lines": lines, "default_work_types": ["polish"],
+        })
+    plan.gap("The sheet's material lines do not depend on the polish system: Salt & Pepper and Cream charge the same "
+             "densifier (C20) and sealer (C21), and the system changes the labor and tooling (the calculator at P4:W16). "
+             "The three assemblies exist so the estimator picks by name; only Full aggregate adds the grout compound (C22).")
+    plan.gap("The sheet charges grout (B22) whenever the Grout? box (I36) says Yes Grout, on any system, though its own note "
+             "(I35) says full aggregate only. The library says it the way the note does: grout is a line of the Full "
+             "aggregate assembly, and a Salt & Pepper or Cream job cannot carry it by the picker.")
+    plan.gap("Not in the library, priced by code or typed: the patch (C17, D17: New / Reno price rows are the Seal tab's), dye "
+             "(C25, C26, E25) and joint filler (B29, C29, E29) by the job's conditions, shipping (B32, D32, 2%), the "
+             "sub-total roundup (D31), tooling and consumables (C51, D51, from the calculator V10:W10), demo tooling "
+             "(C52), slurry hardener (B53, C53) and plastic (B54, C54), the Standard Add's table (H17:K22, priced from "
+             "the validation tab's tiers) and the Potential Add Options (I28:I30).")
+
+
 # ── the whole plan ───────────────────────────────────────────────────────────
 def make_plan(path: pathlib.Path = TEMPLATE_PATH, only: str = "all", sheets: Optional[Dict[str, Sheet]] = None) -> Plan:
     """The plan for the workbook at `path`. `sheets` is for a caller that has already read it (reading the template
     takes several seconds, planning takes a tenth of one) and wants to plan from it again."""
-    if only not in ("all", "epoxy", "gyp", "seal"):
-        raise PlanError("--only is epoxy, gyp, seal or all")
+    if only not in ("all", "epoxy", "gyp", "seal", "polish"):
+        raise PlanError("--only is epoxy, gyp, seal, polish or all")
     if sheets is None:
         sheets = load(path)
     plan = Plan()
@@ -770,6 +902,8 @@ def make_plan(path: pathlib.Path = TEMPLATE_PATH, only: str = "all", sheets: Opt
         plan_gyp(sheets, plan)
     if only in ("all", "seal"):
         plan_seal(sheets, plan)
+    if only in ("all", "polish"):
+        plan_polish(sheets, plan)
     return plan
 
 
@@ -791,7 +925,7 @@ def _lit(v: Any) -> str:
 
 
 ITEM_COLUMNS = ["id", "name", "unit", "buy_qty", "unit_cost", "coverage", "waste_pct", "roundup", "divisions",
-                "category", "default_work_types", "notes", "bulk_cost", "price_breaks"]
+                "category", "default_work_types", "notes", "bulk_cost", "price_breaks", "vendor"]
 ASSEMBLY_COLUMNS = ["id", "name", "unit", "lines", "category", "description", "default_work_types"]
 LABOR_COLUMNS = ["id", "name", "rate", "unit", "guys_auto", "sort", "favorite", "default_work_types"]
 CALC_COLUMNS = ["line_id", "mode", "hours_per_day", "guys"]
@@ -816,19 +950,99 @@ def statements(plan: Plan) -> List[str]:
     return out
 
 
-def sql_script(plan: Plan) -> str:
-    return "begin;\n" + "\n".join(statements(plan)) + "\ncommit;\n"
+def vendor_statements(plan: Plan) -> List[str]:
+    """The supplier names the items' `vendor` text uses, as dropdown rows. Still an insert that cannot overwrite: a row is
+    added only when no live vendor of that name is there already (the Items tab refuses a duplicate name the same way,
+    ignoring case and space), and the id is the name's slug, so a second run adds nothing."""
+    out: List[str] = []
+    for name in sorted(plan.vendors):
+        v = plan.vendors[name]
+        out.append("insert into public.library_vendors (id, name, notes) select %s, %s, %s where not exists "
+                   "(select 1 from public.library_vendors where lower(trim(name)) = lower(%s) and deleted_at is null) "
+                   "on conflict (id) do nothing;" % (_lit(v["id"]), _lit(v["name"]), _lit(v["notes"]), _lit(v["name"])))
+    return out
+
+
+# ── the exceptions to insert-only: each behind its own flag, in its own named group ──
+GROUP_TAG_VENDORS = "tag-vendors"
+GROUP_GYP_SAND = "gyp-sand-40"
+GROUP_BETA_SAMPLE = "retire-beta-sample"
+GROUPS = (GROUP_TAG_VENDORS, GROUP_GYP_SAND, GROUP_BETA_SAMPLE)
+
+# Kyle's 10.01 master has Gyp (USG 1-8") D33, Sand (per Ton), at 40 where the 5.7 template says 35. The template file is
+# not changed (the plan, the code's fallbacks and their pin tests all read 35), so the move is its own statement.
+GYP_SAND_ID = "wb-gyp-sand-per-ton"
+GYP_SAND_FROM = 35.0
+GYP_SAND_TO = 40.0
+# The two rows the beta placed in the library to try the Polish section with. Their ids were generated by the library
+# API and are not in any file, so they are found by exact name; a statement touches a row only if it is still live.
+BETA_ASSEMBLY_NAME = "Polish — Salt & Pepper (beta sample)"
+BETA_ITEM_NAME = "OPF — 5 gal pail (beta sample)"
+
+
+def tag_vendor_statements(plan: Plan) -> List[str]:
+    """Fill `vendor` on a row that already exists and has none. Only the vendor column, only where it is NULL."""
+    tagged = [it for it in plan.as_dict()["items"] if it.get("vendor")]
+    if not tagged:
+        raise PlanError("--tag-vendors found no row with a discount group in the plan: it needs the epoxy plan "
+                        "(--only all or epoxy)")
+    return ["update public.library_items set vendor = %s where id = %s and vendor is null;" % (_lit(it["vendor"]), _lit(it["id"]))
+            for it in tagged]
+
+
+def gyp_sand_statements(plan: Plan) -> List[str]:
+    it = plan.items.get(GYP_SAND_ID)
+    if it is None:
+        raise PlanError("--gyp-sand-40 needs the gyp plan (--only all or gyp)")
+    if it["unit_cost"] != GYP_SAND_FROM:
+        raise PlanError("the workbook's sand is %r now, not %r: the 35 to 40 move was written for the 5.7 template"
+                        % (it["unit_cost"], GYP_SAND_FROM))
+    return ["update public.library_items set unit_cost = %s where id = %s and unit_cost = %s;"
+            % (_lit(GYP_SAND_TO), _lit(GYP_SAND_ID), _lit(GYP_SAND_FROM))]
+
+
+def _ascii_lit(text: str) -> str:
+    """A text literal with every character outside ASCII written as chr(code), so the script is plain ASCII and no console,
+    pipe or ssh encoding can turn the em dash of a name into another character and make a statement match nothing."""
+    parts = re.split(r"([^\x00-\x7f])", text)
+    return " || ".join("chr(%d)" % ord(p) if len(p) == 1 and ord(p) > 127 else _lit(p) for p in parts if p != "")
+
+
+def beta_sample_statements() -> List[str]:
+    return ["update public.library_assemblies set deleted_at = now() where name = (%s) and deleted_at is null;" % _ascii_lit(BETA_ASSEMBLY_NAME),
+            "update public.library_items set deleted_at = now() where name = (%s) and deleted_at is null;" % _ascii_lit(BETA_ITEM_NAME)]
+
+
+def exception_statements(plan: Plan, groups: Tuple[str, ...]) -> List[str]:
+    """The statements of the groups asked for, each under a comment that names it. Empty for no groups."""
+    unknown = [g for g in groups if g not in GROUPS]
+    if unknown:
+        raise PlanError("unknown statement group %s (the groups are %s)" % (", ".join(unknown), ", ".join(GROUPS)))
+    makers = {GROUP_TAG_VENDORS: ("fill vendor where it is still NULL", lambda: tag_vendor_statements(plan)),
+              GROUP_GYP_SAND: ("sand 35 to 40, only where it is still 35", lambda: gyp_sand_statements(plan)),
+              GROUP_BETA_SAMPLE: ("soft-delete the two beta sample rows, only where live", beta_sample_statements)}
+    out: List[str] = []
+    for g in GROUPS:
+        if g in groups:
+            out.append("-- EXCEPTION GROUP %s (not insert-only): %s" % (g, makers[g][0]))
+            out.extend(makers[g][1]())
+    return out
+
+
+def sql_script(plan: Plan, groups: Tuple[str, ...] = ()) -> str:
+    body = statements(plan) + vendor_statements(plan) + exception_statements(plan, tuple(groups))
+    return "begin;\n" + "\n".join(body) + "\ncommit;\n"
 
 
 # ── applying it ──────────────────────────────────────────────────────────────
-def apply_to_staging(plan: Plan, runner=None) -> str:
+def apply_to_staging(plan: Plan, runner=None, groups: Tuple[str, ...] = ()) -> str:
     """Run the statements inside the staging database container, over ssh. `runner(args, input)` is how a test
     stands in for ssh. Returns what psql printed."""
-    script = sql_script(plan)
+    script = sql_script(plan, groups)
     args = ["ssh", STAGING_SSH_HOST, "docker", "exec", "-i", STAGING_DB_CONTAINER,
             "psql", "-U", STAGING_DB_USER, "-d", STAGING_DB_NAME, "-v", "ON_ERROR_STOP=1", "-q"]
     if runner is None:
-        done = subprocess.run(args, input=script, capture_output=True, text=True, check=False)
+        done = subprocess.run(args, input=script, capture_output=True, text=True, encoding="utf-8", check=False)
         if done.returncode != 0:
             raise PlanError("psql over ssh failed (%d): %s" % (done.returncode, done.stderr.strip()))
         return done.stdout
@@ -848,10 +1062,14 @@ def describe(plan: Plan) -> str:
             extra += "  breaks " + json.dumps(it["price_breaks"])
         if it.get("bulk_cost") is not None:
             extra += "  bulk %s" % it["bulk_cost"]
+        if it.get("vendor"):
+            extra += "  vendor " + it["vendor"]
         lines.append("  item  %-62s %-8s pack %-5s cost %-10s cov %-9s%s" % (
             it["id"], it["unit"], _g(it["buy_qty"]), it["unit_cost"], it["coverage"], extra))
     for a in plan.as_dict()["assemblies"]:
         lines.append("  asm   %-62s %-3s %d line(s)" % (a["id"], a["unit"], len(a["lines"])))
+    for name in sorted(plan.vendors):
+        lines.append("  vendor %-61s (dropdown row, added only if no live vendor has the name)" % name)
     for r in plan.as_dict()["labor"]:
         lines.append("  labor %-62s %s/%s" % (r["id"], r["rate"], r["unit"]))
     lines += ["", "NAMED MODELLING GAPS (for Kyle):"] + ["  - " + g for g in plan.gaps]
@@ -860,12 +1078,20 @@ def describe(plan: Plan) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--only", default="all", choices=["all", "epoxy", "gyp", "seal"])
+    ap.add_argument("--only", default="all", choices=["all", "epoxy", "gyp", "seal", "polish"])
     ap.add_argument("--sql", action="store_true", help="print the statements, write nothing")
     ap.add_argument("--json", action="store_true", help="print the plan as JSON, write nothing (what the tests read)")
+    ap.add_argument("--tag-vendors", action="store_true",
+                    help="also fill vendor on existing Epoxy rows, only where it is NULL (an exception to insert-only)")
+    ap.add_argument("--gyp-sand-40", action="store_true",
+                    help="also move the Gyp sand price from 35 to 40, only where it is still 35 (an exception to insert-only)")
+    ap.add_argument("--retire-beta-sample", action="store_true",
+                    help="also soft-delete the two beta sample rows by name (an exception to insert-only)")
     ap.add_argument("--apply", action="store_true", help="write the plan (needs --target staging)")
     ap.add_argument("--target", default=None, help="staging is the only target; production is not approved")
     args = ap.parse_args(argv)
+    groups = tuple(g for g, on in ((GROUP_TAG_VENDORS, args.tag_vendors), (GROUP_GYP_SAND, args.gyp_sand_40),
+                                   (GROUP_BETA_SAMPLE, args.retire_beta_sample)) if on)
     try:
         plan = make_plan(only=args.only)
         if args.apply:
@@ -874,8 +1100,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                       "(production is not approved).", file=sys.stderr)
                 return 2
             sys.stdout.write(describe(plan))
-            apply_to_staging(plan)
-            print("applied to staging: %s" % json.dumps(plan.counts()))
+            exception_statements(plan, groups)      # a group that cannot be built stops the run before anything is sent
+            apply_to_staging(plan, groups=groups)
+            print("applied to staging: %s%s" % (json.dumps(plan.counts()),
+                                                 (" + exception groups: " + ", ".join(groups)) if groups else ""))
             return 0
         if args.target is not None:
             print("refused: --target means nothing without --apply.", file=sys.stderr)
@@ -883,7 +1111,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.json:
             print(json.dumps(plan.as_dict(), indent=1, sort_keys=True))
         else:
-            sys.stdout.write(sql_script(plan) if args.sql else describe(plan))
+            if groups and not args.sql:
+                print("refused: the statement groups (%s) are SQL; add --sql to print them." % ", ".join(groups), file=sys.stderr)
+                return 2
+            sys.stdout.write(sql_script(plan, groups) if args.sql else describe(plan))
         return 0
     except PlanError as err:
         print("stopped: %s" % err, file=sys.stderr)

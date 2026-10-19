@@ -88,7 +88,10 @@ def test_what_the_page_saves_and_what_a_new_bid_opens_holding_is_the_golden_byte
     as the model the page holds after init() and the blob its first save writes. Compared as JSON text, so
     key order is part of it.
 
-    Mutations: see test_the_golden_goes_red_when_the_code_changes."""
+    Mutations: see test_the_golden_goes_red_when_the_code_changes.
+
+    The seven `newBid` records were cut again on 2026-10-16 (meta.polish_rev3_recut): a new bid is stamped polish-rev3 and
+    carries the sheet's patch line. The 26 `saved` records were not touched."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert want["meta"]["commit"] == "28a5d1f"
     # The 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
@@ -378,7 +381,7 @@ def test_a_bid_with_several_sections_writes_the_complete_derived_set(ran):
     assert c["frozenThrew"] is None, c["frozenThrew"]
     assert c["keys"] == ["polish_estimate", "polish_sf", "polish_2_sf", "computed_bid", "priced_tabs", "base_tab_id",
                          "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
-                         "proposal_remodel_on", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
+                         "proposal_remodel_on", "cove_height_v2", "sheet_area", "cost_snapshot", "phase_price", "tab_opts"], (
         "tab_opts is written only because this bid holds an option (Phase 15): the proposal side prints a priced tab "
         "under Options & Unit Prices only when it says is_option")
     assert c["savePatchMultiKeys"] == ["polish_estimate", "cell_values"] + c["keys"][1:]
@@ -674,16 +677,16 @@ BREAKS = {
         "    for (var i = 0; i < list.length; i++) if (i >= 0) return list[i].tab;",
         lambda r: r["pins"]["carrierRootOff"] != 'Gyp (USG 1-8")'),
     "a sections labor ignores the job's conditions": (
-        "js/bid-model.js", "      labor: laborTotal(s.labor, model.conditions),",
+        "js/bid-model.js", "      labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),",
         "      labor: laborTotal(s.labor),",
         lambda r: r["pins"]["laborReadsConditions"][0] <= r["pins"]["laborReadsConditions"][1]),
     "a sections contingency is dropped": (
-        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: model.conditions,",
-        "      contingency: 0, fees: s.fees, conditions: model.conditions,",
+        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),",
+        "      contingency: 0, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),",
         lambda r: r["pins"]["contingencyMoves"] is False),
     "a sections fees are dropped": (
-        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: model.conditions,",
-        "      contingency: s.contingency, fees: 0, conditions: model.conditions,",
+        "js/bid-model.js", "      contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),",
+        "      contingency: s.contingency, fees: 0, conditions: chainConditions(model.conditions, s.adjust),",
         lambda r: r["pins"]["feesMove"] is False),
     "the page hands a gyp section a plain number": (
         "js/polish-estimate.js", '    if (entry.role === "gyp" && G) {',

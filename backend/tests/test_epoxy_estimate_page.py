@@ -312,3 +312,94 @@ def test_the_checks_go_red_when_the_page_or_the_model_changes(tmp_path, name):
     if proc.returncode != 0:
         return                                               # a crash is the loudest way to go red
     assert noticed(last_json_line(proc.stdout)), "the checks did not notice: " + name
+
+
+# ── the override boxes on the Review step (Hanz, 2026-10-16) ─────────────────────────────────────────────────────────
+# Driven through the page: each box typed as a person types it, the figures read off the step afterwards, and every
+# price held to the engines (priceSection over the library the bid buys), never to a number typed here.
+def test_the_hard_bid_switch_fills_the_discount_with_kyles_rule_and_a_typed_figure_still_wins(ran):
+    """Hanz, 2026-10-17: "lets make the hard bid have those rules but still overridable in the review tab". The switch is on
+    the Discount line of an Epoxy section's Review step; on, the box shows the rule's figure greyed and the rule prices."""
+    h = ran["hardBid"]
+    b = h["before"]
+    assert b["switchShown"] and b["aria"] == "false" and b["hardBid"] == 0 and b["adjust"] == "absent"
+    assert b["placeholder"] == "0" and "4% off from $60,000" in b["note"]
+
+    on = h["on"]
+    assert on["stored"] == {"hard_bid": True} and on["aria"] == "true" and on["sameNode"], "the switch was redrawn"
+    assert on["subTotal"] >= 13000, "the fixture is too small for the rule to give anything, so this proves nothing"
+    assert on["hardBid"] == on["handHardBid"] != 0 and on["total"] == on["handTotal"]
+    assert on["rulePct"] == pytest.approx(-0.025)
+    assert on["placeholder"] == "2.5" and "takes 2.5% off" in on["note"]
+    assert on["rowOff"] == "" and on["shown"].replace(",", "").lstrip("-$") == str(-on["hardBid"])
+
+    t = h["typed"]
+    assert t["hardBid"] == t["hand"] != t["ruleWas"], "a typed 3% did not replace the rule"
+    assert h["cleared"]["hardBid"] == h["cleared"]["rule"], "clearing the box did not go back to the rule"
+
+    off = h["off"]
+    assert off["aria"] == "false" and off["adjust"] == "absent" and not off["savedHasKey"]
+    assert off["hardBid"] == 0 and off["total"] == b["total"] and off["placeholder"] == "0"
+
+
+def test_the_review_step_offers_every_box_with_the_rule_greyed_in(ran):
+    a = ran["adjust"]["before"]
+    assert a["adjust"] == "absent" and a["total"] == a["hand"]
+    assert all(present for _k, present in a["boxes"]) and a["bulkSwitch"] is True
+    assert a["gpPlaceholder"] == "35" and a["gpUsed"] == 0.35, "the greyed GP is the rule the bid is using"
+    assert a["shipPlaceholder"] == "9" and a["shipUsed"] == 0.09
+
+
+def test_the_supplier_discount_reprices_the_materials_as_the_engines_do(ran):
+    s = ran["adjust"]["supplier"]
+    assert s["stored"] == {"supplier_pct": "20"}
+    assert s["material"] == s["hand"]["material"] < 11991 and s["total"] == s["hand"]["total"]
+    assert (s["materialShown"], s["totalShown"]) == ("$10,253", "$30,527"), "repainted in place"
+    # KYLE'S GP LADDER, NOT A BUG: the cheaper materials take the sub-total under $15,000, where the sheet's GP steps up
+    # from 35% to 45%, so this job's total RISES with a discount. The engines and the page agree on it.
+    assert s["fell"] is False
+
+
+def test_an_unusable_box_is_named_and_left_out_and_clearing_it_takes_the_name_away(ran):
+    a = ran["adjust"]
+    assert a["gpBad"]["warn"] == {"text": "not a number, so it is not used", "hidden": False}
+    assert a["gpBad"]["sameAsBefore"] is True
+    assert a["gpCleared"]["warn"]["hidden"] is True and a["gpCleared"]["stored"] == {"supplier_pct": "20"}
+
+
+def test_a_discount_bigger_than_the_labor_and_markup_is_refused_on_the_page(ran):
+    h = ran["adjust"]["discountHuge"]
+    assert h["refused"] is True and h["hardBid"] == 0
+    assert h["warn"] == {"text": "more than the labor and markup it comes off, so it is not used", "hidden": False}
+
+
+def test_the_discount_line_prices_shows_and_the_dollars_win(ran):
+    a = ran["adjust"]
+    assert a["discountAmt"]["hardBid"] == -1500 and a["discountAmt"]["shown"] == "-$1,500"
+    assert a["discountAmt"]["total"] == a["discountAmt"]["hand"] and a["discountAmt"]["warn"]["hidden"] is True
+    assert a["dollarsWin"]["hardBid"] == -1500, "with both typed, the dollars are the line"
+    assert a["percent"]["hardBid"] < 0 and a["percent"]["total"] == a["percent"]["hand"]
+
+
+def test_the_bulk_switch_answers_a_click_and_the_keyboard_in_place(ran):
+    a = ran["adjust"]
+    assert a["bulkClick"]["stored"] is True and a["bulkClick"]["aria"] == "true" and a["bulkClick"]["sameNode"] is True
+    assert a["bulkClick"]["total"] == a["bulkClick"]["hand"]
+    assert a["bulkKey"] == {"stored": False, "aria": "false"}, "Space on the switch turns it back off"
+
+
+def test_the_save_carries_the_boxes_and_the_proposal_is_the_bid_shown(ran):
+    s = ran["adjust"]["saved"]
+    assert s["adjust"] == {"discount_pct": "3", "supplier_pct": "20"}
+    assert s["lump"] == s["total"]
+
+
+def test_clearing_every_box_puts_the_bid_back_exactly(ran):
+    c = ran["adjust"]["cleared"]
+    assert c["adjust"] == "absent" and c["savedHasKey"] is False
+    assert c["total"] == ran["adjust"]["before"]["total"]
+
+
+def test_the_save_names_the_height_of_the_cove_the_bid_bought(ran):
+    """The proposal reads it before falling back to 6 (test_cove_height_v2.py)."""
+    assert ran["priced"]["coveHeight"] == "4"

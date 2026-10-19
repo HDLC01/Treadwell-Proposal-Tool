@@ -98,11 +98,14 @@ function sealByHand(model, tab, reno) {
 }
 
 /** The Polish root priced without the page. */
-function polishByHand(model) {
+function polishByHand(model, reno) {
   const alone = model.takeoff.map((r) => (B.rowOn(r) ? rowPriceOf(r) : null));
   const bought = B.poolsPacks(model) ? LIB.pricePool(alone, { on: model.takeoff.map((r) => B.rowOn(r)) }) : alone;
+  // A NEW bid's Polish root is polish-rev3 (2026-10-16), whose chain takes the sheet's patch line (D17): the Seal module's
+  // patchCost over the same library, at the New rate unless the job answers Reno (these drafts answer neither, as the page reads it).
+  const patch = B.polishPatchOn(model, B.ROOT_TAB) ? SL.patchCost(items, B.takeoffSf(model.takeoff), !!reno) : 0;
   return B.markupChain({
-    material: bought.reduce((t, p) => t + (p ? p.total : 0), 0), labor: B.laborTotal(model.labor, model.conditions),
+    material: bought.reduce((t, p) => t + (p ? p.total : 0), 0), patch: patch, labor: B.laborTotal(model.labor, model.conditions),
     travel: B.travelCosts(model.travel, model.labor, B.travelOpts(model, "Polish")).total,
     tooling: B.rootTooling(model), contingency: model.contingency, fees: model.fees,
     conditions: model.conditions, sf: B.takeoffSf(model.takeoff),

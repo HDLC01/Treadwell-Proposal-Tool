@@ -153,7 +153,10 @@ def test_an_old_intake_blob_seeds_from_system_one_exactly_as_before(ran):
     # And since Phase 17 (Polish rev 2) a new bid carries the sheet's tooling the moment it has an area: 8,250 SF of
     # salt and pepper is $4,430 (8,250 x $0.486 = $4,010, plus two bags of slurry hardener at $210) taken through the
     # markups, which is the whole of this figure. No material, no labor, no travel.
-    assert got["total"] == 10997
+    # And since polish-rev3 (2026-10-16) a new bid also carries the sheet's patch line (Polish!D17): 8,250 SF x $0.05, the New
+    # rate (the blob names no Renovation answer), is $412.50. That is the only change: the same chain handed that $412.50 as
+    # material on the rev2 profile (patch folded in by hand) answers 12,143 too, where it answered 10,997 without it.
+    assert got["total"] == 12143
 
 
 @needs_node

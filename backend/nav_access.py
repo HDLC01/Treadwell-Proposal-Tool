@@ -185,37 +185,36 @@ TABS: Dict[str, Dict[str, Any]] = {
         "pages": ("/followups.html",),
         "api": ("/api/portal/followups",),
     },
-    "/polish-intake.html": {
-        # WAS "Polish Estimate" until 2026-10-07. Same href, same two pages; only the name moved,
-        # which is why this table is keyed on href. frontend/auth.js carries the same label on the
-        # sidebar row and the Admin page shows one or the other, so test_v2_names.py pins them equal.
+    "/v2-board.html": {
+        # ESTIMATING TOOL v2. Its href was /polish-intake.html until 2026-10-15, when Hanz asked for
+        # the row to open a board like Direct Projects ("It should be here not V2 estimates") rather
+        # than drop the estimator straight into the intake form. The board is the row's front door;
+        # the intake (step 1) and the estimate (step 2) are still this row's pages, reached from a
+        # card or from "+ New", so denying the row covers all three. A policy saved under the old
+        # href is read as this one (LEGACY_HREFS below), so nobody who was kept off the tool gains it.
         "label": "Estimating Tool v2",
-        # TWO PAGES on one sidebar row. Step 2 is opened directly from two places that are not this
-        # tab — the beta link in the Estimate Review toolbar (estimate-review.html) and the step-2
-        # link on polish-intake.html itself — so denying the row has to cover both or the door is
-        # simply the other one. The row's href stays step 1 because that is what the menu links to.
-        "pages": ("/polish-intake.html", "/polish-estimate.html"),
-        "api": (),
+        "pages": ("/v2-board.html", "/polish-intake.html", "/polish-estimate.html"),
+        # OWNS /api/v2/pipeline, THE BOARD'S OWN FEED. It moved here with the board from the v2
+        # Estimates row. No other page calls it (test_nav_access.py re-takes that measurement), so it
+        # passes the single-caller rule this table is built on. Exact match, no trailing slash: the
+        # route has no children, and a slashless prefix keeps this from reaching anything else under
+        # /api/v2/ if one is ever added.
+        "api": ("/api/v2/pipeline",),
     },
     "/polish-estimates.html": {
-        # WAS "Polish Estimate Database" until 2026-10-07. Same href; see the note above.
+        # WAS "Polish Estimate Database" until 2026-10-07. Same href.
         "label": "v2 Estimates",
-        # OWNS /api/v2/pipeline, THE BETA BOARD'S OWN FEED (2026-10-13). Until the board was built the
-        # page read /api/drafts and nothing else, which is the Proposals Database's own list and so
-        # could not be claimed (that is why this row used to carry api: ()). The board now reads
-        # /api/v2/pipeline and nothing else, and no other page calls it (grep frontend/ for the
-        # string; test_nav_access.py re-takes that measurement), so it passes the single-caller rule
-        # this table is built on. Without this entry a signed-in member who was denied the page could
-        # still read every v2 bid, with its price, by typing the URL.
+        # api: () DELIBERATELY. The page is a list again since 2026-10-15 (the board moved to the
+        # Estimating Tool v2 row) and reads /api/drafts and NOTHING else, and that route is the
+        # Proposals Database's own list. Claiming it here would 403 a page nobody restricted the
+        # moment anyone switched this row off, which is the single-caller rule this whole table is
+        # built on. Denying this row therefore refuses the PAGE and leaves the data alone, the same
+        # shape as /projects.html.
         #
-        # Exact match, no trailing slash: the route has no children, and a slashless prefix is what
-        # keeps this from reaching anything else under /api/v2/ if one is ever added.
-        #
-        # ONE PAGE, unlike its neighbour above: there is no second door into this list. It is
-        # reached from the sidebar, and its rows lead OUT to /polish-intake.html, which that row
-        # already governs.
+        # ONE PAGE: there is no second door into this list. It is reached from the sidebar, and its
+        # rows lead OUT to /polish-intake.html, which the Estimating Tool v2 row governs.
         "pages": ("/polish-estimates.html",),
-        "api": ("/api/v2/pipeline",),
+        "api": (),
     },
     "/analytics.html": {
         "label": "Analytics",
@@ -288,6 +287,13 @@ TABS: Dict[str, Dict[str, Any]] = {
 #   /gc-projects.html Hanz, 2026-09-29: "The General Contractor board is always on, like Direct
 #                    Projects." Same board, same guarantee — not a landing page, just never denied.
 LOCKED: Tuple[str, ...] = ("/admin.html", "/portal.html", "/gc-projects.html")
+
+# A row whose href moved, keyed old -> new. A saved policy names rows by href, so without this a deny
+# saved under the old href would match no row any more and silently stop denying anything.
+# /polish-intake.html was Estimating Tool v2's href until 2026-10-15; prod's saved policy keeps the
+# `user` role off it, and that must keep meaning the tool. Read-side only: the file keeps the old
+# href until an admin next saves, after which a pre-2026-10-15 image would no longer recognise it.
+LEGACY_HREFS: Dict[str, str] = {"/polish-intake.html": "/v2-board.html"}
 
 # The super admin is bootstrapped from SUPER_ADMIN_EMAIL and cannot be granted or revoked from the
 # UI; his role exists so somebody always has a way in. A policy that can deny it is a policy that
@@ -379,6 +385,7 @@ def sanitize(deny: Any) -> Dict[str, List[str]]:
         keep: List[str] = []
         for raw in paths:
             href = _norm_href(raw)
+            href = LEGACY_HREFS.get(href, href)
             if href and href in TABS and href not in LOCKED and href not in keep:
                 keep.append(href)
         if keep:

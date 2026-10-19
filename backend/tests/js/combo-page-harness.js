@@ -22,6 +22,7 @@ const B = require(path.join(ROOT, "js", "bid-model.js"));
 const LIB = require(path.join(ROOT, "js", "library-core.js"));
 const X = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
 const E = require(path.join(ROOT, "js", "bid-engine.js"));
+const SL = require(path.join(ROOT, "js", "seal-takeoff.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -97,13 +98,16 @@ function rowPriceOf(row) {
 /** THE SAME JOB PRICED WITHOUT THE PAGE: the Polish root through markupChain (what the page's bid() is), the Epoxy section
  *  through priceSection (the engine's epoxy profile), both from the saved model, then the engine's combine. Nothing of the
  *  page's own pricing, and nothing of composePricingSnapshot, is in it. */
-function byHand(model, remodelRate) {
+function byHand(model, remodelRate, reno) {
   // each row ALONE, then bought once for the section when it is stamped to pool (library-core pricePool)
   const alone = model.takeoff.map((r) => (B.rowOn(r) ? rowPriceOf(r) : null));
   const bought = B.poolsPacks(model) ? LIB.pricePool(alone, { on: model.takeoff.map((r) => B.rowOn(r)) }) : alone;
   const rootMaterial = bought.reduce((t, p) => t + (p ? p.total : 0), 0);
+  // A NEW bid's Polish root is polish-rev3 (2026-10-16), whose chain takes the sheet's patch line (D17): the Seal module's
+  // patchCost over the same library, at the New rate unless the job answers Reno (these drafts answer neither, as the page reads it).
+  const patch = B.polishPatchOn(model, B.ROOT_TAB) ? SL.patchCost(items, B.takeoffSf(model.takeoff), !!reno) : 0;
   const polish = B.markupChain({
-    material: rootMaterial, labor: B.laborTotal(model.labor, model.conditions),
+    material: rootMaterial, patch: patch, labor: B.laborTotal(model.labor, model.conditions),
     travel: B.travelCosts(model.travel, model.labor, B.travelOpts(model, "Polish")).total,
     tooling: B.rootTooling(model), contingency: model.contingency, fees: model.fees,
     conditions: model.conditions, sf: B.takeoffSf(model.takeoff), remodel_rate: remodelRate,

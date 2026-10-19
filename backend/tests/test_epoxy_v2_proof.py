@@ -137,8 +137,8 @@ def test_the_proof_touches_every_system_primer_wall_and_cove_the_seed_plans(gold
             if c["in"].get(k):
                 used.add(" ".join(c["in"][k].split()))
     for a in PLAN.as_dict()["assemblies"]:
-        if a["id"].startswith(("wb-gyp-", "wb-seal-")):
-            continue                                     # the Gyp areas and the Seal assemblies are proved in test_gyp_v2_proof.py and test_seal_v2_proof.py
+        if a["id"].startswith(("wb-gyp-", "wb-seal-", "wb-polish-")):
+            continue                                     # the Gyp areas and the Seal assemblies are proved in test_gyp_v2_proof.py and test_seal_v2_proof.py, the Polish systems to the cent in test_seed_library.py
         name = " ".join(a["name"].replace("Primer: ", "").replace("Cove: ", "").split())
         assert name in used, "no recorded job prices %s" % a["name"]
 
@@ -352,7 +352,7 @@ BREAKS = {
         "js/library-core.js", "      if (list[i].min_qty <= u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];",
         "      if (list[i].min_qty < u && (hit === null || list[i].min_qty > hit.min_qty)) hit = list[i];"),
     "the section's labor is not read": (
-        MODEL, "      labor: laborTotal(s.labor, model.conditions),", "      labor: 0,"),
+        MODEL, "      labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),", "      labor: 0,"),
     "a price break is judged on each line alone again": (
         "js/library-core.js", "                       g.needed, rep.roundup, g.bulk, g.cost0, g.ladder.units);",
         "                       g.needed, rep.roundup, g.bulk, g.cost0);"),

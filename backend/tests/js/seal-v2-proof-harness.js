@@ -116,7 +116,9 @@ golden.cases.forEach((c) => {
     rowPrice: (row) => LIB.priceAssembly(asm, items, B.num(row.measurement)),
   });
   const raw = material({ section: sec });
-  const r = B.priceSection(m, c.tab, { material: material });
+  // What the PAGE hands the chain for a Seal option is { material, tooling }: the patch is already inside `material`
+  // (seal-takeoff.js sectionMaterial), and since polish-rev3 (2026-10-16) a `patch` key would be added to it a second time.
+  const r = B.priceSection(m, c.tab, { material: (entry) => { const x = material(entry); return { material: x.material, tooling: x.tooling }; } });
   jobs.push({
     id: c.id, tab: c.tab, material_raw: raw.material, patch: raw.patch, tooling_in: raw.tooling,
     priceable: r.priceable !== false, material: r.material, material_total: r.material_total, tooling: r.tooling,

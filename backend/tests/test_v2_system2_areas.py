@@ -230,7 +230,10 @@ def test_two_areas_cost_exactly_what_one_combined_floor_costs(ran):
     p = ran["packs"]
     assert p["twoPriced"] == p["onePriced"] == 8000, p
     # 25,162 until Phase 17 (Polish rev 2): a new bid now carries the sheet's tooling, so each is $9,331 more
-    assert p["two"] == p["one"] == 34493, p
+    # 34,493 until polish-rev3 (2026-10-16): a new bid now also carries the patch line, 8,000 SF x $0.05 = $400 of material
+    # (material 10,401 -> 10,801, shipping 209 -> 217). That lifts the sub-total from 14,918 to 15,326, across the $15,000 rung
+    # of Polish's gross profit ladder (45% below it, 35% from it), so the bid FALLS: the sheet's own cliff, not the patch.
+    assert p["two"] == p["one"] == 30004, p
     s = ran["packsSmall"]
     assert s["twoPriced"] == s["onePriced"] == 2000, s
     assert s["two"] == s["one"] > 0, s
