@@ -54,6 +54,10 @@ BANNED = ["polish estimate", "polish beta", "beta polish", "beta calculator", "b
           "beta estimate", "polish intake"]
 EXEMPT_PREFIXES = ["[polish beta]"]
 
+# The Estimating Tool v2 ROW's href. It was the intake's own until 2026-10-15, when the row started
+# opening on the v2 board (Hanz: "It should be here not V2 estimates"); the intake and the estimate
+# are still that row's pages.
+TOOL_HREF = "/v2-board.html"
 INTAKE_HREF = "/polish-intake.html"
 ESTIMATE_HREF = "/polish-estimate.html"
 DATABASE_HREF = "/polish-estimates.html"
@@ -199,7 +203,7 @@ def test_the_sidebar_names_the_tool_and_its_database_for_every_role(ran, role):
     """Run through auth.js for each role. Both rows keep their addresses and their BETA tag, and
     both stay under the Beta heading, which is derived from that tag."""
     rows = {r["href"]: r for r in ran["sidebar"][role]}
-    assert rows[INTAKE_HREF] == {"section": "Beta", "href": INTAKE_HREF, "label": TOOL, "tag": "BETA"}
+    assert rows[TOOL_HREF] == {"section": "Beta", "href": TOOL_HREF, "label": TOOL, "tag": "BETA"}
     assert rows[DATABASE_HREF] == {"section": "Beta", "href": DATABASE_HREF, "label": DATABASE, "tag": "BETA"}
 
 
@@ -217,7 +221,7 @@ def test_the_sidebar_and_the_server_name_every_tab_the_same(ran):
     for row in ran["sidebar"]["super_admin"]:
         if row["href"] in server:
             compared[row["href"]] = (row["label"], server[row["href"]])
-    assert {INTAKE_HREF, DATABASE_HREF} <= set(compared), "the two renamed tabs were not compared"
+    assert {TOOL_HREF, DATABASE_HREF} <= set(compared), "the two renamed tabs were not compared"
     assert len(compared) >= 15, "suspiciously few tabs compared: %s" % sorted(compared)
     disagree = {h: v for h, v in compared.items() if v[0] != v[1]}
     assert not disagree, "the sidebar and nav_access.py disagree about: %s" % disagree
@@ -225,18 +229,19 @@ def test_the_sidebar_and_the_server_name_every_tab_the_same(ran):
 
 def test_the_server_table_renames_the_two_tabs_and_moves_nothing_else():
     """LABELS ONLY. The table is keyed on href; what a denied role is refused, and which API routes
-    the tab owns, are what a rename must not touch. (The one deliberate change since the rename: on
-    2026-10-13 the v2 Estimates row took ownership of its own board feed, /api/v2/pipeline, so a
-    member kept off the page cannot read the data; test_nav_access.py holds that claim.)"""
+    the tab owns, are what a rename must not touch. (The one deliberate move since the rename: on
+    2026-10-15 the Estimating Tool v2 row took the v2 board as its front door, with the board's feed,
+    /api/v2/pipeline, and kept its two steps as pages; test_nav_access.py holds that claim.)"""
     tabs = nav_access.TABS
-    assert tabs[INTAKE_HREF]["label"] == TOOL
+    assert tabs[TOOL_HREF]["label"] == TOOL
     assert tabs[DATABASE_HREF]["label"] == DATABASE
-    assert tuple(tabs[INTAKE_HREF]["pages"]) == (INTAKE_HREF, ESTIMATE_HREF)
+    assert tuple(tabs[TOOL_HREF]["pages"]) == (TOOL_HREF, INTAKE_HREF, ESTIMATE_HREF)
     assert tuple(tabs[DATABASE_HREF]["pages"]) == (DATABASE_HREF,)
-    assert tuple(tabs[INTAKE_HREF]["api"]) == ()
-    assert tuple(tabs[DATABASE_HREF]["api"]) == ("/api/v2/pipeline",)
+    assert tuple(tabs[TOOL_HREF]["api"]) == ("/api/v2/pipeline",)
+    assert tuple(tabs[DATABASE_HREF]["api"]) == ()
+    assert INTAKE_HREF not in tabs, "the intake is a page of the row now, not a row of its own"
     served = {t["href"]: t["label"] for t in nav_access.capability_table()}
-    assert served[INTAKE_HREF] == TOOL and served[DATABASE_HREF] == DATABASE
+    assert served[TOOL_HREF] == TOOL and served[DATABASE_HREF] == DATABASE
 
 
 def test_the_admin_matrix_draws_the_new_names_from_the_real_capability_table(ran):
@@ -244,15 +249,15 @@ def test_the_admin_matrix_draws_the_new_names_from_the_real_capability_table(ran
     its label from the sidebar, and the paragraph under it names the tabs that can only be hidden
     from the server's table, so both sources meet in one rendered page."""
     labels = dict(map(tuple, ran["admin"]["rowLabels"]))
-    assert labels[INTAKE_HREF] == TOOL and labels[DATABASE_HREF] == DATABASE
+    assert labels[TOOL_HREF] == TOOL and labels[DATABASE_HREF] == DATABASE
     hidden_only = [n for n in ran["admin"]["notes"] if "can only be hidden" in n]
     assert len(hidden_only) == 1, ran["admin"]["notes"]
     listed = hidden_only[0].split("not sealed:")[1].split(". Every API route")[0]
     names = [n.strip() for n in listed.split(",")]
-    assert TOOL in names, names                            # the server's label, in the server's order
-    # v2 Estimates owns its board feed since 2026-10-13, so a switch there blocks its data and the
-    # row leaves the "can only be hidden" list; the matrix still draws it under its new name
-    assert DATABASE not in names, names
+    assert DATABASE in names, names                        # the server's label, in the server's order
+    # Estimating Tool v2 owns its board's feed since 2026-10-15, so a switch there blocks its data and
+    # the row leaves the "can only be hidden" list
+    assert TOOL not in names, names
     assert "the Item Library's assemblies also price %s," % TOOL in hidden_only[0], hidden_only[0]
     assert "Polish" not in hidden_only[0]
 
@@ -260,9 +265,12 @@ def test_the_admin_matrix_draws_the_new_names_from_the_real_capability_table(ran
 # ═════════════════════════════════════════════════════════════════════════════
 # 2. the pages, titles and headings
 # ═════════════════════════════════════════════════════════════════════════════
-def test_the_three_pages_are_titled_and_headed_with_the_new_names():
-    intake, estimate, database = (read_page(n) for n in
-                                  ("polish-intake.html", "polish-estimate.html", "polish-estimates.html"))
+def test_the_four_pages_are_titled_and_headed_with_the_new_names():
+    board, intake, estimate, database = (read_page(n) for n in
+                                         ("v2-board.html", "polish-intake.html", "polish-estimate.html",
+                                          "polish-estimates.html"))
+    assert text_of(board.by_tag["title"]) == "%s · Treadwell Proposal Generator" % TOOL
+    assert text_of(board.by_tag["h1"]) == TOOL
     assert text_of(intake.by_tag["title"]) == "%s · Intake · Treadwell Proposal Generator" % TOOL
     assert text_of(estimate.by_tag["title"]) == "%s · Estimate · Treadwell Proposal Generator" % TOOL
     assert text_of(database.by_tag["title"]) == "%s · Treadwell Proposal Generator" % DATABASE
@@ -278,12 +286,12 @@ def test_every_page_a_sidebar_row_owns_is_headed_with_that_rows_label(ran):
     a third page added to either row is held to it too."""
     labels = {r["href"]: r["label"] for r in ran["sidebar"]["super_admin"]}
     checked = []
-    for href in (INTAKE_HREF, DATABASE_HREF):
+    for href in (TOOL_HREF, DATABASE_HREF):
         for page in nav_access.TABS[href]["pages"]:
             heading = text_of(read_page(page.lstrip("/")).by_tag["h1"])
             assert heading.startswith(labels[href]), (page, heading, labels[href])
             checked.append(page)
-    assert checked == [INTAKE_HREF, ESTIMATE_HREF, DATABASE_HREF]
+    assert checked == [TOOL_HREF, INTAKE_HREF, ESTIMATE_HREF, DATABASE_HREF]
 
 
 def test_the_intake_page_says_whose_intake_it_is():
@@ -294,20 +302,21 @@ def test_the_intake_page_says_whose_intake_it_is():
 
 
 def test_the_v2_estimates_page_uses_the_new_names_for_its_controls():
-    """The page is a BETA board now (month and sort controls are gone on purpose); what must hold is
-    that the words it keeps still name the tool and the page."""
     page = read_page("polish-estimates.html")
     attrs = [(t, n, v) for _l, t, n, v in page.attrs]
     assert ("input", "placeholder", "Search v2 estimates…") in attrs
     assert ("input", "aria-label", "Search v2 estimates") in attrs
-    assert not [a for a in attrs if a[0] == "select" and a[2] in ("Filter by month", "Sort v2 estimates by")]
+    assert ("select", "aria-label", "Sort v2 estimates by") in attrs
+    assert ("select", "aria-label", "Filter by month") in attrs, "the month filter is not a rename"
+    options = [text_of([t]) for t in page.by_tag["option"]]
+    assert options == ["Any month", "Date updated", "Name", "Deadline", TOTAL], options
     assert text_of(page.by_id["list"]) == "Loading v2 estimates…"
     door = [a for a in page.anchors if text_of(a["text"]) == "Open %s" % TOOL]
-    assert len(door) == 1 and door[0]["href"] == INTAKE_HREF, page.anchors
+    # the tool's front door is its board since 2026-10-15
+    assert len(door) == 1 and door[0]["href"] == TOOL_HREF, page.anchors
     sentences = " ".join(text_of([text]) for _l, text in page.words)
-    assert "Every bid made in %s, from the moment it is created" % TOOL in sentences
+    assert "Every estimate priced in %s, newest first. Open one to reopen it exactly as it was saved." % TOOL in sentences
     assert "%s is what %s priced. It is not the estimate sheet's lump sum" % (TOTAL, TOOL) in sentences
-    assert "—" not in sentences, "em dash in UI copy (house rule)"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -346,6 +355,63 @@ def test_the_pages_that_describe_the_tool_use_its_new_name(name, phrase):
     in_an_attribute = [squash(v) for _l, _t, _n, v in page.attrs]
     as_text = squash(" ".join(text for _l, text in page.words))
     assert any(squash(phrase) in v for v in in_an_attribute) or squash(phrase) in as_text, phrase
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4. the v2 Estimates page, run
+# ═════════════════════════════════════════════════════════════════════════════
+def test_the_total_column_says_whose_figure_it_is(ran):
+    """"Beta total" became "v2 total" and may not be tidied to a bare "Total": the engine behind this
+    page can disagree with the estimate sheet, and the word in front is what says so. The column
+    set is untouched, which is what makes this a rename."""
+    loaded = ran["database"]["loaded"]
+    assert loaded["heads"] == ["Project", "Flag", "Type", TOTAL, "Files", "Estimator", "Due", "Updated"]
+    assert ran["database"]["atTheReadCeiling"]["heads"] == loaded["heads"]
+
+
+def test_a_priced_row_and_a_test_badge_carry_the_new_name_in_their_hover_text(ran):
+    loaded = ran["database"]["loaded"]
+    html = loaded["listHtml"]
+    assert 'title="Priced in %s. Not the estimate sheet\'s lump sum"' % TOOL in html
+    assert 'title="Filed as a test project. %s files every copy it makes this way"' % TOOL in html
+    assert "Polish" not in html, "the table says Polish with a capital P again"
+    # the page lists v2 estimates only: the row whose polish_beta is false was left out
+    assert loaded["count"] == "2 estimates" and "Not beta" not in loaded["listText"]
+
+
+def test_the_empty_page_names_the_tool_and_both_ways_in(ran):
+    empty = ran["database"]["empty"]
+    assert empty["listText"].startswith("No v2 estimates yet. An estimate lands here the moment it is priced in %s," % TOOL)
+    assert "or by pressing the %s link on a polish job's Estimate Review." % TOOL in empty["listText"]
+    assert "so a v2 estimate older than that will not appear here." in empty["listText"]
+    assert 'href="/polish-intake.html">Start a v2 estimate</a>' in empty["listHtml"]
+    assert 'href="/projects.html">Proposals Database</a>' in empty["listHtml"]
+    assert "&mdash;" not in empty["listHtml"], "em dash in UI copy (house rule)"
+    assert empty["toolbarHidden"] is True
+
+
+def test_a_search_that_matches_nothing_counts_v2_estimates(ran):
+    """Reached by a search saved in the browser's session, so the page opens on it."""
+    none = ran["database"]["emptyBecauseNoneMatch"]
+    assert none["listText"] == ("Nothing matches that. 2 v2 estimates are saved, but none of them "
+                                "match the search or month you have set.")
+    assert none["count"] == "0 of 2"
+    assert "&mdash;" not in none["listHtml"]
+
+
+def test_a_failed_read_is_its_own_state_in_the_new_words(ran):
+    failed = ran["database"]["failed"]
+    assert failed["listText"].startswith("Could not load the v2 estimates. Nothing is lost")
+    assert "Try again" in failed["listText"]
+    assert failed["toolbarHidden"] is True
+
+
+def test_the_read_ceiling_footnote_says_v2_estimate(ran):
+    ceiling = ran["database"]["atTheReadCeiling"]
+    assert ceiling["ceilingHidden"] is False
+    assert ceiling["ceilingText"] == ("Showing the 300 most recently updated projects. A v2 estimate "
+                                      "older than that is still saved, but will not appear here.")
+    assert ran["database"]["loaded"]["ceilingHidden"] is True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -471,7 +537,7 @@ def test_no_script_string_shows_an_old_name(ran):
 # 9. LABELS ONLY: what must not have moved
 # ═════════════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("name", ["polish-intake.html", "polish-estimate.html", "polish-estimates.html",
-                                  "js/polish-intake.js", "js/polish-estimate.js", "js/v2-board.js", "js/v2-board-core.js",
+                                  "js/polish-intake.js", "js/polish-estimate.js", "js/polish-estimates.js",
                                   "js/polish-sandbox.js", "js/bid-model.js"])
 def test_the_files_keep_their_names(name):
     assert (FRONTEND / name).is_file(), "%s was renamed or removed: a rename of labels moves no file" % name
@@ -484,7 +550,22 @@ def test_the_ids_the_doors_and_notes_are_found_by_did_not_move():
     for page in ("polish-intake.html", "polish-estimate.html"):
         assert "sandbox-note" in read_page(page).elements, page
     database = read_page("polish-estimates.html")
-    assert {"list", "toolbar", "q", "est", "clear", "count", "ceiling", "v2-tabs"} <= set(database.elements)
+    assert {"list", "toolbar", "q", "month", "sort", "dir", "clear", "count", "ceiling"} <= set(database.elements)
+
+
+def test_a_row_on_the_v2_estimates_page_still_opens_the_tools_intake(ran):
+    """Pressed for real: the page's own click listener was handed a row, and the address it sent the
+    browser to is recorded. The rename did not touch where a row goes."""
+    assert ran["database"]["loaded"]["opened"] == ["/polish-intake.html?d=p1"]
+    assert ran["database"]["empty"]["opened"] == []
+
+
+def test_the_sort_options_keep_their_keys():
+    """The labels moved ("Beta total" is "v2 total"); the keys the page sorts on and keeps in
+    sessionStorage did not. The month option's empty value is the "any month" choice."""
+    page = read_page("polish-estimates.html")
+    keys = [v for _l, t, n, v in page.attrs if (t, n) == ("option", "value")]
+    assert keys == ["updated", "name", "deadline", "total"], keys
 
 
 def test_a_test_copy_is_still_named_the_way_the_sandbox_and_the_tab_find_it(ran):

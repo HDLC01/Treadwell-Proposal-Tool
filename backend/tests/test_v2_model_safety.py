@@ -154,7 +154,7 @@ def test_the_known_key_list_is_what_the_v2_branch_actually_normalises(ran):
     Mutation: delete `"distance"` from MODEL_KEYS."""
     k = ran["known"]
     assert k["keys"] == k["maximalKeys"], "the maximal model is not stating every key it comes back with"
-    assert len(k["keys"]) == 13
+    assert len(k["keys"]) == 15        # `adjust` joined on 2026-10-16 (the estimator's overrides)
     assert k["exported"] == k["keys"]
 
 

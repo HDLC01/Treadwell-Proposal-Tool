@@ -152,6 +152,57 @@
     return hit;
   }
 
+  /** THE LIBRARY AS ONE SECTION OF ONE BID BUYS IT (Hanz, 2026-10-16): `items` with that section's supplier discounts
+   *  and Bulk Discount switch applied, as a COPY. Every price on the estimate goes through priceLine / pricePool over a
+   *  list of items, so pricing them over this list is the whole change: no second pricing path exists to drift.
+   *
+   *    adj.discounts   { vendor: fraction off }   a material whose `vendor` is named is priced at
+   *                    cost x (1 + E - d) / (1 + E), E = adj.escalation: the library cost is the list price with the
+   *                    escalation in it (Kyle's U140), and his sheet takes the discount off the LIST, so the
+   *                    escalation stands. Its pack cost, bulk cost and every price break move alike.
+   *    adj.bulk        true: a material with a bulk cost is bought at it. A price break dearer than the bulk cost is
+   *                    dropped, because switching a discount on must never raise a price (priceLine's breakHelps,
+   *                    which this keeps), and the cheaper break still wins.
+   *
+   *  The SAME ARRAY comes back when there is nothing to change, so a bid that never used the boxes prices off the
+   *  library exactly as it always did. Rows are never mutated. A discount that would leave a price at or below zero is
+   *  refused by the caller's range check (bid-model.js pctInRange); one that arrives anyway is ignored. */
+  function itemsForBid(items, adj) {
+    if (!(items instanceof Array) || !adj) return items;
+    var disc = adj.discounts || {};
+    var esc = num(adj.escalation) || 0;
+    // A vendor is matched on its letters alone, so "Sherwin Williams", "sherwin-williams" and "Sherwin-Williams " typed
+    // on the Items tab are one vendor, and a hand-made row gets the same discount the seeded ones do.
+    var vkey = function (v) { return String(v == null ? "" : v).toLowerCase().replace(/[^a-z]/g, ""); };
+    var offOf = new Map();
+    Object.keys(disc).forEach(function (v) {
+      var d = num(disc[v]);
+      if (d !== null && d > 0 && (1 + esc - d) > 0) offOf.set(vkey(v), d);
+    });
+    var vendors = Array.from(offOf.keys());
+    if (!adj.bulk && !vendors.length) return items;
+    return items.map(function (it) {
+      if (!it || typeof it !== "object") return it;
+      var factor = 1;
+      if (offOf.has(vkey(it.vendor))) factor = (1 + esc - offOf.get(vkey(it.vendor))) / (1 + esc);
+      var bulkCost = num(it.bulk_cost);
+      var useBulk = !!adj.bulk && bulkCost !== null && bulkCost > 0;
+      if (factor === 1 && !useBulk) return it;
+      var scale = function (c) { var n = num(c); return n === null ? c : n * factor; };
+      var out = Object.assign({}, it, { unit_cost: scale(useBulk ? bulkCost : it.unit_cost) });
+      if (bulkCost !== null) out.bulk_cost = scale(bulkCost);
+      var brks = priceBreaks(it);
+      if (brks.length) {
+        out.price_breaks = brks
+          .filter(function (b) { return !useBulk || b.unit_cost < bulkCost; })
+          .map(function (b) { return { min_qty: b.min_qty, unit_cost: b.unit_cost * factor }; });
+      }
+      if (useBulk) out.bulk_applied = true;
+      if (factor !== 1) out.discount_factor = factor;
+      return out;
+    });
+  }
+
   /** Price one line against an area.
    *
    *  THREE OPTIONAL COLUMNS ON THE MATERIAL (Phase 11), and a row without them prices exactly as it
@@ -669,7 +720,7 @@
     wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
     qtyLabel: qtyLabel, costWorking: costWorking,
     coverageBasis: coverageBasis, areaFor: areaFor, priceBreaks: priceBreaks, breakAt: breakAt,
-    pricePool: pricePool, poolId: poolId, allocate: allocate,
+    pricePool: pricePool, poolId: poolId, allocate: allocate, itemsForBid: itemsForBid,
     materialPriceText: materialPriceText, assemblyPriceText: assemblyPriceText,
     REFERENCE_AREA: REFERENCE_AREA,
   };

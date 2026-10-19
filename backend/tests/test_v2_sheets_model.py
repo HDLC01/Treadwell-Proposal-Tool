@@ -42,6 +42,7 @@ SCRATCH_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.
                  "js/work-types.js", "js/excel-math.js", "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js"]
 
 REV2 = "polish-rev2@1"
+REV3 = "polish-rev3@1"
 LEGACY = "polish-legacy@1"
 OFF_THE_PROPOSAL = {"show_system": True, "show_diff": False, "is_option": False, "show": True, "price_mode": "total"}
 ON_THE_PROPOSAL = dict(OFF_THE_PROPOSAL, is_option=True)
@@ -176,8 +177,10 @@ def test_polishBid_prices_the_root_as_the_page_always_did_and_a_copy_as_the_root
 
 
 def test_a_polish_sheet_added_to_the_bid_is_a_rev2_section_priced_as_a_rev2_root(ran):
+    """Since 2026-10-16 a Polish sheet added to a bid is polish-rev3 (rev2 plus the patch line), and answers the same keys as a
+    rev2 root. A copy of a SAVED rev2 sheet keeps rev2 (the `rev2` rows above), and prices with no patch line."""
     a = ran["polishCopies"]["added"]
-    assert a["profile"] == REV2 and a["pool"] is True and a["hasRates"] is False and a["sameAsRev2Root"] is True
+    assert a["profile"] == REV3 and a["pool"] is True and a["hasRates"] is False and a["sameAsRev2Root"] is True
 
 
 def test_a_rev2_copy_that_carries_the_jobs_travel_counts_nights_the_sheets_way_and_a_legacy_one_counts_man_days(ran):
@@ -515,7 +518,7 @@ def test_every_sheet_a_bid_can_take_is_added_as_an_option_that_starts_on_the_pro
         assert s["rootUntouched"] is True, sheet + ": nothing the estimator typed in the root is reseeded"
         assert s["takeoff"] == [8000], sheet + ": the area handed in under the sheet's name"
     p = a["sheets"]["Polish"]
-    assert p["id"] == "Copy1" and p["profile"] == REV2 and p["hasSheet"] == "Polish" and p["hasLabel"] == "Polish 2" and p["hasRates"] is False
+    assert p["id"] == "Copy1" and p["profile"] == REV3 and p["hasSheet"] == "Polish" and p["hasLabel"] == "Polish 2" and p["hasRates"] is False
     assert p["layout"] == "polish" and p["role"] == "polish" and p["entryLabel"] == "Polish 2"
     assert "lab-po" in p["labor"] and "lab-ep" not in p["labor"], "a Polish sheet is crewed from the Polish defaults"
     e = a["sheets"]["Epoxy"]
@@ -679,7 +682,7 @@ BREAKS = {
         '    if (false) return optionTravelCosts(model.travel, s.labor).total;',
         lambda r: r["copies"]["legacy"]["farAsOption"] != 1500),
     "a rev 2 copy counts the nights of the people and not the sheet's": (
-        MODEL, '    return isObject(s) && s.layout === "polish" && s.profile === REV2.stamp;', "    return false;",
+        MODEL, '    return isObject(s) && s.layout === "polish" && (s.profile === REV2.stamp || s.profile === REV3.stamp);', "    return false;",
         lambda r: r["polishCopies"]["nights"]["rev2CopyAsCarrier"] != r["polishCopies"]["nights"]["rev2Root"]),
     "an off root stops answering the job's travel": (
         MODEL, '    if (carrier || (e.root && e.kind === "off")) return travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;',
@@ -689,19 +692,19 @@ BREAKS = {
         MODEL, "      if (tabId !== ROOT_TAB) throw err;", "      throw err;",
         lambda r: _all(r, "polishCopies")),
     "polishBid reprices a stamp it does not know": (
-        MODEL, "    var profile = e.profile === LEGACY.stamp ? LEGACY : (e.profile === REV2.stamp ? REV2 : null);",
+        MODEL, "    var profile = e.profile === LEGACY.stamp ? LEGACY : (e.profile === REV2.stamp ? REV2 : (e.profile === REV3.stamp ? REV3 : null));",
         "    var profile = e.profile === REV2.stamp ? REV2 : LEGACY;",
         lambda r: r["polishCopies"]["errors"]["unknownStamp"].get("priceable") is not False),
     "the page leaves Dye out of a Polish copy": (
-        PAGE, '    if (entry.role === "polish") return { material: polishMaterial(takeoff) };', "    void polishMaterial;",
+        PAGE, '    if (entry.role === "polish") return polishMaterialIn(takeoff);', "    void polishMaterialIn;",
         lambda r: _all(r, "page") or r["page"]["copyOnPage"]["same"] is not True),
     "the page reads a Gyp copy by its key": (
         PAGE, "      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.sheet, {",
         "      var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.tab, {",
         lambda r: _all(r, "page") or r["page"]["gypCopyOnPage"]["priceable"] != [True, True]),
     "the page prices a Gyp copy's area row on its key": (
-        PAGE, "        { items: ITEMS, tab: gyp.sheet, settings: gyp.section.gyp });",
-        "        { items: ITEMS, tab: gyp.tab, settings: gyp.section.gyp });",
+        PAGE, "        { items: items, tab: gyp.sheet, settings: gyp.section.gyp });",
+        "        { items: items, tab: gyp.tab, settings: gyp.section.gyp });",
         lambda r: _all(r, "page") or r["page"]["gypAreaRowOnCopy"]["rows"]["copy"] != r["page"]["gypAreaRowOnCopy"]["rows"]["source"]
         or r["page"]["gypAreaRowOnCopy"]["shown"]["Copy1"] != {"panel": True, "repaint": True}),
     # --- pick the base ---
@@ -851,9 +854,9 @@ BREAKS = {
         MODEL, "        input.truckload = engine.forTab(e.sheet).truckload;", "        input.truckload = engine.forTab(e.tab).truckload;",
         lambda r: _all(r, "presets") or r["presets"]["priceOnCopy"] != [True, True]),
     # --- add ---
-    "a new Polish sheet is not stamped rev 2": (
-        MODEL, "    var profile = polish ? REV2 : engine.forTab(sheet).profile;", "    var profile = engine.forTab(sheet).profile;",
-        lambda r: _all(r, "adding") or r["adding"]["sheets"]["Polish"]["profile"] != REV2),
+    "a new Polish sheet is not stamped rev 3": (
+        MODEL, "    var profile = polish ? REV3 : engine.forTab(sheet).profile;", "    var profile = engine.forTab(sheet).profile;",
+        lambda r: _all(r, "adding") or r["adding"]["sheets"]["Polish"]["profile"] != REV3),
     "a new sheet is not stamped for the purchase pool": (
         MODEL, "    section.pool_packs = true;      // a section made now buys each material once for the whole section (see poolsPacks)",
         "    void 0;",

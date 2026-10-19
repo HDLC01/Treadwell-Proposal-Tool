@@ -272,7 +272,9 @@ def test_the_capability_table_tells_the_page_which_tabs_only_hide(monkeypatch):
             _as(monkeypatch, "admin").get("/api/admin/nav-access").json()["tabs"]}
     assert tabs["/notifications.html"]["api"] == []
     assert tabs["/history.html"]["api"] == ["/api/history"]
-    assert tabs["/polish-intake.html"]["pages"] == ["/polish-intake.html", "/polish-estimate.html"]
+    # Estimating Tool v2 opens on its board since 2026-10-15; its two steps are still its pages
+    assert tabs["/v2-board.html"]["pages"] == ["/v2-board.html", "/polish-intake.html",
+                                               "/polish-estimate.html"]
 
 
 def test_writing_the_policy_needs_admin(monkeypatch):

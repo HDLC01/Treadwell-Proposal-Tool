@@ -393,7 +393,7 @@ def _ensure_cover_letter_values(values: Mapping[str, Any]) -> dict:
         except ValueError:
             cove_lf = 0.0
         if cove_lf > 0:
-            height = str(out.get("cove_height") or "6").strip() or "6"
+            height = str(out.get("cove_height") or out.get("cove_height_v2") or "6").strip() or "6"
             line = (line + " with " if line else "") + height + '" Integral Cove Base'
         out["cover_system_line"] = line
 

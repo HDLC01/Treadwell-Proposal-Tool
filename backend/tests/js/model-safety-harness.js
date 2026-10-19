@@ -136,6 +136,8 @@ const MAXIMAL = {
   no_travel_labor: true, conditions_shown: { dye: false }, cond_cov: { joint_filler: 3000 },
   travel: { lodging: { enabled: true, qty: 3, rate: 90 } },
   distance: { miles: 12, source: "typed", key: "" }, fees_default: 25,
+  prevailing: { trade: "painter", rate: 40, fringes: 12 },
+  adjust: { discount_pct: "3", ship_pct: "6", bulk: true },
 };
 const KNOWN = Object.keys(B.migrateModel(clone(MAXIMAL))).sort();
 

@@ -182,7 +182,7 @@ def test_a_saved_draft_with_five_empty_cards_opens_without_them_and_its_total_is
 MUTATIONS = {
     "a blank rate prices at $0 again": (
         "js/bid-model.js",
-        "return num(row.guys) * num(row.days) * laborRateOf(row) * perDay;",
+        "return num(row.guys) * num(row.days) * laborRateOf(row, pw) * perDay;",
         "return num(row.guys) * num(row.days) * num(row.rate) * perDay;",
         lambda r: r["ls1Blank"]["whileEmpty"]["total"] == 0),
     "a saved blank rate is pinned to zero": (

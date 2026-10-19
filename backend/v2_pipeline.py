@@ -1,4 +1,4 @@
-"""The v2 Estimates board's rows: Estimating Tool v2 bids, shaped like pipeline rows.
+"""The Estimating Tool v2 board's rows: Estimating Tool v2 bids, shaped like pipeline rows.
 
 Hanz, 2026-10-13: "make the V2 have a pipeline like the ones we have for active projects", then
 "make sure they are separate tho", then "the V2 pipeline is still in beta ... so do not merge it to
@@ -18,7 +18,9 @@ customer portal also knows (it was sent from the real flow) takes the portal's r
 our own facts; one the portal does not know is synthesised, `not_sent`, which stage() files under
 "Created but not sent".
 
-READ ONLY. Nothing here writes anywhere, and the page it feeds has no control that does.
+READ ONLY. Nothing here writes anywhere. The page it feeds (/v2-board.html, the Estimating Tool v2
+row's front door since 2026-10-15) has the Direct Projects card buttons, and those post to the routes
+the real board uses (/api/draft/{id}/status, /api/portal/proposal/{id}/status), never to this module.
 """
 from __future__ import annotations
 

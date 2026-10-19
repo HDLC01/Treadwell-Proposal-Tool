@@ -452,16 +452,16 @@ BREAKS = {
         "    if (Math.abs(scaled - whole) > 1e-5 * Math.max(1, Math.abs(scaled))) {",
         [check_a_fractional_total_off_the_grain_is_split_exactly_at_any_size]),
     "the page prices every cove alone": (
-        PAGE, "    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });",
+        PAGE, "    return E.poolCoves(pooled, list, { items: itemsFor(list), quartz: E.systemOneIsQuartz(list), on: on });",
         "    return pooled;",
         [check_the_pooled_cove_rows_show_a_cost_and_add_up]),
     "the section's material prices every cove alone": (
-        PAGE, "        items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),",
-        "        items: ITEMS, sf: B.takeoffSf(takeoff),",
+        PAGE, "        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),",
+        "        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff),",
         [check_the_pooled_cove_rows_show_a_cost_and_add_up, check_the_same_cove_on_two_areas_is_one_length]),
     "the page pools an off cove": (
-        PAGE, "    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });",
-        "    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list) });",
+        PAGE, "    return E.poolCoves(pooled, list, { items: itemsFor(list), quartz: E.systemOneIsQuartz(list), on: on });",
+        "    return E.poolCoves(pooled, list, { items: itemsFor(list), quartz: E.systemOneIsQuartz(list) });",
         [check_an_off_cove_takes_no_share_and_two_different_coves_are_two_purchases]),
     "every cove is one purchase whatever its size": (
         TAKEOFF, "      var key = r.assembly_id;                      // one purchase per cove assembly",

@@ -436,6 +436,8 @@ function build(opts) {
     // The pagehide flush calls this after pushing the pending save through synchronously --
     // counted separately from rec.saves so it does not masquerade as a second save.
     flushState: () => { rec.flushed++; },
+    // shared.js's two-button question. Absent unless a scenario answers it, so no other build is ever asked anything.
+    confirmDanger: opts.confirmDanger,
   };
 
   const S = {
@@ -4079,8 +4081,11 @@ const rendered = [];      // every string the page put on screen, for the Labour
         }
       });
       material += extraMaterial(m);
+      // A NEW bid is polish-rev3 since 2026-10-16: its chain takes Polish!D17, the patch line, as the page does (the
+      // Seal module's patchCost over the library the page holds, at the job's own New or Reno answer).
+      const patch = B.polishPatchOn(m, B.ROOT_TAB) ? SEAL.patchCost(FAV_ITEMS, B.takeoffSf(m.takeoff), p.api.jobIsReno()) : 0;
       return B.markupChain({
-        material: material, labor: B.laborTotal(m.labor, m.conditions),
+        material: material, patch: patch, labor: B.laborTotal(m.labor, m.conditions),
         travel: B.travelCosts(m.travel, m.labor, B.travelOpts(m, "Polish")).total,
         tooling: B.rootTooling(m),
         contingency: m.contingency, fees: m.fees, conditions: m.conditions,
@@ -4770,6 +4775,36 @@ const rendered = [];      // every string the page put on screen, for the Labour
       nightsTwo: nightsTwo, afterCrew: afterCrew, savedAuto: savedAuto, addedLine: addedLine,
       viaLib: { guys: viaLib.guys, days: viaLib.days, auto: viaLib.guys_auto, rate: viaLib.rate },
       travelRow: clone(q.api.model().labor[tIdxQ]) };
+  }
+
+  // A MEASUREMENT CHANGED BY ACCIDENT IS ASKED ABOUT (Hanz, 2026-10-17). Driven the way a browser does it: the box is
+  // entered (focusin), typed into (input, a keystroke at a time is what setMeasurement already proves), and left (change);
+  // the question is answered by the stub, and the clock and the promise are let run.
+  {
+    const settle = async (x) => { x.clock.fire(); await new Promise((r) => setImmediate(r)); };
+    const ask = async (answer, value, opts) => {
+      const asked = [];
+      const x = build({ confirmDanger: (o) => { asked.push(clone(o)); return Promise.resolve(answer); } });
+      await x.api.init(); x.api.go(0);
+      const sel = '[data-tk="0"][data-k="measurement"]';
+      if (opts && opts.blankFirst) typeInto(x, sel, "");
+      const total0 = x.api.bid().total;
+      x.doc.fire("focusin", { target: need(x, sel) });
+      typeInto(x, sel, value);
+      const totalTyped = x.api.bid().total;
+      changeTo(x, sel, value);
+      await settle(x);
+      return { asked: asked.length, q: asked[0] || null, measurement: x.api.model().takeoff[0].measurement,
+               box: need(x, sel).value, total0: total0, totalTyped: totalTyped, total: x.api.bid().total,
+               others: x.api.model().takeoff.slice(1).map((r) => r.measurement) };
+    };
+    out.measureAsk = {
+      putBack: await ask(false, "1250"),
+      kept: await ask(true, "1250"),
+      cleared: await ask(false, ""),
+      same: await ask(false, "12500"),
+      firstEntry: await ask(false, "800", { blankFirst: true }),
+    };
   }
 
   console.log(JSON.stringify(out));

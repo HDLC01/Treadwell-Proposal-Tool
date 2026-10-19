@@ -315,6 +315,35 @@
     return Object.keys(tabs).some(function (k) { return !!tabs[k] && tabs[k].takeoff === list && B.poolsPacks(tabs[k]); });
   }
 
+  /** THE SECTION THAT OWNS A TAKEOFF LIST, found by identity as poolsList finds it: the root for the root's own list,
+   *  one of the sections under `tabs` for theirs, or null for a list no section owns. */
+  function sectionOfList(list) {
+    if (!ROOT || !(list instanceof Array)) return null;
+    if (ROOT.takeoff === list) return ROOT;
+    var tabs = ROOT.tabs;
+    if (!tabs || typeof tabs !== "object") return null;
+    var keys = Object.keys(tabs);
+    for (var i = 0; i < keys.length; i++) if (tabs[keys[i]] && tabs[keys[i]].takeoff === list) return tabs[keys[i]];
+    return null;
+  }
+
+  /** THE LIBRARY AS THE SECTION THAT OWNS `takeoff` BUYS IT (Hanz, 2026-10-16): ITEMS with that section's supplier
+   *  discounts and Bulk Discount switch applied (library-core's itemsForBid; the boxes are on the Review step). Every
+   *  material price on this page is read off the list this returns, so a discount reaches the row cost boxes, the
+   *  pooled coats, the cove, the Gyp area rows and the section's material sum alike. ITEMS itself when the section
+   *  typed nothing, which is every bid saved before the boxes existed. Kept until ITEMS or the boxes change. */
+  var itemsForCache = { items: null, key: "", out: null };
+  function itemsFor(takeoff) {
+    var sec = sectionOfList(takeoff || (M && M.takeoff));
+    var adj = sec ? B.materialAdjust(sec.adjust) : null;
+    if (!adj || (!adj.bulk && !Object.keys(adj.discounts).length)) return ITEMS;
+    var key = JSON.stringify(adj);
+    if (itemsForCache.items !== ITEMS || itemsForCache.key !== key) {
+      itemsForCache = { items: ITEMS, key: key, out: L.itemsForBid(ITEMS, adj) };
+    }
+    return itemsForCache.out;
+  }
+
   /** Every row of a pooling takeoff priced as one purchase: library-core's pricePool over each row priced
    *  alone. An OFF row buys nothing and takes no share; Dye and Joint Filler are never pooled. Index for
    *  index with `list`. */
@@ -323,12 +352,13 @@
     var on = list.map(function (r) { return B.rowOn(r); });
     var pooled = L.pricePool(alone, { on: on, skip: RESERVED_ITEM_IDS });
     // a cove on two areas is one length, priced once (the library's pool has no item to add up for it)
-    return E.poolCoves(pooled, list, { items: ITEMS, quartz: E.systemOneIsQuartz(list), on: on });
+    return E.poolCoves(pooled, list, { items: itemsFor(list), quartz: E.systemOneIsQuartz(list), on: on });
   }
 
   function rawRowPrice(row, takeoff) {
     var r = row || {};
-    if (r.item_id) return priceMaterialRow(r);
+    var items = itemsFor(takeoff);
+    if (r.item_id) return priceMaterialRow(r, items);
     var asm = asmById(r.assembly_id);
     if (!asm) return null;
     // A COVE IS PRICED BY THE SHEET'S OWN FORMULA, NOT BY A LIBRARY LINE (js/epoxy-takeoff.js): it rounds twice,
@@ -336,7 +366,7 @@
     // list, and it is the one on show unless a caller prices another section's.
     if (E.coveVariant(asm.id)) {
       return E.priceCoveRow(asm.id, B.num(r.measurement),
-        { items: ITEMS, quartz: E.systemOneIsQuartz(takeoff || M.takeoff) });
+        { items: items, quartz: E.systemOneIsQuartz(takeoff || M.takeoff) });
     }
     // A GYP AREA ROW IS THE GYPSUM OF THAT AREA at the section's thickness and mix (js/gyp-takeoff.js), not a library
     // line: a bag's yield depends on the thickness, which the library cannot say. A takeoff that is not a Gyp
@@ -344,9 +374,9 @@
     if (G && G.bucketOfAssembly(asm.id)) {
       var gyp = gypEntryOf(takeoff || M.takeoff);
       if (gyp) return G.priceAreaRow(asm.id, B.num(r.measurement),
-        { items: ITEMS, tab: gyp.sheet, settings: gyp.section.gyp });
+        { items: items, tab: gyp.sheet, settings: gyp.section.gyp });
     }
-    return priceAssemblyRow(asm, r, B.num(r.measurement));
+    return priceAssemblyRow(asm, r, B.num(r.measurement), items);
   }
 
   /** `items` with ONE item's coverage replaced, as a copy. The library's own rows are never
@@ -367,16 +397,18 @@
    *  priceLine / priceAssembly that every other number on the page goes through does the
    *  arithmetic; there is no second pricing path to drift. With nothing typed this is exactly
    *  L.priceAssembly(asm, ITEMS, area), which is what every row saved before this existed gets. */
-  function priceAssemblyRow(asm, row, area) {
+  function priceAssemblyRow(asm, row, area, base) {
+    // `base` is the library as this row's section buys it (itemsFor); a caller that has none prices off ITEMS.
+    var lib = base || ITEMS;
     var lc = (row && row.line_cov && typeof row.line_cov === "object") ? row.line_cov : null;
     var lines = (asm && asm.lines) || [];
-    if (!lc) return L.priceAssembly(asm, ITEMS, area);
-    var items = ITEMS, any = false;
+    if (!lc) return L.priceAssembly(asm, lib, area);
+    var items = lib, any = false;
     var swapped = lines.map(function (ln, j) {
       var cov = B.num(lc[j]);
       var id = ln && (ln.item_id || ln.item);
       if (!(cov > 0) || !id) return ln;
-      var real = L.findItem(ITEMS, id);
+      var real = L.findItem(lib, id);
       if (!real) return ln;
       any = true;
       var tmp = "__cov" + j;
@@ -384,7 +416,7 @@
       items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov, pool_of: real.id })]);
       return Object.assign({}, ln, { item_id: tmp, item: undefined });
     });
-    if (!any) return L.priceAssembly(asm, ITEMS, area);
+    if (!any) return L.priceAssembly(asm, lib, area);
     return L.priceAssembly(Object.assign({}, asm, { lines: swapped }), items, area);
   }
 
@@ -393,20 +425,22 @@
    *  `broken_lines` follows library-core's own rule rather than inventing a second one: an
    *  unfilled row is work not started, not work gone wrong, so `no_item` is not a fault. Getting
    *  that wrong would put "1 line cannot price yet" under every row the moment it is added. */
-  function priceMaterialRow(r) {
+  function priceMaterialRow(r, base) {
     var area = B.num(r.measurement);
     // THE OVERRIDE LIVES HERE, not inside priceLine: waste and roundup have no box on this row and
     // come from the material either way. A typed coverage prices against a ONE-ITEM SWAP of the
     // real item -- coverage replaced, everything else (cost, pack size) untouched -- so the item
     // in the library is never mutated. Blank r.coverage leaves `items` as ITEMS, so priceLine
     // falls back to the material's own coverage exactly as it does for every assembly line.
-    var items = ITEMS;
+    // `base` is the library as this row's section buys it (itemsFor); a caller that has none prices off ITEMS.
+    var lib = base || ITEMS;
+    var items = lib;
     var cov = B.num(r.coverage);
     // TRUTHY, NOT !== null: B.num returns 0 for "", null and undefined alike (see
     // bid-model.js), which is exactly how covHint/covPlaceholder already tell "nothing
     // typed" from a real figure. `!== null` would treat every blank row as coverage 0 and price it
     // as broken (no_coverage) the instant it's added, before anyone touches the box.
-    if (cov) items = itemsWithCoverage(ITEMS, r.item_id, cov);
+    if (cov) items = itemsWithCoverage(lib, r.item_id, cov);
     var one = L.priceLine({ item_id: r.item_id }, items, area);
     var priced = one.ok && one.priced ? 1 : 0;
     var broken = (!one.ok && one.reason !== "no_item") ? 1 : 0;
@@ -539,7 +573,36 @@
     var area = B.takeoffSf(takeoff);
     if (ROOT.conditions.dye) sum += condLine("dye", area).cost;
     if (ROOT.conditions.joint_filler) sum += condLine("joint_filler", area).cost;
+    // The patch line (Polish!D17) is NOT in this sum: it goes to the chain on its own (polishMaterialIn), and the
+    // engine adds it inside D31's round-up only on a profile that carries it (the `polishPatch` quirk).
     return sum;
+  }
+
+  /** What a Polish section's chain is handed: the raw material and, separately, the patch line (Polish!D17). The
+   *  engine takes the patch into the material only on a profile that carries it (polish-rev3 on), so a section saved
+   *  before 2026-10-16 prices exactly as it did whatever is passed here. */
+  function polishMaterialIn(takeoff) {
+    return { material: polishMaterial(takeoff), patch: polishPatchCost(takeoff) };
+  }
+
+  /** What the patch line comes to for the Polish section that owns `takeoff`, or 0 when its profile has no patch line
+   *  or the Seal module (which prices it) did not load. */
+  function polishPatchCost(takeoff) {
+    if (!SL || !polishPatchOnList(takeoff)) return 0;
+    return SL.patchCost(ITEMS, B.takeoffSf(takeoff), jobIsReno());
+  }
+
+  /** Does the Polish section that owns `takeoff` carry the patch line? Found by identity, as sectionOfList finds it. */
+  function polishPatchOnList(takeoff) {
+    if (!ROOT || !(takeoff instanceof Array)) return false;
+    if (ROOT.takeoff === takeoff) return B.polishPatchOn(ROOT, B.ROOT_TAB);
+    var tabs = ROOT.tabs;
+    if (!tabs || typeof tabs !== "object") return false;
+    var keys = Object.keys(tabs);
+    for (var i = 0; i < keys.length; i++) {
+      if (tabs[keys[i]] && tabs[keys[i]].takeoff === takeoff) return B.polishPatchOn(ROOT, keys[i]);
+    }
+    return false;
   }
 
   /** This project's REAL remodel-tax rate, or 0 when nobody has picked a county.
@@ -589,7 +652,8 @@
     // B.polishBid prices every Polish section the same way, the root and a copy under `tabs` alike (the model's own
     // markupChain call with the section's rows, travel by its role, and tooling on a rev 2 profile). The page hands it the
     // library's raw material, which is the one thing the model cannot know.
-    return B.polishBid(ROOT, B.ROOT_TAB, { material: rootMaterial, remodel_rate: remodelRate() });
+    return B.polishBid(ROOT, B.ROOT_TAB, { material: function () { return polishMaterialIn(ROOT.takeoff); },
+                                           remodel_rate: remodelRate() });
   }
 
   /** The raw material of a section that is not the root: its takeoff rows priced from the library, the rows
@@ -601,10 +665,10 @@
   function sectionMaterial(entry) {
     var takeoff = entry.section.takeoff || [];
     // A POLISH SECTION UNDER `tabs` (a copy of the Polish sheet, or a Polish sheet added to the bid) is bought like the root.
-    if (entry.role === "polish") return { material: polishMaterial(takeoff) };
+    if (entry.role === "polish") return polishMaterialIn(takeoff);
     if (entry.role === "epoxy") {
       var r = E.sectionMaterial(takeoff, {
-        items: ITEMS, sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
+        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), poolCoves: B.poolsPacks(entry.section),
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: r.material, tooling: r.tooling };
@@ -616,7 +680,7 @@
     if (entry.role === "seal") {
       if (!SL) return { unpriceable: "the Seal takeoff did not load, so this option cannot be priced. Reload the page." };
       var sr = SL.sectionMaterial(takeoff, {
-        items: ITEMS, sf: B.takeoffSf(takeoff), reno: jobIsReno(),
+        items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), reno: jobIsReno(),
         rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       return { material: sr.material, tooling: sr.tooling };
@@ -627,7 +691,7 @@
     // section is priced: a plain sum is refused by priceSection, never charged as the gypsum alone.
     if (entry.role === "gyp" && G) {
       var g = G.sectionMaterial(takeoff, entry.section.gyp, entry.sheet, {
-        items: ITEMS, rowPrice: function (row) { return rowPrice(row, takeoff); }
+        items: itemsFor(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
       });
       var figures = { gyp: g.gyp, extras: g.extras, sand: g.sand, soundMat: g.soundMat,
                       soundMatRolls: g.soundMatRolls, truckload: g.truckload, tooling: g.tooling };
@@ -1252,7 +1316,10 @@
       else if (picked || measured) half += 1;
     });
     var lab = 0;
-    M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });
+    // The Labor step is done when a line prices, and a line the prevailing wage prices counts (the same rate the
+    // totals and the blockers use), so a blank-rate line the card is pricing does not leave the pips grey.
+    var pwStep = B.prevailingApplied(M);
+    M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });
     return {
       takeoff: half ? "att" : (priced ? "ok" : ""),
       labor: lab ? "ok" : "",
@@ -2087,7 +2154,7 @@
 
   /** What the Gyp sheet works out from the section on show, for the card, the caption and the Review step. */
   function gypFigures(entry) {
-    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.sheet, ITEMS);
+    return G.figures(entry.section.takeoff || [], entry.section.gyp, entry.sheet, itemsFor(entry.section.takeoff || []));
   }
 
   /** Text for a quantity of a thing the sheet buys in fractions: two places, no trailing zeros. */
@@ -2262,7 +2329,7 @@
     if (!e || e.role !== "epoxy") return "";
     var takeoff = e.section.takeoff || [];
     var r = E.sectionMaterial(takeoff, {
-      items: ITEMS, sf: B.takeoffSf(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
+      items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
     });
     return '<p class="cap">Patch <b data-epoxy-patch>' + esc(moneyAuto(r.patch)) + '</b> is added for you: ' +
       esc(B.money2(E.unitPrice(ITEMS, "patch").cost)) + ' a square foot of the whole area, whatever the system. ' +
@@ -2282,6 +2349,153 @@
       esc(B.money2(SL.unitPrice(ITEMS, reno ? "patchReno" : "patchNew").cost)) + ' a square foot of the whole area (' +
       (reno ? "a renovation" : "new concrete") + '), whatever the rows say. Tooling and consumables, ' +
       esc(moneyAuto(SL.toolingCost(sf))) + ', are added on the Review step.</p>';
+  }
+
+  /** THE PREVAILING WAGE CALCULATOR, as a card at the bottom of the Labor step (Hanz, 2026-10-15).
+   *
+   *  Kyle's workbook has this calculator on every priced tab (Polish!I47:L54): a Rate box, a Fringes box,
+   *  the Prevailing Wage Rate they add up to (J48) and the 1:1 "Entry" Half Wage (J53, half the rate and
+   *  never under $23, for the Missouri state wage only, not Davis-Bacon). Nothing in the sheet reads it,
+   *  so the estimator worked the rate out there and typed it into every labor line. Here the card sets
+   *  the labor lines itself: while its switch is on and a rate is set, every labor line prices at the
+   *  prevailing rate except Travel Labor and a line where somebody typed a rate (B.laborRateOf).
+   *
+   *  The switch is the JOB's prevailing wage answer (conditions.prevailing_wage), the same flag the
+   *  intake and the Review step use, so there is one source. Every trade has its own box (Cement Mason and
+   *  Painter always, plus any the estimator adds and names, Hanz 2026-10-15), and the one marked "Labor lines
+   *  use this rate" is the rate the lines follow. Rate and fringes start EMPTY on a new bid, like every quantity.
+   *  The figures are the job's, so the card reads the same on every section of the bid.
+   *
+   *  OFF IS ONE LINE (Hanz, 2026-10-15): the title, the switch and the words "Off. Labor lines keep their own rates."
+   *  Switching it on opens the trade boxes and + Add a trade. What was typed is kept while it is closed
+   *  (the boxes are still there, only hidden), and the switch repaints the card IN PLACE (repaintNumbers), never a
+   *  rebuild of the panel, so the focus stays on the switch and the keyboard can press it again. */
+  function pwNote(total) {
+    var on = !!(M.conditions || {}).prevailing_wage;
+    if (!on) return "";
+    // NAMES THE TRADE the lines use: "no rate yet" with figures typed on ANOTHER trade would be a sentence that
+    // reads as false, and the bid would go out at the lines' own rates.
+    if (!(total > 0)) return pwTradeLabel(M.prevailing) + " has no rate yet. Type its rate and fringes, or pick another " +
+      "trade with Labor lines use this rate.";
+    return "Labor lines price at " + B.money2(total) + " an hour. Travel Labor, and any rate you type on a line, keep their own." +
+      (gypOpen() ? "" : " The 5% labor escalation is added on the review step.");
+  }
+
+  /** A trade's name as the card says it: the sheet's two by their names, one of the estimator's own by the
+   *  name typed for it, or "Other trade" while it has none. */
+  function pwTradeName(t) {
+    var name = String((t && t.label) || "").trim();
+    return name || "Other trade";
+  }
+
+  /** The name of the trade the crew is paid at. */
+  function pwTradeLabel(p) {
+    var t = B.prevailingCrewTrade(p || {});
+    return t ? pwTradeName(t) : "";
+  }
+
+  function pwOwnTrade(t) {
+    for (var i = 0; i < B.PREVAILING_TRADES.length; i++) if (B.PREVAILING_TRADES[i].key === t.key) return false;
+    return true;
+  }
+
+  function pwSubText(p, total) {
+    if (!(M.conditions || {}).prevailing_wage) return "Off. Labor lines keep their own rates.";
+    return pwTradeLabel(p) + (total > 0 ? ", " + B.money2(total) + " an hour" : "");
+  }
+
+  /** ONE TRADE'S BOX on the card: its name, rate, fringes, the two figures the sheet works out, and the choice
+   *  that makes it the rate the crew is paid. `i` is the trade's place in the block's `trades`, which every
+   *  input carries (data-pw-i) so the handlers write the right one. The sheet's two trades are named by the
+   *  card; a trade the estimator added has a name box and a Remove button. */
+  function pwTradeBox(t, i, crewKey) {
+    var total = B.prevailingTotal(t);
+    var crew = t.key === crewKey;
+    var own = pwOwnTrade(t);
+    var name = pwTradeName(t);
+    var money = function (field, label) {
+      return '<div class="f"><label>' + label + '</label>' +
+        '<span class="mny">$<input class="n" inputmode="decimal" data-pw="' + field + '" data-pw-i="' + i + '" value="' +
+        esc(nv(t[field])) + '" aria-label="' + esc(name) + ' ' + label.toLowerCase() + ' per hour"></span></div>';
+    };
+    return '<div class="pwtrade' + (crew ? " paid" : "") + '" data-pw-trade="' + i + '"><div class="pwtrade-h">' +
+      (own
+        ? '<input class="pwname" data-pw="label" data-pw-i="' + i + '" value="' + esc(t.label) + '" maxlength="' +
+          B.PREVAILING_LABEL_MAX + '" placeholder="Trade name" aria-label="Trade name">' +
+          '<button class="x" data-pw-del="' + i + '" title="Remove this trade" aria-label="Remove ' + esc(name) + '">' +
+          icon("x", 12) + '</button>'
+        : '<span class="pwname static">' + esc(name) + '</span>') +
+      '</div><div class="pwtrade-g">' + money("rate", "Rate") + money("fringes", "Fringes") +
+      '<div class="f"><label>Prevailing wage rate</label>' +
+      '<div class="costbox' + (total > 0 ? "" : " empty") + '" data-pw-total data-pw-i="' + i + '">' +
+      esc(total > 0 ? B.money2(total) : "") + '</div></div>' +
+      '<div class="f"><label>Entry half wage</label>' +
+      '<div class="costbox' + (total > 0 ? "" : " empty") + '" data-pw-entry data-pw-i="' + i + '">' +
+      esc(total > 0 ? B.money2(B.entryHalfWage(total)) : "") + '</div></div></div>' +
+      '<label class="pwpay"><input type="radio" name="pw-pay" data-pw-pick="' + i + '" value="' + esc(t.key) + '"' +
+      (crew ? " checked" : "") + '> Labor lines use this rate</label></div>';
+  }
+
+  function prevailingCard() {
+    var p = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
+    var on = !!(M.conditions || {}).prevailing_wage;
+    var total = B.prevailingTotal(p);
+    return '<div class="tk pwcard' + (on ? "" : " inert off") + '" data-pw-card><div class="tk-h">' +
+      '<span class="labname static">Prevailing wage</span>' +
+      B.sliderHtml(on, 'data-cond="prevailing_wage" data-pw-sw="1"', "On", "The job's prevailing wage switch, the same one " +
+        "as on the intake and Review steps. On sets the labor lines to this rate and adds the 5% labor escalation") +
+      '<span class="tk-sub calc" data-pw-sub>' + esc(pwSubText(p, total)) + '</span>' +
+      // THE BODY, hidden while the switch is off. A wrapper with nothing but the attribute on it: the page's own
+      // `[hidden]{display:none!important}` hides it, and the grid inside keeps its own `display` untouched.
+      '</div><div data-pw-body' + (on ? "" : " hidden") + '><div class="pwtrades">' +
+      p.trades.map(function (t, i) { return pwTradeBox(t, i, p.trade); }).join("") +
+      '</div><button class="btn addline below" data-pw-add="1">' + icon("plus", 16) + ' Add a trade</button>' +
+      '<p class="hint trvnote">Rate plus fringes is the prevailing wage rate. Entry half wage is the 1:1 entry ' +
+      'laborer, Missouri state wage only, not Davis-Bacon. Foreman min. ' + esc(B.money(B.PREVAILING.FOREMAN_MIN)) +
+      ', entry min. ' + esc(B.money(B.PREVAILING.ENTRY_MIN)) + '.</p>' +
+      '<p class="hint trvnote" data-pw-note>' + esc(pwNote(total)) + '</p></div></div>';
+  }
+
+  /** Write one box of the Prevailing wage card into the job (`M.prevailing`, kept at the root with the
+   *  other job-level answers). `i` is the trade's place on the card. `field` is read off an attribute, so it
+   *  is matched against the names below and written to a named property, never used as a key. "pick" makes
+   *  that trade the one the crew is paid; "label" names one of the estimator's own trades (the sheet's two
+   *  keep their names). The first write on a bid creates the block. */
+  function setPrevailing(field, value, i) {
+    var cur = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
+    var t = cur.trades[i];
+    if (!t) return;
+    if (field === "pick") cur.trade = t.key;
+    else if (field === "rate") t.rate = value;
+    else if (field === "fringes") t.fringes = value;
+    else if (field === "label" && pwOwnTrade(t)) t.label = value;
+    else return;
+    // THE FIRST FIGURES TYPED PICK THEIR TRADE. While the trade the lines use has no rate, typing a rate or fringes on
+    // another one makes that one the trade the lines use: an estimator on a painting job who types the Painter box and
+    // never looks at the radio must not send the bid out at the lines' own rates. Once the picked trade has a rate,
+    // typing another trade's figures moves nothing; picking is then the radio's job.
+    if ((field === "rate" || field === "fringes") && t.key !== cur.trade && B.prevailingTotal(t) > 0 &&
+        !(B.prevailingTotal(B.prevailingCrewTrade(cur)) > 0)) cur.trade = t.key;
+    M.prevailing = B.normalizePrevailing(cur);
+  }
+
+  /** + Add a trade: a new box with no name and no figures, after the others. Returns its place. */
+  function addPrevailingTrade() {
+    var cur = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
+    cur.trades.push({ key: B.newPrevailingTradeKey(cur), label: "", rate: "", fringes: "" });
+    M.prevailing = B.normalizePrevailing(cur);
+    return M.prevailing.trades.length - 1;
+  }
+
+  /** Remove one of the estimator's own trades (the sheet's two stay). When it was the one the crew was paid,
+   *  the crew goes back to the first trade, Cement Mason. */
+  function removePrevailingTrade(i) {
+    var cur = B.normalizePrevailing(M.prevailing);
+    if (!cur || !cur.trades[i] || !pwOwnTrade(cur.trades[i])) return false;
+    var gone = cur.trades.splice(i, 1)[0];
+    if (cur.trade === gone.key) cur.trade = cur.trades[0].key;
+    M.prevailing = B.normalizePrevailing(cur);
+    return true;
   }
 
   /** One labor task, as its own card.
@@ -2315,6 +2529,9 @@
     // auto, and typing a number makes it the estimator's own (guys_auto false). The "Included"
     // slider is a different thing and stays.
     var on = B.rowOn(r);
+    // THE PREVAILING RATE IN FORCE (0 when the card is off or empty): a line that follows its default
+    // prices at it, and its Rate box says so. One figure for the box, the cost and the warning.
+    var pw = B.prevailingApplied(M);
     return '<div class="tk lab' + ((inert || !on) ? " inert" : "") + (on ? "" : " off") +
       '" data-lab-card="' + i +
       '"><div class="tk-h">' +
@@ -2323,7 +2540,7 @@
       B.sliderHtml(on, 'data-on-lab="' + i + '"', "Included", "Off keeps this line here, grayed, " +
         "and adds nothing to the price") +
       '<span class="tk-sub calc" data-lcost-for="' + i + '">' +
-      esc(moneyAuto(B.laborCost(r))) + '</span>' +
+      esc(moneyAuto(B.laborCost(r, pw))) + '</span>' +
       (M.labor.length > 1
         ? '<button class="x" data-del-lab="' + i + '" title="Remove this line">' + icon("x", 12) + '</button>'
         : '') +
@@ -2346,13 +2563,13 @@
 
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-lab="' + i + '" data-k="rate" value="' +
-      esc(nv(r.rate)) + '"></span>' +
-      dfltWarnHtml('data-ratedflt-for="' + i + '"', rateDefaultText(r)) +
+      esc(nv(B.laborRateBox(r, pw))) + '"></span>' +
+      dfltWarnHtml('data-ratedflt-for="' + i + '"', rateDefaultText(r, pw)) +
       '<p class="hint">Per hour.</p></div>' +
 
       '<div class="f"><label>Cost</label>' +
-      '<div class="costbox' + (B.laborCost(r) > 0 ? "" : " empty") + '" data-lcostbox-for="' + i + '">' +
-      esc(moneyAuto(B.laborCost(r))) + '</div>' +
+      '<div class="costbox' + (B.laborCost(r, pw) > 0 ? "" : " empty") + '" data-lcostbox-for="' + i + '">' +
+      esc(moneyAuto(B.laborCost(r, pw))) + '</div>' +
       '<p class="hint">' + (hours ? "guys × hours × rate" :
         "guys × days × rate × " + B.dayHours(r)) + '</p></div>' +
       // HOURS A DAY, only on a line the Labor Calculator filled (it carries calc_default): 8 or 10.
@@ -2558,6 +2775,8 @@
     // task keeps its place above it. `i` stays the row's real index in M.labor -- the handlers
     // splice and edit by position.
     if (!M.travel) M.travel = B.normalizeTravel(null);
+    // THE PREVAILING WAGE CARD is drawn LAST, at the bottom of every section's Labor step (Hanz, 2026-10-15:
+    // "prevailing wage should be at the bottom not at the top"), after the crew lines and the travel block.
     var html = "";
     var travelRows = "";
     // The job's travel is charged ONCE, on the section that carries it (B.travelCarrier). Any other section of a
@@ -2573,7 +2792,7 @@
     html += '<button class="btn addline below" data-add-lab="1">' + icon("plus", 16)
       + ' Add a labor line</button>';
     html += '<p class="cap">Labor total <b data-labor-total>' +
-      esc(moneyAuto(B.laborTotal(M.labor, M.conditions))) + '</b>.</p>';
+      esc(moneyAuto(B.laborTotal(M.labor, M.conditions, B.prevailingApplied(M)))) + '</b>.</p>';
 
     if (!carries) {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
@@ -2595,11 +2814,12 @@
     var gypLab = gypOpen();
     html += gypLab
       ? '<p class="cap">A Gyp bid adds the 5% labor escalation whatever prevailing wage says (the sheet types it in).</p>'
-      : '<p class="cap">Prevailing wage is <b>' + (pw ? "on" : "off") + '</b>' +
-        (pw ? ", so a 5% escalation is added on the review step" : "") +
-        '. Change it on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
+      : '<p class="cap">Prevailing wage is <b data-pw-state>' + (pw ? "on" : "off") + '</b>' +
+        '<span data-pw-esc>' + (pw ? ", so a 5% escalation is added on the review step" : "") + '</span>' +
+        '. Change it with the switch on the Prevailing wage card, or on <a href="' + esc(TW.withDraft("/polish-intake.html")) +
         '">the intake step</a>.</p>';
     if (gypLab) html += gypHoursCaption(gypLab);
+    html += prevailingCard();
 
     return shell("Labor",
       gypLab ? "Guys × hours × rate. A Gyp crew is priced by the hour, in 10 hour days. Travel is priced per hour."
@@ -2630,7 +2850,8 @@
     return '<table class="rev-t"><tbody>' + rows.map(function (r) {
       var label = (r[0] && typeof r[0] === "object" && "raw" in r[0]) ? r[0].raw : esc(r[0]);
       return '<tr' + (r[3] ? ' class="' + r[3] + '"' : '') + '><td>' + label +
-        '</td><td class="r">' + esc(r[1] == null ? "" : r[1]) + '</td><td class="r">' +
+        '</td><td class="r">' + ((r[1] && typeof r[1] === "object" && "raw" in r[1]) ? r[1].raw
+          : esc(r[1] == null ? "" : r[1])) + '</td><td class="r">' +
         (r[2] == null ? "" : r[2]) + '</td></tr>';
     }).join("") + '</tbody></table>';
   }
@@ -2725,9 +2946,28 @@
                    esc(rowCost(r).text)]);
     });
     if (!tkRows.length) tkRows.push(["Nothing measured yet", "", ""]);
+    // THE PATCH LINE, said where its money is (polish-rev3 and later): the rate is the New one or the Renovation one.
+    var patchNow = polishPatchCost(M.takeoff);
+    if (patchNow > 0) {
+      tkRows.push([{ raw: 'Patch <span class="note">' + (jobIsReno() ? "renovation" : "new concrete") + ' rate</span>' },
+                   B.fmtSf(B.takeoffSf(M.takeoff)) + " SF", esc(moneyAuto(patchNow))]);
+    }
     // A Gyp section's other lines: the primer, ISO strip, tape, sand and sound mat the sheet buys from the areas.
     var gypRev = gypOpen();
     if (gypRev) gypLines(gypRev).forEach(function (l) { tkRows.push([l.label, l.qty, esc(moneyAuto(l.cost))]); });
+    // AN EPOXY SECTION'S OWN MATERIAL BOXES (Hanz, 2026-10-16): Kyle's supplier discounts (B41 on the Sherwin-Williams
+    // liquids, C41 on the Poly-Crete ones) and his Bulk Discount switch (D41). They price the materials above, so they
+    // sit with them. Only an Epoxy section has those cells; a Polish, Seal or Gyp tab has no discount groups.
+    var rb = ruleBid();
+    if (onShow && onShow.layout === "epoxy") {
+      tkRows.push([{ raw: 'Supplier discount <span class="note">Sherwin-Williams liquids</span>' },
+                   { raw: adjBox("supplier_pct", "0") }, ""]);
+      tkRows.push([{ raw: 'Poly-Crete discount <span class="note">SL, MD and WR; blank is the supplier discount</span>' },
+                   { raw: adjBox("polycrete_pct", adjTyped("supplier_pct") || "0") }, ""]);
+      tkRows.push([{ raw: 'Bulk Discount <span class="note">bulk prices where a material has one</span>' },
+                   { raw: B.sliderHtml(adjOn("bulk"), 'data-adj-bulk="1"', adjOn("bulk") ? "On" : "Off",
+                     "Kyle's Bulk Discount switch: a material that has a bulk price is bought at it") }, ""]);
+    }
     tkRows.push(["Material Subtotal", "", mkAmt(b, "material")]);
     // A rate the engine reports for the section on show is the one printed (an Epoxy section ships at its tier);
     // the root's chain reports none of these, so it prints the Polish figures it always did.
@@ -2738,7 +2978,10 @@
       tkRows.push(["Material escalation", "", mkAmt(b, "material_escalation")]);
       tkRows.push(["Shipping", "", mkAmt(b, "shipping")]);
     } else {
-      tkRows.push(["Shipping", B.pct(rateOf("ship_pct", B.RATES.SHIPPING)), mkAmt(b, "shipping")]);
+      // Typed over the sheet's own rate (Kyle's B42 / B32); blank is the rule, which the box shows greyed.
+      tkRows.push(["Shipping", { raw: rateSpan(b, "ship_pct") +
+                     adjBox("ship_pct", pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING)) },
+                   mkAmt(b, "shipping")]);
     }
     tkRows.push(["Material Total", "", mkAmt(b, "material_total"), "tot"]);
     html += card("Takeoff and Material", 0, "takeoff", revTable(tkRows));
@@ -2754,12 +2997,13 @@
     // zero is a DECISION, and a decision is exactly what a review step is for. Leaving it off meant
     // the one labor line an estimator is most likely to have forgotten was also the only one they
     // could not see.
+    var pwRev = B.prevailingApplied(M);       // the Labor step's prevailing rate, the one the totals use
     M.labor.forEach(function (r) {
       if (!B.rowOn(r)) return;               // switched off: out of the bid, so out of the list
-      var cost = B.laborCost(r);
+      var cost = B.laborCost(r, pwRev);
       if (!cost && (r || {}).id !== "travel") return;
       labRows.push([r.label || "Labor line",
-                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(B.laborRateOf(r)),
+                    B.num(r.guys) + " × " + B.num(r.days) + " × " + B.money2(B.laborRateOf(r, pwRev)),
                     esc(moneyAuto(cost))]);
     });
     if (!labRows.length) labRows.push(["No labor entered yet", "", ""]);
@@ -2859,6 +3103,129 @@
       esc(TW.withDraft("/polish-intake.html")) + '">pick a county</a> for the real one</span>';
   }
 
+  // ── THE ESTIMATOR'S OVERRIDES (Hanz, 2026-10-16) ───────────────────────────────────────────────────────────
+  // Boxes over the sheet's own rules, one set per section (`M.adjust`, which B.sectionView answers from the section on
+  // show). bid-model.js checks and converts them (normalizeAdjust, chainAdjust, materialAdjust, adjustProblems).
+
+  /** What was typed in one box, as text, or "" for nothing. */
+  function adjTyped(key) {
+    var a = B.normalizeAdjust(M.adjust);
+    if (!a) return "";
+    switch (key) {
+      case "discount_pct": return a.discount_pct == null ? "" : String(a.discount_pct);
+      case "discount_amt": return a.discount_amt == null ? "" : String(a.discount_amt);
+      case "ship_pct": return a.ship_pct == null ? "" : String(a.ship_pct);
+      case "gp_pct": return a.gp_pct == null ? "" : String(a.gp_pct);
+      case "super_pct": return a.super_pct == null ? "" : String(a.super_pct);
+      case "soft_pct": return a.soft_pct == null ? "" : String(a.soft_pct);
+      case "supplier_pct": return a.supplier_pct == null ? "" : String(a.supplier_pct);
+      case "polycrete_pct": return a.polycrete_pct == null ? "" : String(a.polycrete_pct);
+      default: return "";
+    }
+  }
+  function adjOn(key) {
+    var a = B.normalizeAdjust(M.adjust);
+    if (!a) return false;
+    if (key === "bulk") return a.bulk === true;
+    if (key === "hard_bid") return a.hard_bid === true;
+    return false;
+  }
+
+  /** Write one box into the section on show. The keys are named one by one (never `obj[key] = value` with a key off
+   *  an attribute), and the whole set goes back through normalizeAdjust, so a cleared box takes its key away and a
+   *  section left with nothing typed saves no `adjust` at all. */
+  function setAdjust(key, value) {
+    var a = Object.assign({}, B.normalizeAdjust(M.adjust) || {});
+    switch (key) {
+      case "discount_pct": a.discount_pct = value; break;
+      case "discount_amt": a.discount_amt = value; break;
+      case "ship_pct": a.ship_pct = value; break;
+      case "gp_pct": a.gp_pct = value; break;
+      case "super_pct": a.super_pct = value; break;
+      case "soft_pct": a.soft_pct = value; break;
+      case "supplier_pct": a.supplier_pct = value; break;
+      case "polycrete_pct": a.polycrete_pct = value; break;
+      case "bulk": a.bulk = value === true; break;
+      case "hard_bid": a.hard_bid = value === true; break;
+      default: return;
+    }
+    var next = B.normalizeAdjust(a);
+    M.adjust = next || undefined;
+  }
+
+  /** The bid of the section on show with its boxes set aside: what the sheet's own rules give, which is what each box
+   *  shows greyed until something is typed in it. Nothing is changed: the section's boxes are put back. */
+  function ruleBid() {
+    var saved = M.adjust;
+    // The material boxes stay: the rule a markup box is greyed with is the rule for the material this section buys.
+    try { M.adjust = B.materialOnlyAdjust(saved) || undefined; return activeBid(); } finally { M.adjust = saved; }
+  }
+
+  /** A fraction as the figure a % box holds: nine percent reads "9", two point seven percent "2.7". "" for none. */
+  function pctNum(f) {
+    var n = B.num(f);
+    return (f === null || f === undefined || !isFinite(n)) ? "" : String(parseFloat((n * 100).toPrecision(6)));
+  }
+
+  /** The words beside a box that is typed but cannot be used (B.adjustProblems), hidden when there are none. */
+  function adjWarnText(key) {
+    var probs = B.adjustProblems(M.adjust);
+    for (var i = 0; i < probs.length; i++) if (probs[i].key === key) return probs[i].text;
+    // The chain refuses a discount that gives back the whole bid (bid-engine.js): said under whichever box is in force,
+    // the dollars when they are typed (they win), else the percentage.
+    if (key === "discount_amt" || key === "discount_pct") {
+      var typedAmt = adjTyped("discount_amt") !== "";
+      if ((key === "discount_amt") === typedAmt && activeBid().discount_refused) {
+        return "more than the labor and markup it comes off, so it is not used";
+      }
+    }
+    return "";
+  }
+  function adjWarnHtml(key) {
+    var t = adjWarnText(key);
+    return '<span class="adjwarn" data-adjwarn="' + key + '"' + (t ? '' : ' hidden') + '>' + esc(t) + '</span>';
+  }
+
+  /** THE RATE A LINE WAS PRICED WITH, override or rule, as the chain reports it (falling back to the pinned rate where
+   *  the Polish chain reports none). Keyed `data-mkrate` so the repaint refreshes it beside its box. */
+  function rateUsed(b, key) {
+    switch (key) {
+      case "ship_pct": return b.ship_pct != null ? b.ship_pct : B.RATES.SHIPPING;
+      case "super_pct": return b.super_pct != null ? b.super_pct : B.RATES.SUPER_PTO;
+      case "soft_pct": return b.soft_pct != null ? b.soft_pct : B.RATES.SOFT_COSTS;
+      case "discount_pct": return b.hard_bid_pct ? -b.hard_bid_pct : null;
+      default: return null;
+    }
+  }
+  function rateSpan(b, key) {
+    var f = rateUsed(b, key);
+    // NOT DRAWN (Hanz, 2026-10-17: "why do we have double values here its confusing"). It sits beside a box that already
+    // shows the same rate, greyed when it is the sheet's rule and in the box's own ink when typed; the span stays so the
+    // repaint and the checks still read the rate the chain priced with.
+    return '<span class="mkused" aria-hidden="true" data-mkrate="' + key + '">' + esc(f == null ? "" : B.pct(f)) + '</span>';
+  }
+
+  /** The Discount box's greyed figure: what Kyle's hard bid rule gives (the switch on), else 0. */
+  function discountRule(rb) {
+    return rb && rb.hard_bid_pct ? pctNum(-rb.hard_bid_pct) : "0";
+  }
+
+  /** The words beside the Hard bid switch: the rule while it is off, what it gives while it is on. */
+  function hardBidNote(rb) {
+    if (!adjOn("hard_bid")) return "4% off from $60,000, 2.5% on a local job from $13,000";
+    if (rb && rb.hard_bid_pct) return "the rule takes " + pctNum(-rb.hard_bid_pct) + "% off; a figure you type wins";
+    return "the rule gives nothing here: under $13,000, or not local and under $60,000";
+  }
+
+  /** One % box over a rule. `rule` is the figure the sheet's rule gives, shown greyed as the placeholder. */
+  function adjBox(key, rule) {
+    var label = { ship_pct: "Shipping", gp_pct: "GP", super_pct: "Superintendent and PTO", soft_pct: "Soft costs",
+                  discount_pct: "Discount", supplier_pct: "Supplier discount", polycrete_pct: "Poly-Crete discount" }[key] || key;
+    return '<span class="adjbox"><input data-adj="' + key + '" value="' + esc(adjTyped(key)) + '" placeholder="' +
+      esc(rule) + '" inputmode="decimal" aria-label="' + esc(label) + ' in percent; blank uses the sheet\'s rule">%' +
+      adjWarnHtml(key) + '</span>';
+  }
+
   /** Rows 64-82 of the Polish tab, in the same order, so an estimator who knows Kyle's sheet can
    *  read down it and recognise every line. Percentages are the sheet's own and not editable —
    *  the workbook locks these cells in the generated download for the same reason. Contingency is
@@ -2870,20 +3237,42 @@
         '<td class="pct">' + pctHtml + '</td>' +
         '<td class="amt" data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</td></tr>';
     };
-    var keyedPct = function (key) {
-      return '<span data-mkpct="' + key + '">' + esc(B.pct(b[key])) + '</span>';
+    var keyedPct = function (key, beside) {
+      // `beside`: a box shows this rate already, so the text is kept for the repaint and not drawn (see rateSpan).
+      return '<span' + (beside ? ' class="mkused" aria-hidden="true"' : '') + ' data-mkpct="' + key + '">' +
+        esc(B.pct(b[key])) + '</span>';
     };
 
     r += '<tr class="sub"><td>Subtotal</td><td class="pct"></td>' +
       '<td class="amt" data-mk="sub_total">' + esc(moneyAuto(b.sub_total)) + '</td></tr>';
 
-    r += '<tr class="band"><td colspan="3">Markup</td></tr>';
-    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct"), "gp");
-    // NO HARD BID ROW. Hanz, 2026-09-22: "remove all hard bids from the polish intake form. And
-    // also on the markups" -- the switch and its row came out with the condition itself; see
-    // bid-model.js's note on bid() for where the arithmetic went.
-    r += row("Superintendent &amp; PTO", esc(B.pct(b.super_pct != null ? b.super_pct : B.RATES.SUPER_PTO)), "super_pto");
-    r += row("Soft costs", esc(B.pct(b.soft_pct != null ? b.soft_pct : B.RATES.SOFT_COSTS)), "soft_costs");
+    r += '<tr class="band"><td colspan="3">Markup <span class="bandnote">grey is the sheet\'s own figure; ' +
+      'type over it to change it, clear the box to go back</span></td></tr>';
+    // THE RATES ARE BOXES OVER THE RULE (Hanz, 2026-10-16): blank is the sheet's own figure, shown greyed in the box,
+    // and a number typed is the rate (Kyle types over B73/B67, B75/B69 and B76/B70 on a share of his bids).
+    var rb = ruleBid();
+    r += row("GP <span class=\"note\">before the lines below</span>", keyedPct("gp_pct", true) + adjBox("gp_pct", pctNum(rb.gp_pct)), "gp");
+    // THE DISCOUNT LINE IS BACK (Hanz, 2026-10-16), reversing 2026-09-22: Kyle's "Hard Bid Discount" was his
+    // price-landing line on 21 of 41 bids in the two months before, mostly on jobs that were not hard bids. It is
+    // a plain discount now, a % or a $ (the $ wins), blank is none, and nothing turns it on by itself.
+    // The discount's amount is keyed `data-mkdisc`, not `data-mk`: a bid with nothing typed has no such line in its
+    // chain, and the review's every-money-cell-is-the-chain check stays exactly as strict as it was.
+    // HARD BID (Hanz, 2026-10-17): the job's switch sits on this line, because the line is what it moves. On, the box shows
+    // Kyle's rule greyed (4% from $60,000, 2.5% local from $13,000) and the rule prices; a figure typed in either box
+    // still wins. Shown only where the section's chain has the rule.
+    var hb = B.hardBidRuleOn(ROOT, activeTab);
+    r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span>' +
+      (hb ? '<div class="hbline">' + B.sliderHtml(adjOn("hard_bid"), 'data-adj-hb="1"', "Hard bid",
+              "Kyle's Hard bid answer for this sheet: his rule fills the discount until you type one") +
+            ' <span class="note" data-hbnote>' + esc(hardBidNote(rb)) + '</span></div>' : '') + '</td>' +
+      '<td class="pct">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", discountRule(rb)) + '</td>' +
+      '<td class="amt"><span class="adjbox adjamt">$<input data-adj="discount_amt" value="' + esc(adjTyped("discount_amt")) +
+      '" placeholder="0" inputmode="decimal" aria-label="Discount in dollars; it wins over the percentage">' +
+      adjWarnHtml("discount_amt") + '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span></td></tr>';
+    r += row("Superintendent &amp; PTO", rateSpan(b, "super_pct") +
+      adjBox("super_pct", pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO)), "super_pto");
+    r += row("Soft costs", rateSpan(b, "soft_pct") +
+      adjBox("soft_pct", pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS)), "soft_costs");
     r += '<tr><td>Contingency <span class="note">yours to set</span></td>' +
       '<td class="pct"></td><td class="amt"><input data-contingency value="' +
       esc(nv(M.contingency)) + '" inputmode="decimal"></td></tr>';
@@ -3006,9 +3395,62 @@
       var hi = parseInt(el.getAttribute("data-asmhint-for"), 10);
       el.innerHTML = pickHint(M.takeoff[hi], hi);
     });
+    // THE PREVAILING RATE IN FORCE (0 when off or empty), read once for every labor figure below.
+    var pwNow = B.prevailingApplied(M);
     document.querySelectorAll("[data-ratedflt-for]").forEach(function (el) {
       var row = M.labor[parseInt(el.getAttribute("data-ratedflt-for"), 10)];
-      paintDfltWarn(el, rateDefaultText(row));
+      paintDfltWarn(el, rateDefaultText(row, pwNow));
+    });
+    // A Rate box on a line that follows the prevailing wage is a derived number: it moves when the card's
+    // rate does, and goes back to the line's own rate when the card is switched off. A box somebody is typing
+    // in is never touched, and a typed rate is left as typed (laborRateBox gives the stored one back).
+    document.querySelectorAll('[data-lab][data-k="rate"]').forEach(function (el) {
+      if (document.activeElement === el) return;
+      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (!r) return;
+      var v = nv(B.laborRateBox(r, pwNow));
+      if (el.value !== v) el.value = v;
+    });
+    // The Prevailing wage card's own figures, live: each trade's sum and entry half wage, which trade the crew
+    // is paid, the header and the note.
+    var pwBlock = B.normalizePrevailing(M.prevailing) || B.normalizePrevailing({});
+    var pwSum = B.prevailingTotal(pwBlock);
+    var pwOn = !!(M.conditions || {}).prevailing_wage;
+    var pwOf = function (el) { return pwBlock.trades[parseInt(el.getAttribute("data-pw-i"), 10)]; };
+    document.querySelectorAll("[data-pw-total]").forEach(function (el) {
+      var sum = B.prevailingTotal(pwOf(el));
+      el.textContent = sum > 0 ? B.money2(sum) : "";
+      el.className = "costbox" + (sum > 0 ? "" : " empty");
+    });
+    document.querySelectorAll("[data-pw-entry]").forEach(function (el) {
+      var sum = B.prevailingTotal(pwOf(el));
+      el.textContent = sum > 0 ? B.money2(B.entryHalfWage(sum)) : "";
+      el.className = "costbox" + (sum > 0 ? "" : " empty");
+    });
+    document.querySelectorAll("[data-pw-trade]").forEach(function (el) {
+      var t = pwBlock.trades[parseInt(el.getAttribute("data-pw-trade"), 10)];
+      el.className = "pwtrade" + (t && t.key === pwBlock.trade ? " paid" : "");
+    });
+    document.querySelectorAll("[data-pw-pick]").forEach(function (el) {
+      var t = pwBlock.trades[parseInt(el.getAttribute("data-pw-pick"), 10)];
+      el.checked = !!t && t.key === pwBlock.trade;
+    });
+    document.querySelectorAll("[data-pw-sub]").forEach(function (el) { el.textContent = pwSubText(pwBlock, pwSum); });
+    document.querySelectorAll("[data-pw-note]").forEach(function (el) { el.textContent = pwNote(pwSum); });
+    document.querySelectorAll("[data-pw-card]").forEach(function (el) {
+      el.className = "tk pwcard" + (pwOn ? "" : " inert off");
+    });
+    // OPEN AND CLOSED, IN PLACE: the card's own switch is repainted here (its track and aria-checked) and its body
+    // shown or hidden, so pressing it never rebuilds the panel and the focus stays on the switch. The boxes inside
+    // keep what was typed while the body is hidden.
+    document.querySelectorAll("[data-pw-sw]").forEach(function (el) {
+      el.className = "mw-sw" + (pwOn ? " on" : "");
+      el.setAttribute("aria-checked", pwOn ? "true" : "false");
+    });
+    document.querySelectorAll("[data-pw-body]").forEach(function (el) { el.hidden = !pwOn; });
+    document.querySelectorAll("[data-pw-state]").forEach(function (el) { el.textContent = pwOn ? "on" : "off"; });
+    document.querySelectorAll("[data-pw-esc]").forEach(function (el) {
+      el.textContent = pwOn ? ", so a 5% escalation is added on the review step" : "";
     });
     document.querySelectorAll("[data-calcwarn]").forEach(function (el) {
       var parts = el.getAttribute("data-calcwarn").split(":");
@@ -3025,13 +3467,13 @@
     });
     document.querySelectorAll("[data-lcost-for]").forEach(function (el) {
       el.textContent = moneyAuto(B.laborCost(M.labor[parseInt(
-        el.getAttribute("data-lcost-for"), 10)]));
+        el.getAttribute("data-lcost-for"), 10)], pwNow));
     });
     // The Cost box in the card body shows the same figure as the header above it, so it repaints in
     // the same pass. Until it had its own hook only the header moved while the box kept the value
     // it was rendered with ($594 up top, $0 below). Class and text only: no rebuild, no lost focus.
     document.querySelectorAll("[data-lcostbox-for]").forEach(function (el) {
-      var c = B.laborCost(M.labor[parseInt(el.getAttribute("data-lcostbox-for"), 10)]);
+      var c = B.laborCost(M.labor[parseInt(el.getAttribute("data-lcostbox-for"), 10)], pwNow);
       el.textContent = moneyAuto(c);
       el.className = "costbox" + (c > 0 ? "" : " empty");
     });
@@ -3156,7 +3598,7 @@
       if (truckEl) truckEl.textContent = gypTruckText(gypNow);
     }
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
-    one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions)));
+    one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions, pwNow)));
     one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor, B.travelOpts(ROOT, activeTab)).total));
     one("[data-trv-how]", B.travelHow(M).text);
     one("[data-mk-persf]", perSfText(b));
@@ -3166,6 +3608,35 @@
     });
     // The GP band and the two tax rates move with the sub-total and the toggles, so the percentage
     // column is as computed as the money column is.
+    // The override boxes: each one's greyed rule (the rule moves with the job: GP steps down as the sub-total grows),
+    // and the warning beside a box that is typed but cannot be used. A box being typed in keeps its own text.
+    var adjEls = document.querySelectorAll("[data-adj]");
+    if (adjEls.length) {
+      var rb = ruleBid();
+      var ruleOf = {
+        ship_pct: pctNum(rb.ship_pct != null ? rb.ship_pct : B.RATES.SHIPPING), gp_pct: pctNum(rb.gp_pct),
+        super_pct: pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO),
+        soft_pct: pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS),
+        polycrete_pct: adjTyped("supplier_pct") || "0",
+        discount_pct: discountRule(rb)
+      };
+      document.querySelectorAll("[data-hbnote]").forEach(function (el) { el.textContent = hardBidNote(rb); });
+      adjEls.forEach(function (el) {
+        var k = el.getAttribute("data-adj");
+        if (Object.prototype.hasOwnProperty.call(ruleOf, k) && el.placeholder !== ruleOf[k]) el.placeholder = ruleOf[k];
+      });
+      document.querySelectorAll("[data-adjwarn]").forEach(function (el) {
+        var t = adjWarnText(el.getAttribute("data-adjwarn"));
+        el.textContent = t;
+        el.hidden = !t;
+      });
+    }
+    document.querySelectorAll("[data-mkrate]").forEach(function (el) {
+      var f = rateUsed(b, el.getAttribute("data-mkrate"));
+      el.textContent = f == null ? "" : B.pct(f);
+    });
+    document.querySelectorAll("[data-mkdisc]").forEach(function (el) { el.textContent = moneyAuto(b.hard_bid || 0); });
+    document.querySelectorAll("[data-disc-row]").forEach(function (el) { el.className = b.hard_bid ? "" : "off"; });
     document.querySelectorAll("[data-mkpct]").forEach(function (el) {
       el.textContent = B.pct(b[el.getAttribute("data-mkpct")]);
     });
@@ -3247,7 +3718,13 @@
 
   /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
    *  not the company rate (a blank one included), "" (hidden) while the two agree. */
-  function rateDefaultText(row) {
+  function rateDefaultText(row, pw) {
+    // WHILE A PREVAILING WAGE IS IN FORCE it is every crew line's default (Travel Labor keeps its own):
+    // a line that follows it reads the same as the default and says nothing, and a rate typed over it
+    // says "Default value: <the prevailing rate>" -- the way back is to retype it or clear the box.
+    if (B.num(pw) > 0 && !B.isTravelRow(row)) {
+      return dfltWarnText(B.num(B.laborRateOf(row, pw)) !== B.num(pw), B.money2(pw));
+    }
     // A line the Labor Calculator filled carries its own default rate (the line's, else the
     // company's at the time) -- warn against THAT, so an untouched calculator rate never shows
     // "Default value" and a changed one names the number it started from.
@@ -3305,7 +3782,9 @@
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
-    var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]");
+    // data-cond is the job's condition switch, the Prevailing wage card's among them.
+    var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") ||
+      t.closest("[data-cond]") || t.closest("[data-adj-bulk]") || t.closest("[data-adj-hb]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -3395,6 +3874,20 @@
     }
     var addLab = t.closest("[data-add-lab]");
     if (addLab) { openLaborPicker(addLab); return; }
+    // + Add a trade, and the x on a trade the estimator added. The panel is redrawn (a box comes or goes), and a
+    // new trade's name box takes the focus, since naming it is the first thing it needs.
+    if (t.closest("[data-pw-add]")) {
+      var at = addPrevailingTrade();
+      changed(true);
+      var nameBox = document.querySelector('[data-pw="label"][data-pw-i="' + at + '"]');
+      if (nameBox && nameBox.focus) nameBox.focus();
+      return;
+    }
+    var pwDel = t.closest("[data-pw-del]");
+    if (pwDel) {
+      if (removePrevailingTrade(parseInt(pwDel.getAttribute("data-pw-del"), 10))) changed(true);
+      return;
+    }
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       if (M.labor.length <= 1) return;
@@ -3408,6 +3901,30 @@
     // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
     // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
     // that has been flipped back is indistinguishable from one never touched.
+    // THE BULK DISCOUNT SWITCH (an Epoxy section's). The material and every figure under it reprice in place, and the
+    // switch is repainted where it is, so the focus stays on it and Space can press it again.
+    var bulkSw = t.closest("[data-adj-bulk]");
+    if (bulkSw) {
+      setAdjust("bulk", !adjOn("bulk"));
+      var onNow = adjOn("bulk");
+      bulkSw.className = "mw-sw" + (onNow ? " on" : "");
+      bulkSw.setAttribute("aria-checked", onNow ? "true" : "false");
+      if (bulkSw.lastChild && bulkSw.lastChild.nodeType === 3) bulkSw.lastChild.nodeValue = onNow ? "On" : "Off";
+      changed(false);
+      return;
+    }
+    // THE HARD BID SWITCH on the Discount line: the rule's figure goes into the box (greyed) and the price, and the
+    // words beside the switch say what it gives. In place, as the Bulk switch is: the repaint moves the note, the box's
+    // grey figure and the line, and the focus stays on the switch.
+    var hbSw = t.closest("[data-adj-hb]");
+    if (hbSw) {
+      setAdjust("hard_bid", !adjOn("hard_bid"));
+      var hbNow = adjOn("hard_bid");
+      hbSw.className = "mw-sw" + (hbNow ? " on" : "");
+      hbSw.setAttribute("aria-checked", hbNow ? "true" : "false");
+      changed(false);
+      return;
+    }
     var gypIso = t.closest("[data-gyp-iso]");
     if (gypIso) {
       var isoSec = gypOpen();
@@ -3456,7 +3973,9 @@
       if (M.conditions_shown && Object.prototype.hasOwnProperty.call(M.conditions_shown, ck)) {
         delete M.conditions_shown[ck];
       }
-      changed(true);
+      // THE PREVAILING WAGE CARD's own switch repaints in place (repaintNumbers): opening or closing the card must
+      // not rebuild the panel and drop the focus off the switch. Every other condition switch rebuilds as it did.
+      changed(cond.getAttribute("data-pw-sw") === null);
       return;
     }
   });
@@ -3668,6 +4187,14 @@
       changed(false);
       return;
     }
+    // AN OVERRIDE BOX. `changed(false)`: the chain reprices and repaintNumbers refreshes the amounts, the other boxes'
+    // greyed rules and the warnings in place, so the caret stays in the box being typed in.
+    var adjKey = el.getAttribute("data-adj");
+    if (adjKey !== null) {
+      setAdjust(adjKey, el.value);
+      changed(false);
+      return;
+    }
     // `changed(false)` like contingency: the chain reprices and repaintNumbers refreshes every
     // keyed cell, without the full rebuild that would take the caret out of the box.
     if (el.matches("[data-fees]")) {
@@ -3711,6 +4238,15 @@
     if (cc !== null) {
       if (!M.cond_cov || typeof M.cond_cov !== "object") M.cond_cov = {};
       M.cond_cov[cc] = el.value;
+      changed(false);
+      return;
+    }
+
+    // THE PREVAILING WAGE CARD's Rate and Fringes. `changed(false)`: the sum, the entry half wage and every
+    // labor line that follows the rate repaint in place, so the caret stays in the box being typed in.
+    var pwField = el.getAttribute("data-pw");
+    if (pwField !== null) {
+      setPrevailing(pwField, el.value, parseInt(el.getAttribute("data-pw-i"), 10));
       changed(false);
       return;
     }
@@ -3793,7 +4329,10 @@
           refocus('[data-lab="' + j + '"][data-k="guys"]');
           return;
         }
-        M.labor[j][k] = el.value;
+        // A typed RATE goes in through B.setLaborRate: a rate typed to the line's own default is marked as typed,
+        // so a prevailing wage in force does not take it back (the number alone cannot say it was typed).
+        if (k === "rate") B.setLaborRate(M.labor[j], el.value);
+        else M.labor[j][k] = el.value;
       }
       changed(false);
       return;
@@ -3832,6 +4371,14 @@
       changed(true);
       return;
     }
+    // THE PREVAILING WAGE CARD's "Labor lines use this rate": the trade whose rate the labor lines follow. Every
+    // figure that moves with it (the lines, the header, the note) repaints in place, so the radio keeps focus.
+    var pwPick = el.getAttribute("data-pw-pick");
+    if (pwPick !== null) {
+      if (el.checked) setPrevailing("pick", el.value, parseInt(pwPick, 10));
+      changed(false);
+      return;
+    }
     // HOURS A DAY on a calculator-filled labor line is a <select>, which the "input" handler above
     // skips (it only takes <input>); it reprices here, the way the takeoff unit select does.
     var hl = el.getAttribute("data-lab");
@@ -3854,9 +4401,12 @@
     if (blankKey === "rate" && el.getAttribute("data-lab") !== null && String(el.value).trim() === "") {
       var rateRow = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
       if (rateRow && B.laborRateOf(rateRow) > 0) {
+        // The line's OWN rate goes back into the row (what turning the prevailing wage off restores), and
+        // the box shows what the line prices at now: the prevailing rate while the card has one in force.
         var back = B.laborRateOf(rateRow);
         rateRow.rate = back;
-        el.value = String(back);
+        delete rateRow.rate_typed;     // the line follows its default again (the prevailing rate, while one is in force)
+        el.value = String(B.laborRateBox(rateRow, B.prevailingApplied(M)));
         changed(false);
         return;
       }
@@ -3866,6 +4416,7 @@
     if (ti === null) return;
     var i = parseInt(ti, 10);
     var k = el.getAttribute("data-k");
+    if (k === "measurement") { askMeasure(i); return; }
     // No `unit` branch: a takeoff row's unit is read-only now (it comes from Items & Assemblies),
     // so nothing on the page fires a change for it.
     if (k === "pick") {
@@ -3888,6 +4439,58 @@
       changed(false);
     }
   });
+
+  // A MEASUREMENT CHANGED BY ACCIDENT IS ASKED ABOUT (Hanz, 2026-10-17: "add a pop up when we accidentally edit the
+  // measurement"). The takeoff as it stood when the box was entered is kept; leaving the box (Tab, a click away or
+  // Enter) with a different number over one that was already there asks whether to keep it. "Put back" restores that
+  // takeoff whole, because the keystrokes moved more than the one number: a floor's coats follow the floor. A first
+  // number typed into an empty box is never asked about, and neither is retyping the same number.
+  var measureStart = null;
+  document.addEventListener("focusin", function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute || el.getAttribute("data-k") !== "measurement") return;
+    var ti = el.getAttribute("data-tk");
+    if (ti === null) return;
+    measureStart = { i: parseInt(ti, 10), rows: JSON.parse(JSON.stringify(M.takeoff || [])) };
+  });
+
+  function measureWords(v, unit) {
+    return v > 0 ? B.fmtSf(v) + (unit ? " " + unit : "") : "nothing";
+  }
+
+  function askMeasure(i) {
+    var start = measureStart;
+    measureStart = null;
+    if (!start || start.i !== i || !start.rows[i] || !M.takeoff[i]) return;
+    var was = B.num(start.rows[i].measurement);
+    var now = B.num(M.takeoff[i].measurement);
+    if (!(was > 0) || was === now) return;
+    if (!TW.confirmDanger || (TW.modalOpen && TW.modalOpen())) return;
+    var unit = M.takeoff[i].unit || "";
+    var rows = start.rows;
+    // After the focus has finished moving, so it goes back to wherever the estimator was going.
+    setTimeout(function () {
+      var back = document.activeElement;
+      TW.confirmDanger({
+        tone: "warn", icon: "pencil", title: "Change this measurement?",
+        name: rowName(M.takeoff[i]) || "this row", before: "Row " + (i + 1) + ", ",
+        after: ", goes from " + measureWords(was, unit) + " to " + measureWords(now, unit) + ".",
+        detail: "Every price on the bid follows it.",
+        cancelText: "Put back " + measureWords(was, unit), confirmText: "Keep " + measureWords(now, unit),
+        focus: "container", dismiss: "explicit"
+      }).then(function (keep) {
+        if (!keep) {
+          Array.prototype.splice.apply(M.takeoff, [0, M.takeoff.length].concat(rows));
+          document.querySelectorAll('[data-tk][data-k="measurement"]').forEach(function (box) {
+            var row = M.takeoff[parseInt(box.getAttribute("data-tk"), 10)];
+            if (row) box.value = row.measurement == null ? "" : row.measurement;
+          });
+          changed(false);
+        }
+        try { if (back && back !== document.body && document.contains(back)) back.focus(); } catch (err) { /* gone */ }
+      });
+    }, 0);
+  }
 
   // ── boot ────────────────────────────────────────────────────────────────────
   /** The estimator's own default labor lines, out of Library -> Default Items & Assemblies.

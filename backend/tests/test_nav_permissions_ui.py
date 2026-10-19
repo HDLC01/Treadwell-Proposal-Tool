@@ -65,12 +65,23 @@ def _hrefs(entries):
 
 # ── the menu ──────────────────────────────────────────────────────────────────
 @needs_node
+def test_the_tool_row_stays_lit_on_its_intake_and_estimate(ran):
+    """Estimating Tool v2 opens on its board since 2026-10-15, and its two steps are still the tab you
+    are in. Exactly one row is lit on each page, and no other row picked up the extra pages."""
+    lit = ran["litOn"]
+    for page in ("/v2-board.html", "/polish-intake.html", "/polish-estimate.html"):
+        assert lit[page] == ["/v2-board.html"], (page, lit[page])
+    assert lit["/polish-estimates.html"] == ["/polish-estimates.html"]
+    assert lit["/projects.html"] == ["/projects.html"]
+
+
+@needs_node
 def test_a_denied_path_leaves_that_roles_menu(ran):
     """The policy denies members the Lead Inbox and the Polish beta, and nothing else."""
     before, after = _hrefs(ran["menusOpen"]["user"]), _hrefs(ran["menus"]["user"])
-    assert set(before) - set(after) == {"/leads.html", "/polish-intake.html"}, (
+    assert set(before) - set(after) == {"/leads.html", "/v2-board.html"}, (
         "member menu went from %s to %s" % (before, after))
-    assert after == [h for h in before if h not in ("/leads.html", "/polish-intake.html")], (
+    assert after == [h for h in before if h not in ("/leads.html", "/v2-board.html")], (
         "filtering the menu also reordered it")
 
 
@@ -80,7 +91,7 @@ def test_it_stays_in_every_other_roles_menu(ran):
     passes any test that only looks at the role that was denied something."""
     assert "/leads.html" in _hrefs(ran["menus"]["admin"])
     assert "/leads.html" in _hrefs(ran["menus"]["super_admin"])
-    assert "/polish-intake.html" in _hrefs(ran["menus"]["admin"])
+    assert "/v2-board.html" in _hrefs(ran["menus"]["admin"])
     # And the ADMIN's own denial is the one missing from the admin menu, nobody else's.
     assert "/history.html" not in _hrefs(ran["menus"]["admin"])
     assert "/history.html" in _hrefs(ran["menus"]["user"])

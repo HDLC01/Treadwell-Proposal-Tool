@@ -228,6 +228,6 @@ def test_the_link_is_marked_beta_the_way_the_sidebar_marks_its_own(anchor):
     """
     assert ">BETA<" in anchor, "the toolbar link is not marked BETA"
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    i = auth.index('navItem("/polish-intake.html"')
+    i = auth.index('navItem("/v2-board.html"')       # the tool's row opens on its board since 2026-10-15
     assert "BETA" in auth[i:i + 120], (
         "the sidebar entry lost its BETA tag; the two doors should agree")

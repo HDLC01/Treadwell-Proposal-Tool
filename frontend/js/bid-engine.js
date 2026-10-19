@@ -419,6 +419,45 @@
 
   function isBlank(v) { return v === null || v === undefined || v === ""; }
 
+  /** THE ESTIMATOR'S OVERRIDES for one tab, checked (Hanz, 2026-10-16: "all the edge cases"). Kyle types over his own
+   *  rules on a real share of bids (2026-08-16 to 10-16: a discount on 21 of 41, soft or super % on 4, GP on 1,
+   *  shipping on 1), so each of these replaces the rule's figure when it is a number, and is absent otherwise. They
+   *  arrive as FRACTIONS: bid-model.js chainAdjust turns the Review step's "3" into 0.03.
+   *
+   *  A RATE must be a finite fraction from 0 up to, but not including, 1: GP divides by (1 - gp), so 1 or more is no
+   *  price at all, and a negative markup or shipping is not something the sheet's cells are ever typed with. A
+   *  DISCOUNT is taken as its size, whichever way it is signed (the sheet holds it negative; the box takes it either
+   *  way): the line is always money given back. Its percentage is below 1 for the same reason a rate is (100% off is
+   *  a free floor, not a bid), and one that gives back the whole bid is refused below. The dollar figure, when there is one, wins over the percentage:
+   *  the sheet's D-cell, typed, replaces its own formula. Anything that is not a usable number throws, so a bad box is
+   *  named rather than priced as if it were blank. */
+  function adjustOf(raw) {
+    if (raw === null || raw === undefined) return {};
+    if (typeof raw !== "object") throw new BidEngineError("adjust must be an object of the estimator's overrides");
+    // Each key read and written by its own name: a key that came from data never becomes a property (the rule
+    // test_bid_engine.py holds this file to).
+    function fraction(name, v) {
+      if (isBlank(v)) return undefined;
+      var n = Number(v);
+      if (!isFinite(n)) throw new BidEngineError("the " + name + " override is not a number: " + String(v));
+      if (name === "discount_pct") n = Math.abs(n);
+      if (n < 0 || n >= 1) throw new BidEngineError("the " + name + " override must be from 0 to under 100%, not " + n);
+      return snap(n);
+    }
+    var out = {
+      ship_pct: fraction("ship_pct", raw.ship_pct), gp_pct: fraction("gp_pct", raw.gp_pct),
+      super_pct: fraction("super_pct", raw.super_pct), soft_pct: fraction("soft_pct", raw.soft_pct),
+      discount_pct: fraction("discount_pct", raw.discount_pct), discount_amt: undefined
+    };
+    if (!isBlank(raw.discount_amt)) {
+      var amt = Number(raw.discount_amt);
+      if (!isFinite(amt)) throw new BidEngineError("the discount_amt override is not a number: " + JSON.stringify(raw.discount_amt));
+      out.discount_amt = snap(Math.abs(amt));
+    }
+    // An override that was not given is ABSENT, not undefined, so `has1` below can tell the two apart.
+    return JSON.parse(JSON.stringify(out));
+  }
+
   function unpriceable(profile, e) {
     return { priceable: false, profile: profile.stamp, line: e.line, reason: e.reason, total: null };
   }
@@ -436,6 +475,11 @@
    *    bond_pct             a bond rate typed for the job (a profile with `bondInput`)
    *    laborRate, lodgingRate, perDiemRate   override the defaults for the lodging nights
    *    gyp, extras, sand, soundMat, soundMatRolls, truckload   a profile with shippingRule "gyp-split"
+   *    patch                the patch line's dollars (Polish!D17), taken into the material on a `polishPatch` profile
+   *    adjust               what the estimator typed OVER the sheet's rules for this tab (see adjustOf), all optional:
+   *                           ship_pct, gp_pct, super_pct, soft_pct   fractions that replace the rule's rate
+   *                           discount_pct                           a fraction off (0.03 is 3% off), Kyle's B74/B68
+   *                           discount_amt                           dollars off, Kyle's D74/D68 typed; wins over the %
    *
    *  `rates` is what compileRates returned for this profile, or nothing for the profile's own built-ins. The
    *  answer has one key per line of the chain (snake_case, the keys bid-model's markupChain has always
@@ -453,6 +497,8 @@
     var cond = input.conditions || {};
     var local = (cond.local === undefined || cond.local === null) ? true : !!cond.local;
     var hardBidOn = !!q.hasHardBid && !!cond.hard_bid;
+    var adj = adjustOf(input.adjust);
+    var has1 = function (k) { return Object.prototype.hasOwnProperty.call(adj, k); };
     var sf = num(input.sf);
     var state = { material: 0, subTotal: 0, local: local, hardBid: hardBidOn, base: 0 };
 
@@ -475,9 +521,13 @@
           roundUp((extras + (rolls < truckload ? soundMat : 0)) * rate("ship_other_pct"));
         material_total = material + material_escalation + shipping;
       } else {
-        material = roundUp(input.material);
+        // THE PATCH LINE (Polish!D17) is inside D31's round-up, on a profile that carries it (`polishPatch`). Every
+        // other profile, and every caller that passes no `patch`, buys exactly the material it always did.
+        // Only a POLISH-layout profile takes it: every profile inherits the quirk from the base Polish tab, and an Epoxy,
+        // Seal or Gyp section prices its own patch in its takeoff module, so a stray `patch` there would count twice.
+        material = roundUp(num(input.material) + (q.polishPatch && profile.layout === "polish" ? num(input.patch) : 0));
         state.material = material;
-        ship_pct = rate("ship_pct");
+        ship_pct = has1("ship_pct") ? adj.ship_pct : rate("ship_pct");
         shipping = roundUp(material * ship_pct);
         overage = q.hasOverage ? roundUp(input.overage) : 0;
         material_total = material + overage + shipping;
@@ -521,19 +571,37 @@
       var fees = roundUp(num(input.fees));
 
       // ── gross profit: a margin, divided up and the cost taken back off ──
-      var gp_pct = rate("gp");
+      var gp_pct = has1("gp_pct") ? adj.gp_pct : rate("gp");
       var gp = roundUp((sub_total + sales_tax + fees) / (1 - gp_pct))
              - roundUp(sub_total + sales_tax + (q.gpSubtractionIncludesFees ? fees : 0));   // odd rule 4: Epoxy leaves fees out
-      var hard_bid_pct = 0, hard_bid = 0;
-      if (hardBidOn) {
+      // THE DISCOUNT LINE (Kyle's "Hard Bid Discount", Epoxy B74/D74, Polish B68/D68): `=ROUNDUP(SUM(sub,gp)*pct,0)`
+      // with a negative pct, ROUNDUP going away from zero. The estimator's typed dollars or percentage replace the
+      // profile's own hard-bid rule, on any tab, whether or not the job is a hard bid: it is how Kyle lands a price.
+      var hard_bid_pct = 0, hard_bid = 0, discount_refused = false;
+      if (has1("discount_amt")) {
+        hard_bid = adj.discount_amt ? -adj.discount_amt : 0;   // never -0, which prints as "-$0"
+        hard_bid_pct = null;
+      } else if (has1("discount_pct")) {
+        hard_bid_pct = -adj.discount_pct;
+        hard_bid = adj.discount_pct === 0 ? 0 : roundUp((sub_total + gp) * hard_bid_pct);
+      }
+      // A DISCOUNT BIGGER THAN WHAT IT COMES OFF is refused, not priced. It is money given back out of the labor and the
+      // margin (the remodel tax is charged on exactly those, with the discount inside), never out of the materials: one
+      // larger than the labor, its burden and escalation, the tooling, the travel and the GP together would make a
+      // negative remodel tax, and past that a negative total, and the proposal would print it. The line is left out (the
+      // bid prices as if the box were blank) and `discount_refused` says so, for the Review step to name.
+      if (hard_bid !== 0 && -hard_bid > labor + escalation + burden + tooling + travel + gp) {
+        hard_bid = 0; hard_bid_pct = 0; discount_refused = true;
+      }
+      if (!has1("discount_amt") && !has1("discount_pct") && hardBidOn) {
         hard_bid_pct = rate("hard_bid");
         hard_bid = roundUp((sub_total + gp) * hard_bid_pct);
       }
       var contingency = num(input.contingency);
 
-      var super_pct = rate("super_pto");
+      var super_pct = has1("super_pct") ? adj.super_pct : rate("super_pto");
       var super_pto = roundUp((sub_total + gp + hard_bid + contingency + sales_tax + fees) * super_pct);
-      var soft_pct = rate("soft_costs");
+      var soft_pct = has1("soft_pct") ? adj.soft_pct : rate("soft_costs");
       var soft_costs = roundUp((sub_total + gp + hard_bid + super_pto + contingency + sales_tax + fees) * soft_pct);
 
       // ── the remodel tax: the labor side and the markups, never the materials ──
@@ -545,7 +613,10 @@
       var remodelBase = labor + escalation + burden;
       if (q.remodelBase === "sheet") remodelBase += tooling + travel;
       remodelBase += gp;
-      if (q.hasHardBid) remodelBase += hard_bid;
+      // The discount is labor-side money given back, so the remodel tax is on what is left (Epoxy D81 sums D73:D77,
+      // Polish D75 sums D67:D71, both with the discount cell inside). A profile with no hard-bid rule only ever has
+      // one here when the estimator typed it, so every bid priced before overrides existed is unchanged.
+      if (q.hasHardBid || hard_bid !== 0) remodelBase += hard_bid;
       remodelBase += super_pto + soft_costs + contingency + fees;
       var remodel_tax = roundUp(remodelBase * remodel_pct);
       var taxes = sales_tax + remodel_tax;
@@ -574,6 +645,7 @@
         remodel_pct: remodel_pct, remodel_tax: remodel_tax, taxes: taxes,
         fees: fees, bond: bond, bond_pct: bond_pct, fees_and_bond: fees_and_bond,
         total: total,
+        discount_refused: discount_refused,
         sf: sf,
         // Null, not 0, without an area: 0 would read as "free" rather than "not known yet".
         per_sf: sf > 0 ? total / sf : null
@@ -619,7 +691,7 @@
   return {
     BidEngineError: BidEngineError, UnpriceableError: UnpriceableError,
     resolveProfile: resolveProfile, forTab: forTab,
-    priceChain: priceChain, combine: combine, lodgingNights: lodgingNights,
+    priceChain: priceChain, combine: combine, lodgingNights: lodgingNights, adjustOf: adjustOf,
     compileRates: compileRates, ruleNumber: ruleNumber,
     snapshotRates: snapshotRates, ratesOf: ratesOf, SNAPSHOT_VERSION: SNAPSHOT_VERSION, UNWIRED: UNWIRED,
     rateNumber: rateNumber, defaultNumber: defaultNumber, bandsOf: bandsOf,
