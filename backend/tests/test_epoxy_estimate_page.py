@@ -100,6 +100,30 @@ def test_the_labor_step_edits_the_epoxy_crew_and_the_price_follows(ran):
     assert lab["savedDays"] == "9" and lab["rootLaborUntouched"] == 4, "the day went to the Epoxy section, not the root"
 
 
+def test_the_distance_fills_the_epoxy_sections_travel_labor_on_its_own_crew(ran):
+    """THE DISTANCE FILLS TRAVEL LABOR since 2026-10-20 (Hanz: "Every work day (Kyle's sheet math)", Kyle's Epoxy row 52). An Epoxy
+    job's Polish root is off and the Epoxy section carries the job's travel, so the row the answer fills is Epoxy's own, with Epoxy's
+    own crew for the man-days: 190 miles is 6.5 hours (a 380 mile round trip at 60 mph), and 4 guys for 12 days is 48 man-days, so
+    the line is 48 x 6.5 x $33. The root's own Travel row, which goes with the off root, is not the job's and is left alone.
+
+    Mutation: fill the model's own labor and not the carrier section's (BREAKS below)."""
+    t = ran["travelFill"]
+    b = t["before"]
+    assert b["carries"] is True, "the Epoxy section carries the job's travel, so its Labor step draws the distance"
+    assert (b["row"]["days"], b["row"]["hours_seed"], b["row"]["guys_auto"]) == (6.5, 6.5, True)
+    assert (b["hoursBox"], b["guysBox"]) == ("6.5", "0"), "the answer is in and no crew is typed yet"
+    a = t["after"]
+    assert (a["row"]["guys"], a["guysBox"], a["manDays"], a["cost"]) == (48, "48", 48, 48 * 6.5 * 33)
+    assert a["note"]["hidden"] is False and a["note"]["text"].startswith("6.5 hrs: a 380 mile round trip at 60 mph from the Olathe office.")
+    assert t["tabs"] == ["Epoxy"] and t["rootKind"] == "off" and t["distance"]["miles"] == 190
+    s = t["savedEpoxyTravel"]
+    assert (s["days"], s["hours_seed"], s["guys"], s["guys_auto"]) == (6.5, 6.5, 48, True), "the save keeps the figures on the Epoxy section"
+    # The control (the same job and crew with no distance answer at all) leaves the Epoxy row empty, so the fill above is the answer's;
+    # and the off root's Travel row is the same with the answer as without it.
+    assert t["controlEpoxyTravel"]["days"] == "" and "hours_seed" not in t["controlEpoxyTravel"]
+    assert t["rootTravelUntouched"] is True, t["rootTravel"]
+
+
 def test_a_row_added_beside_a_measured_one_shares_the_floor_in_a_section_other_than_the_root(ran):
     s = ran["sameFloor"]
     assert s["added"] == {"sameFloor": True, "measurement": 6000, "unit": "SF"}
@@ -282,6 +306,9 @@ BREAKS = {
         "js/bid-model.js", "      get: function (target, key) { return Reflect.get(ownerOf(target, key), key); },",
         "      get: function (target, key) { return Reflect.get(target, key); },",
         lambda r: r["labor"]["after"] == r["labor"]["before"] or "error" in r),
+    "the distance fills the model's own Travel Labor row and not the carrier section's": (
+        "js/bid-model.js", "        holder = carrier.section;", "        holder = model;",
+        lambda r: r["travelFill"]["before"]["row"]["days"] != 6.5 or r["travelFill"]["rootTravelUntouched"] is not True),
     "the sections of an epoxy job leave the root on": (
         "js/bid-model.js", '      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");',
         "      out = e.root ? out : withSectionKind(out, e.tab, \"off\");",

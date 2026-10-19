@@ -179,8 +179,9 @@
   // to B5, so his own formula reads it as not-hard-bid, which is the same outcome.
 
   /** The hint under a Guys / Lodging / Per Diem box: one wording, drawn by the card builders and
-   *  repainted in place as the tasks above change. A box on auto (a bid saved before 2026-10-12)
-   *  says the figure IS the man-days. Any other box says what the sheet would count, as text and
+   *  repainted in place as the tasks above change. A box on auto (a bid saved before 2026-10-12, or
+   *  Travel Labor's Guys on a job the distance sent far, 2026-10-20) says the figure IS the
+   *  man-days. Any other box says what the sheet would count, as text and
    *  never as a value: the box itself is the estimator's to type. `manDays` is travelManDays of the
    *  rows; left out, the hint says only that the box is typed. */
   function manDaysHint(auto, manDays) {
@@ -803,10 +804,11 @@
 
   /** A NEW bid's labor row with its quantities empty: no guys, no days or hours, and not on auto
    *  (guys_auto false is what stops syncAutoGuys writing the man-days into an hours row), and no
-   *  hours_seed (the distance answer no longer fills the hours). The library row's own guys_auto
-   *  stays what the library says (libraryLaborRow is one faithful mapping); it is this step, the
-   *  one that opens a new bid, that decides the man-days fill nothing. The rate and the rest of the
-   *  row stay. A copy; the row handed in is never touched. */
+   *  hours_seed (nothing has been written yet: a far distance answer writes Travel Labor's hours and
+   *  this marker later, followDistanceHours). The library row's own guys_auto stays what the library
+   *  says (libraryLaborRow is one faithful mapping); it is this step, the one that opens a new bid,
+   *  that decides the man-days fill nothing -- until a far distance answer puts Travel Labor's guys on
+   *  them (2026-10-20). The rate and the rest of the row stay. A copy; the row handed in is never touched. */
   function laborRowStartsEmpty(row) {
     var out = copyInto({}, row);
     out.guys = ""; out.days = ""; out.guys_auto = false;
@@ -853,6 +855,8 @@
    *  `conditions.local` stays on the model -- it is still what Polish!B4 / Epoxy!B4 are written from
    *  -- but it is DERIVED now: under 70 miles is local. At 70 or more the three travel lines come
    *  on (Travel Labor by un-graying, Lodging and Per Diem by switching on); under 70 they go gray.
+   *  Travel Labor is also FILLED on a far job, its hours from the miles and its guys from the
+   *  crew's man-days (followDistanceHours, below); Lodging and Per Diem are only switched.
    *
    *  A HAND FLIP WINS. A Lodging / Per Diem line the estimator flipped (`hand`) is never moved by a
    *  distance answer in either direction -- the same rule normalizeTravel's note records.
@@ -911,16 +915,50 @@
       var l = model.travel[k];
       if (l && l.hand !== true) l.enabled = far;
     });
+    // Travel Labor's own two boxes follow the answer as well (Hanz, 2026-10-20).
+    followDistanceHours(model, miles);
     return model;
   }
 
-  /** THE DISTANCE NO LONGER FILLS THE DRIVE HOURS (Hanz, 2026-10-12). From 2026-10-06 the distance
-   *  answer wrote a round trip at DRIVE_MPH into a new bid's Travel Labor hours (150 mi -> 5). It
-   *  does not any more: "nights, days, guys and hours should have nothing when it starts". The
-   *  distance still decides local or travel (the lines gray or come on); the hours are typed.
-   *  driveHoursFor stays as the pure arithmetic (a round trip to the half hour); nothing on a bid
-   *  calls it. A bid saved with the old `hours_seed` marker keeps the hours it was saved with, and
-   *  travelHow still words them as the round trip they were. */
+  /** THE DISTANCE FILLS TRAVEL LABOR AGAIN, ON A JOB 70 MILES OR MORE OUT (Hanz, 2026-10-20: "For
+   *  jobs outside the local scope we need to automatically turn on travel time ... it would auto
+   *  calculate based on the miles from the treadwell office ... its just an estimate though").
+   *  Asked how, he chose "Every work day (Kyle's sheet math)".
+   *
+   *  THIS REVERSES 2026-10-12 FOR THAT ONE LINE. From 2026-10-06 the answer wrote a round trip at
+   *  DRIVE_MPH into a new bid's Travel Labor hours (150 mi -> 5); on 2026-10-12 it was stopped, with
+   *  everything else a new bid opened with ("nights, days, guys and hours should have nothing when it
+   *  starts"). A far answer fills Travel Labor again, and only Travel Labor: Lodging and Per Diem still
+   *  open empty and are typed, and a job under 70 miles still opens with nothing.
+   *
+   *  KYLE'S ROW (Polish row 44, Epoxy row 52): Guys = (A37*B37)+(A38*B38)+... -- the crew's MAN-DAYS,
+   *  every guy on every work day -- Hours typed beside his note "Drive Time: ?", Rate $33, and the
+   *  line is guys x hours x rate (backend/pricing.py: man_days * travel_hours * labor_rate). A far
+   *  answer fills the sheet's two boxes the way he reads them:
+   *    Hours  driveHoursFor(miles): one round trip at DRIVE_MPH, to the half hour (190 mi -> 6.5);
+   *    Guys   the crew's man-days (guys_auto on, so travelManDays keeps them in step as the crew is typed).
+   *  190 miles with 4 guys for 12 days is 48 man-days x 6.5 hours x $33 = $10,296.
+   *
+   *  A TYPED FIGURE ALWAYS WINS. The hours the tool wrote are remembered on the row (`hours_seed`), so
+   *  a later answer moves only an UNTOUCHED figure: blank, or still the very number the tool wrote
+   *  (driveHoursAreTools). Hours typed in the box arrive as text and the tool's own are a number, so a
+   *  figure somebody typed is never mistaken for the tool's, even when it spells the same digits.
+   *  Guys are the estimator's once typed (guys_auto false and a number in the box). Under 70 miles, or
+   *  with the miles cleared, the figure the tool wrote goes back to empty and the line grays as it
+   *  always did; a typed one stays. The guys keep following the man-days either way: a derived count
+   *  that prices nothing without hours.
+   *
+   *  A SAVED BID NEVER MOVES ON OPEN. Nothing here runs when a bid opens. It runs when an answer is
+   *  APPLIED in a session (applyDistance, clearDistance): the estimator typing miles, asking for the
+   *  lookup, or a NEW bid's own lookup after its first paint. A saved bid whose Travel Labor is blank is
+   *  filled only when somebody does one of those.
+   *
+   *  WHERE IT LANDS. The job's Travel Labor row lives on the section that carries the job's travel
+   *  (travelCarrier), so that is the row filled, with that section's own crew for the man-days. Pass
+   *  the WHOLE model: a section view (sectionView) answers `labor` from the section on show, which is
+   *  not the carrier's when another section is open. A Gyp carrier is left alone: its crew is priced by
+   *  the hour in ten hour days, so there are no man-days to follow (travelManDays skips an hours row),
+   *  and the Gyp sheet works its own drive time (js/gyp-takeoff.js sheetHours, quoted on its Labor step). */
   var DRIVE_MPH = 60;
   function driveHoursFor(miles) {
     var m = milesOrNull(miles);
@@ -928,8 +966,97 @@
     return Math.ceil((2 * m / DRIVE_MPH) * 2) / 2;
   }
 
+  /** The job's Travel Labor row and the rows beside it (the man-days are theirs), or null when the bid
+   *  has none to fill: no Travel Labor row, or a Gyp carrier. A one-section bid is its own carrier. */
+  function travelLaborHeld(model) {
+    if (!isObject(model)) return null;
+    var holder = model, layout = "polish";
+    if (isObject(model.tabs)) {
+      try {
+        var carrier = sectionOf(model, travelCarrier(model));
+        holder = carrier.section;
+        layout = carrier.layout;
+      } catch (err) { holder = model; }
+    }
+    if (layout === "gyp") return null;
+    var rows = holder && holder.labor instanceof Array ? holder.labor : [];
+    for (var i = 0; i < rows.length; i++) {
+      if (isTravelRow(rows[i]) && rows[i].unit === "hours") return { row: rows[i], rows: rows };
+    }
+    return null;
+  }
+
+  /** Is the figure in this Travel row's Hours box the one the distance wrote? `hours_seed` holds what
+   *  the tool wrote, and the figure still being that number is what makes it the tool's to move. A
+   *  number on both sides: what the estimator types in the box is text, so it is never taken for the
+   *  tool's, whatever digits it spells. */
+  function driveHoursAreTools(row) {
+    return !!row && typeof row.days === "number" && typeof row.hours_seed === "number" && row.days === row.hours_seed;
+  }
+
+  /** Fill (or take back) Travel Labor for a distance answer of `miles` (a number, or null when the
+   *  distance is cleared). MUTATES the model. See the block above for every rule it keeps. */
+  function followDistanceHours(model, miles) {
+    var held = travelLaborHeld(model);
+    if (!held) return;
+    var row = held.row, hours = driveHoursFor(miles), wrote = driveHoursAreTools(row);
+    if (hours === "") {
+      // Local, or no distance: only the figure the tool wrote goes back to empty; a typed one stays.
+      if (wrote) { row.days = ""; row.hours_seed = ""; }
+      return;
+    }
+    // A far job: an empty box, or the tool's own figure, takes the new one; a typed figure stays.
+    if (isBlank(row.days) || wrote) { row.days = hours; row.hours_seed = hours; }
+    // The guys are the crew's man-days unless somebody typed them (a blank box is nobody's yet).
+    if (!row.guys_auto && !filledIn(row.guys)) row.guys_auto = true;
+    if (row.guys_auto) row.guys = travelManDays(held.rows);
+  }
+
+  /** The number as it reads in a sentence: at most two places, none when it is whole. */
+  function plainNum(n) { return String(Math.round(num(n) * 100) / 100); }
+
+  /** WHERE THE TRAVEL LABOR HOURS CAME FROM, when the distance wrote them: `{hours, roundTrip, mph}`,
+   *  or null when they did not (typed, empty, no distance, a job under 70 miles, or a figure this
+   *  distance would not give). One reading for the card's note, the how-it-is-worked-out note and the
+   *  Review's working. `model` is read only for its distance. */
+  function driveHoursSource(model, row) {
+    var d = model && model.distance;
+    var miles = d ? milesOrNull(d.miles) : null;
+    if (miles === null || !driveHoursAreTools(row) || row.days !== driveHoursFor(miles)) return null;
+    return { hours: row.days, roundTrip: Math.round(2 * miles * 10) / 10, mph: DRIVE_MPH };
+  }
+
+  /** "a 380 mile round trip at 60 mph from the Olathe office": the trip, in words. */
+  function driveTripWords(src) {
+    return "a " + plainNum(src.roundTrip) + " mile round trip at " + src.mph + " mph from the Olathe office";
+  }
+
+  /** "6.5 hrs: a 380 mile round trip at 60 mph from the Olathe office", or "" for no source. */
+  function driveHoursSentence(src) {
+    return src ? plainNum(src.hours) + " hrs: " + driveTripWords(src) : "";
+  }
+
+  /** THE NOTE UNDER THE TRAVEL LABOR CARD: where its hours came from and what the line is, or "" while
+   *  the hours are typed or empty (and the card shows nothing). `rows` are the labor rows the man-days
+   *  are counted on. Plain words, with Kyle's way named: the man-days on the labor lines x those hours.
+   *  (The estimate page never says "crew": its column is Guys, and a test holds every word it renders to that.) */
+  function driveHoursNote(model, row, rows) {
+    var src = driveHoursSource(model, row);
+    if (!src) return "";
+    var head = driveHoursSentence(src) + ". ";
+    if (!row.guys_auto) {
+      return head + "The guys are typed, so Travel Labor is your guys x those hours. Type over the hours to use your own.";
+    }
+    var days = travelManDays(rows);
+    return head + "Travel Labor is the man-days on the labor lines above" + (days > 0 ? " (" + plainNum(days) + ")" : "") +
+      " x those hours, the way Kyle's sheet works it" +
+      (days > 0 ? "." : ", so it prices once those lines have days.") +
+      " Type over the hours or the guys to use your own.";
+  }
+
   /** Back to "unknown": the estimator cleared the miles they had typed. Local again (the shipped
-   *  default) and every line the estimator never touched gray again; a hand flip stays. */
+   *  default) and every line the estimator never touched gray again; a hand flip stays. The hours
+   *  the distance wrote into Travel Labor go back to empty with it; typed hours stay. */
   function clearDistance(model) {
     if (!model) return model;
     delete model.distance;
@@ -941,6 +1068,7 @@
         if (l && l.hand !== true) l.enabled = false;
       });
     }
+    followDistanceHours(model, null);
     return model;
   }
 
@@ -1012,19 +1140,29 @@
     var showManDays = false;
     if (tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
       var hrs = "";
+      // The round trip the hours were worked from, when the distance wrote them (Hanz, 2026-10-20): the trip in words.
+      var drive = driveHoursSource(M, tr);
       if (!isBlank(tr.days) && num(tr.days) > 0) {
-        // "Round trip at 60 mph" only while there IS a distance it was worked from; after the miles
-        // are cleared the seeded hours stay priced, so say plainly where they came from instead.
-        hrs = (!isBlank(tr.hours_seed) && num(tr.days) === num(tr.hours_seed))
-          ? (miles !== null ? " (round trip at " + DRIVE_MPH + " mph)"
-                            : " (from an earlier distance; type the miles or the hours)")
-          : " (typed)";
+        // A figure the distance wrote says the trip it came from. One it wrote for a distance that is gone or has
+        // moved (the miles cleared on a bid saved before 2026-10-12) says so plainly, and the rest was typed.
+        hrs = drive ? " (" + driveTripWords(drive) + ")"
+          : driveHoursAreTools(tr)
+            ? (miles !== null ? " (round trip at " + DRIVE_MPH + " mph)"
+                              : " (from an earlier distance; type the miles or the hours)")
+            : " (typed)";
       }
       if (tr.guys_auto) usesAuto = true;
       if (!tr.guys_auto) showManDays = true;
+      // What is still to do on the line: the hours, or (when the distance wrote them and the guys follow a crew with no
+      // days yet) the crew's days, which are the guys.
+      var todo = "";
+      if (!(num(tr.days) > 0)) todo = ". Type the drive hours.";
+      else if (drive && tr.guys_auto && !(travelManDays(rows) > 0)) {
+        todo = ". The guys follow the man-days, so type the days on the labor lines above.";
+      }
       lines.push("Travel Labor: " + qty(tr.guys) + " man-days" + ((tr.guys_auto || !filledIn(tr.guys)) ? "" : " (typed)") +
         " x " + qty(tr.days) + " drive hours" + hrs + " x " + money2(tr.rate) + " = " +
-        money2(laborCost(tr)) + (num(tr.days) > 0 ? "" : ". Type the drive hours."));
+        money2(laborCost(tr)) + todo);
     } else {
       lines.push("Travel Labor: off, $0");
     }
@@ -2385,11 +2523,12 @@
                ? !!r.guys_auto : true };
   }
 
-  /** The Travel row's `hours_seed` marker, written on the shipped model's Travel row only. Since
-   *  2026-10-12 nothing READS it to fill the hours (the distance answer no longer does, see
-   *  driveHoursFor), and a new bid's Travel row has it taken off again (laborRowStartsEmpty). It
-   *  stays on freshModel() because that model's exact shape is pinned by the polish chain golden,
-   *  and travelHow still words the hours of a bid saved with the marker as the round trip they were. */
+  /** The Travel row's `hours_seed` marker: the drive hours the distance wrote there, "" while it has
+   *  written none. followDistanceHours writes it and reads it back (2026-10-20) to tell a figure the
+   *  tool wrote from one somebody typed. The shipped model's Travel row carries it empty; a new bid's
+   *  Travel row has it taken off again (laborRowStartsEmpty), and the fill treats a missing marker and
+   *  an empty one alike, so a row without it is filled all the same. It stays on freshModel() because
+   *  that model's exact shape is pinned by the polish chain golden. */
   function withHoursSeed(row) { row.hours_seed = ""; return row; }
 
   /** One row of `public.library_labor`, read as one of THIS model's labor rows.
@@ -5402,6 +5541,9 @@
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
+    // Travel Labor filled from the distance (2026-10-20): what it wrote, where it says so.
+    driveHoursAreTools: driveHoursAreTools, driveHoursSource: driveHoursSource,
+    driveHoursSentence: driveHoursSentence, driveHoursNote: driveHoursNote,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,

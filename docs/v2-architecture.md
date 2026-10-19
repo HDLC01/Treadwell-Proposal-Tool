@@ -853,7 +853,10 @@ while the portal went on pricing the spreadsheet's rooms. A later phase that wri
 tooling line (the tab's D55 is at least $150 and counts slurry hardener and plastic), a remodel tax base that left out
 tooling and travel, lodging nights counted in people-days, no hard bid and no bond. Hanz decided on 2026-10-07 that the
 fixes apply to NEW bids only and that a saved bid keeps its total, and on 2026-10-12 that a new bid's Lodging nights and
-Per Diem days start empty and are typed.
+Per Diem days start empty and are typed. On 2026-10-20 he chose, for Travel Labor alone, that a job 70 miles or more from
+the office fills the line by itself, Kyle's way ("Every work day"): the hours are one round trip at 60 mph to the half hour,
+the guys are the man-days of the labor lines, a typed figure always wins, and a saved bid never moves on open
+(`followDistanceHours` in `js/bid-model.js`, held by `tests/test_polish_travel_hours.py`).
 
 **Done.**
 

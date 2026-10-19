@@ -1,11 +1,12 @@
 """The Labor step's "how this is worked out" note (Hanz, 2026-10-06), two wording cases.
 
 A far job whose Travel Labor row is switched off must say so, or the note reads "Travel Labor ...
-come on" and then "Travel Labor: off, $0" with nothing in between. And once the miles are cleared
-the seeded drive hours stay priced, so the note must not still claim "round trip at 60 mph" with
-no distance behind it. Only a bid SAVED while the distance filled the hours carries that marker
-(since 2026-10-12 the distance fills none), so the harness builds one. Runs the real engine through
-travel-how-harness.js.
+come on" and then "Travel Labor: off, $0" with nothing in between. And the note must not claim a
+round trip with no distance behind it. The distance fills Travel Labor's hours again (Hanz,
+2026-10-20): a far answer writes them, and the cleared miles take them back, so a cleared bid has
+no hours to word. What is left to word is a bid SAVED while the distance wrote the hours (2026-10-06
+to 10-12), which carries the figure and the old marker with no distance stored; the harness builds
+one. Runs the real engine through travel-how-harness.js.
 """
 import json
 import pathlib
@@ -33,10 +34,18 @@ def test_a_far_job_with_travel_labor_switched_off_says_so(ran):
     assert "Travel Labor: off, $0" in t["text"]
 
 
-def test_cleared_miles_do_not_claim_a_round_trip(ran):
+def test_cleared_miles_take_the_hours_the_distance_wrote_back_and_claim_no_round_trip(ran):
+    """It used to leave the seeded hours priced with "from an earlier distance" beside them (a bid whose
+    distance had filled them). Now the miles cleared are the hours cleared: nothing is priced, so nothing is claimed."""
     text = ran["cleared"]["text"]
-    assert "round trip at 60 mph" not in text, text
-    assert "from an earlier distance" in text, text
+    assert "round trip" not in text, text
+    assert "Travel Labor: off, $0" in text, text
+
+
+def test_hours_saved_by_the_old_distance_with_no_distance_stored_say_they_are_from_an_earlier_one(ran):
+    text = ran["earlier"]["text"]
+    assert "round trip" not in text, text
+    assert "from an earlier distance; type the miles or the hours" in text, text
 
 
 def test_a_rev2_bid_words_the_nights_the_way_the_cost_box_charges_them(ran):
@@ -59,5 +68,7 @@ def test_a_saved_bid_still_words_the_people_days(ran):
     assert any(x.startswith("Man-days = guys x days") and "(20 now)" in x for x in r["lines"]), r["lines"]
 
 
-def test_with_miles_the_round_trip_wording_stays(ran):
-    assert "round trip at 60 mph" in ran["withMiles"]["text"]
+def test_with_miles_the_round_trip_is_worded_from_them(ran):
+    """150 miles is a 300 mile round trip and 5 hours at 60 mph; the sum quotes the trip it was worked from."""
+    text = ran["withMiles"]["text"]
+    assert "5 drive hours (a 300 mile round trip at 60 mph from the Olathe office)" in text, text

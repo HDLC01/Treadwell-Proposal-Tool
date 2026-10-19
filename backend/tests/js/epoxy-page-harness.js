@@ -257,7 +257,49 @@ async function main() {
                  epoxyAaaBeforeMacro: epKeys.indexOf("asm:zz-untagged-asm") < epKeys.indexOf("asm:wb-epoxy-sys-macro-flake-single-broadcast") };
   out.adjust = await adjustSection();
   out.hardBid = await hardBidSection();
+  out.travelFill = await travelFillSection();
   return out;
+}
+
+/** THE DISTANCE FILLS THE EPOXY SECTION'S TRAVEL LABOR (Hanz, 2026-10-20: "Every work day (Kyle's sheet math)"). An Epoxy job's
+ *  Polish root is off and the Epoxy section carries the job's travel, so the Travel Labor row the answer fills is Epoxy's own, on
+ *  Epoxy's own crew (Kyle's Epoxy row 52): 4 guys for 12 days is 48 man-days, and the line is 48 x the 6.5 hours of a 380 mile
+ *  round trip x $33. Driven through the real page: the lookup lands on a new Epoxy bid, the crew is typed as a person types it,
+ *  and the save is read back. The root's own Travel row, which is off with the root, is never touched. */
+async function travelFillSection() {
+  const draft = epoxyDraft({ address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" });
+  const b = await open(draft, { distance: { ok: true, miles: 190, reason: "" } });
+  b.api.go(1);
+  for (let i = 0; i < 6; i++) await flush();
+  const model = () => b.api.model();
+  const ti = () => model().labor.findIndex((r) => r.id === "travel");
+  const ci = () => model().labor.findIndex((r) => r.id === "epoxy-install");
+  const box = (k) => String(P.need(b, '[data-lab="' + ti() + '"][data-k="' + k + '"]').value);
+  const src = () => P.need(b, "[data-trv-src]");
+  const before = { row: clone(model().labor[ti()]), hoursBox: box("days"), guysBox: box("guys"), carries: !!b.doc.querySelector("[data-dist]") };
+  P.typeInto(b, '[data-lab="' + ci() + '"][data-k="guys"]', "4");
+  P.typeInto(b, '[data-lab="' + ci() + '"][data-k="days"]', "12");
+  const row = model().labor[ti()];
+  const after = { row: clone(row), guysBox: box("guys"), cost: B.laborCost(row), manDays: B.travelManDays(model().labor),
+                  note: { text: src().textContent, hidden: src().hidden } };
+  b.clock.fire();
+  const saved = b.rec.saves[b.rec.saves.length - 1].polish_estimate;
+  // THE CONTROL: the same job with the same crew typed and no distance answer at all. The off root's own Travel row is whatever the
+  // page makes of it (its guys follow the root's man-days on open), and the answer must leave it exactly as that.
+  const ctl = await open(draft);
+  ctl.api.go(1);
+  const cm = () => ctl.api.model();
+  const cci = cm().labor.findIndex((r) => r.id === "epoxy-install");
+  P.typeInto(ctl, '[data-lab="' + cci + '"][data-k="guys"]', "4");
+  P.typeInto(ctl, '[data-lab="' + cci + '"][data-k="days"]', "12");
+  ctl.clock.fire();
+  const controlSaved = ctl.rec.saves[ctl.rec.saves.length - 1].polish_estimate;
+  const rootTravel = (m) => JSON.stringify(m.labor.filter((r) => r.id === "travel")[0]);
+  return { before: before, after: after, tabs: Object.keys(saved.tabs || {}), rootKind: saved.kind,
+           savedEpoxyTravel: clone(saved.tabs.Epoxy.labor.filter((r) => r.id === "travel")[0]),
+           rootTravelUntouched: rootTravel(saved) === rootTravel(controlSaved), rootTravel: rootTravel(saved),
+           controlEpoxyTravel: clone(controlSaved.tabs.Epoxy.labor.filter((r) => r.id === "travel")[0]),
+           distance: saved.distance };
 }
 
 /** THE HARD BID SWITCH on the Review step's Discount line (Hanz, 2026-10-17), driven through the page: by click and by the

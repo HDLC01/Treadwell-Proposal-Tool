@@ -829,8 +829,9 @@
   }
 
   /** Whether an hours-based labor row (Travel) renders dimmed: on a local job, untouched.
-   *  Untouched is Guys not typed (blank on a new bid, or still on auto on a bid saved before
-   *  2026-10-12) and Hours blank. A typed Guys or a typed Hours is the estimator saying "we need
+   *  Untouched is Guys not typed (blank on a new bid, or still on auto: a bid saved before
+   *  2026-10-12, or one the distance sent far and then back under 70 miles) and Hours blank. A
+   *  typed Guys or a typed Hours is the estimator saying "we need
    *  this anyway", so either one lifts the dim -- not just Hours, since Guys is the box somebody
    *  is looking at when they start typing.
    *
@@ -2553,6 +2554,9 @@
     // job. A crew line priced by the hour (a Gyp pour) is an ordinary line whose second box is hours.
     var travelRow = travelLike(r);
     var auto = !!(hours && r.guys_auto);
+    // WHERE THE HOURS CAME FROM, when the distance wrote them (Hanz, 2026-10-20): said full width under the card, and "" (the line
+    // hidden) while the hours are typed or empty. repaintNumbers keeps it current as the miles, the crew and the boxes move.
+    var srcNote = travelRow ? B.driveHoursNote(M, r, M.labor) : "";
     // Dimmed, not disabled, and not hidden: `.sw.inert`'s rule, for `.sw.inert`'s reason. A local
     // job that does need drive time must not send somebody back to the intake step to type it,
     // and a row that vanished would take an estimator's typed hours with it. Untouched only --
@@ -2560,8 +2564,9 @@
     var inert = laborInert(r);
     // NO "TYPE MY OWN" SWITCH (Hanz, 2026-10-07). The Guys box is editable, so a control to ask
     // for permission to type was a second way to do what the box already does. A NEW bid's box opens
-    // EMPTY and stays the estimator's (2026-10-12); only a bid saved before then can still be on
-    // auto, and typing a number makes it the estimator's own (guys_auto false). The "Included"
+    // EMPTY and stays the estimator's (2026-10-12); only a bid saved before then, or Travel Labor on
+    // a job the distance sent far (it puts the guys on the man-days, 2026-10-20), can be on auto,
+    // and typing a number makes it the estimator's own (guys_auto false). The "Included"
     // slider is a different thing and stays.
     var on = B.rowOn(r);
     // THE PREVAILING RATE IN FORCE (0 when the card is off or empty): a line that follows its default
@@ -2620,13 +2625,17 @@
         : "") +
 
       '</div>' + (travelRow
+        // The note on where the hours came from (B.driveHoursNote). Always drawn on the travel card, hidden while there is
+        // nothing to say, so the live repaint can bring it in and out without a rebuild. `hidden` holds on this page
+        // (`[hidden]{display:none!important}`).
+        ? '<p class="hint trvnote" data-trv-src="' + i + '"' + (srcNote ? '' : ' hidden') + '>' + esc(srcNote) + '</p>' +
         // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
         // whether it shows, so the card's class is the one source of truth for both the dimming
         // and the caption, and the two cannot drift apart on a live repaint.
-        ? '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
+        '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
           'anyway if it needs drive time.</p>' +
-          '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office. ' +
-          'Under 70 miles this line stays gray.</p>'
+          '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office, where the hours fill in ' +
+          'from the miles and the guys follow the man-days. Under 70 miles this line stays gray.</p>'
         : "") + '</div>';
   }
 
@@ -2691,6 +2700,10 @@
   //
   // ONLY A NEW BID LOOKS IT UP BY ITSELF. A saved bid opened later does not reprice behind
   // anybody's back: it shows what it was saved with and offers the button.
+  //
+  // A FAR ANSWER ALSO FILLS TRAVEL LABOR (Hanz, 2026-10-20: "Every work day (Kyle's sheet math)"): its hours
+  // from the miles, its guys from the crew's man-days, a typed figure always winning (B.applyDistance, B.clearDistance).
+  // It is given the WHOLE model (ROOT), not the section on show: the Travel Labor row is the carrier section's.
   var distBusy = false;
   var distReason = "";
   var DIST_REASONS = {
@@ -2759,7 +2772,7 @@
     var key = B.distanceKey(s.address, s.city, s.state, s.zip);
     if (!key) { distReason = "incomplete"; paintDistance(); return; }
     if (!force && M.distance && (M.distance.source === "typed" || M.distance.key === key)) return;
-    var model = M;
+    var model = M, whole = ROOT;
     distBusy = true; distReason = "";
     paintDistance();
     var miles = null, reason = "error";
@@ -2779,9 +2792,9 @@
     distBusy = false;
     // The page can have moved to another draft, or the estimator can have typed miles while the
     // answer was on its way. Theirs wins; this answer is dropped.
-    if (model !== M || (!force && M.distance && M.distance.source === "typed")) { paintDistance(); return; }
+    if (model !== M || whole !== ROOT || (!force && M.distance && M.distance.source === "typed")) { paintDistance(); return; }
     if (miles === null) { distReason = reason; paintDistance(); return; }
-    B.applyDistance(M, { miles: miles, source: "google", key: key });
+    B.applyDistance(ROOT, { miles: miles, source: "google", key: key });
     changed(false);
     paintDistance();
   }
@@ -3141,7 +3154,12 @@
       var perDay = r.unit === "hours" ? 1 : B.dayHours(r);
       var hrs = B.num(r.guys) * B.num(r.days) * perDay;
       var work = B.fmtSf(B.num(r.guys)) + " × " + B.fmtSf(B.num(r.days)) + (r.unit === "hours" ? "" : " × " + perDay);
-      labRows.push([r.label || "Labor line",
+      // Hours the distance wrote say the trip they were worked from (Hanz, 2026-10-20), under the line's name: "6.5 hrs: a 380
+      // mile round trip at 60 mph from the Olathe office". The Quantity column is too narrow to hold it (it would run into the
+      // Unit column), so it sits in the wide one, and the working beside it stays "48 × 6.5".
+      var drive = B.driveHoursSource(M, r);
+      var lineName = r.label || "Labor line";
+      labRows.push([drive ? { raw: esc(lineName) + '<span class="note work">' + esc(B.driveHoursSentence(drive)) + '</span>' } : lineName,
                     { raw: rv("lab." + i + ".q", B.fmtSf(hrs)) + '<span class="note work">' + rv("lab." + i + ".w", work) + '</span>' },
                     "hrs", rvc("lab." + i + ".rate", rateMoney(B.laborRateOf(r, pwRev)) + " / hr"),
                     rv("lab." + i + ".tot", moneyAuto(cost))]);
@@ -3682,6 +3700,22 @@
     document.querySelectorAll("[data-hint-lab]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-hint-lab"), 10)];
       if (travelLike(r)) el.textContent = B.manDaysHint(!!r.guys_auto, B.travelManDays(M.labor));
+    });
+    // THE HOURS THE DISTANCE WRITES (Hanz, 2026-10-20). A far answer fills Travel Labor's Hours box, and the lookup landing
+    // takes this `changed(false)` path, so the box is repainted here like the auto Guys box above -- unless the estimator is
+    // in it. Hours somebody typed are never changed by an answer, so this only ever writes what the model holds.
+    document.querySelectorAll('[data-lab][data-k="days"]').forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-lab"), 10)];
+      if (!r || r.id !== "travel" || document.activeElement === el) return;
+      var v = r.days == null ? "" : String(r.days);
+      if (el.value !== v) el.value = v;
+    });
+    // ...and the note under the card that says where they came from (B.driveHoursNote), shown while there is one.
+    document.querySelectorAll("[data-trv-src]").forEach(function (el) {
+      var r = M.labor[parseInt(el.getAttribute("data-trv-src"), 10)];
+      var note = r ? B.driveHoursNote(M, r, M.labor) : "";
+      el.textContent = note;
+      el.hidden = !note;
     });
     // The Travel card's own dim state, live: typing in Guys or Hours takes this path
     // (`changed(false)`), never a rebuild, so nothing else repaints the card's class. Keyed
@@ -4396,19 +4430,20 @@
       return;
     }
     // THE ESTIMATOR'S OWN MILES. They always win over the server's figure. A number applies at
-    // once (>= 70 brings the travel lines on, under 70 grays them; a line flipped by hand stays
-    // as flipped); clearing the box goes back to "unknown" and asks the server again. The panel is
+    // once (>= 70 brings the travel lines on and fills Travel Labor's hours and guys, under 70 grays
+    // them and takes the hours the tool wrote back; a line flipped by hand stays as flipped, and so
+    // do hours typed); clearing the box goes back to "unknown" and asks the server again. The panel is
     // rebuilt so the three cards repaint, with the caret carried (the pattern the Travel boxes
     // below use) -- a half-typed "7" before "70" is an ordinary moment, not an error.
     if (el.matches("[data-dist-miles]")) {
       var rawMiles = String(el.value);
       var typedMiles = B.milesOrNull(el.value);
       if (typedMiles !== null) {
-        B.applyDistance(M, { miles: typedMiles, source: "typed", key: addressKey() });
+        B.applyDistance(ROOT, { miles: typedMiles, source: "typed", key: addressKey() });
         changed(true);
         refocus("[data-dist-miles]", rawMiles);
       } else if (String(el.value).trim() === "") {
-        B.clearDistance(M);
+        B.clearDistance(ROOT);
         changed(true);
         refocus("[data-dist-miles]");
         lookupDistance(false);
