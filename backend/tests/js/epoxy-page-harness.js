@@ -100,7 +100,7 @@ async function main() {
   out.opened = {
     tabs: Object.keys(m0.tabs || {}), rootKind: m0.kind, takeoff: clone(m0.takeoff),
     laborIds: m0.labor.map((r) => r.id), laborGuys: m0.labor.map((r) => r.guys),
-    strip: { hidden: !!b.doc.getElementById("sheet-now").hidden, tabs: panelTabs(b) },
+    strip: { tabs: panelTabs(b) },
     panelHasPatch: html(b, "panels").indexOf("data-epoxy-patch") >= 0,
     panelHasPolishCards: /Dye|Joint filler/.test(html(b, "panels")),
     profile: m0.tabs ? undefined : null, savesOnOpen: b.rec.saves.length,
@@ -188,7 +188,6 @@ async function main() {
   out.polish = {
     tabs: pol.api.model().tabs === undefined ? "none" : Object.keys(pol.api.model().tabs),
     kind: pol.api.model().kind === undefined ? "base" : pol.api.model().kind,
-    strip: !!pol.doc.getElementById("sheet-now").hidden,
     bid: pol.api.bid().total, activeBid: pol.api.activeBid().total,
   };
 
@@ -204,7 +203,6 @@ async function main() {
   out.strip = {
     html: html(two, "sheets-panel"),
     tabs: panelTabs(two),
-    hidden: !!two.doc.getElementById("sheet-now").hidden,
   };
   const sealBtn = two.doc.querySelector('[data-section-tab="Seal"]');
   P.clickEl(two, sealBtn);

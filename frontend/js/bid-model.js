@@ -5115,32 +5115,46 @@
     return { title: title, body: body.trim() };
   }
 
-  /** The "Sheets" panel, as the markup inside its <aside>. See the block comment above for `view`. */
+  /** The "Sheets" bar, as the markup inside its element: ONE strip of tabs (a sheet each, like the worksheet tabs of the live
+   *  estimate) and, under it, the bar of the sheet that is open. See the block comment above for `view`.
+   *
+   *  Row 1, the strip: the base-bid radio, the name and the price of each sheet in sheetsFacts order, the combined Epoxy + Polish
+   *  choice when the bid has the pair, and "+ Add sheet" last. Row 2, the open sheet only: what it is (the base, or the option and
+   *  its figure) and every control it has. A base change waiting for its yes shows between the two, whichever sheet it is for. */
   function sheetsPanelHtml(model, view) {
     var f = sheetsFacts(model, view);
     var v = f.view;
     var ic = typeof v.icon === "function" ? v.icon : function () { return ""; };
     var key = function (id, what) { return ' data-sh-key="' + escHtml(id + "|" + what) + '"'; };
-    var h = '<div class="sh-head"><span class="sh-grip">' + ic("menu", 14) + '</span>Sheets</div>' +
-      '<p class="sh-hint"><span class="rdot" aria-hidden="true"></span> marks the base bid, which sets the lump sum and the job type. ' +
-      'Click a sheet to open it.</p>';
-    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {
-      h += '<p class="sh-hint sh-excel">Copies print on the proposal. The Excel download does not include them.</p>';
-    }
+    var h = "";
     if (f.unreadable) {
       h += '<div class="sh-warn" role="alert">' + ic("warning", 14) + '<span>This bid\'s other sheets can\'t be read, so only ' +
         escHtml(rootLabel(model)) + ' shows. ' + escHtml(rootLabel(model)) + ' still prices and saves. Reload to try again.</span></div>';
     }
 
-    // "Add sheet" is the first thing under the hint, above the list (Hanz, 2026-10-13).
-    h += '<div class="sh-add">';
-    // Why a sheet could not be added, beside the button that was pressed (the page's own alert is above the fold of a long page).
-    if (isObject(v.notice) && v.notice.at === "add") h += noticeHtml(v.notice);
+    // ROW 1: the tabs.
+    var tabs = [];
+    if (f.pair && !f.unreadable) {
+      var combined = f.baseIds.length === 2;
+      tabs.push('<li class="sh sh-tab combined' + (combined ? " base" : "") + '" data-sh-row="combined" role="presentation">' +
+        '<span class="sh-slot"><input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
+        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid" title="Base bid: Epoxy and Polish together"></span>' +
+        '<span class="sh-name static" title="Epoxy and Polish together"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
+        (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></li>');
+    }
+    f.rows.forEach(function (r) { tabs.push(tabHtml(r)); });
     if (!v.pick) {
-      h += '<button type="button" class="btn ghost sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
-        ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button>';
-      if (f.unreadable) h += '<p class="sh-cap">Adding a sheet is off until the other sheets can be read.</p>';
-    } else {
+      tabs.push('<li class="sh-addli" role="presentation"><button type="button" class="sh-addbtn" data-sh-act="add-menu"' + key("add", "menu") +
+        ' aria-expanded="false"' + (f.unreadable ? " disabled" : "") + '>' + ic("plus", 14) + 'Add sheet</button></li>');
+    }
+    var strip = '<div class="sh-strip"><ul class="sh-list" role="tablist" aria-label="Sheets on this bid">' + tabs.join("") + '</ul></div>';
+
+    // The add picker, and why a sheet could not be added, open just under the strip.
+    var add = "";
+    // Why a sheet could not be added, beside the button that was pressed (the page's own alert is above the fold of a long page).
+    if (isObject(v.notice) && v.notice.at === "add") add += noticeHtml(v.notice);
+    if (f.unreadable) add += '<p class="sh-cap">Adding a sheet is off until the other sheets can be read.</p>';
+    if (v.pick) {
       // One row a type. Gyp's five presets are one product (the Gyp card on the Material step switches between them), so the menu
       // lists "Gyp" once and adds the first preset; Seal and Seal (+Jnts) are two different sheets and are both listed.
       var rank = { polish: 0, epoxy: 1, gyp: 2, seal: 3 };
@@ -5148,13 +5162,13 @@
       var kinds = sheetsToAdd().map(function (s, i) { return { s: s, i: i, role: types.tab(types.tabOfSheet(s)).role }; })
         .filter(function (k) { if (k.role !== "gyp") return true; var first = !seenGyp; seenGyp = true; return first; })
         .sort(function (a, b) { return (rank[a.role] - rank[b.role]) || (a.i - b.i); });
-      h += '<div class="sh-pick" role="group" aria-label="Add a sheet"><div class="sh-pick-h">Add a sheet' +
+      add += '<div class="sh-pick" role="group" aria-label="Add a sheet"><div class="sh-pick-h">Add a sheet' +
         '<button type="button" class="x" aria-label="Close" data-sh-act="add-close"' + key("add", "close") + '>' + ic("x", 14) +
         '</button></div><p class="sh-cap">' + (num(v.sf) > 0 ? "It starts from this bid's " + fmtSf(num(v.sf)) + " SF."
           : "It starts empty. Measure it on its Material step.") + '</p><ul class="sh-pick-l">';
       kinds.forEach(function (k) {
         var only = types.tab(types.tabOfSheet(k.s)).optionOnly;
-        h += '<li><button type="button" class="sh-pick-row" data-sh-act="add" data-sh-sheet="' + escHtml(k.s) + '"' +
+        add += '<li><button type="button" class="sh-pick-row" data-sh-act="add" data-sh-sheet="' + escHtml(k.s) + '"' +
           key("add", k.s) + (v.busy ? " disabled" : "") + '><span>' + escHtml(k.role === "gyp" ? types.tab(types.tabOfSheet(k.s)).label : k.s) + '</span>' +
           (only ? '<span class="pill">Option only</span>' : "") + '</button></li>';
       });
@@ -5162,28 +5176,25 @@
       types.tabKeys().forEach(function (tk) {
         var rec = types.tab(tk);
         if (rec.optionOnly && rec.offered !== true) {
-          h += '<li><button type="button" class="sh-pick-row" disabled><span>' + escHtml(rec.label) +
+          add += '<li><button type="button" class="sh-pick-row" disabled><span>' + escHtml(rec.label) +
             '</span><span class="pill">Coming</span></button></li>';
         }
       });
-      h += '</ul></div>';
+      add += '</ul></div>';
     }
-    h += '</div>';
+    h += '<div class="sh-stripwrap">' + strip + (add ? '<div class="sh-add">' + add + '</div>' : "") + '</div>';
 
-    var rows = [];
-    if (f.pair && !f.unreadable) {
-      var combined = f.baseIds.length === 2;
-      var confirmHere = isObject(v.confirm) && v.confirm.row === "combined";
-      rows.push('<li class="sh" data-sh-row="combined"><div class="sh-top"><span class="sh-slot">' +
-        '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
-        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid"></span>' +
-        '<span class="sh-name static"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
-        (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></div>' +
-        '<div class="sh-meta"><span class="sh-type">COMBINED</span>' + (combined ? '<span class="pill base">Base bid</span>' : "") + '</div>' +
-        (confirmHere ? confirmHtml(model, v) : "") + '</li>');
+    // A base change waiting for its yes, whichever tab it is for.
+    if (isObject(v.confirm)) h += confirmHtml(model, v);
+
+    // ROW 2: the open sheet.
+    f.rows.forEach(function (r, i) { if (r.e.tab === v.open) h += openHtml(r, i); });
+
+    h += '<p class="sh-hint"><span class="rdot" aria-hidden="true"></span> marks the base bid, which sets the lump sum and the job type.';
+    if (f.rows.some(function (r) { return COPY_ID.test(r.e.tab); })) {
+      h += ' <span class="sh-excel">Copies print on the proposal. The Excel download does not include them.</span>';
     }
-    f.rows.forEach(function (r, i) { rows.push(rowHtml(r, i)); });
-    h += '<ul class="sh-list">' + rows.join("") + '</ul>';
+    h += '</p>';
     if (f.rows.length === 1 && !f.unreadable) {
       h += '<p class="sh-empty">Add a sheet to price an option. Options never change the lump sum.</p>';
     }
@@ -5197,97 +5208,89 @@
     function confirmHtml(m, view2) {
       var words;
       try { words = baseChangeWords(m, view2.confirm.ids); } catch (err) { return ""; }
-      return '<div class="sh-confirm" role="group" aria-label="Confirm the base bid"><b>' + escHtml(words.title) + '</b><p>' +
+      return '<div class="sh-confirm" role="group" aria-label="Confirm the base bid" data-sh-confirm="' + escHtml(view2.confirm.row) +
+        '"><b>' + escHtml(words.title) + '</b><p>' +
         escHtml(words.body) + '</p><div class="sh-btns"><button type="button" class="btn sm" data-sh-act="base-yes"' +
         key("confirm", "yes") + '>Make it the base</button><button type="button" class="btn ghost sm" data-sh-act="base-no"' +
         key("confirm", "no") + '>Cancel</button></div></div>';
     }
 
-    function rowHtml(r, i) {
+    /** One tab of the strip: the base radio (none for an option-only Seal sheet), the name, and the price. */
+    function tabHtml(r) {
       var e = r.e, t = e.tab, open = t === v.open, ren = open && v.renaming === t;
-      var tabAttr = ' data-sh-tab="' + escHtml(t) + '"';
-      var s = '<li class="sh' + (open ? " open" : "") + '" data-sh-row="' + escHtml(t) + '"><div class="sh-top">' +
+      var s = '<li class="sh sh-tab' + (open ? " open" : "") + (r.base || r.inBase ? " base" : "") + '" data-sh-row="' + escHtml(t) + '" role="presentation">' +
         '<span class="sh-slot"' + (r.canBase ? "" : ' title="Seal sheets price as options only, never as the base bid"') + '>' +
         (r.canBase ? '<input type="radio" class="sh-radio" name="sh-base" data-sh-base="' + escHtml(t) + '"' + key(t, "base") +
-          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid">' : "") + '</span>';
+          (r.base ? " checked" : "") + ' aria-label="Make ' + escHtml(e.label) + ' the base bid" title="Base bid">' : "") + '</span>';
       if (ren) {
         s += '<input type="text" class="sh-ren-in" data-sh-name="' + escHtml(t) + '"' + key(t, "name") + ' value="' +
           escHtml(v.draft) + '" aria-label="Sheet name">';
       } else {
-        s += '<button type="button" class="sh-name" data-section-tab="' + escHtml(t) + '"' + key(t, "open") + ' aria-current="' +
-          (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) + '</span><span class="sh-price' +
-          (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span></button>';
+        s += '<button type="button" class="sh-name" role="tab" aria-selected="' + (open ? "true" : "false") + '" data-section-tab="' +
+          escHtml(t) + '"' + key(t, "open") + ' aria-current="' + (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) +
+          '</span><span class="sh-price' + (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span></button>';
       }
-      s += '</div><div class="sh-meta"><span class="sh-type">' + escHtml(String(r.typeLabel).toUpperCase()) + '</span>';
+      return s + '</li>';
+    }
+
+    /** The bar under the strip: what the open sheet is, and every control it has. */
+    function openHtml(r, i) {
+      var e = r.e, t = e.tab, ren = v.renaming === t;
+      var tabAttr = ' data-sh-tab="' + escHtml(t) + '"';
+      var s = '<div class="sh-open" data-sh-open="' + escHtml(t) + '" role="tabpanel"><div class="sh-meta"><span class="sh-type">' +
+        escHtml(String(r.typeLabel).toUpperCase()) + '</span>';
       if (r.base) s += '<span class="pill base">Base bid</span>';
       else if (r.inBase) s += '<span class="pill">In the base bid</span>';
       else s += '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) +
         (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>';
-      s += '</div>';
-      if (isObject(v.confirm) && v.confirm.row === t) s += confirmHtml(model, v);
-      if (open) {
-        s += '<div class="sh-body">';
-        if (ren) {
-          s += '<div class="sh-btns"><button type="button" class="btn sm" data-sh-act="rename-save"' + tabAttr + key(t, "save") +
-            '>Save name</button><button type="button" class="btn ghost sm" data-sh-act="rename-cancel"' + tabAttr + key(t, "cancel") +
-            '>Cancel</button></div><p class="sh-note">Enter saves, Esc cancels. The name is only a label: nothing is repriced.</p>';
-          if (v.error) s += '<p class="sh-note warn" role="alert" data-sh-error>' + escHtml(v.error) + '</p>';
-        } else {
-          if (r.opt) {
-            s += '<button type="button" class="mw-sw' + (r.on ? " on" : "") + '" role="switch" aria-checked="' + (r.on ? "true" : "false") +
-              '" data-sh-act="on"' + tabAttr + key(t, "on") + '><span class="track"></span>On the proposal as an option</button>' +
-              '<div class="sh-ctl' + (r.on ? "" : " inert") + '">';
-            if (!r.optOnly) {
-              s += '<div class="sh-mode"><span class="sh-lbl">Price as</span><span class="seg" role="radiogroup" aria-label="Price as">' +
-                '<input type="radio" id="sh-m' + i + '-t" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="total"' +
-                key(t, "mode-total") + (r.mode === "total" ? " checked" : "") + '><label for="sh-m' + i + '-t">Total</label>' +
-                '<input type="radio" id="sh-m' + i + '-d" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="deduct"' +
-                key(t, "mode-deduct") + (r.mode === "deduct" ? " checked" : "") + '><label for="sh-m' + i + '-d">Add / Deduct</label>' +
-                '</span></div>';
-            }
-            var dOpen = isObject(v.descOpen) && v.descOpen[t] === true;
-            s += '<div class="sh-desc"><button type="button" class="sh-desc-t" data-sh-act="desc"' + tabAttr + key(t, "desc") +
-              ' aria-expanded="' + (dOpen ? "true" : "false") + '">' + ic("chev-right", 12) + 'Description <span class="opt">optional</span></button>';
-            if (dOpen) {
-              var ph = typeof v.sysDesc === "function" ? v.sysDesc(t) : "";
-              s += '<textarea class="sh-desc-in" rows="3" maxlength="400" data-sh-desc="' + escHtml(t) + '"' + key(t, "desc-box") +
-                ' aria-label="Description" placeholder="' + escHtml(ph) + '">' + escHtml(r.desc) + '</textarea>' +
-                '<p class="sh-cap">Prints as the option line. Left empty, the grey text prints.</p>';
-            } else if (r.desc) {
-              s += '<span class="sh-desc-prev">' + escHtml(r.desc) + '</span>';
-            }
-            s += '</div></div>';
-            if (r.optOnly) s += '<p class="sh-note">Seal sheets are options only. They are priced as a total and can\'t be the base bid.</p>';
+      s += '</div><div class="sh-body">';
+      if (ren) {
+        s += '<div class="sh-btns"><button type="button" class="btn sm" data-sh-act="rename-save"' + tabAttr + key(t, "save") +
+          '>Save name</button><button type="button" class="btn ghost sm" data-sh-act="rename-cancel"' + tabAttr + key(t, "cancel") +
+          '>Cancel</button></div><p class="sh-note">Enter saves, Esc cancels. The name is only a label: nothing is repriced.</p>';
+        if (v.error) s += '<p class="sh-note warn" role="alert" data-sh-error>' + escHtml(v.error) + '</p>';
+      } else {
+        if (r.opt) {
+          s += '<button type="button" class="mw-sw' + (r.on ? " on" : "") + '" role="switch" aria-checked="' + (r.on ? "true" : "false") +
+            '" data-sh-act="on"' + tabAttr + key(t, "on") + '><span class="track"></span>On the proposal as an option</button>' +
+            '<div class="sh-ctl' + (r.on ? "" : " inert") + '">';
+          if (!r.optOnly) {
+            s += '<div class="sh-mode"><span class="sh-lbl">Price as</span><span class="seg" role="radiogroup" aria-label="Price as">' +
+              '<input type="radio" id="sh-m' + i + '-t" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="total"' +
+              key(t, "mode-total") + (r.mode === "total" ? " checked" : "") + '><label for="sh-m' + i + '-t">Total</label>' +
+              '<input type="radio" id="sh-m' + i + '-d" name="sh-m' + i + '" data-sh-mode="' + escHtml(t) + '" value="deduct"' +
+              key(t, "mode-deduct") + (r.mode === "deduct" ? " checked" : "") + '><label for="sh-m' + i + '-d">Add / Deduct</label>' +
+              '</span></div>';
           }
-          var locked = r.base || r.inBase || e.root;
-          var armed = v.armed === t && !locked;
-          s += '<div class="sh-acts"><button type="button" class="kindpick" data-sh-act="copy"' + tabAttr + key(t, "copy") + '>' +
-            ic("copy", 12) + 'Copy</button><button type="button" class="kindpick" data-sh-act="rename"' + tabAttr + key(t, "rename") + '>' +
-            ic("pencil", 12) + 'Rename</button><button type="button" class="kindpick' + (armed ? " armed" : "") +
-            '" data-sh-act="delete"' + tabAttr + key(t, "delete") + (locked ? " disabled" : "") + '>' + ic("trash", 12) +
-            (armed ? "Click again to delete" : "Delete") + '</button></div>';
-          if (r.base) s += '<p class="sh-note">The base bid can\'t be deleted. Make another sheet the base first.</p>';
-          else if (r.inBase) s += '<p class="sh-note">' + escHtml(e.label) + ' is part of the base bid, so it can\'t be deleted. Pick a different base first.</p>';
-          else if (e.root) s += '<p class="sh-note">' + escHtml(e.label) + ' is where this bid starts, so it can\'t be deleted. Switch it off above to keep it off the proposal.</p>';
-          if (armed) s += '<p class="sh-note warn">Deletes ' + escHtml(e.label) + ' and everything typed on it.</p>';
-          if (isObject(v.notice) && v.notice.at === t) s += noticeHtml(v.notice);
+          var dOpen = isObject(v.descOpen) && v.descOpen[t] === true;
+          s += '<div class="sh-desc"><button type="button" class="sh-desc-t" data-sh-act="desc"' + tabAttr + key(t, "desc") +
+            ' aria-expanded="' + (dOpen ? "true" : "false") + '">' + ic("chev-right", 12) + 'Description <span class="opt">optional</span></button>';
+          if (dOpen) {
+            var ph = typeof v.sysDesc === "function" ? v.sysDesc(t) : "";
+            s += '<textarea class="sh-desc-in" rows="3" maxlength="400" data-sh-desc="' + escHtml(t) + '"' + key(t, "desc-box") +
+              ' aria-label="Description" placeholder="' + escHtml(ph) + '">' + escHtml(r.desc) + '</textarea>' +
+              '<p class="sh-cap">Prints as the option line. Left empty, the grey text prints.</p>';
+          } else if (r.desc) {
+            s += '<span class="sh-desc-prev">' + escHtml(r.desc) + '</span>';
+          }
+          s += '</div></div>';
+          if (r.optOnly) s += '<p class="sh-note">Seal sheets are options only. They are priced as a total and can\'t be the base bid.</p>';
         }
-        s += '</div>';
+        var locked = r.base || r.inBase || e.root;
+        var armed = v.armed === t && !locked;
+        s += '<div class="sh-acts"><button type="button" class="kindpick" data-sh-act="copy"' + tabAttr + key(t, "copy") + '>' +
+          ic("copy", 12) + 'Copy</button><button type="button" class="kindpick" data-sh-act="rename"' + tabAttr + key(t, "rename") + '>' +
+          ic("pencil", 12) + 'Rename</button><button type="button" class="kindpick' + (armed ? " armed" : "") +
+          '" data-sh-act="delete"' + tabAttr + key(t, "delete") + (locked ? " disabled" : "") + '>' + ic("trash", 12) +
+          (armed ? "Click again to delete" : "Delete") + '</button></div>';
+        if (r.base) s += '<p class="sh-note">The base bid can\'t be deleted. Make another sheet the base first.</p>';
+        else if (r.inBase) s += '<p class="sh-note">' + escHtml(e.label) + ' is part of the base bid, so it can\'t be deleted. Pick a different base first.</p>';
+        else if (e.root) s += '<p class="sh-note">' + escHtml(e.label) + ' is where this bid starts, so it can\'t be deleted. Switch it off above to keep it off the proposal.</p>';
+        if (armed) s += '<p class="sh-note warn">Deletes ' + escHtml(e.label) + ' and everything typed on it.</p>';
+        if (isObject(v.notice) && v.notice.at === t) s += noticeHtml(v.notice);
       }
-      return s + '</li>';
+      return s + '</div></div>';
     }
-  }
-
-  /** The "Open sheet" line above the step rail: the sheet on show, its type, and whether it is the base or what it is as an
-   *  option. "" for a bid with one sheet, which has nothing to tell apart. */
-  function sheetNowHtml(model, view) {
-    var f = sheetsFacts(model, view);
-    if (f.rows.length < 2) return "";
-    var r = f.rows.filter(function (x) { return x.e.tab === f.view.open; })[0] || f.rows[0];
-    return '<span class="sn-k">Open sheet</span><h2>' + escHtml(r.e.label) + '</h2><span class="sh-type">' +
-      escHtml(String(r.typeLabel).toUpperCase()) + '</span>' +
-      (r.base ? '<span class="pill base">Base bid</span>' : (r.inBase ? '<span class="pill">In the base bid</span>' :
-        '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) + (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>'));
   }
 
   /** What is stopping this model being priced, in plain words. [] when nothing is.
@@ -5433,7 +5436,7 @@
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, coveHeightOf: coveHeightOf, sectionSwitcherHtml: sectionSwitcherHtml,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
-    sheetsPanelHtml: sheetsPanelHtml, sheetNowHtml: sheetNowHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
+    sheetsPanelHtml: sheetsPanelHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
     optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
     // A Gyp sheet's key changes with its preset: what the draft kept under the old key follows (see moveSheetDraftPatch).
     moveSheetDraftPatch: moveSheetDraftPatch,

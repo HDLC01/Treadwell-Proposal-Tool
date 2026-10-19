@@ -149,7 +149,7 @@ def test_a_bid_with_no_option_draws_one_row_offers_add_sheet_and_writes_nothing_
     """The Sheets panel is on every bid (Sheets phase 3): a bid with one sheet has its one row and "Add sheet", and the Open sheet
     line, which would have nothing to tell apart, hides itself."""
     f = page["fresh"]
-    assert f["stripHidden"] is True and f["rows"] == ["Polish"] and f["addButton"] == "Add sheet"
+    assert f["rows"] == ["Polish"] and f["addButton"] == "Add sheet"
     assert f["choicesShown"] == [] and f["noTabsKey"] is True
     assert f["savesOnOpen"] == 0 and f["armedOnOpen"] == 0
 
@@ -169,8 +169,8 @@ def test_choosing_seal_adds_an_option_seeded_like_a_new_section_that_carries_no_
     assert a["pooled"] is True
     assert a["takeoff"] == [["wb-seal-2-coats", 10000, "SF"]], "the sheet's own default, over what the base measures"
     assert a["laborIds"] == ["seal-install", "seal-jointfill", "seal-mockup"] and a["noTravelRow"] is True
-    assert a["strip"] == ["Polish", "Seal"] and a["stripHidden"] is False and a["activeIsSeal"] is True
-    assert "Open sheet" in a["stripLabel"] and "Option, total" in a["stripLabel"], "a new sheet starts ON the proposal, priced as a total"
+    assert a["strip"] == ["Polish", "Seal"] and a["activeIsSeal"] is True
+    assert "SEAL" in a["stripLabel"].upper() and "Option, total" in a["stripLabel"], "a new sheet starts ON the proposal, priced as a total"
     assert a["barAfter"] == {"choices": [], "menuClosed": True} and a["saved"] is True, "the menu closes once a sheet is added"
     assert a["materialPanel"] == {"hasPatchCaption": True, "hasRow": True, "noDyeCard": True}, (
         "the option's Material step is the ordinary takeoff, with the patch the sheet always charges, and none of Polish's cards")
@@ -205,24 +205,24 @@ def test_the_save_writes_the_option_as_a_priced_tab_and_says_it_is_an_option(pag
     assert s["taxable"] == [True, False]
 
 
-def test_review_shows_each_option_as_its_own_card_with_its_own_total_and_says_it_is_not_in_the_lump_sum(page):
+def test_review_shows_the_open_sheet_alone_with_no_option_card_for_the_seal_option(page):
+    """Hanz, 2026-10-19: Review has ONE scope. On the base sheet it is the base's own cards and the base's price; the orange card
+    that listed each option's total is gone (an option's figure is on its tab and, open, on its own Review)."""
     r = page["review"]
-    assert r["hasOptionCard"] is True
-    assert "Option, not in the lump sum" in r["optionCardText"] and "Seal option total" in r["optionCardText"]
-    assert r["figure"] == r["handFigure"] == _money(page["priced"]["handSeal"])
-    assert r["keys"] == ["option", "takeoff", "labor", "travel", "takeoff", "markup"], "the option's card has its own colour key (the last takeoff-coloured card is the new bid's tooling)"
-    assert r["noWholeBidCard"] is True, "one base and an option have nothing to add up"
+    assert r["noOptionCard"] is True, "no 'Seal option' card on the base's Review"
+    assert r["handFigure"] == _money(page["priced"]["handSeal"]), "the option is still priced, it is just not listed here"
+    assert r["keys"] == ["takeoff", "labor", "travel", "takeoff", "markup"], "only the open sheet's own cards (the last takeoff-coloured card is the bid's tooling)"
+    assert r["noWholeBidCard"] is True and r["noteOnBase"] is False
     assert r["markupTotal"] == _money(page["priced"]["handPolish"]), "the base's own card says the base's price"
-    assert r["openButton"] is True
 
 
 def test_the_option_open_on_review_says_so_first_and_shows_its_own_cards_with_its_tooling(page):
     o = page["review"]["onSeal"]
-    assert o["note"] == "Option, not in the lump sum." and o["optionCardFirst"] is True and o["toolingCard"] is True
+    assert o["note"] == "Option, not in the lump sum." and o["noteFirst"] is True and o["noOptionCard"] is True and o["toolingCard"] is True
     assert o["markupTotal"] == _money(page["priced"]["handSeal"])
 
 
-def test_a_figure_typed_on_review_moves_the_base_and_the_option_card_stays_its_own(page):
+def test_a_figure_typed_on_review_moves_the_open_sheets_own_total(page):
     l = page["review"]["live"]
     assert l["base"] == l["baseOnPage"]
 
@@ -266,7 +266,7 @@ def test_deleting_a_sheet_takes_two_presses_and_the_proposal_side_forgets_it(pag
         "the words typed over its line and its tax rows go, the other option's and a manual line stay")
     assert p["before"] == {"option:Copy1": ["typed above the other"]} and p["after"] == {}
     n = r["none"]
-    assert n["stripHidden"] is True and n["tabsKey"] == {} and n["pricedTabs"] == [["Polish", "base"]]
+    assert n["tabsKey"] == {} and n["pricedTabs"] == [["Polish", "base"]]
     assert n["rows"] == ["Polish"] and n["tabOptsKeys"] == [] and n["addOffered"] is True
     assert n["lump"] == a["lump"] and n["bar"] == _money(n["lump"])
 
@@ -404,13 +404,13 @@ PAGE_BREAKS = {
     "seal is not offered in the vocabulary": (
         "js/work-types.js", "      offered: true,", "      offered: false,",
         lambda r: "Seal" in r["menu"]["choices"] or "Seal (+Jnts)" in r["menu"]["choices"]),
-    "the option's card is coloured as the markup card": (
-        "js/polish-estimate.js", """      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +""",
-        """      html += '<div data-rev="markup" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +""",
-        lambda r: r["review"]["keys"] != ["option", "takeoff", "labor", "travel", "takeoff", "markup"]),
-    "the card does not say the option is not in the lump sum": (
+    "the base's review lists the option as a card again": (
+        "js/polish-estimate.js", "    // Takeoff and material",
+        "    html += '<div data-rev=\"option\" class=\"rev\" data-option-card=\"Seal\"></div>'; // Takeoff and material",
+        lambda r: r["review"]["noOptionCard"] is not True or r["review"]["keys"] != ["takeoff", "labor", "travel", "takeoff", "markup"]),
+    "the note does not say the option is not in the lump sum": (
         "js/polish-estimate.js", '  var OPTION_NOT_IN_SUM = "Option, not in the lump sum";', '  var OPTION_NOT_IN_SUM = "Option";',
-        lambda r: "Option, not in the lump sum" not in r["review"]["optionCardText"]),
+        lambda r: r["review"]["onSeal"]["note"] != "Option, not in the lump sum."),
     "a sheet is deleted by one press": (
         "js/polish-estimate.js", "    if (sheetsUi.armed !== tab) { sheetsUi.armed = tab; paintSheets(); return; }", "    void 0;",
         lambda r: r["remove"]["stillThere"] != ["Seal", "Copy1"]),

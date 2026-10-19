@@ -923,8 +923,8 @@
   }
 
   // ── the Sheets panel (Sheets phase 3) ───────────────────────────────────────
-  // Every sheet of the bid, the base bid marked, and what each option does on the proposal, in one floating panel
-  // (aside#sheets-panel). It took the place of the strip of section buttons and the "+ Add option" bar. The markup is
+  // Every sheet of the bid, the base bid marked, and what each option does on the proposal, as ONE strip of tabs and the open sheet's
+  // bar under it (section#sheets-panel). It took the place of the strip of section buttons and the "+ Add option" bar. The markup is
   // B.sheetsPanelHtml's (js/bid-model.js, pure); this is the page's side of it: the state the panel is in (a base change
   // waiting for its yes, a Delete pressed once, a name being typed), what each control writes, and the repaint.
   //
@@ -943,8 +943,7 @@
     busy: false,        // a sheet is being added (the library is being read)
     focus: null         // the control to put the caret back on after the next repaint (data-sh-key)
   };
-  var lastSheets = null;     // the panel markup last drawn, so a keystroke elsewhere redraws nothing that did not change
-  var lastSheetNow = null;   // and the "Open sheet" line
+  var lastSheets = null;     // the bar markup last drawn, so a keystroke elsewhere redraws nothing that did not change
 
   /** The area a new sheet starts on: what the job's base section measures (the section that carries the job's travel
    *  is the first base), 0 when nothing is measured yet. */
@@ -998,7 +997,7 @@
     }
   }
 
-  /** Draw the Sheets panel and the "Open sheet" line. Redrawn only when what they say changed. */
+  /** Draw the sheet bar (the tabs and the open sheet's controls). Redrawn only when what it says changed. */
   function paintSheets() {
     var el = $("sheets-panel");
     if (!el) return;
@@ -1013,10 +1012,6 @@
       want = keep;
     }
     if (want) focusSheetsKey(want);
-    var now = B.sheetNowHtml(ROOT, view);
-    var nowEl = $("sheet-now");
-    if (now !== lastSheetNow) { lastSheetNow = now; nowEl.innerHTML = now; }
-    if (nowEl.hidden === !!now) nowEl.hidden = !now;
   }
 
   /** Kept under its old name: the harnesses (and anything else that asked the page to redraw "the option bar") still do. */
@@ -1266,14 +1261,6 @@
     if (act === "add-menu") { sheetsUi.pick = true; sheetsUi.armed = null; sheetsUi.focus = "add|close"; paintSheets(); return; }
     if (act === "add-close") { sheetsUi.pick = false; sheetsUi.focus = "add|menu"; paintSheets(); return; }
     if (act === "add") { addSheetPress(sheet); return; }
-  }
-
-  /** The panel is a floating, movable widget above 1400px: drag its header to put it wherever it is not in the way, and it
-   *  opens there next time. TW.floatPanel (shared.js) is the one copy of the drag, the remembered position and the clamp that
-   *  keeps a restored panel on screen; this panel has its own key, because one shared key would teleport each of them to
-   *  wherever another was last left. Below the breakpoint the CSS puts it back in the flow and the restore does not run. */
-  function initSheetsPanelDrag() {
-    TW.floatPanel($("sheets-panel"), { handle: "sh-head", draggingClass: "sh-dragging", key: "tw_v2sheets_pos", width: 256 });
   }
 
   /** Is the section on show edited on the page's own panels? Polish, Epoxy and Gyp are (their work types are `ready`
@@ -2867,61 +2854,7 @@
     return '<span data-mk="' + key + '">' + esc(moneyAuto(b[key])) + '</span>';
   }
 
-  /** THE WHOLE BID, on the Review step of a bid made of more than one section (a combo job: Epoxy and Polish).
-  *  One row for each section that is part of the bid, at its OWN price (each has had its own gross profit taken),
-  *  and the combined base bid under them: the same figure the save writes as the lump sum. An option is listed and
-  *  is not in the combined figure. "" for a bid with one section, so a Polish or an Epoxy bid reads as it always did. */
-  function jobCard() {
-    var live = sectionList().filter(function (e) { return e.kind !== "off"; });
-    if (live.length < 2) return "";
-    var bids = allBids();
-    var bases = live.filter(function (e) { return e.kind !== "option"; });
-    var html = "";
-    // The whole-bid card adds the BASE sections up. A bid with one base and an option has nothing to add (the base's
-    // own cards say its price), so it draws none.
-    if (bases.length > 1) {
-      var rows = bases.map(function (e) {
-        var sb = bids[e.tab];
-        return [e.label, "", '<span data-job-sec="' + esc(e.tab) + '">' + esc(sectionMoney(sb)) + '</span>'];
-      });
-      rows.push(["Combined base bid", "", '<span data-job-total>' + esc(jobMoney()) + '</span>', "tot"]);
-      html += '<div data-rev="markup" class="rev" data-job-card><div class="rev-h">Whole bid</div>' + revTable(rows) + '</div>';
-    }
-    // An option is its OWN card, in its own colour, with its own total, and it says it is not in the lump sum.
-    live.filter(function (e) { return e.kind === "option"; }).forEach(function (e) {
-      html += '<div data-rev="option" class="rev" data-option-card="' + esc(e.tab) + '"><div class="rev-h">' + esc(e.label) +
-        ' option <button data-section-tab="' + esc(e.tab) + '">Open</button></div>' +
-        revTable([[OPTION_NOT_IN_SUM, "", ""],
-                  [e.label + " option total", "", '<span data-opt-sec="' + esc(e.tab) + '">' + esc(sectionMoney(bids[e.tab])) + '</span>', "tot"]]) +
-        '</div>';
-    });
-    return html;
-  }
-
   var OPTION_NOT_IN_SUM = "Option, not in the lump sum";
-
-  function sectionMoney(sb) {
-    return sb && sb.priceable !== false && sb.total ? moneyAuto(sb.total) : "no price";
-  }
-
-  /** The combined base bid as the save composes it, or "no price" when a section cannot be priced. */
-  function jobMoney() {
-    var c = null;
-    try { c = B.composePricingSnapshot(ROOT, priceCtx()).computed_bid; } catch (err) { c = null; }
-    return c && c.lump_sum ? moneyAuto(c.lump_sum) : "no price";
-  }
-
-  /** Keep the whole-bid card's figures in step with a keystroke (repaintNumbers). */
-  function repaintJob() {
-    var secs = document.querySelectorAll("[data-job-sec]");
-    var optSecs = document.querySelectorAll("[data-opt-sec]");
-    var tot = document.querySelector("[data-job-total]");
-    if (!secs.length && !tot && !optSecs.length) return;
-    var bids = allBids();
-    secs.forEach(function (el) { el.textContent = sectionMoney(bids[el.getAttribute("data-job-sec")]); });
-    optSecs.forEach(function (el) { el.textContent = sectionMoney(bids[el.getAttribute("data-opt-sec")]); });
-    if (tot) tot.textContent = jobMoney();
-  }
 
   function reviewPanel() {
     // The bid of the section on show: the root's chain, or the engine's answer for another section.
@@ -2938,8 +2871,6 @@
       html += '<p class="cap" data-option-note><b>' + esc(OPTION_NOT_IN_SUM) + '.</b> ' + esc(onShow.tab) +
         ' is priced on its own and printed under Options &amp; Unit Prices. The lump sum is the base bid alone.</p>';
     }
-    html += jobCard();
-
     // Takeoff and material
     var tkRows = [];
     M.takeoff.forEach(function (r) {
@@ -3646,7 +3577,6 @@
     document.querySelectorAll("[data-mkpct]").forEach(function (el) {
       el.textContent = B.pct(b[el.getAttribute("data-mkpct")]);
     });
-    repaintJob();
   }
 
   // ── events ──────────────────────────────────────────────────────────────────
@@ -4803,10 +4733,6 @@
     // keeps what it was saved with and offers the button. See lookupDistance.
     if (newBid && laborDefaults && !M.distance) lookupDistance(false);
   }
-
-  // The Sheets panel floats above 1400px. At parse time, like the page's own delegated listeners: the panel is in the
-  // markup already, and its drag is delegated to the header, which is redrawn with every repaint.
-  initSheetsPanelDrag();
 
   init();
 })();

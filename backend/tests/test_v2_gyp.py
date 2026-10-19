@@ -62,7 +62,6 @@ def _node(code: str, model=MODEL):
 def test_a_new_gyp_job_opens_as_a_section_on_the_base_sheet_with_the_polish_root_off(ran):
     o = ran["opened"]
     assert o["tabs"] == [FIRST] and o["rootKind"] == "off" and o["kind"] == "base"
-    assert o["strip"]["hidden"] is True, "the bid is one sheet, so the Open sheet line has nothing to tell apart"
     assert len(o["strip"]["tabs"]) == 1, "the Sheets panel is drawn for one sheet too, with that sheet's row"
     assert o["savesOnOpen"] == 0, "opening a job writes nothing until somebody edits it"
     assert o["gypSettings"] == "none", "the sheet's own defaults are the preset's, so nothing is stated until somebody types"
