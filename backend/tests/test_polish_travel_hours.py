@@ -679,7 +679,8 @@ def test_a_copy_of_the_carriers_typed_row_made_a_base_beside_it_is_given_back_bu
     """A COPY of the carrier's sheet carries the row the carrier had, the estimator's typed 3 x 5 included (it is priced apart, as an option, which is why it
     has one). Made a base beside the carrier (the Sheets panel's combined pair) it would charge the drive a second time: $495 + $495. A row that REPEATS the
     carrier's exactly (the same guys, hours and hands on them) is a copy's leftover and is given back (emptied, markers gone); one that says something else
-    (typed 2 x 4 on the copy) is the estimator's own choice and stays.
+    (typed 2 x 4 on the copy) is the estimator's own choice and stays. (Every clause of "exactly" is pinned ALONE, by a copy that differs in nothing else, in
+    test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect: here the guys and the hours differ together.)
 
     Mutation: leave the copy's repeat on its section (BREAKS below)."""
     c = ran["copyRepeat"]
@@ -745,6 +746,12 @@ def test_typed_guys_are_worded_as_guys_one_round_trip_each_and_never_as_man_days
     assert "The guys are typed, so Travel Labor is your guys x those hours." in t["note"]
     assert "For reference, the man-days on the labor lines above are 48." in t["howText"], "the reference is for the nights and days typed below"
     assert "crew" not in (t["note"] + t["hint"] + t["howText"]).lower(), "the estimate page's column is Guys, never Crew"
+    # ...and when the nights and days are NOT typed, a far answer fills them (the fifth audit's decision), so the words say they follow the labor, with the man-days as the figure
+    f = ran["notesFollowing"]
+    assert f["how"] == t["how"], "the Travel guys are worded the same either way"
+    assert "Nights and per diem days follow the man-days on the labor lines above (48 now), a night and a day of per diem for each man-day, Kyle's way." in f["lines"]
+    assert not any(x.startswith("For reference") for x in f["lines"]), "nothing is typed below, so there is no reference to give"
+    assert "crew" not in f["howText"].lower() and "man-days (typed)" not in f["howText"]
 
 
 def test_a_cleared_guys_box_is_empty_and_says_so_and_never_the_guys_are_typed(ran):
@@ -798,11 +805,16 @@ def test_the_words_on_a_row_left_on_a_base_that_does_not_carry_the_travel(ran):
 
 
 # ── the other two lines, bad input, words ────────────────────────────────────────────────────────
-def test_lodging_and_per_diem_are_as_they_were(ran):
-    """Switched on by the answer, a hand flip never moved, and their quantities still open empty and typed."""
+def test_lodging_and_per_diem_come_on_by_the_answer_a_hand_flip_never_moves_and_their_quantities_follow_the_labor(ran):
+    """Switched on by the answer, and a hand flip never moved (Lodging flipped off by hand stays off, whatever the miles). Their QUANTITIES are a different box: until
+    2026-10-20 they opened empty and were typed, and a far answer left them so; now a far answer fills a quantity nobody typed with the sheet's count of the labor (4 guys x 12
+    days: 48 nights and 48 days of per diem), on auto and marked as following (`qty_follow`), hand flip or none: the quantity does not depend on the switch.
+
+    Mutation: leave the quantities empty; let a hand flip stop the fill."""
     ln = ran["lines"]
-    assert ln["lodging"] is False and ln["perDiem"] is True
-    assert ln["lodgingQty"] == "" and ln["perDiemQty"] == "" and ln["lodgingAuto"] is False and ln["perDiemAuto"] is False
+    assert ln["lodging"] is False and ln["perDiem"] is True and ln["lodgingHand"] is True
+    assert ln["manDays"] == 48 and ln["lodgingQty"] == 48 and ln["perDiemQty"] == 48
+    assert ln["lodgingAuto"] is True and ln["perDiemAuto"] is True and ln["lodgingFollow"] == "labor" and ln["perDiemFollow"] == "labor"
 
 
 def test_an_answer_with_no_usable_miles_changes_nothing(ran):
@@ -823,12 +835,200 @@ def test_the_words_say_where_the_hours_came_from_and_who_the_trip_is_charged_to(
     assert w["fractional"] == "4.5 hrs: one 240.8 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the labor lines above"
 
 
+# ── the fourth audit (2026-10-20, of c0255de): an option follows the answers, the settling's order, a typed rate, every clause of a repeat, a malformed bid ──
+def filled(hours, guys, rate=33):
+    """A Travel Labor row the distance filled: the tool's hours, the guys on the crew (marked), nobody's box typed in."""
+    return {"hours": hours, "seed": hours, "auto": True, "follow": "crew", "guys": guys, "cost": guys * hours * rate, "on": True}
+
+
+def core(row):
+    """The facts every reading of a row shares (an option's carries its markers and its keys besides)."""
+    return {k: row[k] for k in ("hours", "seed", "auto", "follow", "guys", "cost", "on")}
+
+
+def test_an_options_travel_labor_follows_every_distance_answer_on_its_own_crew(ran):
+    """THE FOURTH AUDIT'S MEDIUM FINDING. A far Polish bid (the job's crew is 4, the copy's own Polishing 6) copied as an option holds a Travel Labor row of its own, and only the
+    carrier's followed an answer: corrected to 50 miles the base dropped its drive ($30,872 on the page) and the option went on pricing its 6.5 hours ($32,632), and at 300 miles the
+    base went to 10 hours while the option stayed at 6.5. Now every answer reaches the option's row by the carrier's rule, on the option's OWN lines' crew: 300 miles is 10 hours for
+    the base's 4 and the option's 6; 50 miles takes the option's drive back WHOLE (empty, no marker; the carrier's row loses only its hours and keeps its crew marker); 190 again fills
+    it again (an empty row is filled by a far answer, so a number typed digit by digit, 3, 30, 300, ends where typing 300 does); clearing the miles takes it back; and the answer
+    alone, with no sync after it, puts the option's guys on its own lines.
+
+    Mutation: leave the options out of an answer; out of clearing the miles; keep an option's markers when the job goes local; put its guys on the base crew; fill only what was filled."""
+    f = ran["optionsFollow"]
+    assert "error" not in f, f.get("error")
+    assert f["crewOfJob"] == 4 and f["ownCrew"] == 6
+    assert [k for k, _ in f["start"]["kinds"]] == ["Polish", "Copy1"] and f["start"]["kinds"][1][1] == "option"
+    for step, hours in (("start", 6.5), ("farther", 10), ("farAgain", 6.5), ("digitsFar", 10)):
+        assert f[step]["base"] == filled(hours, 4), step
+        assert core(f[step]["option"]) == filled(hours, 6), step + ": the option's own crew, not the base's"
+    for step in ("local", "cleared", "digitsLocal"):
+        assert f[step]["base"] == {"hours": "", "seed": "", "auto": True, "follow": "crew", "guys": 4, "cost": 0, "on": True}, step + ": the carrier keeps its crew marker"
+        assert f[step]["option"] == dict(EMPTIED, typed=False, hoursTyped=False, keys=EMPTIED_KEYS), step + ": the option's drive is taken back whole"
+    assert f["cleared"]["distance"] is None
+    assert core(f["bare"]) == filled(10, 6), "the answer alone fills the option's guys on its own lines"
+
+
+def test_what_the_estimator_typed_cleared_or_switched_off_on_an_option_is_left_alone_by_every_answer(ran):
+    """The copy carries the row the carrier had, so each estimator's variant reaches the option as it was: typed 3 x 5 (both boxes marked), the hours box cleared, the guys box cleared, the
+    row switched off. Through 300 miles, 50, 190 and the miles cleared, the box they typed or cleared stays as it was and the row they switched off stays exactly as it was (figures,
+    markers, off), while a box nobody typed in still follows the answer (the cleared Guys box's hours: 6.5, 10, empty, 6.5, empty) and the guys of a row on the crew keep following
+    the option's own lines.
+
+    Mutation: fill a switched-off option row; overwrite what was typed; refill a cleared box."""
+    o = ran["optionsOwned"]
+    assert "error" not in o, o.get("error")
+    steps = ("start", "far300", "local50", "far190", "cleared")
+    for step in steps:
+        t = o["typed"][step]
+        assert (t["guys"], t["hours"], t["typed"], t["hoursTyped"], t["cost"], t["on"]) == ("3", "5", True, True, 495, True), step
+        c = o["clearedHours"][step]
+        assert (c["hours"], c["hoursTyped"], c["guys"], c["follow"], c["cost"]) == ("", True, 4, "crew", 0), step
+        g = o["clearedGuys"][step]
+        assert (g["guys"], g["typed"], g["cost"]) == ("", True, 0), step
+        off = o["off"][step]
+        assert (off["on"], off["guys"], off["hours"], off["seed"], off["follow"], off["cost"]) == (False, 4, 6.5, 6.5, "crew", 0), step
+        assert "enabled" in off["keys"]
+    assert [o["clearedGuys"][s]["hours"] for s in steps] == [6.5, 10, "", 6.5, ""], "the box nobody typed in follows the answer, the cleared one does not"
+
+
+def test_a_sheet_the_sheets_panel_demoted_keeps_following_the_answers_as_an_option(ran):
+    """THE AUDIT'S SECOND ROUTE. A Combo (Polish 4 guys, Epoxy 5), Epoxy made the base (Polish becomes an option; the new carrier takes the job's Travel Labor row and, since the
+    fifth audit, the demoted Polish KEEPS its own, on its own crew of 4: a copy went and nothing moved), the bid reopened (nothing to add: migrateModel finds the row it
+    holds), Polish made the base again: Epoxy is an option holding the drive it was filled with (5 x 6.5 x $33) and Polish carries 4 x 6.5.
+    The miles corrected to 50 emptied Polish's hours and left the option's 6.5 hours priced; now the option's drive goes (empty, no marker), and at 300 miles it is 5 x 10 x $33 =
+    $1,650 beside the base's $1,320.
+
+    Mutation: leave the options out of an answer."""
+    d = ran["optionsDemoted"]
+    assert "error" not in d, d.get("error")
+    assert d["epoxyBase"]["carrier"] == "Epoxy" and d["epoxyBase"]["epoxy"] == filled(6.5, 5), "the new carrier took the job's drive"
+    assert d["epoxyBase"]["polish"] == filled(6.5, 4), "the demoted Polish keeps a Travel Labor row of its own, filled, on its own crew (a copy went to the carrier)"
+    p = d["polishBase"]
+    assert (p["carrier"], p["kinds"]) == ("Polish", [["Polish", "base"], ["Epoxy", "option"]])
+    assert p["polish"] == filled(6.5, 4) and p["epoxy"] == filled(6.5, 5)
+    assert d["local"]["epoxy"] == EMPTIED and d["local"]["polish"]["hours"] == ""
+    assert d["farther"]["polish"] == filled(10, 4) and d["farther"]["epoxy"] == filled(10, 5)
+
+
+def test_an_options_empty_row_is_filled_by_a_far_answer_and_a_gyp_option_never_is(ran):
+    """An option's row that nobody has filled or typed in (the copy was made on a local job) is a row like the carrier's empty one, and a far answer fills it: 4 x 6.5 x $33 beside the
+    base's. A Gyp section is left alone as a Gyp carrier is: the Gyp sheet works its own drive time, so its Travel Labor is typed.
+
+    Mutation: fill only a row the distance has filled before; fill a Gyp option."""
+    b = ran["optionBlankFilled"]
+    assert "error" not in b, b.get("error")
+    assert b["before"]["hours"] == "" and b["before"]["keys"] == EMPTIED_KEYS
+    assert b["base"] == filled(6.5, 4) and core(b["option"]) == filled(6.5, 4)
+    g = ran["optionGyp"]
+    assert "error" not in g, g.get("error")
+    assert g["untouchedFar"] is True and g["untouchedLocal"] is True and g["base"]["hours"] == ""
+
+
+def test_the_settling_puts_the_guys_on_the_crew_before_it_gives_a_repeat_back(ran):
+    """THE FOURTH AUDIT'S LOW FINDING. The carrier's Travel Labor is switched off, and a base beside it holds an exact copy of the row whose guys are those of a crew since gone (3, where
+    the crew is 4 now). A restructure gave repeats back BEFORE it put the guys on the crew, compared 4 with 3, found two different rows, and then made them the same: an exact duplicate
+    of the carrier's switched-off row stayed on the base (price neutral while both are off, a second drive the day either is switched on). The guys come first now, so the copy is
+    recognised and given back: empty, no marker, and switched ON again (releaseTravelRow), while the carrier's row stays as the estimator left it.
+
+    Mutation: give repeats back before the guys are put on the crew; leave a given-back row switched off."""
+    d = ran["duplicateOff"]
+    assert "error" not in d, d.get("error")
+    assert d["root"]["on"] is False and (d["root"]["guys"], d["root"]["hours"], d["root"]["follow"]) == (4, 6.5, "crew") and d["rootMarks"]["off"] is True
+    assert d["epoxy"] == EMPTIED and d["epoxyMarks"]["keys"] == EMPTIED_KEYS and d["epoxyRows"] == 1, "given back, switched on, empty, markers gone"
+    assert d["drive"] == 0
+
+
+def test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect(ran):
+    """THE FOURTH AUDIT'S TEST GAP. The carrier's Travel Labor is typed 3 x 5 (both boxes marked), its sheet is copied and the copy made a base beside it. A copy that says exactly what the
+    carrier's row says is the copy's leftover and is given back (emptied, switched on). A copy that says something else is the estimator's own choice and stays, and it is told from the
+    carrier's by ANY one thing: its guys (2), its hours (4), the Guys box being on auto, the row being switched off, its guys or its hours not carrying the typed marker. Each of those is
+    checked alone, so a clause that goes missing from the comparison gives a copy back that the estimator wrote. (The copy's own figures are priced beside the carrier's: the one-drive rule
+    is about what the distance filled; this row is theirs.) A switched-off carrier row and a copy switched off too are the same row, and it is switched on again when given back.
+
+    Mutation: leave the guys, the hours, the auto flag, the switch, or either typed marker out of the comparison; leave a given-back row switched off."""
+    r = ran["repeatVariants"]
+    assert "error" not in r, r.get("error")
+    s = r["same"]
+    assert s["copy"] == EMPTIED and s["copyMarks"]["keys"] == EMPTIED_KEYS and s["root"] == TYPED_ROOT and s["drive"] == 495
+    kept = {                    # what the copy's row still holds: (guys, hours, cost, on), and what the job's Travel Labor adds up to beside the carrier's $495
+        "guysOnly": (("2", "5", 330, True), 825),
+        "hoursOnly": (("3", "4", 396, True), 891),
+        "autoOnly": (("3", "5", 495, True), 990),
+        "offOnly": (("3", "5", 0, False), 495),
+        "guysMarkerOnly": (("3", "5", 495, True), 990),
+        "hoursMarkerOnly": (("3", "5", 495, True), 990),
+    }
+    for name, (figures, drive) in kept.items():
+        c = r[name]["copy"]
+        assert c != EMPTIED, name + ": a row that differs is the estimator's and stays"
+        assert (c["guys"], c["hours"], c["cost"], c["on"]) == figures, name
+        assert r[name]["root"] == TYPED_ROOT and r[name]["drive"] == drive, name
+    assert r["autoOnly"]["copy"]["auto"] is True and r["offOnly"]["copyMarks"]["off"] is True
+    assert r["guysMarkerOnly"]["copyMarks"]["typed"] is False and r["hoursMarkerOnly"]["copyMarks"]["hoursTyped"] is False
+    b = r["bothOff"]
+    assert b["copy"] == EMPTIED and b["copyMarks"]["keys"] == EMPTIED_KEYS, "the copy of a switched-off row is given back and is switched on again"
+    assert b["root"]["on"] is False and b["rootMarks"]["off"] is True and (b["root"]["guys"], b["root"]["hours"]) == ("3", "5")
+
+
+def test_a_typed_rate_follows_the_jobs_drive_like_typed_guys_and_hours(ran):
+    """THE FOURTH AUDIT'S LOW FINDING. $40 typed on Polish's Travel Labor (the guys and hours still on the distance), the job switched to Epoxy: the row read $33. The old carrier's row was
+    not the estimator's, so it was taken back and the new carrier was filled at its own rate. A rate over the default the row was filled with, or one marked typed (setLaborRate marks the
+    case a number cannot tell: a typed $33 over a default of $33), makes the row the estimator's: it goes to the new carrier with the job's drive (the rows change places, markers and rate
+    and all), whose boxes are then filled by the rule (4 x 6.5 x $40 = $1,040, 4 x 10 x $40 at 300 miles), and it follows the carrier back. The old carrier is left holding the new
+    carrier's former row, at its own rate. A row with no default to compare to (the older row the Polish root of an Epoxy or Gyp job holds, a bid saved before the stamp) is told by the
+    way the box holds the figure, as the Hours box is: a rate typed over it is text and is the estimator's, a number says nothing. Both carriers' rows typed: both stay, and the drive is
+    priced once, at the carrier's own rate.
+
+    Mutation: make a typed rate not the estimator's; lose the marker; take a number over an unknown default for a typed one, or a text rate over it for a number."""
+    t = ran["typedRate"]
+    assert "error" not in t, t.get("error")
+    a = t["typed40"]
+    assert a["toEpoxy"]["carrier"] == "Epoxy" and a["toEpoxy"]["drive"] == 1040
+    assert a["toEpoxy"]["epoxy"] == {"rate": "40", "marked": False, "hours": 6.5, "guys": 4, "follow": "crew", "cost": 4 * 6.5 * 40}
+    assert a["toEpoxy"]["root"] == {"rate": 33, "marked": False, "hours": "", "guys": "", "follow": None, "cost": 0}, "the old carrier holds the new carrier's former row"
+    assert a["later300"]["epoxy"] == {"rate": "40", "marked": False, "hours": 10, "guys": 4, "follow": "crew", "cost": 4 * 10 * 40}, "a later answer moves the hours, never the rate"
+    assert a["backToPolish"]["carrier"] == "Polish" and a["backToPolish"]["drive"] == 1600
+    assert a["backToPolish"]["root"]["rate"] == "40" and a["backToPolish"]["root"]["cost"] == 1600 and a["backToPolish"]["epoxy"]["rate"] == 33
+    m = t["markedAtDefault"]
+    assert m["toEpoxy"]["epoxy"]["marked"] is True and m["toEpoxy"]["epoxy"]["rate"] == "33" and m["toEpoxy"]["root"]["marked"] is False and m["toEpoxy"]["drive"] == 858
+    assert m["backToPolish"]["root"]["marked"] is True and m["backToPolish"]["epoxy"]["marked"] is False
+    u = t["untouched"]
+    assert u["toEpoxy"]["epoxy"]["rate"] == 33 and u["toEpoxy"]["drive"] == 858 and u["backToPolish"]["drive"] == 1320, "no typed rate: as before"
+    x = t["unstampedText"]      # a row never stamped with a default (the Polish root of an Epoxy or Gyp job, a bid saved before the stamp): the rate typed over it is text
+    assert x["toEpoxy"]["epoxy"]["rate"] == "40" and x["toEpoxy"]["epoxy"]["cost"] == 1040 and x["toEpoxy"]["root"]["rate"] == 33 and x["backToPolish"]["root"]["cost"] == 1600
+    n = t["unstampedNumber"]    # ...and a NUMBER over a default nobody knows says nothing: the rate stays on the row the old carrier is given back
+    assert n["toEpoxy"]["epoxy"]["rate"] == 33 and n["toEpoxy"]["epoxy"]["cost"] == 858 and n["toEpoxy"]["root"]["rate"] == 40
+    b = t["bothTyped"]
+    assert b["root"] == {"rate": "45", "marked": False, "hours": 6.5, "guys": 4, "follow": "crew", "cost": 4 * 6.5 * 45}
+    assert b["epoxy"]["rate"] == "40" and (b["epoxy"]["hours"], b["epoxy"]["guys"], b["epoxy"]["cost"]) == ("", "", 0) and b["drive"] == 4 * 6.5 * 45
+    r = ran["rateRows"]
+    assert r == {"typedOverDefault": True, "typedText": True, "atDefault": False, "markedAtDefault": True, "blank": False, "zero": True, "noDefaultAtShipped": False,
+                 "noDefaultOther": False, "noDefaultText": True, "noRow": False, "estimatorsFilled": True, "autoFilledStill": True, "estimatorsAtDefault": False}
+
+
+def test_a_section_whose_labor_is_not_a_list_never_makes_the_answers_or_the_settling_throw(ran):
+    """THE FOURTH AUDIT'S ROBUSTNESS FINDING. A saved bid is whatever was saved: migrateModel carries `tabs` through as they came, so a section can hold a string, a number, an object or a
+    boolean where its labor lines should be. syncAutoGuys walked them with `.forEach` and threw, and the page runs it as it opens (a blank estimate: test_polish_travel_switch.py opens
+    such a bid). The settling, the sync and every answer pass over the section, whether it is a base or an option, and everything that can be read is settled all the same (the carrier's
+    drive 4 x 10 x $33 at 300 miles).
+
+    Mutation: walk the lines of a section whatever they are (the sync, and the helper the options use)."""
+    c = ran["corruptLabor"]
+    assert "error" not in c, c.get("error")
+    assert sorted(c) == ["boolean", "number", "object", "string"]
+    for kind, v in c.items():
+        assert v["calls"] == {"sync": None, "settle": None, "settleMoved": None, "answer": None, "cleared": None}, kind
+        assert v["optionCalls"] == {"sync": None, "answer": None, "cleared": None}, kind
+        assert v["settledRoot"] == filled(10, 4) and v["optionBase"] == filled(10, 4), kind
+
+
 # ── red without the code: break a COPY of the model one line at a time ───────────────────────────
-FILLS = "var fills = !row.hours_typed && (isBlank(row.days) || wrote);"
+FILLS ="var fills = !row.hours_typed && (isBlank(row.days) || wrote);"
 FILL = "if (fills) { row.days = hours; row.hours_seed = hours; }"
 GUYS_ON = 'if (!row.guys_typed && !row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }'
 LEGACY_ON = 'if (!row.guys_typed && row.guys_auto && !row.guys_follow && fills) row.guys_follow = "crew";'
-GUYS_SET = "if (followsCrew(row)) row.guys = crewSize(model);"
+GUYS_SET = "if (followsCrew(row)) row.guys = own ? ownCrewSize(model, rows) : crewSize(model);"
 SYNC = "r.guys = followsCrew(r) ? (s.option ? ownCrewSize(model, s.section.labor) : crewSize(model)) : manDays;"
 CARRY_CALL = "carryTravelRow(model, fromTab);"
 TAKE_BACK_CALL = "takeBackStrayTravel(model);"
@@ -852,7 +1052,8 @@ CATCH_CARRY = "} catch (err) { /* nothing to carry */ }"
 OWN_CREW = "return mostGuysOn(rows, isObject(model) && isObject(model.conditions) ? model.conditions : {}, 0);"
 STRAY_FILLED = "if (travelRowIsAutoFilled(row)) {"
 STRAY_OFF = 'if (!rowOn(row)) return where + " This line holds figures but is switched off'
-ESTIMATORS = "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));"
+ESTIMATORS = "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));"
+TYPED_RATE = 'return row.rate_typed === true || (own !== null ? num(row.rate) !== own : typeof row.rate === "string");'
 REPEAT_GIVEN_BACK = "else if (e.tab !== carrier && travelRowRepeats(r, carrierRow)) releaseTravelRow(r);"
 CLEARED = "delete row.hours_seed; delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;"
 COPY_NOT_SHARED = "to.labor = (to.labor instanceof Array ? to.labor : []).concat(rest.length ? mine : mine.map(jsonCopy));"
@@ -905,7 +1106,7 @@ MUTATIONS = {
     "the answer leaves the guys to the page's sync": (
         GUYS_SET, "if (followsCrew(row)) void 0;", lambda g: g["wichitaBare"]["guys"] != 4),
     "the guys are the man-days and not the crew's size": (
-        GUYS_SET, "if (followsCrew(row)) row.guys = travelManDays(held.rows);", lambda g: g["wichitaBare"]["guys"] != 4),
+        GUYS_SET, "if (followsCrew(row)) row.guys = travelManDays(rows);", lambda g: g["wichitaBare"]["guys"] != 4),
     "the page's sync puts the guys on the man-days": (
         SYNC, "r.guys = manDays;", lambda g: g["crewAfter"]["guys"] != 4),
     "the sync leaves a reopened crew row to follow nothing": (
@@ -1045,8 +1246,88 @@ MUTATIONS = {
         OWN_CREW, "return mostGuysOn(rows, {}, 0);",
         lambda g: g["optionHand"]["withHand"] != 4),
     "a switched-off row is not the estimator's": (
-        ESTIMATORS, "return !!row && !travelRowIsHandsOff(row);",
+        ESTIMATORS, "return !!row && (!travelRowIsHandsOff(row) || travelRateIsTyped(row));",
         lambda g: g["autoFilled"]["estimators"]["off"] is not True or g["moveOffFollows"]["rootMarks"]["off"] is not True),
+    # --- the fourth audit (2026-10-20, of c0255de): an option follows every answer ---
+    "an answer never reaches an option's Travel Labor": (
+        "followDistanceOptions(model, miles);", "void miles;",
+        lambda g: g["optionsFollow"]["farther"]["option"]["hours"] != 10 or g["optionsDemoted"]["farther"]["epoxy"]["hours"] != 10),
+    "clearing the miles never reaches an option's Travel Labor": (
+        "followDistanceOptions(model, null);", "void model;",
+        lambda g: g["optionsFollow"]["cleared"]["option"]["hours"] != "" or g["optionsFollow"]["cleared"]["option"]["keys"] != EMPTIED_KEYS),
+    "an option keeps its fill markers when the job goes local": (
+        "if (own && travelRowIsAutoFilled(row)) clearQuantities(row);", "if (false) clearQuantities(row);",
+        lambda g: g["optionsFollow"]["local"]["option"]["keys"] != EMPTIED_KEYS or g["optionsDemoted"]["local"]["epoxy"] != EMPTIED),
+    "an option's guys follow the base crew when an answer fills them": (
+        GUYS_SET, "if (followsCrew(row)) row.guys = crewSize(model);",
+        lambda g: g["optionsFollow"]["bare"]["guys"] != 6),
+    "an option's empty row is not filled by a far answer": (
+        'if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true);',
+        'if (isTravelRow(r) && r.unit === "hours" && travelRowIsAutoFilled(r)) followDistanceOnRow(model, r, rows, miles, true);',
+        lambda g: g["optionsFollow"]["farAgain"]["option"]["hours"] != 6.5 or g["optionBlankFilled"]["option"]["hours"] != 6.5),
+    "a Gyp option is filled like the rest": (
+        'e.layout === "gyp" || ', "",
+        lambda g: g["optionGyp"]["untouchedFar"] is not True),
+    "a switched-off option row is filled": (
+        OFF_GUARD, "void 0;",
+        lambda g: g["optionsOwned"]["off"]["far300"]["hours"] != 6.5),
+    "a typed option row is overwritten by the next answer": (
+        FILLS, "var fills = true;",
+        lambda g: g["optionsOwned"]["typed"]["far300"]["hours"] != "5"),
+    "a cleared option guys box is refilled by the next answer": (
+        GUYS_ON, 'if (!row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }',
+        lambda g: g["optionsOwned"]["clearedGuys"]["far300"]["guys"] != ""),
+    # --- the settling's order, and what a given-back row is left as ---
+    "the take-back runs before the guys are put on the crew": (
+        SYNC_CALL, "takeBackStrayTravel(model); syncAutoGuys(model); return model;",
+        lambda g: g["duplicateOff"]["epoxy"] != EMPTIED),
+    "a given-back row is left switched off": (
+        "delete row.enabled;", "void row;",
+        lambda g: g["duplicateOff"]["epoxy"]["on"] is not True or "enabled" in g["duplicateOff"]["epoxyMarks"]["keys"]
+        or g["repeatVariants"]["bothOff"]["copy"]["on"] is not True),
+    # --- every clause of "repeats the carrier's row" ---
+    "a copy that says other guys is given back": (
+        'same("guys") && ', "",
+        lambda g: g["repeatVariants"]["guysOnly"]["copy"]["guys"] != "2" or g["repeatVariants"]["guysOnly"]["drive"] != 825),
+    "a copy that says other hours is given back": (
+        'same("days") && ', "",
+        lambda g: g["repeatVariants"]["hoursOnly"]["copy"]["hours"] != "4" or g["repeatVariants"]["hoursOnly"]["drive"] != 891),
+    "a copy on auto when the carrier's is not is given back": (
+        '!!row.guys_auto === !!carrierRow.guys_auto && ', "",
+        lambda g: g["repeatVariants"]["autoOnly"]["copy"]["auto"] is not True or g["repeatVariants"]["autoOnly"]["drive"] != 990),
+    "a copy switched off when the carrier's is on is given back": (
+        "(row.enabled === false) === (carrierRow.enabled === false) &&", "true &&",
+        lambda g: g["repeatVariants"]["offOnly"]["copy"]["on"] is not False),
+    "a copy whose guys were not typed by hand when the carrier's were is given back": (
+        "(row.guys_typed === true) === (carrierRow.guys_typed === true) && ", "",
+        lambda g: g["repeatVariants"]["guysMarkerOnly"]["copy"]["guys"] != "3" or g["repeatVariants"]["guysMarkerOnly"]["drive"] != 990),
+    "a copy whose hours were not typed by hand when the carrier's were is given back": (
+        "(row.hours_typed === true) === (carrierRow.hours_typed === true);", "true;",
+        lambda g: g["repeatVariants"]["hoursMarkerOnly"]["copy"]["hours"] != "5" or g["repeatVariants"]["hoursMarkerOnly"]["drive"] != 990),
+    # --- a typed rate follows the job's drive ---
+    "a rate the estimator typed does not make the row theirs": (
+        ESTIMATORS, "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));",
+        lambda g: g["typedRate"]["typed40"]["toEpoxy"]["epoxy"]["rate"] != "40" or g["rateRows"]["estimatorsFilled"] is not True),
+    "a rate typed to the line's own default is told from one that follows it": (
+        TYPED_RATE, 'return (own !== null ? num(row.rate) !== own : typeof row.rate === "string");',
+        lambda g: g["rateRows"]["markedAtDefault"] is not True or g["typedRate"]["markedAtDefault"]["toEpoxy"]["epoxy"]["marked"] is not True),
+    "a number over a default nobody knows is taken for typed": (
+        TYPED_RATE, "return row.rate_typed === true || num(row.rate) !== own;",
+        lambda g: g["rateRows"]["noDefaultAtShipped"] is not False or g["rateRows"]["noDefaultOther"] is not False
+        or g["typedRate"]["unstampedNumber"]["toEpoxy"]["epoxy"]["rate"] != 33),
+    "a text rate over a default nobody knows is not taken for typed": (
+        TYPED_RATE, "return row.rate_typed === true || (own !== null ? num(row.rate) !== own : false);",
+        lambda g: g["rateRows"]["noDefaultText"] is not True or g["typedRate"]["unstampedText"]["toEpoxy"]["epoxy"]["rate"] != "40"),
+    "a rate at the line's own default is taken for typed": (
+        TYPED_RATE, "return row.rate_typed === true || own !== null;",
+        lambda g: g["rateRows"]["atDefault"] is not False or g["typedRate"]["untouched"]["toEpoxy"]["epoxy"]["rate"] != 33),
+    # --- a saved bid is whatever was saved ---
+    "the sync walks a labor that is not a list": (
+        "var lines = laborLinesOf(s.section);", "var lines = s.section.labor || [];",
+        lambda g: "error" in g["corruptLabor"] or any(v["calls"]["sync"] is not None for v in g["corruptLabor"].values())),
+    "the options walk a labor that is not a list": (
+        "return isObject(section) && Array.isArray(section.labor) ? section.labor : [];", "return isObject(section) && section.labor ? section.labor : [];",
+        lambda g: "error" in g["corruptLabor"] or any(v["optionCalls"]["answer"] is not None or v["calls"]["sync"] is not None for v in g["corruptLabor"].values())),
     # --- the notes ---
     "figures nobody typed are called typed on a leftover row": (
         STRAY_FILLED, "if (false) {",

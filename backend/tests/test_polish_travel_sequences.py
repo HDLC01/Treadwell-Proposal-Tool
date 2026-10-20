@@ -1,4 +1,4 @@
-"""THE JOB'S ONE DRIVE, OVER EVERY SEQUENCE OF SWITCHES: the third audit's acceptance test (2026-10-20, of 7d32336), part 1 of 3.
+"""THE JOB'S ONE DRIVE, OVER EVERY SEQUENCE OF SWITCHES: the third audit's acceptance test (2026-10-20, of 7d32336), part 1 of 4.
 
 A hand-picked scenario can only hold the switches somebody thought of, and each audit of "a far distance fills Travel Labor" found that the scenarios held every switch
 but the next one: Epoxy to Polish to Combo priced the drive twice ($858 + $858 = $1,716 where Kyle types $858), a Combo made Polish saved a price a plain reopen then
@@ -22,7 +22,8 @@ minutes) was run for the commit message and has no violation.
 
 This file also walks a local job (40 miles) and a job whose distance could not be found, where no drive is priced at all. Part 2
 (test_polish_travel_sequences_owned.py) walks the same sequences with the estimator's own typed / cleared / switched-off Travel Labor and with the Sheets panel's base changes. Part 3 (test_polish_travel_sequences_mutations.py) breaks a copy of the model one line at a time and
-requires the walk to go red, so a clean walk is never a walk that cannot see.
+requires the walk to go red, so a clean walk is never a walk that cannot see. Part 4 (test_polish_travel_sequences_distance.py, the fourth audit, of c0255de) adds the
+miles corrected AFTER the sheets were restructured, copied and demoted as a step of the walk, and holds every option's Travel Labor to the answer.
 """
 import pytest
 

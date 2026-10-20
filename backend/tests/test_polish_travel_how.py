@@ -134,3 +134,23 @@ def test_nights_on_auto_are_explained_in_the_same_figure_and_the_travel_guys_sta
     assert any(x.startswith("Lodging: 23 nights") for x in a["lines"]) and any(x.startswith("Per Diem: 23 days") for x in a["lines"])
     assert a["lodgingHint"] == "Nights counted from the labor above, as the sheet does."
     assert any(x.startswith("Travel Labor: 4 guys x 5 drive hours") for x in a["lines"])
+
+
+def test_the_lines_a_far_answer_filled_follow_the_sheets_count_and_say_so_in_kyles_words(ran):
+    """THE FIFTH AUDIT'S DECISION (Hanz, 2026-10-20, "Fill them automatically"): the same bid with Lodging and Per Diem left blank, as a new bid opens them, and a far answer
+    applied. Each line is charged the sheet's count of the labor (23 nights where guys x days is 21: the fourth hand on the joint-filler line counts too), the working says each
+    line follows the labor, and ONE sentence says what they follow and that a night and a day of per diem are charged for each, Kyle's way. The words under the boxes say the
+    same. None of the older auto lines' sentences ("Nights = ...", "Man-days = ...") or a typed line's reference ("For reference, ...") is said for them.
+
+    Mutation: say the lines are typed; leave the sentence out; word the count as the man-days when it is not."""
+    f = ran["handFollowing"]
+    assert (f["lodging"]["qty"], f["lodging"]["qty_auto"], f["lodging"]["qty_follow"]) == (23, True, "labor")
+    assert (f["perDiem"]["qty"], f["perDiem"]["qty_auto"], f["perDiem"]["qty_follow"]) == (23, True, "labor")
+    assert f["charge"] == {"lodging": 1610, "per_diem": 1035, "total": 2645}
+    assert "Lodging: 23 nights (follows the labor) x $70.00 = $1,610.00" in f["lines"]
+    assert "Per Diem: 23 days (follows the labor) x $45.00 = $1,035.00" in f["lines"]
+    assert ("Nights and per diem days follow the labor above as the sheet counts it (23 now; guys x days is 21), a night and a day of per diem for each, Kyle's way."
+            in f["lines"])
+    assert not any(x.startswith("Nights = ") or x.startswith("Man-days = ") or x.startswith("For reference") for x in f["lines"]), f["lines"]
+    assert f["lodgingHint"] == "Follows the labor above as the sheet counts it (23; guys x days is 21): a night for each, Kyle's way."
+    assert f["perDiemHint"] == "Follows the labor above as the sheet counts it (23; guys x days is 21): a day of per diem for each, Kyle's way."

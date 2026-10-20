@@ -1,4 +1,4 @@
-"""THE JOB'S ONE DRIVE, OVER EVERY SEQUENCE OF SWITCHES, part 2 of 3: what the estimator said, and the Sheets panel.
+"""THE JOB'S ONE DRIVE, OVER EVERY SEQUENCE OF SWITCHES, part 2 of 4: what the estimator said, and the Sheets panel.
 
 Part 1 (test_polish_travel_sequences.py) walks a new far bid whose Travel Labor nobody touched. This walks the cases the third audit (2026-10-20, of 7d32336) found
 the settling did not hold:
@@ -7,7 +7,9 @@ the settling did not hold:
                       row switched off) before any switch: through EVERY sequence of job types after it, the row is the carrier's, as they left it, and on no other section.
                       "Typed, cleared and switched-off are the estimator's, are never refilled, and follow the job's drive when the carrier changes." At 7d32336 the typed 3 x 5
                       stayed behind on the old carrier while the new one was filled beside it ($858 + $495), and a cleared or switched-off row read $858 on the new carrier.
-  mixed               the same four say-sos, applied ONCE anywhere along the sequence instead of at the start.
+  rate                (the fourth audit, 2026-10-20, of c0255de) a RATE typed over the line's $33 ($40) with the guys and the hours left on the distance: the typed rate is the
+                      estimator's too, and follows the job's drive to every carrier as typed guys and hours do ($40 read $33 on Epoxy).
+  mixed               the same say-sos (the rate too), applied ONCE anywhere along the sequence instead of at the start.
   sheets              the four job types AND the Sheets panel: every base change it offers (a sheet, or the Epoxy + Polish pair) and a copy of the carrier (an option, which
                       is priced apart and carries its own row). The base's Travel Labor is judged by the same rules; an option's is its own.
   sheetsTyped, ...    the Sheets walk with the estimator's say on the carrier's row first: a copy carries that row too, and made a base it must not price the drive twice.
@@ -23,11 +25,12 @@ from _node import require_node
 from _travel_sequences import explain, run
 
 
-@pytest.mark.parametrize("variant", ["typed", "clearHours", "clearGuys", "off"])
+@pytest.mark.parametrize("variant", ["typed", "clearHours", "clearGuys", "off", "rate"])
 def test_what_the_estimator_said_on_travel_labor_follows_the_carrier_through_every_sequence_of_job_types(variant):
     """Four starts (Polish, Epoxy, Combo, Gyp), the estimator's say applied to the carrier's row, then every sequence of the four job types three steps deep: 340 pages
-    each. After every step the row is on the CARRIER with what they left (typed 3 x 5; the empty Hours or Guys box; switched off), no other section holds anything of
-    theirs or prices anything, and the drive is priced at most once."""
+    each. After every step the row is on the CARRIER with what they left (typed 3 x 5; the empty Hours or Guys box; switched off; the rate typed as $40 with the guys and
+    hours left on the distance, which the 2026-10-20 fourth audit found staying behind on the old carrier at $33), no other section holds anything of theirs or prices
+    anything, and the drive is priced at most once."""
     require_node()
     got = run(variant, 3)
     assert got["runs"] >= 340 and got["plain"] >= 84 and got["reopens"] >= 190, "the walk was cut short: %r" % ({k: got[k] for k in ("runs", "plain", "reopens")},)
@@ -53,7 +56,7 @@ def test_job_switches_copies_and_every_base_change_the_sheets_panel_offers_price
     assert got["violations"] == {} and got["crashes"] == [], explain(got)
 
 
-@pytest.mark.parametrize("variant", ["Typed", "ClearHours", "ClearGuys", "Off"])
+@pytest.mark.parametrize("variant", ["Typed", "ClearHours", "ClearGuys", "Off", "Rate"])
 def test_what_the_estimator_said_survives_every_job_switch_copy_and_base_change_together(variant):
     """The estimator's say on the carrier's row (typed, a cleared box, switched off), then every sequence of job switches, copies of the carrier and Sheets base changes
     three steps deep: 939 pages each. The estimator's row is the carrier's after every step, and the drive is priced at most once. A COPY of the carrier's sheet carries the
@@ -68,7 +71,7 @@ def test_what_the_estimator_said_survives_every_job_switch_copy_and_base_change_
 
 
 @pytest.mark.parametrize("distance", ["local", "unknown"])
-@pytest.mark.parametrize("variant", ["typed", "clearHours", "clearGuys", "off"])
+@pytest.mark.parametrize("variant", ["typed", "clearHours", "clearGuys", "off", "rate"])
 def test_what_the_estimator_said_follows_the_carrier_on_a_short_job_or_one_with_no_distance_too(variant, distance):
     """The estimator's say is theirs wherever the job is: typed Travel Labor on a 40 mile job (it is priced: typing lifts the grey) or on a job whose distance the
     lookup could not find still goes with the job's drive to every carrier, and nothing is filled beside it. Every sequence of the four job types two steps deep."""

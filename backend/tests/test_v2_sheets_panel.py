@@ -236,7 +236,9 @@ def test_a_base_change_that_moves_the_travel_fills_the_new_carriers_blank_travel
     t = ran["baseTravel"]
     b = t["blank"]
     assert b["before"] == {"carrier": "Polish", "row": {"days": "", "guys": "", "guys_auto": False}}, "blank, untouched, no marker"
-    assert (b["carrier"], b["rootHasTravel"], b["epoxyHasTravel"], b["asked"]) == ("Epoxy", False, True, 0)
+    # (the demoted Polish root KEEPS its Travel Labor row since the fifth audit: it is an option, priced apart with a drive of its own, and moving the row left it none
+    # until a reload; the new carrier took a copy)
+    assert (b["carrier"], b["rootHasTravel"], b["epoxyHasTravel"], b["asked"]) == ("Epoxy", True, True, 0)
     assert b["row"] == {"days": 6.5, "guys": 3, "guys_auto": True, "guys_follow": "crew", "hours_seed": 6.5}
     ty = t["typed"]
     assert (ty["carrier"], ty["epoxyHasTravel"]) == ("Epoxy", True)

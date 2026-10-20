@@ -144,15 +144,16 @@
     } catch (err) { return B.ROOT_TAB; }
   }
 
-  /** The words on the Labor and Review steps of a section that does not carry the job's travel. */
+  /** The words on the Labor and Review steps of a section that does not carry the job's travel. THE SECTION IS NAMED BY ITS NAME ON SCREEN
+   *  (carrierName: a sheet the estimator renamed, or a copy, is called what the sheet bar calls it), never by its tab id: "at the rates set on
+   *  the Copy1 section" told nobody which sheet that was. */
   function travelNote() {
-    var tab = B.ROOT_TAB;
-    try { tab = B.travelCarrier(ROOT); } catch (err) { tab = B.ROOT_TAB; }
+    var name = carrierName();
     if (activeIsOption()) {
       return "This option is priced apart, so it carries its own Hotel and Per Diem for its own crew when the job is on the road, " +
-        "at the rates set on the " + tab + " section. Open it to change them.";
+        "at the rates set on the " + name + " section. Open it to change them.";
     }
-    return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + tab +
+    return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + name +
       " section. Open it to change them.";
   }
 
@@ -1404,7 +1405,9 @@
    *  a page that opens shouting at the estimator has said nothing. */
   function stepStatus() {
     var priced = 0, half = 0;
-    M.takeoff.forEach(function (r) {
+    // The lists are read as lists and never assumed to be: the model reads a saved section's labor or takeoff that is not a list as an empty one
+    // (B.migrateModel), and the rail is drawn for every section the estimator puts on show, so this is the first thing to run on it.
+    (M.takeoff instanceof Array ? M.takeoff : []).forEach(function (r) {
       if (!B.rowOn(r)) return;                         // an off row is not part of the bid
       var measured = B.num(r.measurement) > 0;
       // EITHER ID COUNTS. A picked, measured material row is a finished row by every definition
@@ -1419,7 +1422,7 @@
     // The Labor step is done when a line prices, and a line the prevailing wage prices counts (the same rate the
     // totals and the blockers use), so a blank-rate line the card is pricing does not leave the pips grey.
     var pwStep = B.prevailingApplied(M);
-    M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });
+    (M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });
     return {
       takeoff: half ? "att" : (priced ? "ok" : ""),
       labor: lab ? "ok" : "",
@@ -2425,18 +2428,24 @@
   }
 
   /** What an Epoxy section charges that is not one of its rows, in words: the patch (a flat price on the whole
-   *  area, always charged) and where the cove rows and the tooling are. "" for any other section. */
+   *  area, always charged) and where the cove rows and the tooling are. "" for any other section. The paragraph is KEYED (`data-epoxy-cap`) and its words are
+   *  epoxyCaptionText's, so repaintNumbers writes them again whenever the takeoff moves: the note read "Patch $0" until the step was entered again. */
   function epoxyCaption() {
     var e = activeTab === B.ROOT_TAB ? null : openEntry();
     if (!e || e.role !== "epoxy") return "";
+    return '<p class="cap" data-epoxy-cap>' + epoxyCaptionText(e) + '</p>';
+  }
+
+  /** The inside of the Epoxy caption (HTML), for the Epoxy section `e`: the patch and the tooling worked out from its takeoff as it is NOW. */
+  function epoxyCaptionText(e) {
     var takeoff = e.section.takeoff || [];
     var r = E.sectionMaterial(takeoff, {
       items: itemsFor(takeoff), sf: B.takeoffSf(takeoff), rowPrice: function (row) { return rowPrice(row, takeoff); }
     });
-    return '<p class="cap">Patch <b data-epoxy-patch>' + esc(moneyAuto(r.patch)) + '</b> is added for you: ' +
+    return 'Patch <b data-epoxy-patch>' + esc(moneyAuto(r.patch)) + '</b> is added for you: ' +
       esc(B.money2(E.unitPrice(ITEMS, "patch").cost)) + ' a square foot of the whole area, whatever the system. ' +
       'A cove row is priced the way the estimate sheet prices it, from its length. Tooling and consumables, ' +
-      esc(moneyAuto(r.tooling)) + ', are added on the Review step.</p>';
+      esc(moneyAuto(r.tooling)) + ', are added on the Review step.';
   }
 
   /** What a Seal option charges that is not one of its rows, in words: the patch (a price a square foot of the whole
@@ -2445,12 +2454,17 @@
   function sealCaption() {
     var e = activeTab === B.ROOT_TAB ? null : openEntry();
     if (!e || e.role !== "seal" || !SL) return "";
+    return '<p class="cap" data-seal-cap>' + sealCaptionText(e) + '</p>';
+  }
+
+  /** The inside of the Seal caption (HTML), for the Seal section `e`, from its takeoff as it is NOW (repaintNumbers writes it again when the takeoff moves). */
+  function sealCaptionText(e) {
     var sf = B.takeoffSf(e.section.takeoff || []);
     var reno = jobIsReno();
-    return '<p class="cap">Patch <b data-seal-patch>' + esc(moneyAuto(SL.patchCost(ITEMS, sf, reno))) + '</b> is added for you: ' +
+    return 'Patch <b data-seal-patch>' + esc(moneyAuto(SL.patchCost(ITEMS, sf, reno))) + '</b> is added for you: ' +
       esc(B.money2(SL.unitPrice(ITEMS, reno ? "patchReno" : "patchNew").cost)) + ' a square foot of the whole area (' +
       (reno ? "a renovation" : "new concrete") + '), whatever the rows say. Tooling and consumables, ' +
-      esc(moneyAuto(SL.toolingCost(sf))) + ', are added on the Review step.</p>';
+      esc(moneyAuto(SL.toolingCost(sf))) + ', are added on the Review step.';
   }
 
   /** THE PREVAILING WAGE CALCULATOR, as a card at the bottom of the Labor step (Hanz, 2026-10-15).
@@ -2733,7 +2747,8 @@
   /** One of the two travel cost lines (Lodging, Per Diem) as a card, in the `.tk lab` vocabulary
    *  the labor cards use so the three travel lines read as one family. `key` is "lodging" or
    *  "per_diem". Quantity is nights / days; while it is auto it is the crew's man-days (the way
-   *  backend/pricing.py counts them) and the box says so; typing flips it to the estimator's own. */
+   *  backend/pricing.py counts them) and the box says so; typing flips it to the estimator's own. A far answer FILLS a quantity nobody has typed
+   *  (B.followDistanceNights, 2026-10-20): it goes on auto and follows the labor, and the words under the box say so in Kyle's way (B.travelQtyHint). */
   function travelCard(key) {
     var l = (M.travel || {})[key] || {};
     var on = !!l.enabled;
@@ -2752,7 +2767,7 @@
       '<div class="f"><label>' + unitWord + '</label>' +
       '<input class="n" data-trv="' + key + '" data-k="qty" value="' + esc(nv(l.qty)) + '"' +
       (auto ? ' data-auto="1"' : '') + '>' +
-      '<p class="hint" data-hint-trv="' + key + '">' + B.lodgingHint(ROOT, activeTab, auto, M.labor) + '</p></div>' +
+      '<p class="hint" data-hint-trv="' + key + '">' + esc(B.travelQtyHint(ROOT, activeTab, key, l, M.labor)) + '</p></div>' +
       '<div class="f"><label>Rate</label>' +
       '<span class="mny">$<input class="n" data-trv="' + key + '" data-k="rate" value="' +
       esc(nv(l.rate)) + '"></span>' +
@@ -2763,11 +2778,17 @@
       '<div class="costbox' + (cost > 0 ? "" : " empty") + '" data-trvcostbox-for="' + key + '">' +
       esc(moneyAuto(cost)) + '</div>' +
       '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
-      '</div><p class="hint trvnote">' + (isNight
-        ? "Overnight stays are expected at 70 miles or more from the office. Under 70 miles " +
-          "this line stays gray."
-        : "Meals while the guys are away, expected at 70 miles or more from the office. Under " +
-          "70 miles this line stays gray.") + '</p></div>';
+      '</div><p class="hint trvnote">' + (gypOpen()
+        // A Gyp crew is entered in hours, which the man-days do not count, so on a Gyp sheet the nights are typed (round-5 audit).
+        ? (isNight ? "Overnight stays are expected at 70 miles or more from the office. Type the nights: a Gyp crew is entered in hours, so they " +
+            "do not fill in by themselves. Under 70 miles this line stays gray."
+          : "Meals while the guys are away, expected at 70 miles or more from the office. Type the days: a Gyp crew is entered in hours, so " +
+            "they do not fill in by themselves. Under 70 miles this line stays gray.")
+        : isNight
+        ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the man-days, a night for each, " +
+          "Kyle's way. Type your own to use them instead. Under 70 miles this line stays gray."
+        : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the man-days, a day of " +
+          "per diem for each, Kyle's way. Type your own to use them instead. Under 70 miles this line stays gray.") + '</p></div>';
   }
 
   // ── distance decides "local" ────────────────────────────────────────────────
@@ -2787,7 +2808,8 @@
   // A FAR ANSWER ALSO FILLS TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20): its hours from the miles (one round trip), its
   // guys the crew's size, so each guy is charged one trip as on his own sheets. A figure the estimator typed in a box, or
   // cleared, always wins, and a switched-off row is left as it is (B.applyDistance, B.clearDistance, B.followDistanceHours).
-  // It is given the WHOLE model (ROOT), not the section on show: the Travel Labor row is the carrier section's.
+  // It is given the WHOLE model (ROOT), not the section on show: the Travel Labor row is the carrier section's, and every sheet that is an
+  // OPTION (a copy of the carrier, a base that was demoted) has a row of its own that follows the same answers on its own crew (B.followDistanceOptions).
   var distBusy = false;
   var distReason = "";
   var DIST_REASONS = {
@@ -2934,12 +2956,16 @@
     } else {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
-        '70 miles all three lines below stay gray until you switch one on.</p>';
+        '70 miles all three lines below stay gray until you switch one on. ' + (gypOpen()
+          ? 'On a far Gyp job type the drive hours, the nights and the per diem days: a Gyp crew is entered in hours, so they do not fill in by themselves.</p>'
+          : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');
       html += distanceBlock();
       // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
       // pre-line), so the live repaint can replace it without touching anything the estimator is in.
       html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
-      html += travelRows + travelCard("lodging") + travelCard("per_diem");
+      // THE CARD'S WAY BACK (the 2026-10-20 fifth audit): with no Travel Labor line on the carrier the block draws the control that adds one,
+      // where the card would be.
+      html += (travelRows || addTravelHtml()) + travelCard("lodging") + travelCard("per_diem");
       html += '<p class="cap">Lodging and Per Diem total <b data-travel-total>' +
         esc(moneyAuto(B.travelCosts(M.travel, M.labor, B.travelOpts(ROOT, activeTab)).total)) + '</b>, added before the markups.</p>';
     }
@@ -3297,7 +3323,12 @@
       var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor)[k]
                            : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab));
       var per = k === "lodging" ? "night" : "day";
-      trvRows.push([name, rvc("trv." + k + ".q", B.fmtSf(B.num(qty))), per + "s", rvc("trv." + k + ".rate", rateMoney(tl.rate) + " / " + per),
+      // THE JOB'S LINE SAYS WHERE ITS QUANTITY CAME FROM while a far answer filled it (B.followDistanceNights): the nights and the per diem days follow the
+      // man-days, Kyle's way, said in the line's own words under its name. A keyed figure like the drive sentence above, so a late answer repaints it
+      // in place, and empty (no height) for a line the estimator typed. An option's own lines count their own man-days and say nothing here.
+      var followNote = !ownTravel && B.qtyFollows(tl) ? B.travelFollowWords(ROOT, activeTab, k, M.labor) : "";
+      var nameCell = ownTravel ? name : { raw: esc(name) + '<span class="note work">' + rv("trv." + k + ".note", followNote) + '</span>' };
+      trvRows.push([nameCell, rvc("trv." + k + ".q", B.fmtSf(B.num(qty))), per + "s", rvc("trv." + k + ".rate", rateMoney(tl.rate) + " / " + per),
                     rv("trv." + k + ".tot", moneyAuto(cost))]);
     });
     if (!carries) {
@@ -3863,14 +3894,21 @@
       });
       document.querySelectorAll('[data-trv][data-k="qty"]').forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv")];
-        if (!l || l.qty_auto === false) return;
-        el.setAttribute("data-auto", "1");
+        if (!l) return;
         var v = l.qty == null ? "" : String(l.qty);
+        if (l.qty_auto === false) {
+          // A quantity that LEFT auto without the estimator typing (a lookup that put a far job back under 70 miles takes the figure the labor filled back to
+          // empty) shows what the model holds now; one they typed already holds exactly that. The box they are in is never written.
+          if (document.activeElement !== el && el.value !== v) el.value = v;
+          return;
+        }
+        el.setAttribute("data-auto", "1");
         if (el.value !== v) el.value = v;
       });
       document.querySelectorAll("[data-hint-trv]").forEach(function (el) {
-        var l = M.travel[el.getAttribute("data-hint-trv")];
-        if (l) el.textContent = B.lodgingHint(ROOT, activeTab, l.qty_auto !== false, M.labor);
+        var key = el.getAttribute("data-hint-trv");
+        var l = M.travel[key];
+        if (l) el.textContent = B.travelQtyHint(ROOT, activeTab, key, l, M.labor);
       });
       document.querySelectorAll("[data-trv-card]").forEach(function (el) {
         var l = M.travel[el.getAttribute("data-trv-card")];
@@ -3930,6 +3968,15 @@
       if (capEl) capEl.innerHTML = gypCaptionText(gypNow);
       var truckEl = document.querySelector("[data-gyp-truck]");
       if (truckEl) truckEl.textContent = gypTruckText(gypNow);
+    }
+    // THE PATCH NOTE UNDER AN EPOXY OR SEAL SECTION'S ROWS, in place (the 2026-10-20 fifth audit): the patch and the tooling are worked out from the area, which is
+    // what a keystroke in a takeoff row changes, and a keystroke takes this path and never rebuilds the panel. The note read "Patch $0" from the first
+    // drawing (an empty takeoff) until the step was entered again, when it said $200.
+    var epoxyCapEl = document.querySelector("[data-epoxy-cap]"), sealCapEl = document.querySelector("[data-seal-cap]");
+    if (epoxyCapEl || sealCapEl) {
+      var capEntry = activeTab === B.ROOT_TAB ? null : openEntry();
+      if (epoxyCapEl && capEntry && capEntry.role === "epoxy") epoxyCapEl.innerHTML = epoxyCaptionText(capEntry);
+      if (sealCapEl && capEntry && capEntry.role === "seal" && SL) sealCapEl.innerHTML = sealCaptionText(capEntry);
     }
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions, pwNow)));
@@ -4058,6 +4105,33 @@
         }
       });
     });
+  }
+
+  /** THE ADD TRAVEL LABOR CONTROL (the 2026-10-20 fifth audit). The Travel Labor card's x takes the line away and the Add labor pop-up leaves Travel out
+   *  on purpose ("it has its own block below"), so until now nothing brought the line back: the summary said Travel Labor came on over a job with no
+   *  Travel Labor line. Drawn in the travel block, in place of the card, only while the job's carrier has no such line. */
+  function addTravelHtml() {
+    return '<div class="trvadd" data-trv-none><p class="cap">This bid has no Travel Labor line, so the drive adds nothing to the price.</p>' +
+      '<button class="btn addline below" data-add-travel="1">' + icon("plus", 16) + ' Add Travel Labor</button></div>';
+  }
+
+  var travelAdding = false;
+  /** Add the line back: a fresh row, the one a new bid is seeded with (the library's Travel name and rate, empty), on the section that carries the job's travel,
+   *  filled by the distance on file by the rule when the job is far (B.addTravelLabor). The library is read first, like the Add labor pop-up, and a double click adds
+   *  one line (B.addTravelLabor refuses a section that already has one). The model is read AFTER the library answers, so a figure typed meanwhile is kept. */
+  async function addTravelLaborPress() {
+    if (travelAdding) return;
+    travelAdding = true;
+    try {
+      var rows = await loadLaborDefaults();
+      if (!B.addTravelLabor(ROOT, B.freshTravelRow(rows, LABOR_RATE))) return;
+      changed(true);
+      var at = -1;
+      M.labor.forEach(function (r, i) { if (at < 0 && B.isTravelRow(r)) at = i; });
+      if (at >= 0) refocus('[data-lab="' + at + '"][data-k="guys"]');
+    } finally {
+      travelAdding = false;
+    }
   }
 
   /** The warning under a labor rate box: the shared "Default value: $X.XX" when this row's rate is
@@ -4218,6 +4292,7 @@
     }
     var addLab = t.closest("[data-add-lab]");
     if (addLab) { openLaborPicker(addLab); return; }
+    if (t.closest("[data-add-travel]")) { addTravelLaborPress(); return; }
     // + Add a trade, and the x on a trade the estimator added. The panel is redrawn (a box comes or goes), and a
     // new trade's name box takes the focus, since naming it is the first thing it needs.
     if (t.closest("[data-pw-add]")) {
@@ -4235,7 +4310,11 @@
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       if (M.labor.length <= 1) return;
-      M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
+      var gone = M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1)[0];
+      // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY (round-5 audit): migrateModel appends a blank Travel row to a bid that has none unless the model
+      // says its absence is the answer (no_travel_labor), so a reload brought the line back and the next far answer priced it (+$783). The x is
+      // that answer; Add Travel Labor (B.addTravelLabor) takes it back.
+      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;
       changed(true);
       return;
     }
@@ -4628,19 +4707,25 @@
     }
 
     // Lodging / Per Diem boxes. Typing in the auto quantity is how you leave auto (the same trade
-    // Travel's Guys box makes): one rebuild so the hint and the switch say so, caret carried.
+    // Travel's Guys box makes): one rebuild so the hint and the switch say so, caret carried. A KEYSTROKE IN THE BOX MAKES IT THE ESTIMATOR'S,
+    // clearing it included (B.markTravelQtyTyped): a far answer fills the nights and the per diem days the labor counts (B.followDistanceNights)
+    // and never again over a box somebody has typed in or emptied.
     var trvKey = el.getAttribute("data-trv");
     if (trvKey !== null && k) {
       var tline = M.travel && M.travel[trvKey];
       if (tline) {
-        if (k === "qty" && tline.qty_auto !== false) {
-          tline.qty_auto = false;
+        if (k === "qty") {
+          var wasAuto = tline.qty_auto !== false;
+          B.markTravelQtyTyped(tline);
           tline.qty = el.value;
-          changed(true);
-          refocus('[data-trv="' + trvKey + '"][data-k="qty"]');
-          return;
+          if (wasAuto) {
+            changed(true);
+            refocus('[data-trv="' + trvKey + '"][data-k="qty"]');
+            return;
+          }
+        } else {
+          tline[k] = el.value;
         }
-        tline[k] = el.value;
       }
       changed(false);
       return;
