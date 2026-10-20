@@ -33,7 +33,7 @@ HARNESS = TESTS / "js" / "sheet-order-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js", "js/proposal-review.js"]
-SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "afterReload", "legacy", "model", "invariance"]
+SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "staleCopy", "afterReload", "legacy", "model", "invariance"]
 GYP = 'Gyp (USG 1-8")'
 GYP_FR = "Gyp (FR)"
 # What a page shows that depends on the order of the sheets, as the harness reads it. (Not `open`: a session is on whatever sheet the estimator was last
@@ -302,6 +302,43 @@ def test_an_unstamped_section_is_newer_than_a_stamped_one(ran):
 def test_two_sections_with_one_stamp_are_told_apart_by_their_ids_and_not_by_their_keys(ran):
     got = ran["model"]
     assert set(got["tieOrders"]) == {" | ".join(["Polish", "Copy1", "Copy2", "Epoxy", GYP])}, got["tieOrders"]
+
+
+def test_a_copy_that_holds_its_sources_place_stands_after_it_whatever_the_keys_and_the_ids(ran):
+    """A page still running the code from before this round copied a section whole, `seq` and all, so the copy and its source claim one place and the tie was settled by the ids:
+    Copy2 (a copy of Epoxy) sorted in front of the sheet it came from. The copy is the newer sheet, and stands after it, with the keys in any of their 24 orders."""
+    got = ran["model"]["sourceTie"]
+    assert got["pair"] == [" | ".join(["Polish", "Epoxy", "Copy2", "Copy1", GYP])], got["pair"]
+
+
+def test_copies_of_copies_with_one_place_stand_in_the_order_they_were_made(ran):
+    """Epoxy, Copy2 (a copy of Epoxy) and Copy3 (a copy of Copy2) all hold place 1; the ids alone would say Copy2, Copy3, Epoxy."""
+    got = ran["model"]["sourceTie"]
+    assert got["chain"] == [" | ".join(["Polish", "Epoxy", "Copy2", "Copy3", "Copy1", GYP])], got["chain"]
+
+
+def test_a_loop_of_sources_ends_and_is_told_apart_by_the_ids(ran):
+    """A hand-made model in which Epoxy and Copy2 each name the other as their source: no copy is older, so the ids decide, and the walk down the sources stops."""
+    got = ran["model"]["sourceTie"]
+    assert got["loop"] == [" | ".join(["Polish", "Copy2", "Epoxy", "Copy1", GYP])], got["loop"]
+
+
+def test_a_source_that_is_not_in_the_tie_is_nothing(ran):
+    """Copy1 ties with Gyp. Its source is Epoxy, which holds another place, or it is not a sheet's name at all (a number, an unknown id, the root, null, a list): the ids decide (Copy1 first)."""
+    got = ran["model"]["sourceTie"]
+    expected = [" | ".join(["Polish", "Epoxy", "Copy2", "Copy1", GYP])]
+    assert got["apart"] == expected, got["apart"]
+    assert got["junkSource"] == [expected] * 5, got["junkSource"]
+
+
+def test_a_copy_an_older_page_made_opens_right_after_its_source(ran):
+    """A saved bid (Epoxy place 1, Gyp place 2) with a copy of Epoxy added the way the code from before this round made one: Copy1 holds place 1 too, and jsonb keeps its key first."""
+    got = ran["staleCopy"]
+    assert got["held"]["epoxy"] == got["held"]["copy"] == 1 and got["held"]["gyp"] == 2, got["held"]
+    assert got["held"]["keys"][0] == "Copy1", "the setup: the keys and the ids both put the copy in front of its source"
+    assert got["opened"]["order"] == ["Polish", "Epoxy", "Copy1", GYP] and got["opened"]["strip"] == ["Epoxy", "Copy1", GYP], got["opened"]
+    assert got["reload"]["order"] == got["opened"]["order"] and got["reload"]["strip"] == got["opened"]["strip"], got["reload"]
+    assert got["savedSeqs"]["Copy1"] == 1 and got["savedSeqs"]["Epoxy"] == 1, "nothing renumbers the tie: the next save carries the places it was given"
 
 
 def test_a_bid_with_no_stamps_is_in_the_order_its_keys_are_held_in(ran):

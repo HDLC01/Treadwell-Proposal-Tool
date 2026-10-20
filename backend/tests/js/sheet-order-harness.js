@@ -21,6 +21,8 @@
  *                   the page saved, in the session and after a reload and one more save.
  *   lifecycle       one session of add, copy, rename, delete, a copy that takes a freed Copy<N> id, a Gyp sheet that changes preset (its KEY changes), a
  *                   base change and a job-type switch, compared with a reload after EVERY step.
+ *   staleCopy       a copy made by a page that was still running the code from before this round (it copies a section whole, `seq` and all, so the copy holds its
+ *                   source's place) is added to a saved bid: it opens right after its source, not in front of it because its id sorts first.
  *   afterReload     a rename, a delete, a kind change (a base picked), a copy and a job switch, each made on a page opened on what the server returned, on a bid
  *                   whose sheets' places are not the order jsonb holds their keys in: none moves a sheet that was not meant to move. (In a session that never
  *                   reloaded the keys are in the order of the places, so a step that renumbered the sheets by their keys would move nothing there.)
@@ -330,6 +332,26 @@ async function main() {
     return { steps: steps };
   });
 
+  // ═══ staleCopy: a copy made by a page that kept its source's place ═══════════════════════════════════════════════════════════════════════════════
+  await section("staleCopy", async () => {
+    const b = await newBid(comboDraft(), [["Polish", "polishing", "6", "10"], ["Epoxy", "epoxy-install", "4", "12"]]);
+    await addSheet(b, GYP_TAB);                           // Epoxy holds place 1, Gyp place 2
+    const saved = clone(b.store.blob);
+    // a tab left open from before this round copies the Epoxy section whole, as the code did then: the copy is Copy1, a newer sheet, and holds Epoxy's place
+    const tabs = saved.polish_estimate.tabs;
+    tabs.Copy1 = Object.assign(clone(tabs.Epoxy), { kind: "option", sheet: "Epoxy", label: "Epoxy copy", source: "Epoxy", totals: {} });
+    const held = { epoxy: tabs.Epoxy.seq, copy: tabs.Copy1.seq, gyp: tabs[GYP_TAB].seq, keys: Object.keys(J.reloaded(saved).polish_estimate.tabs) };
+    const r = await reload(saved);
+    r.api.go(1);
+    await settle();
+    const opened = facts(r, true);
+    const savedAgain = clone(r.store.blob);
+    const again = await reload(savedAgain);
+    again.api.go(1);
+    await settle();
+    return { held: held, opened: opened, savedSeqs: Object.fromEntries(Object.keys(savedAgain.polish_estimate.tabs).map((id) => [id, savedAgain.polish_estimate.tabs[id].seq])), reload: facts(again, true) };
+  });
+
   // ═══ afterReload: a rename, a delete, a kind change, a copy and a job switch made on a page opened on what the server returned ═════════════════════════
   await section("afterReload", async () => {
     // The sheets' places (Epoxy, Gyp, Copy1, Copy2) are not the order jsonb holds their keys in (Copy1, Copy2, Epoxy, Gyp). In a session that never reloaded the keys ARE in the
@@ -451,6 +473,20 @@ async function main() {
     const tie = clone(m0);
     Object.keys(tie.tabs).forEach((k) => { tie.tabs[k].seq = 7; });
     const tieOrders = permutations(Object.keys(tie.tabs)).map((p) => ids(reorder(tie, p)).join(" | "));
+    // A COPY THAT HOLDS ITS SOURCE'S PLACE (a page still running the code from before this round copied the section whole, `seq` and all): the two claim one place, the copy is the newer
+    // sheet and stands after the one it was copied from, however many copies deep, whatever their ids (Copy2 sorts before Epoxy) and whatever order the keys arrive in. A source that
+    // names no sheet of the tie, or is not a name at all, is nothing, and a loop of sources ends and is told apart by the ids.
+    const placed = (m, spec) => { const c = clone(m); Object.keys(spec).forEach((id) => { c.tabs[id].seq = spec[id]; }); return c; };
+    const everywhere = (m) => [...new Set(permutations(Object.keys(m.tabs)).map((p) => ids(reorder(m, p)).join(" | ")))];
+    const tiedCopy = placed(m0, { Copy2: 1 });                                     // Copy2 is a copy of Epoxy and holds its place
+    const copiedTwice = B.copySection(m0, "Copy2", { state: {} });                 // Copy3, a copy of Copy2
+    const chained = placed(copiedTwice.model, { Copy2: 1, Copy3: 1 });
+    const looped = placed(m0, { Copy2: 1 });
+    looped.tabs.Epoxy.source = "Copy2";                                            // Epoxy and Copy2 each name the other
+    const apart = placed(m0, { Copy1: 4 });                                        // Copy1 ties with Gyp, and was copied from Epoxy, which holds another place
+    apart.tabs.Copy1.source = "Epoxy";
+    const junkSource = [5, "Nope", "Polish", null, ["Gyp"]].map((source) => { const c = placed(m0, { Copy1: 4 }); c.tabs.Copy1.source = source; return everywhere(c); });
+    const sourceTie = { pair: everywhere(tiedCopy), chain: everywhere(chained), loop: everywhere(looped), apart: everywhere(apart), junkSource: junkSource };
     // a bid saved before the order was kept: no stamps at all, the order the keys are held in
     const legacy = clone(m0);
     Object.keys(legacy.tabs).forEach((k) => { delete legacy.tabs[k].seq; });
@@ -536,6 +572,7 @@ async function main() {
       stamped: seqs(m0), order: ids(m0), stampedOrders: stampedOrders, viaServer: viaServer,
       mixed: { keysAB: mixedKeysAB, keysBA: mixedKeysBA },
       tieOrders: tieOrders,
+      sourceTie: sourceTie,
       legacy: { held: legacyHeld, order: legacyOrder },
       stampedOnce: stampedOnce ? { seqs: seqs(stampedOnce), order: ids(stampedOnce) } : null,
       stampedTwiceSame: stampedOnce ? stampedTwice === stampedOnce : null,
