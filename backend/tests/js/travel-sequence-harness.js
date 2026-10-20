@@ -75,11 +75,20 @@
  *                    blob as the session saved it, and on a page opened on it after the server, leaves the same prices and rows. The report marks a divergence "PRICES DIFFER" when a
  *                    price is not the same (`priced`), and "same prices, other rows or order" when only the sheets or the rows are.
  *
+ * ROUND 6, PART 3 (2026-10-21, M1) put the ANSWER walks under the server's order too. Until the sheet-order work was merged they re-keyed a reloaded blob as jsonb does EXCEPT the sheets under
+ * `tabs`, which they kept in the order they were saved (a tree without `seq` reads them back in another order, and every reopen would have reported the sheet bar moving); every reopen now goes
+ * through reopen(), sheets and all. And the one shape that order decides a PRICE on is a step of its own: THE EPOXY + POLISH-COPY PAIR (`pair`, pairOfCopy), the two bases an Epoxy sheet and a copy
+ * of the Polish root, both under `tabs`, the root an option. Which of the two carries the job's travel (crew, drive, nights) is their order alone, and jsonb hands "Copy1" back before "Epoxy".
+ * It is a step of the `answer` and `session` walks, judged after it as every Sheets action is (RELOAD_AGREES there, SESSION_AGREES here, DEMOTED_KEEPS in both), and two of the `answers`
+ * sequences build it with Epoxy added first, so the reload moves it.
+ *
  * MODES (argv[3]): far | farplain | local | unknown | nightsTyped | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys |
  *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | answer | answerJobs | answerSheets | answers | session | audit54.
- *   answers               the thirteen sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them: ANSWER_SEQUENCES), every rule judged after every step.
+ *   answers               the fifteen sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them, and the Epoxy + Polish-copy pair: ANSWER_SEQUENCES),
+ *                         every rule judged after every step.
  *   answer, answerJobs, answerSheets   the steps of `reload` plus the ANSWER (the x on the carrier's Travel Labor line, the x on an option's, Add Travel Labor on the carrier, on an option),
- *                         with RELOAD_AGREES judged after every Sheets action, x and Add, against a JSONB reload of the draft the session saved. `answer` takes every kind of step, two deep;
+ *                         with RELOAD_AGREES judged after every Sheets action, x and Add, against a JSONB reload of the draft the session saved. `answer` takes every kind of step, two deep,
+ *                         the Epoxy + Polish-copy pair among them;
  *                         `answerJobs` the four job types and the answer, three deep (F1's family: switch, x, switch back); `answerSheets` the Sheets actions and the answer, three deep (F2's family).
  *   far, local, unknown   steps are the four job types, each plain or with the crew typed on the new carrier.
  *   farplain              the same far job, with the four job types only (no crew typed): the deeper walk.
@@ -96,8 +105,8 @@
  *   distTyped, distClearHours, distClearGuys, distOff, distRate   the same steps, with the estimator's variant applied to the carrier's row first (a copy carries it).
  *   reload                the `sheets` steps and a fresh Epoxy sheet added, and RELOAD_AGREES judged after every sheets action (the session against a reload, four answers each).
  *   reloadTyped, reloadClearHours, reloadClearGuys, reloadOff, reloadRate   the same, with the estimator's variant applied to the carrier's row first.
- *   session               the job types, the Sheets panel's base changes, a copy of the carrier and a fresh Epoxy or Polish sheet, in ONE continuous session (see above), judged against a
- *                         reload after every prefix of every sequence.
+ *   session               the job types, the Sheets panel's base changes, a copy of the carrier, a fresh Epoxy or Polish sheet and the Epoxy + Polish-copy pair, in ONE continuous session
+ *                         (see above), judged against a reload after every prefix of every sequence.
  *   audit54               the 54 sequences the 2026-10-20 audit found pricing the drive twice at 7d32336, with their exact dollars.
  * Any mode but audit54 takes a distance after an at-sign (typed@local, sheetsOff@unknown, mixed@local): the same walk on a 40 mile job or one with no distance.
  * argv[4] is the depth (the number of steps after the start).
@@ -521,14 +530,65 @@ async function take(saved, step, distanceAnswer) {
     return { b: b, plain: false, piece: "addTravel:" + step.addTravel, step: step };
   }
   if (!(await sheetsAction(b, step))) return null;
-  return { b: b, plain: false, piece: step.copy ? "copy" : step.add ? "add:" + step.add : "base:" + step.base, step: step };
+  return { b: b, plain: false, piece: stepLabel(step), step: step };
 }
 
-/** The Sheets panel's three actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (a sheet's radio, or the "Make Epoxy + Polish the base" button for the pair, and then its yes). The page is saved
- *  after it. False when the control is not there (the panel does not offer it at this state). A FRESH SHEET is an option that starts on the proposal. It holds no Travel Labor row:
- *  only the section that carries the job's travel has one. */
+/** THE EPOXY + POLISH-COPY PAIR (round 6, part 3, M1), made on the page `b` with the Sheets panel's own controls: the two bases are an Epoxy sheet and a COPY of the Polish root, and the root is
+ *  an option. Both bases live under `tabs`, so which of them carries the job's travel (the first base) is decided by their order alone, and a reload hands `tabs` back in jsonb's order ("Copy1"
+ *  before "Epoxy"): only each section's `seq` keeps it (the sheet-order work, round 6, C1; a far Combo of Epoxy 4 x 12 and a Polish copy 6 x 10 as the two bases was $78,628 as saved and
+ *  $81,086 with the copy first). Made as the estimator makes it: an Epoxy sheet from the Add menu when the bid has none, a copy of the root from the root's bar when the bid holds none, the copy
+ *  made the base (its radio, and yes), then "Make Epoxy + Polish the base" on the copy's bar. Its yes is left to sheetsAction, which saves after it. False when a control is not there, when the
+ *  root is off (a Gyp or Epoxy job: the root would not be an option) and when the bases are that pair already (nothing would change). */
+async function pairOfCopy(b) {
+  const entries = () => B.sectionsOf(b.api.root());
+  const copyOfRoot = () => entries().filter((e) => !e.root && e.role === "polish" && e.source === B.ROOT_TAB);
+  if (entries()[0].kind === "off") return false;
+  const bases = B.baseOf(b.api.root()).ids;
+  if (bases.length === 2 && copyOfRoot().some((e) => bases.indexOf(e.tab) >= 0) && entries().some((e) => e.role === "epoxy" && bases.indexOf(e.tab) >= 0)) return false;
+  if (!entries().some((e) => e.role === "epoxy")) {
+    b.api.go(1);
+    await settle();
+    if (b.doc.querySelector('[data-sh-act="add-menu"]')) P.clickOn(b, '[data-sh-act="add-menu"]');
+    const add = '[data-sh-act="add"][data-sh-sheet="Epoxy"]';
+    if (!b.doc.querySelector(add)) return false;
+    P.clickOn(b, add);
+    await settle();
+  }
+  if (!copyOfRoot().length) {
+    const rootTab = '[data-section-tab="' + attrOf(B.ROOT_TAB) + '"]';
+    if (b.doc.querySelector(rootTab)) { P.clickOn(b, rootTab); await settle(); }
+    if (!b.doc.querySelector('[data-sh-act="copy"]')) return false;
+    P.clickOn(b, '[data-sh-act="copy"]');
+    await settle();
+    if (!copyOfRoot().length) return false;
+  }
+  const copy = copyOfRoot().filter((e) => e.kind === "base")[0] || copyOfRoot()[0];
+  if (copy.kind !== "base") {
+    const radio = '[data-sh-base="' + attrOf(copy.tab) + '"]';
+    if (!b.doc.querySelector(radio)) return false;
+    b.doc.fire("change", { target: P.need(b, radio) });
+    if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return false;
+    P.clickOn(b, '[data-sh-act="base-yes"]');
+    await settle();
+  }
+  const pair = B.combinedPair(b.api.root());
+  if (!pair || pair.indexOf(copy.tab) < 0) return false;
+  const copyTab = '[data-section-tab="' + attrOf(copy.tab) + '"]';
+  if (b.doc.querySelector(copyTab)) { P.clickOn(b, copyTab); await settle(); }
+  if (!b.doc.querySelector('[data-sh-act="combine"]')) return false;
+  P.clickOn(b, '[data-sh-act="combine"]');
+  return true;
+}
+
+/** The Sheets panel's actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (a sheet's radio, or the "Make Epoxy + Polish the base" button for the
+ *  pair, and then its yes), and the Epoxy + Polish-copy pair (pairOfCopy: several of them in a row, then its yes). The page is saved after it. False when the control is not there (the panel does not offer it at
+ *  this state). A FRESH SHEET is an option that starts on the proposal. It holds no Travel Labor row: only the section that carries the job's travel has one. */
 async function sheetsAction(b, step) {
-  if (step.copy) {
+  if (step.pair) {
+    if (!(await pairOfCopy(b))) return false;
+    if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return false;
+    P.clickOn(b, '[data-sh-act="base-yes"]');
+  } else if (step.copy) {
     const sel = '[data-sh-act="copy"]';
     if (!b.doc.querySelector(sel)) return false;
     P.clickOn(b, sel);
@@ -569,14 +629,14 @@ async function sheetsAction(b, step) {
 function nextCtx(ctx, step) {
   if (!ANSWER) return ctx;
   if (step.x === "carrier") return Object.assign({}, ctx, { said: true });
-  if (step.addTravel === "carrier" || step.base !== undefined || step.copy || step.add) return Object.assign({}, ctx, { said: null });
+  if (step.addTravel === "carrier" || step.base !== undefined || step.copy || step.add || step.pair) return Object.assign({}, ctx, { said: null });
   return ctx;
 }
 
 /** A step as the walk's labels say it. */
 function stepLabel(step) {
   return step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add : step.x ? "x:" + step.x :
-    step.addTravel ? "addTravel:" + step.addTravel : step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base;
+    step.addTravel ? "addTravel:" + step.addTravel : step.pair ? "pair:" + step.pair : step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base;
 }
 
 /** The base changes the Sheets panel of this page offers, other than the base it already has: one sheet to a radio, and the pair priced
@@ -609,6 +669,7 @@ function stepsFor(page, path) {
     // The job types (not in answerSheets), the Sheets actions (not in answerJobs: no sheet but the job's own, so no option to press anything on), and the answer.
     if (MODE !== "answerSheets") TYPES.forEach((t) => out.push({ job: t }));
     if (MODE !== "answerJobs") { basePicks(page).forEach((v) => out.push({ base: v })); out.push({ copy: true }); out.push({ add: "Epoxy" }); }
+    if (MODE === "answer") out.push({ pair: "copy" });          // the Epoxy + Polish-copy pair (pairOfCopy): two bases under `tabs`, the root an option
     (MODE === "answerJobs" ? ["carrier"] : ["carrier", "option"]).forEach((w) => { out.push({ x: w }); out.push({ addTravel: w }); });
   } else if (SHEETS) {
     TYPES.forEach((t) => out.push({ job: t }));
@@ -616,6 +677,7 @@ function stepsFor(page, path) {
     out.push({ copy: true });
     if (RELOAD || SESSION) out.push({ add: "Epoxy" });
     if (SESSION) out.push({ add: "Polish" });                // beside the root a Polish sheet is a Copy<N>: with an Epoxy base it is the other half of a pair that lives under `tabs`
+    if (SESSION) out.push({ pair: "copy" });                 // the Epoxy + Polish-copy pair (pairOfCopy): bases Epoxy and a copy of the root, the root an option
     if (DIST) Object.keys(DIST_TEXT).forEach((k) => out.push({ dist: k }));
   } else {
     TYPES.forEach((t) => out.push({ job: t }));
@@ -685,9 +747,9 @@ async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
   report.runs++;
   judge(b, ctx).forEach(([code, detail]) => record(code, label, detail));
   if (got.dist) judgeOptions(b, got.dist).forEach(([code, detail]) => record(code, label, detail));
-  if (got.step && got.step.base !== undefined && parent && parent.saved) demotedKeeps(b, parent.saved).forEach(([code, detail]) => record(code, label, detail));
+  if (got.step && (got.step.base !== undefined || got.step.pair) && parent && parent.saved) demotedKeeps(b, parent.saved).forEach(([code, detail]) => record(code, label, detail));
   // THE SHEETS ACTIONS ARE JUDGED ONE MORE WAY, in the `reload` mode: the session against a reload (RELOAD_AGREES).
-  if ((RELOAD || ANSWER) && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add || got.step.x || got.step.addTravel)) {
+  if ((RELOAD || ANSWER) && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add || got.step.x || got.step.addTravel || got.step.pair)) {
     report.reloadJudged = (report.reloadJudged || 0) + 1;
     await judgeReload(parent.saved, got.step, distanceAnswer, label);
   }
@@ -877,6 +939,10 @@ const ANSWER_SEQUENCES = [
   { start: "polish", steps: [{ copy: true }, { x: "carrier" }, { base: "Copy1" }, { x: "carrier" }] },
   { start: "polish", steps: [{ copy: true }, { x: "carrier" }, { x: "option" }, { addTravel: "option" }, "epoxy", "polish"] },
   { start: "epoxy", steps: [{ x: "carrier" }, "combo", "gyp", "epoxy+", "polish+"] },
+  // THE EPOXY + POLISH-COPY PAIR (round 6, part 3, M1): an Epoxy sheet added first, so a reload's jsonb order puts the copy ("Copy1") before it and only `seq` keeps Epoxy the carrier; then the
+  // job's answer on that carrier, a job-type switch and the answer taken back; and a Combo whose copy is made after its Epoxy base and paired, the demoted root's own line taken off and added back, and two switches.
+  { start: "polish", steps: [{ add: "Epoxy" }, { pair: "copy" }, { x: "carrier" }, "combo", { addTravel: "carrier" }] },
+  { start: "combo", steps: [{ pair: "copy" }, { x: "option" }, { addTravel: "option" }, "epoxy", "combo"] },
 ];
 
 async function newBid(start, distanceAnswer) {

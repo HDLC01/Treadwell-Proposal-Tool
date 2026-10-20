@@ -16,8 +16,15 @@ F2: a far Polish, the x, an Epoxy sheet made the base, Add Travel Labor on it, t
     on a demotion that loses its line; the two part-5 entries that put that loss back (test_polish_travel_sequences_reload.py) now see it through this rule.
 
 `answerJobs` is F1's family (three steps among the four job types and the answer), `answerSheets` F2's (the Sheets actions and the answer), `answer` every kind of step two deep, and `answers` the
-thirteen sequences of the answer's own, the audit's three among them. (The order of a bid's SHEETS under a reload is the sheets-order work's, round 6, C1: the walk keeps the sheets in the order they were
-saved and re-keys everything else.) The last block breaks a COPY of the page or the model one line at a time and requires the walk to report the rule the line keeps.
+fifteen sequences of the answer's own, the audit's three among them.
+
+ROUND 6, PART 3 (2026-10-21, M1): the sheets are re-keyed with everything else. Until the sheet-order work (each section's `seq`) was merged, these walks kept the sheets under `tabs` in the order they were
+saved, because a tree without it reads them back in jsonb's; now every reopen is the server's, sheets and all (tests/js/_jsonb.js, `run` refuses a walk none of whose reopens moved the sheets). The one
+shape that order decides a PRICE on is a step of its own, THE EPOXY + POLISH-COPY PAIR (`pair`: bases Epoxy and a copy of the Polish root, the root an option, both bases under `tabs`, so the carrier
+is their order alone): a step of the `answer` walk and of the session walk, and two of the `answers` sequences, which add the Epoxy sheet first so that a reload hands "Copy1" back ahead of it. A session
+and a jsonb reload price the same after every step of them (RELOAD_AGREES), and the walk sees it when the model lists the sheets in the server's key order (the last entry of BREAKS).
+
+The last block breaks a COPY of the page or the model one line at a time and requires the walk to report the rule the line keeps.
 """
 import pytest
 
@@ -56,12 +63,12 @@ def test_the_answer_walk_is_clean_on_a_job_that_starts_local_or_with_no_distance
 
 
 def test_the_answers_own_sequences_are_clean_and_none_is_cut_short():
-    """The thirteen sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
-    it): every rule after every step. None may be skipped (a step the page offers nothing to press on would shorten the sequence without a word)."""
+    """The fifteen sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
+    it, and the Epoxy + Polish-copy pair, twice): every rule after every step. None may be skipped (a step the page offers nothing to press on would shorten the sequence without a word)."""
     require_node()
     got = run("answers", 0)
     _walked(got, 55, 8, 30)
-    assert got["sequences"] == 13 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
+    assert got["sequences"] == 15 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
     assert got["violations"] == {} and got["crashes"] == [], explain(got)
 
 
@@ -71,6 +78,7 @@ RELEASE = "      if (model.no_travel_labor === true) releaseNobodysTravelRow(mod
 OPTION_X = "      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);"
 CARRIER_X = "    model.no_travel_labor = true;"
 ADD_TAKES_BACK = "    if (isCarrier) delete model.no_travel_labor;"
+SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
 
 # (The settling of the answer when an option that holds a line is made the base is held on the page: test_polish_travel_round6_answer.py reads it before and after. The walk cannot see it, because
 # without it the release a base pick runs removes the promoted line instead and leaves a state every rule above accepts: a different answer, not a wrong one.)
@@ -91,6 +99,9 @@ BREAKS = {
         "js/bid-model.js", RELEASE, "      void model;", "answerJobs", 2, {"ANSWER_HELD"}),
     "a job-type switch seeds the new carrier a line and the blank one is not taken off": (
         "js/bid-model.js", RELEASE, "      void model;", "answers", 0, {"ANSWER_HELD"}),
+    # round 6, part 3 (M1): the Epoxy + Polish-copy pair's carrier is the order of its two bases, which a reload hands back in jsonb's order; the answers' own sequences see the code from before `seq`
+    "the sheets are listed in the order the server returns their keys (the pair's carrier moves on a reload)": (
+        "js/bid-model.js", SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "answers", 0, {"RELOAD_AGREES"}),
 }
 
 
