@@ -5778,6 +5778,7 @@
   //   pick       the "Add a sheet" menu is open              busy       a sheet is being added (the library is being read)
   //   icon       function (name, size) -> svg markup, or none   sysDesc    function (sectionId) -> what the option prints now
   //   notice     { at, text }: why a press was refused, drawn under the control that was pressed (at: a section id, or "add")
+  //   reno       true when the job is labelled a renovation: the open sheet's bar says so, on every step
   //
   // EVERY CONTROL CARRIES A data- ATTRIBUTE THE PAGE'S ONE CLICK HANDLER READS: data-section-tab (open it), data-sh-base (the
   // radio), data-sh-act with data-sh-tab (on, desc, combine, copy, rename, rename-save, rename-cancel, delete, base-yes, base-no,
@@ -6059,6 +6060,9 @@
         (f.baseTotal === null ? "" : ', <b>' + money(f.baseTotal) + '</b>') + '</span>';
       else s += '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) +
         (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>';
+      // THE RENOVATION TAG (Hanz, 2026-10-21): a job labelled a renovation says so on the bar of whichever sheet is open, so it is
+      // identified on Material, Labor and Review alike. The switch that sets it is on the Material step of a Polish or Seal sheet.
+      if (v.reno === true) s += '<span class="pill reno" title="A renovation: the patch is charged at the renovation rate">Renovation</span>';
       s += '</div><div class="sh-body">';
       if (ren) {
         s += '<div class="sh-btns"><button type="button" class="btn sm" data-sh-act="rename-save"' + tabAttr + key(t, "save") +

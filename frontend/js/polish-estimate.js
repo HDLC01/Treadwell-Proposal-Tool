@@ -650,9 +650,10 @@
     return null;                        // nobody has picked a county yet
   }
 
-  /** Is this job a renovation? Only a Seal option reads it (the sheet's patch price is one figure for New and another for Reno). The
-   *  v2 estimate model does not carry Renovation (js/work-types.js: `model: false`), so it is read off the draft the
-   *  way the intake leaves it: the cells the condition writes (T.condition("reno").cells), the first one that holds
+  /** Is this job a renovation? The patch line of a Polish sheet (on a profile that carries it) and of every Seal option reads it:
+   *  Kyle's patch price is one figure for New and another for Reno (Polish!C17 reads B10). The v2 estimate model does
+   *  not carry Renovation (js/work-types.js: `model: false`), so it is read off the draft the way the live intake, the AI autofill and
+   *  this page's own switch (setReno) leave it: the cells the condition writes (T.condition("reno").cells), the first one that holds
    *  an answer deciding. A draft that never answered it is a new floor, the condition's own default. */
   function jobIsReno() {
     var cells = (state && state.cell_values && typeof state.cell_values === "object") ? state.cell_values : {};
@@ -662,6 +663,46 @@
       if (v === "Reno" || v === "New") return v === "Reno";
     }
     return false;
+  }
+
+  /** THE JOB IS A RENOVATION, OR NEW CONCRETE (Hanz, 2026-10-21: "a label that we could just identify if its a renovation job to
+   *  fix the lump sum difference we had for polish"). The answer is written where every other reader already looks: Kyle's New or
+   *  Reno cells on the draft (Polish!B10, Epoxy!B10, Seal!B10), which B.conditionCellWrites carries to the downloaded workbook on
+   *  every save, so the .xlsx prices the patch the way this page does. It is NOT put on the model: a bid nobody labels prices as new
+   *  concrete, exactly as before, and no saved bid moves. The page's own copy of the draft (`state`) is updated with it, because
+   *  jobIsReno reads that copy (TW.getState parses the whole blob, too dear for every keystroke). */
+  function setReno(on) {
+    var spec = T.condition("reno");
+    var lit = on ? spec.on : spec.off;
+    var now = TW.getState() || {};
+    var cells = Object.assign({}, now.cell_values && typeof now.cell_values === "object" ? now.cell_values : {});
+    var mine = {};
+    spec.cells.forEach(function (c) { cells[c] = lit; mine[c] = lit; });
+    TW.setState({ cell_values: cells });
+    state = Object.assign({}, state, { cell_values: Object.assign({}, state && state.cell_values || {}, mine) });
+    changed(true);
+    // The panel was rebuilt under the switch: the caret goes back to it, so Space can press it again.
+    refocus("[data-reno-sw]");
+  }
+
+  /** THE RENOVATION SWITCH, asked where its money is: on the Material step of a Polish sheet and of a Seal option, the two whose patch
+   *  line it prices. The patch itself is the itemised line on the Review step (quantity, rate and total), which is what Will meant by
+   *  "it should just be an item"; the switch is the label that picks its rate, and the open sheet's bar says "Renovation" on every step. */
+  function renoCard() {
+    if (!SL) return "";
+    var on = jobIsReno();
+    var newRate = SL.unitPrice(ITEMS, "patchNew").cost, renoRate = SL.unitPrice(ITEMS, "patchReno").cost;
+    // Its own kind of card (`tk floor`), dressed as a condition card: it is a fact about the building, not one of the three
+    // conditions of the work (Dye, Joint Filler, Remove Existing) that the intake handed this step.
+    return '<div class="tk floor' + (on ? "" : " inert") + '" data-reno-card="1">' +
+      '<div class="tk-h">' +
+      '<span class="tag">Floor</span>' +
+      B.sliderHtml(on, 'data-reno-sw="1"', "Renovation", null, "") +
+      '<span class="tk-sub">Polish!B10</span>' +
+      "</div>" +
+      '<p class="hint">An existing floor, not new concrete. The patch is charged at the renovation rate, ' + esc(B.money2(renoRate)) +
+      ' a square foot of the whole area, instead of ' + esc(B.money2(newRate)) + ' for new concrete, as Kyle\'s sheet does.</p>' +
+      "</div>";
   }
 
   /** The ROOT (Polish) section's bid, recomputed from the model. Cheap enough to call on every keystroke.
@@ -992,7 +1033,8 @@
     return {
       open: activeTab, bids: bids, opts: multi ? TW.getState().tab_opts : undefined, sf: optionStartSf(), icon: icon,
       confirm: sheetsUi.confirm, armed: sheetsUi.armed, renaming: sheetsUi.renaming, draft: sheetsUi.draft,
-      error: sheetsUi.error, notice: sheetsUi.notice, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf
+      error: sheetsUi.error, notice: sheetsUi.notice, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf,
+      reno: jobIsReno()
     };
   }
 
@@ -2443,6 +2485,9 @@
     }).map(function (c) {
       return c.cost ? condMaterialCard(c) : condSwitchCard(c);
     }).join("");
+    // THE RENOVATION SWITCH, on the sheets whose patch line it prices: a Polish sheet (the root or a copy) and a Seal option.
+    var floorRole = activeTab === B.ROOT_TAB ? "polish" : ((openEntry() || {}).role || "");
+    if (floorRole === "polish" || floorRole === "seal") html += renoCard();
 
     html += '<p class="cap">Material total <b data-mat-total>' +
       esc(moneyAuto(materialTotal())) + '</b> · measured area <b data-area-total>' +
@@ -4234,7 +4279,7 @@
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
     // data-cond is the job's condition switch, the Prevailing wage card's among them.
     var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") ||
-      t.closest("[data-cond]") || t.closest("[data-adj-hb]");
+      t.closest("[data-cond]") || t.closest("[data-adj-hb]") || t.closest("[data-reno-sw]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -4413,6 +4458,8 @@
       changed(true);
       return;
     }
+    var renoSw = t.closest("[data-reno-sw]");
+    if (renoSw) { setReno(!jobIsReno()); return; }
     var cond = t.closest("[data-cond]");
     if (cond) {
       var ck = cond.getAttribute("data-cond");
