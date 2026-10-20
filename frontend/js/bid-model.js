@@ -193,7 +193,7 @@
 
   /** The hint under a Lodging or Per Diem box. A line on the OLDER auto (a bid saved before 2026-10-12) says what it is charged, as it always has: the SHEET's count on a Polish root priced
    *  by rev 2, which is worked out from the labor dollars (sheetNights) and so can be more than the man-days, else the man-days (manDaysHint). A box that is TYPED says what the sheet would count
-   *  for the job: the section's own count where its tab counts the sheet's way (a Polish section priced by rev 2, every Gyp section), else the man-days, and a crew entered in HOURS counts
+   *  for the job: the section's own count from its labor dollars (every tab since round 6, part 3; the man-days on a polish-legacy Polish section), and a crew entered in HOURS counts
    *  guys x hours over what a night is worth on its tab (travelManDays: 10 on Gyp). On a job with two base sections (a Combo) it is the two together, and the words say where the count comes from:
    *  the nights are both crews' (round 6). Words that say the sheet's count are used only while it differs from the man-days; while every row is paid the same rate the two are one figure
    *  and the words are the ones every bid shows. Text only: the box stays the estimator's to type. `rows` are the labor rows of the section on show. */
@@ -736,15 +736,17 @@
    *  for the per diem): the labor dollars that are not travel labor, over the rate of the first crew row (C37), over
    *  an 8 hour day. It is guys x days (travelManDays) while every row is paid that rate, and more once a row is paid
    *  another (a prevailing wage row), because the extra pay reads as extra days. The divide is the engine's own, so
-   *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2, and since round 6 for the Gyp tabs.
+   *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2 and rev3, since round 6 for the Gyp tabs, and since round 6, part 3 (M2) for EVERY tab
+   *  but a polish-legacy Polish section (sheetCountProfile): Epoxy!B65, Seal's and Seal (+Jnts)'s B58 and Leveling!B61 are this formula over their own rows.
    *
    *  `profile` is the resolved profile the section is priced by (bid-engine resolveProfile): it gives the divisor (REV2's 8 when left out, which is every caller that predates it) and says what the
-   *  drive is. On Polish and the tabs that share its layout an hours row IS the drive, whatever it is called. A GYP tab prices its crew by the hour (Gyp!E45 `=A45*B45*C45`, no day in it), so only
-   *  the row called travel is the drive there and the crew's hours are the labor the nights are counted from: Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`, 4 guys for 120 hours at $33 is
-   *  $15,840 / $33 / 10 = 48 nights. */
+   *  drive is. On a POLISH section an hours row IS the drive, whatever it is called (the Polish tab's only hours row is row 44, the drive), as it has been since Phase 17. On every other tab only
+   *  the row called travel is the drive (`crewByHour`: a crew there can be priced by the hour). A GYP tab prices its crew by the hour (Gyp!E45 `=A45*B45*C45`, no day in it), so the crew's hours
+   *  are the labor the nights are counted from: Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`, 4 guys for 120 hours at $33 is $15,840 / $33 / 10 = 48 nights. And a crew line entered in hours on an
+   *  Epoxy, Seal or Leveling section is labor too, counted from its dollars (2 guys for 40 hours over 8 is 10 nights, as the head count it replaces counted them), never taken off as a drive. */
   function sheetNights(rows, conditions, pw, profile) {
     profile = profile || REV2;
-    var crewByHour = profile.layout === "gyp";
+    var crewByHour = profile.layout !== "polish";
     rows = rows || [];
     var travelLabor = 0, rate = 0;
     for (var i = 0; i < rows.length; i++) {
@@ -776,8 +778,8 @@
    *  job 70 miles out, gray for a local one, a hand flip kept) at the job's rates, for the option's own crew's man-days. The
    *  typed quantity belongs to the carrier's crew and is not used here.
    *
-   *  `nights` is the option's own count (ownNights: a Gyp sheet's is the sheet's own, from its crew's hours; every other tab's is its man-days, a crew in hours counted over the hours a night is
-   *  worth on its tab). Left out, it is the man-days of the rows' day rows, as it always was (round 6 hands every caller that has the section the figure; a Gyp option charged $0 before). */
+   *  `nights` is the option's own count (ownNights: its own tab's count from its own labor dollars, the sheet's way, since round 6, part 3; a head count only on a polish-legacy Polish sheet).
+   *  Left out, it is the man-days of the rows' day rows, as it always was (round 6 hands every caller that has the section the figure; a Gyp option charged $0 before). */
   function optionTravelCosts(travel, rows, nights) {
     var t = travel || {};
     var days = nights === undefined ? travelManDays(rows) : num(nights);
@@ -787,17 +789,24 @@
     return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
   }
 
-  // ══ THE NIGHTS A SECTION'S OWN LABOR COUNTS (round 6, 2026-10-20) ═══════════════════════════════════════════════════════════════════════════════════════════
+  // ══ THE NIGHTS A SECTION'S OWN LABOR COUNTS (round 6, 2026-10-20; every tab its own way since part 3, 2026-10-21) ═════════════════════════════════════════════
   //
-  // Kyle's sheet counts the nights of lodging, and the same days of per diem, off the labor of the TAB the job is priced on (Polish!B58, Gyp!B64): the labor dollars less the drive's, over the first crew
-  // row's rate, over the hours a night is worth on that tab. Hanz's decisions of 2026-10-12 (match the workbook EXACTLY, tab by tab) and 2026-10-20 (a far job FILLS its nights) are carried out by four figures:
+  // Kyle's sheet counts the nights of lodging, and the same days of per diem, off the labor of the TAB the job is priced on: the labor dollars rounded up, less the drive's, over the first crew row's rate,
+  // over the hours a night is worth on that tab. Epoxy!B65 `=IF(B4="No",((D53-D52)/C47)/8)`, Polish!B58 and the two Seal tabs `=IF(B4="No",((D45-D44)/C37)/8)`, Leveling!B61
+  // `=IF(B4="No",((D49-D48)/C44)/8)` and Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`; the per diem days are the same figure on every one (`=B65`, `=B58`, `=B61`, `=B64`). Hanz's decisions of
+  // 2026-10-12 (match the workbook EXACTLY, tab by tab) and 2026-10-20 (a far job FILLS its nights) are carried out by four figures:
   //   entryDivisor    the hours a night is worth on a section's tab: its profile's `lodgingDivisor`, which the oracle pins to the tab's own formula (8 on Polish, Epoxy, Seal and Leveling, whose day is ten
   //                   hours and whose lodging is still divided by 8; 10 on the five Gyp tabs)
-  //   sectionNights   what ONE section's labor counts: the sheet's way, from the labor dollars (sheetNights), on a Polish section priced by rev 2 and on every Gyp section, whose crew is entered in
-  //                   hours; its man-days (travelManDays, a crew in hours over the divisor) on every other
+  //   sectionNights   what ONE section's labor counts: THE SHEET'S WAY ON EVERY TAB (sheetNights, from the labor dollars, by the section's own profile: sheetCountProfile), and a head count of man-days
+  //                   (travelManDays, a crew in hours over the divisor) only for a Polish section priced by polish-legacy, a saved bid's, which has always counted people and keeps its totals
   //   jobNights       what EVERY BASE section counts together, which is what a line that follows the labor is charged: Kyle carries hotel on every sheet of a job (all-years scan of his Dropbox: 136 of 140 far
   //                   jobs with two or more priced sheets), so a Combo's nights are both crews'. An option is priced apart and counts nothing here; a section that is off counts nothing.
-  //   ownNights       what an OPTION counts for itself (optionTravelCosts): a Gyp sheet's is the sheet's own count, every other tab's its man-days
+  //   ownNights       what an OPTION counts for itself (optionTravelCosts): what the same section would count as a base, its own tab's way
+  // ROUND 6, PART 3 (M2): until then only a Polish section priced by rev 2 or 3 and the Gyp tabs counted the sheet's dollars, and an Epoxy carrier, an Epoxy, Seal, Seal (+Jnts) or Leveling option and a
+  // Polish sheet that is an option counted people while the words said each tab is counted its own way. A head count is the sheet's figure only while every row is paid the first row's rate, a day is 8
+  // hours and the labor comes to a whole dollar: a $48 row beside $33 rows is 20.82 nights on the sheet where the head count says 19, and a Leveling crew of 3 for 5 days is 18.75 (15 man-days). Proved
+  // against the workbook's own lodging vectors of the five tabs, to the cent, through a v2 section with the nights left to follow (tests/test_tab_nights_proof.py). HANZ, 2026-10-21: saved v2 bids
+  // re-price under it ("Let them re-price": every v2 bid is still a test copy), so nothing is frozen; a figure the estimator typed is theirs, as always.
   // They take the WHOLE model (never a section view: a view answers `labor` from the section on show).
 
   /** The profile a section is priced by, resolved from the stamp it carries ("gyp@1"), or null when it cannot be read. */
@@ -837,13 +846,14 @@
     try { return travelCarrier(model); } catch (err) { return ROOT_TAB; }
   }
 
-  /** THE PROFILE A SECTION'S NIGHTS ARE COUNTED BY WHEN THEY ARE COUNTED THE SHEET'S WAY, from the labor dollars (sheetNights): a Polish section priced by rev 2 or later, and every Gyp section. null for
-   *  any other section, which counts people (travelManDays). */
+  /** THE PROFILE A SECTION'S NIGHTS ARE COUNTED BY, the sheet's way, from the labor dollars (sheetNights): the section's own (a Gyp tab's, Epoxy's, Seal's, Leveling's, a Polish section's priced by rev 2
+   *  or later), which says the divisor and what the drive is. null for a Polish section priced by polish-legacy (a saved bid's), which counts people (travelManDays) as it always has, and for a section
+   *  whose profile cannot be read. Every tab its own way since round 6, part 3 (M2: see the block above). */
   function sheetCountProfile(entry) {
     if (!entry) return null;
     if (entry.layout === "gyp") return profileOf(entry);
     if (entry.layout === "polish" && (entry.profile === REV2.stamp || entry.profile === REV3.stamp)) return entry.profile === REV3.stamp ? REV3 : REV2;
-    return null;
+    return entry.layout === "polish" ? null : profileOf(entry);
   }
 
   /** What one section's own labor counts, as `{ count, days, sheet }`: `count` is the figure a line is charged (the sheet's dollars where the section counts them so, else the man-days), `days` the
@@ -882,12 +892,11 @@
   /** What a line that follows the labor is charged for: jobNights' count (see the block above). */
   function jobFollowQty(model) { return jobNights(model).count; }
 
-  /** What an OPTION counts for itself (optionTravelCosts): the sheet's own count on a Gyp section, whose crew is entered in hours, else its man-days with a crew in hours counted over its tab's divisor.
-   *  `entry` is the option's entry; `optionNights(model, tab)` asks by tab. */
+  /** What an OPTION counts for itself (optionTravelCosts): what the same section counts as a base (sectionNights), its own tab's way from its own labor dollars, a Gyp crew's hours included, and a
+   *  head count only on a polish-legacy Polish sheet. (Round 6, part 3, M2: an Epoxy, Seal, Seal (+Jnts), Leveling or rev 2/3 Polish option counted people until then.) `entry` is the option's
+   *  entry; `optionNights(model, tab)` asks by tab. */
   function ownNights(model, entry) {
-    var rows = laborLinesOf(entry.section);
-    var profile = entry.layout === "gyp" ? sheetCountProfile(entry) : null;
-    return profile ? sheetNights(rows, model.conditions, prevailingApplied(model), profile) : travelManDays(rows, entryDivisor(entry));
+    return sectionNights(model, entry).count;
   }
   function optionNights(model, tab) {
     var e = entryOrNull(model, tab);
@@ -1724,8 +1733,8 @@
   }
 
   /** What a line that follows the labor is charged for, worked out of the labor of EVERY base section of the bid, exactly as the price works it out (travelQty with
-   *  travelOpts' `follow`, jobNights): each base counted by its own tab's rule, the sheet's count on a Polish section priced by polish-rev2 or later and on every Gyp section,
-   *  the man-days on every other, and the bases added together (round 6: a Combo's hotel is on both sheets, where round 5 counted the carrier's alone). An option and a section that is
+   *  travelOpts' `follow`, jobNights): each base counted by its own tab's rule, the sheet's count from its labor dollars on every tab (round 6, part 3), a head count only on a polish-legacy
+   *  Polish section, and the bases added together (round 6: a Combo's hotel is on both sheets, where round 5 counted the carrier's alone). An option and a section that is
    *  off count nothing; a model whose sections cannot be read counts the root's labor. TO TWO PLACES, because it is the figure the line's box holds and shows: the
    *  sheet's count carries the cents of the Travel Labor row (its labor total is rounded up, its travel is not: 70.0019 nights on a crew of 5 driving
    *  6.5 hours), and "70.00189393939394" is not a number to put in a box. The price is still charged on the count itself, as Kyle's sheet charges it. `line` is the line asked about
@@ -1741,8 +1750,9 @@
    *  lookup, a carrier that moved under a far distance on file: applyDistance, followDistance) FILLS what nobody has typed:
    *    - A quantity the estimator never typed in or cleared and that is still empty (the kind a new bid opens with) goes on auto and carries the marker
    *      `qty_follow: "labor"`. It is then charged the count of the labor of EVERY BASE SECTION of the bid, each by its own tab's rule and added together (travelQty
-   *      with travelOpts' `follow`, jobNights: sheetNights, from the labor dollars, on a Polish section priced the sheet's way and on every Gyp section, whose crew is entered
-   *      in hours and is counted ten hours a night, Gyp!B64; the man-days on the others), and keeps following it as the labor changes, like the crew-following Travel guys
+   *      with travelOpts' `follow`, jobNights: sheetNights, from the labor dollars, on every tab, each over its own divisor: a Gyp crew, entered in hours, ten hours a night
+   *      (Gyp!B64), every other tab eight (Epoxy!B65, Polish!B58, Leveling!B61 for its ten hour day); a head count only on a polish-legacy Polish section), and keeps following
+   *      it as the labor changes, like the crew-following Travel guys
    *      (syncAutoGuys writes the figure into the line). Wichita, four guys for twelve days: 48 nights x $70 = $3,360 and 48 days x $45 = $2,160; a Combo's Polish 4 x 12 and Epoxy
    *      4 x 12 are 96 (Kyle carries hotel on every sheet: round 5 counted the carrier's 48 alone), and a Gyp crew of 4 for 120 hours is 48.
    *    - TYPING IN THE BOX, OR CLEARING IT, MAKES IT THEIRS (markTravelQtyTyped: `qty_typed`): never filled again, whatever it holds. A figure sitting in a box that

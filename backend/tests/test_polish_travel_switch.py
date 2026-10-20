@@ -533,11 +533,15 @@ def test_a_demoted_bases_drive_follows_the_miles_as_an_option_on_the_page(ran):
 
     (The base's totals at 190 and 300 miles, $40,864 and $41,771, carry its own Lodging and Per Diem on the labor's 48 man-days now: a far answer fills them, 2026-10-20.)
 
+    (Round 6, part 3, M2, 2026-10-21: Epoxy counts its nights from its own labor DOLLARS, Epoxy!B65, as every tab does now. With a drive of five guys x 6.5 hours, $1,072.50, its labor rounds up to
+    $14,273, 50.0019 nights where 5 x 10 is 50, a dollar more on each of its Lodging and Per Diem: $49,281 at 190 miles where the head count priced it $49,278, and $48,440 for the Epoxy BASE of the
+    added-sheet route where it was $48,437. At 300 miles the drive is a whole $1,650 and the count is 50 again.)
+
     Mutation: leave the options out of an answer."""
     d = ran["demotedOptionFollowsMiles"]
     assert d["epoxyBase"] == {"carrier": "Epoxy", "kinds": [["Polish", "option"], ["Epoxy", "base"]]}
     for step, totals, polish, epoxy in (
-            ("start", (40864, 49278), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("start", (40864, 49281), _filled_row(6.5), _filled_row(6.5, 5)),
             ("local", (30872, 37044), LOCAL_CARRIER_ROW, EMPTY_ROW),
             ("farther", (41771, 50383), _filled_row(10), _filled_row(10, 5))):
         s = d[step]
@@ -551,7 +555,7 @@ def test_a_demoted_bases_drive_follows_the_miles_as_an_option_on_the_page(ran):
     a = d["addedSheet"]
     carrier_local = {"guys": 5, "days": "", "auto": True, "follow": "crew", "seed": "", "typed": False, "hoursTyped": False, "cost": 0}
     for step, totals, polish, epoxy in (
-            ("start", (40864, 48437), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("start", (40864, 48440), _filled_row(6.5), _filled_row(6.5, 5)),
             ("local", (30872, 36165), EMPTY_ROW, carrier_local),
             ("farther", (41771, 49542), _filled_row(10), _filled_row(10, 5))):
         s = a[step]

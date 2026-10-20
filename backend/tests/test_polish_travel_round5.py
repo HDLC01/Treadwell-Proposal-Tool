@@ -230,14 +230,18 @@ def test_a_saved_bid_never_moves_on_open_and_the_next_answer_fills_it(ran):
 
 def test_a_carrier_that_moves_under_a_far_distance_on_file_brings_the_lines_under_the_rule(ran):
     """A Polish bid saved far with blank lines, opened as Epoxy (the job type switched in the session): the new carrier's crew (5 x 10 days) gives 50 man-days, and Lodging and Per Diem
-    follow them ($3,500 and $2,250, charged on the Epoxy carrier's man-days, as the price charges them). A line the estimator typed (9 nights) is carried through the same switch as theirs.
+    follow them, charged on the Epoxy carrier as the price charges them. A line the estimator typed (9 nights) is carried through the same switch as theirs.
+
+    ROUND 6, PART 3 (M2, 2026-10-21): the Epoxy tab counts its nights the sheet's way, from its labor DOLLARS (Epoxy!B65 `((D53-D52)/C47)/8`), as every tab does now: the crew's $13,200 and the drive's
+    five guys x 6.5 hours, $1,072.50, round up to $14,273, so 50.0019 nights where the head count says 50, and the lines charge a dollar more each, $3,501 and $2,251 (this test pinned $3,500 and $2,250,
+    the head count the Epoxy tab no longer charges; Hanz, 2026-10-21: "Let them re-price"). The box still shows 50: it holds the figure to two places.
 
     Mutation: leave the nights out of the carrier's settling."""
     m = ran["nights"]["carrierMoved"]
     assert m["n"]["carrier"] == "Epoxy" and m["manDays"] == 50
     assert m["n"]["lodging"]["qty"] == 50 and m["n"]["lodging"]["follow"] == "labor" and m["n"]["perDiem"]["follow"] == "labor"
-    assert m["n"]["costs"] == {"lodging": 3500, "per_diem": 2250, "total": 5750}
-    assert "Lodging: 50 nights (follows the labor) x $70.00 = $3,500.00" in m["l"]["how"].split("\n"), "worked out on the Epoxy carrier's own man-days, as the price is"
+    assert m["n"]["costs"] == {"lodging": 3501, "per_diem": 2251, "total": 5752}
+    assert "Lodging: 50 nights (follows the labor) x $70.00 = $3,500.13, rounded up to $3,501" in m["l"]["how"].split("\n"), "worked out on the Epoxy carrier's own labor, as the price is"
     t = ran["nights"]["carrierMovedTyped"]["n"]
     assert t["lodging"]["qty"] == "9" and t["lodging"]["typed"] is True and t["lodging"]["follow"] is None and t["perDiem"]["qty"] == 50
 

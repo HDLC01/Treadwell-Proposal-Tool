@@ -363,8 +363,9 @@ def test_the_man_days_count_a_crew_in_hours_only_when_a_tab_says_what_a_night_is
 def test_every_profiles_divisor_is_the_one_its_own_tabs_lodging_formula_divides_by(ran):
     """Checked against the workbook's own formulas (the figure after the last slash of each tab's lodging quantity cell): the five Gyp tabs divide by 10, and every other priced tab by 8, Leveling
     included, though a Leveling day is ten hours (the sheet divides by 8 all the same). The model answers the same for a section of each tab, and counts the hours of a crew row on it by that figure:
-    two guys for 40 hours (80 man-hours) is 10 nights over 8 on Seal, Seal (+Jnts), Leveling and Epoxy blank, never 8 (a ten hour day would say so), and 8.0006 on a Gyp option, which counts the
-    sheet's dollars ($2,693 over $33.66 over 10).
+    two guys for 40 hours (80 man-hours) is 10 man-days over 8 on Epoxy, Seal, Seal (+Jnts), Leveling and Epoxy blank, never 8 (a ten hour day would say so), and 8 over 10 on a Gyp option. The
+    NIGHTS each of them charges are its own tab's dollars over that figure (round 6, part 3, M2: every tab counts the sheet's way, tests/test_tab_nights_proof.py): $2,692.80 of labor rounded up to
+    $2,693, over $33.66, is 10.0007 over 8 and 8.0006 over 10. (Until M2 the four tabs that are not Gyp charged the head count, 10, which this test pinned; the head count is still `people`.)
 
     Mutation: let a profile's divisor drift from its tab's formula (Gyp 8; Leveling 10); divide a Leveling crew's hours by its ten hour day; divide every tab by 8."""
     d = ran["direct"]
@@ -377,7 +378,7 @@ def test_every_profiles_divisor_is_the_one_its_own_tabs_lodging_formula_divides_
     assert d["root"]["divisor"] == 8
     s = d["sections"]
     for tab in ("Epoxy", "Seal", "Seal (+Jnts)", "Leveling", "Epoxy blank"):
-        assert s[tab]["divisor"] == 8 and s[tab]["people"] == pytest.approx(10) and s[tab]["nights"] == pytest.approx(10), tab
+        assert s[tab]["divisor"] == 8 and s[tab]["people"] == pytest.approx(10) and s[tab]["nights"] == pytest.approx(2693 / 33.66 / 8), tab
     assert s[GYP_TAB]["divisor"] == 10 and s[GYP_TAB]["people"] == pytest.approx(8)
     assert s[GYP_TAB]["nights"] == pytest.approx(2693 / 33.66 / 10), "a Gyp option counts the sheet's dollars, over the first row's rate, over 10"
 
@@ -462,7 +463,7 @@ FILL_IF = "if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty))
 SYNC_QTY = "if (l && l.qty_auto !== false) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;"
 SYNC_OPEN = "      var carrier = multi ? sectionOf(model, travelCarrier(model)).section : model;"
 FOLLOW_LIST = "      list = bases.length ? bases : live.slice(0, 1);"
-OWN_NIGHTS = "    return profile ? sheetNights(rows, model.conditions, prevailingApplied(model), profile) : travelManDays(rows, entryDivisor(entry));"
+OWN_NIGHTS = "    return sectionNights(model, entry).count;"
 FOLLOW_GUARD = "    if (qtyFollows(line) && opts && opts.follow !== undefined) return opts.follow;"
 SHEET_TRAVEL = '      if (crewByHour ? isTravelRow(r) : r.unit === "hours") { travelLabor += laborCost(r, pw); continue; }'
 SHEET_DIVIDE = "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);"
@@ -559,13 +560,13 @@ BREAKS = {
         lambda g: g["gyp"]["savedBlank"]["n"]["lodging"]["qty"] != "" or g["combo"]["savedBlank"]["n"]["lodging"]["qty"] != ""),
     # an option counts its own
     "a Gyp option is charged nothing for its hours crew": (
-        MODEL, OWN_NIGHTS, "    return travelManDays(rows);",
+        MODEL, OWN_NIGHTS, "    return travelManDays(laborLinesOf(entry.section));",
         lambda g: g["gypOption"]["gyp"]["travel"] != 5520 or g["gypCopy"]["copied"]["travel"] != 5520),
     "an option is charged by the older man-days": (
         MODEL, OPTION_COST, '    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;',
         lambda g: g["gypOption"]["gyp"]["travel"] != 5520),
     "a Gyp option counts people and not the sheet's dollars": (
-        MODEL, '    var profile = entry.layout === "gyp" ? sheetCountProfile(entry) : null;', "    var profile = null;",
+        MODEL, OWN_NIGHTS, "    return sectionNights(model, entry).days;",
         lambda g: not close(g["direct"]["sections"][GYP_TAB]["nights"], 2693 / 33.66 / 10)),
     "the Review shows an option's nights as day rows": (
         PAGE, REVIEW_QTY, "      var qty = ownTravel ? B.travelManDays(M.labor) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));",
