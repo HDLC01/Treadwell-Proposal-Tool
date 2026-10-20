@@ -19,6 +19,12 @@ The same walks also judge NIGHTS after every step, Hanz's decision of the same d
 following the labor; a job under 70 miles, or with no distance, fills nothing. An option is priced apart and counts nothing in it, and a section that is off counts nothing.
 (Every older walk is judged by it too: none of them types in those boxes. The `nightsTyped` walk does, and holds the typed lines to what was typed: part 2.)
 
+ROUND 6 (2026-10-20, item C2): "a plain reopen" in these walks was a JSON copy, which keeps the order the saving page wrote. The draft is a jsonb column, which keeps no key order, so every
+reopen of every walk now goes through tests/js/_jsonb.js (every object's keys sorted by length and then by bytes), and the walk refuses to pass unless a good share of its reopens brought the
+sheets back in another order (`reloads`, `reordered`). Run that way at 619f092 these walks reported 216 RELOAD_AGREES, 56 REOPEN_AGREES and 8 PLAIN_REOPEN in the depth-2 slice: every one
+the SHEETS' ORDER (the sheet bar and priced_tabs in jsonb's order, "Copy1" before "Epoxy") with the same prices; none moved a price, because each step of these walks starts from a reopen and
+so never holds a sheet the server has not already ordered. The session that does (test_polish_travel_sequences_session*.py) found the prices; the sheets now keep their place (`seq`), and these are clean.
+
 The local, no-distance and estimator-said slices are in test_polish_travel_sequences_reload_more.py (a second file only so the two run on different workers).
 The last block breaks a COPY of js/bid-model.js one line at a time and requires the walk to report the rule the line keeps.
 """
@@ -30,8 +36,10 @@ from _travel_sequences import PAGE_FILES, explain, run
 
 
 def _walked(got, judged=80):
-    seen = {k: got.get(k) for k in ("runs", "reopens", "plain", "reloadJudged")}
+    seen = {k: got.get(k) for k in ("runs", "reopens", "plain", "reloadJudged", "reloads", "reordered")}
     assert got["runs"] >= 200 and got["reopens"] >= 150 and got["plain"] >= 28 and got.get("reloadJudged", 0) >= judged, "the walk was cut short: %r" % (seen,)
+    # held to the SERVER's key order (round 6): every reopen is jsonb's, and a good share of them brought the sheets back in another order than they were saved in
+    assert got.get("reloads", 0) >= 1300 and got.get("reordered", 0) >= 600, "the walk was not held to the server's key order: %r" % (seen,)
 
 
 def test_a_sheets_action_prices_the_same_in_the_session_and_after_a_reload_at_every_distance_answer():
@@ -54,6 +62,7 @@ NIGHTS_GYP = "      if (far) {"
 NIGHTS_DIVIDE = "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);"
 NIGHTS_FILL_IF = '        if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }'
 NIGHTS_MARK = "    line.qty_typed = true;"
+SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
 
 # name -> (old, new, mode, depth, the rules the walk must report)
 BREAKS = {
@@ -90,6 +99,9 @@ BREAKS = {
         NIGHTS_LOCAL, "      } else {", "nightsTyped@local", 1, {"NIGHTS"}),
     "a crew change writes the nights over a box the estimator typed": (
         NIGHTS_SYNC, "if (l) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;", "nightsTyped", 1, {"NIGHTS"}),
+    # round 6, item C2: every reopen is the server's (jsonb keeps no key order), so a model that lists the sheets in the order their keys come back in is seen
+    "the sheets are listed in the order the server returns their keys (the code before the order was kept)": (
+        SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "reload", 2, {"RELOAD_AGREES"}),
 }
 
 

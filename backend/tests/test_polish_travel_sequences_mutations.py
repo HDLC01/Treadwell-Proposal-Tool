@@ -19,6 +19,7 @@ CLEARED = "delete row.hours_seed; delete row.guys_follow; delete row.guys_typed;
 REPEAT_GIVEN_BACK = "else if (e.tab !== carrier && travelRowRepeats(r, carrierRow)) releaseTravelRow(r);"
 INIT_FOLLOW = "if (restructured) B.followDistance(ROOT, carrierBefore);"
 BASE_FOLLOW = "    B.followDistance(ROOT, carrierBefore);"       # four spaces: init's own call has one space before the B
+SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
 
 # name -> (file, old, new, mode, depth, the rules the walk must report)
 BREAKS = {
@@ -44,6 +45,9 @@ BREAKS = {
         "js/polish-estimate.js", INIT_FOLLOW, "void carrierBefore;", "far", 2, {"FAR_CARRIER"}),
     "a base change on the Sheets panel is not settled": (
         "js/polish-estimate.js", BASE_FOLLOW, "    void carrierBefore;", "sheets", 3, {"FAR_CARRIER", "ONE_DRIVE", "STALE"}),
+    # round 6, item C2: every reopen of a walk is the server's (jsonb keeps no key order), so a plain reopen that lists the sheets in the order their keys come back in moves the sheets
+    "the sheets are listed in the order the server returns their keys (the code before the order was kept)": (
+        "js/bid-model.js", SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "far", 2, {"PLAIN_REOPEN", "REOPEN_AGREES"}),
 }
 
 

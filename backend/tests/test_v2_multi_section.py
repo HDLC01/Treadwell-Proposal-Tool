@@ -224,8 +224,9 @@ def test_a_tab_section_is_new_until_somebody_states_labor_or_a_takeoff_in_it(ran
 def test_activating_a_section_stamps_its_profile_and_keeps_the_rules_filed_at_that_moment(ran):
     a = ran["activation"]
     assert a["frozenThrew"] is None, "activateSection edited a frozen input: %s" % a["frozenThrew"]
+    # (`seq` is the section's place in the bid, written when it is put under `tabs`: the jsonb column that stores the draft keeps no key order. test_v2_sheet_order.py.)
     assert a["shape"] == {"keys": ["layout", "kind", "profile", "takeoff", "labor", "contingency", "fees", "rates",
-                                   "totals", "pool_packs"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
+                                   "totals", "pool_packs", "seq"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
                           "takeoffRows": 1, "contingency": 0, "fees": 0}
     assert a["snapshot"] == {"version": 1, "profile": "epoxy@1", "rates": {"soft_costs": "10%"},
                              "fees_default": None, "notes": []}

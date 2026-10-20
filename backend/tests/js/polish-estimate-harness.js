@@ -67,6 +67,8 @@ const PRICE_FILE = path.join(ROOT, "js", "price-lines-core.js");
 const PRICE = fs.existsSync(PRICE_FILE) ? require(PRICE_FILE) : undefined;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
+// What the server does to a draft on its way back (jsonb keeps no key order): see js/_jsonb.js. Used by build()'s `reloaded` option.
+const J = require("./_jsonb.js");
 
 // ── the page's own body, with only the boot call lifted off ───────────────────
 const HEAD = '(function () {\n  "use strict";\n';
@@ -420,7 +422,9 @@ function build(opts) {
   opts = opts || {};
   const log = [];
   const rec = { saves: [], fetches: [], flushed: 0 };
-  const store = { blob: clone(opts.blob === undefined ? blob() : opts.blob),
+  // `opts.reloaded`: the blob is a SAVED draft the server hands back (a reopen), so it comes as jsonb stores it, every object's keys sorted by
+  // length and then bytes (js/_jsonb.js), and not in the order the page that saved it wrote them. Every other build is a draft made here.
+  const store = { blob: opts.reloaded ? J.reloaded(opts.blob === undefined ? blob() : opts.blob) : clone(opts.blob === undefined ? blob() : opts.blob),
                   id: opts.id || "proj-1" };
   const dom = makeDom(log);
   const doc = makeDocument(dom, log);
@@ -2105,7 +2109,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     typeInto(emptied, '[data-tk="1"][data-k="measurement"]', "");
     emptied.clock.fire();
     const eSave = emptied.rec.saves[emptied.rec.saves.length - 1];
-    const reopened = build({ blob: clone(emptied.store.blob) });
+    const reopened = build({ blob: clone(emptied.store.blob), reloaded: true });
     await reopened.api.init();
     out.migration.emptiedSave = { sf: eSave.polish_sf, sf2: eSave.polish_2_sf };
     out.migration.emptiedDraft2 = emptied.store.blob.polish_2_sf;
@@ -4004,7 +4008,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const chhSaved = clone(chh.x.rec.saves[chh.x.rec.saves.length - 1].polish_estimate);
     const SAVED_SF = B.takeoffSf(MODEL.takeoff);
     const reopenFrom = async (saved, distanceAnswer) => {
-      const x = build({ blob: blob(Object.assign({ polish_estimate: clone(saved), polish_sf: SAVED_SF }, ADDRESS)), distance: distanceAnswer });
+      const x = build({ blob: blob(Object.assign({ polish_estimate: clone(saved), polish_sf: SAVED_SF }, ADDRESS)), distance: distanceAnswer, reloaded: true });
       await x.api.init(); x.api.go(1); await settle();
       return x;
     };
@@ -4301,7 +4305,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     withDflt.clock.fire();
     const savedWith = withDflt.rec.saves[withDflt.rec.saves.length - 1];
     const reloaded = build({ blob: Object.assign(blob(), { polish_estimate: clone(savedWith.polish_estimate) }),
-                             markupRules: [] });
+                             markupRules: [], reloaded: true });
     await reloaded.api.init();
     reloaded.api.go(2);
     typeInto(reloaded, feesBox, "10");
@@ -4566,7 +4570,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const savedModel = clone(sv.rec.saves[sv.rec.saves.length - 1].polish_estimate);
     const savedBlob = Object.assign(blob(), { polish_sf: 12000, polish_estimate: savedModel });
     const reopen = async (libState) => {
-      const pg = build(Object.assign({ blob: clone(savedBlob) }, libState));
+      const pg = build(Object.assign({ blob: clone(savedBlob), reloaded: true }, libState));
       await pg.api.init();
       return stateOf(pg);
     };

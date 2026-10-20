@@ -46,10 +46,13 @@ const last = (list) => list[list.length - 1];
 const nn = (v) => (v === undefined ? null : v);
 /** A value as JSON text, or null when there is none (what an erased `tabs` looks like). */
 const text = (v) => (v === undefined ? null : JSON.stringify(v));
-/** `tabs` as JSON text with each section's `totals` taken out. A save restamps every section's totals from
- *  its bid (Phase 10, composePricingSnapshot), and that is the one thing about a section it may change. */
+/** `tabs` as JSON text with each section's `totals` and `seq` taken out. A save restamps every section's totals from
+ *  its bid (Phase 10, composePricingSnapshot), and writes down each section's place in the bid (`seq`, round 6: the
+ *  jsonb column that stores a draft keeps no key order), and those are the two things about a section it may change. */
 const withoutTotals = (tabs) => (tabs === undefined ? null : JSON.stringify(Object.fromEntries(
-  Object.entries(tabs).map(([id, s]) => [id, Object.fromEntries(Object.entries(s).filter(([k]) => k !== "totals"))]))));
+  Object.entries(tabs).map(([id, s]) => [id, Object.fromEntries(Object.entries(s).filter(([k]) => k !== "totals" && k !== "seq"))]))));
+/** Each section's place in the bid, [id, seq] in the order the keys are held, or null when there are no `tabs`. */
+const seqsOfTabs = (tabs) => (tabs === undefined || tabs === null ? null : Object.entries(tabs).map(([id, s]) => [id, s && s.seq !== undefined ? s.seq : null]));
 
 /** Where two values first part, as a sentence, or null when they do not. */
 function where(want, got) {
@@ -359,6 +362,7 @@ async function estimateSection() {
     cells: s.cell_values ? Object.fromEntries(CELLS.filter((c) => has(s.cell_values, c)).map((c) => [c, s.cell_values[c]])) : null,
     modelKeys: Object.keys(s.polish_estimate).sort(),
     tabs: withoutTotals(s.polish_estimate.tabs),
+    seqs: seqsOfTabs(s.polish_estimate.tabs),
     taxable: s.polish_estimate.conditions.taxable,
     totalsTotal: s.polish_estimate.totals && s.polish_estimate.totals.total,
   });
@@ -449,6 +453,8 @@ async function intakeSection() {
       intakeLeavesTabsAsSaved: rawTabsOf(afterIntake.polish_estimate) === rawTabsOf(afterEstimate.polish_estimate),
       tabsAfterEstimate: tabsOf(afterEstimate.polish_estimate),
       tabsAfterIntake: tabsOf(afterIntake.polish_estimate),
+      seqsAfterEstimate: seqsOfTabs((afterEstimate.polish_estimate || {}).tabs),
+      seqsAfterIntake: seqsOfTabs((afterIntake.polish_estimate || {}).tabs),
       extrasMissingAfterEstimate: Object.keys(EVERYTHING).filter((k) => !has(afterEstimate.polish_estimate, k)),
       extrasMissingAfterIntake: Object.keys(EVERYTHING).filter((k) => !has(afterIntake.polish_estimate, k)),
       measurementAfterEstimate: afterEstimate.polish_estimate.takeoff[0].measurement,

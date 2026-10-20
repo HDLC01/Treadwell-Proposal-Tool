@@ -789,13 +789,32 @@ The job-level keys (`conditions`, `conditions_shown`, `cond_cov`, `travel`, `dis
 
 | Piece | What it does |
 |---|---|
-| `sectionsOf(model)` | The one place that knows the root from `tabs`. Every section, root first, by reference. Refuses a section with no layout, a wrong layout for its tab, a kind or profile stamp that is not one, or a profile of another layout. No default layout, "polish" included. `activeSections` leaves out `kind: "off"` (an Epoxy-only job holds an off Polish section). |
+| `sectionsOf(model)` | The one place that knows the root from `tabs`. Every section, root first and then the sections under `tabs` in the order each one's `seq` gives (see below), by reference. Refuses a section with no layout, a wrong layout for its tab, a kind or profile stamp that is not one, or a profile of another layout. No default layout, "polish" included. `activeSections` leaves out `kind: "off"` (an Epoxy-only job holds an off Polish section). |
 | `priceSection`, `priceTabs` | One section's bid through the engine, with the profile it was SAVED with (the stamp) and the rates it kept. The page hands in `ctx.material` (the library is its). A rev that has moved, or an unknown profile, is unpriceable with the reason, never repriced. The job's travel and the fees default belong to one carrier section (the first base). |
 | `activateSection` | The first use of a tab: a blank section, its profile stamped, and `snapshotRates` of the Markups rules filed at that moment kept as text. |
 | `snapshotRates`, `ratesOf` (engine) | The snapshot is `{ version, profile, rates: { line: formula }, fees_default, notes }`. Filed rules are honoured and kept. A blank, unreadable or out-of-range rule is left out with a note and the built-in stands, never $0. A bond rule is not taken (bond is 0 and unwired until Kyle decides). |
 | `isNewSection`, `seedNewSections`, `syncAutoGuys` | The estimate page's new-bid seeding, moved out of `init()`, per section and behind the same gates. The page collects what the library answered and makes one call. |
 | `composePricingSnapshot` | The one pure composition of the derived keys the proposal side reads. `buildSavePatch` is its only caller, so the autosave and the `pagehide` flush write the same thing. |
 | `sectionSwitcherHtml`, the page's strip | Drawn only when the bid has more than one section. |
+
+**The order of the sheets is kept in the sheets, not in the keys (round 6).** `tabs` is an object and `drafts.data` is a jsonb
+column, which keeps no key order: Postgres returns every object with its keys sorted by length in bytes and then by the bytes (so
+"Copy1" sorts before `Gyp (USG 1-8")`, and a bid saved as [Gyp, Polish 2] came back as [Polish 2, Gyp]). The first base carries the job's
+travel, so two bases under `tabs` could change carrier, crew, nights and price on a reload, and the sheet bar, the sheet a bid opens on
+and the options the customer's document lists (`priced_tabs`, which a save writes in this order) went with it. Every section under
+`tabs` now carries `seq`, its place in the bid: a number that only grows, so a new, copied or added sheet is last (`withSectionPut`;
+`copySection` never takes its source's place) and a rename, a kind change, a Gyp preset moving the key or a delete beside it moves
+nothing. `sectionsOf` lists the root and then the sections by `seq` (`tabIdsInOrder`). A bid saved before this has no `seq`: `adopt()`
+stamps it in memory when it opens (`withSectionOrder`: nothing is written on open and no price moves) and every save carries the stamps.
+It is stamped in the order its saved price was computed in, which is the order of its `priced_tabs` (an array, which jsonb keeps in order,
+written in the same save as the model and the lump sum) when that names two or more of the sheets under `tabs`: the sheets it does not
+name (an `off` one is never priced) go after them, in key order. A list that names fewer than two says nothing about the order, and the
+bid is stamped in its keys' order. Without that, a far Combo with Epoxy and a Polish copy both bases, saved at $78,628, opened on the
+copy as the carrier (it sorts first in jsonb) and its first save wrote $81,086 for good. A section with no place is newer than one that
+has one. A tie (a tab still running the code from before this copied a section whole, so the copy holds its source's place) puts a copy after the
+sheet it was copied from, however many copies deep (`source`), and is settled by the sheet's id for the rest, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
+estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
+(`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session*.py`: the session walk in three files).
 
 **How a saved bid is kept from repricing.** The live Markups rules are never read when a section is priced. A section
 with no snapshot (every saved bid, and the Polish root always) prices at its profile's built-ins; a section

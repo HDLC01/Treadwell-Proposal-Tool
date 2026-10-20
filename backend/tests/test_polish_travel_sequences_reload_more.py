@@ -11,8 +11,10 @@ from _travel_sequences import explain, run
 
 
 def _walked(got, judged=80):
-    seen = {k: got.get(k) for k in ("runs", "reopens", "plain", "reloadJudged")}
+    seen = {k: got.get(k) for k in ("runs", "reopens", "plain", "reloadJudged", "reloads", "reordered")}
     assert got["runs"] >= 200 and got["reopens"] >= 150 and got["plain"] >= 28 and got.get("reloadJudged", 0) >= judged, "the walk was cut short: %r" % (seen,)
+    # held to the SERVER's key order (round 6): every reopen is jsonb's, and a good share of them brought the sheets back in another order than they were saved in
+    assert got.get("reloads", 0) >= 1300 and got.get("reordered", 0) >= 600, "the walk was not held to the server's key order: %r" % (seen,)
 
 
 @pytest.mark.parametrize("distance", ["local", "unknown"])

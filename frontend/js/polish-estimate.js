@@ -159,7 +159,11 @@
 
   function adopt(blob) {
     state = blob || {};
-    ROOT = B.migrateModel(state.polish_estimate);
+    // THE ORDER OF THE SHEETS IS WRITTEN DOWN WHEN A BID OPENS (B.withSectionOrder): the draft's sections are keys of one object and the server's jsonb column keeps no key
+    // order, so each section carries its place (`seq`). A bid saved before that has none: it is stamped here in memory, and saved by its next save, in the order its saved price
+    // was computed in (the draft's priced_tabs, an array, which jsonb keeps in order; the order the keys are held in when the list names fewer than two sheets), so its first save
+    // writes the price it was saved at. Nothing is written on open and no price moves. A bid with one sheet has no `tabs` and is left exactly as it was.
+    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);
     M = ROOT;
     // THE CELL WINS WHERE THERE IS ONE, the same rule polish-intake.js has always applied, through
     // the same shared reader so the two screens cannot disagree about one answer.
