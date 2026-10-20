@@ -57,11 +57,16 @@
  * re-keyed as the drafts table's jsonb column hands it back (key length, then bytes), and:
  *   ANSWER_OWNER     the root's `no_travel_labor` is the JOB's answer: it is set only while the section that carries the job's travel holds no Travel Labor line. An option's x and a leftover row's x
  *                    record nothing on the job, a job-type switch after the carrier's x does not seed the new carrier a line, and a flag over a carrier that holds a line is a violation.
+ *   ANSWER_HELD      the job's answer HOLDS (decided 2026-10-20): after the x on the carrier's line and until Add Travel Labor on the carrier, a job-type switch or a crew typed leaves the job with no
+ *                    drive: the flag still set, and no line on the carrier (not seeded to a new section, not carried to it, not a blank one the new carrier already held filled by the distance on
+ *                    file). A Sheets action (a base pick, a copy, a sheet added) ends the rule: an option made the base can hold a line of its own, and then the job has a drive (the answer goes).
+ *   DEMOTED_KEEPS    a base the Sheets panel's pick demotes to an option keeps the Travel Labor line it held (the fifth audit's decision). The blank line a reload gave a demoted root is gone, so a session
+ *                    and a reload now agree even on a demotion that loses the line, and RELOAD_AGREES no longer says so: this says what the session must hold.
  *   (FAR_CARRIER     no longer calls a far carrier with no line a violation while the job's answer says it has no drive.)
  *
  * MODES (argv[3]): far | farplain | local | unknown | nightsTyped | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys |
  *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | answer | answerJobs | answerSheets | answers | audit54.
- *   answers               the ten sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them: ANSWER_SEQUENCES), every rule judged after every step.
+ *   answers               the thirteen sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them: ANSWER_SEQUENCES), every rule judged after every step.
  *   answer, answerJobs, answerSheets   the steps of `reload` plus the ANSWER (the x on the carrier's Travel Labor line, the x on an option's, Add Travel Labor on the carrier, on an option),
  *                         with RELOAD_AGREES judged after every Sheets action, x and Add, against a JSONB reload of the draft the session saved. `answer` takes every kind of step, two deep;
  *                         `answerJobs` the four job types and the answer, three deep (F1's family: switch, x, switch back); `answerSheets` the Sheets actions and the answer, three deep (F2's family).
@@ -302,7 +307,7 @@ function judgeOptions(b, d) {
         if (far && !(r.days === hours && r.hours_seed === hours)) bad.push(["OPT_FOLLOWS", at + ": the hours are not " + hours]);
         if (!far && !(blank(r.days) && typeof r.hours_seed !== "number")) bad.push(["OPT_FOLLOWS", at + ": the hours of a job under 70 miles were not taken back"]);
       }
-      // (A row the distance never filled has nothing to take back: migrateModel gives a root that lost its row the blank older man-days one, which a job under 70 miles leaves as it is.)
+      // (A row the distance never filled has nothing to take back: a blank row, such as the shipped older man-days one an Epoxy bid's off root keeps, is left as it is by a job under 70 miles.)
       const wasFilled = !!wasRow && ((typeof wasRow.days === "number" && wasRow.days === wasRow.hours_seed) || wasRow.guys_follow === "crew");
       if (r.guys_typed !== true) {
         if (far && !(r.guys_follow === "crew" && r.guys_auto === true && Number(r.guys) === crew)) bad.push(["OPT_FOLLOWS", at + ": the guys are not the option's own crew of " + crew]);
@@ -336,6 +341,10 @@ function judge(b, ctx) {
   // THE JOB'S ANSWER (round 6, part 2): `no_travel_labor` says the job has no drive, which is what a carrier with no line is when it is set, so that carrier is not a violation. It is the carrier's
   // answer and nobody else's: set while the carrier holds a Travel Labor line, it is a flag that has outlived its meaning (an option's x, a leftover row's x, a job-type switch that seeded a line).
   if (m.no_travel_labor === true && crow) note("ANSWER_OWNER", "the job says it has no drive (no_travel_labor) and the carrier " + f.carrier + " holds " + fmtRow(crow));
+  if (ctx && ctx.said === true) {
+    if (m.no_travel_labor !== true) note("ANSWER_HELD", "the job said it has no drive (the x on the carrier) and the answer is gone");
+    if (crow) note("ANSWER_HELD", "the job said it has no drive (the x on the carrier) and the carrier " + f.carrier + " holds " + fmtRow(crow));
+  }
   if (f.far && carrierEntry && carrierEntry.layout !== "gyp") {
     if (!crow) { if (m.no_travel_labor !== true) note("FAR_CARRIER", "carrier " + f.carrier + " has no Travel Labor row at " + f.miles + " miles"); }
     else if (!owned(crow)) {
@@ -531,6 +540,15 @@ async function take(saved, step, distanceAnswer) {
   return { b: b, plain: false, piece: "base:" + step.base, step: step };
 }
 
+/** The context a path carries after a step. In the ANSWER walks `said` is true from the x on the carrier's line until the job's drive is back or a Sheets action ends the rule (a base pick can
+ *  promote an option that holds a line of its own, a copy or a sheet added changes what the carrier is next to); a variant starts a context of its own. */
+function nextCtx(ctx, step) {
+  if (!ANSWER) return ctx;
+  if (step.x === "carrier") return Object.assign({}, ctx, { said: true });
+  if (step.addTravel === "carrier" || step.base !== undefined || step.copy || step.add) return Object.assign({}, ctx, { said: null });
+  return ctx;
+}
+
 /** A step as the walk's labels say it. */
 function stepLabel(step) {
   return step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add : step.x ? "x:" + step.x :
@@ -612,11 +630,29 @@ async function judgeReload(parentSaved, step, distanceAnswer, label) {
   }
 }
 
+/** DEMOTED_KEEPS (the fifth audit's decision, held by a rule of its own since round 6, part 2): a base the Sheets panel's pick DEMOTES to an option keeps the Travel Labor line it held, so the option prices its
+ *  own drive from the moment of the pick (moveTravelLabor gives the new carrier a COPY). Until round 6 the walk saw a demotion that lost its line only through RELOAD_AGREES (the reload then gave the root a blank line,
+ *  which the next answer filled, and the session had none); that blank line is gone, so a session and a reload now agree on a demotion that loses the line, and this says what the session must hold. */
+function demotedKeeps(b, savedBefore) {
+  const bad = [];
+  let before;
+  try { before = B.sectionsOf(B.migrateModel(clone(savedBefore.polish_estimate))); } catch (e) { return bad; }
+  const after = facts(b).entries;
+  before.forEach((e0) => {
+    const e1 = after.filter((e) => e.tab === e0.tab)[0];
+    if (e0.kind === "base" && e1 && e1.kind === "option" && travelRows(e0.section).length > 0 && travelRows(e1.section).length === 0) {
+      bad.push(["DEMOTED_KEEPS", e0.tab + " was a base holding a Travel Labor line and is an option holding none"]);
+    }
+  });
+  return bad;
+}
+
 async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
   const b = got.b;
   report.runs++;
   judge(b, ctx).forEach(([code, detail]) => record(code, label, detail));
   if (got.dist) judgeOptions(b, got.dist).forEach(([code, detail]) => record(code, label, detail));
+  if (got.step && got.step.base !== undefined && parent && parent.saved) demotedKeeps(b, parent.saved).forEach(([code, detail]) => record(code, label, detail));
   // THE SHEETS ACTIONS ARE JUDGED ONE MORE WAY, in the `reload` mode: the session against a reload (RELOAD_AGREES).
   if ((RELOAD || ANSWER) && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add || got.step.x || got.step.addTravel)) {
     report.reloadJudged = (report.reloadJudged || 0) + 1;
@@ -661,7 +697,7 @@ async function walk(label, got, path, depth, ctx, distanceAnswer) {
       continue;
     }
     if (!child) continue;
-    const ctx2 = step.variant ? { variant: step.variant } : ctx;
+    const ctx2 = step.variant ? { variant: step.variant } : nextCtx(ctx, step);
     try { await judgeStep(childLabel, child, node, ctx2, depth === 1, distanceAnswer); } catch (e) {
       report.crashes.push([childLabel, String((e && e.stack) || e).slice(0, 400)]);
       record("CRASH", childLabel, "while judging: " + String((e && e.message) || e).slice(0, 200));
@@ -699,8 +735,11 @@ const ANSWER_SEQUENCES = [
   { start: "polish", steps: [{ add: "Epoxy" }, { base: "Epoxy" }, { x: "option" }, { addTravel: "option" }, { base: "Polish" }] },
   { start: "polish", steps: [{ x: "carrier" }, "epoxy", "polish", "combo", "gyp", "polish"] },
   { start: "epoxy", steps: [{ x: "carrier" }, "combo", { addTravel: "carrier" }, "epoxy", "polish"] },
-  { start: "combo", steps: [{ base: "Epoxy" }, { x: "carrier" }, { base: "Polish" }, { addTravel: "carrier" }] },
+  { start: "combo", steps: [{ base: "Epoxy" }, { x: "carrier" }, { base: "Polish" }, { x: "carrier" }, { addTravel: "carrier" }] },
   { start: "gyp", steps: [{ x: "carrier" }, "polish", { addTravel: "carrier" }, "gyp"] },
+  { start: "polish", steps: [{ copy: true }, { x: "carrier" }, { base: "Copy1" }, { x: "carrier" }] },
+  { start: "polish", steps: [{ copy: true }, { x: "carrier" }, { x: "option" }, { addTravel: "option" }, "epoxy", "polish"] },
+  { start: "epoxy", steps: [{ x: "carrier" }, "combo", "gyp", "epoxy+", "polish+"] },
 ];
 
 async function newBid(start, distanceAnswer) {
@@ -746,20 +785,22 @@ async function main() {
       let got = await newBid(seq.start, distanceAnswer);
       let label = "start:" + seq.start;
       let parent = { shape: shape(got.b), lump: lumpOf(got.b.store.blob), saved: clone(got.b.store.blob) };
-      judge(got.b, null).forEach(([code, detail]) => record(code, label, detail));
+      let ctx = null;
+      judge(got.b, ctx).forEach(([code, detail]) => record(code, label, detail));
       report.runs++;
       for (let i = 0; i < seq.steps.length; i++) {
         const s = seq.steps[i];
         const step = typeof s === "string" ? { job: s.replace("+", ""), crew: s.indexOf("+") >= 0 } : s;
         label += " -> " + stepLabel(step);
+        ctx = nextCtx(ctx, step);
         let next = null;
         try { next = await take(parent.saved, step, distanceAnswer); } catch (e) {
           report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
           record("CRASH", label, String((e && e.message) || e).slice(0, 200));
           break;
         }
-        if (!next) { report.skipped = (report.skipped || 0) + 1; break; }     // the page offers nothing to press (it is what the walk would skip)
-        try { await judgeStep(label, next, parent, null, i === seq.steps.length - 1, distanceAnswer); } catch (e) {
+        if (!next) { report.skipped = (report.skipped || 0) + 1; (report.skippedAt = report.skippedAt || []).push(label); break; }     // the page offers nothing to press (it is what the walk would skip)
+        try { await judgeStep(label, next, parent, ctx, i === seq.steps.length - 1, distanceAnswer); } catch (e) {
           report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
           record("CRASH", label, "while judging: " + String((e && e.message) || e).slice(0, 200));
           break;

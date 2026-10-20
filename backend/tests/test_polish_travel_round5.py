@@ -380,7 +380,7 @@ HINT_REPAINT = "if (l) el.textContent = B.travelQtyHint(ROOT, activeTab, key, l,
 FOLLOW_NOTE = 'var followNote = !ownTravel && B.qtyFollows(tl) ? B.travelFollowWords(ROOT, activeTab, k, M.labor) : "";'
 CONTROL = "      html += (travelRows || addTravelHtml()) + travelCard(\"lodging\") + travelCard(\"per_diem\");"
 CLICK = '    if (t.closest("[data-add-travel]")) { addTravelLaborPress(); return; }'
-ADD_FILL = "    if (miles !== null && layout !== \"gyp\") followDistanceOnRow(model, added, holder.labor, miles, false);"
+ADD_FILL = "    if (miles !== null && layout !== \"gyp\") followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);"
 ADD_ONCE = "    if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;"
 ADD_FRESH = "    return stampRateDefaults([laborRowStartsEmpty(seed)])[0];"
 HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : "Travel Labor: no line on this bid, $0");'
@@ -406,10 +406,10 @@ def test_a_travel_labor_line_taken_away_stays_away_after_a_reload_and_add_brings
 
 BREAKS = {
     "the x does not record the answer": (
-        "js/polish-estimate.js", "      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;", "      void gone;",
+        "js/polish-estimate.js", "      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);", "      void gone;",
         lambda g: g["xStays"]["flag"] is False or g["xStays"]["rowAfterReload"] is not None or g["xStays"]["session"] != g["xStays"]["reloaded"]),
     "Add does not take the answer back": (
-        "js/bid-model.js", "    delete model.no_travel_labor;", "    void 0;",
+        "js/bid-model.js", "    if (isCarrier) delete model.no_travel_labor;", "    void 0;",
         lambda g: g["xStays"]["flagAfterAdd"] is not False),
     "a base the pick demoted loses its row to the new carrier": (
         "js/bid-model.js", DEMOTED, "    demoted = false;",
@@ -522,7 +522,7 @@ BREAKS = {
         "js/bid-model.js", HOW_NO_LINE, 'lines.push("Travel Labor: off, $0");',
         lambda g: "Travel Labor: off, $0" in g["addTravel"]["polishFar"]["removed"]["how"]),
     "a Gyp carrier's added line is filled by the distance": (
-        "js/bid-model.js", ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, false);",
+        "js/bid-model.js", ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);",
         lambda g: g["addTravel"]["gypFar"]["row"]["days"] != ""),
     "a second press of the control reads the library again": (
         "js/polish-estimate.js", "    if (travelAdding) return;", "    void travelAdding;",

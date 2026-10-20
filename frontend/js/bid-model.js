@@ -1347,12 +1347,19 @@
    *       the drive was priced twice ($1,716 where Kyle types $858). THIS COMES AFTER THE GUYS (4), because "repeats the carrier's" compares the guys: a
    *       switched-off row that is an exact copy of the carrier's, with the guys of a crew since gone, was compared before the sync had made them the same, and
    *       stayed on the base beside the carrier's (the fourth audit).
+   *    6. THE JOB'S "NO DRIVE" ANSWER IS PUT BACK TO WHAT IT IS (settleTravelAnswer, round 6 part 2). The flag the carrier's x set (`no_travel_labor`) means something only
+   *       while the carrier holds no Travel Labor line; a restructure can hand the job one (an option made the base held a line of its own), and then the flag goes.
+   *       A job-type switch otherwise HONOURS the answer (decided 2026-10-20): the job has no drive, so no row is carried to the new carrier (strandedTravelTab) and
+   *       the new carrier is not seeded one (seedNewSections). Add Travel Labor on the carrier is the way back.
    *  A bid with no distance on file fills nothing (the rest still settles). An option is priced apart and its row is its own: the bases are settled here, and
    *  an option's row follows the ANSWERS (followDistanceOptions). */
   function followDistance(model, fromTab) {
     if (!isObject(model)) return model;
     if (!carrierKept(model, fromTab)) {
       carryTravelRow(model, fromTab);
+      // A JOB THAT SAID IT HAS NO DRIVE keeps saying so (round 6, part 2): the new carrier holds no line nobody typed. A section that was not the carrier can still hold a blank one (the
+      // shipped four rows an off root of a new Epoxy bid was never seeded away from, a row emptied when the drive left it), and the distance on file would fill it below.
+      if (model.no_travel_labor === true) releaseNobodysTravelRow(model);
       var d = model.distance;
       var miles = d ? milesOrNull(d.miles) : null;
       if (miles !== null) followDistanceHours(model, miles);
@@ -1362,6 +1369,7 @@
     }
     syncAutoGuys(model);
     takeBackStrayTravel(model);
+    settleTravelAnswer(model);
     return model;
   }
 
@@ -1381,6 +1389,67 @@
   /** The Travel Labor rows of one section (the root is the model itself), as the section holds them. */
   function travelRowsIn(section) {
     return (isObject(section) && section.labor instanceof Array ? section.labor : []).filter(function (r) { return isTravelRow(r); });
+  }
+
+  /** THE JOB'S "NO TRAVEL LABOR" ANSWER BELONGS TO THE SECTION THAT CARRIES THE JOB'S TRAVEL (round 6, part 2, X2). `no_travel_labor` on the model says the job has no
+   *  drive: the library's decline on a new bid, or the x on the CARRIER's Travel Labor line (travelLaborRemoved). It means something only while the carrier holds no
+   *  Travel Labor line, so this is the question every reader of the flag asks first: does the section that carries the job's travel hold one? `rootLabor` is the
+   *  root's labor to read instead of the model's own (migrateModel asks about a saved model before its labor is normalised). The carrier is the root when the
+   *  sections cannot be read, as everywhere else. Never throws. */
+  function carrierHoldsTravel(model, rootLabor) {
+    if (!isObject(model)) return false;
+    var tab = carrierTabOf(model);
+    if (tab === ROOT_TAB) return travelRowsIn({ labor: rootLabor !== undefined ? rootLabor : model.labor }).length > 0;
+    try { return travelRowsIn(sectionOf(model, tab).section).length > 0; } catch (err) { return false; }
+  }
+
+  /** The carrier's Travel Labor line that nobody typed in, taken off the carrier (a line the estimator typed, cleared, switched off or re-rated is theirs and stays, and the job then
+   *  has a drive: settleTravelAnswer). What a job that said it has no drive does with a blank line its new carrier already held. The line is left when it is the only one the section
+   *  has (a section with no lines at all reads as the shipped four, and so would bring a Travel line back). IN PLACE. */
+  function releaseNobodysTravelRow(model) {
+    var held = model;
+    try { held = sectionOf(model, travelCarrier(model)).section; } catch (err) { held = model; }
+    if (!isObject(held) || !(held.labor instanceof Array)) return;
+    var rest = held.labor.filter(function (r) { return !(isTravelRow(r) && !travelRowIsTheEstimators(r)); });
+    if (rest.length && rest.length !== held.labor.length) held.labor = rest;
+  }
+
+  /** The flag put back to what it is: gone when the section that carries the job's travel holds a Travel Labor line (a restructure can hand the job a line it did not
+   *  have: a row carried to the new carrier, an option made the base that held a line of its own). IN PLACE; returns the model. */
+  function settleTravelAnswer(model) {
+    if (isObject(model) && model.no_travel_labor === true && carrierHoldsTravel(model)) delete model.no_travel_labor;
+    return model;
+  }
+
+  /** THE x ON A TRAVEL LABOR LINE SAYS SOMETHING ONLY ON THE CARRIER (round 6, part 2, X2). The page calls this after the x took a Travel Labor line off the section `tab`
+   *  (the one on show; left out, the carrier). THE ANSWER BELONGS TO THE SECTION WHOSE LINE WENT:
+   *    - the CARRIER's x says the job has no drive: `no_travel_labor` is set on the model, so a reload does not append a blank row (migrateModel), a job-type switch does not
+   *      seed the new carrier a priced one, and none is carried to it. Add Travel Labor on the carrier takes it back.
+   *    - an OPTION's x says only that the option has none. An option is priced apart and nothing puts a row on it but the estimator (migrateModel never reads a section under
+   *      `tabs`, and the root is given a row only when it carries the travel), so its absence is the whole answer and nothing is recorded: the job is not touched.
+   *    - any other base (a leftover row on a section that does not carry the travel) says nothing at all: the job's drive is charged once, on the carrier.
+   *  Answers true when the job's answer was recorded. MUTATES the model. */
+  function travelLaborRemoved(model, tab) {
+    if (!isObject(model)) return false;
+    var carrier = carrierTabOf(model);
+    if (typeof tab === "string" && tab !== "" && tab !== carrier) return false;
+    var held = model;
+    try { held = sectionOf(model, carrier).section; } catch (err) { held = model; }
+    if (travelRowsIn(held).length) return false;      // the carrier still holds a line: nothing was taken away from the job
+    model.no_travel_labor = true;
+    return true;
+  }
+
+  /** CAN A TRAVEL LABOR LINE BE ADDED TO THIS SECTION? (round 6, part 2, X2): the carrier, or an option, and it holds none. The job's one drive is charged on the
+   *  carrier, so a base that does not carry it is never offered one; an option is priced apart and carries its own, so it is. Reads only; never throws. */
+  function travelLaborCanBeAdded(model, tab) {
+    if (!isObject(model)) return false;
+    var carrier = carrierTabOf(model);
+    var want = typeof tab === "string" && tab !== "" ? tab : carrier;
+    var entry = entryOrNull(model, want);
+    if (!entry || !isObject(entry.section)) return false;
+    if (want !== carrier && entry.kind !== "option") return false;
+    return travelRowsIn(entry.section).length === 0;
   }
 
   /** Does the estimator own this Travel Labor row's Guys? Typed in the box (guys_typed), or a figure sitting in a box that is not on
@@ -1466,8 +1535,11 @@
   }
 
   /** WHERE THE JOB'S TRAVEL LABOR ROW IS STRANDED when the caller does not say which section carried it: the first section other than
-   *  `carrier` that holds a Travel Labor row and is off or a base (an option's row is its own and is never carried), "" for none. A bid whose
-   *  library said no Travel Labor (no_travel_labor) has no row to carry, and one with sections that cannot be read has none to find. */
+   *  `carrier` that holds a Travel Labor row and is off or a base (an option's row is its own and is never carried), "" for none. A job that
+   *  said it has no drive (`no_travel_labor`: the carrier's x, or the library's decline on a new bid) has no drive to carry, so a row on another
+   *  section is not the job's and none is looked for; a flag is only ever the CARRIER's answer (travelLaborRemoved, carrierHoldsTravel), so it is
+   *  never set by an option's x or a leftover row's, and this answer is never given on their account. One with sections that cannot be read has
+   *  none to find. */
   function strandedTravelTab(model, carrier) {
     if (model.no_travel_labor === true) return "";
     var entries = readableSections(model);
@@ -1721,27 +1793,41 @@
    *  Travel Labor line. This puts `row` (freshTravelRow) on the section that carries the job's travel, after its other lines, when that section has NO Travel
    *  Labor line, and answers true; a section that already has one is left alone (false). The distance on file fills it by the rule, so a far job's row comes up
    *  as one round trip for each guy of the crew and a local job's comes up empty (a Gyp carrier's drive is typed, and is never filled). MUTATES the model; pass
-   *  the WHOLE model, never a section view. */
-  function addTravelLabor(model, row) {
+   *  the WHOLE model, never a section view.
+   *
+   *  ON ANY SECTION THAT CAN HOLD A DRIVE (round 6, part 2, X2): `tab` is the section the line is added to, the carrier when it is left out. The carrier, or an OPTION
+   *  (an option is priced apart and carries its own drive, filled by the distance on its OWN crew: followDistanceOnRow with `own`); a base that does not carry the
+   *  job's travel is refused (false: the job's drive is charged once, on the carrier). THE ANSWER IT TAKES BACK IS THAT SECTION'S: adding to the carrier answers the
+   *  job's "no drive" again (the flag the carrier's x set goes), adding to an option leaves the job's answer exactly as it is. */
+  function addTravelLabor(model, row, tab) {
     if (!isObject(model) || !isObject(row)) return false;
-    var holder = model, layout = "polish";
+    var holder = model, layout = "polish", isCarrier = true;
     if (isObject(model.tabs)) {
-      try {
-        var entry = sectionOf(model, travelCarrier(model));
-        holder = entry.section;
-        layout = entry.layout;
-      } catch (err) { holder = model; layout = "polish"; }
+      var entries = readableSections(model);
+      if (entries !== null) {
+        var carrierTab = travelCarrier(model);
+        var want = typeof tab === "string" && tab !== "" ? tab : carrierTab;
+        var hit = entries.filter(function (e) { return e.tab === want; })[0];
+        if (!hit || !isObject(hit.section)) return false;
+        if (hit.tab !== carrierTab && hit.kind !== "option") return false;
+        holder = hit.section;
+        layout = hit.layout;
+        isCarrier = hit.tab === carrierTab;
+      }
+    } else if (typeof tab === "string" && tab !== "" && tab !== ROOT_TAB) {
+      return false;
     }
     if (!isObject(holder)) return false;
     if (!(holder.labor instanceof Array)) holder.labor = [];
     if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;
     var added = copyInto({}, row);
     holder.labor.push(added);
-    // The x recorded that the job has no Travel Labor (no_travel_labor, so a reload does not append one back); pressing Add answers it again.
-    delete model.no_travel_labor;
+    // The CARRIER's x recorded that the job has no Travel Labor (no_travel_labor, so a reload does not append one back); pressing Add on the carrier answers it again. An option's
+    // line is the option's own: the job's answer is not its to take back.
+    if (isCarrier) delete model.no_travel_labor;
     var d = model.distance;
     var miles = d ? milesOrNull(d.miles) : null;
-    if (miles !== null && layout !== "gyp") followDistanceOnRow(model, added, holder.labor, miles, false);
+    if (miles !== null && layout !== "gyp") followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);
     return true;
   }
 
@@ -4185,12 +4271,17 @@
         for (var li = 0; li < laborIn.length; li++) {
           if (laborIn[li] && laborIn[li].id === "travel") { hasTravel = true; break; }
         }
-        if (model.no_travel_labor === true) {
-          // A NEW bid the library said not to give Travel (seedLibraryLabor): its absence is the
-          // answer, not a stale draft. Carried through so the next load does not append it back.
-          out.no_travel_labor = true;
-        } else if (!hasTravel) {
-          out.labor = laborIn.concat([travelSeed()]);
+        // THE ROW IS THE JOB'S DRIVE, SO ONLY THE ROOT THAT CARRIES THE JOB'S TRAVEL IS GIVEN ONE (round 6, part 2, X1). The blank row below
+        // exists for a stale draft saved before 2026-09-12, whose root had no Travel row because there was none to have. It was appended to ANY
+        // root that lacked one, including a root that is OFF (an Epoxy job's Polish) or an OPTION, and that is where the round-5 verification's
+        // two $783 findings came from: a job-type switch or a base pick moves the carrier's row off the root, the reload then put a blank one
+        // back on a root that carries nothing, and when the carrier came back to the root the distance filled and priced that row -- but only
+        // if a reload had happened in between, so a session and a reload of the same draft priced the same bid apart. The root is given the row
+        // only when it IS the carrier (carrierTabOf: the root also when the sections cannot be read, as it always was) and the job has not said
+        // it has no drive (`no_travel_labor`: the carrier's x, or the library's decline). A stale draft has no sections, so it still gets its row.
+        var said = model.no_travel_labor === true;
+        if (!hasTravel) {
+          if (!said && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);
         } else {
           // A TRAVEL ROW CAN ALSO BE OUT OF DATE, which is the second half of the same problem and
           // the reason this is a map rather than the one-line pass-through it started as. Travel
@@ -4227,6 +4318,12 @@
             return next;
           });
         }
+        // THE JOB'S ANSWER IS KEPT ONLY WHILE IT IS STILL THE CARRIER'S (round 6, part 2, X2). `no_travel_labor` says the job has no drive: the
+        // library's decline on a new bid, or the x on the CARRIER's Travel Labor line. Until now the x set it for ANY Travel line, so a saved bid can
+        // hold it over a carrier that has its row (an option's own line, a leftover's). It prices nothing, but it kept a legacy root row from being
+        // upgraded (a 2026-09-12 row left at $0 instead of $132), and it hid a stranded row from strandedTravelTab. A flag over a carrier that
+        // holds a Travel Labor line is no answer to anything, so it is not carried; one over a carrier that holds none is, and is.
+        if (said && !carrierHoldsTravel(model, hasTravel ? out.labor : laborIn)) out.no_travel_labor = true;
       }
       var saved = (model.conditions && typeof model.conditions === "object") ? model.conditions : {};
       for (var k in fresh.conditions) {
@@ -5420,6 +5517,8 @@
     });
     var carrierAfter = travelCarrier(out);
     if (carrierAfter !== carrierBefore) out = moveTravelLabor(out, carrierBefore, carrierAfter);
+    // The job's "no drive" answer is the carrier's: an option made the base that held a line of its own hands the job one, and the flag goes (a model that was changed is a copy).
+    if (out !== model) settleTravelAnswer(out);
     var st = isObject(ctx) && isObject(ctx.state) ? ctx.state : {};
     var held = isObject(st.tab_opts) ? st.tab_opts : {};
     var opts = copyInto({}, held);
@@ -5584,7 +5683,11 @@
       var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, kindOfSection(e.layout)), ctx.laborRate));
       // Every row opens with no guys, days or hours, and on neither auto nor the distance (see laborRowStartsEmpty).
       rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });
-      s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
+      // A JOB THAT SAID IT HAS NO DRIVE IS NOT SEEDED ONE (round 6, part 2, X2; decided 2026-10-20). The x on the carrier's Travel Labor line, or the library's decline, is the
+      // job's answer (`no_travel_labor`), and it survives a job-type switch: a new section that becomes the carrier is given the library's crew and none of the drive, where it was
+      // seeded a priced line (4 x 6.5 = $858) while the flag still said none. Add Travel Labor on the carrier takes the answer back.
+      var drives = carrierTab === e.tab && out.no_travel_labor !== true;
+      s.labor = drives ? rows : rows.filter(function (r) { return !r || r.id !== "travel"; });
     });
     if (asked) {
       // Travel is a default like any other: if the library says this bid does not get it, say so on the model so
@@ -6407,6 +6510,8 @@
     // Round 6 (2026-10-20): what a section's own labor counts in nights, tab by tab (the hours a night is worth on a tab, a Gyp crew in hours, an option's own, every base section of the job together).
     nightsDivisor: nightsDivisor, optionNights: optionNights, jobNights: jobNights, jobFollowQty: jobFollowQty,
     travelFollowWords: travelFollowWords, travelQtyHint: travelQtyHint, freshTravelRow: freshTravelRow, addTravelLabor: addTravelLabor,
+    // Round 6, part 2 (2026-10-20): the "no Travel Labor" answer belongs to the sheet whose line went (the carrier's says the job has no drive, an option's says only that the option has none).
+    travelLaborRemoved: travelLaborRemoved, travelLaborCanBeAdded: travelLaborCanBeAdded, carrierHoldsTravel: carrierHoldsTravel, settleTravelAnswer: settleTravelAnswer,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,

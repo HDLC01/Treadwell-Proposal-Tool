@@ -1166,7 +1166,7 @@ MUTATIONS = {
         lambda g: g["moveOptionNotCarried"]["epoxyHasRow"] is not False),
     "a bid whose library said no Travel Labor is given a row": (
         STRANDED_NO_TRAVEL, "void 0;",
-        lambda g: g["moveNoTravelLabor"]["epoxyHasRow"] is not False),
+        lambda g: g["moveNoTravelLabor"]["epoxyHasRow"] is not False or g["moveNoTravelLabor"]["rootKeepsRow"] is not True),
     "an option gives its row back": (
         STRAY_GUARD, 'if (!isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;',
         lambda g: g["moveOptionStays"]["same"] is not True or g["takeBackOff"]["option"] is not True),

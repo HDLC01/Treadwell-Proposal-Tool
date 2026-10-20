@@ -275,7 +275,9 @@ def test_combo_to_epoxy_to_polish_to_combo_prices_one_drive_on_the_crew_of_the_b
     assert [steps[k]["pricedOn"] for k in order] == [["Polish"], ["Epoxy"], ["Polish"], ["Polish"]]
     assert [steps[k]["travelDollars"] for k in order] == [858, 1072.5, 858, 1072.5]
     assert [steps[k]["carrier"] for k in order] == ["Polish", "Epoxy", "Polish", "Polish"]
-    assert _row(steps["combo"], "Epoxy") == EMPTY_ROW and _row(steps["polish"], "Epoxy") == EMPTY_ROW
+    # (Round 6, part 2: the row MOVES with the carrier now, and the root that is off is no longer given a blank one on a reload, so a section that does not carry the drive holds no row at
+     # all where it used to hold the emptied copy of one: nothing is priced there either way.)
+    assert _row(steps["combo"], "Epoxy") is None and _row(steps["polish"], "Epoxy") is None
 
 
 def test_a_bid_saved_with_the_filled_row_left_on_a_section_that_does_not_carry_the_travel_is_not_moved_by_a_reopen(ran):

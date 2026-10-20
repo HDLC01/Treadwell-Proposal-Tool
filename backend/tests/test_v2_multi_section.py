@@ -637,7 +637,7 @@ BREAKS = {
         lambda r: "error" in r["seeding"] or r["seeding"]["multi"]["sealLaborKept"] is False),
     "every section gets Travel": (
         "js/bid-model.js",
-        "      s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== \"travel\"; });",
+        "      s.labor = drives ? rows : rows.filter(function (r) { return !r || r.id !== \"travel\"; });",
         "      s.labor = rows;",
         lambda r: r["seeding"]["multi"]["epoxyHasTravel"] is True),
     "the calculator runs on a saved bid": (

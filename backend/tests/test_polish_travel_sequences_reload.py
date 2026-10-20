@@ -57,10 +57,11 @@ NIGHTS_MARK = "    line.qty_typed = true;"
 
 # name -> (old, new, mode, depth, the rules the walk must report)
 BREAKS = {
+    # (Since round 6, part 2 a reload no longer gives a demoted root a blank line, so the session and a reload agree even when the demotion loses its line: DEMOTED_KEEPS says what the session must hold.)
     "a base the pick demoted loses its Travel Labor row to the new carrier": (
-        DEMOTED, "    demoted = false;", "reload", 2, {"RELOAD_AGREES"}),
+        DEMOTED, "    demoted = false;", "reload", 2, {"DEMOTED_KEEPS"}),
     "a base the pick demoted loses its row (the estimator's typed one)": (
-        DEMOTED, "    demoted = false;", "reloadTyped", 2, {"RELOAD_AGREES"}),
+        DEMOTED, "    demoted = false;", "reloadTyped", 2, {"DEMOTED_KEEPS"}),
     "a far answer fills no nights": (
         NIGHTS_ANSWER, "    void miles;", "far", 1, {"NIGHTS"}),
     "going local keeps the figure the labor filled": (

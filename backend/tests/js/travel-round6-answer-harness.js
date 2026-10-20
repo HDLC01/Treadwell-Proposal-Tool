@@ -19,7 +19,8 @@
  *       can hold a drive and has none (the carrier, or an option) and takes back only that sheet's answer. A job-type switch after the carrier's x HONOURS it (the new carrier is not
  *       seeded a row), and a saved bid's flag, which the round-5 x set for ANY row, is read as what it is now (the job's) and dropped when the carrier holds a row. `migrate` is the table.
  *   X3  `keyboard`: the x on a labor line, pressed from the keyboard, leaves focus on a control that exists afterwards.
- *   X4  `lows`: the round-5 lows.
+ *   X4  `handoff` and `holes`: the round-5 lows that reproduce. (b) A Lodging or Per Diem line switched off by hand was filled by a far answer: an answer leaves it alone now and switching it ON fills
+ *       it. (c) A labor or takeoff list holding a null threw on open: a null reads as no row. (a), a typed drive edit lost when the base flips back, is left (docs/v2-architecture.md).
  *
  * A section that throws reports `{ error }` instead of crashing, so a tree without the code fails an assertion with a reason; the mutation runs in the test count a section error as a
  * failure of the mutation, never as the mutation being noticed.
@@ -389,6 +390,95 @@ async function main() {
       const r = await reopen(b.store.blob);
       res.stray = { before: before, pressed: pressed, afterX: afterX, reloaded: { flag: flagOf(r), rows: driveRows(r) } };
     }
+    // 5. AN OPTION'S ADD TAKES BACK ONLY THE OPTION'S ANSWER, AND FILLS THE LINE ON THE OPTION'S OWN CREW. Far Polish (4 x 12) copied as an option whose Polishing the estimator made 2 x 12; the x on
+    //    the CARRIER's line (the job says it has no drive), the x on the option's, then Add Travel Labor on the option: the job's answer is still said (flag on, the carrier has no line), and the
+    //    option's new line is 2 guys x 6.5 hours (its own crew) = $429, not the base's 4.
+    {
+      const s = await newBid(polishDraft(), CREW.polish);
+      const b = await reopen(s.saved);
+      await copyActive(b);
+      const copy = B.sectionsOf(b.api.root()).filter((e) => e.kind === "option")[0].tab;
+      typeCrew(b, copy, "polishing", "2", "12");
+      b.api.saveSoon();
+      b.clock.fire();
+      await pressX(b, B.ROOT_TAB);
+      await pressX(b, copy);
+      const before = { flag: flagOf(b), rows: driveRows(b), addOnOption: addShown(b, copy), addOnCarrier: addShown(b, B.ROOT_TAB) };
+      const added = await pressAdd(b, copy);
+      const afterAdd = { flag: flagOf(b), rows: driveRows(b), saved: savedFlag(b.store.blob) };
+      const r = await reopen(b.store.blob);
+      res.optionKeepsJobAnswer = { before: before, added: added, afterAdd: afterAdd, reloaded: { flag: flagOf(r), rows: driveRows(r) } };
+    }
+    // 6. THE JOB IS HANDED A LINE: a far Polish bid copied as an option (its own line), the x on the carrier (the job says it has no drive), then the option made the base: the new carrier holds a line
+    //    of its own, so the job has a drive and the answer is gone (it was the carrier's, and the carrier is another section now). The model's pickBase says it too, on a bid the page has not
+    //    settled, and a reload agrees.
+    {
+      const s = await newBid(polishDraft(), CREW.polish);
+      const b = await reopen(s.saved);
+      await copyActive(b);
+      const copy = B.sectionsOf(b.api.root()).filter((e) => e.kind === "option")[0].tab;
+      await pressX(b, B.ROOT_TAB);
+      const said = { flag: flagOf(b), rows: driveRows(b) };
+      const model = clone(b.api.root());
+      const picked = B.pickBase(model, [copy], { state: {} });
+      const modelSays = { flag: picked.model.no_travel_labor === true, inputFlag: model.no_travel_labor === true };
+      await makeBase(b, copy);
+      const after = { flag: flagOf(b), rows: driveRows(b), carrier: B.travelCarrier(b.api.root()), saved: savedFlag(b.store.blob) };
+      const r = await reopen(b.store.blob);
+      res.promoted = { said: said, modelSays: modelSays, after: after, reloaded: { flag: flagOf(r), rows: driveRows(r) } };
+    }
+    // 7. A NEW EPOXY BID'S OFF ROOT HOLDS THE SHIPPED FOUR ROWS (it is not seeded: it is off), Travel among them, blank. The x on the Epoxy carrier says the job has no drive; switched to Combo, the root
+    //    becomes the carrier and its blank line is taken off it (the distance on file would have filled it to $858 and put the drive back); a reload agrees.
+    {
+      const s = await newBid(epoxyDraft(), CREW.epoxy);
+      const b = await reopen(s.saved);
+      const start = { rows: driveRows(b), flag: flagOf(b) };
+      await pressX(b, "Epoxy");
+      const c = await reopen(Object.assign(clone(b.store.blob), { work_type: "combo" }));
+      const toCombo = { carrier: B.travelCarrier(c.api.root()), flag: flagOf(c), rows: driveRows(c), addOnCarrier: addShown(c, B.travelCarrier(c.api.root())), price: prices(c).lump };
+      const r = await reopen(c.store.blob);
+      res.newEpoxy = { start: start, toCombo: toCombo, reloaded: { flag: flagOf(r), rows: driveRows(r), price: prices(r).lump } };
+    }
+    // 8. THE MODEL'S OWN ANSWERS, with no page to settle or re-sync anything after them (the page repairs some of what a wrong model does, so these are read straight off the model).
+    {
+      const s = await newBid(polishDraft(), CREW.polish);
+      const saved = s.saved.polish_estimate;
+      const m0 = B.migrateModel(clone(saved));
+      const withCopy = B.copySection(m0, B.ROOT_TAB, { state: {} }).model;
+      const copy = B.sectionsOf(withCopy).filter((e) => e.kind === "option")[0].tab;
+      const optionRow = (m) => rowIn(m.tabs[copy]);
+      // an option whose crew is 2 x 12 (the base's is 4 x 12) and that holds no Travel Labor line of its own
+      const m1 = clone(withCopy);
+      m1.tabs[copy].labor.forEach((r) => { if (r.id === "polishing") r.guys = "2"; });
+      m1.tabs[copy].labor = m1.tabs[copy].labor.filter((r) => r.id !== "travel");
+      const optionWithoutLine = B.travelLaborCanBeAdded(m1, copy);
+      const added = B.addTravelLabor(m1, B.freshTravelRow(LABOR, 33), copy);
+      const addOnOption = { added: added, guys: optionRow(m1) ? optionRow(m1).guys : null, hours: optionRow(m1) ? optionRow(m1).days : null, flag: m1.no_travel_labor === true };
+      // ...a sheet that already holds a line, a base that does not carry the travel (a Combo's Epoxy) and a sheet the bid does not have are refused
+      const comboModel = B.migrateModel(clone((await newBid(comboDraft(), CREW.polish)).saved.polish_estimate));
+      // (a carrier that holds no line, so that a sheet the bid does not have would be given one if the answer fell back to the carrier)
+      const carrierWithoutLine = clone(comboModel);
+      carrierWithoutLine.labor = carrierWithoutLine.labor.filter((r) => r.id !== "travel");
+      const refused = { holdsOne: B.addTravelLabor(clone(withCopy), B.freshTravelRow(LABOR, 33), copy), strayBase: B.addTravelLabor(clone(comboModel), B.freshTravelRow(LABOR, 33), "Epoxy"),
+        unknownTab: B.addTravelLabor(carrierWithoutLine, B.freshTravelRow(LABOR, 33), "Nope") };
+      // the x on an option when the CARRIER holds no line (and the job has not said so): the option's x says nothing about the job; the carrier's says it
+      const m3 = clone(withCopy);
+      m3.labor = m3.labor.filter((r) => r.id !== "travel");
+      const m4 = clone(m3);
+      const optionX = { said: B.travelLaborRemoved(m3, copy), flag: m3.no_travel_labor === true };
+      const carrierX = { said: B.travelLaborRemoved(m4, B.ROOT_TAB), flag: m4.no_travel_labor === true };
+      const canAdd = { carrier: B.travelLaborCanBeAdded(m3, B.ROOT_TAB), option: B.travelLaborCanBeAdded(m3, copy), carrierWithLine: B.travelLaborCanBeAdded(clone(withCopy), B.ROOT_TAB), optionWithLine: B.travelLaborCanBeAdded(clone(withCopy), copy), optionWithoutLine: optionWithoutLine,
+        strayBase: B.travelLaborCanBeAdded(clone(comboModel), "Epoxy"), unknown: B.travelLaborCanBeAdded(clone(comboModel), "Nope") };
+      // a job that said it has no drive is not seeded one on the section a job-type switch adds (a job that did not say so is)
+      const seed = (flag) => {
+        const m = B.migrateModel(clone(saved));
+        if (flag) m.no_travel_labor = true;
+        let out = B.sectionsForJob(m, "epoxy", { rules: [] });
+        out = B.seedNewSections(out, { saved: saved, laborRows: LABOR, laborRate: 33, sf: { Epoxy: [6000, ""] }, lf: { Epoxy: [300, ""] }, asms: [], items: [], reserved: [], split: false });
+        return rowIn(out.tabs.Epoxy) !== null;
+      };
+      res.direct = { copy: copy, addOnOption: addOnOption, refused: refused, optionX: optionX, carrierX: carrierX, canAdd: canAdd, seeded: { said: seed(true), notSaid: seed(false) } };
+    }
     return res;
   });
 
@@ -472,6 +562,38 @@ async function main() {
     // idempotent
     res.idempotent = Object.keys(cases).every((name) => JSON.stringify(B.migrateModel(B.migrateModel(clone(cases[name])))) === JSON.stringify(B.migrateModel(clone(cases[name]))));
     return res;
+  });
+
+  // A SAVED BID NEVER MOVES ON OPEN: a far job saved with its drive and `no_travel_labor` over it, the shape the round-5 x left (it set the flag for ANY Travel line, an option's own included). The flag
+  // prices nothing, so the bid opens at the price the parent of this change (f8ba775) gives it, 39,742, with the flag and without it, with its Travel line as it was, and the page saves nothing on
+  // opening it. (The saved-bid ratchet's own fixtures feed the golden of the page's saves, which this change must not recut, so the pin lives here.)
+  await section("savedBid", async () => {
+    const model = (flag) => {
+      const m = { version: 2,
+        takeoff: [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 12500, unit: "SF" },
+                  { assembly_id: "a2", assembly_name: "Cove Base", measurement: 200, unit: "LF" },
+                  { assembly_id: "a5", assembly_name: "Densifier Only", measurement: 5000, unit: "SF" }],
+        labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33, rate_default: 33 },
+                { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33, rate_default: 33 },
+                { id: "jointfill", label: "Joint filler", guys: 3, days: 1, rate: 33, rate_default: 33 },
+                { id: "travel", label: "Travel Labor", guys: 3, days: 6.5, rate: 33, unit: "hours", guys_auto: true, guys_follow: "crew", hours_seed: 6.5, rate_default: 33 }],
+        conditions: { local: false, prevailing_wage: false, taxable: true, remodel_tax: false, bond: false, dye: false, joint_filler: false, remove_existing_jf: false },
+        contingency: 0, fees: 0, totals: {},
+        travel: { lodging: { label: "Lodging", enabled: true, qty: 19.5, qty_auto: true, qty_follow: "labor", rate: 70, rate_default: 70 },
+                  per_diem: { label: "Per Diem", enabled: true, qty: 19.5, qty_auto: true, qty_follow: "labor", rate: 45, rate_default: 45 } },
+        distance: { miles: 190, source: "google", key: "1 water works dr|kansas city|ks|66101" } };
+      if (flag) m.no_travel_labor = true;
+      return m;
+    };
+    const blobOf = (flag) => P.blob({ polish_estimate: model(flag), address: "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101", polish_sf: B.takeoffSf(model(flag).takeoff) });
+    const one = async (flag) => {
+      const b = await open(blobOf(flag), { labor: undefined });
+      const total = b.api.bid().total;
+      b.clock.fire();
+      const m = b.api.root();
+      return { total: total, flag: m.no_travel_labor === true, row: rowFacts(rowIn(m)), saves: b.rec.saves.length };      // saves read BEFORE anything forces one
+    };
+    return { withFlag: await one(true), withoutFlag: await one(false) };
   });
 
   // THE FLAG'S GUARD ON A CARRIER MOVE: a bid whose job said it has no drive does not have a stranded row carried to the new carrier when no carrier is named (followDistance with one argument),

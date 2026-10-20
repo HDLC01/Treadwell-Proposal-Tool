@@ -38,6 +38,8 @@ RULES = {
     "NIGHTS": "a far job's Lodging or Per Diem quantity is not the man-days of every base section, each counted with its own tab's divisor (a Gyp crew's hours over 10), on auto and marked as following, or a job under 70 miles has one filled, or a quantity the estimator typed (or cleared) is not exactly as they left it",
     "RELOAD_AGREES": "the same distance answer typed in the session that made a Sheets change (or the x, or Add Travel Labor) and typed after a jsonb reload of what it saved leaves different prices or Travel Labor rows",
     "ANSWER_OWNER": "the job says it has no drive (no_travel_labor) while the section that carries the job's travel holds a Travel Labor line: the flag is the carrier's answer, and nobody else's",
+    "DEMOTED_KEEPS": "a base the Sheets panel's pick demoted to an option lost the Travel Labor line it held (it keeps its own, and the new carrier takes a copy)",
+    "ANSWER_HELD": "after the x on the carrier's Travel Labor line (until Add Travel Labor on the carrier, or a Sheets action) a job-type switch or a crew typed left the job a drive: the answer is gone, or the carrier holds a line",
     "CRASH": "the page threw",
 }
 

@@ -2955,6 +2955,9 @@
     if (!carries) {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap" data-travel-note>' + esc(travelNote()) + '</p>';
+      // AN OPTION WITH NO TRAVEL LABOR LINE of its own is offered one (round 6, part 2): it is priced apart and carries its own drive. A base that does not carry the job's travel is not:
+      // the job's drive is charged once, on the carrier.
+      if (B.travelLaborCanBeAdded(ROOT, activeTab)) html += addTravelHtml(true);
     } else {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
@@ -4114,22 +4117,26 @@
 
   /** THE ADD TRAVEL LABOR CONTROL (the 2026-10-20 fifth audit). The Travel Labor card's x takes the line away and the Add labor pop-up leaves Travel out
    *  on purpose ("it has its own block below"), so until now nothing brought the line back: the summary said Travel Labor came on over a job with no
-   *  Travel Labor line. Drawn in the travel block, in place of the card, only while the job's carrier has no such line. */
-  function addTravelHtml() {
-    return '<div class="trvadd" data-trv-none><p class="cap">This bid has no Travel Labor line, so the drive adds nothing to the price.</p>' +
+   *  Travel Labor line. Drawn in the travel block, in place of the card, only while the job's carrier has no such line.
+   *
+   *  ON ANY SECTION THAT CAN HOLD A DRIVE (round 6, part 2): `option` is the same control drawn under the note of an OPTION that has no Travel Labor line, which is priced apart
+   *  and carries its own drive (B.travelLaborCanBeAdded: the carrier or an option, and no line). It brings back that option's line and takes back only that option's answer. */
+  function addTravelHtml(option) {
+    return '<div class="trvadd" data-trv-none' + (option ? '="option"' : '') + '><p class="cap">' +
+      (option ? "This option has no Travel Labor line, so its drive adds nothing to its price." : "This bid has no Travel Labor line, so the drive adds nothing to the price.") + '</p>' +
       '<button class="btn addline below" data-add-travel="1">' + icon("plus", 16) + ' Add Travel Labor</button></div>';
   }
 
   var travelAdding = false;
-  /** Add the line back: a fresh row, the one a new bid is seeded with (the library's Travel name and rate, empty), on the section that carries the job's travel,
-   *  filled by the distance on file by the rule when the job is far (B.addTravelLabor). The library is read first, like the Add labor pop-up, and a double click adds
-   *  one line (B.addTravelLabor refuses a section that already has one). The model is read AFTER the library answers, so a figure typed meanwhile is kept. */
+  /** Add the line back: a fresh row, the one a new bid is seeded with (the library's Travel name and rate, empty), on the section on show (the carrier, or an option that has none),
+   *  filled by the distance on file by the rule when the job is far (B.addTravelLabor: the carrier's by the crew of the bid, an option's by its own). The library is read first, like the
+   *  Add labor pop-up, and a double click adds one line (B.addTravelLabor refuses a section that already has one). The model is read AFTER the library answers, so a figure typed meanwhile is kept. */
   async function addTravelLaborPress() {
     if (travelAdding) return;
     travelAdding = true;
     try {
       var rows = await loadLaborDefaults();
-      if (!B.addTravelLabor(ROOT, B.freshTravelRow(rows, LABOR_RATE))) return;
+      if (!B.addTravelLabor(ROOT, B.freshTravelRow(rows, LABOR_RATE), activeTab)) return;
       changed(true);
       var at = -1;
       M.labor.forEach(function (r, i) { if (at < 0 && B.isTravelRow(r)) at = i; });
@@ -4316,10 +4323,11 @@
     if (dl) {
       if (M.labor.length <= 1) return;
       var gone = M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1)[0];
-      // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY (round-5 audit): migrateModel appends a blank Travel row to a bid that has none unless the model
-      // says its absence is the answer (no_travel_labor), so a reload brought the line back and the next far answer priced it (+$783). The x is
-      // that answer; Add Travel Labor (B.addTravelLabor) takes it back.
-      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;
+      // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY, AND THE ANSWER BELONGS TO THE SHEET WHOSE LINE WENT (round 6, part 2). The x on the CARRIER's line says the job has no drive:
+      // B.travelLaborRemoved records it on the model (no_travel_labor), so a reload does not append a blank row (migrateModel), a job-type switch does not seed the new carrier a
+      // priced one, and Add Travel Labor on the carrier (B.addTravelLabor) takes it back. The x on an OPTION's line says only that the option has none, and the x on a leftover row
+      // on a base that does not carry the job's travel says nothing: neither touches the job (round 5 set the job's flag for ANY line, which outlived its meaning).
+      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);
       changed(true);
       return;
     }
