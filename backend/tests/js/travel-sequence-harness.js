@@ -428,7 +428,7 @@ async function take(saved, step, distanceAnswer) {
   return { b: b, plain: false, piece: step.copy ? "copy" : step.add ? "add:" + step.add : "base:" + step.base, step: step };
 }
 
-/** The Sheets panel's three actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (the radio and its yes). The page is saved
+/** The Sheets panel's three actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (a sheet's radio, or the "Make Epoxy + Polish the base" button for the pair, and then its yes). The page is saved
  *  after it. False when the control is not there (the panel does not offer it at this state). A FRESH SHEET is an option that starts on the proposal. It holds no Travel Labor row:
  *  only the section that carries the job's travel has one. */
 async function sheetsAction(b, step) {
@@ -444,7 +444,22 @@ async function sheetsAction(b, step) {
     if (!b.doc.querySelector(sel)) return false;
     P.clickOn(b, sel);
   } else {
-    b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
+    if (step.base === "combined") {
+      // THE PAIR PRICED TOGETHER is asked from the bar of either sheet of it (the strip's "Epoxy + Polish" tab until 2026-10-21): open one of the
+      // pair when the sheet on show is not, then press its "Make Epoxy + Polish the base".
+      const pair = B.combinedPair(b.api.root());
+      if (!pair) return false;
+      if (!b.doc.querySelector('[data-sh-act="combine"]')) {
+        const tabSel = '[data-section-tab="' + pair[0] + '"]';
+        if (!b.doc.querySelector(tabSel)) return false;
+        P.clickOn(b, tabSel);
+        await settle();
+      }
+      if (!b.doc.querySelector('[data-sh-act="combine"]')) return false;
+      P.clickOn(b, '[data-sh-act="combine"]');
+    } else {
+      b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
+    }
     if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return false;
     P.clickOn(b, '[data-sh-act="base-yes"]');
   }
@@ -457,11 +472,15 @@ async function sheetsAction(b, step) {
 const stepLabel = (step) => (step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add :
   step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base);
 
-/** The base changes the Sheets panel of this page offers (one to a radio), other than the base it already has. */
+/** The base changes the Sheets panel of this page offers, other than the base it already has: one sheet to a radio, and the pair priced
+ *  together. The pair is a button on the bar of either sheet of it, drawn only while one of them is on show, so it is offered whenever the bid
+ *  HAS the pair and it is not the base already, and first, where its tab stood in the strip before 2026-10-21. */
 function basePicks(b) {
   const html = String((b.doc.getElementById("sheets-panel") || {}).innerHTML || "");
   const out = [];
   const have = B.baseOf(b.api.root()).ids;
+  const pair = B.combinedPair(b.api.root());
+  if (pair && !(have.length === 2 && pair.every((id) => have.indexOf(id) >= 0))) out.push("combined");
   [...html.matchAll(/data-sh-base="([^"]*)"/g)].forEach((mm) => {
     const v = mm[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&");
     const ids = v === "combined" ? B.combinedPair(b.api.root()) : [v];

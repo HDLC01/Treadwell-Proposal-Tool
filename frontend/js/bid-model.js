@@ -5844,9 +5844,10 @@
   //   pick       the "Add a sheet" menu is open              busy       a sheet is being added (the library is being read)
   //   icon       function (name, size) -> svg markup, or none   sysDesc    function (sectionId) -> what the option prints now
   //   notice     { at, text }: why a press was refused, drawn under the control that was pressed (at: a section id, or "add")
+  //   reno       true when the job is labelled a renovation: the open sheet's bar says so, on every step
   //
   // EVERY CONTROL CARRIES A data- ATTRIBUTE THE PAGE'S ONE CLICK HANDLER READS: data-section-tab (open it), data-sh-base (the
-  // radio), data-sh-act with data-sh-tab (on, desc, copy, rename, rename-save, rename-cancel, delete, base-yes, base-no,
+  // radio), data-sh-act with data-sh-tab (on, desc, combine, copy, rename, rename-save, rename-cancel, delete, base-yes, base-no,
   // add-menu, add-close, add with data-sh-sheet), data-sh-mode (the Total / Add or Deduct pair), data-sh-desc and data-sh-name (the
   // two boxes). data-sh-key names a control so the page can put the caret back on it after a repaint.
 
@@ -5995,9 +5996,10 @@
   /** The "Sheets" bar, as the markup inside its element: ONE strip of tabs (a sheet each, like the worksheet tabs of the live
    *  estimate) and, under it, the bar of the sheet that is open. See the block comment above for `view`.
    *
-   *  Row 1, the strip: the base-bid radio, the name and the price of each sheet in sheetsFacts order, the combined Epoxy + Polish
-   *  choice when the bid has the pair, and "+ Add sheet" last. Row 2, the open sheet only: what it is (the base, or the option and
-   *  its figure) and every control it has. A base change waiting for its yes shows between the two, whichever sheet it is for. */
+   *  Row 1, the strip: the base-bid radio, the name and the price of each sheet in sheetsFacts order, and "+ Add sheet" last. Only
+   *  sheets: the combined Epoxy + Polish base is asked from the bar of either sheet of the pair. Row 2, the open sheet only: what it
+   *  is (the base, or the option and its figure) and every control it has. A base change waiting for its yes shows between the two,
+   *  whichever sheet it is for. */
   function sheetsPanelHtml(model, view) {
     var f = sheetsFacts(model, view);
     var v = f.view;
@@ -6009,17 +6011,10 @@
         escHtml(rootLabel(model)) + ' shows. ' + escHtml(rootLabel(model)) + ' still prices and saves. Reload to try again.</span></div>';
     }
 
-    // ROW 1: the tabs.
+    // ROW 1: the tabs, one a sheet. NO "EPOXY + POLISH" TAB (Hanz, 2026-10-21: "The Epoxy + Polish should not be a default Sheet"). It was
+    // the combined base-bid choice, drawn FIRST in the strip whenever the bid held an Epoxy and a Polish sheet, so an Epoxy bid with a Polish
+    // option read as a bid holding a sheet nobody made. Pricing the pair together as the base is asked from either sheet's own bar (Row 2).
     var tabs = [];
-    if (f.pair && !f.unreadable) {
-      var combined = f.baseIds.length === 2;
-      tabs.push('<li class="sh sh-tab combined' + (combined ? " base" : "") + '" data-sh-row="combined" role="presentation">' +
-        '<span class="sh-slot"><input type="radio" class="sh-radio" name="sh-base" data-sh-base="combined"' + key("combined", "base") +
-        (combined ? " checked" : "") + ' aria-label="Make Epoxy + Polish (combined) the base bid, which ' + BASE_MEANS +
-        '" title="Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '"></span>' +
-        '<span class="sh-name static" title="Epoxy and Polish together"><span class="sh-nm">Epoxy + Polish</span><span class="sh-price' +
-        (f.pairTotal === null ? " none" : "") + '">' + (f.pairTotal === null ? "no price" : money(f.pairTotal)) + '</span></span></li>');
-    }
     f.rows.forEach(function (r) { tabs.push(tabHtml(r)); });
     // "+ Add sheet" STAYS IN THE STRIP while its list is open (browser walk, 2026-10-20: it vanished under the cursor). Open, it
     // closes the list again, which is what the list's own close button does.
@@ -6109,8 +6104,10 @@
         s += '<input type="text" class="sh-ren-in" data-sh-name="' + escHtml(t) + '"' + key(t, "name") + ' value="' +
           escHtml(v.draft) + '" aria-label="Sheet name">';
       } else {
+        // DOUBLE-CLICK RENAMES (Hanz, 2026-10-21: "Double clicking the sheet container should allow me to rename it"), as a worksheet tab
+        // does; F2 does it from the keyboard. Said on the tab itself, the way the base radio says what it means.
         s += '<button type="button" class="sh-name" role="tab" aria-selected="' + (open ? "true" : "false") + '" data-section-tab="' +
-          escHtml(t) + '"' + key(t, "open") + ' aria-current="' + (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) +
+          escHtml(t) + '"' + key(t, "open") + ' title="Double-click to rename" aria-current="' + (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) +
           '</span><span class="sh-price' + (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span>' +
           // THE BASE SAYS SO IN WORDS (browser walk, 2026-10-20): its red edge read as a second selected tab.
           (r.base || r.inBase ? '<span class="sh-basetag">Base</span>' : "") + '</button>';
@@ -6125,9 +6122,13 @@
       var s = '<div class="sh-open" data-sh-open="' + escHtml(t) + '" role="tabpanel"><div class="sh-meta"><span class="sh-type">' +
         escHtml(String(r.typeLabel).toUpperCase()) + '</span>';
       if (r.base) s += '<span class="pill base">Base bid</span>';
-      else if (r.inBase) s += '<span class="pill">In the base bid</span>';
+      else if (r.inBase) s += '<span class="pill">In the base bid</span><span class="sh-sum">Epoxy + Polish together' +
+        (f.baseTotal === null ? "" : ', <b>' + money(f.baseTotal) + '</b>') + '</span>';
       else s += '<span class="sh-sum' + (r.off ? " off" : "") + '">' + escHtml(r.lead) +
         (r.figure ? ' <b>' + escHtml(r.figure) + '</b>' : "") + '</span>';
+      // THE RENOVATION TAG (Hanz, 2026-10-21): a job labelled a renovation says so on the bar of whichever sheet is open, so it is
+      // identified on Material, Labor and Review alike. The switch that sets it is on the Material step of a Polish or Seal sheet.
+      if (v.reno === true) s += '<span class="pill reno" title="A renovation: the patch is charged at the renovation rate">Renovation</span>';
       s += '</div><div class="sh-body">';
       if (ren) {
         s += '<div class="sh-btns"><button type="button" class="btn sm" data-sh-act="rename-save"' + tabAttr + key(t, "save") +
@@ -6163,7 +6164,13 @@
         }
         var locked = r.base || r.inBase || e.root;
         var armed = v.armed === t && !locked;
-        s += '<div class="sh-acts"><button type="button" class="kindpick" data-sh-act="copy"' + tabAttr + key(t, "copy") + '>' +
+        // PRICE EPOXY + POLISH TOGETHER AS THE BASE, asked from either sheet of the pair (the strip's "Epoxy + Polish" tab until
+        // 2026-10-21). Not on a sheet outside the pair, and not once the pair is the base.
+        var combine = !!f.pair && !f.unreadable && f.baseIds.length !== 2 && f.pair.indexOf(t) >= 0;
+        s += '<div class="sh-acts">' + (combine ? '<button type="button" class="kindpick sh-combine" data-sh-act="combine"' + tabAttr +
+          key(t, "combine") + ' title="Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '">' + ic("layers", 12) +
+          'Make Epoxy + Polish the base' + (f.pairTotal === null ? "" : ' <span class="sh-cmb">' + money(f.pairTotal) + '</span>') +
+          '</button>' : "") + '<button type="button" class="kindpick" data-sh-act="copy"' + tabAttr + key(t, "copy") + '>' +
           ic("copy", 12) + 'Copy</button><button type="button" class="kindpick" data-sh-act="rename"' + tabAttr + key(t, "rename") + '>' +
           ic("pencil", 12) + 'Rename</button><button type="button" class="kindpick' + (armed ? " armed" : "") +
           '" data-sh-act="delete"' + tabAttr + key(t, "delete") + (locked ? " disabled" : "") + '>' + ic("trash", 12) +

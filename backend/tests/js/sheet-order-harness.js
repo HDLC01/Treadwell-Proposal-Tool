@@ -140,9 +140,17 @@ async function addSheet(b, sheet) {
   b.clock.fire();
 }
 async function makeBase(b, value) {
-  const el = b.doc.querySelector('[data-sh-base="' + attr(value) + '"]');
-  if (!el) return false;
-  b.doc.fire("change", { target: el });
+  if (value === "combined") {
+    // THE PAIR PRICED TOGETHER is a button on the bar of either sheet of it (the strip's "Epoxy + Polish" radio until 2026-10-21): open one of the pair when the sheet on show is not.
+    const pair = B.combinedPair(b.api.root());
+    if (!pair) return false;
+    if (!b.doc.querySelector('[data-sh-act="combine"]')) await openSheet(b, pair[0]);
+    if (!clickIf(b, '[data-sh-act="combine"]')) return false;
+  } else {
+    const el = b.doc.querySelector('[data-sh-base="' + attr(value) + '"]');
+    if (!el) return false;
+    b.doc.fire("change", { target: el });
+  }
   clickIf(b, '[data-sh-act="base-yes"]');
   await settle();
   b.clock.fire();
@@ -168,7 +176,7 @@ async function deleteSheet(b, tab) {
 // ── reading the page ─────────────────────────────────────────────────────────────────────────────────────────
 const lumpOf = (blob) => (blob && blob.proposal_lump_sum !== undefined && blob.proposal_lump_sum !== null ? blob.proposal_lump_sum : blob && blob.computed_bid ? blob.computed_bid.lump_sum : null);
 const panelOf = (b) => String((b.doc.getElementById("sheets-panel") || {}).innerHTML || "");
-/** The sheet bar's tabs, left to right ("combined" is the pair's radio, which always leads). */
+/** The sheet bar's tabs, left to right (one row to a sheet: the pair priced together is a button on a sheet's bar, not a row). */
 const stripOf = (b) => [...panelOf(b).matchAll(/data-sh-row="([^"]*)"/g)].map((m) => unattr(m[1]));
 /** The sheet the bid is on after it opens. */
 const openOf = (b) => { const m = /data-sh-row="([^"]*)"[^>]*data-sh-cur="1"/.exec(panelOf(b)); return m ? unattr(m[1]) : null; };

@@ -136,7 +136,7 @@
        The bid's sheets as TABS, the way the live estimate draws its worksheet tabs, under the four steps in the top bar
        (Hanz, 2026-10-19). It was a floating panel (2026-10-13), and a widget over the page is not a place an estimator
        navigates from. Since 2026-10-20 it sits in the sticky head (.v2head, above), directly under the top bar, on every bid:
-         ROW 1  .sh-strip: one tab a sheet (the base-bid radio, the name, the price), the combined Epoxy + Polish choice
+         ROW 1  .sh-strip: one tab a sheet (the base-bid radio, the name, the price; double-click or F2 renames it)
                 when the bid has the pair, and + Add sheet last. It scrolls sideways on a narrow screen, never the page.
          ROW 2  .sh-open: the open sheet only, its type and its controls, laid out in a row that wraps.
        The open tab is white and joined to the bar below it (its 1px overlap rubs out the strip's baseline); the base
@@ -177,7 +177,8 @@
     .sheets .sh-tab.open{position:relative;z-index:1;margin-bottom:-1px;padding-bottom:1px;background:var(--card);
       box-shadow:inset 0 3px 0 var(--red)}
     .sheets .sh-addbtn.on{background:var(--red-tint);color:var(--red-dark)}
-    .sheets .sh-tab.combined{border-style:dashed}
+    /* The pair priced together as the base, asked from either sheet's bar (the strip's dashed "Epoxy + Polish" tab until 2026-10-21). */
+    .sheets .sh-combine .sh-cmb{color:var(--ink-v);font-variant-numeric:tabular-nums}
     .sheets .sh-slot{display:flex;align-items:center;justify-content:center;width:22px;height:32px}
     .sheets .sh-slot:empty{width:8px}
     .sheets .sh-radio{width:15px;height:15px;margin:0;accent-color:var(--red-dark);cursor:pointer}
@@ -235,6 +236,8 @@
       border-radius:999px;padding:3px 8px;white-space:nowrap;border:1px solid var(--line);background:var(--card);
       color:var(--ink-v)}
     .sheets .pill.base{background:var(--ink);border-color:var(--ink);color:var(--card)}
+    /* The job is labelled a renovation (the Material step's Renovation switch): said on the open sheet's bar on every step. */
+    .sheets .pill.reno{background:var(--warn-bg);border-color:#e8d9a8;color:var(--amber-ink)}
     .sh-sum{font-size:12px;color:var(--ink-v)}
     .sh-sum b{font:600 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
     .sh-sum.off{color:var(--ink-v);font-style:italic}
@@ -552,10 +555,11 @@
        takeoff row does" a few lines up in takeoffPanel(). The distinction now lives only in
        the tag text (JOINT FILLER / DYE vs ROW n) and the hint line, not in a different card. */
     .tk.cond{}
-    .tk.cond .tk-h{margin:0 0 7px}
-    .tk.cond .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
+    /* .tk.floor: the Renovation card (a fact about the building, Polish!B10), dressed as a condition card. */
+    .tk.cond .tk-h,.tk.floor .tk-h{margin:0 0 7px}
+    .tk.cond .tk-sub,.tk.floor .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
       letter-spacing:.02em}
-    .tk.cond .hint{margin:0}
+    .tk.cond .hint,.tk.floor .hint{margin:0}
     /* `.cond-cost` lived here from 2026-09-18 to 2026-09-19: one dollar figure beside the switch,
        which was the most a switch-shaped card could say. Joint Filler and Dye are material rows
        now and their money is in a real `.costbox` in the Total cost column, so the class is gone
