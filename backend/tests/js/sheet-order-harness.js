@@ -333,32 +333,48 @@ async function main() {
     await copySheet(b, "Epoxy");
     await makeBase(b, "Copy1");
     await makeBase(b, "combined");
-    // what an old save looks like once the server has had it: no `seq` anywhere, keys in jsonb's order
+    // what the session saw and saved; then what an old save looks like once the server has had it: no `seq` anywhere, every object's keys in jsonb's order, and priced_tabs (an array:
+    // jsonb keeps its order) as the session wrote it, which is the order the saved price was computed in
+    const session = facts(b, true);
     const old = clone(b.store.blob);
     Object.keys(old.polish_estimate.tabs).forEach((id) => { delete old.polish_estimate.tabs[id].seq; });
+    SAVED_BLOBS.push({ label: "legacy: priced_tabs names the sheets", saved: clone(old) });
     const held = J.reloaded(old);
     const keyOrder = Object.keys(held.polish_estimate.tabs);
-    // opened plain: nothing is written, asked or armed
-    const p = await open(clone(held), { distance: SAVED_ANSWER });
-    p.api.go(1);
-    await settle();
-    const quiet = { armed: p.clock.armed(), saves: p.rec.saves.length, asked: (p.rec.distanceBodies || []).length };
-    const opened = { order: B.sectionsOf(p.api.root()).map((e) => e.tab), seqs: B.sectionsOf(p.api.root()).filter((e) => !e.root).map((e) => e.section.seq) };
-    const factsOpen = facts(p, true);
-    const savedBlob = clone(p.store.blob);
-    const savedSeqs = Object.keys(savedBlob.polish_estimate.tabs).map((id) => [id, savedBlob.polish_estimate.tabs[id].seq]);
-    // the same bid with the order the keys are held in written down by hand, 1..n: stamping it changes nothing
-    const byHand = clone(held);
-    Object.keys(byHand.polish_estimate.tabs).forEach((id, i) => { byHand.polish_estimate.tabs[id].seq = i + 1; });
-    const h = await open(clone(byHand), { distance: SAVED_ANSWER });
-    h.api.go(1);
-    await settle();
-    const factsByHand = facts(h, true);
-    // and what the saved order does after the next reload
-    const again = await reload(savedBlob);
-    again.api.go(1);
-    await settle();
-    return { keyOrder: keyOrder, quiet: quiet, opened: opened, facts: factsOpen, savedSeqs: savedSeqs, byHand: factsByHand, reloadOfSaved: facts(again, true) };
+    const pricedTabs = (held.priced_tabs || []).map((t) => t.id);
+    // one bid opened plain: nothing is written, asked or armed; what it shows; what its first save writes; and what the saved order does after the next reload. `order`: the order the
+    // page is expected to stamp, which is also written down by hand on a copy (1..n) to show that stamping it changes nothing.
+    const openLegacy = async (blob, order) => {
+      const p = await open(clone(blob), { distance: SAVED_ANSWER });
+      p.api.go(1);
+      await settle();
+      const quiet = { armed: p.clock.armed(), saves: p.rec.saves.length, asked: (p.rec.distanceBodies || []).length };
+      const entries = B.sectionsOf(p.api.root());
+      const opened = { order: entries.map((e) => e.tab), seqs: entries.filter((e) => !e.root).map((e) => e.section.seq), carrier: B.travelCarrier(p.api.root()) };
+      const factsOpen = facts(p, true);
+      const savedBlob = clone(p.store.blob);
+      const savedSeqs = Object.keys(savedBlob.polish_estimate.tabs).map((id) => [id, savedBlob.polish_estimate.tabs[id].seq]);
+      const byHand = clone(blob);
+      order.forEach((id, i) => { byHand.polish_estimate.tabs[id].seq = i + 1; });
+      const h = await open(clone(byHand), { distance: SAVED_ANSWER });
+      h.api.go(1);
+      await settle();
+      const factsByHand = facts(h, true);
+      const again = await reload(savedBlob);
+      again.api.go(1);
+      await settle();
+      return { quiet: quiet, opened: opened, facts: factsOpen, savedSeqs: savedSeqs, byHand: factsByHand, reloadOfSaved: facts(again, true) };
+    };
+    // THE LIST NAMES THE SHEETS (the case that matters: every bid with sheets saved before this has one): the order the saved price was computed in
+    const listed = await openLegacy(held, pricedTabs.filter((id) => id !== B.ROOT_TAB));
+    // no list to say how it was priced, and a list that names one sheet only (it says nothing about the order of the others): the order the keys are held in is all there is
+    const noList = clone(held);
+    delete noList.priced_tabs;
+    const oneNamed = clone(held);
+    oneNamed.priced_tabs = oneNamed.priced_tabs.filter((t) => t.id === B.ROOT_TAB || t.id === "Epoxy");
+    const unlisted = await openLegacy(noList, keyOrder);
+    const oneListed = await openLegacy(oneNamed, keyOrder);
+    return Object.assign({ keyOrder: keyOrder, pricedTabs: pricedTabs, savedLump: lumpOf(old), session: session }, listed, { unlisted: unlisted, oneListed: oneListed });
   });
 
   // ═══ model: the order, on the model alone ═════════════════════════════════════════════════════════════════════
@@ -418,6 +434,23 @@ async function main() {
     const oldBid = reorder(legacy, ["Copy2", "Epoxy", GYP_TAB, "Copy1"]);
     const oldAdd = B.copySection(oldBid, "Epoxy", { state: {} });
     const oldFresh = B.addSheet(oldBid, "Seal", { state: {} });
+    // THE LIST A SAVE WRITES NEXT TO THE MODEL (priced_tabs) is the order the saved price was computed in, and an array keeps its order in jsonb where an object's keys do not.
+    // So a bid with no place written anywhere is stamped in the list's order when the list names two or more of its sheets (the sheets it does not name go after them, in the order
+    // their keys are held in), and in the keys' order when it does not. Anything else in the list (a repeat, an id the bid has no sheet for, the root, a name that is a property of every
+    // object, a value that is not an entry at all) names nothing.
+    const entry = (n) => (typeof n === "string" ? { id: n, kind: "option" } : n);
+    const stampedBy = (list, model) => { const from = model || oldBid; const s = B.withSectionOrder(from, list === undefined ? undefined : list.map ? list.map(entry) : list); return { order: ids(s), seqs: seqs(s), same: s === from }; };
+    const partlyStamped = clone(oldBid);
+    partlyStamped.tabs.Epoxy.seq = 1;
+    const priced = {
+      full: stampedBy(["Polish", "Epoxy", "Copy1", "Copy2", GYP_TAB]),
+      named2: stampedBy(["Polish", GYP_TAB, "Epoxy"]),
+      named1: stampedBy(["Polish", "Epoxy"]),
+      none: stampedBy(undefined), notAList: stampedBy({ Epoxy: 1 }), empty: stampedBy([]),
+      junk: stampedBy([null, 7, "Epoxy", { id: 5 }, { id: "Nope" }, { id: "toString" }, { id: "__proto__" }, { id: "Polish" }, { id: GYP_TAB }, { id: "Epoxy" }, { id: GYP_TAB }]),
+      partlyStamped: stampedBy(["Polish", "Copy1", "Copy2", GYP_TAB, "Epoxy"], partlyStamped),
+      allStamped: stampedBy(["Polish", GYP_TAB, "Copy2", "Copy1", "Epoxy"], m0),
+    };
     // a save carries the order: a bid with no stamps is composed into a draft whose sections hold 1..n, and whose priced_tabs list them in that order
     const composeModel = (() => {
       let m = B.freshModel();
@@ -448,6 +481,7 @@ async function main() {
       option: { order: ids(optioned), seqs: seqs(optioned) },
       hostile: hostileStamped ? { same: hostileStamped === hostile, strange: hostileStamped.tabs.Strange, seqsUntouched: Object.keys(hostileStamped.tabs).filter((k) => k !== "Strange").every((k) => hostileStamped.tabs[k].seq === hostile.tabs[k].seq) } : null,
       unreadable: unreadableStamped ? { same: unreadableStamped === unreadable } : null,
+      priced: priced,
       oldBid: { held: Object.keys(oldBid.tabs), copy: { id: oldAdd.id, order: ids(oldAdd.model), seqs: seqs(oldAdd.model) }, fresh: { id: oldFresh.id, order: ids(oldFresh.model), seqs: seqs(oldFresh.model) } },
       composed: composed,
     };

@@ -165,38 +165,73 @@ def test_a_rename_moves_nothing(ran):
 
 # ── nothing else depends on key order either ─────────────────────────────────────────────────
 def test_nothing_a_saved_draft_shows_or_does_depends_on_the_order_of_any_objects_keys(ran):
-    """Every draft the scenarios saved (seventeen of them: the pairs, the bar, the document, every step of the lifecycle), opened with the keys of EVERY object in five orders (as saved,
+    """Every draft the scenarios saved (eighteen of them: the pairs, the bar, the document, every step of the lifecycle, and a bid saved before the order was kept), opened with the keys of EVERY object in five orders (as saved,
     jsonb's, jsonb's reversed, two seeded shuffles): the sheets in order with their kinds, the carrier, the bases, the bar, every price, what the customer's document lists and the whole
     blob the page then saves are the same each time. The sheets under `tabs` were the only thing that read an object's key order (run the same check over a bid saved by 619f092 and the
     keys of `tabs` are the only ones whose order moves anything); this holds the rest of the draft to it."""
     got = ran["invariance"]
-    assert got["blobs"] >= 16 and got["compared"] >= 64, "the check was cut short: %r" % ({k: got[k] for k in ("blobs", "compared")},)
+    assert got["blobs"] >= 18 and got["compared"] >= 72, "the check was cut short: %r" % ({k: got[k] for k in ("blobs", "compared")},)
     assert got["differ"] == [], got["differ"][:5]
 
 
 # ── a bid saved before the order was kept ────────────────────────────────────────────────────
-def test_a_legacy_bid_opens_in_the_order_its_keys_are_held_in(ran):
+LEGACY_CASES = ["unlisted", "oneListed"]
+
+
+def test_the_legacy_bid_is_one_the_keys_would_flip(ran):
+    """Not vacuous. The order the saved price was computed in (priced_tabs: Polish, Epoxy, Copy1, Copy2; Epoxy carries the job's travel) is not the order jsonb holds the sheets'
+    keys in (Copy1, Copy2, Epoxy: Copy1 would carry it), so a page that took the keys' order opens the bid on another carrier and prices it differently."""
     got = ran["legacy"]
-    assert got["keyOrder"] == ["Copy1", "Copy2", "Epoxy"], got["keyOrder"]
-    assert got["opened"]["order"] == ["Polish"] + got["keyOrder"], got["opened"]
+    assert got["pricedTabs"] == ["Polish", "Epoxy", "Copy1", "Copy2"] and got["keyOrder"] == ["Copy1", "Copy2", "Epoxy"], got
+    assert got["session"]["carrier"] == "Epoxy" and got["session"]["bases"] == ["Epoxy", "Copy1"], got["session"]
+    assert got["unlisted"]["opened"]["carrier"] == "Copy1", "with nothing but the keys' order the carrier is Copy1: the setup the defect needs"
+    assert got["savedLump"] == got["session"]["prices"]["lump"] and got["savedLump"] > 0
+
+
+def test_a_legacy_bid_opens_in_the_order_its_saved_price_was_computed_in(ran):
+    """A save writes priced_tabs in the same save as the model and the lump sum, in the order the sheets were in, and jsonb keeps an array's order. A bid saved before `seq` was
+    kept has no place written anywhere, and its list is the only record of the order its price was made in (the first base carries the job's travel)."""
+    got = ran["legacy"]
+    assert got["opened"]["order"] == got["pricedTabs"], got["opened"]
+    assert got["opened"]["seqs"] == [1, 2, 3] and got["opened"]["carrier"] == "Epoxy", got["opened"]
+
+
+def test_the_first_save_of_a_legacy_bid_writes_the_price_it_was_saved_at(ran):
+    """THE DEFECT (round 6 audit): far Combo, Epoxy 4 x 12 and a Polish copy 6 x 10 the two bases, saved at $78,628. Opened on Copy1 as the carrier (jsonb's key order), and its first
+    save stamped THAT order for good and wrote $81,086: +$2,458 with nothing edited. Every fact the order decides is the saving session's, and so is the lump sum."""
+    got = ran["legacy"]
+    assert got["facts"]["prices"]["lump"] == got["savedLump"], (got["savedLump"], got["facts"]["prices"]["lump"])
+    assert differences(got["session"], got["facts"]) == []
+
+
+def test_a_legacy_bid_the_list_says_nothing_about_opens_in_the_order_its_keys_are_held_in(ran):
+    """No priced_tabs, or one that names a single sheet under `tabs` (which says nothing about the order of the others): the order the keys are held in is all there is."""
+    for case in LEGACY_CASES:
+        got = ran["legacy"][case]
+        assert got["opened"]["order"] == ["Polish"] + ran["legacy"]["keyOrder"], (case, got["opened"])
+        assert got["opened"]["seqs"] == [1, 2, 3], (case, got["opened"])
 
 
 def test_a_legacy_bid_stamps_its_order_when_it_opens_and_writes_nothing(ran):
-    got = ran["legacy"]
-    assert got["quiet"] == {"armed": 0, "saves": 0, "asked": 0}, got["quiet"]
-    assert got["opened"]["seqs"] == [1, 2, 3], got["opened"]
+    for got in [ran["legacy"]] + [ran["legacy"][c] for c in LEGACY_CASES]:
+        assert got["quiet"] == {"armed": 0, "saves": 0, "asked": 0}, got["quiet"]
+        assert got["opened"]["seqs"] == [1, 2, 3], got["opened"]
 
 
 def test_stamping_the_order_changes_no_price(ran):
-    """The same bid with its keys' order written down by hand as 1, 2, 3 prices, lists and carries exactly what the unstamped one does."""
-    got = ran["legacy"]
-    assert differences(got["facts"], got["byHand"]) == []
+    """The same bid with the order it opens in written down by hand as 1, 2, 3 prices, lists and carries exactly what the unstamped one does."""
+    for got in [ran["legacy"]] + [ran["legacy"][c] for c in LEGACY_CASES]:
+        assert differences(got["facts"], got["byHand"]) == []
 
 
 def test_the_next_save_of_a_legacy_bid_keeps_the_order_it_opened_with(ran):
     got = ran["legacy"]
-    assert got["savedSeqs"] == [["Copy1", 1], ["Copy2", 2], ["Epoxy", 3]], got["savedSeqs"]
+    assert got["savedSeqs"] == [["Epoxy", 1], ["Copy1", 2], ["Copy2", 3]], got["savedSeqs"]
     assert differences(got["facts"], got["reloadOfSaved"]) == []
+    for case in LEGACY_CASES:
+        got = ran["legacy"][case]
+        assert got["savedSeqs"] == [["Copy1", 1], ["Copy2", 2], ["Epoxy", 3]], (case, got["savedSeqs"])
+        assert differences(got["facts"], got["reloadOfSaved"]) == []
 
 
 # ── the model alone ─────────────────────────────────────────────────────────────────────────────
@@ -272,6 +307,43 @@ def test_a_save_carries_the_order_and_lists_the_priced_tabs_in_it(ran):
     assert "error" not in got, got
     assert got["seqs"] == {"Copy2": 1, "Epoxy": 2, "Copy1": 3}, got
     assert got["pricedTabs"] == ["Polish", "Copy2", "Epoxy", "Copy1"] and got["keys"] == ["Copy2", "Epoxy", "Copy1"], got
+
+
+# ── the saved list (priced_tabs) as the order of a bid with no places ───────────────────────────
+KEYED = ["Polish", "Copy2", "Epoxy", GYP, "Copy1"]          # oldBid: the keys are held in this order, none says its place
+KEYED_SEQS = {"Copy2": 1, "Epoxy": 2, GYP: 3, "Copy1": 4}
+
+
+def test_a_saved_list_that_names_two_or_more_sheets_is_the_order_of_a_bid_with_no_places(ran):
+    got = ran["model"]["priced"]
+    assert got["full"]["order"] == ["Polish", "Epoxy", "Copy1", "Copy2", GYP] and got["full"]["seqs"] == {"Epoxy": 1, "Copy1": 2, "Copy2": 3, GYP: 4}, got["full"]
+    assert got["full"]["same"] is False
+
+
+def test_the_sheets_a_saved_list_does_not_name_go_after_the_ones_it_does_in_key_order(ran):
+    """An `off` sheet is never priced, so a save does not list it: it has no place in the list. It goes after the named ones, in the order its keys are held in (Copy2, then Copy1)."""
+    got = ran["model"]["priced"]["named2"]
+    assert got["order"] == ["Polish", GYP, "Epoxy", "Copy2", "Copy1"] and got["seqs"] == {GYP: 1, "Epoxy": 2, "Copy2": 3, "Copy1": 4}, got
+
+
+def test_a_list_that_says_nothing_about_the_order_leaves_the_keys_in_charge(ran):
+    """No list, not a list, an empty one, and one that names a single sheet under `tabs`."""
+    got = ran["model"]["priced"]
+    for name in ("named1", "none", "notAList", "empty"):
+        assert got[name]["order"] == KEYED and got[name]["seqs"] == KEYED_SEQS, (name, got[name])
+
+
+def test_whatever_in_a_list_names_no_sheet_of_the_bid_names_nothing(ran):
+    """A repeat, an id the bid has no sheet for, the root, `toString` and `__proto__` (which every object has and `tabs` does not), a string, a number and a null where an entry belongs."""
+    got = ran["model"]["priced"]
+    assert got["junk"] == got["named2"], got["junk"]
+
+
+def test_a_list_is_read_only_when_no_sheet_says_its_place(ran):
+    """One sheet that says its place makes the places the order (the others are newer, in key order); a bid that says every place is handed back as it is."""
+    got = ran["model"]["priced"]
+    assert got["partlyStamped"]["order"] == ["Polish", "Epoxy", "Copy2", GYP, "Copy1"], got["partlyStamped"]
+    assert got["allStamped"]["same"] is True and got["allStamped"]["order"] == ["Polish", "Epoxy", "Copy1", "Copy2", GYP], got["allStamped"]
 
 
 # ── the backend's half: what the customer's document is made from ─────────────────────────────────
