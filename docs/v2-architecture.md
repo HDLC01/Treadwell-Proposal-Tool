@@ -807,8 +807,9 @@ and the options the customer's document lists (`priced_tabs`, which a save write
 nothing. `sectionsOf` lists the root and then the sections by `seq` (`tabIdsInOrder`). A bid saved before this has no `seq`: it keeps the
 order it opens with (its keys' order), `adopt()` stamps it in memory when it opens (`withSectionOrder`: nothing is written on open and
 no price moves) and every save carries the stamps; a section with no place is newer than one that has one, and a tie is settled by the
-sheet's id, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and every harness that reopens a saved
-draft goes through it (`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`).
+sheet's id, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
+estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
+(`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session.py`).
 
 **How a saved bid is kept from repricing.** The live Markups rules are never read when a section is priced. A section
 with no snapshot (every saved bid, and the Polish root always) prices at its profile's built-ins; a section
