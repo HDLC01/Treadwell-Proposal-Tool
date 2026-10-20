@@ -471,7 +471,7 @@ async function main() {
     const mixedKeysBA = ids(reorder(mixed, ["Copy1", "Epoxy", "Copy2", GYP_TAB]));
     // two sections with one stamp: settled by the sheet's id, whatever the keys' order
     const tie = clone(m0);
-    Object.keys(tie.tabs).forEach((k) => { tie.tabs[k].seq = 7; });
+    Object.keys(tie.tabs).forEach((k) => { tie.tabs[k].seq = 7; delete tie.tabs[k].source; });          // (no copy among them: a copy stands after its source, see sourceTie)
     const tieOrders = permutations(Object.keys(tie.tabs)).map((p) => ids(reorder(tie, p)).join(" | "));
     // A COPY THAT HOLDS ITS SOURCE'S PLACE (a page still running the code from before this round copied the section whole, `seq` and all): the two claim one place, the copy is the newer
     // sheet and stands after the one it was copied from, however many copies deep, whatever their ids (Copy2 sorts before Epoxy) and whatever order the keys arrive in. A source that
@@ -481,12 +481,14 @@ async function main() {
     const tiedCopy = placed(m0, { Copy2: 1 });                                     // Copy2 is a copy of Epoxy and holds its place
     const copiedTwice = B.copySection(m0, "Copy2", { state: {} });                 // Copy3, a copy of Copy2
     const chained = placed(copiedTwice.model, { Copy2: 1, Copy3: 1 });
+    const deepChain = placed(m0, { Copy1: 1, Copy2: 1 });                          // Copy2 is a copy of Epoxy, and Copy1 (an id that was freed and handed out again) a copy of Copy2
+    deepChain.tabs.Copy1.source = "Copy2";
     const looped = placed(m0, { Copy2: 1 });
     looped.tabs.Epoxy.source = "Copy2";                                            // Epoxy and Copy2 each name the other
     const apart = placed(m0, { Copy1: 4 });                                        // Copy1 ties with Gyp, and was copied from Epoxy, which holds another place
     apart.tabs.Copy1.source = "Epoxy";
-    const junkSource = [5, "Nope", "Polish", null, ["Gyp"]].map((source) => { const c = placed(m0, { Copy1: 4 }); c.tabs.Copy1.source = source; return everywhere(c); });
-    const sourceTie = { pair: everywhere(tiedCopy), chain: everywhere(chained), loop: everywhere(looped), apart: everywhere(apart), junkSource: junkSource };
+    const junkSource = [5, "Nope", "Polish", null, ["Gyp"], "Copy1"].map((source) => { const c = placed(m0, { Copy1: 4 }); c.tabs.Copy1.source = source; return everywhere(c); });
+    const sourceTie = { pair: everywhere(tiedCopy), chain: everywhere(chained), deepChain: everywhere(deepChain), loop: everywhere(looped), apart: everywhere(apart), junkSource: junkSource };
     // a bid saved before the order was kept: no stamps at all, the order the keys are held in
     const legacy = clone(m0);
     Object.keys(legacy.tabs).forEach((k) => { delete legacy.tabs[k].seq; });

@@ -317,6 +317,12 @@ def test_copies_of_copies_with_one_place_stand_in_the_order_they_were_made(ran):
     assert got["chain"] == [" | ".join(["Polish", "Epoxy", "Copy2", "Copy3", "Copy1", GYP])], got["chain"]
 
 
+def test_a_copy_of_a_copy_stands_after_both_not_after_one_hop_and_the_ids(ran):
+    """Epoxy, Copy2 (a copy of Epoxy) and Copy1 (a copy of Copy2: a freed id handed out again) hold place 1. One hop and the ids would give Epoxy, Copy1, Copy2."""
+    got = ran["model"]["sourceTie"]
+    assert got["deepChain"] == [" | ".join(["Polish", "Epoxy", "Copy2", "Copy1", GYP])], got["deepChain"]
+
+
 def test_a_loop_of_sources_ends_and_is_told_apart_by_the_ids(ran):
     """A hand-made model in which Epoxy and Copy2 each name the other as their source: no copy is older, so the ids decide, and the walk down the sources stops."""
     got = ran["model"]["sourceTie"]
@@ -324,11 +330,12 @@ def test_a_loop_of_sources_ends_and_is_told_apart_by_the_ids(ran):
 
 
 def test_a_source_that_is_not_in_the_tie_is_nothing(ran):
-    """Copy1 ties with Gyp. Its source is Epoxy, which holds another place, or it is not a sheet's name at all (a number, an unknown id, the root, null, a list): the ids decide (Copy1 first)."""
+    """Copy1 ties with Gyp. Its source is Epoxy, which holds another place, or it is not a sheet's name at all (a number, an unknown id, the root, null, a list), or it is Copy1 itself: the
+    ids decide (Copy1 first)."""
     got = ran["model"]["sourceTie"]
     expected = [" | ".join(["Polish", "Epoxy", "Copy2", "Copy1", GYP])]
     assert got["apart"] == expected, got["apart"]
-    assert got["junkSource"] == [expected] * 5, got["junkSource"]
+    assert got["junkSource"] == [expected] * 6, got["junkSource"]
 
 
 def test_a_copy_an_older_page_made_opens_right_after_its_source(ran):
@@ -336,7 +343,7 @@ def test_a_copy_an_older_page_made_opens_right_after_its_source(ran):
     got = ran["staleCopy"]
     assert got["held"]["epoxy"] == got["held"]["copy"] == 1 and got["held"]["gyp"] == 2, got["held"]
     assert got["held"]["keys"][0] == "Copy1", "the setup: the keys and the ids both put the copy in front of its source"
-    assert got["opened"]["order"] == ["Polish", "Epoxy", "Copy1", GYP] and got["opened"]["strip"] == ["Epoxy", "Copy1", GYP], got["opened"]
+    assert got["opened"]["order"] == ["Polish", "Epoxy", "Copy1", GYP] and got["opened"]["strip"] == got["opened"]["order"], got["opened"]
     assert got["reload"]["order"] == got["opened"]["order"] and got["reload"]["strip"] == got["opened"]["strip"], got["reload"]
     assert got["savedSeqs"]["Copy1"] == 1 and got["savedSeqs"]["Epoxy"] == 1, "nothing renumbers the tie: the next save carries the places it was given"
 
@@ -470,6 +477,11 @@ DELETE = "      .map(function (k) { return [k, out.tabs[k]]; })));"
 RENAME = "    return withSectionPatch(model, id, { label: next });"
 REMOVE = "      .map(function (id) { return [id, out.tabs[id]]; })));"
 AFTER_DELETED = ["Polish", "Epoxy", GYP, "Copy1"]
+WAITING = '      return typeof s === "string" && s !== row.id && left.some(function (r) { return r.id === s; });'
+PICK = "      var pick = 0;"
+RUNS = "      while (rows[i].seq !== null && j < rows.length && rows[j].seq === rows[i].seq) j++;"
+PAIR_ORDER = [" | ".join(["Polish", "Epoxy", "Copy2", "Copy1", GYP])]
+LOOP_ORDER = [" | ".join(["Polish", "Copy2", "Epoxy", "Copy1", GYP])]
 STAMPED_ALREADY = "    if (ids.every(function (id) { return hasSeq(tabs[id]); })) return model;       // (and a bid with no sections at all)"
 READABLE = "    if (readableSections(model) === null) return model;"
 TIE = "      return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);    // one place claimed twice: by the id, which survives a reload"
@@ -579,6 +591,19 @@ MUTATIONS = {
     "a rename takes the sheet's place from it": (
         MODEL, RENAME, "    return withSectionPatch(model, id, { label: next, seq: undefined });",
         lambda r: r["afterReload"]["rename"]["session"]["order"] != AFTER_START and r["model"]["served"]["rename"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP]),
+    # round 6, O3: a copy that holds its source's place stands after it
+    "a copy that holds its source's place is not held behind it": (
+        MODEL, WAITING, "      return false;",
+        lambda r: r["model"]["sourceTie"]["pair"] != PAIR_ORDER and r["model"]["sourceTie"]["deepChain"] != PAIR_ORDER and r["staleCopy"]["opened"]["order"] != ["Polish", "Epoxy", "Copy1", GYP]),
+    "a section that names itself as its source waits for itself": (
+        MODEL, WAITING, '      return typeof s === "string" && left.some(function (r) { return r.id === s; });',
+        lambda r: r["model"]["sourceTie"]["junkSource"] != [PAIR_ORDER] * 6),
+    "a loop of sources puts the last by id first": (
+        MODEL, PICK, "      var pick = -1;",
+        lambda r: r["model"]["sourceTie"]["loop"] != LOOP_ORDER),
+    "sections that say no place are held behind their sources too": (
+        MODEL, RUNS, "      while (j < rows.length && rows[j].seq === rows[i].seq) j++;",
+        lambda r: r["model"]["legacy"]["order"] != ["Polish"] + r["model"]["legacy"]["held"] and r["legacy"]["unlisted"]["opened"]["order"] != ["Polish"] + HELD),
     "a rename renumbers every sheet by its key's position": (
         MODEL, RENAME,
         "    var renamed = withSectionPatch(model, id, { label: next }); if (isObject(renamed.tabs)) renamed.tabs = copyInto({}, Object.fromEntries(Object.keys(renamed.tabs).map(function (k, i) { return [k, Object.assign({}, renamed.tabs[k], { seq: i + 1 })]; }))); return renamed;",

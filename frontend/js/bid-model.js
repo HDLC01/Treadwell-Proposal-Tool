@@ -4370,8 +4370,9 @@
    *  whatever order their keys arrive in. A section with no valid `seq` is NEWER than every section that has one (it was put there by something that did not keep the order: a
    *  model made by hand, or a page still running the code from before this), and the sections that have none keep the order their keys are held in. A bid saved before this
    *  has none anywhere: it opens in the order its saved price was computed in when the draft's priced_tabs names two or more of its sheets (savedOrderOf: the list is an array,
-   *  which jsonb keeps in order), and in the order its keys are held in when it does not. Two sections with the same `seq` are told apart by their ids and never by their keys,
-   *  which the server does not keep. withSectionOrder writes the order down (the page does it when a bid opens, and every save carries it); nothing here changes a price. */
+   *  which jsonb keeps in order), and in the order its keys are held in when it does not. Two sections with the same `seq` (a page running the code from before this copied a
+   *  section whole, `seq` included) are told apart by `source` first, a copy standing after the section it was copied from, and then by their ids, and never by their keys, which
+   *  the server does not keep. withSectionOrder writes the order down (the page does it when a bid opens, and every save carries it); nothing here changes a price. */
   function hasSeq(section) {
     return isObject(section) && typeof section.seq === "number" && isFinite(section.seq);
   }
@@ -4390,7 +4391,34 @@
       if (a.seq !== b.seq) return a.seq - b.seq;
       return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);    // one place claimed twice: by the id, which survives a reload
     });
-    return rows.map(function (r) { return r.id; });
+    // Sections that claim one place are a run in `rows` now, in the order of their ids; a copy in it is moved after the section it was copied from (copiesAfterTheirSources).
+    var out = [];
+    for (var i = 0; i < rows.length;) {
+      var j = i + 1;
+      while (rows[i].seq !== null && j < rows.length && rows[j].seq === rows[i].seq) j++;
+      out = out.concat(j - i > 1 ? copiesAfterTheirSources(rows.slice(i, j), tabs) : rows.slice(i, j));
+      i = j;
+    }
+    return out.map(function (r) { return r.id; });
+  }
+
+  /** A COPY THAT HOLDS ITS SOURCE'S PLACE (round 6 audit). A page still running the code from before this copied a section whole, `seq` and all, so the copy and the section it
+   *  was copied from claim one place, and the ids alone put "Copy2" in front of the "Epoxy" it came from. `group` is the sections that claim one place, already in the order of their
+   *  ids; they come back in that order with every copy moved after the section it was copied from (`source`), a copy of a copy after that: the first, by id, that is not waiting for
+   *  the section it was copied from is placed, and again. A `source` that names no section of the group (another place, the root, an id nobody holds, a value that is no name) waits
+   *  for nothing, and a loop of sources (a model made by hand) has no one free, so the first by id goes: it always ends, and it never reads a key's position. */
+  function copiesAfterTheirSources(group, tabs) {
+    var left = group.slice(), placed = [];
+    var waiting = function (row) {
+      var s = isObject(tabs[row.id]) ? tabs[row.id].source : null;
+      return typeof s === "string" && s !== row.id && left.some(function (r) { return r.id === s; });
+    };
+    while (left.length) {
+      var pick = 0;
+      for (var i = 0; i < left.length; i++) if (!waiting(left[i])) { pick = i; break; }
+      placed.push(left.splice(pick, 1)[0]);
+    }
+    return placed;
   }
 
   /** The place after every section that has one: what a section put into `tabs` is given. 0 for none. */

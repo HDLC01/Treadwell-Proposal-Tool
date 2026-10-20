@@ -811,7 +811,8 @@ written in the same save as the model and the lump sum) when that names two or m
 name (an `off` one is never priced) go after them, in key order. A list that names fewer than two says nothing about the order, and the
 bid is stamped in its keys' order. Without that, a far Combo with Epoxy and a Polish copy both bases, saved at $78,628, opened on the
 copy as the carrier (it sorts first in jsonb) and its first save wrote $81,086 for good. A section with no place is newer than one that
-has one, and a tie is settled by the sheet's id, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
+has one. A tie (a tab still running the code from before this copied a section whole, so the copy holds its source's place) puts a copy after the
+sheet it was copied from, however many copies deep (`source`), and is settled by the sheet's id for the rest, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
 estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
 (`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session.py`).
 
