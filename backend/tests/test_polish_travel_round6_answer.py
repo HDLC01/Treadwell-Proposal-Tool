@@ -477,6 +477,24 @@ BREAKS = {
         MODEL, 'if (model.no_travel_labor === true) return "";', "void 0;",
         lambda g: g["stranded"]["said"]["rootRow"] is not True),
     # X3: focus
+    "focus is left where it falls": (
+        PAGE, "      refocusAfterRemoval(delAt, B.isTravelRow(gone));", "      void delAt;",
+        lambda g: g["keyboard"]["middle"]["focused"] != ["x:1"] or g["keyboard"]["toOne"]["focused"] != ["add-lab"]),
+    "focus never goes to a line's x": (
+        PAGE, REFOCUS_ROWS, "    if (false) { return; }",
+        lambda g: g["keyboard"]["middle"]["focused"] != ["x:1"] or g["keyboard"]["last"]["focused"] != ["x:2"]),
+    "focus goes to the line before and not the one that took its place": (
+        PAGE, "(at < left ? at : left - 1)", "(at > 0 ? at - 1 : 0)",
+        lambda g: g["keyboard"]["middle"]["focused"] != ["x:1"]),
+    "the last line's focus goes past the list": (
+        PAGE, "(at < left ? at : left - 1)", "(at < left ? at : left)",
+        lambda g: g["keyboard"]["last"]["focused"] != ["x:2"]),
+    "focus is put on the control before the panel is drawn again": (
+        PAGE, "      var gone = M.labor.splice(delAt, 1)[0];", "      var gone = M.labor.splice(delAt, 1)[0]; refocusAfterRemoval(delAt, B.isTravelRow(gone));",
+        lambda g: any(g["keyboard"][c]["alive"] is not True for c in ("middle", "last", "toOne", "travelToOne"))),
+    "the Add Travel Labor button is not offered focus": (
+        PAGE, REFOCUS_TRAVEL, "    if (false) { return; }",
+        lambda g: g["keyboard"]["travelToOne"]["focused"] != ["add-travel"]),
     # X4(b): a line switched off by hand
     # X4(c): a null in a list
 }

@@ -4322,13 +4322,15 @@
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       if (M.labor.length <= 1) return;
-      var gone = M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1)[0];
+      var delAt = parseInt(dl.getAttribute("data-del-lab"), 10);
+      var gone = M.labor.splice(delAt, 1)[0];
       // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY, AND THE ANSWER BELONGS TO THE SHEET WHOSE LINE WENT (round 6, part 2). The x on the CARRIER's line says the job has no drive:
       // B.travelLaborRemoved records it on the model (no_travel_labor), so a reload does not append a blank row (migrateModel), a job-type switch does not seed the new carrier a
       // priced one, and Add Travel Labor on the carrier (B.addTravelLabor) takes it back. The x on an OPTION's line says only that the option has none, and the x on a leftover row
       // on a base that does not carry the job's travel says nothing: neither touches the job (round 5 set the job's flag for ANY line, which outlived its meaning).
       if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);
       changed(true);
+      refocusAfterRemoval(delAt, B.isTravelRow(gone));
       return;
     }
     // Review's own toggles -- same idea as polish-intake.js's onClick/toggleCondition, just
@@ -4787,6 +4789,18 @@
     if (!el.focus) return;
     el.focus();
     try { el.setSelectionRange(el.value.length, el.value.length); } catch (err) {}
+  }
+
+  /** WHERE FOCUS GOES WHEN THE x ON A LABOR LINE WAS PRESSED FROM THE KEYBOARD (round 6, part 2, X3). The Labor panel is drawn again after the line goes, which destroys the button
+   *  that had focus, and focus fell to <body>: the next Tab started from the top of the page. `at` is the index the line had, `wasTravel` whether it was the Travel Labor line. Focus lands
+   *  on a control that exists afterwards, the nearest sensible one: the x of the line that took its place (the next line), else the x of the line before it, else (one line is left,
+   *  and a lone line draws no x) the Add Travel Labor button when the Travel line was the one that went and the card drew the button where the line was, else the Add labor line.
+   *  Called after changed(true), which has drawn the panel again. */
+  function refocusAfterRemoval(at, wasTravel) {
+    var left = (M.labor || []).length;
+    if (left > 1) { refocus('[data-del-lab="' + (at < left ? at : left - 1) + '"]'); return; }
+    if (wasTravel && document.querySelector("[data-add-travel]")) { refocus("[data-add-travel]"); return; }
+    refocus("[data-add-lab]");
   }
 
   document.addEventListener("change", function (e) {
