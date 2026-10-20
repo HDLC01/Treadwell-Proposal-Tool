@@ -19,12 +19,13 @@
  *   stripOrder      a Gyp job and a fresh Polish sheet added to it: the order of the sheet bar, and the sheet the bid opens on.
  *   documentOrder   two options added in one order, and what the customer's document lists: the real proposal-review.js rebuildPricing run over the draft
  *                   the page saved, in the session and after a reload and one more save.
- *   lifecycle       one session of add, copy, rename, delete, a copy that takes a freed Copy<N> id, a base change and a job-type switch, compared with a
- *                   reload after EVERY step.
+ *   lifecycle       one session of add, copy, rename, delete, a copy that takes a freed Copy<N> id, a Gyp sheet that changes preset (its KEY changes), a
+ *                   base change and a job-type switch, compared with a reload after EVERY step.
  *   legacy          a bid saved before the order was kept (no `seq` on any section) opens in the order its keys are held in, changes no price when it
  *                   stamps the order, writes nothing on open, and saves the order it opened with.
- *   model           the model alone: the order does not depend on the key order, an unstamped section is older than a stamped one, a tie is settled by
- *                   the sheet's id, a copy never takes its source's place, withSectionOrder stamps once and leaves unreadable tabs as they are.
+ *   model           the model alone: the order does not depend on the key order, an unstamped section is newer than a stamped one, a tie is settled by
+ *                   the sheet's id, a copy never takes its source's place, a sheet added to a bid with no stamps goes last, a save stamps a bid that has none,
+ *                   withSectionOrder stamps once and leaves unreadable tabs as they are.
  *
  * A section that throws reports `{ error }`, so a tree without the code fails an assertion with a reason; the mutation runs in the test count a section
  * error as a failure of the mutation, never as the mutation being noticed.
@@ -39,6 +40,7 @@ const J = require("./_jsonb.js");
 const ROOT = path.resolve(process.argv[2]);
 const B = require(path.join(ROOT, "js", "bid-model.js"));
 const TWPRICE = require(path.join(ROOT, "js", "price-lines-core.js"));
+const GYPT = require(path.join(ROOT, "js", "gyp-takeoff.js"));
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -62,6 +64,7 @@ const EPOXY_ROW = { id: "epoxy-install", name: "Epoxy install", rate: 33, unit: 
 const GYP_ROW = { id: "gyp-pour", name: "Gyp pour", rate: 33, unit: "hours", guys_auto: false, sort: 2, favorite: true, default_work_types: ["gyp"], default_on: true };
 const LABOR = [TRAVEL_ROW, EPOXY_ROW, GYP_ROW];
 const GYP_TAB = 'Gyp (USG 1-8")';
+const GYP_FR = "Gyp (FR)";                // another preset of the Gyp tab: the section is re-filed under this key
 
 const ADDR = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
 const FAR = { ok: true, miles: 190, reason: "" };          // Wichita: a 380 mile round trip, 6.33 hours, 6.5 to the half hour
@@ -274,6 +277,10 @@ async function main() {
     const b = await newBid(gypDraft(), [[GYP_TAB, "gyp-pour", "4", "12"]]);
     await addSheet(b, "Epoxy");                           // the Epoxy sheet, then
     await addSheet(b, "Polish");                          // a Polish one: Copy1
+    // an option with nothing in it prices nothing, and a document prints only an option that has a price: give each a crew
+    typeCrew(b, "Epoxy", "epoxy-install", "3", "5");
+    typeCrew(b, "Copy1", "polishing", "3", "4");
+    b.clock.fire();
     return await sessionAndReload(b, { doc: true, again: [GYP_TAB, "gyp-pour", "5", "12"] });
   });
 
@@ -289,7 +296,11 @@ async function main() {
     await renameSheet(b, "Copy1", "Garage");              await note("rename Copy1");
     await deleteSheet(b, "Copy2");                        await note("delete Copy2");
     await copySheet(b, "Epoxy");                          await note("copy Epoxy again (takes the freed Copy2)");
-    await makeBase(b, GYP_TAB);                           await note("make Gyp the base");
+    await openSheet(b, GYP_TAB);                          // the Material step's Gyp card moves the sheet to another preset: its KEY changes
+    b.api.go(0);
+    if (GYPT.tabs().indexOf(GYP_FR) >= 0) P.changeTo(b, '[data-gyp="preset"]', GYP_FR);
+    b.clock.fire();                                       await note("change the Gyp sheet to another preset (its key changes)");
+    await makeBase(b, GYP_FR);                            await note("make Gyp the base");
     await makeBase(b, "combined");                        await note("make the Epoxy + Polish pair the base");
     // the intake's job type moves, and the estimate page opens on the same browser's copy of the draft (the session goes on)
     const saved = clone(b.store.blob);
@@ -356,7 +367,7 @@ async function main() {
     const keys = Object.keys(m0.tabs);
     const stampedOrders = permutations(keys).map((p) => ids(reorder(m0, p)).join(" | "));
     const viaServer = ids(J.reloaded(m0));
-    // an unstamped section is older than a stamped one; the unstamped keep the order their keys are held in
+    // an unstamped section is newer than a stamped one (it was put there by something that kept no order); the unstamped keep the order their keys are held in
     const mixed = clone(m0);
     mixed.tabs = Object.fromEntries(Object.keys(mixed.tabs).map((k) => [k, mixed.tabs[k]]));
     delete mixed.tabs.Copy1.seq; delete mixed.tabs.Epoxy.seq;
@@ -384,6 +395,30 @@ async function main() {
     const hostile = clone(m0);
     hostile.tabs.Strange = 5;
     const hostileStamped = B.withSectionOrder ? B.withSectionOrder(hostile) : null;
+    const unreadable = clone(legacy);                                  // objects, but one names no layout: sectionsOf throws, and the bid is carried as it was saved
+    delete unreadable.tabs.Epoxy.layout;
+    const unreadableStamped = B.withSectionOrder ? B.withSectionOrder(unreadable) : null;
+    // a sheet added to a bid saved before the order was kept goes LAST, whatever order its keys are held in (the sections already here are stamped first)
+    const oldBid = reorder(legacy, ["Copy2", "Epoxy", GYP_TAB, "Copy1"]);
+    const oldAdd = B.copySection(oldBid, "Epoxy", { state: {} });
+    const oldFresh = B.addSheet(oldBid, "Seal", { state: {} });
+    // a save carries the order: a bid with no stamps is composed into a draft whose sections hold 1..n, and whose priced_tabs list them in that order
+    const composeModel = (() => {
+      let m = B.freshModel();
+      m = B.activateSection(m, "Epoxy", "base", { rules: [] });
+      m = B.copySection(m, "Epoxy", { state: {} }).model;             // Copy1
+      m = B.copySection(m, "Polish", { state: {} }).model;            // Copy2
+      m = reorder(m, ["Copy2", "Epoxy", "Copy1"]);
+      Object.keys(m.tabs).forEach((k) => { delete m.tabs[k].seq; });
+      return m;
+    })();
+    const CTX = { material: () => 1000, remodel_rate: null };
+    const composed = (() => {
+      try {
+        const snap = B.composePricingSnapshot(composeModel, { bid: B.polishBid(composeModel, "Polish", CTX), bids: B.priceTabs(composeModel, CTX) });
+        return { seqs: seqs(snap.polish_estimate), pricedTabs: snap.priced_tabs.map((t) => t.id), keys: Object.keys(snap.polish_estimate.tabs) };
+      } catch (e) { return { error: String(e && e.message || e) }; }
+    })();
     return {
       stamped: seqs(m0), order: ids(m0), stampedOrders: stampedOrders, viaServer: viaServer,
       mixed: { keysAB: mixedKeysAB, keysBA: mixedKeysBA },
@@ -395,6 +430,9 @@ async function main() {
       copy: { id: copied.id, seqs: seqs(copied.model), order: ids(copied.model), copyOfCopy: { id: copyOfCopy.id, seqs: seqs(copyOfCopy.model), order: ids(copyOfCopy.model) } },
       reused: { id: reused.id, order: ids(reused.model), seqs: seqs(reused.model) },
       hostile: hostileStamped ? { same: hostileStamped === hostile, strange: hostileStamped.tabs.Strange, seqsUntouched: Object.keys(hostileStamped.tabs).filter((k) => k !== "Strange").every((k) => hostileStamped.tabs[k].seq === hostile.tabs[k].seq) } : null,
+      unreadable: unreadableStamped ? { same: unreadableStamped === unreadable } : null,
+      oldBid: { held: Object.keys(oldBid.tabs), copy: { id: oldAdd.id, order: ids(oldAdd.model), seqs: seqs(oldAdd.model) }, fresh: { id: oldFresh.id, order: ids(oldFresh.model), seqs: seqs(oldFresh.model) } },
+      composed: composed,
     };
   });
 

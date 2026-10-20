@@ -4358,7 +4358,65 @@
   var COPY_ID = /^Copy[1-9]\d*$/;
   var MAX_COPIES = 12;
 
-  /** Every section of the model, root first, then `tabs` in the order they were added, as
+  /** THE ORDER OF THE SECTIONS UNDER `tabs` IS KEPT IN THE SECTIONS, NOT IN THE KEYS (2026-10-20, round 6). `tabs` is an object, one key to a sheet, and the draft lives in a
+   *  jsonb column, which keeps no key order: Postgres hands every object back with its keys sorted by length in bytes and then by the bytes. So a bid saved with its sheets
+   *  in one order was read back in another ("Copy1" sorts before 'Gyp (USG 1-8")'; seen on staging: the sheet bar read [Gyp (base), Polish 2] in the session and
+   *  [Polish 2, Gyp (base)] after a reload). Everything that lists the sections in order listed the other one: the sheet bar, the sheet a bid opens on, the options the
+   *  customer's document prints (priced_tabs is written in this order), and, because the section that carries the job's travel is the FIRST base (travelCarrier), the drive's
+   *  crew, the nights and the price when two bases are both under `tabs` (a Polish copy made the base beside Epoxy, the root an option or off).
+   *
+   *  So every section under `tabs` carries `seq`, its place in the bid: a number that only ever grows, so a new, copied or added sheet is last (withSectionPut) and nothing a
+   *  sheet goes through (a rename, a kind change, a Gyp preset moving its key, a delete beside it) moves it. sectionsOf lists the root first and then the sections by `seq`,
+   *  whatever order their keys arrive in. A section with no valid `seq` is NEWER than every section that has one (it was put there by something that did not keep the order: a
+   *  model made by hand, or a page still running the code from before this), and the sections that have none keep the order their keys are held in. A bid saved before this
+   *  has none anywhere, so it opens in the order it opens with. Two sections with the same `seq` are told apart by their ids and never by their keys, which the server does
+   *  not keep. withSectionOrder writes the order down (the page does it when a bid opens, and every save carries it); nothing here changes a price. */
+  function hasSeq(section) {
+    return isObject(section) && typeof section.seq === "number" && isFinite(section.seq);
+  }
+
+  /** The ids of the sections under `tabs`, in the bid's order (see above). Reads only; never throws; a section that is not an object has no `seq`, like an unstamped one. */
+  function tabIdsInOrder(tabs) {
+    if (!isObject(tabs)) return [];
+    var rows = Object.keys(tabs).map(function (id, held) {
+      return { id: id, held: held, seq: hasSeq(tabs[id]) ? tabs[id].seq : null };
+    });
+    rows.sort(function (a, b) {
+      if (a.seq === null || b.seq === null) {
+        if (a.seq === b.seq) return a.held - b.held;      // neither says its place: the order the keys are held in
+        return a.seq === null ? 1 : -1;                   // one that says none is newer than one that does
+      }
+      if (a.seq !== b.seq) return a.seq - b.seq;
+      return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);    // one place claimed twice: by the id, which survives a reload
+    });
+    return rows.map(function (r) { return r.id; });
+  }
+
+  /** The place after every section that has one: what a section put into `tabs` is given. 0 for none. */
+  function lastSeq(tabs) {
+    var last = 0;
+    if (isObject(tabs)) Object.keys(tabs).forEach(function (id) { if (hasSeq(tabs[id]) && tabs[id].seq > last) last = tabs[id].seq; });
+    return last;
+  }
+
+  /** THE MODEL WITH THE ORDER OF ITS SECTIONS WRITTEN DOWN: every section under `tabs` holds `seq`, 1 to n in the order sectionsOf lists them now. The model handed in when
+   *  there is nothing to write (no `tabs`, no sections, every section already says its place), and when the sections cannot be read (sectionsOf throws for such a bid, and the
+   *  page opens it as it is and saves what was typed, so what is in `tabs` is carried exactly as it was). Otherwise a NEW model: the sections that already had a place are
+   *  renumbered with the others and keep their order among them. Pure. */
+  function withSectionOrder(model) {
+    if (!isObject(model) || !isObject(model.tabs)) return model;
+    var tabs = model.tabs;
+    var ids = Object.keys(tabs);
+    if (ids.every(function (id) { return hasSeq(tabs[id]); })) return model;       // (and a bid with no sections at all)
+    if (readableSections(model) === null) return model;
+    var out = copyInto({}, model);
+    out.tabs = copyInto({}, Object.fromEntries(tabIdsInOrder(tabs).map(function (id, i) {
+      return [id, Object.assign({}, tabs[id], { seq: i + 1 })];
+    })));
+    return out;
+  }
+
+  /** Every section of the model, root first, then the sections under `tabs` in the bid's order (tabIdsInOrder: the order they were added, which a reload keeps), as
    *  { tab, root, section, layout, kind, profile, role }. `section` is the live object (the root section IS
    *  the model); nothing here copies. THROWS on a section that is not well formed, because a section priced as
    *  something it is not is a wrong bid: a tab that is not a priced workbook tab, a missing or wrong layout, a
@@ -4375,7 +4433,7 @@
     var tabs = model.tabs;
     if (tabs === undefined || tabs === null) return out;
     if (!isObject(tabs)) throw new Error("model.tabs must be an object of sections keyed by workbook tab id");
-    Object.keys(tabs).forEach(function (id) {
+    tabIdsInOrder(tabs).forEach(function (id) {
       var s = tabs[id];
       var where = "section " + JSON.stringify(id);
       if (id === ROOT_TAB) throw new Error(where + " is the root section's own tab: it lives at the root of the model, not under tabs");
@@ -4877,11 +4935,15 @@
     return section;
   }
 
-  /** A NEW model with `section` filed under `id` in `tabs` (added, or replacing the one there). The model handed in is not touched. */
+  /** A NEW model with `section` filed under `id` in `tabs` (added, or replacing the one there). The model handed in is not touched. THE SECTION'S PLACE IN THE BID (`seq`, see
+   *  withSectionOrder): a `section` that already says its place keeps it (a sheet being seeded is put back where it was made), else it goes after every section the bid has, so a
+   *  new sheet is the newest. The sections already here are given theirs first when they have none, in the order they are listed now, so the new one lands after all of them
+   *  whatever order their keys were handed over in. */
   function withSectionPut(model, id, section) {
-    var out = jsonCopy(model);
+    var out = withSectionOrder(jsonCopy(model));
     var tabs = isObject(out.tabs) ? out.tabs : {};
-    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[id, section]]));
+    var body = isObject(section) && !hasSeq(section) ? Object.assign({}, section, { seq: lastSeq(tabs) + 1 }) : section;
+    out.tabs = copyInto(copyInto({}, tabs), Object.fromEntries([[id, body]]));
     return out;
   }
 
@@ -5140,6 +5202,8 @@
       if (normalizeAdjust(model.adjust)) body.adjust = jsonCopy(normalizeAdjust(model.adjust));
     } else {
       body = jsonCopy(src.section);
+      // The copy is a NEW sheet and takes its own place, last (withSectionPut): never the place of the sheet it came from.
+      delete body.seq;
     }
     body = Object.assign(body, { kind: "option", sheet: src.sheet, label: uniqueLabel(model, src.label + " copy"),
                                  source: sourceId, totals: {} });
@@ -5602,7 +5666,9 @@
   function composePricingSnapshot(model, ctx) {
     if (!isObject(model)) throw new Error("composePricingSnapshot needs the model it is pricing");
     if (!isObject(ctx)) throw new Error("composePricingSnapshot needs ctx, the bids the page priced");
-    var entries = sectionsOf(model);
+    // EVERY SAVE CARRIES THE ORDER OF THE SECTIONS (`seq`, see withSectionOrder): a bid saved before it was kept is stamped in the order it is listed in now, and the same order is
+    // what priced_tabs below lists (the customer's document and the proposal's sidebar read it), so it is the one a reload will give back.
+    var entries = sectionsOf(withSectionOrder(model));
     var bidOf = function (e) {
       var b = e.root ? ctx.bid : (isObject(ctx.bids) && has.call(ctx.bids, e.tab) ? ctx.bids[e.tab] : undefined);
       if (!isObject(b)) {
@@ -6252,6 +6318,8 @@
     // Sections (Phase 10): a bid priced on several workbook tabs. See the block above blockers().
     ROOT_TAB: ROOT_TAB, SECTION_KINDS: SECTION_KINDS, sectionsOf: sectionsOf, activeSections: activeSections,
     sectionOf: sectionOf, isNewSection: isNewSection, travelCarrier: travelCarrier,
+    // The order of the sections under `tabs` is kept in each section's `seq`, because a jsonb column keeps no key order.
+    withSectionOrder: withSectionOrder, tabIdsInOrder: tabIdsInOrder,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
     ADJUST_KEYS: ADJUST_KEYS, MATERIAL_ESCALATION: MATERIAL_ESCALATION, DISCOUNT_VENDORS: DISCOUNT_VENDORS,
     normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn, hardBidRuleOn: hardBidRuleOn,
