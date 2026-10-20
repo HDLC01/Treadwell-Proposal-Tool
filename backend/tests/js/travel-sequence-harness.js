@@ -39,7 +39,8 @@
  * HANZ'S DECISION OF THE FIFTH AUDIT ("Fill them automatically", 2026-10-20) added NIGHTS, judged after every step of every walk (a walk never types in the Lodging or Per Diem box, so none
  * of its lines is the estimator's):
  *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the man-days of the section that carries the job's travel (guys x days, as a person counts them),
- *                    on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker).
+ *                    on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). A GYP carrier is the
+ *                    exception (round-5 audit): its crew is entered in hours, which the man-days do not count, so its nights are typed and hold nothing until someone does.
  *
  * THE FIFTH AUDIT (2026-10-20, of b14bc98) added the RELOAD, which every other step lacks: a step of the walk always starts from the draft the step before SAVED, so every walk above
  * is "reload, then step" and could never see a Sheets panel action that prices differently in the session than after a reload (a base the pick demoted lost its Travel Labor row
@@ -314,7 +315,10 @@ function judge(b, ctx) {
       const l = m.travel[k];
       if (!l) return;
       const says = k + " " + JSON.stringify({ qty: l.qty, auto: l.qty_auto, follow: l.qty_follow, typed: l.qty_typed });
-      if (f.far) {
+      const gypCarrier = !!(carrierEntry && carrierEntry.layout === "gyp");
+      if (f.far && gypCarrier) {
+        if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " is Gyp: its nights are typed");
+      } else if (f.far) {
         if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " has " + manDays + " man-days");
       } else if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) {
         note("NIGHTS", says + " on a job " + (f.miles === null ? "with no distance" : "of " + f.miles + " miles") + ": nothing was to be filled");

@@ -561,6 +561,51 @@ async function main() {
     return res;
   });
 
+  // ═══ ROUND-5 AUDIT, MEDIUM 1: A FAR GYP JOB'S NIGHTS ARE TYPED, AND ITS CARD SAYS SO ══════════════════════════════════════════════════════════════
+  // A Gyp crew is entered in hours, which the man-days do not count: a following figure sat at 0 while the card promised it fills in.
+  await section("gypNights", async () => {
+    const gypTab = 'Gyp (USG 1-8")';
+    const s = await newBid(draftOf("gyp", { gyp_soft_sf: 9000, gyp_hard_sf: 6000, gyp_corridor_sf: 2000 }), [gypTab, "gyp-pour", "4", "12"], FAR);
+    const b = await reopen(s.saved);
+    b.api.show(gypTab);
+    b.api.go(1);
+    await settle();
+    const m = b.api.root();
+    const panel = (b.doc.getElementById("panels") || {}).innerHTML || "";
+    const pe = s.saved.polish_estimate || {};
+    return { carrier: B.travelCarrier(m), miles: m.distance ? m.distance.miles : null,
+             lodging: lineFacts(m.travel && m.travel.lodging), perDiem: lineFacts(m.travel && m.travel.per_diem),
+             savedLodging: lineFacts(pe.travel && pe.travel.lodging),
+             saysTypeNights: panel.indexOf("Type the nights: a Gyp crew is entered in hours") >= 0,
+             promisesFill: panel.indexOf("the nights fill in from the man-days") >= 0 || panel.indexOf("Travel Labor fills in from the miles") >= 0 };
+  });
+
+  // ═══ ROUND-5 AUDIT, MEDIUM 2: A TRAVEL LABOR LINE TAKEN AWAY WITH ITS x STAYS AWAY AFTER A RELOAD ═══════════════════════════════════════════════════════
+  // migrateModel appended a blank Travel row to a bid with none, so a reload brought the line back and the next far answer priced it (+$783).
+  await section("xStays", async () => {
+    const s = await newBid(polishDraft(), ["Polish", "polishing", "4", "12"]);
+    const a = await reopen(s.saved);
+    const i = idxIn(secOf(a.api.root(), B.ROOT_TAB), "travel");
+    P.clickOn(a, '[data-del-lab="' + i + '"]');
+    await settle();
+    a.api.saveSoon();
+    a.clock.fire();
+    const afterX = clone(a.store.blob);
+    await typeMiles(a, "300");
+    const session = prices(a);
+    const r = await reopen(afterX);
+    const rowAfterReload = rowFacts(rowIn(secOf(r.api.root(), B.ROOT_TAB)));
+    await typeMiles(r, "300");
+    const reloaded = prices(r);
+    r.api.go(1);
+    const addShown = has(r, '[data-add-travel="1"]');
+    if (addShown) P.clickOn(r, '[data-add-travel="1"]');
+    await settle();
+    return { flag: !!(afterX.polish_estimate && afterX.polish_estimate.no_travel_labor === true), session: session.lump, reloaded: reloaded.lump,
+             rowAfterReload: rowAfterReload, addShown: addShown, added: rowFacts(rowIn(secOf(r.api.root(), B.ROOT_TAB))),
+             flagAfterAdd: r.api.root().no_travel_labor === true };
+  });
+
   return out;
 }
 

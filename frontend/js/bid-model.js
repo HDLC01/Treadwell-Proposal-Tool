@@ -1539,10 +1539,14 @@
   function followDistanceNights(model, miles) {
     if (!isObject(model) || !isObject(model.travel)) return;
     var far = isFarMiles(miles);
+    // A GYP CARRIER'S NIGHTS ARE TYPED (round-5 audit): a Gyp crew is entered in hours, which the man-days do not count, so a following figure
+    // sat at 0 while the card promised it fills in, and a far Gyp quote carried $0 hotel and per diem. On a Gyp carrier nothing follows: the
+    // lines ask for the nights as before, and a figure that followed while another sheet carried the job goes back to empty.
+    var gyp = carrierLayoutOf(model) === "gyp";
     TRAVEL_LINE_KEYS.forEach(function (k) {
       var l = model.travel[k];
       if (!isObject(l)) return;
-      if (far) {
+      if (far && !gyp) {
         if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }
         if (qtyFollows(l)) l.qty = laborFollowQty(model, l);
       } else if (qtyFollows(l)) {
@@ -1566,6 +1570,12 @@
     return stampRateDefaults([laborRowStartsEmpty(seed)])[0];
   }
 
+  /** The layout of the section that carries the job's travel ("polish" for the root, or when the sections cannot be read). */
+  function carrierLayoutOf(model) {
+    if (!isObject(model) || !isObject(model.tabs)) return "polish";
+    try { return sectionOf(model, travelCarrier(model)).layout || "polish"; } catch (err) { return "polish"; }
+  }
+
   /** ADD THE JOB'S TRAVEL LABOR BACK (the 2026-10-20 fifth audit). The Travel Labor card's x takes the row away, the Add labor pop-up leaves Travel out on
    *  purpose ("it has its own block"), and that block had no way to bring it back: the summary said "Travel Labor, Lodging and Per Diem come on" over a job with no
    *  Travel Labor line. This puts `row` (freshTravelRow) on the section that carries the job's travel, after its other lines, when that section has NO Travel
@@ -1587,6 +1597,8 @@
     if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;
     var added = copyInto({}, row);
     holder.labor.push(added);
+    // The x recorded that the job has no Travel Labor (no_travel_labor, so a reload does not append one back); pressing Add answers it again.
+    delete model.no_travel_labor;
     var d = model.distance;
     var miles = d ? milesOrNull(d.miles) : null;
     if (miles !== null && layout !== "gyp") followDistanceOnRow(model, added, holder.labor, miles, false);

@@ -2778,7 +2778,13 @@
       '<div class="costbox' + (cost > 0 ? "" : " empty") + '" data-trvcostbox-for="' + key + '">' +
       esc(moneyAuto(cost)) + '</div>' +
       '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
-      '</div><p class="hint trvnote">' + (isNight
+      '</div><p class="hint trvnote">' + (gypOpen()
+        // A Gyp crew is entered in hours, which the man-days do not count, so on a Gyp sheet the nights are typed (round-5 audit).
+        ? (isNight ? "Overnight stays are expected at 70 miles or more from the office. Type the nights: a Gyp crew is entered in hours, so they " +
+            "do not fill in by themselves. Under 70 miles this line stays gray."
+          : "Meals while the guys are away, expected at 70 miles or more from the office. Type the days: a Gyp crew is entered in hours, so " +
+            "they do not fill in by themselves. Under 70 miles this line stays gray.")
+        : isNight
         ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the man-days, a night for each, " +
           "Kyle's way. Type your own to use them instead. Under 70 miles this line stays gray."
         : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the man-days, a day of " +
@@ -2950,8 +2956,9 @@
     } else {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
-        '70 miles all three lines below stay gray until you switch one on. On a far job Travel Labor fills in from the miles, and the ' +
-        'nights and per diem days from the man-days; type over any of them to use your own.</p>';
+        '70 miles all three lines below stay gray until you switch one on. ' + (gypOpen()
+          ? 'On a far Gyp job type the drive hours, the nights and the per diem days: a Gyp crew is entered in hours, so they do not fill in by themselves.</p>'
+          : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');
       html += distanceBlock();
       // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
       // pre-line), so the live repaint can replace it without touching anything the estimator is in.
@@ -4303,7 +4310,11 @@
     var dl = t.closest("[data-del-lab]");
     if (dl) {
       if (M.labor.length <= 1) return;
-      M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1);
+      var gone = M.labor.splice(parseInt(dl.getAttribute("data-del-lab"), 10), 1)[0];
+      // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY (round-5 audit): migrateModel appends a blank Travel row to a bid that has none unless the model
+      // says its absence is the answer (no_travel_labor), so a reload brought the line back and the next far answer priced it (+$783). The x is
+      // that answer; Add Travel Labor (B.addTravelLabor) takes it back.
+      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;
       changed(true);
       return;
     }
