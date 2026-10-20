@@ -4369,8 +4369,9 @@
    *  sheet goes through (a rename, a kind change, a Gyp preset moving its key, a delete beside it) moves it. sectionsOf lists the root first and then the sections by `seq`,
    *  whatever order their keys arrive in. A section with no valid `seq` is NEWER than every section that has one (it was put there by something that did not keep the order: a
    *  model made by hand, or a page still running the code from before this), and the sections that have none keep the order their keys are held in. A bid saved before this
-   *  has none anywhere, so it opens in the order it opens with. Two sections with the same `seq` are told apart by their ids and never by their keys, which the server does
-   *  not keep. withSectionOrder writes the order down (the page does it when a bid opens, and every save carries it); nothing here changes a price. */
+   *  has none anywhere: it opens in the order its saved price was computed in when the draft's priced_tabs names two or more of its sheets (savedOrderOf: the list is an array,
+   *  which jsonb keeps in order), and in the order its keys are held in when it does not. Two sections with the same `seq` are told apart by their ids and never by their keys,
+   *  which the server does not keep. withSectionOrder writes the order down (the page does it when a bid opens, and every save carries it); nothing here changes a price. */
   function hasSeq(section) {
     return isObject(section) && typeof section.seq === "number" && isFinite(section.seq);
   }
@@ -4399,18 +4400,40 @@
     return last;
   }
 
+  /** THE ORDER A SAVED BID'S PRICE WAS COMPUTED IN, for a bid saved before `seq` was kept (round 6 audit). A save writes `priced_tabs` (the sections it priced, in the order it priced
+   *  them) in the same save as the model and the lump sum, and jsonb keeps an array's order whatever it does to an object's keys, so the list is the one record of that order a bid
+   *  with no place written down has. It matters: the section that carries the job's travel is the FIRST base, so a bid with two bases under `tabs` prices differently in the other order
+   *  (far Combo, Epoxy 4 x 12 and a Polish copy 6 x 10 the two bases: $78,628 as saved, $81,086 with the copy first, and the first save would have made that permanent).
+   *  `pricedTabs` is the draft's `priced_tabs`. When it names two or more of the sections under `tabs`, the answer is those ids in the list's order, each once, and then the sections it
+   *  does not name (an `off` one is never priced) in the order their keys are held in. null when it does not (no list, not an array, fewer than two of the sections in it): it says
+   *  nothing about their order. What is in the list that is not a section under `tabs` (the root's own entry, an id the bid has no section for, a repeat, an entry that is not an
+   *  object) names nothing. Reads only; never throws. */
+  function savedOrderOf(tabs, pricedTabs) {
+    if (!isObject(tabs) || !(pricedTabs instanceof Array)) return null;
+    var named = [];
+    pricedTabs.forEach(function (entry) {
+      var id = isObject(entry) && typeof entry.id === "string" ? entry.id : null;
+      if (id !== null && has.call(tabs, id) && named.indexOf(id) < 0) named.push(id);
+    });
+    if (named.length < 2) return null;
+    return named.concat(tabIdsInOrder(tabs).filter(function (id) { return named.indexOf(id) < 0; }));
+  }
+
   /** THE MODEL WITH THE ORDER OF ITS SECTIONS WRITTEN DOWN: every section under `tabs` holds `seq`, 1 to n in the order sectionsOf lists them now. The model handed in when
    *  there is nothing to write (no `tabs`, no sections, every section already says its place), and when the sections cannot be read (sectionsOf throws for such a bid, and the
    *  page opens it as it is and saves what was typed, so what is in `tabs` is carried exactly as it was). Otherwise a NEW model: the sections that already had a place are
-   *  renumbered with the others and keep their order among them. Pure. */
-  function withSectionOrder(model) {
+   *  renumbered with the others and keep their order among them. `pricedTabs`, the draft's priced_tabs, is read only for a bid with no place written anywhere: it is then stamped in
+   *  the order its saved price was computed in (savedOrderOf) when the list says one, and in the order its keys are held in when it does not. Pure. */
+  function withSectionOrder(model, pricedTabs) {
     if (!isObject(model) || !isObject(model.tabs)) return model;
     var tabs = model.tabs;
     var ids = Object.keys(tabs);
     if (ids.every(function (id) { return hasSeq(tabs[id]); })) return model;       // (and a bid with no sections at all)
     if (readableSections(model) === null) return model;
+    var anyPlace = ids.some(function (id) { return hasSeq(tabs[id]); });
+    var listed = (anyPlace ? null : savedOrderOf(tabs, pricedTabs)) || tabIdsInOrder(tabs);
     var out = copyInto({}, model);
-    out.tabs = copyInto({}, Object.fromEntries(tabIdsInOrder(tabs).map(function (id, i) {
+    out.tabs = copyInto({}, Object.fromEntries(listed.map(function (id, i) {
       return [id, Object.assign({}, tabs[id], { seq: i + 1 })];
     })));
     return out;

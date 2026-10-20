@@ -438,16 +438,23 @@ async function main() {
     // So a bid with no place written anywhere is stamped in the list's order when the list names two or more of its sheets (the sheets it does not name go after them, in the order
     // their keys are held in), and in the keys' order when it does not. Anything else in the list (a repeat, an id the bid has no sheet for, the root, a name that is a property of every
     // object, a value that is not an entry at all) names nothing.
-    const entry = (n) => (typeof n === "string" ? { id: n, kind: "option" } : n);
-    const stampedBy = (list, model) => { const from = model || oldBid; const s = B.withSectionOrder(from, list === undefined ? undefined : list.map ? list.map(entry) : list); return { order: ids(s), seqs: seqs(s), same: s === from }; };
+    // a list of ids is written as the entries a save writes; `asIs` hands the list over exactly as written (for the junk)
+    const entry = (n) => ({ id: n, kind: "option" });
+    const stampedBy = (list, model, asIs) => {
+      const from = model || oldBid;
+      try {
+        const s = B.withSectionOrder(from, list === undefined || asIs ? list : list.map(entry));
+        return { order: ids(s), seqs: seqs(s), same: s === from };
+      } catch (e) { return { threw: String((e && e.message) || e).slice(0, 160) }; }     // a list that makes a section out of nothing is read back by sectionsOf, which throws
+    };
     const partlyStamped = clone(oldBid);
     partlyStamped.tabs.Epoxy.seq = 1;
     const priced = {
       full: stampedBy(["Polish", "Epoxy", "Copy1", "Copy2", GYP_TAB]),
       named2: stampedBy(["Polish", GYP_TAB, "Epoxy"]),
       named1: stampedBy(["Polish", "Epoxy"]),
-      none: stampedBy(undefined), notAList: stampedBy({ Epoxy: 1 }), empty: stampedBy([]),
-      junk: stampedBy([null, 7, "Epoxy", { id: 5 }, { id: "Nope" }, { id: "toString" }, { id: "__proto__" }, { id: "Polish" }, { id: GYP_TAB }, { id: "Epoxy" }, { id: GYP_TAB }]),
+      none: stampedBy(undefined), notAList: stampedBy({ Epoxy: 1 }, undefined, true), empty: stampedBy([]),
+      junk: stampedBy([null, 7, "Epoxy", ["Epoxy"], { id: 5 }, { id: "Nope" }, { id: "toString" }, { id: "__proto__" }, { id: "Polish" }, { id: GYP_TAB }, { id: "Epoxy" }, { id: GYP_TAB }], undefined, true),
       partlyStamped: stampedBy(["Polish", "Copy1", "Copy2", GYP_TAB, "Epoxy"], partlyStamped),
       allStamped: stampedBy(["Polish", GYP_TAB, "Copy2", "Copy1", "Epoxy"], m0),
     };

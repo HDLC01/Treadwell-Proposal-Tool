@@ -375,7 +375,11 @@ PUT_STAMP = "    var body = isObject(section) && !hasSeq(section) ? Object.assig
 PUT_FIRST = "    var out = withSectionOrder(jsonCopy(model));"
 COPY_SEQ = "      delete body.seq;"
 COMPOSE = "    var entries = sectionsOf(withSectionOrder(model));"
-STAMP_LIST = "    out.tabs = copyInto({}, Object.fromEntries(tabIdsInOrder(tabs).map(function (id, i) {"
+STAMP_LIST = "    out.tabs = copyInto({}, Object.fromEntries(listed.map(function (id, i) {"
+LISTED = "    var listed = (anyPlace ? null : savedOrderOf(tabs, pricedTabs)) || tabIdsInOrder(tabs);"
+NAMED_ENOUGH = "    if (named.length < 2) return null;"
+NAMED_TAIL = "    return named.concat(tabIdsInOrder(tabs).filter(function (id) { return named.indexOf(id) < 0; }));"
+NAMED_PUSH = "      if (id !== null && has.call(tabs, id) && named.indexOf(id) < 0) named.push(id);"
 STAMPED_ALREADY = "    if (ids.every(function (id) { return hasSeq(tabs[id]); })) return model;       // (and a bid with no sections at all)"
 READABLE = "    if (readableSections(model) === null) return model;"
 TIE = "      return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);    // one place claimed twice: by the id, which survives a reload"
@@ -383,7 +387,7 @@ UNSTAMPED_LAST = "        return a.seq === null ? 1 : -1;                   // o
 UNSTAMPED_KEYS = "        if (a.seq === b.seq) return a.held - b.held;      // neither says its place: the order the keys are held in"
 BY_SEQ = "      if (a.seq !== b.seq) return a.seq - b.seq;"
 PRESET = "    var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });"
-ADOPT = "    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate));"
+ADOPT = "    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);"
 SAVE_ON_OPEN = "    if (restructured) saveSoon();"
 HELD = ["Copy1", "Copy2", "Epoxy"]
 
@@ -415,7 +419,7 @@ MUTATIONS = {
         lambda r: r["legacy"]["opened"]["seqs"] != [1, 2, 3]),
     "a bid that opens is stamped in the wrong order": (
         MODEL, STAMP_LIST, "    out.tabs = copyInto({}, Object.fromEntries(Object.keys(tabs).reverse().map(function (id, i) {",
-        lambda r: r["legacy"]["opened"]["order"] != ["Polish"] + HELD and r["model"]["stampedOnce"]["order"] != ["Polish", "Copy2", "Epoxy", GYP, "Copy1"]),
+        lambda r: r["legacy"]["opened"]["order"] != r["legacy"]["pricedTabs"] and r["model"]["stampedOnce"]["order"] != ["Polish", "Copy2", "Epoxy", GYP, "Copy1"]),
     "a bid that is already stamped is stamped again": (
         MODEL, STAMPED_ALREADY, "    void ids;",
         lambda r: r["model"]["alreadyStampedSame"] is not True and r["model"]["stampedTwiceSame"] is not True),
@@ -430,13 +434,38 @@ MUTATIONS = {
         lambda r: r["model"]["mixed"]["keysAB"] != ["Polish", "Copy2", GYP, "Epoxy", "Copy1"]),
     "sections with no place are in the reverse of the order their keys are held in": (
         MODEL, UNSTAMPED_KEYS, "        if (a.seq === b.seq) return b.held - a.held;",
-        lambda r: r["model"]["legacy"]["order"] != ["Polish"] + r["model"]["legacy"]["held"] and r["legacy"]["opened"]["order"] != ["Polish"] + HELD),
+        lambda r: r["model"]["legacy"]["order"] != ["Polish"] + r["model"]["legacy"]["held"] and r["legacy"]["unlisted"]["opened"]["order"] != ["Polish"] + HELD),
     "a Gyp sheet that changes preset loses its place": (
         MODEL, PRESET, "    var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp, seq: null });",
         lambda r: [s for s in r["lifecycle"]["steps"] if s["step"].startswith("change the Gyp sheet")][0]["session"]["order"] != ["Polish", "Epoxy", GYP_FR, "Copy1", "Copy2"]),
     "a bid that merely opens saves": (
         PAGE, SAVE_ON_OPEN, "    saveSoon();",
         lambda r: r["legacy"]["quiet"] != {"armed": 0, "saves": 0, "asked": 0}),
+    # round 6, O1: a bid with no places is stamped in the order its saved price was computed in (the draft's priced_tabs)
+    "the page does not hand the saved list to the stamp": (
+        PAGE, ADOPT, "    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate));",
+        lambda r: r["legacy"]["facts"]["prices"]["lump"] != r["legacy"]["savedLump"] and r["legacy"]["opened"]["order"] != r["legacy"]["pricedTabs"]),
+    "a bid with no places is stamped in the order its keys are held in, whatever its list says": (
+        MODEL, LISTED, "    var listed = tabIdsInOrder(tabs);",
+        lambda r: r["model"]["priced"]["full"]["order"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP] and r["legacy"]["facts"]["prices"]["lump"] != r["legacy"]["savedLump"]),
+    "a bid that already says some places is stamped by its list": (
+        MODEL, LISTED, "    var listed = savedOrderOf(tabs, pricedTabs) || tabIdsInOrder(tabs);",
+        lambda r: r["model"]["priced"]["partlyStamped"]["order"] != ["Polish", "Epoxy", "Copy2", GYP, "Copy1"]),
+    "a list that names one sheet is taken for an order": (
+        MODEL, NAMED_ENOUGH, "    if (named.length < 1) return null;",
+        lambda r: r["model"]["priced"]["named1"]["order"] != KEYED and r["legacy"]["oneListed"]["opened"]["order"] != ["Polish"] + HELD),
+    "the sheets a list does not name are dropped": (
+        MODEL, NAMED_TAIL, "    return named;",
+        lambda r: r["model"]["priced"]["named2"].get("order") != ["Polish", GYP, "Epoxy", "Copy2", "Copy1"]),
+    "the sheets a list does not name go before the ones it does": (
+        MODEL, NAMED_TAIL, "    return tabIdsInOrder(tabs).filter(function (id) { return named.indexOf(id) < 0; }).concat(named);",
+        lambda r: r["model"]["priced"]["named2"].get("order") != ["Polish", GYP, "Epoxy", "Copy2", "Copy1"]),
+    "a sheet a list names twice is taken twice": (
+        MODEL, NAMED_PUSH, "      if (id !== null && has.call(tabs, id)) named.push(id);",
+        lambda r: r["model"]["priced"]["junk"] != r["model"]["priced"]["named2"]),
+    "a name that is a property of every object is taken for a sheet": (
+        MODEL, NAMED_PUSH, "      if (id !== null && id in tabs && named.indexOf(id) < 0) named.push(id);",
+        lambda r: r["model"]["priced"]["junk"] != r["model"]["priced"]["named2"]),
 }
 
 

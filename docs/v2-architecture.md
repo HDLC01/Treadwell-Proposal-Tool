@@ -804,10 +804,14 @@ travel, so two bases under `tabs` could change carrier, crew, nights and price o
 and the options the customer's document lists (`priced_tabs`, which a save writes in this order) went with it. Every section under
 `tabs` now carries `seq`, its place in the bid: a number that only grows, so a new, copied or added sheet is last (`withSectionPut`;
 `copySection` never takes its source's place) and a rename, a kind change, a Gyp preset moving the key or a delete beside it moves
-nothing. `sectionsOf` lists the root and then the sections by `seq` (`tabIdsInOrder`). A bid saved before this has no `seq`: it keeps the
-order it opens with (its keys' order), `adopt()` stamps it in memory when it opens (`withSectionOrder`: nothing is written on open and
-no price moves) and every save carries the stamps; a section with no place is newer than one that has one, and a tie is settled by the
-sheet's id, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
+nothing. `sectionsOf` lists the root and then the sections by `seq` (`tabIdsInOrder`). A bid saved before this has no `seq`: `adopt()`
+stamps it in memory when it opens (`withSectionOrder`: nothing is written on open and no price moves) and every save carries the stamps.
+It is stamped in the order its saved price was computed in, which is the order of its `priced_tabs` (an array, which jsonb keeps in order,
+written in the same save as the model and the lump sum) when that names two or more of the sheets under `tabs`: the sheets it does not
+name (an `off` one is never priced) go after them, in key order. A list that names fewer than two says nothing about the order, and the
+bid is stamped in its keys' order. Without that, a far Combo with Epoxy and a Polish copy both bases, saved at $78,628, opened on the
+copy as the carrier (it sorts first in jsonb) and its first save wrote $81,086 for good. A section with no place is newer than one that
+has one, and a tie is settled by the sheet's id, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
 estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
 (`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session.py`).
 
