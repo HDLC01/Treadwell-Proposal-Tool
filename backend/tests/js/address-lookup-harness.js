@@ -97,6 +97,31 @@ const FEATS = [
   docListeners.click.forEach((f) => f({ target: {} }));
   out.clickAway = { stayedOpenOnInputClick: stayed, closedElsewhere: !dom.ar.isOpen() };
 
+  // LEAVING THE BOX CLOSES ITS LIST (2026-10-20 browser walk: Tab left it open over City, State and Zip)
+  const fire = (node, type, ev) => (node.listeners[type] || []).forEach((f) => f(ev || {}));
+  dom.address.value = "123 W 5th St"; fire(dom.address, "focus"); fire(dom.address, "input"); await flush();
+  const openWhileIn = dom.ar.isOpen();
+  fire(dom.address, "blur");
+  const closedOnLeave = !dom.ar.isOpen();
+  // an answer that lands after the box was left never opens the list
+  dom.address.value = "123 W 5th Street"; fire(dom.address, "input"); fire(dom.address, "blur"); await flush();
+  const lateStaysShut = !dom.ar.isOpen();
+  // back in the box: it opens again; Escape closes it and is consumed
+  fire(dom.address, "focus"); fire(dom.address, "input"); await flush();
+  const reopened = dom.ar.isOpen();
+  let escPrevented = false;
+  fire(dom.address, "keydown", { key: "Escape", preventDefault() { escPrevented = true; } });
+  const closedOnEsc = !dom.ar.isOpen();
+  // a press on the list keeps the focus in the box, so a pick is never lost to the blur
+  let downPrevented = false;
+  fire(dom.ar, "mousedown", { preventDefault() { downPrevented = true; } });
+  // the business box behaves the same
+  fire(dom.business, "focus"); dom.business.value = "Acme warehouse"; fire(dom.business, "input"); await flush();
+  const bizOpen = dom.br.isOpen();
+  fire(dom.business, "blur");
+  out.leave = { openWhileIn, closedOnLeave, lateStaysShut, reopened, closedOnEsc, escPrevented, downPrevented,
+                bizOpen, bizClosedOnLeave: !dom.br.isOpen() };
+
   // a page with no business box (mount tolerates it)
   const doc2 = { getElementById: (id) => (id === "address-results" ? dom.ar : null), addEventListener() {} };
   const w2 = {};
