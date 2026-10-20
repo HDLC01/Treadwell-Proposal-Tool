@@ -482,8 +482,10 @@ async function main() {
     return res;
   });
 
-  // A JOB TYPE SWITCHED AFTER THE CARRIER'S x HONOURS IT (decided 2026-10-20: "the job has no drive" is the job's, so the new carrier is not seeded a row and no row is carried to it; Add
-  // Travel Labor on the carrier takes the answer back). Far Polish -> x -> intake: Epoxy (a new section) -> [reload] -> intake: Polish again. The session equals a reload at every step.
+  // A JOB TYPE SWITCHED AFTER THE CARRIER'S x HONOURS IT (decided 2026-10-20, and Hanz, 2026-10-21: "a job-type switch keeps the drive REMOVED": "the job has no drive" is the job's, so the
+  // new carrier is not seeded a row and no row is carried to it; Add Travel Labor on the carrier takes the answer back. An OPTION holding its own line that the switch makes the carrier brings
+  // that line, as a base pick does: round 6, part 3, M3, test_polish_travel_round6_part3.py). Far Polish -> x -> intake: Epoxy (a new section) -> [reload] -> intake: Polish again. The session
+  // equals a reload at every step.
   await section("switchAfterX", async () => {
     const s = await newBid(polishDraft(), CREW.polish);
     const b = await reopen(s.saved);

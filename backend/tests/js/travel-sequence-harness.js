@@ -42,6 +42,9 @@
  *                    section counted with its own tab's divisor (guys x days, as a person counts them, and a crew entered in hours over the hours a night is worth on its tab: a Gyp crew's
  *                    hours over 10), on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). An option is priced apart
  *                    and a section that is off counts nothing. (Round 5 made a Gyp carrier's nights typed, because the man-days then counted day rows only: that exception is gone.)
+ *                    The model counts every tab's nights from its labor DOLLARS (round 6, part 3, M2: Epoxy!B65, Polish!B58, Leveling!B61, Gyp!B64), and the box holds that count to two
+ *                    places. Every crew of these walks is paid $33 for a day of 8 hours or an hour, so the dollars count the man-days to two places and this head count is the rule's figure;
+ *                    a crew paid two rates, a Leveling day of ten hours, and every tab's own vectors are tests/test_tab_nights_proof.py's, against the workbook.
  *
  * THE FIFTH AUDIT (2026-10-20, of b14bc98) added the RELOAD, which every other step lacks: a step of the walk always starts from the draft the step before SAVED, so every walk above
  * is "reload, then step" and could never see a Sheets panel action that prices differently in the session than after a reload (a base the pick demoted lost its Travel Labor row

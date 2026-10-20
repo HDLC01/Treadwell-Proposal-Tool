@@ -1781,9 +1781,11 @@
    *      either direction: a saved bid never changes under an answer it did not ask for.
    *    - The line's ON and OFF is the answer's as before (applyDistance, and a hand flip stays). A line that is OFF is not filled (round 6, part 2: it used to be, the quantity being
    *      independent of the switch; see below), and the page fills it the moment the estimator switches it ON.
-   *  An OPTION is untouched: it is priced apart and charges its own nights and days for its own labor (optionTravelCosts, ownNights: a far Gyp option or copy of the Gyp sheet
-   *  prices its own, from its crew's hours). Nothing runs when a bid opens: a saved
-   *  bid never moves on open. Called with every ANSWER (applyDistance, clearDistance) and with a carrier that moved (followDistance), and with nothing else.
+   *  An OPTION is untouched: it is priced apart and charges its own nights and days for its own labor (optionTravelCosts, ownNights: its own tab's count, from its own labor dollars,
+   *  round 6, part 3). Nothing runs when a bid opens: opening a saved bid fills nothing and writes nothing. ITS PRICE IS THE RULE'S: a line that follows the labor, and an option's
+   *  own nights, are charged the count the code that prices the bid works out, so a saved v2 bid re-prices when that rule changes, as round 6, part 3 changed it (Hanz, 2026-10-21:
+   *  "Let them re-price", every v2 bid being a test copy; nothing is frozen). A figure the estimator typed is theirs and never moves.
+   *  Called with every ANSWER (applyDistance, clearDistance) and with a carrier that moved (followDistance), and with nothing else.
    *  `miles` null is a cleared distance. MUTATES the model; pass the WHOLE model.
    *
    *  A LINE THE ESTIMATOR SWITCHED OFF IS NOT FILLED, AND IS FILLED WHEN THEY SWITCH IT ON (round 6, part 2, X4b). A far answer used to fill the quantity of a line that was off by hand (48 nights
@@ -5853,7 +5855,8 @@
       var rows = crewFirst(applyLaborRate(seedLibraryLabor(keep, ctx.laborRows, ctx.laborRate, kindOfSection(e.layout)), ctx.laborRate));
       // Every row opens with no guys, days or hours, and on neither auto nor the distance (see laborRowStartsEmpty).
       rows = rows.map(function (r) { return r ? laborRowStartsEmpty(r) : r; });
-      // A JOB THAT SAID IT HAS NO DRIVE IS NOT SEEDED ONE (round 6, part 2, X2; decided 2026-10-20). The x on the carrier's Travel Labor line, or the library's decline, is the
+      // A JOB THAT SAID IT HAS NO DRIVE IS NOT SEEDED ONE (round 6, part 2, X2; decided 2026-10-20, and Hanz, 2026-10-21: "a job-type switch keeps the drive REMOVED", no seed, no carry,
+      // Add Travel Labor is the way back). The x on the carrier's Travel Labor line, or the library's decline, is the
       // job's answer (`no_travel_labor`), and it survives a job-type switch: a new section that becomes the carrier is given the library's crew and none of the drive, where it was
       // seeded a priced line (4 x 6.5 = $858) while the flag still said none. Add Travel Labor on the carrier takes the answer back.
       var drives = carrierTab === e.tab && out.no_travel_labor !== true;

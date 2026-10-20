@@ -917,23 +917,35 @@ nights of lodging, and the same days of per diem, off the labor of the tab the j
 lodging is still divided by 8; 10 on the five Gyp tabs, whose crew is entered in HOURS). A far answer used to switch Lodging and Per Diem ON and leave their quantities empty, by the 2026-10-12 rule that a
 new bid starts empty. Now a far answer (typed miles, the lookup, a carrier that moves under a far distance on file) fills a quantity nobody has typed (`followDistanceNights`, called by `applyDistance`,
 `clearDistance` and `followDistance`): the line goes on auto and carries `qty_follow: "labor"`, `syncAutoGuys` keeps its figure current like the crew-following Travel guys, and it is charged what the price
-charges, the JOB's figure (`travelQty`, `travelOpts`' `follow`, `jobNights`): the sum of what every BASE section counts, each by its own tab's rule. A Polish section priced by rev 2 and every Gyp section
-count the sheet's way, from the labor dollars (`sheetNights`, with the Gyp profile's divisor of 10 and only the row called travel taken off as the drive); every other section counts its man-days
-(`travelManDays`, guys x days, and a crew entered in hours over the section's own divisor, `nightsDivisor`). Wichita, four guys for twelve days: 48 nights x $70 = $3,360 and 48 days x $45 = $2,160. A Combo's
+charges, the JOB's figure (`travelQty`, `travelOpts`' `follow`, `jobNights`): the sum of what every BASE section counts, each by its own tab's rule. EVERY TAB COUNTS THE SHEET'S WAY, from its own labor
+dollars (`sheetNights` by the section's own profile, `sheetCountProfile`: Epoxy!B65 `((D53-D52)/C47)/8`, Polish!B58 and the two Seal tabs `((D45-D44)/C37)/8`, Leveling!B61 `((D49-D48)/C44)/8`, and the Gyp
+tabs with their divisor of 10). The drive taken off is the row called travel on every tab but Polish, so a crew line entered in hours on Epoxy, Seal or Leveling is labor the nights are counted from; on a
+Polish section every hours row is the drive, as it has been since Phase 17. Only a Polish section priced by polish-legacy, a saved bid's, counts its man-days (`travelManDays`, guys x days), as it
+always has. (Round 6, part 3, 2026-10-21, M2: until then an Epoxy carrier and an Epoxy, Seal, Seal (+Jnts), Leveling or rev 2/3 Polish option counted people while the words said each tab is counted its own
+way; a head count is the sheet's figure only while every row is paid the first row's rate, a day is 8 hours and the labor comes to a whole dollar. A $48 row beside $33 rows is 20.82 nights on the sheet where the
+head count says 19, and a Leveling crew of 3 for 5 days is 18.75 nights, its ten hour day still divided by 8, where the head count says 15. `tests/test_tab_nights_proof.py` prices the oracle's own lodging
+vectors of the five tabs, four crews far and local, through a v2 section of each with the nights left to follow, Epoxy and Polish as the carrier and as an option and the rest as options: every nights figure
+to 1e-9 and every dollar to the cent. HANZ, 2026-10-21: saved v2 bids RE-PRICE under the new rule, "Let them re-price", since every v2 bid is still a test copy; nothing is frozen, and a figure the estimator
+typed is theirs as always.) Wichita, four guys for twelve days: 48 nights x $70 = $3,360 and 48 days x $45 = $2,160. A Combo's
 Polish 4 x 12 and Epoxy 4 x 12 are 96, because Kyle carries hotel on every sheet of a job (an all-years scan of his Dropbox: 136 of 140 far jobs with two or more priced sheets); round 5 counted the carrier's
 48 alone under words that said "Kyle's way", $71,555 against $81,226. A Gyp crew of 4 guys for 120 hours is 480 man-hours and 48 nights, and the Gyp card says they fill in from the crew's hours, 10
 hours a night, as Kyle's Gyp sheet counts them (round 5 had left a far Gyp job's nights typed, because the man-days counted day rows only: $0 hotel and per diem on a far Gyp quote). Only the Gyp DRIVE stays
 typed (the Gyp sheet works its own drive time per mobilization), and the card says so. The Gyp proof (`tests/test_gyp_v2_proof.py`) now compares the 40 lodging vectors it used to leave out (the sheet's own
 nights, four crews, far and local, on all five tabs) to the cent through a v2 section with the nights left to follow; a head count (guys x hours over ten) cannot match three of the four crews, because the
 sheet counts labor DOLLARS (the labor total is rounded up to a whole dollar before it is divided, and a row paid another rate reads as extra days), so a Gyp section counts the sheet's dollars, as a
-Polish section priced by rev 2 has since Phase 17. An OPTION is priced apart and counts nothing in the job's figure: it carries its own hotel and per diem for its own labor (`optionNights`, the sheet's count
-on a Gyp sheet, its man-days on every other), so a far Gyp option, or a copy of the Gyp sheet, no longer prices $0 under a note that says it carries its own (an identical copy was $10,536 under its base); a
+Polish section priced by rev 2 has since Phase 17. An OPTION is priced apart and counts nothing in the job's figure: it carries its own hotel and per diem for its own labor (`optionNights`: what the same
+section would count as a base, its own tab's way), so a far Gyp option, or a copy of the Gyp sheet, no longer prices $0 under a note that says it carries its own (an identical copy was $10,536 under its base); a
 section that is off counts nothing. TYPING IN THE BOX, OR CLEARING IT, MAKES IT THEIRS (`markTravelQtyTyped`, `qty_typed`, saved with the line): no answer fills it again, and a figure sitting in a box that is
 off auto is theirs without the mark (a bid saved since 2026-10-12). Going local, or clearing the miles, takes a following figure back to empty and leaves a typed one (greyed while its line is off). A line on
-auto WITHOUT the marker, the older bid's, is never converted in either direction (it is charged the carrier's own day rows, as it always was), and a saved bid never moves on open. The Labor step says where
+auto WITHOUT the marker, the older bid's, is never converted in either direction (it is charged the carrier's own day rows, as it always was), and opening a saved bid fills and writes nothing. Its PRICE
+is the rule's: a line that follows the labor, and an option's own nights, are charged what the code that prices the bid counts, so a saved v2 bid re-prices when the rule changes (Hanz, 2026-10-21: "Let
+them re-price", for round 6, part 3; a typed figure never moves). The Labor step says where
 the count comes from under each box (`travelQtyHint`: "the labor lines of the base sheets" on a Combo, "the crew's hours on the labor lines above, 10 hours a night" on a Gyp bid), in the how-note (one
-sentence, "Nights and per diem days follow the man-days ..., Kyle's way"), and the Review's Hotel and Per Diem rows say it under the line's name. Held by `tests/test_polish_travel_round5.py` and
-`tests/test_polish_travel_round6.py`, and by `NIGHTS`, judged after every step of every walk. The Travel Labor card's x can be undone: with no Travel Labor line on the
+sentence, "Nights and per diem days follow the man-days ..., Kyle's way"), and the Review's Hotel and Per Diem rows say it under the line's name. A Review row reads true (round 6, part 3, M4): its quantity
+is the count the price used, to as many places as it takes for the count x the rate to come to the cent the price worked out (`travelQtyShown`: at the library's Gyp rate, 4 guys for 120 hours are 48.0006
+nights and $3,361 at $70, so the row says 48.0006, not 48), and under the total it says "rounded up to the dollar, as the sheet does" whenever the count x the rate is not whole dollars (each line is
+ROUNDUP'd, Polish!D58); the working under the travel block shows the same count ("48.0006 nights x $70.00 = $3,360.04, rounded up to $3,361"). Held by `tests/test_polish_travel_round5.py`,
+`tests/test_polish_travel_round6.py` and `tests/test_polish_travel_round6_part3.py`, and by `NIGHTS`, judged after every step of every walk. The Travel Labor card's x can be undone: with no Travel Labor line on the
 carrier the travel block draws an Add Travel Labor control (`addTravelLabor`: the row a new bid is seeded with, filled by the rule on a far job), and the summary no longer says Travel Labor
 "comes on" over a job with no line.
 
@@ -952,13 +964,18 @@ reload had happened in between. Now:
 - **Add Travel Labor is drawn on any sheet that can hold a drive and has none**: the carrier, or an option (`travelLaborCanBeAdded`; a base that does not carry the job's travel is refused: the drive is
   charged once, on the carrier). It takes back only that sheet's answer: Add on the carrier answers the job's "no drive" again, Add on an option leaves the job's answer exactly as it is and fills the
   option's line by the distance on its OWN crew (`addTravelLabor(model, row, tab)`).
-- **A job-type switch after the carrier's x HONOURS the answer (decided 2026-10-20).** The job has no drive, so the new carrier is not seeded a line (`seedNewSections`: it was seeded a priced
+- **A job-type switch after the carrier's x HONOURS the answer (decided 2026-10-20; Hanz, 2026-10-21: "a job-type switch keeps the drive REMOVED", no seed, no carry, Add Travel Labor is the way back).** The job has no drive, so the new carrier is not seeded a line (`seedNewSections`: it was seeded a priced
   4 x 6.5 = $858 while the flag still said none), none is carried to it (`strandedTravelTab`, `followDistance`), and a blank line the new carrier already held (a new Epoxy bid's off root keeps the shipped four rows)
   is taken off it (`releaseNobodysTravelRow`: a line nobody typed; one the estimator typed, cleared, switched off or re-rated is theirs and stays, and the job then has a drive). The flag is put back
   to what it is whenever a restructure hands the job a line, a base pick that makes an option holding its own line the base included (`settleTravelAnswer`, from `followDistance` and `pickBase`): a
   flag over a carrier that holds a line is no answer to anything. The alternative, "start fresh" (a new carrier is seeded like any new sheet and the answer is dropped), was not taken: a job-type switch
   must not put back, at $858, a line the estimator removed. The library's own decline is the same flag, so a library that scopes Travel to another work type does not seed the new section of a job
   that was declined for its first one; Add Travel Labor on the carrier is the way back.
+- **An OPTION the switch makes the carrier brings its own drive, as the Sheets panel's pick does (round 6, part 3, M3).** An option's line is not the job's: an option is priced apart and carries its
+  own drive, one the estimator put on it (Add Travel Labor on the option) or kept (a copy's, a demoted base's). When a job-type switch makes that option the carrier, `sectionsForJob` settles the job's
+  answer exactly as `pickBase` does (`settleTravelAnswer`: gone while the carrier holds a line), so `followDistance` has no answer to hold and the line stays. Before, the pick kept the line and the switch
+  took it off as a blank line nobody typed: far Polish 4 x 12 with an Epoxy option (5 x 10) holding its own drive, the carrier's x, Epoxy made the base, $41,410 by the pick and $39,350 by the switch. A section
+  that was OFF, or a new one, brings nothing: the job's drive stays removed. Held by `tests/test_polish_travel_round6_part3.py`, and in the walks by `promotedOwnLine` (ANSWER_HELD ends there).
 - **A saved bid's flag is read as the carrier's answer on open:** kept while the carrier holds no Travel Labor line, dropped when it holds one (the flag prices nothing, so no saved bid moves: the labor
   total is read before and after, and a far saved bid with the flag over its Travel line opens at the $39,742 the parent of this change prices it at, both in `test_polish_travel_round6_answer.py`), and a legacy Travel row is upgraded to the sheet's hours at the company rate whether or not the flag is on the bid.
 - Also in this round: a Lodging or Per Diem line the estimator switched OFF is left alone by an answer (it used to be filled while it was off, which a hand flip does not say and Travel Labor does not do)
@@ -968,7 +985,11 @@ reload had happened in between. Now:
 - **Left as it is:** a typed drive edit made on the carrier is not carried back when the base flips back. A demoted base keeps its own copy of the row (an option is priced apart), so when the option comes
   back both rows are the estimator's and both stay: the edit sits on the option, not lost, and which of two typed rows is the job's drive needs a decision (a row remembering where it was copied from would settle it).
 Held by `tests/test_polish_travel_round6_answer.py` (the audit's own sequences on the page with every reload re-keyed as the jsonb column hands it back, and a mutation entry for each line) and over
-every sequence by the answer walks, `tests/test_polish_travel_sequences_answer.py` (`ANSWER_OWNER`, `ANSWER_HELD`, `RELOAD_AGREES`).
+every sequence by the answer walks, `tests/test_polish_travel_sequences_answer.py` (`ANSWER_OWNER`, `ANSWER_HELD`, `RELOAD_AGREES`). Since round 6, part 3 (M1) those walks re-key a reload's SHEETS too,
+as every walk does with the sheet-order work merged (they used to keep the sheets in the order they were saved, a stop-gap for a tree without `seq`), and the EPOXY + POLISH-COPY PAIR is a step of its own
+(`pair`: an Epoxy sheet and a copy of the Polish root the two bases, both under `tabs`, the root an option), in the `answer` and `session` walks and in two of the answers' own sequences, which add Epoxy first
+so that a reload hands the copy back ahead of it: the carrier is the two bases' order alone, and the session and a jsonb reload price the same after every step (a model that lists the sheets in key
+order is caught: `RELOAD_AGREES`, prices apart).
 
 **Done.**
 

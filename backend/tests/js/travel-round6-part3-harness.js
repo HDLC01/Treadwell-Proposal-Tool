@@ -6,7 +6,7 @@
  *   M3  `m3`: AN OPTION MADE THE CARRIER BY A JOB-TYPE SWITCH BRINGS ITS OWN DRIVE, AS A BASE PICK DOES. Far Polish (4 x 12, 190 miles), an Epoxy sheet added (an option) with a crew of its own
  *       (5 x 10), the x on the Polish carrier's Travel Labor (the job says it has no drive), then Add Travel Labor on the Epoxy option (its own drive, 5 guys x 6.5 hours, filled on its own crew).
  *       Then Epoxy is made the base two ways: the Sheets panel's pick (path A) and the intake's job type (path B). Both end with Epoxy the one base and the job's drive Epoxy's own line; the
- *       pick kept it and dropped the job's answer, the switch took the line off (the release of a blank line nobody typed) and kept the answer: $2,057 apart for the same base. Hanz's decision
+ *       pick kept it and dropped the job's answer, the switch took the line off (the release of a blank line nobody typed) and kept the answer: $2,060 apart for the same base. Hanz's decision
  *       of 2026-10-21 stands beside it: after the carrier's x a job-type switch keeps the JOB'S drive removed (no seed, no carry; Add Travel Labor is the way back), which `keeps` holds.
  *   M4  `m4`: THE REVIEW ROW READS TRUE. At the library's own Gyp rate ($33.66) a far Gyp crew of 4 guys for 120 hours is $16,156.80 of labor, which the sheet rounds UP to $16,157 before it
  *       divides: 48.0006 nights, and each line is rounded up to the dollar ($3,361 and $2,161). The Review said "48 nights x $70 = $3,361", and the Labor step's working "48 nights x $70.00
