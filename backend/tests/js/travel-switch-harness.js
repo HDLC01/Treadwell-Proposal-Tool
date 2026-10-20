@@ -255,7 +255,7 @@ async function main() {
     b.api.go(1);
     await settle();
     const before = jobFacts(b);
-    b.doc.fire("change", { target: P.need(b, '[data-sh-base="combined"]') });
+    P.clickOn(b, '[data-sh-act="combine"]');   // the pair is asked from the open sheet's bar (the strip's tab until 2026-10-21)
     P.clickOn(b, '[data-sh-act="base-yes"]');
     await settle();
     b.api.show(B.ROOT_TAB);            // the Polish root now carries the job's travel: open its Labor step
