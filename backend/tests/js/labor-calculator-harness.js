@@ -118,6 +118,8 @@ const RULE = (key, formula, extra) => Object.assign({ id: "r-" + key, layout: "g
       seventyMiles: html.indexOf("70 miles or more") !== -1,
       insideMarkups: html.indexOf("before GP") !== -1,
       roHidden: s.els["labcalc-ro"].hidden,
+      // The Travel Labor row's own words: guys x hours, one trip each, and what the estimate fills in (2026-10-20, Kyle's way).
+      travelHow: ((html.match(/<td class="lc-how">([^<]*)<\/td>/) || [])[1]) || null,
     };
   }
 

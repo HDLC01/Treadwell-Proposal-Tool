@@ -225,6 +225,28 @@ def test_the_lines_typed_on_the_proposal_step_follow_the_new_base_by_the_shared_
     assert b["optionsKept"] == {"Epoxy": {"label": "mine"}}, "an option's own price override is not the base line's and is not touched"
 
 
+def test_a_base_change_that_moves_the_travel_fills_the_new_carriers_blank_travel_labor_from_the_distance_on_file(ran):
+    """The 2026-10-20 audit's rule, for the Sheets panel's way of switching the job type: a far Polish bid (190 miles on file) whose Travel
+    Labor was left blank, made an Epoxy base, moves the job's travel to Epoxy and the row with it, and the blank row is filled by the rule an
+    answer follows: 6.5 hours (a 380 mile round trip), the guys on the base crew, Epoxy's 3. A change that keeps the carrier (the combined
+    pair: Polish stays the first base) fills nothing; a row somebody typed in is left alone; a row already filled keeps its figures. Nothing
+    is looked up.
+
+    Mutation: leave B.followDistance out of makeBase (BREAKS below)."""
+    t = ran["baseTravel"]
+    b = t["blank"]
+    assert b["before"] == {"carrier": "Polish", "row": {"days": "", "guys": "", "guys_auto": False}}, "blank, untouched, no marker"
+    assert (b["carrier"], b["rootHasTravel"], b["epoxyHasTravel"], b["asked"]) == ("Epoxy", False, True, 0)
+    assert b["row"] == {"days": 6.5, "guys": 3, "guys_auto": True, "guys_follow": "crew", "hours_seed": 6.5}
+    ty = t["typed"]
+    assert (ty["carrier"], ty["epoxyHasTravel"]) == ("Epoxy", True)
+    assert (ty["row"]["days"], ty["row"]["guys"], ty["row"]["guys_auto"], ty["row"].get("guys_follow")) == ("4", "2", False, None), "typed figures stay"
+    k = t["keepsCarrier"]
+    assert (k["carrier"], k["row"]["days"], k["row"]["guys"], k["row"].get("guys_follow")) == ("Polish", "", "", None), "the carrier did not move"
+    f = t["filled"]
+    assert (f["carrier"], f["row"]["days"], f["row"]["guys"], f["row"]["guys_follow"]) == ("Epoxy", 6.5, 3, "crew")
+
+
 def test_a_combined_epoxy_and_polish_base_is_its_own_row_and_writes_combo_and_no_base_id(ran):
     c = ran["combined"]
     assert c["hadRow"] is True
@@ -903,6 +925,12 @@ BREAKS = {
         "js/polish-estimate.js", '      sheetsUi.notice = { at: "add", text: "The sheet could not be added: " + (err && err.message) };',
         '      say("The sheet could not be added: " + (err && err.message));',
         lambda r: r["limit"]["addRefused"]["inAddBlock"] is None),
+    "a base change that moves the travel leaves the new carrier's blank row blank": (
+        "js/polish-estimate.js", "    B.followDistance(ROOT, carrierBefore);", "    void carrierBefore;",
+        lambda r: r["baseTravel"]["blank"]["row"]["days"] != 6.5),
+    "every base change fills the distance, even one that keeps the carrier": (
+        "js/bid-model.js", "return travelCarrier(model) === fromTab;", "return false;",
+        lambda r: r["baseTravel"]["keepsCarrier"]["row"]["days"] != ""),
     "a refusal stays through the next click": (
         "js/polish-estimate.js", '    if (sheetsUi.notice && shWhat !== "copy" && shWhat !== "add") { sheetsUi.notice = null; paintSheets(); }',
         "    void 0;", lambda r: r["limit"]["afterClick"] is not None),

@@ -141,7 +141,7 @@ const sumOf = (b, tab) => ((/class="sh-sum[^"]*">([^<]*)(?:<b>([^<]*)<\/b>)?/.ex
 async function main() {
   const out = {};
   const sections = [
-    ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["combined", combined], ["deleting", deleting],
+    ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["baseTravel", baseTravel], ["combined", combined], ["deleting", deleting],
     ["renaming", renaming], ["options", options], ["reopen", reopen], ["unreadable", unreadable], ["focus", focus], ["markup", markup], ["floating", floating],
     ["gypPreset", gypPreset], ["limit", limit], ["sealMode", sealMode], ["demote", demote], ["resets", resets], ["unstated", unstated], ["hiddenOption", hiddenOption],
     ["stripKeeps", stripKeeps], ["stickyHead", stickyHead],
@@ -295,6 +295,39 @@ async function baseSwitch() {
     // The Proposal step's own edited line followed the base, by the rule the other two base pickers run.
     lines2: clone(blob.price_overrides.lines2), optionsKept: clone(blob.price_overrides.options),
     open: openTab(panel(b)),
+  };
+}
+
+// ── 5b. A BASE CHANGE IS A JOB TYPE SWITCHED IN THE SESSION TOO (2026-10-20 audit) ─────────────────────────────
+// A far Polish bid (190 miles on file, Lodging and Per Diem on) whose Travel Labor was left blank, with an Epoxy option. Making Epoxy the base
+// moves the job's travel to the Epoxy sheet and the Travel Labor row moves with it (B.pickBase); a blank row under a far distance is then filled
+// by the rule an answer follows (B.followDistance): 6.5 hours, the guys on the base crew (Epoxy's 3). A base change that keeps the carrier
+// (to the combined pair: Polish stays the first base) fills nothing, and a row the estimator typed in is left alone.
+async function baseTravel() {
+  const farModel = (travel) => polishModel({
+    labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 }, { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
+            Object.assign({ id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: false }, travel || {})],
+    conditions: Object.assign({}, OFF, { local: false }),
+    travel: { lodging: { label: "Lodging", enabled: true, qty: 4, qty_auto: false, rate: 70 }, per_diem: { label: "Per Diem", enabled: true, qty: 4, qty_auto: false, rate: 45 } },
+    distance: { miles: 190, source: "google", key: "k" }, tabs: { Epoxy: epoxySection("option") } });
+  const travelOf = (sec) => ((sec && sec.labor) || []).filter((r) => r.id === "travel")[0];
+  const facts = (r) => (r ? { days: r.days, guys: r.guys, guys_auto: r.guys_auto, guys_follow: r.guys_follow, hours_seed: r.hours_seed } : null);
+  const run = async (model, ask) => {
+    const b = await open(draft(model));
+    const before = { carrier: B.travelCarrier(b.api.root()), row: facts(travelOf(b.api.root())) };
+    pick(b, ask);
+    clickIf(b, '[data-sh-act="base-yes"]');
+    const root = b.api.root();
+    const carrier = B.travelCarrier(root);
+    const sec = carrier === B.ROOT_TAB ? root : root.tabs[carrier];
+    return { before: before, carrier: carrier, row: facts(travelOf(sec)), rootHasTravel: !!travelOf(root), epoxyHasTravel: !!travelOf(root.tabs.Epoxy),
+             saves: b.rec.saves.length, asked: (b.rec.distanceBodies || []).length };
+  };
+  return {
+    blank: await run(farModel(), '[data-sh-base="Epoxy"]'),
+    typed: await run(farModel({ days: "4", hours_typed: true, guys: "2", guys_typed: true }), '[data-sh-base="Epoxy"]'),
+    keepsCarrier: await run(farModel(), '[data-sh-base="combined"]'),
+    filled: await run(farModel({ days: 6.5, hours_seed: 6.5, guys_auto: true, guys_follow: "crew", guys: 3 }), '[data-sh-base="Epoxy"]'),
   };
 }
 

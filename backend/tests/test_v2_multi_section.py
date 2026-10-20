@@ -94,10 +94,12 @@ def test_what_the_page_saves_and_what_a_new_bid_opens_holding_is_the_golden_byte
     carries the sheet's patch line. The 26 `saved` records were not touched."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert want["meta"]["commit"] == "28a5d1f"
-    # The 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
+    # The first 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
     # re-recorded on 2026-10-12 (meta.newBid_recut): a new bid's Labor step opens with every quantity empty.
-    assert "newBid_recut" in want["meta"]
-    assert len(want["golden"]["saved"]) == 26 and len(want["golden"]["newBid"]) == 7
+    # Two more `saved` records, for a far job saved with Travel Labor blank, were added on 2026-10-20
+    # (meta.far_job_blank_travel_labor_added), cut from the page before the distance filled Travel Labor.
+    assert "newBid_recut" in want["meta"] and "far_job_blank_travel_labor_added" in want["meta"]
+    assert len(want["golden"]["saved"]) == 28 and len(want["golden"]["newBid"]) == 7
     assert json.dumps(recorded) == json.dumps(want["golden"])
 
 

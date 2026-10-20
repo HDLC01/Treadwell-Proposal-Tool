@@ -102,6 +102,7 @@ const EXPORTS = `
     STEPS: STEPS, UNITS: UNITS,
     CONDITION_CARDS: CONDITION_CARDS, RESERVED_ITEM_IDS: RESERVED_ITEM_IDS,
     model: function () { return M; },
+    root: function () { return ROOT; },
     state: function () { return state; },
     asms: function () { return ASMS; },
     items: function () { return ITEMS; },
@@ -1207,8 +1208,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
       sv.api.go(1);
       const svH = sv.dom.get("panels").innerHTML;
       out.savedTypedRow = {
-        // Typed, not auto: the hint names the man-days of the (here empty) crew as text.
-        typedHint: svH.indexOf("Man-days from the tasks above: 0.") !== -1,
+        // Typed, not auto: the hint says what the guys are (one round trip each) and never quotes the man-days beside a typed count
+        // (2026-10-20 audit; it used to name the man-days of the (here empty) crew as text).
+        typedHint: need(sv, '[data-hint-lab="0"]').textContent === "One round trip for each guy.",
         guys: sv.api.model().labor[0].guys, auto: sv.api.model().labor[0].guys_auto,
         box: String(need(sv, '[data-lab="0"][data-k="guys"]').value),
         cost: txt(sv, '[data-lcost-for="0"]'),
@@ -1381,9 +1383,12 @@ const rendered = [];      // every string the page put on screen, for the Labour
       labels: (function () {
         const tables = String(zt.dom.get("panels").innerHTML)
           .match(/<table class="rev-t">[\s\S]*?<\/table>/g) || [];
+        // The label cell of Travel Labor's row carries its trip sentence in a keyed note (always there, so a late answer can repaint it): the
+        // label is what stands in front of that note.
         return (tables[1] || "").split("<tr").slice(1)
           .map((c) => (/<td>([\s\S]*?)<\/td>/.exec(c) || [])[1])
-          .filter((s) => s != null);
+          .filter((s) => s != null)
+          .map((s) => s.replace(/<span class="note work">[\s\S]*$/, ""));
       })(),
       travelCost: B.laborCost(zeroTravel.labor[2]),
       jointFillerCost: B.laborCost(zeroTravel.labor[1]),
@@ -3767,7 +3772,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // TYPED NIGHTS on a far job, and a repaint after the miles move (the note must follow).
     const nights = build({ blob: newBlob(), distance: { ok: true, miles: 150, reason: "" } });
     await nights.api.init(); nights.api.go(1); await settle();
-    // Straight after the lookup nothing is typed: every quantity is empty and the distance filled no hours.
+    // Straight after the lookup nothing is typed: the nights and the days are empty, and the distance has filled only Travel Labor's
+    // hours and guys (Hanz, 2026-10-20; it filled nothing from 2026-10-12 to then).
     const nightsAuto = snap(nights);
     nightsAuto.travelRow = clone(nights.api.model().labor.find((r) => r.id === "travel"));
     nightsAuto.travelBoxes = {
@@ -3818,6 +3824,308 @@ const rendered = [];      // every string the page put on screen, for the Labour
       blank: blankSnap, blankRequests: (blank.rec.distanceBodies || []).length,
       thinRequests: (thin.rec.distanceBodies || []).length,
       savedBefore: savedBefore, savedFetches: savedFetches, savedAfter: savedAfter,
+    };
+  }
+
+  // ── O2. THE DISTANCE FILLS TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20) ────────────────────────────────────────────────
+  // EXECUTED THROUGH THE PAGE. A far answer -- a new bid's own lookup, the button, the miles typed -- fills the Travel Labor line by
+  // itself: its hours from the miles (one round trip at 60 mph, to the half hour) and its guys the CREW'S SIZE (the most guys on any
+  // labor line), so each guy is charged one round trip, as Kyle types it on his own sheets. The Labor step says where the figures came
+  // from and the Review shows the working. A figure the estimator typed, or cleared, always wins; one the tool wrote follows the next
+  // answer; going local, or clearing the miles, takes the tool's own hours back; a switched-off row is left as it is; and a late answer
+  // never writes into a box the estimator is standing in. A SAVED bid never moves on open: an answer applied in a session is what fills it.
+  {
+    const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
+    const ADDRESS = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
+    const KEY = B.distanceKey(ADDRESS.address, ADDRESS.city, ADDRESS.state, ADDRESS.zip);
+    const newBlob = () => { const b = blob(ADDRESS); delete b.polish_estimate; return b; };
+    const answer = (miles) => ({ ok: true, miles: miles, reason: "" });
+    const tIdx = (x) => x.api.model().labor.findIndex((r) => r.id === "travel");
+    const tSel = (x, k) => '[data-lab="' + tIdx(x) + '"][data-k="' + k + '"]';
+    /** Everything a test needs to know about the Travel Labor card and the line behind it, as the page holds it NOW. */
+    const look = (x) => {
+      const m = x.api.model(), r = m.labor[tIdx(x)], src = need(x, "[data-trv-src]");
+      return {
+        row: clone(r), hoursBox: String(need(x, tSel(x, "days")).value), guysBox: String(need(x, tSel(x, "guys")).value),
+        cost: B.laborCost(r), costHead: txt(x, '[data-lcost-for="' + tIdx(x) + '"]'), manDays: B.travelManDays(m.labor),
+        local: m.conditions.local, gray: /inert/.test(need(x, '[data-lab-card="' + tIdx(x) + '"]').className),
+        note: { text: src.textContent, hidden: src.hidden }, how: txt(x, "[data-trv-how]"), miles: txt(x, "[data-dist-note]"),
+        lodging: m.travel.lodging.enabled, perDiem: m.travel.per_diem.enabled,
+      };
+    };
+    /** A NEW bid on the Labor step with the answer in. `opts` stays in hand so a later answer can be a different one. */
+    const open = async (miles) => {
+      const opts = { blob: newBlob(), distance: answer(miles) };
+      const x = build(opts);
+      await x.api.init(); x.api.go(1); await settle();
+      return { x: x, opts: opts };
+    };
+    /** The crew, typed as a person types it: Polishing 4 guys for 12 days, so 48 man-days. */
+    const crew = (x) => { typeInto(x, '[data-lab="0"][data-k="guys"]', "4"); typeInto(x, '[data-lab="0"][data-k="days"]', "12"); };
+    const stripAll = (s) => { let o = String(s), was; do { was = o; o = o.replace(/<[^>]*>/g, ""); } while (o !== was); return dec(o).replace(/\s+/g, " ").trim(); };
+
+    // WICHITA: 190 miles, a NEW bid. The answer is in before anybody types, then the crew is typed (4 guys x 12 days).
+    const wich = await open(190);
+    const wBefore = look(wich.x);
+    crew(wich.x);
+    const wCrew = look(wich.x);
+    wich.x.clock.fire();
+    const wSaved = clone(wich.x.rec.saves[wich.x.rec.saves.length - 1].polish_estimate.labor.find((r) => r.id === "travel"));
+    const wBid = wich.x.api.bid();
+    // the Review: the Travel Labor row as the page drew it
+    wich.x.api.go(2);
+    const wReview = wich.x.dom.get("panels").innerHTML;
+    const wLabor = wReview.slice(wReview.indexOf('data-rev="labor"'), wReview.indexOf('data-rev="travel"'));
+    const wRowHtml = (wLabor.match(/<tr[^>]*><td>Travel Labor[\s\S]*?<\/tr>/) || [""])[0];
+    // each cell's text, tags stripped with a space where a block opened or closed (the working sits in a block of its own under the
+    // quantity, and the trip in one under the name), and the figures the row keys for the live repaint, by key
+    const wRow = wRowHtml.split("</td>").map((c) => stripAll(c.replace(/<span/g, " <span").replace(/<\/span>/g, "</span> "))).filter((c) => c);
+    const wKeyed = {};
+    (wRowHtml.match(/data-rv="[^"]*">[^<]*</g) || []).forEach((m) => { const x = /data-rv="([^"]*)">([^<]*)</.exec(m); wKeyed[x[1]] = dec(x[2]); });
+    wich.x.api.go(1);
+    const wBack = look(wich.x);
+
+    // A TYPED FIGURE ALWAYS WINS: hours typed over the 6.5 survive the button's answer and the miles typed.
+    const ty = await open(190);
+    crew(ty.x);
+    typeInto(ty.x, tSel(ty.x, "days"), "4");
+    const tyTyped = look(ty.x);
+    ty.opts.distance = answer(300);
+    clickOn(ty.x, "[data-dist-lookup]"); await settle();
+    const tyButton = look(ty.x);
+    typeInto(ty.x, "[data-dist-miles]", "250");
+    const tyMiles = look(ty.x);
+    // ...even typed with the very digits the tool wrote
+    const sd = await open(190);
+    crew(sd.x);
+    typeInto(sd.x, tSel(sd.x, "days"), "6.5");
+    typeInto(sd.x, "[data-dist-miles]", "300");
+    const sdAfter = look(sd.x);
+    // ...typed guys the same
+    const tg = await open(190);
+    crew(tg.x);
+    typeInto(tg.x, tSel(tg.x, "guys"), "2");
+    tg.opts.distance = answer(300);
+    clickOn(tg.x, "[data-dist-lookup]"); await settle();
+    const tgAfter = look(tg.x);
+    // ...and over an answer that is still on its way: hours typed while Google is slow are not overwritten when it lands
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const sl = build({ blob: newBlob(), distance: answer(190), distanceGate: gate });
+    await sl.api.init(); sl.api.go(1);
+    typeInto(sl, tSel(sl, "days"), "4");
+    release(); await settle();
+    const slLate = look(sl);
+
+    // AN UNTOUCHED FIGURE FOLLOWS THE NEXT ANSWER: 190 miles wrote 6.5, 300 miles moves it to 10.
+    const mv = await open(190);
+    crew(mv.x);
+    const mvBefore = look(mv.x);
+    mv.opts.distance = answer(300);
+    clickOn(mv.x, "[data-dist-lookup]"); await settle();
+    const mvAfter = look(mv.x);
+
+    // GOING LOCAL takes the tool's own hours back (the card grays again) and far again fills it again; typed hours stay;
+    // CLEARING THE MILES (and the lookup then has no answer) is the same.
+    const lc = await open(190);
+    crew(lc.x);
+    typeInto(lc.x, "[data-dist-miles]", "20");
+    const lcLocal = look(lc.x);
+    typeInto(lc.x, "[data-dist-miles]", "190");
+    const lcBack = look(lc.x);
+    const lk = await open(190);
+    crew(lk.x);
+    typeInto(lk.x, tSel(lk.x, "days"), "4");
+    typeInto(lk.x, "[data-dist-miles]", "20");
+    const lkLocal = look(lk.x);
+    const cl = await open(190);
+    crew(cl.x);
+    cl.opts.distance = { ok: false, miles: null, reason: "no_key" };
+    typeInto(cl.x, "[data-dist-miles]", ""); await settle();
+    const clUnknown = look(cl.x);
+    const cn = await open(190);
+    crew(cn.x);
+    typeInto(cn.x, tSel(cn.x, "days"), "4");
+    cn.opts.distance = { ok: false, miles: null, reason: "no_key" };
+    typeInto(cn.x, "[data-dist-miles]", ""); await settle();
+    const cnUnknown = look(cn.x);
+
+    // A SAVED BID NEVER MOVES ON OPEN. A far job saved with its distance and Travel Labor blank (what a new bid held from
+    // 2026-10-12 to 10-20): it opens as saved, writes nothing and asks the server nothing...
+    const farSaved = (travel) => ({ version: 2, takeoff: clone(MODEL.takeoff),
+      labor: [{ id: "polishing", label: "Polishing", guys: 4, days: 12, rate: 33 },
+              Object.assign({ id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours",
+                              guys_auto: false, rate_default: 33 }, travel || {})],
+      conditions: Object.assign(clone(MODEL.conditions), { local: false }),
+      travel: { lodging: { label: "Lodging", enabled: true, qty: 12, qty_auto: false, rate: 70 },
+                per_diem: { label: "Per Diem", enabled: true, qty: 12, qty_auto: false, rate: 45 } },
+      distance: { miles: 190, source: "google", key: KEY }, contingency: 0, fees: 0, totals: {} });
+    // (polish_sf is the takeoff total an estimate-saved draft already carries: a plain reopen of one is not a save.)
+    const savedSf = B.takeoffSf(MODEL.takeoff);
+    const sv = build({ blob: blob(Object.assign({ polish_estimate: farSaved(), polish_sf: savedSf }, ADDRESS)), distance: answer(300) });
+    await sv.api.init(); sv.api.go(1); await settle(); sv.clock.fire(); await settle();
+    const svOpen = Object.assign(look(sv), { saves: sv.rec.saves.length, asked: (sv.rec.distanceBodies || []).length,
+      total: sv.api.bid().total, status: txt(sv, "[data-dist-status]") });
+    // ...and an answer APPLIED in the session is what fills it: the estimator types the miles.
+    typeInto(sv, "[data-dist-miles]", "200");
+    sv.clock.fire();
+    const svTyped = Object.assign(look(sv), { total: sv.api.bid().total, saves: sv.rec.saves.length,
+      savedRow: clone(sv.rec.saves[sv.rec.saves.length - 1].polish_estimate.labor.find((r) => r.id === "travel")) });
+    // THE ADDRESS CHANGED after the distance was measured: the page says so and asks nothing on open; the button is the way
+    // to ask, and its answer moves the figure the tool wrote and leaves hours somebody typed.
+    const MOVED = { address: "2 Other Rd", city: "Wichita", state: "KS", zip: "67202" };
+    const moved = async (travel) => {
+      const x = build({ blob: blob(Object.assign({ polish_estimate: farSaved(travel), polish_sf: savedSf }, MOVED)), distance: answer(300) });
+      await x.api.init(); x.api.go(1); await settle();
+      return x;
+    };
+    const ad1 = await moved({ days: 6.5, hours_seed: 6.5, guys_auto: true, guys: 48 });
+    const ad1Open = Object.assign(look(ad1), { saves: ad1.rec.saves.length, asked: (ad1.rec.distanceBodies || []).length,
+      status: txt(ad1, "[data-dist-status]") });
+    clickOn(ad1, "[data-dist-lookup]"); await settle();
+    const ad1After = Object.assign(look(ad1), { asked: (ad1.rec.distanceBodies || []).length });
+    const ad2 = await moved({ days: "4", hours_seed: 6.5, guys_auto: true, guys: 48 });
+    clickOn(ad2, "[data-dist-lookup]"); await settle();
+    const ad2After = look(ad2);
+
+    // ── A CLEARED BOX STAYS EMPTY (Hanz, 2026-10-12: "nights, days, guys and hours should have nothing when it starts"). The 2026-10-20
+    // audit found the next answer refilling a box the estimator had cleared (an empty Travel box read as nobody's yet). A real clear is
+    // an `input` event with an empty box; the row is marked, saved with the bid, and no later answer -- the button, the miles typed,
+    // a lookup that lands late, or the same bid reopened -- writes into it.
+    const chh = await open(190);
+    crew(chh.x);
+    typeInto(chh.x, tSel(chh.x, "days"), "");
+    chh.opts.distance = answer(300);
+    clickOn(chh.x, "[data-dist-lookup]"); await settle();
+    const chhButton = look(chh.x);
+    typeInto(chh.x, "[data-dist-miles]", "250");
+    const chhMiles = look(chh.x);
+    chh.x.clock.fire();
+    const chhSaved = clone(chh.x.rec.saves[chh.x.rec.saves.length - 1].polish_estimate);
+    const SAVED_SF = B.takeoffSf(MODEL.takeoff);
+    const reopenFrom = async (saved, distanceAnswer) => {
+      const x = build({ blob: blob(Object.assign({ polish_estimate: clone(saved), polish_sf: SAVED_SF }, ADDRESS)), distance: distanceAnswer });
+      await x.api.init(); x.api.go(1); await settle();
+      return x;
+    };
+    const chhReopen = await reopenFrom(chhSaved, answer(300));
+    const chhReopenOpen = look(chhReopen);
+    typeInto(chhReopen, "[data-dist-miles]", "260");
+    const chhReopenTyped = look(chhReopen);
+    const cgg = await open(190);
+    crew(cgg.x);
+    typeInto(cgg.x, tSel(cgg.x, "guys"), "");
+    cgg.opts.distance = answer(300);
+    clickOn(cgg.x, "[data-dist-lookup]"); await settle();
+    const cggButton = look(cgg.x);
+    typeInto(cgg.x, "[data-dist-miles]", "250");
+    const cggMiles = look(cgg.x);
+    cgg.x.clock.fire();
+    const cggSaved = clone(cgg.x.rec.saves[cgg.x.rec.saves.length - 1].polish_estimate);
+    const cggReopen = await reopenFrom(cggSaved, answer(300));
+    typeInto(cggReopen, "[data-dist-miles]", "260");
+    const cggReopenTyped = look(cggReopen);
+    // ...a box typed in and cleared before ANY answer is cleared all the same: the answer is still on its way when they type and clear.
+    let relC;
+    const gateC = new Promise((r) => { relC = r; });
+    const cb = build({ blob: newBlob(), distance: answer(190), distanceGate: gateC });
+    await cb.api.init(); cb.api.go(1);
+    crew(cb);
+    typeInto(cb, tSel(cb, "days"), "5"); typeInto(cb, tSel(cb, "days"), "");
+    typeInto(cb, tSel(cb, "guys"), "3"); typeInto(cb, tSel(cb, "guys"), "");
+    relC(); await settle();
+    const cbLate = look(cb);
+
+    // ── A LATE ANSWER NEVER WRITES INTO A BOX THE ESTIMATOR IS IN (2026-10-20 audit: the auto Guys repaint ignored focus, so a 3 typed
+    // after the 48 an answer had just put there read 483). The stub document has no focus of its own: the scenario sets
+    // document.activeElement the way the browser does, the answer lands while it is set, and the character typed goes on the END of what the
+    // box shows, which is what a browser does. Leaving the box (focusout, activeElement back on the body) shows the model's figure.
+    const focusOn = async (key, typed) => {
+      let rel;
+      const gate = new Promise((r) => { rel = r; });
+      const x = build({ blob: newBlob(), distance: answer(190), distanceGate: gate });
+      await x.api.init(); x.api.go(1);
+      crew(x);
+      const box = need(x, tSel(x, key));
+      x.doc.activeElement = box;                           // the estimator clicked into the box before the answer landed
+      rel(); await settle();
+      const during = { box: String(box.value), same: need(x, tSel(x, key)) === box, row: clone(x.api.model().labor[tIdx(x)]) };
+      if (typed === null) {                                // they leave it without typing
+        x.doc.activeElement = null;
+        x.doc.fire("focusout", { target: box });
+        return { during: during, left: look(x) };
+      }
+      typeInto(x, tSel(x, key), String(box.value) + typed);  // the browser appends the character to what the box shows
+      const afterType = look(x);
+      return { during: during, afterType: afterType };
+    };
+    const focusGuys = await focusOn("guys", "3");
+    const focusHours = await focusOn("days", "4");
+    const leaveGuys = await focusOn("guys", null);
+    const leaveHours = await focusOn("days", null);
+    // ...a box that is NOT the one in focus is repainted by the same answer: focus in Hours, the Guys box still reads the crew.
+    let relO;
+    const gateO = new Promise((r) => { relO = r; });
+    const other = build({ blob: newBlob(), distance: answer(190), distanceGate: gateO });
+    await other.api.init(); other.api.go(1);
+    crew(other);
+    other.doc.activeElement = need(other, tSel(other, "days"));
+    relO(); await settle();
+    const otherBoxes = { guysBox: String(need(other, tSel(other, "guys")).value), hoursBox: String(need(other, tSel(other, "days")).value) };
+
+    // ── A SWITCHED-OFF ROW IS LEFT EXACTLY AS IT IS (2026-10-20 audit: it was filled and noted while off). Switched off by hand before the
+    // answer lands; switched off by its default on the Defaults tab (the library row's default_on is false); and switched off after the
+    // figures were written, then a new answer. No fill, no take-back, no note; the Labor step says once that it is off.
+    let relF;
+    const gateF = new Promise((r) => { relF = r; });
+    const offHand = build({ blob: newBlob(), distance: answer(190), distanceGate: gateF });
+    await offHand.api.init(); offHand.api.go(1);
+    crew(offHand);
+    clickOn(offHand, '[data-on-lab="' + tIdx(offHand) + '"]');
+    const offHandBefore = JSON.stringify(offHand.api.model().labor[tIdx(offHand)]);
+    relF(); await settle();
+    const offHandAfter = Object.assign(look(offHand), { untouched: JSON.stringify(offHand.api.model().labor[tIdx(offHand)]) === offHandBefore });
+    const offLib = build({ blob: newBlob(), distance: answer(190),
+      labor: [{ id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, sort: -1, favorite: true, default_work_types: [], default_on: false }] });
+    await offLib.api.init(); offLib.api.go(1); await settle();
+    crew(offLib);
+    const offLibAfter = look(offLib);
+    const offLate = await open(190);
+    crew(offLate.x);
+    clickOn(offLate.x, '[data-on-lab="' + tIdx(offLate.x) + '"]');
+    const offLateBefore = look(offLate.x);
+    offLate.opts.distance = answer(300);
+    clickOn(offLate.x, "[data-dist-lookup]"); await settle();
+    const offLateAfter = look(offLate.x);
+    typeInto(offLate.x, "[data-dist-miles]", "20");
+    const offLateLocal = look(offLate.x);
+
+    // ── REMOVE EXISTING JOINT FILLER (2026-10-20 audit): the fourth hand is part of the crew, and the Lodging hint and the how-note give the
+    // same nights. Polishing 3 guys x 5 days and Joint filler 3 guys x 2 days with the two conditions on, far, nights and days typed.
+    const hh = await open(190);
+    typeInto(hh.x, '[data-lab="0"][data-k="guys"]', "3"); typeInto(hh.x, '[data-lab="0"][data-k="days"]', "5");
+    const jfi = hh.x.api.model().labor.findIndex((r) => r.id === "jointfill");
+    typeInto(hh.x, '[data-lab="' + jfi + '"][data-k="guys"]', "3"); typeInto(hh.x, '[data-lab="' + jfi + '"][data-k="days"]', "2");
+    Object.assign(hh.x.api.model().conditions, { joint_filler: true, remove_existing_jf: true });
+    hh.x.api.changed(true);
+    typeInto(hh.x, '[data-trv="lodging"][data-k="qty"]', "5"); typeInto(hh.x, '[data-trv="per_diem"][data-k="qty"]', "5");
+    const hand = Object.assign(look(hh.x), { lodgingHint: txt(hh.x, '[data-hint-trv="lodging"]'), perDiemHint: txt(hh.x, '[data-hint-trv="per_diem"]'),
+      guysHint: txt(hh.x, '[data-hint-lab="' + tIdx(hh.x) + '"]') });
+
+    out.travelFill = {
+      wichita: { before: wBefore, crew: wCrew, saved: wSaved, back: wBack, review: { cells: wRow, keyed: wKeyed },
+                 laborCosts: wich.x.api.model().labor.map((r) => B.laborCost(r)), bidLabor: wBid.labor },
+      typed: { typed: tyTyped, button: tyButton, miles: tyMiles, sameDigits: sdAfter, guys: tgAfter, lateAnswer: slLate },
+      moves: { before: mvBefore, after: mvAfter },
+      local: { local: lcLocal, back: lcBack, keepsTyped: lkLocal, clearedUnknown: clUnknown, clearedKeepsTyped: cnUnknown },
+      saved: { open: svOpen, typedMiles: svTyped, movedOpen: ad1Open, movedToolsFigure: ad1After, movedTypedHours: ad2After },
+      clearedBox: { hoursButton: chhButton, hoursMiles: chhMiles, hoursSaved: chhSaved.labor.find((r) => r.id === "travel"),
+                    hoursReopenOpen: chhReopenOpen, hoursReopenTyped: chhReopenTyped,
+                    guysButton: cggButton, guysMiles: cggMiles, guysSaved: cggSaved.labor.find((r) => r.id === "travel"),
+                    guysReopenTyped: cggReopenTyped, beforeAnswer: cbLate },
+      focus: { guys: focusGuys, hours: focusHours, leaveGuys: leaveGuys, leaveHours: leaveHours, other: otherBoxes },
+      off: { byHand: offHandAfter, byDefault: offLibAfter, lateBefore: offLateBefore, lateAfter: offLateAfter, lateLocal: offLateLocal },
+      hand: hand,
     };
   }
 
@@ -4710,6 +5018,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
   // would have filled every box before: a calculator that gives each crew line guys and days, a
   // library Travel that asks for guys_auto, an hours default that does too, and a distance answer
   // that used to write the drive hours. A saved bid on auto is the other half: it opens unchanged.
+  // The one exception since 2026-10-20 is Travel Labor on a job the distance sent far: the far page
+  // below (150 miles) shows it filled, and the same bid on a local job (30 miles) shows every card empty.
   {
     const settleQ = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
     const crewQ = (id, name, sort) => ({ id: id, name: name, rate: 33, unit: "days", guys_auto: false,
@@ -4738,12 +5048,20 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await q.api.init(); q.api.go(1); await settleQ();
     const boxOf = (built, sel) => String(need(built, sel).value);
     const qm = q.api.model();
-    const cards = qm.labor.map((r, i) => ({
+    const cardsOf = (built) => built.api.model().labor.map((r, i) => ({
       id: r.id, auto: !!r.guys_auto,
-      guys: boxOf(q, '[data-lab="' + i + '"][data-k="guys"]'),
-      days: boxOf(q, '[data-lab="' + i + '"][data-k="days"]'),
-      rate: boxOf(q, '[data-lab="' + i + '"][data-k="rate"]'),
+      guys: boxOf(built, '[data-lab="' + i + '"][data-k="guys"]'),
+      days: boxOf(built, '[data-lab="' + i + '"][data-k="days"]'),
+      rate: boxOf(built, '[data-lab="' + i + '"][data-k="rate"]'),
       cost: B.laborCost(r) }));
+    const cards = cardsOf(q);
+    // THE SAME NEW BID ON A LOCAL JOB (30 miles): the distance fills nothing at all, so every card is as empty as 2026-10-12 made it.
+    // On the far job above (150 miles) the distance fills Travel Labor and only Travel Labor (Hanz, 2026-10-20).
+    const qLocal = build({ blob: nbQ, labor: LIBQ, laborCalc: CALCQ, markupRules: RULESQ,
+                           distance: { ok: true, miles: 30, reason: "" } });
+    await qLocal.api.init(); qLocal.api.go(1); await settleQ();
+    const localCards = cardsOf(qLocal);
+    const localTravelRow = clone(qLocal.api.model().labor.find((r) => r.id === "travel"));
     const travelBoxes = { lodging: boxOf(q, '[data-trv="lodging"][data-k="qty"]'),
       per_diem: boxOf(q, '[data-trv="per_diem"][data-k="qty"]'),
       lodgingRate: boxOf(q, '[data-trv="lodging"][data-k="rate"]'),
@@ -4765,6 +5083,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
       perDiemBox: boxOf(q, '[data-trv="per_diem"][data-k="qty"]'),
       travelGuys: q.api.model().labor[tIdxQ].guys,
       travelGuysBox: boxOf(q, '[data-lab="' + tIdxQ + '"][data-k="guys"]'),
+      // Travel Labor on this far job: the 5 hours the distance wrote x the guys now on the crew's size x the library's $36.
+      travelCost: B.laborCost(q.api.model().labor[tIdxQ]),
+      travelCostHead: txt(q, '[data-lcost-for="' + tIdxQ + '"]'),
       hint: need(q, '[data-hint-trv="lodging"]').textContent };
 
     // A SAVED bid on auto opens unchanged: its nights follow the man-days as they always did.
@@ -4804,7 +5125,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
       rateBox: boxOf(q, '[data-lab="' + addedIdx + '"][data-k="rate"]') };
     // The library's hours default that asks for guys_auto, added from the pop-up, is empty too.
     const viaLib = B.laborRowFromLibrary(LIBQ[4], 40);
-    out.qtyEmpty = { cards: cards, travelBoxes: travelBoxes, openState: openState, nightsEmpty: nightsEmpty,
+    out.qtyEmpty = { cards: cards, localCards: localCards, localTravelRow: localTravelRow,
+      travelBoxes: travelBoxes, openState: openState, nightsEmpty: nightsEmpty,
       nightsTwo: nightsTwo, afterCrew: afterCrew, savedAuto: savedAuto, addedLine: addedLine,
       viaLib: { guys: viaLib.guys, days: viaLib.days, auto: viaLib.guys_auto, rate: viaLib.rate },
       travelRow: clone(q.api.model().labor[tIdxQ]) };

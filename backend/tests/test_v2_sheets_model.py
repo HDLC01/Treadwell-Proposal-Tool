@@ -727,7 +727,7 @@ BREAKS = {
         MODEL, "    if (carrierAfter !== carrierBefore) out = moveTravelLabor(out, carrierBefore, carrierAfter);", "    void moveTravelLabor;",
         lambda r: r["baseBid"]["travelLaborRow"]["epoxyAfter"] != ["installing", "travel"]),
     "the travel labor row is added even when the new carrier has one": (
-        MODEL, "    if (!mine.length || theirs.length) return model;", "    if (!mine.length) return model;",
+        MODEL, "    if (!mine.length || theirs.length) return false;", "    if (!mine.length) return false;",
         lambda r: _all(r, "baseBid", "copies") or r["copies"]["legacy"]["farAsBase"] is not True),
     "a pick forgets the work type": (
         MODEL, "    var patch = { work_type: baseOf(out).jobType, base_tab_id: want.length === 1 ? want[0] : null };",
