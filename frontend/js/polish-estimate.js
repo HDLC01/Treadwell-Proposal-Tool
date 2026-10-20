@@ -4375,8 +4375,15 @@
     // the box returns to it -- see the change handler.)
     var onTrv = t.closest("[data-on-trv]");
     if (onTrv) {
-      var tl = M.travel && M.travel[onTrv.getAttribute("data-on-trv")];
-      if (tl) { tl.enabled = !tl.enabled; tl.hand = true; }
+      var tlKey = onTrv.getAttribute("data-on-trv");
+      var tl = M.travel && M.travel[tlKey];
+      if (tl) {
+        tl.enabled = !tl.enabled; tl.hand = true;
+        // A LINE SWITCHED ON ON A FAR JOB IS FILLED like an answer would have filled it (round 6, part 2, X4b): an answer leaves a line that is off alone (B.followDistanceNights),
+        // so this is the moment it comes on with the labor's count in it, and not empty. Only this line; a figure the estimator typed in is theirs.
+        var dist = ROOT.distance ? B.milesOrNull(ROOT.distance.miles) : null;
+        if (tl.enabled && B.isFarMiles(dist)) B.followDistanceNights(ROOT, dist, tlKey);
+      }
       changed(true);
       return;
     }

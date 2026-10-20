@@ -1750,20 +1750,28 @@
    *    - Going local, or clearing the miles, takes the figure back: a quantity that was following goes back to empty (and loses the marker); one the estimator
    *      typed stays (the line is switched off by the answer, as ever, and greyed). A line on auto WITHOUT the marker, the older bid's, is never converted, in
    *      either direction: a saved bid never changes under an answer it did not ask for.
-   *    - The line's ON and OFF is the answer's as before (applyDistance, and a hand flip stays); the quantity is independent of it.
+   *    - The line's ON and OFF is the answer's as before (applyDistance, and a hand flip stays). A line that is OFF is not filled (round 6, part 2: it used to be, the quantity being
+   *      independent of the switch; see below), and the page fills it the moment the estimator switches it ON.
    *  An OPTION is untouched: it is priced apart and charges its own nights and days for its own labor (optionTravelCosts, ownNights: a far Gyp option or copy of the Gyp sheet
    *  prices its own, from its crew's hours). Nothing runs when a bid opens: a saved
    *  bid never moves on open. Called with every ANSWER (applyDistance, clearDistance) and with a carrier that moved (followDistance), and with nothing else.
-   *  `miles` null is a cleared distance. MUTATES the model; pass the WHOLE model. */
-  function followDistanceNights(model, miles) {
+   *  `miles` null is a cleared distance. MUTATES the model; pass the WHOLE model.
+   *
+   *  A LINE THE ESTIMATOR SWITCHED OFF IS NOT FILLED, AND IS FILLED WHEN THEY SWITCH IT ON (round 6, part 2, X4b). A far answer used to fill the quantity of a line that was off by hand (48 nights
+   *  sitting in a greyed box, following the labor), which is not what "a hand flip wins" says and not what Travel Labor does (a row switched off is left exactly as it is). An answer now leaves a line
+   *  that is off, and not already following, exactly as it is; the page calls this again for that one line (`onlyKey`) when the estimator switches it ON on a far job, so the line is filled the moment it
+   *  comes on, as the answer would have filled it: it never waits with a figure and never comes on empty. A figure the estimator typed in is theirs through all of it. */
+  function followDistanceNights(model, miles, onlyKey) {
     if (!isObject(model) || !isObject(model.travel)) return;
     var far = isFarMiles(miles);
     // EVERY CARRIER FILLS ITS NIGHTS, a Gyp one too (round 6). Round 5 left a Gyp carrier's nights typed because its crew is entered in hours and the man-days counted day rows only (a following
     // figure sat at 0 under words that promised it fills in: $0 hotel and per diem on a far Gyp quote). Kyle's Gyp tab counts its own nights from those hours, ten to a night (Gyp!B64), and so
     // does the figure now (jobNights, sheetNights with the Gyp profile): only the Gyp DRIVE stays typed (followDistanceHours leaves a Gyp carrier alone).
     TRAVEL_LINE_KEYS.forEach(function (k) {
+      if (onlyKey !== undefined && k !== onlyKey) return;
       var l = model.travel[k];
       if (!isObject(l)) return;
+      if (far && l.enabled !== true && !qtyFollows(l)) return;      // a line that is off is left as it is (see above)
       if (far) {
         if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }
         if (qtyFollows(l)) l.qty = laborFollowQty(model, l);

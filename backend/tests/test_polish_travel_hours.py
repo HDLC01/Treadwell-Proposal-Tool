@@ -808,13 +808,15 @@ def test_the_words_on_a_row_left_on_a_base_that_does_not_carry_the_travel(ran):
 def test_lodging_and_per_diem_come_on_by_the_answer_a_hand_flip_never_moves_and_their_quantities_follow_the_labor(ran):
     """Switched on by the answer, and a hand flip never moved (Lodging flipped off by hand stays off, whatever the miles). Their QUANTITIES are a different box: until
     2026-10-20 they opened empty and were typed, and a far answer left them so; now a far answer fills a quantity nobody typed with the sheet's count of the labor (4 guys x 12
-    days: 48 nights and 48 days of per diem), on auto and marked as following (`qty_follow`), hand flip or none: the quantity does not depend on the switch.
+    days: 48 nights and 48 days of per diem), on auto and marked as following (`qty_follow`). A LINE THE ESTIMATOR SWITCHED OFF IS LEFT ALONE (round 6, part 2: it used to be filled
+    while it was off, "hand flip or none: the quantity does not depend on the switch", which a hand flip does not say and Travel Labor does not do): Lodging stays empty and off auto, and the
+    page fills it the moment the estimator switches it ON (test_polish_travel_round6_answer.py).
 
-    Mutation: leave the quantities empty; let a hand flip stop the fill."""
+    Mutation: leave the Per Diem quantity empty; fill a line that is switched off (test_polish_travel_round6_answer.py)."""
     ln = ran["lines"]
     assert ln["lodging"] is False and ln["perDiem"] is True and ln["lodgingHand"] is True
-    assert ln["manDays"] == 48 and ln["lodgingQty"] == 48 and ln["perDiemQty"] == 48
-    assert ln["lodgingAuto"] is True and ln["perDiemAuto"] is True and ln["lodgingFollow"] == "labor" and ln["perDiemFollow"] == "labor"
+    assert ln["manDays"] == 48 and ln["perDiemQty"] == 48 and ln["perDiemAuto"] is True and ln["perDiemFollow"] == "labor"
+    assert ln["lodgingQty"] == "" and ln["lodgingAuto"] is False and ln["lodgingFollow"] is None, "an answer filled a line that is switched off"
 
 
 def test_an_answer_with_no_usable_miles_changes_nothing(ran):

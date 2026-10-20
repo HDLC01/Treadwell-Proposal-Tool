@@ -540,6 +540,21 @@ BREAKS = {
         PAGE, REFOCUS_TRAVEL, "    if (false) { return; }",
         lambda g: g["keyboard"]["travelToOne"]["focused"] != ["add-travel"]),
     # X4(b): a line switched off by hand
+    "an answer fills a line that is switched off": (
+        MODEL, OFF_LINE, "      void l;",
+        lambda g: g["handoff"]["far"]["lines"]["lodging"]["qty"] != ""),
+    "switching a line on does not fill it": (
+        PAGE, SWITCH_ON, "        void dist;",
+        lambda g: g["handoff"]["on"]["lines"]["lodging"]["qty"] != 48 or g["handoff"]["neighbour"]["after"]["lodging"]["qty"] != 48),
+    "switching a line on fills every line": (
+        MODEL, "      if (onlyKey !== undefined && k !== onlyKey) return;", "      void onlyKey;",
+        lambda g: g["handoff"]["neighbour"]["after"]["perDiem"]["qty"] != ""),
+    "switching a line on fills it on a local job": (
+        PAGE, SWITCH_ON, "        if (tl.enabled) B.followDistanceNights(ROOT, 300, tlKey);",
+        lambda g: g["handoff"]["local"]["lodging"]["qty"] != ""),
+    "a figure the estimator typed into a line that is off is lost": (
+        MODEL, OFF_LINE, '      if (far && l.enabled !== true && !qtyFollows(l)) { l.qty_typed = false; l.qty_auto = false; l.qty = ""; return; }',
+        lambda g: g["handoff"]["typed"]["lodging"]["qty"] != "10"),
     # X4(c): a null in a list
 }
 
