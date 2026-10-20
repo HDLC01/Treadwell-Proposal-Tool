@@ -3810,11 +3810,13 @@
         // Travel Labor is the one line the estimate fills itself, and only on a job 70 miles or more out whose travel is carried
         // by an Epoxy, Polish, Seal or Leveling sheet (2026-10-20), whatever the row's guys_auto says: that flag is for the
         // estimates saved before 2026-10-12. A Gyp bid is never filled, so the words say so. A bid saved before this keeps its
-        // figures until a new distance is entered or looked up on it: the fill is an answer applied in the estimate, never an
-        // opening, so the words say that too.
+        // figures until a new distance is entered or looked up on it, or until its job type or its base sheet is changed and that
+        // moves the job's travel to another sheet (the new sheet is filled from the distance the bid already holds): the fill is an
+        // action in the estimate, never an opening, so the words say that too.
         "<td>Typed on the estimate. On a job 70 miles or more out (any sheet but a Gyp bid), the estimate fills the hours from " +
-          "the miles (one round trip) and the guys as the most on any labor line when a distance is entered or looked up. An " +
-          "estimate saved earlier keeps its figures until a new distance answer. A Gyp bid is typed.</td>" +
+          "the miles (one round trip) and the guys as the most on any labor line when a distance is entered or looked up, and when " +
+          "changing the job type or the base sheet moves the job's travel to another sheet. An estimate saved earlier keeps its " +
+          "figures until one of those. A Gyp bid is typed.</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
           ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN && !travelRo)
@@ -3967,8 +3969,9 @@
       (tl.unit === "days" ? "day" : "hour") + '</td><td class="lc-how">' +
       'Guys times the round trip drive hours, one trip for each guy. On a job 70 miles or ' +
       'more from the office (any sheet but a Gyp bid) the estimate fills the hours in from the miles (60 mph, to the half hour) and ' +
-      'the guys as the most on any labor line when a distance is entered or looked up; an estimate saved earlier keeps its figures ' +
-      'until then. Under 70 miles, and on a Gyp bid, the estimator types them. ' +
+      'the guys as the most on any labor line when a distance is entered or looked up, and when changing the job type or the base ' +
+      'sheet moves the job\'s travel to another sheet; an estimate saved earlier keeps its figures until one of those. Under 70 ' +
+      'miles, and on a Gyp bid, the estimator types them. ' +
       'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
       (ADMIN ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
       '</td></tr>';

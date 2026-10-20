@@ -457,18 +457,42 @@ out.moveOptionNotCarried = { epoxyHasRow: !!travelIn(opnTo, "Epoxy"), rootKeepsR
 const nol = comboJob(); nol.no_travel_labor = true;
 const nolTo = switchTo(nol, "epoxy", true);
 out.moveNoTravelLabor = { epoxyHasRow: !!travelIn(nolTo, "Epoxy"), rootKeepsRow: !!travelIn(nolTo, B.ROOT_TAB) };
-// (d) a row the estimator TYPED is left as typed on the old carrier (Epoxy to Combo): both rows are priced, as the card says.
-const et = epoxyJob();
-{ const r = travelIn(et, "Epoxy"); B.markTypedByHand(r, "guys"); r.guys_auto = false; r.guys = "3"; B.markTypedByHand(r, "days"); r.days = "5"; }
-const etc = switchTo(et, "combo");
+// (d) WHAT THE ESTIMATOR SAID FOLLOWS THE JOB'S DRIVE (2026-10-20 audit; before it, a typed row was left on the old carrier and priced beside the new
+//     carrier's filled one: $858 + $495). Epoxy to Combo with Epoxy's row typed 3 guys x 5 hours: the root takes the typed row, markers and all, and Epoxy gives
+//     the row back empty; the drive is priced once, as typed.
+const marksOf = (r) => (r ? { typed: r.guys_typed === true, hoursTyped: r.hours_typed === true, off: r.enabled === false, keys: Object.keys(r).sort() } : null);
+const marksIn = (m, tab) => marksOf(travelIn(m, tab));
+const typedEpoxy = () => {
+  const m = epoxyJob(); const r = travelIn(m, "Epoxy");
+  B.markTypedByHand(r, "guys"); r.guys_auto = false; r.guys = "3"; B.markTypedByHand(r, "days"); r.days = "5";
+  return m;
+};
+const etc = switchTo(typedEpoxy(), "combo");
 row(etc, "polishing").guys = "4"; row(etc, "polishing").days = "12"; B.syncAutoGuys(etc);
-out.moveTypedStays = { root: factsIn(etc, B.ROOT_TAB), epoxy: factsIn(etc, "Epoxy"), drive: drive$(etc) };
-// (e) a row switched OFF is left exactly as it is, and an option's row is its own (the old carrier is an option, not a base, afterwards).
-const eo = epoxyJob();
-travelIn(eo, "Epoxy").enabled = false;
+out.moveTypedFollows = { root: factsIn(etc, B.ROOT_TAB), rootMarks: marksIn(etc, B.ROOT_TAB), epoxy: factsIn(etc, "Epoxy"), epoxyMarks: marksIn(etc, "Epoxy"),
+  drive: drive$(etc), rootRows: countIn(etc, B.ROOT_TAB), epoxyRows: countIn(etc, "Epoxy") };
+// ...a box CLEARED follows too (the next answer never refills it, wherever the job's drive is), and so does a row switched OFF.
+const clearedEpoxy = (key) => {
+  const m = epoxyJob(); const r = travelIn(m, "Epoxy");
+  B.markTypedByHand(r, key);
+  if (key === "guys") r.guys_auto = false;
+  r[key] = "";
+  return m;
+};
+const ech = switchTo(clearedEpoxy("days"), "combo"); row(ech, "polishing").guys = "4"; row(ech, "polishing").days = "12"; B.syncAutoGuys(ech);
+const ecg = switchTo(clearedEpoxy("guys"), "combo"); row(ecg, "polishing").guys = "4"; row(ecg, "polishing").days = "12"; B.syncAutoGuys(ecg);
+out.moveClearedFollows = { hours: { root: factsIn(ech, B.ROOT_TAB), rootMarks: marksIn(ech, B.ROOT_TAB), epoxy: factsIn(ech, "Epoxy"), drive: drive$(ech) },
+  guys: { root: factsIn(ecg, B.ROOT_TAB), rootMarks: marksIn(ecg, B.ROOT_TAB), epoxy: factsIn(ecg, "Epoxy"), drive: drive$(ecg) } };
+ask(ech, 300); ask(ecg, 300);        // ...and a later answer leaves what was cleared empty, on the new carrier
+out.moveClearedStaysEmpty = { hours: factsIn(ech, B.ROOT_TAB), guys: factsIn(ecg, B.ROOT_TAB) };
+// (e) a row switched OFF follows the carrier too (the slider is the estimator's), and an option's row is its own (the old carrier is an option, not a base,
+//     afterwards).
+const offEpoxy = () => { const m = epoxyJob(); travelIn(m, "Epoxy").enabled = false; return m; };
+const eo = offEpoxy();
 const eoBefore = JSON.stringify(travelIn(eo, "Epoxy"));
 const eoc = switchTo(eo, "combo");
-out.moveOffStays = { same: JSON.stringify(travelIn(eoc, "Epoxy")) === eoBefore, enabled: (travelIn(eoc, "Epoxy") || {}).enabled };
+out.moveOffFollows = { root: factsIn(eoc, B.ROOT_TAB), rootMarks: marksIn(eoc, B.ROOT_TAB), epoxy: factsIn(eoc, "Epoxy"), epoxyMarks: marksIn(eoc, "Epoxy"),
+  drive: drive$(eoc), movedFigures: JSON.stringify(Object.assign({}, travelIn(eoc, B.ROOT_TAB), { guys: 0 })) === JSON.stringify(Object.assign(JSON.parse(eoBefore), { guys: 0 })) };
 const op = epoxyJob();
 const opBefore = JSON.stringify(travelIn(op, "Epoxy"));
 delete op.kind; op.tabs.Epoxy.kind = "option";            // the Polish root is the base now and Epoxy an option, priced apart
@@ -490,6 +514,143 @@ out.moveCopy = { rootKeeps: !!travelIn(onlyTo, B.ROOT_TAB), epoxy: factsIn(onlyT
 const loc = comboJob(); B.applyDistance(loc, { miles: 20, source: "typed", key: "" }); B.syncAutoGuys(loc);
 const lo = switchTo(loc, "epoxy");
 out.moveLocal = { epoxy: factsIn(lo, "Epoxy"), rootHasRow: !!travelIn(lo, B.ROOT_TAB), local: lo.conditions.local };
+
+// 14b. THE THIRD AUDIT'S SETTLING (2026-10-20, of 7d32336). Every restructure settles the job's one drive; the page (init and the Sheets panel) calls
+//      followDistance(model, fromTab) after every one of them, and test_polish_travel_sequences.py walks every sequence of them on the real page.
+//      Written to be run exactly the way init() runs it: the sections follow the job type, a NEW section is seeded from the library (it is given a blank
+//      Travel Labor row when it is the carrier), then the settling, then the sync.
+const switchSeeded = (m, jobType) => {
+  const before = B.travelCarrier(m);
+  const next = B.seedNewSections(B.sectionsForJob(m, jobType, { rules: [] }), seedCtx({ saved: m, laborRows: EP_LIB }));
+  B.followDistance(next, before);
+  B.syncAutoGuys(next);
+  return next;
+};
+// (i) EVERY SECTION THAT IS NOT THE CARRIER GIVES THE FILLED ROW BACK, OFF SECTIONS TOO. Epoxy to Polish to Combo priced the drive twice: Epoxy's filled row
+//     was left on the off section and was priced again the day Combo turned the section back on ($1,716).
+const seqRows = (m) => ({ polish: factsIn(m, B.ROOT_TAB), epoxy: factsIn(m, "Epoxy"), epoxyKeys: (travelIn(m, "Epoxy") ? Object.keys(travelIn(m, "Epoxy")).sort() : null),
+  drive: drive$(m), carrier: B.travelCarrier(m), kinds: tabsOf(m) });
+const s1 = switchTo(epoxyJob(), "polish");
+row(s1, "polishing").guys = "4"; row(s1, "polishing").days = "12"; B.syncAutoGuys(s1);
+const s2 = switchTo(s1, "combo");
+const s3 = switchTo(s2, "epoxy");
+const s4 = switchTo(s3, "combo");
+out.settleSequence = { toPolish: seqRows(s1), toCombo: seqRows(s2), toEpoxy: seqRows(s3), toComboAgain: seqRows(s4) };
+// ...an OFF section's row is given back directly, an option's is not, and a row the estimator typed on an off section is theirs.
+const offSec = epoxyJob(); offSec.tabs.Epoxy.kind = "off"; delete offSec.kind;      // the root is the carrier; Epoxy is off and holds the filled row
+B.takeBackStrayTravel(offSec);
+const optSec = epoxyJob(); optSec.tabs.Epoxy.kind = "option"; delete optSec.kind;
+const optBefore = JSON.stringify(travelIn(optSec, "Epoxy"));
+B.takeBackStrayTravel(optSec);
+const typedOff = typedEpoxy(); typedOff.tabs.Epoxy.kind = "off"; delete typedOff.kind;
+const typedOffBefore = JSON.stringify(travelIn(typedOff, "Epoxy"));
+B.takeBackStrayTravel(typedOff);
+const offBase = epoxyJob(); delete offBase.kind; travelIn(offBase, "Epoxy").enabled = false;      // the root carries; Epoxy is a BASE whose row is switched off
+const offBaseBefore = JSON.stringify(travelIn(offBase, "Epoxy"));
+B.takeBackStrayTravel(offBase);
+out.takeBackOff = { off: factsIn(offSec, "Epoxy"), offKeys: travelIn(offSec, "Epoxy") ? Object.keys(travelIn(offSec, "Epoxy")).sort() : null, option: JSON.stringify(travelIn(optSec, "Epoxy")) === optBefore,
+  typedOff: JSON.stringify(travelIn(typedOff, "Epoxy")) === typedOffBefore, offRowStays: JSON.stringify(travelIn(offBase, "Epoxy")) === offBaseBefore };
+// (ii) A NEW CARRIER IS A NEWLY SEEDED SECTION WITH A BLANK TRAVEL LABOR ROW, and what the estimator said on the old carrier follows the job's drive to it:
+//      Polish (crew 4 x 12, 190 miles) switched to Epoxy. A row nobody touched is filled fresh: 4 x 6.5 x $33. Typed 3 x 5, a cleared box and a row
+//      switched off all move to Epoxy, and are not filled (the audit: all three read $858 on the new carrier).
+const polishFar = () => { const m = crewed(newBid()); ask(m, 190); return m; };
+const toEpoxy = (m) => {
+  const n = switchSeeded(m, "epoxy");
+  row(n.tabs.Epoxy, "epoxy-install").guys = "4"; row(n.tabs.Epoxy, "epoxy-install").days = "12"; B.syncAutoGuys(n);
+  return { epoxy: factsIn(n, "Epoxy"), epoxyMarks: marksIn(n, "Epoxy"), root: factsIn(n, B.ROOT_TAB), rootMarks: marksIn(n, B.ROOT_TAB), drive: drive$(n),
+    epoxyRows: countIn(n, "Epoxy"), rootRows: countIn(n, B.ROOT_TAB), _model: n };
+};
+const seeded = { auto: toEpoxy(polishFar()) };
+const sTyped = polishFar(); typeIn(sTyped, "guys", "3"); typeIn(sTyped, "days", "5"); seeded.typed = toEpoxy(sTyped);
+const sHours = polishFar(); typeIn(sHours, "days", ""); seeded.clearedHours = toEpoxy(sHours);
+const sGuys = polishFar(); typeIn(sGuys, "guys", ""); seeded.clearedGuys = toEpoxy(sGuys);
+const sOff = polishFar(); trvOf(sOff).enabled = false; seeded.off = toEpoxy(sOff);
+// ...a later answer still leaves what moved alone (the typed 3 x 5, the empty box), and the sections moving on again carry it on (Epoxy back to Polish).
+ask(seeded.typed._model, 300); ask(seeded.clearedHours._model, 300);
+seeded.laterAnswer = { typed: factsIn(seeded.typed._model, "Epoxy"), clearedHours: factsIn(seeded.clearedHours._model, "Epoxy") };
+const backToPolish = switchSeeded(seeded.typed._model, "polish");
+seeded.backToPolish = { root: factsIn(backToPolish, B.ROOT_TAB), rootMarks: marksIn(backToPolish, B.ROOT_TAB), epoxy: factsIn(backToPolish, "Epoxy"),
+  epoxyMarks: marksIn(backToPolish, "Epoxy"), drive: drive$(backToPolish) };
+Object.keys(seeded).forEach((k) => { if (seeded[k] && seeded[k]._model) delete seeded[k]._model; });
+out.followsSeeded = seeded;
+// (iii) WHEN THE NEW CARRIER'S OWN ROW IS THE ESTIMATOR'S TOO, both are theirs and both stay (nothing to choose between): Epoxy typed 3 x 5, the root typed 2 x 4.
+const both = typedEpoxy();
+{ const r = travelIn(both, B.ROOT_TAB); B.markTypedByHand(r, "guys"); r.guys_auto = false; r.guys = "2"; B.markTypedByHand(r, "days"); r.days = "4"; }
+const bothTo = switchTo(both, "combo");
+out.ownedBothStay = { root: factsIn(bothTo, B.ROOT_TAB), epoxy: factsIn(bothTo, "Epoxy"), drive: drive$(bothTo) };
+// (iv) THE COPY CASE FOR AN ESTIMATOR'S ROW: a root that holds only Travel Labor cannot give it away, so the row is copied, and the copy the old carrier keeps
+//      is released (it was the estimator's, and must not stay priced beside the one that arrived).
+const onlyTyped = comboJob();
+onlyTyped.labor = onlyTyped.labor.filter((r) => r.id === "travel");
+{ const r = travelIn(onlyTyped, B.ROOT_TAB); B.markTypedByHand(r, "guys"); r.guys_auto = false; r.guys = "3"; B.markTypedByHand(r, "days"); r.days = "5"; }
+const onlyTypedTo = switchTo(onlyTyped, "epoxy");
+out.copyReleased = { epoxy: factsIn(onlyTypedTo, "Epoxy"), epoxyMarks: marksIn(onlyTypedTo, "Epoxy"), root: factsIn(onlyTypedTo, B.ROOT_TAB), rootMarks: marksIn(onlyTypedTo, B.ROOT_TAB),
+  aliased: travelIn(onlyTypedTo, "Epoxy") === travelIn(onlyTypedTo, B.ROOT_TAB), drive: drive$(onlyTypedTo) };
+// (v) THE CALLER'S NAME FOR THE OLD CARRIER BEATS LOOKING FOR IT. An Epoxy job (the Polish root is off and holds its own blank Travel Labor row, first in the
+//     order) whose Epoxy row was typed 3 x 5, switched to Gyp: looked for, the first section that is not the carrier and holds a row is the ROOT, and its blank
+//     row would be carried; named, it is Epoxy's typed row that goes with the job's drive.
+const GYP_SHEET = 'Gyp (USG 1-8")';
+const toGyp = typedEpoxy();
+const toGypNext = B.sectionsForJob(toGyp, "gyp", { rules: [] });
+B.followDistance(toGypNext, "Epoxy");
+const toGypLooked = B.sectionsForJob(typedEpoxy(), "gyp", { rules: [] });
+B.followDistance(toGypLooked);
+out.namedBeatsLooked = { carrier: B.travelCarrier(toGypNext), named: { gyp: factsIn(toGypNext, GYP_SHEET), gypMarks: marksIn(toGypNext, GYP_SHEET), epoxy: factsIn(toGypNext, "Epoxy"),
+  rootRows: countIn(toGypNext, B.ROOT_TAB) }, looked: { gyp: factsIn(toGypLooked, GYP_SHEET), epoxy: factsIn(toGypLooked, "Epoxy") } };
+// (vi) A GYP CARRIER IS NEVER FILLED, NOT EVEN BY A ROW THAT ARRIVES FILLED: Epoxy (filled) to Gyp gives Gyp an empty row (its drive is typed), and Epoxy's goes
+//      back too. What the estimator typed does go to Gyp.
+const eg = switchSeeded(epoxyJob(), "gyp");
+out.gypNeverFilled = { gyp: travelIn(eg, GYP_SHEET) ? factsIn(eg, GYP_SHEET) : null, epoxy: factsIn(eg, "Epoxy"), drive: drive$(eg), carrier: B.travelCarrier(eg) };
+const egTyped = switchSeeded(typedEpoxy(), "gyp");
+out.gypTypedFollows = { gyp: factsIn(egTyped, GYP_SHEET), gypMarks: marksIn(egTyped, GYP_SHEET), epoxy: factsIn(egTyped, "Epoxy") };
+// ...also when the Gyp section is new and has no Travel Labor row at all, so the old carrier's row is CARRIED to it (and so arrives filled): it is emptied there.
+const egCarried = switchTo(epoxyJob(), "gyp");
+out.gypCarriedUnfilled = { gyp: factsIn(egCarried, GYP_SHEET), gypKeys: travelIn(egCarried, GYP_SHEET) ? Object.keys(travelIn(egCarried, GYP_SHEET)).sort() : null, drive: drive$(egCarried) };
+// ...and a section that holds ONLY its Travel Labor row hands the estimator's over like any other (no section is ever left with an empty labor list).
+const lone = typedEpoxy();
+lone.tabs.Epoxy.labor = lone.tabs.Epoxy.labor.filter((r) => r.id === "travel");
+const loneTo = switchTo(lone, "combo");
+out.ownedFromLoneRow = { root: factsIn(loneTo, B.ROOT_TAB), epoxy: factsIn(loneTo, "Epoxy"), epoxyRows: (loneTo.tabs.Epoxy.labor || []).length, drive: drive$(loneTo) };
+// (vii) NEVER THROWS: a name for a section the model does not have, and a bid whose sections cannot be read, have nothing to carry and are settled as far
+//       as they can be.
+const nameless = comboJob(); let namelessThrew = null;
+try { B.followDistance(nameless, "NoSuchSheet"); } catch (e) { namelessThrew = String(e); }
+const broken = comboJob(); broken.tabs = { Epoxy: { layout: "polish", kind: "base" } }; let brokenThrew = null;
+try { B.followDistance(broken, "Epoxy"); B.followDistance(broken); } catch (e) { brokenThrew = String(e); }
+out.followNeverThrows = { namelessThrew: namelessThrew, brokenThrew: brokenThrew, namelessRowKept: !!travelIn(nameless, B.ROOT_TAB) };
+// (viii) A CARRIER KEPT STILL SETTLES THE GUYS AND THE OLD ROWS: a Combo (Polish 4 guys, Epoxy 6) made Polish keeps the root as the carrier; its guys follow the
+//        crew of the bid as it is now (4, not the Combo's 6), and Epoxy, off now, gives back anything the distance filled there.
+const kc = combo(4, 6); ask(kc, 190);
+const kcBefore = facts(kc);
+const kcNext = B.sectionsForJob(kc, "polish", { rules: [] });
+B.followDistance(kcNext, "Polish");
+out.carrierKept = { before: kcBefore, after: facts(kcNext), crew: B.crewSize(kcNext), carrier: B.travelCarrier(kcNext), epoxyRows: countIn(kcNext, "Epoxy"),
+  drive: drive$(kcNext) };
+// ...and a carrier kept fills nothing: a far bid saved with the root's Travel Labor blank stays blank through a switch that keeps it.
+const kb = combo(4, 4); kb.distance = { miles: 190, source: "google", key: "k" }; kb.conditions.local = false;
+const kbNext = B.sectionsForJob(kb, "polish", { rules: [] });
+B.followDistance(kbNext, "Polish");
+out.carrierKeptFillsNothing = facts(kbNext);
+// (ix) THE FOURTH HAND OF AN OPTION'S OWN CREW: Remove existing joint filler adds a hand on the option's joint-filler line, as it does for the job's crew.
+const oh = newBid();
+row(oh, "polishing").guys = "3"; row(oh, "polishing").days = "5"; row(oh, "jointfill").guys = "3"; row(oh, "jointfill").days = "2";
+Object.assign(oh.conditions, { joint_filler: true, remove_existing_jf: true });
+out.optionHand = { withHand: later("ownCrewSize")(oh, oh.labor), noConditions: later("ownCrewSize")({}, oh.labor), noModel: later("ownCrewSize")(null, oh.labor) };
+
+// (x) A COPY OF THE CARRIER'S SHEET carries the row the carrier had, the estimator's typed 3 x 5 included (it is priced apart, as an option). Made a base beside the
+//     carrier it would charge the drive a second time, so a row that REPEATS the carrier's exactly is given back when its section is a base that does not carry the
+//     travel; one that says something else (typed 2 x 4) is theirs and stays.
+const copyTyped = (typeGuys, typeDays) => {
+  const m = crewed(newBid()); ask(m, 190);
+  typeIn(m, "guys", "3"); typeIn(m, "days", "5");
+  const made = B.copySection(m, "Polish", { state: {} });
+  const n = made.model;
+  if (typeGuys) { const r = travelIn(n, made.id); r.guys = typeGuys; r.days = typeDays; }
+  n.tabs[made.id].kind = "base";
+  B.takeBackStrayTravel(n);
+  return { id: made.id, root: factsIn(n, B.ROOT_TAB), copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), drive: drive$(n), kinds: tabsOf(n) };
+};
+out.copyRepeat = { same: copyTyped(), different: copyTyped("2", "4") };
 
 // 15. AN OPTION IS PRICED APART, FOR ITS OWN CREW (2026-10-20 audit): a copy of the carrier made as an option carries its own Travel Labor row,
 //     and its guys follow the option's OWN labor lines and not the base crew the job's one drive is charged for.
@@ -531,7 +692,12 @@ out.hints = {
 };
 // the words on a leftover row: an empty one says leave it empty, a typed one says it was left as typed and what to do about it
 out.strayWords = { empty: later("strayTravelNote")("Polish", { guys: "", days: "" }), typed: later("strayTravelNote")("Copy1", { guys: "3", days: "5" }),
-  hoursOnly: later("strayTravelNote")("Polish", { guys: "", days: "5" }), noRow: later("strayTravelNote")("Polish", null) };
+  hoursOnly: later("strayTravelNote")("Polish", { guys: "", days: "5" }), noRow: later("strayTravelNote")("Polish", null),
+  // ...and what the third audit found said "typed" over figures nobody typed: the drive the distance filled that a bid saved earlier still holds, and a
+  // row that is switched off (it adds nothing, so it must not say it does)
+  filled: later("strayTravelNote")("Polish", { guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5 }),
+  filledOld: later("strayTravelNote")("Polish", { guys: 16.5, days: 5, guys_auto: true, hours_seed: 5 }),
+  off: later("strayTravelNote")("Polish", { guys: "3", days: "5", enabled: false }), offEmpty: later("strayTravelNote")("Polish", { guys: "", days: "", enabled: false }) };
 out.autoFilled = {
   crewRow: later("travelRowIsAutoFilled")({ guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5 }),
   crewBlankHours: later("travelRowIsAutoFilled")({ guys: 4, days: "", guys_auto: true, guys_follow: "crew", hours_seed: "" }),
@@ -545,6 +711,24 @@ out.autoFilled = {
   clearedHoursMarked: later("travelRowIsAutoFilled")({ guys: 4, days: "", guys_auto: true, guys_follow: "crew", hours_seed: 6.5, hours_typed: true }),
   typedHoursNoMarker: later("travelRowIsAutoFilled")({ guys: 4, days: "5", guys_auto: true, guys_follow: "crew", hours_seed: 6.5 }),
   noRow: later("travelRowIsAutoFilled")(null),
+};
+// ...and the same rows asked the other way: whose row is it? The estimator's when a box was typed in or cleared, hours were typed over the tool's, or the row is
+// switched off; a blank row and one the distance filled are nobody's.
+out.autoFilled.estimators = {
+  crewRow: later("travelRowIsTheEstimators")({ guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5 }),
+  crewBlankHours: later("travelRowIsTheEstimators")({ guys: 4, days: "", guys_auto: true, guys_follow: "crew", hours_seed: "" }),
+  legacyWithToolHours: later("travelRowIsTheEstimators")({ guys: 16.5, days: 5, guys_auto: true, hours_seed: 5 }),
+  legacyBlank: later("travelRowIsTheEstimators")({ guys: 16.5, days: "", guys_auto: true, hours_seed: "" }),
+  empty: later("travelRowIsTheEstimators")({ guys: "", days: "", guys_auto: false }),
+  typedGuysMarked: later("travelRowIsTheEstimators")({ guys: "3", days: 6.5, guys_auto: false, guys_typed: true, hours_seed: 6.5 }),
+  typedGuysNoMarker: later("travelRowIsTheEstimators")({ guys: "3", days: 6.5, guys_auto: false, hours_seed: 6.5 }),
+  clearedGuys: later("travelRowIsTheEstimators")({ guys: "", days: 6.5, guys_auto: false, guys_typed: true, hours_seed: 6.5 }),
+  typedHoursMarked: later("travelRowIsTheEstimators")({ guys: 4, days: "5", guys_auto: true, guys_follow: "crew", hours_seed: 6.5, hours_typed: true }),
+  clearedHoursMarked: later("travelRowIsTheEstimators")({ guys: 4, days: "", guys_auto: true, guys_follow: "crew", hours_seed: 6.5, hours_typed: true }),
+  typedHoursNoMarker: later("travelRowIsTheEstimators")({ guys: 4, days: "5", guys_auto: true, guys_follow: "crew", hours_seed: 6.5 }),
+  off: later("travelRowIsTheEstimators")({ guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5, enabled: false }),
+  offEmpty: later("travelRowIsTheEstimators")({ guys: "", days: "", guys_auto: false, enabled: false }),
+  noRow: later("travelRowIsTheEstimators")(null),
 };
 
 console.log(JSON.stringify(out));

@@ -16,6 +16,12 @@ tests/js/travel-switch-harness.js, on the real js/bid-model.js) the way the inta
   8  A cleared Guys box is empty and says so; typed guys are guys.
 The model rules under these (and finding 3, an older auto row with no hours) are in test_polish_travel_hours.py.
 
+THE THIRD AUDIT (2026-10-20, of 7d32336) is held here too, on the page, and by test_polish_travel_sequences.py over every sequence of switches:
+  H  EVERY restructure settles the job's one drive, off sections included (Epoxy to Polish to Combo priced it twice, $1,716), and the Epoxy card no longer
+     says its figures "were typed" over the tool's own.
+  M  Combo made Polish re-derives the crew-following row's guys, so the draft saves the price a plain reopen shows; a new bid's distance lookup lands whatever
+     section is on show; what the estimator typed, cleared or switched off follows the job's drive to a newly seeded carrier instead of being refilled.
+
 The last block breaks a COPY of js/polish-estimate.js or js/bid-model.js one line at a time and requires a fact to change: never a crash.
 """
 from __future__ import annotations
@@ -33,7 +39,8 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 SECTIONS = ["epoxyBid", "epoxyToPolish", "epoxyToCombo", "epoxyPlain", "gypToPolish", "comboToEpoxy", "typedToCombo", "sheetsCombined",
-            "wholeModel", "optionCopy", "comboOptionCopy", "reviewLate", "notes"]
+            "wholeModel", "optionCopy", "comboOptionCopy", "reviewLate", "notes", "epoxyPolishCombo", "comboEpoxyPolishCombo", "staleSaved",
+            "comboToPolishSync", "lateLookup", "newCarrierFollows", "renamedCarrier", "nightShiftLine"]
 
 CREW_ROW = {"guys": 4, "days": 6.5, "auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hoursTyped": False, "cost": 858}
 EMPTY_ROW = {"guys": "", "days": "", "auto": False, "follow": None, "seed": None, "typed": False, "hoursTyped": False, "cost": 0}
@@ -41,6 +48,8 @@ TRIP = "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for e
 STRAY_EMPTY = "The job's drive is charged once, on the Polish section. Leave this line empty: anything typed here is charged a second time."
 STRAY_TYPED = ("The job's drive is charged once, on the Polish section. This line holds figures that were typed, so it was left as typed and "
                "still adds to this section's labor. Clear it, or remove the line, if the drive is already charged there.")
+STRAY_FILLED = ("The job's drive is charged once, on the Polish section. This line still holds the drive the distance filled, so it adds to this "
+                "section's labor as well. Clear it, or remove the line.")
 
 
 def run(frontend=FRONTEND):
@@ -185,21 +194,28 @@ def test_a_plain_reopen_changes_nothing(ran):
     assert _row(p, "Epoxy") == CREW_ROW and p["pricedOn"] == ["Epoxy"]
 
 
-def test_a_row_the_estimator_typed_on_the_old_carrier_is_left_as_typed_and_its_card_says_so(ran):
-    """Epoxy's own Travel Labor was typed (3 guys, 5 hours: marked as theirs). The switch to Combo leaves it exactly as typed and still priced
-    ($495 beside the root's $858: the drive is charged on both, which is why it is theirs to clear), and the Epoxy sheet's Labor step says so:
-    the drive is charged once, on the Polish section; this line was left as typed and still adds to this section's labor; clear it or remove it.
-    Typing in that row changes what the card says (cleared, it says to leave the line empty), live.
+def test_a_row_the_estimator_typed_follows_the_job_s_drive_and_the_cards_say_what_is_true(ran):
+    """THE THIRD AUDIT (2026-10-20). Epoxy's own Travel Labor was typed (3 guys, 5 hours: marked as theirs). It is the JOB'S drive, so the switch to Combo
+    carries it to the Polish root, the new carrier: that Labor step shows the typed boxes, and Travel is priced once, as typed ($495). It used to be left
+    on Epoxy and priced beside the root's own fill ($858 + $495 = $1,353). The Epoxy sheet gives its row back empty and its card says to leave the line
+    empty. Typing figures in that leftover row changes what the card says (they say they were typed), live, and a row the estimator typed on a section
+    that is turned off is theirs: nothing gives it back.
 
-    Mutation: take a row back whatever was typed in it; leave the words off the card; never repaint them."""
+    Mutation: leave what the estimator typed on the old carrier; take a row back whatever was typed in it; leave the words off the card; never repaint them."""
     t = ran["typedToCombo"]
-    assert t["job"]["pricedOn"] == ["Polish", "Epoxy"] and t["job"]["travelDollars"] == 858 + 3 * 5 * 33
-    epoxy = _row(t["job"], "Epoxy")
-    assert (epoxy["guys"], epoxy["days"], epoxy["auto"], epoxy["follow"], epoxy["typed"], epoxy["hoursTyped"], epoxy["cost"]) == (
+    assert t["job"]["pricedOn"] == ["Polish"] and t["job"]["travelDollars"] == 495
+    polish = _row(t["job"], "Polish")
+    assert (polish["guys"], polish["days"], polish["auto"], polish["follow"], polish["typed"], polish["hoursTyped"], polish["cost"]) == (
         "3", "5", False, None, True, True, 495)
-    assert _row(t["job"], "Polish") == CREW_ROW
-    assert t["epoxyStep"] == {"note": STRAY_TYPED, "guysBox": "3", "hoursBox": "5"}
+    assert _row(t["job"], "Epoxy") == EMPTY_ROW, "the old carrier gave the row back"
+    assert (t["rootCard"]["guysBox"], t["rootCard"]["hoursBox"], t["rootCard"]["hint"]) == ("3", "5", "One round trip for each guy.")
+    assert t["epoxyStep"] == {"note": STRAY_EMPTY, "guysBox": "", "hoursBox": ""}
+    assert t["typedHere"]["note"] == STRAY_TYPED
     assert t["cleared"]["note"] == STRAY_EMPTY
+    both = _row(t["bothTypedThenPolish"]["job"], "Epoxy")
+    assert (both["guys"], both["days"], both["typed"], both["hoursTyped"], both["cost"]) == ("2", "4", True, True, 264), (
+        "what the estimator typed on a section is theirs, and it is not given back when the section goes off")
+    assert t["bothTypedThenPolish"]["job"]["pricedOn"] == ["Polish"], "an off section prices nothing"
 
 
 def test_the_sheets_panels_base_change_settles_the_travel_rows_too(ran):
@@ -216,6 +232,138 @@ def test_the_sheets_panels_base_change_settles_the_travel_rows_too(ran):
     assert _row(a, "Polish") == CREW_ROW and _row(a, "Epoxy") == EMPTY_ROW
     assert a["pricedOn"] == ["Polish"] and a["travelDollars"] == 858
     assert s["card"]["guysBox"] == "4" and s["card"]["hoursBox"] == "6.5"
+
+
+# ── 9. the third audit: every restructure settles the job's one drive ────────────────────────────
+def test_epoxy_to_polish_to_combo_prices_the_drive_once_and_the_epoxy_card_says_what_is_true(ran):
+    """THE HIGH FINDING, on the page. A new far Epoxy bid switched to Polish (crew 4 x 12 typed on its Polishing) and then to Combo: the drive is $858 at
+    BOTH steps. The take-back only ran when the carrier moved and only on a base, so Epoxy's filled row stayed on the section while Polish switched it
+    off, and was priced again when Combo turned it back on beside the root's ($858 + $858 = $1,716). The Epoxy sheet's Labor step now says to leave its
+    line empty; it said its figures "were typed" over the tool's own. A plain reopen of the result moves and saves nothing.
+
+    Mutation: take back only from bases; leave the words off the card (BREAKS below)."""
+    s = ran["epoxyPolishCombo"]
+    p = s["polish"]
+    assert (p["carrier"], p["pricedOn"], p["travelDollars"]) == ("Polish", ["Polish"], 858)
+    assert _row(p, "Epoxy") == EMPTY_ROW, "Epoxy is OFF at this step and still gave its row back"
+    c = s["combo"]
+    assert (c["carrier"], c["jobType"], c["pricedOn"], c["travelDollars"]) == ("Polish", "combo", ["Polish"], 858)
+    assert _row(c, "Polish") == CREW_ROW and _row(c, "Epoxy") == EMPTY_ROW
+    e = s["epoxyStep"]
+    assert e["note"] == STRAY_EMPTY and "typed" not in e["note"].replace("anything typed here", ""), "the card does not call the tool's figures typed"
+    assert e["cardCost"] == "$0" and e["hint"] == "One round trip for each guy."
+    r = s["reopened"]
+    assert (r["saves"], r["asked"], r["pricedOn"], r["travelDollars"]) == (0, 0, ["Polish"], 858)
+    assert _row(r, "Polish") == CREW_ROW and _row(r, "Epoxy") == EMPTY_ROW and s["card"]["guysBox"] == "4"
+
+
+def test_combo_to_epoxy_to_polish_to_combo_prices_one_drive_on_the_crew_of_the_bid_as_it_is(ran):
+    """The audit's own example (combo to epoxy to polish to combo went $858, then $1,930.50). One Travel Labor row is priced at every step, on the crew of
+    the bid AS IT IS: 4 on the Combo (Polish's Polishing), 5 once the job is Epoxy and Epoxy's crew of 5 is typed, 4 again when Polish alone is the bid,
+    and 5 on the Combo again (a Combo's crew is the biggest of both bases): $858, $1,072.50, $858, $1,072.50.
+
+    Mutation: leave the settling out of a restructure that keeps the carrier; take back only from bases (BREAKS below)."""
+    steps = {x["at"]: x["job"] for x in ran["comboEpoxyPolishCombo"]}
+    order = ("start", "epoxy", "polish", "combo")
+    assert [steps[k]["pricedOn"] for k in order] == [["Polish"], ["Epoxy"], ["Polish"], ["Polish"]]
+    assert [steps[k]["travelDollars"] for k in order] == [858, 1072.5, 858, 1072.5]
+    assert [steps[k]["carrier"] for k in order] == ["Polish", "Epoxy", "Polish", "Polish"]
+    assert _row(steps["combo"], "Epoxy") == EMPTY_ROW and _row(steps["polish"], "Epoxy") == EMPTY_ROW
+
+
+def test_a_bid_saved_with_the_filled_row_left_on_a_section_that_does_not_carry_the_travel_is_not_moved_by_a_reopen(ran):
+    """A bid saved by the build before the take-back, a Combo whose Epoxy section still holds the filled row: a plain reopen is not a switch, so nothing
+    is saved, asked or emptied, and the card says what the row IS: the drive the distance filled, still adding to the section's labor. (The audit
+    caught the card saying "figures that were typed" over the tool's own $858.)
+
+    Mutation: call the tool's figures typed on the card (BREAKS below)."""
+    s = ran["staleSaved"]
+    assert s["quiet"] == {"armed": 0, "saves": 0, "asked": 0}
+    assert s["opened"]["pricedOn"] == ["Epoxy"] and _row(s["opened"], "Epoxy") == CREW_ROW, "the reopen leaves the row as it was saved"
+    assert s["note"] == STRAY_FILLED and "were typed" not in s["note"]
+
+
+def test_combo_made_polish_re_derives_the_guys_and_the_draft_saves_the_price_a_plain_reopen_shows(ran):
+    """THE SECOND FINDING. A Combo (Polish's crew of 4, Epoxy's crew of 6: the job's crew is 6, $1,287) switched to Polish keeps the root as the carrier, so
+    nothing re-synced the root's crew-following Travel Labor: it read 6 guys ($1,287) over a crew of 4, and the draft saved a price a plain reopen then
+    disagreed with ($33,514 and $32,632 on the audit's bid). Now the row is the Polish crew's 4 x 6.5 x $33 = $858 when the page opens, the draft saves
+    it, and the plain reopen of the saved draft shows the same price, the same rows, and arms and saves nothing.
+
+    Mutation: leave the sync out of the settling (BREAKS below)."""
+    s = ran["comboToPolishSync"]
+    assert _row(s["combo"], "Polish")["guys"] == 6 and s["combo"]["travelDollars"] == 6 * 6.5 * 33
+    o = s["opened"]
+    assert _row(o["job"], "Polish") == CREW_ROW and o["job"]["travelDollars"] == 858
+    assert (o["card"]["guysBox"], o["card"]["hint"]) == ("4", "Most guys on one labor line above: 4.")
+    assert s["savedLump"] is not None and s["savedLump"] == s["reopenedLump"], "the draft saved the price a plain reopen of it shows"
+    assert _row(s["reopened"], "Polish") == CREW_ROW and s["reopened"]["pricedOn"] == ["Polish"]
+    assert s["quiet"] == {"armed": 0, "saves": 0}
+
+
+def test_a_new_bids_distance_lookup_lands_whatever_is_on_show_or_has_replaced_the_model(ran):
+    """THE THIRD FINDING. A NEW bid's distance lookup is in flight when the estimator opens another sheet's tab (or copies a sheet): the answer was dropped,
+    leaving a 190 mile job with no distance, no Lodging, no Per Diem and no Travel Labor. The answer belongs to the whole model: it lands on the bid as it is
+    NOW, on a Combo with Epoxy on show, on an Epoxy bid with its own tab clicked, and on the model a Sheets action replaced. The estimator's own typed miles
+    still win over an answer that is on its way.
+
+    Mutation: drop the answer when the section on show is not the one the lookup started on; let a late answer overwrite typed miles (BREAKS below)."""
+    l = ran["lateLookup"]
+    for name in ("stay", "epoxyTab", "epoxyBid", "sheets"):
+        r = l[name]
+        assert (r["distance"], r["lodging"], r["perDiem"], r["asked"]) == (190, True, True, 1), name
+        assert (r["row"]["days"], r["row"]["seed"], r["row"]["follow"], r["row"]["auto"]) == (6.5, 6.5, "crew", True), name
+    assert (l["epoxyTab"]["carrier"], l["epoxyBid"]["carrier"], l["sheets"]["carrier"]) == ("Polish", "Epoxy", "Polish")
+    t = l["typedWins"]
+    assert (t["distance"], t["lodging"], t["perDiem"]) == (10, False, False) and t["row"] == EMPTY_ROW and t["asked"] == 1
+
+
+def test_what_the_estimator_typed_cleared_or_switched_off_follows_a_newly_seeded_carrier_and_is_not_filled(ran):
+    """THE FOURTH FINDING, on the page. A Polish bid (crew 4 x 12, 190 miles) is switched to Epoxy: Epoxy is a NEW section with a blank Travel Labor row.
+    Said nothing about, it is filled ($858). But the Travel Labor typed 3 x 5, a box cleared, and a row switched off all go to Epoxy with the job's drive
+    and are NOT filled (all three read $858 on the audit's build), the Polish root gives its row back empty, the boxes show what was typed, and the saved
+    bid reopens as it was left.
+
+    Mutation: leave what the estimator said on the old carrier (BREAKS below)."""
+    f = ran["newCarrierFollows"]
+    a = f["auto"]["after"]["job"]
+    assert _row(a, "Epoxy") == CREW_ROW and a["travelDollars"] == 858 and _row(a, "Polish") == EMPTY_ROW
+
+    def epoxy(name, when="opened"):
+        return _row(f[name][when]["job"], "Epoxy")
+    t = epoxy("typed")
+    assert (t["guys"], t["days"], t["typed"], t["hoursTyped"], t["cost"]) == ("3", "5", True, True, 495)
+    assert (f["typed"]["opened"]["card"]["guysBox"], f["typed"]["opened"]["card"]["hoursBox"]) == ("3", "5")
+    assert f["typed"]["opened"]["job"]["travelDollars"] == 495
+    h = epoxy("clearHours")
+    assert (h["days"], h["hoursTyped"], h["cost"]) == ("", True, 0) and f["clearHours"]["opened"]["card"]["hoursBox"] == ""
+    assert epoxy("clearHours", "after")["guys"] == 4 and f["clearHours"]["after"]["job"]["travelDollars"] == 0, "the guys follow the crew, the empty hours price nothing"
+    g = epoxy("clearGuys")
+    assert (g["guys"], g["typed"], g["cost"]) == ("", True, 0) and f["clearGuys"]["opened"]["card"]["guysBox"] == ""
+    o = epoxy("off", "after")
+    assert (o["guys"], o["days"], o["cost"]) == (4, 6.5, 0) and f["off"]["after"]["job"]["pricedOn"] == [] and f["off"]["after"]["job"]["travelDollars"] == 0
+    for name in ("typed", "clearHours", "clearGuys", "off"):
+        assert _row(f[name]["opened"]["job"], "Polish") == EMPTY_ROW, name + ": the old carrier gave the row back"
+        assert f[name]["reopened"]["job"]["saves"] == 0 and f[name]["reopened"]["job"]["asked"] == 0, name
+        assert _row(f[name]["reopened"]["job"], "Epoxy") == _row(f[name]["after"]["job"], "Epoxy"), name + ": the saved bid reopens as it was left"
+
+
+def test_the_card_of_a_leftover_row_names_the_carrier_by_its_name_on_screen(ran):
+    """The Polish sheet was renamed "Main floor": the Epoxy sheet's leftover Travel Labor row says the drive is charged on the Main floor section, not
+    on "Polish" (the key nobody sees).
+
+    Mutation: name the carrier by its tab id (BREAKS below)."""
+    r = ran["renamedCarrier"]
+    assert r["carrier"] == "Polish"
+    assert r["note"] == "The job's drive is charged once, on the Main floor section. Leave this line empty: anything typed here is charged a second time."
+
+
+def test_only_travel_labors_row_says_the_drive_is_charged_elsewhere(ran):
+    """Another hours line on a base that does not carry the travel (a night shift, 5 guys x 3 hours) is an ordinary line: it does not say the job's
+    drive is charged once somewhere else. Only Travel Labor's own row does.
+
+    Mutation: let any hours line say it (BREAKS below)."""
+    n = ran["nightShiftLine"]
+    assert n["strayAt"] == [n["travelAt"]] and n["nightAt"] != n["travelAt"] and n["rows"] == 3
 
 
 # ── 4. the answers get the whole model ───────────────────────────────────────────────────────────
@@ -257,6 +405,12 @@ def test_an_option_copys_travel_labor_follows_its_own_lines_on_the_page(ran):
     assert o["strayNote"] is None, "an option's Travel Labor is its own: the card does not say the drive is charged elsewhere"
     c = ran["comboOptionCopy"]
     assert (c["guys"], c["jobCrew"]) == (6, 4)
+    # ...the words as the copy's card is FIRST DRAWN, before anything is typed (the repaint is checked after the typing, below): its own lines, "above"
+    assert c["firstDrawn"]["hint"] == "Most guys on one labor line above: 4."
+    assert c["firstDrawn"]["note"] == ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the labor lines "
+                                       "above. Type more trips for a long job.")
+    # ...and only Travel Labor's row of the Review carries the keyed trip sentence: no other labor line of the Review has one
+    assert len(c["reviewDriveKeys"]) == 1 and c["reviewLaborRows"] == 2
     assert c["hint"] == "Most guys on one labor line above: 6."
     assert c["note"].endswith("for each of the 6 guys on the labor lines above. Type more trips for a long job.")
     assert c["review"] == "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 6 guys on the labor lines above"
@@ -328,10 +482,18 @@ def test_nothing_on_these_cards_says_crew_or_labour(ran):
 FILL_GUYS = 'if (!row.guys_typed && row.guys_auto && !row.guys_follow && fills) row.guys_follow = "crew";'
 CARRY_CALL = "carryTravelRow(model, fromTab);"
 TAKE_BACK_CALL = "takeBackStrayTravel(model);"
-STRAY_ROW = 'if (isTravelRow(r) && r.unit === "hours" && rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);'
+STRAY_ROW = "if (rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);"
+STRAY_GUARD = 'if (e.kind === "option" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;'
 SYNC = "r.guys = followsCrew(r) ? (s.option ? ownCrewSize(model, s.section.labor) : crewSize(model)) : manDays;"
-INIT_FOLLOW = "if (carrierMoved) B.followDistance(ROOT, carrierBefore);"
-BASE_FOLLOW = "if (B.travelCarrier(ROOT) !== carrierBefore) B.followDistance(ROOT, carrierBefore);"
+SYNC_CALL = "syncAutoGuys(model);"
+ELSE_OWNED = "followOwnedRow(model, from, to);"
+INIT_FOLLOW = "if (restructured) B.followDistance(ROOT, carrierBefore);"
+BASE_FOLLOW = "    B.followDistance(ROOT, carrierBefore);"          # four spaces: init's call is `if (restructured) B.followDistance(...)`, one space before the B
+LOOKUP_GUARD = '    if (!force && ROOT.distance && ROOT.distance.source === "typed") { paintDistance(); return; }'
+CARRIER_NAME = "return B.sectionOf(ROOT, tab).label || tab;"
+STRAY_ONLY_TRAVEL = 'var stray = travelRow && r.id === "travel" && holdsStrayTravel();'
+FIRST_DRAWN = "var ownCrew = activeIsOption();     // first drawing"
+REVIEW_NAME = "var nameCell = B.isTravelRow(r)"
 STRAY_MARKUP = "? '<p class=\"hint trvnote\" data-trv-stray=\"' + i + '\">' + esc(B.strayTravelNote(carrierName(), r)) + '</p>'"
 STRAY_IS = 'return B.sectionOf(ROOT, activeTab).kind === "base" && B.travelCarrier(ROOT) !== activeTab;'
 HINT_REPAINT = "if (travelLike(r)) el.textContent = B.travelGuysHint(M, r, M.labor, ownCrew);"
@@ -351,8 +513,46 @@ BREAKS = {
         "js/bid-model.js", TAKE_BACK_CALL, "void fromTab;",
         lambda g: g["epoxyToCombo"]["wichita"]["job"]["travelDollars"] != 858 or g["sheetsCombined"]["after"]["travelDollars"] != 858),
     "a row is taken back whatever was typed in it": (
-        "js/bid-model.js", STRAY_ROW, 'if (isTravelRow(r) && r.unit === "hours" && rowOn(r)) clearQuantities(r);',
-        lambda g: g["typedToCombo"]["job"]["travelDollars"] != 858 + 495),
+        "js/bid-model.js", STRAY_ROW, "if (rowOn(r)) clearQuantities(r);",
+        lambda g: _row(g["typedToCombo"]["bothTypedThenPolish"]["job"], "Epoxy")["guys"] != "2"),
+    # --- the third audit (2026-10-20, of 7d32336) ---
+    "the take-back only runs for a base": (
+        "js/bid-model.js", STRAY_GUARD, 'if (e.kind !== "base" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;',
+        lambda g: _row(g["epoxyPolishCombo"]["polish"], "Epoxy") != EMPTY_ROW or g["epoxyPolishCombo"]["combo"]["travelDollars"] != 858),
+    "a restructure that keeps the carrier is not settled": (
+        "js/polish-estimate.js", INIT_FOLLOW, "if (restructured && openingTab() !== carrierBefore) B.followDistance(ROOT, carrierBefore);",
+        lambda g: g["comboToPolishSync"]["opened"]["job"]["rows"]["Polish"]["row"]["guys"] != 4),
+    "the settling leaves the guys on the old crew": (
+        "js/bid-model.js", SYNC_CALL, "void model;",
+        lambda g: g["comboToPolishSync"]["opened"]["job"]["rows"]["Polish"]["row"]["guys"] != 4 or g["comboToPolishSync"]["savedLump"] != g["comboToPolishSync"]["reopenedLump"]),
+    "what the estimator typed is left on the old carrier": (
+        "js/bid-model.js", ELSE_OWNED, "void from;",
+        lambda g: g["typedToCombo"]["job"]["travelDollars"] != 495 or g["newCarrierFollows"]["typed"]["opened"]["job"]["travelDollars"] != 495),
+    "what the estimator cleared is refilled on the new carrier": (
+        "js/bid-model.js", ELSE_OWNED, "void from;",
+        lambda g: _row(g["newCarrierFollows"]["clearHours"]["opened"]["job"], "Epoxy")["days"] != ""),
+    "a row the estimator switched off is filled on the new carrier": (
+        "js/bid-model.js", ELSE_OWNED, "void from;",
+        lambda g: g["newCarrierFollows"]["off"]["after"]["job"]["travelDollars"] != 0),
+    "the lookup's answer is dropped when another section is on show": (
+        "js/polish-estimate.js", LOOKUP_GUARD,
+        '    if (M !== ROOT || (!force && ROOT.distance && ROOT.distance.source === "typed")) { paintDistance(); return; }',
+        lambda g: g["lateLookup"]["epoxyTab"]["distance"] != 190 or g["lateLookup"]["epoxyBid"]["distance"] != 190),
+    "a late lookup overwrites the miles the estimator typed": (
+        "js/polish-estimate.js", LOOKUP_GUARD, "    if (false) { paintDistance(); return; }",
+        lambda g: g["lateLookup"]["typedWins"]["distance"] != 10),
+    "the leftover row names the carrier by its tab id": (
+        "js/polish-estimate.js", CARRIER_NAME, "return tab;",
+        lambda g: "Main floor" not in (g["renamedCarrier"]["note"] or "")),
+    "any hours line says the drive is charged elsewhere": (
+        "js/polish-estimate.js", STRAY_ONLY_TRAVEL, "var stray = travelRow && holdsStrayTravel();",
+        lambda g: g["nightShiftLine"]["strayAt"] != [g["nightShiftLine"]["travelAt"]]),
+    "the first drawing of an option's card does not know it is an option's": (
+        "js/polish-estimate.js", FIRST_DRAWN, "var ownCrew = false;     // first drawing",
+        lambda g: g["comboOptionCopy"]["firstDrawn"]["hint"].endswith("base sheets: 4.")),
+    "the Review keys a trip sentence on every labor line": (
+        "js/polish-estimate.js", REVIEW_NAME, "var nameCell = true",
+        lambda g: len(g["comboOptionCopy"]["reviewDriveKeys"]) != 1),
     "an option's crew-following row follows the base crew": (
         "js/bid-model.js", SYNC, "r.guys = followsCrew(r) ? crewSize(model) : manDays;",
         lambda g: g["optionCopy"]["copyAfter"]["guys"] != 6),
@@ -372,7 +572,7 @@ BREAKS = {
         lambda g: g["comboOptionCopy"]["hint"].endswith("base sheets: 6.") or g["comboOptionCopy"]["review"].endswith("base sheets")),
     "a leftover row says the same whatever it holds": (
         "js/bid-model.js", "if (row && (filledIn(row.guys) || filledIn(row.days))) {", "if (false) {",
-        lambda g: g["typedToCombo"]["epoxyStep"]["note"] != STRAY_TYPED),
+        lambda g: g["typedToCombo"]["typedHere"]["note"] != STRAY_TYPED),
     "a leftover row is never told to stay empty": (
         "js/bid-model.js", EMPTY_WORDS, 'return where + " This line holds figures that were typed.";',
         lambda g: g["epoxyToCombo"]["epoxyStep"]["note"] != STRAY_EMPTY),
@@ -389,10 +589,10 @@ BREAKS = {
         "js/polish-estimate.js", "B.clearDistance(ROOT);", "B.clearDistance(M);",
         lambda g: g["wholeModel"]["cleared"]["after"]["days"] != ""),
     "a job type switch settles the rows on the section on show": (
-        "js/polish-estimate.js", INIT_FOLLOW, "if (carrierMoved) B.followDistance(M, carrierBefore);",
+        "js/polish-estimate.js", INIT_FOLLOW, "if (restructured) B.followDistance(M, carrierBefore);",
         lambda g: g["epoxyToPolish"]["open"]["job"]["rows"]["Polish"]["row"]["days"] != 6.5),
     "a base change settles the rows on the section on show": (
-        "js/polish-estimate.js", BASE_FOLLOW, "if (B.travelCarrier(ROOT) !== carrierBefore) B.followDistance(M, carrierBefore);",
+        "js/polish-estimate.js", BASE_FOLLOW, "    B.followDistance(M, carrierBefore);",
         lambda g: g["sheetsCombined"]["after"]["pricedOn"] != ["Polish"] or _row(g["sheetsCombined"]["after"], "Polish")["cost"] != 858),
     "the Review's trip sentence is plain text and not a keyed figure": (
         "js/polish-estimate.js", 'rv("lab." + i + ".drive", drive)', "esc(drive)",
@@ -408,7 +608,7 @@ BREAKS = {
         lambda g: g["optionCopy"]["strayNote"] is not None),
     "a leftover row's words are never repainted": (
         "js/polish-estimate.js", "if (r) el.textContent = B.strayTravelNote(carrierName(), r);", "void r;",
-        lambda g: g["typedToCombo"]["cleared"]["note"] != STRAY_EMPTY),
+        lambda g: g["typedToCombo"]["typedHere"]["note"] != STRAY_TYPED),
     "the hint repaint does not know the row is an option's": (
         "js/polish-estimate.js", HINT_REPAINT, "if (travelLike(r)) el.textContent = B.travelGuysHint(M, r, M.labor);",
         lambda g: g["comboOptionCopy"]["hint"].endswith("base sheets: 6.")),

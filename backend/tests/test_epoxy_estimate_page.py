@@ -132,8 +132,10 @@ def test_a_job_type_switched_in_the_session_fills_the_new_carriers_travel_labor_
     carrying the job's travel, and its Travel Labor row is NEW. It read blank while the distance said 190 and Lodging and Per Diem were
     on. The switch is the estimator's own action, so the distance on file fills the new carrier's row by the same rule an answer does:
     6.5 hours, the guys on Epoxy's crew (none typed yet: 0, then the 4 typed, so 4 x 6.5 x $33 = $858), the note under the card, and the
-    bid saved once. The root's own row, which goes off with the root, is untouched. A bid whose Travel Labor was left blank is filled the
-    same way on a switch, a root row switched off does not stop the new carrier being filled, and the sections after it are as before.
+    bid saved once. The root's own row, which goes off with the root, gives its fill back (the third audit, 2026-10-20: a filled row left on an
+    off section is priced again the day the job type comes back). A bid whose Travel Labor was left blank is filled the same way on a switch, a
+    root row switched off goes with the job's drive to the new carrier and is NOT filled there (it was the estimator's), and the sections after
+    it are as before.
 
     Mutation: leave B.followDistance out of the page's init (BREAKS below)."""
     j = ran["jobSwitch"]
@@ -142,7 +144,9 @@ def test_a_job_type_switched_in_the_session_fills_the_new_carriers_travel_labor_
     assert (b["carrier"], b["rootKind"], b["tabs"], b["distance"]) == ("Epoxy", "off", ["Epoxy"], 190)
     for key in ("days", "hours_seed", "guys_auto", "guys_follow", "guys"):
         assert b["row"][key] == {"days": 6.5, "hours_seed": 6.5, "guys_auto": True, "guys_follow": "crew", "guys": 0}[key], key
-    assert b["rootRow"]["guys"] == 4 and b["rootRow"]["days"] == 6.5, "the off root keeps the row it was saved with"
+    assert b["rootRow"]["guys"] == "" and b["rootRow"]["days"] == "" and b["rootRow"]["guys_auto"] is False, (
+        "the off root gives its filled row back, so the drive is priced once whatever job type the bid comes back to")
+    assert "hours_seed" not in b["rootRow"] and "guys_follow" not in b["rootRow"], "and no marker of the fill is left on it"
     assert b["asked"] == 0, "nothing was looked up: the distance on file is what filled it"
     assert s["boxes"]["hours"] == "6.5" and s["boxes"]["guys"] == "0"
     assert s["boxes"]["note"] == ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each guy on the labor lines "
@@ -154,7 +158,9 @@ def test_a_job_type_switched_in_the_session_fills_the_new_carriers_travel_labor_
     assert (bs["carrier"], bs["row"]["days"], bs["row"]["guys_follow"]) == ("Epoxy", 6.5, "crew")
     assert (bs["rootRow"]["days"], bs["rootRow"]["guys"], bs["rootRow"]["guys_auto"]) == ("", "", False), "the off root's blank row is not the job's"
     orr = j["offRoot"]
-    assert (orr["row"]["days"], orr["row"]["guys_follow"]) == (6.5, "crew") and orr["rootRow"]["enabled"] is False and orr["rootRow"]["guys"] == 4
+    assert (orr["row"]["days"], orr["row"]["guys_follow"], orr["row"]["enabled"]) == (6.5, "crew", False), (
+        "the switched-off row went with the job's drive to the new carrier, still off, with the figures it held, and was not filled")
+    assert orr["rootRow"]["guys"] == "" and orr["rootRow"]["days"] == "" and "enabled" not in orr["rootRow"], "the root gives it up, on and empty"
 
 
 def test_the_saved_crew_size_row_reopens_as_saved_and_keeps_following_the_sections_crew(ran):
@@ -172,12 +178,13 @@ def test_the_saved_crew_size_row_reopens_as_saved_and_keeps_following_the_sectio
 def test_a_box_cleared_on_the_epoxy_sections_travel_labor_is_marked_on_that_row_and_stays_empty(ran):
     """The page edits a section through its view, so a keystroke in the Epoxy section's Travel Labor box must leave its mark on THAT row and
     not on the off root's: the Hours box cleared, then the button's 300 mile answer, and the box is still empty (the tool's 6.5 would have
-    become 10). The root's own row, which goes off with the root, is as it was saved and carries no mark.
+    become 10). The root's own row, which goes off with the root, gave its filled row back when the job type was switched (empty) and carries no mark.
 
     Mutation: leave the mark out of the page's input handler (BREAKS below)."""
     c = ran["jobSwitch"]["clearedOnSection"]
     assert (c["row"]["days"], c["hoursBox"], c["row"]["hours_typed"]) == ("", "", True)
-    assert c["rootRow"]["days"] == 6.5 and "hours_typed" not in c["rootRow"] and "guys_typed" not in c["rootRow"]
+    assert c["rootRow"]["days"] == "" and "hours_typed" not in c["rootRow"] and "guys_typed" not in c["rootRow"]
+    assert "hours_seed" not in c["rootRow"], "and it holds no marker of the fill it gave back"
 
 
 def test_a_plain_reopen_and_a_switch_that_keeps_the_carrier_fill_nothing(ran):
@@ -386,13 +393,13 @@ BREAKS = {
         "js/bid-model.js", "        holder = carrier.section;", "        holder = model;",
         lambda r: r["travelFill"]["before"]["row"]["days"] != 6.5 or r["travelFill"]["rootTravelUntouched"] is not True),
     "the distance on file is not put on the new carrier's row after a job type switch": (
-        "js/polish-estimate.js", "if (carrierMoved) B.followDistance(ROOT, carrierBefore);", "void 0;",
+        "js/polish-estimate.js", "if (restructured) B.followDistance(ROOT, carrierBefore);", "void 0;",
         lambda r: r["jobSwitch"]["switched"]["before"]["row"]["days"] != 6.5 or r["jobSwitch"]["blankSwitch"]["row"]["days"] != 6.5),
     "a box cleared on the Epoxy section's Travel Labor is refilled by the next answer": (
         "js/polish-estimate.js", 'if (k === "guys" || k === "days") B.markTypedByHand(M.labor[j], k);', "void 0;",
         lambda r: r["jobSwitch"]["clearedOnSection"]["hoursBox"] != ""),
     "every restructure fills the distance, even one that keeps the carrier": (
-        "js/polish-estimate.js", "var carrierMoved = restructured && openingTab() !== carrierBefore;", "var carrierMoved = restructured;",
+        "js/bid-model.js", "return travelCarrier(model) === fromTab;", "return false;",
         lambda r: r["jobSwitch"]["combo"]["row"]["days"] != ""),
     "the sections of an epoxy job leave the root on": (
         "js/bid-model.js", '      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");',

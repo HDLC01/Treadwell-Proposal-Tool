@@ -1302,12 +1302,13 @@
       if (moved) patch.price_overrides = pov;
     }
     ROOT = made.model;
-    // A BASE CHANGE IS A JOB TYPE SWITCHED IN THE SESSION TOO (2026-10-20 audit): when it moves the job's travel to another sheet, the
-    // Travel Labor row moves with it (B.pickBase), and a row that was left blank under a far distance on file is filled by the same
-    // rule an answer follows (B.followDistance), which also takes back the drive an old carrier that is still a base had filled, so one
-    // Travel Labor row is priced for the job's one drive. It is given the WHOLE model (ROOT): M is the section on show, of the model
-    // from before the change. A base change that keeps the carrier fills nothing.
-    if (B.travelCarrier(ROOT) !== carrierBefore) B.followDistance(ROOT, carrierBefore);
+    // A BASE CHANGE IS A JOB TYPE SWITCHED IN THE SESSION TOO (2026-10-20 audits), and is settled the same way, after EVERY change of the
+    // base: when it moves the job's travel to another sheet, the Travel Labor row moves with it (B.pickBase), what the estimator typed,
+    // cleared or switched off follows the carrier, a row that was left blank under a far distance on file is filled by the same rule an
+    // answer follows, and every other section's filled row (an old carrier that is still a base, or a sheet that was off) is emptied, so
+    // one Travel Labor row is priced for the job's one drive (B.followDistance). A base change that keeps the carrier fills nothing but
+    // still gives the old rows back. It is given the WHOLE model (ROOT): M is the section on show, of the model from before the change.
+    B.followDistance(ROOT, carrierBefore);
     TW.setState(patch);
     sheetsChanged(activeTab, (asked.row === "combined" ? "combined" : asked.row) + "|base");
   }
@@ -2622,7 +2623,7 @@
     var auto = !!(hours && r.guys_auto);
     // A Travel Labor row on an option follows its OWN section's lines, and one on a base that does not carry the job's travel is a
     // leftover of a carrier move that says so (B.strayTravelNote).
-    var ownCrew = activeIsOption();
+    var ownCrew = activeIsOption();     // first drawing (repaintNumbers asks again on every keystroke)
     var stray = travelRow && r.id === "travel" && holdsStrayTravel();
     // WHERE THE HOURS CAME FROM, when the distance wrote them (Hanz, 2026-10-20): said full width under the card, and "" (the line
     // hidden) while the hours are typed or empty. repaintNumbers keeps it current as the miles, the crew and the boxes move.
@@ -2855,7 +2856,6 @@
     var key = B.distanceKey(s.address, s.city, s.state, s.zip);
     if (!key) { distReason = "incomplete"; paintDistance(); return; }
     if (!force && M.distance && (M.distance.source === "typed" || M.distance.key === key)) return;
-    var model = M, whole = ROOT;
     distBusy = true; distReason = "";
     paintDistance();
     var miles = null, reason = "error";
@@ -2873,9 +2873,12 @@
       reason = (j && j.reason) || "error";
     } catch (e) { miles = null; }
     distBusy = false;
-    // The page can have moved to another draft, or the estimator can have typed miles while the
-    // answer was on its way. Theirs wins; this answer is dropped.
-    if (model !== M || whole !== ROOT || (!force && M.distance && M.distance.source === "typed")) { paintDistance(); return; }
+    // The estimator can have typed miles while the answer was on its way. Theirs wins; this answer is dropped. NOTHING ELSE DROPS IT
+    // (2026-10-20 audit): the answer belongs to the WHOLE model, whatever is on show when it lands. It was dropped when the section on
+    // show had changed (an estimator who clicked the Epoxy tab of a new bid in the second the lookup took got a 190 mile job with no
+    // distance, Lodging, Per Diem or Travel Labor), and when a Sheets action had replaced the model object; the draft cannot change
+    // under the page after init (the sandbox settles which draft this is before the lookup starts), so the model as it is NOW is the one.
+    if (!force && ROOT.distance && ROOT.distance.source === "typed") { paintDistance(); return; }
     if (miles === null) { distReason = reason; paintDistance(); return; }
     B.applyDistance(ROOT, { miles: miles, source: "google", key: key });
     changed(false);
@@ -5080,7 +5083,6 @@
       var carrierBefore = openingTab();
       if (jobSections) ROOT = B.sectionsForJob(ROOT, jobType, { rules: await loadMarkupRules() });
       var restructured = !newBid && JSON.stringify(ROOT) !== sectionsBefore;
-      var carrierMoved = restructured && openingTab() !== carrierBefore;
       ROOT = B.seedNewSections(ROOT, {
       saved: savedEstimate,
       laborRows: libraryLaborRows,
@@ -5104,17 +5106,19 @@
     } catch (err) {
       say("This bid's other sections cannot be read, so the library's defaults were not added: " + (err && err.message));
     }
-    // A JOB TYPE SWITCHED IN THE SESSION CAN GIVE THE BID A NEW CARRIER (2026-10-20 audit): Polish saved at 190 miles and switched to
-    // Epoxy on the intake step opens with the Epoxy section carrying the job's travel, and the seeding above gave that section a
-    // blank Travel Labor row while the distance on file still says far and Lodging and Per Diem are on. The switch is the
-    // estimator's own action, so the distance on file fills the new carrier's row by the same rule an answer does
-    // (B.followDistance). A plain reopen is not a switch (sectionsForJob hands back the model it was given, so nothing
-    // restructured and the carrier is the same) and fills nothing, and neither does a switch that keeps the carrier.
-    // THE JOB'S ONE DRIVE IS PRICED ONCE, so the switch also settles the row that held it (B.followDistance, given the carrier the
-    // job had): a new carrier with no row of its own takes the old one's (a Combo switched to Epoxy left the filled row on the Polish
-    // root, which is off), the new carrier's row is filled on the crew's size (an Epoxy job switched to Polish holds the root's older
-    // row), and a row the old carrier had filled and is still a base of the bid (Epoxy to Combo) is taken back. Given the WHOLE model.
-    if (carrierMoved) B.followDistance(ROOT, carrierBefore);
+    // A JOB TYPE SWITCHED IN THE SESSION IS SETTLED AFTER EVERY RESTRUCTURE (2026-10-20 audits), whether or not the carrier moved:
+    // Polish saved at 190 miles and switched to Epoxy on the intake step opens with the Epoxy section carrying the job's travel, and the
+    // seeding above gave that section a blank Travel Labor row while the distance on file still says far and Lodging and Per Diem are on.
+    // The switch is the estimator's own action, so B.followDistance (given the carrier the job had, and the WHOLE model) settles the
+    // job's ONE drive: a new carrier with no row of its own takes the old one's (a Combo switched to Epoxy left the filled row on the
+    // Polish root, which is off); what the estimator typed, cleared or switched off follows the carrier; the new carrier's row is filled
+    // on the crew's size by the same rule an answer follows; and every other section's filled row, off sections too, is emptied (Epoxy
+    // to Polish to Combo priced the drive twice). A switch that keeps the carrier (Combo made Polish) fills nothing but still gives the
+    // old rows back. It ends by putting the guys on the crew of the bid as it is NOW, before the first paint and the first save: adopt()
+    // synced them for the sections the draft was saved with, and a Combo made Polish still read the Combo's bigger crew (6 guys, $1,287
+    // over a crew of 4) and saved a price a plain reopen then disagreed with. A plain reopen is not a switch (sectionsForJob hands back
+    // the model it was given, so nothing restructured) and moves nothing.
+    if (restructured) B.followDistance(ROOT, carrierBefore);
     // The model was replaced above (the seeding hands back a new one), so the panels' view of it is made again.
     show(openingTab());
     followSf = B.takeoffSf(M.takeoff);

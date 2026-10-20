@@ -926,10 +926,10 @@ BREAKS = {
         '      say("The sheet could not be added: " + (err && err.message));',
         lambda r: r["limit"]["addRefused"]["inAddBlock"] is None),
     "a base change that moves the travel leaves the new carrier's blank row blank": (
-        "js/polish-estimate.js", "    if (B.travelCarrier(ROOT) !== carrierBefore) B.followDistance(ROOT, carrierBefore);", "    void carrierBefore;",
+        "js/polish-estimate.js", "    B.followDistance(ROOT, carrierBefore);", "    void carrierBefore;",
         lambda r: r["baseTravel"]["blank"]["row"]["days"] != 6.5),
     "every base change fills the distance, even one that keeps the carrier": (
-        "js/polish-estimate.js", "    if (B.travelCarrier(ROOT) !== carrierBefore) B.followDistance(ROOT, carrierBefore);", "    B.followDistance(ROOT, carrierBefore);",
+        "js/bid-model.js", "return travelCarrier(model) === fromTab;", "return false;",
         lambda r: r["baseTravel"]["keepsCarrier"]["row"]["days"] != ""),
     "a refusal stays through the next click": (
         "js/polish-estimate.js", '    if (sheetsUi.notice && shWhat !== "copy" && shWhat !== "add") { sheetsUi.notice = null; paintSheets(); }',

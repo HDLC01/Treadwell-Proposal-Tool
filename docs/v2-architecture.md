@@ -863,14 +863,22 @@ in `js/bid-model.js`, held by `tests/test_polish_travel_hours.py`). An answer ap
 it FILLS on the crew's size, the older man-days auto row included (leaving it on the man-days charged 49.5 man-days x 6.5 x $33
 = $10,617.75 for an Epoxy job switched to Polish, where Kyle types $858).
 
-The job's drive is one trip, so ONE Travel Labor row is priced for it, on the section that carries the job's travel. When the job
-type is switched in the session or the Sheets panel makes another sheet the base, the carrier moves and `followDistance(model,
-fromTab)` settles the rows (the page names the old carrier in `fromTab`; left out, the stranded row is looked for): the old
-carrier's row goes with the carrier when the new carrier has none (Combo to Epoxy), the new
-carrier's row is filled by the rule, and a row the distance filled and nobody typed in, left on a section that is still a base but
-no longer the carrier, is taken back (Epoxy to Combo), so Travel is charged once. A row somebody typed in is left as typed and its
-card says the drive is charged elsewhere. An option is priced apart: its Travel Labor row is its own and its guys follow its own
-labor lines (`ownCrewSize`). Held by `tests/test_polish_travel_switch.py`, which drives the real page.
+The job's drive is one trip, so ONE Travel Labor row is priced for it, on the section that carries the job's travel. EVERY time the
+job restructures (the job type is switched in the session, or the Sheets panel makes another sheet the base) the page calls
+`followDistance(model, fromTab)` (it names the old carrier in `fromTab`; left out, the stranded row is looked for), whether or not
+the carrier moved, and the rows are settled in this order: the old carrier's row goes with the carrier when the new carrier has
+none (Combo to Epoxy); what the estimator said on the old carrier's row (typed figures, a cleared box, a switch turned off) follows
+the job's drive to a new carrier whose own row nobody touched (the two rows change places, so every section keeps its one row;
+if both are the estimator's both stay); a row nobody touched is filled by the rule, only when the carrier moved (a Combo made
+Polish fills nothing); every Travel Labor row the distance filled and nobody touched, on any section that is not the carrier and
+is not an option, off sections included, is emptied with its fill markers (Epoxy to Polish to Combo priced the drive twice until
+off sections were included); and the guys follow the crew of the bid as it is now (a Combo made Polish saved a price a plain reopen
+contradicted until they did). A Gyp carrier is never filled, whatever row lands on it. A plain reopen is not a restructure and moves
+nothing. A distance lookup that is still on its way lands on the whole model whatever section is on show or whatever a Sheets action
+has replaced since. An option is priced apart: its Travel Labor row is its own and its guys follow its own labor lines
+(`ownCrewSize`). Held by `tests/test_polish_travel_switch.py` and `tests/test_polish_travel_hours.py`, and over every sequence of
+switches (job types, the estimator's own say, the Sheets panel's base changes, a local job, no distance) by
+`tests/js/travel-sequence-harness.js` through `tests/test_polish_travel_sequences*.py`.
 
 **Done.**
 

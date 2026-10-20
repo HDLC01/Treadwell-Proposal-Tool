@@ -336,7 +336,7 @@ async function jobSwitchSection() {
     const carrier = B.travelCarrier(m);
     const sec = carrier === B.ROOT_TAB ? m : m.tabs[carrier];
     return { carrier: carrier, rootKind: m.kind === undefined ? "base" : m.kind, tabs: Object.keys(m.tabs || {}),
-             row: clone(rowIn(sec)), rootRow: clone(rowIn(m)), distance: m.distance && m.distance.miles,
+             row: rowIn(sec) ? clone(rowIn(sec)) : null, rootRow: rowIn(m) ? clone(rowIn(m)) : null, distance: m.distance && m.distance.miles,
              saves: x.rec.saves.length, asked: (x.rec.distanceBodies || []).length };
   };
 
@@ -374,7 +374,8 @@ async function jobSwitchSection() {
   const noDist = await opened("epoxy", polishBid(null, { distance: undefined }));
   const noDistOut = report(noDist);
 
-  // 6. A root row switched OFF stays as it is; the new carrier (not off) is filled all the same.
+  // 6. A root row switched OFF is the estimator's, and it follows the job's drive to the new carrier (the third audit, 2026-10-20): Epoxy's row is the
+  //    switched-off one, and is NOT filled; the root gives its row back empty. (Until then the new carrier was filled and the off row stayed on the root.)
   const offRoot = await opened("epoxy", polishBid(Object.assign({ enabled: false }, filledRow)));
   const offRootOut = report(offRoot);
 

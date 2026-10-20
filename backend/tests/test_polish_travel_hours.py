@@ -474,23 +474,55 @@ def test_a_combo_switched_to_epoxy_carries_the_travel_labor_row_to_the_new_carri
         "a bid whose library said no Travel Labor has no row to carry")
 
 
-def test_a_row_the_estimator_typed_stays_typed_on_the_old_carrier(ran):
-    """Epoxy's row was typed (3 guys, 5 hours, both marked): it is theirs. The switch to Combo leaves it exactly as typed and still priced
-    ($495, beside the root's $858: the card on that section says so), and does not mistake the tool's remembered 6.5 for a figure to take back.
-
-    Mutation: take back a row whatever was typed in it."""
-    t = ran["moveTypedStays"]
-    assert t["epoxy"] == {"hours": "5", "seed": 6.5, "auto": False, "follow": None, "guys": "3", "cost": 3 * 5 * 33, "on": True}
-    assert t["root"]["cost"] == 858 and t["drive"] == 858 + 495
+TYPED_ROOT = {"hours": "5", "seed": 6.5, "auto": False, "follow": None, "guys": "3", "cost": 3 * 5 * 33, "on": True}
+EMPTIED = {"hours": "", "seed": None, "auto": False, "follow": None, "guys": "", "cost": 0, "on": True}
+EMPTIED_KEYS = ["days", "guys", "guys_auto", "id", "label", "rate", "unit"]
+TYPED_KEYS = ["days", "guys", "guys_auto", "guys_typed", "hours_seed", "hours_typed", "id", "label", "rate", "unit"]
 
 
-def test_a_switched_off_row_an_options_row_and_a_carrier_that_did_not_move_are_left_alone(ran):
-    """A Travel Labor row switched off is left exactly as it is (no take-back, like no fill). An old carrier that is an OPTION afterwards keeps its
-    own row (an option is priced apart, for its own crew). A carrier handed in that is the carrier already moves nothing and takes nothing back, and
-    no model is no model.
+def test_a_row_the_estimator_typed_follows_the_job_s_drive_to_the_new_carrier(ran):
+    """THE THIRD AUDIT (2026-10-20, of 7d32336). Epoxy's row was typed (3 guys, 5 hours, both marked): it is theirs, and it is the JOB'S drive. The
+    switch to Combo makes the root the carrier, so the typed row goes with it, markers and all, and Epoxy gives the row back empty: the drive is
+    priced once, as typed ($495). Before, the typed row was left behind on Epoxy and priced beside the root's own fill: $858 + $495 = $1,353.
 
-    Mutation: take back an off row; take back an option's row; run the move when the carrier did not."""
-    assert ran["moveOffStays"] == {"same": True, "enabled": False}
+    Mutation: leave what the estimator typed on the old carrier."""
+    t = ran["moveTypedFollows"]
+    assert t["root"] == TYPED_ROOT and t["rootMarks"] == {"typed": True, "hoursTyped": True, "off": False, "keys": TYPED_KEYS}
+    assert t["epoxy"] == EMPTIED and t["epoxyMarks"]["keys"] == EMPTIED_KEYS, "the old carrier gives the row back with no marker left on it"
+    assert t["drive"] == 495 and t["rootRows"] == 1 and t["epoxyRows"] == 1
+
+
+def test_a_cleared_box_follows_the_job_s_drive_and_is_never_refilled_on_the_new_carrier(ran):
+    """The Hours box cleared on Epoxy, or the Guys box: the empty box is the estimator's answer, and it moves to the root with the drive. The root is
+    NOT filled (the audit: a new carrier's blank row was auto-filled to $858 in every case), and a later answer leaves it empty.
+
+    Mutation: leave what the estimator cleared on the old carrier; fill the new carrier whatever it was handed."""
+    c = ran["moveClearedFollows"]
+    h, g = c["hours"], c["guys"]
+    assert (h["root"]["hours"], h["rootMarks"]["hoursTyped"], h["root"]["cost"], h["drive"]) == ("", True, 0, 0)
+    assert (g["root"]["guys"], g["rootMarks"]["typed"], g["root"]["cost"], g["drive"]) == ("", True, 0, 0)
+    assert h["epoxy"] == EMPTIED and g["epoxy"] == EMPTIED, "the old carrier keeps nothing"
+    s = ran["moveClearedStaysEmpty"]
+    assert s["hours"]["hours"] == "" and s["guys"]["guys"] == "" and s["guys"]["hours"] == 10, "the answer moved the tool's hours, never the box they cleared"
+
+
+def test_a_switched_off_row_follows_the_job_s_drive_and_is_never_filled(ran):
+    """The slider is the estimator's too: Epoxy's Travel Labor switched off, the switch to Combo, and the root's row is the one switched off (with the
+    figures the row held), Epoxy's is back on and empty, and nothing is priced. It was left behind off on the old carrier while the new carrier was
+    filled to $858.
+
+    Mutation: leave the switched-off row on the old carrier."""
+    o = ran["moveOffFollows"]
+    assert o["rootMarks"]["off"] is True and o["root"]["on"] is False and o["drive"] == 0
+    assert o["movedFigures"] is True, "the row that moved is the row that was switched off, figures and all"
+    assert o["epoxy"] == EMPTIED and "enabled" not in o["epoxyMarks"]["keys"], "the old carrier's row is back on and empty"
+
+
+def test_an_options_row_and_a_carrier_that_did_not_move_are_left_alone(ran):
+    """An old carrier that is an OPTION afterwards keeps its own row (an option is priced apart, for its own crew). A carrier handed in that is the
+    carrier already moves nothing and takes nothing back, and no model is no model.
+
+    Mutation: take back an option's row; run the move when the carrier did not."""
     assert ran["moveOptionStays"] == {"carrier": "Polish", "same": True}
     assert ran["moveSameCarrier"] == {"same": True}
     assert ran["moveNoModel"] == "null"
@@ -510,6 +542,161 @@ def test_a_carrier_move_under_a_local_job_carries_the_row_and_fills_nothing(ran)
     m = ran["moveLocal"]
     assert m["local"] is True and m["rootHasRow"] is False
     assert (m["epoxy"]["hours"], m["epoxy"]["cost"]) == ("", 0)
+
+
+# ── the third audit (2026-10-20, of 7d32336): EVERY restructure settles the job's one drive ─────────────────────────────────────
+def test_every_section_that_is_not_the_carrier_gives_the_filled_row_back_off_sections_too(ran):
+    """THE HIGH FINDING. Epoxy to Polish to Combo priced the drive twice ($858 + $858 = $1,716; combo to epoxy to polish to combo: $858 + $1,072.50): the
+    take-back only ran when the carrier MOVED and only on a base, so Epoxy's row, filled for the Epoxy job and left on the section when Polish switched it off,
+    was priced again the day Combo turned the section back on, beside the root's own. Now every Travel Labor row the distance filled and nobody touched, on
+    ANY section that is not the carrier (an option excepted: it is priced apart), is emptied with its markers when the job restructures. Through
+    Epoxy -> Polish -> Combo -> Epoxy -> Combo, ONE row is priced every time and the section that is not the carrier holds an empty row.
+
+    Mutation: take back only from bases; leave the take-back out of a restructure that keeps the carrier (BREAKS below)."""
+    s = ran["settleSequence"]
+    for step, carrier in (("toPolish", "Polish"), ("toCombo", "Polish"), ("toEpoxy", "Epoxy"), ("toComboAgain", "Polish")):
+        assert s[step]["carrier"] == carrier, step
+    assert [s[k]["drive"] for k in ("toPolish", "toCombo", "toEpoxy", "toComboAgain")] == [858, 858, 0, 858], (
+        "one drive each time (the 0 is the Epoxy job before its crew is typed on Epoxy: the carrier's row is filled with no guys yet)")
+    assert s["toPolish"]["epoxy"] == EMPTIED and s["toPolish"]["epoxyKeys"] == EMPTIED_KEYS, "Epoxy is OFF here and still gives its row back"
+    assert s["toCombo"]["epoxy"] == EMPTIED and s["toComboAgain"]["epoxy"] == EMPTIED
+    assert s["toEpoxy"]["polish"]["cost"] == 0 or s["toEpoxy"]["carrier"] == "Epoxy"
+    t = ran["takeBackOff"]
+    assert t["off"] == EMPTIED and t["offKeys"] == EMPTIED_KEYS, "an off section's filled row is taken back, markers and all"
+    assert t["option"] is True, "an option's row is its own"
+    assert t["typedOff"] is True, "a row the estimator typed is theirs, on an off section too"
+    assert t["offRowStays"] is True, "a row the estimator switched off is theirs, on a base that does not carry the travel"
+
+
+def test_the_estimators_row_is_told_from_one_the_distance_filled(ran):
+    """travelRowIsTheEstimators: a box typed in or cleared (the markers, a figure in a Guys box that is off auto, hours that are not the tool's) or a row switched
+    off. A blank row and one the distance filled are nobody's. The two readings never overlap: a row is not both filled and the estimator's.
+
+    Mutation: let typed hours count as the tool's (BREAKS below)."""
+    a = ran["autoFilled"]
+    assert a["estimators"] == {"crewRow": False, "crewBlankHours": False, "legacyWithToolHours": False, "legacyBlank": False, "empty": False,
+                               "typedGuysMarked": True, "typedGuysNoMarker": True, "clearedGuys": True, "typedHoursMarked": True,
+                               "clearedHoursMarked": True, "typedHoursNoMarker": True, "off": True, "offEmpty": True, "noRow": False}
+    for k, v in a["estimators"].items():
+        if k in a and v is True:
+            assert a[k] is False, k + ": a row cannot be both the tool's fill and the estimator's"
+
+
+def test_what_the_estimator_said_follows_a_newly_seeded_carrier_and_only_a_row_nobody_touched_is_filled(ran):
+    """THE MEDIUM FINDING. A Polish job (crew 4 x 12, 190 miles) switched to Epoxy: Epoxy is a NEW section and the library gives it a blank Travel Labor row
+    as the carrier. A row nobody touched is filled fresh: 4 x 6.5 x $33 = $858. But a typed 3 x 5, a cleared box and a switched-off row all MOVE to Epoxy with
+    the job's drive and are NOT filled (the audit: the new carrier's blank row was auto-filled to $858 in all three cases), and the old carrier gives the row
+    back empty. A later answer leaves what moved alone, and the row follows the carrier on again.
+
+    Mutation: leave what the estimator said on the old carrier (BREAKS below)."""
+    f = ran["followsSeeded"]
+    assert f["auto"]["epoxy"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
+    assert f["auto"]["root"] == EMPTIED and f["auto"]["drive"] == 858
+    assert f["typed"]["epoxy"] == TYPED_ROOT and f["typed"]["epoxyMarks"]["keys"] == TYPED_KEYS and f["typed"]["drive"] == 495
+    assert f["clearedHours"]["epoxy"]["hours"] == "" and f["clearedHours"]["epoxyMarks"]["hoursTyped"] is True and f["clearedHours"]["drive"] == 0
+    assert f["clearedGuys"]["epoxy"]["guys"] == "" and f["clearedGuys"]["epoxyMarks"]["typed"] is True and f["clearedGuys"]["drive"] == 0
+    assert f["off"]["epoxy"]["on"] is False and f["off"]["epoxyMarks"]["off"] is True and f["off"]["drive"] == 0
+    for name in ("typed", "clearedHours", "clearedGuys", "off"):
+        assert f[name]["root"] == EMPTIED and f[name]["rootMarks"]["keys"] == EMPTIED_KEYS, name + ": the old carrier gives the row back"
+        assert (f[name]["epoxyRows"], f[name]["rootRows"]) == (1, 1), name
+    assert f["laterAnswer"]["typed"] == TYPED_ROOT and f["laterAnswer"]["clearedHours"]["hours"] == ""
+    b = f["backToPolish"]
+    assert b["root"] == TYPED_ROOT and b["rootMarks"]["typed"] is True and b["epoxy"] == EMPTIED and b["drive"] == 495, "and it follows the carrier back"
+
+
+def test_when_the_new_carriers_own_row_is_the_estimators_too_both_stay(ran):
+    """Epoxy typed 3 x 5 and the root typed 2 x 4, switched to Combo: neither is the tool's to move, and there is nothing to choose between them, so both
+    stay exactly as typed (the card of the section that does not carry the travel says so).
+
+    Mutation: let the old carrier's row replace a new carrier's row that is the estimator's too (BREAKS below)."""
+    b = ran["ownedBothStay"]
+    assert b["root"]["guys"] == "2" and b["root"]["hours"] == "4" and b["epoxy"] == TYPED_ROOT
+    assert b["drive"] == 2 * 4 * 33 + 3 * 5 * 33
+
+
+def test_a_section_that_holds_only_its_travel_labor_row_hands_the_estimators_over_and_is_never_left_with_nothing(ran):
+    """A root (or any section) whose only labor row is Travel Labor: the rows change places, so each section keeps its one row and no labor list is left
+    empty (an empty root reads as the four shipped rows). The typed row goes to the carrier; the lone section keeps an empty one.
+
+    Mutation: leave what the estimator said on the old carrier (BREAKS below)."""
+    o = ran["ownedFromLoneRow"]
+    assert o["root"] == TYPED_ROOT and o["epoxy"] == EMPTIED and o["epoxyRows"] == 1 and o["drive"] == 495
+    c = ran["copyReleased"]
+    assert c["epoxy"] == TYPED_ROOT and c["root"] == EMPTIED and c["rootMarks"]["keys"] == EMPTIED_KEYS and c["aliased"] is False and c["drive"] == 495, (
+        "a COPY (the old carrier keeps no other row) is released: the estimator's row is not left priced on both")
+
+
+def test_the_callers_name_for_the_old_carrier_beats_looking_for_it(ran):
+    """An Epoxy job (the Polish root is off and holds its own blank Travel Labor row, first in the order) whose Epoxy row was typed 3 x 5, switched to Gyp.
+    Named, the old carrier is Epoxy and its typed row goes with the job's drive. Looked for, the first section that is not the carrier and holds a row is the
+    ROOT, whose blank row would be carried instead, and the typed row would be stranded.
+
+    Mutation: look for the old carrier even when the caller names it (BREAKS below)."""
+    n = ran["namedBeatsLooked"]
+    assert n["carrier"] == 'Gyp (USG 1-8")'
+    assert n["named"]["gyp"] == TYPED_ROOT and n["named"]["gypMarks"]["keys"] == TYPED_KEYS and n["named"]["epoxy"] is None and n["named"]["rootRows"] == 1
+    assert n["looked"]["gyp"]["cost"] == 0 and n["looked"]["epoxy"] == TYPED_ROOT, "the proof the two readings differ: the lookup strands the typed row"
+
+
+def test_a_gyp_carrier_is_never_filled_not_even_by_a_row_that_arrives_filled(ran):
+    """A Gyp bid's Travel Labor is typed (the Gyp sheet works its own drive time per mobilization), so the distance never fills it. A job switched to Gyp
+    from an Epoxy job whose Travel Labor was filled used to carry that FILLED row to Gyp and leave it there (the fuzz at 7d32336: a Gyp carrier priced at
+    $0 x 6.5 'crew'); now the row the distance filled is given back wherever it lands, and what the estimator typed goes to Gyp as theirs.
+
+    Mutation: leave a row the distance filled on a Gyp carrier (BREAKS below)."""
+    g = ran["gypNeverFilled"]
+    assert g["carrier"] == 'Gyp (USG 1-8")' and g["gyp"] == EMPTIED and g["epoxy"] == EMPTIED and g["drive"] == 0
+    c = ran["gypCarriedUnfilled"]
+    assert c["gyp"] == EMPTIED and c["gypKeys"] == EMPTIED_KEYS and c["drive"] == 0, "carried to a Gyp section that had no row: emptied there"
+    t = ran["gypTypedFollows"]
+    assert t["gyp"] == TYPED_ROOT and t["gypMarks"]["typed"] is True and t["epoxy"] == EMPTIED
+
+
+def test_followDistance_never_throws_for_a_section_it_cannot_find_or_read(ran):
+    """The caller's name for a section the model does not have, and a bid whose sections cannot be read (a saved `tabs` that is not well formed), have
+    nothing to carry: the job is settled as far as it can be and nothing throws (the page runs this on init, where a throw is a blank estimate).
+
+    Mutation: let the carry throw (BREAKS below)."""
+    n = ran["followNeverThrows"]
+    assert n["namelessThrew"] is None and n["brokenThrew"] is None and n["namelessRowKept"] is True
+
+
+def test_a_restructure_that_keeps_the_carrier_re_derives_the_guys_and_fills_nothing(ran):
+    """THE SECOND MEDIUM FINDING. A Combo (Polish 4 guys, Epoxy 6) made Polish keeps the root as the carrier, so nothing moved, and nothing re-derived the
+    root's crew-following Travel Labor: it read 6 guys ($1,287) over a crew of 4, and the draft saved a price a plain reopen then contradicted ($33,514
+    and $32,632 on the audit's bid). The settling now ends with syncAutoGuys, so the guys are the crew of the bid as it is: 4, $858. A carrier that
+    stayed fills NOTHING, so a far bid saved with a blank row is not filled by it.
+
+    Mutation: leave the sync out of the settling; settle a carrier that stayed as if it had moved (BREAKS below)."""
+    k = ran["carrierKept"]
+    assert k["before"]["guys"] == 6 and k["before"]["cost"] == 6 * 6.5 * 33
+    assert k["after"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
+    assert k["crew"] == 4 and k["carrier"] == "Polish" and k["epoxyRows"] == 0 and k["drive"] == 858
+    assert ran["carrierKeptFillsNothing"] == EMPTIED
+
+
+def test_a_copy_of_the_carriers_typed_row_made_a_base_beside_it_is_given_back_but_a_different_one_stays(ran):
+    """A COPY of the carrier's sheet carries the row the carrier had, the estimator's typed 3 x 5 included (it is priced apart, as an option, which is why it
+    has one). Made a base beside the carrier (the Sheets panel's combined pair) it would charge the drive a second time: $495 + $495. A row that REPEATS the
+    carrier's exactly (the same guys, hours and hands on them) is a copy's leftover and is given back (emptied, markers gone); one that says something else
+    (typed 2 x 4 on the copy) is the estimator's own choice and stays.
+
+    Mutation: leave the copy's repeat on its section (BREAKS below)."""
+    c = ran["copyRepeat"]
+    s = c["same"]
+    assert s["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
+    assert s["root"] == TYPED_ROOT and s["copy"] == EMPTIED and s["copyMarks"]["keys"] == EMPTIED_KEYS and s["drive"] == 495
+    d = c["different"]
+    assert d["root"] == TYPED_ROOT and d["copy"]["guys"] == "2" and d["copy"]["hours"] == "4" and d["copy"]["cost"] == 2 * 4 * 33 and d["drive"] == 495 + 264
+
+
+def test_an_options_own_crew_counts_the_fourth_hand_of_remove_existing_joint_filler(ran):
+    """ownCrewSize is the crew an option's Travel Labor follows: its own lines' most guys, and the fourth hand of Remove existing joint filler counts through
+    the joint-filler line exactly as it does for the job's crew (Polishing 3 and Joint filler 3 + 1 are a crew of 4, where the lines alone say 3).
+
+    Mutation: leave the job's conditions out of an option's own crew (BREAKS below)."""
+    o = ran["optionHand"]
+    assert o == {"withHand": 4, "noConditions": 3, "noModel": 3}
 
 
 def test_which_rows_the_distance_filled_and_so_may_be_taken_back(ran):
@@ -597,6 +784,15 @@ def test_the_words_on_a_row_left_on_a_base_that_does_not_carry_the_travel(ran):
         "The job's drive is charged once, on the Copy1 section. This line holds figures that were typed, so it was left as typed and still adds "
         "to this section's labor. Clear it, or remove the line, if the drive is already charged there.")
     assert s["noRow"] == s["empty"]
+    # THE THIRD AUDIT: figures nobody typed are never called typed. A bid saved before the take-back can still hold the drive the distance filled on a section
+    # that does not carry the travel (a card that said "figures that were typed" over the tool's own $858), and a row switched off adds nothing.
+    assert s["filled"] == s["filledOld"] == (
+        "The job's drive is charged once, on the Polish section. This line still holds the drive the distance filled, so it adds to this section's labor "
+        "as well. Clear it, or remove the line.")
+    assert "typed" not in s["filled"]
+    assert s["off"] == ("The job's drive is charged once, on the Polish section. This line holds figures but is switched off, so it adds nothing to "
+                        "this section's labor.")
+    assert s["offEmpty"] == s["empty"]
     for words in s.values():
         assert "crew" not in words.lower() and "labour" not in words.lower(), "the estimate page's column is Guys, never Crew"
 
@@ -640,12 +836,24 @@ CARRY_FROM = 'var from = typeof fromTab === "string" && fromTab !== "" ? fromTab
 STRANDED_SKIP = 'if (e.tab === carrier || e.kind === "option" || !isObject(e.section)) continue;'
 STRANDED_NO_TRAVEL = 'if (model.no_travel_labor === true) return "";'
 
-STRAY_GUARD = 'if (e.kind !== "base" || e.tab === carrier || !isObject(e.section)) return;'
-STRAY_ROW = 'if (isTravelRow(r) && r.unit === "hours" && rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);'
+STRAY_GUARD = 'if (e.kind === "option" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;'
+STRAY_ROW = "if (rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);"
 TYPED_GUYS = "if (travelGuysAreTyped(row)) return false;"
-TYPED_HOURS = "if (!isBlank(row.days) && !driveHoursAreTools(row)) return false;"
+TYPED_HOURS = "return isBlank(row.days) || driveHoursAreTools(row);"
 TYPED_MARKS = "if (!row || row.guys_typed === true || row.hours_typed === true) return false;"
-NOTHING_WRITTEN = "return driveHoursAreTools(row) || followsCrew(row);"
+NOTHING_WRITTEN = "return travelRowIsHandsOff(row) && (driveHoursAreTools(row) || followsCrew(row));"
+ELSE_OWNED = "followOwnedRow(model, from, to);"
+OWNED_BOTH = "if (!travelRowIsTheEstimators(row) || theirs.some(travelRowIsTheEstimators)) return false;"
+SWAP = "from.labor[from.labor.indexOf(row)] = leaves;"
+RELEASE_LEAVES = "releaseTravelRow(leaves);"
+CARRIER_KEPT = "return travelCarrier(model) === fromTab;"
+SYNC_CALL = "syncAutoGuys(model);"
+CATCH_CARRY = "} catch (err) { /* nothing to carry */ }"
+OWN_CREW = "return mostGuysOn(rows, isObject(model) && isObject(model.conditions) ? model.conditions : {}, 0);"
+STRAY_FILLED = "if (travelRowIsAutoFilled(row)) {"
+STRAY_OFF = 'if (!rowOn(row)) return where + " This line holds figures but is switched off'
+ESTIMATORS = "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));"
+REPEAT_GIVEN_BACK = "else if (e.tab !== carrier && travelRowRepeats(r, carrierRow)) releaseTravelRow(r);"
 CLEARED = "delete row.hours_seed; delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;"
 COPY_NOT_SHARED = "to.labor = (to.labor instanceof Array ? to.labor : []).concat(rest.length ? mine : mine.map(jsonCopy));"
 NOTE_TYPED = "return head + (filledIn(row.guys)"
@@ -758,15 +966,21 @@ MUTATIONS = {
     "a bid whose library said no Travel Labor is given a row": (
         STRANDED_NO_TRAVEL, "void 0;",
         lambda g: g["moveNoTravelLabor"]["epoxyHasRow"] is not False),
-    "a section that is not a base gives its row back": (
-        STRAY_GUARD, 'if (e.tab === carrier || !isObject(e.section)) return;',
-        lambda g: g["moveOptionStays"]["same"] is not True),
+    "an option gives its row back": (
+        STRAY_GUARD, 'if (!isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;',
+        lambda g: g["moveOptionStays"]["same"] is not True or g["takeBackOff"]["option"] is not True),
     "the carrier's own row is taken back": (
-        STRAY_GUARD, 'if (e.kind !== "base" || !isObject(e.section)) return;',
+        STRAY_GUARD, 'if (e.kind === "option" || !isObject(e.section)) return;',
         lambda g: g["moveEpoxyToCombo"]["root"]["cost"] != 858 or g["moveEpoxyToCombo"]["drive"] != 858),
+    "an off section keeps the row the distance filled": (
+        STRAY_GUARD, 'if (e.kind !== "base" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;',
+        lambda g: g["takeBackOff"]["off"] != EMPTIED or g["settleSequence"]["toPolish"]["epoxy"] != EMPTIED),
+    "a Gyp carrier keeps a row the distance filled": (
+        STRAY_GUARD, 'if (e.kind === "option" || !isObject(e.section) || e.tab === carrier) return;',
+        lambda g: g["gypCarriedUnfilled"]["gyp"] != EMPTIED or g["gypCarriedUnfilled"]["drive"] != 0),
     "a switched-off row is taken back": (
-        STRAY_ROW, 'if (isTravelRow(r) && r.unit === "hours" && travelRowIsAutoFilled(r)) clearQuantities(r);',
-        lambda g: g["moveOffStays"]["same"] is not True),
+        STRAY_ROW, "if (travelRowIsAutoFilled(r)) clearQuantities(r);",
+        lambda g: g["takeBackOff"]["offRowStays"] is not True),
     "a row taken back keeps its markers": (
         CLEARED, "delete row.hours_seed; delete row.guys_typed; delete row.hours_typed;",
         lambda g: g["moveEpoxyToCombo"]["epoxy"]["follow"] is not None or "guys_follow" in g["moveEpoxyToCombo"]["epoxyKeys"]),
@@ -774,14 +988,15 @@ MUTATIONS = {
         CLEARED, "delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;",
         lambda g: g["moveEpoxyToCombo"]["epoxy"]["seed"] is not None),
     "typed guys are taken back": (
-        TYPED_GUYS, "void 0;", lambda g: g["moveTypedStays"]["epoxy"]["guys"] != "3" or g["autoFilled"]["typedGuysNoMarker"] is not False),
+        TYPED_GUYS, "void 0;", lambda g: g["autoFilled"]["typedGuysNoMarker"] is not False or g["autoFilled"]["estimators"]["typedGuysNoMarker"] is not True),
     "typed hours are taken back": (
-        TYPED_HOURS, "void 0;", lambda g: g["autoFilled"]["typedHoursNoMarker"] is not False),
+        TYPED_HOURS, "return true;",
+        lambda g: g["autoFilled"]["typedHoursNoMarker"] is not False or g["autoFilled"]["estimators"]["typedHoursNoMarker"] is not True),
     "a marked row is taken back": (
         TYPED_MARKS, "if (!row) return false;",
         lambda g: g["autoFilled"]["clearedHoursMarked"] is not False or g["autoFilled"]["typedHoursMarked"] is not False),
     "a row nothing was written in counts as filled": (
-        NOTHING_WRITTEN, "return true;",
+        NOTHING_WRITTEN, "return travelRowIsHandsOff(row);",
         lambda g: g["autoFilled"]["empty"] is not False or g["autoFilled"]["legacyBlank"] is not False),
     "a copy of the row shares its object with the old carrier": (
         COPY_NOT_SHARED, "to.labor = (to.labor instanceof Array ? to.labor : []).concat(mine);",
@@ -789,7 +1004,56 @@ MUTATIONS = {
     "a new carrier that has a row of its own is given a second one": (
         SHIFT_CASE, "if (!mine.length) return false;",
         lambda g: g["moveEpoxyToCombo"]["rootRows"] != 1 or g["moveEpoxyToPolish"]["rootRows"] != 1),
+    # --- the third audit: what the estimator said follows the carrier, every section gives the fill back, the carrier that stayed is still settled ---
+    "what the estimator typed stays behind on the old carrier": (
+        ELSE_OWNED, "void from;",
+        lambda g: g["moveTypedFollows"]["root"] != TYPED_ROOT or g["moveTypedFollows"]["drive"] != 495 or g["followsSeeded"]["typed"]["drive"] != 495),
+    "what the estimator cleared is refilled on the new carrier": (
+        ELSE_OWNED, "void from;",
+        lambda g: g["moveClearedFollows"]["hours"]["root"]["hours"] != "" or g["moveClearedFollows"]["guys"]["root"]["guys"] != ""),
+    "a copy of the carrier's typed row made a base keeps pricing the drive beside it": (
+        REPEAT_GIVEN_BACK, "else void r;",
+        lambda g: g["copyRepeat"]["same"]["copy"] != EMPTIED or g["copyRepeat"]["same"]["drive"] != 495),
+    "a row the estimator switched off stays behind on the old carrier": (
+        ELSE_OWNED, "void from;",
+        lambda g: g["moveOffFollows"]["rootMarks"]["off"] is not True or g["followsSeeded"]["off"]["epoxyMarks"]["off"] is not True),
+    "the estimator's row overwrites a new carrier's row that is the estimator's too": (
+        OWNED_BOTH, "if (!travelRowIsTheEstimators(row)) return false;",
+        lambda g: g["ownedBothStay"]["root"]["guys"] != "2" or g["ownedBothStay"]["drive"] != 2 * 4 * 33 + 3 * 5 * 33),
+    "the old carrier keeps the estimator's row when it is handed over": (
+        SWAP, "void leaves;",
+        lambda g: g["moveTypedFollows"]["drive"] != 495 or g["moveTypedFollows"]["epoxy"] != EMPTIED),
+    "the row the estimator's replaced keeps its fill": (
+        RELEASE_LEAVES, "void leaves;",
+        lambda g: g["moveTypedFollows"]["epoxy"] != EMPTIED or g["followsSeeded"]["typed"]["root"] != EMPTIED),
+    "a copy the old carrier keeps of the estimator's row is not given back": (
+        REPEAT_GIVEN_BACK, "else void r;",
+        lambda g: g["copyReleased"]["root"] != EMPTIED or g["copyReleased"]["drive"] != 495),
+    "the caller's name for the old carrier is ignored": (
+        CARRY_FROM, "var from = strandedTravelTab(model, to);",
+        lambda g: g["namedBeatsLooked"]["named"]["gyp"] != TYPED_ROOT),
+    "a carrier that stayed is settled as if it had moved": (
+        CARRIER_KEPT, "return false;",
+        lambda g: g["carrierKeptFillsNothing"] != EMPTIED),
+    "the settling leaves the guys on the old crew": (
+        SYNC_CALL, "void model;",
+        lambda g: g["carrierKept"]["after"]["guys"] != 4 or g["carrierKept"]["drive"] != 858),
+    "the carry throws for a section it cannot find or read": (
+        CATCH_CARRY, "} catch (err) { throw err; }",
+        lambda g: g["followNeverThrows"]["namelessThrew"] is not None or g["followNeverThrows"]["brokenThrew"] is not None),
+    "an option's own crew leaves the job's conditions out": (
+        OWN_CREW, "return mostGuysOn(rows, {}, 0);",
+        lambda g: g["optionHand"]["withHand"] != 4),
+    "a switched-off row is not the estimator's": (
+        ESTIMATORS, "return !!row && !travelRowIsHandsOff(row);",
+        lambda g: g["autoFilled"]["estimators"]["off"] is not True or g["moveOffFollows"]["rootMarks"]["off"] is not True),
     # --- the notes ---
+    "figures nobody typed are called typed on a leftover row": (
+        STRAY_FILLED, "if (false) {",
+        lambda g: "typed" in g["strayWords"]["filled"] or "typed" in g["strayWords"]["filledOld"]),
+    "a leftover row that is switched off says it adds to the labor": (
+        STRAY_OFF, 'if (false) return where + " This line holds figures but is switched off',
+        lambda g: "still adds" in g["strayWords"]["off"]),
     "a cleared guys box says the guys are typed": (
         NOTE_TYPED, "return head + (true",
         lambda g: "The guys are typed" in g["notesCleared"]["note"]),

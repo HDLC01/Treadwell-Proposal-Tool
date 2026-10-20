@@ -1121,31 +1121,52 @@
     else if (row.guys_auto) row.guys = travelManDays(held.rows);   // the older auto the answer did not fill: the man-days, as syncAutoGuys keeps them
   }
 
-  /** Put the distance the model ALREADY HOLDS on its Travel Labor row, by the rule above. For the one case where the carrier changed
-   *  under a distance that is already on file: the job type was switched in the session (js/polish-estimate.js: init, after
-   *  sectionsForJob, and a base change on the Sheets panel, makeBase), so the new carrier's Travel Labor row is new and blank (or
-   *  was blank where it came from) while the job is far. A bid with no distance on file is returned as it is. MUTATES the model
-   *  and returns it. Never called when a bid merely opens, and never when the carrier stays where it was.
+  /** THE JOB'S ONE DRIVE, SETTLED AFTER A RESTRUCTURE (the 2026-10-20 audits). The job type was switched in the session (js/polish-estimate.js: init,
+   *  after sectionsForJob) or the Sheets panel made another sheet the base (makeBase), so sections changed kind and the one that carries the job's
+   *  travel may have changed with them. The page calls this after EVERY such restructure, whether or not the carrier moved, and says in `fromTab` which
+   *  section carried the job's travel BEFORE it. Left out, the caller does not know, and the carrier is taken to have moved (the stranded row is looked
+   *  for: strandedTravelTab). MUTATES the model and returns it. Never called when a bid merely opens: a saved bid never moves on open.
    *
-   *  BECAUSE THE CARRIER MOVED, the job's drive is settled as one trip, priced once (2026-10-20 audit):
-   *    1. THE ROW GOES WITH THE CARRIER. A new carrier that has no Travel Labor row of its own takes the old carrier's (the way
-   *       pickBase moves it: the Combo switched to Epoxy left the filled row stranded on the Polish root, which is off, while Lodging
-   *       and Per Diem stayed on and the how-note said Travel Labor was off). One it has of its own is kept. `fromTab`, the section
-   *       that carried the job's travel BEFORE the switch, says whose row that is; the page always knows it and passes it. Left out,
-   *       the row is looked for: the first Travel Labor row of a section that is off or a base other than the carrier (carryTravelRow).
-   *    2. THE DISTANCE ON FILE FILLS THE NEW CARRIER'S ROW, by the rule above.
-   *    3. THE OLD CARRIER STOPS CHARGING THE DRIVE. A Travel Labor row the distance filled and nobody typed in, left on a section that
-   *       is still a BASE of the bid but no longer carries the job's travel, is taken back (guys and hours empty, every marker
-   *       cleared): an Epoxy to Combo switch left Epoxy's filled row priced beside the new one, so Travel was charged twice
-   *       (takeBackStrayTravel). A row somebody typed in is left as typed, and the card says so. An option's row is its own. */
+   *  THE RULE (Hanz, 2026-10-20). On a job 70 miles or more out there is exactly ONE priced drive: the carrier's Travel Labor row, the crew's size x one
+   *  round trip's hours x its rate (followDistanceHours). Hotel and Per Diem stay as they were. What the estimator typed, a box they cleared and a row
+   *  they switched off are theirs: never refilled, and they follow the job's drive when the carrier changes. In this order:
+   *    1. THE ROW GOES WITH THE CARRIER (carryTravelRow). A new carrier that has no Travel Labor row takes the old carrier's, the way pickBase moves it:
+   *       a Combo switched to Epoxy left the filled row stranded on the off Polish root while Lodging and Per Diem stayed on.
+   *    2. WHAT THE ESTIMATOR SAID FOLLOWS (followOwnedRow). A new carrier that has a row nobody touched takes the old carrier's row when the old one is
+   *       the estimator's (typed figures and their markers, a cleared box, a switch turned off): the audit found a typed 3 x 5 stay behind on the Epoxy
+   *       section while the new carrier was filled with the crew's size beside it ($858 + $495), and a cleared or switched-off row refilled to $858.
+   *    3. THE DISTANCE ON FILE FILLS THE NEW CARRIER'S ROW, by the rule above: only a row nobody touched takes it. Done only when the carrier MOVED: a
+   *       restructure that keeps the carrier (a Combo made Polish) fills nothing, so a bid saved with a blank row is not filled by it.
+   *    4. EVERY OTHER SECTION GIVES THE DRIVE BACK (takeBackStrayTravel). A Travel Labor row the distance filled and nobody touched, on any section that
+   *       is not the carrier and is not an option, off sections included, is emptied and loses its fill markers (and so is the estimator's row that only
+   *       repeats the carrier's, which is what a copy of the carrier's sheet carries once it is made a base beside it). It was only ever taken back from a
+   *       base, and only when the carrier moved, so Epoxy to Polish to Combo left Epoxy's filled row on the off section until Combo turned it back on, and
+   *       the drive was priced twice ($1,716 where Kyle types $858).
+   *    5. THE GUYS FOLLOW THE CREW OF THE BID AS IT IS NOW (syncAutoGuys): Combo made Polish left the carrier's guys on the Combo's bigger crew, and
+   *       the price the draft saved was not the price a plain reopen showed ($33,514 and $32,632).
+   *  A bid with no distance on file fills nothing (the rest still settles). An option is priced apart and its row is its own. */
   function followDistance(model, fromTab) {
     if (!isObject(model)) return model;
-    carryTravelRow(model, fromTab);
-    var d = model.distance;
-    var miles = d ? milesOrNull(d.miles) : null;
-    if (miles !== null) followDistanceHours(model, miles);
+    if (!carrierKept(model, fromTab)) {
+      carryTravelRow(model, fromTab);
+      var d = model.distance;
+      var miles = d ? milesOrNull(d.miles) : null;
+      if (miles !== null) followDistanceHours(model, miles);
+    }
     takeBackStrayTravel(model);
+    syncAutoGuys(model);
     return model;
+  }
+
+  /** Did the section that carried the job's travel before a restructure carry it still? Only a caller that says which section that was can say yes. */
+  function carrierKept(model, fromTab) {
+    if (typeof fromTab !== "string" || fromTab === "") return false;
+    try { return travelCarrier(model) === fromTab; } catch (err) { return false; }
+  }
+
+  /** The Travel Labor rows of one section (the root is the model itself), as the section holds them. */
+  function travelRowsIn(section) {
+    return (isObject(section) && section.labor instanceof Array ? section.labor : []).filter(function (r) { return isTravelRow(r); });
   }
 
   /** Does the estimator own this Travel Labor row's Guys? Typed in the box (guys_typed), or a figure sitting in a box that is not on
@@ -1154,27 +1175,67 @@
     return !!row && (row.guys_typed === true || (!row.guys_auto && filledIn(row.guys)));
   }
 
+  /** Has nobody put a hand on this Travel Labor row's boxes? No marker says a box was typed in or cleared, no guys sit in a Guys box that is off auto, and
+   *  no hours are typed over the tool's own. The distance may have filled it. (The row can still be switched off, which is the estimator's too:
+   *  travelRowIsTheEstimators counts that.) */
+  function travelRowIsHandsOff(row) {
+    if (!row || row.guys_typed === true || row.hours_typed === true) return false;
+    if (travelGuysAreTyped(row)) return false;
+    return isBlank(row.days) || driveHoursAreTools(row);
+  }
+
   /** Is this Travel Labor row one the DISTANCE filled and nobody typed in? Its hours are the tool's own figure (or empty), its
    *  guys are on auto (the crew's size, or the older man-days) or empty, and no marker says a box was typed in or cleared. Such a
    *  row can be taken back without costing the estimator anything they wrote; a row with any figure of theirs in it cannot. */
   function travelRowIsAutoFilled(row) {
-    if (!row || row.guys_typed === true || row.hours_typed === true) return false;
-    if (travelGuysAreTyped(row)) return false;
-    if (!isBlank(row.days) && !driveHoursAreTools(row)) return false;     // hours typed in
-    return driveHoursAreTools(row) || followsCrew(row);                   // and the tool wrote something there
+    return travelRowIsHandsOff(row) && (driveHoursAreTools(row) || followsCrew(row));    // and the tool wrote something there
   }
 
-  /** The Travel Labor row of the section that carried the job's travel moves with the carrier. The job-type path's half of
-   *  pickBase's moveTravelLabor, done IN PLACE on the live model: only when the old carrier has a row, the new one has none (the
-   *  new carrier's own row, typed or not, stays its own), and it is a copy and not a move when the old carrier keeps no other row.
-   *  `fromTab` is the old carrier when the caller knows it; otherwise strandedTravelTab looks for it. Never throws: a bid whose
-   *  sections cannot be read, or a section that is gone, has nothing to carry. */
+  /** Is this Travel Labor row the ESTIMATOR'S? A box they typed in or cleared (the markers saved with the row, or guys in a box that is off auto, or hours that are
+   *  not the tool's own) or a row they switched off, by the slider on its card or by its default on the Defaults tab. The tool never writes into it, and it
+   *  follows the job's drive when the carrier moves (followOwnedRow). A blank row, and one the distance filled, are nobody's. */
+  function travelRowIsTheEstimators(row) {
+    return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));
+  }
+
+  /** The Travel Labor row of the section that carried the job's travel moves with the carrier, and what the estimator said on it moves too. The job-type path's half
+   *  of pickBase's moveTravelLabor, done IN PLACE on the live model: a new carrier that has no row takes the old carrier's (it is a copy and not a move when the
+   *  old carrier keeps no other row); one that has a row nobody touched takes the old carrier's when that one is the estimator's (followOwnedRow); a new
+   *  carrier whose own row is the estimator's keeps it. `fromTab` is the old carrier when the caller knows it; otherwise strandedTravelTab looks for it.
+   *  Never throws: a bid whose sections cannot be read, or a section that is gone, has nothing to carry. */
   function carryTravelRow(model, fromTab) {
     try {
       var to = travelCarrier(model);
       var from = typeof fromTab === "string" && fromTab !== "" ? fromTab : strandedTravelTab(model, to);
-      if (from && from !== to) shiftTravelRow(model, from, to);
+      // (A COPY and not a move, when the old carrier keeps no other row, leaves the old carrier holding a repeat of the row that went: takeBackStrayTravel
+      // gives a repeat of the carrier's row back, the estimator's included, and the row the distance filled.)
+      if (from && from !== to && !shiftTravelRow(model, from, to)) followOwnedRow(model, from, to);
     } catch (err) { /* nothing to carry */ }
+  }
+
+  /** A Travel Labor row given back to nobody: empty, off auto, no marker of a fill or of the estimator's hand, and switched on again. IN PLACE. What an old
+   *  carrier is left holding when its row has gone with the job's drive to another section. */
+  function releaseTravelRow(row) {
+    clearQuantities(row);
+    delete row.enabled;
+    return row;
+  }
+
+  /** WHAT THE ESTIMATOR SAID ON THE JOB'S DRIVE FOLLOWS THE CARRIER (2026-10-20 audit). The old carrier's Travel Labor row is the estimator's (travelRowIsTheEstimators: typed
+   *  figures, a cleared box, a switch turned off) and the new carrier has a row of its own that nobody touched: the two rows change places. The estimator's takes the
+   *  new carrier's slot in its labor list, markers and rate and all, and the old carrier is left holding the new carrier's former row, emptied (releaseTravelRow): every
+   *  section keeps its one row and only the carrier's is priced, as when the distance's own fill is given back, and no row is ever shared or copied. If the new carrier's
+   *  own row is the estimator's too, both are theirs and both stay. True when the rows changed places. THROWS for a section the model does not have, like sectionOf. */
+  function followOwnedRow(model, fromTab, toTab) {
+    var from = sectionOf(model, fromTab).section, to = sectionOf(model, toTab).section;
+    var mine = travelRowsIn(from), theirs = travelRowsIn(to);
+    if (!mine.length || !theirs.length) return false;
+    var row = mine[0], leaves = theirs[0];
+    if (!travelRowIsTheEstimators(row) || theirs.some(travelRowIsTheEstimators)) return false;
+    to.labor[to.labor.indexOf(leaves)] = row;
+    from.labor[from.labor.indexOf(row)] = leaves;
+    releaseTravelRow(leaves);
+    return true;
   }
 
   /** WHERE THE JOB'S TRAVEL LABOR ROW IS STRANDED when the caller does not say which section carried it: the first section other than
@@ -1192,22 +1253,36 @@
     return "";
   }
 
-  /** ONE DRIVE, ONE TRAVEL LABOR ROW PRICED (2026-10-20 audit). After the carrier moved, every Travel Labor row on a section that
-   *  is still a BASE of the bid but no longer carries the job's travel and that the distance filled (travelRowIsAutoFilled) is taken
-   *  back: guys and hours empty, markers cleared, so that section stops charging the drive the new carrier charges. Left alone: a row
-   *  somebody typed in (it is theirs; the card says the drive is charged once, elsewhere), a row switched off, a section that is off
-   *  (it prices nothing, and its row waits for the day the job type comes back), and an option's row (an option is priced apart,
-   *  for its own crew, and carries its own). MUTATES the model. */
+  /** ONE DRIVE, ONE TRAVEL LABOR ROW PRICED (2026-10-20 audits). Every Travel Labor row the distance filled and nobody touched (travelRowIsAutoFilled), on any
+   *  section that does not hold the job's fill, is taken back: guys and hours empty, every fill marker gone. The fill lives on the carrier, so that is every
+   *  other section that is a base OR OFF (an off section prices nothing, but its row would be priced again the day its job type came back: Epoxy to Polish to
+   *  Combo charged $858 twice), and a Gyp carrier too, whose drive is typed and which the distance never fills. Left alone: a row somebody typed in or cleared
+   *  or switched off (it is theirs), and an option's row (an option is priced apart, for its own crew, and carries its own). ONE EXCEPTION to "theirs": the
+   *  estimator's row on a section that is not the carrier that says exactly what the carrier's row says is a COPY of it (a copy of the carrier's sheet carries the
+   *  row it had, and was made a base beside it), so it is given back too: the job's drive is typed once and charged once. MUTATES the model. */
   function takeBackStrayTravel(model) {
     var entries = readableSections(model);
     if (entries === null) return;
     var carrier = travelCarrier(model);
+    var held = entries.filter(function (e) { return e.tab === carrier; })[0];
+    var carrierRow = held ? travelRowsIn(held.section)[0] : null;
     entries.forEach(function (e) {
-      if (e.kind !== "base" || e.tab === carrier || !isObject(e.section)) return;
-      (e.section.labor instanceof Array ? e.section.labor : []).forEach(function (r) {
-        if (isTravelRow(r) && r.unit === "hours" && rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);
+      if (e.kind === "option" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;
+      travelRowsIn(e.section).forEach(function (r) {
+        if (r.unit !== "hours") return;
+        if (rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);
+        else if (e.tab !== carrier && travelRowRepeats(r, carrierRow)) releaseTravelRow(r);
       });
     });
+  }
+
+  /** Does this Travel Labor row repeat the carrier's: both the estimator's, with the same guys and hours (and the same hands on them: typed, cleared, switched
+   *  off, on auto or not)? What a copy of the carrier's sheet holds beside the carrier's own row once the copy is a base of the job. */
+  function travelRowRepeats(row, carrierRow) {
+    if (!row || !carrierRow || row === carrierRow || !travelRowIsTheEstimators(row) || !travelRowIsTheEstimators(carrierRow)) return false;
+    var same = function (k) { return String(row[k] == null ? "" : row[k]) === String(carrierRow[k] == null ? "" : carrierRow[k]); };
+    return same("guys") && same("days") && !!row.guys_auto === !!carrierRow.guys_auto && (row.enabled === false) === (carrierRow.enabled === false) &&
+      (row.guys_typed === true) === (carrierRow.guys_typed === true) && (row.hours_typed === true) === (carrierRow.hours_typed === true);
   }
 
   /** The number as it reads in a sentence: at most two places, none when it is whole. */
@@ -1291,13 +1366,20 @@
     return manDaysHint(!!(row && row.guys_auto), travelManDays(rows));
   }
 
-  /** THE WORDS ON A TRAVEL LABOR CARD THAT SITS ON A BASE SECTION WHICH DOES NOT CARRY THE JOB'S TRAVEL (2026-10-20 audit). The job's
-   *  drive is one trip and is charged once, on the carrier (`carrierTab`), so such a row is a leftover of a carrier move
-   *  (followDistance). One the distance filled and nobody typed in has been taken back and is empty: the words say to leave it so. One
-   *  somebody typed in was left as typed and still adds to this section's labor: the words say that, and what to do about it. */
+  /** THE WORDS ON A TRAVEL LABOR CARD THAT SITS ON A BASE SECTION WHICH DOES NOT CARRY THE JOB'S TRAVEL (2026-10-20 audits). The job's
+   *  drive is one trip and is charged once, on the carrier (`carrierTab`), so the card says so. A row the distance filled and nobody
+   *  touched has been taken back (followDistance) and is empty: the words say to leave it so. One that still holds figures is worded
+   *  by what they ARE: the estimator's own (typed, and so left as typed), a row switched off (it adds nothing), or the drive the distance
+   *  filled that a bid saved before the take-back still holds (not typed: the audit caught the card saying "typed" over the tool's own
+   *  figures). A row somebody typed in, and the drive the distance filled, both still add to this section's labor, and the words say what to do. */
   function strayTravelNote(carrierTab, row) {
     var where = "The job's drive is charged once, on the " + carrierTab + " section.";
     if (row && (filledIn(row.guys) || filledIn(row.days))) {
+      if (!rowOn(row)) return where + " This line holds figures but is switched off, so it adds nothing to this section's labor.";
+      if (travelRowIsAutoFilled(row)) {
+        return where + " This line still holds the drive the distance filled, so it adds to this section's labor as well. " +
+          "Clear it, or remove the line.";
+      }
       return where + " This line holds figures that were typed, so it was left as typed and still adds to this section's labor. " +
         "Clear it, or remove the line, if the drive is already charged there.";
     }
@@ -5849,8 +5931,10 @@
     driveHoursAreTools: driveHoursAreTools, driveHoursSource: driveHoursSource,
     driveHoursSentence: driveHoursSentence, driveHoursNote: driveHoursNote, travelGuysHint: travelGuysHint,
     followsCrew: followsCrew, crewSize: crewSize, ownCrewSize: ownCrewSize, followDistance: followDistance, markTypedByHand: markTypedByHand,
-    // One drive, one Travel Labor row priced (2026-10-20 audit): what a carrier move takes back, and the words on a row it leaves behind.
-    travelRowIsAutoFilled: travelRowIsAutoFilled, takeBackStrayTravel: takeBackStrayTravel, strayTravelNote: strayTravelNote,
+    // One drive, one Travel Labor row priced (2026-10-20 audits): what a restructure takes back, what follows the carrier (the estimator's own row), and the
+    // words on a row it leaves behind.
+    travelRowIsAutoFilled: travelRowIsAutoFilled, travelRowIsTheEstimators: travelRowIsTheEstimators,
+    takeBackStrayTravel: takeBackStrayTravel, strayTravelNote: strayTravelNote,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
