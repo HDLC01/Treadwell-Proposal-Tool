@@ -211,7 +211,9 @@
       // The prevailing rate in force is the one the page prices with.
       if (profile) nights = sheetNights(rows, model.conditions, prevailingApplied(model), profile);
     }
-    var one = nights === null || Math.abs(nights - days) < 1e-9;
+    // Two counts that read the same to the two places the page shows are ONE figure for a box that is typed: a Gyp crew at the library's $33.66 counts 48.0006 nights (the sheet rounds the labor UP to the
+    // dollar before it divides) where a head count says 48, and 48 is what both say. A line on the older auto keeps the exactness it always had.
+    var one = nights === null || Math.abs(nights - days) < (auto ? 1e-9 : 0.005);
     if (multi) {
       return one ? "Man-days from the labor lines of the base sheets: " + (Math.round(days * 100) / 100) + "."
                  : "Nights from the labor of the base sheets, as the sheet counts them: " + (Math.round(nights * 100) / 100) + ".";
@@ -1955,7 +1957,7 @@
         " now).");
     } else if (showManDays) {
       // Text only: the figure is not used anywhere until the estimator types it into a box.
-      if (job.sheet && Math.abs(job.count - job.days) >= 1e-9) {
+      if (job.sheet && Math.abs(job.count - job.days) >= 0.005) {
         lines.push("For reference, " + where + " count " + qty(job.count) + " nights the way the sheet does (" + (gypCarrier ? "guys x hours over " + nightHours : "guys x days") + " is " +
           qty(job.days) + ").");
       } else {

@@ -533,13 +533,29 @@ async function main() {
     const read = (m, tab) => {
       const rows = tab === B.ROOT_TAB ? m.labor : m.tabs[tab].labor;
       const how = B.travelHow(B.sectionView(m, tab), m).lines;
-      return { job: B.jobNights(m), lodgingHint: B.travelQtyHint(m, tab, "lodging", m.travel.lodging, rows), perDiemHint: B.travelQtyHint(m, tab, "per_diem", m.travel.per_diem, rows),
+      return { job: B.jobNights(m), costs: B.travelCosts(m.travel, rows, B.travelOpts(m, tab)), lodgingHint: B.travelQtyHint(m, tab, "lodging", m.travel.lodging, rows), perDiemHint: B.travelQtyHint(m, tab, "per_diem", m.travel.per_diem, rows),
         following: pick(how, /follow the/), reference: pick(how, /^For reference/) };
     };
     res.gypFollowing = read(farAnswer(gyp()), GYP_TAB);
     res.gypTyped = read(typedLines(farAnswer(gyp())), GYP_TAB);
     res.comboFollowing = read(farAnswer(combo()), B.ROOT_TAB);
     res.comboTyped = read(typedLines(farAnswer(combo())), B.ROOT_TAB);
+    // THE LIBRARY'S OWN GYP RATE, $33.66: the sheet rounds the labor UP to the dollar before it divides, so 4 guys for 120 hours count 48.0006 nights where a head count says 48, and charge a dollar
+    // more on each line ($3,361 and $2,161). Both counts read 48, and a typed box is told so in the plain words, not "as the sheet counts them".
+    const real = () => {
+      const m = gyp();
+      m.tabs[GYP_TAB].labor = [{ id: "a", label: "A", guys: 4, days: 120, rate: 33.66, unit: "hours" }];
+      return m;
+    };
+    res.gypRealFollowing = read(farAnswer(real()), GYP_TAB);
+    res.gypRealTyped = read(typedLines(farAnswer(real())), GYP_TAB);
+    // A LINE ON THE OLDER AUTO keeps the exactness it always had: a rev 3 root (Polishing 4 x 12, a drive of 5 guys x 6.5 hours = $1,072.50) counts 48.0019 nights where guys x days is 48, and the
+    // line says so ("as the sheet does"), as a bid saved before 2026-10-12 always read.
+    const older = combo();
+    older.tabs.Epoxy.kind = "off";
+    older.labor = [{ id: "polishing", label: "Polishing", guys: 4, days: 12, rate: 33 }, { id: "travel", label: "Travel Labor", guys: 5, days: 6.5, rate: 33, unit: "hours", guys_auto: false }];
+    older.travel = { lodging: { label: "Lodging", enabled: true, qty: 48, qty_auto: true, rate: 70 }, per_diem: { label: "Per Diem", enabled: true, qty: 48, qty_auto: true, rate: 45 } };
+    res.olderAutoNear = { job: B.jobNights(older), hint: B.travelQtyHint(older, B.ROOT_TAB, "lodging", older.travel.lodging, older.labor) };
     return res;
   });
 

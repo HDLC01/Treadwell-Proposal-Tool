@@ -418,6 +418,24 @@ def test_the_words_give_both_figures_when_the_sheets_count_is_not_the_head_count
     assert ct["reference"] == ["For reference, the labor lines of the base sheets count 42 nights the way the sheet does (guys x days is 32)."]
 
 
+def test_a_gyp_crew_at_the_librarys_rate_reads_as_man_days_though_the_sheet_charges_a_dollar_more(ran):
+    """At the library's own $33.66 the sheet rounds the labor UP to the dollar before it divides, so 4 guys for 120 hours count 48.0006 nights where a head count says 48, and the lines charge a dollar
+    more each ($3,361 and $2,161). Both counts read 48, so the words say 48 in the plain way ("Man-days from the tasks above: 48." under a typed box, "the man-days on the labor lines above are 48." in the
+    working), not "as the sheet counts them" with the same number on both sides. A line on the OLDER auto keeps the exactness it always had: a rev 3 Polish root at 48.0019 nights against guys x days 48
+    still reads "Nights counted from the labor above, as the sheet does."
+
+    Mutation: tell a typed box a rounding is a different count (in the hint; in the working's reference); read an older auto line's rounding as the same count."""
+    f, t = ran["words"]["gypRealFollowing"], ran["words"]["gypRealTyped"]
+    assert f["job"]["count"] == pytest.approx(16157 / 33.66 / 10) and f["job"]["days"] == 48
+    assert f["costs"] == {"lodging": 3361, "per_diem": 2161, "total": 5522}, "the sheet's own figure: 48.0006 nights, each line rounded up"
+    assert f["lodgingHint"] == GYP_FOLLOW_LODGING
+    assert t["lodgingHint"] == t["perDiemHint"] == "Man-days from the tasks above: 48."
+    assert t["reference"] == ["For reference, the man-days on the labor lines above are 48."]
+    o = ran["words"]["olderAutoNear"]
+    assert o["job"]["count"] == pytest.approx(12672.5 / 33 / 8) and o["job"]["days"] == 48
+    assert o["hint"] == "Nights counted from the labor above, as the sheet does."
+
+
 def test_the_working_is_worked_out_of_the_whole_model_whatever_section_the_panel_hands_it(ran):
     """A Combo (Polish 4 x 12, Epoxy 5 x 10) asked through the view of its Epoxy section, with the whole model beside it, counts 48 + 50 = 98 man-days between its two bases and says so in the
     working; asked of the model itself it says the same. (A view alone would read the Epoxy rows as the root's too: 100.)
@@ -594,6 +612,19 @@ BREAKS = {
     "the typed reference tells a Gyp crew guys x days": (
         MODEL, TYPED_REFERENCE, TYPED_REFERENCE.replace('(gypCarrier ? "guys x hours over " + nightHours : "guys x days")', '"guys x days"'),
         lambda g: g["words"]["gypTyped"]["reference"] != ["For reference, the labor lines above count 20.7 nights the way the sheet does (guys x hours over 10 is 19)."]),
+    "a typed box calls a rounding a different count": (
+        MODEL, "    var one = nights === null || Math.abs(nights - days) < (auto ? 1e-9 : 0.005);", "    var one = nights === null || Math.abs(nights - days) < 1e-9;",
+        lambda g: g["words"]["gypRealTyped"]["lodgingHint"] != "Man-days from the tasks above: 48."),
+    "the working's reference calls a rounding a different count": (
+        MODEL, "      if (job.sheet && Math.abs(job.count - job.days) >= 0.005) {", "      if (job.sheet && Math.abs(job.count - job.days) >= 1e-9) {",
+        lambda g: g["words"]["gypRealTyped"]["reference"] != ["For reference, the man-days on the labor lines above are 48."]),
+    "an older auto line reads a rounding as the same count": (
+        MODEL, "    var one = nights === null || Math.abs(nights - days) < (auto ? 1e-9 : 0.005);", "    var one = nights === null || Math.abs(nights - days) < 0.005;",
+        lambda g: g["words"]["olderAutoNear"]["hint"] != "Nights counted from the labor above, as the sheet does."),
+    # N1: the Gyp DRIVE stays typed
+    "a far answer fills a Gyp carrier's drive": (
+        MODEL, '    if (layout === "gyp") return null;', "    void layout;",
+        lambda g: g["gyp"]["saved"]["drive"]["days"] != ""),
     # N4: the cards, both of them, on a Gyp carrier and on every other
     "the Gyp Lodging card says the man-days": (
         PAGE, CARD_GYP_LODGING, CARD_GYP_LODGING.replace("the crew's hours, ", "the man-days, "),
