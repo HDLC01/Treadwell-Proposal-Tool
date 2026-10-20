@@ -3087,6 +3087,9 @@
       ' <button data-go="' + step + '">Edit</button></div>' + inner + '</div>';
   }
 
+  /** The words under a Hotel or Per Diem total whose count x rate is not whole dollars (round 6, part 3, M4): the sheet rounds each line up to the dollar. */
+  var ROUNDED_UP = "rounded up to the dollar, as the sheet does";
+
   /** THE REVIEW TABLES SHOW HOW EVERY FIGURE WAS WORKED OUT (Hanz, 2026-10-19: "show the break down of any thing that has a
    *  total ... how its solved or how it got to that price. Make sure to label the columns as price/sf, SF or LF etc.").
    *  Every card is a table with a header row and five columns: Item | Quantity | Unit | Rate | Total. A row that has a total
@@ -3412,13 +3415,16 @@
       var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor, qty)[k]
                            : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab));
       var per = k === "lodging" ? "night" : "day";
+      // THE ROW READS TRUE (round 6, part 3, M4): the count to as many places as the charge needs (48.0006 nights at $70 is $3,361, and "48" x $70 is not), and, under the total, that the sheet
+      // rounds each line up to the dollar whenever the count x the rate is not whole dollars (B.travelQtyShown).
+      var shown = B.travelQtyShown(qty, tl.rate, cost);
       // THE JOB'S LINE SAYS WHERE ITS QUANTITY CAME FROM while a far answer filled it (B.followDistanceNights): the nights and the per diem days follow the
       // man-days, Kyle's way, said in the line's own words under its name. A keyed figure like the drive sentence above, so a late answer repaints it
       // in place, and empty (no height) for a line the estimator typed. An option's own lines count their own man-days and say nothing here.
       var followNote = !ownTravel && B.qtyFollows(tl) ? B.travelFollowWords(ROOT, activeTab, k, M.labor) : "";
       var nameCell = ownTravel ? name : { raw: esc(name) + '<span class="note work">' + rv("trv." + k + ".note", followNote) + '</span>' };
-      trvRows.push([nameCell, rvc("trv." + k + ".q", B.fmtSf(B.num(qty))), per + "s", rvc("trv." + k + ".rate", rateMoney(tl.rate) + " / " + per),
-                    rv("trv." + k + ".tot", moneyAuto(cost))]);
+      trvRows.push([nameCell, rvc("trv." + k + ".q", shown.text), per + "s", rvc("trv." + k + ".rate", rateMoney(tl.rate) + " / " + per),
+                    rv("trv." + k + ".tot", moneyAuto(cost)) + '<span class="note work">' + rv("trv." + k + ".up", shown.roundedUp ? ROUNDED_UP : "") + '</span>']);
     });
     if (!carries) {
       trvRows.push([travelNote(), "", "", "", ""]);

@@ -234,14 +234,15 @@ def test_a_carrier_that_moves_under_a_far_distance_on_file_brings_the_lines_unde
 
     ROUND 6, PART 3 (M2, 2026-10-21): the Epoxy tab counts its nights the sheet's way, from its labor DOLLARS (Epoxy!B65 `((D53-D52)/C47)/8`), as every tab does now: the crew's $13,200 and the drive's
     five guys x 6.5 hours, $1,072.50, round up to $14,273, so 50.0019 nights where the head count says 50, and the lines charge a dollar more each, $3,501 and $2,251 (this test pinned $3,500 and $2,250,
-    the head count the Epoxy tab no longer charges; Hanz, 2026-10-21: "Let them re-price"). The box still shows 50: it holds the figure to two places.
+    the head count the Epoxy tab no longer charges; Hanz, 2026-10-21: "Let them re-price"). The box still shows 50: it holds the figure to two places. The working shows the count to the places
+    the price needs (M4): "50.0019 nights x $70.00 = $3,500.13, rounded up to $3,501", where "50 nights" times $70 was not the $3,500.13 it printed.
 
     Mutation: leave the nights out of the carrier's settling."""
     m = ran["nights"]["carrierMoved"]
     assert m["n"]["carrier"] == "Epoxy" and m["manDays"] == 50
     assert m["n"]["lodging"]["qty"] == 50 and m["n"]["lodging"]["follow"] == "labor" and m["n"]["perDiem"]["follow"] == "labor"
     assert m["n"]["costs"] == {"lodging": 3501, "per_diem": 2251, "total": 5752}
-    assert "Lodging: 50 nights (follows the labor) x $70.00 = $3,500.13, rounded up to $3,501" in m["l"]["how"].split("\n"), "worked out on the Epoxy carrier's own labor, as the price is"
+    assert "Lodging: 50.0019 nights (follows the labor) x $70.00 = $3,500.13, rounded up to $3,501" in m["l"]["how"].split("\n"), "worked out on the Epoxy carrier's own labor, as the price is"
     t = ran["nights"]["carrierMovedTyped"]["n"]
     assert t["lodging"]["qty"] == "9" and t["lodging"]["typed"] is True and t["lodging"]["follow"] is None and t["perDiem"]["qty"] == 50
 
