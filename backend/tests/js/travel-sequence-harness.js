@@ -406,7 +406,22 @@ async function take(saved, step, distanceAnswer) {
     b.clock.fire();
     return { b: b, plain: false, piece: "add:" + step.add, step: step };
   }
-  b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
+  if (step.base === "combined") {
+    // THE PAIR PRICED TOGETHER is asked from the bar of either sheet of it (the strip's "Epoxy + Polish" tab until 2026-10-21): open one of the
+    // pair when the sheet on show is not, then press its "Make Epoxy + Polish the base".
+    const pair = B.combinedPair(b.api.root());
+    if (!pair) return null;
+    if (!b.doc.querySelector('[data-sh-act="combine"]')) {
+      const tabSel = '[data-section-tab="' + pair[0] + '"]';
+      if (!b.doc.querySelector(tabSel)) return null;
+      P.clickOn(b, tabSel);
+      await settle();
+    }
+    if (!b.doc.querySelector('[data-sh-act="combine"]')) return null;
+    P.clickOn(b, '[data-sh-act="combine"]');
+  } else {
+    b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
+  }
   if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return null;
   P.clickOn(b, '[data-sh-act="base-yes"]');
   await settle();
@@ -414,11 +429,15 @@ async function take(saved, step, distanceAnswer) {
   return { b: b, plain: false, piece: "base:" + step.base, step: step };
 }
 
-/** The base changes the Sheets panel of this page offers (one to a radio), other than the base it already has. */
+/** The base changes the Sheets panel of this page offers, other than the base it already has: one sheet to a radio, and the pair priced
+ *  together. The pair is a button on the bar of either sheet of it, drawn only while one of them is on show, so it is offered whenever the bid
+ *  HAS the pair and it is not the base already, and first, where its tab stood in the strip before 2026-10-21. */
 function basePicks(b) {
   const html = String((b.doc.getElementById("sheets-panel") || {}).innerHTML || "");
   const out = [];
   const have = B.baseOf(b.api.root()).ids;
+  const pair = B.combinedPair(b.api.root());
+  if (pair && !(have.length === 2 && pair.every((id) => have.indexOf(id) >= 0))) out.push("combined");
   [...html.matchAll(/data-sh-base="([^"]*)"/g)].forEach((mm) => {
     const v = mm[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&");
     const ids = v === "combined" ? B.combinedPair(b.api.root()) : [v];

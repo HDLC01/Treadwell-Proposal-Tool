@@ -1099,6 +1099,12 @@
     var t = e.target;
     if (!t || !t.closest || !t.getAttribute || t.getAttribute("data-section-tab") === null) return;
     var k = e.key;
+    // F2 RENAMES THE TAB THE CARET IS ON, the keyboard's double-click (as in a worksheet's tabs and a file list).
+    if (k === "F2") {
+      e.preventDefault();
+      renameFromTab(t.getAttribute("data-section-tab"), t.getAttribute("data-sh-key"));
+      return;
+    }
     if (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "Home" && k !== "End") return;
     var panel = $("sheets-panel");
     var tabs = panel ? Array.prototype.slice.call(panel.querySelectorAll("[data-section-tab]")) : [];
@@ -1112,6 +1118,27 @@
       tabs[to].focus({ preventScroll: true });
       stripReveal(panel.querySelector("[data-sh-strip]"), typeof tabs[to].closest === "function" ? tabs[to].closest("li") : null);
     }
+  });
+
+  /** RENAME A SHEET FROM ITS TAB (Hanz, 2026-10-21: "Double clicking the sheet container should allow me to rename it"): a double-click
+   *  on the tab, or F2 on it. The sheet is opened first, because the name box is drawn in the OPEN sheet's tab, then the Rename button's
+   *  own action runs. A sheet already being renamed is left as it is, so what was typed is never thrown away. */
+  function renameFromTab(tab, key) {
+    if (tab === null || tab === undefined || sheetsUi.renaming === tab) return;
+    if (tab !== activeTab) {
+      resetSheetsUi();
+      show(tab);
+      sheetsUi.focus = key || null;
+      paintSections();
+      renderPanel();
+    }
+    sheetsAct("rename", tab);
+  }
+
+  document.addEventListener("dblclick", function (e) {
+    var t = e.target;
+    var secTab = t && t.closest ? t.closest("[data-section-tab]") : null;
+    if (secTab) renameFromTab(secTab.getAttribute("data-section-tab"), secTab.getAttribute("data-sh-key"));
   });
 
   /** Kept under its old name: the harnesses (and anything else that asked the page to redraw "the option bar") still do. */
@@ -1256,7 +1283,7 @@
 
   /** The base bid was asked for: one sheet, or the combined Epoxy and Polish pair. Nothing changes until the estimator says
    *  yes, because it moves the lump sum, the job type and what the proposal prints. */
-  function askBase(row) {
+  function askBase(row, focusOnAsk) {
     var ids = row === "combined" ? B.combinedPair(ROOT) : [row];
     var now = null;
     try { now = B.baseOf(ROOT).ids; } catch (err) { now = null; }
@@ -1267,6 +1294,7 @@
     }
     sheetsUi.confirm = { row: row, ids: ids };
     sheetsUi.armed = null;
+    if (focusOnAsk) sheetsUi.focus = focusOnAsk;
     paintSheets();
   }
 
@@ -1311,7 +1339,7 @@
     // still gives the old rows back. It is given the WHOLE model (ROOT): M is the section on show, of the model from before the change.
     B.followDistance(ROOT, carrierBefore);
     TW.setState(patch);
-    sheetsChanged(activeTab, (asked.row === "combined" ? "combined" : asked.row) + "|base");
+    sheetsChanged(activeTab, asked.row === "combined" ? activeTab + "|open" : asked.row + "|base");
   }
 
   /** The "On the proposal as an option" switch. Off keeps the sheet on the bid and priced, and takes it off the proposal. */
@@ -1346,6 +1374,9 @@
       paintSheets();
       return;
     }
+    // The pair priced together as the base (the open sheet's bar; it was the strip's "Epoxy + Polish" tab). The question is drawn above
+    // the bar, so the caret is put on its "Make it the base" rather than left behind it.
+    if (act === "combine") { askBase("combined", "confirm|yes"); return; }
     if (act === "copy") { copySheet(tab); return; }
     if (act === "rename") {
       var label = "";
@@ -1362,7 +1393,8 @@
     if (act === "base-no") {
       var row = sheetsUi.confirm ? sheetsUi.confirm.row : null;
       sheetsUi.confirm = null;
-      sheetsUi.focus = row ? row + "|base" : null;
+      // The combined pair is asked from the open sheet's "Make Epoxy + Polish the base" button; one sheet from its tab's radio.
+      sheetsUi.focus = row === "combined" ? activeTab + "|combine" : (row ? row + "|base" : null);
       paintSheets();
       return;
     }
@@ -4230,6 +4262,13 @@
     // A sheet's name in the panel (and the Open button on an option's Review card): put that sheet on show.
     var secTab = t.closest("[data-section-tab]");
     if (secTab) {
+      // THE SECOND PRESS OF A DOUBLE-CLICK renames. The first press opened the sheet and redrew the strip, so the second lands on a
+      // NEW button: it is known by the browser's own count of presses (detail), not by being the same element, and the dblclick
+      // that follows finds the sheet already being renamed and leaves it alone.
+      if (e.detail >= 2 && secTab.getAttribute("data-section-tab") === activeTab) {
+        renameFromTab(activeTab, secTab.getAttribute("data-sh-key"));
+        return;
+      }
       resetSheetsUi();
       show(secTab.getAttribute("data-section-tab"));
       sheetsUi.focus = secTab.getAttribute("data-sh-key");
