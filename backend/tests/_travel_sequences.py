@@ -44,7 +44,7 @@ RULES = {
     "RELOAD_AGREES": "the same distance answer typed in the session that made a Sheets change (or the x, or Add Travel Labor) and typed after a jsonb reload of what it saved leaves different prices or Travel Labor rows",
     "ANSWER_OWNER": "the job says it has no drive (no_travel_labor) while the section that carries the job's travel holds a Travel Labor line: the flag is the carrier's answer, and nobody else's",
     "DEMOTED_KEEPS": "a base the Sheets panel's pick demoted to an option lost the Travel Labor line it held (it keeps its own, and the new carrier takes a copy)",
-    "ANSWER_HELD": "after the x on the carrier's Travel Labor line (until Add Travel Labor on the carrier, or a Sheets action) a job-type switch or a crew typed left the job a drive: the answer is gone, or the carrier holds a line",
+    "ANSWER_HELD": "after the x on the carrier's Travel Labor line (until Add Travel Labor on the carrier, a Sheets action, or a job-type switch that makes an option holding its own line the carrier) a job-type switch or a crew typed left the job a drive: the answer is gone, or the carrier holds a line",
     "SESSION_AGREES": "a session that made its changes without reloading and a reload of what it saved hold other prices, other sheets or sheets in another order, other Travel Labor rows, or leave other ones after a distance answer",
     "CRASH": "the page threw",
 }

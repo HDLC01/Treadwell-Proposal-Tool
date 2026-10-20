@@ -1357,17 +1357,19 @@
    *       switched-off row that is an exact copy of the carrier's, with the guys of a crew since gone, was compared before the sync had made them the same, and
    *       stayed on the base beside the carrier's (the fourth audit).
    *    6. THE JOB'S "NO DRIVE" ANSWER IS PUT BACK TO WHAT IT IS (settleTravelAnswer, round 6 part 2). The flag the carrier's x set (`no_travel_labor`) means something only
-   *       while the carrier holds no Travel Labor line; a restructure can hand the job one (an option made the base held a line of its own), and then the flag goes.
-   *       A job-type switch otherwise HONOURS the answer (decided 2026-10-20): the job has no drive, so no row is carried to the new carrier (strandedTravelTab) and
-   *       the new carrier is not seeded one (seedNewSections). Add Travel Labor on the carrier is the way back.
+   *       while the carrier holds no Travel Labor line; a restructure can hand the job one (an option made the base held a line of its own: by the Sheets panel's pick, pickBase,
+   *       or by a job-type switch, sectionsForJob, round 6 part 3), and then the flag goes. A job-type switch otherwise HONOURS the answer (decided 2026-10-20, and confirmed by
+   *       Hanz on 2026-10-21: "a job-type switch keeps the drive REMOVED"): the job has no drive, so no row is carried to the new carrier (strandedTravelTab), the new carrier is
+   *       not seeded one (seedNewSections) and a blank one it held is taken off (releaseNobodysTravelRow). Add Travel Labor on the carrier is the way back.
    *  A bid with no distance on file fills nothing (the rest still settles). An option is priced apart and its row is its own: the bases are settled here, and
    *  an option's row follows the ANSWERS (followDistanceOptions). */
   function followDistance(model, fromTab) {
     if (!isObject(model)) return model;
     if (!carrierKept(model, fromTab)) {
       carryTravelRow(model, fromTab);
-      // A JOB THAT SAID IT HAS NO DRIVE keeps saying so (round 6, part 2): the new carrier holds no line nobody typed. A section that was not the carrier can still hold a blank one (the
-      // shipped four rows an off root of a new Epoxy bid was never seeded away from, a row emptied when the drive left it), and the distance on file would fill it below.
+      // A JOB THAT SAID IT HAS NO DRIVE keeps saying so (round 6, part 2; Hanz, 2026-10-21: the switch keeps the drive removed): the new carrier holds no line nobody typed. A section that was
+      // not the carrier can still hold a blank one (the shipped four rows an off root of a new Epoxy bid was never seeded away from, a row emptied when the drive left it), and the distance
+      // on file would fill it below. (An OPTION the switch made the carrier, holding a line of its own, has already settled the flag in sectionsForJob: its line is its own drive, and stays.)
       if (model.no_travel_labor === true) releaseNobodysTravelRow(model);
       var d = model.distance;
       var miles = d ? milesOrNull(d.miles) : null;
@@ -4912,6 +4914,12 @@
     // A Polish section that has never held a takeoff is new to the bid, so it is priced by Polish rev 2 like any other new
     // one (Phase 17). A root that was priced before and is coming back keeps the profile it had, or none.
     if (rootLifted && out.profile === undefined && !takeoffStated(out.takeoff)) out = Object.assign({}, out, { profile: REV3.stamp });
+    // AN OPTION THE SWITCH MAKES THE CARRIER BRINGS ITS OWN DRIVE, AS A BASE PICK DOES (round 6, part 3, M3). After the carrier's x the job says it has no drive (`no_travel_labor`), and a job-type
+    // switch keeps the JOB'S drive removed (Hanz, 2026-10-21: no seed, no carry; Add Travel Labor is the way back), so a blank line the new carrier holds is taken off (followDistance). An OPTION's
+    // line is not the job's: an option is priced apart and carries its own drive, one the estimator put on it (Add Travel Labor) or kept (a copy's, a demoted base's). When the switch makes that option
+    // the carrier, the job has a drive again, and the flag is settled exactly as pickBase settles it (settleTravelAnswer: gone while the carrier holds a line). Without this the switch took the line
+    // off where the Sheets panel's pick kept it: a far Polish with an Epoxy option holding its own drive, Epoxy made the base, $39,350 one way and $41,410 the other.
+    if (out !== model && out.no_travel_labor === true && held.some(function (e) { return e.kind === "option" && e.tab === carrierTabOf(out); })) settleTravelAnswer(out);
     return out;
   }
 

@@ -10,13 +10,15 @@ F2: a far Polish, the x, an Epoxy sheet made the base, Add Travel Labor on it, t
     distance answer (50, 300, 190 miles, or the box cleared) typed in the session and after the reload must leave the same prices and the same Travel Labor rows (RELOAD_AGREES);
   * ANSWER_OWNER: the root's `no_travel_labor` is the JOB's answer, the carrier's and nobody else's. Set while the section that carries the job's travel holds a Travel Labor line, it is a flag
     that has outlived its meaning (an option's x, a leftover row's x, a job-type switch that seeded the new carrier a line the job had said it does not have);
-  * ANSWER_HELD: the answer HOLDS (decided 2026-10-20). After the x on the carrier's line, and until Add Travel Labor on the carrier or a Sheets action, a job-type switch or a crew typed leaves
-    the job no drive: the flag still set and no line on the carrier, not seeded to a new section, not carried to it, not a blank one the new carrier already held filled by the distance on file;
+  * ANSWER_HELD: the answer HOLDS (decided 2026-10-20; Hanz, 2026-10-21: "a job-type switch keeps the drive REMOVED", no seed, no carry, Add Travel Labor is the way back). After the x on the
+    carrier's line, and until Add Travel Labor on the carrier or a Sheets action, a job-type switch or a crew typed leaves the job no drive: the flag still set and no line on the carrier, not seeded
+    to a new section, not carried to it, not a blank one the new carrier already held filled by the distance on file. A switch that makes an OPTION holding a line of its own the carrier ends the
+    rule as a base pick does (round 6, part 3, M3): that line is the option's own drive, and the job has one;
   * DEMOTED_KEEPS: a base the Sheets panel's pick demotes to an option keeps the Travel Labor line it held. The blank line a reload gave a demoted root is gone, so a session and a reload now agree even
     on a demotion that loses its line; the two part-5 entries that put that loss back (test_polish_travel_sequences_reload.py) now see it through this rule.
 
 `answerJobs` is F1's family (three steps among the four job types and the answer), `answerSheets` F2's (the Sheets actions and the answer), `answer` every kind of step two deep, and `answers` the
-fifteen sequences of the answer's own, the audit's three among them.
+seventeen sequences of the answer's own, the audit's three among them.
 
 ROUND 6, PART 3 (2026-10-21, M1): the sheets are re-keyed with everything else. Until the sheet-order work (each section's `seq`) was merged, these walks kept the sheets under `tabs` in the order they were
 saved, because a tree without it reads them back in jsonb's; now every reopen is the server's, sheets and all (tests/js/_jsonb.js, `run` refuses a walk none of whose reopens moved the sheets). The one
@@ -63,12 +65,13 @@ def test_the_answer_walk_is_clean_on_a_job_that_starts_local_or_with_no_distance
 
 
 def test_the_answers_own_sequences_are_clean_and_none_is_cut_short():
-    """The fifteen sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
-    it, and the Epoxy + Polish-copy pair, twice): every rule after every step. None may be skipped (a step the page offers nothing to press on would shorten the sequence without a word)."""
+    """The seventeen sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
+    it, the Epoxy + Polish-copy pair, twice, and an option holding its own drive made the carrier by a job-type switch and by a base pick): every rule after every step. None may be skipped (a
+    step the page offers nothing to press on would shorten the sequence without a word)."""
     require_node()
     got = run("answers", 0)
     _walked(got, 55, 8, 30)
-    assert got["sequences"] == 15 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
+    assert got["sequences"] == 17 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
     assert got["violations"] == {} and got["crashes"] == [], explain(got)
 
 

@@ -57,9 +57,11 @@
  * re-keyed as the drafts table's jsonb column hands it back (key length, then bytes), and:
  *   ANSWER_OWNER     the root's `no_travel_labor` is the JOB's answer: it is set only while the section that carries the job's travel holds no Travel Labor line. An option's x and a leftover row's x
  *                    record nothing on the job, a job-type switch after the carrier's x does not seed the new carrier a line, and a flag over a carrier that holds a line is a violation.
- *   ANSWER_HELD      the job's answer HOLDS (decided 2026-10-20): after the x on the carrier's line and until Add Travel Labor on the carrier, a job-type switch or a crew typed leaves the job with no
- *                    drive: the flag still set, and no line on the carrier (not seeded to a new section, not carried to it, not a blank one the new carrier already held filled by the distance on
- *                    file). A Sheets action (a base pick, a copy, a sheet added) ends the rule: an option made the base can hold a line of its own, and then the job has a drive (the answer goes).
+ *   ANSWER_HELD      the job's answer HOLDS (decided 2026-10-20; Hanz, 2026-10-21: "a job-type switch keeps the drive REMOVED, no seed, no carry, Add Travel Labor is the way back"): after the x
+ *                    on the carrier's line and until Add Travel Labor on the carrier, a job-type switch or a crew typed leaves the job with no drive: the flag still set, and no line on the carrier
+ *                    (not seeded to a new section, not carried to it, not a blank one the new carrier already held filled by the distance on file). A Sheets action (a base pick, a copy, a sheet
+ *                    added) ends the rule: an option made the base can hold a line of its own, and then the job has a drive (the answer goes). So does a job-type switch that makes an OPTION holding
+ *                    a line of its own the carrier (round 6, part 3, M3: it brings its own drive, exactly as the base pick does; promotedOwnLine).
  *   DEMOTED_KEEPS    a base the Sheets panel's pick demotes to an option keeps the Travel Labor line it held (the fifth audit's decision). The blank line a reload gave a demoted root is gone, so a session
  *                    and a reload now agree even on a demotion that loses the line, and RELOAD_AGREES no longer says so: this says what the session must hold.
  *   (FAR_CARRIER     no longer calls a far carrier with no line a violation while the job's answer says it has no drive.)
@@ -633,6 +635,21 @@ function nextCtx(ctx, step) {
   return ctx;
 }
 
+/** ROUND 6, PART 3 (M3): did the job-type switch that ended a step make an OPTION that held a Travel Labor line of its own the carrier? Then it brought its own drive, as the Sheets panel's pick does
+ *  (sectionsForJob settles the job's answer as pickBase does), and ANSWER_HELD ends with it. `parentSaved` is the draft before the step, read as the page would read it (migrateModel); `b` the page after. */
+function promotedOwnLine(parentSaved, b) {
+  if (!parentSaved || !parentSaved.polish_estimate) return false;
+  let before, carrier;
+  try { before = B.sectionsOf(B.migrateModel(clone(parentSaved.polish_estimate))); carrier = B.travelCarrier(b.api.root()); } catch (e) { return false; }
+  const was = before.filter((e) => e.tab === carrier)[0];
+  return !!was && was.kind === "option" && travelRows(was.section).length > 0;
+}
+
+/** The context to judge a step's page by and to carry on from it: nextCtx's, and ANSWER_HELD ended by a job-type switch that promoted an option holding its own line (promotedOwnLine). */
+function ctxAfter(ctx, step, parentSaved, b) {
+  return ANSWER && ctx && ctx.said === true && step.job && promotedOwnLine(parentSaved, b) ? Object.assign({}, ctx, { said: null }) : ctx;
+}
+
 /** A step as the walk's labels say it. */
 function stepLabel(step) {
   return step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add : step.x ? "x:" + step.x :
@@ -797,7 +814,7 @@ async function walk(label, got, path, depth, ctx, distanceAnswer) {
       continue;
     }
     if (!child) continue;
-    const ctx2 = step.variant ? { variant: step.variant } : nextCtx(ctx, step);
+    const ctx2 = ctxAfter(step.variant ? { variant: step.variant } : nextCtx(ctx, step), step, saved, child.b);
     try { await judgeStep(childLabel, child, node, ctx2, depth === 1, distanceAnswer); } catch (e) {
       report.crashes.push([childLabel, String((e && e.stack) || e).slice(0, 400)]);
       record("CRASH", childLabel, "while judging: " + String((e && e.message) || e).slice(0, 200));
@@ -943,6 +960,11 @@ const ANSWER_SEQUENCES = [
   // job's answer on that carrier, a job-type switch and the answer taken back; and a Combo whose copy is made after its Epoxy base and paired, the demoted root's own line taken off and added back, and two switches.
   { start: "polish", steps: [{ add: "Epoxy" }, { pair: "copy" }, { x: "carrier" }, "combo", { addTravel: "carrier" }] },
   { start: "combo", steps: [{ pair: "copy" }, { x: "option" }, { addTravel: "option" }, "epoxy", "combo"] },
+  // AN OPTION MADE THE CARRIER BRINGS ITS OWN DRIVE (round 6, part 3, M3): far Polish, an Epoxy option, the x on the Polish carrier, Add Travel Labor on the Epoxy option, then Epoxy made the base by
+  // the intake's job type, and by the Sheets panel's pick. Both hand the job the option's own line (the answer goes), and the switch back to Polish carries that drive to the root, as a job's drive
+  // follows its carrier.
+  { start: "polish", steps: [{ add: "Epoxy" }, { x: "carrier" }, { addTravel: "option" }, "epoxy", "polish"] },
+  { start: "polish", steps: [{ add: "Epoxy" }, { x: "carrier" }, { addTravel: "option" }, { base: "Epoxy" }] },
 ];
 
 async function newBid(start, distanceAnswer) {
@@ -1003,6 +1025,7 @@ async function main() {
           break;
         }
         if (!next) { report.skipped = (report.skipped || 0) + 1; (report.skippedAt = report.skippedAt || []).push(label); break; }     // the page offers nothing to press (it is what the walk would skip)
+        ctx = ctxAfter(ctx, step, parent.saved, next.b);
         try { await judgeStep(label, next, parent, ctx, i === seq.steps.length - 1, distanceAnswer); } catch (e) {
           report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
           record("CRASH", label, "while judging: " + String((e && e.message) || e).slice(0, 200));
