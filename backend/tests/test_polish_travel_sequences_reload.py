@@ -21,7 +21,7 @@ ROUND 6 (2026-10-20, item C2): "a plain reopen" in these walks was a JSON copy, 
 reopen of every walk now goes through tests/js/_jsonb.js (every object's keys sorted by length and then by bytes), and the walk refuses to pass unless a good share of its reopens brought the
 sheets back in another order (`reloads`, `reordered`). Run that way at 619f092 these walks reported 216 RELOAD_AGREES, 56 REOPEN_AGREES and 8 PLAIN_REOPEN in the depth-2 slice: every one
 the SHEETS' ORDER (the sheet bar and priced_tabs in jsonb's order, "Copy1" before "Epoxy") with the same prices; none moved a price, because each step of these walks starts from a reopen and
-so never holds a sheet the server has not already ordered. The session that does (test_polish_travel_sequences_session.py) found the prices; the sheets now keep their place (`seq`), and these are clean.
+so never holds a sheet the server has not already ordered. The session that does (test_polish_travel_sequences_session*.py) found the prices; the sheets now keep their place (`seq`), and these are clean.
 
 The local, no-distance and estimator-said slices are in test_polish_travel_sequences_reload_more.py (a second file only so the two run on different workers).
 The last block breaks a COPY of js/bid-model.js one line at a time and requires the walk to report the rule the line keeps.

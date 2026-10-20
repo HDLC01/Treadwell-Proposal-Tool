@@ -814,7 +814,7 @@ copy as the carrier (it sorts first in jsonb) and its first save wrote $81,086 f
 has one. A tie (a tab still running the code from before this copied a section whole, so the copy holds its source's place) puts a copy after the
 sheet it was copied from, however many copies deep (`source`), and is settled by the sheet's id for the rest, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
 estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
-(`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session.py`).
+(`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session*.py`: the session walk in three files).
 
 **How a saved bid is kept from repricing.** The live Markups rules are never read when a section is priced. A section
 with no snapshot (every saved bid, and the Polish root always) prices at its profile's built-ins; a section

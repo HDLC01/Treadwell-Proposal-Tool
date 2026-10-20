@@ -59,6 +59,13 @@ def run(mode: str, depth: int = 0, frontend=FRONTEND, timeout: int = 900) -> dic
     return got
 
 
+def session_walked(got: dict) -> None:
+    """The `session` walk was not cut short (a slice that quietly shrank would pass for the wrong reason): every one of its paths ran, each was judged against a reload, and the reopens
+    were the server's key order, a good share of them bringing the sheets back in another order than they were saved in."""
+    seen = {k: got.get(k) for k in ("runs", "sessions", "reloads", "reordered")}
+    assert got["runs"] >= 270 and got["sessions"] >= 270 and got["reloads"] >= 1300 and got["reordered"] >= 700, "the walk was cut short: %r" % (seen,)
+
+
 def explain(report: dict) -> str:
     """The rules a walk broke, how many times each, and the shortest sequences that broke them, one line each."""
     lines = []
