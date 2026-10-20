@@ -21,8 +21,13 @@
       --sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
       --r:12px; --r-s:7px; --shadow:0 1px 3px rgba(0,0,0,.05); }
     *{box-sizing:border-box}
+    /* THE PAGE'S BOTTOM PADDING IS THE TOTAL BAR'S HEIGHT AND 24px OF AIR (2026-10-21, the audit of the sixth round). The bar (.bid, below) is position:fixed, so it takes no room in the page, and the
+       step's last row, Back / Next, has to end above it. The bar is not a fixed height: with the staff sidebar open it wraps its sums onto a second row, 154px tall at 1000px in Chrome against 84px of
+       one row, and the 132px this padding was left that row 21px under it. js/polish-estimate.js reads the bar's height and writes it onto the html element as --bid-h (a ResizeObserver on the bar,
+       with a fallback on its repaint and the window's resize); 132px stands until it has, which is what the page reserved before. backend/tests/test_v2_bid_bar_height.py reads this rule and runs
+       the script. */
     body{margin:0;background:var(--surf);color:var(--ink);font:400 14px/1.55 var(--sans);
-         padding:0 22px 132px}
+         padding:0 22px calc(var(--bid-h,132px) + 24px)}
     [hidden]{display:none!important}
     .wrap{max-width:1000px;margin:0 auto}
 

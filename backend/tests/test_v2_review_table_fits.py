@@ -634,7 +634,7 @@ MUTATIONS = [
     ("a box that does not scroll", ROUND_6["box"][0], ROUND_6["box"][0].replace("overflow-x:auto", "overflow-x:visible"), "the .tscroll box does not scroll sideways"),
     # the box's width is read off the page's own layout: change the layout and the arithmetic moves with it
     ("a section body padded 40px a side", ".sec-b{padding:18px 19px}", ".sec-b{padding:18px 40px}", "the Total column is"),
-    ("a page padded 50px a side", "padding:0 22px 132px}", "padding:0 50px 132px}", "the Total column is"),
+    ("a page padded 50px a side", "padding:0 22px calc(var(--bid-h,132px) + 24px)}", "padding:0 50px calc(var(--bid-h,132px) + 24px)}", "the Total column is"),
     ("a page column capped at 560px", ".wrap{max-width:1000px;margin:0 auto}", ".wrap{max-width:560px;margin:0 auto}", "the Total column is"),
 ]
 

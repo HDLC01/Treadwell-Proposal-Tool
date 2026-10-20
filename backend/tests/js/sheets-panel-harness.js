@@ -948,8 +948,11 @@ async function stickyHead() {
 
   // 2. THE HEAD'S HEIGHT REACHES --v2head-h THROUGH THE OBSERVER. With one, a repaint of the bar measures nothing and the observer does,
   //    rounding up; a head with no height leaves the last good figure.
-  const watched = { made: ro.made.length, targets: ro.made.map((o) => o.targets.map((t) => t.attrs.id)),
-                    resizeListeners: b.win.listeners.filter((l) => l.type === "resize").length };
+  // THE HEAD'S OWN OBSERVER AND LISTENER. The total bar has a pair of its own (syncBarHeight, written to --bid-h: test_v2_bid_bar_height.py), so what the head has is counted by what it watches and by the
+  // name of the listener, and not as everything the page registered.
+  const headWatchers = ro.made.filter((o) => o.targets.some((t) => t.attrs.id === "v2head"));
+  const watched = { made: headWatchers.length, targets: headWatchers.map((o) => o.targets.map((t) => t.attrs.id)),
+                    resizeListeners: b.win.listeners.filter((l) => l.type === "resize" && l.handler.name === "syncHeadHeight").length };
   const idle = headProp(b);
   ro.fire();
   const first = headProp(b);
@@ -969,7 +972,7 @@ async function stickyHead() {
   headBox(plain, 188.4);
   plain.win.fire("resize");
   const resized = headProp(plain);
-  const fallback = { resizeListeners: plain.win.listeners.filter((l) => l.type === "resize").length, painted: painted, resized: resized };
+  const fallback = { resizeListeners: plain.win.listeners.filter((l) => l.type === "resize" && l.handler.name === "syncHeadHeight").length, painted: painted, resized: resized };
   // a document with no html element to write to is no error either
   delete plain.doc.documentElement;
   let noRoot = true;
