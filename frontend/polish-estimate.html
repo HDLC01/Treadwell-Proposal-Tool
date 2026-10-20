@@ -731,8 +731,13 @@
     .mw-sw.on .track{background:var(--red);border-color:transparent}
     .mw-sw.on .track::after{left:13px;background:#fff}
 
+    /* THE BAR STARTS WHERE THE PAGE DOES (2026-10-20 sixth round, the staging walk). It is position:fixed, and a fixed element is not moved by the body's margin-left,
+       so with the staff sidebar open (a 240px rail beside the page from 768px up, auth.js) the bar ran UNDER it and the first 240px of its text were hidden at 916px.
+       It follows the rail as auth.js's own top bar does, from the same breakpoint, and slides when the body does. Under 768px the sidebar is a sheet over the page
+       with a scrim and the body does not move, so the bar does not either. backend/tests/test_v2_total_bar_beside_sidebar.py reads the cascade for every width and state. */
     .bid{position:fixed;left:0;right:0;bottom:0;background:var(--card);
-         border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9}
+         border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9;transition:left .2s ease}
+    @media (min-width:768px){ html.tw-nav-open .bid{left:var(--tw-w,240px)} }
     .bid-in{max-width:1000px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;
          gap:18px;flex-wrap:wrap}
     .maths{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;
