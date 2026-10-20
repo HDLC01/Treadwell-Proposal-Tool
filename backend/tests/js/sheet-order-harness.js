@@ -21,8 +21,12 @@
  *                   the page saved, in the session and after a reload and one more save.
  *   lifecycle       one session of add, copy, rename, delete, a copy that takes a freed Copy<N> id, a Gyp sheet that changes preset (its KEY changes), a
  *                   base change and a job-type switch, compared with a reload after EVERY step.
- *   legacy          a bid saved before the order was kept (no `seq` on any section) opens in the order its keys are held in, changes no price when it
- *                   stamps the order, writes nothing on open, and saves the order it opened with.
+ *   afterReload     a rename, a delete, a kind change (a base picked), a copy and a job switch, each made on a page opened on what the server returned, on a bid
+ *                   whose sheets' places are not the order jsonb holds their keys in: none moves a sheet that was not meant to move. (In a session that never
+ *                   reloaded the keys are in the order of the places, so a step that renumbered the sheets by their keys would move nothing there.)
+ *   legacy          a bid saved before the order was kept (no `seq` on any section) opens in the order its saved price was computed in (the draft's
+ *                   priced_tabs) when that names two or more of its sheets, and in the order its keys are held in when it does not; changes no price when it
+ *                   stamps the order, writes nothing on open, saves the order it opened with, and its first save writes the price it was saved at.
  *   invariance      every draft the sections above saved, opened with the keys of EVERY object in five orders (as saved, jsonb's, jsonb's reversed, two seeded
  *                   shuffles): the page shows, prices, lists for the document and then saves exactly the same. Nothing else of a saved draft may depend on the
  *                   order of its keys either (a `cell_values`, a `tab_opts`, a row), and this is what holds it.
@@ -326,6 +330,46 @@ async function main() {
     return { steps: steps };
   });
 
+  // ═══ afterReload: a rename, a delete, a kind change, a copy and a job switch made on a page opened on what the server returned ═════════════════════════
+  await section("afterReload", async () => {
+    // The sheets' places (Epoxy, Gyp, Copy1, Copy2) are not the order jsonb holds their keys in (Copy1, Copy2, Epoxy, Gyp). In a session that never reloaded the keys ARE in the
+    // order of the places, so a step that renumbers the sheets by their keys, or drops their places, moves nothing there and everything on a page opened on the server's blob.
+    const b = await newBid(comboDraft(), [["Polish", "polishing", "6", "10"], ["Epoxy", "epoxy-install", "4", "12"]]);
+    await addSheet(b, GYP_TAB);
+    await copySheet(b, "Epoxy");                          // Copy1
+    await copySheet(b, "Polish");                         // Copy2
+    const start = clone(b.store.blob);
+    const shape = (p) => { const e = B.sectionsOf(p.api.root()); return { order: e.map((x) => x.tab), kinds: e.map((x) => x.kind), strip: stripOf(p) }; };
+    const onReloaded = async (blob) => { const p = await reload(blob); p.api.go(1); await settle(); return p; };
+    const steps = {
+      rename: (p) => renameSheet(p, "Copy1", "Garage"),
+      delete: (p) => deleteSheet(p, "Copy2"),
+      kind: (p) => makeBase(p, "Copy1"),                  // Polish and Epoxy (both bases) become options and the copy the base: a kind change on two sheets under `tabs` and on the root
+      copy: (p) => copySheet(p, "Epoxy"),
+    };
+    const res = { start: { keys: Object.keys(start.polish_estimate.tabs), reloadedKeys: Object.keys(J.reloaded(start).polish_estimate.tabs), opened: shape(await onReloaded(start)) } };
+    const measure = async (p, before) => {
+      const session = facts(p, true);
+      const labels = B.sectionsOf(p.api.root()).map((e) => e.label);
+      const reloaded = await onReloaded(clone(p.store.blob));
+      return { before: before, session: session, labels: labels, reload: facts(reloaded, true) };
+    };
+    for (const name of Object.keys(steps)) {
+      const p = await onReloaded(start);
+      const before = shape(p);
+      await steps[name](p);
+      res[name] = await measure(p, before);
+    }
+    // the intake's job type reaches the estimate page, on the draft the server returned: a kind change for the sheets of the job type (the root goes off)
+    const p = await reload(Object.assign(clone(start), { work_type: "epoxy" }));
+    p.api.go(1);
+    await settle();
+    const before = shape(p);
+    p.clock.fire();
+    res.job = await measure(p, before);
+    return res;
+  });
+
   // ═══ legacy: a bid saved before the order was kept ════════════════════════════════════════════════════════════
   await section("legacy", async () => {
     const b = await newBid(comboDraft(), [["Polish", "polishing", "6", "10"], ["Epoxy", "epoxy-install", "4", "12"]]);
@@ -434,6 +478,19 @@ async function main() {
     const oldBid = reorder(legacy, ["Copy2", "Epoxy", GYP_TAB, "Copy1"]);
     const oldAdd = B.copySection(oldBid, "Epoxy", { state: {} });
     const oldFresh = B.addSheet(oldBid, "Seal", { state: {} });
+    // THE SAME STEPS ON A MODEL THE SERVER RETURNED (the keys in jsonb's order, the places as saved): none moves a sheet that was not meant to move. (A model made in this process has its
+    // keys in the order of its places, so a step that renumbers the sheets by their keys moves nothing on it.) A step that throws is a fact too.
+    const served = J.reloaded(m0);
+    const stepOn = (fn) => { try { return ids(fn()); } catch (e) { return "threw: " + String((e && e.message) || e).slice(0, 160); } };
+    const afterServed = {
+      keys: Object.keys(served.tabs),
+      rename: stepOn(() => B.renameSection(served, "Copy1", "Garage")),
+      delete: stepOn(() => B.deleteSection(served, "Copy2", { state: {} }).model),
+      removeOption: stepOn(() => B.removeOption(served, "Copy2")),
+      kind: stepOn(() => B.pickBase(served, ["Copy1"], { state: {} }).model),
+      copy: stepOn(() => B.copySection(served, "Epoxy", { state: {} }).model),
+      option: stepOn(() => B.addOption(served, "Seal", { state: {} })),
+    };
     // THE LIST A SAVE WRITES NEXT TO THE MODEL (priced_tabs) is the order the saved price was computed in, and an array keeps its order in jsonb where an object's keys do not.
     // So a bid with no place written anywhere is stamped in the list's order when the list names two or more of its sheets (the sheets it does not name go after them, in the order
     // their keys are held in), and in the keys' order when it does not. Anything else in the list (a repeat, an id the bid has no sheet for, the root, a name that is a property of every
@@ -489,6 +546,7 @@ async function main() {
       hostile: hostileStamped ? { same: hostileStamped === hostile, strange: hostileStamped.tabs.Strange, seqsUntouched: Object.keys(hostileStamped.tabs).filter((k) => k !== "Strange").every((k) => hostileStamped.tabs[k].seq === hostile.tabs[k].seq) } : null,
       unreadable: unreadableStamped ? { same: unreadableStamped === unreadable } : null,
       priced: priced,
+      served: afterServed,
       oldBid: { held: Object.keys(oldBid.tabs), copy: { id: oldAdd.id, order: ids(oldAdd.model), seqs: seqs(oldAdd.model) }, fresh: { id: oldFresh.id, order: ids(oldFresh.model), seqs: seqs(oldFresh.model) } },
       composed: composed,
     };

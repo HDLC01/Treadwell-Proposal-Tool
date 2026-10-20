@@ -33,7 +33,7 @@ HARNESS = TESTS / "js" / "sheet-order-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js", "js/proposal-review.js"]
-SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "legacy", "model", "invariance"]
+SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "afterReload", "legacy", "model", "invariance"]
 GYP = 'Gyp (USG 1-8")'
 GYP_FR = "Gyp (FR)"
 # What a page shows that depends on the order of the sheets, as the harness reads it. (Not `open`: a session is on whatever sheet the estimator was last
@@ -161,6 +161,54 @@ def test_a_rename_moves_nothing(ran):
     before = [s for s in ran["lifecycle"]["steps"] if s["step"] == "copy Polish (Copy2)"][0]
     after = [s for s in ran["lifecycle"]["steps"] if s["step"] == "rename Copy1"][0]
     assert after["session"]["order"] == before["session"]["order"] and after["reload"]["order"] == before["session"]["order"]
+
+
+# ── a rename, a delete, a kind change, a copy and a job switch made AFTER A RELOAD ──────────────
+# The lifecycle above makes each of them in a session that never reloaded, where the keys of `tabs` are in the order of the sheets' places: a step that renumbered the sheets
+# by their keys (or put them last, or dropped their places) would move nothing there. On a page opened on the server's blob the keys are in jsonb's order, and it would move them.
+AFTER_START = ["Polish", "Epoxy", GYP, "Copy1", "Copy2"]
+
+
+def test_the_bid_the_after_reload_steps_start_from_is_not_in_jsonbs_order(ran):
+    """Not vacuous: the places are Epoxy, Gyp, Copy1, Copy2 and the keys the server returns are Copy1, Copy2, Epoxy, Gyp. A page opened on the blob lists the sheets by their places."""
+    got = ran["afterReload"]["start"]
+    assert got["keys"] == ["Epoxy", GYP, "Copy1", "Copy2"] and got["reloadedKeys"] == ["Copy1", "Copy2", "Epoxy", GYP], got
+    assert got["opened"]["order"] == AFTER_START and got["opened"]["strip"] == AFTER_START, got["opened"]
+    assert got["opened"]["kinds"] == ["base", "base", "option", "option", "option"], got["opened"]
+
+
+@pytest.mark.parametrize("step, order, strip", [("rename", AFTER_START, AFTER_START), ("kind", AFTER_START, AFTER_START), ("delete", ["Polish", "Epoxy", GYP, "Copy1"], ["Polish", "Epoxy", GYP, "Copy1"]),
+                                                ("copy", AFTER_START + ["Copy3"], AFTER_START + ["Copy3"]),
+                                                ("job", AFTER_START, AFTER_START[1:])])         # (a job type that puts the root off leaves it no tab on the bar)
+def test_a_step_made_after_a_reload_moves_no_sheet_and_the_next_reload_agrees(ran, step, order, strip):
+    """The sheets stay in the order they were in (a delete takes its sheet out and a copy goes last), on the sheet bar and in the model, in the session that made the step and on a
+    page opened on what it saved."""
+    got = ran["afterReload"][step]
+    assert got["session"]["order"] == order and got["session"]["strip"] == strip, (step, got["session"]["order"], got["session"]["strip"])
+    assert got["reload"]["order"] == order and got["reload"]["strip"] == strip, (step, got["reload"]["order"], got["reload"]["strip"])
+    assert differences(got["session"], got["reload"]) == []
+
+
+def test_the_after_reload_steps_did_what_they_say(ran):
+    """So a step that quietly did nothing cannot pass for one that moved nothing."""
+    got = ran["afterReload"]
+    assert "Garage" in got["rename"]["labels"], got["rename"]["labels"]
+    assert "Copy2" in got["delete"]["before"]["order"] and "Copy2" not in got["delete"]["session"]["order"]
+    assert got["kind"]["before"]["kinds"] == ["base", "base", "option", "option", "option"], got["kind"]["before"]
+    assert got["kind"]["session"]["kinds"] == ["option", "option", "option", "base", "option"] and got["kind"]["session"]["carrier"] == "Copy1", got["kind"]["session"]
+    assert got["copy"]["session"]["order"][-1] == "Copy3"
+    assert got["job"]["session"]["kinds"] == ["off", "base", "option", "option", "option"] and got["job"]["session"]["carrier"] == "Epoxy", got["job"]["session"]
+
+
+def test_the_pure_steps_made_on_a_model_the_server_returned_move_no_sheet(ran):
+    """The same steps as functions of the model (rename, delete, removeOption, pickBase, copy, addOption), on a model whose keys are in jsonb's order (Copy1, Copy2, Epoxy, Gyp) and whose
+    places are Epoxy 1, Copy1 2, Copy2 3, Gyp 4. removeOption is public model API the page does not reach (its press is the Sheets delete), and it rewrites `tabs` the same way."""
+    got = ran["model"]["served"]
+    assert got["keys"] == ["Copy1", "Copy2", "Epoxy", GYP], got["keys"]
+    whole = ["Polish", "Epoxy", "Copy1", "Copy2", GYP]
+    assert got["rename"] == whole and got["kind"] == whole, got
+    assert got["delete"] == got["removeOption"] == ["Polish", "Epoxy", "Copy1", GYP], got
+    assert got["copy"] == whole + ["Copy3"] and got["option"] == whole + ["Seal"], got
 
 
 # ── nothing else depends on key order either ─────────────────────────────────────────────────
@@ -380,6 +428,11 @@ LISTED = "    var listed = (anyPlace ? null : savedOrderOf(tabs, pricedTabs)) ||
 NAMED_ENOUGH = "    if (named.length < 2) return null;"
 NAMED_TAIL = "    return named.concat(tabIdsInOrder(tabs).filter(function (id) { return named.indexOf(id) < 0; }));"
 NAMED_PUSH = "      if (id !== null && has.call(tabs, id) && named.indexOf(id) < 0) named.push(id);"
+KIND = "    out.tabs = copyInto(copyInto({}, out.tabs), Object.fromEntries([[tabId, Object.assign({}, model.tabs[tabId], { kind: kind })]]));"
+DELETE = "      .map(function (k) { return [k, out.tabs[k]]; })));"
+RENAME = "    return withSectionPatch(model, id, { label: next });"
+REMOVE = "      .map(function (id) { return [id, out.tabs[id]]; })));"
+AFTER_DELETED = ["Polish", "Epoxy", GYP, "Copy1"]
 STAMPED_ALREADY = "    if (ids.every(function (id) { return hasSeq(tabs[id]); })) return model;       // (and a bid with no sections at all)"
 READABLE = "    if (readableSections(model) === null) return model;"
 TIE = "      return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);    // one place claimed twice: by the id, which survives a reload"
@@ -466,6 +519,33 @@ MUTATIONS = {
     "a name that is a property of every object is taken for a sheet": (
         MODEL, NAMED_PUSH, "      if (id !== null && id in tabs && named.indexOf(id) < 0) named.push(id);",
         lambda r: r["model"]["priced"]["junk"] != r["model"]["priced"]["named2"]),
+    # round 6, O2: a kind change, a delete and a rename made AFTER A RELOAD (a session that never reloaded has its keys in the order of the places, which hides every one of these)
+    "a kind change takes the sheet's place from it": (
+        MODEL, KIND, KIND.replace("{ kind: kind }", "{ kind: kind, seq: undefined }"),
+        lambda r: r["afterReload"]["kind"]["session"]["order"] != AFTER_START and r["model"]["served"]["kind"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP]),
+    "a kind change puts the sheet last": (
+        MODEL, KIND, KIND.replace("{ kind: kind }", "{ kind: kind, seq: lastSeq(out.tabs) + 1 }"),
+        lambda r: r["afterReload"]["kind"]["session"]["order"] != AFTER_START and r["model"]["served"]["kind"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP]),
+    "a kind change renumbers every sheet by its key's position": (
+        MODEL, KIND,
+        "    out.tabs = copyInto({}, Object.fromEntries(Object.keys(out.tabs).map(function (id, i) { return [id, Object.assign({}, id === tabId ? model.tabs[tabId] : out.tabs[id], id === tabId ? { kind: kind, seq: i + 1 } : { seq: i + 1 })]; })));",
+        lambda r: r["afterReload"]["kind"]["session"]["order"] != AFTER_START and r["model"]["served"]["kind"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP]),
+    "a delete renumbers the sheets left by their keys' position": (
+        MODEL, DELETE, "      .map(function (k, i) { return [k, Object.assign({}, out.tabs[k], { seq: i + 1 })]; })));",
+        lambda r: r["afterReload"]["delete"]["session"]["order"] != AFTER_DELETED and r["model"]["served"]["delete"] != ["Polish", "Epoxy", "Copy1", GYP]),
+    "a delete takes the places of the sheets left": (
+        MODEL, DELETE, "      .map(function (k) { return [k, Object.assign({}, out.tabs[k], { seq: undefined })]; })));",
+        lambda r: r["afterReload"]["delete"]["session"]["order"] != AFTER_DELETED and r["model"]["served"]["delete"] != ["Polish", "Epoxy", "Copy1", GYP]),
+    "taking an option off renumbers the sheets left by their keys' position": (
+        MODEL, REMOVE, "      .map(function (id, i) { return [id, Object.assign({}, out.tabs[id], { seq: i + 1 })]; })));",
+        lambda r: r["model"]["served"]["removeOption"] != ["Polish", "Epoxy", "Copy1", GYP]),
+    "a rename takes the sheet's place from it": (
+        MODEL, RENAME, "    return withSectionPatch(model, id, { label: next, seq: undefined });",
+        lambda r: r["afterReload"]["rename"]["session"]["order"] != AFTER_START and r["model"]["served"]["rename"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP]),
+    "a rename renumbers every sheet by its key's position": (
+        MODEL, RENAME,
+        "    var renamed = withSectionPatch(model, id, { label: next }); if (isObject(renamed.tabs)) renamed.tabs = copyInto({}, Object.fromEntries(Object.keys(renamed.tabs).map(function (k, i) { return [k, Object.assign({}, renamed.tabs[k], { seq: i + 1 })]; }))); return renamed;",
+        lambda r: r["afterReload"]["rename"]["session"]["order"] != AFTER_START and r["model"]["served"]["rename"] != ["Polish", "Epoxy", "Copy1", "Copy2", GYP]),
 }
 
 
