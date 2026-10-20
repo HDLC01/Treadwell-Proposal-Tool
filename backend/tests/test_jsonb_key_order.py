@@ -10,6 +10,7 @@ cases that tell the rule from the ones it is easily mistaken for), and to the th
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
@@ -21,6 +22,7 @@ TESTS = pathlib.Path(__file__).resolve().parent
 BACKEND = TESTS.parent
 HARNESS = TESTS / "js" / "jsonb-selftest-harness.js"
 HELPER = TESTS / "js" / "_jsonb.js"
+RECORDED = TESTS / "fixtures" / "jsonb_key_order_pg18.json"
 SHEETS = ["Seal", "Copy1", "Copy2", "Epoxy", "Copy10", "Polish 2", "Gyp (base)", 'Gyp (USG 1-8")']
 EXPECTED = {
     "documented": ["bar", "active", "balance"],
@@ -38,7 +40,7 @@ EXPECTED = {
 
 
 def run(helper=HELPER):
-    proc = run_node(HARNESS, helper)
+    proc = run_node(HARNESS, helper, RECORDED)
     assert proc.returncode == 0, "the harness itself failed:\n" + proc.stderr[-800:]
     return last_json_line(proc.stdout)
 
@@ -52,6 +54,29 @@ def ran():
 @pytest.mark.parametrize("name", sorted(EXPECTED))
 def test_the_helper_orders_keys_as_postgres_jsonb_does(ran, name):
     assert ran[name] == EXPECTED[name]
+
+
+# ── what a real PostgreSQL returned ─────────────────────────────────────────────────────────────
+def _recorded():
+    return json.loads(RECORDED.read_text(encoding="utf-8"))
+
+
+def test_the_recorded_answers_are_a_real_servers_and_cover_the_cases_that_matter():
+    """tests/fixtures/jsonb_key_order_pg18.json is `select '<input>'::jsonb::text` run on a PostgreSQL 18.2 started for the purpose (the SQL is in the file's `meta`). It holds the manual's own
+    example, keys that differ in BYTES but not in characters, a four byte character, the sheets of a bid, the pair the staging walk saw, numbers as keys, __proto__, and a draft's own keys."""
+    data = _recorded()
+    assert data["meta"]["server"].startswith("PostgreSQL 18"), data["meta"]
+    names = [c["name"] for c in data["cases"]]
+    assert len(names) >= 15 and len(set(names)) == len(names)
+    server = {c["name"]: c["server"] for c in data["cases"]}
+    assert server["documented example (PostgreSQL manual, 8.14.1)"] == '{"bar": "baz", "active": false, "balance": 7.77}'
+    assert server["the staging pair"] == '{"Polish 2": 2, "Gyp (base)": 1}', "the order the staging walk saw: Polish 2 before Gyp (base)"
+
+
+@pytest.mark.parametrize("name", [c["name"] for c in json.loads(RECORDED.read_text(encoding="utf-8"))["cases"]])
+def test_the_helper_puts_every_recorded_document_in_the_order_a_real_postgres_returned_it(ran, name):
+    got = [r for r in ran["recorded"] if r["name"] == name]
+    assert got and got[0]["same"] is True, "the helper's order is not the server's for %r" % name
 
 
 def test_the_sheets_the_staging_walk_saw_flip_the_way_it_saw_them(ran):
@@ -91,11 +116,11 @@ CLONE = "  return jsonbOrder(JSON.parse(JSON.stringify(blob)));"
 # name -> (old, new, the facts that must change)
 BREAKS = {
     "length is counted in characters, not bytes": (
-        COMPARE_LENGTH, "  if (String(a).length !== String(b).length) return String(a).length < String(b).length ? -1 : 1;", {"multibyte", "compare"}),
-    "equal lengths keep the order they came in": (COMPARE_BYTES, "  return 0;", {"bytes", "multibyte", "compare"}),
-    "the keys are not sorted at all": (SORT, "    Object.keys(value).forEach((k) => {", {"documented", "length", "sheets", "nested"}),
-    "an array's objects are not re-keyed": (ARRAYS, "  if (Array.isArray(value)) return value;", {"nested"}),
-    "a key is assigned and not defined (__proto__ becomes the prototype)": (OWN, "      out[k] = jsonbOrder(value[k]);", {"proto"}),
+        COMPARE_LENGTH, "  if (String(a).length !== String(b).length) return String(a).length < String(b).length ? -1 : 1;", {"multibyte", "compare", "recorded"}),
+    "equal lengths keep the order they came in": (COMPARE_BYTES, "  return 0;", {"bytes", "multibyte", "compare", "recorded"}),
+    "the keys are not sorted at all": (SORT, "    Object.keys(value).forEach((k) => {", {"documented", "length", "sheets", "nested", "recorded"}),
+    "an array's objects are not re-keyed": (ARRAYS, "  if (Array.isArray(value)) return value;", {"nested", "recorded"}),
+    "a key is assigned and not defined (__proto__ becomes the prototype)": (OWN, "      out[k] = jsonbOrder(value[k]);", {"proto", "recorded"}),
     "reloaded() does not clone": (CLONE, "  return jsonbOrder(blob);", {"reloaded"}),
 }
 
@@ -111,4 +136,6 @@ def test_the_selftest_goes_red_when_the_line_that_keeps_the_order_is_broken(tmp_
     broken.write_bytes(src.replace(old, new).encode("utf-8"))
     got = run(broken)
     changed = {k for k in EXPECTED if got.get(k) != EXPECTED[k]}
+    if not all(r["same"] for r in got.get("recorded", [])):
+        changed.add("recorded")
     assert facts & changed, "the self-test did not notice: %s (changed: %s)" % (name, sorted(changed))

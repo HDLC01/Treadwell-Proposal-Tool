@@ -5,8 +5,12 @@
  * (lengthCompareJsonbStringValue). The vectors below are the cases that tell that rule from the ones it is easily mistaken for: sorting by
  * character count or by UTF-16 code units, sorting alphabetically, or keeping the order the keys came in.
  *
- * Usage: node jsonb-selftest-harness.js [path to _jsonb.js]   ->  one line of JSON
+ * With a second argument (tests/fixtures/jsonb_key_order_pg18.json) it also holds the helper to what a REAL PostgreSQL returned for fifteen documents, `recorded`: the keys of each
+ * `input` put in jsonb's order by the helper must come out in exactly the order of the server's own text, read the way a browser reads it (an array index key leads).
+ *
+ * Usage: node jsonb-selftest-harness.js [path to _jsonb.js] [path to the recorded cases]   ->  one line of JSON
  */
+const fs = require("fs");
 const path = require("path");
 const J = require(path.resolve(process.argv[2] || path.join(__dirname, "_jsonb.js")));
 
@@ -46,4 +50,10 @@ const hostileOut = J.jsonbOrder(hostile);
 out.proto = { keys: keysOf(hostileOut), own: Object.prototype.hasOwnProperty.call(hostileOut, "__proto__"), polluted: ({}).polluted === true, prototypeKept: Object.getPrototypeOf(hostileOut) === Object.prototype };
 // compareKeys is the order, as a comparator
 out.compare = [J.compareKeys("a", "b"), J.compareKeys("b", "a"), J.compareKeys("a", "a"), J.compareKeys("zz", "é"), J.compareKeys("é", "b"), J.compareKeys("b", "é")];
+// the recorded server answers: the same key order, at every depth, as the text a real server returned
+if (process.argv[3]) {
+  const cases = JSON.parse(fs.readFileSync(process.argv[3], "utf8")).cases;
+  const pairs = (v) => (Array.isArray(v) ? v.map(pairs) : v && typeof v === "object" ? Object.keys(v).map((k) => [k, pairs(v[k])]) : v);
+  out.recorded = cases.map((c) => ({ name: c.name, same: JSON.stringify(pairs(J.jsonbOrder(JSON.parse(c.input)))) === JSON.stringify(pairs(JSON.parse(c.server))) }));
+}
 console.log(JSON.stringify(out));
