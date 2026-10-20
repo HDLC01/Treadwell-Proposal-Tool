@@ -2109,7 +2109,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     typeInto(emptied, '[data-tk="1"][data-k="measurement"]', "");
     emptied.clock.fire();
     const eSave = emptied.rec.saves[emptied.rec.saves.length - 1];
-    const reopened = build({ blob: clone(emptied.store.blob) });
+    const reopened = build({ blob: clone(emptied.store.blob), reloaded: true });
     await reopened.api.init();
     out.migration.emptiedSave = { sf: eSave.polish_sf, sf2: eSave.polish_2_sf };
     out.migration.emptiedDraft2 = emptied.store.blob.polish_2_sf;
@@ -4008,7 +4008,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const chhSaved = clone(chh.x.rec.saves[chh.x.rec.saves.length - 1].polish_estimate);
     const SAVED_SF = B.takeoffSf(MODEL.takeoff);
     const reopenFrom = async (saved, distanceAnswer) => {
-      const x = build({ blob: blob(Object.assign({ polish_estimate: clone(saved), polish_sf: SAVED_SF }, ADDRESS)), distance: distanceAnswer });
+      const x = build({ blob: blob(Object.assign({ polish_estimate: clone(saved), polish_sf: SAVED_SF }, ADDRESS)), distance: distanceAnswer, reloaded: true });
       await x.api.init(); x.api.go(1); await settle();
       return x;
     };
@@ -4305,7 +4305,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     withDflt.clock.fire();
     const savedWith = withDflt.rec.saves[withDflt.rec.saves.length - 1];
     const reloaded = build({ blob: Object.assign(blob(), { polish_estimate: clone(savedWith.polish_estimate) }),
-                             markupRules: [] });
+                             markupRules: [], reloaded: true });
     await reloaded.api.init();
     reloaded.api.go(2);
     typeInto(reloaded, feesBox, "10");
@@ -4570,7 +4570,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
     const savedModel = clone(sv.rec.saves[sv.rec.saves.length - 1].polish_estimate);
     const savedBlob = Object.assign(blob(), { polish_sf: 12000, polish_estimate: savedModel });
     const reopen = async (libState) => {
-      const pg = build(Object.assign({ blob: clone(savedBlob) }, libState));
+      const pg = build(Object.assign({ blob: clone(savedBlob), reloaded: true }, libState));
       await pg.api.init();
       return stateOf(pg);
     };

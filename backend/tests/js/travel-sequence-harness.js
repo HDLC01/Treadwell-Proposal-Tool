@@ -49,8 +49,19 @@
  *   RELOAD_AGREES    the SAME distance answer typed in the session that made the change, and typed after a plain reopen of the draft that session saved, leaves the same prices (the lump
  *                    sum a save writes, the root sheet's bid, every other section's) and the same Travel Labor rows, for each of the four answers (50, 300, 190 and cleared).
  *
+ * THE SIXTH ROUND (2026-10-20, item C2) made every reopen go through the SERVER'S key order (js/_jsonb.js: the draft's jsonb column keeps no key order, so every object of a reopened blob
+ * has its keys sorted by length and then by bytes), and added the one walk that had never been possible: a SESSION that does not reload. Every other walk starts each step from the draft
+ * the step before saved, reopened, so a bid it is judging was always read back from the server before anything was done to it, and a Sheets action that puts a sheet into the bid
+ * (a copy, a fresh sheet) always acted on sheets the server had already put in its own order. In `session` mode ONE page carries a whole path of Sheets actions (and job switches, which
+ * the intake makes on the same browser's copy of the draft: localStorage keeps the order it was written in), and after every prefix of every path the page is judged against a reload:
+ *   SESSION_AGREES   the bid the session made, and a page opened on the blob it saved with every object's keys in jsonb's order, hold the same prices (the lump sum a save writes, the root
+ *                    sheet's bid, every other section's), the same sheets in the same order with the same kinds, the same carrier, the same priced_tabs (the order the customer's document
+ *                    and the proposal's sidebar list them in) and the same Travel Labor rows; and each of the four distance answers (50, 300, 190, cleared) typed on a page opened on the
+ *                    blob as the session saved it, and on a page opened on it after the server, leaves the same prices and rows. The report marks a divergence "PRICES DIFFER" when a
+ *                    price is not the same (`priced`), and "same prices, other rows or order" when only the sheets or the rows are.
+ *
  * MODES (argv[3]): far | farplain | local | unknown | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys | sheetsOff |
- *   sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | audit54.
+ *   sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | session | audit54.
  *   far, local, unknown   steps are the four job types, each plain or with the crew typed on the new carrier.
  *   farplain              the same far job, with the four job types only (no crew typed): the deeper walk.
  *   typed, clearHours, clearGuys, off, rate   the estimator's variant is applied to the carrier's Travel Labor row first, then the steps are the four job types. (`rate` types $40
@@ -63,15 +74,20 @@
  *   distTyped, distClearHours, distClearGuys, distOff, distRate   the same steps, with the estimator's variant applied to the carrier's row first (a copy carries it).
  *   reload                the `sheets` steps and a fresh Epoxy sheet added, and RELOAD_AGREES judged after every sheets action (the session against a reload, four answers each).
  *   reloadTyped, reloadClearHours, reloadClearGuys, reloadOff, reloadRate   the same, with the estimator's variant applied to the carrier's row first.
+ *   session               the job types, the Sheets panel's base changes, a copy of the carrier and a fresh Epoxy or Polish sheet, in ONE continuous session (see above), judged against a
+ *                         reload after every prefix of every sequence.
  *   audit54               the 54 sequences the 2026-10-20 audit found pricing the drive twice at 7d32336, with their exact dollars.
  * Any mode but audit54 takes a distance after an at-sign (typed@local, sheetsOff@unknown, mixed@local): the same walk on a 40 mile job or one with no distance.
  * argv[4] is the depth (the number of steps after the start).
  *
- * Usage: node travel-sequence-harness.js <frontend-dir> <mode> [depth]   ->  one line of JSON
+ * Usage: node travel-sequence-harness.js <frontend-dir> <mode> [depth]   ->  one line of JSON:
+ *   { mode, depth, runs, reopens, plain, reloads, reordered, [sessions, reloadJudged], violations: { CODE: n }, priced: { CODE: n }, pricedSamples: [...], samples, crashes }
+ *   (`reloads`: reopens made through the server's key order; `reordered`: how many brought the sheets back in another order; `priced`: how many divergences moved a price.)
  */
 const path = require("path");
 const Module = require("module");
 const L = require("./_lib.js");
+const J = require("./_jsonb.js");
 
 const ROOT = path.resolve(process.argv[2]);
 const RAW_MODE = process.argv[3] || "far";
@@ -126,7 +142,8 @@ const MODE_VARIANT = (function () {
 })();
 const DIST = MODE === "dist" || /^dist(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE);
 const RELOAD = MODE === "reload" || /^reload(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE);
-const SHEETS = MODE === "sheets" || /^sheets(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE) || DIST || RELOAD;      // a distance walk takes every step of the Sheets walk too
+const SESSION = MODE === "session";
+const SHEETS = MODE === "sheets" || /^sheets(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE) || DIST || RELOAD || SESSION;      // a distance walk takes every step of the Sheets walk too
 /** The miles a distance step types: under 70 (local), 300 (farther than the 190 a new bid starts on), 190 again, and the box cleared (the lookup then finds nothing). */
 const DIST_TEXT = { local: "50", farther: "300", far: "190", cleared: "" };
 
@@ -141,6 +158,17 @@ async function open(blob, extra) {
   await settle();
   b.opts = opts;           // what the lookup answers is read from here each time the page asks, so a step can change it after the page is open
   return b;
+}
+
+/** A page on a SAVED draft, reopened: the draft comes back from the server, whose jsonb column keeps no key order, so every object's keys are in jsonb's
+ *  order (js/_jsonb.js) and not in the order the page that saved it wrote them. Every step of a walk starts from one, and so does every plain reopen.
+ *  The report counts them (`reloads`) and the ones whose sheets came back in ANOTHER order than they were saved in (`reordered`), so a walk that stopped
+ *  re-keying, or whose bids never had sheets that jsonb moves, cannot pass as one that was held to the server's order. */
+function reopen(saved, extra) {
+  const tabsOf = (blob) => Object.keys(((blob && blob.polish_estimate) || {}).tabs || {}).join("|");
+  report.reloads = (report.reloads || 0) + 1;
+  if (tabsOf(saved) !== tabsOf(J.reloaded(saved))) report.reordered = (report.reordered || 0) + 1;
+  return open(saved, Object.assign({ reloaded: true }, extra || {}));
 }
 
 const secOf = (m, tab) => (tab === B.ROOT_TAB ? m : (m.tabs || {})[tab]);
@@ -342,7 +370,17 @@ function lumpNow(b) {
   return lumpOf(b.store.blob);
 }
 
-const report = { mode: RAW_MODE, depth: DEPTH, runs: 0, reopens: 0, plain: 0, violations: {}, samples: {}, crashes: [] };
+const report = { mode: RAW_MODE, depth: DEPTH, runs: 0, reopens: 0, plain: 0, violations: {}, priced: {}, pricedSamples: [], samples: {}, crashes: [] };
+/** A divergence in the PRICES (a customer is charged by them), kept apart from the rest: the path, what was compared, and the prices on each side. The twenty shortest paths. */
+function notePriced(code, label, when, left, right) {
+  report.priced[code] = (report.priced[code] || 0) + 1;
+  const list = report.pricedSamples;
+  if (list.length < 20 || label.length < list[list.length - 1].label.length) {
+    list.push({ code: code, label: label, when: when, left: left, right: right });
+    list.sort((x, y) => x.label.length - y.label.length || (x.label < y.label ? -1 : 1));
+    if (list.length > 20) list.pop();
+  }
+}
 function record(code, label, detail) {
   const v = (report.violations[code] = (report.violations[code] || 0) + 1);
   const s = (report.samples[code] = report.samples[code] || []);
@@ -355,7 +393,7 @@ async function take(saved, step, distanceAnswer) {
   const here = typeOfBlob(saved);
   const answer = { distance: Object.assign({}, distanceAnswer, { miles: distanceAnswer.miles === null ? null : 300 }) };
   if (step.job) {
-    const b = await open(Object.assign(clone(saved), { work_type: step.job }), answer);
+    const b = await reopen(Object.assign(clone(saved), { work_type: step.job }), answer);
     b.api.go(1);
     await settle();
     const plain = step.job === here && !step.crew;
@@ -366,7 +404,7 @@ async function take(saved, step, distanceAnswer) {
     return { b: b, plain: plain, quiet: quiet, was: was, piece: step.job + (step.crew ? "+crew" : ""), step: step };
   }
   // The lookup a CLEARED box asks again finds nothing (the estimator took the miles away); every other step's lookup is never asked of a saved bid.
-  const b = await open(Object.assign(clone(saved), { work_type: here }), step.dist === "cleared" ? { distance: DISTANCES.unknown } : answer);
+  const b = await reopen(Object.assign(clone(saved), { work_type: here }), step.dist === "cleared" ? { distance: DISTANCES.unknown } : answer);
   b.api.go(1);
   await settle();
   if (step.dist !== undefined) {
@@ -386,33 +424,38 @@ async function take(saved, step, distanceAnswer) {
     b.clock.fire();
     return { b: b, plain: false, piece: "[" + step.variant + "]", step: step };
   }
+  if (!(await sheetsAction(b, step))) return null;
+  return { b: b, plain: false, piece: step.copy ? "copy" : step.add ? "add:" + step.add : "base:" + step.base, step: step };
+}
+
+/** The Sheets panel's three actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (the radio and its yes). The page is saved
+ *  after it. False when the control is not there (the panel does not offer it at this state). A FRESH SHEET is an option that starts on the proposal. It holds no Travel Labor row:
+ *  only the section that carries the job's travel has one. */
+async function sheetsAction(b, step) {
   if (step.copy) {
     const sel = '[data-sh-act="copy"]';
-    if (!b.doc.querySelector(sel)) return null;
+    if (!b.doc.querySelector(sel)) return false;
     P.clickOn(b, sel);
-    await settle();
-    b.clock.fire();
-    return { b: b, plain: false, piece: "copy", step: step };
-  }
-  if (step.add) {
-    // A FRESH SHEET (the Sheets panel's Add menu): an option that starts on the proposal. It holds no Travel Labor row: only the section that carries the job's travel has one.
+  } else if (step.add) {
     b.api.go(1);
     await settle();
     if (b.doc.querySelector('[data-sh-act="add-menu"]')) P.clickOn(b, '[data-sh-act="add-menu"]');
     const sel = '[data-sh-act="add"][data-sh-sheet="' + step.add + '"]';
-    if (!b.doc.querySelector(sel)) return null;
+    if (!b.doc.querySelector(sel)) return false;
     P.clickOn(b, sel);
-    await settle();
-    b.clock.fire();
-    return { b: b, plain: false, piece: "add:" + step.add, step: step };
+  } else {
+    b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
+    if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return false;
+    P.clickOn(b, '[data-sh-act="base-yes"]');
   }
-  b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
-  if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return null;
-  P.clickOn(b, '[data-sh-act="base-yes"]');
   await settle();
   b.clock.fire();
-  return { b: b, plain: false, piece: "base:" + step.base, step: step };
+  return true;
 }
+
+/** A step as a piece of a label. */
+const stepLabel = (step) => (step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add :
+  step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base);
 
 /** The base changes the Sheets panel of this page offers (one to a radio), other than the base it already has. */
 function basePicks(b) {
@@ -440,7 +483,8 @@ function stepsFor(page, path) {
     TYPES.forEach((t) => out.push({ job: t }));
     basePicks(page).forEach((v) => out.push({ base: v }));
     out.push({ copy: true });
-    if (RELOAD) out.push({ add: "Epoxy" });
+    if (RELOAD || SESSION) out.push({ add: "Epoxy" });
+    if (SESSION) out.push({ add: "Polish" });                // beside the root a Polish sheet is a Copy<N>: with an Epoxy base it is the other half of a pair that lives under `tabs`
     if (DIST) Object.keys(DIST_TEXT).forEach((k) => out.push({ dist: k }));
   } else {
     TYPES.forEach((t) => out.push({ job: t }));
@@ -471,7 +515,7 @@ async function judgeReload(parentSaved, step, distanceAnswer, label) {
     const made = await take(parentSaved, step, distanceAnswer);
     if (!live || !made) return;
     const saved = clone(made.b.store.blob);
-    const reopened = await open(clone(saved), { distance: Object.assign({}, answer, { miles: answer.miles === null ? null : 300 }) });
+    const reopened = await reopen(saved, { distance: Object.assign({}, answer, { miles: answer.miles === null ? null : 300 }) });
     reopened.api.go(1);
     await settle();
     // A cleared box asks the lookup again, and the lookup finds nothing (the estimator took the miles away): on the page that made the change as on the reopened one.
@@ -479,7 +523,11 @@ async function judgeReload(parentSaved, step, distanceAnswer, label) {
     const inSession = await answerOn(live.b, dist);
     const afterReload = await answerOn(reopened, dist);
     if (JSON.stringify(inSession) !== JSON.stringify(afterReload)) {
-      record("RELOAD_AGREES", label, "after {" + dist + "} typed in the session " + JSON.stringify(inSession).slice(0, 170) + " VS after a reload " + JSON.stringify(afterReload).slice(0, 170));
+      // PRICES are what a customer is charged; the rest (the rows, the order of the sheets) is what the estimator reads. Said first, so a report tells the two apart.
+      const priced = !inSession || !afterReload || JSON.stringify([inSession.lump, inSession.root, inSession.sections]) !== JSON.stringify([afterReload.lump, afterReload.root, afterReload.sections]);
+      if (priced) notePriced("RELOAD_AGREES", label, "after {" + dist + "}", inSession && [inSession.lump, inSession.root, inSession.sections], afterReload && [afterReload.lump, afterReload.root, afterReload.sections]);
+      record("RELOAD_AGREES", label, (priced ? "PRICES DIFFER: " : "same prices, other rows or order: ") + "after {" + dist + "} typed in the session " +
+        JSON.stringify(inSession).slice(0, 170) + " VS after a reload " + JSON.stringify(afterReload).slice(0, 170));
     }
   }
 }
@@ -500,11 +548,14 @@ async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
       record("PLAIN_REOPEN", label, "armed " + got.quiet.armed + " saves " + got.quiet.saves + " lookups " + got.quiet.asked);
     }
     if (parent && got.was !== parent.shape) record("PLAIN_REOPEN", label, "the rows moved: " + got.was.slice(0, 160) + " VS " + parent.shape.slice(0, 160));
-    if (parent && lumpNow(b) !== parent.lump) record("REOPEN_AGREES", label, "the plain reopen prices " + lumpOf(b.store.blob) + ", the draft saved " + parent.lump);
+    if (parent && lumpNow(b) !== parent.lump) {
+      notePriced("REOPEN_AGREES", label, "a plain reopen", parent.lump, lumpOf(b.store.blob));
+      record("REOPEN_AGREES", label, "PRICES DIFFER: the plain reopen prices " + lumpOf(b.store.blob) + ", the draft saved " + parent.lump);
+    }
   } else if (leaf) {
     // A step that ended the path is reopened plain too (every other step has a plain child, which holds the same question).
     const saved = clone(b.store.blob);
-    const again = await open(clone(saved), { distance: DISTANCES.far });
+    const again = await reopen(saved, { distance: DISTANCES.far });
     again.api.go(1);
     await settle();
     report.reopens++;
@@ -512,7 +563,9 @@ async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
     const same = shape(again) === shape(b);
     const lump = lumpNow(again);
     if (!quiet || !same || lump !== lumpOf(saved)) {
-      record("REOPEN_AGREES", label, (quiet ? "" : "the reopen armed a save; ") + (same ? "" : "the rows moved on reopen: " + shape(b).slice(0, 150) + " VS " + shape(again).slice(0, 150) + "; ") +
+      if (lump !== lumpOf(saved)) notePriced("REOPEN_AGREES", label, "a reopen at the end of the path", lumpOf(saved), lump);
+      record("REOPEN_AGREES", label, (lump !== lumpOf(saved) ? "PRICES DIFFER: " : "") + (quiet ? "" : "the reopen armed a save; ") +
+        (same ? "" : "the rows moved on reopen: " + shape(b).slice(0, 150) + " VS " + shape(again).slice(0, 150) + "; ") +
         (lump === lumpOf(saved) ? "" : "saved " + lumpOf(saved) + " reopened " + lump));
     }
   }
@@ -526,7 +579,7 @@ async function walk(label, got, path, depth, ctx, distanceAnswer) {
   const steps = stepsFor(b, path);
   for (const step of steps) {
     let child = null;
-    const childLabel = label + " -> " + (step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add : step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base);
+    const childLabel = label + " -> " + stepLabel(step);
     try { child = await take(saved, step, distanceAnswer); } catch (e) {
       report.crashes.push([childLabel, String((e && e.stack) || e).slice(0, 400)]);
       record("CRASH", childLabel, String((e && e.message) || e).slice(0, 200));
@@ -541,6 +594,105 @@ async function walk(label, got, path, depth, ctx, distanceAnswer) {
     }
     await walk(childLabel, child, path.concat([step]), depth - 1, ctx2, distanceAnswer);
   }
+}
+
+// ── THE SESSION AGAINST A RELOAD (mode `session`) ────────────────────────────────────────────────────────────────────────────────────────────────────────
+const attrOf = (s) => String(s).replace(/"/g, "&quot;");
+
+/** One step of a session, made on the page that has carried the path so far. A Sheets action is made on the page itself; a job switch is the intake's, so the draft is saved and the
+ *  estimate page is opened again on the SAME browser's copy of it (what localStorage hands back keeps the order the page wrote). Returns the page the session goes on with, or null
+ *  when the panel does not offer the step here. */
+async function advance(b, step, distanceAnswer) {
+  if (step.job) {
+    b.clock.fire();
+    const saved = clone(b.store.blob);
+    const next = await open(Object.assign(clone(saved), { work_type: step.job }), { distance: Object.assign({}, distanceAnswer, { miles: distanceAnswer.miles === null ? null : 300 }) });
+    next.api.go(1);
+    await settle();
+    next.clock.fire();
+    return next;
+  }
+  b.api.go(1);
+  await settle();
+  // A copy is a copy of the sheet that carries the job's travel, as in every other walk (its page opens on the carrier); a session is on whatever sheet the last action left open.
+  if (step.copy) {
+    const tab = '[data-section-tab="' + attrOf(B.travelCarrier(b.api.root())) + '"]';
+    if (b.doc.querySelector(tab)) { P.clickOn(b, tab); await settle(); }
+  }
+  return (await sheetsAction(b, step)) ? b : null;
+}
+
+/** A new bid, and the steps of a path made one after the other on ONE page. null when a step is not offered. */
+async function replaySession(start, steps, distanceAnswer) {
+  let b = (await newBid(start, distanceAnswer)).b;
+  for (const step of steps) {
+    b = await advance(b, step, distanceAnswer);
+    if (!b) return null;
+  }
+  return b;
+}
+
+/** What a session and a reload must agree on (SESSION_AGREES): every price, the sheets in order with their kinds, the carrier and the Travel Labor rows (`shape`), and the order
+ *  priced_tabs lists the sheets in. A save is forced, so this runs after everything else is read. */
+function sessionFacts(b) {
+  const bids = b.api.sectionBids();
+  const root = b.api.bid().total;
+  const lump = lumpNow(b);
+  return { lump: lump, root: root, sections: Object.fromEntries(Object.keys(bids).sort().map((k) => [k, bids[k].total])),
+    priced: (b.store.blob.priced_tabs || []).map((t) => t.id + ":" + t.kind), shape: shape(b) };
+}
+const pricesOf = (f) => JSON.stringify(f ? [f.lump, f.root, f.sections] : null);
+
+function compareSession(label, when, session, reload) {
+  if (JSON.stringify(session) === JSON.stringify(reload)) return;
+  const priced = pricesOf(session) !== pricesOf(reload);
+  if (priced) notePriced("SESSION_AGREES", label, when, session && [session.lump, session.root, session.sections], reload && [reload.lump, reload.root, reload.sections]);
+  record("SESSION_AGREES", label, (priced ? "PRICES DIFFER " : "same prices, other rows or order ") + when + ": in the session " + JSON.stringify(session).slice(0, 190) +
+    " VS after a reload " + JSON.stringify(reload).slice(0, 190));
+}
+
+/** SESSION_AGREES, asked of the page a session has reached: as it stands, and after each of the four distance answers (typed on the draft as the session saved it, and on the draft as the
+ *  server returns it). The session's own page is never typed on, so the path goes on from where it is. */
+async function judgeSessionNode(label, b, distanceAnswer) {
+  const lookup = (answer) => ({ distance: Object.assign({}, answer, { miles: answer.miles === null ? null : 300 }) });
+  const here = sessionFacts(b);
+  const saved = clone(b.store.blob);
+  const r = await reopen(saved, lookup(distanceAnswer));
+  r.api.go(1);
+  await settle();
+  report.sessions = (report.sessions || 0) + 1;
+  compareSession(label, "as saved", here, sessionFacts(r));
+  for (const dist of Object.keys(DIST_TEXT)) {
+    const answer = dist === "cleared" ? DISTANCES.unknown : distanceAnswer;
+    const same = await open(clone(saved), lookup(answer));          // the same browser's copy: the order the session wrote
+    const after = await reopen(saved, lookup(answer));              // the server's
+    same.api.go(1);
+    after.api.go(1);
+    await settle();
+    // A cleared box asks the lookup again, and the lookup finds nothing (the estimator took the miles away).
+    if (dist === "cleared") { same.opts.distance = DISTANCES.unknown; after.opts.distance = DISTANCES.unknown; }
+    compareSession(label, "after {" + dist + "}", await answerOn(same, dist), await answerOn(after, dist));
+  }
+}
+
+/** Every path of Sheets actions and job switches up to `depth`, each replayed in one continuous session and judged (judgeSessionNode) after every prefix. */
+async function walkSession(start, steps, depth, distanceAnswer) {
+  const label = "start:" + start + steps.map((st) => " -> " + stepLabel(st)).join("");
+  let b = null;
+  try { b = await replaySession(start, steps, distanceAnswer); } catch (e) {
+    report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
+    record("CRASH", label, String((e && e.message) || e).slice(0, 200));
+    return;
+  }
+  if (!b) return;
+  report.runs++;
+  try { await judgeSessionNode(label, b, distanceAnswer); } catch (e) {
+    report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
+    record("CRASH", label, "while judging: " + String((e && e.message) || e).slice(0, 200));
+    return;
+  }
+  if (depth === 0) return;
+  for (const step of stepsFor(b, steps)) await walkSession(start, steps.concat([step]), depth - 1, distanceAnswer);
 }
 
 /** The 54 sequences the audit of 7d32336 found pricing the drive twice: start type, then steps (a "+" is the crew typed on the new carrier). */
@@ -593,13 +745,17 @@ async function main() {
     report.sequences = AUDIT54.length;
     return;
   }
+  if (SESSION) {
+    for (const start of TYPES) await walkSession(start, [], DEPTH, distanceAnswer);
+    return;
+  }
   const starts = TYPES;
   for (const start of starts) {
     let first = await newBid(start, distanceAnswer);
     let ctx = null;
     const label0 = "start:" + start;
     if (MODE_VARIANT) {
-      const reopened = await open(clone(first.b.store.blob), { distance: distanceAnswer });
+      const reopened = await reopen(first.b.store.blob, { distance: distanceAnswer });
       reopened.api.go(1);
       await settle();
       if (!applyVariant(reopened, MODE_VARIANT)) { report.skipped = (report.skipped || 0) + 1; continue; }

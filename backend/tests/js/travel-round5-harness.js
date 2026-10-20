@@ -104,9 +104,10 @@ async function newBid(blob, crew, distance) {
   return { saved: clone(b.store.blob), page: b };
 }
 
-/** The saved draft reopened on a page of its own, on the Labor step. The lookup would say 300 miles, which a saved bid never asks for. */
+/** The saved draft reopened on a page of its own, on the Labor step. The lookup would say 300 miles, which a saved bid never asks for. It comes back as the
+ *  server hands a draft back (`reloaded`): jsonb keeps no key order, so every object's keys are in jsonb's order (js/_jsonb.js), not the saving page's. */
 async function reopen(saved, extra) {
-  const b = await open(clone(saved), Object.assign({ distance: { ok: true, miles: 300, reason: "" } }, extra || {}));
+  const b = await open(clone(saved), Object.assign({ distance: { ok: true, miles: 300, reason: "" }, reloaded: true }, extra || {}));
   b.api.go(1);
   await settle();
   return b;
