@@ -11,8 +11,11 @@ bases that are both under `tabs` (a Polish copy made the base beside Epoxy, the 
     reload    carrier Copy1, lump sum $81,086   (Copy1 $47,813 + Epoxy $33,273)
 
 THE FIX. Every section under `tabs` carries `seq`, its place in the bid (a number that only ever grows: a new, copied or added sheet is last), and `sectionsOf` lists the root and
-then the sections by `seq`, whatever order their keys are in. A bid saved before the order was kept has no `seq` and keeps the order it opens with (its keys' order), which is stamped
-when it opens and saved by its next save; nothing is written on open and no price moves.
+then the sections by `seq`, whatever order their keys are in. A bid saved before the order was kept has no `seq`: it is stamped when it opens, in the order its saved price was computed
+in (the draft's priced_tabs, an array, which jsonb keeps in order) when that names two or more of its sheets and in its keys' order when it does not, and saved by its next save; nothing is
+written on open and no price moves (round 6 audit: stamped in the keys' order, a far Combo saved at $78,628 with Epoxy and a Polish copy both bases opened on the copy as the carrier and
+its first save wrote $81,086). Two sheets that claim one place (a copy made by a tab still running the code from before this) are told apart by `source`, a copy standing after the sheet it
+was copied from, and then by their ids.
 
 HOW THESE TESTS RUN. tests/js/sheet-order-harness.js drives js/polish-estimate.js whole, over the real js/bid-model.js, as a person does (a new far bid, a copy, a fresh sheet, a base
 change, a rename, a delete, a job-type switch), and reads every fact twice: off the session that made the bid, and off a page opened on the blob that session saved, re-keyed as the server

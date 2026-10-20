@@ -33,8 +33,10 @@
  *                   shuffles): the page shows, prices, lists for the document and then saves exactly the same. Nothing else of a saved draft may depend on the
  *                   order of its keys either (a `cell_values`, a `tab_opts`, a row), and this is what holds it.
  *   model           the model alone: the order does not depend on the key order, an unstamped section is newer than a stamped one, a tie is settled by
- *                   the sheet's id, a copy never takes its source's place, a sheet added to a bid with no stamps goes last, a save stamps a bid that has none,
- *                   withSectionOrder stamps once and leaves unreadable tabs as they are.
+ *                   the copy's source first (a pair, a chain, a loop, a source that is no sheet of the tie) and then by the sheet's id, a copy never takes its
+ *                   source's place, a sheet added to a bid with no stamps goes last, a save stamps a bid that has none, withSectionOrder stamps once, leaves
+ *                   unreadable tabs as they are and reads the saved priced_tabs list as the order of a bid with no stamps (every shape of list), and the pure
+ *                   steps (rename, delete, removeOption, pickBase, copy, addOption) on a model the server returned move no sheet.
  *
  * A section that throws reports `{ error }`, so a tree without the code fails an assertion with a reason; the mutation runs in the test count a section
  * error as a failure of the mutation, never as the mutation being noticed.
