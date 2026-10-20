@@ -38,7 +38,7 @@ HARNESS = TESTS / "js" / "travel-round6-answer-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
-SECTIONS = ["rootCause", "f1", "oracle", "f2", "s1", "answer", "switchAfterX", "migrate", "savedBid", "stranded", "keyboard"]
+SECTIONS = ["rootCause", "f1", "oracle", "f2", "s1", "answer", "switchAfterX", "migrate", "savedBid", "stranded", "keyboard", "handoff", "holes"]
 
 
 def run(frontend=FRONTEND):
@@ -335,13 +335,57 @@ def _hand(on, qty, auto, follow, typed, hand):
     return {"on": on, "qty": qty, "auto": auto, "follow": follow, "typed": typed, "hand": hand}
 
 
+def test_a_far_answer_leaves_a_line_the_estimator_switched_off_alone_and_switching_it_on_fills_it(ran):
+    """A 40 mile bid whose Lodging the estimator switched on and off by hand, then 190 miles typed: the answer filled 48 nights into the line that was off (a figure sitting in a greyed box,
+    following the labor), which "a hand flip wins" does not say and Travel Labor does not do (a row switched off is left exactly as it is). Now the line is left exactly as it was (off,
+    empty, off auto, no marker), Per Diem is filled as ever (48, following), and the moment the estimator switches Lodging ON it is filled as an answer would have filled it (48, $3,360):
+    it never waits with a figure and never comes on empty. A reopen of that bid moves nothing and arms no save.
+
+    Mutation: fill a line that is off; do not fill a line that is switched on by hand."""
+    h = ran["handoff"]
+    assert h["flipped"]["lodging"] == _hand(False, "", False, None, False, True)
+    assert h["far"]["lines"]["lodging"] == _hand(False, "", False, None, False, True), "an answer filled a line that is switched off"
+    assert h["far"]["lines"]["perDiem"] == _hand(True, 48, True, "labor", False, False)
+    assert (h["far"]["box"], h["far"]["perDiemBox"]) == ("", "48")
+    assert h["on"]["lines"]["lodging"] == _hand(True, 48, True, "labor", False, True)
+    assert (h["on"]["box"], h["on"]["cost"]) == ("48", "$3,360")
+    assert h["on"]["hint"] == "Follows the man-days on the labor lines above (48): a night for each, Kyle's way."
+    assert h["reopened"] == {"lines": h["on"]["lines"], "armed": 0, "saves": 0}
 
 
+def test_a_figure_typed_into_a_line_that_was_off_is_theirs_through_the_switch_on(ran):
+    """Lodging switched on and typed as 10 on a 40 mile bid, switched off by hand, 190 miles typed, switched on again: it still reads the 10 they typed, off auto, marked as theirs.
+
+    Mutation: fill a typed box when its line is switched on."""
+    assert ran["handoff"]["typed"]["lodging"] == _hand(True, "10", False, None, True, True)
 
 
+def test_switching_a_line_on_fills_that_line_and_no_other_and_never_on_a_local_job(ran):
+    """A far bid saved with both lines ON and BLANK is not filled by being opened (nothing armed or saved). Lodging switched off and on again by hand is filled (48, following) and the Per Diem
+    line, which nobody touched, is exactly as it was (blank). On a 40 mile job switching a line on fills nothing.
+
+    Mutation: fill every line when one is switched on; fill a line on a local job."""
+    n = ran["handoff"]["neighbour"]
+    blank = _hand(True, "", False, None, False, False)
+    assert n["opened"] == {"lines": {"lodging": blank, "perDiem": blank}, "armed": 0, "saves": 0}
+    assert n["after"]["lodging"] == _hand(True, 48, True, "labor", False, True)
+    assert n["after"]["perDiem"] == blank
+    assert ran["handoff"]["local"]["lodging"] == _hand(True, "", False, None, False, True)
 
 
 # ── X4(c). a labor or takeoff list that holds a null ────────────────────────────────────────────────────────────────────────────────────────────────────────
+def test_a_labor_or_takeoff_list_that_holds_a_null_is_read_as_one_without_it(ran):
+    """The fuzz of this round (every path of four saved bids made hostile one at a time, through the page, every section on show at every step, the x, Add Travel Labor, the miles typed and
+    cleared, and the model's own entry points) found one shape that still threw: a list holding a null, which the panels read `.label` and `.measurement` of. The page threw on open or on a step and
+    the estimator got no panel. A null row prices nothing and says nothing, so it is read as no row (the root's, a base's and an option's lists alike, labor and takeoff): the bid opens, every
+    section can be put on show, the x and Add Travel Labor can be pressed, and it prices exactly what the same bid prices without the hole. A list that is nothing but a null reads as an empty
+    one.
+
+    Mutation: leave a null in the root's labor; in its takeoff; in a section's labor; in a section's takeoff."""
+    h = ran["holes"]
+    ok = {"opened": True, "shown": True, "threw": {}, "error": None, "same": True}
+    for name in ("root labor", "root takeoff", "Epoxy labor", "Epoxy takeoff", "option labor", "option takeoff", "onlyNull"):
+        assert h[name] == ok, (name, h[name])
 
 
 # ── red without the code: break a COPY of the page or the model one line at a time ──────────────────────────────────────────────────────────────────────────

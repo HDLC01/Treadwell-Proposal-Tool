@@ -678,6 +678,139 @@ async function main() {
     return res;
   });
 
+  // ═══ X4(b). A LODGING OR PER DIEM LINE THE ESTIMATOR SWITCHED OFF BY HAND ══════════════════════════════════════════════════════════════════════════
+  // A far answer filled the nights of a line that was switched off by hand (Lodging off, 48 sitting in its greyed box and following the labor), which is not what "a hand flip wins" says and
+  // not what Travel Labor does (a row switched off is left exactly as it is). Now an answer leaves a line that is off alone, and the line is filled the moment the estimator switches it ON,
+  // as an answer would have filled it: it never waits with a figure and never comes on empty. Only that line is filled, a figure the estimator typed in is theirs through it.
+  await section("handoff", async () => {
+    const res = {};
+    const LOCAL = { ok: true, miles: 40, reason: "" };
+    const lineFacts = (l) => (l ? { on: !!l.enabled, qty: l.qty, auto: l.qty_auto !== false, follow: l.qty_follow === undefined ? null : l.qty_follow, typed: l.qty_typed === true, hand: l.hand === true } : null);
+    const lines = (b) => ({ lodging: lineFacts(b.api.root().travel.lodging), perDiem: lineFacts(b.api.root().travel.per_diem) });
+    const box = (b, key) => boxOf(b, '[data-trv="' + key + '"][data-k="qty"]');
+    const flip = (b, key) => { b.api.go(1); P.clickOn(b, '[data-on-trv="' + key + '"]'); };
+    {
+      const s = await newBid(polishDraft(), CREW.polish, LOCAL);
+      const b = await reopen(s.saved);
+      flip(b, "lodging");
+      flip(b, "lodging");                  // on, then off, by hand
+      res.flipped = lines(b);
+      await typeMiles(b, "190");
+      res.far = { lines: lines(b), box: box(b, "lodging"), perDiemBox: box(b, "per_diem") };
+      flip(b, "lodging");                  // switched ON by hand on the far job
+      res.on = { lines: lines(b), box: box(b, "lodging"), cost: textOf(b, '[data-trvcostbox-for="lodging"]'), hint: textOf(b, '[data-hint-trv="lodging"]') };
+      b.api.saveSoon();
+      b.clock.fire();
+      const r = await reopen(b.store.blob);
+      res.reopened = { lines: lines(r), armed: r.clock.armed(), saves: r.rec.saves.length };
+    }
+    // a figure the estimator typed into the line is theirs: off by hand, a far answer, on by hand, and it still reads what they typed
+    {
+      const s = await newBid(polishDraft(), CREW.polish, LOCAL);
+      const b = await reopen(s.saved);
+      flip(b, "lodging");
+      P.typeInto(b, '[data-trv="lodging"][data-k="qty"]', "10");
+      flip(b, "lodging");
+      await typeMiles(b, "190");
+      flip(b, "lodging");
+      res.typed = lines(b);
+    }
+    // only the line switched on is filled: a far bid saved with both lines ON and BLANK (what a bid held before an answer filled them) is not filled by being opened, and switching Lodging off
+    // and on again fills Lodging and leaves the Per Diem line, which nobody touched, exactly as it was
+    {
+      const s = await newBid(polishDraft(), CREW.polish);
+      const old = clone(s.saved);
+      ["lodging", "per_diem"].forEach((k) => { const l = old.polish_estimate.travel[k]; l.qty_auto = false; l.qty = ""; delete l.qty_follow; delete l.qty_typed; });
+      const b = await reopen(old);
+      const opened = { lines: lines(b), armed: b.clock.armed(), saves: b.rec.saves.length };
+      flip(b, "lodging");
+      flip(b, "lodging");
+      res.neighbour = { opened: opened, after: lines(b) };
+    }
+    // a LOCAL job: switching a line on fills nothing (nothing is far)
+    {
+      const s = await newBid(polishDraft(), CREW.polish, LOCAL);
+      const b = await reopen(s.saved);
+      flip(b, "lodging");
+      res.local = lines(b);
+    }
+    return res;
+  });
+
+  // ═══ X4(c). A LABOR OR TAKEOFF LIST THAT HOLDS A NULL ══════════════════════════════════════════════════════════════════════════════════════════════
+  // Round 5 coerced a section whose labor or takeoff is not a list at all. The fuzz of this round (every path of four saved bids, made hostile one at a time: null, a string, a number, a boolean,
+  // lists and objects, run through the page, every section on show at every step, the x, Add Travel Labor, the miles typed and cleared, and the model's own entry points) found ONE shape that still
+  // threw: a list that holds a null (the panels read r.label and r.measurement). The page's whole open or a step threw, so the estimator got no panel. A null row prices nothing and says nothing,
+  // so it is read as no row: the bid opens, every section can be put on show, and it prices exactly what the same bid prices without the hole.
+  await section("holes", async () => {
+    const res = {};
+    const combo = await newBid(comboDraft(), CREW.polish);
+    const withCopy = await (async () => {
+      const s = await newBid(polishDraft(), CREW.polish);
+      const b = await reopen(s.saved);
+      await copyActive(b);
+      return clone(b.store.blob);
+    })();
+    /** Open the bid and put EVERY section on show at every step, press the x on the first labor line and Add Travel Labor where they are drawn: what threw, by place. */
+    const walk = async (blob) => {
+      const r = { opened: false, shown: false, threw: {}, lump: null };
+      let b;
+      try {
+        b = await reopen(blob);
+        r.opened = true;
+        r.shown = !!b.doc.getElementById("main") && !b.doc.getElementById("main").hidden;
+      } catch (e) { r.error = String((e && e.message) || e).slice(0, 120); return r; }
+      let tabs = [B.ROOT_TAB];
+      try { tabs = B.sectionsOf(b.api.root()).map((e) => e.tab); } catch (e) { tabs = [B.ROOT_TAB]; }
+      tabs.forEach((tab) => [0, 1, 2].forEach((step) => {
+        try { b.api.show(tab); b.api.go(step); } catch (err) { r.threw[tab + "#" + step] = String((err && err.message) || err).slice(0, 80); }
+      }));
+      for (const tab of tabs) {
+        try {
+          b.api.show(tab);
+          b.api.go(1);
+          if (has(b, "[data-del-lab]")) P.clickEl(b, b.doc.querySelectorAll("[data-del-lab]")[0]);
+          await settle();
+          b.api.go(1);
+          if (has(b, "[data-add-travel]")) { P.clickOn(b, "[data-add-travel]"); await settle(); }
+        } catch (err) { r.threw[tab + "#press"] = String((err && err.message) || err).slice(0, 80); }
+      }
+      return r;
+    };
+    /** The price the page opens the bid at (no press): the bid's lump sum and every section's total. */
+    const opened = async (blob) => {
+      try { return prices(await reopen(blob)); } catch (e) { return { threw: String((e && e.message) || e).slice(0, 80) }; }
+    };
+    const holey = (blob, where, key) => {
+      const c = clone(blob);
+      const sec = where === "root" ? c.polish_estimate : c.polish_estimate.tabs[where];
+      sec[key] = [null].concat(sec[key] instanceof Array ? sec[key] : []);
+      return c;
+    };
+    const cases = [
+      ["root labor", combo.saved, "root", "labor"], ["root takeoff", combo.saved, "root", "takeoff"],
+      ["Epoxy labor", combo.saved, "Epoxy", "labor"], ["Epoxy takeoff", combo.saved, "Epoxy", "takeoff"],
+      ["option labor", withCopy, "Copy1", "labor"], ["option takeoff", withCopy, "Copy1", "takeoff"],
+    ];
+    for (const c of cases) {
+      const blob = holey(c[1], c[2], c[3]);
+      const w = await walk(blob);
+      res[c[0]] = { opened: w.opened, shown: w.shown, threw: w.threw, error: w.error || null, same: JSON.stringify(await opened(blob)) === JSON.stringify(await opened(c[1])) };
+    }
+    // a list that is NOTHING BUT a null reads as an empty one, which the root reads as the shipped rows and a section as none
+    const only = clone(combo.saved);
+    only.polish_estimate.labor = [null];
+    only.polish_estimate.takeoff = [null];
+    const none = clone(combo.saved);
+    none.polish_estimate.labor = [];
+    none.polish_estimate.takeoff = [];
+    const w = await walk(only);
+    // (the PAGE seeds the library's lines into a bid whose saved list is EMPTY and leaves one that states a row alone, so what is compared is how the model reads the two)
+    res.onlyNull = { opened: w.opened, shown: w.shown, threw: w.threw, error: w.error || null,
+      same: JSON.stringify(B.migrateModel(clone(only.polish_estimate))) === JSON.stringify(B.migrateModel(clone(none.polish_estimate))) };
+    return res;
+  });
+
   return out;
 }
 
