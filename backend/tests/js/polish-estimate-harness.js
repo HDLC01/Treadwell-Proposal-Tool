@@ -67,6 +67,8 @@ const PRICE_FILE = path.join(ROOT, "js", "price-lines-core.js");
 const PRICE = fs.existsSync(PRICE_FILE) ? require(PRICE_FILE) : undefined;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
+// What the server does to a draft on its way back (jsonb keeps no key order): see js/_jsonb.js. Used by build()'s `reloaded` option.
+const J = require("./_jsonb.js");
 
 // ── the page's own body, with only the boot call lifted off ───────────────────
 const HEAD = '(function () {\n  "use strict";\n';
@@ -420,7 +422,9 @@ function build(opts) {
   opts = opts || {};
   const log = [];
   const rec = { saves: [], fetches: [], flushed: 0 };
-  const store = { blob: clone(opts.blob === undefined ? blob() : opts.blob),
+  // `opts.reloaded`: the blob is a SAVED draft the server hands back (a reopen), so it comes as jsonb stores it, every object's keys sorted by
+  // length and then bytes (js/_jsonb.js), and not in the order the page that saved it wrote them. Every other build is a draft made here.
+  const store = { blob: opts.reloaded ? J.reloaded(opts.blob === undefined ? blob() : opts.blob) : clone(opts.blob === undefined ? blob() : opts.blob),
                   id: opts.id || "proj-1" };
   const dom = makeDom(log);
   const doc = makeDocument(dom, log);
