@@ -651,7 +651,7 @@
   }
 
   /** Is this job a renovation? The patch line of a Polish sheet (on a profile that carries it) and of every Seal option reads it:
-   *  Kyle's patch price is one figure for New and another for Reno (Polish!C17 = IF(B10="New",0.05,0.15)). The v2 estimate model does
+   *  Kyle's patch price is one figure for New and another for Reno (Polish!C17 reads B10). The v2 estimate model does
    *  not carry Renovation (js/work-types.js: `model: false`), so it is read off the draft the way the live intake, the AI autofill and
    *  this page's own switch (setReno) leave it: the cells the condition writes (T.condition("reno").cells), the first one that holds
    *  an answer deciding. A draft that never answered it is a new floor, the condition's own default. */
@@ -692,7 +692,9 @@
     if (!SL) return "";
     var on = jobIsReno();
     var newRate = SL.unitPrice(ITEMS, "patchNew").cost, renoRate = SL.unitPrice(ITEMS, "patchReno").cost;
-    return '<div class="tk cond' + (on ? "" : " inert") + '" data-reno-card="1">' +
+    // Its own kind of card (`tk floor`), dressed as a condition card: it is a fact about the building, not one of the three
+    // conditions of the work (Dye, Joint Filler, Remove Existing) that the intake handed this step.
+    return '<div class="tk floor' + (on ? "" : " inert") + '" data-reno-card="1">' +
       '<div class="tk-h">' +
       '<span class="tag">Floor</span>' +
       B.sliderHtml(on, 'data-reno-sw="1"', "Renovation", null, "") +

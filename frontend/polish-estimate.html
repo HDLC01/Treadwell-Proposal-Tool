@@ -555,10 +555,11 @@
        takeoff row does" a few lines up in takeoffPanel(). The distinction now lives only in
        the tag text (JOINT FILLER / DYE vs ROW n) and the hint line, not in a different card. */
     .tk.cond{}
-    .tk.cond .tk-h{margin:0 0 7px}
-    .tk.cond .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
+    /* .tk.floor: the Renovation card (a fact about the building, Polish!B10), dressed as a condition card. */
+    .tk.cond .tk-h,.tk.floor .tk-h{margin:0 0 7px}
+    .tk.cond .tk-sub,.tk.floor .tk-sub{margin-left:auto;font:600 10.5px var(--mono);color:var(--ink-3);
       letter-spacing:.02em}
-    .tk.cond .hint{margin:0}
+    .tk.cond .hint,.tk.floor .hint{margin:0}
     /* `.cond-cost` lived here from 2026-09-18 to 2026-09-19: one dollar figure beside the switch,
        which was the most a switch-shaped card could say. Joint Filler and Dye are material rows
        now and their money is in a real `.costbox` in the Total cost column, so the class is gone
