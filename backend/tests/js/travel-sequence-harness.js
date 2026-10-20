@@ -38,9 +38,10 @@
  *
  * HANZ'S DECISION OF THE FIFTH AUDIT ("Fill them automatically", 2026-10-20) added NIGHTS, judged after every step of every walk (a walk never types in the Lodging or Per Diem box, so none
  * of its lines is the estimator's):
- *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the man-days of the section that carries the job's travel (guys x days, as a person counts them),
- *                    on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). A GYP carrier is the
- *                    exception (round-5 audit): its crew is entered in hours, which the man-days do not count, so its nights are typed and hold nothing until someone does.
+ *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the summed man-days of EVERY base section (round 6: Kyle carries hotel on every sheet of a Combo), each
+ *                    section counted with its own tab's divisor (guys x days, as a person counts them, and a crew entered in hours over the hours a night is worth on its tab: a Gyp crew's
+ *                    hours over 10), on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). An option is priced apart
+ *                    and a section that is off counts nothing. (Round 5 made a Gyp carrier's nights typed, because the man-days then counted day rows only: that exception is gone.)
  *
  * THE FIFTH AUDIT (2026-10-20, of b14bc98) added the RELOAD, which every other step lacks: a step of the walk always starts from the draft the step before SAVED, so every walk above
  * is "reload, then step" and could never see a Sheets panel action that prices differently in the session than after a reload (a base the pick demoted lost its Travel Labor row
@@ -305,21 +306,28 @@ function judge(b, ctx) {
     if (!owned(r) && (!blank(r.days) || r.guys_follow || typeof r.hours_seed === "number")) note("STALE", e.tab + " (" + e.kind + ") still holds the filled row " + fmtRow(r));
   }));
 
-  // NIGHTS. Counted here from the carrier's own rows, and not asked of the model, so the check does not agree with a model that has the same mistake in it.
+  // NIGHTS. Counted here from the rows of EVERY base section (everything in the lump sum), each by its own tab's divisor, and not asked of the model, so the check does not agree
+  // with a model that has the same mistake in it. A section's man-days are guys x days over its day rows and guys x hours over the hours a night is worth on its tab (10 on a Gyp
+  // tab, whose crew is entered in hours; 8 on every other) over its crew rows in hours; the drive is never one. An option counts apart, and an off section counts nothing.
   if (m.travel) {
-    const carrierRows = carrierEntry && carrierEntry.section.labor instanceof Array ? carrierEntry.section.labor : [];
+    const nightHours = (e) => (e.layout === "gyp" ? 10 : 8);
     let manDays = 0;
-    carrierRows.forEach((r) => { if (r && r.unit !== "hours" && r.enabled !== false) manDays += (Number(r.guys) || 0) * (Number(r.days) || 0); });
+    f.entries.filter((e) => e.kind === "base").forEach((e) => {
+      (e.section.labor instanceof Array ? e.section.labor : []).forEach((r) => {
+        if (!r || r.enabled === false || r.id === "travel") return;
+        if (r.unit === "hours") manDays += (Number(r.guys) || 0) * (Number(r.days) || 0) / nightHours(e);
+        else manDays += (Number(r.guys) || 0) * (Number(r.days) || 0);
+      });
+    });
     manDays = Math.round(manDays * 100) / 100;
     ["lodging", "per_diem"].forEach((k) => {
       const l = m.travel[k];
       if (!l) return;
       const says = k + " " + JSON.stringify({ qty: l.qty, auto: l.qty_auto, follow: l.qty_follow, typed: l.qty_typed });
-      const gypCarrier = !!(carrierEntry && carrierEntry.layout === "gyp");
-      if (f.far && gypCarrier) {
-        if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " is Gyp: its nights are typed");
-      } else if (f.far) {
-        if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " has " + manDays + " man-days");
+      if (f.far) {
+        if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) {
+          note("NIGHTS", says + " on a " + f.miles + " mile job whose bases (carrier " + f.carrier + ") have " + manDays + " man-days between them");
+        }
       } else if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) {
         note("NIGHTS", says + " on a job " + (f.miles === null ? "with no distance" : "of " + f.miles + " miles") + ": nothing was to be filled");
       }

@@ -116,13 +116,56 @@ def test_every_oracle_vector_of_all_five_gyp_tabs_is_equal_to_the_cent_through_a
     assert {c["tab"] for c in checked} == set(TABS)
     for tab in TABS:
         assert sum(1 for c in checked if c["tab"] == tab) >= 140, "too few vectors of %s were compared" % tab
-    # what v2 has no box for is counted, not hidden: a typed bond rate (bond is 0 and unwired), and the sheet's own
-    # lodging, which v2 takes from the Lodging and Per Diem lines the estimator types
+    # what v2 has no box for is counted, not hidden: a typed bond rate (bond is 0 and unwired). The sheet's own lodging, which v2 took from lines the estimator typed and this proof left out
+    # (40 vectors) until round 6 of the travel work, is compared now: test_the_sheets_own_lodging_is_equal_to_the_cent_through_a_v2_section_with_the_nights_left_to_follow
     reasons = {}
     for c in skipped:
         reasons[c["skipped"]] = reasons.get(c["skipped"], 0) + 1
-    assert reasons == {"bond": 60, "lodging": 40}, reasons
-    assert len(checked) == 795
+    assert reasons == {"bond": 60}, reasons
+    assert len(checked) == 835
+    assert sum(1 for c in checked if c.get("lodging")) == 40
+
+
+# What the workbook answers for the four crews of its own lodging vectors, on a far job (`local0`; the same job local, `local1`, is $0 on every line): the nights it counts (Gyp!B64), the Lodging
+# and Per Diem dollars (E64 and E65, each rounded up) and the two together (E67). Read off the recorded oracle, not off v2.
+LODGING = {
+    "one": (15.000000000000004, 1050, 675, 1725),
+    "template": (18.000594177064766, 1261, 811, 2072),
+    "mixedRates": (20.704099821746883, 1450, 932, 2382),
+    "withTravel": (15.000356506238862, 1051, 676, 1727),
+}
+
+
+def test_the_sheets_own_lodging_is_equal_to_the_cent_through_a_v2_section_with_the_nights_left_to_follow(ran):
+    """ROUND 6, N1. The 40 vectors that ask the template for its OWN nights (Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`, per diem `=B64`: 4 crews x 5 tabs x far and local) were left out of
+    this proof because v2 took a Gyp job's Lodging and Per Diem from lines the estimator types. Each is priced now through a v2 section, the crew as v2 types it (in HOURS, a day of the sheet's
+    ten, at its own rate, the drive its own row) and the job answered far, so the Lodging and Per Diem lines come on and FOLLOW THE LABOR: the nights, each line's dollars, the sum and every figure
+    of the chain are equal to the workbook to the cent, on all five tabs. A local job is $0 on every line.
+
+    THE RULE THAT WAS PICKED. A head count (guys x hours over ten, the man-days the page quotes) cannot match: three of the four crews differ from the sheet by a dollar or more, because the
+    sheet counts labor DOLLARS: the labor total is rounded UP to a whole dollar before it is divided (`template`: 18.0006 nights where a head count says 18, $1,261 against $1,260 and $811 against
+    $810; `withTravel`: 15.0004 against 15, $1,051 against $1,050), and a row paid another rate reads as extra days (`mixedRates`: 3 guys at $33.66 and 2 at $48, 20.704 nights where a head
+    count says 19, $1,450 against $1,330). Hanz's decision of 2026-10-12 is to match the workbook EXACTLY, so a Gyp section counts the sheet's dollars (bid-model `sheetNights`, with the Gyp
+    profile's divisor of 10), as a Polish section priced by rev 2 has since Phase 17; a head count would have been wrong by up to $120 a line and has no vector it alone satisfies.
+
+    Mutation: count a Gyp section's head count; take the whole crew off as the drive; divide by 8; leave a Gyp section's nights typed (see MUTATIONS below)."""
+    vectors = [c for c in ran["chain"] if c.get("lodging")]
+    assert len(vectors) == 40 and {c["tab"] for c in vectors} == set(TABS)
+    assert [c for c in vectors if c["wrong"]] == [], [c for c in vectors if c["wrong"]][:4]
+    far = [c for c in vectors if c["far"]]
+    assert len(far) == 20 and len([c for c in vectors if not c["far"]]) == 20
+    for c in far:
+        crew = c["id"].split("/")[1]
+        nights, lodging, per_diem, travel = LODGING[crew]
+        assert c["nights"] == pytest.approx(nights, abs=1e-9) and c["lodgingCost"] == lodging and c["perDiemCost"] == per_diem, (c["tab"], crew)
+        assert c["sheet"] == {"lodging": lodging, "perDiem": per_diem, "travel": travel}, (c["tab"], crew)
+    for c in vectors:
+        if not c["far"]:
+            assert c["lodgingCost"] == 0 and c["perDiemCost"] == 0 and c["sheet"]["travel"] == 0, c["id"]
+    # the rule that was not picked: a head count matches the one crew whose dollars are whole and one rate, and misses the other three, on every tab
+    for tab in TABS:
+        missed = sorted(c["id"].split("/")[1] for c in far if c["tab"] == tab and (c["people"]["lodging"], c["people"]["perDiem"]) != (c["sheet"]["lodging"], c["sheet"]["perDiem"]))
+        assert missed == ["mixedRates", "template", "withTravel"], (tab, missed)
 
 
 def test_the_sound_mat_at_279_rolls_against_280_through_a_v2_section(ran):
