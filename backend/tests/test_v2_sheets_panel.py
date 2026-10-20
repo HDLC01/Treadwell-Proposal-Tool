@@ -40,7 +40,7 @@ HARNESS = TESTS / "js" / "sheets-panel-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
-SECTIONS = ["list", "copy", "add", "seal", "baseSwitch", "combined", "deleting", "renaming", "options", "reopen", "unreadable", "focus",
+SECTIONS = ["list", "copy", "add", "seal", "baseSwitch", "combined", "renameByTab", "deleting", "renaming", "options", "reopen", "unreadable", "focus",
             "markup", "floating", "gypPreset", "limit", "sealMode", "demote", "resets", "unstated", "hiddenOption", "stickyHead"]
 GYP1, GYP2 = 'Gyp (USG 1-8")', "Gyp (USG N12ULTRA)"
 LIMIT = "A bid can hold 12 copied sheets at most."
@@ -86,7 +86,7 @@ def test_a_base_radio_is_on_every_sheet_that_can_be_the_base_and_says_what_it_me
     lg = p["legend"]
     assert lg["gone"] is True, "the legend line, with its red-ringed dot, is back: a footer line in a block that stays on screen is height lost to every step"
     assert lg["radios"] == lg["titled"] == lg["named"] == 2, "each radio's title and its accessible name say what the base bid does"
-    assert ran["combined"]["radio"] == {"titled": True, "named": True}, "so does the combined Epoxy + Polish radio"
+    assert ran["combined"]["button"]["titled"] is True, "so does the button that makes Epoxy + Polish the base together"
     assert ran["markup"]["legendAnywhere"] is False, "in none of the eleven states the bar can be in"
 
 
@@ -249,16 +249,64 @@ def test_a_base_change_that_moves_the_travel_fills_the_new_carriers_blank_travel
     assert (f["carrier"], f["row"]["days"], f["row"]["guys"], f["row"]["guys_follow"]) == ("Epoxy", 6.5, 3, "crew")
 
 
-def test_a_combined_epoxy_and_polish_base_is_its_own_row_and_writes_combo_and_no_base_id(ran):
+def test_the_strip_holds_sheets_only_and_the_pair_is_made_the_base_from_either_sheets_bar(ran):
+    """Hanz, 2026-10-21: "The Epoxy + Polish should not be a default Sheet". The combined base-bid choice was a dashed tab drawn FIRST in the
+    strip whenever the bid held an Epoxy and a Polish sheet, so an Epoxy bid with a Polish option read as a bid holding a sheet nobody made.
+    The strip holds the sheets and "+ Add sheet"; the pair is priced together as the base from the bar of either sheet of it, never from a
+    copy, and the button goes once the pair is the base."""
     c = ran["combined"]
-    assert c["hadRow"] is True
+    assert c["tab"]["none"] is True, "the strip draws an Epoxy + Polish tab again"
+    assert c["tab"]["rows"] == ["Polish", "Epoxy", "Copy1"], "one tab a sheet, in the model's order"
+    b = c["button"]
+    assert b["onPolish"] is True and b["onEpoxy"] is True, "either sheet of the pair offers it"
+    assert b["onCopy"] is False, "a copy of Polish is not the pair's Polish: its bar does not offer it"
+    assert b["says"] == "Make Epoxy + Polish the base ${:,}".format(c["lump"]), "it says what it does and what the pair comes to"
+    assert c["noButtonOnceCombined"] is True and c["stillNoTab"] is True, "once the pair is the base the button goes, and no tab comes back"
+    together = "Epoxy + Polish together, ${:,}".format(c["lump"])
+    assert "In the base bid" in c["bars"]["epoxy"] and together in c["bars"]["epoxy"] and together in c["bars"]["polish"], (
+        "each sheet of a combined base says so, and what the pair comes to")
+
+
+def test_making_the_pair_the_base_asks_first_puts_the_caret_on_the_answer_and_cancelling_moves_nothing(ran):
+    c = ran["combined"]
     assert c["confirm"] == {"title": "Make Epoxy + Polish (combined) the base bid?",
                             "body": "The job becomes a Combo job and the proposal switches to the Combo format."}
+    assert c["focus"]["asked"] == ["confirm|yes"], "the question is drawn above the bar: the caret goes to its answer, not behind it"
+    assert c["focus"]["cancelled"] == ["Epoxy|combine"], "Cancel puts the caret back on the button that asked"
+    assert c["cancelled"] == {"kinds": [["Polish", "base"], ["Epoxy", "option"], ["Copy1", "option"]], "button": True}
+    assert c["focus"]["made"] == ["Epoxy|open"], "once it is made the button is gone, so the caret goes to the open sheet's tab"
+
+
+def test_a_combined_epoxy_and_polish_base_writes_combo_and_no_base_id_and_sums_the_pair(ran):
+    c = ran["combined"]
     assert c["draft"] == {"work_type": "combo", "base_tab_id": None}, "no sheet is the base on its own"
-    assert c["kinds"] == [["Polish", "base"], ["Epoxy", "base"]] and c["jobType"] == "combo"
+    assert c["kinds"] == [["Polish", "base"], ["Epoxy", "base"], ["Copy1", "option"]] and c["jobType"] == "combo"
     assert c["savedBase"] is None and c["savedWorkType"] == "combo"
     assert c["lump"] == c["polishTotal"] + c["epoxyTotal"], "the pair is summed"
-    assert c["checked"] is True and c["baseTabs"] == 2 and c["chipBase"] is True and c["rowPrice"] == "${:,}".format(c["lump"]) and c["rowType"] == "COMBINED"
+    assert c["baseTabs"] == 2, "both sheets of the pair are marked as the base in the strip"
+
+
+def test_a_double_click_on_a_tab_renames_the_sheet(ran):
+    """Hanz, 2026-10-21: "Double clicking the sheet container should allow me to rename it", as a worksheet's tab does. The first press opens
+    the sheet and redraws the strip, so the second press lands on a NEW button: the page knows it by the browser's count of presses (detail)."""
+    r = ran["renameByTab"]
+    assert r["titled"] is True, "every tab says it can be renamed with a double-click"
+    assert r["afterOne"] == {"open": "Copy1", "naming": None}, "one press opens the sheet and nothing else"
+    assert r["afterTwo"]["open"] == "Copy1" and r["afterTwo"]["naming"] == {"tab": "Copy1", "value": r["copyLabel"]}
+    assert r["afterTwo"]["focus"] == ["Copy1|name"], "the caret is in the name box, ready to type"
+    assert r["afterDbl"] == {"label": "Gara", "naming": None}, "the dblclick that follows the second press leaves what was typed alone"
+
+
+def test_a_dblclick_on_a_sheet_that_is_not_open_opens_it_and_renames_it_and_esc_drops_the_name(ran):
+    r = ran["renameByTab"]
+    assert r["dblOther"] == {"open": "Polish", "naming": {"tab": "Polish", "value": "Polish"}}
+    assert r["afterEsc"] == {"open": "Polish", "naming": None}
+
+
+def test_f2_on_a_tab_renames_it_from_the_keyboard(ran):
+    r = ran["renameByTab"]
+    assert r["f2"] == {"open": "Copy1", "naming": {"tab": "Copy1", "value": "Gara"}, "prevented": True}
+    assert r["savedLabel"] == "Garage"
 
 
 def test_going_from_the_combined_base_to_one_sheet_makes_the_other_an_option_on_the_proposal(ran):
@@ -266,7 +314,7 @@ def test_going_from_the_combined_base_to_one_sheet_makes_the_other_an_option_on_
     assert back["body"].startswith("The job becomes an Epoxy job") and back["body"].endswith("priced as a total.")
     assert back["work_type"] == "epoxy" and back["base_tab_id"] == "Epoxy"
     assert back["polishOpt"]["is_option"] is True and back["polishOpt"]["price_mode"] == "total"
-    assert back["kinds"] == [["Polish", "option"], ["Epoxy", "base"]]
+    assert back["kinds"] == [["Polish", "option"], ["Epoxy", "base"], ["Copy1", "option"]]
 
 
 # ── 6. delete ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1005,10 +1053,53 @@ BREAKS = {
         "js/bid-model.js", "          '\" title=\"Base bid: ' + BASE_MEANS + '\">' : \"\") + '</span>';",
         "          '\" title=\"Base bid\">' : \"\") + '</span>';",
         lambda r: r["list"]["legend"]["titled"] != 2),
-    "the combined radio no longer says what it means": (
-        "js/bid-model.js", "        '\" title=\"Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '\"></span>' +",
-        "        '\" title=\"Base bid: Epoxy and Polish together\"></span>' +",
-        lambda r: r["combined"]["radio"]["titled"] is not True),
+    "the combine button no longer says what it means": (
+        "js/bid-model.js", "          key(t, \"combine\") + ' title=\"Base bid: Epoxy and Polish together. It ' + BASE_MEANS + '\">' + ic(\"layers\", 12) +",
+        "          key(t, \"combine\") + '>' + ic(\"layers\", 12) +",
+        lambda r: r["combined"]["button"]["titled"] is not True),
+    "the strip draws the Epoxy + Polish tab again": (
+        "js/bid-model.js", "    f.rows.forEach(function (r) { tabs.push(tabHtml(r)); });",
+        "    if (f.pair) tabs.push('<li class=\"sh sh-tab combined\" data-sh-row=\"combined\" role=\"presentation\"><span class=\"sh-nm\">Epoxy + Polish</span></li>');\n"
+        "    f.rows.forEach(function (r) { tabs.push(tabHtml(r)); });",
+        lambda r: r["combined"]["tab"]["none"] is not True),
+    "a sheet outside the pair offers the combine button": (
+        "js/bid-model.js", "        var combine = !!f.pair && !f.unreadable && f.baseIds.length !== 2 && f.pair.indexOf(t) >= 0;",
+        "        var combine = !!f.pair && !f.unreadable && f.baseIds.length !== 2;",
+        lambda r: r["combined"]["button"]["onCopy"] is not False),
+    "the combine button stays once the pair is the base": (
+        "js/bid-model.js", "        var combine = !!f.pair && !f.unreadable && f.baseIds.length !== 2 && f.pair.indexOf(t) >= 0;",
+        "        var combine = !!f.pair && !f.unreadable && f.pair.indexOf(t) >= 0;",
+        lambda r: r["combined"]["noButtonOnceCombined"] is not True),
+    "a combined base's sheet does not say what the pair comes to": (
+        "js/bid-model.js", "      else if (r.inBase) s += '<span class=\"pill\">In the base bid</span><span class=\"sh-sum\">Epoxy + Polish together' +",
+        "      else if (r.inBase) s += '<span class=\"pill\">In the base bid</span><span class=\"sh-sum\">' +",
+        lambda r: "Epoxy + Polish together" not in r["combined"]["bars"]["epoxy"]),
+    "the caret is left behind the question": (
+        "js/polish-estimate.js", '    if (act === "combine") { askBase("combined", "confirm|yes"); return; }',
+        '    if (act === "combine") { askBase("combined"); return; }',
+        lambda r: r["combined"]["focus"]["asked"] != ["confirm|yes"]),
+    "cancelling the pair loses the caret": (
+        "js/polish-estimate.js", '      sheetsUi.focus = row === "combined" ? activeTab + "|combine" : (row ? row + "|base" : null);',
+        '      sheetsUi.focus = row ? row + "|base" : null;',
+        lambda r: r["combined"]["focus"]["cancelled"] != ["Epoxy|combine"]),
+    "the second press of a double-click does not rename": (
+        "js/polish-estimate.js", '      if (e.detail >= 2 && secTab.getAttribute("data-section-tab") === activeTab) {',
+        '      if (false) {',
+        lambda r: r["renameByTab"]["afterTwo"]["naming"] is None),
+    "a dblclick does not rename": (
+        "js/polish-estimate.js", '    if (secTab) renameFromTab(secTab.getAttribute("data-section-tab"), secTab.getAttribute("data-sh-key"));',
+        '    void secTab;',
+        lambda r: r["renameByTab"]["dblOther"]["naming"] is None),
+    "F2 does not rename": (
+        "js/polish-estimate.js", '    if (k === "F2") {', '    if (k === "F2" && false) {',
+        lambda r: r["renameByTab"]["f2"]["naming"] is None),
+    "a dblclick throws away what was typed": (
+        "js/polish-estimate.js", "    if (tab === null || tab === undefined || sheetsUi.renaming === tab) return;",
+        "    if (tab === null || tab === undefined) return;",
+        lambda r: r["renameByTab"]["afterDbl"]["label"] != "Gara"),
+    "a tab does not say it can be renamed": (
+        "js/bid-model.js", "' title=\"Double-click to rename\" aria-current=\"'", "' aria-current=\"'",
+        lambda r: r["renameByTab"]["titled"] is not True),
     "the note about copies is gone": (
         "js/bid-model.js", "      h += '<p class=\"sh-hint\">Copies print on the proposal. The Excel download does not include them.</p>';",
         "      h += '';",
