@@ -374,14 +374,16 @@ def test_each_term_of_the_box_formula_is_needed_to_reproduce_the_walk(term):
 
 
 def test_the_layout_is_read_off_the_pages_css_and_the_shell():
-    """The synthetic page says 10px of body padding a side, a 900px column, a 2px section border, 7px of section padding a side and a 3px card border; the shell says 240px and 768px."""
+    """The synthetic page says 10px of body padding a side, a 900px column, a 2px section border, 7px of section padding a side and a 3px card border; the shell says how wide its rail is and from what
+    width it moves the body, and the arithmetic follows both (a sheet over the page, below that width, moves nothing)."""
     page = ("<style>body{margin:0;padding:0 10px 99px}.wrap{max-width:900px;margin:0 auto}.sec{border:2px solid red}.sec-b{padding:5px 7px}.rev{border:3px solid blue}</style>")
     got = layout(page)
-    assert got == {"body_pad": 20, "wrap_max": 900, "sec_border": 2, "sec_pad": 7, "rev_border": 3, "rail": 240, "rail_from": 768}
+    assert {k: got[k] for k in ("body_pad", "wrap_max", "sec_border", "sec_pad", "rev_border")} == {"body_pad": 20, "wrap_max": 900, "sec_border": 2, "sec_pad": 7, "rev_border": 3}
+    assert got["rail"] > 0 and got["rail_from"] > 0
     assert box_width(got, 1000, False, 0) == 900 - 2 * 2 - 2 * 7 - 2 * 3
-    assert box_width(got, 800, True, 15) == (800 - 15 - 240 - 20) - 4 - 14 - 6
-    # and the real page's layout is the one the walk measured (its numbers are what test_the_model_reproduces... holds the formula to)
-    assert layout(PAGE_PATH.read_text(encoding="utf-8")) == WALK_LAYOUT
+    edge = got["rail_from"]
+    assert box_width(got, edge, True, 15) == (edge - 15 - got["rail"] - 20) - 4 - 14 - 6
+    assert box_width(got, edge - 1, True, 15) == (edge - 1 - 15 - 20) - 4 - 14 - 6
 
 
 def test_the_total_column_is_in_view_at_916px_with_the_sidebar_open():

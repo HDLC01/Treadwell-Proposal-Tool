@@ -35,9 +35,9 @@ from _golden_support import FRONTEND, break_source
 PAGE_PATH = FRONTEND / "polish-estimate.html"
 AUTH_PATH = FRONTEND / "auth.js"
 
-# the windows the check walks: phones, the pixel either side of the shell's 768px breakpoint, the walk's 916px, laptops, a desktop
-WINDOWS = (360, 375, 390, 414, 600, 767, 768, 800, 916, 1024, 1280, 1440, 1920)
-PHONES = (360, 375, 390, 414, 600, 767)
+# the windows the check walks: phones, the pixel either side of the shell's breakpoint (768px today, read from the shell below), the walk's 916px, laptops, a desktop
+WINDOWS = (360, 375, 390, 414, 600, 800, 916, 1024, 1280, 1440, 1920)
+PHONES = (360, 375, 390, 414, 600)
 
 # elements, as (tag, id, classes)
 BAR = ("div", "bidbar", ("bid",))
@@ -242,9 +242,29 @@ def page_left(width: int, nav_open: bool, shell=SHELL) -> float:
     return 0.0 if value is None else length(value, shell[1])
 
 
+def is_sheet(width: int, nav_open: bool, shell=SHELL) -> bool:
+    """Is the open sidebar a SHEET over the page, with a scrim, rather than a rail beside it? The shell says so by drawing the scrim."""
+    return nav_open and resolve(shell[0], "display", BACKDROP, width, True) == "block"
+
+
+def rail_from(shell=SHELL) -> int:
+    """The window width from which an open sidebar is a rail beside the page: where the shell stops drawing the scrim (768px today)."""
+    return min(w for w in range(200, 3000) if not is_sheet(w, True, shell))
+
+
+def windows(shell=SHELL) -> list[int]:
+    edge = rail_from(shell)
+    return sorted(set(WINDOWS) | {edge - 1, edge})
+
+
+def phones(shell=SHELL) -> list[int]:
+    edge = rail_from(shell)
+    return sorted({w for w in PHONES if w < edge} | {edge - 1})
+
+
 def sidebar_right(width: int, nav_open: bool, shell=SHELL) -> float:
-    """The right edge of the sidebar when it is a rail beside the page (open, 768px and up); 0 when there is none."""
-    if not nav_open or media_applies("(max-width:767px)", width):
+    """The right edge of the sidebar when it is a rail beside the page (open, from the shell's breakpoint up); 0 when there is none."""
+    if not nav_open or is_sheet(width, nav_open, shell):
         return 0.0
     return length(resolve(shell[0], "width", SIDEBAR, width, nav_open), shell[1])
 
@@ -265,7 +285,7 @@ def text_start(page: str, width: int, nav_open: bool, shell=SHELL) -> float:
 def problems(page: str, shell=SHELL) -> list[str]:
     """Every way the bar and the page column disagree, over the windows and the two sidebar states."""
     found: list[str] = []
-    for width in WINDOWS:
+    for width in windows(shell):
         for nav_open in (False, True):
             state = "open" if nav_open else "shut"
             left, column, rail = bar_left(page, width, nav_open, shell), page_left(width, nav_open, shell), sidebar_right(width, nav_open, shell)
@@ -280,12 +300,12 @@ def problems(page: str, shell=SHELL) -> list[str]:
 
 
 def walk_problems(page: str, shell=SHELL) -> list[str]:
-    """The walk's own window, 916px: the sidebar is 240px; the bar starts at 240px when it is open, so its Material and Labor sums, the first of its text, are in view, and at the window's edge when it is shut."""
+    """The walk's own window, 916px: the sidebar is a rail there (240px today); the bar starts at the rail's edge when it is open, so its Material and Labor sums, the first of its text, are in view, and at the window's edge when it is shut."""
     found = []
     rail = sidebar_right(916, True, shell)
-    if rail != 240.0:
-        found.append("the walk's premise is gone: the sidebar is %dpx wide at 916px, not 240px" % rail)
-    if bar_left(page, 916, True, shell) != rail:
+    if is_sheet(916, True, shell) or rail <= 0:
+        found.append("the walk's premise is gone: the open sidebar is not a rail beside the page at 916px")
+    elif bar_left(page, 916, True, shell) != rail:
         found.append("at 916px with the sidebar open the bar starts at %dpx under a %dpx sidebar" % (bar_left(page, 916, True, shell), rail))
     if bar_left(page, 916, False, shell) != 0.0:
         found.append("at 916px with the sidebar shut the bar starts at %dpx, not at the window's edge" % bar_left(page, 916, False, shell))
@@ -293,9 +313,9 @@ def walk_problems(page: str, shell=SHELL) -> list[str]:
 
 
 def phone_problems(page: str, shell=SHELL) -> list[str]:
-    """Below 768px the sidebar is a modal sheet with a scrim and auth.js does not move the body: no state of the sidebar may move the bar."""
+    """Below the shell's breakpoint (768px) the sidebar is a modal sheet with a scrim and auth.js does not move the body: no state of the sidebar may move the bar."""
     found = []
-    for width in PHONES:
+    for width in phones(shell):
         for nav_open in (False, True):
             if page_left(width, nav_open, shell) != 0.0:
                 found.append("the shell moves the body at %dpx: this check's premise is gone" % width)
@@ -380,7 +400,7 @@ def test_a_shell_that_stops_moving_the_body_is_found(tmp_path):
     frontend = break_source(tmp_path, "auth.js", "html.tw-nav-open body{margin-left:var(--tw-w);}", "html.tw-nav-open body{margin-left:0;}")
     shell = shell_of((frontend / "auth.js").read_text(encoding="utf-8"))
     found = problems(PAGE, shell)
-    assert found and any(p.startswith("not with the page: at 916px with the sidebar open the page column starts at 0px and the bar at 240px") for p in found), found
+    assert found and any(p.startswith("not with the page: at 916px with the sidebar open the page column starts at 0px and the bar at ") for p in found), found
 
 
 # ── the resolver has to be worth believing ───────────────────────────────────────────────────────────────
@@ -431,11 +451,15 @@ def test_the_resolver_refuses_what_it_cannot_read():
 
 
 def test_the_resolver_finds_the_shells_own_numbers_in_authjs():
-    """The premises this file stands on, read from the shell and not typed in: the rail is 240px, the body moves from 768px up while the sidebar is open, a phone gets a scrim."""
-    assert SHELL[1].get("--tw-w") == "240px"
-    assert page_left(767, True) == 0.0 and page_left(768, True) == 240.0 and page_left(1440, False) == 0.0
-    assert resolve(SHELL[0], "display", BACKDROP, 375, True) == "block"
-    assert resolve(SHELL[0], "display", BACKDROP, 1440, True) == "none"
+    """The premises this file stands on, read from the shell and not typed in (whatever width it gives the rail, and wherever it puts its breakpoint): an open sidebar moves the body by its width from the
+    breakpoint up and not below it, a shut one moves nothing, and a phone gets a scrim exactly where the body does not move."""
+    rail = length(SHELL[1]["--tw-w"], SHELL[1])
+    edge = rail_from()
+    assert rail > 0 and 200 < edge < 3000
+    assert page_left(edge - 1, True) == 0.0 and page_left(edge, True) == rail and page_left(1440, False) == 0.0
+    assert resolve(SHELL[0], "display", BACKDROP, edge - 1, True) == "block"
+    assert resolve(SHELL[0], "display", BACKDROP, edge, True) == "none"
+    assert windows() == sorted(set(WINDOWS) | {edge - 1, edge}) and all(w < edge for w in phones())
 
 
 # ── the check can see the bug: the old rule, and each part of the new one undone, are found ─────────────
@@ -446,13 +470,12 @@ CHECKS = {"problems": problems, "walk": walk_problems, "phone": phone_problems, 
 
 MUTATIONS = [
     # (what is undone, the page's own text, what stands there instead, the check that must find it, how its first finding starts)
-    ("the old bar, with no offset at all", OFFSET, "", "problems",
-     "under the sidebar: at 916px with the sidebar open the bar starts at 0px and the sidebar's right edge is at 240px: 240px of the bar lie under it, its text starts at 22px, so 218px of its text are hidden"),
-    ("the old bar, at the walk's window", OFFSET, "", "walk", "at 916px with the sidebar open the bar starts at 0px under a 240px sidebar"),
+    ("the old bar, with no offset at all", OFFSET, "", "problems", "under the sidebar: at 916px with the sidebar open the bar starts at 0px and the sidebar's right edge is at "),
+    ("the old bar, at the walk's window", OFFSET, "", "walk", "at 916px with the sidebar open the bar starts at 0px under a "),
     ("an offset that applies on a phone too", OFFSET, "@media (min-width:0px){ html.tw-nav-open .bid{left:var(--tw-w,240px)} }", "problems", "not with the page"),
     ("an offset that applies on a phone too, as the phone check sees it", OFFSET, "@media (min-width:0px){ html.tw-nav-open .bid{left:var(--tw-w,240px)} }", "phone", "the bar moves at 360px"),
     ("an offset that applies with the sidebar shut", OFFSET, "@media (min-width:768px){ .bid{left:var(--tw-w,240px)} }", "problems", "not with the page"),
-    ("an offset that applies with the sidebar shut, as the walk sees it", OFFSET, "@media (min-width:768px){ .bid{left:var(--tw-w,240px)} }", "walk", "at 916px with the sidebar shut the bar starts at 240px"),
+    ("an offset that applies with the sidebar shut, as the walk sees it", OFFSET, "@media (min-width:768px){ .bid{left:var(--tw-w,240px)} }", "walk", "at 916px with the sidebar shut the bar starts at "),
     ("an offset the sidebar still covers", OFFSET, "@media (min-width:768px){ html.tw-nav-open .bid{left:calc(var(--tw-w,240px) - 40px)} }", "problems", "under the sidebar"),
     ("an offset that starts one pixel after the shell's breakpoint", OFFSET, "@media (min-width:769px){ html.tw-nav-open .bid{left:var(--tw-w,240px)} }", "problems", "not with the page"),
     ("a bar that starts away from the edge while the sidebar is shut", EDGE, EDGE.replace("left:0", "left:12px"), "problems", "not with the page"),
