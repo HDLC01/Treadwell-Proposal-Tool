@@ -6,7 +6,9 @@ object its session saved: the same values under other keys' order. A harness tha
 (test_v2_sheet_order.py is one such thing; test_polish_travel_sequences_reload.py's walks now go through the helper too).
 
 This file holds the helper to PostgreSQL's order, on keys whose order is known (tests/js/jsonb-selftest-harness.js: the documentation's own example, the keys of a bid's sheets, and the
-cases that tell the rule from the ones it is easily mistaken for), and to the three schema facts the rule rests on. The last block breaks a COPY of the helper one line at a time.
+cases that tell the rule from the ones it is easily mistaken for, and fifteen documents a real PostgreSQL 18.2 answered), and to the two facts the rule rests on: the column is jsonb in both
+databases (read from the schema files) and the backend hands the blob back in the order the database gave it (EXECUTED, not read: see the block that says what it does and does not prove).
+The last block breaks a COPY of the helper one line at a time.
 """
 from __future__ import annotations
 
@@ -95,14 +97,81 @@ def test_both_databases_store_the_draft_blob_as_jsonb():
         assert re.search(r"^\s*data\s+jsonb\b", table, re.M), "%s: drafts.data is no longer jsonb:\n%s" % (rel, table)
 
 
-def test_the_backend_hands_the_blob_back_in_the_order_it_read_it():
-    """No sort_keys on the way out: drafts.load_draft returns row['data'] as the database gave it, and the route returns it in a dict (FastAPI's JSON keeps a dict's order)."""
-    drafts = (BACKEND / "drafts.py").read_text(encoding="utf-8")
-    body = re.search(r"def load_draft\(.*?\n\n\n", drafts, re.S).group(0)
-    assert '"data": row.get("data") or {}' in body and "sort" not in body
-    main = (BACKEND / "main.py").read_text(encoding="utf-8")
-    route = re.search(r'@app\.get\("/api/draft/\{draft_id\}"\)\n(.*?)\n\n\n', main, re.S).group(1)
-    assert "drafts.load_draft(draft_id)" in route and "sort" not in route
+# ── what the backend does with the order: EXECUTED ───────────────────────────────────────────────
+# WHAT THIS PROVES. GET /api/draft/{id} is called for real (FastAPI's TestClient, the real route, the real drafts.load_draft, FastAPI's own JSON encoding), over a store whose draft row holds
+# `data` exactly as the data client would parse a real PostgreSQL's answer: the dicts json.loads makes of the TEXT a PostgreSQL 18.2 returned for `jsonb::text` (the fixture's `server`
+# strings: the keys in jsonb's order, at every depth). The response BODY is then read back with every object as a list of pairs, and the pairs must be the server's, in the server's order.
+# So nothing in this repository's path from the row to the bytes (load_draft, the route, the encoder) reorders a key: a sort_keys, a sorted() or a reordering encoder would fail it, and
+# two such breaks are put in below to show it does.
+# WHAT IT DOES NOT PROVE. The data client itself is not run: the fake hands over the dicts, so that supabase-py's HTTP read (httpx, Python's json, which keep an object's order) keeps the
+# order is assumed, not shown. Nor is PostgREST run (staging's and Supabase's): that it emits a jsonb column in the order the server stores it is what the staging walk saw
+# ([Polish 2, Gyp (base)] after a reload), not something this file executes. And the browser's half (JSON.parse, which keeps order except for keys that are array indexes) is
+# tests/js/_jsonb.js's, held to the same recorded answers above.
+def _pairs(text):
+    """JSON text with every object as a list of [key, value] pairs in the order the text holds them (two dicts that differ only in key order are equal; two of these are not)."""
+    return json.loads(text, object_pairs_hook=lambda kv: [list(p) for p in kv])
+
+
+def _served(fake_supabase, monkeypatch, data, wrap_load=None, sorted_encoding=False):
+    """The `data` member of what GET /api/draft/d1 answers, as pairs, for a stored draft whose `data` is the dict `data`.
+    `wrap_load`: a function that is handed the real load_draft and returns the one to use. `sorted_encoding`: FastAPI's serialization of the response (routing.serialize_response, which
+    every version calls by name for a route with a response type, and which hands back bytes or primitives according to the version) is made to sort every object's keys."""
+    import drafts
+    import main
+    from fastapi.testclient import TestClient
+
+    row = {"id": "d1", "data": data, "owner_email": "u@x.com", "created_at": "2026-10-20", "updated_at": "2026-10-20", "deleted_at": None}
+    monkeypatch.setattr(drafts, "get_client", lambda: fake_supabase({"drafts": [row]}))
+    if wrap_load is not None:
+        monkeypatch.setattr(drafts, "load_draft", wrap_load(drafts.load_draft))
+    if sorted_encoding:
+        import fastapi.routing as routing
+        real_serialize = routing.serialize_response
+
+        async def sorting_serialize(**kwargs):
+            out = await real_serialize(**kwargs)
+            primitives = json.loads(out) if isinstance(out, (bytes, str)) else out
+            ordered = json.loads(json.dumps(primitives), object_pairs_hook=lambda kv: dict(sorted(kv)))
+            return json.dumps(ordered).encode("utf-8") if isinstance(out, (bytes, str)) else ordered
+
+        monkeypatch.setattr(routing, "serialize_response", sorting_serialize)
+    res = TestClient(main.app).get("/api/draft/d1")
+    assert res.status_code == 200, res.text
+    return dict(_pairs(res.text))["data"]
+
+
+def _server_text(name):
+    return [c for c in _recorded()["cases"] if c["name"] == name][0]["server"]
+
+
+@pytest.mark.parametrize("name", [c["name"] for c in json.loads(RECORDED.read_text(encoding="utf-8"))["cases"]])
+def test_the_backend_hands_back_the_order_a_real_postgres_returned_unchanged(fake_supabase, monkeypatch, name):
+    server = _server_text(name)
+    assert _served(fake_supabase, monkeypatch, json.loads(server)) == _pairs(server)
+
+
+def _sorting_load(real):
+    def load(draft_id):
+        row = real(draft_id)
+        return dict(row, data=json.loads(json.dumps(row["data"], sort_keys=True)))
+    return load
+
+
+def test_the_check_has_an_order_to_notice(fake_supabase, monkeypatch):
+    """A comparison a sorting backend would pass proves nothing. The recorded sheets of a bid are in neither alphabetical order nor its reverse (Seal, Copy1, Copy2, Epoxy, Copy10, ...)."""
+    keys = [k for k, _ in _pairs(_server_text("the sheets of a bid"))]
+    assert keys != sorted(keys) and keys != sorted(keys, reverse=True), keys
+    assert _served(fake_supabase, monkeypatch, json.loads(_server_text("the sheets of a bid"))) == _pairs(_server_text("the sheets of a bid"))
+
+
+@pytest.mark.parametrize("variant", ["load_draft sorts the keys", "the response's serialization sorts the keys"])
+def test_the_check_notices_a_backend_that_sorts_the_keys(fake_supabase, monkeypatch, variant):
+    """The same comparison, with a sort put in the one place each layer could have it, must fail: the check is not one that any backend passes."""
+    server = _server_text("the sheets of a bid")
+    got = _served(fake_supabase, monkeypatch, json.loads(server),
+                  wrap_load=_sorting_load if variant.startswith("load_draft") else None, sorted_encoding=variant.startswith("the response"))
+    assert got != _pairs(server), variant
+    assert [k for k, _ in got] == sorted(k for k, _ in got), "and what it hands back is the alphabetical order, so the break did what it says"
 
 
 # ── red without the code: break a COPY of the helper one line at a time ────────────────────────
