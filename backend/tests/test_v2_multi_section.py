@@ -584,8 +584,8 @@ BREAKS = {
         "js/bid-model.js", "    if (String(profile.rev) !== stamp[2]) {", "    if (false) {",
         lambda r: r["pricing"]["stale"]["priceable"] is True),
     "every section carries the jobs travel": (
-        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,",
-        "      travel: travelCosts(model.travel, s.labor).total,",
+        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,",
+        "      travel: travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total,",
         lambda r: r["pricing"]["farTravel"]["epoxy"] != 0),
     "a section with no layout is read as one": (
         "js/bid-model.js",

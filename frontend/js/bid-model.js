@@ -191,18 +191,32 @@
     return "Man-days from the tasks above: " + (Math.round(num(manDays) * 100) / 100) + ".";
   }
 
-  /** The hint under a Lodging or Per Diem box. A bid priced by Polish rev 2 says what the SHEET counts, which is worked
-   *  out from the labor dollars (sheetNights) and so can be more than the man-days; every other bid says the man-days as
-   *  it always has (manDaysHint), and so does a rev 2 bid while the sheet's count and the man-days are the same figure.
-   *  Text only: the box stays the estimator's to type. `rows` are the labor rows of the
-   *  section on show. */
+  /** The hint under a Lodging or Per Diem box. A line on the OLDER auto (a bid saved before 2026-10-12) says what it is charged, as it always has: the SHEET's count on a Polish root priced
+   *  by rev 2, which is worked out from the labor dollars (sheetNights) and so can be more than the man-days, else the man-days (manDaysHint). A box that is TYPED says what the sheet would count
+   *  for the job: the section's own count where its tab counts the sheet's way (a Polish section priced by rev 2, every Gyp section), else the man-days, and a crew entered in HOURS counts
+   *  guys x hours over what a night is worth on its tab (travelManDays: 10 on Gyp). On a job with two base sections (a Combo) it is the two together, and the words say where the count comes from:
+   *  the nights are both crews' (round 6). Words that say the sheet's count are used only while it differs from the man-days; while every row is paid the same rate the two are one figure
+   *  and the words are the ones every bid shows. Text only: the box stays the estimator's to type. `rows` are the labor rows of the section on show. */
   function lodgingHint(model, tab, auto, rows) {
-    var opts = travelOpts(model, tab);
-    if (!opts) return manDaysHint(auto, travelManDays(rows));
-    // The prevailing rate in force rides in opts (travelOpts), so the count here is the one the page prices with.
-    var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions, opts.prevailing);
-    // While every row is paid the same rate the two counts are one figure and the words are the ones every bid shows.
-    if (Math.abs(nights - days) < 1e-9) return manDaysHint(auto, days);
+    var entry = entryOrNull(model, tab);
+    var profile = !entry ? null : (auto ? (isRev2Polish(model, tab) ? sheetCountProfile(entry) : null) : sheetCountProfile(entry));
+    var multi = !auto && !!entry && baseCount(model) > 1 && carrierTabOf(model) === tab;
+    var days, nights = null;
+    if (multi) {
+      var job = jobNights(model);
+      days = job.days;
+      nights = job.sheet ? job.count : null;
+    } else {
+      days = travelManDays(rows, entry && !auto ? entryDivisor(entry) : undefined);
+      // The prevailing rate in force is the one the page prices with.
+      if (profile) nights = sheetNights(rows, model.conditions, prevailingApplied(model), profile);
+    }
+    var one = nights === null || Math.abs(nights - days) < 1e-9;
+    if (multi) {
+      return one ? "Man-days from the labor lines of the base sheets: " + (Math.round(days * 100) / 100) + "."
+                 : "Nights from the labor of the base sheets, as the sheet counts them: " + (Math.round(nights * 100) / 100) + ".";
+    }
+    if (one) return manDaysHint(auto, days);
     if (auto) return "Nights counted from the labor above, as the sheet does.";
     return "Nights from the labor above, as the sheet counts them: " + (Math.round(nights * 100) / 100) + ".";
   }
@@ -603,13 +617,24 @@
    *  crew (3×5 + 3×0.5 + 3×0.5).
    *
    *  Rows with no `days` contribute nothing, so a half-filled crew simply moves the figure as it
-   *  gets filled in. */
-  function travelManDays(rows) {
+   *  gets filled in.
+   *
+   *  A CREW ENTERED IN HOURS (round 6, 2026-10-20). A Gyp crew is typed as guys x HOURS (the Gyp tab's rows are `A*B*C`, no day in them), and the tab counts its nights from the labor dollars over ten
+   *  hours (Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`), so a head count of its man-days is guys x hours over ten. `hoursPerNight` is that figure, the hours one night is worth on the section's own tab
+   *  (its profile's lodgingDivisor: 10 on Gyp, 8 on every other tab; nightsDivisor says which): given, a crew row entered in hours counts guys x hours over it. The drive never counts, a row
+   *  switched off counts nothing, and day rows are guys x days beside it. LEFT OUT, an hours row counts nothing, which is what every caller that has no tab to ask has always had (a line on
+   *  the older auto, saved before 2026-10-12, follows exactly that: no saved bid moves). */
+  function travelManDays(rows, hoursPerNight) {
     rows = rows || [];
+    var hourly = num(hoursPerNight) > 0 ? num(hoursPerNight) : 0;
     var t = 0;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
-      if (r.unit === "hours") continue;
+      if (r.unit === "hours") {
+        // A crew row in hours (not the drive, not switched off) is its guys x hours over the hours a night is worth.
+        if (hourly && !isTravelRow(r) && rowOn(r)) t += num(r.guys) * num(r.days) / hourly;
+        continue;
+      }
       // An OFF crew row is not driving anywhere: it drops out of the man-days Travel is priced on.
       if (!rowOn(r)) continue;
       t += num(r.guys) * num(r.days);
@@ -660,7 +685,7 @@
    *  A bid SAVED before then keeps `qty_auto` true and still follows travelManDays until the
    *  estimator types a number; typing is how you leave auto, and clearing the box leaves it empty.
    *  (2026-10-20, Hanz: "Fill them automatically": a far distance answer puts a quantity nobody typed back on auto,
-   *  following the sheet's count of the labor, and marks it `qty_follow: "labor"`; typing or clearing a box marks
+   *  following the count of the job's labor (every base section's, each by its own tab's rule: jobNights), and marks it `qty_follow: "labor"`; typing or clearing a box marks
    *  it `qty_typed`, and a marked box is never filled again. See followDistanceNights.)
    *  An OFF line, or an absent `travel`, is $0.
    *
@@ -692,10 +717,15 @@
   }
 
   /** What a line is charged for: the typed quantity, or the crew's man-days while it is auto. `opts.sheetNights` (a
-   *  polish-rev2 bid's) counts the auto quantity the sheet's way instead: from the labor dollars (sheetNights). */
+   *  polish-rev2 bid's) counts the auto quantity the sheet's way instead: from the labor dollars (sheetNights).
+   *
+   *  A LINE A FAR ANSWER FILLED (qtyFollows: auto, marked `qty_follow: "labor"`) is charged the JOB'S figure, `opts.follow` (travelOpts, jobFollowQty): what every base section of the bid counts
+   *  together, each by its own tab's rule (a Combo's hotel is on both sheets). A line on the older auto, with no marker, is never converted: it is charged as it always was, the carrier's
+   *  own rows alone. Without `opts.follow` (a caller that has no model to ask) a following line is the carrier's rows, as before. */
   function travelQty(line, rows, opts) {
     line = line || {};
     if (line.qty_auto === false) return num(line.qty);
+    if (qtyFollows(line) && opts && opts.follow !== undefined) return opts.follow;
     if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions, opts.prevailing);
     return travelManDays(rows);
   }
@@ -704,16 +734,23 @@
    *  for the per diem): the labor dollars that are not travel labor, over the rate of the first crew row (C37), over
    *  an 8 hour day. It is guys x days (travelManDays) while every row is paid that rate, and more once a row is paid
    *  another (a prevailing wage row), because the extra pay reads as extra days. The divide is the engine's own, so
-   *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2 only. */
-  function sheetNights(rows, conditions, pw) {
+   *  the chain and this are one formula (bid-engine nightsOf). Money, not people: used for polish-rev2, and since round 6 for the Gyp tabs.
+   *
+   *  `profile` is the resolved profile the section is priced by (bid-engine resolveProfile): it gives the divisor (REV2's 8 when left out, which is every caller that predates it) and says what the
+   *  drive is. On Polish and the tabs that share its layout an hours row IS the drive, whatever it is called. A GYP tab prices its crew by the hour (Gyp!E45 `=A45*B45*C45`, no day in it), so only
+   *  the row called travel is the drive there and the crew's hours are the labor the nights are counted from: Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`, 4 guys for 120 hours at $33 is
+   *  $15,840 / $33 / 10 = 48 nights. */
+  function sheetNights(rows, conditions, pw, profile) {
+    profile = profile || REV2;
+    var crewByHour = profile.layout === "gyp";
     rows = rows || [];
     var travelLabor = 0, rate = 0;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i] || {};
-      if (r.unit === "hours") { travelLabor += laborCost(r, pw); continue; }
+      if (crewByHour ? isTravelRow(r) : r.unit === "hours") { travelLabor += laborCost(r, pw); continue; }
       if (!rate && rowOn(r) && laborRateOf(r, pw) > 0) rate = laborRateOf(r, pw);
     }
-    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);
+    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);
   }
 
   /** One travel line's cost, ROUNDED UP TO THE DOLLAR like pricing.py's D68 (each of lodging and
@@ -735,14 +772,124 @@
    *  crew. An option is priced apart and the workbook charges it its own: the Seal tabs read Local = No and bill Lodging and
    *  Per Diem for their own man-days (Seal!B58 and B59). So an OPTION takes the job's two lines AS THEY ARE SWITCHED (on for a
    *  job 70 miles out, gray for a local one, a hand flip kept) at the job's rates, for the option's own crew's man-days. The
-   *  typed quantity belongs to the carrier's crew and is not used here. */
-  function optionTravelCosts(travel, rows) {
+   *  typed quantity belongs to the carrier's crew and is not used here.
+   *
+   *  `nights` is the option's own count (ownNights: a Gyp sheet's is the sheet's own, from its crew's hours; every other tab's is its man-days, a crew in hours counted over the hours a night is
+   *  worth on its tab). Left out, it is the man-days of the rows' day rows, as it always was (round 6 hands every caller that has the section the figure; a Gyp option charged $0 before). */
+  function optionTravelCosts(travel, rows, nights) {
     var t = travel || {};
-    var days = travelManDays(rows);
+    var days = nights === undefined ? travelManDays(rows) : num(nights);
     function ownLineCost(line) { return (line && rowOn(line)) ? roundUp(days * num(line.rate)) : 0; }
     var lodging = ownLineCost(t.lodging);
     var per_diem = ownLineCost(t.per_diem);
     return { lodging: lodging, per_diem: per_diem, total: lodging + per_diem };
+  }
+
+  // ══ THE NIGHTS A SECTION'S OWN LABOR COUNTS (round 6, 2026-10-20) ═══════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Kyle's sheet counts the nights of lodging, and the same days of per diem, off the labor of the TAB the job is priced on (Polish!B58, Gyp!B64): the labor dollars less the drive's, over the first crew
+  // row's rate, over the hours a night is worth on that tab. Hanz's decisions of 2026-10-12 (match the workbook EXACTLY, tab by tab) and 2026-10-20 (a far job FILLS its nights) are carried out by four figures:
+  //   entryDivisor    the hours a night is worth on a section's tab: its profile's `lodgingDivisor`, which the oracle pins to the tab's own formula (8 on Polish, Epoxy, Seal and Leveling, whose day is ten
+  //                   hours and whose lodging is still divided by 8; 10 on the five Gyp tabs)
+  //   sectionNights   what ONE section's labor counts: the sheet's way, from the labor dollars (sheetNights), on a Polish section priced by rev 2 and on every Gyp section, whose crew is entered in
+  //                   hours; its man-days (travelManDays, a crew in hours over the divisor) on every other
+  //   jobNights       what EVERY BASE section counts together, which is what a line that follows the labor is charged: Kyle carries hotel on every sheet of a job (all-years scan of his Dropbox: 136 of 140 far
+  //                   jobs with two or more priced sheets), so a Combo's nights are both crews'. An option is priced apart and counts nothing here; a section that is off counts nothing.
+  //   ownNights       what an OPTION counts for itself (optionTravelCosts): a Gyp sheet's is the sheet's own count, every other tab's its man-days
+  // They take the WHOLE model (never a section view: a view answers `labor` from the section on show).
+
+  /** The profile a section is priced by, resolved from the stamp it carries ("gyp@1"), or null when it cannot be read. */
+  function profileOf(entry) {
+    try {
+      var stamp = entry && typeof entry.profile === "string" ? PROFILE_STAMP.exec(entry.profile) : null;
+      return stamp ? engine.resolveProfile(stamp[1]) : null;
+    } catch (err) { return null; }
+  }
+
+  /** The hours one night of lodging is worth on this section's tab (see the block above); 8 for a section whose profile cannot be read. */
+  function entryDivisor(entry) {
+    var p = profileOf(entry);
+    var d = p ? Number(p.quirks.lodgingDivisor) : NaN;
+    return d > 0 ? d : 8;
+  }
+
+  /** A section's entry, or null when the model cannot answer for it. The root is always answered: a bid whose `tabs` cannot be read still has its root, as polishEntry reads it. */
+  function entryOrNull(model, tab) {
+    try { return sectionOf(model, tab); } catch (err) {
+      if (tab === ROOT_TAB && isObject(model)) {
+        return { tab: ROOT_TAB, sheet: ROOT_TAB, label: rootLabel(model), source: null, root: true, section: model,
+                 layout: "polish", kind: "base", profile: rootProfile(model).stamp, role: "polish" };
+      }
+      return null;
+    }
+  }
+
+  /** `nightsDivisor(model, tab)`: entryDivisor of the section filed under `tab` (8 for a section the model does not hold). */
+  function nightsDivisor(model, tab) {
+    var e = entryOrNull(model, tab);
+    return e ? entryDivisor(e) : 8;
+  }
+
+  /** The tab of the section that carries the job's travel; the root when the sections cannot be read (travelCarrier throws for those). */
+  function carrierTabOf(model) {
+    try { return travelCarrier(model); } catch (err) { return ROOT_TAB; }
+  }
+
+  /** THE PROFILE A SECTION'S NIGHTS ARE COUNTED BY WHEN THEY ARE COUNTED THE SHEET'S WAY, from the labor dollars (sheetNights): a Polish section priced by rev 2 or later, and every Gyp section. null for
+   *  any other section, which counts people (travelManDays). */
+  function sheetCountProfile(entry) {
+    if (!entry) return null;
+    if (entry.layout === "gyp") return profileOf(entry);
+    if (entry.layout === "polish" && (entry.profile === REV2.stamp || entry.profile === REV3.stamp)) return entry.profile === REV3.stamp ? REV3 : REV2;
+    return null;
+  }
+
+  /** What one section's own labor counts, as `{ count, days, sheet }`: `count` is the figure a line is charged (the sheet's dollars where the section counts them so, else the man-days), `days` the
+   *  head count of man-days (guys x days, and a crew in hours over the section's divisor), and `sheet` whether `count` is the sheet's. */
+  function sectionNights(model, entry) {
+    var rows = laborLinesOf(entry.section);
+    var days = travelManDays(rows, entryDivisor(entry));
+    var profile = sheetCountProfile(entry);
+    return { count: profile ? sheetNights(rows, model.conditions, prevailingApplied(model), profile) : days, days: days, sheet: !!profile };
+  }
+
+  /** THE JOB'S NIGHTS, as `{ count, days, sheet, sections }`: the sum of sectionNights over EVERY base section of the bid (the first live section when none is a base, as crewSize reads it; the root when
+   *  the sections cannot be read). An option and a section that is off count nothing. `count` is what a line that follows the labor is charged, `days` the head count beside it. */
+  function jobNights(model) {
+    var entries = readableSections(model);
+    var list = [];
+    if (entries !== null) {
+      var live = entries.filter(function (e) { return e.kind !== "off"; });
+      var bases = live.filter(function (e) { return e.kind === "base"; });
+      list = bases.length ? bases : live.slice(0, 1);
+    }
+    if (!list.length) {
+      var root = entryOrNull(model, ROOT_TAB);
+      list = root ? [root] : [];
+    }
+    var out = { count: 0, days: 0, sheet: false, sections: list.length };
+    list.forEach(function (e) {
+      var n = sectionNights(model, e);
+      out.count += n.count;
+      out.days += n.days;
+      if (n.sheet) out.sheet = true;
+    });
+    return out;
+  }
+
+  /** What a line that follows the labor is charged for: jobNights' count (see the block above). */
+  function jobFollowQty(model) { return jobNights(model).count; }
+
+  /** What an OPTION counts for itself (optionTravelCosts): the sheet's own count on a Gyp section, whose crew is entered in hours, else its man-days with a crew in hours counted over its tab's divisor.
+   *  `entry` is the option's entry; `optionNights(model, tab)` asks by tab. */
+  function ownNights(model, entry) {
+    var rows = laborLinesOf(entry.section);
+    var profile = entry.layout === "gyp" ? sheetCountProfile(entry) : null;
+    return profile ? sheetNights(rows, model.conditions, prevailingApplied(model), profile) : travelManDays(rows, entryDivisor(entry));
+  }
+  function optionNights(model, tab) {
+    var e = entryOrNull(model, tab);
+    return e ? ownNights(model, e) : 0;
   }
 
   /** The Lodging and Per Diem rates out of GET /api/markup/rules' `rules`, as
@@ -1188,7 +1335,7 @@
    *       section while the new carrier was filled with the crew's size beside it ($858 + $495), and a cleared or switched-off row refilled to $858.
    *    3. THE DISTANCE ON FILE FILLS THE NEW CARRIER'S ROW, by the rule above: only a row nobody touched takes it. Done only when the carrier MOVED: a
    *       restructure that keeps the carrier (a Combo made Polish) fills nothing, so a bid saved with a blank row is not filled by it. The job's Lodging and Per
-   *       Diem quantities come under the rule in the same place (followDistanceNights: a quantity nobody typed follows the new carrier's labor).
+   *       Diem quantities come under the rule in the same place (followDistanceNights: a quantity nobody typed follows the labor of the bases, the new carrier's among them).
    *    4. THE GUYS FOLLOW THE CREW OF THE BID AS IT IS NOW (syncAutoGuys): Combo made Polish left the carrier's guys on the Combo's bigger crew, and
    *       the price the draft saved was not the price a plain reopen showed ($33,514 and $32,632).
    *    5. EVERY OTHER SECTION GIVES THE DRIVE BACK (takeBackStrayTravel). A Travel Labor row the distance filled and nobody touched, on any section that
@@ -1208,7 +1355,7 @@
       var miles = d ? milesOrNull(d.miles) : null;
       if (miles !== null) followDistanceHours(model, miles);
       // A carrier that moved under a far distance on file brings the nights and the per diem days under the rule too (followDistanceNights):
-      // a quantity nobody typed follows the sheet's count of the new carrier's labor, like the drive.
+      // a quantity nobody typed follows the count of the bases' labor (jobNights), the new carrier's among them, like the drive.
       if (miles !== null) followDistanceNights(model, miles);
     }
     syncAutoGuys(model);
@@ -1502,20 +1649,15 @@
     return line;
   }
 
-  /** What a line that follows the labor is charged for, worked out of the labor of the section that carries the job's travel, exactly as the price
-   *  works it out (travelQty with the carrier's own options): the sheet's count on a Polish section priced by polish-rev2 or later, the man-days on every
-   *  other. A model whose sections cannot be read counts the root's labor. TO TWO PLACES, because it is the figure the line's box holds and shows: the
+  /** What a line that follows the labor is charged for, worked out of the labor of EVERY base section of the bid, exactly as the price works it out (travelQty with
+   *  travelOpts' `follow`, jobNights): each base counted by its own tab's rule, the sheet's count on a Polish section priced by polish-rev2 or later and on every Gyp section,
+   *  the man-days on every other, and the bases added together (round 6: a Combo's hotel is on both sheets, where round 5 counted the carrier's alone). An option and a section that is
+   *  off count nothing; a model whose sections cannot be read counts the root's labor. TO TWO PLACES, because it is the figure the line's box holds and shows: the
    *  sheet's count carries the cents of the Travel Labor row (its labor total is rounded up, its travel is not: 70.0019 nights on a crew of 5 driving
-   *  6.5 hours), and "70.00189393939394" is not a number to put in a box. The price is still charged on the count itself, as Kyle's sheet charges it. */
+   *  6.5 hours), and "70.00189393939394" is not a number to put in a box. The price is still charged on the count itself, as Kyle's sheet charges it. `line` is the line asked about
+   *  (every line that follows is charged the one figure). */
   function laborFollowQty(model, line) {
-    var tab = ROOT_TAB, rows = laborLinesOf(model);
-    if (isObject(model.tabs)) {
-      try {
-        tab = travelCarrier(model);
-        rows = laborLinesOf(sectionOf(model, tab).section);
-      } catch (err) { tab = ROOT_TAB; rows = laborLinesOf(model); }
-    }
-    return Math.round(travelQty(line, rows, travelOpts(model, tab)) * 100) / 100;
+    return Math.round(jobFollowQty(model) * 100) / 100;
   }
 
   /** THE NIGHTS AND THE PER DIEM DAYS OF A FAR JOB FILL THEMSELVES, KYLE'S WAY (Hanz, 2026-10-20: asked whether a far answer should fill them, he chose "Fill
@@ -1524,29 +1666,31 @@
    *  ("Type the nights"), by the rule of 2026-10-12 that a new bid starts empty, and showed the man-days only as a hint. Now a far answer (the typed miles, the
    *  lookup, a carrier that moved under a far distance on file: applyDistance, followDistance) FILLS what nobody has typed:
    *    - A quantity the estimator never typed in or cleared and that is still empty (the kind a new bid opens with) goes on auto and carries the marker
-   *      `qty_follow: "labor"`. It is then charged the sheet's count of the labor of the section that carries the job's travel (travelQty: sheetNights on a Polish
-   *      section priced the sheet's way, the man-days on the others), and keeps following it as the labor changes, like the crew-following Travel guys
-   *      (syncAutoGuys writes the figure into the line). Wichita, four guys for twelve days: 48 nights x $70 = $3,360 and 48 days x $45 = $2,160.
+   *      `qty_follow: "labor"`. It is then charged the count of the labor of EVERY BASE SECTION of the bid, each by its own tab's rule and added together (travelQty
+   *      with travelOpts' `follow`, jobNights: sheetNights, from the labor dollars, on a Polish section priced the sheet's way and on every Gyp section, whose crew is entered
+   *      in hours and is counted ten hours a night, Gyp!B64; the man-days on the others), and keeps following it as the labor changes, like the crew-following Travel guys
+   *      (syncAutoGuys writes the figure into the line). Wichita, four guys for twelve days: 48 nights x $70 = $3,360 and 48 days x $45 = $2,160; a Combo's Polish 4 x 12 and Epoxy
+   *      4 x 12 are 96 (Kyle carries hotel on every sheet: round 5 counted the carrier's 48 alone), and a Gyp crew of 4 for 120 hours is 48.
    *    - TYPING IN THE BOX, OR CLEARING IT, MAKES IT THEIRS (markTravelQtyTyped: `qty_typed`): never filled again, whatever it holds. A figure sitting in a box that
    *      is off auto is theirs too, marker or not (a bid saved since 2026-10-12 has no marker).
    *    - Going local, or clearing the miles, takes the figure back: a quantity that was following goes back to empty (and loses the marker); one the estimator
    *      typed stays (the line is switched off by the answer, as ever, and greyed). A line on auto WITHOUT the marker, the older bid's, is never converted, in
    *      either direction: a saved bid never changes under an answer it did not ask for.
    *    - The line's ON and OFF is the answer's as before (applyDistance, and a hand flip stays); the quantity is independent of it.
-   *  An OPTION is untouched: it is priced apart and charges its own nights and days for its own labor (optionTravelCosts). Nothing runs when a bid opens: a saved
+   *  An OPTION is untouched: it is priced apart and charges its own nights and days for its own labor (optionTravelCosts, ownNights: a far Gyp option or copy of the Gyp sheet
+   *  prices its own, from its crew's hours). Nothing runs when a bid opens: a saved
    *  bid never moves on open. Called with every ANSWER (applyDistance, clearDistance) and with a carrier that moved (followDistance), and with nothing else.
    *  `miles` null is a cleared distance. MUTATES the model; pass the WHOLE model. */
   function followDistanceNights(model, miles) {
     if (!isObject(model) || !isObject(model.travel)) return;
     var far = isFarMiles(miles);
-    // A GYP CARRIER'S NIGHTS ARE TYPED (round-5 audit): a Gyp crew is entered in hours, which the man-days do not count, so a following figure
-    // sat at 0 while the card promised it fills in, and a far Gyp quote carried $0 hotel and per diem. On a Gyp carrier nothing follows: the
-    // lines ask for the nights as before, and a figure that followed while another sheet carried the job goes back to empty.
-    var gyp = carrierLayoutOf(model) === "gyp";
+    // EVERY CARRIER FILLS ITS NIGHTS, a Gyp one too (round 6). Round 5 left a Gyp carrier's nights typed because its crew is entered in hours and the man-days counted day rows only (a following
+    // figure sat at 0 under words that promised it fills in: $0 hotel and per diem on a far Gyp quote). Kyle's Gyp tab counts its own nights from those hours, ten to a night (Gyp!B64), and so
+    // does the figure now (jobNights, sheetNights with the Gyp profile): only the Gyp DRIVE stays typed (followDistanceHours leaves a Gyp carrier alone).
     TRAVEL_LINE_KEYS.forEach(function (k) {
       var l = model.travel[k];
       if (!isObject(l)) return;
-      if (far && !gyp) {
+      if (far) {
         if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }
         if (qtyFollows(l)) l.qty = laborFollowQty(model, l);
       } else if (qtyFollows(l)) {
@@ -1568,12 +1712,6 @@
     var seed = travelSeed(lib);
     if (dflt !== undefined && dflt !== null && !libraryRateIsOwn(lib || {}, true)) seed.rate = laborRateOrShipped(dflt);
     return stampRateDefaults([laborRowStartsEmpty(seed)])[0];
-  }
-
-  /** The layout of the section that carries the job's travel ("polish" for the root, or when the sections cannot be read). */
-  function carrierLayoutOf(model) {
-    if (!isObject(model) || !isObject(model.tabs)) return "polish";
-    try { return sectionOf(model, travelCarrier(model)).layout || "polish"; } catch (err) { return "polish"; }
   }
 
   /** ADD THE JOB'S TRAVEL LABOR BACK (the 2026-10-20 fifth audit). The Travel Labor card's x takes the row away, the Add labor pop-up leaves Travel out on
@@ -1606,16 +1744,24 @@
   }
 
   /** The words under a Lodging or Per Diem box while it follows the labor (Kyle's way, by the sheet's count): what it follows, the figure, and that a night
-   *  (or a day of per diem) is charged for each. `key` is "lodging" or "per_diem"; `tab` the section on show and `rows` its labor lines. */
+   *  (or a day of per diem) is charged for each. `key` is "lodging" or "per_diem"; `tab` the section on show. The figure is the JOB's (jobNights): on a job with two base sections (a
+   *  Combo) it is both crews' and the words say so ("the labor lines of the base sheets"), and on a Gyp job, whose crew is entered in hours, it is the crew's hours at ten to a night
+   *  (round 6). `rows` stays in the signature for the callers that pass them; the figure never depends on the section on show. */
   function travelFollowWords(model, tab, key, rows) {
-    var opts = travelOpts(model, tab);
-    var days = travelManDays(rows);
-    var count = opts ? sheetNights(rows, opts.conditions, opts.prevailing) : days;
+    var job = jobNights(model);
+    var multi = baseCount(model) > 1;
     var each = key === "lodging" ? "a night" : "a day of per diem";
     // No crew typed yet: the figure is nothing, and says so ("none yet"), not a bare 0 that reads like a count somebody chose.
     var shown = function (n) { return n > 0 ? plainNum(n) : "none yet"; };
-    if (Math.abs(count - days) < 0.005) return "Follows the man-days on the labor lines above (" + shown(days) + "): " + each + " for each, Kyle's way.";
-    return "Follows the labor above as the sheet counts it (" + shown(count) + "; guys x days is " + shown(days) + "): " + each + " for each, Kyle's way.";
+    var same = Math.abs(job.count - job.days) < 0.005;
+    var carrier = multi ? null : entryOrNull(model, carrierTabOf(model));
+    if (carrier && carrier.layout === "gyp") {
+      var hours = entryDivisor(carrier);
+      if (same) return "Follows the crew's hours on the labor lines above, " + hours + " hours a night (" + shown(job.days) + "): " + each + " for each, Kyle's way.";
+      return "Follows the labor above as the sheet counts it (" + shown(job.count) + "; guys x hours over " + hours + " is " + shown(job.days) + "): " + each + " for each, Kyle's way.";
+    }
+    if (same) return "Follows the man-days on " + (multi ? "the labor lines of the base sheets" : "the labor lines above") + " (" + shown(job.days) + "): " + each + " for each, Kyle's way.";
+    return "Follows the labor " + (multi ? "of the base sheets" : "above") + " as the sheet counts it (" + shown(job.count) + "; guys x days is " + shown(job.days) + "): " + each + " for each, Kyle's way.";
   }
 
   /** The hint under a Lodging or Per Diem box: the words of a line that follows the labor (travelFollowWords), else lodgingHint's, which every other line
@@ -1644,9 +1790,13 @@
    *  `white-space: pre-line`. A pure read of the model: it prices nothing and changes nothing.
    *
    *  Lives here, not in js/polish-estimate.js, because the harness for that file lifts init() and
-   *  laborPanel() by name and a new local function they call is a ReferenceError in every scenario. */
-  function travelHow(model) {
+   *  laborPanel() by name and a new local function they call is a ReferenceError in every scenario.
+   *
+   *  `model` is the model as the panel sees it (the page hands the view of the section on show, whose `labor` is the carrier's rows); `whole` is the WHOLE model, which the nights of a job with
+   *  more than one base section are worked out from (jobNights), and is `model` itself when left out. */
+  function travelHow(model, whole) {
     var M = model || {};
+    var W = whole || M;
     var d = M.distance;
     var miles = d ? milesOrNull(d.miles) : null;
     var far = miles !== null && miles >= LOCAL_MILES;
@@ -1695,9 +1845,14 @@
     // The travel panel is the carrier's (the root's, unless another section carries the job's travel): a bid priced by Polish rev 2 counts auto nights the
     // sheet's way, so the working lines count them the same way the cost box and the bid do, ON THE SECTION THE BID CHARGES THEM ON. (It read the root's
     // profile for every carrier: an Epoxy carrier's lodging was worked out the sheet's way here and by the man-days in the price, a dollar apart.)
-    var carrierTab = ROOT_TAB;
-    try { carrierTab = travelCarrier(M); } catch (err) { carrierTab = ROOT_TAB; }
-    var trvOpts = travelOpts(M, carrierTab);
+    var carrierTab = carrierTabOf(W);
+    var trvOpts = travelOpts(W, carrierTab);
+    // What the job's base sections count between them (jobNights): the figure a line that follows the labor is charged, and what a typed one is told the sheet would count.
+    var job = jobNights(W);
+    var multi = baseCount(W) > 1;
+    var carrierEntry = multi ? null : entryOrNull(W, carrierTab);
+    var gypCarrier = !!carrierEntry && carrierEntry.layout === "gyp";
+    var nightHours = carrierEntry ? entryDivisor(carrierEntry) : 8;
     // Set when a travel line that is on is not on auto: the man-days the sheet would count are then shown as text.
     var showManDays = false;
     // The Travel row's guys are on the crew's size (a far answer put them there) or on the older man-days (a bid saved
@@ -1766,22 +1921,31 @@
       lines.push("Guys = the most guys on any one labor line " + (baseCount(M) > 1 ? "of the base sheets" : "above") +
         " (" + qty(tr.guys) + " now), one round trip each.");
     }
-    // The nights and days are counted from the labor above, and the Lodging hint under the box says the same figure in the
-    // same words (lodgingHint): the sheet's count where a profile counts them from the labor dollars (a fourth hand on the
-    // joint-filler line, or a row paid more, makes that more than guys x days), guys x days otherwise.
-    var nightsNow = trvOpts ? sheetNights(rows, trvOpts.conditions, trvOpts.prevailing) : null;
+    // A LINE ON THE OLDER AUTO (a bid saved before 2026-10-12) is charged as it always was, the carrier's own rows: the sheet's count where its Polish root is priced by rev 2 (a fourth hand on the
+    // joint-filler line, or a row paid more, makes that more than guys x days), guys x days otherwise. Its words are the carrier's alone.
+    var nightsNow = trvOpts && trvOpts.sheetNights ? sheetNights(rows, trvOpts.conditions, trvOpts.prevailing) : null;
     var manDaysNow = travelManDays(rows);
     var sheetCounts = nightsNow !== null && Math.abs(nightsNow - manDaysNow) >= 1e-9;
     // THE NIGHTS AND PER DIEM DAYS A FAR ANSWER FILLED follow the labor, Kyle's way: a night and a day of per diem for every man-day, as his sheet counts them
-    // (Polish!B65), or the sheet's own count where a profile works it from the labor dollars. A box the estimator types over leaves it. Said once, for the
-    // lines that follow, in the words of each; a count that reads the same as the man-days at two places is not called a different count.
+    // (Polish!B65), or the sheet's own count where a profile works it from the labor dollars. The figure is the JOB's (jobNights): every base section's together, so a Combo's words say
+    // "the base sheets", and a Gyp crew is counted in hours, ten to a night (Gyp!B64). A box the estimator types over leaves it. Said once, for the lines that follow, in the words
+    // of each; a count that reads the same as the man-days at two places is not called a different count.
+    var where = multi ? "the labor lines of the base sheets" : "the labor lines above";
     if (followed.length) {
       var what = followed.length === 2 ? "Nights and per diem days follow" : (followed[0] === "lodging" ? "Nights follow" : "Per diem days follow");
       var each = followed.length === 2 ? "a night and a day of per diem" : (followed[0] === "lodging" ? "a night" : "a day of per diem");
-      lines.push(nightsNow !== null && Math.abs(nightsNow - manDaysNow) >= 0.005
-        ? what + " the labor above as the sheet counts it (" + qty(nightsNow) + " now; guys x days is " + qty(manDaysNow) + "), " + each + " for each, Kyle's way."
-        : what + " the man-days on the labor lines above (" + (manDaysNow > 0 ? qty(manDaysNow) + " now" : "none yet") + "), " + each + " for each man-day, Kyle's way." +
-          (manDaysNow > 0 ? "" : " Type the guys and the days on the labor lines above and they fill in."));
+      var differs = Math.abs(job.count - job.days) >= 0.005;
+      if (gypCarrier) {
+        lines.push(differs
+          ? what + " the labor above as the sheet counts it (" + qty(job.count) + " now; guys x hours over " + nightHours + " is " + qty(job.days) + "), " + each + " for each, Kyle's way."
+          : what + " the crew's hours on the labor lines above, " + nightHours + " hours a night (" + (job.days > 0 ? qty(job.days) + " now" : "none yet") + "), " + each + " for each, Kyle's way." +
+            (job.days > 0 ? "" : " Type the guys and the hours on the labor lines above and they fill in."));
+      } else {
+        lines.push(differs
+          ? what + " the labor " + (multi ? "of the base sheets" : "above") + " as the sheet counts it (" + qty(job.count) + " now; guys x days is " + qty(job.days) + "), " + each + " for each, Kyle's way."
+          : what + " the man-days on " + where + " (" + (job.days > 0 ? qty(job.days) + " now" : "none yet") + "), " + each + " for each man-day, Kyle's way." +
+            (job.days > 0 ? "" : " Type the guys and the days on " + where + " and they fill in."));
+      }
     }
     if (usesAuto && sheetCounts) {
       lines.push("Nights = the labor dollars above over the first labor line's rate over 8 hours, as the sheet counts them (" +
@@ -1791,11 +1955,11 @@
         " now).");
     } else if (showManDays) {
       // Text only: the figure is not used anywhere until the estimator types it into a box.
-      if (sheetCounts) {
-        lines.push("For reference, the labor lines above count " + qty(nightsNow) + " nights the way the sheet does (guys x days is " +
-          qty(manDaysNow) + ").");
+      if (job.sheet && Math.abs(job.count - job.days) >= 1e-9) {
+        lines.push("For reference, " + where + " count " + qty(job.count) + " nights the way the sheet does (" + (gypCarrier ? "guys x hours over " + nightHours : "guys x days") + " is " +
+          qty(job.days) + ").");
       } else {
-        lines.push("For reference, the man-days on the labor lines above are " + qty(manDaysNow) + ".");
+        lines.push("For reference, the man-days on " + where + " are " + qty(job.days) + ".");
       }
     }
     return { decision: decision, hand: hand, lines: lines,
@@ -2676,14 +2840,24 @@
 
   /** The options travelCosts takes for the section `tab` of this model: the sheet's way of counting nights (sheetNights) for
    *  a Polish section priced by polish-rev2 (the root of a bid stamped so, or a Polish section under `tabs` that was made
-   *  with the stamp), and none for every other section, which count as they always did. */
+   *  with the stamp), and none for every other section, which count as they always did.
+   *
+   *  A LINE THAT FOLLOWS THE LABOR (a far answer filled it: qtyFollows) is charged the JOB'S figure, the nights every base section counts together (jobNights): `follow`, a number, is added whenever a
+   *  line follows, for any section the model holds (a Combo's hotel is on both sheets, a Gyp job's is its crew's hours over ten). It says nothing about a line that does not follow, so a bid with none
+   *  gets exactly the opts it always did (undefined on a section that is not a rev 2 Polish one). */
   function travelOpts(model, tab) {
-    if (!isRev2Polish(model, tab)) return undefined;
-    // The prevailing rate in force rides along only when there is one, so a bid with none gets exactly the
-    // two keys it always did. The nights divide the labor dollars by the crew's rate, and that rate is it.
-    var opts = { sheetNights: true, conditions: model.conditions };
-    var pw = prevailingApplied(model);
-    if (pw > 0) opts.prevailing = pw;
+    var opts;
+    if (isRev2Polish(model, tab)) {
+      // The prevailing rate in force rides along only when there is one, so a bid with none gets exactly the
+      // two keys it always did. The nights divide the labor dollars by the crew's rate, and that rate is it.
+      opts = { sheetNights: true, conditions: model.conditions };
+      var pw = prevailingApplied(model);
+      if (pw > 0) opts.prevailing = pw;
+    }
+    if (isObject(model) && isObject(model.travel) && TRAVEL_LINE_KEYS.some(function (k) { return qtyFollows(model.travel[k]); }) && entryOrNull(model, tab)) {
+      opts = opts || {};
+      opts.follow = jobFollowQty(model);
+    }
     return opts;
   }
 
@@ -4714,13 +4888,14 @@
     var carrier = travelCarrier(model) === e.tab;
     var input = {
       labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),
-      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,
+      // The carrier is charged the job's travel; a line that follows the labor is charged what every base section counts together (travelOpts, jobNights).
+      travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,
       contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate,
       adjust: chainAdjust(s.adjust)
     };
-    // An OPTION carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does.
-    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;
+    // An OPTION carries its own Lodging and Per Diem for its own crew (optionTravelCosts), as the workbook's tab does: the nights its own labor counts (ownNights).
+    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;
     // The root carries the job's travel counted the sheet's way when a profile asks for it (polish-rev2).
     if (carrier && e.root) input.travel = travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;
     // The root's tooling is the sheet's D55 on a profile that charges it. Another section brings its own, in `mat`.
@@ -4824,7 +4999,7 @@
     var carrier = true;
     try { carrier = travelCarrier(model) === e.tab; } catch (err) { carrier = true; }
     if (carrier || (e.root && e.kind === "off")) return travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;
-    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor).total;
+    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;
     return 0;
   }
 
@@ -5302,9 +5477,9 @@
    *  steps. MUTATES `model`. A Travel row a far distance answer filled (guys_follow "crew") follows the job's crew SIZE
    *  (crewSize: the most guys on any one labor line of the base sections), except one on an OPTION, which is priced apart for
    *  its own crew and follows its OWN labor lines' (ownCrewSize); a row on the older auto, from a bid saved
-   *  before 2026-10-12, follows its own section's man-days as it always did. The job's Lodging and Per Diem follow the
-   *  carrier section's man-days; a line a far answer filled (qty_follow "labor", followDistanceNights) follows the SHEET'S count of that labor instead, the
-   *  figure it is charged. */
+   *  before 2026-10-12, follows its own section's man-days as it always did. The job's Lodging and Per Diem on the older auto follow the
+   *  carrier section's man-days; a line a far answer filled (qty_follow "labor", followDistanceNights) follows the JOB'S figure instead (jobNights: what every base section
+   *  counts, each by its own tab's rule), the figure it is charged. */
   function syncAutoGuys(model) {
     var multi = isObject(model.tabs);
     var sections = [{ section: model, option: false }];
@@ -5331,8 +5506,8 @@
       var days = travelManDays(carrier.labor);
       TRAVEL_LINE_KEYS.forEach(function (k) {
         var l = model.travel[k];
-        // A line a far answer filled follows the SHEET'S count of the carrier's labor (followDistanceNights), the figure it is charged;
-        // the older auto line (no marker) keeps the man-days it always held.
+        // A line a far answer filled follows the JOB'S figure, what every base section counts (followDistanceNights, jobNights), the figure it is charged;
+        // the older auto line (no marker) keeps the carrier's man-days it always held.
         if (l && l.qty_auto !== false) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;
       });
     }
@@ -6227,6 +6402,8 @@
     // The nights and the per diem days of a far job follow the labor (2026-10-20, Hanz: "Fill them automatically"), and the Travel Labor line the card's x took
     // away can be added back (the fifth audit).
     followDistanceNights: followDistanceNights, qtyFollows: qtyFollows, markTravelQtyTyped: markTravelQtyTyped, laborFollowQty: laborFollowQty,
+    // Round 6 (2026-10-20): what a section's own labor counts in nights, tab by tab (the hours a night is worth on a tab, a Gyp crew in hours, an option's own, every base section of the job together).
+    nightsDivisor: nightsDivisor, optionNights: optionNights, jobNights: jobNights, jobFollowQty: jobFollowQty,
     travelFollowWords: travelFollowWords, travelQtyHint: travelQtyHint, freshTravelRow: freshTravelRow, addTravelLabor: addTravelLabor,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,

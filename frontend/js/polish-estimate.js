@@ -834,8 +834,9 @@
    *  the saved blob describing the same row. */
   function syncAutoGuys() {
     // The rule moved into the model (B.syncAutoGuys) so the new-bid seeding can run it between its steps:
-    // Lodging and Per Diem count the same man-days while they are on auto (nights = man-days, the way
-    // backend/pricing.py counts them), and a Travel row on auto follows the job's crew SIZE (the most guys on any labor
+    // Lodging and Per Diem count the same nights while they are on auto (a night for every man-day, the way backend/pricing.py counts
+    // them: a line a far answer filled follows the JOB'S figure, what every base section counts by its own tab's rule, B.jobNights; an
+    // older line follows the carrier's man-days), and a Travel row on auto follows the job's crew SIZE (the most guys on any labor
     // line of the base sections), or its own section's lines when the section is an option; an older row follows the man-days.
     B.syncAutoGuys(ROOT);
   }
@@ -2779,11 +2780,12 @@
       esc(moneyAuto(cost)) + '</div>' +
       '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
       '</div><p class="hint trvnote">' + (gypOpen()
-        // A Gyp crew is entered in hours, which the man-days do not count, so on a Gyp sheet the nights are typed (round-5 audit).
-        ? (isNight ? "Overnight stays are expected at 70 miles or more from the office. Type the nights: a Gyp crew is entered in hours, so they " +
-            "do not fill in by themselves. Under 70 miles this line stays gray."
-          : "Meals while the guys are away, expected at 70 miles or more from the office. Type the days: a Gyp crew is entered in hours, so " +
-            "they do not fill in by themselves. Under 70 miles this line stays gray.")
+        // A Gyp crew is entered in HOURS, and Kyle's Gyp sheet counts its nights from them, ten to a night (Gyp!B64): the nights and the per diem days fill in like every carrier's (round 6).
+        // Only the drive stays typed (the sheet works its own drive time), and the sentence above the travel block says so.
+        ? (isNight ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the crew's hours, " +
+            B.nightsDivisor(ROOT, activeTab) + " hours a night, as Kyle's Gyp sheet counts them. Type your own to use them instead. Under 70 miles this line stays gray."
+          : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the crew's hours, " +
+            B.nightsDivisor(ROOT, activeTab) + " hours a day, a day of per diem for each, as Kyle's Gyp sheet counts them. Type your own to use them instead. Under 70 miles this line stays gray.")
         : isNight
         ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the man-days, a night for each, " +
           "Kyle's way. Type your own to use them instead. Under 70 miles this line stays gray."
@@ -2854,7 +2856,7 @@
     var note = document.querySelector("[data-dist-note]");
     if (note) note.textContent = B.distanceNote(M);
     var how = document.querySelector("[data-trv-how]");
-    if (how) how.textContent = B.travelHow(M).text;
+    if (how) how.textContent = B.travelHow(M, ROOT).text;
     var st = document.querySelector("[data-dist-status]");
     if (st) st.textContent = distanceStatus();
     var box = document.querySelector("[data-dist-miles]");
@@ -2957,12 +2959,14 @@
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
         '70 miles all three lines below stay gray until you switch one on. ' + (gypOpen()
-          ? 'On a far Gyp job type the drive hours, the nights and the per diem days: a Gyp crew is entered in hours, so they do not fill in by themselves.</p>'
+          // THE DRIVE STAYS TYPED on a Gyp carrier (the Gyp sheet works its own drive time per mobilization); the nights and the per diem days are filled from the crew's hours (round 6).
+          ? 'On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew\'s hours, ' +
+            B.nightsDivisor(ROOT, activeTab) + ' hours a night; type over any of them to use your own.</p>'
           : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');
       html += distanceBlock();
       // HOW IT IS WORKED OUT: the local-or-not call and the sums, in words. Text only (one element,
       // pre-line), so the live repaint can replace it without touching anything the estimator is in.
-      html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M).text) + '</p>';
+      html += '<p class="cap trvhow" data-trv-how>' + esc(B.travelHow(M, ROOT).text) + '</p>';
       // THE CARD'S WAY BACK (the 2026-10-20 fifth audit): with no Travel Labor line on the carrier the block draws the control that adds one,
       // where the card would be.
       html += (travelRows || addTravelHtml()) + travelCard("lodging") + travelCard("per_diem");
@@ -3319,8 +3323,9 @@
       if ((!carries && !ownTravel) || !tl || !tl.enabled) return;
       var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
       // Nights (lodging) or days (per diem) at the line's own rate: the quantity the chain charged, times the rate.
-      var qty = ownTravel ? B.travelManDays(M.labor) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));
-      var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor)[k]
+      // An option's own lines are its own nights (B.optionNights: a Gyp sheet's crew in hours is counted ten to a night, as the sheet counts it), charged at the job's rates.
+      var qty = ownTravel ? B.optionNights(ROOT, activeTab) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));
+      var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor, qty)[k]
                            : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab));
       var per = k === "lodging" ? "night" : "day";
       // THE JOB'S LINE SAYS WHERE ITS QUANTITY CAME FROM while a far answer filled it (B.followDistanceNights): the nights and the per diem days follow the
@@ -3981,7 +3986,7 @@
     one("[data-area-total]", B.fmtSf(B.takeoffSf(M.takeoff)) + " SF");
     one("[data-labor-total]", moneyAuto(B.laborTotal(M.labor, M.conditions, pwNow)));
     one("[data-travel-total]", moneyAuto(B.travelCosts(M.travel, M.labor, B.travelOpts(ROOT, activeTab)).total));
-    one("[data-trv-how]", B.travelHow(M).text);
+    one("[data-trv-how]", B.travelHow(M, ROOT).text);
     one("[data-mk-persf]", perSfText(b));
 
     document.querySelectorAll("[data-mk]").forEach(function (el) {

@@ -30,7 +30,7 @@ HARNESS = TESTS / "js" / "travel-round5-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
-SECTIONS = ["demotion", "badShapes", "unreadableTabs", "nights", "addTravel", "notes", "patchNote", "gypNights", "xStays"]
+SECTIONS = ["demotion", "badShapes", "unreadableTabs", "nights", "addTravel", "notes", "patchNote", "xStays"]
 
 LODGING_WORDS = "Follows the man-days on the labor lines above (48): a night for each, Kyle's way."
 PER_DIEM_WORDS = "Follows the man-days on the labor lines above (48): a day of per diem for each, Kyle's way."
@@ -387,17 +387,9 @@ HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : "Travel Labor: no line 
 HOW_FOLLOWED = "    if (followed.length) {"
 NOTE_NAME = "    var name = carrierName();"
 
-def test_a_far_gyp_jobs_nights_are_typed_and_its_card_says_so(ran):
-    """Round-5 audit, medium: a Gyp crew is entered in hours, which the man-days do not count, so the nights a far answer set to follow the labor sat at 0
-    while the card promised they fill in: a far Gyp quote carried $0 hotel and per diem with nothing saying so. On a Gyp carrier nothing follows; the card
-    asks for the nights, as it did before the nights followed anywhere."""
-    g = ran["gypNights"]
-    assert "error" not in g, g.get("error")
-    assert g["carrier"].startswith("Gyp") and g["miles"] == 190, "the fixture is not a far Gyp job, so this proves nothing"
-    for k in ("lodging", "perDiem", "savedLodging"):
-        assert g[k]["follow"] is None and g[k]["qty"] in ("", None), "a far Gyp job's %s follows the labor: %r" % (k, g[k])
-    assert g["saysTypeNights"] is True, "the Gyp card does not ask for the nights"
-    assert g["promisesFill"] is False, "the Gyp card promises a fill that never happens"
+# (Round-5 audit, medium: a far Gyp job's nights were TYPED, because a Gyp crew is entered in hours and the man-days counted day rows only. SUPERSEDED in round 6 by Hanz's decision to fill
+# them: Kyle's Gyp tab counts its own nights from those hours, ten to a night (Gyp!B64), so a Gyp carrier's nights follow the crew like every carrier's and the card says so. The Gyp DRIVE is
+# the one thing that stays typed. Held by test_polish_travel_round6.py, the sequence walk's NIGHTS rule, and test_gyp_v2_proof.py's 40 lodging vectors.)
 
 
 def test_a_travel_labor_line_taken_away_stays_away_after_a_reload_and_add_brings_it_back(ran):
@@ -413,9 +405,6 @@ def test_a_travel_labor_line_taken_away_stays_away_after_a_reload_and_add_brings
 
 
 BREAKS = {
-    "a Gyp carrier's nights follow the labor": (
-        "js/bid-model.js", '    var gyp = carrierLayoutOf(model) === "gyp";', "    var gyp = false;",
-        lambda g: g["gypNights"]["lodging"]["follow"] is not None or g["gypNights"]["savedLodging"]["follow"] is not None),
     "the x does not record the answer": (
         "js/polish-estimate.js", "      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;", "      void gone;",
         lambda g: g["xStays"]["flag"] is False or g["xStays"]["rowAfterReload"] is not None or g["xStays"]["session"] != g["xStays"]["reloaded"]),
@@ -442,9 +431,9 @@ BREAKS = {
     "a tabs entry that is not a section is read as one": (
         "js/bid-model.js", "      if (!isObject(s)) return;", "      void s;",
         lambda g: any(v["threw"] is not None for v in g["badShapes"]["notSections"].values())),
-    "the nights are counted from sections that cannot be read": (
-        "js/bid-model.js", "      } catch (err) { tab = ROOT_TAB; rows = laborLinesOf(model); }", "      } catch (err) { throw err; }",
-        lambda g: g["unreadableTabs"]["applied"] is not None),
+    "the nights of a bid whose sections cannot be read are not counted from the root": (
+        "js/bid-model.js", "    if (!list.length) {", "    if (false) {",
+        lambda g: g["unreadableTabs"]["far"]["lodging"]["qty"] != 48),
     # C
     "the answers walk the options of a bid whose sections cannot be read": (
         "js/bid-model.js", GUARD, "void entries;",

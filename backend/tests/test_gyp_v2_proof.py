@@ -312,6 +312,20 @@ MUTATIONS = {
     "a Gyp section escalates labor only with prevailing wage": (
         "js/bid-engine.js", "var esc_pct = (q.escalationAlwaysOn || cond.prevailing_wage) ? rate(\"esc_pct\") : 0;",
         "var esc_pct = (cond.prevailing_wage) ? rate(\"esc_pct\") : 0;"),
+    # the sheet's own lodging (round 6): the model counts a Gyp section's nights from its labor dollars, over the first row's rate, over ten hours
+    "a Gyp carrier's nights are typed again, so the lines stay empty": (
+        "js/bid-model.js", "      if (far) {", "      if (far && (entryOrNull(model, carrierTabOf(model)) || {}).layout !== \"gyp\") {"),
+    "a Gyp section counts its people and not the sheet's dollars": (
+        "js/bid-model.js", "    if (entry.layout === \"gyp\") return profileOf(entry);", "    if (entry.layout === \"gyp\") return null;"),
+    "a Gyp tab's crew in hours is taken off as the drive": (
+        "js/bid-model.js", "      if (crewByHour ? isTravelRow(r) : r.unit === \"hours\") { travelLabor += laborCost(r, pw); continue; }",
+        "      if (r.unit === \"hours\") { travelLabor += laborCost(r, pw); continue; }"),
+    "a Gyp section's nights are divided by the Polish tab's 8": (
+        "js/bid-model.js", "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);"),
+    "the drive's dollars are left in the labor the nights are counted from": (
+        "js/bid-model.js", "      if (crewByHour ? isTravelRow(r) : r.unit === \"hours\") { travelLabor += laborCost(r, pw); continue; }",
+        "      if (crewByHour ? false : r.unit === \"hours\") { travelLabor += laborCost(r, pw); continue; }"),
 }
 
 # What each mutation breaks, so a mutation cannot go unnoticed because the check that should see it was the wrong one.

@@ -23,11 +23,14 @@ import pathlib
 
 import pytest
 
-from _golden_support import FRONTEND
+from _golden_support import FRONTEND, break_source, copy_unmodified
 from _node import last_json_line, require_node, run_node
 
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "travel-round6-harness.js"
+PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
+              "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
+              "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 SECTIONS = ["gyp", "gypOption", "gypCopy", "combo", "cards", "legacy", "direct", "words"]
 GYP_TAB = 'Gyp (USG 1-8")'
 
@@ -424,3 +427,222 @@ def test_the_working_is_worked_out_of_the_whole_model_whatever_section_the_panel
     sentence = ("Nights and per diem days follow the man-days on the labor lines of the base sheets (98 now), a night and a day of per diem for each man-day, Kyle's way.")
     assert h["carrier"] == "Polish" and h["job"]["sections"] == 2 and h["job"]["days"] == 98 and h["job"]["sheet"] is True
     assert h["whole"] == [sentence] and h["plain"] == [sentence]
+
+
+# ── red without the code: break a COPY of the page or the model one line at a time ──────────────────────────────────────────────────────────
+MODEL = "js/bid-model.js"
+PAGE = "js/polish-estimate.js"
+PROFILES = "js/bid-profiles.js"
+
+
+def close(a, b):
+    return a is not None and abs(a - b) < 1e-6
+
+
+# the same anchors test_polish_travel_round5.py breaks for a Polish bid, which a Gyp bid and a Combo share
+FILL_IF = "if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) {"
+SYNC_QTY = "if (l && l.qty_auto !== false) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;"
+SYNC_OPEN = "      var carrier = multi ? sectionOf(model, travelCarrier(model)).section : model;"
+FOLLOW_LIST = "      list = bases.length ? bases : live.slice(0, 1);"
+OWN_NIGHTS = "    return profile ? sheetNights(rows, model.conditions, prevailingApplied(model), profile) : travelManDays(rows, entryDivisor(entry));"
+FOLLOW_GUARD = "    if (qtyFollows(line) && opts && opts.follow !== undefined) return opts.follow;"
+SHEET_TRAVEL = '      if (crewByHour ? isTravelRow(r) : r.unit === "hours") { travelLabor += laborCost(r, pw); continue; }'
+SHEET_DIVIDE = "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);"
+DIVISOR = "    var d = p ? Number(p.quirks.lodgingDivisor) : NaN;"
+CARRIER_COST = "      travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,"
+OPTION_COST = '    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;'
+GYP_HINT = ("      if (same) return \"Follows the crew's hours on the labor lines above, \" + hours + \" hours a night (\" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";")
+ONE_HINT = ("    if (same) return \"Follows the man-days on \" + (multi ? \"the labor lines of the base sheets\" : \"the labor lines above\") + \" (\" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";")
+GYP_DIFFERS_HINT = ("      return \"Follows the labor above as the sheet counts it (\" + shown(job.count) + \"; guys x hours over \" + hours + \" is \" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";")
+ONE_DIFFERS_HINT = ("    return \"Follows the labor \" + (multi ? \"of the base sheets\" : \"above\") + \" as the sheet counts it (\" + shown(job.count) + \"; guys x days is \" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";")
+GYP_DIFFERS_HOW = ("          ? what + \" the labor above as the sheet counts it (\" + qty(job.count) + \" now; guys x hours over \" + nightHours + \" is \" + qty(job.days) + \"), \" + each + \" for each, Kyle's way.\"")
+ONE_DIFFERS_HOW = ("          ? what + \" the labor \" + (multi ? \"of the base sheets\" : \"above\") + \" as the sheet counts it (\" + qty(job.count) + \" now; guys x days is \" + qty(job.days) + \"), \" + each + \" for each, Kyle's way.\"")
+TYPED_MULTI_HINT = '                 : "Nights from the labor of the base sheets, as the sheet counts them: " + (Math.round(nights * 100) / 100) + ".";'
+TYPED_REFERENCE = ('        lines.push("For reference, " + where + " count " + qty(job.count) + " nights the way the sheet does (" + (gypCarrier ? "guys x hours over " + nightHours : "guys x days") + " is " +')
+GYP_HOW_LINE = ("          : what + \" the crew's hours on the labor lines above, \" + nightHours + \" hours a night (\" + (job.days > 0 ? qty(job.days) + \" now\" : \"none yet\") + \"), \" + each + \" for each, Kyle's way.\" +")
+HOW_WHERE = '    var where = multi ? "the labor lines of the base sheets" : "the labor lines above";'
+CARD_GYP_LODGING = ('        ? (isNight ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the crew\'s hours, " +').replace("\\'", "'")
+CARD_GYP_PER_DIEM = '          : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the crew\'s hours, " +'.replace("\\'", "'")
+CARD_LODGING_LINE = '        ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the man-days, a night for each, " +'
+CARD_PER_DIEM_LINE = '        : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the man-days, a day of " +'
+CAP_GYP = "          ? 'On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew\\'s hours, ' +"
+CAP_LINE = "          : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');"
+REVIEW_QTY = "      var qty = ownTravel ? B.optionNights(ROOT, activeTab) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));"
+
+# name -> (file, old, new, a fact that must change). Each is one line, which break_source requires to be there exactly once.
+BREAKS = {
+    # N1: a Gyp crew in hours
+    "a Gyp carrier's nights are typed again": (
+        MODEL, "      if (far) {", '      if (far && (entryOrNull(model, carrierTabOf(model)) || {}).layout !== "gyp") {',
+        lambda g: g["gyp"]["saved"]["lodging"]["follow"] is None),
+    "a crew in hours counts nothing in the man-days": (
+        MODEL, "    var hourly = num(hoursPerNight) > 0 ? num(hoursPerNight) : 0;", "    var hourly = 0;",
+        lambda g: g["direct"]["manDays"]["gyp"] != 48 or g["gyp"]["typed"]["l"]["lodgingHint"] != "Man-days from the tasks above: 60."),
+    "the drive is counted as crew": (
+        MODEL, "        if (hourly && !isTravelRow(r) && rowOn(r)) t += num(r.guys) * num(r.days) / hourly;",
+        "        if (hourly && rowOn(r)) t += num(r.guys) * num(r.days) / hourly;",
+        lambda g: g["direct"]["manDays"]["gyp"] != 48),
+    "a switched-off crew row counts": (
+        MODEL, "        if (hourly && !isTravelRow(r) && rowOn(r)) t += num(r.guys) * num(r.days) / hourly;",
+        "        if (hourly && !isTravelRow(r)) t += num(r.guys) * num(r.days) / hourly;",
+        lambda g: g["direct"]["manDays"]["off"] != 0),
+    "every tab's hours are divided by 8": (
+        MODEL, DIVISOR, "    var d = 8;",
+        lambda g: g["direct"]["sections"][GYP_TAB]["divisor"] != 10 or g["gyp"]["typed"]["l"]["lodgingHint"] != "Man-days from the tasks above: 60."),
+    "a Leveling crew's hours are divided by its ten hour day": (
+        MODEL, DIVISOR, "    var d = p ? Number(p.quirks.dayHours) : NaN;",
+        lambda g: g["direct"]["sections"]["Leveling"]["divisor"] != 8),
+    "a Gyp section counts people and not the sheet's dollars": (
+        MODEL, '    if (entry.layout === "gyp") return profileOf(entry);', '    if (entry.layout === "gyp") return null;',
+        lambda g: not close(g["direct"]["sections"][GYP_TAB]["nights"], 2693 / 33.66 / 10)),
+    "every hours row is taken off as the drive on a Gyp tab": (
+        MODEL, SHEET_TRAVEL, '      if (r.unit === "hours") { travelLabor += laborCost(r, pw); continue; }',
+        lambda g: not close(g["direct"]["sheet"]["mixed"], 6969 / 33.66 / 10)),
+    "the sheet's nights are divided by the Polish tab's 8 on every tab": (
+        MODEL, SHEET_DIVIDE, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        lambda g: not close(g["direct"]["sheet"]["mixed"], 6969 / 33.66 / 10) or g["gyp"]["saved"]["lodging"]["qty"] != 48),
+    "a profile's divisor drifts from its tab's formula (Gyp)": (
+        PROFILES, '        escalationAlwaysOn: true, hasHardBid: false, shippingRule: "gyp-split", lodgingDivisor: 10, dayHours: 10',
+        '        escalationAlwaysOn: true, hasHardBid: false, shippingRule: "gyp-split", lodgingDivisor: 8, dayHours: 10',
+        lambda g: any(f["divisor"] != f["profile"] for f in g["direct"]["formulas"])),
+    "a profile's divisor drifts from its tab's formula (Leveling)": (
+        PROFILES, "      quirks: { escalationInSubtotal: false, dayHours: 10 },", "      quirks: { escalationInSubtotal: false, dayHours: 10, lodgingDivisor: 10 },",
+        lambda g: any(f["divisor"] != f["profile"] for f in g["direct"]["formulas"])),
+    # the follow figure is the job's: every base section together
+    "a line that follows is charged the carrier's own rows": (
+        MODEL, FOLLOW_GUARD, "    void opts;",
+        lambda g: g["combo"]["price"]["lump"] != 81226 or g["gyp"]["price"]["lump"] != 46088),
+    "the job's figure counts only the carrier": (
+        MODEL, FOLLOW_LIST, "      list = live.slice(0, 1);",
+        lambda g: g["combo"]["n"]["lodging"]["qty"] != 96),
+    "a section that is off is counted": (
+        MODEL, FOLLOW_LIST, '      list = entries.filter(function (e) { return e.kind === "base" || e.kind === "off"; });',
+        lambda g: g["combo"]["polishOnly"]["n"]["lodging"]["qty"] != 48),
+    "an option is counted in the job's figure": (
+        MODEL, FOLLOW_LIST, "      list = live;",
+        lambda g: g["combo"]["withOption"]["n"]["lodging"]["qty"] != 96),
+    "the box holds no figure": (
+        MODEL, "    return Math.round(jobFollowQty(model) * 100) / 100;", "    return 0;",
+        lambda g: g["gyp"]["saved"]["lodging"]["qty"] != 48),
+    "the page prices the carrier from its own rows": (
+        MODEL, CARRIER_COST, "      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,",
+        lambda g: g["gyp"]["price"]["lump"] != 46088),
+    "the figure does not follow the crew when it changes": (
+        MODEL, SYNC_QTY, "if (l && l.qty_auto !== false && !qtyFollows(l)) l.qty = days;",
+        lambda g: g["gyp"]["moreGuys"]["n"]["lodging"]["qty"] != 60 or g["combo"]["morePolish"]["n"]["lodging"]["qty"] != 132),
+    "a box the estimator cleared is refilled by the next answer": (
+        MODEL, FILL_IF, "if (l.qty_auto === false && !filledIn(l.qty)) {",
+        lambda g: g["gyp"]["typed"]["n"]["perDiem"]["qty"] != ""),
+    "going local keeps the figure the labor filled": (
+        MODEL, "      } else if (qtyFollows(l)) {", "      } else if (false) {",
+        lambda g: g["gyp"]["local"]["n"]["lodging"]["qty"] != ""),
+    "the lines are filled when a bid merely opens": (
+        MODEL, SYNC_OPEN, "      followDistanceNights(model, model.distance ? model.distance.miles : null);\n" + SYNC_OPEN,
+        lambda g: g["gyp"]["savedBlank"]["n"]["lodging"]["qty"] != "" or g["combo"]["savedBlank"]["n"]["lodging"]["qty"] != ""),
+    # an option counts its own
+    "a Gyp option is charged nothing for its hours crew": (
+        MODEL, OWN_NIGHTS, "    return travelManDays(rows);",
+        lambda g: g["gypOption"]["gyp"]["travel"] != 5520 or g["gypCopy"]["copied"]["travel"] != 5520),
+    "an option is charged by the older man-days": (
+        MODEL, OPTION_COST, '    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;',
+        lambda g: g["gypOption"]["gyp"]["travel"] != 5520),
+    "a Gyp option counts people and not the sheet's dollars": (
+        MODEL, '    var profile = entry.layout === "gyp" ? sheetCountProfile(entry) : null;', "    var profile = null;",
+        lambda g: not close(g["direct"]["sections"][GYP_TAB]["nights"], 2693 / 33.66 / 10)),
+    "the Review shows an option's nights as day rows": (
+        PAGE, REVIEW_QTY, "      var qty = ownTravel ? B.travelManDays(M.labor) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));",
+        lambda g: g["gypOption"]["gyp"]["review"]["lodgingQty"] != "48"),
+    # the words
+    "the Gyp hint says man-days": (
+        MODEL, GYP_HINT, "      if (same) return \"Follows the man-days on the labor lines above (\" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";",
+        lambda g: g["gyp"]["labor"]["lodgingHint"] != GYP_FOLLOW_LODGING or g["gyp"]["review"]["perDiemNote"] != GYP_FOLLOW_PER_DIEM),
+    "the Combo hint names one sheet": (
+        MODEL, ONE_HINT, "    if (same) return \"Follows the man-days on the labor lines above (\" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";",
+        lambda g: g["combo"]["l"]["lodgingHint"] != COMBO_FOLLOW_LODGING or g["combo"]["review"]["lodgingNote"] != COMBO_FOLLOW_LODGING),
+    "the working says man-days for a Gyp crew": (
+        MODEL, GYP_HOW_LINE, "          : what + \" the man-days on the labor lines above (\" + (job.days > 0 ? qty(job.days) + \" now\" : \"none yet\") + \"), \" + each + \" for each, Kyle's way.\" +",
+        lambda g: GYP_HOW not in g["gyp"]["labor"]["how"].split("\n")),
+    "the working names one sheet on a Combo": (
+        MODEL, HOW_WHERE, '    var where = "the labor lines above";',
+        lambda g: COMBO_HOW not in g["combo"]["l"]["how"].split("\n")
+        or "For reference, the man-days on the labor lines of the base sheets are 96." not in g["combo"]["typedHint"]["how"].split("\n")),
+    "the working is asked of the section on show": (
+        MODEL, "    var W = whole || M;", "    var W = M;",
+        lambda g: g["direct"]["how"]["whole"] != g["direct"]["how"]["plain"]),
+    "a typed box on a Combo is told the carrier's man-days": (
+        MODEL, "    var multi = !auto && !!entry && baseCount(model) > 1 && carrierTabOf(model) === tab;", "    var multi = false;",
+        lambda g: g["combo"]["typedHint"]["lodging"] != "Man-days from the labor lines of the base sheets: 96."),
+    "a typed box leaves a crew's hours out of the man-days": (
+        MODEL, "      days = travelManDays(rows, entry && !auto ? entryDivisor(entry) : undefined);", "      days = travelManDays(rows);",
+        lambda g: g["gyp"]["typed"]["l"]["lodgingHint"] != "Man-days from the tasks above: 60."),
+    # the words when the sheet's count is not the head count
+    "a crew in hours is told guys x days when the sheet's count differs": (
+        MODEL, GYP_DIFFERS_HINT, "      return \"Follows the labor above as the sheet counts it (\" + shown(job.count) + \"; guys x days is \" + shown(job.days) + \"): \" + each + \" for each, Kyle's way.\";",
+        lambda g: g["words"]["gypFollowing"]["lodgingHint"] != "Follows the labor above as the sheet counts it (20.7; guys x hours over 10 is 19): a night for each, Kyle's way."),
+    "a Combo is told one sheet when the sheet's count differs": (
+        MODEL, ONE_DIFFERS_HINT, ONE_DIFFERS_HINT.replace('(multi ? \"of the base sheets\" : \"above\")', '\"above\"'),
+        lambda g: g["words"]["comboFollowing"]["lodgingHint"] != "Follows the labor of the base sheets as the sheet counts it (42; guys x days is 32): a night for each, Kyle's way."),
+    "the working tells a Gyp crew guys x days when the sheet's count differs": (
+        MODEL, GYP_DIFFERS_HOW, "          ? what + \" the labor above as the sheet counts it (\" + qty(job.count) + \" now; guys x days is \" + qty(job.days) + \"), \" + each + \" for each, Kyle's way.\"",
+        lambda g: not g["words"]["gypFollowing"]["following"][0].endswith("(20.7 now; guys x hours over 10 is 19), a night and a day of per diem for each, Kyle's way.")),
+    "the working names one sheet on a Combo when the sheet's count differs": (
+        MODEL, ONE_DIFFERS_HOW, ONE_DIFFERS_HOW.replace('(multi ? \"of the base sheets\" : \"above\")', '\"above\"'),
+        lambda g: "of the base sheets as the sheet counts it" not in g["words"]["comboFollowing"]["following"][0]),
+    "a typed box on a Combo is told one sheet when the sheet's count differs": (
+        MODEL, TYPED_MULTI_HINT, TYPED_MULTI_HINT.replace("of the base sheets", "above"),
+        lambda g: g["words"]["comboTyped"]["lodgingHint"] != "Nights from the labor of the base sheets, as the sheet counts them: 42."),
+    "the typed reference tells a Gyp crew guys x days": (
+        MODEL, TYPED_REFERENCE, TYPED_REFERENCE.replace('(gypCarrier ? "guys x hours over " + nightHours : "guys x days")', '"guys x days"'),
+        lambda g: g["words"]["gypTyped"]["reference"] != ["For reference, the labor lines above count 20.7 nights the way the sheet does (guys x hours over 10 is 19)."]),
+    # N4: the cards, both of them, on a Gyp carrier and on every other
+    "the Gyp Lodging card says the man-days": (
+        PAGE, CARD_GYP_LODGING, CARD_GYP_LODGING.replace("the crew's hours, ", "the man-days, "),
+        lambda g: g["cards"]["gyp"]["lodging"] != GYP_CARD_LODGING),
+    "the Gyp Per Diem card says the man-days": (
+        PAGE, CARD_GYP_PER_DIEM, CARD_GYP_PER_DIEM.replace("the crew's hours, ", "the man-days, "),
+        lambda g: g["cards"]["gyp"]["perDiem"] != GYP_CARD_PER_DIEM),
+    "the Gyp sentence above the travel block says the nights are typed": (
+        PAGE, CAP_GYP, CAP_GYP.replace("fill in from the crew\\'s hours, ", "are typed, because a crew in hours does not count, "),
+        lambda g: g["cards"]["gyp"]["cap"] != GYP_CAP),
+    "the Lodging card of every other carrier loses its words": (
+        PAGE, CARD_LODGING_LINE, CARD_LODGING_LINE.replace("a night for each, ", "a night each, "),
+        lambda g: g["cards"]["polish"]["lodging"] != CARD_LODGING or g["cards"]["epoxy"]["lodging"] != CARD_LODGING),
+    "the Per Diem card of every other carrier loses its words": (
+        PAGE, CARD_PER_DIEM_LINE, CARD_PER_DIEM_LINE.replace("a day of ", "a day for "),
+        lambda g: g["cards"]["polish"]["perDiem"] != CARD_PER_DIEM or g["cards"]["epoxy"]["perDiem"] != CARD_PER_DIEM),
+    "the sentence above the travel block of every other carrier loses its words": (
+        PAGE, CAP_LINE, CAP_LINE.replace("from the man-days;", "from the crew;"),
+        lambda g: g["cards"]["polish"]["cap"] != CAP or g["cards"]["epoxy"]["cap"] != CAP),
+    # a bid saved before this change
+    "an older auto line counts a crew's hours": (
+        MODEL, "    return travelManDays(rows);", "    return travelManDays(rows, 10);",
+        lambda g: g["legacy"]["gypOlderAuto"]["lump"] != 35552),
+    "an older auto line is charged the job's figure": (
+        MODEL, FOLLOW_GUARD, "    if (opts && opts.follow !== undefined) return opts.follow;",
+        lambda g: g["legacy"]["comboOneFollows"]["costs"]["per_diem"] != 2160),
+    "a typed quantity follows the labor": (
+        MODEL, "    if (line.qty_auto === false) return num(line.qty);", "    void line;",
+        lambda g: g["legacy"]["comboTyped"]["lump"] != 81226),
+}
+
+
+def test_no_fact_a_break_looks_for_is_already_changed_on_the_real_tree(ran):
+    """The other half of every entry below: the fact it reads is NOT changed on the tree as it is (a break that is "noticed" because its check was already true would prove nothing)."""
+    already = sorted(name for name, (_rel, _old, _new, noticed) in BREAKS.items() if noticed(ran))
+    assert already == [], "these breaks are noticed on the real tree, so they prove nothing: %s" % already
+
+
+@pytest.mark.parametrize("name", sorted(BREAKS))
+def test_the_scenarios_go_red_when_the_page_or_the_model_changes(tmp_path, name):
+    """Each change is a line a fact above depends on, broken in a scratch copy of the page or the model; a FACT must change. A break that stops the harness, or makes a section throw, is
+    not counted as noticed: it has no facts to compare."""
+    require_node()
+    rel, old, new, noticed = BREAKS[name]
+    frontend = break_source(tmp_path, rel, old, new)
+    copy_unmodified(frontend, PAGE_FILES)
+    proc = run_node(HARNESS, frontend)
+    assert proc.returncode == 0, "the break stopped the harness outright, so no fact noticed it: " + name + "\n" + proc.stderr[-600:]
+    got = last_json_line(proc.stdout)
+    crashed = sorted(k for k in SECTIONS if "error" in got.get(k, {}))
+    assert not crashed, "the break crashed %s instead of changing a fact: %s (%s)" % (", ".join(crashed), name, "; ".join(got[k]["error"][:200] for k in crashed))
+    assert noticed(got), "the scenarios did not notice: " + name

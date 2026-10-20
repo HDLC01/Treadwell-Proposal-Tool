@@ -279,8 +279,8 @@ PAGE_BREAKS = {
         '    { key: "combo",  label: "Combo (Epoxy + Polish)", tabs: ["epoxy", "polish"], ready: false,',
         lambda r: r["model"]["tabs"] != ["Epoxy"]),
     "the job's travel is charged on every section": (
-        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,",
-        "      travel: travelCosts(model.travel, s.labor).total,",
+        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,",
+        "      travel: travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total,",
         lambda r: r["travel"]["epoxyTravel"] != 0 or r["priced"]["pageEpoxy"] != r["priced"]["handEpoxy"]),
     "the combined bid takes only the first section": (
         "js/bid-engine.js",
@@ -337,8 +337,8 @@ def test_the_page_checks_go_red_when_the_code_changes(tmp_path, name):
 
 PROOF_BREAKS = {
     "the job's travel is charged on every section": (
-        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,",
-        "      travel: travelCosts(model.travel, s.labor).total,"),
+        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,",
+        "      travel: travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total,"),
     "the combined bid takes only the first section": (
         "js/bid-engine.js",
         "      sums = Object.assign({}, sums, Object.fromEntries([[key, tabs.reduce(function (t, x) { return t + num(x.result[key]); }, 0)]]));",

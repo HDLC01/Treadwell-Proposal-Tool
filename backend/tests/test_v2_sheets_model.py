@@ -684,8 +684,8 @@ BREAKS = {
         "    if (true) return travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;",
         lambda r: r["copies"]["legacy"]["farAsOption"] != 1500),
     "polishBid gives an option no travel": (
-        MODEL, '    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor).total;',
-        '    if (false) return optionTravelCosts(model.travel, s.labor).total;',
+        MODEL, '    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;',
+        '    if (false) return optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;',
         lambda r: r["copies"]["legacy"]["farAsOption"] != 1500),
     "a rev 2 copy counts the nights of the people and not the sheet's": (
         MODEL, '    return isObject(s) && s.layout === "polish" && (s.profile === REV2.stamp || s.profile === REV3.stamp);', "    return false;",
