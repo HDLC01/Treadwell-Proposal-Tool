@@ -37,7 +37,7 @@
  * (LOCAL, judged on every live section, options included, already says that a job under 70 miles prices no row nobody touched.)
  *
  * HANZ'S DECISION OF THE FIFTH AUDIT ("Fill them automatically", 2026-10-20) added NIGHTS, judged after every step of every walk (a walk never types in the Lodging or Per Diem box, so none
- * of its lines is the estimator's):
+ * of its lines is the estimator's, but in the `nightsTyped` mode, which types in both first and judges them as the estimator's: they hold what was typed, through every step):
  *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the summed man-days of EVERY base section (round 6: Kyle carries hotel on every sheet of a Combo), each
  *                    section counted with its own tab's divisor (guys x days, as a person counts them, and a crew entered in hours over the hours a night is worth on its tab: a Gyp crew's
  *                    hours over 10), on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). An option is priced apart
@@ -50,10 +50,13 @@
  *   RELOAD_AGREES    the SAME distance answer typed in the session that made the change, and typed after a plain reopen of the draft that session saved, leaves the same prices (the lump
  *                    sum a save writes, the root sheet's bid, every other section's) and the same Travel Labor rows, for each of the four answers (50, 300, 190 and cleared).
  *
- * MODES (argv[3]): far | farplain | local | unknown | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys | sheetsOff |
- *   sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | audit54.
+ * MODES (argv[3]): far | farplain | local | unknown | nightsTyped | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys |
+ *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | audit54.
  *   far, local, unknown   steps are the four job types, each plain or with the crew typed on the new carrier.
  *   farplain              the same far job, with the four job types only (no crew typed): the deeper walk.
+ *   nightsTyped           the estimator's say on the job's NIGHTS is applied first (Lodging typed 10, Per Diem typed over and cleared, on the Labor step of the carrier), then the steps are the
+ *                         far mode's. A typed line is THEIRS (round 6, N4): through every sequence after it, on a far job, under 70 miles and with no distance (nightsTyped@local,
+ *                         nightsTyped@unknown), Lodging holds "10" and Per Diem holds nothing, both typed, off auto, with no follow marker: no answer fills them, no crew changes them.
  *   typed, clearHours, clearGuys, off, rate   the estimator's variant is applied to the carrier's Travel Labor row first, then the steps are the four job types. (`rate` types $40
  *                         over the line's $33 and nothing else: the guys and the hours stay on the distance, and the typed rate follows the job's drive.)
  *   mixed                 the steps are the four job types and, once on any path, ONE of the variants (anywhere in the sequence).
@@ -119,6 +122,8 @@ const TYPES = ["epoxy", "polish", "combo", "gyp"];
 const START_CREW = { epoxy: ["Epoxy", "epoxy-install", "4", "12"], polish: ["Polish", "polishing", "4", "12"], combo: ["Polish", "polishing", "4", "12"], gyp: [GYP_TAB, "gyp-pour", "4", "12"] };
 const STEP_CREW = { epoxy: ["Epoxy", "epoxy-install", "5", "12"], polish: ["Polish", "polishing", "6", "12"], combo: ["Polish", "polishing", "6", "12"], gyp: [GYP_TAB, "gyp-pour", "5", "12"] };
 const VARIANTS = ["typed", "clearHours", "clearGuys", "off", "rate"];
+/** `nightsTyped`: the estimator's own say on the job's NIGHTS (Lodging typed 10, Per Diem cleared) on the carrier's Labor step, before any switch. Typed lines are THEIRS: through every sequence they hold what was typed. */
+const NIGHTS_TYPED = MODE === "nightsTyped";
 /** The variant a mode starts from, or "": the variant modes, and the sheets and dist modes that name one (sheetsTyped, sheetsOff, distRate, ...). */
 const MODE_VARIANT = (function () {
   if (VARIANTS.indexOf(MODE) >= 0) return MODE;
@@ -206,6 +211,19 @@ function applyVariant(b, name) {
   else if (name === "off") P.clickOn(b, '[data-on-lab="' + i + '"]');
   else if (name === "rate") P.typeInto(b, sel("rate"), "40");
   else throw new Error("no such variant " + name);
+  return true;
+}
+
+/** The estimator's own say on the job's nights, through the two boxes on the Labor step of the sheet that carries the job's travel: Lodging typed as 10, Per Diem typed over and cleared.
+ *  False when the step has no such boxes. */
+function applyNights(b) {
+  b.api.show(B.travelCarrier(b.api.root()));
+  b.api.go(1);
+  const lodging = '[data-trv="lodging"][data-k="qty"]', perDiem = '[data-trv="per_diem"][data-k="qty"]';
+  if (!b.doc.querySelector(lodging) || !b.doc.querySelector(perDiem)) return false;
+  P.typeInto(b, lodging, "10");
+  P.typeInto(b, perDiem, "7");
+  P.typeInto(b, perDiem, "");
   return true;
 }
 
@@ -324,6 +342,14 @@ function judge(b, ctx) {
       const l = m.travel[k];
       if (!l) return;
       const says = k + " " + JSON.stringify({ qty: l.qty, auto: l.qty_auto, follow: l.qty_follow, typed: l.qty_typed });
+      // A TYPED LINE IS THE ESTIMATOR'S (`nightsTyped`): it holds exactly what they left, whatever the distance, the carrier or the other base's crew do: never filled, never emptied, never followed.
+      if (ctx && ctx.nights) {
+        const want = k === "lodging" ? "10" : "";
+        if (!(l.qty_typed === true && l.qty_auto === false && l.qty_follow === undefined && String(blank(l.qty) ? "" : l.qty) === want)) {
+          note("NIGHTS", says + " was left by the estimator as " + JSON.stringify(want) + " and the walk changed it");
+        }
+        return;
+      }
       if (f.far) {
         if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) {
           note("NIGHTS", says + " on a " + f.miles + " mile job whose bases (carrier " + f.carrier + ") have " + manDays + " man-days between them");
@@ -439,7 +465,7 @@ function basePicks(b) {
 function stepsFor(page, path) {
   const used = path.some((p) => p.variant);
   const out = [];
-  if (MODE === "far" || MODE === "local" || MODE === "unknown") {
+  if (MODE === "far" || MODE === "local" || MODE === "unknown" || NIGHTS_TYPED) {
     TYPES.forEach((t) => { out.push({ job: t }); out.push({ job: t, crew: true }); });
   } else if (MODE === "mixed") {
     TYPES.forEach((t) => out.push({ job: t }));
@@ -615,7 +641,16 @@ async function main() {
       first = { b: reopened };
       ctx = { variant: MODE_VARIANT };
     }
-    const label = label0 + (ctx ? "[" + MODE_VARIANT + "]" : "");
+    if (NIGHTS_TYPED) {
+      const reopened = await open(clone(first.b.store.blob), { distance: distanceAnswer });
+      reopened.api.go(1);
+      await settle();
+      if (!applyNights(reopened)) { report.skipped = (report.skipped || 0) + 1; continue; }
+      reopened.clock.fire();
+      first = { b: reopened };
+      ctx = { nights: true };
+    }
+    const label = label0 + (ctx ? "[" + (MODE_VARIANT || "nights") + "]" : "");
     report.runs++;
     judge(first.b, ctx).forEach(([code, detail]) => record(code, label, detail));
     await walk(label, first, [], DEPTH, ctx, distanceAnswer);

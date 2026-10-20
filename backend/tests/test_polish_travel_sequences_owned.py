@@ -14,6 +14,9 @@ the settling did not hold:
                       is priced apart and carries its own row). The base's Travel Labor is judged by the same rules; an option's is its own.
   sheetsTyped, ...    the Sheets walk with the estimator's say on the carrier's row first: a copy carries that row too, and made a base it must not price the drive twice.
   typed@local, ...    the estimator's say on a 40 mile job, and on one whose distance could not be found (typed hours are priced there: typing lifts the grey).
+  nightsTyped         (round 6, N4) the estimator's say on the job's NIGHTS: Lodging typed as 10 and Per Diem typed over and cleared, on the Labor step of the carrier, before any
+                      switch. "Typed lines are the estimator's": through every sequence of job types and crews after it, on a far job, a 40 mile one and one with no distance, Lodging
+                      still holds 10 and Per Diem still holds nothing, both typed, off auto, with no follow marker. No answer fills them, no crew or carrier change follows them.
 
 Every step is judged by travel-sequence-harness.js's rules (see _travel_sequences.RULES): one priced drive, no man-days row, a far carrier always has its row, nothing
 filled on a Gyp carrier, no filled row left on a section that is not the carrier, the estimator's row on the carrier, and a plain reopen that changes and saves nothing and
@@ -68,6 +71,23 @@ def test_what_the_estimator_said_survives_every_job_switch_copy_and_base_change_
     got = run("sheets" + variant, 3)
     assert got["runs"] >= 900 and got["plain"] >= 150 and got["reopens"] >= 650, "the walk was cut short: %r" % ({k: got[k] for k in ("runs", "plain", "reopens")},)
     assert got.get("skipped", 0) == 0 and got["violations"] == {} and got["crashes"] == [], explain(got)
+
+
+@pytest.mark.parametrize("where,depth,floor", [("far", 3, (2300, 290, 1700)), ("local", 2, (290, 36, 220)), ("unknown", 2, (290, 36, 220))])
+def test_nights_the_estimator_typed_stay_theirs_through_every_sequence_of_job_types_and_crews(where, depth, floor):
+    """Round 6, N4: "typed lines are the estimator's". The estimator types 10 in Lodging and types over and clears Per Diem (an emptied box is an answer too: 2026-10-12), then every
+    sequence of the four job types, each plain or with the crew typed on the new carrier, runs after it: three steps deep on a far job (2,340 pages, 1,792 reopened plain), two on a
+    40 mile one and on one with no distance (292 each). After every step Lodging holds 10 and Per Diem holds nothing, both typed, off auto and with no marker that they follow the labor:
+    a carrier that moved under a far distance fills only what nobody typed (a cleared box is typed), a crew that grew is not followed, and going local takes back only the figure the
+    labor had filled.
+
+    Mutation (test_polish_travel_sequences_reload.py): a far answer fills a box that was typed and left empty; typing in the box marks nothing; going local empties a typed figure."""
+    require_node()
+    got = run("nightsTyped" + ("" if where == "far" else "@" + where), depth)
+    runs, plain, reopens = floor
+    assert got["runs"] >= runs and got["plain"] >= plain and got["reopens"] >= reopens, "the walk was cut short: %r" % ({k: got[k] for k in ("runs", "plain", "reopens")},)
+    assert got.get("skipped", 0) == 0, "a start had no Lodging and Per Diem boxes to type in"
+    assert got["violations"] == {} and got["crashes"] == [], explain(got)
 
 
 @pytest.mark.parametrize("distance", ["local", "unknown"])

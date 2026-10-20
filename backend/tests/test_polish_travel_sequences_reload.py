@@ -17,7 +17,7 @@ At b14bc98 the depth-2 walk of the far job reported it in 18 sequences (Combo th
 The same walks also judge NIGHTS after every step, Hanz's decision of the same day ("Fill them automatically"): a far job's Lodging and Per Diem hold the man-days of EVERY base section
 (round 6: a Combo's hotel is on both sheets, and a Gyp crew entered in hours is counted ten hours to a night), each section counted with its own tab's divisor, on auto and marked as
 following the labor; a job under 70 miles, or with no distance, fills nothing. An option is priced apart and counts nothing in it, and a section that is off counts nothing.
-(Every older walk is judged by it too: none of them types in those boxes.)
+(Every older walk is judged by it too: none of them types in those boxes. The `nightsTyped` walk does, and holds the typed lines to what was typed: part 2.)
 
 The local, no-distance and estimator-said slices are in test_polish_travel_sequences_reload_more.py (a second file only so the two run on different workers).
 The last block breaks a COPY of js/bid-model.js one line at a time and requires the walk to report the rule the line keeps.
@@ -52,6 +52,8 @@ NIGHTS_SYNC = "if (l && l.qty_auto !== false) l.qty = qtyFollows(l) ? laborFollo
 NIGHTS_BASES = "      list = bases.length ? bases : live.slice(0, 1);"
 NIGHTS_GYP = "      if (far) {"
 NIGHTS_DIVIDE = "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);"
+NIGHTS_FILL_IF = '        if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }'
+NIGHTS_MARK = "    line.qty_typed = true;"
 
 # name -> (old, new, mode, depth, the rules the walk must report)
 BREAKS = {
@@ -76,6 +78,17 @@ BREAKS = {
         NIGHTS_BASES, "      list = live;", "sheets", 1, {"NIGHTS"}),
     "a Gyp crew's nights are divided by the Polish tab's 8": (
         NIGHTS_DIVIDE, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);", "far", 1, {"NIGHTS"}),
+    # round 6, N4: a line the estimator typed is theirs (the nightsTyped walk types Lodging 10 and clears Per Diem first)
+    "a far answer fills a box the estimator typed over and left empty": (
+        NIGHTS_FILL_IF, '        if (l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }', "nightsTyped", 2, {"NIGHTS"}),
+    "typing in a nights box marks nothing": (
+        NIGHTS_MARK, "    void line;", "nightsTyped", 1, {"NIGHTS"}),
+    "typing in a nights box leaves it following the labor": (
+        NIGHTS_MARK, "    line.qty_typed = true; return line;", "nightsTyped", 1, {"NIGHTS"}),
+    "going local empties a figure the estimator typed": (
+        NIGHTS_LOCAL, "      } else {", "nightsTyped@local", 1, {"NIGHTS"}),
+    "a crew change writes the nights over a box the estimator typed": (
+        NIGHTS_SYNC, "if (l) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;", "nightsTyped", 1, {"NIGHTS"}),
 }
 
 

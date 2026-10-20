@@ -35,7 +35,7 @@ RULES = {
     "REOPEN_AGREES": "the price (or the rows) the draft saved is not what a plain reopen of it shows",
     "OPT_FOLLOWS": "after the miles were typed, an option's Travel Labor does not hold what the answer gives (the hours, its own crew, or the fill taken back whole under 70 miles)",
     "OPT_OWNED": "after the miles were typed, an option's switched-off row moved, or a box the estimator typed in or cleared on it changed",
-    "NIGHTS": "a far job's Lodging or Per Diem quantity is not the man-days of every base section, each counted with its own tab's divisor (a Gyp crew's hours over 10), on auto and marked as following, or a job under 70 miles has one filled",
+    "NIGHTS": "a far job's Lodging or Per Diem quantity is not the man-days of every base section, each counted with its own tab's divisor (a Gyp crew's hours over 10), on auto and marked as following, or a job under 70 miles has one filled, or a quantity the estimator typed (or cleared) is not exactly as they left it",
     "RELOAD_AGREES": "the same distance answer typed in the session that made a Sheets change and typed after a plain reopen of what it saved leaves different prices or Travel Labor rows",
     "CRASH": "the page threw",
 }
