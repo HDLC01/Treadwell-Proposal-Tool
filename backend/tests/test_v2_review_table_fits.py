@@ -341,8 +341,17 @@ def view_problems(page: str) -> list[str]:
     return sorted(set(found))
 
 
+def at_916_problems(page: str) -> list[str]:
+    """The staging walk's own window: 916px wide with the sidebar open, where the box is 575px. The table must fit it, so the TOTAL header and every row's total need no scrolling to be seen."""
+    f = facts(page)
+    hidden = out_of_view(f, 916, True)
+    if not hidden:
+        return []
+    return ["the table is %dpx wide in a %dpx box: the last %dpx of it, the TOTAL column, are out of view until the box is scrolled (916px, sidebar open)" % (f["min_width"], box_width(f, 916, True), hidden)]
+
+
 def problems(page: str) -> list[str]:
-    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page)))
+    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page) + at_916_problems(page)))
 
 
 # ── the assertions ───────────────────────────────────────────────────────────────────────────────────────
@@ -390,9 +399,7 @@ def test_the_total_column_is_in_view_at_916px_with_the_sidebar_open():
     """The walk's own window: the box is 575px and the table must fit it, so the TOTAL header and every row's total need no scrolling to be seen.
 
     Mutation: put the 640px minimum back."""
-    f = facts(PAGE_PATH.read_text(encoding="utf-8"))
-    hidden = out_of_view(f, 916, True)
-    assert hidden == 0, "the table is %dpx wide in a %dpx box: the last %dpx of it, the TOTAL column, are out of view until the box is scrolled" % (f["min_width"], box_width(f, 916, True), hidden)
+    assert at_916_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
 
 
 def test_no_review_table_needs_scrolling_from_900px_up_whatever_the_sidebar_or_the_scrollbar():
@@ -534,6 +541,7 @@ def test_the_page_as_it_was_at_619f092_hides_the_total_column_at_916px_with_the_
 MUTATIONS = [
     # (what is undone, the page's own line, what stands there instead, how the problem starts)
     ("the 640px minimum is back", NEW["min"], ".rev-t,.mk{min-width:640px}", "the Total column is"),
+    ("the 640px minimum is back, at the walk's window", NEW["min"], ".rev-t,.mk{min-width:640px}", "the table is 640px wide in a 575px box: the last 65px of it, the TOTAL column"),
     ("a minimum under what the columns and Item need", NEW["min"], ".rev-t,.mk{min-width:500px}", "Item column"),
     ("a Quantity column too narrow for its heading", NEW["qty"], ".rev-t th:nth-child(2),.mk th:nth-child(2){width:70px}", "Quantity column"),
     ("the old Unit share", NEW["unit"], ".rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}", "Unit column"),
@@ -546,6 +554,7 @@ MUTATIONS = [
     ("a wide inset at the card's right edge", ROUND_6["last"][0], ROUND_6["last"][0].replace("padding-right:14px", "padding-right:30px"), "Total column"),
     ("a wide inset at the card's left edge", ROUND_6["first"][0], ROUND_6["first"][0].replace("padding-left:14px", "padding-left:40px"), "Item column"),
     ("the Total cells are not pinned", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("position:sticky", "position:static"), "pin: the Total"),
+    ("the Total cells are not pinned, so the Total scrolls out of view below 900px", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("position:sticky", "position:static"), "the table scrolls"),
     ("the Total cells are pinned to the other edge", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("right:0", "left:0"), "pin: the Total"),
     ("the pinned Total cells have no background", ROUND_6["fill"][0], ROUND_6["fill"][0].replace("background:var(--card)", "background:transparent"), "pin: a pinned Total cell"),
     ("no scroll padding for the pinned column", ROUND_6["box"][0], ROUND_6["box"][1], "pin: the .tscroll box"),
