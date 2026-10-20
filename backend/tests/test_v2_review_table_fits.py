@@ -1,17 +1,32 @@
-"""THE REVIEW'S TABLES HOLD WHAT THEY HOLD AT EVERY WIDTH THEY CAN HAVE (the 2026-10-20 fifth audit, finding H): nothing is cut off at 900 to 1000px.
+"""THE REVIEW'S TABLES FIT THEIR BOX, AND THE TOTAL COLUMN IS NEVER OUT OF VIEW (round 5 finding H, 2026-10-20; round 6 item B1, the staging walk of #694).
 
-At about 916px the Review's markup card cut off the Discount $ box, the Contingency and Fees boxes and the "margin on cost" / "of subtotal + markups" words beside them. The card's table
-is `table-layout: fixed`, so its columns are whatever the header row says, and they said 20% / 12% / 19% / 14% of a table that is 592px wide when the sidebar is open at that
-window width (916 less the 240px sidebar, the page's side padding and the card's own padding), or 815px when it is not: the Total column was 83px or 114px wide, and the 104px box in it
-(plus the cell's own 12px either side) needs 128px; the Unit column was 71px or 98px and its words, which could not wrap, need 151px. The boxes ran past the column and the card's edge.
+ROUND 5. At about 916px the Review's markup card cut off the Discount $ box, the Contingency and Fees boxes and the "margin on cost" / "of subtotal + markups" words beside them. The card's table
+is `table-layout: fixed`, so its columns are whatever the header row says, and they said 20% / 12% / 19% / 14% of the table: the Total column was too narrow for the 104px box in it, the Unit column
+too narrow for its words. The fix made Unit, Rate and Total PIXELS, each as wide as the markup card needs, let the Unit words wrap, and gave the table a minimum width, below which it scrolls
+INSIDE its own box (the `.tscroll` the page already has), as it does on a phone.
 
-The fix (polish-estimate.html's CSS): Unit, Rate and Total are PIXELS, each as wide as the markup card needs them, Quantity is a share of the table, the Unit words may wrap, and the table keeps
-a minimum width (640px) below which it scrolls INSIDE its own box (the `.tscroll` the page already has), as it does on a phone. Nothing here needs a browser to be checked: the layout of a fixed-width
-table is arithmetic on the page's own CSS. The widths a column NEEDS were measured in a browser on the real Review (Chrome through Playwright, 2026-10-20, 916px with and without the sidebar,
-and every width from 560 to 1000px: no cell of any of the five cards overflowed, and the table scrolled inside its box below 640px); they are the constants below, and every one that can be
-read off the CSS (the boxes' widths, the cell padding) IS read off it, so a box made wider without a column made wider goes red.
+ROUND 6. A real browser at 916px with the staff sidebar open showed what round 5's arithmetic had not: the table's box there is 575px, not 592 (916, less the 15px scrollbar, the 240px sidebar,
+the page's 22px a side, and 1px + 19px + 1px a side for the section, its padding and the card), and the 640px minimum, chosen for the boxes with columns wider than their contents need (Unit 124 for
+words that need 94, Rate 132 for a box that needs 104, Total 132 for 128), left 65px of every Review card out of view: the TOTAL header and every row's total were off to the right until the box
+was scrolled. It fit only from 981px (980 hid 1px, 821 hid 160, 800 hid 181).
 
-The last block puts the old rules (and each new rule one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
+THE FIX (polish-estimate.html's CSS), two parts:
+
+  1. The four fixed columns are as narrow as their contents allow (Quantity 82px, Unit 90, Rate 108, Total 126) with 8px of cell padding between columns and 14px at the card's two edges (the card
+     title's own inset), so the table's minimum is 550px: the four columns and 144px for Item, which is the 122px of content round 5 chose as Item's floor. A box of 575px (916, sidebar open) or
+     559px (900, sidebar open) holds that with nothing to scroll; Item and the Unit words wrap as before.
+  2. Below that the box scrolls, and the Total column is PINNED to its right edge (`position: sticky; right: 0`, opaque) so the total is in view at every width down to a phone, with the working
+     (Quantity, Unit, Rate) scrolling beneath it. `scroll-padding-right` keeps a box that is tabbed into clear of the pinned column, and the borders are the CELLS' (`border-collapse: separate`)
+     because a collapsed border belongs to the table and would not travel with a pinned cell.
+
+NOTHING HERE NEEDS A BROWSER TO BE CHECKED: the layout of a fixed-width table is arithmetic on the page's own CSS, and the box it sits in is arithmetic on the page's CSS and the shell's (auth.js's
+`--tw-w`, and its 768px breakpoint for moving the body). That arithmetic is CALIBRATED against the walk: test_the_model_reproduces_what_the_staging_walk_measured runs it on the old 640px minimum and
+gets the walk's own five numbers (981px: nothing hidden; 980: 1px; 916: 65px; 821: 160px; 800: 181px), so the box formula is the browser's and not a guess. The widths a column NEEDS were measured in
+a browser on the real Review (Chrome through Playwright, 2026-10-20: no cell of any of the five cards overflowed at any width from 560 to 1000px); they are the constants below, and everything
+that can be read off the CSS (the boxes' widths, the cell padding, the columns, the minimum) IS read off it, so a box made wider without a column made wider goes red. That every row of every
+card has the Total as its fifth cell (a band row in the markup card is one cell, colspan 5) is checked by executing the page in test_v2_review_working.py.
+
+The last block puts the old rules (and each new rule, one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
 """
 from __future__ import annotations
 
@@ -23,16 +38,35 @@ from _golden_support import FRONTEND, break_source
 
 PAGE_PATH = FRONTEND / "polish-estimate.html"
 AUTH_PATH = FRONTEND / "auth.js"
+JS_PATH = FRONTEND / "js" / "polish-estimate.js"
 
-# What the cells hold, in pixels, measured on the real Review in a browser (see the docstring). The cell padding and the boxes' own widths are read off the CSS instead.
+# What the cells hold, in pixels of CONTENT, measured on the real Review in a browser (see the docstring). The cell padding and the boxes' own widths are read off the CSS instead.
 DOLLAR_AND_GAP = 12          # the "$" before the Discount dollar box, and the gap after it
 PERCENT_AND_GAP = 16         # the "%" after a rate box, and the gap before it
 LONGEST_UNIT_TEXT = 127      # "of subtotal + markups" at 13px: what a Unit cell needs if its words cannot wrap
 LONGEST_UNIT_WORD = 70       # "escalation", the longest word a Unit cell holds: what it needs if they can
 QUANTITY_HEADER = 62         # "QUANTITY" at 10.5px with its letter-spacing, before the header's own padding
-ITEM_MIN = 150               # the Item column wraps; below this a label of two words stands on a line of its own
+# Two more, by arithmetic and not by measurement (the audit measured the boxes and the words, which were what overflowed): the widest figure a card prints in each of these columns, at
+# 0.6em a character, the widest monospace face a browser falls back to.
+QUANTITY_WORKING = 66        # "4 × 12 × 8", the working under a labor line's hours: ten characters of 11px monospace
+RATE_FIGURE = 90             # "$0.0987 / SF", "$33.125 / hr": twelve characters of 12.5px monospace
+ITEM_CONTENT_MIN = 122       # the Item column wraps; below this much room for its words a label of two words stands on a line of its own (round 5's 150px column less its 28px of padding)
+
+# The staging walk of #694 (a real browser): the table's box at 916px with the sidebar open was 575px. A classic vertical scrollbar of 15px is the one value for which every number below holds.
+SCROLLBAR = 15
+SCROLLBARS = (0, SCROLLBAR, 17)              # an overlay scrollbar, the walk's, and a wider classic one
+OLD_MIN_WIDTH = 640                          # the minimum width of 619f092, which the walk measured
+WALK = {981: 0, 980: 1, 916: 65, 821: 160, 800: 181}     # window width with the sidebar open -> px of the 640px table out of view, as the walk measured them
+# The layout of the page the walk measured (619f092), typed in so the calibration below stays what it is, a check of the FORMULA against the browser's numbers, if the page's padding changes later.
+WALK_LAYOUT = {"body_pad": 44, "wrap_max": 1000, "sec_border": 1, "sec_pad": 19, "rev_border": 1, "rail": 240, "rail_from": 768}
+FIT_FROM, FIT_TO = 900, 1500                 # from here up a Review table must need no scrolling at all
+PIN_FROM = 360                               # the narrowest phone the shell supports (test_phone_shell.py); between here and FIT_FROM the box may scroll
+REST_OF_THE_BOX = 100                        # what the pinned Total column must leave of the box for the working to scroll in
+
+NAMES = {1: "Item", 2: "Quantity", 3: "Unit", 4: "Rate", 5: "Total"}
 
 
+# ── reading the page's CSS ───────────────────────────────────────────────────────────────────────────────
 def _css(page: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"/\*.*?\*/", "", page, flags=re.S))
 
@@ -44,10 +78,46 @@ def _rule(css: str, selector: str) -> str:
     return ";".join(found)
 
 
+def _rules(css: str):
+    """(selector list, declarations) for every rule of the page's style block, a rule inside an @media block included (its prelude is dropped: nothing read this way is conditional)."""
+    if "<style>" in css:
+        css = css[css.index("<style>") + len("<style>"):css.index("</style>")]
+    for chunk in css.split("}"):
+        if "{" not in chunk:
+            continue
+        head, body = chunk.rsplit("{", 1)
+        yield head.rsplit("{", 1)[-1].strip(), body
+
+
+def _decls_for(css: str, selector: str) -> dict:
+    """Every declaration of every rule whose selector LIST holds `selector`, merged in the order the page has them (a later rule wins)."""
+    merged: dict = {}
+    for selectors, body in _rules(css):
+        if selector in [s.strip() for s in selectors.split(",")]:
+            for decl in body.split(";"):
+                if ":" in decl:
+                    prop, value = decl.split(":", 1)
+                    merged[prop.strip()] = value.strip()
+    return merged
+
+
 def _px(declarations: str, prop: str) -> int:
     found = re.findall(r"(?:^|[;\s])" + re.escape(prop) + r":\s*(\d+)px", declarations)
     assert found, "no %s in %r" % (prop, declarations)
     return int(found[-1])
+
+
+def _px_value(token: str) -> int:
+    return 0 if token.strip() == "0" else int(token.strip().rstrip("px"))
+
+
+def _padding_lr(value: str) -> tuple[int, int]:
+    parts = [_px_value(t) for t in value.split()]
+    if len(parts) == 1:
+        return parts[0], parts[0]
+    if len(parts) in (2, 3):
+        return parts[1], parts[1]
+    return parts[3], parts[1]
 
 
 def _column(css: str, n: int):
@@ -58,63 +128,323 @@ def _column(css: str, n: int):
     return found[-1][1], int(found[-1][0])
 
 
-def problems(page: str, sidebar: int = 240) -> list[str]:
-    """What is cut off, as a list of sentences, for every table width the page can give the Review at a window 900 to 1000px wide (the sidebar open or shut) and below."""
+def _cell_pads(css: str, kind: str) -> dict:
+    """{table: [(left, right) for each of the five columns]} for the `th` or `td` cells: the table's own padding, and the card's edges (`:first-child`, `:last-child`) where the page gives them their own."""
+    out = {}
+    for table in (".rev-t", ".mk"):
+        base = _decls_for(css, "%s %s" % (table, kind))
+        assert "padding" in base, "%s %s has no padding" % (table, kind)
+        left, right = _padding_lr(base["padding"])
+        first = _decls_for(css, "%s %s:first-child" % (table, kind))
+        last = _decls_for(css, "%s %s:last-child" % (table, kind))
+        pads = []
+        for n in range(1, 6):
+            l, r = left, right
+            if n == 1 and "padding-left" in first:
+                l = _px_value(first["padding-left"])
+            if n == 5 and "padding-right" in last:
+                r = _px_value(last["padding-right"])
+            pads.append((l, r))
+        out[table] = pads
+    return out
+
+
+def _variables(css: str) -> dict:
+    return {k: v for k, v in _decls_for(css, ":root").items() if k.startswith("--")}
+
+
+def _color(value: str, variables: dict):
+    """The colour a declaration comes to, following var(--x, fallback) through the tokens; None when it cannot be told."""
+    value = (value or "").strip()
+    m = re.fullmatch(r"var\((--[\w-]+)(?:,\s*(.+))?\)", value)
+    if m:
+        if m.group(1) in variables:
+            return _color(variables[m.group(1)], variables)
+        return _color(m.group(2), variables) if m.group(2) else None
+    return value or None
+
+
+def _opaque(value: str, variables: dict) -> bool:
+    color = _color(value, variables)
+    if not color or color in ("transparent", "none", "inherit", "initial", "unset"):
+        return False
+    if re.fullmatch(r"#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}", color):
+        return True
+    m = re.fullmatch(r"rgba?\(([^)]*)\)", color)
+    if m:
+        parts = [p.strip() for p in m.group(1).replace("/", ",").split(",")]
+        return len(parts) < 4 or float(parts[3]) >= 1
+    return False                      # a value this cannot read is not proof of an opaque one
+
+
+# ── the geometry: the box a table sits in ────────────────────────────────────────────────────────────────
+def layout(page: str) -> dict:
+    """What decides the width of the box a table sits in, read off the page's CSS and the shell's: the body's side padding (both sides), the page column's maximum, the section's border, the section
+    body's side padding, the card's border, and the sidebar's width and the window width from which it moves the body."""
     css = _css(page)
-    min_width = _px(_rule(css, ".rev-t,.mk"), "min-width")   # two rules name both tables together: the minimum width, and table-layout
-    pad = int(re.search(r"padding:\s*\d+px (\d+)px", _rule(css, ".mk td")).group(1))
+    shell = AUTH_PATH.read_text(encoding="utf-8")
+    rail = re.search(r"--tw-w:\s*(\d+)px", shell)
+    breakpoint_ = re.search(r"@media\s*\(min-width:\s*(\d+)px\)\s*\{\s*html\.tw-nav-open body\{\s*margin-left:\s*var\(--tw-w\)", shell)
+    assert rail and breakpoint_, "auth.js no longer says how wide the sidebar is, or from what width it moves the body"
+    return {
+        "body_pad": 2 * int(re.search(r"body\{[^}]*padding:\s*0 (\d+)px", css).group(1)),
+        "wrap_max": _px(_rule(css, ".wrap"), "max-width"),
+        "sec_border": int(re.search(r"border:\s*(\d+)px", _rule(css, ".sec")).group(1)),
+        "sec_pad": int(re.search(r"padding:\s*\d+px (\d+)px", _rule(css, ".sec-b")).group(1)),
+        "rev_border": int(re.search(r"border:\s*(\d+)px", _rule(css, ".rev")).group(1)),
+        "rail": int(rail.group(1)),
+        "rail_from": int(breakpoint_.group(1)),
+    }
+
+
+def facts(page: str) -> dict:
+    """Everything the arithmetic needs: the layout, and the tables' own rules."""
+    css = _css(page)
+    return {
+        "css": css,
+        "min_width": _px(_rule(css, ".rev-t,.mk"), "min-width"),   # two rules name both tables together: the minimum width, and table-layout
+        "columns": {n: _column(css, n) for n in (2, 3, 4, 5)},
+        **layout(page),
+    }
+
+
+def box_width(f: dict, window: int, rail_open: bool, scrollbar: int = SCROLLBAR) -> int:
+    """The width of the `.tscroll` box a Review table sits in, in a window `window`px wide. The page column is the viewport (less the scrollbar), less the body margin the open sidebar gives it at
+    768px and up (a sheet over the page below that, which moves nothing), less the body's side padding, at most 1000px; the box is that less the section's border, its padding and the card's border."""
+    viewport = window - scrollbar
+    shifted = f["rail"] if rail_open and window >= f["rail_from"] else 0
+    column = min(f["wrap_max"], viewport - shifted - f["body_pad"])
+    return column - 2 * f["sec_border"] - 2 * f["sec_pad"] - 2 * f["rev_border"]
+
+
+def out_of_view(f: dict, window: int, rail_open: bool, scrollbar: int = SCROLLBAR, min_width: int | None = None) -> int:
+    """How many px of the table lie beyond its box: a table is as wide as its box but never narrower than its minimum, and what does not fit scrolls."""
+    table = f["min_width"] if min_width is None else min_width
+    return max(0, table - box_width(f, window, rail_open, scrollbar))
+
+
+# ── what each column needs, and what it has ─────────────────────────────────────────────────────────────
+def needs(f: dict) -> dict:
+    """{column: px} the column must be, from what the cards put in it plus the cell's own padding (the stricter of the two tables, and of the header and the body cells)."""
+    css = f["css"]
+    pads_td, pads_th = _cell_pads(css, "td"), _cell_pads(css, "th")
     mk_box = _px(_rule(css, ".mk input"), "width")
     pct_box = _px(_rule(css, ".adjbox input,.mk .adjbox input"), "width")
     amt_box = _px(_rule(css, ".adjbox.adjamt input,.mk .adjbox.adjamt input"), "width")
     unit_wraps = _rule(css, ".rev-t td.u,.mk td.u").replace(" ", "").split("white-space:")[-1].startswith("normal")
-    needs = {
-        2: QUANTITY_HEADER + 2 * int(re.search(r"padding:\s*\d+px (\d+)px", _rule(css, ".rev-t th,.mk th")).group(1)),
-        3: (LONGEST_UNIT_WORD if unit_wraps else LONGEST_UNIT_TEXT) + 2 * pad,
-        4: pct_box + PERCENT_AND_GAP + 2 * pad,
-        5: max(mk_box, amt_box + DOLLAR_AND_GAP) + 2 * pad,
+    content = {                                   # column: (what the header holds, what a body cell holds)
+        1: (0, ITEM_CONTENT_MIN),
+        2: (QUANTITY_HEADER, QUANTITY_WORKING),
+        3: (0, LONGEST_UNIT_WORD if unit_wraps else LONGEST_UNIT_TEXT),
+        4: (0, max(pct_box + PERCENT_AND_GAP, RATE_FIGURE)),
+        5: (0, max(mk_box, amt_box + DOLLAR_AND_GAP)),
     }
-    names = {2: "Quantity", 3: "Unit", 4: "Rate", 5: "Total"}
-    # The table's room: the window, less the page's side padding (22px a side), the card's border and padding (1px + 19px a side), and the sidebar when it is open.
-    body_pad = int(re.search(r"body\{[^}]*padding:\s*0 (\d+)px", css).group(1)) * 2
-    card = 2 + 2 * int(re.search(r"\.sec-b\{padding:\s*\d+px (\d+)px", css).group(1))
-    problems_found: list[str] = []
-    for window in range(900, 1001, 4):
-        for open_ in (False, True):
-            room = window - body_pad - card - (sidebar if open_ else 0)
-            table = max(min_width, room)      # below the minimum the table scrolls inside its box, at its minimum width
-            widths = {}
-            for n in (2, 3, 4, 5):
-                unit, value = _column(css, n)
-                widths[n] = value if unit == "px" else table * value / 100.0
-            for n, need in needs.items():
-                if widths[n] + 1e-6 < need:
-                    problems_found.append("%s column is %dpx and its contents need %dpx (window %dpx, sidebar %s)" % (names[n], widths[n], need, window, "open" if open_ else "shut"))
-            item = table - sum(widths.values())
-            if item < ITEM_MIN:
-                problems_found.append("the Item column is %dpx, under %dpx (window %dpx, sidebar %s)" % (item, ITEM_MIN, window, "open" if open_ else "shut"))
-    return sorted(set(problems_found))
+    out = {}
+    for n, (head, cell) in content.items():
+        out[n] = max(max(head + l + r for l, r in (pads_th[t][n - 1] for t in pads_th)),
+                     max(cell + l + r for l, r in (pads_td[t][n - 1] for t in pads_td)))
+    return out
 
 
-def test_the_reviews_tables_hold_their_boxes_and_words_at_every_width_between_900_and_1000px():
-    """Every column of every Review table is wide enough for what the markup card puts in it, at every table width a 900 to 1000px window can give (816 to 916px with the sidebar shut, 576 to
-    676px with it open, which is the table's 640px minimum or less: it scrolls inside its box there). The Total column holds the 104px Contingency and Fees boxes and the $ box beside
-    the Discount; Rate holds the % box; Unit holds its words (they wrap); Quantity holds its heading; Item is left 150px or more.
+def widths_at(f: dict, table: float) -> dict:
+    """{column: px}: the header row's widths, a share of the table where the page says a share, and Item (no width of its own) with what is left."""
+    out = {}
+    for n, (unit, value) in f["columns"].items():
+        out[n] = value if unit == "px" else table * value / 100.0
+    out[1] = table - sum(out.values())
+    return out
 
-    Mutation: put the old percentage columns back; make the Unit words unable to wrap; lower the minimum width."""
+
+def fit_problems(page: str) -> list[str]:
+    """Is every column wide enough for what it holds, at the narrowest table the page allows (a share of the table is at its narrowest there, and so is Item)?"""
+    f = facts(page)
+    table = f["min_width"]
+    need, have = needs(f), widths_at(f, table)
+    found = []
+    for n in (2, 3, 4, 5):
+        if have[n] + 1e-6 < need[n]:
+            found.append("%s column is %dpx and its contents need %dpx (table %dpx)" % (NAMES[n], have[n], need[n], table))
+    if have[1] + 1e-6 < need[1]:
+        found.append("Item column is %dpx, under the %dpx its words need (table %dpx)" % (have[1], need[1], table))
+    return found
+
+
+# ── the Total column in view ─────────────────────────────────────────────────────────────────────────────
+def pin_problems(page: str) -> list[str]:
+    """Is the Total column PINNED to the right edge of the box the table scrolls in, so it stays in view when the table is wider than the box?"""
+    css = _css(page)
+    variables = _variables(css)
+    found = []
+    for kind in ("th", "td"):
+        for table in (".rev-t", ".mk"):
+            d = _decls_for(css, "%s %s:nth-child(5)" % (table, kind))
+            if d.get("position") != "sticky":
+                found.append("pin: the Total %s cell of the %s table is %r, not position:sticky" % (kind, table, d.get("position")))
+            elif d.get("right") not in ("0", "0px"):
+                found.append("pin: the Total %s cell of the %s table is pinned with right:%s, not to the box's right edge" % (kind, table, d.get("right")))
+    for table in (".rev-t", ".mk"):
+        bg = _decls_for(css, "%s td:nth-child(5)" % table).get("background")
+        if not _opaque(bg, variables):
+            found.append("pin: a pinned Total cell of the %s table has background %r, so the cells scrolling under it would show through" % (table, bg))
+    th_bg = _decls_for(css, ".rev-t th").get("background")
+    if not _opaque(th_bg, variables):
+        found.append("pin: the pinned TOTAL header has background %r, so the cells scrolling under it would show through" % th_bg)
+    # a row that wears the card's tint has to wear an opaque one: every card the page draws names its tint
+    js = JS_PATH.read_text(encoding="utf-8")
+    keys = set(re.findall(r'card\("[^"]*", \d+, "(\w+)"', js)) | set(re.findall(r'data-rev="(\w+)" class="rev"', js))
+    assert {"takeoff", "labor", "travel", "markup"} <= keys, "the cards the page draws are no longer the ones this check knows: %r" % sorted(keys)
+    for key in sorted(keys):
+        card = _decls_for(css, '.rev[data-rev="%s"]' % key)
+        if not _opaque("var(--rev-tot)", {**variables, **{k: v for k, v in card.items() if k.startswith("--")}}):
+            found.append("pin: the %s card has no opaque --rev-tot, so its total row would be see-through under a pinned cell" % key)
+    columns = {n: _column(css, n) for n in (5,)}
+    total_width = columns[5][1] if columns[5][0] == "px" else None
+    padding = _decls_for(css, ".tscroll").get("scroll-padding-right", "")
+    if total_width is not None and (not re.fullmatch(r"\d+px", padding) or int(padding[:-2]) < total_width):
+        found.append("pin: the .tscroll box has scroll-padding-right %r, under the pinned Total column's %spx, so a box tabbed into could stay under it" % (padding, total_width))
+    # ...but not while focus is IN the pinned column: its boxes sit in the padded-off band, and a focus or a keystroke in one would scroll the table to put it clear of itself (the sticky head found
+    # the same cost in a browser, see .v2head: its zero padding while focus is inside it)
+    zero = _decls_for(css, ".tscroll:has(td:nth-child(5):focus-within)").get("scroll-padding-right")
+    if zero not in ("0", "0px"):
+        found.append("pin: the .tscroll box keeps scroll-padding-right %r while focus is in the pinned column, so a focus or a keystroke in one of its boxes would scroll the table to put it clear of itself" % zero)
+    for table in (".rev-t", ".mk"):
+        d = _decls_for(css, table)
+        if d.get("border-collapse") != "separate" or d.get("border-spacing") not in ("0", "0px"):
+            found.append("pin: the %s table has border-collapse:%s: a collapsed border belongs to the table and would not travel with a pinned cell" % (table, d.get("border-collapse")))
+    return found
+
+
+def view_problems(page: str) -> list[str]:
+    """From 900px up no Review table may need scrolling, in any sidebar state and with any scrollbar; below it the Total column must be pinned wherever the table scrolls, and leave room."""
+    f = facts(page)
+    found = []
+    for scrollbar in SCROLLBARS:
+        for rail_open in (False, True):
+            hidden, window = max((out_of_view(f, w, rail_open, scrollbar), w) for w in range(FIT_FROM, FIT_TO + 1))
+            if hidden:
+                found.append("the Total column is %dpx out of view at a window %dpx wide (sidebar %s, scrollbar %dpx): from %dpx up a Review table must fit its box without scrolling"
+                             % (hidden, window, "open" if rail_open else "shut", scrollbar, FIT_FROM))
+    pinned = not pin_problems(page)
+    total = f["columns"][5]
+    for scrollbar in SCROLLBARS:
+        for rail_open in (False, True):
+            below = [(out_of_view(f, w, rail_open, scrollbar), w) for w in range(PIN_FROM, FIT_FROM)]
+            hidden, window = max(below)
+            if hidden and not pinned:
+                found.append("the table scrolls (%dpx at a window %dpx wide, sidebar %s, scrollbar %dpx) and the Total column is not pinned, so it scrolls out of view with it"
+                             % (hidden, window, "open" if rail_open else "shut", scrollbar))
+            if hidden and total[0] == "px":
+                narrowest = min((box_width(f, w, rail_open, scrollbar), w) for _h, w in below)
+                if narrowest[0] - total[1] < REST_OF_THE_BOX:
+                    found.append("the pinned Total column leaves %dpx of the box at a window %dpx wide (sidebar %s, scrollbar %dpx), under the %dpx the working needs to scroll in"
+                                 % (narrowest[0] - total[1], narrowest[1], "open" if rail_open else "shut", scrollbar, REST_OF_THE_BOX))
+    return sorted(set(found))
+
+
+def problems(page: str) -> list[str]:
+    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page)))
+
+
+# ── the assertions ───────────────────────────────────────────────────────────────────────────────────────
+def test_the_model_reproduces_what_the_staging_walk_measured():
+    """The arithmetic is only worth believing if it gives the browser's numbers. For the layout the walk measured, on the 640px minimum it measured, the box and what stuck out of it are the walk's
+    own at all five windows it recorded with the sidebar open: 981px fits exactly, 980 hides 1px, 916 hides 65, 821 hides 160, 800 hides 181; the box at 916px is 575px. A 15px scrollbar is the only
+    value for which that holds, GIVEN the layout's other terms, which the CSS states: the five windows fix only the SUM of what is taken from the box (a 15px scrollbar and 2px of border are told
+    apart by the CSS, not by the walk). Below the shell's breakpoint the sidebar is a sheet over the page and takes nothing from the box.
+
+    Mutation: test_each_term_of_the_box_formula_is_needed_to_reproduce_the_walk drops each term of the formula in turn."""
+    assert box_width(WALK_LAYOUT, 916, True) == 575
+    for window, hidden in sorted(WALK.items()):
+        assert out_of_view(WALK_LAYOUT, window, True, SCROLLBAR, min_width=OLD_MIN_WIDTH) == hidden, (window, box_width(WALK_LAYOUT, window, True))
+    assert [sb for sb in range(0, 31) if _reproduces_the_walk(WALK_LAYOUT, sb)] == [SCROLLBAR]
+    assert box_width(WALK_LAYOUT, 767, True) == box_width(WALK_LAYOUT, 767, False)
+    assert box_width(WALK_LAYOUT, 768, True) == box_width(WALK_LAYOUT, 768, False) - WALK_LAYOUT["rail"]
+
+
+def _reproduces_the_walk(layout_: dict, scrollbar: int) -> bool:
+    return all(out_of_view(layout_, w, True, scrollbar, min_width=OLD_MIN_WIDTH) == hidden for w, hidden in WALK.items())
+
+
+@pytest.mark.parametrize("term", ["body_pad", "sec_pad", "rail"])
+def test_each_term_of_the_box_formula_is_needed_to_reproduce_the_walk(term):
+    """Take one term out of the box formula (the body's padding, the section's padding, the sidebar) and the walk's five numbers are no longer reproduced at any scrollbar width: the calibration can
+    tell a right formula from a wrong one. (The 1px borders are not here: a border of 2px and a scrollbar 2px narrower are the same to the walk, so it cannot tell them apart; the CSS can, and says 1px.)"""
+    broken = dict(WALK_LAYOUT, **{term: 0})
+    assert not any(_reproduces_the_walk(broken, sb) for sb in range(0, 31)), term
+
+
+def test_the_layout_is_read_off_the_pages_css_and_the_shell():
+    """The synthetic page says 10px of body padding a side, a 900px column, a 2px section border, 7px of section padding a side and a 3px card border; the shell says 240px and 768px."""
+    page = ("<style>body{margin:0;padding:0 10px 99px}.wrap{max-width:900px;margin:0 auto}.sec{border:2px solid red}.sec-b{padding:5px 7px}.rev{border:3px solid blue}</style>")
+    got = layout(page)
+    assert got == {"body_pad": 20, "wrap_max": 900, "sec_border": 2, "sec_pad": 7, "rev_border": 3, "rail": 240, "rail_from": 768}
+    assert box_width(got, 1000, False, 0) == 900 - 2 * 2 - 2 * 7 - 2 * 3
+    assert box_width(got, 800, True, 15) == (800 - 15 - 240 - 20) - 4 - 14 - 6
+    # and the real page's layout is the one the walk measured (its numbers are what test_the_model_reproduces... holds the formula to)
+    assert layout(PAGE_PATH.read_text(encoding="utf-8")) == WALK_LAYOUT
+
+
+def test_the_total_column_is_in_view_at_916px_with_the_sidebar_open():
+    """The walk's own window: the box is 575px and the table must fit it, so the TOTAL header and every row's total need no scrolling to be seen.
+
+    Mutation: put the 640px minimum back."""
+    f = facts(PAGE_PATH.read_text(encoding="utf-8"))
+    hidden = out_of_view(f, 916, True)
+    assert hidden == 0, "the table is %dpx wide in a %dpx box: the last %dpx of it, the TOTAL column, are out of view until the box is scrolled" % (f["min_width"], box_width(f, 916, True), hidden)
+
+
+def test_no_review_table_needs_scrolling_from_900px_up_whatever_the_sidebar_or_the_scrollbar():
+    """From 900px up (the sidebar open or shut; no scrollbar, the walk's 15px, or a wider 17px one) every Review table fits its box. At 900px with the sidebar open and a 17px scrollbar the box is 557px.
+
+    Mutation: put the 640px minimum back; a minimum above the box at 900px."""
     page = PAGE_PATH.read_text(encoding="utf-8")
-    assert problems(page) == []
+    assert [p for p in view_problems(page) if p.startswith("the Total column is")] == []
+
+
+def test_below_that_the_total_column_stays_in_view_down_to_a_phone_and_leaves_room():
+    """A box narrower than the table's minimum scrolls, and the Total column is PINNED to its right edge, so it is in view at every window from a 360px phone up, and leaves 100px or more of the box for
+    the working to scroll in.
+
+    Mutation: unpin the cells; a Total column 200px wide."""
+    page = PAGE_PATH.read_text(encoding="utf-8")
+    assert [p for p in view_problems(page) if not p.startswith("the Total column is")] == []
+
+
+def test_the_pinned_total_cells_are_opaque_pinned_to_the_right_edge_and_keep_their_own_borders():
+    """`position: sticky; right: 0` on the header and body cells of both tables; an opaque background on each (and an opaque tint on every card's total row); a scroll padding as wide as the pinned column
+    so a box tabbed into is not left under it; and borders that are the cells' own, which a collapsed border is not.
+
+    Mutation: static cells; the other edge; no background; a see-through card tint; no scroll padding, and one too small; collapsed borders."""
+    assert pin_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_every_column_holds_what_the_cards_put_in_it():
+    """Every column of every Review table is wide enough for what the markup card puts in it, at the narrowest table the page allows (550px): Total holds the 104px Contingency and Fees boxes and
+    the $ box beside the Discount; Rate holds the % box and a twelve-character figure; Unit holds its words (they wrap); Quantity holds its heading and a working line; Item keeps 122px of room.
+
+    Mutation: percentage columns; Unit words that cannot wrap; wider cell padding between columns, and at the card's two edges; a minimum width under what the columns and Item need."""
+    assert fit_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
+def scroll_problems(page: str) -> list[str]:
+    """Does a table wider than its box scroll INSIDE its own box (the page never scrolls sideways for a table), and is every Review card drawn in such a box?"""
+    css = _css(page)
+    found = []
+    if not re.search(r"\.tscroll\{[^}]*overflow-x:auto", css):
+        found.append("the .tscroll box does not scroll sideways, so a table wider than it would push the page sideways")
+    js = JS_PATH.read_text(encoding="utf-8")
+    if js.count('<div class="tscroll"><table class="rev-t">') != 1 or js.count('<div class="tscroll"><table class="mk">') != 1:
+        found.append("a Review card is not drawn in a .tscroll box")
+    return found
 
 
 def test_the_table_still_scrolls_inside_its_own_box_below_its_minimum_width():
-    css = _css(PAGE_PATH.read_text(encoding="utf-8"))
-    assert re.search(r"\.tscroll\{[^}]*overflow-x:auto", css), "the table must scroll in its own box"
-    assert _px(_rule(css, ".rev-t,.mk"), "min-width") >= 640
-    # ...and every Review card is drawn in such a box, markup card included (the page never scrolls sideways for a table)
-    js = (FRONTEND / "js" / "polish-estimate.js").read_text(encoding="utf-8")
-    assert js.count('<div class="tscroll"><table class="rev-t">') == 1 and js.count('<div class="tscroll"><table class="mk">') == 1
+    """Mutation: a box that does not scroll."""
+    assert scroll_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
 
 
 # ── the check can see the bug: the old rules, and each new rule undone, are found ────────────────────────────────────────────────
+# The page as it was at b14bc98 (round 4): percentage columns and a 560px minimum.
 OLD_RULES = """
     .rev-t,.mk{min-width:560px}
     .rev-t th:nth-child(2),.mk th:nth-child(2){width:20%}
@@ -124,40 +454,119 @@ OLD_RULES = """
     .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}
 """
 NEW = {
+    "min": ".rev-t,.mk{min-width:550px}",
+    "qty": ".rev-t th:nth-child(2),.mk th:nth-child(2){width:82px}",
+    "unit": ".rev-t th:nth-child(3),.mk th:nth-child(3){width:90px}",
+    "rate": ".rev-t th:nth-child(4),.mk th:nth-child(4){width:108px}",
+    "total": ".rev-t th:nth-child(5),.mk th:nth-child(5){width:126px}",
+    "words": ".rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}",
+}
+# The rules round 6 added or changed, exactly as the page has them, and what each was at 619f092 ("" where there was nothing).
+ROUND_6 = {
+    "rev_cells": (".rev-t td{padding:7px 8px;border-top:1px solid var(--line-2);color:var(--ink-v)}", ".rev-t td{padding:7px 14px;border-top:1px solid var(--line-2);color:var(--ink-v)}"),
+    "mk_cells": (".mk td{padding:7px 8px;border-top:1px solid var(--line-2)}", ".mk td{padding:7px 12px;border-top:1px solid var(--line-2)}"),
+    "heads": (".rev-t th,.mk th{padding:6px 8px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;",
+              ".rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;"),
+    "first": (".rev-t th:first-child,.mk th:first-child,.rev-t td:first-child,.mk td:first-child{padding-left:14px}", ""),
+    "last": (".rev-t th:last-child,.mk th:last-child,.rev-t td:last-child,.mk td:last-child{padding-right:14px}", ""),
+    "pin": (".rev-t th:nth-child(5),.mk th:nth-child(5),.rev-t td:nth-child(5),.mk td:nth-child(5){position:sticky;right:0}", ""),
+    "fill": (".rev-t td:nth-child(5),.mk td:nth-child(5){background:var(--card)}", ""),
+    "box": (".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:126px}",
+            ".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}"),
+    "focus": (".tscroll:has(td:nth-child(5):focus-within){scroll-padding-right:0}", ""),
+    "rev_table": (".rev-t{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}", ".rev-t{width:100%;border-collapse:collapse;font-size:12.5px}"),
+    "mk_table": (".mk{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;margin:0}", ".mk{width:100%;border-collapse:collapse;font-size:13px;margin:0}"),
+}
+AT_619F092 = {
     "min": ".rev-t,.mk{min-width:640px}",
     "qty": ".rev-t th:nth-child(2),.mk th:nth-child(2){width:15%}",
     "unit": ".rev-t th:nth-child(3),.mk th:nth-child(3){width:124px}",
     "rate": ".rev-t th:nth-child(4),.mk th:nth-child(4){width:132px}",
     "total": ".rev-t th:nth-child(5),.mk th:nth-child(5){width:132px}",
-    "words": ".rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}",
+    "words": NEW["words"],
 }
 
 
+def _once(page: str, old: str, new: str) -> str:
+    assert page.count(old) == 1, "%r appears %d times on the page, not once" % (old, page.count(old))
+    return page.replace(old, new)
+
+
+def page_at_619f092() -> str:
+    """The page with every rule round 6 touched put back as it was at 619f092 (the staging walk's page), each anchor required to be on the page exactly once."""
+    page = PAGE_PATH.read_text(encoding="utf-8")
+    for key, old in NEW.items():
+        page = _once(page, old, AT_619F092[key])
+    for old, new in ROUND_6.values():
+        page = _once(page, old, new)
+    return page
+
+
 def test_the_old_rules_are_found_to_cut_things_off():
-    """The page as it was at b14bc98 (its rules for the columns, the minimum and the Unit words), run through the same check: the Total and Unit columns are too narrow at the widths a
-    900 to 1000px window gives, which is the markup card's boxes and words the audit named."""
+    """The page as it was at b14bc98 (its rules for the columns, the minimum and the Unit words), run through the same check: the Total and Unit columns are too narrow at the narrowest table, which is
+    the markup card's boxes and words round 5's audit named."""
     page = PAGE_PATH.read_text(encoding="utf-8")
     old = page
     for key, line in NEW.items():
-        old = old.replace(line, "") if line in old else old
-    assert old != page
+        old = _once(old, line, "")
     old = old.replace("</style>", OLD_RULES + "</style>", 1)
     found = problems(old)
     assert any(p.startswith("Total column") for p in found), found
     assert any(p.startswith("Unit column") for p in found), found
 
 
-@pytest.mark.parametrize("rule,undone,starts", [
-    ("total", ".rev-t th:nth-child(5),.mk th:nth-child(5){width:14%}", "Total column"),
-    ("unit", ".rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}", "Unit column"),
-    ("words", ".rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}", "Unit column"),
-    ("min", ".rev-t,.mk{min-width:560px}", None),
-])
-def test_each_rule_of_the_fix_is_needed(tmp_path, rule, undone, starts):
-    """Put ONE of the new rules back as it was in a copy of the page: the check finds a column too narrow (the minimum width, undone alone, leaves the Item column or a box short at the
-    narrowest table). break_source refuses a rule that is not on the page exactly once, so none of these can pass by applying nowhere."""
-    frontend = break_source(tmp_path, "polish-estimate.html", NEW[rule], undone)
+def test_the_page_as_it_was_at_619f092_hides_the_total_column_at_916px_with_the_sidebar_open():
+    """The walk's finding, as a permanent test: with every rule round 6 touched put back, the table is 640px in a 575px box, 65px of it (the TOTAL column) are out of view at 916px with the sidebar open,
+    and the other four windows the walk recorded hide what it measured. The check names it, and says the Total column is not pinned."""
+    old = page_at_619f092()
+    f = facts(old)
+    assert f["min_width"] == OLD_MIN_WIDTH
+    for window, hidden in sorted(WALK.items()):
+        assert out_of_view(f, window, True) == hidden, window
+    found = problems(old)
+    assert any(p.startswith("the Total column is 81px out of view at a window 900px wide (sidebar open, scrollbar 15px)") for p in found), found
+    assert any(p.startswith("the table scrolls") and "not pinned" in p for p in found), found
+    assert any(p.startswith("pin: ") for p in found), found
+
+
+MUTATIONS = [
+    # (what is undone, the page's own line, what stands there instead, how the problem starts)
+    ("the 640px minimum is back", NEW["min"], ".rev-t,.mk{min-width:640px}", "the Total column is"),
+    ("a minimum under what the columns and Item need", NEW["min"], ".rev-t,.mk{min-width:500px}", "Item column"),
+    ("a Quantity column too narrow for its heading", NEW["qty"], ".rev-t th:nth-child(2),.mk th:nth-child(2){width:70px}", "Quantity column"),
+    ("the old Unit share", NEW["unit"], ".rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}", "Unit column"),
+    ("a Rate column too narrow for its box", NEW["rate"], ".rev-t th:nth-child(4),.mk th:nth-child(4){width:96px}", "Rate column"),
+    ("the old Total share", NEW["total"], ".rev-t th:nth-child(5),.mk th:nth-child(5){width:14%}", "Total column"),
+    ("Unit words that cannot wrap", NEW["words"], ".rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}", "Unit column"),
+    ("the old padding between the Review cells", ROUND_6["rev_cells"][0], ROUND_6["rev_cells"][1], "Unit column"),
+    ("the old padding between the markup cells", ROUND_6["mk_cells"][0], ROUND_6["mk_cells"][1], "Unit column"),
+    ("the old padding in the headers", ROUND_6["heads"][0], ROUND_6["heads"][1], "Quantity column"),
+    ("a wide inset at the card's right edge", ROUND_6["last"][0], ROUND_6["last"][0].replace("padding-right:14px", "padding-right:30px"), "Total column"),
+    ("a wide inset at the card's left edge", ROUND_6["first"][0], ROUND_6["first"][0].replace("padding-left:14px", "padding-left:40px"), "Item column"),
+    ("the Total cells are not pinned", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("position:sticky", "position:static"), "pin: the Total"),
+    ("the Total cells are pinned to the other edge", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("right:0", "left:0"), "pin: the Total"),
+    ("the pinned Total cells have no background", ROUND_6["fill"][0], ROUND_6["fill"][0].replace("background:var(--card)", "background:transparent"), "pin: a pinned Total cell"),
+    ("no scroll padding for the pinned column", ROUND_6["box"][0], ROUND_6["box"][1], "pin: the .tscroll box"),
+    ("a scroll padding narrower than the pinned column", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:126px", "scroll-padding-right:60px"), "pin: the .tscroll box"),
+    ("scroll padding while focus is in the pinned column", ROUND_6["focus"][0], ROUND_6["focus"][0].replace("scroll-padding-right:0", "scroll-padding-right:126px"), "pin: the .tscroll box keeps"),
+    ("collapsed borders on the Review tables", ROUND_6["rev_table"][0], ROUND_6["rev_table"][1], "pin: the .rev-t table"),
+    ("collapsed borders on the markup table", ROUND_6["mk_table"][0], ROUND_6["mk_table"][1], "pin: the .mk table"),
+    ("a card with no tint of its own", '.rev[data-rev="travel"]{--rev-band:var(--rev-travel-band);--rev-tot:var(--rev-travel-tot)}',
+     '.rev[data-rev="travel"]{--rev-band:var(--rev-travel-band)}', "pin: the travel card"),
+    ("a pinned Total column that eats the box", NEW["total"], ".rev-t th:nth-child(5),.mk th:nth-child(5){width:200px}", "the pinned Total column leaves"),
+    ("a box that does not scroll", ROUND_6["box"][0], ROUND_6["box"][0].replace("overflow-x:auto", "overflow-x:visible"), "the .tscroll box does not scroll sideways"),
+    # the box's width is read off the page's own layout: change the layout and the arithmetic moves with it
+    ("a section body padded 40px a side", ".sec-b{padding:18px 19px}", ".sec-b{padding:18px 40px}", "the Total column is"),
+    ("a page padded 50px a side", "padding:0 22px 132px}", "padding:0 50px 132px}", "the Total column is"),
+    ("a page column capped at 560px", ".wrap{max-width:1000px;margin:0 auto}", ".wrap{max-width:560px;margin:0 auto}", "the Total column is"),
+]
+
+
+@pytest.mark.parametrize("what,anchor,undone,starts", MUTATIONS, ids=[m[0] for m in MUTATIONS])
+def test_each_rule_of_the_fix_is_needed(tmp_path, what, anchor, undone, starts):
+    """Put ONE rule back as it was (or make it wrong) in a copy of the page: the check finds it, and says which kind of fault it is. break_source refuses an anchor that is not on the page exactly once,
+    so none of these can pass by applying nowhere."""
+    frontend = break_source(tmp_path, "polish-estimate.html", anchor, undone)
     found = problems((frontend / "polish-estimate.html").read_text(encoding="utf-8"))
-    assert found, "the check did not notice %s undone" % rule
-    if starts:
-        assert any(p.startswith(starts) for p in found), found
+    assert found, "the check did not notice: %s" % what
+    assert any(p.startswith(starts) for p in found), (what, found)

@@ -622,29 +622,44 @@
            background:var(--rev-band,var(--surf-low));font:600 12.5px var(--sans)}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
            cursor:pointer;text-decoration:underline}
-    .rev-t{width:100%;border-collapse:collapse;font-size:12.5px}
-    .rev-t td{padding:7px 14px;border-top:1px solid var(--line-2);color:var(--ink-v)}
+    .rev-t{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+    .rev-t td{padding:7px 8px;border-top:1px solid var(--line-2);color:var(--ink-v)}
     .rev-t td.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;
            color:var(--ink)}
     .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink);
            background:var(--rev-tot,transparent)}
     /* THE WORKING (Hanz, 2026-10-19): every Review table has a labelled header row, Item | Quantity | Unit | Rate | Total. The
-       table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page. */
-    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
-    /* 640 AND NOT 560 (2026-10-20 fifth audit): at about 916px the markup card cut off the Discount $ box, the Contingency and Fees boxes (a 104px box in a
-       column of 14% of the table, 78px at the old 560) and the "margin on cost" / "of subtotal + markups" words beside them. The three right-hand columns
-       now hold their boxes at every width the table can have, and below this width the table scrolls inside its own box instead of squeezing them. */
-    .rev-t,.mk{min-width:640px}
+       table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page.
+       THE SCROLL PADDING is the pinned Total column's width (see the pin below): a box tabbed into scrolls clear of that column, not under it. WHILE FOCUS IS IN THAT
+       COLUMN THE PADDING IS NOTHING: its boxes sit inside the padded-off band, so a focus or a keystroke in one would scroll the table to put it clear of itself (the
+       cost the sticky head found in a browser, see .v2head), and a pinned box is on screen already. */
+    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:126px}
+    .tscroll:has(td:nth-child(5):focus-within){scroll-padding-right:0}
+    /* 550: THE FOUR FIXED COLUMNS (below) AND 144px FOR ITEM, 122px of it room for words. It was 640 until the 2026-10-20 sixth round. Round 5 chose 640 for the
+       markup card's boxes, with columns wider than their contents need, and at 916px with the staff sidebar open the table's box is 575px: every card scrolled 65px
+       and the TOTAL column, the one figure the page is for, was the part out of view. 550 fits a 575px box (916px, sidebar open) and a 559px one (900px, sidebar open).
+       Below it the box scrolls and the Total column is pinned to its edge (below). backend/tests/test_v2_review_table_fits.py does this arithmetic on this CSS. */
+    .rev-t,.mk{min-width:550px}
     /* ONE SET OF COLUMNS FOR EVERY CARD (browser walk, 2026-10-20: each card sized its own, so Quantity and Unit wandered
-       from card to card). Fixed layout takes the widths from the header row. The Unit, Rate and Total columns are PIXELS, each wide enough for what
-       the markup card puts in it (a 104px box and the cell's own padding in Total, the % box in Rate, the words of Unit over two lines); Quantity is
-       a share of the table, and Item, which wraps, takes what is left. */
+       from card to card). Fixed layout takes the widths from the header row. Quantity, Unit, Rate and Total are PIXELS, each as wide as what the cards put in
+       it needs and no wider (the heading and a working line in Quantity, the longest word of Unit, which wraps, the % box and a twelve character figure in Rate,
+       and in Total the 104px box and the cell's padding); Item, which wraps, takes what is left. */
     .rev-t,.mk{table-layout:fixed}
-    .rev-t th:nth-child(2),.mk th:nth-child(2){width:15%}
-    .rev-t th:nth-child(3),.mk th:nth-child(3){width:124px}
-    .rev-t th:nth-child(4),.mk th:nth-child(4){width:132px}
-    .rev-t th:nth-child(5),.mk th:nth-child(5){width:132px}
-    .rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
+    .rev-t th:nth-child(2),.mk th:nth-child(2){width:82px}
+    .rev-t th:nth-child(3),.mk th:nth-child(3){width:90px}
+    .rev-t th:nth-child(4),.mk th:nth-child(4){width:108px}
+    .rev-t th:nth-child(5),.mk th:nth-child(5){width:126px}
+    /* THE CELLS' PADDING: 8px between columns and 14px at the card's two edges (the inset of its title). Padding is the one thing in a column that holds nothing,
+       and the table has no room to spare at 916px. */
+    .rev-t th:first-child,.mk th:first-child,.rev-t td:first-child,.mk td:first-child{padding-left:14px}
+    .rev-t th:last-child,.mk th:last-child,.rev-t td:last-child,.mk td:last-child{padding-right:14px}
+    /* THE TOTAL STAYS IN VIEW (2026-10-20 sixth round). Where the box is narrower than the table it scrolls, and the Total column, header and cells, is pinned to the
+       box's right edge, so the figure is on screen at every width down to a phone while Quantity, Unit and Rate scroll beneath it. The pinned cells are opaque (a
+       tinted row keeps its own tint: those rules weigh more), and the tables' borders are the cells' own (border-collapse above), because a collapsed border belongs
+       to the table and would not travel with a pinned cell. Where the table fits its box, a pinned cell is where it would have been. */
+    .rev-t th:nth-child(5),.mk th:nth-child(5),.rev-t td:nth-child(5),.mk td:nth-child(5){position:sticky;right:0}
+    .rev-t td:nth-child(5),.mk td:nth-child(5){background:var(--card)}
+    .rev-t th,.mk th{padding:6px 8px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
            text-transform:uppercase;color:var(--ink-v);background:var(--rev-band,var(--surf-low));white-space:nowrap}
     .rev-t th.r,.mk th.r{text-align:right}
     .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}
@@ -658,8 +673,8 @@
 
     /* The markup block, laid out like rows 64-82 of the Polish tab so an estimator who knows
        Kyle's sheet can read down it and recognise every line. */
-    .mk{width:100%;border-collapse:collapse;font-size:13px;margin:0}
-    .mk td{padding:7px 12px;border-top:1px solid var(--line-2)}
+    .mk{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;margin:0}
+    .mk td{padding:7px 8px;border-top:1px solid var(--line-2)}
     .mk td.pct,.mk td.amt{text-align:right;font-family:var(--mono);
         font-variant-numeric:tabular-nums}
     .mk td.pct{color:var(--ink-3);width:104px}
