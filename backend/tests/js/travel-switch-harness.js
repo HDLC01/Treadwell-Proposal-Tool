@@ -508,6 +508,117 @@ async function main() {
       strayAt: b.doc.querySelectorAll("[data-trv-stray]").map((el) => el.getAttribute("data-trv-stray")), rows: labor.length };
   });
 
+  // ═══ 10. THE FOURTH AUDIT (2026-10-20, of c0255de) ═══════════════════════════════════════════════════════════════════════════════════════════
+  // (a) AN OPTION'S TRAVEL LABOR FOLLOWS THE MILES the estimator types on the Labor step: the audit's own probe. A far Polish bid (crew 4 x 12, 190 miles), its sheet copied as an option,
+  //     then the miles corrected to 50, to 300, cleared, and typed again. The base and the option are priced by the page at every step. (Clearing the miles asks the lookup again; it
+  //     answers nothing here, so the job is left with no distance.)
+  const totals = (b, tab) => ({ base: b.api.bid().total, option: (b.api.sectionBids()[tab] || {}).total });
+  /** A page on a draft whose lookup answer can be changed afterwards (`b.opts.distance`): the page reads it each time it asks. */
+  const openWith = async (blob, extra) => {
+    const opts = Object.assign({ blob: blob, labor: LABOR }, extra || {});
+    const b = P.build(opts);
+    await b.api.init();
+    await settle();
+    b.opts = opts;
+    return b;
+  };
+  await section("optionFollowsMiles", async () => {
+    const polish = await newBid(polishDraft(), ["Polish", "polishing", "4", "12"]);
+    const b = await openWith(clone(polish.saved), { distance: { ok: true, miles: 300, reason: "" } });
+    b.api.go(1);
+    await settle();
+    await copyOf(b, "Polish");
+    b.clock.fire();
+    const copyTab = B.sectionsOf(b.api.root()).filter((e) => e.kind === "option")[0].tab;
+    const snap = () => ({ miles: b.api.root().distance ? b.api.root().distance.miles : null, totals: totals(b, copyTab), baseRow: rowFacts(rowIn(b.api.root())),
+      optionRow: rowFacts(rowIn(secOf(b.api.root(), copyTab))) });
+    const res = { copyTab: copyTab, start: snap() };
+    b.api.show(B.ROOT_TAB);
+    b.api.go(1);
+    const type = async (v) => { P.typeInto(b, "[data-dist-miles]", v); await settle(); };
+    await type("50"); res.local = snap();
+    await type("300"); res.farther = snap();
+    b.opts.distance = LOST;
+    await type(""); res.cleared = snap();
+    await type("190"); res.again = snap();
+    // ...and the same through the page's own save: what the draft saved, reopened, is what the page showed (the option's row included)
+    b.clock.fire();
+    const reopened = await open(clone(b.store.blob), { distance: { ok: true, miles: 300, reason: "" } });
+    reopened.api.go(1);
+    await settle();
+    res.reopened = { totals: totals(reopened, copyTab), optionRow: rowFacts(rowIn(secOf(reopened.api.root(), copyTab))), saves: reopened.rec.saves.length, armed: reopened.clock.armed() };
+    return res;
+  });
+  // (b) THE AUDIT'S SECOND ROUTE, on the page: a Combo, Epoxy made the base (Polish becomes an option), the bid reopened and Epoxy's crew typed, Polish made the base again (Epoxy is the
+  //     option now, holding the drive it was filled with), then the miles corrected.
+  await section("demotedOptionFollowsMiles", async () => {
+    const combo = await newBid(comboDraft(), ["Polish", "polishing", "4", "12"]);
+    const makeBase = async (page, value) => {
+      page.doc.fire("change", { target: P.need(page, '[data-sh-base="' + value + '"]') });
+      P.clickOn(page, '[data-sh-act="base-yes"]');
+      await settle();
+      page.clock.fire();
+    };
+    let b = await open(clone(combo.saved), { distance: { ok: true, miles: 300, reason: "" } });
+    b.api.go(1);
+    await settle();
+    await makeBase(b, "Epoxy");
+    const epoxyBase = { carrier: B.travelCarrier(b.api.root()), kinds: B.sectionsOf(b.api.root()).map((e) => [e.tab, e.kind]) };
+    b = await open(clone(b.store.blob), { distance: { ok: true, miles: 300, reason: "" } });
+    b.api.show("Epoxy");
+    b.api.go(1);
+    typeCrew(b, "Epoxy", "epoxy-install", "5", "12");
+    b.clock.fire();
+    await makeBase(b, "Polish");
+    const snap = () => ({ carrier: B.travelCarrier(b.api.root()), kinds: B.sectionsOf(b.api.root()).map((e) => [e.tab, e.kind]), totals: totals(b, "Epoxy"),
+      polishRow: rowFacts(rowIn(b.api.root())), epoxyRow: rowFacts(rowIn(secOf(b.api.root(), "Epoxy"))) });
+    const res = { epoxyBase: epoxyBase, start: snap() };
+    b.api.show(B.ROOT_TAB);
+    b.api.go(1);
+    P.typeInto(b, "[data-dist-miles]", "50"); await settle(); res.local = snap();
+    P.typeInto(b, "[data-dist-miles]", "300"); await settle(); res.farther = snap();
+    return res;
+  });
+  // (c) A TYPED RATE FOLLOWS THE JOB'S DRIVE (the audit's probe): $40 typed on Polish's Travel Labor, the guys and hours left on the distance; each job type reopens the saved bid.
+  await section("typedRateOnThePage", async () => {
+    const p = await newBid(polishDraft(), ["Polish", "polishing", "4", "12"]);
+    const here = await reopenAs(p.saved, "polish");
+    const i = idxIn(here.api.root(), "travel");
+    P.typeInto(here, '[data-lab="' + i + '"][data-k="rate"]', "40");
+    here.clock.fire();
+    const carrierRow = (b) => { const m = b.api.root(); const car = B.travelCarrier(m); const r = rowIn(secOf(m, car)); return { carrier: car, row: rowFacts(r), rate: r ? r.rate : null }; };
+    const res = { polish: carrierRow(here) };
+    const crewOf = { epoxy: ["Epoxy", "epoxy-install"], combo: ["Polish", "polishing"], polish: ["Polish", "polishing"] };
+    for (const jt of ["epoxy", "combo", "polish"]) {
+      const s = await reopenAs(here.store.blob, jt);
+      s.api.show(crewOf[jt][0]);
+      s.api.go(1);
+      typeCrew(s, crewOf[jt][0], crewOf[jt][1], "4", "12");
+      res[jt] = carrierRow(s);
+    }
+    return res;
+  });
+  // (d) A SAVED BID WHOSE ACTIVE SECTION'S LABOR IS NOT A LIST OPENS: syncAutoGuys threw on it, as the page opened, so the estimator got no estimate at all.
+  await section("corruptLabor", async () => {
+    const combo = await newBid(comboDraft(), ["Polish", "polishing", "4", "12"]);
+    const res = {};
+    for (const kv of [["string", "x"], ["number", 5], ["object", {}], ["boolean", true]]) {
+      res[kv[0]] = {};
+      for (const as of ["combo", "polish", "epoxy"]) {
+        const blob = clone(combo.saved);
+        blob.polish_estimate.tabs.Epoxy.labor = kv[1];
+        try {
+          const b = await reopenAs(blob, as);
+          const main = b.doc.getElementById("main");
+          res[kv[0]][as] = { opened: true, shown: !!main && !main.hidden, carrier: B.travelCarrier(b.api.root()), root: rowFacts(rowIn(b.api.root())) };
+        } catch (e) {
+          res[kv[0]][as] = { opened: false, error: String((e && e.message) || e).slice(0, 140) };
+        }
+      }
+    }
+    return res;
+  });
+
   return out;
 }
 

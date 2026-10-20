@@ -33,6 +33,8 @@ RULES = {
     "ONE_ROW": "a section holds two Travel Labor rows",
     "PLAIN_REOPEN": "a plain reopen armed a save, wrote something, or moved a row",
     "REOPEN_AGREES": "the price (or the rows) the draft saved is not what a plain reopen of it shows",
+    "OPT_FOLLOWS": "after the miles were typed, an option's Travel Labor does not hold what the answer gives (the hours, its own crew, or the fill taken back whole under 70 miles)",
+    "OPT_OWNED": "after the miles were typed, an option's switched-off row moved, or a box the estimator typed in or cleared on it changed",
     "CRASH": "the page threw",
 }
 

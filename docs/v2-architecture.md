@@ -867,18 +867,23 @@ The job's drive is one trip, so ONE Travel Labor row is priced for it, on the se
 job restructures (the job type is switched in the session, or the Sheets panel makes another sheet the base) the page calls
 `followDistance(model, fromTab)` (it names the old carrier in `fromTab`; left out, the stranded row is looked for), whether or not
 the carrier moved, and the rows are settled in this order: the old carrier's row goes with the carrier when the new carrier has
-none (Combo to Epoxy); what the estimator said on the old carrier's row (typed figures, a cleared box, a switch turned off) follows
-the job's drive to a new carrier whose own row nobody touched (the two rows change places, so every section keeps its one row;
-if both are the estimator's both stay); a row nobody touched is filled by the rule, only when the carrier moved (a Combo made
-Polish fills nothing); every Travel Labor row the distance filled and nobody touched, on any section that is not the carrier and
-is not an option, off sections included, is emptied with its fill markers (Epoxy to Polish to Combo priced the drive twice until
-off sections were included); and the guys follow the crew of the bid as it is now (a Combo made Polish saved a price a plain reopen
-contradicted until they did). A Gyp carrier is never filled, whatever row lands on it. A plain reopen is not a restructure and moves
-nothing. A distance lookup that is still on its way lands on the whole model whatever section is on show or whatever a Sheets action
-has replaced since. An option is priced apart: its Travel Labor row is its own and its guys follow its own labor lines
-(`ownCrewSize`). Held by `tests/test_polish_travel_switch.py` and `tests/test_polish_travel_hours.py`, and over every sequence of
-switches (job types, the estimator's own say, the Sheets panel's base changes, a local job, no distance) by
-`tests/js/travel-sequence-harness.js` through `tests/test_polish_travel_sequences*.py`.
+none (Combo to Epoxy); what the estimator said on the old carrier's row (typed figures, a cleared box, a rate typed over the line's
+default, a switch turned off) follows the job's drive to a new carrier whose own row nobody touched (the two rows change places,
+so every section keeps its one row; if both are the estimator's both stay); a row nobody touched is filled by the rule, only when
+the carrier moved (a Combo made Polish fills nothing); the guys follow the crew of the bid as it is now (a Combo made Polish saved
+a price a plain reopen contradicted until they did); and then every Travel Labor row the distance filled and nobody touched, on
+any section that is not the carrier and is not an option, off sections included, is emptied with its fill markers (Epoxy to Polish
+to Combo priced the drive twice until off sections were included). The give-back comes after the guys because "a copy of the
+carrier's row" is told by comparing them. A Gyp carrier is never filled, whatever row lands on it. A plain reopen is not a
+restructure and moves nothing. A distance lookup that is still on its way lands on the whole model whatever section is on show or
+whatever a Sheets action has replaced since. An option is priced apart: its Travel Labor row is its own, its guys follow its own labor
+lines (`ownCrewSize`), and it follows every distance ANSWER (`followDistanceOptions`, called by `applyDistance` and `clearDistance`)
+by the carrier's rule: a box nobody typed in takes the answer (an empty row too), what the estimator typed in or cleared and a row
+switched off are left alone, and the fill is taken back whole when the job goes local or the miles are cleared (a Gyp option is left
+alone, as a Gyp carrier is). Corrected to 50 miles, a far bid's copy no longer keeps pricing the 6.5 hour drive the base dropped, and
+at 300 miles it moves to 10 hours with the base's. Held by `tests/test_polish_travel_switch.py` and `tests/test_polish_travel_hours.py`,
+and over every sequence of switches (job types, the estimator's own say, the Sheets panel's base changes, the miles corrected after
+any of them, a local job, no distance) by `tests/js/travel-sequence-harness.js` through `tests/test_polish_travel_sequences*.py`.
 
 **Done.**
 

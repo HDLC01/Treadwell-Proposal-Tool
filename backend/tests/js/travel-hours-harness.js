@@ -731,4 +731,225 @@ out.autoFilled.estimators = {
   noRow: later("travelRowIsTheEstimators")(null),
 };
 
+// ═══ THE FOURTH AUDIT (2026-10-20, of c0255de): an option's Travel Labor follows the answers, the settling's order, a typed rate, the repeat's every clause, a malformed saved bid ═══
+/** A scenario that throws reports `{ error }` instead of stopping the whole run, so a tree without the code fails an assertion with a reason. */
+const scenario = (fn) => { try { return fn(); } catch (e) { return { error: String((e && e.stack) || e) }; } };
+const optFacts = (j) => {
+  const r = travelIn(j.m, j.id);
+  return r ? Object.assign(facts(j.m, r), { typed: r.guys_typed === true, hoursTyped: r.hours_typed === true, keys: Object.keys(r).sort() }) : null;
+};
+
+// 17. THE DISTANCE ANSWER REACHES AN OPTION'S TRAVEL LABOR. An option is priced apart, for its own crew, and a copy of the carrier (or an old base the Sheets panel demoted) holds a Travel Labor
+//     row of its own. Before, only the carrier's row followed an answer: a far Polish bid (4 guys, 190 miles) copied as an option and corrected to 50 miles dropped the base's drive and
+//     went on pricing the option's 6.5 hours, and at 300 miles the base went to 10 hours while the option stayed at 6.5. An option's row follows the same answers by the same rule, on its
+//     OWN crew: a box nobody typed in takes the answer (an empty row too), a box typed in or cleared and a row switched off are left alone, and a row the distance filled is taken back
+//     whole (empty, no marker) when the job goes local or the miles are cleared.
+const optionJob = (ownGuys, miles) => {
+  const m = crewed(newBid()); ask(m, miles === undefined ? 190 : miles);
+  const made = B.copySection(m, "Polish", { state: {} });
+  const n = made.model;
+  if (ownGuys) row(sectionOf(n, made.id), "polishing").guys = String(ownGuys);
+  B.syncAutoGuys(n);
+  return { m: n, id: made.id };
+};
+const baseAndOption = (j) => ({ base: factsIn(j.m, B.ROOT_TAB), option: optFacts(j), kinds: tabsOf(j.m) });
+out.optionsFollow = scenario(() => {
+  const j = optionJob(6);                          // the copy's own Polishing has 6 guys; the job's crew (the base's) is 4
+  const res = { start: baseAndOption(j), crewOfJob: B.crewSize(j.m), ownCrew: later("ownCrewSize")(j.m, sectionOf(j.m, j.id).labor) };
+  ask(j.m, 300); res.farther = baseAndOption(j);
+  ask(j.m, 50); res.local = baseAndOption(j);
+  ask(j.m, 190); res.farAgain = baseAndOption(j);
+  clear(j.m); res.cleared = Object.assign(baseAndOption(j), { distance: j.m.distance === undefined ? null : j.m.distance });
+  // a figure typed digit by digit, as the page applies every keystroke: 3 and 30 are local jobs, 300 is far again, and the option's drive comes back with it
+  ask(j.m, 3); ask(j.m, 30); res.digitsLocal = baseAndOption(j);
+  ask(j.m, 300); res.digitsFar = baseAndOption(j);
+  // ...the answer alone, with no syncAutoGuys after it, fills the option's guys itself, on its own lines
+  const bare = optionJob(6); B.applyDistance(bare.m, { miles: 300, source: "typed", key: "" });
+  res.bare = optFacts(bare);
+  return res;
+});
+// ...what the estimator typed in, cleared, or switched off on the option is left alone by every answer (the copy carries the row the carrier had).
+out.optionsOwned = scenario(() => {
+  const variants = {
+    typed: (m) => { typeIn(m, "guys", "3"); typeIn(m, "days", "5"); },
+    clearedHours: (m) => typeIn(m, "days", ""),
+    clearedGuys: (m) => typeIn(m, "guys", ""),
+    off: (m) => { trvOf(m).enabled = false; },
+  };
+  const res = {};
+  Object.keys(variants).forEach((name) => {
+    const m = crewed(newBid()); ask(m, 190);
+    variants[name](m);
+    const made = B.copySection(m, "Polish", { state: {} });
+    const j = { m: made.model, id: made.id };
+    const steps = { start: optFacts(j) };
+    [["far300", 300], ["local50", 50], ["far190", 190]].forEach((kv) => { ask(j.m, kv[1]); steps[kv[0]] = optFacts(j); });
+    clear(j.m); steps.cleared = optFacts(j);
+    res[name] = steps;
+  });
+  return res;
+});
+// ...a sheet that was the base and was demoted on the Sheets panel holds the drive it was filled with, and it follows too (the audit's second route: a Combo, Epoxy made the base, the bid
+//    reopened, Polish made the base again, then the miles corrected). makeBase is what the page does for a base change: pickBase, then the settling, then the sync.
+const makeBase = (m, ids) => {
+  const before = B.travelCarrier(m);
+  const n = B.pickBase(m, ids, { state: {} }).model;
+  B.followDistance(n, before);
+  B.syncAutoGuys(n);
+  return n;
+};
+const reopenedModel = (m) => { const n = B.migrateModel(clone(m)); B.syncAutoGuys(n); return n; };
+out.optionsDemoted = scenario(() => {
+  const both2 = (m) => ({ carrier: B.travelCarrier(m), kinds: tabsOf(m), polish: factsIn(m, B.ROOT_TAB), epoxy: factsIn(m, "Epoxy") });
+  const cj = combo(4, 5); ask(cj, 190);
+  const res = { combo: both2(cj) };
+  let m = makeBase(cj, ["Epoxy"]);                  // Polish demoted to an option; Epoxy carries the drive (the row moved to it)
+  res.epoxyBase = both2(m);
+  m = reopenedModel(m);                              // a reopen: migrateModel gives the Polish root the blank Travel Labor row it no longer has
+  m = makeBase(m, ["Polish"]);                       // Epoxy demoted to an option, still holding the drive it was filled with; Polish carries
+  res.polishBase = both2(m);
+  ask(m, 50); res.local = both2(m);
+  ask(m, 300); res.farther = both2(m);
+  return res;
+});
+// ...an option's EMPTY row is filled by a far answer (the copy was made on a local job), and a Gyp option is never filled: its drive is typed, like a Gyp carrier's.
+out.optionBlankFilled = scenario(() => {
+  const m = crewed(newBid()); ask(m, 50);
+  const made = B.copySection(m, "Polish", { state: {} });
+  const before = optFacts({ m: made.model, id: made.id });
+  ask(made.model, 190);
+  return { before: before, base: factsIn(made.model, B.ROOT_TAB), option: optFacts({ m: made.model, id: made.id }) };
+});
+out.optionGyp = scenario(() => {
+  const g = B.activateSection(crewed(newBid()), GYP, "option", {});
+  g.tabs[GYP].labor = [{ id: "pour", label: "Pour", guys: "4", days: "12", rate: 33, unit: "hours" },
+    { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: false }];
+  const before = JSON.stringify(g.tabs[GYP].labor);
+  ask(g, 190);
+  const far = JSON.stringify(g.tabs[GYP].labor);
+  ask(g, 50);
+  return { untouchedFar: far === before, untouchedLocal: JSON.stringify(g.tabs[GYP].labor) === before, base: factsIn(g, B.ROOT_TAB) };
+});
+
+// 18. THE SETTLING'S ORDER: the guys first, then the take-back (the fourth audit). A switched-off Travel Labor row on the carrier, and an exact copy of it on a base beside the carrier whose guys are
+//     those of a crew since gone (3, where the crew is 4 now): the take-back compares the guys, so it has to run after the sync has put both on the crew. Before the sync the two read 4 and 3, the copy
+//     survived beside the carrier's, and the sync then made them the same. The row it hands back is switched ON again and empty (releaseTravelRow).
+out.duplicateOff = scenario(() => {
+  const m = combo(4, 4); ask(m, 190);
+  const root = travelIn(m, B.ROOT_TAB);
+  root.enabled = false;
+  const dup = clone(root); dup.guys = 3;
+  m.tabs.Epoxy.labor = m.tabs.Epoxy.labor.concat([dup]);
+  B.followDistance(m, B.ROOT_TAB);                  // a restructure that keeps the carrier (a Combo made Polish and back is one)
+  return { root: factsIn(m, B.ROOT_TAB), rootMarks: marksIn(m, B.ROOT_TAB), epoxy: factsIn(m, "Epoxy"), epoxyMarks: marksIn(m, "Epoxy"), epoxyRows: countIn(m, "Epoxy"), drive: drive$(m) };
+});
+
+// 19. A COPY THAT REPEATS THE CARRIER'S ROW IS GIVEN BACK, AND ONLY ONE THAT REPEATS IT IN EVERY RESPECT (the fourth audit: the clauses were not pinned one by one). The carrier's Travel Labor is typed
+//     3 x 5; its sheet is copied and the copy made a base beside it; ONE thing is changed on the copy's row, and only that. The row that is changed stays (the estimator's own figures); the identical
+//     one is the copy's leftover and is emptied and switched on. `typed` is the guys box with its marker, `hoursTyped` the hours box with its marker.
+out.repeatVariants = scenario(() => {
+  const variant = (patch) => {
+    const m = crewed(newBid()); ask(m, 190);
+    typeIn(m, "guys", "3"); typeIn(m, "days", "5");
+    const made = B.copySection(m, "Polish", { state: {} });
+    const n = made.model;
+    if (patch) patch(travelIn(n, made.id));
+    n.tabs[made.id].kind = "base";
+    B.takeBackStrayTravel(n);
+    return { copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), root: factsIn(n, B.ROOT_TAB), drive: drive$(n) };
+  };
+  return {
+    same: variant(null),
+    guysOnly: variant((r) => { r.guys = "2"; }),
+    hoursOnly: variant((r) => { r.days = "4"; }),
+    autoOnly: variant((r) => { r.guys_auto = true; }),
+    offOnly: variant((r) => { r.enabled = false; }),
+    guysMarkerOnly: variant((r) => { delete r.guys_typed; }),
+    hoursMarkerOnly: variant((r) => { delete r.hours_typed; }),
+    // ...and a switched-off carrier whose copy is switched off too is the same row: given back, and switched on again (releaseTravelRow)
+    bothOff: (() => {
+      const m = crewed(newBid()); ask(m, 190);
+      typeIn(m, "guys", "3"); typeIn(m, "days", "5"); trvOf(m).enabled = false;
+      const made = B.copySection(m, "Polish", { state: {} });
+      const n = made.model; n.tabs[made.id].kind = "base";
+      B.takeBackStrayTravel(n);
+      return { copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), root: factsIn(n, B.ROOT_TAB), rootMarks: marksIn(n, B.ROOT_TAB) };
+    })(),
+  };
+});
+
+// 20. A TYPED RATE FOLLOWS THE JOB'S DRIVE, like typed guys and hours (the fourth audit): $40 typed on Polish's Travel Labor (the guys and the hours left on the distance) read $33 on Epoxy after the job type
+//     was switched. A new bid's row carries the rate it was filled with (`rate_default`, stamped on the page); the rate it holds over that default is the estimator's.
+out.typedRate = scenario(() => {
+  const far = (value) => { const m = crewed(newBid()); trvOf(m).rate_default = 33; ask(m, 190); if (value !== null) B.setLaborRate(trvOf(m), value); return m; };
+  const rateFacts = (m, tab) => { const r = travelIn(m, tab); return r ? { rate: r.rate, marked: r.rate_typed === true, hours: r.days, guys: r.guys, follow: r.guys_follow === undefined ? null : r.guys_follow, cost: B.laborCost(r) } : null; };
+  const trip = (m) => {
+    const n = switchSeeded(m, "epoxy");
+    row(n.tabs.Epoxy, "epoxy-install").guys = "4"; row(n.tabs.Epoxy, "epoxy-install").days = "12"; B.syncAutoGuys(n);
+    const toEpoxy = { epoxy: rateFacts(n, "Epoxy"), root: rateFacts(n, B.ROOT_TAB), drive: drive$(n), carrier: B.travelCarrier(n) };
+    ask(n, 300);                                     // a later answer moves the hours, never the rate
+    const later300 = { epoxy: rateFacts(n, "Epoxy") };
+    const back = switchSeeded(n, "polish");
+    return { toEpoxy: toEpoxy, later300: later300, backToPolish: { root: rateFacts(back, B.ROOT_TAB), epoxy: rateFacts(back, "Epoxy"), drive: drive$(back), carrier: B.travelCarrier(back) } };
+  };
+  const res = { typed40: trip(far("40")), markedAtDefault: trip(far("33")), untouched: trip(far(null)) };
+  // ...a row that was never stamped with a default (the model's own older row, which the Polish root of an Epoxy or Gyp job holds, and a bid saved before the stamp): a rate typed over it
+  //    is text, so it is the estimator's all the same; a number over a default nobody knows says nothing, and stays behind with the row the old carrier is given back
+  const farUnstamped = (value) => { const m = crewed(newBid()); ask(m, 190); B.setLaborRate(trvOf(m), value); return m; };
+  res.unstampedText = trip(farUnstamped("40"));
+  res.unstampedNumber = trip(farUnstamped(40));
+  // ...both rows carry a typed rate (Epoxy $40, the Polish root $45): neither is the other's to take, both stay, and the drive is priced once, on the carrier, at ITS rate
+  const both = epoxyJob();
+  { const e = travelIn(both, "Epoxy"); e.rate_default = 33; B.setLaborRate(e, "40"); const p = travelIn(both, B.ROOT_TAB); p.rate_default = 33; B.setLaborRate(p, "45"); }
+  const bothTo = switchTo(both, "combo");
+  row(bothTo, "polishing").guys = "4"; row(bothTo, "polishing").days = "12"; B.syncAutoGuys(bothTo);
+  res.bothTyped = { root: rateFacts(bothTo, B.ROOT_TAB), epoxy: rateFacts(bothTo, "Epoxy"), drive: drive$(bothTo) };
+  return res;
+});
+out.rateRows = {
+  typedOverDefault: later("travelRateIsTyped")({ rate: 40, rate_default: 33 }),
+  typedText: later("travelRateIsTyped")({ rate: "40", rate_default: 33 }),
+  atDefault: later("travelRateIsTyped")({ rate: 33, rate_default: 33 }),
+  markedAtDefault: later("travelRateIsTyped")({ rate: 33, rate_default: 33, rate_typed: true }),
+  blank: later("travelRateIsTyped")({ rate: "", rate_default: 33 }),
+  zero: later("travelRateIsTyped")({ rate: 0, rate_default: 33 }),
+  noDefaultAtShipped: later("travelRateIsTyped")({ rate: 33 }),
+  noDefaultOther: later("travelRateIsTyped")({ rate: 40 }),
+  noDefaultText: later("travelRateIsTyped")({ rate: "40" }),
+  noRow: later("travelRateIsTyped")(null),
+  // a row whose only hand on it is a typed rate is the estimator's (it follows the carrier) and is still a row the distance filled (it is taken back and filled like any other)
+  estimatorsFilled: later("travelRowIsTheEstimators")({ guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5, rate: 40, rate_default: 33 }),
+  autoFilledStill: later("travelRowIsAutoFilled")({ guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5, rate: 40, rate_default: 33 }),
+  estimatorsAtDefault: later("travelRowIsTheEstimators")({ guys: 4, days: 6.5, guys_auto: true, guys_follow: "crew", hours_seed: 6.5, rate: 33, rate_default: 33 }),
+};
+
+// 21. A SAVED BID IS WHATEVER WAS SAVED (the fourth audit): a section whose `labor` is not a list (migrateModel carries `tabs` through as they came) must not make the settling, the sync or an answer throw
+//     (the page runs them as it opens: a throw is a blank estimate), and the sections that can be read are settled all the same.
+out.corruptLabor = scenario(() => {
+  const res = {};
+  [["string", "x"], ["number", 5], ["object", {}], ["boolean", true]].forEach((kv) => {
+    const run = (calls, k, fn) => { try { fn(); calls[k] = null; } catch (e) { calls[k] = String((e && e.message) || e); } };
+    // the corrupt section is a BASE (it is part of every sum) ...
+    const m = comboJob();
+    m.tabs.Epoxy.labor = kv[1];
+    const calls = {};
+    run(calls, "sync", () => B.syncAutoGuys(m));
+    run(calls, "settle", () => B.followDistance(m, B.ROOT_TAB));
+    run(calls, "settleMoved", () => B.followDistance(m, "Epoxy"));
+    run(calls, "answer", () => B.applyDistance(m, { miles: 300, source: "typed", key: "" }));
+    const settled = factsIn(m, B.ROOT_TAB);
+    run(calls, "cleared", () => B.clearDistance(m));
+    // ... and again where it is an OPTION (an answer reaches the options too)
+    const o = optionJob(6);
+    sectionOf(o.m, o.id).labor = kv[1];
+    const optionCalls = {};
+    run(optionCalls, "sync", () => B.syncAutoGuys(o.m));
+    run(optionCalls, "answer", () => B.applyDistance(o.m, { miles: 300, source: "typed", key: "" }));
+    const optionBase = factsIn(o.m, B.ROOT_TAB);
+    run(optionCalls, "cleared", () => B.clearDistance(o.m));
+    res[kv[0]] = { calls: calls, settledRoot: settled, optionCalls: optionCalls, optionBase: optionBase };
+  });
+  return res;
+});
+
 console.log(JSON.stringify(out));

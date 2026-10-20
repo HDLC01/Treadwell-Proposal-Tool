@@ -925,8 +925,9 @@
       var l = model.travel[k];
       if (l && l.hand !== true) l.enabled = far;
     });
-    // Travel Labor's own two boxes follow the answer as well (Hanz, 2026-10-20).
+    // Travel Labor's own two boxes follow the answer as well (Hanz, 2026-10-20), the carrier's and then every option's own.
     followDistanceHours(model, miles);
+    followDistanceOptions(model, miles);
     return model;
   }
 
@@ -1098,16 +1099,28 @@
    *  is the row filled. Pass the WHOLE model: a section view (sectionView) answers `labor` from the section on show, which is
    *  not the carrier's when another section is open. A Gyp carrier is left alone: its crew is priced by the hour in ten hour
    *  days, and the Gyp sheet works its own drive time per mobilization (js/gyp-takeoff.js sheetHours), so a Gyp bid's Travel
-   *  Labor is typed. */
+   *  Labor is typed.
+   *
+   *  THIS FUNCTION IS THE CARRIER'S ROW. A sheet that is an option has a Travel Labor row of its own when it is a copy of the carrier or was the base before a Sheets
+   *  base pick, and that row follows the same answers by the same rule, on its own crew: followDistanceOptions. */
   function followDistanceHours(model, miles) {
     var held = travelLaborHeld(model);
     if (!held) return;
-    var row = held.row;
+    followDistanceOnRow(model, held.row, held.rows, miles, false);
+  }
+
+  /** THE RULE ABOVE, FOR ONE TRAVEL LABOR ROW: `row`, one of the labor lines `rows` (the older man-days auto counts the others' man-days). The carrier's row is the
+   *  job's drive, and its guys are the crew of the bid (crewSize). An OPTION's row (`own`) is its own: its guys are its own section's lines' most (ownCrewSize),
+   *  and when the job goes local, or the miles are cleared, a row the distance filled and nobody touched gives the fill back WHOLE (empty, every marker gone:
+   *  clearQuantities), as every row off the carrier does (takeBackStrayTravel), where the carrier's keeps the crew marker and loses only the hours. A box the
+   *  estimator typed in or cleared, and a row they switched off, are left alone in either. MUTATES the row. */
+  function followDistanceOnRow(model, row, rows, miles, own) {
     if (!rowOn(row)) return;   // switched off: no fill and no take-back
     var hours = driveHoursFor(miles), wrote = driveHoursAreTools(row);
     if (hours === "") {
-      // Local, or no distance: only the hours the tool wrote go back to empty; typed ones stay.
-      if (wrote) { row.days = ""; row.hours_seed = ""; }
+      // Local, or no distance: only the hours the tool wrote go back to empty; typed ones stay. (An option's row the distance filled, and nobody touched, goes back whole.)
+      if (own && travelRowIsAutoFilled(row)) clearQuantities(row);
+      else if (wrote) { row.days = ""; row.hours_seed = ""; }
       return;
     }
     // A far job. Hours: a box nobody has typed in takes the answer when it is empty or still the tool's own figure.
@@ -1117,8 +1130,31 @@
     if (!row.guys_typed && !row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }
     // A row on the older man-days auto that this answer fills goes on the crew's size too (see above): the marker is what moves it.
     if (!row.guys_typed && row.guys_auto && !row.guys_follow && fills) row.guys_follow = "crew";
-    if (followsCrew(row)) row.guys = crewSize(model);
-    else if (row.guys_auto) row.guys = travelManDays(held.rows);   // the older auto the answer did not fill: the man-days, as syncAutoGuys keeps them
+    if (followsCrew(row)) row.guys = own ? ownCrewSize(model, rows) : crewSize(model);
+    else if (row.guys_auto) row.guys = travelManDays(rows);   // the older auto the answer did not fill: the man-days, as syncAutoGuys keeps them
+  }
+
+  /** THE DISTANCE ANSWER REACHES AN OPTION'S TRAVEL LABOR TOO (the 2026-10-20 fourth audit). An option is priced apart, for its own crew, with its own Lodging and Per
+   *  Diem and, when it was copied from the carrier or was the base before a Sheets base pick, its own Travel Labor row. That row is a drive like the carrier's and follows
+   *  the distance like it. Before, only the carrier's row followed: a far Polish bid (4 guys, 190 miles) copied as an option and corrected to 50 miles dropped the base's
+   *  drive ($30,872) and went on pricing 4 x 6.5 x $33 on the option ($32,632), and at 300 miles the base went to 10 hours while the option stayed at 6.5.
+   *
+   *  EVERY TRAVEL LABOR ROW OF EVERY SECTION THAT IS AN OPTION follows the rule of the carrier's row (followDistanceOnRow), with its own crew: a box nobody typed in takes the
+   *  answer (an option's empty row too, so 300 miles typed after 50 fills it again), a box typed in or cleared and a row switched off are left alone, and a row the distance
+   *  filled and nobody touched is taken back whole when the job goes local or the miles are cleared. A Gyp section is left alone, like a Gyp carrier: its drive is typed. The
+   *  section that carries the job's travel is the carrier's (followDistanceHours). The one-drive rule is about the bases; an option still prices its own drive.
+   *  Called with every ANSWER (applyDistance, clearDistance) and with nothing else: a restructure settles the bases (followDistance). MUTATES the model; pass the WHOLE model. */
+  function followDistanceOptions(model, miles) {
+    var entries = readableSections(model);
+    if (entries === null) return;
+    var carrier = travelCarrier(model);
+    entries.forEach(function (e) {
+      if (e.kind !== "option" || e.tab === carrier || e.layout === "gyp" || !isObject(e.section)) return;
+      var rows = laborLinesOf(e.section);
+      rows.forEach(function (r) {
+        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true);
+      });
+    });
   }
 
   /** THE JOB'S ONE DRIVE, SETTLED AFTER A RESTRUCTURE (the 2026-10-20 audits). The job type was switched in the session (js/polish-estimate.js: init,
@@ -1137,14 +1173,17 @@
    *       section while the new carrier was filled with the crew's size beside it ($858 + $495), and a cleared or switched-off row refilled to $858.
    *    3. THE DISTANCE ON FILE FILLS THE NEW CARRIER'S ROW, by the rule above: only a row nobody touched takes it. Done only when the carrier MOVED: a
    *       restructure that keeps the carrier (a Combo made Polish) fills nothing, so a bid saved with a blank row is not filled by it.
-   *    4. EVERY OTHER SECTION GIVES THE DRIVE BACK (takeBackStrayTravel). A Travel Labor row the distance filled and nobody touched, on any section that
+   *    4. THE GUYS FOLLOW THE CREW OF THE BID AS IT IS NOW (syncAutoGuys): Combo made Polish left the carrier's guys on the Combo's bigger crew, and
+   *       the price the draft saved was not the price a plain reopen showed ($33,514 and $32,632).
+   *    5. EVERY OTHER SECTION GIVES THE DRIVE BACK (takeBackStrayTravel). A Travel Labor row the distance filled and nobody touched, on any section that
    *       is not the carrier and is not an option, off sections included, is emptied and loses its fill markers (and so is the estimator's row that only
    *       repeats the carrier's, which is what a copy of the carrier's sheet carries once it is made a base beside it). It was only ever taken back from a
    *       base, and only when the carrier moved, so Epoxy to Polish to Combo left Epoxy's filled row on the off section until Combo turned it back on, and
-   *       the drive was priced twice ($1,716 where Kyle types $858).
-   *    5. THE GUYS FOLLOW THE CREW OF THE BID AS IT IS NOW (syncAutoGuys): Combo made Polish left the carrier's guys on the Combo's bigger crew, and
-   *       the price the draft saved was not the price a plain reopen showed ($33,514 and $32,632).
-   *  A bid with no distance on file fills nothing (the rest still settles). An option is priced apart and its row is its own. */
+   *       the drive was priced twice ($1,716 where Kyle types $858). THIS COMES AFTER THE GUYS (4), because "repeats the carrier's" compares the guys: a
+   *       switched-off row that is an exact copy of the carrier's, with the guys of a crew since gone, was compared before the sync had made them the same, and
+   *       stayed on the base beside the carrier's (the fourth audit).
+   *  A bid with no distance on file fills nothing (the rest still settles). An option is priced apart and its row is its own: the bases are settled here, and
+   *  an option's row follows the ANSWERS (followDistanceOptions). */
   function followDistance(model, fromTab) {
     if (!isObject(model)) return model;
     if (!carrierKept(model, fromTab)) {
@@ -1153,8 +1192,8 @@
       var miles = d ? milesOrNull(d.miles) : null;
       if (miles !== null) followDistanceHours(model, miles);
     }
-    takeBackStrayTravel(model);
     syncAutoGuys(model);
+    takeBackStrayTravel(model);
     return model;
   }
 
@@ -1162,6 +1201,13 @@
   function carrierKept(model, fromTab) {
     if (typeof fromTab !== "string" || fromTab === "") return false;
     try { return travelCarrier(model) === fromTab; } catch (err) { return false; }
+  }
+
+  /** The labor lines of one section (the root is the model itself), or none when its `labor` is not a list. A saved bid is whatever was saved, and migrateModel carries
+   *  `tabs` through exactly as it came without looking inside, so a section can hold a string, a number or an object there; the page runs the settling and the sync
+   *  on every open, and a line that is not a list is no reason for either to throw. */
+  function laborLinesOf(section) {
+    return isObject(section) && Array.isArray(section.labor) ? section.labor : [];
   }
 
   /** The Travel Labor rows of one section (the root is the model itself), as the section holds them. */
@@ -1191,11 +1237,24 @@
     return travelRowIsHandsOff(row) && (driveHoursAreTools(row) || followsCrew(row));    // and the tool wrote something there
   }
 
+  /** Did the estimator type the RATE of this Travel Labor row? A rate marked as typed (`rate_typed`: setLaborRate marks the one case a number cannot tell, a typed rate that IS
+   *  the line's own default), or a rate that is not blank and is not the default the row was filled with (`rate_default`). A row with NO default to compare to (the model's own
+   *  shipped row, which is what the Polish root of an Epoxy or Gyp job holds, and a bid saved before the stamp) is told the way the Hours box is (driveHoursAreTools): what a
+   *  person types in the box is text and a rate that was seeded is a number, so a text rate is typed and a number says nothing. (rateTypedByHand reads every such rate as typed,
+   *  so that no prevailing wage moves it; here a row taken for the estimator's is one the carrier's move carries off, and a row that cannot say is not taken for it.) */
+  function travelRateIsTyped(row) {
+    if (!row || isBlank(row.rate)) return false;
+    var own = ownDefaultRate(row);
+    return row.rate_typed === true || (own !== null ? num(row.rate) !== own : typeof row.rate === "string");
+  }
+
   /** Is this Travel Labor row the ESTIMATOR'S? A box they typed in or cleared (the markers saved with the row, or guys in a box that is off auto, or hours that are
-   *  not the tool's own) or a row they switched off, by the slider on its card or by its default on the Defaults tab. The tool never writes into it, and it
-   *  follows the job's drive when the carrier moves (followOwnedRow). A blank row, and one the distance filled, are nobody's. */
+   *  not the tool's own), a rate they typed (travelRateIsTyped: $40 over the $33 the line was filled with), or a row they switched off, by the slider on its card or by
+   *  its default on the Defaults tab. The tool never writes into it, and it follows the job's drive when the carrier moves (followOwnedRow): a typed rate moves with the
+   *  row, as typed guys and hours do. (The rate alone does not stop the row's boxes being filled or taken back: travelRowIsHandsOff and travelRowIsAutoFilled do not read
+   *  it, so the fill and the one-drive rule treat a row with a typed rate like any other.) A blank row, and one the distance filled, are nobody's. */
   function travelRowIsTheEstimators(row) {
-    return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));
+    return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));
   }
 
   /** The Travel Labor row of the section that carried the job's travel moves with the carrier, and what the estimator said on it moves too. The job-type path's half
@@ -1401,6 +1460,7 @@
       });
     }
     followDistanceHours(model, null);
+    followDistanceOptions(model, null);
     return model;
   }
 
@@ -5032,8 +5092,11 @@
       } catch (err) { multi = false; }
     }
     sections.forEach(function (s) {
-      var manDays = travelManDays(s.section.labor);
-      (s.section.labor || []).forEach(function (r) {
+      // A section whose `labor` is not a list (a saved bid is whatever was saved: migrateModel carries `tabs` through as they came) has no
+      // lines to keep in step, and is no reason for the page to throw while it opens (the 2026-10-20 fourth audit: `"x".forEach`).
+      var lines = laborLinesOf(s.section);
+      var manDays = travelManDays(lines);
+      lines.forEach(function (r) {
         if (r && r.unit === "hours" && r.guys_auto) {
           r.guys = followsCrew(r) ? (s.option ? ownCrewSize(model, s.section.labor) : crewSize(model)) : manDays;
         }
@@ -5933,7 +5996,7 @@
     followsCrew: followsCrew, crewSize: crewSize, ownCrewSize: ownCrewSize, followDistance: followDistance, markTypedByHand: markTypedByHand,
     // One drive, one Travel Labor row priced (2026-10-20 audits): what a restructure takes back, what follows the carrier (the estimator's own row), and the
     // words on a row it leaves behind.
-    travelRowIsAutoFilled: travelRowIsAutoFilled, travelRowIsTheEstimators: travelRowIsTheEstimators,
+    travelRowIsAutoFilled: travelRowIsAutoFilled, travelRowIsTheEstimators: travelRowIsTheEstimators, travelRateIsTyped: travelRateIsTyped,
     takeBackStrayTravel: takeBackStrayTravel, strayTravelNote: strayTravelNote,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,

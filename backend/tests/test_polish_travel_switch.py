@@ -22,6 +22,12 @@ THE THIRD AUDIT (2026-10-20, of 7d32336) is held here too, on the page, and by t
   M  Combo made Polish re-derives the crew-following row's guys, so the draft saves the price a plain reopen shows; a new bid's distance lookup lands whatever
      section is on show; what the estimator typed, cleared or switched off follows the job's drive to a newly seeded carrier instead of being refilled.
 
+THE FOURTH AUDIT (2026-10-20, of c0255de) is held here too, on the page, and by test_polish_travel_hours.py on the model:
+  O  An option's Travel Labor (a copy of the carrier, or a base the Sheets panel demoted) follows every distance answer on its own crew: the miles corrected to 50
+     emptied the base's drive and left the option's priced, and at 300 miles the base moved to 10 hours while the option stayed at 6.5.
+  R  A rate typed on Travel Labor follows the job's drive to the new carrier ($40 read $33 on Epoxy).
+  B  A saved bid whose active section's labor is not a list opens (the sync threw as the page opened: no estimate at all).
+
 The last block breaks a COPY of js/polish-estimate.js or js/bid-model.js one line at a time and requires a fact to change: never a crash.
 """
 from __future__ import annotations
@@ -40,7 +46,8 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 SECTIONS = ["epoxyBid", "epoxyToPolish", "epoxyToCombo", "epoxyPlain", "gypToPolish", "comboToEpoxy", "typedToCombo", "sheetsCombined",
             "wholeModel", "optionCopy", "comboOptionCopy", "reviewLate", "notes", "epoxyPolishCombo", "comboEpoxyPolishCombo", "staleSaved",
-            "comboToPolishSync", "lateLookup", "newCarrierFollows", "renamedCarrier", "nightShiftLine"]
+            "comboToPolishSync", "lateLookup", "newCarrierFollows", "renamedCarrier", "nightShiftLine", "optionFollowsMiles", "demotedOptionFollowsMiles",
+            "typedRateOnThePage", "corruptLabor"]
 
 CREW_ROW = {"guys": 4, "days": 6.5, "auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hoursTyped": False, "cost": 858}
 EMPTY_ROW = {"guys": "", "days": "", "auto": False, "follow": None, "seed": None, "typed": False, "hoursTyped": False, "cost": 0}
@@ -478,8 +485,89 @@ def test_nothing_on_these_cards_says_crew_or_labour(ran):
     assert "labour" not in text
 
 
+# ── 10. the fourth audit (2026-10-20, of c0255de) ────────────────────────────────────────────────
+def _filled_row(hours, guys=4):
+    return {"guys": guys, "days": hours, "auto": True, "follow": "crew", "seed": hours, "typed": False, "hoursTyped": False, "cost": guys * hours * 33}
+
+
+LOCAL_CARRIER_ROW = {"guys": 4, "days": "", "auto": True, "follow": "crew", "seed": "", "typed": False, "hoursTyped": False, "cost": 0}
+
+
+def test_an_option_copys_drive_follows_the_miles_the_estimator_types(ran):
+    """THE AUDIT'S MEDIUM FINDING, on the page. A far Polish bid (crew 4 x 12, Wichita 190 miles: the base is $32,632), its sheet copied as an option ($40,864, with the travel an option
+    carries for itself). The estimator corrects the miles on the Labor step. Before, only the base's Travel Labor followed: at 50 miles the base fell to $30,872 and the option stayed
+    at $32,632 (its 6.5 hour drive still priced in it), and at 300 miles the base moved to 10 hours ($33,582) while the option stayed at 6.5 ($40,864). Now the option's drive follows
+    the miles on its own crew: 50 miles is $30,872 on both (the option's row is emptied, no marker), 300 miles is 4 x 10 x $33 = $1,320 on both ($33,582 and $41,771), the miles
+    cleared is $30,872 on both again, and 190 typed again gives back the figures the bid started with. The draft the page saved reopens to the same prices and saves nothing.
+
+    Mutation: leave the options out of an answer."""
+    o = ran["optionFollowsMiles"]
+    assert o["copyTab"] == "Copy1"
+    expect = (
+        ("start", 190, (32632, 40864), _filled_row(6.5), _filled_row(6.5)),
+        ("local", 50, (30872, 30872), LOCAL_CARRIER_ROW, EMPTY_ROW),
+        ("farther", 300, (33582, 41771), _filled_row(10), _filled_row(10)),
+        ("cleared", None, (30872, 30872), LOCAL_CARRIER_ROW, EMPTY_ROW),
+        ("again", 190, (32632, 40864), _filled_row(6.5), _filled_row(6.5)),
+    )
+    for step, miles, totals, base, option in expect:
+        s = o[step]
+        assert (s["miles"], (s["totals"]["base"], s["totals"]["option"])) == (miles, totals), step
+        assert s["baseRow"] == base and s["optionRow"] == option, step
+    r = o["reopened"]
+    assert (r["totals"]["base"], r["totals"]["option"]) == (32632, 40864) and r["optionRow"] == _filled_row(6.5)
+    assert r["saves"] == 0 and r["armed"] == 0, "a plain reopen of what was saved changes and saves nothing"
+
+
+def test_a_demoted_bases_drive_follows_the_miles_as_an_option_on_the_page(ran):
+    """THE AUDIT'S SECOND ROUTE. A Combo, Epoxy made the base on the Sheets panel (Polish is an option), the bid reopened and Epoxy's crew of 5 typed, Polish made the base again: Epoxy is
+    an option holding the drive it was filled with (5 x 6.5 x $33) and the base is Polish's 4 x 6.5. The miles corrected to 50 took the base's drive away and left Epoxy's priced
+    ($39,197 where the base is $30,872); the miles typed as 300 moved the base to 10 hours and left Epoxy's at 6.5 ($49,278). Now Epoxy's drive goes with the miles (its row
+    emptied, $37,044) and comes back at 300 miles on its own 5 guys (5 x 10 x $33 = $1,650, $50,383).
+
+    Mutation: leave the options out of an answer."""
+    d = ran["demotedOptionFollowsMiles"]
+    assert d["epoxyBase"] == {"carrier": "Epoxy", "kinds": [["Polish", "option"], ["Epoxy", "base"]]}
+    for step, totals, polish, epoxy in (
+            ("start", (32632, 49278), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("local", (30872, 37044), LOCAL_CARRIER_ROW, EMPTY_ROW),
+            ("farther", (33582, 50383), _filled_row(10), _filled_row(10, 5))):
+        s = d[step]
+        assert (s["carrier"], s["kinds"]) == ("Polish", [["Polish", "base"], ["Epoxy", "option"]]), step
+        assert (s["totals"]["base"], s["totals"]["option"]) == totals, step
+        assert s["polishRow"] == polish and s["epoxyRow"] == epoxy, step
+
+
+def test_a_rate_typed_on_travel_labor_follows_the_job_to_the_new_carrier_on_the_page(ran):
+    """The audit's own probe. $40 typed on Polish's Travel Labor (4 x 6.5 x $40 = $1,040, the guys and hours left on the distance), then the saved bid reopened as Epoxy, Combo and Polish
+    with the crew typed on the carrier: the carrier's row is $1,040 each time (on Epoxy it read 4 x 6.5 x $33 = $858: the typed rate stayed behind on a row that was given back).
+
+    Mutation: make a typed rate not the estimator's (test_polish_travel_hours.py runs it on the model too)."""
+    r = ran["typedRateOnThePage"]
+    assert r["polish"]["rate"] == "40" and r["polish"]["row"]["cost"] == 1040
+    for job, carrier in (("epoxy", "Epoxy"), ("combo", "Polish"), ("polish", "Polish")):
+        assert (r[job]["carrier"], r[job]["rate"], r[job]["row"]["cost"]) == (carrier, "40", 4 * 6.5 * 40), job
+        assert (r[job]["row"]["guys"], r[job]["row"]["days"], r[job]["row"]["follow"]) == (4, 6.5, "crew"), job
+
+
+def test_a_saved_bid_whose_active_sections_labor_is_not_a_list_opens(ran):
+    """A saved bid is whatever was saved, and migrateModel carries a section under `tabs` through as it came. Epoxy's labor was a string, a number, an object or a boolean, with a stated
+    takeoff (so nothing reseeds it): syncAutoGuys walked it with `.forEach` and threw as the page opened, as a Combo, as Polish (the bid it was saved as was still a Combo when the sync
+    first ran) and as Epoxy, and the estimator got no estimate. The page opens, shows its estimate, and the carrier's drive is as it was saved (4 x 6.5 x $33).
+
+    Mutation: walk a labor that is not a list."""
+    c = ran["corruptLabor"]
+    assert sorted(c) == ["boolean", "number", "object", "string"]
+    for kind, jobs in c.items():
+        assert sorted(jobs) == ["combo", "epoxy", "polish"], kind
+        for job, page in jobs.items():
+            assert page["opened"] is True and page.get("shown") is True, "%s opened as %s: %s" % (kind, job, page.get("error"))
+        assert jobs["combo"]["carrier"] == "Polish" and jobs["combo"]["root"] == CREW_ROW and jobs["polish"]["root"] == CREW_ROW, kind
+        assert jobs["epoxy"]["carrier"] == "Epoxy", kind
+
+
 # ── red without the code: break a COPY of the page or the model one line at a time ───────────────
-FILL_GUYS = 'if (!row.guys_typed && row.guys_auto && !row.guys_follow && fills) row.guys_follow = "crew";'
+FILL_GUYS ='if (!row.guys_typed && row.guys_auto && !row.guys_follow && fills) row.guys_follow = "crew";'
 CARRY_CALL = "carryTravelRow(model, fromTab);"
 TAKE_BACK_CALL = "takeBackStrayTravel(model);"
 STRAY_ROW = "if (rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);"
@@ -576,6 +664,20 @@ BREAKS = {
     "a leftover row is never told to stay empty": (
         "js/bid-model.js", EMPTY_WORDS, 'return where + " This line holds figures that were typed.";',
         lambda g: g["epoxyToCombo"]["epoxyStep"]["note"] != STRAY_EMPTY),
+    # --- the fourth audit (2026-10-20, of c0255de) ---
+    "an answer never reaches an option's Travel Labor": (
+        "js/bid-model.js", "followDistanceOptions(model, miles);", "void miles;",
+        lambda g: g["optionFollowsMiles"]["local"]["totals"]["option"] != 30872 or g["demotedOptionFollowsMiles"]["local"]["totals"]["option"] != 37044),
+    "clearing the miles never reaches an option's Travel Labor": (
+        "js/bid-model.js", "followDistanceOptions(model, null);", "void model;",
+        lambda g: g["optionFollowsMiles"]["cleared"]["totals"]["option"] != 30872),
+    "a rate the estimator typed stays on the old carrier": (
+        "js/bid-model.js", "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));",
+        "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));",
+        lambda g: g["typedRateOnThePage"]["epoxy"]["rate"] != "40"),
+    "the sync walks a labor that is not a list": (
+        "js/bid-model.js", "var lines = laborLinesOf(s.section);", "var lines = s.section.labor || [];",
+        lambda g: any(page["opened"] is not True for jobs in g["corruptLabor"].values() for page in jobs.values())),
     # --- the page ---
     "the lookup's answer is handed the section on show": (
         "js/polish-estimate.js", 'B.applyDistance(ROOT, { miles: miles, source: "google", key: key });',

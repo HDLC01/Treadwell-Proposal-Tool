@@ -2787,7 +2787,8 @@
   // A FAR ANSWER ALSO FILLS TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20): its hours from the miles (one round trip), its
   // guys the crew's size, so each guy is charged one trip as on his own sheets. A figure the estimator typed in a box, or
   // cleared, always wins, and a switched-off row is left as it is (B.applyDistance, B.clearDistance, B.followDistanceHours).
-  // It is given the WHOLE model (ROOT), not the section on show: the Travel Labor row is the carrier section's.
+  // It is given the WHOLE model (ROOT), not the section on show: the Travel Labor row is the carrier section's, and every sheet that is an
+  // OPTION (a copy of the carrier, a base that was demoted) has a row of its own that follows the same answers on its own crew (B.followDistanceOptions).
   var distBusy = false;
   var distReason = "";
   var DIST_REASONS = {
