@@ -33,7 +33,7 @@ HARNESS = TESTS / "js" / "sheet-order-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js", "js/proposal-review.js"]
-SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "legacy", "model"]
+SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "legacy", "model", "invariance"]
 GYP = 'Gyp (USG 1-8")'
 GYP_FR = "Gyp (FR)"
 # What a page shows that depends on the order of the sheets, as the harness reads it. (Not `open`: a session is on whatever sheet the estimator was last
@@ -161,6 +161,17 @@ def test_a_rename_moves_nothing(ran):
     before = [s for s in ran["lifecycle"]["steps"] if s["step"] == "copy Polish (Copy2)"][0]
     after = [s for s in ran["lifecycle"]["steps"] if s["step"] == "rename Copy1"][0]
     assert after["session"]["order"] == before["session"]["order"] and after["reload"]["order"] == before["session"]["order"]
+
+
+# ── nothing else depends on key order either ─────────────────────────────────────────────────
+def test_nothing_a_saved_draft_shows_or_does_depends_on_the_order_of_any_objects_keys(ran):
+    """Every draft the scenarios saved (seventeen of them: the pairs, the bar, the document, every step of the lifecycle), opened with the keys of EVERY object in five orders (as saved,
+    jsonb's, jsonb's reversed, two seeded shuffles): the sheets in order with their kinds, the carrier, the bases, the bar, every price, what the customer's document lists and the whole
+    blob the page then saves are the same each time. The sheets under `tabs` were the only thing that read an object's key order (run the same check over a bid saved by 619f092 and the
+    keys of `tabs` are the only ones whose order moves anything); this holds the rest of the draft to it."""
+    got = ran["invariance"]
+    assert got["blobs"] >= 16 and got["compared"] >= 64, "the check was cut short: %r" % ({k: got[k] for k in ("blobs", "compared")},)
+    assert got["differ"] == [], got["differ"][:5]
 
 
 # ── a bid saved before the order was kept ────────────────────────────────────────────────────
@@ -308,10 +319,10 @@ HELD = ["Copy1", "Copy2", "Epoxy"]
 MUTATIONS = {
     "sectionsOf lists the sections in the order their keys are held in": (
         MODEL, SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {",
-        lambda r: _flipped(r) and len(set(r["model"]["stampedOrders"])) > 1),
+        lambda r: _flipped(r) and len(set(r["model"]["stampedOrders"])) > 1 and len(r["invariance"]["differ"]) > 0),
     "the places are ignored (every section sorts by its id or its key)": (
         MODEL, BY_SEQ, "      if (a.seq !== b.seq) return 0;",
-        lambda r: _flipped(r) and len(set(r["model"]["stampedOrders"])) > 1),
+        lambda r: _flipped(r) and len(set(r["model"]["stampedOrders"])) > 1 and len(r["invariance"]["differ"]) > 0),
     "a new section is given no place": (
         MODEL, PUT_STAMP, "    var body = section;",
         lambda r: r["model"]["copy"]["seqs"].get("Copy3") is None and r["model"]["reused"]["seqs"].get("Copy1") is None and r["model"]["option"]["seqs"].get("Seal") is None),

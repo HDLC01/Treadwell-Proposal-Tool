@@ -23,6 +23,9 @@
  *                   base change and a job-type switch, compared with a reload after EVERY step.
  *   legacy          a bid saved before the order was kept (no `seq` on any section) opens in the order its keys are held in, changes no price when it
  *                   stamps the order, writes nothing on open, and saves the order it opened with.
+ *   invariance      every draft the sections above saved, opened with the keys of EVERY object in five orders (as saved, jsonb's, jsonb's reversed, two seeded
+ *                   shuffles): the page shows, prices, lists for the document and then saves exactly the same. Nothing else of a saved draft may depend on the
+ *                   order of its keys either (a `cell_values`, a `tab_opts`, a row), and this is what holds it.
  *   model           the model alone: the order does not depend on the key order, an unstamped section is newer than a stamped one, a tie is settled by
  *                   the sheet's id, a copy never takes its source's place, a sheet added to a bid with no stamps goes last, a save stamps a bid that has none,
  *                   withSectionOrder stamps once and leaves unreadable tabs as they are.
@@ -211,6 +214,8 @@ function facts(b, withDoc) {
 }
 
 const out = {};
+/** Every draft a session saved, for the `invariance` section: [{ label, saved }]. */
+const SAVED_BLOBS = [];
 async function section(name, fn) {
   try { out[name] = await fn(); } catch (e) { out[name] = { error: String((e && e.stack) || e) }; }
 }
@@ -220,6 +225,7 @@ async function sessionAndReload(b, opts) {
   const o = opts || {};
   const session = facts(b, o.doc);
   const saved = clone(b.store.blob);
+  SAVED_BLOBS.push({ label: o.label || "", saved: clone(saved) });
   const r = await reload(saved);
   r.api.go(1);
   await settle();
@@ -242,11 +248,11 @@ async function main() {
   await section("comboCopyBase", async () => {
     const b = await newBid(comboDraft(), [["Polish", "polishing", "6", "10"], ["Epoxy", "epoxy-install", "4", "12"]]);
     await copySheet(b, "Polish");                         // Copy1, a Polish copy, an option
-    const afterCopy = await sessionAndReload(b);
+    const afterCopy = await sessionAndReload(b, { label: "comboCopyBase: after the copy" });
     await makeBase(b, "Copy1");                           // the copy is the base; Polish and Epoxy become options
-    const copyBase = await sessionAndReload(b);
+    const copyBase = await sessionAndReload(b, { label: "comboCopyBase: the copy the base" });
     const made = await makeBase(b, "combined");           // Epoxy + the copy: both bases are under `tabs`, the Polish root an option
-    const res = await sessionAndReload(b, { doc: true, again: ["Epoxy", "epoxy-install", "5", "12"] });
+    const res = await sessionAndReload(b, { doc: true, again: ["Epoxy", "epoxy-install", "5", "12"], label: "comboCopyBase" });
     res.steps = { afterCopy: afterCopy, copyBase: copyBase };
     res.madeCombined = made;
     return res;
@@ -259,7 +265,7 @@ async function main() {
     const copyId = B.sectionsOf(b.api.root()).filter((e) => e.role === "polish" && !e.root)[0];
     if (copyId) { typeCrew(b, copyId.tab, "polishing", "6", "10"); b.clock.fire(); }
     const made = await makeBase(b, "combined");
-    const res = await sessionAndReload(b, { doc: true });
+    const res = await sessionAndReload(b, { doc: true, label: "epoxyAddPolish" });
     res.madeCombined = made;
     res.copyId = copyId ? copyId.tab : null;
     return res;
@@ -269,7 +275,7 @@ async function main() {
   await section("stripOrder", async () => {
     const b = await newBid(gypDraft(), [[GYP_TAB, "gyp-pour", "4", "12"]]);
     await addSheet(b, "Polish");
-    return await sessionAndReload(b, { doc: true });
+    return await sessionAndReload(b, { doc: true, label: "stripOrder" });
   });
 
   // ═══ documentOrder: two options, added in one order ═══════════════════════════════════════════════════════════
@@ -281,14 +287,14 @@ async function main() {
     typeCrew(b, "Epoxy", "epoxy-install", "3", "5");
     typeCrew(b, "Copy1", "polishing", "3", "4");
     b.clock.fire();
-    return await sessionAndReload(b, { doc: true, again: [GYP_TAB, "gyp-pour", "5", "12"] });
+    return await sessionAndReload(b, { doc: true, again: [GYP_TAB, "gyp-pour", "5", "12"], label: "documentOrder" });
   });
 
   // ═══ lifecycle: every way a sheet comes, goes and changes, a reload after each ════════════════════════════════
   await section("lifecycle", async () => {
     let b = await newBid(comboDraft(), [["Polish", "polishing", "6", "10"], ["Epoxy", "epoxy-install", "4", "12"]]);
     const steps = [];
-    const note = async (name) => { steps.push(Object.assign({ step: name }, await sessionAndReload(b, { doc: true }))); };
+    const note = async (name) => { steps.push(Object.assign({ step: name }, await sessionAndReload(b, { doc: true, label: "lifecycle: " + name }))); };
     await note("start");
     await addSheet(b, GYP_TAB);                           await note("add Gyp");
     await copySheet(b, "Epoxy");                          await note("copy Epoxy (Copy1)");
@@ -437,6 +443,45 @@ async function main() {
       oldBid: { held: Object.keys(oldBid.tabs), copy: { id: oldAdd.id, order: ids(oldAdd.model), seqs: seqs(oldAdd.model) }, fresh: { id: oldFresh.id, order: ids(oldFresh.model), seqs: seqs(oldFresh.model) } },
       composed: composed,
     };
+  });
+
+  // ═══ invariance: nothing a saved draft shows or does depends on the order of any object's keys ════════════════════
+  await section("invariance", async () => {
+    const rng = (seed) => { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+    const rekey = (v, order) => {
+      if (Array.isArray(v)) return v.map((x) => rekey(x, order));
+      if (v && typeof v === "object") {
+        const o = {};
+        order(Object.keys(v)).forEach((k) => { Object.defineProperty(o, k, { value: rekey(v[k], order), enumerable: true, writable: true, configurable: true }); });
+        return o;
+      }
+      return v;
+    };
+    const shuffled = (seed) => { const r = rng(seed); return (ks) => { const a = ks.slice(); for (let j = a.length - 1; j > 0; j--) { const k = Math.floor(r() * (j + 1)); const t = a[j]; a[j] = a[k]; a[k] = t; } return a; }; };
+    const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((kk) => [kk, x[kk]])) : x));
+    const shown = async (blob) => {
+      const b = await open(blob, { distance: SAVED_ANSWER });
+      b.api.go(1);
+      await settle();
+      const f = facts(b, true);                                      // forces a save: what it writes is read below
+      return { order: f.order, kinds: f.kinds, carrier: f.carrier, bases: f.bases, strip: f.strip, prices: f.prices, document: f.document, saved: canon(b.store.blob) };
+    };
+    const subjects = SAVED_BLOBS.filter((x) => x.label);
+    const differ = [];
+    let compared = 0;
+    for (let i = 0; i < subjects.length; i++) {
+      const s = subjects[i];
+      const base = await shown(clone(s.saved));
+      const variants = [["jsonb", (ks) => ks.slice().sort(J.compareKeys)], ["jsonb reversed", (ks) => ks.slice().sort(J.compareKeys).reverse()],
+                        ["shuffle 1", shuffled(i * 131 + 17)], ["shuffle 2", shuffled(i * 131 + 7936)]];
+      for (const v of variants) {
+        const got = await shown(rekey(clone(s.saved), v[1]));
+        compared++;
+        const fields = Object.keys(base).filter((k) => JSON.stringify(base[k]) !== JSON.stringify(got[k]));
+        if (fields.length) differ.push({ label: s.label, variant: v[0], fields: fields });
+      }
+    }
+    return { blobs: subjects.length, compared: compared, differ: differ };
   });
 
   return out;
