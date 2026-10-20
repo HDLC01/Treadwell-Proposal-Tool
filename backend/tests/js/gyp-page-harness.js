@@ -272,7 +272,8 @@ async function main() {
 
   // ── 14. the labor rows are ordinary crew lines priced by the hour: not dimmed, no drive-time words ──
   const labPanel = (() => { api.go(1); return html(b, "panels"); })();
-  const trvNoteOf = (panel) => ((panel.match(/<p class="hint trvnote">Drive time is expected[^<]*<\/p>/) || [""])[0]).replace(/<[^>]*>/g, "");
+  // The note's text is CAPTURED, not cut out of its tags: a tag-stripping replace trips CodeQL's incomplete-sanitization rule.
+  const trvNoteOf = (panel) => (panel.match(/<p class="hint trvnote">(Drive time is expected[^<]*)<\/p>/) || ["", ""])[1];
   out.laborCards = {
     pourHint: labPanel.indexOf("Hours on the job.") >= 0, driveHint: (labPanel.match(/Drive time, each way counted\./g) || []).length,
     hourCards: (labPanel.match(/data-lab-card="\d+"/g) || []).length,
