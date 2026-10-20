@@ -36,8 +36,20 @@
  *   OPT_OWNED        an option's row that was switched off is exactly as it was, and a box that was typed in or cleared holds what it held.
  * (LOCAL, judged on every live section, options included, already says that a job under 70 miles prices no row nobody touched.)
  *
+ * HANZ'S DECISION OF THE FIFTH AUDIT ("Fill them automatically", 2026-10-20) added NIGHTS, judged after every step of every walk (a walk never types in the Lodging or Per Diem box, so none
+ * of its lines is the estimator's):
+ *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the man-days of the section that carries the job's travel (guys x days, as a person counts them),
+ *                    on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker).
+ *
+ * THE FIFTH AUDIT (2026-10-20, of b14bc98) added the RELOAD, which every other step lacks: a step of the walk always starts from the draft the step before SAVED, so every walk above
+ * is "reload, then step" and could never see a Sheets panel action that prices differently in the session than after a reload (a base the pick demoted lost its Travel Labor row
+ * in the session, and migrateModel gave the root a blank one on the next open: +$783 between the two). In `reload` mode every sheets action (a base change, a copy, a sheet
+ * added) is judged one more way, after every step it ends:
+ *   RELOAD_AGREES    the SAME distance answer typed in the session that made the change, and typed after a plain reopen of the draft that session saved, leaves the same prices (the lump
+ *                    sum a save writes, the root sheet's bid, every other section's) and the same Travel Labor rows, for each of the four answers (50, 300, 190 and cleared).
+ *
  * MODES (argv[3]): far | farplain | local | unknown | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys | sheetsOff |
- *   sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | audit54.
+ *   sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | audit54.
  *   far, local, unknown   steps are the four job types, each plain or with the crew typed on the new carrier.
  *   farplain              the same far job, with the four job types only (no crew typed): the deeper walk.
  *   typed, clearHours, clearGuys, off, rate   the estimator's variant is applied to the carrier's Travel Labor row first, then the steps are the four job types. (`rate` types $40
@@ -48,6 +60,8 @@
  *   dist                  the `sheets` steps, and the miles corrected: typed as 50 (local), 300 (farther), 190 (far) or cleared (the lookup finds nothing), at every point of every
  *                         sequence, so every distance answer arrives after copies, base demotions and job switches.
  *   distTyped, distClearHours, distClearGuys, distOff, distRate   the same steps, with the estimator's variant applied to the carrier's row first (a copy carries it).
+ *   reload                the `sheets` steps and a fresh Epoxy sheet added, and RELOAD_AGREES judged after every sheets action (the session against a reload, four answers each).
+ *   reloadTyped, reloadClearHours, reloadClearGuys, reloadOff, reloadRate   the same, with the estimator's variant applied to the carrier's row first.
  *   audit54               the 54 sequences the 2026-10-20 audit found pricing the drive twice at 7d32336, with their exact dollars.
  * Any mode but audit54 takes a distance after an at-sign (typed@local, sheetsOff@unknown, mixed@local): the same walk on a 40 mile job or one with no distance.
  * argv[4] is the depth (the number of steps after the start).
@@ -106,11 +120,12 @@ const VARIANTS = ["typed", "clearHours", "clearGuys", "off", "rate"];
 /** The variant a mode starts from, or "": the variant modes, and the sheets and dist modes that name one (sheetsTyped, sheetsOff, distRate, ...). */
 const MODE_VARIANT = (function () {
   if (VARIANTS.indexOf(MODE) >= 0) return MODE;
-  const m = /^(?:sheets|dist)(Typed|ClearHours|ClearGuys|Off|Rate)$/.exec(MODE);
+  const m = /^(?:sheets|dist|reload)(Typed|ClearHours|ClearGuys|Off|Rate)$/.exec(MODE);
   return m ? m[1].charAt(0).toLowerCase() + m[1].slice(1) : "";
 })();
 const DIST = MODE === "dist" || /^dist(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE);
-const SHEETS = MODE === "sheets" || /^sheets(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE) || DIST;      // a distance walk takes every step of the Sheets walk too
+const RELOAD = MODE === "reload" || /^reload(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE);
+const SHEETS = MODE === "sheets" || /^sheets(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE) || DIST || RELOAD;      // a distance walk takes every step of the Sheets walk too
 /** The miles a distance step types: under 70 (local), 300 (farther than the 190 a new bid starts on), 190 again, and the box cleared (the lookup then finds nothing). */
 const DIST_TEXT = { local: "50", farther: "300", far: "190", cleared: "" };
 
@@ -119,9 +134,11 @@ const settle = async () => { for (let i = 0; i < 10; i++) await flush(); };
 
 /** A page on a draft. `extra.distance` is what the lookup answers (a NEW bid asks by itself, a saved one does not). */
 async function open(blob, extra) {
-  const b = P.build(Object.assign({ blob: blob, labor: LABOR }, extra || {}));
+  const opts = Object.assign({ blob: blob, labor: LABOR }, extra || {});
+  const b = P.build(opts);
   await b.api.init();
   await settle();
+  b.opts = opts;           // what the lookup answers is read from here each time the page asks, so a step can change it after the page is open
   return b;
 }
 
@@ -287,6 +304,24 @@ function judge(b, ctx) {
     if (!owned(r) && (!blank(r.days) || r.guys_follow || typeof r.hours_seed === "number")) note("STALE", e.tab + " (" + e.kind + ") still holds the filled row " + fmtRow(r));
   }));
 
+  // NIGHTS. Counted here from the carrier's own rows, and not asked of the model, so the check does not agree with a model that has the same mistake in it.
+  if (m.travel) {
+    const carrierRows = carrierEntry && carrierEntry.section.labor instanceof Array ? carrierEntry.section.labor : [];
+    let manDays = 0;
+    carrierRows.forEach((r) => { if (r && r.unit !== "hours" && r.enabled !== false) manDays += (Number(r.guys) || 0) * (Number(r.days) || 0); });
+    manDays = Math.round(manDays * 100) / 100;
+    ["lodging", "per_diem"].forEach((k) => {
+      const l = m.travel[k];
+      if (!l) return;
+      const says = k + " " + JSON.stringify({ qty: l.qty, auto: l.qty_auto, follow: l.qty_follow, typed: l.qty_typed });
+      if (f.far) {
+        if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " has " + manDays + " man-days");
+      } else if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) {
+        note("NIGHTS", says + " on a job " + (f.miles === null ? "with no distance" : "of " + f.miles + " miles") + ": nothing was to be filled");
+      }
+    });
+  }
+
   if (ctx && ctx.variant) {
     if (!crow || !variantHolds(ctx.variant, crow)) note("OWNED", ctx.variant + " is not what carrier " + f.carrier + " holds: " + fmtRow(crow) + " " + JSON.stringify(crow));
     f.entries.filter((e) => e.tab !== f.carrier && e.kind !== "option").forEach((e) => travelRows(e.section).forEach((r) => {
@@ -324,7 +359,7 @@ async function take(saved, step, distanceAnswer) {
     if (step.crew) { const c = STEP_CREW[step.job]; typeCrew(b, c[0], c[1], c[2], c[3]); }
     const was = plain ? shape(b) : null;
     if (!plain) b.clock.fire();
-    return { b: b, plain: plain, quiet: quiet, was: was, piece: step.job + (step.crew ? "+crew" : "") };
+    return { b: b, plain: plain, quiet: quiet, was: was, piece: step.job + (step.crew ? "+crew" : ""), step: step };
   }
   // The lookup a CLEARED box asks again finds nothing (the estimator took the miles away); every other step's lookup is never asked of a saved bid.
   const b = await open(Object.assign(clone(saved), { work_type: here }), step.dist === "cleared" ? { distance: DISTANCES.unknown } : answer);
@@ -340,12 +375,12 @@ async function take(saved, step, distanceAnswer) {
     await settle();
     b.clock.fire();
     const d = b.api.root().distance;
-    return { b: b, plain: false, piece: "{" + step.dist + "}", dist: { before: before, miles: d ? B.milesOrNull(d.miles) : null } };
+    return { b: b, plain: false, piece: "{" + step.dist + "}", dist: { before: before, miles: d ? B.milesOrNull(d.miles) : null }, step: step };
   }
   if (step.variant) {
     if (!applyVariant(b, step.variant)) return null;
     b.clock.fire();
-    return { b: b, plain: false, piece: "[" + step.variant + "]" };
+    return { b: b, plain: false, piece: "[" + step.variant + "]", step: step };
   }
   if (step.copy) {
     const sel = '[data-sh-act="copy"]';
@@ -353,14 +388,26 @@ async function take(saved, step, distanceAnswer) {
     P.clickOn(b, sel);
     await settle();
     b.clock.fire();
-    return { b: b, plain: false, piece: "copy" };
+    return { b: b, plain: false, piece: "copy", step: step };
+  }
+  if (step.add) {
+    // A FRESH SHEET (the Sheets panel's Add menu): an option that starts on the proposal. It holds no Travel Labor row: only the section that carries the job's travel has one.
+    b.api.go(1);
+    await settle();
+    if (b.doc.querySelector('[data-sh-act="add-menu"]')) P.clickOn(b, '[data-sh-act="add-menu"]');
+    const sel = '[data-sh-act="add"][data-sh-sheet="' + step.add + '"]';
+    if (!b.doc.querySelector(sel)) return null;
+    P.clickOn(b, sel);
+    await settle();
+    b.clock.fire();
+    return { b: b, plain: false, piece: "add:" + step.add, step: step };
   }
   b.doc.fire("change", { target: P.need(b, '[data-sh-base="' + step.base + '"]') });
   if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return null;
   P.clickOn(b, '[data-sh-act="base-yes"]');
   await settle();
   b.clock.fire();
-  return { b: b, plain: false, piece: "base:" + step.base };
+  return { b: b, plain: false, piece: "base:" + step.base, step: step };
 }
 
 /** The base changes the Sheets panel of this page offers (one to a radio), other than the base it already has. */
@@ -389,6 +436,7 @@ function stepsFor(page, path) {
     TYPES.forEach((t) => out.push({ job: t }));
     basePicks(page).forEach((v) => out.push({ base: v }));
     out.push({ copy: true });
+    if (RELOAD) out.push({ add: "Epoxy" });
     if (DIST) Object.keys(DIST_TEXT).forEach((k) => out.push({ dist: k }));
   } else {
     TYPES.forEach((t) => out.push({ job: t }));
@@ -396,11 +444,52 @@ function stepsFor(page, path) {
   return out;
 }
 
-async function judgeStep(label, got, parent, ctx, leaf) {
+/** The miles typed on the Labor step of the sheet that carries the job's travel, on the page `b`, and what the page then holds: every price (the lump sum a save writes, the root
+ *  sheet's own bid, every other section's) and the shape of the Travel Labor rows. null when there is no box to type in. */
+async function answerOn(b, dist) {
+  b.api.show(B.travelCarrier(b.api.root()));
+  b.api.go(1);
+  if (!b.doc.querySelector("[data-dist-miles]")) return null;
+  P.typeInto(b, "[data-dist-miles]", DIST_TEXT[dist]);
+  await settle();
+  b.clock.fire();
+  const bids = b.api.sectionBids();
+  return { lump: lumpOf(b.store.blob), root: b.api.bid().total, sections: Object.fromEntries(Object.keys(bids).sort().map((k) => [k, bids[k].total])), shape: shape(b) };
+}
+
+/** RELOAD_AGREES: a Sheets panel action (a base change, a copy, a sheet added) ends a step; the same answer to the distance, typed in the session that made the change and typed
+ *  after a plain reopen of what that session saved, must leave the same prices and the same Travel Labor rows. Each side is built again from the parent's draft (the walk's own page
+ *  is never typed on, so what its children are built from does not move). */
+async function judgeReload(parentSaved, step, distanceAnswer, label) {
+  for (const dist of Object.keys(DIST_TEXT)) {
+    const answer = dist === "cleared" ? DISTANCES.unknown : distanceAnswer;
+    const live = await take(parentSaved, step, distanceAnswer);
+    const made = await take(parentSaved, step, distanceAnswer);
+    if (!live || !made) return;
+    const saved = clone(made.b.store.blob);
+    const reopened = await open(clone(saved), { distance: Object.assign({}, answer, { miles: answer.miles === null ? null : 300 }) });
+    reopened.api.go(1);
+    await settle();
+    // A cleared box asks the lookup again, and the lookup finds nothing (the estimator took the miles away): on the page that made the change as on the reopened one.
+    if (dist === "cleared") live.b.opts.distance = DISTANCES.unknown;
+    const inSession = await answerOn(live.b, dist);
+    const afterReload = await answerOn(reopened, dist);
+    if (JSON.stringify(inSession) !== JSON.stringify(afterReload)) {
+      record("RELOAD_AGREES", label, "after {" + dist + "} typed in the session " + JSON.stringify(inSession).slice(0, 170) + " VS after a reload " + JSON.stringify(afterReload).slice(0, 170));
+    }
+  }
+}
+
+async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
   const b = got.b;
   report.runs++;
   judge(b, ctx).forEach(([code, detail]) => record(code, label, detail));
   if (got.dist) judgeOptions(b, got.dist).forEach(([code, detail]) => record(code, label, detail));
+  // THE SHEETS ACTIONS ARE JUDGED ONE MORE WAY, in the `reload` mode: the session against a reload (RELOAD_AGREES).
+  if (RELOAD && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add)) {
+    report.reloadJudged = (report.reloadJudged || 0) + 1;
+    await judgeReload(parent.saved, got.step, distanceAnswer, label);
+  }
   if (got.plain) {
     report.plain++;
     if (got.quiet.armed !== 0 || got.quiet.saves !== 0 || got.quiet.asked !== 0) {
@@ -428,12 +517,12 @@ async function judgeStep(label, got, parent, ctx, leaf) {
 async function walk(label, got, path, depth, ctx, distanceAnswer) {
   const b = got.b;
   const saved = clone(b.store.blob);
-  const node = { shape: shape(b), lump: lumpOf(saved) };
+  const node = { shape: shape(b), lump: lumpOf(saved), saved: saved };
   if (depth === 0) return;
   const steps = stepsFor(b, path);
   for (const step of steps) {
     let child = null;
-    const childLabel = label + " -> " + (step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base);
+    const childLabel = label + " -> " + (step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add : step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base);
     try { child = await take(saved, step, distanceAnswer); } catch (e) {
       report.crashes.push([childLabel, String((e && e.stack) || e).slice(0, 400)]);
       record("CRASH", childLabel, String((e && e.message) || e).slice(0, 200));
@@ -441,7 +530,7 @@ async function walk(label, got, path, depth, ctx, distanceAnswer) {
     }
     if (!child) continue;
     const ctx2 = step.variant ? { variant: step.variant } : ctx;
-    try { await judgeStep(childLabel, child, node, ctx2, depth === 1); } catch (e) {
+    try { await judgeStep(childLabel, child, node, ctx2, depth === 1, distanceAnswer); } catch (e) {
       report.crashes.push([childLabel, String((e && e.stack) || e).slice(0, 400)]);
       record("CRASH", childLabel, "while judging: " + String((e && e.message) || e).slice(0, 200));
       continue;

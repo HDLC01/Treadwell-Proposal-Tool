@@ -357,7 +357,10 @@ out.followDistance.noModel = String(B.followDistance(null));
 const ln = crewed(newBid()); ln.travel.lodging.hand = true; ln.travel.lodging.enabled = false;
 ask(ln, 190);
 out.lines = { lodging: ln.travel.lodging.enabled, perDiem: ln.travel.per_diem.enabled, lodgingQty: ln.travel.lodging.qty,
-  perDiemQty: ln.travel.per_diem.qty, lodgingAuto: ln.travel.lodging.qty_auto, perDiemAuto: ln.travel.per_diem.qty_auto };
+  perDiemQty: ln.travel.per_diem.qty, lodgingAuto: ln.travel.lodging.qty_auto, perDiemAuto: ln.travel.per_diem.qty_auto,
+  lodgingFollow: ln.travel.lodging.qty_follow === undefined ? null : ln.travel.lodging.qty_follow,
+  perDiemFollow: ln.travel.per_diem.qty_follow === undefined ? null : ln.travel.per_diem.qty_follow,
+  lodgingHand: ln.travel.lodging.hand === true, manDays: B.travelManDays(ln.labor) };
 
 // 11. WORDS. A figure the distance wrote says the trip and who it is charged to; one it wrote for a distance that has gone says so;
 //     a typed one says typed; a crew of none says what to type.
@@ -675,9 +678,15 @@ out.optionWords = { own: B.driveHoursSentence(ccCopy.model, ccRow, true), base: 
 
 // 16. THE NOTES SAY WHAT THE GUYS ARE (2026-10-20 audit). A typed count is GUYS, one round trip each ("2 guys (typed)"), never man-days; the hint
 //     under the box says so and never quotes the man-days beside it; a cleared Guys box is EMPTY and says that, never "the guys are typed".
-const nTyped = crewed(newBid()); ask(nTyped, 190); typeIn(nTyped, "guys", "2");
+//     The nights and the per diem days are TYPED here (10 each, before the answer: a far answer fills a quantity nobody typed, 2026-10-20), so the reference to the man-days
+//     below is for the boxes the estimator typed; `following` leaves them blank, the answer fills them, and the words say they follow the labor.
+const nTyped = crewed(newBid());
+["lodging", "per_diem"].forEach((k) => { B.markTravelQtyTyped(nTyped.travel[k]); nTyped.travel[k].qty = "10"; });
+ask(nTyped, 190); typeIn(nTyped, "guys", "2");
 out.notesTyped = { note: B.driveHoursNote(nTyped, trvOf(nTyped), nTyped.labor), hint: B.travelGuysHint(nTyped, trvOf(nTyped), nTyped.labor),
   how: lineOf(nTyped, "Travel Labor"), howText: B.travelHow(nTyped).text };
+const nFollowing = crewed(newBid()); ask(nFollowing, 190); typeIn(nFollowing, "guys", "2");
+out.notesFollowing = { how: lineOf(nFollowing, "Travel Labor"), howText: B.travelHow(nFollowing).text, lines: B.travelHow(nFollowing).lines };
 const nCleared = crewed(newBid()); ask(nCleared, 190); typeIn(nCleared, "guys", "");
 out.notesCleared = { note: B.driveHoursNote(nCleared, trvOf(nCleared), nCleared.labor), hint: B.travelGuysHint(nCleared, trvOf(nCleared), nCleared.labor),
   how: lineOf(nCleared, "Travel Labor") };
@@ -803,9 +812,9 @@ out.optionsDemoted = scenario(() => {
   const both2 = (m) => ({ carrier: B.travelCarrier(m), kinds: tabsOf(m), polish: factsIn(m, B.ROOT_TAB), epoxy: factsIn(m, "Epoxy") });
   const cj = combo(4, 5); ask(cj, 190);
   const res = { combo: both2(cj) };
-  let m = makeBase(cj, ["Epoxy"]);                  // Polish demoted to an option; Epoxy carries the drive (the row moved to it)
+  let m = makeBase(cj, ["Epoxy"]);                  // Polish demoted to an option; Epoxy carries the drive (a copy of the row went to it, and Polish keeps its own)
   res.epoxyBase = both2(m);
-  m = reopenedModel(m);                              // a reopen: migrateModel gives the Polish root the blank Travel Labor row it no longer has
+  m = reopenedModel(m);                              // a reopen: migrateModel finds the Travel Labor row the demoted root keeps, and adds nothing
   m = makeBase(m, ["Polish"]);                       // Epoxy demoted to an option, still holding the drive it was filled with; Polish carries
   res.polishBase = both2(m);
   ask(m, 50); res.local = both2(m);

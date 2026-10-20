@@ -74,9 +74,10 @@ const crewBid = (() => {
 const crewHow = B.travelHow(crewBid);
 
 // THE AUDIT'S REMOVE-EXISTING CASE: a bid priced the sheet's way (polish-rev3), Polishing 3 guys x 5 days and Joint filler 3 guys x 2
-// days with Remove existing joint filler on (a fourth hand on that line), far, Lodging and Per Diem typed. Guys x days is 21; the sheet's
-// nights count the fourth hand's two days as well, 23. The crew is 4 (3 + the hand).
-function handBid(local) {
+// days with Remove existing joint filler on (a fourth hand on that line), far, Lodging and Per Diem TYPED (10 nights and 10 days, the estimator's own).
+// Guys x days is 21; the sheet's nights count the fourth hand's two days as well, 23. The crew is 4 (3 + the hand). `following` leaves the two lines
+// blank instead, as a new bid opens them: a far answer then puts them on the sheet's count (2026-10-20, Hanz: "Fill them automatically").
+function handBid(local, following) {
   const M = B.freshModel();
   M.profile = "polish-rev3@1";
   M.takeoff = [{ assembly_id: "a", assembly_name: "Polish - S&P", measurement: 10000, unit: "SF" }];
@@ -84,8 +85,11 @@ function handBid(local) {
              { id: "jointfill", label: "Joint filler", guys: 3, days: 2, rate: 33 },
              { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: false }];
   Object.assign(M.conditions, { joint_filler: true, remove_existing_jf: true });
-  M.travel = { lodging: { label: "Lodging", enabled: false, qty: "", qty_auto: false, rate: 70 },
-               per_diem: { label: "Per Diem", enabled: false, qty: "", qty_auto: false, rate: 45 } };
+  M.travel = following
+    ? { lodging: { label: "Lodging", enabled: false, qty: "", qty_auto: false, rate: 70 },
+        per_diem: { label: "Per Diem", enabled: false, qty: "", qty_auto: false, rate: 45 } }
+    : { lodging: { label: "Lodging", enabled: false, qty: "10", qty_auto: false, qty_typed: true, rate: 70 },
+        per_diem: { label: "Per Diem", enabled: false, qty: "10", qty_auto: false, qty_typed: true, rate: 45 } };
   B.applyDistance(M, { miles: local ? 30 : 150, source: "typed" });
   B.syncAutoGuys(M);
   return M;
@@ -93,11 +97,15 @@ function handBid(local) {
 const hand = handBid();
 const handHow = B.travelHow(hand);
 const handTrvOpts = B.travelOpts(hand, B.ROOT_TAB);
-// ...the same with the nights ON AUTO (an older bid's lines): the nights line explains the sheet's count, and the Travel guys still say no man-days.
+// ...the same with the nights ON AUTO (an older bid's lines, saved before 2026-10-12: auto and NO marker): the nights line explains the sheet's count, and the Travel
+// guys still say no man-days.
 const handAuto = handBid();
-handAuto.travel.lodging.qty_auto = true; handAuto.travel.per_diem.qty_auto = true;
+["lodging", "per_diem"].forEach((k) => { const l = handAuto.travel[k]; l.qty_auto = true; delete l.qty_typed; delete l.qty_follow; });
 B.syncAutoGuys(handAuto);
 const handAutoHow = B.travelHow(handAuto);
+// ...and the lines a far answer FILLED (the new bid's, left blank until the answer): they follow the sheet's count, in Kyle's words, and say so once.
+const handFollowing = handBid(false, true);
+const handFollowingHow = B.travelHow(handFollowing);
 
 console.log(JSON.stringify({
   crewBid: { text: crewHow.text, lines: crewHow.lines, guys: crewBid.labor[1].guys, follow: crewBid.labor[1].guys_follow },
@@ -106,6 +114,10 @@ console.log(JSON.stringify({
              sheetNights: B.travelQty({ qty_auto: true }, hand.labor, handTrvOpts), manDays: B.travelManDays(hand.labor),
              guysHint: B.travelGuysHint(hand, hand.labor[2], hand.labor) },
   handAuto: { lines: handAutoHow.lines, lodgingHint: B.lodgingHint(handAuto, B.ROOT_TAB, true, handAuto.labor) },
+  handFollowing: { lines: handFollowingHow.lines, lodging: handFollowing.travel.lodging, perDiem: handFollowing.travel.per_diem,
+                   lodgingHint: B.travelQtyHint(handFollowing, B.ROOT_TAB, "lodging", handFollowing.travel.lodging, handFollowing.labor),
+                   perDiemHint: B.travelQtyHint(handFollowing, B.ROOT_TAB, "per_diem", handFollowing.travel.per_diem, handFollowing.labor),
+                   charge: B.travelCosts(handFollowing.travel, handFollowing.labor, B.travelOpts(handFollowing, B.ROOT_TAB)) },
   rev2: { lines: B.travelHow(rev2).lines, charge: rev2Charge },
   legacy: { lines: B.travelHow(legacy).lines, charge: legacyCharge },
   travelOff: { text: offHow.text, hand: offHow.hand },

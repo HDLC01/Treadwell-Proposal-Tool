@@ -233,7 +233,8 @@ async function main() {
     noOptionCard: review.indexOf("data-option-card") < 0,
     ownCards: review.indexOf("Takeoff and Material") >= 0,
     openTotal: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
-    hotelHasLodging: /Hotel<\/td>/.test(review),
+    // The job's lodging line: "Hotel" in a cell of its own, with the words that say where its quantity came from under the name when a far answer filled it (the fifth audit).
+    hotelHasLodging: /Hotel(<span class="note work">.*?<\/span>)?<\/td>/.test(review),
   };
   // a figure typed on Review moves the open sheet's own total live
   P.typeInto(b, "[data-contingency]", "1000");

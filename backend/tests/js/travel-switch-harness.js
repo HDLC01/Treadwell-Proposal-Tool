@@ -577,6 +577,28 @@ async function main() {
     b.api.go(1);
     P.typeInto(b, "[data-dist-miles]", "50"); await settle(); res.local = snap();
     P.typeInto(b, "[data-dist-miles]", "300"); await settle(); res.farther = snap();
+    // THE ROUTE THAT NEEDED THE FIFTH AUDIT: the base is demoted in favour of a sheet that was ADDED (a fresh sheet holds no Travel Labor row: only the carrier has one). The row used to
+    // MOVE to it, so the demoted Polish had no drive to follow the miles with, in the session. It keeps its row now (a copy goes to Epoxy), and follows the answers on its own crew.
+    const fresh = await newBid(polishDraft(), ["Polish", "polishing", "4", "12"]);
+    const f = await open(clone(fresh.saved), { distance: { ok: true, miles: 300, reason: "" } });
+    f.api.go(1);
+    await settle();
+    if (f.doc.querySelector('[data-sh-act="add-menu"]')) P.clickOn(f, '[data-sh-act="add-menu"]');
+    P.clickOn(f, '[data-sh-act="add"][data-sh-sheet="Epoxy"]');
+    await settle();
+    f.clock.fire();
+    f.api.show("Epoxy");
+    f.api.go(1);
+    typeCrew(f, "Epoxy", "epoxy-install", "5", "12");
+    f.clock.fire();
+    await makeBase(f, "Epoxy");
+    const snapAdded = () => ({ carrier: B.travelCarrier(f.api.root()), kinds: B.sectionsOf(f.api.root()).map((e) => [e.tab, e.kind]), totals: totals(f, "Epoxy"),
+      polishRow: rowFacts(rowIn(f.api.root())), epoxyRow: rowFacts(rowIn(secOf(f.api.root(), "Epoxy"))) });
+    res.addedSheet = { start: snapAdded() };
+    f.api.show("Epoxy");
+    f.api.go(1);
+    P.typeInto(f, "[data-dist-miles]", "50"); await settle(); res.addedSheet.local = snapAdded();
+    P.typeInto(f, "[data-dist-miles]", "300"); await settle(); res.addedSheet.farther = snapAdded();
     return res;
   });
   // (c) A TYPED RATE FOLLOWS THE JOB'S DRIVE (the audit's probe): $40 typed on Polish's Travel Labor, the guys and hours left on the distance; each job type reopens the saved bid.
@@ -611,6 +633,9 @@ async function main() {
           const b = await reopenAs(blob, as);
           const main = b.doc.getElementById("main");
           res[kv[0]][as] = { opened: true, shown: !!main && !main.hidden, carrier: B.travelCarrier(b.api.root()), root: rowFacts(rowIn(b.api.root())) };
+          // ...and the malformed section PUT ON SHOW, all three steps (the fifth audit: it opened, and the first panel to touch it threw)
+          try { b.api.show("Epoxy"); [1, 0, 2].forEach((step) => b.api.go(step)); res[kv[0]][as].showedEpoxy = true; }
+          catch (e) { res[kv[0]][as].showedEpoxy = false; res[kv[0]][as].showError = String((e && e.message) || e).slice(0, 100); }
         } catch (e) {
           res[kv[0]][as] = { opened: false, error: String((e && e.message) || e).slice(0, 140) };
         }

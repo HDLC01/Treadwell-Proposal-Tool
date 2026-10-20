@@ -58,5 +58,7 @@ def test_the_step_pills_of_a_v2_draft_go_to_the_v2_pages(page):
 def test_every_review_card_shares_one_set_of_columns():
     css = re.sub(r"\s+", " ", PAGE)
     assert ".rev-t,.mk{table-layout:fixed}" in css
+    # Quantity is a share of the table; Unit, Rate and Total are pixels, each wide enough for what the markup card puts in it (the 2026-10-20 fifth audit: a
+    # share of a narrow table cut the boxes off at about 916px, see test_v2_review_table_fits.py). Either way ONE rule gives a column to BOTH tables.
     for n in (2, 3, 4, 5):
-        assert re.search(r"\.rev-t th:nth-child\(%d\),\.mk th:nth-child\(%d\)\{width:\d+%%\}" % (n, n), css), n
+        assert re.search(r"\.rev-t th:nth-child\(%d\),\.mk th:nth-child\(%d\)\{width:\d+(?:%%|px)\}" % (n, n), css), n

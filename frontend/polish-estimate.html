@@ -496,6 +496,9 @@
     /* "How this is worked out": one .cap paragraph, one line per sentence. pre-line keeps the
        newlines the live repaint writes; overflow-wrap lets a long sum break at 390px. */
     .cap.trvhow{white-space:pre-line;overflow-wrap:anywhere;margin:0 0 12px;font-variant-numeric:tabular-nums}
+    /* Where the Travel Labor card goes when the line has been removed: one sentence and the control that brings it back (js/polish-estimate.js addTravelHtml). */
+    .trvadd{margin:0 0 12px}
+    .trvadd .cap{margin:0}
     .trvdist{margin:6px 0 10px}
     .trvdist .distrow{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:6px}
     .trvdist .distrow label{font:600 12px var(--sans);color:var(--ink-3)}
@@ -628,18 +631,23 @@
     /* THE WORKING (Hanz, 2026-10-19): every Review table has a labelled header row, Item | Quantity | Unit | Rate | Total. The
        table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page. */
     .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
-    .rev-t,.mk{min-width:560px}
+    /* 640 AND NOT 560 (2026-10-20 fifth audit): at about 916px the markup card cut off the Discount $ box, the Contingency and Fees boxes (a 104px box in a
+       column of 14% of the table, 78px at the old 560) and the "margin on cost" / "of subtotal + markups" words beside them. The three right-hand columns
+       now hold their boxes at every width the table can have, and below this width the table scrolls inside its own box instead of squeezing them. */
+    .rev-t,.mk{min-width:640px}
     /* ONE SET OF COLUMNS FOR EVERY CARD (browser walk, 2026-10-20: each card sized its own, so Quantity and Unit wandered
-       from card to card). Fixed layout takes the widths from the header row. */
+       from card to card). Fixed layout takes the widths from the header row. The Unit, Rate and Total columns are PIXELS, each wide enough for what
+       the markup card puts in it (a 104px box and the cell's own padding in Total, the % box in Rate, the words of Unit over two lines); Quantity is
+       a share of the table, and Item, which wraps, takes what is left. */
     .rev-t,.mk{table-layout:fixed}
-    .rev-t th:nth-child(2),.mk th:nth-child(2){width:20%}
-    .rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}
-    .rev-t th:nth-child(4),.mk th:nth-child(4){width:19%}
-    .rev-t th:nth-child(5),.mk th:nth-child(5){width:14%}
+    .rev-t th:nth-child(2),.mk th:nth-child(2){width:15%}
+    .rev-t th:nth-child(3),.mk th:nth-child(3){width:124px}
+    .rev-t th:nth-child(4),.mk th:nth-child(4){width:132px}
+    .rev-t th:nth-child(5),.mk th:nth-child(5){width:132px}
     .rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
            text-transform:uppercase;color:var(--ink-v);background:var(--rev-band,var(--surf-low));white-space:nowrap}
     .rev-t th.r,.mk th.r{text-align:right}
-    .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}
+    .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}
     .rev-t td.q,.rev-t td.rt,.mk td.q,.mk td.rt{white-space:nowrap}
     .rev-t .note.work,.mk .note.work{display:block;font:11px var(--mono);color:var(--ink-3)}
     .mk td.q,.mk td.rt{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3)}

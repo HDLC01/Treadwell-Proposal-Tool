@@ -885,6 +885,27 @@ at 300 miles it moves to 10 hours with the base's. Held by `tests/test_polish_tr
 and over every sequence of switches (job types, the estimator's own say, the Sheets panel's base changes, the miles corrected after
 any of them, a local job, no distance) by `tests/js/travel-sequence-harness.js` through `tests/test_polish_travel_sequences*.py`.
 
+A base the Sheets panel DEMOTES keeps its Travel Labor row (the fifth audit, 2026-10-20): `moveTravelLabor` gives the new carrier a copy and leaves the old carrier,
+an option now, the row it had, so the option prices its own drive from the moment of the pick and follows every later answer on its own crew. Before, the row MOVED, and the
+demoted sheet priced no drive until the draft was reloaded (`migrateModel` then gives a root a blank row, which the next answer filled): far Polish 4 x 12, an Epoxy sheet added and
+made the base, the miles typed as 300 and then 299, was $40,988 in the session and $41,771 after a reload. A pick followed by its undo no longer returns the model byte for byte (the
+Epoxy option keeps the row it took as the base). The walk of the fifth audit judges the session against a reload after every Sheets action (`RELOAD_AGREES`,
+`tests/test_polish_travel_sequences_reload*.py`), which no earlier walk could: each step of a walk starts from the draft the step before saved.
+
+**Nights and per diem days fill on a far job (Hanz, 2026-10-20: "Fill them automatically").** Kyle's sheet counts them off the labor (Polish!B65 is
+`=IF(Local="No", (labor$ - travel$)/rate/8)`, one night and one day of per diem for every man-day), and a far answer used to switch Lodging and Per Diem ON and leave their
+quantities empty, by the 2026-10-12 rule that a new bid starts empty. Now a far answer (typed miles, the lookup, a carrier that moves under a far distance on file) fills a
+quantity nobody has typed with the sheet's count of the carrier's labor (`followDistanceNights`, called by `applyDistance`, `clearDistance` and `followDistance`): the line goes on auto
+and carries `qty_follow: "labor"`, `syncAutoGuys` keeps its figure current like the crew-following Travel guys, and it is charged what the price charges (`travelQty`: `sheetNights` on a
+Polish section priced the sheet's way, the man-days on the others). Wichita, four guys for twelve days: 48 nights x $70 = $3,360 and 48 days x $45 = $2,160. TYPING IN THE BOX, OR CLEARING
+IT, MAKES IT THEIRS (`markTravelQtyTyped`, `qty_typed`, saved with the line): no answer fills it again, and a figure sitting in a box that is off auto is theirs without the mark (a bid saved since
+2026-10-12). Going local, or clearing the miles, takes a following figure back to empty and leaves a typed one (greyed while its line is off). A line on auto WITHOUT the marker, the older
+bid's, is never converted in either direction, and a saved bid never moves on open. An OPTION is untouched: it charges its own nights for its own labor (`optionTravelCosts`). The Labor step
+says it under each box (`travelQtyHint`), in the how-note (one sentence, "Nights and per diem days follow the man-days ..., Kyle's way"), and the Review's Hotel and Per Diem rows say it under
+the line's name. Held by `tests/test_polish_travel_round5.py`, and by `NIGHTS`, judged after every step of every walk. The Travel Labor card's x can be undone: with no Travel Labor line on the
+carrier the travel block draws an Add Travel Labor control (`addTravelLabor`: the row a new bid is seeded with, filled by the rule on a far job), and the summary no longer says Travel Labor
+"comes on" over a job with no line.
+
 **Done.**
 
 | What | Where |

@@ -500,22 +500,26 @@ def test_an_option_copys_drive_follows_the_miles_the_estimator_types(ran):
     the miles on its own crew: 50 miles is $30,872 on both (the option's row is emptied, no marker), 300 miles is 4 x 10 x $33 = $1,320 on both ($33,582 and $41,771), the miles
     cleared is $30,872 on both again, and 190 typed again gives back the figures the bid started with. The draft the page saved reopens to the same prices and saves nothing.
 
+    (The figures at 190 and 300 miles are the base's own Lodging and Per Diem more than the first audit's: since 2026-10-20 a far answer fills them with the labor's 48 man-days,
+    $3,360 + $2,160 inside the markups, as the option's own lines always charged theirs, so on the same crew the base and its copy price the same: $40,864 and $41,771, where the
+    base was $32,632 and $33,582 with its nights left empty. Nothing about the drive moved.)
+
     Mutation: leave the options out of an answer."""
     o = ran["optionFollowsMiles"]
     assert o["copyTab"] == "Copy1"
     expect = (
-        ("start", 190, (32632, 40864), _filled_row(6.5), _filled_row(6.5)),
+        ("start", 190, (40864, 40864), _filled_row(6.5), _filled_row(6.5)),
         ("local", 50, (30872, 30872), LOCAL_CARRIER_ROW, EMPTY_ROW),
-        ("farther", 300, (33582, 41771), _filled_row(10), _filled_row(10)),
+        ("farther", 300, (41771, 41771), _filled_row(10), _filled_row(10)),
         ("cleared", None, (30872, 30872), LOCAL_CARRIER_ROW, EMPTY_ROW),
-        ("again", 190, (32632, 40864), _filled_row(6.5), _filled_row(6.5)),
+        ("again", 190, (40864, 40864), _filled_row(6.5), _filled_row(6.5)),
     )
     for step, miles, totals, base, option in expect:
         s = o[step]
         assert (s["miles"], (s["totals"]["base"], s["totals"]["option"])) == (miles, totals), step
         assert s["baseRow"] == base and s["optionRow"] == option, step
     r = o["reopened"]
-    assert (r["totals"]["base"], r["totals"]["option"]) == (32632, 40864) and r["optionRow"] == _filled_row(6.5)
+    assert (r["totals"]["base"], r["totals"]["option"]) == (40864, 40864) and r["optionRow"] == _filled_row(6.5)
     assert r["saves"] == 0 and r["armed"] == 0, "a plain reopen of what was saved changes and saves nothing"
 
 
@@ -525,15 +529,31 @@ def test_a_demoted_bases_drive_follows_the_miles_as_an_option_on_the_page(ran):
     ($39,197 where the base is $30,872); the miles typed as 300 moved the base to 10 hours and left Epoxy's at 6.5 ($49,278). Now Epoxy's drive goes with the miles (its row
     emptied, $37,044) and comes back at 300 miles on its own 5 guys (5 x 10 x $33 = $1,650, $50,383).
 
+    (The base's totals at 190 and 300 miles, $40,864 and $41,771, carry its own Lodging and Per Diem on the labor's 48 man-days now: a far answer fills them, 2026-10-20.)
+
     Mutation: leave the options out of an answer."""
     d = ran["demotedOptionFollowsMiles"]
     assert d["epoxyBase"] == {"carrier": "Epoxy", "kinds": [["Polish", "option"], ["Epoxy", "base"]]}
     for step, totals, polish, epoxy in (
-            ("start", (32632, 49278), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("start", (40864, 49278), _filled_row(6.5), _filled_row(6.5, 5)),
             ("local", (30872, 37044), LOCAL_CARRIER_ROW, EMPTY_ROW),
-            ("farther", (33582, 50383), _filled_row(10), _filled_row(10, 5))):
+            ("farther", (41771, 50383), _filled_row(10), _filled_row(10, 5))):
         s = d[step]
         assert (s["carrier"], s["kinds"]) == ("Polish", [["Polish", "base"], ["Epoxy", "option"]]), step
+        assert (s["totals"]["base"], s["totals"]["option"]) == totals, step
+        assert s["polishRow"] == polish and s["epoxyRow"] == epoxy, step
+    # THE ROUTE THAT NEEDED THE FIFTH AUDIT: the base demoted in favour of a sheet that was ADDED (a fresh sheet holds no Travel Labor row: only the carrier has one). The row used to
+    # MOVE to the new carrier, so the demoted Polish had no drive to follow the miles with, in the session, whatever this test's name said. It keeps its row now (Epoxy took a copy):
+    # 4 x 6.5 x $33 from the pick, emptied whole at 50 miles (no marker), 4 x 10 x $33 at 300, while Epoxy, the base, goes 5 x 6.5, nothing, 5 x 10. (`totals.base` is the root sheet's own
+    # bid, the demoted Polish option here; `totals.option` is Epoxy's, the base.)
+    a = d["addedSheet"]
+    carrier_local = {"guys": 5, "days": "", "auto": True, "follow": "crew", "seed": "", "typed": False, "hoursTyped": False, "cost": 0}
+    for step, totals, polish, epoxy in (
+            ("start", (40864, 48437), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("local", (30872, 36165), EMPTY_ROW, carrier_local),
+            ("farther", (41771, 49542), _filled_row(10), _filled_row(10, 5))):
+        s = a[step]
+        assert (s["carrier"], s["kinds"]) == ("Epoxy", [["Polish", "option"], ["Epoxy", "base"]]), step
         assert (s["totals"]["base"], s["totals"]["option"]) == totals, step
         assert s["polishRow"] == polish and s["epoxyRow"] == epoxy, step
 
@@ -554,14 +574,18 @@ def test_a_saved_bid_whose_active_sections_labor_is_not_a_list_opens(ran):
     """A saved bid is whatever was saved, and migrateModel carries a section under `tabs` through as it came. Epoxy's labor was a string, a number, an object or a boolean, with a stated
     takeoff (so nothing reseeds it): syncAutoGuys walked it with `.forEach` and threw as the page opened, as a Combo, as Polish (the bid it was saved as was still a Combo when the sync
     first ran) and as Epoxy, and the estimator got no estimate. The page opens, shows its estimate, and the carrier's drive is as it was saved (4 x 6.5 x $33).
+    THE FIFTH AUDIT'S HALF: the sync's guard (laborLinesOf) let such a bid OPEN, and the first panel to touch the section threw when the estimator put it on show
+    (`M.labor.forEach is not a function`). A section's labor that is not a list now reads as an empty one in the model (migrateModel), so the section is put on show
+    and all three steps open. (The sync's own guard is held on the model, in test_polish_travel_hours.py: the page never hands it such a section any more.)
 
-    Mutation: walk a labor that is not a list."""
+    Mutation: read a section's labor that is not a list as itself (the model); walking it unguarded in the sync is test_polish_travel_hours.py's."""
     c = ran["corruptLabor"]
     assert sorted(c) == ["boolean", "number", "object", "string"]
     for kind, jobs in c.items():
         assert sorted(jobs) == ["combo", "epoxy", "polish"], kind
         for job, page in jobs.items():
             assert page["opened"] is True and page.get("shown") is True, "%s opened as %s: %s" % (kind, job, page.get("error"))
+            assert page["showedEpoxy"] is True, "%s opened as %s and threw when Epoxy was put on show: %s" % (kind, job, page.get("showError"))
         assert jobs["combo"]["carrier"] == "Polish" and jobs["combo"]["root"] == CREW_ROW and jobs["polish"]["root"] == CREW_ROW, kind
         assert jobs["epoxy"]["carrier"] == "Epoxy", kind
 
@@ -675,9 +699,12 @@ BREAKS = {
         "js/bid-model.js", "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));",
         "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));",
         lambda g: g["typedRateOnThePage"]["epoxy"]["rate"] != "40"),
-    "the sync walks a labor that is not a list": (
-        "js/bid-model.js", "var lines = laborLinesOf(s.section);", "var lines = s.section.labor || [];",
-        lambda g: any(page["opened"] is not True for jobs in g["corruptLabor"].values() for page in jobs.values())),
+    "a base demoted in favour of a fresh sheet loses its Travel Labor row to the new carrier": (
+        "js/bid-model.js", '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catch (err) { demoted = false; }', "    demoted = false;",
+        lambda g: g["demotedOptionFollowsMiles"]["addedSheet"]["start"]["polishRow"] is None),
+    "a section's labor that is not a list is not read as an empty one": (
+        "js/bid-model.js", "      if (badLabor) section.labor = [];", "      void badLabor;",
+        lambda g: any(page.get("showedEpoxy") is not True for jobs in g["corruptLabor"].values() for page in jobs.values())),
     # --- the page ---
     "the lookup's answer is handed the section on show": (
         "js/polish-estimate.js", 'B.applyDistance(ROOT, { miles: miles, source: "google", key: key });',

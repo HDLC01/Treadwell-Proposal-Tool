@@ -746,6 +746,12 @@ def test_typed_guys_are_worded_as_guys_one_round_trip_each_and_never_as_man_days
     assert "The guys are typed, so Travel Labor is your guys x those hours." in t["note"]
     assert "For reference, the man-days on the labor lines above are 48." in t["howText"], "the reference is for the nights and days typed below"
     assert "crew" not in (t["note"] + t["hint"] + t["howText"]).lower(), "the estimate page's column is Guys, never Crew"
+    # ...and when the nights and days are NOT typed, a far answer fills them (the fifth audit's decision), so the words say they follow the labor, with the man-days as the figure
+    f = ran["notesFollowing"]
+    assert f["how"] == t["how"], "the Travel guys are worded the same either way"
+    assert "Nights and per diem days follow the man-days on the labor lines above (48 now), a night and a day of per diem for each man-day, Kyle's way." in f["lines"]
+    assert not any(x.startswith("For reference") for x in f["lines"]), "nothing is typed below, so there is no reference to give"
+    assert "crew" not in f["howText"].lower() and "man-days (typed)" not in f["howText"]
 
 
 def test_a_cleared_guys_box_is_empty_and_says_so_and_never_the_guys_are_typed(ran):
@@ -799,11 +805,16 @@ def test_the_words_on_a_row_left_on_a_base_that_does_not_carry_the_travel(ran):
 
 
 # ── the other two lines, bad input, words ────────────────────────────────────────────────────────
-def test_lodging_and_per_diem_are_as_they_were(ran):
-    """Switched on by the answer, a hand flip never moved, and their quantities still open empty and typed."""
+def test_lodging_and_per_diem_come_on_by_the_answer_a_hand_flip_never_moves_and_their_quantities_follow_the_labor(ran):
+    """Switched on by the answer, and a hand flip never moved (Lodging flipped off by hand stays off, whatever the miles). Their QUANTITIES are a different box: until
+    2026-10-20 they opened empty and were typed, and a far answer left them so; now a far answer fills a quantity nobody typed with the sheet's count of the labor (4 guys x 12
+    days: 48 nights and 48 days of per diem), on auto and marked as following (`qty_follow`), hand flip or none: the quantity does not depend on the switch.
+
+    Mutation: leave the quantities empty; let a hand flip stop the fill."""
     ln = ran["lines"]
-    assert ln["lodging"] is False and ln["perDiem"] is True
-    assert ln["lodgingQty"] == "" and ln["perDiemQty"] == "" and ln["lodgingAuto"] is False and ln["perDiemAuto"] is False
+    assert ln["lodging"] is False and ln["perDiem"] is True and ln["lodgingHand"] is True
+    assert ln["manDays"] == 48 and ln["lodgingQty"] == 48 and ln["perDiemQty"] == 48
+    assert ln["lodgingAuto"] is True and ln["perDiemAuto"] is True and ln["lodgingFollow"] == "labor" and ln["perDiemFollow"] == "labor"
 
 
 def test_an_answer_with_no_usable_miles_changes_nothing(ran):
@@ -882,15 +893,17 @@ def test_what_the_estimator_typed_cleared_or_switched_off_on_an_option_is_left_a
 
 
 def test_a_sheet_the_sheets_panel_demoted_keeps_following_the_answers_as_an_option(ran):
-    """THE AUDIT'S SECOND ROUTE. A Combo (Polish 4 guys, Epoxy 5), Epoxy made the base (Polish becomes an option and the Travel Labor row moves to Epoxy), the bid reopened (the Polish
-    root is given the blank row it no longer has), Polish made the base again: Epoxy is an option holding the drive it was filled with (5 x 6.5 x $33) and Polish carries 4 x 6.5.
+    """THE AUDIT'S SECOND ROUTE. A Combo (Polish 4 guys, Epoxy 5), Epoxy made the base (Polish becomes an option; the new carrier takes the job's Travel Labor row and, since the
+    fifth audit, the demoted Polish KEEPS its own, on its own crew of 4: a copy went and nothing moved), the bid reopened (nothing to add: migrateModel finds the row it
+    holds), Polish made the base again: Epoxy is an option holding the drive it was filled with (5 x 6.5 x $33) and Polish carries 4 x 6.5.
     The miles corrected to 50 emptied Polish's hours and left the option's 6.5 hours priced; now the option's drive goes (empty, no marker), and at 300 miles it is 5 x 10 x $33 =
     $1,650 beside the base's $1,320.
 
     Mutation: leave the options out of an answer."""
     d = ran["optionsDemoted"]
     assert "error" not in d, d.get("error")
-    assert d["epoxyBase"]["carrier"] == "Epoxy" and d["epoxyBase"]["polish"] is None and d["epoxyBase"]["epoxy"] == filled(6.5, 5), "the row moved with the carrier"
+    assert d["epoxyBase"]["carrier"] == "Epoxy" and d["epoxyBase"]["epoxy"] == filled(6.5, 5), "the new carrier took the job's drive"
+    assert d["epoxyBase"]["polish"] == filled(6.5, 4), "the demoted Polish keeps a Travel Labor row of its own, filled, on its own crew (a copy went to the carrier)"
     p = d["polishBase"]
     assert (p["carrier"], p["kinds"]) == ("Polish", [["Polish", "base"], ["Epoxy", "option"]])
     assert p["polish"] == filled(6.5, 4) and p["epoxy"] == filled(6.5, 5)

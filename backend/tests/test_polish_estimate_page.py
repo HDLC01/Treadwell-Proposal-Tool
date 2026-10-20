@@ -3894,16 +3894,19 @@ def test_the_how_note_on_a_far_job_says_not_local_and_shows_every_sum(ran):
     # Nothing is on auto, so the man-days appear as a reference sentence, not as a working sum.
     assert "For reference, the man-days on the labor lines above are" in how
     assert "Man-days = guys x days" not in how
-    # Straight after the lookup nothing is typed, and the distance fills ONLY Travel Labor (Hanz, 2026-10-20): its hours, 5 for the
-    # 300 mile round trip of 150 miles, and its guys, which follow the crew (none typed yet, so 0). The nights and the days
-    # stay empty, every line is still $0, and each note says what to type. (Before 2026-10-20 the hours stayed empty as well.)
+    # Straight after the lookup nothing is typed, and the distance fills Travel Labor (Hanz, 2026-10-20): its hours, 5 for the
+    # 300 mile round trip of 150 miles, and its guys, which follow the crew (none typed yet, so 0). THE NIGHTS AND THE DAYS FOLLOW THE LABOR
+    # TOO (the same day's second decision, "Fill them automatically"): there is no crew yet, so they are 0 and say so, every line is still $0,
+    # and the sentence says what to type. (Before 2026-10-20 the hours stayed empty as well, and then the nights and days did: "Type the nights.")
     e = ran["distance"]["howNights"]["auto"]
-    assert e["travelBoxes"] == {"guys": "0", "hours": "5", "nights": "", "days": ""}, e["travelBoxes"]
+    assert e["travelBoxes"] == {"guys": "0", "hours": "5", "nights": "0", "days": "0"}, e["travelBoxes"]
     assert e["travelRow"]["days"] == 5 and e["travelRow"]["guys"] == 0
     assert e["travelRow"]["guys_auto"] is True and e["travelRow"]["hours_seed"] == 5 and e["travelRow"]["guys_follow"] == "crew"
     assert e["cost"] == {"lodging": 0, "per_diem": 0, "travel": 0}
-    assert _how_line(e["how"], "Lodging").endswith("= $0.00. Type the nights.")
-    assert _how_line(e["how"], "Per Diem").endswith("= $0.00. Type the days.")
+    assert _how_line(e["how"], "Lodging") == "Lodging: 0 nights (follows the labor) x $70.00 = $0.00"
+    assert _how_line(e["how"], "Per Diem") == "Per Diem: 0 days (follows the labor) x $45.00 = $0.00"
+    assert ("Nights and per diem days follow the man-days on the labor lines above (none yet), a night and a day of per diem for each man-day, Kyle's way. "
+            "Type the guys and the days on the labor lines above and they fill in.") in e["how"].split("\n")
     assert _how_line(e["how"], "Travel Labor") == (
         "Travel Labor: 0 guys x 5 drive hours (one 300 mile round trip at 60 mph from the Olathe office, for each guy) x $33.00 = $0.00. "
         "The guys follow the labor lines above, so type the guys there.")
@@ -4690,18 +4693,19 @@ def test_on_a_far_job_the_distance_fills_travel_labor_and_no_other_card(ran):
 
 
 @needs_node
-def test_a_new_bids_nights_and_days_open_empty_with_the_rates_filled_and_the_distance_fills_only_travel_labor(ran):
-    """150 miles came back: Lodging and Per Diem are switched ON by the distance (far job) and their nights and days stay
-    EMPTY (typed, as 2026-10-12 made them). Travel Labor's hours read 5, a round trip at 60 mph (they stayed empty from
+def test_a_new_bids_nights_and_days_open_empty_and_a_far_answer_puts_them_on_the_labor_with_the_rates_filled(ran):
+    """150 miles came back: Lodging and Per Diem are switched ON by the distance (far job) and, since Hanz's decision of 2026-10-20 ("Fill them
+    automatically"), their nights and days go on the labor: nobody has typed a crew yet, so the boxes read 0 (a new bid opened them EMPTY,
+    2026-10-12, and the local pages below still do). Travel Labor's hours read 5, a round trip at 60 mph (they stayed empty from
     2026-10-12 to 2026-10-20). The two rates are the Markups -> Global figures ($80 / $50).
 
     Mutation: let syncAutoGuys fill the quantity of a line whose qty_auto is false -- the nights read the man-days;
     or leave the fill out of applyDistance -- the hours read empty."""
     q = ran["qtyEmpty"]
-    assert q["travelBoxes"] == {"lodging": "", "per_diem": "", "lodgingRate": "80", "perDiemRate": "50"}
+    assert q["travelBoxes"] == {"lodging": "0", "per_diem": "0", "lodgingRate": "80", "perDiemRate": "50"}
     s = q["openState"]
     assert s["local"] is False and s["lodgingOn"] is True and s["perDiemOn"] is True
-    assert s["lodgingAuto"] is False and s["perDiemAuto"] is False
+    assert s["lodgingAuto"] is True and s["perDiemAuto"] is True, "a far answer put the two quantities on the labor"
     assert q["travelRow"]["days"] == 5, "the distance answer did not fill the drive hours"
 
 
@@ -4715,16 +4719,17 @@ def test_lodging_on_with_no_nights_prices_nothing_and_two_typed_nights_price_two
 
 
 @needs_node
-def test_typing_the_crew_moves_no_lodging_or_per_diem_quantity_and_travel_labors_guys_follow_it(ran):
-    """15 man-days (3 guys x 5 days) after the crew is typed. The nights stay what was typed (2), the Per Diem box stays
-    empty, and the hint says the figure as words, never a value. Travel Labor's guys are the exception on this far job
-    (the distance put them on the crew, 2026-10-20): the box reads 3, the most guys on any line, NOT the 15 man-days, and the line
-    prices 3 x 5 hours x its $36 rate.
+def test_typing_the_crew_moves_no_typed_quantity_the_untouched_per_diem_follows_it_and_travel_labors_guys_follow_it(ran):
+    """15 man-days (3 guys x 5 days) after the crew is typed. The nights the estimator typed stay what was typed (2) and the hint under them
+    says the figure as words, never a value; the Per Diem days nobody typed FOLLOW the labor (the far answer put them on it, 2026-10-20) and
+    read 15. Travel Labor's guys follow the crew the same way on this far job: the box reads 3, the most guys on any line, NOT the 15
+    man-days, and the line prices 3 x 5 hours x its $36 rate.
 
-    Mutation: leave the syncAutoGuys effect running for Lodging and Per Diem -- the nights or the days read 15 -- or take
-    Travel's Guys off the crew after the distance put them there -- the box reads empty -- or put them on the man-days (15)."""
+    Mutation: leave the syncAutoGuys effect running for a quantity the estimator typed -- the nights read 15 -- or stop it following for the
+    untouched Per Diem -- the days read 0 -- or take Travel's Guys off the crew after the distance put them there -- the box reads empty -- or
+    put them on the man-days (15)."""
     a = ran["qtyEmpty"]["afterCrew"]
-    assert a["nights"] == "2" and a["perDiemBox"] == ""
+    assert a["nights"] == "2" and a["perDiemBox"] == "15"
     assert a["travelGuys"] == 3 and a["travelGuysBox"] == "3"
     assert a["travelCost"] == 3 * 5 * 36 == 540 and a["travelCostHead"] == "$540", "the card's own figure moved with the crew"
     assert a["hint"] == "Man-days from the tasks above: 15."

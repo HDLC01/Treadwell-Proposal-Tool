@@ -762,8 +762,8 @@ MUTATIONS = {
         lambda r: r["typedAtDefaultPage"]["clearedByChange"]["mark"] is True
         and r["typedAtDefaultPage"]["clearedByChange"]["box"] == "33"),
     "the step pips price the labor without the prevailing rate": (
-        PAGE, "M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
-        "M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });",
+        PAGE, "(M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
+        "(M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });",
         lambda r: r["steps"]["on"]["step"]["labor"] == "" and r["steps"]["on"]["step"]["review"] == ""),
     "the crew is not paid the trade picked": (
         MODEL, "    if (p.trades instanceof Array) p = prevailingCrewTrade(p) || {};",
