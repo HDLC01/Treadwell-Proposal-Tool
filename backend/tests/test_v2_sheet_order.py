@@ -429,7 +429,7 @@ def test_a_list_that_says_nothing_about_the_order_leaves_the_keys_in_charge(ran)
 
 
 def test_whatever_in_a_list_names_no_sheet_of_the_bid_names_nothing(ran):
-    """A repeat, an id the bid has no sheet for, the root, `toString` and `__proto__` (which every object has and `tabs` does not), a string, a number and a null where an entry belongs."""
+    """A repeat, an id the bid has no sheet for, the root, `toString` and `__proto__` (which every object has and `tabs` does not), and a string, a number, a null and a list where an entry belongs."""
     got = ran["model"]["priced"]
     assert got["junk"] == got["named2"], got["junk"]
 
