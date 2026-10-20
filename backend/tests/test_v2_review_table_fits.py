@@ -19,12 +19,17 @@ THE FIX (polish-estimate.html's CSS), two parts:
      (Quantity, Unit, Rate) scrolling beneath it. `scroll-padding-right` keeps a box that is tabbed into clear of the pinned column, and the borders are the CELLS' (`border-collapse: separate`)
      because a collapsed border belongs to the table and would not travel with a pinned cell.
 
-NOTHING HERE NEEDS A BROWSER TO BE CHECKED: the layout of a fixed-width table is arithmetic on the page's own CSS, and the box it sits in is arithmetic on the page's CSS and the shell's (auth.js's
-`--tw-w`, and its 768px breakpoint for moving the body). That arithmetic is CALIBRATED against the walk: test_the_model_reproduces_what_the_staging_walk_measured runs it on the old 640px minimum and
-gets the walk's own five numbers (981px: nothing hidden; 980: 1px; 916: 65px; 821: 160px; 800: 181px), so the box formula is the browser's and not a guess. The widths a column NEEDS were measured in
-a browser on the real Review (Chrome through Playwright, 2026-10-20: no cell of any of the five cards overflowed at any width from 560 to 1000px); they are the constants below, and everything
-that can be read off the CSS (the boxes' widths, the cell padding, the columns, the minimum) IS read off it, so a box made wider without a column made wider goes red. That every row of every
-card has the Total as its fifth cell (a band row in the markup card is one cell, colspan 5) is checked by executing the page in test_v2_review_working.py.
+WHAT THIS FILE VERIFIES, AND WHAT IT DOES NOT. It verifies CSS ARITHMETIC: what a column HAS (its width, the cells' padding, the table's minimum) and the box a table sits in are read off the page's own CSS and the shell's
+(auth.js's `--tw-w`, and its 768px breakpoint for moving the body), and what a column NEEDS is a set of CONTENT WIDTHS TYPED BELOW. The box formula is CALIBRATED against a real browser: test_the_model_reproduces_what_the_staging_walk_measured
+runs it on the old 640px minimum and gets the walk's own five numbers (981px: nothing hidden; 980: 1px; 916: 65px; 821: 160px; 800: 181px), so the box formula is the browser's and not a guess. The typed content widths are not all
+measurements: the "$" and "%" with their gaps, the longest Unit text and word, and the QUANTITY heading were measured by Chrome on ROUND 5's Review (2026-10-20: a 640px table whose columns were wider than their contents needed, and in which no
+cell of any of the five cards overflowed at any width from 560 to 1000px), the working line and the widest rate are worked out at 0.6em a character, and Item's 122px of room is the floor round 5 chose. ROUND 6'S OWN WIDTHS (the 82, 90, 108
+and 126px columns, the 8px cell padding, the 550px minimum and the pinned Total column) WERE NEVER MEASURED IN A BROWSER when they were written, and this file still checks them only as typed content widths that fit the widths the CSS gives them.
+ONE OFF, WHICH THIS FILE CANNOT REPEAT (a headless run lays nothing out): on 2026-10-21 Chrome driven over the real page, a Polish bid and an Epoxy bid on a small stub library, the sidebar open and shut, 13 windows from 360 to 1920px, found no
+cell whose content overflowed it, the Total column inside its box at every width, no table scrolling where its box was 550px or more (the 575px of 916px with the sidebar open, the 559px of 900px), every table scrolling inside its own box where the box was narrower, and no
+sideways scroll of the page; the same scan on a copy with the Total column squeezed to 70px flagged overflow in every configuration, so a clean result is not vacuous. THE STAGING WALK CHECKS THE REST: the real library's names and figures, and
+that the pinned column paints over what scrolls under it. Everything that can be read off the CSS IS read off it, so a box made wider without a column made wider goes red. That every row of every card has the Total as its fifth cell (a band row in
+the markup card is one cell, colspan 5) is checked by executing the page in test_v2_review_working.py.
 
 ROUND 6 AUDIT, U1: THE WARNING BESIDE A TYPED % BOX. With the Total column pinned and opaque, the red refusal beside a box typed with something unusable ("not a number, so it is not used":
 `.adjwarn` inside `.adjbox`, in the Rate cell) was CUT OFF under it. The box was a one-line `inline-flex; white-space: nowrap` row, so it was no narrower than its three parts side by side at their narrowest (the 64px
@@ -33,7 +38,7 @@ opaque background painted over it. The fix gives the warning a LINE OF ITS OWN I
 width, may break a long word, and the box keeps its place on the first line. `warning_problems` reads that off the CSS. The markup it relies on (the warning is the last child of the .adjbox of
 its own box, in the Rate cell, or in the Total cell for the dollar box) is checked by EXECUTING the page on a Review drawn with every box invalid, in test_v2_review_working.py.
 MEASURED ONCE IN A BROWSER, which this file cannot repeat (a headless run lays nothing out): Chrome driven over the real page on 2026-10-21, 916px wide with the sidebar open, the audit's figures typed.
-On the old rules the five % warnings were a column 35 to 46px wide that began 21px inside the Rate cell and ran 14 to 25px past its edge, every line of it under the Total cell. With the fix each is
+On the old rules the five % warnings were a column 35 to 46px wide that began 21px short of the Rate cell's right edge and ran 14 to 25px past it, every line of it under the Total cell. With the fix each is
 92px wide, the room a Rate cell has (104px in the Total cell, for the dollar box), and nothing paints over it: a Polish bid at 916 and 800px, an Epoxy bid at 916, 800 and 390px.
 
 The last block puts the old rules (and each new rule, one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
@@ -50,7 +55,7 @@ PAGE_PATH = FRONTEND / "polish-estimate.html"
 AUTH_PATH = FRONTEND / "auth.js"
 JS_PATH = FRONTEND / "js" / "polish-estimate.js"
 
-# What the cells hold, in pixels of CONTENT, measured on the real Review in a browser (see the docstring). The cell padding and the boxes' own widths are read off the CSS instead.
+# What the cells hold, in pixels of CONTENT, TYPED here: the first five were measured in a browser on ROUND 5's Review, the next two are worked out, and the last is the floor round 5 chose for Item (see the docstring). The cell padding and the boxes' own widths are read off the CSS instead.
 DOLLAR_AND_GAP = 12          # the "$" before the Discount dollar box, and the gap after it
 PERCENT_AND_GAP = 16         # the "%" after a rate box, and the gap before it
 LONGEST_UNIT_TEXT = 127      # "of subtotal + markups" at 13px: what a Unit cell needs if its words cannot wrap
