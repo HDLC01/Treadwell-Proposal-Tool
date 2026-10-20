@@ -556,6 +556,21 @@ BREAKS = {
         MODEL, OFF_LINE, '      if (far && l.enabled !== true && !qtyFollows(l)) { l.qty_typed = false; l.qty_auto = false; l.qty = ""; return; }',
         lambda g: g["handoff"]["typed"]["lodging"]["qty"] != "10"),
     # X4(c): a null in a list
+    "a null in the root's labor is kept": (
+        MODEL, HOLES_LABOR, "      var laborIn = model.labor;",
+        lambda g: _holey(g, "root labor")),
+    "a null in the root's takeoff is kept": (
+        MODEL, HOLES_TAKEOFF, "        takeoff: model.takeoff, labor: laborIn,",
+        lambda g: _holey(g, "root takeoff")),
+    "a null in a section's labor is kept": (
+        MODEL, HOLES_SECTION_LABOR, "      if (badLabor) section.labor = s.labor instanceof Array ? s.labor : [];",
+        lambda g: _holey(g, "Epoxy labor") or _holey(g, "option labor")),
+    "a null in a section's takeoff is kept": (
+        MODEL, HOLES_SECTION_TAKEOFF, "      if (badTakeoff) section.takeoff = s.takeoff instanceof Array ? s.takeoff : [];",
+        lambda g: _holey(g, "Epoxy takeoff") or _holey(g, "option takeoff")),
+    "a list with no hole loses its rows": (
+        MODEL, HOLES_FILTER, HOLES_FILTER.replace(": rows;", ": [];"),
+        lambda g: any(_holey(g, k) for k in ("root labor", "root takeoff", "Epoxy labor", "option labor"))),
 }
 
 

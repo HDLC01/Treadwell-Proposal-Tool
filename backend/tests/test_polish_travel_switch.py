@@ -705,7 +705,7 @@ BREAKS = {
         "js/bid-model.js", '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catch (err) { demoted = false; }', "    demoted = false;",
         lambda g: g["demotedOptionFollowsMiles"]["addedSheet"]["start"]["polishRow"] is None),
     "a section's labor that is not a list is not read as an empty one": (
-        "js/bid-model.js", "      if (badLabor) section.labor = [];", "      void badLabor;",
+        "js/bid-model.js", "      if (badLabor) section.labor = s.labor instanceof Array ? withoutHoles(s.labor) : [];", "      void badLabor;",
         lambda g: any(page.get("showedEpoxy") is not True for jobs in g["corruptLabor"].values() for page in jobs.values())),
     # --- the page ---
     "the lookup's answer is handed the section on show": (

@@ -4196,13 +4196,24 @@
     return copyInto(out, Object.fromEntries(rest));
   }
 
+  /** A LIST WITHOUT ITS HOLES (round 6, part 2, X4c). A labor or takeoff list that holds a null (or an undefined) has a row that prices nothing and says nothing, and every panel reads
+   *  `.label` or `.measurement` of each row: the fuzz of the saved shapes found this the one hostile value that still made the page throw on open. A hole is read as no row. `rows`
+   *  handed back as it is when it is not a list or holds no hole, so a sound bid comes back byte for byte; otherwise a NEW list, the input untouched. */
+  function hasHoles(rows) {
+    return rows instanceof Array && rows.some(function (r) { return r === null || r === undefined; });
+  }
+  function withoutHoles(rows) {
+    return hasHoles(rows) ? rows.filter(function (r) { return r !== null && r !== undefined; }) : rows;
+  }
+
   /** `tabs` WITH EVERY SECTION'S LABOR AND TAKEOFF READ AS A LIST (the 2026-10-20 fifth audit). `tabs` is carried through as it came and is never
    *  looked into, which left one gap: a saved section whose `labor` (or `takeoff`) is a string, a number, an object, a boolean or null opened
    *  fine (the settling and the sync read the lists through laborLinesOf) and then THREW on the first panel that touched it, the moment the
    *  estimator put that sheet on show (`M.labor.forEach is not a function`: no panel at all). The root already reads a labor that is not a list
    *  as the shipped rows (migrateModel); a section has no shipped rows to fall back on, so it reads as an EMPTY list, which every panel, the
    *  sync and the price already handle. ONLY A KEY THE SECTION STATES AND THAT IS NOT A LIST is replaced (an absent key stays absent, and a
-   *  list is never touched, so every well-formed bid comes back byte for byte). A NEW object when anything was replaced, built without writing
+   *  list is never touched, so every well-formed bid comes back byte for byte), AND A LIST THAT HOLDS A NULL LOSES ITS HOLES (round 6, part 2:
+   *  withoutHoles; the panels read `.label` and `.measurement` of every row). A NEW object when anything was replaced, built without writing
    *  the input; the `tabs` handed in is returned as it is when every section is sound. */
   function tabsReadAsLists(tabs) {
     if (!isObject(tabs)) return tabs;
@@ -4210,12 +4221,12 @@
     Object.keys(tabs).forEach(function (id) {
       var s = tabs[id];
       if (!isObject(s)) return;
-      var badLabor = Object.prototype.hasOwnProperty.call(s, "labor") && !(s.labor instanceof Array);
-      var badTakeoff = Object.prototype.hasOwnProperty.call(s, "takeoff") && !(s.takeoff instanceof Array);
+      var badLabor = Object.prototype.hasOwnProperty.call(s, "labor") && (!(s.labor instanceof Array) || hasHoles(s.labor));
+      var badTakeoff = Object.prototype.hasOwnProperty.call(s, "takeoff") && (!(s.takeoff instanceof Array) || hasHoles(s.takeoff));
       if (!badLabor && !badTakeoff) return;
       var section = copyInto({}, s);
-      if (badLabor) section.labor = [];
-      if (badTakeoff) section.takeoff = [];
+      if (badLabor) section.labor = s.labor instanceof Array ? withoutHoles(s.labor) : [];
+      if (badTakeoff) section.takeoff = s.takeoff instanceof Array ? withoutHoles(s.takeoff) : [];
       fixed = copyInto(fixed || copyInto({}, tabs), Object.fromEntries([[id, section]]));
     });
     return fixed || tabs;
@@ -4231,14 +4242,14 @@
     if (model.version === 2) {
       // THE CARDS NOBODY FILLED IN ARE NOT OPENED (Hanz, 2026-10-09: no empty cards). Such a row
       // prices $0, so no total moves. Travel is never one of them.
-      var laborIn = model.labor;
+      var laborIn = withoutHoles(model.labor);        // a null row is no row (withoutHoles)
       if (laborIn instanceof Array && laborIn.length) {
         laborIn = pinSavedBlankRates(dropEmptyLaborRows(laborIn));
         if (!laborIn.length) laborIn = [withHoursSeed(travelSeed())];
       }
       var out = {
         version: 2,
-        takeoff: model.takeoff, labor: laborIn,
+        takeoff: withoutHoles(model.takeoff), labor: laborIn,
         conditions: {}, contingency: model.contingency, fees: model.fees,
         totals: (model.totals && typeof model.totals === "object") ? model.totals : {}
       };

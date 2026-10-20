@@ -417,10 +417,10 @@ BREAKS = {
         or g["demotion"]["addedSheet"]["session"]["at300"] != g["demotion"]["addedSheet"]["reloaded"]["at300"]),
     # B
     "a section's labor that is not a list is left as it was saved": (
-        "js/bid-model.js", "      if (badLabor) section.labor = [];", "      void badLabor;",
+        "js/bid-model.js", "      if (badLabor) section.labor = s.labor instanceof Array ? withoutHoles(s.labor) : [];", "      void badLabor;",
         lambda g: any(p["threw"] or not p["opened"] for shape in ("string", "number", "object", "boolean", "null") for p in g["badShapes"][shape]["labor"].values())),
     "a section's takeoff that is not a list is left as it was saved": (
-        "js/bid-model.js", "      if (badTakeoff) section.takeoff = [];", "      void badTakeoff;",
+        "js/bid-model.js", "      if (badTakeoff) section.takeoff = s.takeoff instanceof Array ? withoutHoles(s.takeoff) : [];", "      void badTakeoff;",
         lambda g: any(p["threw"] or not p["opened"] for shape in ("string", "number", "object", "boolean", "null") for p in g["badShapes"][shape]["takeoff"].values())),
     "the rail walks a labor that is not a list": (
         "js/polish-estimate.js", RAIL_LABOR, "    M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
