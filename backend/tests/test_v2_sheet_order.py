@@ -229,6 +229,12 @@ def test_a_copy_takes_its_own_place_last_and_never_its_sources(ran):
     assert got["copy"]["copyOfCopy"]["id"] == "Copy4" and got["copy"]["copyOfCopy"]["seqs"]["Copy4"] == 6, got["copy"]["copyOfCopy"]
 
 
+def test_an_option_added_to_a_bid_goes_last(ran):
+    got = ran["model"]["option"]
+    assert got["order"] == ["Polish", "Epoxy", "Copy1", "Copy2", GYP, "Seal"], got["order"]
+    assert got["seqs"]["Seal"] == 5 and got["seqs"]["Epoxy"] == 1, got["seqs"]
+
+
 def test_a_freed_copy_id_handed_out_again_is_last(ran):
     got = ran["model"]["reused"]
     assert got["id"] == "Copy1" and got["order"] == ["Polish", "Epoxy", "Copy2", GYP, "Copy1"], got
@@ -308,7 +314,7 @@ MUTATIONS = {
         lambda r: _flipped(r) and len(set(r["model"]["stampedOrders"])) > 1),
     "a new section is given no place": (
         MODEL, PUT_STAMP, "    var body = section;",
-        lambda r: r["model"]["copy"]["seqs"].get("Copy3") is None and r["model"]["reused"]["seqs"].get("Copy1") is None),
+        lambda r: r["model"]["copy"]["seqs"].get("Copy3") is None and r["model"]["reused"]["seqs"].get("Copy1") is None and r["model"]["option"]["seqs"].get("Seal") is None),
     "a new section takes the first place": (
         MODEL, PUT_STAMP, "    var body = isObject(section) && !hasSeq(section) ? Object.assign({}, section, { seq: 1 }) : section;",
         lambda r: r["model"]["copy"]["seqs"].get("Copy3") != 5 and r["model"]["copy"]["order"][-1] != "Copy3"),

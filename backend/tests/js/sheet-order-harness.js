@@ -388,6 +388,8 @@ async function main() {
     // a copy takes its own place, last, whatever the source's was
     const copied = B.copySection(m0, "Epoxy", { state: {} });
     const copyOfCopy = B.copySection(copied.model, copied.id, { state: {} });
+    // an option added to a bid (the Seal sheets) goes last too
+    const optioned = B.addOption(m0, "Seal", { state: {} });
     // a freed Copy<N> id handed out again goes last
     const freed = B.deleteSection(m0, "Copy1", { state: {} }).model;
     const reused = B.copySection(freed, "Epoxy", { state: {} });
@@ -429,6 +431,7 @@ async function main() {
       alreadyStampedSame: B.withSectionOrder ? B.withSectionOrder(m0) === m0 : null,
       copy: { id: copied.id, seqs: seqs(copied.model), order: ids(copied.model), copyOfCopy: { id: copyOfCopy.id, seqs: seqs(copyOfCopy.model), order: ids(copyOfCopy.model) } },
       reused: { id: reused.id, order: ids(reused.model), seqs: seqs(reused.model) },
+      option: { order: ids(optioned), seqs: seqs(optioned) },
       hostile: hostileStamped ? { same: hostileStamped === hostile, strange: hostileStamped.tabs.Strange, seqsUntouched: Object.keys(hostileStamped.tabs).filter((k) => k !== "Strange").every((k) => hostileStamped.tabs[k].seq === hostile.tabs[k].seq) } : null,
       unreadable: unreadableStamped ? { same: unreadableStamped === unreadable } : null,
       oldBid: { held: Object.keys(oldBid.tabs), copy: { id: oldAdd.id, order: ids(oldAdd.model), seqs: seqs(oldAdd.model) }, fresh: { id: oldFresh.id, order: ids(oldFresh.model), seqs: seqs(oldFresh.model) } },
