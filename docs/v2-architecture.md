@@ -918,6 +918,39 @@ sentence, "Nights and per diem days follow the man-days ..., Kyle's way"), and t
 carrier the travel block draws an Add Travel Labor control (`addTravelLabor`: the row a new bid is seeded with, filled by the rule on a far job), and the summary no longer says Travel Labor
 "comes on" over a job with no line.
 
+**The "no Travel Labor" answer belongs to the sheet whose line went (round 6, part 2, 2026-10-20).** The round-5 verification found a session and a reload of the SAME draft pricing $783 apart (far Combo,
+switched to Epoxy, the x on the Epoxy sheet's Travel Labor, back to Combo, 300 miles typed; far Polish, the x, an Epoxy sheet made the base, Add Travel Labor on it, the Polish option read) and traced
+both to one line: `migrateModel` appended a blank Travel Labor row to the ROOT whenever the root had none, even when the root was off (an Epoxy job's Polish) or an option. A job-type switch or a base
+pick moves the carrier's row off the root, the reload put a blank one back on a root that carries nothing, and when the carrier came back the distance filled and priced that row, but only if a
+reload had happened in between. Now:
+- **The blank row goes only to a root that carries the job's travel** (`carrierTabOf`: the root is its own carrier when its sections cannot be read) **and the job has not said it has no drive.** The
+  stale draft it exists for (saved before 2026-09-12) has no sections, so it still gets its row. A plain reopen of any draft writes nothing and moves no row, which every walk now judges on EVERY
+  Travel Labor row, a blank one included (`shape` used to leave blank rows out of "as it was", which is how the reopen that appended one looked the same as the page that saved it).
+- **The root's `no_travel_labor` is the JOB's answer: the carrier's x, or the library's decline on a new bid.** The x on an OPTION's line says only that the option has none and records nothing (nothing
+  puts a row on an option: `migrateModel` never reads a section under `tabs`, and the root is given a row only when it carries the travel), and the x on a leftover row on a base that does not carry the
+  travel says nothing (`travelLaborRemoved(model, tab)`). Round 5 set the flag for ANY Travel line, which outlived its meaning: an option's x set a flag that no control could clear (Add Travel Labor was drawn only on a
+  carrier with no line), hid a stranded row from `strandedTravelTab`, and kept a legacy root row from being upgraded (a 2026-09-12 row left at $0 instead of $132).
+- **Add Travel Labor is drawn on any sheet that can hold a drive and has none**: the carrier, or an option (`travelLaborCanBeAdded`; a base that does not carry the job's travel is refused: the drive is
+  charged once, on the carrier). It takes back only that sheet's answer: Add on the carrier answers the job's "no drive" again, Add on an option leaves the job's answer exactly as it is and fills the
+  option's line by the distance on its OWN crew (`addTravelLabor(model, row, tab)`).
+- **A job-type switch after the carrier's x HONOURS the answer (decided 2026-10-20).** The job has no drive, so the new carrier is not seeded a line (`seedNewSections`: it was seeded a priced
+  4 x 6.5 = $858 while the flag still said none), none is carried to it (`strandedTravelTab`, `followDistance`), and a blank line the new carrier already held (a new Epoxy bid's off root keeps the shipped four rows)
+  is taken off it (`releaseNobodysTravelRow`: a line nobody typed; one the estimator typed, cleared, switched off or re-rated is theirs and stays, and the job then has a drive). The flag is put back
+  to what it is whenever a restructure hands the job a line, a base pick that makes an option holding its own line the base included (`settleTravelAnswer`, from `followDistance` and `pickBase`): a
+  flag over a carrier that holds a line is no answer to anything. The alternative, "start fresh" (a new carrier is seeded like any new sheet and the answer is dropped), was not taken: a job-type switch
+  must not put back, at $858, a line the estimator removed. The library's own decline is the same flag, so a library that scopes Travel to another work type does not seed the new section of a job
+  that was declined for its first one; Add Travel Labor on the carrier is the way back.
+- **A saved bid's flag is read as the carrier's answer on open:** kept while the carrier holds no Travel Labor line, dropped when it holds one (the flag prices nothing, so no saved bid moves: the labor
+  total is read before and after, and a far saved bid with the flag over its Travel line opens at the $39,742 the parent of this change prices it at, both in `test_polish_travel_round6_answer.py`), and a legacy Travel row is upgraded to the sheet's hours at the company rate whether or not the flag is on the bid.
+- Also in this round: a Lodging or Per Diem line the estimator switched OFF is left alone by an answer (it used to be filled while it was off, which a hand flip does not say and Travel Labor does not do)
+  and is filled the moment they switch it ON on a far job, so it never comes on empty (`followDistanceNights`'s `onlyKey`); a labor or takeoff list that holds a null reads as one without it
+  (`withoutHoles`: the one hostile shape a fuzz of every path of four saved bids still threw on); and the x on a labor line pressed from the keyboard leaves focus on the next line's x, else the
+  previous one's, else Add Travel Labor, else the Add labor line (`refocusAfterRemoval`: the panel is drawn again and the button died with it, so focus fell to the page).
+- **Left as it is:** a typed drive edit made on the carrier is not carried back when the base flips back. A demoted base keeps its own copy of the row (an option is priced apart), so when the option comes
+  back both rows are the estimator's and both stay: the edit sits on the option, not lost, and which of two typed rows is the job's drive needs a decision (a row remembering where it was copied from would settle it).
+Held by `tests/test_polish_travel_round6_answer.py` (the audit's own sequences on the page with every reload re-keyed as the jsonb column hands it back, and a mutation entry for each line) and over
+every sequence by the answer walks, `tests/test_polish_travel_sequences_answer.py` (`ANSWER_OWNER`, `ANSWER_HELD`, `RELOAD_AGREES`).
+
 **Done.**
 
 | What | Where |
