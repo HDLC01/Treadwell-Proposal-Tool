@@ -708,7 +708,12 @@
        wears the brand tint, so what somebody changed stands out from what the sheet decided. The rate the chain used
        is kept beside it for the repaint, not drawn (.mkused). */
     .mkused{display:none}
-    .adjbox{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+    /* THE WARNING GETS A LINE OF ITS OWN INSIDE ITS CELL (2026-10-21, the audit of the sixth round). It was a third item in a one-line row (nowrap, no narrower than the 64px box, its "%" and the
+       warning's longest word side by side, which is more than the 92px a Rate cell holds), so the words stood in a column that began inside the cell and ended under the pinned Total column,
+       whose opaque background painted over them. Now the row wraps and the warning takes the whole line (flex-basis 100%), so it is as wide as its cell and no wider, wraps there, may break a
+       long word and is not capped. The box and its % keep to the right of the cell, where they sit with no warning, so nothing jumps when one appears. The dollar box in the Total cell does
+       the same inside its own. backend/tests/test_v2_review_table_fits.py reads these two rules, and test_v2_review_working.py draws a Review with every box invalid to see the warning is in its cell. */
+    .adjbox{display:inline-flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px;white-space:nowrap}
     .adjbox input,.mk .adjbox input{width:64px;text-align:right;font:600 13px var(--mono);
         font-variant-numeric:tabular-nums;border:1.5px solid var(--ink-3);border-radius:6px;padding:5px 8px;
         background:var(--card);color:var(--ink);box-shadow:inset 0 1px 2px rgba(27,28,28,.06)}
@@ -719,7 +724,7 @@
     .adjbox input:focus,.mk input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(200,16,46,.16)}
     .mk .hbline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
     .mk tr.band .bandnote{margin-left:8px;font:500 11px var(--sans);letter-spacing:0;text-transform:none;color:var(--ink-v)}
-    .adjwarn{display:block;white-space:normal;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:220px}
+    .adjwarn{display:block;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:none}
     .adjwarn[hidden]{display:none}
 
     /* Intake's `.sw` switch (styles.css), shrunk to sit inside a table cell instead of its own

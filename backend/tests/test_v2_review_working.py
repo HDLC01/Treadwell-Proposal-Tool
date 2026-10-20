@@ -13,6 +13,11 @@ PROVEN BY EXECUTION. tests/js/review-working-harness.js boots js/polish-estimate
 `problems()` holds every figure on screen to the figure the chain priced with (the bid the page computed, the row prices the page's own
 pricing answers, the rates the takeoff modules answer). The mutations at the bottom break one source of a Rate or a base in a scratch copy
 of the page and the same checks go red.
+
+THE WARNING BESIDE A TYPED BOX (round 6 audit, U1). The same harness types something the engine cannot use into every override box of the Review ("abc" in GP %, "5+5" in Soft costs,
+"150" in Shipping, "x" in Discount %, and the rest) and draws the Review again; `problems()["warnings"]` reads where each red refusal sits in the markup the page drew. It must be the
+last child of the .adjbox span its own box is in (the flex row the page's CSS gives a line of its own, see test_v2_review_table_fits.py), in the Rate cell, or in the Total cell for the
+dollar box. That is the half of the fix a headless run can see: the other half is the CSS that stops the warning running under the pinned Total column.
 """
 from __future__ import annotations
 
@@ -32,6 +37,10 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js"]
 HEAD = ["Item", "Quantity", "Unit", "Rate", "Total"]
+RATE_CELL, TOTAL_CELL = 3, 4         # a Review row's cells, counted from 0: Item, Quantity, Unit, Rate, Total
+# The boxes each bid's Review draws. A Polish bid has no supplier or Poly-Crete box; the dollar box (discount_amt) sits in the Total cell and every % box in the Rate cell.
+PERCENT_BOXES = {"polish": ["discount_pct", "gp_pct", "ship_pct", "soft_pct", "super_pct"],
+                 "epoxy": ["discount_pct", "gp_pct", "polycrete_pct", "ship_pct", "soft_pct", "super_pct", "supplier_pct"]}
 
 
 def run(frontend=FRONTEND, tmp=None):
@@ -84,7 +93,7 @@ def pct_text(text):
 def problems(d):
     """Every way the Review's working disagrees with the bid the chain priced. {area: [what is wrong]}; all empty when it is right."""
     out = {k: [] for k in ("header", "columns", "takeoff", "patch", "labor", "burden", "markup", "travel", "tooling",
-                           "totals", "adjust", "supplier", "shipping")}
+                           "totals", "adjust", "supplier", "shipping", "warnings")}
     for name in ("polish", "epoxy"):
         f = d[name]
         bid = f["bid"]
@@ -237,6 +246,28 @@ def problems(d):
                 or not cents(num(grand["cells"][3]["text"]), round(bid["per_sf"] + 1e-12, 2)) or num(grand["cells"][4]["text"]) != bid["total"]:
             why("markup", "the lump sum row reads %r" % [x["text"] for x in grand["cells"]])
 
+    # a Review drawn with EVERY override box typed with something unusable: each box's warning is shown, is the last child of the .adjbox its own box is in, and is in the cell of that box
+    for name in ("polish", "epoxy"):
+        inv = d[name]["invalid"]
+        why = lambda msg, name=name: out["warnings"].append(name + ": " + msg)
+        boxes = PERCENT_BOXES[name] + ["discount_amt"]
+        if sorted(inv["typed"]) != sorted(boxes):
+            why("the boxes typed into are %r, the Review draws %r" % (sorted(inv["typed"]), sorted(boxes)))
+        got = {w["key"]: w for w in inv["warns"]}
+        if sorted(w["key"] for w in inv["warns"]) != sorted(boxes):
+            why("the warnings drawn are %r, not one for each of %r" % (sorted(w["key"] for w in inv["warns"]), sorted(boxes)))
+        for key in boxes:
+            w = got.get(key)
+            if w is None:
+                continue
+            if w["hidden"] or not w["text"]:
+                why("the %s box is typed %r and its warning says %r (hidden: %r): this Review was not drawn with the box invalid" % (key, inv["typed"].get(key), w["text"], w["hidden"]))
+            if not w["inBox"]:
+                why("the %s warning is not the last child of the .adjbox its own box is in, so no rule of the box can give it a line of its own" % key)
+            want = TOTAL_CELL if key == "discount_amt" else RATE_CELL
+            if w["cell"] != want:
+                why("the %s warning is in cell %d of its row (%s card, %r), not in cell %d, the %s cell" % (key, w["cell"], w["card"], w["row"], want, HEAD[want]))
+
     # the override boxes still type, reprice, and the working moves with them without a rebuild
     a = d["polish"]["adjust"]
     if not a["noRebuild"] or a["typed"] != "25":
@@ -330,6 +361,20 @@ def test_the_override_boxes_still_type_and_reprice_and_the_working_moves_with_th
     assert p["adjust"] == [] and p["supplier"] == [], p["adjust"] + p["supplier"]
 
 
+def test_a_review_drawn_with_every_box_invalid_keeps_each_warning_in_the_cell_of_its_box(ran):
+    """Round 6 audit, U1: "abc" in GP %, "5+5" in Soft costs, "150" in Shipping, "x" in Discount % (and, on an Epoxy bid, the Supplier discount and Poly-Crete boxes) each put a red
+    refusal beside the box, and with the Total column pinned and opaque the refusal was cut off under it. On the Review drawn with all of them invalid, on a Polish bid and on an Epoxy bid, every
+    refusal is shown (so the check is not vacuous), is the last child of the .adjbox its box is in, and sits in the Rate cell: the one a % box is in. The dollar box's is in the Total cell.
+
+    Mutation: a refusal drawn outside its .adjbox; the dollar box's refusal drawn outside its .adjbox."""
+    assert problems(ran)["warnings"] == [], problems(ran)["warnings"]
+    for name in ("polish", "epoxy"):
+        assert len(ran[name]["invalid"]["warns"]) == len(PERCENT_BOXES[name]) + 1, "the Review did not draw one warning for each box"
+    # every refusal the engine has a word for is on screen somewhere in these two Reviews (a check that never sees the long one would miss the longest)
+    said = {w["text"] for name in ("polish", "epoxy") for w in ran[name]["invalid"]["warns"]}
+    assert {"not a number, so it is not used", "must be from 0 to under 100%, so it is not used", "not a dollar figure, so it is not used"} <= said, said
+
+
 def test_the_tables_scroll_inside_their_own_box_so_a_phone_never_scrolls_the_page():
     page = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
     assert re.search(r"\.tscroll\{[^}]*overflow-x:auto", page), "the table must scroll in its own box"
@@ -370,6 +415,16 @@ BREAKS = {
     "shipping is taken of the wrong base": ("js/polish-estimate.js",
         '      tkRows.push(["Shipping", rvc("ship.q", moneyAuto(b.material)), "of material",',
         '      tkRows.push(["Shipping", rvc("ship.q", moneyAuto(b.material_total)), "of material",', "shipping"),
+    # round 6 audit, U1: where the warning beside a typed box is drawn
+    "a % box's warning is drawn outside its .adjbox": ("js/polish-estimate.js",
+        "      adjWarnHtml(key) + '</span>';",
+        "      '</span>' + adjWarnHtml(key);", "warnings"),
+    "a % box and its warning are drawn in the Total cell, not the Rate cell": ("js/polish-estimate.js",
+        '                   { raw: adjBox("supplier_pct", "0") }, ""]);',
+        '                   "", adjBox("supplier_pct", "0")]);', "warnings"),
+    "the dollar box's warning is drawn outside its .adjbox": ("js/polish-estimate.js",
+        "      adjWarnHtml(\"discount_amt\") + '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span></td></tr>';",
+        "      '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span>' + adjWarnHtml(\"discount_amt\") + '</td></tr>';", "warnings"),
 }
 
 

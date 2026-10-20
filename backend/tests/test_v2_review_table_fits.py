@@ -26,6 +26,16 @@ a browser on the real Review (Chrome through Playwright, 2026-10-20: no cell of 
 that can be read off the CSS (the boxes' widths, the cell padding, the columns, the minimum) IS read off it, so a box made wider without a column made wider goes red. That every row of every
 card has the Total as its fifth cell (a band row in the markup card is one cell, colspan 5) is checked by executing the page in test_v2_review_working.py.
 
+ROUND 6 AUDIT, U1: THE WARNING BESIDE A TYPED % BOX. With the Total column pinned and opaque, the red refusal beside a box typed with something unusable ("not a number, so it is not used":
+`.adjwarn` inside `.adjbox`, in the Rate cell) was CUT OFF under it. The box was a one-line `inline-flex; white-space: nowrap` row, so it was no narrower than its three parts side by side at their narrowest (the 64px
+box, the "%", and the warning's longest word), which is more than the 92px a Rate cell holds: the warning stood in a column of its own that began inside the cell and ended under the next one, whose
+opaque background painted over it. The fix gives the warning a LINE OF ITS OWN INSIDE ITS CELL: `.adjbox` wraps, `.adjwarn` takes the whole line (`flex: 1 0 100%`) so it wraps within the cell's
+width, may break a long word, and the box keeps its place on the first line. `warning_problems` reads that off the CSS. The markup it relies on (the warning is the last child of the .adjbox of
+its own box, in the Rate cell, or in the Total cell for the dollar box) is checked by EXECUTING the page on a Review drawn with every box invalid, in test_v2_review_working.py.
+MEASURED ONCE IN A BROWSER, which this file cannot repeat (a headless run lays nothing out): Chrome driven over the real page on 2026-10-21, 916px wide with the sidebar open, the audit's figures typed.
+On the old rules the five % warnings were a column 35 to 46px wide that began 21px inside the Rate cell and ran 14 to 25px past its edge, every line of it under the Total cell. With the fix each is
+92px wide, the room a Rate cell has (104px in the Total cell, for the dollar box), and nothing paints over it: a Polish bid at 916 and 800px, an Epoxy bid at 916, 800 and 390px.
+
 The last block puts the old rules (and each new rule, one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
 """
 from __future__ import annotations
@@ -452,6 +462,62 @@ def test_the_table_still_scrolls_inside_its_own_box_below_its_minimum_width():
     assert scroll_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
 
 
+# ── the warning beside a typed % box stays in its cell (round 6 audit, U1) ──────────────────────────────────────────────
+def _flex_basis(decls: dict):
+    """The flex-basis a set of declarations gives: `flex-basis`, or the basis in the `flex` shorthand (`1 0 100%`, `1 100%`; a bare number is a grow factor and the basis is then 0%); None when it says none."""
+    if "flex-basis" in decls:
+        return decls["flex-basis"].strip()
+    parts = decls.get("flex", "").split()
+    if not parts:
+        return None
+    for part in parts:
+        if part in ("auto", "content") or re.fullmatch(r"-?\d*\.?\d+(?:px|%|em|rem)", part):
+            return part
+    return "auto" if parts == ["none"] else "0%"
+
+
+def warning_problems(page: str) -> list[str]:
+    """Is the warning beside a typed % box a flex item that WRAPS onto a line of its own inside its cell? `.adjbox` must be a wrapping flex row that keeps its first line (the box and its %) at the right
+    of the cell, where it sits with no warning; `.adjwarn` must take the whole line, wrap its words (and a long word) inside it, and not be capped narrower than the cell it is in."""
+    css = _css(page)
+    box, warn = _decls_for(css, ".adjbox"), _decls_for(css, ".adjwarn")
+    found = []
+    if "flex" not in box.get("display", ""):
+        found.append("warning: .adjbox is display:%s, not a flex row, so the warning is not an item of it" % box.get("display"))
+    elif box.get("flex-wrap") not in ("wrap", "wrap-reverse"):
+        found.append("warning: .adjbox does not wrap (flex-wrap:%s), so its warning stays on the line of the box and is as wide as the box and the words add up to, which runs out of the cell and under the pinned Total column"
+                     % box.get("flex-wrap", "nowrap"))
+    if box.get("justify-content") not in ("flex-end", "end", "right"):
+        found.append("warning: .adjbox does not keep its first line at the right of the cell (justify-content:%s), so the %% box jumps left of where it sits when a warning appears" % box.get("justify-content", "flex-start"))
+    basis = _flex_basis(warn) or "auto"                  # no flex-basis at all is auto: the width of the words
+    if basis != "100%":
+        found.append("warning: .adjwarn has a flex-basis of %s, not 100%%, so it can share a line with the box and does not wrap inside its cell" % basis)
+    if warn.get("white-space") != "normal":
+        found.append("warning: .adjwarn has white-space:%s, so its words cannot wrap inside the cell" % warn.get("white-space"))
+    if warn.get("overflow-wrap") != "anywhere" and warn.get("word-break") not in ("break-all", "break-word"):
+        found.append("warning: .adjwarn may not break a long word (overflow-wrap:%s), so one could run out of the cell" % warn.get("overflow-wrap", "normal"))
+    # a cap is harmless while it is wider than the narrowest cell a warning sits in (the Rate cell's room, or the Total cell's for the dollar box): narrower, it leaves the words in a column the box's line is not
+    cap = warn.get("max-width", "none").strip()
+    f = facts(page)
+    pads = _cell_pads(css, "td")
+
+    def cell_room(n):             # what a cell of column n has for content: the column's width less the wider of the two tables' padding
+        return f["columns"][n][1] - max(l + r for l, r in (pads[t][n - 1] for t in pads))
+    room = min(cell_room(n) for n in (4, 5) if f["columns"][n][0] == "px")
+    if cap != "none" and not (re.fullmatch(r"\d+px", cap) and int(cap[:-2]) >= room):
+        found.append("warning: .adjwarn is capped at %s, narrower than the %dpx of the narrowest cell it sits in" % (cap, room))
+    return found
+
+
+def test_a_warning_beside_a_typed_box_gets_a_line_of_its_own_inside_its_cell():
+    """Round 6 audit, U1: the refusal beside a typed % box was cut off under the pinned Total column because the box was a nowrap row. `.adjbox` wraps, keeps its box at the right, and `.adjwarn` takes the
+    whole line, wraps its words and a long word, and is not capped narrower than its cell.
+
+    Mutation: the old `.adjbox` rule; the old `.adjwarn` rule; a row that does not wrap, one that is not a flex row, one that lets the box jump left, a warning that shares the box's line, one that cannot
+    wrap, one that may not break a long word, one capped narrower than its cell."""
+    assert warning_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
 # ── the check can see the bug: the old rules, and each new rule undone, are found ────────────────────────────────────────────────
 # The page as it was at b14bc98 (round 4): percentage columns and a 560px minimum.
 OLD_RULES = """
@@ -579,5 +645,47 @@ def test_each_rule_of_the_fix_is_needed(tmp_path, what, anchor, undone, starts):
     so none of these can pass by applying nowhere."""
     frontend = break_source(tmp_path, "polish-estimate.html", anchor, undone)
     found = problems((frontend / "polish-estimate.html").read_text(encoding="utf-8"))
+    assert found, "the check did not notice: %s" % what
+    assert any(p.startswith(starts) for p in found), (what, found)
+
+
+# ── the warning rules, and what each one undone is found to do (round 6 audit, U1) ───────────────────────────────────────────
+WARN_BOX = ".adjbox{display:inline-flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px;white-space:nowrap}"
+WARN_TEXT = ".adjwarn{display:block;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:none}"
+# the two rules as they stood until round 6's audit: a nowrap row with the warning in it, and a warning capped at 220px
+OLD_WARN_BOX = ".adjbox{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}"
+OLD_WARN_TEXT = ".adjwarn{display:block;white-space:normal;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:220px}"
+
+WARNING_MUTATIONS = [
+    # (what is undone, the page's own line, what stands there instead, how the first finding starts)
+    ("the old .adjbox rule is back: one nowrap row", WARN_BOX, OLD_WARN_BOX, "warning: .adjbox does not wrap"),
+    ("the old .adjwarn rule is back: no line of its own", WARN_TEXT, OLD_WARN_TEXT, "warning: .adjwarn has a flex-basis"),
+    ("a row that is told not to wrap", WARN_BOX, WARN_BOX.replace("flex-wrap:wrap", "flex-wrap:nowrap"), "warning: .adjbox does not wrap"),
+    ("a box that is not a flex row at all", WARN_BOX, WARN_BOX.replace("inline-flex", "inline-block"), "warning: .adjbox is display:inline-block"),
+    ("a box that jumps left when a warning appears", WARN_BOX, WARN_BOX.replace("justify-content:flex-end;", ""), "warning: .adjbox does not keep its first line"),
+    ("a warning that shares the box's line", WARN_TEXT, WARN_TEXT.replace("flex:1 0 100%", "flex:0 1 auto"), "warning: .adjwarn has a flex-basis of auto"),
+    ("a warning with a basis of a fraction of the line", WARN_TEXT, WARN_TEXT.replace("flex:1 0 100%", "flex-basis:50%"), "warning: .adjwarn has a flex-basis of 50%"),
+    ("a warning that cannot wrap", WARN_TEXT, WARN_TEXT.replace("white-space:normal", "white-space:nowrap"), "warning: .adjwarn has white-space:nowrap"),
+    ("a warning that may not break a long word", WARN_TEXT, WARN_TEXT.replace("overflow-wrap:anywhere;", ""), "warning: .adjwarn may not break a long word"),
+    ("a warning capped narrower than its cell", WARN_TEXT, WARN_TEXT.replace("max-width:none", "max-width:60px"), "warning: .adjwarn is capped at 60px"),
+]
+
+
+def test_the_old_warning_rules_are_found_to_run_under_the_pinned_column():
+    """Both rules as they stood together (the nowrap row and the 220px warning): the check names the row that does not wrap AND the warning that has no line of its own."""
+    page = PAGE_PATH.read_text(encoding="utf-8")
+    old = _once(_once(page, WARN_BOX, OLD_WARN_BOX), WARN_TEXT, OLD_WARN_TEXT)
+    found = warning_problems(old)
+    assert any(p.startswith("warning: .adjbox does not wrap") for p in found), found
+    assert any(p.startswith("warning: .adjwarn has a flex-basis of auto") for p in found), found
+    assert any(p.startswith("warning: .adjwarn may not break") for p in found), found
+
+
+@pytest.mark.parametrize("what,anchor,undone,starts", WARNING_MUTATIONS, ids=[m[0] for m in WARNING_MUTATIONS])
+def test_each_rule_of_the_warning_fix_is_needed(tmp_path, what, anchor, undone, starts):
+    """Put ONE of the two warning rules back as it was (or make one declaration of it wrong) in a copy of the page: warning_problems finds it and says which kind of fault it is. break_source refuses an
+    anchor that is not on the page exactly once, so none of these can pass by applying nowhere."""
+    frontend = break_source(tmp_path, "polish-estimate.html", anchor, undone)
+    found = warning_problems((frontend / "polish-estimate.html").read_text(encoding="utf-8"))
     assert found, "the check did not notice: %s" % what
     assert any(p.startswith(starts) for p in found), (what, found)
