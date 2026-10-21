@@ -676,6 +676,11 @@
     .rev-t th.r,.mk th.r{text-align:right}
     .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}
     .rev-t td.q,.rev-t td.rt,.mk td.q,.mk td.rt{white-space:nowrap}
+    /* A RATE'S UNIT WRAPS UNDER ITS FIGURE (round 7, part 4, P8: the round-6 staging walk's X2, a regression of #697). A Rate cell holds 92px of text (108 less its padding), and a rate worked
+       to four places with a long unit is wider: "$16.8113 / gallon", the Gyp Primer row, is 116.8px in Chrome, and it ran under the pinned Total column ("$16.8113 / gall"). The cell may break
+       between the figure and its unit, balanced, so it reads "$16.8113" over "/ gallon"; its widest piece is the figure, never the whole line, so no width or minimum moves and the table still
+       fits from 900px with the sidebar open. A browser without text-wrap:balance breaks at the last space that fits. backend/tests/test_v2_review_table_fits.py does this arithmetic. */
+    .rev-t td.rt{white-space:normal;text-wrap:balance}
     .rev-t .note.work,.mk .note.work{display:block;font:11px var(--mono);color:var(--ink-3)}
     .mk td.q,.mk td.rt{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3)}
     .mk td.rt{min-width:96px}

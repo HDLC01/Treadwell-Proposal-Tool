@@ -178,7 +178,10 @@
     // order, so each section carries its place (`seq`). A bid saved before that has none: it is stamped here in memory, and saved by its next save, in the order its saved price
     // was computed in (the draft's priced_tabs, an array, which jsonb keeps in order; the order the keys are held in when the list names fewer than two sheets), so its first save
     // writes the price it was saved at. Nothing is written on open and no price moves. A bid with one sheet has no `tabs` and is left exactly as it was.
-    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);
+    // A COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7: one drive, on the carrier, and no line on its other base) OPENS WITH EVERY BASE'S OWN DRIVE (round 7, part 4, P4; Hanz's D1 of
+    // 2026-10-21 and "let them re-price"): B.giveEveryBaseItsDrive gives the other base its line, filled by the rule from the distance on file, so the open, the session and a reload price a
+    // drive for each crew. A base whose x said it has none keeps its answer. Nothing is written until the next save.
+    ROOT = B.giveEveryBaseItsDrive(B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs));
     M = ROOT;
     // THE CELL WINS WHERE THERE IS ONE, the same rule polish-intake.js has always applied, through
     // the same shared reader so the two screens cannot disagree about one answer.
@@ -2443,7 +2446,7 @@
       '<p class="hint">$' + esc(String(G.TOOLING.moistureTest)) + ' a test. Tooling and consumables are added for you.</p></div>' +
       '<div class="f"><label>Mobilizations</label>' +
       '<input class="n" data-gyp="mobs" inputmode="decimal" value="' + esc(nv(set.mobs)) + '">' +
-      '<p class="hint">How many times the crew comes out. It sets the hours the sheet suggests on the Labor step.</p></div>' +
+      '<p class="hint">How many times the crew comes out. It sets the hours the sheet suggests on the Labor step, and on a far job the drive: one round trip each.</p></div>' +
       '</div></div>';
   }
 
@@ -2862,7 +2865,9 @@
             // base too since round 7 (Hanz, 2026-10-21, D2), whose crew lines are entered in hours: its card said "type its guys and its hours" while the line was typed.
             : '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office. ' +
               (r.id !== "travel" ? ''
-                : 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ') +
+                // A Gyp drive is a round trip for each mobilization on the Gyp card (round 7, part 4, P2).
+                : 'There the hours fill in from the miles, ' + (gypOpen() ? 'one round trip for each mobilization on the Gyp card' : 'one round trip') +
+                  ', and the guys are the most on any labor line. ') +
               'Under 70 miles this line stays gray.</p>')
         : "") + '</div>';
   }
@@ -3096,7 +3101,7 @@
         '70 miles all three lines below stay gray until you switch one on. ' + (gypOpen()
           // A GYP BASE'S DRIVE FILLS FROM THE MILES like the others (round 7, Hanz 2026-10-21, D2): its crew is the most guys on one of its crew lines, entered in hours. The nights and the
           // per diem days are filled from the crew's hours (round 6).
-          ? 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew\'s hours, ' +
+          ? 'On a far job Travel Labor fills in from the miles, a round trip for each mobilization, and the nights and per diem days from the crew\'s hours, ' +
             B.nightsDivisor(ROOT, activeTab) + ' hours a night; type over any of them to use your own.</p>'
           : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');
       html += distanceBlock();
@@ -4272,9 +4277,14 @@
    *  sheet's line and takes back that sheet's answer (and the job's, which then goes on speaking for every other base that holds none). */
   function addTravelHtml(option) {
     // "sheet" (round 7): a base that does not carry the job's Hotel and Per Diem, whose crew drives on its own, and whose x took its line away (its own answer).
+    // THE CARRIER OF A JOB OF SEVERAL BASES (round 7, part 4, P6: the round-7 audit's F5): its x is that sheet's answer and every other base keeps its own drive, so the words say THIS SHEET
+    // has no line and which sheets still have theirs (B.otherDrives). They said "This bid has no Travel Labor line, so the drive adds nothing to the price" beside the Epoxy crew's priced drive.
+    var others = option ? [] : B.otherDrives(ROOT, activeTab);
     var words = option === "sheet" ? "This sheet has no Travel Labor line, so its drive adds nothing to the price."
-      : option ? "This option has no Travel Labor line, so its drive adds nothing to its price." : "This bid has no Travel Labor line, so the drive adds nothing to the price.";
-    return '<div class="trvadd" data-trv-none' + (option === "sheet" ? '="sheet"' : option ? '="option"' : '') + '><p class="cap">' + words + '</p>' +
+      : option ? "This option has no Travel Labor line, so its drive adds nothing to its price."
+      : others.length ? "This sheet has no Travel Labor line, so its own crew's drive is not charged. " + B.otherDrivesWords(others)
+      : "This bid has no Travel Labor line, so the drive adds nothing to the price.";
+    return '<div class="trvadd" data-trv-none' + (option === "sheet" || others.length ? '="sheet"' : option ? '="option"' : '') + '><p class="cap">' + words + '</p>' +
       '<button class="btn addline below" data-add-travel="1">' + icon("plus", 16) + ' Add Travel Labor</button></div>';
   }
 
@@ -4285,10 +4295,14 @@
   async function addTravelLaborPress() {
     if (travelAdding) return;
     travelAdding = true;
+    // THE SHEET THE ESTIMATOR PRESSED ADD ON (round 7, part 4, P5: the round-7 audit's F4), taken at the press, before the library is read: a sheet put on show while the library answers
+    // does not take the line. It went on whatever sheet was on show when the answer landed, or on none when that sheet already held one, and the sheet pressed on kept saying it had no line.
+    var pressedOn = activeTab;
     try {
       var rows = await loadLaborDefaults();
-      if (!B.addTravelLabor(ROOT, B.freshTravelRow(rows, LABOR_RATE), activeTab)) return;
+      if (!B.addTravelLabor(ROOT, B.freshTravelRow(rows, LABOR_RATE), pressedOn)) return;
       changed(true);
+      if (activeTab !== pressedOn) return;       // the line is on the sheet pressed on; the caret stays where the estimator is
       var at = -1;
       M.labor.forEach(function (r, i) { if (at < 0 && B.isTravelRow(r)) at = i; });
       if (at >= 0) refocus('[data-lab="' + at + '"][data-k="guys"]');
@@ -4607,6 +4621,9 @@
       next = { thickness: Object.assign({}, held.thickness, Object.fromEntries([[area, value]])) };
     }
     if (next) e.section.gyp = Object.assign({}, held, next);
+    // THE DRIVE IS A ROUND TRIP FOR EACH MOBILIZATION (round 7, part 4, P2: the round-7 audit's F2), as Kyle's Gyp travel line works it (B51 `=((B6*2)/60)*T28`): hours the tool wrote follow the
+    // box, and hours the estimator typed stay theirs (B.followDriveTrips).
+    if (key === "mobs") B.followDriveTrips(ROOT, e.tab);
   }
 
   /** A Gyp area row says which area it is (soft, hard or corridor) with a `bucket` mark, which the model reads to
