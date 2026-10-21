@@ -1405,6 +1405,24 @@
     return model;
   }
 
+  /** A DRIVE LINE THE TOOL FILLED, SWITCHED BACK ON, IS FILLED AGAIN BY THE RULE (round 7 polish, W4). An answer leaves a line that is switched off alone (followDistanceOnRow: no fill and no take-back), so the
+   *  miles typed, the job gone local or the Gyp card's Mobilizations moved while the line was off left its hours at the old answer, and switching it back on priced them, with mobilizations a figure N
+   *  trips long. The page calls this when the switch on a labor line is flipped ON: `row` is that line, on the section filed under `tab` of the WHOLE model. It is filled by the rule from the distance and
+   *  the trips on file, as the answer it missed would have filled it (followDistanceOnRow: an option's line goes back whole when the job is local, a base's loses its hours), so the price is the price of
+   *  the same bid that was never switched off. ONLY HOURS THE TOOL WROTE ARE MOVED (driveHoursAreTools): a figure the estimator typed or a box they cleared is theirs, and a line the tool never filled
+   *  (blank, off from the start) is left for them to fill, which is what travelHow tells them to do. Another labor line, a line still switched off (the rule leaves it) and a section that is off are left as
+   *  they are. MUTATES the row; returns the model. */
+  function followDriveSwitchedOn(model, tab, row) {
+    if (!isObject(model) || !isTravelRow(row) || !driveHoursAreTools(row)) return model;
+    var e = entryOrNull(model, tab);
+    if (!e || e.kind === "off") return model;
+    var rows = laborLinesOf(e.section);
+    if (rows.indexOf(row) < 0) return model;
+    var d = model.distance;
+    followDistanceOnRow(model, row, rows, d ? milesOrNull(d.miles) : null, !isDriveTab(model, tab), driveTripsOf(e));
+    return model;
+  }
+
   /** THE RULE ABOVE, FOR ONE TRAVEL LABOR ROW: `row`, one of the labor lines `rows` (the older man-days auto counts the others' man-days). Its guys are the crew of the
    *  lines beside it, `rows` (ownCrewSize), whichever section it is on: a base's own crew (round 7, D1: a Combo's bases each drive their own; until then a base's row took the
    *  biggest crew of both bases, crewSize) and an option's own (`own`). An option's row, when the job goes local or the miles are cleared, gives a fill nobody touched back
@@ -7227,7 +7245,7 @@
     driveTabs: driveTabs, isDriveTab: isDriveTab, sectionKinds: sectionKinds, drivesHoldTravel: drivesHoldTravel, releaseNobodysTravelRow: releaseNobodysTravelRow,
     // Round 7, part 4 (the round-7 audit's remaining findings): a Gyp drive's round trips are its mobilizations (P2), a Combo saved under the one-drive law opens with every base's drive (P4), and a
     // sheet whose line went beside a base that keeps its own says so (P6).
-    driveTripsOf: driveTripsOf, followDriveTrips: followDriveTrips, giveEveryBaseItsDrive: giveEveryBaseItsDrive, givenDrivesPrice: givenDrivesPrice, otherDrives: otherDrives, otherDrivesWords: otherDrivesWords,
+    driveTripsOf: driveTripsOf, followDriveTrips: followDriveTrips, followDriveSwitchedOn: followDriveSwitchedOn, giveEveryBaseItsDrive: giveEveryBaseItsDrive, givenDrivesPrice: givenDrivesPrice, otherDrives: otherDrives, otherDrivesWords: otherDrivesWords,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,

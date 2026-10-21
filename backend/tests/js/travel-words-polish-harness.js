@@ -416,6 +416,17 @@ async function main() {
     flip(c, B.ROOT_TAB, "polishing");
     flip(c, B.ROOT_TAB, "polishing");
     res.crew = { before: cBefore, after: { rows: driveRows(c), price: prices(c) } };
+
+    // (h) A COMBO'S SECOND BASE drives its own crew: far Polish 4 x 12 and Epoxy 5 x 12, the Epoxy line switched off, 300 miles typed (the Polish line follows it, the off Epoxy line is left alone), the Epoxy
+    //     line switched on: 5 x 10, on its own crew, and the bid is the bid of the same Combo that was never switched off.
+    const k = await newBid(COMBO(), [CREW_POLISH, CREW_EPOXY]);
+    flip(k, "Epoxy");
+    await typeMiles(k, 300);
+    const kStale = driveRows(k);
+    flip(k, "Epoxy");
+    const kDone = { rows: driveRows(k), marks: marks(k, "Epoxy"), price: prices(k) };
+    const kNever = await newBid(COMBO(), [CREW_POLISH, CREW_EPOXY], AT(300));
+    res.combo = { stale: kStale, done: kDone, never: { rows: driveRows(kNever), price: prices(kNever) } };
     return res;
   });
 

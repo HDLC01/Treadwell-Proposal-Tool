@@ -192,6 +192,16 @@ def test_a_line_switched_back_on_when_the_job_went_local_gives_the_tools_hours_b
     assert l["done"]["price"] == l["never"]["price"] and l["done"]["price"]["lump"] == 30872
 
 
+def test_a_combos_second_base_is_refilled_on_its_own_crew(ran):
+    """Far Combo, Polish 4 x 12 and Epoxy 5 x 12 at 190 miles. The Epoxy line switched off, 300 miles typed (the Polish line follows to 4 x 10, the off Epoxy line is left at 5 x 6.5), the Epoxy line on:
+    5 x 10 on its own crew, and the bid is the bid of the same Combo that was never switched off."""
+    c = ran["w4"]["combo"]
+    assert c["stale"] == {"Polish:base": "4 x 10 = $1320", "Epoxy:base": "5 x 6.5 = $0"}
+    assert c["done"]["rows"] == {"Polish:base": "4 x 10 = $1320", "Epoxy:base": "5 x 10 = $1650"}
+    assert c["done"]["marks"] == {"auto": True, "follow": "crew", "seed": 10, "typed": False, "on": True}
+    assert c["done"]["price"] == c["never"]["price"]
+
+
 def test_an_options_drive_is_refilled_the_same_way_and_goes_back_whole_when_the_job_goes_local(ran):
     """A copy of the Polish sheet (an option, priced apart) holds its own drive: 300 miles while it is off, then on: 4 x 10. Gone local and switched back on, an option's fill nobody touched goes back
     WHOLE (guys and hours both empty, every marker gone), as the same answer gives it when the line is on; a base keeps its guys (the test above)."""

@@ -4581,6 +4581,9 @@
         if (B.rowOn(M.labor[ol])) M.labor[ol].enabled = false; else delete M.labor[ol].enabled;
         // A Travel Labor line the tool copied from another sheet is this sheet's own once its switch is flipped here, as after a keystroke in it (round 7, part 3: B.markSwitchedByHand).
         B.markSwitchedByHand(M.labor[ol]);
+        // A TOOL-FILLED DRIVE LINE SWITCHED BACK ON IS FILLED AGAIN BY THE RULE (round 7 polish, W4): an answer leaves a switched-off line alone, so the miles, the job's locality or the Gyp card's
+        // Mobilizations may have moved while it was off and its hours are the old answer's. Only hours the tool wrote move; what the estimator typed stays theirs (B.followDriveSwitchedOn).
+        if (B.rowOn(M.labor[ol])) B.followDriveSwitchedOn(ROOT, activeTab, M.labor[ol]);
       }
       changed(true);
       return;
