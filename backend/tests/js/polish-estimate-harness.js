@@ -449,7 +449,7 @@ function build(opts) {
     resolveApiBase: () => "",
     // The pagehide flush calls this after pushing the pending save through synchronously --
     // counted separately from rec.saves so it does not masquerade as a second save.
-    flushState: () => { rec.flushed++; },
+    flushState: (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); },
     // shared.js's two-button question. Absent unless a scenario answers it, so no other build is ever asked anything.
     confirmDanger: opts.confirmDanger,
   };
@@ -467,7 +467,6 @@ function build(opts) {
       return opts.sandboxOk !== false;
     },
     repointWizardLinks() { log.push("repoint"); },
-    markNewProjectAsTest() { log.push("markTest"); },
   };
 
   const winListeners = [];
@@ -2919,6 +2918,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       savedSynchronously: b.rec.saves.length - before,   // save ran inline, not on the timer
       armedAfterLeaving: b.clock.armed(),                // the timer it cleared
       flushedTheNetwork: b.rec.flushed,                  // TW.flushState(), forcing the PUT now
+      flushedAsKeepalive: (b.rec.flushOpts || []).map((o) => !!(o && o.keepalive)),   // and what it asked for: a request that outlives the page
     };
 
     // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.

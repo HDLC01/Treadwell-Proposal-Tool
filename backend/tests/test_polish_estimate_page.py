@@ -1767,13 +1767,17 @@ def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
     survive a tab close or step-nav click.
 
     Mutation: remove the pagehide handler (or its `if (!saveTimer) return;` guard so it fires a save
-    from nothing) and this fails either way."""
+    from nothing) and this fails either way.
+
+    AND THE FLUSH IS A KEEPALIVE REQUEST, as the intake page's is (X1, round 3, F5): flushState({ keepalive: true }). A plain
+    request is dropped with the page that sent it. Mutation: call TW.flushState() with no argument."""
     p = ran["pagehideFlush"]
     assert p["wired"], "polish-estimate.js registers no pagehide handler at all"
     assert p["armedBeforeLeaving"] == 1, "typing a takeoff number did not arm a timer for pagehide to catch"
     assert p["savedSynchronously"] == 1, "pagehide did not push the pending save through"
     assert p["armedAfterLeaving"] == 0, "pagehide left the 600ms timer armed behind it"
     assert p["flushedTheNetwork"] == 1, "pagehide saved locally but never called TW.flushState()"
+    assert p["flushedAsKeepalive"] == [True], "the pagehide flush is not a keepalive request: %r" % p["flushedAsKeepalive"]
     assert p["quietWhenNothingArmed"], (
         "leaving with nothing typed must not manufacture a save or a flush out of thin air")
 

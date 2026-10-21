@@ -859,13 +859,16 @@
   // Same gap as the intake page's Fault 3: nothing here flushed its own 600ms debounce before
   // navigating away, and shared.js's pagehide net only flushes a timer THIS page armed. A takeoff
   // number typed and then left via the step nav inside that window was silently lost.
+  //
+  // THE FLUSH IS A KEEPALIVE REQUEST, as the intake page's is (F5 of the audit of X1, round 2): a plain request is dropped with the
+  // page that sent it, so leaving within the 600 ms still lost the edit. A draft too big for one (shared.js keepaliveFits) goes plain.
   window.addEventListener("pagehide", function () {
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
     var cur = TW.getState();
     TW.setState(Object.assign({}, cur, savePatch(cur)));
-    TW.flushState();
+    TW.flushState({ keepalive: true });
   });
 
   /** Write the derived Guys figure INTO any auto travel row, so the model holds what the screen
