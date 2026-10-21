@@ -4388,6 +4388,15 @@
     else if (e.key === "Escape") { e.preventDefault(); cancelRename(name); }
   });
 
+  // Esc closes the "Add a sheet" list the way its Close button does, and the caret goes back to the "Add sheet" button that opened it (round 7 polish, K1: only the rename box took Esc). Only for a key
+  // pressed on a control of the Sheets panel (every one carries a data-sh-key), and never over a key something else has taken: the rename box's Esc, above, cancels the rename and leaves the list
+  // for a second Esc, and the library pop-up's Esc closes the pop-up. Nothing happens, and the key is not taken, while the list is shut.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (e.key !== "Escape" || !sheetsUi.pick || e.defaultPrevented || !t || !t.closest || !t.closest("[data-sh-key]")) return;
+    e.preventDefault(); sheetsAct("add-close");
+  });
+
   // Space and Enter work the on/off slider from the keyboard, as they would a button.
   document.addEventListener("keydown", function (e) {
     var t = e.target;
