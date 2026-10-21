@@ -211,10 +211,16 @@ function createWorld(cfg) {
   const procMs = Object.assign({ GET: 10, PUT: 40, TEST: 40, COND: 10 }, o.proc);
   const sim = createSim();
   const local = createStorage();
-  const session = createStorage();
+  // TABS. One browser has ONE localStorage and one clock, and each tab has its own sessionStorage (shared.js keeps its reload
+  // guard and its "this draft was adopted blind" mark there) and its own page, which a navigation in that tab replaces. A world
+  // starts with one tab; world.openTab() adds another, and world.load(url, { tab }) puts a page in it.
+  const tabs = [];
+  const openTab = () => { const t = { n: tabs.length + 1, session: createStorage(), page: null }; tabs.push(t); return t; };
+  const mainTab = openTab();
+  const session = mainTab.session;
 
   const world = {
-    sim, local, session, net, procMs, frontend,
+    sim, local, session, net, procMs, frontend, tabs, mainTab, openTab,
     rows: new Map(), faults: [], requests: [], pages: [], navs: [], console: [], unmocked: [],
     current: null,
   };
@@ -390,7 +396,7 @@ function createWorld(cfg) {
     const timers = new Map();
     let timerSeq = 0;
     const win = {
-      document: doc, location, history, localStorage: local, sessionStorage: session,
+      document: doc, location, history, localStorage: local, sessionStorage: page.tab.session,
       crypto: { randomUUID: () => "est-" + (++uuids) },
       fetch: makeFetch(page),
       setTimeout(fn, ms) {
@@ -427,11 +433,14 @@ function createWorld(cfg) {
   }
   const mod = (rel) => require(path.join(frontend, rel));
 
-  world.load = (urlString) => {
+  /** Load a page: a new document in `opts.tab` (the first tab when none is named). */
+  world.load = (urlString, opts) => {
     const u = new URL(urlString, ORIGIN);
+    const tab = (opts && opts.tab) || mainTab;
     const page = { n: ++pageCount, url: u.href, kind: kindOf(u.pathname), dead: false, leaving: false, bornAt: sim.now,
-                   diedAt: null, settled: null, settledAt: null };
+                   diedAt: null, settled: null, settledAt: null, tab: tab };
     page.label = page.kind + "#" + page.n;
+    tab.page = page;
     page.win = makeWindow(page);
     world.pages.push(page);
     world.current = page;
@@ -544,7 +553,7 @@ function createWorld(cfg) {
       // A page that keeps asking for itself (shared.js's hydrate-and-reload, with something else claiming the
       // slot each time) must show up in the report as a fact, not as a run that never ends.
       if (pageCount >= (o.maxPages || 30)) { world.runaway = true; return; }
-      sim.at(net.bootMs, () => { world.load(target); });
+      sim.at(net.bootMs, () => { world.load(target, { tab: page.tab }); });
     });
   };
 
@@ -556,13 +565,15 @@ function createWorld(cfg) {
 
   /** The board's "+ New estimate": the same keys js/v2-board.js startNew() clears so shared.js mints a new
    *  draft id, then the intake page opens with no ?d=. From the GC tab the bid starts as a GC one, which startNew
-   *  does by leaving { audience: "GC" } behind (`opts.gc`). Resolves once the page has booted. */
+   *  does by leaving { audience: "GC" } behind (`opts.gc`). `opts.tab` is the browser tab it is pressed in (the first by
+   *  default). Resolves once the page has booted. */
   world.startNewEstimate = async (opts) => {
+    const tab = (opts && opts.tab) || mainTab;
     local.removeItem(KEYS.state);
     local.removeItem(KEYS.draftId);
-    session.removeItem(KEYS.guard);
+    tab.session.removeItem(KEYS.guard);
     if (opts && opts.gc) local.setItem(KEYS.state, JSON.stringify({ audience: "GC" }));
-    const page = world.load("/polish-intake.html");
+    const page = world.load("/polish-intake.html", { tab });
     await world.settle();
     return page;
   };
@@ -580,25 +591,58 @@ function createWorld(cfg) {
    *  browser to the live intake ("/?new=1"). Resolves with the intake page once it has booted. */
   world.pressNewProject = async (opts) => {
     const tab = (opts && opts.tab) || "test";
+    const browserTab = (opts && opts.browserTab) || mainTab;
     const src = read(path.join(frontend, "js", "projects.js"));
     const head = 'document.getElementById("new-project").addEventListener("click", (e) => {';
     const at = src.indexOf(head);
     if (at < 0) throw new Error("projects.js no longer starts a new project with a click handler on #new-project: retarget _world.js");
     const open = at + head.length - 1;
     const body = src.slice(open + 1, L.balanced(src, open));
-    const page = world.load("/projects.html");
+    const page = world.load("/projects.html", { tab: browserTab });
     await world.settle();
     const win = page.win;
     new Function("CURRENT_FILTER", "window", "TW", "localStorage", "sessionStorage", "e", body)(
       tab, win, win.TW, win.localStorage, win.sessionStorage, { preventDefault() {} });
     await world.settle();
-    return world.pageOf("v1intake");
+    return world.pageOf("v1intake", browserTab);
+  };
+
+  /** The Direct and GC boards' "+ New proposal", executed: the REAL startNewProposal of js/portal.js, lifted out of the file and
+   *  run on a page that has shared.js loaded, with `opts.tab` as the board's TAB ("test" or "active": the only two that draw the
+   *  button) and `opts.pipeline` as its PIPELINE ("gc" or "direct"). From the GC board it leaves { audience: "GC" } in the fresh
+   *  draft; either way it records which tab the click came from and sends the browser to the live intake ("/?new=1").
+   *  `opts.browserTab` is the browser tab it is pressed in. Resolves with the intake page once it has booted. */
+  world.pressNewProposal = async (opts) => {
+    const board = (opts && opts.tab) || "test";
+    const pipeline = (opts && opts.pipeline) || "direct";
+    const browserTab = (opts && opts.browserTab) || mainTab;
+    const src = L.read(path.join(frontend, "js", "portal.js"));
+    const fn = L.liftSource(src, "startNewProposal", { where: "js/portal.js" });
+    const page = world.load("/projects.html", { tab: browserTab });
+    await world.settle();
+    const win = page.win;
+    new Function("window", "TW", "localStorage", "sessionStorage", "PIPELINE", "TAB", fn + "\nstartNewProposal();")(
+      win, win.TW, win.localStorage, win.sessionStorage, pipeline, board);
+    await world.settle();
+    return world.pageOf("v1intake", browserTab);
   };
 
   /** The blob this browser holds for the project it is on, as stored. */
   world.blob = () => { try { return JSON.parse(local.getItem(KEYS.state) || "{}"); } catch (e) { return null; } };
 
-  world.pageOf = (kind) => world.pages.filter((p) => p.kind === kind).pop() || null;
+  /** The most recent page of a kind (in `tab`, when one is named). */
+  world.pageOf = (kind, tab) => world.pages.filter((p) => p.kind === kind && (!tab || p.tab === tab)).pop() || null;
+
+  /** What this browser holds of how a project was STARTED: the value under its own key ("1" a test, "0" a real bid, null when
+   *  nothing is pending for it). Every project has its own key, so no other project's start can touch it. */
+  world.startOf = (id) => local.getItem(KEYS.intent + ":" + id);
+  /** Every start this browser holds, { id: "1" | "0" }. */
+  world.starts = () => {
+    const out = {};
+    const dump = local.dump();
+    Object.keys(dump).forEach((k) => { if (k.indexOf(KEYS.intent + ":") === 0) out[k.slice(KEYS.intent.length + 1)] = dump[k]; });
+    return out;
+  };
 
   /** A row as the Projects page would read it: is_test is true, false, or null for "nobody has said". `bornIsTest` is what
    *  the row's FIRST save said (a project that is ever on the board unfiled was born unfiled), `flips` how many times a
@@ -643,6 +687,7 @@ function createWorld(cfg) {
     rows: Object.fromEntries(Array.from(world.rows.keys()).sort().map((id) => [id, world.row(id)])),
     requests: world.requestsLog(),
     intent: local.getItem(KEYS.intent),
+    starts: world.starts(),
     synced: local.getItem(KEYS.synced),
     blob: world.blob(),
     storedDraftId: local.getItem(KEYS.draftId),

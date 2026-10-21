@@ -786,6 +786,161 @@ def test_the_two_places_that_name_the_pending_start_agree():
     assert len(set(keys.values())) == 1 and INTENT_KEY in keys.values(), keys
 
 
+# ══ ROUND 3: a project's start is its own, and a look at a page starts nothing ══════════════════════════
+# The audit of round 2 (F1 to F5). Round 2 kept what a project was STARTED as in ONE localStorage slot, and the slot could be
+# overwritten by a page that only looked at a project (F1) or by another project's start (F3), and a blob that never went through
+# setState could not carry it at all (F2). The runs are tests/js/new-estimate-test-flag-harness.js's `looks`, `abandonedBoardStart`,
+# `twoTabs` and `bigDraftLeftEarly`, on the model's tabs (one localStorage, a sessionStorage per tab) and with the REAL starts:
+# projects.js's "+ New project" click handler and portal.js's startNewProposal, both lifted out of their files and executed.
+TAB_SAYS = {"test": "1", "active": "0", "all": None}          # what the Projects page's tab leaves for the project it starts
+TAB_BORN = {"test": True, "active": False, "all": None}       # and what the project is born as
+ELSEWHERE = "sheet-7"
+
+
+def test_a_look_at_a_v2_page_starts_nothing_and_changes_nothing(ran):
+    """F1 of the audit of round 2. "+ New project" on a Projects tab opens the live intake on a new project. The estimator LOOKS
+    at a v2 page (the sidebar's link to its intake or its estimate page, which resumes the same project, and types nothing
+    there) and goes Back to the live intake to type the bid. The v2 page's sandbox found no row and used to ARM the project as a
+    test: it overwrote the one slot, "<id>:0" of the Active tab became "<id>:1", and the real bid was born a test and left the
+    Active board. A look is not a write, so it leaves the start exactly as the tab left it and writes nothing to the server, and
+    the bid typed afterwards is born as its tab said: a test from Test, a real bid from Active, and unsaid from All."""
+    looks = ran["looks"]
+    assert sorted(looks) == sorted("%s/%s" % (t, d) for t in TAB_SAYS for d in ("intake", "estimate")), sorted(looks)
+    for name, r in sorted(looks.items()):
+        tab = r["tab"]
+        saw = r["looked"]
+        assert saw["kind"] == r["door"] and saw["draft"] == r["id"], "%s: the look is not on the project: %r" % (name, saw)
+        assert saw["report"]["settled"] is True and "Nothing has been priced here yet" in saw["report"]["note"], (
+            "%s: the v2 page did not open on a project nobody has saved: %r" % (name, saw["report"]))
+        assert r["afterLook"]["rows"] == [], "%s: a look at a v2 page wrote a row: %r" % (name, r["afterLook"]["rows"])
+        x = r["x"]
+        assert x is not None and x["bornIsTest"] is TAB_BORN[tab] and x["is_test"] is TAB_BORN[tab] and x["flips"] == 0, (
+            "%s: the bid was born %r, not as its tab said (%r): %r" % (name, (x or {}).get("bornIsTest"), TAB_BORN[tab], x))
+        assert r["rowIds"] == [r["id"]], "%s: %r" % (name, r["rowIds"])
+        assert r["startAtArrival"] == TAB_SAYS[tab], "%s: the tab left %r behind" % (name, r["startAtArrival"])
+        assert r["afterLook"]["start"] == TAB_SAYS[tab], (
+            "%s: the look changed what the project was started as, from %r to %r" % (name, TAB_SAYS[tab], r["afterLook"]["start"]))
+        assert r["starts"] == {}, "%s: a start is still armed after the project was written: %r" % (name, r["starts"])
+
+
+def test_the_active_tabs_real_bid_is_not_made_a_test_by_a_look_at_v2(ran):
+    """F1 on its own, in the audit's words: a REAL bid started on the Projects page's Active tab. After a look at either v2
+    page its start still reads "0", and the bid is born a real bid (is_test false), not a test."""
+    for door in ("intake", "estimate"):
+        r = ran["looks"]["active/" + door]
+        assert r["x"]["bornIsTest"] is False and r["x"]["is_test"] is False, "%s: the real bid was born %r" % (door, r["x"])
+        assert r["afterLook"]["start"] == "0", "%s: %r" % (door, r["afterLook"]["start"])
+
+
+def test_a_project_typed_into_on_a_v2_page_is_a_test_project_whichever_tab_started_it(ran):
+    """The look that is not a look, pinned so that it is a decision and not an accident. Whatever a v2 page WRITES is a test
+    project (Hanz, 2026-08-11: everything the beta touches lands under Test), so a project started on the Active tab and then
+    typed into on the v2 intake is born a test, filed by that page's own first write, and the estimate page edits it directly.
+    Only a LOOK leaves it as its tab started it (the test above)."""
+    r = ran["activeThenTypedInV2"]
+    assert_filed_and_edited_directly(r, "started on the Active tab, typed into on the v2 intake")
+    assert r["starts"] == {}, r["starts"]
+
+
+def test_a_gc_boards_active_start_is_not_filed_as_a_test_by_a_look_at_v2(ran):
+    """F1's other door. A GC board's "+ New proposal" starts the bid with { audience: "GC" } already in the draft, so on the v2
+    intake the sandbox sees a project WITH content and no row, which it saves at once, as a test. From the Active tab that is a
+    real bid created as a test by looking at a page: nothing is saved by the look, the start still reads "0", and the bid typed
+    afterwards in the live intake is born real. From the Test tab the start says test and the bid is born a test."""
+    a = ran["gcBoardThenLook"]["active"]
+    assert a["afterLook"]["rows"] == [], "the look created a row for a real bid: %r" % a["afterLook"]["rows"]
+    assert "Nothing has been priced here yet" in a["afterLook"]["report"]["note"], a["afterLook"]["report"]["note"]
+    assert a["x"]["bornIsTest"] is False and a["x"]["is_test"] is False and a["rowIds"] == [a["id"]], (a["x"], a["rowIds"])
+    assert a["startAtArrival"] == "0" and a["afterLook"]["start"] == "0", (a["startAtArrival"], a["afterLook"]["start"])
+    t = ran["gcBoardThenLook"]["test"]
+    assert t["x"]["bornIsTest"] is True and t["x"]["is_test"] is True and t["rowIds"] == [t["id"]], (t["x"], t["rowIds"])
+    assert t["startAtArrival"] == "1", t["startAtArrival"]
+
+
+def test_an_abandoned_board_start_is_flushed_born_as_its_tab_said(ran):
+    """F2 of the audit of round 2. A board's "+ New proposal" (the real startNewProposal of js/portal.js) opens the live intake;
+    from the GC board it leaves { audience: "GC" } in the draft, which never went through setState. Nothing is typed and the
+    estimator opens ANOTHER project, so shared.js flushes the abandoned blob under its own id. The start travels in that PUT: the
+    row is born a test from the Test tab and a real bid from the Active tab, where round 2 created it unfiled on the board. The
+    Direct board leaves nothing to flush. The other project's page boots and it is only read."""
+    ab = ran["abandonedBoardStart"]
+    assert sorted(ab) == ["direct/active", "direct/test", "gc/active", "gc/test", "gc/test, its save refused"], sorted(ab)
+    for name, want in (("gc/test", True), ("gc/active", False)):
+        r = ab[name]
+        assert r["blobAtArrival"] == {"audience": "GC", "__draft_id": r["id"]}, "%s: %r" % (name, r["blobAtArrival"])
+        x = r["x"]
+        assert x is not None and x["bornIsTest"] is want and x["is_test"] is want and x["flips"] == 0, (
+            "%s: the abandoned start was flushed unfiled: %r" % (name, x))
+        assert r["startAtArrival"] == ("1" if want else "0"), "%s: %r" % (name, r["startAtArrival"])
+        assert r["startAfter"] is None, "%s: the start was left armed after the row was stored: %r" % (name, r["startAfter"])
+    for name in ("direct/test", "direct/active"):
+        assert ab[name]["blobAtArrival"] == {} and ab[name]["x"] is None, "%s: %r %r" % (name, ab[name]["blobAtArrival"], ab[name]["x"])
+    for name, r in sorted(ab.items()):
+        assert r["lastKind"] == "v1intake" and r["lastDraft"] == ELSEWHERE, "%s: the other project's page did not boot" % name
+        assert [q for q in reqs(r, id_=ELSEWHERE) if q["method"] != "GET"] == [], "%s: the other project was written to" % name
+        assert r["other"]["is_test"] is None and r["other"]["bornIsTest"] is None, "%s: %r" % (name, r["other"])
+
+
+def test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save(ran):
+    """The abandoned GC start's own save is refused (HTTP 500): no row exists, so the start must NOT be spent. It is used up only
+    once the server has stored a copy that carries it."""
+    r = ran["abandonedBoardStart"]["gc/test, its save refused"]
+    assert r["x"] is None, "a row exists although the only save was refused: %r" % r["x"]
+    assert r["startAtArrival"] == "1" and r["startAfter"] == "1", (r["startAtArrival"], r["startAfter"])
+
+
+def test_two_tabs_each_start_their_own_project_and_keep_their_own_start(ran):
+    """F3 of the audit of round 2. Two tabs of one browser, each starting a project (one localStorage, a sessionStorage each):
+    the v2 board's "+ New estimate" in both, and the Projects page's "+ New project" on the Test tab in one and on the Active
+    tab in the other. Round 2 kept the start in ONE slot, so the second tab's start overwrote the first's before its first write
+    and the first project was born unfiled (and forked on reopen). Now each project's start is its own, whichever tab types
+    first. The tab that typed leaves exactly one row, born as ITS tab said; the other tab's project has no row; nothing forks."""
+    t = ran["twoTabs"]
+    assert sorted(t) == ["projectsA", "projectsB", "v2A", "v2B"], sorted(t)
+    for name, r in sorted(t.items()):
+        typed = r["ids"][r["first"]]
+        want = False if (r["how"] == "projects" and r["first"] == "B") else True
+        row = r["rows"].get(typed)
+        assert row is not None and row["bornIsTest"] is want and row["is_test"] is want and row["flips"] == 0, (
+            "%s: the project of the tab that typed (%s) was born %r, expected %r" % (name, typed, row, want))
+        assert r["rowIds"] == [typed], "%s: a row was forked or another tab's project appeared: %r" % (name, r["rowIds"])
+        assert [p for p in r["pages"] if p["crashed"]] == [] and not r["runaway"], name
+    both = t["projectsA"]["startsAtOpen"]
+    assert both == {t["projectsA"]["ids"]["A"]: "1", t["projectsA"]["ids"]["B"]: "0"}, (
+        "the two tabs' starts did not both survive: %r" % both)
+
+
+def test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce(ran):
+    """F5 of the audit of round 2. The intake's own save waits 600 ms after an edit, and its pagehide handler flushed it with a
+    plain request, which a page that is going cannot finish: leaving by a link, Back, a reload or a closed tab within 600 ms of an
+    edit saved NOTHING (no row; the typed text only in localStorage), and the comment above it said keepalive. It is a keepalive
+    request now, so every door at every time leaves a row, born filed, and the intake's own save at 100 ms goes out as the
+    page goes and says so on the wire."""
+    exits = ran["exits"]
+    early = [e for e in exits if e["waitMs"] == 100]
+    assert sorted(e["door"] for e in early) == ["back", "close", "link", "reload"], [e["door"] for e in early]
+    for e in exits:
+        flow = "%s at %d ms" % (e["door"], e["waitMs"])
+        if e["door"] == "link":
+            continue
+        assert e["before"]["x"] is not None, "%s: the page left and saved nothing: %r" % (flow, e["before"])
+    for e in early:
+        flow = "%s at 100 ms" % e["door"]
+        first = reqs(e, "PUT", e["id"], page="intake")[0]
+        assert first["keepalive"] is True, "%s: the save sent as the page goes is not a keepalive request: %r" % (flow, first)
+
+
+def test_a_save_sent_as_the_page_goes_is_never_a_keepalive_request_the_browser_refuses(ran):
+    """"Mind the 64 KiB cap". A saved project whose draft is over the browser's keepalive limit is edited on the v2 intake and
+    left within 600 ms. The page must not ask for a keepalive request it knows will be refused ("TypeError: Failed to fetch",
+    swallowed, nothing sent): it sends a plain one, which is no worse than before (the browser may finish it or drop it)."""
+    r = ran["bigDraftLeftEarly"]
+    puts = reqs(r, "PUT", "big-4", page="intake")
+    assert puts, "the intake sent no save at all: %r" % r["requests"]
+    for q in puts:
+        assert q["keepalive"] is False and not q["outcome"].startswith("refused"), "the page asked for a keepalive the browser refuses: %r" % q
+
+
 # ══ every check goes red when the code is changed ═════════════════════════════════════════════════════
 # Each entry breaks one LINE of the sources in a scratch copy of the frontend, runs a harness on it, and the named check (a test
 # above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not there exactly once, so
