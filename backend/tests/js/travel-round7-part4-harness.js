@@ -275,6 +275,9 @@ async function typeMiles(b, miles) {
 
 /** What the Labor step of the section `tab` draws about the drive: the Travel Labor card's note on where its hours came from and its fill words, the travel block's caption, the Add Travel
  *  Labor control with the words above it, and the how-it-is-worked-out note. */
+/** The text a browser shows for words the page wrote through its esc(): the five entities it writes, `&amp;` last so nothing is decoded twice. */
+const shown = (s) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
 async function laborFacts(b, tab) {
   b.api.show(tab);
   b.api.go(1);
@@ -285,7 +288,7 @@ async function laborFacts(b, tab) {
   const cardNote = /<p class="hint trvnote">(Drive time is expected[^<]*)<\/p>/.exec(html);
   const none = /<div class="trvadd" data-trv-none[^>]*><p class="cap">([^<]*)<\/p>/.exec(html);
   return { src: i >= 0 ? textOf(b, '[data-trv-src="' + i + '"]') : null, cap: cap ? cap[1] : null, cardNote: cardNote ? cardNote[1] : null,
-    add: has(b, "[data-add-travel]"), none: attrOf(b, "[data-trv-none]", "data-trv-none"), noneWords: none ? none[1] : null, how: textOf(b, "[data-trv-how]") };
+    add: has(b, "[data-add-travel]"), none: attrOf(b, "[data-trv-none]", "data-trv-none"), noneWords: none ? shown(none[1]) : null, how: textOf(b, "[data-trv-how]") };
 }
 
 /** The Gyp card's Mobilizations hint, on the Material step of the section `tab`. */
