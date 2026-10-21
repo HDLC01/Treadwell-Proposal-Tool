@@ -519,6 +519,7 @@ CLEAR_LINE = "    if (timer) clearTimeout(timer);"
 CATCH_LINE = "    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }"
 AWAIT_FILING_LINE = "        if (ok) await applyPendingTestIntent(id);"
 
+MARK_LINE = '    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}'
 NET_CALL = "    var filedNow = await fileOwnNewProject(id, row);"
 NET_NOT_A_COPY = "    if (!row || row.beta_sandbox_of) return null;"
 NET_UNSET = "    if (row.is_test != null) return null;"
@@ -548,6 +549,10 @@ BREAKS = {
     "Continue does not wait and nothing else catches the project": (
         "world", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),
                   broken(SANDBOX, NET_CALL, "    var filedNow = null;")),
+        test_a_fast_continue_files_the_new_project_under_test),
+    "the pending filing is written without the project's id, so neither layer can find it": (
+        "world", (broken(SANDBOX, MARK_LINE,
+                         '    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", "1"); } catch (e) {}'),),
         test_a_fast_continue_files_the_new_project_under_test),
     "the save is waited for and the filing that follows it is not": (
         "world", (broken(SHARED, AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);"),),
