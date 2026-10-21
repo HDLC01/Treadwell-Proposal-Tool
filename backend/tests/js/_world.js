@@ -193,7 +193,12 @@ function makeNode(tag) {
     set(v) { markup = String(v); own = ""; n.children = []; },
   });
   Object.defineProperty(n, "textContent", {
-    get() { return markup && !own && !n.children.length ? markup.replace(/<[^>]*>/g, "") : own + n.children.map((c) => c.textContent).join(""); },
+    get() {
+      if (!(markup && !own && !n.children.length)) return own + n.children.map((c) => c.textContent).join("");
+      let t = markup, prev;
+      do { prev = t; t = t.replace(/<[^>]*>/g, ""); } while (t !== prev);
+      return t;
+    },
     set(v) { n.children = []; own = String(v); markup = ""; },
   });
   return n;
