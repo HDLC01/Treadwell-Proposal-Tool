@@ -754,6 +754,23 @@
     } catch {}
   }
 
+  // THE FIRST SAVES WHOSE CHECK COULD NOT BE MADE (round-5 audit F1), per project: retried while the page is open (a bounded number of times, so a
+  // server that is down is not asked every few seconds for ever), and sent as the page goes (the pagehide handler).
+  const _askFailed = new Set();
+  const ASK_RETRY_MS = 5000, ASK_RETRIES = 12;
+  const _askRetries = new Map();
+  function askFailed(id) {
+    _askFailed.add(id);
+    const n = (_askRetries.get(id) || 0) + 1;
+    _askRetries.set(id, n);
+    if (n <= ASK_RETRIES) {
+      setTimeout(() => {
+        try { if (getDraftId() === id && !takenOver(id) && !_saveTimer) scheduleServerSave(getState()); } catch {}
+      }, ASK_RETRY_MS);
+    }
+    return false;
+  }
+
   // The saves this page has asked for and has not heard back from, per project (a plain request: a keepalive one outlives the page). One that is
   // still unanswered when the page goes is lost with it (a request that has not reached the server is dropped, and nobody sees its answer), so
   // the page goes with the newest copy sent again (the pagehide handler below). X1, round 5, B1: the beta door's wait ran out while its save was
@@ -775,18 +792,21 @@
    *  `storage` event (heardStateWrite) as it happens; this asks the one party that cannot have forgotten. No row (404) goes ahead. A row this page
    *  wrote itself (rememberOwn: its first save was stored and its answer is late, or the sandbox saved the project at once) goes ahead. Any other
    *  row means another page wrote it: this page is taken over and sends nothing. A server that cannot be asked (an error, no answer) sends nothing
-   *  either, which loses nothing: the copy is on this computer and the next save asks again. */
+   *  THEN, but the save is not dropped (round-5 audit F1: a 500 at the ask followed by a closed tab lost the project): the page asks again a few
+   *  seconds later while it is open (askFailed), and if it goes first it sends its copy as it goes (the pagehide handler; takenOver and the
+   *  storage listener still guard that send). */
   async function askBeforeFirstSave(id, blob) {
     let row = null;
     try {
       const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), { headers: authHeaders() });
       if (res.status !== 404) {
-        if (!res.ok) return false;
+        if (!res.ok) return askFailed(id);
         const body = await res.json();
         row = body && body.data;
-        if (!(row && typeof row === "object" && !Array.isArray(row))) return false;
+        if (!(row && typeof row === "object" && !Array.isArray(row))) return askFailed(id);
       }
-    } catch { return false; }
+    } catch { return askFailed(id); }
+    _askFailed.delete(id);
     if (row !== null && _ownDigests.indexOf(draftDigest(row)) < 0) {
       markTakenOver(id);
       console.warn("[TW] refused server save: draft", id, "has a row this page did not write");
@@ -1354,7 +1374,7 @@
     // which the page's going cannot cancel; the same copy twice is harmless. Not for a page that holds its saves behind a gate, has given its
     // copy up, or is reloading onto another draft: those are never sent on this page's own say-so.
     const here = getDraftId();
-    const resend = !_saveTimer && !!here && _unanswered.has(here) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);
+    const resend = !_saveTimer && !!here && (_unanswered.has(here) || _askFailed.has(here)) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);
     if (!_saveTimer && !resend) return;
     let pageSends = false;
     try { pageSends = !!(_pageSavesOnLeave && _pageSavesOnLeave()); } catch { pageSends = false; }

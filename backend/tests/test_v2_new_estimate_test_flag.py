@@ -1385,6 +1385,19 @@ def test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends(ran):
     assert len(failed["asked"]) == 1 and failed["asked"][0]["at"] < 1000, "a save that failed at once was waited out: %r" % failed["asked"]
 
 
+def test_a_failed_check_before_the_first_save_loses_nothing_closed_or_open(ran):
+    """Round-5 audit F1. The first save of a project this page created asks the server first; when that ask failed once (a 500) nothing re-armed
+    the save, and a tab closed afterwards never sent it: the project never reached the server. Now a failed ask is retried while the page is open,
+    and the page sends its copy as it goes (keepalive; the takeover guards still apply to that send)."""
+    for name in ("askFailsThenClose", "askFailsStaysOpen"):
+        r = ran[name]
+        gets = [q for q in r["requests"] if q.get("route") == "GET" and q.get("id") == r["id"]]
+        assert any(q.get("status") == 500 for q in gets), "%s: the ask never failed, so this checks nothing: %r" % (name, gets)
+        assert r["x"] is not None, "%s: the project never reached the server: %r" % (name, r["rowIds"])
+        assert r["x"]["is_test"] is True and r["x"]["bornIsTest"] is True, (name, r["x"])
+        assert r["beta"] is None, "%s: a copy was forked" % name
+
+
 def test_the_beta_doors_wait_running_out_does_not_lose_a_save_that_is_still_on_the_way_up(ran):
     """B1 of the audit of round 4. The door waits at most 8 s for its save. A save still uploading when the wait runs out is a PLAIN request, which the
     browser drops with the page, and nothing resent it: the v2 page then found no row and stopped, and the bid was never saved. A save that has not
@@ -1713,7 +1726,7 @@ REMEMBER_SENT = "      rememberOwn(id, sent);"
 SANDBOX_NOTES_OWN = '    if (typeof TW.noteOwnSave === "function") TW.noteOwnSave(id, blob);'
 START_V2_READ = "      if (v === V2_START) return _startsAsTest === id ? true : null;"
 DROP_V2_START = "        if (ok) dropV2Start(id);           // a stored save of a project the v2 board started, by a page that is not a v2 page creating it: the start can no longer be used"
-PAGEHIDE_RESEND = "    const resend = !_saveTimer && !!here && _unanswered.has(here) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);"
+PAGEHIDE_RESEND = "    const resend = !_saveTimer && !!here && (_unanswered.has(here) || _askFailed.has(here)) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);"
 TRACK_UNANSWERED = "    _unanswered.set(id, (_unanswered.get(id) || 0) + 1);"
 TAKEN_OVER_STICKY = "    if (_takenOver === id) return true;"
 TAKEN_OVER_FOREIGN = "    if (cur[STAMP] && cur[STAMP] !== id) return false;"
@@ -1782,6 +1795,15 @@ check_a_save_that_cannot_be_made = every(test_a_save_that_cannot_be_made_is_said
 
 # name -> (harness, (the lines to break: (file, anchor line, what it becomes), ...), the check)
 BREAKS = {
+    # ── round-5 audit F1: a failed check before the first save ──
+    "a failed check is not sent as the page goes": (
+        "world", (broken(SHARED, "    const resend = !_saveTimer && !!here && (_unanswered.has(here) || _askFailed.has(here)) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);",
+                         "    const resend = !_saveTimer && !!here && _unanswered.has(here) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);"),),
+        test_a_failed_check_before_the_first_save_loses_nothing_closed_or_open),
+    "a failed check is never asked again while the page is open": (
+        "world", (broken(SHARED, "        try { if (getDraftId() === id && !takenOver(id) && !_saveTimer) scheduleServerSave(getState()); } catch {}",
+                         "        void 0;"),),
+        test_a_failed_check_before_the_first_save_loses_nothing_closed_or_open),
     # ── the seed: setState says what the project was started as ──
     "no write says what the project was started as (every flow)": (
         "world", NOTHING_SAYS, test_a_new_project_is_born_filed_whichever_way_it_leaves),

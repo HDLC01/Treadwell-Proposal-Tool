@@ -1615,6 +1615,10 @@ process.on("exit", (code) => {
                                                                 { at: 12000, press: true }] }),
   };
   // B1: the door's wait runs out while its save is still on the way UP (a poor uplink): a plain request does not outlive its page
+  // ROUND-5 AUDIT F1: the check before a created project's first save fails once (a 500, a deploy blip). Closed after it, the save must still go;
+  // left open, the page must save without another edit.
+  out.askFailsThenClose = await exit("close", 3600, { faults: [{ route: "GET", mode: "http500", times: 1 }], reopen: false });
+  out.askFailsStaysOpen = (await drive({ faults: [{ route: "GET", mode: "http500", times: 1 }], steps: TYPED, settleMs: 30000 })).result;
   out.betaDoorSlowUplink = {};
   for (const tab of ["test", "active"]) {
     out.betaDoorSlowUplink[tab] = await betaDoor(tab, { faults: [{ route: "PUT", mode: "slowup", ms: 9000, times: 1 }] });
