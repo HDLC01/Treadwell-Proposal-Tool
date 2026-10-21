@@ -399,8 +399,12 @@
   }
 
   /** The new project could not be saved to the server just now. Said plainly, and never as "filed": nothing is on the
-   *  server to be filed. It stays on this computer, saves again as the estimator works, and lands under the Test tab
-   *  when it does. */
+   *  server to be filed. What is true of it, and all this note says: it stays on this computer (the browser's copy of the draft),
+   *  and what the estimator writes next is said as a test by this page's own word (TW.startsAsTest), so a save the server stores
+   *  creates the row under the Test tab. It promises no more than that. Left without anything typed, the project has no row at
+   *  all (shared.js does not flush a draft nobody typed into: hasWork), a project that is only the GC tab's { audience: "GC" } is
+   *  one of those, and if another page writes the project first this page stops saving and says so (showTakenOverNote), which
+   *  replaces this note. */
   function showUnsavedNote() {
     var el = $("sandbox-note");
     if (!el) return;
@@ -503,8 +507,9 @@
     // board's New button leaves ({ audience: "GC" }) is not written content.
     //
     // A SAVE THAT DID NOT LAND IS SAID, NEVER CLAIMED AS A FILING: there is no row on the server to be filed. The project
-    // stays on this computer, and this page's writes say "test" in their own blob and create the row filed. (This page
-    // used to say "filed as a test" over it.)
+    // stays on this computer, and this page's writes say "test" in their own blob, so the first one the server stores creates the
+    // row filed (unless another page has written the project first, in which case this page's writes are refused and it says so:
+    // showTakenOverNote). (This page used to say "filed as a test" over it.)
     if (row === null) {
       var said = state.is_test;
       var written = Object.keys(state).some(function (k) { return k !== "__draft_id" && k !== "audience" && k !== "is_test"; });

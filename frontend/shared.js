@@ -201,9 +201,11 @@
   // What a project was STARTED AS (a test, a real bid, or nothing said) goes into the project's OWN blob, in every write that
   // holds anything (setState: sayWhatItWasStartedAs), and into a copy that goes to the server without having been through
   // setState (putDraft: withStart). It is not a second request after the first save: the backend inserts a new row as it is sent
-  // and, on an update, keeps a server-owned key the row already has (drafts.save_draft keep_server_owned), so the first PUT, by
-  // whatever path it leaves, creates the row already filed, and a tab holding an old blob cannot undo what somebody has since
-  // chosen on the Projects card (`is_test` is server-owned: see _SERVER_OWNED_KEYS in backend/drafts.py).
+  // and, on an update, keeps a server-owned key the row already has (drafts.save_draft keep_server_owned), so the first PUT the
+  // server STORES, by whatever path it leaves, creates the row as that said (filed as a test, or as a real bid), and a tab holding
+  // an old blob cannot undo what somebody has since chosen on the Projects card (`is_test` is server-owned: see _SERVER_OWNED_KEYS
+  // in backend/drafts.py). What it does not do: say anything for a project nobody started (the All and Inactive tabs), file a row
+  // somebody has already filed, or happen at all for a save that is refused or lost with its page (the start stays armed).
   //
   // EACH PROJECT'S START IS ITS OWN KEY, AND THE PROJECT'S ID IS MINTED WITH IT. It was one slot for the whole browser, and a
   // second tab's New project overwrote the first tab's start before its first write, which left the first project unfiled. Under
@@ -298,15 +300,18 @@
    *  still decides every project a v2 page has not written. But the page decided it was creating the project when it opened and found no
    *  row, and another page (the sidebar's bare link resumes the browser's current draft, so two tabs can be on one project) may have
    *  written it since: that page's word, or its silence, stands, and this page's stale decision does not SEED a test onto it. A write
-   *  into a blob that was wiped to nothing (another tab's New project) still says it: nothing was written.
+   *  into a blob that was wiped to nothing (another tab's New project) still says it: nothing was written. (Since round 4 a page whose
+   *  decision has gone stale is refused outright before it gets here: takenOver. What is left of this is a page that decided with work
+   *  already in the blob, and a page's own later writes, which already carry the word.)
    *
    *  IT SPENDS NOTHING. A write only says the start, and putDraft spends it once the server has stored a copy that carries it
    *  (spendStart). A start spent by the write that said it went with the blob when another tab's New project wiped the shared blob
    *  before the save went, and the page's next write, on an empty blob, then said nothing: the project was created unsaid.
    *
    *  NOT BEFORE THERE IS CONTENT. A write whose blob holds nothing but the stamp (and the flag) says nothing, so an untouched
-   *  project stays a blob with nothing in it. The sandbox and flushEvictedBlob both read "nothing but the stamp" as
-   *  "nothing to save", and a project nobody typed into must never become a row.
+   *  project stays a blob with nothing in it. The sandbox reads "nothing but the stamp" as "nothing to save", and flushEvictedBlob
+   *  reads "nothing typed" (hasWork: the stamp, the flag and a board's { audience: "GC" } are not work) the same way, and a project
+   *  nobody typed into must never become a row.
    *
    *  A blob that already says is_test is left as it is: a hydrate, or a refresh of the server-owned keys, wrote what the server
    *  holds, and that is the more recent word. `false` is a word like any other (somebody saying "this IS a real bid", which is
@@ -615,9 +620,15 @@
   // base-bid change the estimator had just made, so the portal showed Epoxy as the base
   // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
   //
-  // A NEW TEST PROJECT NEEDS NOTHING AFTER ITS FIRST SAVE: the copy it sends already says is_test
-  // (sayWhatItWasStartedAs in setState, withStart for a blob that never went through it), so a caller
-  // that awaits this leaves with the project created filed.
+  // WHAT A SAVE SAYS ABOUT THE PROJECT'S FILING, AND WHAT IT DOES NOT PROMISE. The copy this sends carries what the project was STARTED
+  // AS when the project holds work and something has been said: from the blob itself when it went through setState
+  // (sayWhatItWasStartedAs: the start held under this id, or the word of a v2 page that created the project), and from this browser's start
+  // when it did not (withStart). The server inserts a new row as sent and keeps a server-owned key a row already has
+  // (drafts.save_draft), so a save that is STORED creates the row as that said (a test, from the Test tab, the v2 board or a v2 page's own
+  // word; a real bid, from the Active tab) and files nothing somebody has already filed. It promises nothing for a project nobody started
+  // (the All and Inactive tabs say nothing, so nothing is said), for a copy with nothing in it (sent as it is), or for a save that is
+  // refused or lost with the page that sent it (the start stays armed for the next one, below). A caller that awaits a stored save has
+  // created the row as it was started, and no more than that.
   //
   // THE START IS SPENT ONLY WHEN THE SERVER HAS STORED A COPY THAT CARRIED IT (spendStart): whether the
   // blob said it (sayWhatItWasStartedAs) or withStart added it. A save that is refused, or lost with the

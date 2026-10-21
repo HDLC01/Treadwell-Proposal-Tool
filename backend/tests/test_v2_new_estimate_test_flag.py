@@ -34,6 +34,17 @@ on a copy that never went through setState and spends it only once the server ha
 filed (test_generate_writeback.py); and the pagehide saves are keepalive requests (a draft too big for one goes plain). By design,
 pinned: a project typed into on a v2 page is a test project whichever tab started it. Only a LOOK leaves it as its tab started it.
 
+THE AUDIT OF ROUND 3 (14 of its 16 claims held; no fuzzed single-tab scenario flagged a real project as a test) found six more, and ROUND 4 closes them.
+(F1) A v2 page that created a project and lost it to another tab's write kept writing its older, emptier copy over it, and a save it had queued
+fired over a newer row: it now refuses the write, does not send the queued copy, and says so in place of its banner (shared.js takenOver). (F2) The v2
+board's New estimate left no start and an abandoned GC start was flushed as a nameless row: the board starts the project as a test under its own id
+and a draft nobody typed into is never flushed (hasWork). (F3) The live intake's beta door left before its save was answered, so the v2 page asked
+before the row was there: it waits, bounded. (F4) Both pagehide handlers sent a save as the page went: shared.js stands down when the page's own
+will send (TW.pageSavesOnLeave). (F5) A v2 page on a blob stamped for another project saved it under its own id: it stops, and the sandbox's save
+refuses such a blob. (F6) keepaliveFits counts UTF-8 bytes, now pinned. The model grew with them: it runs the board's real startNew, holds keepalive
+requests to one shared 64 KiB budget, can be slow over one request, and presses the live intake's beta door; and the mutation table has a few
+entries with two breaks, because the board's start is now a second mechanism for what setState says (see NOTHING_SAYS).
+
 HOW THESE TESTS RUN. tests/js/new-estimate-test-flag-harness.js runs the REAL shared.js, js/polish-sandbox.js,
 js/polish-intake.js and js/index.js, whole, in tests/js/_world.js: a browser model with virtual time in which a page's
 timers and replies die with it and a keepalive request survives it with nobody to hear the answer. The intake is driven as
