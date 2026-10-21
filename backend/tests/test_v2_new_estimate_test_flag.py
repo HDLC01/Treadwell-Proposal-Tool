@@ -26,7 +26,11 @@ HOW THESE TESTS RUN. tests/js/new-estimate-test-flag-harness.js runs the REAL sh
 js/polish-intake.js and js/index.js, whole, in tests/js/_world.js: a browser model with virtual time in which a page's
 timers and replies die with it and a keepalive request survives it with nobody to hear the answer. The intake is driven as
 a person drives it; every fact is read off the server's rows (what each was BORN as, and what it is now) and the pages after
-everything has settled. The model's browser rules and its server are held to the real thing by the first tests below.
+everything has settled. The model's SERVER is held to the real routes by the first tests below (the same requests go to
+backend/main.py over an in-memory store). Its BROWSER rules (a page being left, keepalive, a reply nobody sees) are only stated
+by the first of them: nothing in this suite can check a browser against the model, so they were walked by hand in a real Chrome
+on 2026-10-21 (the fast Continue, the step link, a closed tab, the live intake from the Test tab, a navigation that does not go),
+against the real backend over an in-memory store, and each agreed with the model.
 The MUTATION tests at the end break a COPY of the sources, one line at a time, and require a named check to go red.
 """
 import pathlib
@@ -634,7 +638,8 @@ def test_the_record_of_what_the_server_holds_is_written_as_the_first_save_is_sto
     r = ran["synced"]
     assert r["synced"] == r["id"] + ":" + r["digestNow"] and r["digestNow"], (r["synced"], r["digestNow"])
     assert r["navs"][0]["syncedAtAsk"] == r["synced"], "Continue asked to leave before the record was written: %r" % r["navs"][0]
-    assert r["blob"].get("is_test") is True and r["x"]["bornIsTest"] is True
+    assert r["blob"].get("is_test") is True and r["x"]["bornIsTest"] is True, (
+        "the project's own blob does not say it is a test, or its row was created unfiled: %r %r" % (r["blob"].get("is_test"), r["x"]))
 
 
 # ══ S7: the live intake, through the Projects page ══════════════════════════════════════════════════════
