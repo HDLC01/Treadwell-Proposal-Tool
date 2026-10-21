@@ -31,24 +31,31 @@
  *   running, even one that has asked to leave, is.
  *
  *   THE SERVER is the route contract of backend/main.py, nothing more: GET /api/draft/{id} (200, or 404
- *   when the row does not exist), PUT /api/draft/{id} (an upsert that keeps the server-owned keys, as
+ *   when the row does not exist), PUT /api/draft/{id} (an upsert that INSERTS a new row as sent, so a first
+ *   save carrying is_test creates the row already filed, and keeps a server-owned key the stored row has, as
  *   drafts.save_draft does with keep_server_owned), POST /api/draft/{id}/test (sets is_test; 200 with
- *   {"ok": true, "existed": false} when there is no row), and GET /api/condition-defaults. It can be told
+ *   {"ok": true, "existed": false} when there is no row), and GET /api/condition-defaults. Each row remembers
+ *   what its first save said (`born`), because "was it ever on the board unfiled" is a fact about its birth. It can be told
  *   to fail a route (`fault`): an HTTP 500, a 200 carrying {"ok": false} (which is how both /test and
  *   the save route answer a caught exception), a network error, no answer at all, a 200 that is not JSON
  *   (a proxy's error page) and a 200 that says the row is not there ({"ok": true, "existed": false}).
  *
- * WHAT IS REAL. The page scripts (shared.js, js/polish-sandbox.js, js/polish-intake.js) and the modules they
- * read (work-types, intake-scope, bid-model, excel-math): every one is read from the frontend directory the
- * harness is given and run unchanged. WHAT IS NOT: the DOM (a permissive tree of nodes, enough for these
- * pages), the network, and the estimate page, which is a copy of the first lines of polish-estimate.js's
- * init() (see openEstimate): the real file is 5,000 lines of calculator, and the part that decides a fork
- * is the sandbox call it makes. test_polish_beta_sandbox.py pins that order in the real file.
+ * WHAT IS REAL. The page scripts (shared.js, js/polish-sandbox.js, js/polish-intake.js, and js/index.js, the
+ * live intake) and the modules they read (work-types, intake-scope, bid-model, excel-math): every one is read
+ * from the frontend directory the harness is given and run unchanged, and so is the body of js/projects.js's
+ * "+ New project" click handler (world.pressNewProject lifts it out of the file and runs it). WHAT IS NOT:
+ * the DOM (a permissive tree of nodes, enough for these pages), the network, the address lookup index.js
+ * mounts (a no-op), and two pages that are only as much of themselves as the facts need. The estimate page is
+ * a copy of the first lines of polish-estimate.js's init() (see openEstimate): the real file is 5,000 lines of
+ * calculator, and the part that decides a fork is the sandbox call it makes (test_polish_beta_sandbox.py pins
+ * that order in the real file). The "review" page (the spreadsheet's Estimate step) is shared.js plus one
+ * write when it loads, as estimate-review.js writes the draft as it loads.
  *
  * Usage: const W = require("./_world.js"); const world = W.createWorld({ frontend: "<dir>" });
  */
 const fs = require("fs");
 const path = require("path");
+const L = require("./_lib.js");
 
 const ORIGIN = "https://proposals.test";
 const KEYS = {
@@ -56,6 +63,7 @@ const KEYS = {
   draftId: "treadwell.proposal_tool.draft_id",
   guard: "treadwell.proposal_tool.hydrated_once",
   intent: "treadwell.proposal_tool.new_is_test",
+  synced: "treadwell.proposal_tool.synced",
 };
 // Mirror of drafts._SERVER_OWNED_KEYS. test_v2_new_estimate_test_flag.py compares the two.
 const SERVER_OWNED = ["is_test", "archived", "assigned_estimator"];
@@ -166,11 +174,12 @@ function makeNode(tag) {
   return n;
 }
 
-/** The form's controls, read out of the REAL polish-intake.html, so the names a save reads are the page's own. */
-function formControls(html) {
+/** The form's controls, read out of the REAL polish-intake.html (or index.html, the live intake), so the names a
+ *  save reads are the page's own. */
+function formControls(html, file) {
   const from = html.indexOf('<form id="intake-form">');
   const to = html.indexOf("</form>", from);
-  if (from < 0 || to < 0) throw new Error("#intake-form is gone from polish-intake.html: retarget _world.js");
+  if (from < 0 || to < 0) throw new Error("#intake-form is gone from " + file + ": retarget _world.js");
   const attr = (tag, k) => {
     const m = new RegExp("\\s" + k + '="([^"]*)"').exec(tag);
     return m ? m[1] : null;
@@ -183,9 +192,12 @@ function formControls(html) {
     c.checked = /\schecked\b/.test(tag);
     return c;
   }).filter((c) => c.name);
-  if (controls.length < 15) throw new Error("only " + controls.length + " named controls in #intake-form: retarget _world.js");
+  if (controls.length < 15) throw new Error("only " + controls.length + " named controls in #intake-form of " + file + ": retarget _world.js");
   return controls;
 }
+
+/** What the server holds of a draft's `is_test`, as the Projects page reads it: true, false, or null for "nobody has said". */
+const flagOf = (data) => (Object.prototype.hasOwnProperty.call(data, "is_test") && data.is_test !== undefined ? data.is_test : null);
 
 // ── the world ────────────────────────────────────────────────────────────────────────────────────────────
 function createWorld(cfg) {
@@ -248,13 +260,16 @@ function createWorld(cfg) {
         row.data = data;
         row.updated_at = stamp();
       } else {
-        world.rows.set(req.id, { data: data, created_at: stamp(), updated_at: stamp() });
+        // INSERTED AS SENT (drafts.save_draft's else branch): a row is born with whatever is_test its first save
+        // carries. `born` is the fact the fix is about: a project that is ever on the board unfiled was born unfiled.
+        world.rows.set(req.id, { data: data, created_at: stamp(), updated_at: stamp(),
+                                 born: { at: sim.now, is_test: flagOf(data) }, flips: [] });
       }
       return { status: 200, body: { ok: true, id: req.id, updated_at: stamp() } };
     }
     if (req.route === "TEST") {
       const want = req.body ? JSON.parse(req.body).is_test !== false : true;
-      if (row) row.data.is_test = want;
+      if (row) { row.flips.push({ at: sim.now, from: flagOf(row.data), to: want }); row.data.is_test = want; }
       return { status: 200, body: { ok: true, existed: !!row, is_test: want } };
     }
     if (req.route === "COND") return { status: 200, body: { ok: true, conditions: [] } };
@@ -264,7 +279,8 @@ function createWorld(cfg) {
 
   /** Put a row on the server without going through a page (a project that already exists). */
   world.seed = (id, data) => {
-    world.rows.set(id, { data: clone(data), created_at: stamp(), updated_at: stamp() });
+    world.rows.set(id, { data: clone(data), created_at: stamp(), updated_at: stamp(),
+                         born: { at: sim.now, is_test: flagOf(data) }, flips: [] });
   };
   /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang"|"html"|"gone", id?, times? } */
   world.fault = (spec) => { world.faults.push(Object.assign({ times: Infinity, used: 0 }, spec)); };
@@ -323,6 +339,12 @@ function createWorld(cfg) {
   function kindOf(pathname) {
     if (pathname === "/polish-intake.html") return "intake";
     if (pathname === "/polish-estimate.html") return "estimate";
+    // The LIVE intake (index.html + js/index.js), where "+ New project" on the Projects page lands.
+    if (pathname === "/" || pathname === "/index.html") return "v1intake";
+    // The spreadsheet's Estimate step. It writes the draft as it loads, so it is shared.js plus one write.
+    if (pathname === "/estimate-review.html") return "review";
+    // A page that runs shared.js and nothing else (the Projects page, which has not saved anything).
+    if (pathname === "/projects.html") return "plain";
     if (pathname === "/blank.html") return "blank";
     throw new Error("the harness has no page for " + pathname);
   }
@@ -404,23 +426,41 @@ function createWorld(cfg) {
     const win = page.win;
 
     // A blank page runs no scripts: it is a window to put requests and timers on, for the model's own checks.
+    const sandboxed = page.kind === "intake" || page.kind === "estimate";
     if (page.kind !== "blank") {
       runScript(page, "shared.js");
-      win.TWWorkTypes = mod("js/work-types.js");
-      if (page.kind === "intake") {
-        win.TWBidModel = mod("js/bid-model.js");
-        win.TWIntakeScope = mod("js/intake-scope.js");
-      }
-      runScript(page, "js/polish-sandbox.js");
+      if (sandboxed || page.kind === "v1intake") win.TWWorkTypes = mod("js/work-types.js");
+      if (page.kind === "intake") win.TWBidModel = mod("js/bid-model.js");
+      if (page.kind === "intake" || page.kind === "v1intake") win.TWIntakeScope = mod("js/intake-scope.js");
+      // The address lookup (js/address-lookup.js) is a convenience that needs a real DOM, and index.js calls it unasked.
+      if (page.kind === "v1intake") win.TWAddress = { mount() {} };
+      if (sandboxed) runScript(page, "js/polish-sandbox.js");
     }
 
     if (page.kind === "intake") {
       const html = read(path.join(frontend, "polish-intake.html"));
       const form = makeNode("form");
       form.id = "intake-form";
-      form.elements = formControls(html);
+      form.elements = formControls(html, "polish-intake.html");
       page.nodes["intake-form"] = form;
+      // The Continue button as the page ships it (its label is what a disabled-and-relabelled button must give back).
+      const btn = /<button\b[^>]*\bid="continue-btn"[^>]*>([^<]*)<\/button>/.exec(html);
+      if (btn) { const b = makeNode("button"); b.id = "continue-btn"; b.textContent = btn[1]; page.nodes["continue-btn"] = b; }
       runScript(page, "js/polish-intake.js");
+    }
+    if (page.kind === "v1intake") {
+      const form = makeNode("form");
+      form.id = "intake-form";
+      form.elements = formControls(read(path.join(frontend, "index.html")), "index.html");
+      page.nodes["intake-form"] = form;
+      runScript(page, "js/index.js");
+    }
+    if (page.kind === "review") {
+      // estimate-review.js writes the draft as it loads (a county, a tab order, the price lines); one write stands for them.
+      (async () => {
+        try { await win.TW.draftReady; } catch (e) { /* the page carries on */ }
+        win.TW.setState({ review_opened: true });
+      })();
     }
     if (page.kind === "estimate") openEstimate(page);
 
@@ -438,8 +478,15 @@ function createWorld(cfg) {
       c.value = String(value);
       page.form.fire("input", { target: c });
     };
-    /** Press Continue (or Enter in a box): the form's own submit handlers. */
-    page.pressContinue = () => { page.form.fire("submit", {}); };
+    /** Press Continue (or Enter in a box): the form's own submit handlers. A disabled Continue does nothing, and neither
+     *  does Enter in a box while it is disabled (a form whose default button is disabled is not submitted implicitly), so
+     *  a press that finds it disabled answers false and the page is never asked. */
+    page.pressContinue = () => {
+      const btn = page.nodes["continue-btn"];
+      if (btn && btn.disabled) return false;
+      page.form.fire("submit", {});
+      return true;
+    };
     /** Click a link: the browser is sent to `href`. */
     page.follow = (href) => world.navigate(page, href);
     page.text = (id) => page.el(id).textContent;
@@ -466,8 +513,10 @@ function createWorld(cfg) {
   /** location.assign() / a link: ask for the new document. The old page keeps running until it commits. */
   world.navigate = (page, href) => {
     if (page.dead || page.leaving) return;
-    page.leaving = true;
     const target = new URL(String(href), page.url).href;
+    // A browser that does not go (the load was stopped, a prompt was answered no): the page is still there, as it was.
+    if (world.navigationBlocked) { world.navs.push({ from: page.label, to: target, askedAt: sim.now, blocked: true }); return; }
+    page.leaving = true;
     world.navs.push({ from: page.label, to: target, askedAt: sim.now });
     sim.at(net.commitMs, () => {
       if (page.dead) return;
@@ -512,23 +561,57 @@ function createWorld(cfg) {
     local.setItem(KEYS.draftId, id);
   };
 
+  /** Projects' "+ New project", executed: the REAL click handler of js/projects.js, lifted out of the file and run on a
+   *  page that has shared.js loaded, with `tab` as the Projects page's CURRENT_FILTER ("test", "active", "all" or
+   *  "inactive"). It clears the browser's own copy of the project, records which tab the click came from and sends the
+   *  browser to the live intake ("/?new=1"). Resolves with the intake page once it has booted. */
+  world.pressNewProject = async (opts) => {
+    const tab = (opts && opts.tab) || "test";
+    const src = read(path.join(frontend, "js", "projects.js"));
+    const head = 'document.getElementById("new-project").addEventListener("click", (e) => {';
+    const at = src.indexOf(head);
+    if (at < 0) throw new Error("projects.js no longer starts a new project with a click handler on #new-project: retarget _world.js");
+    const open = at + head.length - 1;
+    const body = src.slice(open + 1, L.balanced(src, open));
+    const page = world.load("/projects.html");
+    await world.settle();
+    const win = page.win;
+    new Function("CURRENT_FILTER", "window", "TW", "localStorage", "sessionStorage", "e", body)(
+      tab, win, win.TW, win.localStorage, win.sessionStorage, { preventDefault() {} });
+    await world.settle();
+    return world.pageOf("v1intake");
+  };
+
+  /** The blob this browser holds for the project it is on, as stored. */
+  world.blob = () => { try { return JSON.parse(local.getItem(KEYS.state) || "{}"); } catch (e) { return null; } };
+
   world.pageOf = (kind) => world.pages.filter((p) => p.kind === kind).pop() || null;
 
-  /** A row as the Projects page would read it: is_test is true, false, or null for "nobody has said". */
+  /** A row as the Projects page would read it: is_test is true, false, or null for "nobody has said". `bornIsTest` is what
+   *  the row's FIRST save said (a project that is ever on the board unfiled was born unfiled), `flips` how many times a
+   *  filing request changed it afterwards. */
   world.row = (id) => {
     const r = world.rows.get(id);
     if (!r) return null;
     const d = r.data;
     return {
-      is_test: Object.prototype.hasOwnProperty.call(d, "is_test") && d.is_test !== undefined ? d.is_test : null,
+      is_test: flagOf(d),
+      bornIsTest: r.born.is_test,
+      flips: r.flips.length,
       beta_sandbox_of: d.beta_sandbox_of || null,
       project_name: d.project_name === undefined ? null : d.project_name,
     };
   };
 
+  /** What a save said about the project's filing: the is_test its body carried (true, false, or null for "nothing"). */
+  const sentFlag = (r) => {
+    if (r.route !== "PUT" || !r.body) return undefined;
+    try { return flagOf(JSON.parse(r.body).data || {}); } catch (e) { return undefined; }
+  };
+
   world.requestsLog = () => world.requests.map((r) => ({
     n: r.n, at: r.sentAt, page: r.page.label, route: r.route, method: r.method, id: r.id || null,
-    keepalive: r.keepalive, outcome: r.outcome, status: r.status,
+    keepalive: r.keepalive, outcome: r.outcome, status: r.status, sentIsTest: sentFlag(r),
     arrivedAt: r.arrivedAt === undefined ? null : r.arrivedAt, doneAt: r.doneAt === undefined ? null : r.doneAt,
     repliedAt: r.repliedAt === undefined ? null : r.repliedAt,
   }));
@@ -547,6 +630,8 @@ function createWorld(cfg) {
     rows: Object.fromEntries(Array.from(world.rows.keys()).sort().map((id) => [id, world.row(id)])),
     requests: world.requestsLog(),
     intent: local.getItem(KEYS.intent),
+    synced: local.getItem(KEYS.synced),
+    blob: world.blob(),
     storedDraftId: local.getItem(KEYS.draftId),
     navs: world.navs.slice(),
     pages: world.pages.map(world.pageReport),

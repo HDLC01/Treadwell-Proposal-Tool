@@ -307,6 +307,8 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // to land in humanConditions, which is what stops a second verbal run overriding it.
   var humanConditions = {};
   var saveTimer = null;
+  // Set while Continue is waiting for its save or has asked the browser to leave: a second press does nothing.
+  var leaving = false;
   ${fn("condOn")}
   ${fn("adoptModel")}
   ${fn("conditionCells")}
@@ -395,6 +397,10 @@ function build(opts) {
                   id: opts.id || "proj-1" };
   const dom = makeDom(log, opts.formValues || FORM_VALUES);
   const doc = makeDocument(log);
+  // The Continue button as the page ships it, so that "give the label back" has the page's own label to give. The write
+  // that puts it there is not the page's, so it is taken back out of the log.
+  const shipped = /<button\b[^>]*\bid="continue-btn"[^>]*>([^<]*)<\/button>/.exec(pageHtml);
+  if (shipped) { dom.el("continue-btn").textContent = shipped[1]; log.pop(); }
 
   const TW = {
     getState: () => JSON.parse(JSON.stringify(store.blob)),
@@ -1030,6 +1036,12 @@ out.engineMoves = (function () {
   //
   // The four ways a wait can end that the real flushState can produce are all here, and one it cannot: it
   // answers true or false and never throws, so the throw is the page's own `catch`, which nothing else reaches.
+  //
+  // THE BUTTON (F5 of the audit of round 1). While it waits Continue says so (disabled, "Saving…"), a second press does
+  // nothing, and once it has asked the browser to leave it says that ("Opening the estimate…"). If the browser does not
+  // go, or the page throws before it asks, the button is given back with its own label and works again: the page's own
+  // timer (armed once it has asked the browser to leave, so it is the one timer left after the wait's own is cleared)
+  // is cranked by hand to stand for the time it takes.
   {
     const press = (b) => b.dom.nodes["intake-form"].listeners
       .filter((l) => l.type === "submit").map((l) => l.handler({ preventDefault() {} }));
@@ -1038,29 +1050,40 @@ out.engineMoves = (function () {
     // ever must show up as a page that has not left, not as a harness that never prints anything.
     const finished = async (presses) => {
       let over = false;
-      Promise.all(presses).then(() => { over = true; });
+      Promise.all(presses).then(() => { over = true; }, () => { over = true; });
       for (let i = 0; i < 20 && !over; i++) await tick();
       return over;
     };
+    const btnOf = (b) => { const n = b.dom.el("continue-btn"); return { disabled: !!n.disabled, label: n.textContent }; };
 
     let answer = null;
     const held = new Promise((r) => { answer = r; });
     const b = build({ flushState: () => held });
     await b.api.boot();
+    const labelBefore = btnOf(b);
     const savesBefore = b.rec.saves.length;
     const pressed = press(b);
     await tick();
     const whileWaiting = { navigated: b.rec.navigated.length, savedFirst: b.rec.saves.length - savesBefore,
-                           flushes: b.rec.flushed, armed: b.clock.armed() };
+                           flushes: b.rec.flushed, armed: b.clock.armed(), button: btnOf(b) };
+    const second = press(b);                                           // a second press while it waits
+    await tick();
+    whileWaiting.flushesAfterASecondPress = b.rec.flushed;
+    whileWaiting.savesAfterASecondPress = b.rec.saves.length - savesBefore;
     answer(true);
-    await finished(pressed);
-    const afterAnswer = { navigated: b.rec.navigated.slice(), armed: b.clock.armed() };
+    await finished(pressed.concat(second));
+    const afterAnswer = { navigated: b.rec.navigated.slice(), armed: b.clock.armed(), button: btnOf(b) };
+    b.clock.fire();                                                    // the browser has not gone: its timer, by hand
+    const afterGiveBack = { armed: b.clock.armed(), button: btnOf(b), navigated: b.rec.navigated.length };
+    await finished(press(b));                                          // and Continue works again
+    const pressedAgain = { navigated: b.rec.navigated.length, flushes: b.rec.flushed, button: btnOf(b) };
 
     const c = build({ flushState: () => new Promise(() => {}) });      // never answered
     await c.api.boot();
     const pressedC = press(c);
     await tick();
     const beforeBound = c.rec.navigated.length;
+    const buttonBeforeBound = btnOf(c);
     c.clock.fire();                                                    // the page's own wait, cranked by hand
     await finished(pressedC);
 
@@ -1072,11 +1095,19 @@ out.engineMoves = (function () {
     await e.api.boot();
     await finished(press(e));
 
+    // the page throws BEFORE it asks the browser to leave (a draft it cannot read): nothing is saved, nothing is
+    // asked of the browser, and the button is not left saying "Saving…"
+    const f = build({ readForm: () => { throw new Error("cannot read the form"); } });
+    await f.api.boot();
+    const threwBefore = await press(f)[0].then(() => null, (err) => String(err && err.message));
+
     out.continueWaits = {
-      whileWaiting, afterAnswer,
-      neverAnswered: { beforeBound, afterBound: c.rec.navigated.slice(), armedAfter: c.clock.armed() },
-      failedSave: { navigated: d.rec.navigated.slice(), armedAfter: d.clock.armed() },
+      labelBefore, whileWaiting, afterAnswer, afterGiveBack, pressedAgain,
+      neverAnswered: { beforeBound, afterBound: c.rec.navigated.slice(), armedAfter: c.clock.armed(),
+                       buttonBeforeBound, buttonAfter: btnOf(c) },
+      failedSave: { navigated: d.rec.navigated.slice(), armedAfter: d.clock.armed(), button: btnOf(d) },
       threw: { navigated: e.rec.navigated.slice(), armedAfter: e.clock.armed(), saved: e.rec.saves.length > 0 },
+      threwBefore: { error: threwBefore, navigated: f.rec.navigated.length, flushes: f.rec.flushed, button: btnOf(f), armed: f.clock.armed() },
     };
   }
 
