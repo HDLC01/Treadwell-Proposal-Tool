@@ -20,6 +20,10 @@
  * action has replaced the model still applies, and what the estimator typed, cleared or switched off follows the job's drive to a newly seeded carrier. The rest of it,
  * and every sequence of switches, is in travel-sequence-harness.js.
  *
+ * ROUND 7, PART 1 (Hanz's decisions of 2026-10-21) changed what several sections show, and the test file says so section by section: a far Combo has TWO drives, one per
+ * base crew (D1), so a base that stays a base keeps its own drive and its card is its own (no leftover, no "charged once" on a base), the job's ONE drive is carried only
+ * when a single-base job's base moves, and a Gyp base's drive fills from the miles (D2). The section names keep their audit's words.
+ *
  * A section that throws reports `{ error }` instead of crashing, so a tree without the code fails an assertion with a reason; the
  * mutation runs in the test count a section error as a failure of the mutation, never as the mutation being noticed.
  *
@@ -174,11 +178,13 @@ async function main() {
     const open = { job: jobFacts(b), card: cardFacts(b) };
     typeCrew(b, B.ROOT_TAB, "polishing", "4", "12");
     const res = { open: open, wichita: { job: jobFacts(b), card: cardFacts(b) } };
-    // ...and the Epoxy sheet's own Labor step: the row it was left holding says the drive is charged on the Polish sheet.
+    // ...and the Epoxy sheet's own Labor step (round 7, D1: it is a base, and its own crew drives): its own Travel Labor card, in its own travel block, with the note on where its
+    // hours came from and the words that Hotel and Per Diem are charged once, on the Polish sheet. No word that its drive is charged elsewhere.
     b.api.show("Epoxy");
     b.api.go(1);
     const ei = idxIn(b.api.root().tabs.Epoxy, "travel");
-    res.epoxyStep = { note: textOf(b, '[data-trv-stray="' + ei + '"]'), hint: textOf(b, '[data-hint-lab="' + ei + '"]'),
+    res.epoxyStep = { note: textOf(b, '[data-trv-src="' + ei + '"]'), stray: textOf(b, '[data-trv-stray="' + ei + '"]'), travelNote: textOf(b, "[data-travel-note]"),
+      hint: textOf(b, '[data-hint-lab="' + ei + '"]'),
       genericHint: /There the hours fill in/.test(b.doc.getElementById("panels").innerHTML), cardCost: textOf(b, '[data-lcost-for="' + ei + '"]') };
     b.clock.fire();
     res.saved = Object.fromEntries(B.sectionsOf(clone(b.store.blob.polish_estimate)).map((e) => [e.tab, rowFacts(rowIn(e.section))]));
@@ -191,7 +197,8 @@ async function main() {
   // A plain reopen of the Epoxy bid as the job type it already is changes nothing: no restructure, no save, no lookup.
   await section("epoxyPlain", async () => jobFacts(await reopenAs(epoxy.saved, "epoxy")));
 
-  // Gyp to Polish: a Gyp carrier is never filled (the Gyp sheet works its own drive time), and the Polish root, holding the older row, is.
+  // Gyp to Polish: a Gyp base's drive fills from the miles (round 7, D2; it was never filled, the Gyp sheet working its own drive time), and the Polish root, holding the older row, is
+  // filled on its crew's size.
   await section("gypToPolish", async () => {
     const gyp = await newBid(gypDraft(), [GYP_TAB, "gyp-pour", "4", "12"]);
     const res = { gyp: jobFacts(gyp.page), gypCard: textOf(gyp.page, "[data-trv-src]") };
@@ -234,16 +241,17 @@ async function main() {
     b.api.show("Epoxy");
     b.api.go(1);
     const i = idxIn(b.api.root().tabs.Epoxy, "travel");
-    const res = { job: job, rootCard: rootCard, epoxyStep: { note: textOf(b, '[data-trv-stray="' + i + '"]'), guysBox: boxOf(b, i, "guys"), hoursBox: boxOf(b, i, "days") } };
-    // Typing in the (empty) leftover row changes what its card says: figures typed there say they were typed, and cleared it says to leave the line empty.
+    const res = { job: job, rootCard: rootCard, epoxyStep: { stray: textOf(b, '[data-trv-stray="' + i + '"]'), travelNote: textOf(b, "[data-travel-note]"), guysBox: boxOf(b, i, "guys"),
+      hoursBox: boxOf(b, i, "days"), cost: textOf(b, '[data-lcost-for="' + i + '"]') } };
+    // Typing over the Epoxy sheet's own (typed) row: it is that sheet's drive (round 7), so its boxes and its cost follow what is typed, and nothing says it is charged elsewhere.
     typeCrew(b, "Epoxy", "travel", "2", "4");
-    res.typedHere = { note: textOf(b, '[data-trv-stray="' + i + '"]') };
+    res.typedHere = { stray: textOf(b, '[data-trv-stray="' + i + '"]'), guysBox: boxOf(b, i, "guys"), hoursBox: boxOf(b, i, "days"), cost: textOf(b, '[data-lcost-for="' + i + '"]') };
     // Both rows are the estimator's now. Combo made Polish turns Epoxy off, and what is theirs is not given back.
     b.clock.fire();
     const polish = await reopenAs(b.store.blob, "polish");
     res.bothTypedThenPolish = { job: jobFacts(polish) };
     typeCrew(b, "Epoxy", "travel", "", "");
-    res.cleared = { note: textOf(b, '[data-trv-stray="' + i + '"]') };
+    res.cleared = { stray: textOf(b, '[data-trv-stray="' + i + '"]'), guysBox: boxOf(b, i, "guys"), hoursBox: boxOf(b, i, "days"), cost: textOf(b, '[data-lcost-for="' + i + '"]') };
     return res;
   });
 
@@ -372,8 +380,9 @@ async function main() {
   });
 
   // ═══ 9. THE THIRD AUDIT (2026-10-20, of 7d32336): EVERY RESTRUCTURE SETTLES THE JOB'S ONE DRIVE ═══════════════════════════════════════════
-  // (a) Epoxy to Polish to Combo, the audit's HIGH finding: the drive is priced once at every step ($858, where the third step read $1,716), the Epoxy sheet's card
-  //     says to leave its line empty (it said its figures "were typed"), and a plain reopen of the result changes nothing.
+  // (a) Epoxy to Polish to Combo, the audit's HIGH finding: the Epoxy section, off at the Polish step, gives its fill back (it kept it and the Combo priced the same crew's drive
+  //     twice), and at the Combo step each base drives its own crew (round 7, D1: $858 + $858); the Epoxy sheet's card says where its hours came from (it said its figures
+  //     "were typed"), and a plain reopen of the result changes nothing.
   await section("epoxyPolishCombo", async () => {
     const p = await reopenAs(epoxy.saved, "polish");
     typeCrew(p, B.ROOT_TAB, "polishing", "4", "12");
@@ -383,7 +392,7 @@ async function main() {
     c.api.show("Epoxy");
     c.api.go(1);
     const ei = idxIn(c.api.root().tabs.Epoxy, "travel");
-    const epoxyStep = { note: textOf(c, '[data-trv-stray="' + ei + '"]'), hint: textOf(c, '[data-hint-lab="' + ei + '"]'),
+    const epoxyStep = { note: textOf(c, '[data-trv-src="' + ei + '"]'), stray: textOf(c, '[data-trv-stray="' + ei + '"]'), hint: textOf(c, '[data-hint-lab="' + ei + '"]'),
       cardCost: textOf(c, '[data-lcost-for="' + ei + '"]') };
     c.clock.fire();
     const again = await reopenAs(c.store.blob, "combo");
@@ -416,7 +425,7 @@ async function main() {
     b.api.show("Epoxy");
     b.api.go(1);
     const ei = idxIn(b.api.root().tabs.Epoxy, "travel");
-    return { opened: opened, quiet: quiet, note: textOf(b, '[data-trv-stray="' + ei + '"]') };
+    return { opened: opened, quiet: quiet, note: textOf(b, '[data-trv-src="' + ei + '"]'), stray: textOf(b, '[data-trv-stray="' + ei + '"]') };
   });
   // (c) Combo made Polish: the carrier is the root before and after, so nothing "moved", and the guys still follow the crew of the bid as it is (4, not the Combo's 6);
   //     what the draft saves is what a plain reopen shows.
@@ -494,7 +503,7 @@ async function main() {
     b.api.show("Epoxy");
     b.api.go(1);
     const i = idxIn(b.api.root().tabs.Epoxy, "travel");
-    return { carrier: B.travelCarrier(b.api.root()), note: textOf(b, '[data-trv-stray="' + i + '"]') };
+    return { carrier: B.travelCarrier(b.api.root()), note: textOf(b, "[data-travel-note]"), stray: textOf(b, '[data-trv-stray="' + i + '"]') };
   });
   // (g) ONLY TRAVEL LABOR'S ROW SAYS THE DRIVE IS CHARGED ELSEWHERE: another hours line (a night shift) on a base that does not carry the travel is an ordinary line.
   await section("nightShiftLine", async () => {
@@ -504,8 +513,13 @@ async function main() {
     b.api.show("Epoxy");
     b.api.go(1);
     const labor = b.api.root().tabs.Epoxy.labor;
+    // (round 7) which cards sit in the sheet's own travel block (after the Travel separator): Travel Labor's, and no other line
+    const html = String(b.doc.getElementById("panels").innerHTML);
+    const sep = html.indexOf("trvsep");
+    const inBlock = labor.map((r, i) => i).filter((i) => { const at = html.indexOf('data-lab-card="' + i + '"'); return sep >= 0 && at > sep; }).map(String);
     return { travelAt: String(idxIn(b.api.root().tabs.Epoxy, "travel")), nightAt: String(idxIn(b.api.root().tabs.Epoxy, "night")),
-      strayAt: b.doc.querySelectorAll("[data-trv-stray]").map((el) => el.getAttribute("data-trv-stray")), rows: labor.length };
+      strayAt: b.doc.querySelectorAll("[data-trv-stray]").map((el) => el.getAttribute("data-trv-stray")), inTravelBlock: inBlock,
+      srcAt: b.doc.querySelectorAll("[data-trv-src]").map((el) => el.getAttribute("data-trv-src")), rows: labor.length };
   });
 
   // ═══ 10. THE FOURTH AUDIT (2026-10-20, of c0255de) ═══════════════════════════════════════════════════════════════════════════════════════════

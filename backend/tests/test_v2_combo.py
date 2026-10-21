@@ -104,8 +104,8 @@ def test_a_new_combo_job_opens_on_polish_with_both_sections_seeded_and_writes_no
     assert o["rootTakeoff"] == [[10000, "SF"]], "the intake's Polish area seeds the root"
     assert o["epoxyTakeoff"] == [[6000, "SF"], [300, "LF"]], "the intake's Epoxy area and cove seed the Epoxy section"
     assert o["savesOnOpen"] == 0
-    assert o["rootLaborIds"] == ["polishing", "travel"] and o["epoxyLaborIds"] == ["epoxy-install"], (
-        "each section gets its own crew from the library, and only the carrier gets Travel")
+    assert o["rootLaborIds"] == ["polishing", "travel"] and o["epoxyLaborIds"] == ["travel", "epoxy-install"], (
+        "each section gets its own crew from the library, and every base its own Travel line (round 7, Hanz's D1 of 2026-10-21: only the carrier's until then)")
 
 
 # ── pricing: each section on its own profile, summed ─────────────────────────────────────────────
@@ -141,11 +141,16 @@ def test_hotel_and_per_diem_are_charged_once_on_polish_and_never_again_on_epoxy(
     assert t["lump"] == t["handLump"] and t["handLump"] - t["handLumpBefore"] == t["polishAfter"] - t["polishBefore"]
 
 
-def test_the_section_that_does_not_carry_the_travel_says_where_it_is_charged_instead_of_drawing_it(page):
+def test_the_section_that_does_not_carry_the_travel_draws_its_own_drive_and_says_where_hotel_and_per_diem_are_charged(page):
+    """ROUND 7 (Hanz's D1 of 2026-10-21): a Combo's second base drives its own crew, so its Labor step draws its OWN Travel Labor card, under a note that says so and that Hotel and Per
+    Diem are charged once, on the Polish section; it draws none of the carrier's block (no miles box, no how-note, no Hotel or Per Diem lines), and its Review says where Hotel and Per
+    Diem are charged. Until round 7 it drew no Travel Labor line at all and said Travel was charged on the Polish section too."""
     t = page["travel"]
-    assert t["epoxyLaborHasBlock"] is False and t["epoxyLaborHasTravelRow"] is False
-    assert t["epoxyLaborNote"] == ("Travel, Hotel and Per Diem are charged once for the whole job, on the Polish section. "
-                                   "Open it to change them.")
+    assert t["epoxyLaborHasBlock"] is False and t["epoxyLaborHasTravelRow"] is True
+    # (the harness reads the note out of the panel's markup, so its apostrophe is the escaped one)
+    assert t["epoxyLaborNote"].replace("&#39;", "'") == (
+        "This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the Polish section. "
+        "Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them.")
     assert t["epoxyReviewNote"] is True and t["epoxyReviewHotelLines"] is False
 
 
@@ -216,7 +221,7 @@ def test_that_switch_is_saved_once_with_both_sections_so_the_proposal_never_sees
 def test_a_saved_polish_job_switched_to_combo_gets_an_epoxy_section_with_its_crew_row(page):
     s = page["switched"]["polishToCombo"]
     assert s["kinds"] == [["Polish", "base"], ["Epoxy", "base"]]
-    assert s["epoxyLabor"] == ["epoxy-install"], "the new section is crewed from the library like a new combo's"
+    assert s["epoxyLabor"] == ["travel", "epoxy-install"], "the new section is crewed from the library like a new combo's, its own Travel line too (round 7, D1)"
     assert s["epoxyTakeoff"] == [[6000, "SF"], [300, "LF"]]
     assert s["bar"] == s["handBar"] and s["saves"] == 1 and s["savesOnOpen"] == 0
     assert s["savedPricedTabs"] == [["Polish", "base"], ["Epoxy", "base"]]

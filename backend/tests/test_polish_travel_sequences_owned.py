@@ -13,6 +13,10 @@ the settling did not hold:
   sheets              the four job types AND the Sheets panel: every base change it offers (a sheet, or the Epoxy + Polish pair) and a copy of the carrier (an option, which
                       is priced apart and carries its own row). The base's Travel Labor is judged by the same rules; an option's is its own.
   sheetsTyped, ...    the Sheets walk with the estimator's say on the carrier's row first: a copy carries that row too, and made a base it must not price the drive twice.
+  said                (round 7, part 3: the round-7 audit's F1) the sequences that copy the say onto a SECOND base, each after each of the five say-sos: far Polish, an Epoxy sheet
+                      added and made the base (the job's one drive follows it as a copy), then Combo by the job type or by the pair; far Epoxy and a Polish sheet the same way; and a
+                      copy of the Polish sheet made the pair with Epoxy after the job's drive went to Epoxy. SAID_TWICE: what was said once is on one base;
+                      COPY_REFILLED (the pass-2 audit's A2): the copy given back is given back whole and refilled by the rule on its own crew.
   typed@local, ...    the estimator's say on a 40 mile job, and on one whose distance could not be found (typed hours are priced there: typing lifts the grey).
   nightsTyped         (round 6, N4) the estimator's say on the job's NIGHTS: Lodging typed as 10 and Per Diem typed over and cleared, on the Labor step of the carrier, before any
                       switch. "Typed lines are the estimator's": through every sequence of job types and crews after it, on a far job, a 40 mile one and one with no distance, Lodging
@@ -62,14 +66,32 @@ def test_job_switches_copies_and_every_base_change_the_sheets_panel_offers_price
 @pytest.mark.parametrize("variant", ["Typed", "ClearHours", "ClearGuys", "Off", "Rate"])
 def test_what_the_estimator_said_survives_every_job_switch_copy_and_base_change_together(variant):
     """The estimator's say on the carrier's row (typed, a cleared box, switched off), then every sequence of job switches, copies of the carrier and Sheets base changes
-    three steps deep: 939 pages each. The estimator's row is the carrier's after every step, and the drive is priced at most once. A COPY of the carrier's sheet carries the
-    row the carrier had, so it carries the estimator's typed 3 x 5 too; made a base beside the carrier (the combined pair) it would price the drive a second time ($495 +
-    $495), so a row that repeats the carrier's exactly is given back when its section is a base that does not carry the travel.
+    three steps deep: 939 pages each. The estimator's row is the carrier's after every step, and each base crew's drive is priced once. A COPY of the carrier's sheet carries
+    the row the carrier had, so it carries the estimator's typed 3 x 5 too, as the tool's copy (`tool_copy`); made a base beside the base that holds the estimator's own row
+    (Polish copied, the job made Epoxy so the typed drive went to Epoxy, then the copy and Epoxy made the pair) it priced the one figure on two crews ($495 + $495) until round 7,
+    part 3 (SAID_TWICE: the round-7 audit's F1), and now the copy is given back and filled on its own crew (Hanz's D1 of 2026-10-21: a base nobody typed on drives its own crew).
 
-    Mutation: leave the copy's repeat of the row on its section (test_polish_travel_hours.py runs it on the model)."""
+    Mutation: never give a copy back, or never mark a sheet's copy as the tool's (test_polish_travel_sequences_mutations.py)."""
     require_node()
     got = run("sheets" + variant, 3)
     assert got["runs"] >= 900 and got["plain"] >= 150 and got["reopens"] >= 650, "the walk was cut short: %r" % ({k: got[k] for k in ("runs", "plain", "reopens")},)
+    assert got.get("skipped", 0) == 0 and got["violations"] == {} and got["crashes"] == [], explain(got)
+
+
+@pytest.mark.parametrize("where", ["", "@local", "@unknown"])
+def test_what_the_estimator_said_once_is_on_one_base_through_every_sequence_that_copies_it_to_a_second(where):
+    """ROUND 7, PART 3 (the round-7 audit's F1). The estimator says it once on the carrier's row (3 x 5 typed, the Hours or the Guys box cleared, the row switched off, $40 typed over the
+    rate), and then the four sequences that copy it onto a second base: far Polish, an Epoxy sheet added and made the base (the job's one drive follows it, as the tool's COPY, and the demoted
+    Polish option keeps its own), then Combo by the intake's job type or by "Make Epoxy + Polish the base"; far Epoxy and a Polish sheet the same way; and a copy of the Polish sheet made the
+    pair with Epoxy after the job's typed drive went to Epoxy. 20 sequences, 80 pages, every rule judged after every step and every Sheets action against a jsonb reload at four distance
+    answers. Until this round each ended with the say on BOTH bases (SAID_TWICE in all 20: the Polish crew's typed 7 x 3.25 priced on the Epoxy crew too, +$1,505 in the audit's own bid); now
+    the tool's copy is given back and the base drives its own crew (Hanz's D1 of 2026-10-21), and the estimator's own row stays where the job's drive took it. The copy is given back WHOLE, at its
+    own default rate, and refilled by the rule (COPY_REFILLED), as every other way a base arrives beside a typed drive gives it, and SAID_TWICE judges the whole say (the typed guys and hours, a
+    cleared box, the switch, the rate). Part 4's P1 kept the trip on the copy, the hours the estimator typed and the rate (COPY_TRIP); the pass-2 audit's A2 withdrew it: one typed trip priced the
+    second crew two ways by the route, and the copy's hours, marked typed, were charged on a 40 mile job."""
+    require_node()
+    got = run("said" + where, 0)
+    assert got["sequences"] == 20 and got["runs"] >= 80 and got.get("reloadJudged", 0) >= 50, "the walk was cut short: %r" % ({k: got.get(k) for k in ("sequences", "runs", "reloadJudged")},)
     assert got.get("skipped", 0) == 0 and got["violations"] == {} and got["crashes"] == [], explain(got)
 
 

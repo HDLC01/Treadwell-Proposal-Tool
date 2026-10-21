@@ -16,6 +16,13 @@ property the page script writes. The script is EXECUTED (tests/js/bid-bar-height
 custom property the page wrote, with a ResizeObserver, without one, and with no layout at all. A headless run lays nothing out, so how tall the bar really is at a given width is not checked here; the
 heights above are what a browser measured, and the walk on staging checks the rest.
 
+ROUND 7, PART 2 (2026-10-21, the round-6 lows, L3): A FOCUSED FIELD SCROLLS CLEAR OF THE BAR. The body's padding keeps the page's LAST row above the bar, but a field anywhere else that is focused
+(a Tab, a focus() the page makes) was scrolled only just into the window, and the bottom of the window is the bar's: Chrome on the real page (2026-10-21, 1000 x 700, the Review scrolled to the top) left
+the Shipping % box at 673 to 700px with the bar's top at 616, wholly behind it. html's `scroll-padding-bottom` is now the bar's height (the same `--bid-h` the script writes) and a little air, so the
+browser brings a focused field into the part of the window the bar does not cover (the same probe after the fix: the box at 390 to 417px, every field probed at 1000, 800 and 390px clear of the bar).
+The bar holds nothing that takes focus, so unlike the sticky head's padding (scroll-padding-top, which is nothing while focus is in the head) it needs no exception. `focus_problems` reads the rule, the
+property it reads, the room it leaves above the bar at every height, its fallback, that no rule for a window or a state takes it away, and the premise that the bar holds nothing focusable.
+
 The last blocks put each rule and each line of the script back as it was, or make it wrong, in a COPY of the page, and require the check to find it: a check that has never failed proves nothing.
 """
 from __future__ import annotations
@@ -112,6 +119,89 @@ def css_problems(page: str, js: str) -> list[str]:
     return found
 
 
+# ── a focused field and the bar (round 7, part 2, L3) ──────────────────────────────────────────────────────
+FOCUS_AIR = 4                   # at least this much of the window must show between a field the browser scrolled to and the bar's top (an input's focus ring is 3px)
+FOCUSABLE = re.compile(r"<(?:input|button|select|textarea|a\s[^>]*href)\b|\btabindex=|\bcontenteditable\b", re.I)
+
+
+def _style_rules(page: str):
+    """(media prelude or None, selector, {property: value}) for every rule of the page's style block, comments removed."""
+    style = page[page.index("<style>") + len("<style>"):page.index("</style>")]
+    css = re.sub(r"/\*.*?\*/", "", style, flags=re.S)
+    out = []
+
+    def read(text, media):
+        i, n = 0, len(text)
+        while i < n:
+            j = text.find("{", i)
+            if j < 0:
+                return
+            prelude, depth, k = text[i:j].strip(), 1, j + 1
+            while k < n and depth:
+                depth += {"{": 1, "}": -1}.get(text[k], 0)
+                k += 1
+            body = text[j + 1:k - 1]
+            if prelude.startswith("@media"):
+                read(body, prelude[len("@media"):].strip())
+            else:
+                decls = {}
+                for decl in body.split(";"):
+                    if ":" in decl:
+                        prop, val = decl.split(":", 1)
+                        decls[prop.strip()] = re.sub(r"\s+", " ", val.strip())
+                out.append((media, re.sub(r"\s+", " ", prelude), decls))
+            i = k
+
+    read(css, None)
+    return out
+
+
+def bar_markup(page: str) -> str:
+    """The total bar's own markup on the page (#bidbar, to the end of its element)."""
+    start = page.rindex("<div", 0, page.index('id="bidbar"'))
+    depth = 0
+    for m in re.finditer(r"<(/?)div\b[^>]*>", page[start:]):
+        depth += -1 if m.group(1) else 1
+        if depth == 0:
+            return page[start:start + m.end()]
+    return page[start:]
+
+
+def focus_problems(page: str) -> list[str]:
+    """Does a field the browser scrolls to stop clear of the bar? html's scroll-padding-bottom must be the bar's height (--bid-h) and some air, at every height the bar has been seen at and one
+    more, one for one, no less than the 132px the page reserved until the bar is measured; no rule for a window size or a state may take it away; and the bar must hold nothing that takes focus
+    (a control in it would sit inside the padded band, and a focus or a keystroke in it would scroll the page, the cost the sticky head's padding found in Chrome)."""
+    rules = _style_rules(page)
+    found = []
+    top = {}
+    for media, selector, decls in rules:
+        if media is None and selector == "html":
+            top.update(decls)
+    value = top.get("scroll-padding-bottom")
+    if value is None:
+        return ["focus: html has no scroll-padding-bottom, so a field the browser scrolls to stops in the bottom of the window, behind the fixed bar"]
+    names = re.findall(r"var\(\s*(--[\w-]+)", value)
+    if names != [PROPERTY]:
+        return ["focus: html's scroll-padding-bottom is %r, which reads %s, not %s: it cannot follow the bar's height" % (value, names or "no custom property", PROPERTY)]
+    for h in BAR_HEIGHTS:
+        room = reserve(value, h) - h
+        if room < FOCUS_AIR:
+            found.append("focus: with the bar %dpx tall a focused field is brought to %dpx above the window's bottom, %dpx clear of the bar, under the %dpx of air it needs" % (h, reserve(value, h), room, FOCUS_AIR))
+    if reserve(value, 200) - reserve(value, 100) != 100:
+        found.append("focus: the scroll padding does not follow the bar's height one for one (%dpx at 100px, %dpx at 200px)" % (reserve(value, 100), reserve(value, 200)))
+    if reserve(value, None) < OLD_RESERVE:
+        found.append("focus: until the page has measured the bar the scroll padding is %dpx, under the %dpx the bar was reserved before it is measured" % (reserve(value, None), OLD_RESERVE))
+    for media, selector, decls in rules:
+        if not selector.startswith("html") or (media is None and selector == "html"):
+            continue
+        for prop in ("scroll-padding-bottom", "scroll-padding", "scroll-padding-block", "scroll-padding-block-end"):
+            if prop in decls and re.findall(r"var\(\s*(--[\w-]+)", decls[prop]) != [PROPERTY]:
+                found.append("focus: %s%s sets %s:%s, which takes the bar's height out of the scroll padding there" % (("@media " + media + " ") if media else "", selector, prop, decls[prop]))
+    if FOCUSABLE.search(bar_markup(page)):
+        found.append("focus: the bar holds something that takes focus, which would sit inside the padded band: a focus or a keystroke in it would scroll the page")
+    return found
+
+
 # ── running the page ─────────────────────────────────────────────────────────────────────────────────────
 def run_page(frontend=FRONTEND):
     proc = run_node(HARNESS, frontend)
@@ -182,6 +272,22 @@ def test_a_browser_with_no_resize_observer_is_told_by_every_repaint_of_the_bar_a
 def test_a_page_with_no_layout_writes_nothing_and_breaks_nothing(ran):
     """The stand-in DOM every other harness has gives the bar no box: opening the bid, repainting it and a window resize write no property and throw nothing."""
     assert ran["noLayout"] == {"value": "", "threw": False}
+
+
+def test_a_field_the_browser_scrolls_to_stops_clear_of_the_bar():
+    """ROUND 7, PART 2 (L3): html's scroll-padding-bottom is the bar's measured height and some air, so a focused field near the bottom of the window is brought above the bar, never behind it (Chrome:
+    the Shipping % box at 673 to 700px with the bar's top at 616 before; 390 to 417px after). It reads the property the script writes, follows it one for one, stands on 132px until the bar is measured,
+    no rule for a window size or a state takes it away, and the bar holds nothing that takes focus.
+
+    Mutation: no padding; a fixed 132px; the bar's height and no air; another property; a fallback of nothing; a narrow window that takes it away; a control put in the bar."""
+    assert focus_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_the_focus_check_reads_the_bar_markup_it_means():
+    """Not vacuous: the markup the premise is read off is the bar's, its total is in it, and a control the check is looking for is found in it."""
+    bar = bar_markup(PAGE_PATH.read_text(encoding="utf-8"))
+    assert bar.startswith('<div class="bid" id="bidbar"') and 'id="bid-total"' in bar and bar.rstrip().endswith("</div>"), bar[:200]
+    assert FOCUSABLE.search(bar.replace('<div class="total">', '<div class="total"><a class="x" href="#">x</a>', 1))
 
 
 # ── red without the code ─────────────────────────────────────────────────────────────────────────────────
@@ -274,6 +380,31 @@ def test_each_part_of_the_padding_rule_is_needed(tmp_path, what, anchor, undone,
     """Put the old padding back, or make one part of the new one wrong, in a COPY of the page: the check finds it and says which kind of fault it is."""
     frontend = break_source(tmp_path, "polish-estimate.html", anchor, undone)
     found = css_problems((frontend / "polish-estimate.html").read_text(encoding="utf-8"), JS_PATH.read_text(encoding="utf-8"))
+    assert found, "the check did not notice: %s" % what
+    assert found[0].startswith(starts), (what, found)
+
+
+FOCUS_RULE = "    html{scroll-padding-bottom:calc(var(--bid-h,132px) + 8px)}"
+BAR_OPEN = '  <div class="bid" id="bidbar" hidden>'
+
+FOCUS_MUTATIONS = [
+    # (what is undone, the page's own text, what stands there instead, how the first finding starts)
+    ("no scroll padding at the bottom (the page before round 7, part 2)", FOCUS_RULE, "", "focus: html has no scroll-padding-bottom"),
+    ("a fixed 132px", FOCUS_RULE, "    html{scroll-padding-bottom:132px}", "focus: html's scroll-padding-bottom is '132px'"),
+    ("the bar's height and no air", FOCUS_RULE, FOCUS_RULE.replace("+ 8px", "+ 0px"), "focus: with the bar 84px tall"),
+    ("a padding that reads another property", FOCUS_RULE, FOCUS_RULE.replace("--bid-h", "--bar-h"), "focus: html's scroll-padding-bottom"),
+    ("a fallback of nothing", FOCUS_RULE, FOCUS_RULE.replace("132px", "0px"), "focus: until the page has measured the bar"),
+    ("a narrow window takes it away", FOCUS_RULE, FOCUS_RULE + "\n    @media (max-width:820px){ html{scroll-padding-bottom:0} }", "focus: @media (max-width:820px) html sets scroll-padding-bottom:0"),
+    ("a control put in the bar", BAR_OPEN, BAR_OPEN + '<button type="button">Save</button>', "focus: the bar holds something that takes focus"),
+]
+
+
+@pytest.mark.parametrize("what,anchor,undone,starts", FOCUS_MUTATIONS, ids=[m[0] for m in FOCUS_MUTATIONS])
+def test_each_part_of_the_focus_padding_is_needed(tmp_path, what, anchor, undone, starts):
+    """Take the scroll padding away, or make one part of it wrong, in a COPY of the page: the check finds it and says which kind of fault it is. break_source refuses an anchor that is not on the page
+    exactly once."""
+    frontend = break_source(tmp_path, "polish-estimate.html", anchor, undone)
+    found = focus_problems((frontend / "polish-estimate.html").read_text(encoding="utf-8"))
     assert found, "the check did not notice: %s" % what
     assert found[0].startswith(starts), (what, found)
 

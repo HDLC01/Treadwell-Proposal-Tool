@@ -192,7 +192,7 @@ def test_a_plain_reopen_and_a_switch_that_keeps_the_carrier_fill_nothing(ran):
     was, no save, no lookup. A Polish bid whose Travel Labor was left blank is left blank by a plain reopen. Switching Polish to Combo keeps
     the root as the carrier (the first base), so its blank row is not filled; and a switch with no distance on file has nothing to follow.
 
-    Mutation: fill on every restructure and not only when the carrier changed (BREAKS below)."""
+    Mutation: fill on every restructure and not only on a sheet that became a base (BREAKS below; round 7: a base that stays a base keeps its own)."""
     j = ran["jobSwitch"]
     p = j["plain"]
     assert (p["carrier"], p["tabs"], p["saves"], p["asked"]) == ("Polish", [], 0, 0)
@@ -224,7 +224,9 @@ def test_editing_a_section_beside_the_polish_root_never_writes_over_the_roots_ro
     assert b["stripTabs"] == ['data-section-tab="Polish"', 'data-section-tab="Epoxy"']
     assert b["epoxyMeasurement"] == "5500", "the number typed on the Epoxy tab is the Epoxy section's"
     assert b["rootTakeoff"] == b["rootBefore"] and len(b["rootTakeoff"]) == 3, "the root's own takeoff is as it was"
-    assert "polishing" in b["rootLaborIds"] and b["epoxyLaborIds"] == ["epoxy-install"]
+    # The Epoxy base's own lines, and since round 7, part 4 (P4) its own Travel Labor line: the fixture is a Combo saved with no line on its Epoxy base and no answer of its own (the one-drive
+    # law's shape), which opens with that base's drive given (B.giveEveryBaseItsDrive; test_polish_travel_round7_part4.py). The root's rows are its own.
+    assert "polishing" in b["rootLaborIds"] and b["epoxyLaborIds"] == ["epoxy-install", "travel"]
 
 
 def test_the_add_pop_up_offers_the_work_types_own_rows_first_in_an_epoxy_section_and_leaves_the_roots_order_alone(ran):
@@ -390,16 +392,19 @@ BREAKS = {
         "      get: function (target, key) { return Reflect.get(target, key); },",
         lambda r: r["labor"]["after"] == r["labor"]["before"] or "error" in r),
     "the distance fills the model's own Travel Labor row and not the carrier section's": (
-        "js/bid-model.js", "        holder = carrier.section;", "        holder = model;",
+        # (round 7: every base's drive is filled from its own lines, fillOwnDrive; it was the carrier's, travelLaborHeld)
+        "js/bid-model.js", "    var lines = laborLinesOf(e.section);", "    var lines = laborLinesOf(model);",
         lambda r: r["travelFill"]["before"]["row"]["days"] != 6.5 or r["travelFill"]["rootTravelUntouched"] is not True),
     "the distance on file is not put on the new carrier's row after a job type switch": (
-        "js/polish-estimate.js", "if (restructured) B.followDistance(ROOT, carrierBefore);", "void 0;",
+        "js/polish-estimate.js", "if (restructured) B.followDistance(ROOT, carrierBefore, kindsBefore);", "void 0;",
         lambda r: r["jobSwitch"]["switched"]["before"]["row"]["days"] != 6.5 or r["jobSwitch"]["blankSwitch"]["row"]["days"] != 6.5),
     "a box cleared on the Epoxy section's Travel Labor is refilled by the next answer": (
         "js/polish-estimate.js", 'if (k === "guys" || k === "days") B.markTypedByHand(M.labor[j], k);', "void 0;",
         lambda r: r["jobSwitch"]["clearedOnSection"]["hoursBox"] != ""),
-    "every restructure fills the distance, even one that keeps the carrier": (
-        "js/bid-model.js", "return travelCarrier(model) === fromTab;", "return false;",
+    # (round 7, Hanz's D1 of 2026-10-21: what is filled is a sheet that BECAME a base; a base that stays a base keeps its own, filled or blank. It was "only when the carrier moved".)
+    "every restructure fills the distance, even on a base that stays a base": (
+        "js/bid-model.js", "      return { drives: list.map(function (k) { return k.tab; }), kindOf: function (tab) { return kinds.get(tab); } };",
+        "      return { drives: [], kindOf: function (tab) { return kinds.get(tab); } };",
         lambda r: r["jobSwitch"]["combo"]["row"]["days"] != ""),
     "the sections of an epoxy job leave the root on": (
         "js/bid-model.js", '      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");',

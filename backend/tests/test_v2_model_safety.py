@@ -314,16 +314,20 @@ def test_the_estimate_scenarios_exercise_what_used_to_drift(ran):
 
 def test_an_estimate_save_keeps_the_tabs_and_everything_else_the_model_does_not_know(ran):
     """Through the real page, both ways: the model the page saves holds `work_type`, `tabs`, `rates`,
-    `profile` and a null, and `tabs` is what was sent, byte for byte, except for the two things a save may
-    write in a section: its `totals`, restamped from its bid, and its `seq`, its place in the bid (round 6:
+    `profile` and a null, and `tabs` is what was sent, byte for byte, except for the three things a save may
+    write in a section: its `totals`, restamped from its bid, its `seq`, its place in the bid (round 6:
     the jsonb column that stores a draft keeps no key order, so the order is written down, in the order the
-    sections were held in). The fixture is a bid saved before the order was kept, so every `seq` is new."""
+    sections were held in), and the drive the open gives a base that held none (round 7, part 4, P4: the
+    fixture is a Combo saved under the one-drive law, its Epoxy base holding no Travel Labor line and no answer
+    of its own, and every base crew drives its own since Hanz's D1 of 2026-10-21; the Gyp and Seal options are
+    given nothing). The fixture is a bid saved before the order was kept, so every `seq` is new."""
     w = ran["estimate"]["withTabs"]
     for way in ("autosave", "pagehide"):
         keys = w[way]["modelKeys"]
         for k in ("work_type", "tabs", "rates", "profile", "a_null"):
             assert k in keys, "%s: the page saved a model with no %s" % (way, k)
         assert w[way]["tabs"] == w["sentTabs"], way
+        assert w[way]["givenDrives"] == ["Epoxy"], way
         assert w[way]["seqs"] == [["Epoxy", 1], ['Gyp (USG 1-8")', 2], ["Seal (+Jnts)", 3]], way
 
 
@@ -339,11 +343,12 @@ def test_an_intake_save_leaves_the_tabs_and_the_other_keys_alone(ran):
 def test_an_intake_save_after_an_estimate_save_leaves_tabs_byte_identical(ran):
     """The cross-page law, through the two real pages over one draft: an estimate save, then an intake
     save. `tabs` is the same bytes before, after the estimate save and after the intake save (but for the
-    `totals` and the `seq` the estimate's save writes, see the test above), nothing else the model carries
-    goes missing in either, and the estimate's takeoff survives the intake."""
+    `totals`, the `seq` and the Epoxy base's own drive the estimate's save writes, see the test above), nothing
+    else the model carries goes missing in either, and the estimate's takeoff survives the intake."""
     c = ran["intake"]["cross"]
     assert c["tabsAfterEstimate"] == c["tabsBefore"]
     assert c["tabsAfterIntake"] == c["tabsBefore"]
+    assert c["givenDrivesAfterEstimate"] == c["givenDrivesAfterIntake"] == ["Epoxy"]
     expected = [["Epoxy", 1], ['Gyp (USG 1-8")', 2], ["Seal (+Jnts)", 3]]
     assert c["seqsAfterEstimate"] == expected and c["seqsAfterIntake"] == expected, "the intake changed the order the estimate wrote down"
     assert c["intakeLeavesTabsAsSaved"] is True, "the intake changed a section the estimate had saved"

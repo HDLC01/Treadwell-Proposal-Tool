@@ -202,8 +202,9 @@ MUTATIONS = {
         lambda r: r["ls1Fallback"]["ids"] == ["travel"]),
     "the model's own crew rows win over the library's": (
         "js/bid-model.js",
-        'var keep = carrierTab === e.tab ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];',
-        "var keep = carrierTab === e.tab ? (s.labor || []) : [];",
+        # (round 7: every base keeps its own Travel line through the seeding, Hanz's D1 of 2026-10-21; it was the carrier alone)
+        'var keep = drive ? (s.labor || []).filter(function (r) { return r && r.id === "travel"; }) : [];',
+        "var keep = drive ? (s.labor || []) : [];",
         lambda r: r["ls1Library"]["mockup"]["label"] == "Mock-up"),
     "a Labor-tab rate loses to the company rate": (
         "js/bid-model.js",

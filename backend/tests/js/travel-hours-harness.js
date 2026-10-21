@@ -136,7 +136,8 @@ row(hw, "polishing").guys = "3"; row(hw, "polishing").days = "5"; row(hw, "joint
 Object.assign(hw.conditions, { joint_filler: true, remove_existing_jf: true });
 ask(hw, 190);
 out.handLine = facts(hw);
-// A COMBO has one crew that drives once: the most over BOTH base sections (Polish 3 x 5, Epoxy 4 x 12), not the carrier's alone and not the sum.
+// A COMBO's biggest crew (crewSize) is the most over BOTH base sections (Polish 3 x 5, Epoxy 4 x 12), not the carrier's alone and not the sum. Since round 7 no drive is filled on it:
+// each base drives its own crew (below).
 const EP_LIB = B.withCrewFallback([
   { id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, favorite: true, default_on: true },
   { id: "epoxy-install", name: "Epoxy install", rate: 33, unit: "days", guys_auto: false, favorite: true, default_on: true,
@@ -147,10 +148,14 @@ const combo = (polishGuys, epoxyGuys) => {
   row(cj, "polishing").guys = String(polishGuys); row(cj, "polishing").days = "5";
   return cj;
 };
+// ROUND 7 (Hanz, 2026-10-21, D1): EACH BASE OF A COMBO DRIVES ITS OWN CREW. The Polish sheet's Travel Labor is the Polish crew's, and the Epoxy sheet holds its own, the Epoxy crew's.
 const cj = combo(3, 4); ask(cj, 190);
+const cjEpoxy = cj.tabs.Epoxy.labor.filter((r) => r.id === "travel")[0] || null;
 out.comboJob = Object.assign(facts(cj), { crew: B.crewSize(cj), manDays: B.travelManDays(cj.labor), carrier: B.travelCarrier(cj),
-  epoxyHasTravel: cj.tabs.Epoxy.labor.some((r) => r.id === "travel"), words: B.driveHoursSentence(cj, trvOf(cj)),
-  hint: B.travelGuysHint(cj, trvOf(cj), cj.labor), howGuys: B.travelHow(cj).lines.filter((l) => l.indexOf("Guys = ") === 0)[0] });
+  epoxyHasTravel: !!cjEpoxy, epoxy: cjEpoxy ? facts(cj, cjEpoxy) : null, words: B.driveHoursSentence(cj, trvOf(cj)),
+  epoxyWords: cjEpoxy ? B.driveHoursSentence(cj, cjEpoxy) : null,
+  hint: B.travelGuysHint(cj, trvOf(cj), cj.labor), howGuys: B.travelHow(cj).lines.filter((l) => l.indexOf("Guys = ") === 0)[0],
+  howEpoxy: B.travelHow(cj).lines.filter((l) => l.indexOf("Travel Labor on the Epoxy sheet") === 0)[0] || null });
 const cj2 = combo(5, 4); ask(cj2, 190);
 out.comboPolishBigger = facts(cj2);
 const cj3 = combo(3, 4); cj3.tabs.Epoxy.kind = "option"; B.syncAutoGuys(cj3); ask(cj3, 190);
@@ -294,14 +299,16 @@ ask(ej, 190);
 const epTravel = ej.tabs.Epoxy.labor.filter((r) => r.id === "travel")[0];
 out.epoxyJob = Object.assign(facts(ej, epTravel), { manDays: B.travelManDays(ej.tabs.Epoxy.labor), crew: B.crewSize(ej),
   rootRowUntouched: JSON.stringify(ej.labor.filter((r) => r.id === "travel")[0]) === epRowBefore, carrier: B.travelCarrier(ej) });
-// a Gyp job prices its crew by the hour and works its own drive time: left exactly as it was
+// a Gyp job prices its crew by the hour; since round 7 (Hanz, 2026-10-21, D2) its drive fills from the miles like the others, on its crew's size (the most guys on one of its crew lines,
+// entered in hours: guys x hours)
 const GYP = 'Gyp (USG 1-8")';
 const gj = B.activateSection(Object.assign(B.migrateModel(undefined), { kind: "off" }), GYP, "base", {});
 gj.tabs[GYP].labor = [{ id: "pour", label: "Pour", guys: "4", days: "12", rate: 33, unit: "hours" },
   { id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours", guys_auto: false }];
 const gypBefore = JSON.stringify(gj.tabs[GYP].labor);
 ask(gj, 190);
-out.gypJob = { untouched: JSON.stringify(gj.tabs[GYP].labor) === gypBefore, local: gj.conditions.local, distance: gj.distance };
+out.gypJob = { untouched: JSON.stringify(gj.tabs[GYP].labor) === gypBefore, local: gj.conditions.local, distance: gj.distance,
+  row: facts(gj, gj.tabs[GYP].labor.filter((r) => r.id === "travel")[0]) };
 // a bid with no Travel Labor row (the library said no): the answer is recorded and nothing throws
 const nt = crewed(newBid()); nt.labor = nt.labor.filter((r) => r.id !== "travel"); nt.no_travel_labor = true;
 let threw = null;
@@ -411,11 +418,12 @@ const travelIn = (m, tab) => (sectionOf(m, tab).labor || []).filter((r) => r.id 
 const factsIn = (m, tab) => (travelIn(m, tab) ? facts(m, travelIn(m, tab)) : null);
 const countIn = (m, tab) => (sectionOf(m, tab).labor || []).filter((r) => r.id === "travel").length;
 /** What the page does on a job type switch: the sections follow the job type, then the distance on file settles the rows, given the carrier
- *  the job had. */
+ *  the job had and (round 7) what every section was, as the page hands them (noFrom: a caller that knows neither, which followDistance guesses). */
 const switchTo = (m, jobType, noFrom) => {
   const before = B.travelCarrier(m);
+  const kinds = B.sectionKinds(m);
   const next = B.sectionsForJob(m, jobType, { rules: [] });
-  B.followDistance(next, noFrom ? undefined : before);
+  if (noFrom) B.followDistance(next); else B.followDistance(next, before, kinds);
   B.syncAutoGuys(next);
   return next;
 };
@@ -460,6 +468,16 @@ out.moveOptionNotCarried = { epoxyHasRow: !!travelIn(opnTo, "Epoxy"), rootKeepsR
 const nol = comboJob(); nol.no_travel_labor = true;
 const nolTo = switchTo(nol, "epoxy", true);
 out.moveNoTravelLabor = { epoxyHasRow: !!travelIn(nolTo, "Epoxy"), rootKeepsRow: !!travelIn(nolTo, B.ROOT_TAB) };
+// ...and a SINGLE-base job that says it has no drive (the flag over a filled row, as a saved bid can hold it) switched with its old carrier named: nothing is carried (round 7)
+const nolSingle = crewed(newBid()); ask(nolSingle, 190); nolSingle.no_travel_labor = true;
+const nolSingleTo = switchTo(nolSingle, "epoxy");
+out.moveNoTravelLaborNamed = { epoxyHasRow: !!travelIn(nolSingleTo, "Epoxy"), rootKeepsRow: !!travelIn(nolSingleTo, B.ROOT_TAB) };
+// ...and the guys of a row carried under a LOCAL job follow the new base's crew (the settling's sync: a local answer fills nothing, so it does not put them there itself)
+const lcarry = crewed(newBid()); ask(lcarry, 190); ask(lcarry, 20);
+const lcarryFrom = B.travelCarrier(lcarry), lcarryKinds = B.sectionKinds(lcarry);
+const lcarryTo = B.sectionsForJob(lcarry, "epoxy", { rules: [] });
+B.followDistance(lcarryTo, lcarryFrom, lcarryKinds);      // the settling alone, no sync after it: its own sync is what puts the guys on the new crew
+out.localCarry = { epoxy: factsIn(lcarryTo, "Epoxy"), crew: B.crewSize(lcarryTo) };
 // (d) WHAT THE ESTIMATOR SAID FOLLOWS THE JOB'S DRIVE (2026-10-20 audit; before it, a typed row was left on the old carrier and priced beside the new
 //     carrier's filled one: $858 + $495). Epoxy to Combo with Epoxy's row typed 3 guys x 5 hours: the root takes the typed row, markers and all, and Epoxy gives
 //     the row back empty; the drive is priced once, as typed.
@@ -486,8 +504,8 @@ const ech = switchTo(clearedEpoxy("days"), "combo"); row(ech, "polishing").guys 
 const ecg = switchTo(clearedEpoxy("guys"), "combo"); row(ecg, "polishing").guys = "4"; row(ecg, "polishing").days = "12"; B.syncAutoGuys(ecg);
 out.moveClearedFollows = { hours: { root: factsIn(ech, B.ROOT_TAB), rootMarks: marksIn(ech, B.ROOT_TAB), epoxy: factsIn(ech, "Epoxy"), drive: drive$(ech) },
   guys: { root: factsIn(ecg, B.ROOT_TAB), rootMarks: marksIn(ecg, B.ROOT_TAB), epoxy: factsIn(ecg, "Epoxy"), drive: drive$(ecg) } };
-ask(ech, 300); ask(ecg, 300);        // ...and a later answer leaves what was cleared empty, on the new carrier
-out.moveClearedStaysEmpty = { hours: factsIn(ech, B.ROOT_TAB), guys: factsIn(ecg, B.ROOT_TAB) };
+ask(ech, 300); ask(ecg, 300);        // ...and a later answer leaves what was cleared empty, on the sheet it was cleared on (round 7: Epoxy stays a base and keeps its own)
+out.moveClearedStaysEmpty = { hours: factsIn(ech, "Epoxy"), guys: factsIn(ecg, "Epoxy") };
 // (e) a row switched OFF follows the carrier too (the slider is the estimator's), and an option's row is its own (the old carrier is an option, not a base,
 //     afterwards).
 const offEpoxy = () => { const m = epoxyJob(); travelIn(m, "Epoxy").enabled = false; return m; };
@@ -507,8 +525,9 @@ const sameBefore = JSON.stringify(same);
 B.followDistance(same, "Epoxy");
 out.moveSameCarrier = { same: JSON.stringify(same) === sameBefore };
 out.moveNoModel = String(B.followDistance(null, "Polish"));
-// (h) the old carrier keeps no other row (a root that holds only Travel Labor): the row is COPIED, and the two sections never share one object.
-const only = comboJob();
+// (h) the old carrier keeps no other row (a root that holds only Travel Labor): the row is COPIED, and the two sections never share one object. (A SINGLE-base job since round 7:
+//     the job's one drive is what follows its one base; a Combo's bases each keep their own.)
+const only = crewed(newBid()); ask(only, 190);
 only.labor = only.labor.filter((r) => r.id === "travel");
 const onlyTo = switchTo(only, "epoxy");
 out.moveCopy = { rootKeeps: !!travelIn(onlyTo, B.ROOT_TAB), epoxy: factsIn(onlyTo, "Epoxy"),
@@ -524,8 +543,9 @@ out.moveLocal = { epoxy: factsIn(lo, "Epoxy"), rootHasRow: !!travelIn(lo, B.ROOT
 //      Travel Labor row when it is the carrier), then the settling, then the sync.
 const switchSeeded = (m, jobType) => {
   const before = B.travelCarrier(m);
+  const kinds = B.sectionKinds(m);
   const next = B.seedNewSections(B.sectionsForJob(m, jobType, { rules: [] }), seedCtx({ saved: m, laborRows: EP_LIB }));
-  B.followDistance(next, before);
+  B.followDistance(next, before, kinds);
   B.syncAutoGuys(next);
   return next;
 };
@@ -533,12 +553,17 @@ const switchSeeded = (m, jobType) => {
 //     was left on the off section and was priced again the day Combo turned the section back on ($1,716).
 const seqRows = (m) => ({ polish: factsIn(m, B.ROOT_TAB), epoxy: factsIn(m, "Epoxy"), epoxyKeys: (travelIn(m, "Epoxy") ? Object.keys(travelIn(m, "Epoxy")).sort() : null),
   drive: drive$(m), carrier: B.travelCarrier(m), kinds: tabsOf(m) });
+// (Each step's facts are read as the step ends: sectionsForJob hands back a shallow copy when it only lifts the root's kind, so a later step's settling writes into the rows an earlier
+// model shares with it. The page never keeps the model it switched from.)
 const s1 = switchTo(epoxyJob(), "polish");
 row(s1, "polishing").guys = "4"; row(s1, "polishing").days = "12"; B.syncAutoGuys(s1);
+const r1 = seqRows(s1);
 const s2 = switchTo(s1, "combo");
+const r2 = seqRows(s2);
 const s3 = switchTo(s2, "epoxy");
+const r3 = seqRows(s3);
 const s4 = switchTo(s3, "combo");
-out.settleSequence = { toPolish: seqRows(s1), toCombo: seqRows(s2), toEpoxy: seqRows(s3), toComboAgain: seqRows(s4) };
+out.settleSequence = { toPolish: r1, toCombo: r2, toEpoxy: r3, toComboAgain: seqRows(s4) };
 // ...an OFF section's row is given back directly, an option's is not, and a row the estimator typed on an off section is theirs.
 const offSec = epoxyJob(); offSec.tabs.Epoxy.kind = "off"; delete offSec.kind;      // the root is the carrier; Epoxy is off and holds the filled row
 B.takeBackStrayTravel(offSec);
@@ -579,11 +604,11 @@ out.followsSeeded = seeded;
 // (iii) WHEN THE NEW CARRIER'S OWN ROW IS THE ESTIMATOR'S TOO, both are theirs and both stay (nothing to choose between): Epoxy typed 3 x 5, the root typed 2 x 4.
 const both = typedEpoxy();
 { const r = travelIn(both, B.ROOT_TAB); B.markTypedByHand(r, "guys"); r.guys_auto = false; r.guys = "2"; B.markTypedByHand(r, "days"); r.days = "4"; }
-const bothTo = switchTo(both, "combo");
+const bothTo = switchTo(both, "polish");               // a single-base switch (round 7: on Epoxy to Combo both are bases and each keeps its own anyway)
 out.ownedBothStay = { root: factsIn(bothTo, B.ROOT_TAB), epoxy: factsIn(bothTo, "Epoxy"), drive: drive$(bothTo) };
 // (iv) THE COPY CASE FOR AN ESTIMATOR'S ROW: a root that holds only Travel Labor cannot give it away, so the row is copied, and the copy the old carrier keeps
 //      is released (it was the estimator's, and must not stay priced beside the one that arrived).
-const onlyTyped = comboJob();
+const onlyTyped = crewed(newBid()); ask(onlyTyped, 190);
 onlyTyped.labor = onlyTyped.labor.filter((r) => r.id === "travel");
 { const r = travelIn(onlyTyped, B.ROOT_TAB); B.markTypedByHand(r, "guys"); r.guys_auto = false; r.guys = "3"; B.markTypedByHand(r, "days"); r.days = "5"; }
 const onlyTypedTo = switchTo(onlyTyped, "epoxy");
@@ -600,19 +625,21 @@ const toGypLooked = B.sectionsForJob(typedEpoxy(), "gyp", { rules: [] });
 B.followDistance(toGypLooked);
 out.namedBeatsLooked = { carrier: B.travelCarrier(toGypNext), named: { gyp: factsIn(toGypNext, GYP_SHEET), gypMarks: marksIn(toGypNext, GYP_SHEET), epoxy: factsIn(toGypNext, "Epoxy"),
   rootRows: countIn(toGypNext, B.ROOT_TAB) }, looked: { gyp: factsIn(toGypLooked, GYP_SHEET), epoxy: factsIn(toGypLooked, "Epoxy") } };
-// (vi) A GYP CARRIER IS NEVER FILLED, NOT EVEN BY A ROW THAT ARRIVES FILLED: Epoxy (filled) to Gyp gives Gyp an empty row (its drive is typed), and Epoxy's goes
-//      back too. What the estimator typed does go to Gyp.
+// (vi) A GYP BASE IS FILLED LIKE ANY OTHER (round 7, Hanz's D2 of 2026-10-21; until then it was never filled, not even by a row that arrived filled): Epoxy (filled) to
+//      Gyp fills the Gyp section's own row on its crew, and Epoxy's goes back. What the estimator typed does go to Gyp. (The names below keep the old rule's words.)
 const eg = switchSeeded(epoxyJob(), "gyp");
-out.gypNeverFilled = { gyp: travelIn(eg, GYP_SHEET) ? factsIn(eg, GYP_SHEET) : null, epoxy: factsIn(eg, "Epoxy"), drive: drive$(eg), carrier: B.travelCarrier(eg) };
+const gypNoCrew = travelIn(eg, GYP_SHEET) ? factsIn(eg, GYP_SHEET) : null;
+eg.tabs[GYP_SHEET].labor.push({ id: "pour", label: "Pour", guys: "4", days: "120", rate: 33, unit: "hours" }); B.syncAutoGuys(eg);
+out.gypNeverFilled = { gyp: travelIn(eg, GYP_SHEET) ? factsIn(eg, GYP_SHEET) : null, gypNoCrew: gypNoCrew, epoxy: factsIn(eg, "Epoxy"), drive: drive$(eg), carrier: B.travelCarrier(eg) };
 const egTyped = switchSeeded(typedEpoxy(), "gyp");
 out.gypTypedFollows = { gyp: factsIn(egTyped, GYP_SHEET), gypMarks: marksIn(egTyped, GYP_SHEET), epoxy: factsIn(egTyped, "Epoxy") };
-// ...also when the Gyp section is new and has no Travel Labor row at all, so the old carrier's row is CARRIED to it (and so arrives filled): it is emptied there.
+// ...also when the Gyp section is new and has no Travel Labor row at all, so the old carrier's row is CARRIED to it: it is filled there on Gyp's crew (it was emptied there).
 const egCarried = switchTo(epoxyJob(), "gyp");
 out.gypCarriedUnfilled = { gyp: factsIn(egCarried, GYP_SHEET), gypKeys: travelIn(egCarried, GYP_SHEET) ? Object.keys(travelIn(egCarried, GYP_SHEET)).sort() : null, drive: drive$(egCarried) };
 // ...and a section that holds ONLY its Travel Labor row hands the estimator's over like any other (no section is ever left with an empty labor list).
 const lone = typedEpoxy();
 lone.tabs.Epoxy.labor = lone.tabs.Epoxy.labor.filter((r) => r.id === "travel");
-const loneTo = switchTo(lone, "combo");
+const loneTo = switchTo(lone, "polish");               // a single-base switch (round 7: Epoxy to Combo keeps Epoxy a base, with its own row)
 out.ownedFromLoneRow = { root: factsIn(loneTo, B.ROOT_TAB), epoxy: factsIn(loneTo, "Epoxy"), epoxyRows: (loneTo.tabs.Epoxy.labor || []).length, drive: drive$(loneTo) };
 // (vii) NEVER THROWS: a name for a section the model does not have, and a bid whose sections cannot be read, have nothing to carry and are settled as far
 //       as they can be.
@@ -626,13 +653,13 @@ out.followNeverThrows = { namelessThrew: namelessThrew, brokenThrew: brokenThrew
 const kc = combo(4, 6); ask(kc, 190);
 const kcBefore = facts(kc);
 const kcNext = B.sectionsForJob(kc, "polish", { rules: [] });
-B.followDistance(kcNext, "Polish");
+B.followDistance(kcNext, "Polish", B.sectionKinds(kc));
 out.carrierKept = { before: kcBefore, after: facts(kcNext), crew: B.crewSize(kcNext), carrier: B.travelCarrier(kcNext), epoxyRows: countIn(kcNext, "Epoxy"),
-  drive: drive$(kcNext) };
+  epoxy: factsIn(kcNext, "Epoxy"), drive: drive$(kcNext) };
 // ...and a carrier kept fills nothing: a far bid saved with the root's Travel Labor blank stays blank through a switch that keeps it.
 const kb = combo(4, 4); kb.distance = { miles: 190, source: "google", key: "k" }; kb.conditions.local = false;
 const kbNext = B.sectionsForJob(kb, "polish", { rules: [] });
-B.followDistance(kbNext, "Polish");
+B.followDistance(kbNext, "Polish", B.sectionKinds(kb));
 out.carrierKeptFillsNothing = facts(kbNext);
 // (ix) THE FOURTH HAND OF AN OPTION'S OWN CREW: Remove existing joint filler adds a hand on the option's joint-filler line, as it does for the job's crew.
 const oh = newBid();
@@ -643,17 +670,23 @@ out.optionHand = { withHand: later("ownCrewSize")(oh, oh.labor), noConditions: l
 // (x) A COPY OF THE CARRIER'S SHEET carries the row the carrier had, the estimator's typed 3 x 5 included (it is priced apart, as an option). Made a base beside the
 //     carrier it would charge the drive a second time, so a row that REPEATS the carrier's exactly is given back when its section is a base that does not carry the
 //     travel; one that says something else (typed 2 x 4) is theirs and stays.
-const copyTyped = (typeGuys, typeDays) => {
+//     A BASE (round 7, part 3, the round-7 audit's F1): the copy made a base beside the carrier is settled as the page settles it (followDistance, told the copy was an option), and the
+//     tool's copy that repeats the carrier's typed row is given back and filled on the copy's own crew (Hanz's D1 of 2026-10-21); one that says something else stays.
+const copyTyped = (typeGuys, typeDays, kind) => {
   const m = crewed(newBid()); ask(m, 190);
   typeIn(m, "guys", "3"); typeIn(m, "days", "5");
   const made = B.copySection(m, "Polish", { state: {} });
   const n = made.model;
   if (typeGuys) { const r = travelIn(n, made.id); r.guys = typeGuys; r.days = typeDays; }
-  n.tabs[made.id].kind = "base";
-  B.takeBackStrayTravel(n);
+  const before = B.sectionKinds(n);
+  n.tabs[made.id].kind = kind || "off";
+  if (kind === "base") B.followDistance(n, B.ROOT_TAB, before);
+  else B.takeBackStrayTravel(n);
   return { id: made.id, root: factsIn(n, B.ROOT_TAB), copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), drive: drive$(n), kinds: tabsOf(n) };
 };
-out.copyRepeat = { same: copyTyped(), different: copyTyped("2", "4") };
+// (round 7) the repeat is looked for on a section that is OFF (what the job's one drive, carried to a new base, leaves behind); on a BASE beside the carrier (round 7, part 3) the tool's copy
+// is given back when it repeats the carrier's row, and one that says something else is the estimator's and stays.
+out.copyRepeat = { same: copyTyped(), different: copyTyped("2", "4"), base: copyTyped(null, null, "base"), baseDifferent: copyTyped("2", "4", "base") };
 
 // 15. AN OPTION IS PRICED APART, FOR ITS OWN CREW (2026-10-20 audit): a copy of the carrier made as an option carries its own Travel Labor row,
 //     and its guys follow the option's OWN labor lines and not the base crew the job's one drive is charged for.
@@ -802,8 +835,9 @@ out.optionsOwned = scenario(() => {
 //    reopened, Polish made the base again, then the miles corrected). makeBase is what the page does for a base change: pickBase, then the settling, then the sync.
 const makeBase = (m, ids) => {
   const before = B.travelCarrier(m);
+  const kinds = B.sectionKinds(m);
   const n = B.pickBase(m, ids, { state: {} }).model;
-  B.followDistance(n, before);
+  B.followDistance(n, before, kinds);
   B.syncAutoGuys(n);
   return n;
 };
@@ -821,7 +855,7 @@ out.optionsDemoted = scenario(() => {
   ask(m, 300); res.farther = both2(m);
   return res;
 });
-// ...an option's EMPTY row is filled by a far answer (the copy was made on a local job), and a Gyp option is never filled: its drive is typed, like a Gyp carrier's.
+// ...an option's EMPTY row is filled by a far answer (the copy was made on a local job), and a Gyp option is too since round 7 (D2: it was never filled, like a Gyp carrier).
 out.optionBlankFilled = scenario(() => {
   const m = crewed(newBid()); ask(m, 50);
   const made = B.copySection(m, "Polish", { state: {} });
@@ -836,21 +870,29 @@ out.optionGyp = scenario(() => {
   const before = JSON.stringify(g.tabs[GYP].labor);
   ask(g, 190);
   const far = JSON.stringify(g.tabs[GYP].labor);
+  const farRow = factsIn(g, GYP);
   ask(g, 50);
-  return { untouchedFar: far === before, untouchedLocal: JSON.stringify(g.tabs[GYP].labor) === before, base: factsIn(g, B.ROOT_TAB) };
+  // round 7 (D2): a Gyp option's drive follows the answers like any other option's, on its own crew; a local answer takes the fill back whole
+  return { untouchedFar: far === before, untouchedLocal: JSON.stringify(g.tabs[GYP].labor) === before, base: factsIn(g, B.ROOT_TAB), far: farRow, local: factsIn(g, GYP) };
 });
 
 // 18. THE SETTLING'S ORDER: the guys first, then the take-back (the fourth audit). A switched-off Travel Labor row on the carrier, and an exact copy of it on a base beside the carrier whose guys are
 //     those of a crew since gone (3, where the crew is 4 now): the take-back compares the guys, so it has to run after the sync has put both on the crew. Before the sync the two read 4 and 3, the copy
 //     survived beside the carrier's, and the sync then made them the same. The row it hands back is switched ON again and empty (releaseTravelRow).
+// (round 7) the copy is what the job's one drive leaves behind when it is CARRIED: a single-base Polish job whose root holds only its Travel Labor row, switched OFF, switched to
+// Epoxy. The row goes to Epoxy as a COPY (the root keeps no other row), the root (off now) is left holding a repeat, and that repeat is given back, switched on again. A row on a section
+// the drive was not carried from is the estimator's for that sheet and stays (takeBackStrayTravel's `carriedFrom`).
 out.duplicateOff = scenario(() => {
-  const m = combo(4, 4); ask(m, 190);
-  const root = travelIn(m, B.ROOT_TAB);
-  root.enabled = false;
-  const dup = clone(root); dup.guys = 3;
-  m.tabs.Epoxy.labor = m.tabs.Epoxy.labor.concat([dup]);
-  B.followDistance(m, B.ROOT_TAB);                  // a restructure that keeps the carrier (a Combo made Polish and back is one)
-  return { root: factsIn(m, B.ROOT_TAB), rootMarks: marksIn(m, B.ROOT_TAB), epoxy: factsIn(m, "Epoxy"), epoxyMarks: marksIn(m, "Epoxy"), epoxyRows: countIn(m, "Epoxy"), drive: drive$(m) };
+  const m = crewed(newBid()); ask(m, 190);
+  m.labor = m.labor.filter((r) => r.id === "travel");
+  trvOf(m).enabled = false;
+  const n = switchTo(m, "epoxy");
+  const k = combo(4, 4); ask(k, 190); travelIn(k, B.ROOT_TAB).enabled = false;
+  k.tabs.Epoxy.labor = k.tabs.Epoxy.labor.filter((r) => r.id !== "travel").concat([clone(travelIn(k, B.ROOT_TAB))]);
+  k.tabs.Epoxy.kind = "off";
+  B.followDistance(k, B.ROOT_TAB);                  // a restructure that keeps the carrier and carries nothing: the off sheet's switched-off row is its own
+  return { epoxy: factsIn(n, "Epoxy"), epoxyMarks: marksIn(n, "Epoxy"), root: factsIn(n, B.ROOT_TAB), rootMarks: marksIn(n, B.ROOT_TAB), rootRows: countIn(n, B.ROOT_TAB),
+    drive: drive$(n), notCarried: { epoxy: factsIn(k, "Epoxy"), epoxyMarks: marksIn(k, "Epoxy") } };
 });
 
 // 19. A COPY THAT REPEATS THE CARRIER'S ROW IS GIVEN BACK, AND ONLY ONE THAT REPEATS IT IN EVERY RESPECT (the fourth audit: the clauses were not pinned one by one). The carrier's Travel Labor is typed
@@ -863,7 +905,7 @@ out.repeatVariants = scenario(() => {
     const made = B.copySection(m, "Polish", { state: {} });
     const n = made.model;
     if (patch) patch(travelIn(n, made.id));
-    n.tabs[made.id].kind = "base";
+    n.tabs[made.id].kind = "off";                  // round 7: a repeat is given back from a section that is off; a base keeps its own drive
     B.takeBackStrayTravel(n);
     return { copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), root: factsIn(n, B.ROOT_TAB), drive: drive$(n) };
   };
@@ -880,7 +922,7 @@ out.repeatVariants = scenario(() => {
       const m = crewed(newBid()); ask(m, 190);
       typeIn(m, "guys", "3"); typeIn(m, "days", "5"); trvOf(m).enabled = false;
       const made = B.copySection(m, "Polish", { state: {} });
-      const n = made.model; n.tabs[made.id].kind = "base";
+      const n = made.model; n.tabs[made.id].kind = "off";
       B.takeBackStrayTravel(n);
       return { copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), root: factsIn(n, B.ROOT_TAB), rootMarks: marksIn(n, B.ROOT_TAB) };
     })(),

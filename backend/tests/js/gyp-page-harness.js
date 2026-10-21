@@ -220,6 +220,14 @@ async function main() {
     tooling: review.indexOf("Tooling and consumables") >= 0,
     total: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
     noDye: !/Dye/.test(review),
+    // EVERY RATE CELL'S TEXT (round 7, part 4, P8): what the Review's cards print in their Rate column on a Gyp bid, read off the page, so test_v2_review_table_fits.py sizes the column by the real widest
+    // string ("$16.8113 / gallon", the Primer row, ran under the pinned Total column at 916px with the sidebar open). Each cell's markup stripped to a fixed point; a rate holds no
+    // & < > " or ', so only the non-breaking space is read back (decoding the rest after a strip is what CodeQL's double-escaping and multi-character rules flag).
+    rates: [...review.matchAll(/<td class="rt r">([\s\S]*?)<\/td>/g)].map((mm) => {
+      let t = mm[1], prev;
+      do { prev = t; t = t.replace(/<[^>]*>/g, ""); } while (t !== prev);
+      return t.replace(/&nbsp;/g, " ");
+    }).filter((t) => t !== ""),
   };
 
   // ── 8. a thickness that cannot be worked out is NO PRICE, in the page's words, never a bid on the part that could be ──
