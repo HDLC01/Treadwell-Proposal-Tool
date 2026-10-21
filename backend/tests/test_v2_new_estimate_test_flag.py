@@ -1110,6 +1110,59 @@ def test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_i
         assert_filed_and_edited_directly(r, name)
 
 
+STOPPED_SAVING = "stopped saving"       # what a v2 page says once another page has written the project it opened as new
+
+
+def test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it(ran):
+    """F1 of the audit of round 3. A v2 page decides a project is NEW when it opens (no row, nothing written) and says so on its banner ("saved as a
+    NEW test project"). ANOTHER tab then writes the project: the live intake, which resumes the browser's current draft, with a real bid typed and
+    Continue pressed, so its save creates the row. The v2 page's estimator types one character, and the page's save reads the WHOLE form, which
+    still holds nothing (nothing told it the project had been written), and wrote that over the blob: the real bid's name and address were EMPTIED
+    on the server and a v2 model put in their place, by a page that went on saying "NEW test project". Now the page refuses the write (as a page
+    that has given its copy back does), says so on screen in place of the banner that is no longer true, and goes on refusing: nothing it holds
+    reaches the project. From the board's New estimate and from each Projects tab; and its Continue still leaves cleanly, to the estimate page,
+    which edits the saved project."""
+    runs = ran["staleNewPage"]
+    assert sorted(runs) == ["board", "board, Continue pressed on the stale page", "projects/active", "projects/all", "projects/test"], sorted(runs)
+    for name, r in sorted(runs.items()):
+        assert r["sameProject"] and "Nothing has been priced here yet" in r["noteAtOpen"], (
+            "%s: the v2 page did not open on a project nobody had saved: %r" % (name, r["noteAtOpen"]))
+        live = r["rowAfterLive"]
+        assert live is not None and live["project_name"] == "Real Customer Bid" and live["address"] == "1 Main St" and live["has_v2_model"] is False, (
+            "%s: the live intake did not save the bid first, so this checks nothing: %r" % (name, live))
+        f = r["final"]
+        assert f["project_name"] == "Real Customer Bid" and f["address"] == "1 Main St", (
+            "%s: the bid another tab saved was emptied or overwritten by the page that thought it was new: %r" % (name, f))
+        assert f["has_v2_model"] is False and f["zip"] != "66101", "%s: the stale page's edit reached the project: %r" % (name, f)
+        assert reqs(r, "PUT", r["id"], page="intake") == [], "%s: the stale v2 page sent a save" % name
+        note = " ".join(r["noteAfterTyping"].split())
+        assert STOPPED_SAVING in note and "another tab" in note, "%s: the page does not say it stopped saving: %r" % (name, note)
+        assert "NEW test project" not in note, "%s: the page still says what is no longer true: %r" % (name, note)
+    c = runs["board, Continue pressed on the stale page"]
+    est = c["estimate"]
+    assert c["staleNavs"] == ["https://proposals.test/polish-estimate.html?d=" + c["id"]], "Continue on the stale page did not leave: %r" % c["staleNavs"]
+    assert est is not None and est["settled"] is True and est["draftId"] == c["id"] and DIRECT in est["note"], (
+        "the estimate page did not open the saved project and edit it directly: %r" % est)
+    assert c["beta"] is None and c["rowIds"] == [c["id"]], "a copy or another row appeared: %r" % c["rowIds"]
+
+
+def test_a_stale_queued_save_never_overwrites_what_another_page_saved_since(ran):
+    """F1, the queued copy. TWO v2 tabs on one new project: tab A's page types (its own save has run, so its server save of that copy is queued for
+    2.5 s later); tab B opens the v2 intake by a bare link, which resumes the same draft, finds the blob tab A wrote, saves it as a test (so the row
+    now exists), adopts what is in it, and its estimator adds an address and presses Continue, which saves at once. Tab A's queued save then fired
+    with ITS older copy, which has no address, over the row tab B had just saved: the page that thought it was creating the project overwrote a
+    newer row with an older copy, though it had typed nothing since. It is not sent, and the page says why."""
+    r = ran["staleQueuedCopy"]
+    assert r["p2Draft"] == r["id"] and DIRECT in r["p2NoteAtOpen"], "tab B did not open on tab A's project: %r %r" % (r["p2Draft"], r["p2NoteAtOpen"])
+    assert r["rowAfterP2"] == {"project_name": "First Tab Job", "address": "2 Second Tab St", "zip": "", "has_v2_model": True, "is_test": True}, (
+        "tab B did not save its edit first, so this checks nothing: %r" % r["rowAfterP2"])
+    assert r["final"]["address"] == "2 Second Tab St" and r["final"]["project_name"] == "First Tab Job", (
+        "tab A's queued save, of its older copy, was sent over what tab B saved since: %r" % r["final"])
+    assert [q for q in reqs(r, "PUT", r["id"]) if q["page"] == r["p1Label"]] == [], "tab A's page sent a save of its older copy"
+    note = " ".join(r["p1Note"].split())
+    assert STOPPED_SAVING in note and "another tab" in note, "tab A does not say its save was not sent: %r" % note
+
+
 def test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit(ran):
     """F4 of the audit of round 3. The v2 intake is left with TWO saves pending: the page's own 600 ms save has run (so shared.js's 2.5 s save of
     that copy is queued) and the estimator edits once more (so the page's own 600 ms timer is pending too). shared.js registers its pagehide

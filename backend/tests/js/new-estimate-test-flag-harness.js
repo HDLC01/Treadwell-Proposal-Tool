@@ -87,6 +87,10 @@
  *   abandonedV2Start    the v2 board's New estimate (the real startNew), Direct and GC, and the estimator opens another project: the GC
  *                       tab's first save refused, and the page left before it heard from the server (F2).
  *   v2BoardThenLiveIntake  a project the v2 board started, written first by the LIVE intake (F2).
+ *   staleNewPage        a v2 page that decided its project was NEW, and another tab (the live intake) that has since written it: the stale
+ *                       page must stop saving and say so, never emptying what the other tab saved (F1).
+ *   staleQueuedCopy     two v2 tabs on one new project: the first tab's queued save, of its older copy, must not fire over what the second
+ *                       tab has saved since (F1).
  *   twoSavesPending     the v2 intake left with both its own timer and shared.js's pending (a small draft; the first save sent slow; a ~36 KiB
  *                       draft that fits one keepalive request and not two): ONE save is sent as the page goes, carrying the newest edit (F4).
  *   betaDoor            the live intake's "Continue with Estimating Tool v2" on a new bid from each Projects tab, fast and slow server: the v2
@@ -1109,6 +1113,88 @@ async function bytesNotCharacters(fill, count) {
   return summary(w, BIG, { fill: fill, count: count });
 }
 
+/** F1. A v2 page decides a project is NEW when it opens (no row, nothing written) and says so on its banner ("saved as a NEW test project").
+ *  ANOTHER tab then writes the project: the live intake, which resumes the browser's current draft, with a real bid typed and Continue pressed,
+ *  so its save creates the row. The v2 page's estimator then types one character in a v2 box. Its `save()` reads the WHOLE form, which still
+ *  holds nothing (it was never told the project had been written), and wrote that over the blob: the real bid's name and address were emptied
+ *  on the server and a v2 model put in their place, by a page that still said "NEW test project". `how` is how the project was started
+ *  ("board": the v2 board's New estimate in tab A; "projects": the Projects page's New project on `opts.tab` in tab B, then a bare link to the
+ *  v2 intake in tab A). `opts.continueStale`: the stale page's Continue is pressed after its edit. (The v2 page cannot have typed first here:
+ *  once it has written, the live intake's Continue sends the draft to the v2 intake instead of saving it, js/index.js. See staleQueuedCopy.) */
+const rowOf = (w, id) => {
+  const r = w.rows.get(id);
+  if (!r) return null;
+  const d = r.data;
+  return { project_name: d.project_name === undefined ? null : d.project_name, address: d.address === undefined ? null : d.address,
+           zip: d.zip === undefined ? null : d.zip, has_v2_model: !!d.polish_estimate, is_test: flagOf(d) };
+};
+async function staleNewPage(how, opts) {
+  const o = Object.assign({ tab: "all", continueStale: false }, opts || {});
+  const w = W.createWorld({ frontend: ROOT });
+  const tabA = w.mainTab;                                       // the v2 page's tab
+  const tabB = w.openTab();                                     // the live intake's tab
+  let live, v2, id;
+  if (how === "board") {
+    v2 = await w.startNewEstimate({ tab: tabA });
+    id = v2.draftId();
+    live = w.load("/?new=1", { tab: tabB });                    // the sidebar's link to the live intake: resumes the browser's current draft
+    await w.settle();
+  } else {
+    live = await w.pressNewProject({ tab: o.tab, browserTab: tabB });
+    id = live.draftId();
+    v2 = w.load("/polish-intake.html", { tab: tabA });          // a bare link to the v2 intake: resumes the same draft
+    await w.settle();
+  }
+  const noteAtOpen = v2.text("sandbox-note");
+  const sameProject = v2.draftId() === id && live.draftId() === id;
+  live.type("project_name", "Real Customer Bid");
+  live.type("address", "1 Main St");
+  await w.advance(300);
+  live.pressContinue();                                         // the live intake writes the project: its save creates the row
+  await w.advance(3500);
+  const rowAfterLive = rowOf(w, id);
+  v2.type("zip", "66101");                                      // the v2 page's estimator types one character
+  await w.advance(1000);
+  v2.type("city", "Kansas City");                               // and another: a refused page stays refused
+  await w.advance(9000);
+  const noteAfterTyping = v2.text("sandbox-note");
+  if (o.continueStale) {
+    v2.pressContinue();
+    await w.settle();
+  }
+  await w.settle();
+  return summary(w, id, { how: how, tab: o.tab, noteAtOpen: noteAtOpen, sameProject: sameProject,
+    rowAfterLive: rowAfterLive, noteAfterTyping: noteAfterTyping, final: rowOf(w, id),
+    staleNavs: w.navs.filter((n) => n.from === v2.label).map((n) => n.to) });
+}
+
+/** F1, the queued copy. TWO v2 tabs on one new project. Tab A's page types (its own save has run, so its server save of that copy is queued for
+ *  2.5 s later); tab B opens the v2 intake by a bare link, which resumes the same draft: it finds the blob tab A wrote, saves it as a test (so the
+ *  row now exists), adopts what is in it, and its estimator adds an address and presses Continue, which saves at once. Tab A's queued save then
+ *  fires with ITS older copy, which has no address, over the row tab B just saved. The page that thought it was creating the project was
+ *  overwriting a newer row with its own older copy, though it had typed nothing since. */
+async function staleQueuedCopy() {
+  const w = W.createWorld({ frontend: ROOT });
+  const tabA = w.mainTab;
+  const tabB = w.openTab();
+  const p1 = await w.startNewEstimate({ tab: tabA });
+  const id = p1.draftId();
+  p1.type("project_name", "First Tab Job");
+  await w.advance(700);                                         // tab A's own save has run: its server save is queued
+  const p2 = w.load("/polish-intake.html", { tab: tabB });      // a bare link: resumes the same draft, whose row does not exist yet
+  await w.advance(500);                                         // its sandbox finds no row, saves the blob it found as a test, and opens
+  const p2NoteAtOpen = p2.text("sandbox-note");
+  const p2Draft = p2.draftId();
+  p2.type("address", "2 Second Tab St");
+  await w.advance(100);
+  p2.pressContinue();                                           // its save is awaited and goes now
+  await w.advance(1000);
+  const rowAfterP2 = rowOf(w, id);
+  await w.settle();                                             // tab A's queued save fires (or is not sent)
+  return summary(w, id, { p2NoteAtOpen: p2NoteAtOpen, p2Draft: p2Draft, rowAfterP2: rowAfterP2, final: rowOf(w, id),
+    p1Note: p1.text("sandbox-note"), p1Label: p1.label });
+}
+
 /** F4. The v2 intake is left with TWO saves pending: the page's own 600 ms save has run (so shared.js's 2.5 s save of that copy is queued) and
  *  the estimator edits once more (so the page's own 600 ms timer is pending too). Both pagehide handlers have something to send, and they used to
  *  send it BOTH: shared.js's, as the shared blob stood (the older copy), and then the page's, which saves and sends the newest, two keepalive
@@ -1363,6 +1449,14 @@ process.on("exit", (code) => {
     "3-byte": await bytesNotCharacters("€", 24000),            // the euro sign: three bytes, one UTF-16 unit
     "4-byte": await bytesNotCharacters("😀", 18000),      // an emoji: four bytes, TWO UTF-16 units (a surrogate pair)
   };
+  out.staleNewPage = {
+    "board": await staleNewPage("board"),
+    "board, Continue pressed on the stale page": await staleNewPage("board", { continueStale: true }),
+    "projects/all": await staleNewPage("projects", { tab: "all" }),
+    "projects/active": await staleNewPage("projects", { tab: "active" }),
+    "projects/test": await staleNewPage("projects", { tab: "test" }),
+  };
+  out.staleQueuedCopy = await staleQueuedCopy();
   out.twoSavesPending = {
     "small": await twoSavesPending(),
     "small, the first save slow": await twoSavesPending({ slowFirst: 400 }),
