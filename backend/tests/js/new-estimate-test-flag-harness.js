@@ -76,6 +76,10 @@
  *                       typing first: each keeps its own start (F3).
  *   bigDraftLeftEarly   a draft too big for keepalive, left inside the debounce: no keepalive request the browser will refuse (F5).
  *
+ * ROUND 4 (the audit of round 3, F1 to F6):
+ *   bytesNotCharacters  a draft under the keepalive limit as characters and over it as UTF-8 bytes (2-, 3- and 4-byte characters),
+ *                       left inside the debounce: sent as a plain request, never a keepalive one the browser refuses (F6).
+ *
  * Usage: node new-estimate-test-flag-harness.js <frontend-dir>   ->   one line of JSON
  */
 const path = require("path");
@@ -1057,6 +1061,27 @@ async function bigDraftLeftEarly() {
   return summary(w, BIG, { address: (w.rows.get(BIG).data || {}).address });
 }
 
+// ══ ROUND 4: the audit of round 3 (F1 to F6) ═══════════════════════════════════════════════════════════════
+/** F6. shared.js keepaliveFits counts a body's size in UTF-8 BYTES, as the browser does against its 64 KiB keepalive limit. Nothing
+ *  pinned that: a body of `count` characters of `fill` is under the limit as `.length` says it and over it in bytes, so a page that
+ *  counted characters would ask for a keepalive request the browser refuses on the spot ("TypeError: Failed to fetch": nothing sent).
+ *  A saved TEST project holding such a draft is edited on the v2 intake and left within the 600 ms debounce. */
+async function bytesNotCharacters(fill, count) {
+  const w = W.createWorld({ frontend: ROOT });
+  const data = { is_test: true, notes_text: fill.repeat(count), project_name: "Overland Park Warehouse", address: "100 Main St",
+    city: "Overland Park", state: "KS", zip: "66212", work_type: "polish", audience: "Direct", polish_sf: 6000,
+    polish_estimate: { version: 2, conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } };
+  w.seed(BIG, data);
+  w.holdLocally(BIG, data);
+  const intake = w.load("/polish-intake.html?d=" + BIG);
+  await w.settle();
+  intake.type("address", "9 Big Address");
+  await w.advance(100);
+  intake.follow("/polish-estimate.html?d=" + BIG);
+  await w.settle();
+  return summary(w, BIG, { fill: fill, count: count });
+}
+
 // VIRTUAL TIME MOVES ONLY WHEN THE MODEL IS ASKED TO RUN IT (world.advance / world.settle). A harness that awaits a request
 // before doing so waits for an event nobody will run, node finds nothing left to do and exits 0 with nothing printed, which
 // reads as "the harness printed nothing". Say so instead.
@@ -1120,6 +1145,11 @@ process.on("exit", (code) => {
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
+  out.bytesNotCharacters = {
+    "2-byte": await bytesNotCharacters("é", 36000),            // é: two bytes, one UTF-16 unit
+    "3-byte": await bytesNotCharacters("€", 24000),            // the euro sign: three bytes, one UTF-16 unit
+    "4-byte": await bytesNotCharacters("😀", 18000),      // an emoji: four bytes, TWO UTF-16 units (a surrogate pair)
+  };
   out.twoPagesOneProject = {};
   for (const tab of ["all", "active", "test"]) out.twoPagesOneProject[tab] = await twoPagesOneProject(tab);
   out.wiped = {};

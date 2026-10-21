@@ -1167,6 +1167,32 @@ def test_a_save_sent_as_the_page_goes_is_never_a_keepalive_request_the_browser_r
         assert q["keepalive"] is False and not q["outcome"].startswith("refused"), "the page asked for a keepalive the browser refuses: %r" % q
 
 
+# ══ ROUND 4: the audit of round 3 (F1 to F6) ═════════════════════════════════════════════════════════════
+# The harness runs are tests/js/new-estimate-test-flag-harness.js's round-4 scenarios, on the same model, which now also runs the board's
+# REAL startNew, holds keepalive requests to one shared 64 KiB budget, and presses the live intake's beta door.
+KEEPALIVE_LIMIT = 64 * 1024
+KEEPALIVE_ASKED = 60 * 1024         # shared.js KEEPALIVE_MAX_BYTES: a little under the limit is the most a keepalive request is asked to carry
+
+
+def test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request(ran):
+    """F6 of the audit of round 3. keepaliveFits counts the body's size in UTF-8 BYTES, as the browser counts it against its 64 KiB
+    keepalive limit, and nothing pinned that: a draft whose text is 2-, 3- or 4-byte characters (an accented name, a euro sign, an emoji
+    in a note) is under the limit as `.length` says it and over it in bytes. A page that counted characters would ask for a keepalive
+    request the browser refuses on the spot ("TypeError: Failed to fetch", swallowed, nothing sent), and the edit made in the last
+    600 ms would go nowhere. Each family is checked on its own, and the premise is checked too (a body that is under the limit as
+    characters and over it as bytes), so that a draft that is simply too big cannot make this pass for the wrong reason."""
+    fams = ran["bytesNotCharacters"]
+    assert sorted(fams) == ["2-byte", "3-byte", "4-byte"], sorted(fams)
+    for name, r in sorted(fams.items()):
+        puts = reqs(r, "PUT", "big-4", page="intake")
+        assert puts, "%s: the intake sent no save at all: %r" % (name, r["requests"])
+        for q in puts:
+            assert q["chars"] < KEEPALIVE_ASKED and q["bytes"] > KEEPALIVE_LIMIT, (
+                "%s: the draft is not under the limit as characters and over it as bytes, so this checks nothing: %r" % (name, q))
+            assert q["keepalive"] is False and not q["outcome"].startswith("refused"), (
+                "%s: the page asked for a keepalive request the browser refuses (it counted characters, not bytes): %r" % (name, q))
+
+
 # ══ every check goes red when the code is changed ═════════════════════════════════════════════════════
 # Each entry breaks one LINE of the sources in a scratch copy of the frontend, runs a harness on it, and the named check (a test
 # above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not there exactly once, so
@@ -1206,6 +1232,9 @@ WITH_START_WORD = '    if (!id || Object.prototype.hasOwnProperty.call(blob, "is
 KEEPALIVE_GATE = "        keepalive: keepalive && keepaliveFits(body),"
 FLUSH_KEEPALIVE = "        putDraft(id, blob, !!(opts && opts.keepalive));"
 SYNCED_LINE = "        if (ok && id === getDraftId() && getState()[STAMP] === id) markSynced(id, sent);"
+KEEPALIVE_THREE_BYTES = "      else bytes += 3;"
+KEEPALIVE_TWO_BYTES = "      else if (c < 0x800) bytes += 2;"
+KEEPALIVE_FOUR_BYTES = "      else if (c >= 0xd800 && c <= 0xdbff) { bytes += 4; i++; }    // a surrogate pair is one four-byte character"
 # the sandbox
 SANDBOX_SAYS_TEST = "      body: JSON.stringify({ data: Object.assign({}, blob, { is_test: true }) }),"
 SANDBOX_NOTE_UNSAVED = "          showUnsavedNote();"
@@ -1512,6 +1541,16 @@ BREAKS = {
     "the page alone has no Continue button to speak through": (
         "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
         test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    # ── round 4, F6: the size of a save sent as the page goes is counted in bytes ──
+    "a three-byte character is counted as one byte": (
+        "world", (broken(SHARED, KEEPALIVE_THREE_BYTES, "      else bytes += 1;"),),
+        test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request),
+    "a two-byte character is counted as one byte": (
+        "world", (broken(SHARED, KEEPALIVE_TWO_BYTES, "      else if (c < 0x800) bytes += 1;"),),
+        test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request),
+    "a four-byte character is counted as two bytes": (
+        "world", (broken(SHARED, KEEPALIVE_FOUR_BYTES, KEEPALIVE_FOUR_BYTES.replace("bytes += 4;", "bytes += 2;")),),
+        test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request),
 }
 
 
@@ -1600,7 +1639,9 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before,
                  test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued,
                  test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
-                 test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has):
+                 test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has,
+                 # round 4
+                 test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request):
         assert must.__name__ in named, "no break turns %s red" % must.__name__
 
 
