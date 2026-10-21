@@ -192,13 +192,6 @@ def test_only_the_copy_is_ever_written_to(sandbox):
     """The one write aimed at the page's OWN id is the never-saved case, where there is no source
     row in existence to protect. Once a source row is known to exist, nothing writes to it.
 
-    THE ONE EXCEPTION, added for X1 (2026-10-21): fileOwnNewProject, called just ABOVE the filed-as-test
-    check and so outside the slice read below, files (never saves, never edits into) a project that this
-    browser itself started as a new test project and finds saved and still unfiled. It is a filing, it
-    acts only when the pending filing names this id and says "test", no is_test has been set and the row
-    is no copy, and it is the one filing the guard below does not read.
-    test_v2_new_estimate_test_flag.py executes it and proves it never acts on a real project.
-
     Mutation: file the source as a test (its updated_at moves, it leaves Active, and Kyle's real
     bid is now a test project), or save the sandbox state under the source id."""
     own = sandbox.index("saveThenFileAsTest(id, state)")
@@ -206,8 +199,6 @@ def test_only_the_copy_is_ever_written_to(sandbox):
     known_row = sandbox.index("row.is_test === true")
     assert guard < own < known_row, (
         "the page saves under the id it was given outside the never-saved branch")
-    assert sandbox.index("fileOwnNewProject(") < known_row, (
-        "the one filing of the page's own id that is allowed has moved below the check this test reads from")
     after = sandbox[known_row:]
     for forbidden in ("saveThenFileAsTest(id", "fileAsTest(id)", "adoptDraft(id"):
         assert forbidden not in after, (
@@ -312,23 +303,27 @@ def test_the_copy_is_filed_through_the_same_route_projects_js_uses():
     assert '"POST"' in body and "is_test" in body
 
 
-def test_the_test_flag_is_only_set_after_a_save_that_landed():
-    """set_test_flag returns False on a missing draft, so filing before the first successful save
-    is a silent no-op and the copy stays in Active.
+def test_a_project_saved_as_a_test_is_filed_by_the_save_that_creates_it():
+    """THE SAVE IS THE FILING (X1, round 2). The PUT's own body says is_test true, so the row is CREATED filed and "saved" and
+    "filed" are one fact reported by one answer. There used to be a POST /test after the PUT, which set_test_flag could only do
+    once the row existed, and whose answer nobody read: a /test that failed left the project in Active with the page saying
+    it was filed, and one that never answered held the page that was booting on it.
 
     And "landed" is not res.ok: api_save_draft catches its own failures and answers 200 with
-    {"ok": false, "error": ...}.
+    {"ok": false, "error": ...}, so a save that did not land throws, and nothing downstream may say it is filed.
 
-    Mutations: file before the PUT; or trust res.ok alone."""
+    Mutations: drop `is_test: true` from the body (the row is born unfiled and nothing files it), trust res.ok alone, or put
+    a second request back whose answer is not read."""
     body = _block(PAGE, "saveThenFileAsTest")
     put = body.index('method: "PUT"')
+    says_test = body.index("is_test: true")
     thrown = body.index("throw new Error")
-    flag = body.index("fileAsTest(")
-    assert put < thrown < flag, "the test flag is set before the save is known to have worked"
+    assert put < says_test < thrown, "the save does not say is_test, or says it after it has been judged"
     assert "res.ok" in body
     assert "body.ok === false" in body, (
         'a 200 carrying {"ok": false} is being read as a successful save')
-    assert re.search(r"await fileAsTest\(", body), "the filing is not awaited"
+    assert "fileAsTest(" not in body and "/test" not in body, (
+        "a second request files the project after the save, and nobody reads its answer")
 
 
 def test_only_the_small_write_survives_a_navigation_and_the_big_one_must_not_try():
@@ -553,7 +548,7 @@ def test_the_notice_cannot_be_markup():
     below reads every innerHTML assignment rather than just counting them, so a second one that
     carries anything else fails here."""
     assign = re.compile(r"\.innerHTML\s*=\s*([^;]+);")
-    for fn in ("showCopyNote", "showDirectNote"):
+    for fn in ("showCopyNote", "showDirectNote", "showUnsavedNote"):
         body = _block(PAGE, fn)
         for rhs in assign.findall(body):
             assert re.fullmatch(r'icon\("[a-z-]+",\s*\d+\)', rhs.strip()), (

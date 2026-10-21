@@ -7,23 +7,30 @@ it used to make a live one. You then had to return to Projects and press Test? o
 forget, and leave a test sitting in Kyle's working list among real customer bids. Hanz,
 2026-08-07: "It should land in test... If its active it should land in active."
 
+THE DESIGN CHANGED ON 2026-10-21 (X1, round 2), AND THIS FILE CHANGED WITH IT. The start used to be applied by a POST
+/test after the project's first save came back, and "kept out of the blob" was the rule that made that necessary: a tab
+holding its own is_test would overwrite whatever somebody had since chosen on the card. A POST needs a page that is
+still there to see the first save come back, and every way of leaving that did not wait (a link, Back, a closed tab, a
+double press) left the project BORN UNFILED on the board where staff work. Now shared.js's setState says the start in the
+project's OWN blob, on the first write that has anything in it, so the first PUT creates the row already filed; and
+`drafts.save_draft(keep_server_owned=True)` is what makes that safe, because the stored value of a server-owned key wins
+over a blob's whenever the row has one. test_v2_new_estimate_test_flag.py EXECUTES all of it (the real shared.js, the real
+click handler of projects.js and the real routes); this file keeps the cheap source-level pins of the wiring.
+
 THE THREE WAYS THIS GOES WRONG, WHICH IS WHAT THESE TESTS GUARD.
 
-1. **The flag written into the saved blob.** `is_test` is server-owned (`_SERVER_OWNED_KEYS` in
-   drafts.py) precisely because the browser PUTs the whole blob on every autosave. A tab holding
-   its own copy would overwrite whatever somebody had since chosen on the card: file a project
-   as real, leave yesterday's tab open, and its next autosave files it back as a test. So the
-   intent must travel outside the blob and be applied through /test-flag.
+1. **The flag overruling somebody.** A blob that already says is_test (a hydrate wrote what the server holds) is never
+   overwritten by a start, and the server keeps a stored value over any blob. File a project as real, leave yesterday's tab
+   open, and its next autosave must not file it back as a test.
 
-2. **The intent left unbound.** It would attach to whichever project was saved next — press New
-   project, change your mind, open a real customer bid, and that bid gets filed as a test.
+2. **The intent left unbound.** It would attach to whichever project was written next — press New project, change your
+   mind, open a real customer bid, and that bid gets filed as a test.
 
-3. **Applied before the project exists.** `set_test_flag` returns False on a missing draft, so
-   filing before the first save is a silent no-op and the project stays in Active looking as
-   though it worked.
+3. **A second request.** A /test after the save is what failed (a page that had left, a failure nobody read, an answer
+   nobody waited for). Nothing in shared.js files a project with a request of its own any more.
 
-Source-level, like the other frontend guards in this suite: the behaviour lives in a browser
-page, and what is checkable here is that the wiring is present and shaped correctly.
+Source-level, like the other frontend guards in this suite: what is checkable here is that the wiring is present and
+shaped correctly.
 """
 import pathlib
 import re
@@ -49,6 +56,19 @@ def _body(code, name):
     i = code.index("function " + name)
     j = code.find("\n  function ", i + 1)
     return code[i:j if j != -1 else len(code)]
+
+
+def _exact(code, name):
+    """`function name(...) { ... }` and nothing after it: brace-counted, because _body runs on to the next plain `function`
+    and an `async function` in between (shared.js has several) would be swept in with it."""
+    i = code.index("function " + name)
+    j = code.index("{", code.index(")", i))
+    depth = 0
+    for k in range(j, len(code)):
+        depth += {"{": 1, "}": -1}.get(code[k], 0)
+        if depth == 0:
+            return code[i:k + 1]
+    raise AssertionError("unbalanced braces in " + name)
 
 
 @pytest.fixture(scope="module")
@@ -86,58 +106,40 @@ def test_all_and_inactive_state_no_opinion(projects):
     assert "setNewProjectTestIntent(null)" in block
 
 
-def test_the_flag_never_goes_into_the_saved_blob(shared):
-    """The reason this whole mechanism exists rather than a field on the state object.
-
-    A tab holding its own `is_test` overwrites whatever somebody has since chosen on the card,
-    because every autosave PUTs the whole blob.
-    """
-    assert "setState" in shared
-    # The intent lives under its own localStorage key, not in the draft state.
+def test_the_flag_goes_into_the_blob_only_as_a_new_projects_own_first_write(shared):
+    """The rule this file used to hold the other way round. The intent lives under its own localStorage key; setState is what
+    says it in the project's blob (and nothing else writes it there on this browser's own authority); and putDraft never
+    adds is_test to what it sends, so a blob that does not say it (a project somebody has since filed) is not re-flagged from
+    there. The executed counterparts are in test_v2_new_estimate_test_flag.py (the first PUT carries it; a stale tab cannot
+    undo a human's filing, against the real routes)."""
     assert "treadwell.proposal_tool.new_is_test" in shared
-    # It must not be smuggled into the PUT body.
+    set_state = _body(shared, "setState")
+    assert "sayWhatItWasStartedAs(id, merged)" in set_state, "setState does not say what the project was started as"
+    assert "sayWhatItWasStartedAs" not in _body(shared, "setLocalState"), (
+        "setLocalState is for facts the server holds already: it must not start saying one of its own")
     put = _body(shared, "putDraft")
-    assert "is_test" not in put, (
-        "putDraft sends is_test in the blob, which lets a stale tab undo somebody's filing")
+    assert "is_test" not in put, "putDraft adds is_test to the blob it sends, which re-flags a project somebody filed since"
 
 
-def test_it_posts_to_the_same_endpoint_the_Test_button_uses():
-    """The route, not a plausible-looking spelling of it.
-
-    An earlier version guessed "/test-flag" from the handler name `api_test_flag_draft`. The
-    real route is "/test". Every call 405'd and the project silently stayed in Active — and the
-    test passed, because it only asserted the string "test-flag" appeared in the file.
-
-    Comparing against projects.js is what makes this bite: both call the same endpoint, so if
-    one is wrong they disagree, and if the route is ever renamed both have to move together.
-    """
-    shared_src = SHARED.read_text(encoding="utf-8")
+def test_nothing_in_shared_js_files_a_project_with_a_request_of_its_own(shared):
+    """A /test after the save is what failed: it needs a page that is still there to see the save come back, its failure was
+    never read, and a page booting on it waited for ever. The start travels in the first save, so shared.js has no route of
+    its own to file with (the Test? button on the Projects card still has one, and the sandbox's refile of a copy)."""
+    assert "applyPendingTestIntent" not in shared, "the second request is back"
+    assert not re.search(r'"/api/draft/"\s*\+\s*encodeURIComponent\(\w+\)\s*\+\s*"/test"', shared), (
+        "shared.js posts to /test again")
+    stamp = _exact(shared, "sayWhatItWasStartedAs")
+    assert "fetch(" not in stamp and "keepalive" not in stamp, "the stamp makes a request"
     projects_src = PROJECTS.read_text(encoding="utf-8")
-    pat = r'"/api/draft/"\s*\+\s*encodeURIComponent\(\w+\)\s*\+\s*"(/[a-z-]+)"'
-    theirs = set(re.findall(pat, projects_src))
-    mine = set(re.findall(pat, shared_src))
-    assert "/test" in theirs, (
-        "projects.js no longer posts to /test; this test's reference point has moved: %s" % theirs)
-    assert "/test" in mine, (
-        "shared.js files the new project at %s, but the Test? button uses /test" % (mine or "nothing"))
+    assert re.search(r'"/api/draft/"\s*\+\s*encodeURIComponent\(\w+\)\s*\+\s*"/test"', projects_src), (
+        "projects.js no longer posts to /test: the Test? button has moved, and this file's reference point with it")
 
 
-def test_the_call_survives_the_navigation_that_usually_follows_it():
-    """Intake submits and goes straight to Estimate Review, so the first save and the page
-    unload happen together. Without keepalive the browser cancels the flag POST in flight — the
-    PUT beside it carries keepalive for exactly this reason."""
-    shared_src = SHARED.read_text(encoding="utf-8")
-    i = shared_src.index("function applyPendingTestIntent")
-    body = shared_src[i:i + 1400]
-    assert "keepalive: true" in body, (
-        "the flag POST is cancelled when intake navigates to Estimate Review")
-
-
-def test_the_intent_is_bound_to_an_id_before_it_can_be_applied(shared):
-    """Unbound, it would land on whichever project was saved next."""
+def test_the_intent_is_bound_to_an_id_before_it_can_be_used(shared):
+    """Unbound, it would land on whichever project was written next."""
     assert "bindNewProjectTestIntent" in shared
-    apply_body = _body(shared, "applyPendingTestIntent")
-    assert "pendingTestIntentFor" in apply_body
+    stamp = _exact(shared, "sayWhatItWasStartedAs")
+    assert "pendingTestIntentFor(id)" in stamp
     match = _body(shared, "pendingTestIntentFor")
     assert "raw.slice(0, i) !== id" in match, (
         "the pending intent is not checked against the draft it was meant for")
@@ -159,20 +161,17 @@ def test_the_intent_is_only_bound_when_a_NEW_id_is_minted(shared):
     assert re.search(r'if\s*\(minting\)\s*bindNewProjectTestIntent', init)
 
 
-def test_the_flag_is_applied_only_after_the_project_reaches_the_server(shared):
-    """set_test_flag returns False on a missing draft, so filing before the first save is a
-    silent no-op — the project stays in Active looking as though it worked."""
-    put = _body(shared, "putDraft")
-    assert "res.ok" in put and "applyPendingTestIntent" in put, (
-        "the flag is applied without waiting for the save to succeed")
-
-
-def test_the_intent_is_cleared_once_so_it_cannot_fight_a_later_decision(shared):
-    """A retry that outlived the page would re-file a project the estimator had since moved."""
-    body = _body(shared, "applyPendingTestIntent")
+def test_the_start_is_used_up_by_the_write_that_says_it(shared):
+    """One shot. A start left in the one localStorage slot after it has been said would wait there for a stranger (the next
+    new project overwrites the slot, a project that has moved on would be filed by it). It is emptied by the first write that
+    holds anything, before the blob is touched, and not by a write that holds nothing."""
+    body = _exact(shared, "sayWhatItWasStartedAs")
     assert "removeItem" in body
-    assert body.index("removeItem") < body.index("fetch("), (
-        "the intent is cleared only on success, so a failure leaves it armed for the next save")
+    content_check = body.index("k !== STAMP")
+    assert content_check < body.index("removeItem") < body.index("blob.is_test = want"), (
+        "the start is not checked for content first, or not used up before it is said")
+    assert 'hasOwnProperty.call(blob, "is_test")' in body, (
+        "a blob that already says is_test is overwritten by a start (a human's word, or the server's, would lose)")
 
 
 def test_shared_exports_the_setter_projects_calls(shared):

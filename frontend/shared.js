@@ -95,6 +95,7 @@
     }
     const merged = Object.assign(cur, partial || {});
     if (id) merged[STAMP] = id;   // force-stamp AFTER the merge (partials can carry a stale stamp)
+    if (id) sayWhatItWasStartedAs(id, merged);   // a NEW project's first write says what it was started as
     writeBlob(merged);
     scheduleServerSave(merged);   // debounced push to the server draft
     return merged;
@@ -181,18 +182,26 @@
 
   // ── "the new project lands in the tab you started it from" ────────────────
   //
-  // Projects records the intent when + New project is pressed; it is applied here, once, after
-  // the project first reaches the server.
+  // Projects records the intent when + New project is pressed, and the v2 intake records one when it opens on a
+  // project nobody has saved. setState says it in the project's OWN blob, from the first write that holds anything,
+  // and uses the intent up (sayWhatItWasStartedAs, below).
   //
-  // WHY IT IS NOT JUST A FIELD IN THE SAVED BLOB. `is_test` is server-owned (see
-  // _SERVER_OWNED_KEYS in backend/drafts.py). The browser PUTs the whole blob on every autosave,
-  // so a tab that held its own copy of `is_test` would overwrite whatever somebody had since
-  // chosen on the Projects card — file a project as real, leave yesterday's tab open, and its
-  // next autosave silently files it back as a test. Keeping the flag off the blob and applying
-  // it through /test-flag is what stops that.
+  // THE FLAG TRAVELS IN THE FIRST SAVE, NOT IN A SECOND REQUEST AFTER IT (X1). It used to be applied by a POST /test
+  // once the first PUT had come back, and that needs a page that is still there to see it come back. A Continue that
+  // did not wait, a link, Back or a closed tab sent the first PUT as the page went, nobody saw the reply, and the
+  // project sat on the board unfiled (the v2 intake then forked a copy of it). A blob that already says is_test cannot
+  // be left that way: the backend inserts a new row as it is sent, so the first PUT, by whatever path it leaves,
+  // creates the row already filed.
+  //
+  // WHY THAT IS SAFE NOW, WHEN THIS FILE USED TO KEEP THE FLAG OUT OF THE BLOB. `is_test` is server-owned (see
+  // _SERVER_OWNED_KEYS in backend/drafts.py), and a tab that held its own copy could overwrite whatever somebody had
+  // since chosen on the Projects card: file a project as real, leave yesterday's tab open, and its next autosave filed it
+  // back as a test. PUT /api/draft/{id} now keeps the STORED value of a server-owned key whenever the row has one
+  // (drafts.save_draft keep_server_owned), so a blob can only seed a key the row has never had, and a row this flag
+  // created has it from the start. test_v2_new_estimate_test_flag.py runs both rules on the real routes.
   //
   // WHY IT IS BOUND TO AN ID. Unbound, the intent would attach to whatever project happened to
-  // be saved next — press New project, change your mind, open a real customer bid, and that bid
+  // be written next — press New project, change your mind, open a real customer bid, and that bid
   // gets filed as a test. So it is rewritten as "<id>:<0|1>" the moment an id exists, and only
   // ever applied to that id.
   const NEW_IS_TEST_KEY = "treadwell.proposal_tool.new_is_test";
@@ -231,37 +240,27 @@
     } catch { return null; }
   }
 
-  /** File the project this browser started as a test (or as a real bid), now that its row exists, and
-   *  hand back the POST's promise so a caller can WAIT for the filing instead of racing it. The promise
-   *  never rejects, and it resolves at once when nothing was pending for `id`.
+  /** Say, in `blob`, what this browser started the project as, when a start is pending for THIS id. Called by setState on
+   *  every write, and a no-op unless it finds one (pendingTestIntentFor: the id must be this draft's, so a start for
+   *  another project, or an unbound one, is never applied here).
    *
-   *  putDraft waits on it, which is the reason it is returned. keepalive lets the POST outlive a page
-   *  that is leaving, but surviving is not landing: the next page to read the row (the estimate page's
-   *  sandbox, which forks a project it finds unfiled) asks within a few hundred milliseconds, and on a
-   *  server that takes longer than that to file it found the project unfiled (X1, 2026-10-21). */
-  function applyPendingTestIntent(id) {
+   *  ONE-SHOT. The first write that has anything in it uses the start up (the slot is emptied) whether or not it had
+   *  anything to add, so nothing stays armed in the one localStorage slot to file this project, or another, later: a
+   *  second new project overwrites that slot, and a start nobody used would otherwise wait there for a stranger.
+   *
+   *  NOT BEFORE THERE IS CONTENT. A write whose blob holds nothing but the stamp (and the flag) leaves the start where it
+   *  is, so an untouched project stays a blob with nothing in it. The sandbox and flushEvictedBlob both read "nothing but the
+   *  stamp" as "nothing to save", and a project nobody typed into must never become a row.
+   *
+   *  A blob that already says is_test is left as it is: a hydrate, or a refresh of the server-owned keys, wrote what the
+   *  server holds, and that is the more recent word. `false` is a word like any other (somebody saying "this IS a real
+   *  bid", which is what the Active tab's New project starts), so it is never mistaken for silence. */
+  function sayWhatItWasStartedAs(id, blob) {
     const want = pendingTestIntentFor(id);
-    if (want === null) return Promise.resolve();
-    // Cleared before the call, win or lose. A retry that outlived the page would fight whatever
-    // the estimator has since chosen on the card, and filing is one click to redo.
+    if (want === null) return;
+    if (!Object.keys(blob).some((k) => k !== STAMP && k !== "is_test")) return;
     try { localStorage.removeItem(NEW_IS_TEST_KEY); } catch {}
-    try {
-      // Same endpoint the Test? button on the Projects card uses. It is "/test" — an earlier
-      // version of this guessed "/test-flag" from the handler's name and got a 405 on every
-      // call, which the source tests could not see because they only checked the string was
-      // there. Caught by creating a project on staging and reading the flag back.
-      //
-      // keepalive because the first save often coincides with leaving the page: intake submits
-      // and navigates straight to Estimate Review, and a plain fetch is cancelled on unload —
-      // the PUT above carries it for exactly the same reason.
-      return fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + "/test", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ is_test: want }),
-        keepalive: true,
-      }).catch(() => {});
-    } catch {}
-    return Promise.resolve();
+    if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;
   }
 
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
@@ -524,9 +523,8 @@
   // base-bid change the estimator had just made, so the portal showed Epoxy as the base
   // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
   //
-  // THE PROMISE ALSO COVERS THE FILING UNDER TEST that follows the first save of a new project
-  // (applyPendingTestIntent, awaited in the `.then` below): a caller that awaits the save leaves
-  // with the project filed, not with the request to file it still in flight.
+  // A NEW TEST PROJECT NEEDS NOTHING AFTER ITS FIRST SAVE: the blob it sends already says is_test
+  // (sayWhatItWasStartedAs), so a caller that awaits this leaves with the project created filed.
   function putDraft(id, blob, keepalive = false) {
     try {
       // Taken as the body is, before anything can change the blob, so a stored write records
@@ -561,15 +559,6 @@
         // still said Y — so X's record was gone, and the Files page then put the server's copy of
         // X over an edit of Kyle's that had not saved.
         if (ok && id === getDraftId() && getState()[STAMP] === id) markSynced(id, sent);
-        // Only after the row exists: set_test_flag returns false on a missing draft, so filing
-        // before the first save would be a silent no-op and the project would stay in Active.
-        //
-        // AND WAITED FOR, so that this promise (and flushState, which hands it on) resolves once the
-        // project is saved AND filed. It comes after the record above on purpose: a slow filing
-        // delays this promise and nothing else. The v2 intake's Continue awaits it before it leaves,
-        // which is what puts the first save, and the filing that follows it, in front of a page that
-        // is still there to see the answer (X1).
-        if (ok) await applyPendingTestIntent(id);
         return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
@@ -644,9 +633,7 @@
   }
 
   /** Wait until this draft's edits are on the server. Resolves true when the server holds
-   *  what this page shows, false if the write failed or was refused. For the first save of a new
-   *  project that includes the filing under Test (putDraft): a page that leaves right after this
-   *  leaves with the project saved and filed, which the v2 intake's Continue relies on.
+   *  what this page shows, false if the write failed or was refused.
    *
    *  Anything that makes the SERVER read the draft — publishing to the portal, generating
    *  files — must await this first. The debounce is 2.5s; a person who edits and clicks

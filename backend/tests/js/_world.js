@@ -269,7 +269,8 @@ function createWorld(cfg) {
     }
     if (req.route === "TEST") {
       const want = req.body ? JSON.parse(req.body).is_test !== false : true;
-      if (row) { row.flips.push({ at: sim.now, from: flagOf(row.data), to: want }); row.data.is_test = want; }
+      // A flip is a CHANGE: a filing that finds the row already filed that way changes nothing.
+      if (row) { if (flagOf(row.data) !== want) row.flips.push({ at: sim.now, from: flagOf(row.data), to: want }); row.data.is_test = want; }
       return { status: 200, body: { ok: true, existed: !!row, is_test: want } };
     }
     if (req.route === "COND") return { status: 200, body: { ok: true, conditions: [] } };

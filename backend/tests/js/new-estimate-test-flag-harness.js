@@ -38,8 +38,8 @@
  *   pressDuringAutosave Continue pressed while the 2.5 s autosave PUT is in flight (a slow server).
  *   overlappingSaves    typing goes on while the autosave PUT is in flight, then Continue: two saves overlap.
  *   exits               every other way out, at 0.1 to 3.2 s after the last edit: the "2 · Estimate" link, Back (the
- *                       Projects page) and a closed tab; the project is reopened a minute later when the estimate page
- *                       was not where the estimator went.
+ *                       Projects page), a closed tab and a reload; the project is reopened a minute later when the
+ *                       estimate page was not where the estimator went.
  *   overtaken           a closed tab at 700 ms, and then ANOTHER new estimate is started and left: the one localStorage
  *                       slot of round 1 is overwritten, and the first project must not be left behind unfiled.
  *   closedThenReopened  the tab goes at 700 ms (a keepalive PUT whose reply nobody sees), and the board's link to the
@@ -52,10 +52,15 @@
  *                       be claimed filed, and the estimate page must say it is not saved).
  *   feedback            Continue's button while it waits: disabled and relabelled, ignored on a second press, and given back
  *                       when the browser does not go.
+ *   stampRules          shared.js's stamp on its own: which start it applies, to which project, on which write, and what it
+ *                       leaves in the one localStorage slot (its own, another project's, an unbound one, one already said).
  *   synced              the record of what the server holds, written as the first save is stored.
  *   v1                  the Projects page's "+ New project" on each tab, through the LIVE intake's Continue.
  *   realThroughIntake, realProject, anotherProjects, saidReal, filingAsReal, aCopy, staleStart
  *                       projects that are NOT a new test project of this browser's: copied as ever, never flagged.
+ *   v1Real              a real spreadsheet bid opened in the LIVE intake from the Projects page and saved, with another
+ *                       project's start (or the bare "1" an abandoned "+ New project" leaves) in the one slot: saved as
+ *                       the real bid it is.
  *
  * Usage: node new-estimate-test-flag-harness.js <frontend-dir>   ->   one line of JSON
  */
@@ -106,8 +111,9 @@ const button = (page) => { const b = page.el("continue-btn"); return { disabled:
  *    { at, sample: "name" }        the Continue button is read
  *  Everything is left to finish afterwards. */
 async function drive(opts) {
-  const o = Object.assign({ steps: [], world: {}, faults: [], gc: false, blocked: false, settleMs: undefined }, opts || {});
+  const o = Object.assign({ steps: [], world: {}, faults: [], faultsAtOpen: [], gc: false, blocked: false, settleMs: undefined }, opts || {});
   const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
+  o.faultsAtOpen.forEach((f) => w.fault(f));                     // a server that is already down as the intake opens
   const intake = await w.startNewEstimate({ gc: o.gc });
   const id = intake.draftId();
   const pendingAtOpen = w.localKey("intent");
@@ -128,7 +134,7 @@ async function drive(opts) {
       const accepted = intake.pressContinue() !== false;
       presses.push({ at: w.now() - t0, accepted: accepted, button: button(intake) });
     }
-    if (s.follow) intake.follow(s.follow === true ? "/polish-estimate.html?d=" + id : s.follow);
+    if (s.follow) intake.follow(typeof s.follow === "function" ? s.follow(id) : s.follow === true ? "/polish-estimate.html?d=" + id : s.follow);
     if (s.sample) samples[s.sample] = Object.assign({ at: w.now() - t0 }, button(intake));
   }
   await w.settle(o.settleMs);
@@ -287,7 +293,14 @@ async function overlappingSaves() {
 }
 
 // ── every other way out of the intake ─────────────────────────────────────────────────────────────────────
-const DOORS = { link: true, back: "/projects.html", close: "/blank.html" };
+// Where each door leads, given the project's id: the "2 · Estimate" step link, Back (the Projects page), a closed tab (a page that
+// runs nothing) and a reload (the intake asked for again at the address shared.js put the project's id in).
+const DOORS = {
+  link: (id) => "/polish-estimate.html?d=" + id,
+  back: () => "/projects.html",
+  close: () => "/blank.html",
+  reload: (id) => "/polish-intake.html?d=" + id,
+};
 const EXIT_WAITS = [100, 600, 700, 1500, 3000, 3100, 3200];
 
 /** The new estimate typed into, then left by a door that is not Continue, `waitMs` after the last edit. When the estimator
@@ -387,6 +400,20 @@ async function saveFaults() {
     await w.settle();
     out["down_" + mode] = Object.assign(during, { afterRecovery: summary(w, run.id) });
   }
+  // The GC tab starts the bid with something in the draft, so the sandbox saves it as the intake opens: with the server
+  // already down. The blob holds no flag of its own yet (nothing has been written through setState), so the sandbox has to arm the
+  // start again, or the first write after the server is back creates the project unfiled.
+  {
+    const run = await drive({ gc: true, faultsAtOpen: [{ route: "PUT", mode: "http500" }],
+      steps: TYPED.concat([{ at: 100, press: true }]) });
+    const w = run.w;
+    const during = summary(w, run.id, { name: "gcDown" });
+    const page = w.pageOf("estimate");
+    w.faults.length = 0;
+    page.win.TW.setState({ address: "300 Main St" });
+    await w.settle();
+    out.gcDown_http500 = Object.assign(during, { noteAtOpen: run.result.noteAtOpen, afterRecovery: summary(w, run.id) });
+  }
   return out;
 }
 
@@ -431,6 +458,40 @@ async function staleTab() {
   page.win.TW.setState({ address: "300 Main St" });          // the tab goes on working
   await w.settle();
   return summary(w, run.id, { filedReal: filedReal, blobFlag: (w.blob() || {}).is_test });
+}
+
+/** The rules of the stamp in shared.js's setState, executed on the real file (a page that has shared.js and nothing else, on the
+ *  draft id it minted): which start it applies, to which project, on which write, and what it leaves in the one slot. */
+async function stampRules() {
+  const fresh = async () => {
+    const w = W.createWorld({ frontend: ROOT });
+    const page = w.load("/projects.html");
+    await w.settle();
+    return { w: w, TW: page.win.TW, id: page.win.TW.getDraftId() };
+  };
+  const seen = (w, id) => ({ id: id, blob: w.blob(), slot: w.localKey("intent") });
+  const out = {};
+  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, r.id + ":1"); r.TW.setState({ project_name: "A" }); out.test = seen(r.w, r.id); }
+  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, r.id + ":0"); r.TW.setState({ project_name: "A" }); out.real = seen(r.w, r.id); }
+  {
+    const r = await fresh();
+    r.w.local.setItem(W.KEYS.intent, r.id + ":1");
+    r.TW.setState({});                                                  // nothing in it yet
+    out.empty = seen(r.w, r.id);
+    r.TW.setState({ project_name: "A" });                               // the first write that has something in it
+    out.emptyThenContent = seen(r.w, r.id);
+  }
+  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, r.id + ":1"); r.TW.setState({ project_name: "A", is_test: false }); out.says = seen(r.w, r.id); }
+  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, "someone-else:1"); r.TW.setState({ project_name: "A" }); out.other = seen(r.w, r.id); }
+  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, "1"); r.TW.setState({ project_name: "A" }); out.unbound = seen(r.w, r.id); }
+  {
+    const r = await fresh();
+    r.w.local.setItem(W.KEYS.intent, r.id + ":1");
+    r.TW.setState({ project_name: "A" });
+    r.TW.setState({ project_name: "B" });                               // a later write: nothing left to say
+    out.later = seen(r.w, r.id);
+  }
+  return out;
 }
 
 // ── the record of what the server holds ───────────────────────────────────────────────────────────────────
@@ -497,6 +558,28 @@ async function realThroughIntake() {
     realAddress: (w.rows.get(REAL).data || {}).address });
 }
 
+/** A REAL spreadsheet bid, opened in the LIVE intake from the Projects page (js/projects.js open(): "/?d=<id>&edit=1"), its address
+ *  changed and Continue pressed. It has no start of its own pending, whatever else is in the one localStorage slot: another
+ *  project's start, or the bare "1" that a "+ New project" on the Test tab left behind when it was abandoned. It must be saved
+ *  as the real bid it is: no is_test in what is sent, none on the row, and no filing request. */
+const SHEET = "sheet-3";
+async function v1RealOpen(intent) {
+  const w = W.createWorld({ frontend: ROOT });
+  w.seed(SHEET, { project_name: "Nearman Creek Epoxy", address: "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101",
+    bid_date: "2026-09-01", work_type: "epoxy", audience: "Direct", system_1_sf: 8000 });
+  if (intent !== undefined) w.local.setItem(W.KEYS.intent, intent);
+  w.load("/?d=" + SHEET + "&edit=1");
+  await w.settle();                                  // shared.js reads the project, adopts it and reloads the page
+  const intake = w.pageOf("v1intake");
+  intake.type("address", "9 New Address");
+  await w.advance(100);
+  const intentBefore = w.localKey("intent");
+  intake.pressContinue();
+  await w.settle();
+  return summary(w, SHEET, { intentBeforeContinue: intentBefore, draftOnIntake: intake.draftId(),
+    address: (w.rows.get(SHEET).data || {}).address });
+}
+
 /** A project the server holds, opened on the estimate page by a browser that has been working on it. */
 const PROJECT = "proj-9";
 const projectData = (over) => Object.assign({
@@ -540,9 +623,11 @@ async function openProject(opts) {
   out.saveFaults = await saveFaults();
   out.feedback = await feedback();
   out.staleTab = await staleTab();
+  out.stampRules = await stampRules();
   out.synced = await synced();
   out.v1 = await v1();
   out.realThroughIntake = await realThroughIntake();
+  out.v1Real = { clean: await v1RealOpen(undefined), anotherStart: await v1RealOpen("other-1:1"), abandonedNew: await v1RealOpen("1") };
   out.realProject = await openProject({});
   out.anotherProjects = await openProject({ intent: "other-1:1" });
   out.saidReal = await openProject({ row: { is_test: false }, intent: PROJECT + ":1" });

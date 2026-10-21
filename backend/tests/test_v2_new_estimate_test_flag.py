@@ -19,8 +19,8 @@ backend inserts a new row as sent and, on an update, keeps a server-owned key th
 keep_server_owned), so the first PUT, by whatever path it leaves, CREATES THE ROW ALREADY FILED, and a project somebody has
 since filed as real is never re-flagged by a stale blob. No page's boot, no button and no door has anything to wait for,
 and a failed filing is a failed save, which is read as one. Of round 1, T1's wait stays (the first save is on the server
-before the browser leaves, whatever its size) with feedback on the button, and the sandbox's net (T2) is gone: it had
-nothing left to catch, and it filed whatever a stale intent named, from inside the next page's boot.
+before the browser leaves, answered to a page that is still there) with feedback on the button, and the sandbox's net (T2)
+is gone: it had nothing left to catch, and it filed whatever a stale intent named, from inside the next page's boot.
 
 HOW THESE TESTS RUN. tests/js/new-estimate-test-flag-harness.js runs the REAL shared.js, js/polish-sandbox.js,
 js/polish-intake.js and js/index.js, whole, in tests/js/_world.js: a browser model with virtual time in which a page's
@@ -276,9 +276,9 @@ def test_the_projects_page_hands_the_live_intake_the_tab_it_started_from(ran):
     own shared.js: "+ New project" on Test leaves "<id>:1" bound to the id the intake minted, on Active "<id>:0", and on All
     nothing. The v1 flows below start from exactly this."""
     v1 = ran["v1"]
-    assert v1["test"]["intentOnArrival"] == v1["test"]["id"] + ":1"
-    assert v1["active"]["intentOnArrival"] == v1["active"]["id"] + ":0"
-    assert v1["all"]["intentOnArrival"] is None
+    assert v1["test"]["intentOnArrival"] == v1["test"]["id"] + ":1", "Test: %r" % v1["test"]["intentOnArrival"]
+    assert v1["active"]["intentOnArrival"] == v1["active"]["id"] + ":0", "Active: %r" % v1["active"]["intentOnArrival"]
+    assert v1["all"]["intentOnArrival"] is None, "All: %r" % v1["all"]["intentOnArrival"]
 
 
 # ══ S1: the seed. A new project is born filed, whichever way it leaves ══════════════════════════════════
@@ -323,10 +323,29 @@ def test_the_first_save_says_what_the_project_was_started_as(ran):
     assert reqs(v1["all"], "PUT", v1["all"]["id"])[0]["sentIsTest"] is None
 
 
+def test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project(ran):
+    """shared.js's stamp, executed on its own. A start for THIS project is said in the blob by the first write that holds
+    anything, and the slot is emptied by it: true for a test, false for a real bid. A write that holds nothing yet (an empty
+    partial on a project nobody has typed into) says nothing and leaves the start where it is, so an untouched project stays
+    a blob with nothing in it and never becomes a row. A blob that already says is_test (a human's word, written by a
+    hydrate) is not overruled, and the start is used up all the same. A start for ANOTHER project, or an unbound one, is not
+    applied here and not used up. And a second write has nothing left to say."""
+    s = ran["stampRules"]
+    assert s["test"]["blob"].get("is_test") is True and s["test"]["slot"] is None, s["test"]
+    assert s["real"]["blob"].get("is_test") is False and s["real"]["slot"] is None, s["real"]
+    assert "is_test" not in s["empty"]["blob"] and s["empty"]["slot"] == s["empty"]["id"] + ":1", s["empty"]
+    assert set(s["empty"]["blob"]) <= {"__draft_id"}, "an empty write made the project non-empty: %r" % s["empty"]["blob"]
+    assert s["emptyThenContent"]["blob"].get("is_test") is True and s["emptyThenContent"]["slot"] is None, s["emptyThenContent"]
+    assert s["says"]["blob"].get("is_test") is False and s["says"]["slot"] is None, s["says"]
+    assert "is_test" not in s["other"]["blob"] and s["other"]["slot"] == "someone-else:1", s["other"]
+    assert "is_test" not in s["unbound"]["blob"] and s["unbound"]["slot"] == "1", s["unbound"]
+    assert s["later"]["blob"].get("is_test") is True and s["later"]["blob"]["project_name"] == "B" and s["later"]["slot"] is None, s["later"]
+
+
 def test_every_other_door_out_of_the_intake_leaves_one_row_born_filed(ran):
-    """The audit's F2. The "2 · Estimate" step link, Back (to the Projects page) and a closed tab, at 0.1, 0.6, 0.7, 1.5, 3.0,
-    3.1 and 3.2 s after the last edit (before the page's own 600 ms save, between it and the 2.5 s timer that sends it,
-    and across the moment the autosave PUT goes). None of them waits for anything, so each sends whatever it sends as the
+    """The audit's F2. The "2 · Estimate" step link, Back (to the Projects page), a closed tab and a reload, at 0.1, 0.6, 0.7,
+    1.5, 3.0, 3.1 and 3.2 s after the last edit (before the page's own 600 ms save, between it and the 2.5 s timer that sends
+    it, and across the moment the autosave PUT goes). None of them waits for anything, so each sends whatever it sends as the
     page goes (a plain request that dies with the page, or a keepalive one whose reply nobody sees).
 
     Whatever reached the server was born FILED: no row is ever on the board unfiled, nothing is forked, and there is
@@ -335,10 +354,10 @@ def test_every_other_door_out_of_the_intake_leaves_one_row_born_filed(ran):
     editable and still the only row, whether the first leg left a row (a keepalive PUT) or none (a plain one dropped).
 
     Not vacuous: both legs occur in the matrix (a closed tab that left a row, and one that left none), and so do all
-    three doors at all seven times."""
+    four doors at all seven times."""
     exits = ran["exits"]
-    assert len(exits) == 21 and {(e["door"], e["waitMs"]) for e in exits} == {
-        (d, w) for d in ("link", "back", "close") for w in (100, 600, 700, 1500, 3000, 3100, 3200)}
+    assert len(exits) == 28 and {(e["door"], e["waitMs"]) for e in exits} == {
+        (d, w) for d in ("link", "back", "close", "reload") for w in (100, 600, 700, 1500, 3000, 3100, 3200)}
     left_a_row, left_none = 0, 0
     for r in exits:
         flow = "%s at %d ms" % (r["door"], r["waitMs"])
@@ -358,7 +377,7 @@ def test_every_other_door_out_of_the_intake_leaves_one_row_born_filed(ran):
         assert before["beta"] is None
         assert r["intakeDraft"] == r["id"] and DIRECT in r["intakeNote"] and COPY not in r["intakeNote"], (
             "%s: the reopened project is not edited directly: %r %r" % (flow, r["intakeDraft"], r["intakeNote"]))
-    assert left_a_row >= 10 and left_none >= 2, (left_a_row, left_none)
+    assert left_a_row >= 12 and left_none >= 2, (left_a_row, left_none)
 
 
 def test_the_next_new_estimate_does_not_leave_the_first_one_behind(ran):
@@ -412,6 +431,7 @@ def test_a_server_that_never_answers_does_not_trap_the_estimator(ran):
     assert r["navs"][0]["askedAt"] - r["continueAt"] >= 7000, "Continue did not wait for the save at all: %r" % r["navs"][0]
     assert r["estimate"] and r["estimate"]["settled"] is True, r["estimate"]
     assert_filed_and_edited_directly(r, "the first save was never answered")
+    assert r["blob"].get("is_test") is True, "the project's own blob does not say it is a test: %r" % r["blob"]
 
 
 def test_a_save_that_fails_at_once_is_not_waited_out(ran):
@@ -420,6 +440,7 @@ def test_a_save_that_fails_at_once_is_not_waited_out(ran):
     r = ran["saveFaults"]["once_network"]
     assert len(r["navs"]) == 1 and r["navs"][0]["askedAt"] - r["continueAt"] < 1000, r["navs"]
     assert_filed_and_edited_directly(r, "no network for the first save")
+    assert r["blob"].get("is_test") is True, "the project's own blob does not say it is a test: %r" % r["blob"]
 
 
 # ══ S2: a filing the server will not do ═════════════════════════════════════════════════════════════════
@@ -444,7 +465,9 @@ def test_a_save_that_fails_once_still_ends_born_filed(ran, mode):
     """The first save fails once (HTTP 500, a 200 carrying {"ok": false}, no network). Continue leaves; the estimate page finds
     nothing saved and saves the project itself. The flag is in the project's own blob, so the retry carries it: born
     filed, edited directly, one row."""
-    assert_filed_and_edited_directly(ran["saveFaults"]["once_" + mode], "the first save failed once (%s)" % mode)
+    r = ran["saveFaults"]["once_" + mode]
+    assert_filed_and_edited_directly(r, "the first save failed once (%s)" % mode)
+    assert r["blob"].get("is_test") is True, "the project's own blob does not say it is a test: %r" % r["blob"]
 
 
 @pytest.mark.parametrize("mode", ["http500", "okfalse", "network"])
@@ -464,6 +487,17 @@ def test_a_save_that_cannot_be_made_is_said_and_never_claimed_as_a_filing(ran, m
     assert (after["estimate"] or {}).get("draftId") == r["id"], "the estimate page left the project: %s" % describe(after)
 
 
+def test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed(ran):
+    """The GC tab starts the bid with something in the draft, so the sandbox saves it as the intake opens, and the server is
+    down. The blob holds no flag of its own (nothing has been written through setState yet), so the sandbox arms the start
+    again: the intake says so at once, and the first write after the server is back says "test" in its own blob and creates
+    the project filed. Without that the project is created unfiled by the very save that rescued it."""
+    r = ran["saveFaults"]["gcDown_http500"]
+    assert UNSAVED in r["noteAtOpen"] and DIRECT not in r["noteAtOpen"], r["noteAtOpen"]
+    assert r["x"] is None and r["rowIds"] == [], "a row exists although no save was ever taken: %s" % describe(r)
+    assert_born_filed(r["afterRecovery"], "the server came back after the GC tab opened the intake")
+
+
 # ══ S3: no page's boot waits on a filing ═══════════════════════════════════════════════════════════════
 def test_the_next_page_boots_while_a_filing_never_answers(ran):
     """The audit's F4. The estimator leaves a new project 100 ms after its last edit, for ANOTHER project's estimate page.
@@ -471,10 +505,13 @@ def test_the_next_page_boots_while_a_filing_never_answers(ran):
     that followed that flush, so a /test nobody answered stopped the other page from ever booting ("Loading this
     project..." for ever). The new project is saved by that flush, born filed, and the other page boots and shows the
     estimator its test copy, with a control run that has no fault and with /test failing outright."""
-    for name, r in sorted(ran["bootWhileFilingHangs"].items()):
+    runs = sorted(ran["bootWhileFilingHangs"].items())
+    assert [name for name, _r in runs] == ["control", "hang", "http500"]
+    for name, r in runs:                       # FIRST, and for every run: the other page boots (the fact round 1 broke)
         last = r["lastPage"]
         assert last["settled"] is True and last["loading"] == "", "%s: the other project's page never finished booting: %r" % (name, last)
         assert r["lastKind"] == "estimate" and r["lastDraft"] == "real-2-beta" and COPY in last["note"], (name, r["lastDraft"], last["note"])
+    for name, r in runs:
         assert r["x"] is not None and r["x"]["bornIsTest"] is True and r["x"]["is_test"] is True and r["x"]["flips"] == 0, (name, r["x"])
         assert r["other"] == {"is_test": None, "bornIsTest": None, "flips": 0, "beta_sandbox_of": None, "project_name": "Overland Park Lab"}, (
             "%s: the other, real project was written to or filed: %r" % (name, r["other"]))
@@ -488,7 +525,8 @@ def test_continue_tells_the_estimator_it_is_saving(ran):
     says "Saving…"; it has its own label before, and the estimator who sees nothing happen is the one who presses again.
     A second press (a double click, Enter in a box) is not accepted, and one press is all the page is ever asked."""
     s = ran["feedback"]["saving"]
-    assert s["labelAtOpen"].strip() and SAVING not in s["labelAtOpen"], s["labelAtOpen"]
+    assert s["labelAtOpen"].strip() and SAVING not in s["labelAtOpen"], (
+        "the page has no Continue button to speak through (its label reads %r)" % s["labelAtOpen"])
     assert s["presses"][0]["accepted"] is True and s["presses"][0]["button"] == {"disabled": True, "label": SAVING}, s["presses"]
     assert s["samples"]["early"]["disabled"] is True and s["samples"]["early"]["label"] == SAVING, s["samples"]
     assert s["samples"]["late"]["disabled"] is True and s["samples"]["late"]["label"] == SAVING, s["samples"]
@@ -564,6 +602,7 @@ def test_a_stale_start_for_a_project_that_has_moved_on_is_copied_and_never_filed
     assert r["x"] == {"is_test": None, "bornIsTest": None, "flips": 0, "beta_sandbox_of": None, "project_name": "Wichita Warehouse"}, r["x"]
     assert [q for q in reqs(r, id_=REAL_PROJECT) if q["method"] != "GET"] == [], "the stale start's project was written to or filed"
     assert r["beta"] is not None and r["beta"]["is_test"] is True and r["beta"]["beta_sandbox_of"] == REAL_PROJECT, r["beta"]
+    assert r["beta"]["bornIsTest"] is True, r["beta"]
     est = r["estimate"] or {}
     assert est.get("draftId") == REAL_PROJECT + "-beta" and COPY in says(r) and DIRECT not in says(r) and "No real bid" not in says(r), describe(r)
 
@@ -619,6 +658,23 @@ def test_all_and_inactive_start_a_project_that_nobody_has_said_anything_about(ra
 REAL_PROJECT = "proj-9"
 
 
+def test_a_real_bid_saved_in_the_live_intake_is_never_flagged(ran):
+    """A real spreadsheet bid opened in the live intake from the Projects page (the real shared.js hydrates it, the real
+    index.js saves it), its address changed and Continue pressed, with something else in the one localStorage slot: nothing at
+    all; ANOTHER project's start (which is neither applied to this one nor used up); and the bare "1" that a "+ New project" on
+    the Test tab leaves behind when it is abandoned (which arriving at an existing project drops). The bid is saved, as itself:
+    no is_test in what was sent, none on the row, no filing request, and the one row there is."""
+    for name, slot in (("clean", None), ("anotherStart", "other-1:1"), ("abandonedNew", None)):
+        r = ran["v1Real"][name]
+        assert r["x"] == {"is_test": None, "bornIsTest": None, "flips": 0, "beta_sandbox_of": None,
+                          "project_name": "Nearman Creek Epoxy"}, (name, r["x"])
+        assert r["address"] == "9 New Address" and r["draftOnIntake"] == "sheet-3", "%s: the bid was not saved as itself: %r" % (name, r["address"])
+        puts = reqs(r, "PUT", "sheet-3")
+        assert puts and [p["sentIsTest"] for p in puts] == [None] * len(puts), "%s: a save said is_test: %r" % (name, puts)
+        assert reqs(r, "TEST") == [] and r["rowIds"] == ["sheet-3"], (name, r["rowIds"])
+        assert r["intent"] == slot and r["intentBeforeContinue"] == slot, "%s: the slot is %r, expected %r" % (name, r["intent"], slot)
+
+
 def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
     """The sandbox's whole job, through the intake: a real project opened in v2 is copied, the copy is filed, and
     the real row is only ever READ, through Continue and onto the estimate page."""
@@ -627,6 +683,7 @@ def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
     assert r["realAddress"] == "1 Water Works Dr", "the real project's row was written to"
     assert [q for q in reqs(r, id_="real-1") if q["method"] != "GET"] == [], "the real project was written to or filed"
     assert r["beta"] is not None and r["beta"]["is_test"] is True and r["beta"]["beta_sandbox_of"] == "real-1"
+    assert r["beta"]["bornIsTest"] is True, "the copy was created unfiled: %r" % r["beta"]
     assert r["beta"]["project_name"] == "Nearman Creek (beta test)"
     assert r["draftOnOpen"] == "real-1-beta" and COPY in r["noteOnOpen"]
     assert (r["estimate"] or {}).get("draftId") == "real-1-beta"
@@ -656,6 +713,7 @@ def test_a_real_project_is_copied_never_filed_and_never_written_to(ran):
         assert [q for q in reqs(r, id_=REAL_PROJECT) if q["method"] != "GET"] == [], (
             "%s: the real project was written to or filed" % scenario)
         assert r["beta"] is not None and r["beta"]["is_test"] is True and r["beta"]["beta_sandbox_of"] == REAL_PROJECT, (scenario, r["beta"])
+        assert r["beta"]["bornIsTest"] is True, "%s: the copy was created unfiled: %r" % (scenario, r["beta"])
         assert r["beta"]["project_name"] == "Wichita Warehouse (beta test)", (scenario, r["beta"])
         est = r["estimate"] or {}
         assert est.get("draftId") == REAL_PROJECT + "-beta" and COPY in says(r) and DIRECT not in says(r), (
@@ -703,3 +761,307 @@ def test_the_two_places_that_name_the_pending_start_agree():
                                           sandbox).group(1),
     }
     assert len(set(keys.values())) == 1 and INTENT_KEY in keys.values(), keys
+
+
+# ══ every check goes red when the code is changed ═════════════════════════════════════════════════════
+# Each entry breaks one LINE of the sources in a scratch copy of the frontend, runs a harness on it, and the named check (a test
+# above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not there exactly once, so
+# none of them can pass by applying nowhere; the harness runs outside the `raises`, so a break that merely crashes it is an
+# error and never counts as the check noticing.
+SHARED = "shared.js"
+SANDBOX = "js/polish-sandbox.js"
+INTAKE = "js/polish-intake.js"
+PAGE = "polish-intake.html"
+PROJECTS = "js/projects.js"
+
+# shared.js: the stamp, its rules and the two places a start is bound
+STAMP_CALL = "    if (id) sayWhatItWasStartedAs(id, merged);   // a NEW project's first write says what it was started as"
+STAMP_CONTENT = '    if (!Object.keys(blob).some((k) => k !== STAMP && k !== "is_test")) return;'
+STAMP_USE_UP = "    try { localStorage.removeItem(NEW_IS_TEST_KEY); } catch {}"
+STAMP_KEEPS_A_WORD = '    if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;'
+STAMP_NONE_PENDING = "    if (want === null) return;"
+STAMP_THIS_ID = "      if (i < 0 || raw.slice(0, i) !== id) return null;"
+SYNCED_LINE = "        if (ok && id === getDraftId() && getState()[STAMP] === id) markSynced(id, sent);"
+BIND_AT_MINTING = "      if (minting) bindNewProjectTestIntent(getDraftId());"
+BIND_WRITES = '      if (raw === "1" || raw === "0") localStorage.setItem(NEW_IS_TEST_KEY, id + ":" + raw);'
+# the sandbox
+SANDBOX_SAYS_TEST = "      body: JSON.stringify({ data: Object.assign({}, blob, { is_test: true }) }),"
+SANDBOX_NOTE_UNSAVED = "          showUnsavedNote();"
+SANDBOX_REARMS = "          markNewProjectAsTest(id);"
+SANDBOX_IF_SAVED = "        if (saved) {"
+SANDBOX_SAVES = "        try { await saveThenFileAsTest(id, state); }"
+SANDBOX_SAVE_FN = "  async function saveThenFileAsTest(id, blob) {"
+SANDBOX_EXACT_TRISTATE = "    if (row.is_test === true || row.beta_sandbox_of) {"
+MARK_LINE = '    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}'
+# the intake
+LEAVING_GUARD = "    if (leaving) return;"
+SAY_SAVING = '      say("Saving…", true);'
+SAY_OPENING = '      say("Opening the estimate…", true);'
+GIVE_BACK_TIMER = "    setTimeout(giveBack, GIVE_BACK_MS);"
+GIVE_BACK_ON_THROW = "      giveBack();"
+GIVE_BACK_FN = "    var giveBack = function () { if (givenBack) return; givenBack = true; leaving = false; say(label, false); };"
+LABEL_KEPT = '    var label = btn ? btn.textContent : "";'
+SAY_FN = "    var say = function (text, off) { if (btn) { btn.disabled = off; btn.textContent = text; } };"
+FLUSH_LINE = "        TW.flushState(),"
+BOUND_LINE = "        new Promise(function (resolve) { timer = setTimeout(resolve, SAVE_WAIT_MS); })"
+CLEAR_LINE = "    if (timer) clearTimeout(timer);"
+CATCH_LINE = "    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }"
+BUTTON_TAG = '        <button type="submit" class="btn-primary" id="continue-btn">Continue to the estimate →</button>'
+# the Projects page
+ACTIVE_TAB = '        else if (CURRENT_FILTER === "active") TW.setNewProjectTestIntent(false);'
+OTHER_TABS = "        else                                  TW.setNewProjectTestIntent(null);"
+
+
+def broken(rel, old, new):
+    return (rel, old, new)
+
+
+def every(test, modes):
+    """A parametrized test as one check over all its parameters, under the test's own name."""
+    def check(ran):
+        for mode in modes:
+            test(ran, mode)
+    check.__name__ = test.__name__
+    return check
+
+
+FILING_MODES = ("http500", "okfalse", "network", "hang", "html", "gone")
+SAVE_MODES = ("http500", "okfalse", "network")
+check_nothing_depends_on_a_filing_request = every(test_nothing_depends_on_a_filing_request, FILING_MODES)
+check_a_save_that_fails_once = every(test_a_save_that_fails_once_still_ends_born_filed, SAVE_MODES)
+check_a_save_that_cannot_be_made = every(test_a_save_that_cannot_be_made_is_said_and_never_claimed_as_a_filing, SAVE_MODES)
+
+# name -> (harness, (the lines to break: (file, anchor line, what it becomes), ...), the check)
+BREAKS = {
+    # ── the seed: setState says what the project was started as ──
+    "no write says what the project was started as (every flow)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "no write says what the project was started as (the first save, on the wire)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_the_first_save_says_what_the_project_was_started_as),
+    "no write says what the project was started as (every other door)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_every_other_door_out_of_the_intake_leaves_one_row_born_filed),
+    "no write says what the project was started as (the next new estimate)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_the_next_new_estimate_does_not_leave_the_first_one_behind),
+    "no write says what the project was started as (the latencies)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_whatever_the_latencies_the_new_project_is_born_filed_and_never_forked),
+    "no write says what the project was started as (a /test that goes wrong)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), check_nothing_depends_on_a_filing_request),
+    "no write says what the project was started as (a save that fails once)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), check_a_save_that_fails_once),
+    "no write says what the project was started as (a stale tab)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_stale_tab_cannot_undo_a_humans_filing),
+    "no write says what the project was started as (the live intake)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_project_started_from_the_test_tab_is_born_filed_through_the_live_intake),
+    "no write says what the project was started as (a save that cannot be made at all)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
+    "a server that never answers: the first save says nothing": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
+    "a save that fails at once: the first save says nothing": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_save_that_fails_at_once_is_not_waited_out),
+    "a pending start written without the project's id, so nothing can find it": (
+        "world", (broken(SANDBOX, MARK_LINE,
+                         '    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", "1"); } catch (e) {}'),),
+        test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    # ── the stamp's own rules ──
+    "an empty write says it and uses the start up": (
+        "world", (broken(SHARED, STAMP_CONTENT, "    void 0;"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    "the start is not used up by the write that says it": (
+        "world", (broken(SHARED, STAMP_USE_UP, "    void 0;"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    "the start is not used up (on the wire)": (
+        "world", (broken(SHARED, STAMP_USE_UP, "    void 0;"),), test_the_first_save_says_what_the_project_was_started_as),
+    "a start overrules a blob that already says is_test": (
+        "world", (broken(SHARED, STAMP_KEEPS_A_WORD, "    blob.is_test = want;"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    "a write says something even when no start is pending": (
+        "world", (broken(SHARED, STAMP_NONE_PENDING, "    if (want === undefined) return;"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    "another project's start is applied to this one": (
+        "world", (broken(SHARED, STAMP_THIS_ID, "      if (i < 0) return null;"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    "another project's start files a real bid saved in the live intake": (
+        "world", (broken(SHARED, STAMP_THIS_ID, "      if (i < 0) return null;"),),
+        test_a_real_bid_saved_in_the_live_intake_is_never_flagged),
+    "a real bid's write uses up another project's start": (
+        "world", (broken(SHARED, STAMP_NONE_PENDING, "    if (want === undefined) return;"),),
+        test_a_real_bid_saved_in_the_live_intake_is_never_flagged),
+    # ── the sandbox: a save that creates a project as a test, and says so honestly ──
+    "the sandbox's save does not say is_test (the page that creates the project)": (
+        "world", (broken(SANDBOX, SANDBOX_SAYS_TEST, "      body: JSON.stringify({ data: blob }),"),),
+        test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "the sandbox's save does not say is_test (the copy)": (
+        "world", (broken(SANDBOX, SANDBOX_SAYS_TEST, "      body: JSON.stringify({ data: blob }),"),),
+        test_a_real_project_is_copied_never_filed_and_never_written_to),
+    "the sandbox never saves the project it says it saved": (
+        "world", (broken(SANDBOX, SANDBOX_SAVES, "        try { void 0; }"),),
+        test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "a save that failed is said to be filed": (
+        "world", (broken(SANDBOX, SANDBOX_IF_SAVED, "        if (true) {"),), check_a_save_that_cannot_be_made),
+    "a save that failed is not said at all": (
+        "world", (broken(SANDBOX, SANDBOX_NOTE_UNSAVED, "          showDirectNote(false);"),), check_a_save_that_cannot_be_made),
+    "a save that failed does not arm the start again": (
+        "world", (broken(SANDBOX, SANDBOX_REARMS, "          void 0;"),),
+        test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
+    "a page's save waits for a filing that never answers": (
+        "world", (broken(SANDBOX, SANDBOX_SAVE_FN, SANDBOX_SAVE_FN + " await fileAsTest(id);"),),
+        test_the_next_page_boots_while_a_filing_never_answers),
+    "a project nobody has filed is edited in place": (
+        "world", (broken(SANDBOX, SANDBOX_EXACT_TRISTATE, "    if (row.is_test !== false || row.beta_sandbox_of) {"),),
+        test_a_real_project_is_copied_never_filed_and_never_written_to),
+    "a project nobody has filed is edited in place (a stale start)": (
+        "world", (broken(SANDBOX, SANDBOX_EXACT_TRISTATE, "    if (row.is_test !== false || row.beta_sandbox_of) {"),),
+        test_a_stale_start_for_a_project_that_has_moved_on_is_copied_and_never_filed),
+    "a real bid is edited in place (through the intake)": (
+        "world", (broken(SANDBOX, SANDBOX_EXACT_TRISTATE, "    if (row.is_test !== false || row.beta_sandbox_of) {"),),
+        test_a_real_project_is_copied_and_never_written_to_or_filed),
+    # ── the live intake, through the Projects page ──
+    "a new project's start is never bound to the id the live intake mints": (
+        "world", (broken(SHARED, BIND_AT_MINTING, "      void 0;"),),
+        test_a_project_started_from_the_test_tab_is_born_filed_through_the_live_intake),
+    "a new project's start is never bound (what the Projects page hands over)": (
+        "world", (broken(SHARED, BIND_AT_MINTING, "      void 0;"),),
+        test_the_projects_page_hands_the_live_intake_the_tab_it_started_from),
+    "the Active tab's start is bound as a test": (
+        "world", (broken(SHARED, BIND_WRITES, '      if (raw === "1" || raw === "0") localStorage.setItem(NEW_IS_TEST_KEY, id + ":1");'),),
+        test_a_project_started_from_the_active_tab_is_born_as_a_real_bid),
+    "the Active tab says nothing": (
+        "world", (broken(PROJECTS, ACTIVE_TAB, '        else if (CURRENT_FILTER === "active") TW.setNewProjectTestIntent(null);'),),
+        test_a_project_started_from_the_active_tab_is_born_as_a_real_bid),
+    "All and Inactive start a real bid": (
+        "world", (broken(PROJECTS, OTHER_TABS, "        else                                  TW.setNewProjectTestIntent(false);"),),
+        test_all_and_inactive_start_a_project_that_nobody_has_said_anything_about),
+    # ── the record of what the server holds ──
+    "the first save is never recorded as stored": (
+        "world", (broken(SHARED, SYNCED_LINE, "        void 0;"),),
+        test_the_record_of_what_the_server_holds_is_written_as_the_first_save_is_stored),
+    # ── Continue: the wait ──
+    "Continue leaves without waiting for the save": (
+        "world", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
+    "Continue waits for a save that never answers, for ever": (
+        "world", (broken(INTAKE, BOUND_LINE, "        new Promise(function () {})"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
+    "Continue waits for a save that failed at once, for the whole bound": (
+        "world", (broken(INTAKE, FLUSH_LINE, "        new Promise(function () {}),"),), test_a_save_that_fails_at_once_is_not_waited_out),
+    "Continue does not wait for the save (the page alone)": (
+        "intake", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),),
+        test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    "Continue's wait has no bound (the page alone)": (
+        "intake", (broken(INTAKE, BOUND_LINE, "        new Promise(function () {})"),), test_continue_leaves_when_the_wait_is_over_however_it_ends),
+    "Continue leaves its wait's timer armed": (
+        "intake", (broken(INTAKE, CLEAR_LINE, "    void 0;"),), test_continue_gives_the_button_back_on_the_page_alone),
+    "a save that throws stops Continue": (
+        "intake", (broken(INTAKE, CATCH_LINE, "    } catch (err) { return; }"),), test_continue_leaves_when_the_wait_is_over_however_it_ends),
+    # ── Continue: the button ──
+    "Continue says nothing while it saves": (
+        "world", (broken(INTAKE, SAY_SAVING, "      void 0;"),), test_continue_tells_the_estimator_it_is_saving),
+    "Continue's button is never disabled": (
+        "world", (broken(INTAKE, SAY_FN, "    var say = function (text, off) { if (btn) { btn.textContent = text; } };"),),
+        test_continue_tells_the_estimator_it_is_saving),
+    "the page has no Continue button to speak through": (
+        "world", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),), test_continue_tells_the_estimator_it_is_saving),
+    "the button is not given back when the browser does not go": (
+        "world", (broken(INTAKE, GIVE_BACK_TIMER, "    void 0;"),), test_continue_gives_the_button_back_when_the_browser_does_not_go),
+    "Continue is dead after the button is given back": (
+        "world", (broken(INTAKE, GIVE_BACK_FN, GIVE_BACK_FN.replace(" leaving = false;", "")),),
+        test_continue_gives_the_button_back_when_the_browser_does_not_go),
+    "the button is given back without its label": (
+        "world", (broken(INTAKE, LABEL_KEPT, '    var label = "";'),), test_continue_gives_the_button_back_when_the_browser_does_not_go),
+    "a second press is accepted (the page alone)": (
+        "intake", (broken(INTAKE, LEAVING_GUARD, "    void 0;"),),
+        test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    "Continue says nothing while it saves (the page alone)": (
+        "intake", (broken(INTAKE, SAY_SAVING, "      void 0;"),),
+        test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    "Continue does not say it is opening the estimate (the page alone)": (
+        "intake", (broken(INTAKE, SAY_OPENING, "      void 0;"),), test_continue_gives_the_button_back_on_the_page_alone),
+    "the button is not given back when the browser does not go (the page alone)": (
+        "intake", (broken(INTAKE, GIVE_BACK_TIMER, "    void 0;"),), test_continue_gives_the_button_back_on_the_page_alone),
+    "the button is left saying Saving when the page throws (the page alone)": (
+        "intake", (broken(INTAKE, GIVE_BACK_ON_THROW, "      void 0;"),), test_continue_gives_the_button_back_on_the_page_alone),
+    "Continue is dead after the button is given back (the page alone)": (
+        "intake", (broken(INTAKE, GIVE_BACK_FN, GIVE_BACK_FN.replace(" leaving = false;", "")),),
+        test_continue_gives_the_button_back_on_the_page_alone),
+    "the page alone has no Continue button to speak through": (
+        "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
+        test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+}
+
+
+def _break_more(frontend, rel, old, new):
+    """Another line broken in the scratch copy break_source made: the same rule, the anchor is there exactly once."""
+    target = frontend / rel
+    src = target.read_bytes().decode("utf-8")
+    seen = src.count(old)
+    assert seen == 1, "the mutation anchor %r appears %d times in %s, not once" % (old, seen, rel)
+    target.write_bytes(src.replace(old, new).encode("utf-8"))
+
+
+def _on_broken_tree(tmp_path, which, edits):
+    files = PAGE_FILES if which == "world" else INTAKE_FILES
+    rel, old, new = edits[0]
+    frontend = break_source(tmp_path, rel, old, new, also=files)
+    for rel, old, new in edits[1:]:
+        _break_more(frontend, rel, old, new)
+    if which == "intake":
+        # the intake harness parses the county table out of backend/reference_tax.py, beside the frontend
+        (tmp_path / "backend").mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / "backend" / "reference_tax.py", tmp_path / "backend" / "reference_tax.py")
+    return run(frontend) if which == "world" else run_intake(frontend)
+
+
+@pytest.mark.parametrize("name", sorted(BREAKS))
+def test_the_checks_go_red_when_the_code_changes(tmp_path, name):
+    require_node()
+    which, edits, check = BREAKS[name]
+    broken_answer = _on_broken_tree(tmp_path, which, edits)
+    with pytest.raises(AssertionError):
+        check(broken_answer)
+
+
+def test_the_unbroken_answers_pass_every_check_the_table_names(ran, intake):
+    """The other half: the same checks, called the same way, are green on the real code."""
+    real = {"world": ran, "intake": intake}
+    for which, _edits, check in BREAKS.values():
+        check(real[which])
+
+
+def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a_break():
+    named = {check.__name__ for _which, _edits, check in BREAKS.values()}
+    for must in (test_a_new_project_is_born_filed_whichever_way_it_leaves,
+                 test_the_first_save_says_what_the_project_was_started_as,
+                 test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project,
+                 test_every_other_door_out_of_the_intake_leaves_one_row_born_filed,
+                 test_the_next_new_estimate_does_not_leave_the_first_one_behind,
+                 test_whatever_the_latencies_the_new_project_is_born_filed_and_never_forked,
+                 test_a_stale_tab_cannot_undo_a_humans_filing,
+                 test_a_server_that_never_answers_does_not_trap_the_estimator,
+                 test_a_save_that_fails_at_once_is_not_waited_out,
+                 test_nothing_depends_on_a_filing_request,
+                 test_a_save_that_fails_once_still_ends_born_filed,
+                 test_a_save_that_cannot_be_made_is_said_and_never_claimed_as_a_filing,
+                 test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed,
+                 test_the_next_page_boots_while_a_filing_never_answers,
+                 test_continue_tells_the_estimator_it_is_saving,
+                 test_continue_gives_the_button_back_when_the_browser_does_not_go,
+                 test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone,
+                 test_continue_gives_the_button_back_on_the_page_alone,
+                 test_continue_leaves_when_the_wait_is_over_however_it_ends,
+                 test_a_stale_start_for_a_project_that_has_moved_on_is_copied_and_never_filed,
+                 test_the_record_of_what_the_server_holds_is_written_as_the_first_save_is_stored,
+                 test_a_project_started_from_the_test_tab_is_born_filed_through_the_live_intake,
+                 test_a_project_started_from_the_active_tab_is_born_as_a_real_bid,
+                 test_all_and_inactive_start_a_project_that_nobody_has_said_anything_about,
+                 test_the_projects_page_hands_the_live_intake_the_tab_it_started_from,
+                 test_a_real_project_is_copied_never_filed_and_never_written_to,
+                 test_a_real_project_is_copied_and_never_written_to_or_filed):
+        assert must.__name__ in named, "no break turns %s red" % must.__name__
+
+
+def test_every_anchor_a_break_uses_is_still_one_line_of_its_file():
+    """The anchors are lines of the real sources, and a break_source run would refuse one that moved. This says it
+    without running a harness: every entry's anchor is a single line, found exactly once, in the file it names."""
+    for name, (_which, edits, _check) in sorted(BREAKS.items()):
+        for rel, old, _new in edits:
+            src = (FRONTEND / rel).read_bytes().decode("utf-8")
+            assert "\n" not in old and "\r" not in old, name
+            assert src.count(old) == 1, "%s: %r is in %s %d times" % (name, old, rel, src.count(old))
