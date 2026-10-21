@@ -31,6 +31,8 @@
  *
  *   model               the browser model itself (and the two server rules the seed leans on). See the test.
  *   fast, fastAfterAutosave, slow   Continue at 100 ms, 700 ms and 3.3 s after the last edit.
+ *   bareLink, bareLinkAfterAutosave   the same Continue at 100 ms and 700 ms on the v2 intake opened by a BARE link on a project nobody started
+ *                       (no start under its id): the page's own word is the only thing that says test (round 4; the board now leaves a start).
  *   gcTab               "+ New" from the GC tab, which starts the bid with { audience: "GC" } already in the draft.
  *   sweep               the fast flows over eight sets of latencies (a slow save, a slow /test, both, a slow link, a page
  *                       that boots at once or late, everything fast): sixteen runs.
@@ -130,7 +132,7 @@ function summary(w, id, extra) {
 /** The Continue button as a person sees it right now. */
 const button = (page) => { const b = page.el("continue-btn"); return { disabled: !!b.disabled, label: b.textContent }; };
 
-/** The board's "+ New estimate" on the Direct tab, driven by a script of timed steps (`at` is ms after the page opened):
+/** The board's "+ New estimate" on the Direct tab (`bare`: the v2 intake opened by a bare link on a project with no start), driven by a script of timed steps (`at` is ms after the page opened):
  *    { at, type: [name, value] }   a box is typed into
  *    { at, press: true }           Continue is pressed (the answer says whether the page was asked, and the button after)
  *    { at, follow: true | href }   the intake is left by a link (true: the "2 · Estimate" step link; "/blank.html" for a
@@ -141,7 +143,7 @@ async function drive(opts) {
   const o = Object.assign({ steps: [], world: {}, faults: [], faultsAtOpen: [], gc: false, blocked: false, settleMs: undefined }, opts || {});
   const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
   o.faultsAtOpen.forEach((f) => w.fault(f));                     // a server that is already down as the intake opens
-  const intake = await w.startNewEstimate({ gc: o.gc });
+  const intake = o.bare ? await w.openBareV2Intake({ gc: o.gc }) : await w.startNewEstimate({ gc: o.gc });
   const id = intake.draftId();
   const startAtOpen = w.startOf(id);
   const noteAtOpen = intake.text("sandbox-note");
@@ -1207,6 +1209,8 @@ process.on("exit", (code) => {
   out.model = await modelChecks();
   out.fast = await newEstimate({ waitMs: 100 });
   out.fastAfterAutosave = await newEstimate({ waitMs: 700 });
+  out.bareLink = await newEstimate({ waitMs: 100, bare: true });
+  out.bareLinkAfterAutosave = await newEstimate({ waitMs: 700, bare: true });
   out.slow = await newEstimate({ waitMs: 3300 });
   out.gcTab = await newEstimate({ waitMs: 100, gc: true });
   out.sweep = await sweep();

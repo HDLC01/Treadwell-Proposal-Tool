@@ -897,6 +897,11 @@
   // draft), flush it to ITS OWN stamped id so another draft's unsynced edits
   // aren't destroyed. Correctly keyed by construction (only ever its own stamp).
   //
+  // ONLY WHEN SOMETHING WAS TYPED (hasWork: X1, round 4, F2). The stamp, the is_test flag and the { audience: "GC" } that a board's New button
+  // leaves behind are not work, so a project nobody typed into is never PUT: it used to be, and a GC New estimate whose own first save had
+  // not landed (refused, or the page left before it heard from the server) became a NAMELESS row, born unfiled, on the board where staff
+  // work. An abandoned start loses nothing by not being saved, since there is nothing in it, and the estimator can start another.
+  //
   // ONLY WHEN IT HOLDS SOMETHING THE SERVER WAS NEVER CONFIRMED TO HAVE. A blob whose digest is
   // still the one this browser last saw the server store for that draft (SYNCED_KEY) has nothing
   // to save — and PUTting it anyway puts yesterday's copy back over whatever has been saved there
@@ -918,7 +923,7 @@
   async function flushEvictedBlob(blob) {
     const owner = blob && blob[STAMP];
     if (!owner) return;
-    if (Object.keys(blob).filter((k) => k !== STAMP).length === 0) return;  // empty → nothing to save
+    if (!hasWork(blob)) return;                                              // nothing typed → nothing to save (ONLY WHEN SOMETHING WAS TYPED, above)
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }         // its pending save is superseded
     const mine = draftDigest(blob);
     const last = syncedDigest(owner);

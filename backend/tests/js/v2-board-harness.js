@@ -57,7 +57,7 @@ const tick = (ms) => new Promise((r) => setTimeout(r, ms || 0));
 async function run(payload, scenario) {
   const els = {};
   const el = (id) => (els[id] = els[id] || stub());
-  const reads = [], writes = [], opened = [], urls = [], fetches = [];
+  const reads = [], writes = [], opened = [], urls = [], fetches = [], intents = [];
   const session = Object.assign({}, scenario.session || {});
   const local = scenario.local ? Object.assign({}, scenario.local) : null;
   const localWrites = [], confirms = [], dialogs = [], buttons = [], seen = [];
@@ -97,6 +97,9 @@ async function run(payload, scenario) {
     TW: { fmtBizDate(iso) { return String(iso || "").slice(0, 10); },
           fmtBizDateTime(iso) { return String(iso || "").slice(0, 16).replace("T", " "); },
           authHeaders() { return {}; }, resolveApiBase() { return ""; },
+          // What a "+ New" says the project is started as (shared.js mints its id and keeps the start; the real one runs in
+          // tests/js/_world.js, which lifts this file's startNew out and runs it). Recorded here so it is a fact read off the board.
+          setNewProjectTestIntent(want) { intents.push(want); },
           confirmDanger(opts) {
             confirms.push(opts);
             return Promise.resolve(scenario.confirm === undefined ? true : !!scenario.confirm);
@@ -186,7 +189,7 @@ async function run(payload, scenario) {
     }
   }
   return { name: scenario.name, first: first, last: snap(), reads: reads, writes: writes,
-           opened: opened, urls: urls, session: session, fetches: fetches,
+           opened: opened, urls: urls, session: session, fetches: fetches, intents: intents,
            local: local, localWrites: localWrites, confirms: confirms, seen: seen,
            dialogs: dialogs.map((d) => ({ html: d.innerHTML, removed: d.removed })),
            buttons: buttons.map((b) => ({ text: b.textContent, disabled: b.disabled })) };

@@ -638,6 +638,21 @@ function createWorld(cfg) {
     return intake;
   };
 
+  /** The v2 intake opened by a BARE link (a bookmark, or the address typed) on a project nobody started: the browser's current draft is whatever
+   *  shared.js mints, and nothing says what it is started as (the board's New estimate leaves a start; this leaves none). It is the flow in which
+   *  the v2 page's OWN word ("this page created the project": TW.startsAsTest) is the only thing that can say a project is a test. `opts.gc`
+   *  leaves { audience: "GC" } in the draft, `opts.tab` is the browser tab, `opts.hold` as for startNewEstimate. */
+  world.openBareV2Intake = async (opts) => {
+    const tab = (opts && opts.tab) || mainTab;
+    local.removeItem(KEYS.state);
+    local.removeItem(KEYS.draftId);
+    tab.session.removeItem(KEYS.guard);
+    if (opts && opts.gc) local.setItem(KEYS.state, JSON.stringify({ audience: "GC" }));
+    const page = world.load("/polish-intake.html", { tab });
+    await (opts && opts.hold ? world.advance(opts.hold) : world.settle());
+    return page;
+  };
+
   /** This browser has been working on a project: its blob is stored, stamped for the project, and is the
    *  draft the browser resumes. (What opening a project from the board looks like after the first visit.) */
   world.holdLocally = (id, data) => {

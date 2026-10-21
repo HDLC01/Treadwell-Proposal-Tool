@@ -264,7 +264,13 @@
   /** + New: a fresh bid in the intake. The same three keys every "start a project" door clears
    *  (projects.js, portal.js startNewProposal), so shared.js mints a new draft id instead of resuming
    *  the last one, and polish-sandbox.js files the new bid the way it files every v2 bid. From the GC
-   *  tab the bid starts as a GC one, as it does from the GC Projects board. */
+   *  tab the bid starts as a GC one, as it does from the GC Projects board.
+   *
+   *  AND IT SAYS WHAT THE PROJECT IS STARTED AS, like every other door that starts one (X1, round 4, F2): a v2 estimate is a test project,
+   *  so setNewProjectTestIntent(true) mints the new project's id with its start ("1") under it, the page that opens resumes that id, and any
+   *  page that writes the project first (a v2 page, or the live intake when the estimator takes it there) says test in its own blob. It
+   *  comes AFTER the keys are cleared, which is what makes the id it mints the one the browser resumes. Without it the project had no
+   *  start at all: the GC tab's abandoned { audience: "GC" } was flushed under its own id with nothing to say what it was. */
   function startNew() {
     try {
       localStorage.removeItem("treadwell.proposal_tool.state");
@@ -272,6 +278,7 @@
       sessionStorage.removeItem("treadwell.proposal_tool.hydrated_once");
       if (TAB === "gc") localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify({ audience: "GC" }));
     } catch (e) { /* private mode: the intake still opens, it just will not resume */ }
+    TW.setNewProjectTestIntent(true);
     window.location.assign("/polish-intake.html");
   }
 

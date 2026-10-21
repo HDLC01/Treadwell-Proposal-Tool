@@ -822,6 +822,9 @@ def test_plus_new_opens_the_intake_on_a_fresh_bid(payload, action, tab, audience
                                                  "treadwell.proposal_tool.draft_id": "old-id"},
                           "actions": acts}])["runs"][0]
     assert run["opened"] == ["/polish-intake.html"]
+    # and says what the project is started as, once, AFTER the keys are cleared (shared.js mints the id and the start together): a test
+    # (X1, round 4, F2; tests/js/_world.js runs the real startNew with the real shared.js, test_v2_new_estimate_test_flag.py reads what it leaves)
+    assert run["intents"] == [True], run["intents"]
     assert "treadwell.proposal_tool.draft_id" not in run["local"]
     assert ["treadwell.proposal_tool.hydrated_once", None] in run["writes"]
     if audience:

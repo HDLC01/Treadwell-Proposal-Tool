@@ -1099,6 +1099,17 @@ def test_an_abandoned_v2_start_never_becomes_a_nameless_row(ran):
     _other_project_untouched("gc", g)
 
 
+def test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_in_its_own_first_write(ran):
+    """The flow in which the v2 page's OWN word ("this page created the project", TW.startsAsTest) is the only thing that can say a project is a
+    test: the intake opened by a bare link (a bookmark, an address typed) on a project that nobody started, so nothing is stored under its id.
+    Since the board's New estimate leaves a start, every flow that begins there is also covered by the start; this one is not, and it is
+    what keeps the page's own word and setState's saying of it honest. Typed into and left, the project is born a test and edited directly."""
+    for name in ("bareLink", "bareLinkAfterAutosave"):
+        r = ran[name]
+        assert r["startAtOpen"] is None, "%s: there was a start for the project, so this checks nothing about the page's own word: %r" % (name, r["startAtOpen"])
+        assert_filed_and_edited_directly(r, name)
+
+
 def test_a_project_started_on_the_v2_board_is_a_test_whichever_page_writes_it_first(ran):
     """What a project is started as follows the PROJECT, not the page that happens to write it. The estimator starts a New estimate on the v2
     board and takes the same project to the LIVE intake (the sidebar's link resumes the browser's current draft), where a page that knows
@@ -1301,6 +1312,7 @@ SANDBOX = "js/polish-sandbox.js"
 INTAKE = "js/polish-intake.js"
 PAGE = "polish-intake.html"
 PROJECTS = "js/projects.js"
+V2_BOARD = "js/v2-board.js"
 
 # shared.js: the stamp and its rules, where a project's start lives, and the copy that goes to the server
 STAMP_CALL = "    if (id) sayWhatItWasStartedAs(id, merged, written);   // a NEW project's first write says what it was started as"
@@ -1360,6 +1372,9 @@ BOUND_LINE = "        new Promise(function (resolve) { timer = setTimeout(resolv
 CLEAR_LINE = "    if (timer) clearTimeout(timer);"
 CATCH_LINE = "    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }"
 BUTTON_TAG = '        <button type="submit" class="btn-primary" id="continue-btn">Continue to the estimate →</button>'
+# the v2 board: what a New estimate starts the project as; and what shared.js does with a project nobody typed into
+BOARD_STARTS_AS_TEST = "    TW.setNewProjectTestIntent(true);"
+EVICTED_NEEDS_WORK = "    if (!hasWork(blob)) return;"
 # the Projects page
 ACTIVE_TAB = '        else if (CURRENT_FILTER === "active") TW.setNewProjectTestIntent(false);'
 OTHER_TABS = "        else                                  TW.setNewProjectTestIntent(null);"
@@ -1367,6 +1382,18 @@ OTHER_TABS = "        else                                  TW.setNewProjectTest
 
 def broken(rel, old, new):
     return (rel, old, new)
+
+
+# THE BOARD NOW LEAVES A START (round 4, F2), so a project that begins there is told "test" by TWO things: the page that writes it (setState, from the
+# start or from the page's own word) and, for a copy that goes to the server, withStart. A flow that begins on the board therefore goes red only when
+# BOTH are broken, and the page's own word only when the board's start is gone too. Each of them on its own is proved on a flow that has no start
+# (the bare link), below.
+# No write says what the project was started as, and no copy that goes to the server is given it either.
+NOTHING_SAYS = (broken(SHARED, STAMP_CALL, "    void 0;"), broken(SHARED, PUT_WITH_START, "      const out = blob;"))
+# The page does not arm its own word, and the board leaves no start for the project.
+NEITHER_PAGE_NOR_BOARD = (broken(SANDBOX, SANDBOX_MARK, "      void 0;"), broken(V2_BOARD, BOARD_STARTS_AS_TEST, "    void 0;"))
+# Everything is taken to be written already (the page's word is lost after a wipe), and the board leaves no start to say it instead.
+WRITTEN_AND_NO_START = (broken(SHARED, SET_STATE_WRITTEN, "    const written = true;"), broken(V2_BOARD, BOARD_STARTS_AS_TEST, "    void 0;"))
 
 
 def every(test, modes):
@@ -1388,36 +1415,36 @@ check_a_save_that_cannot_be_made = every(test_a_save_that_cannot_be_made_is_said
 BREAKS = {
     # ── the seed: setState says what the project was started as ──
     "no write says what the project was started as (every flow)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_new_project_is_born_filed_whichever_way_it_leaves),
+        "world", NOTHING_SAYS, test_a_new_project_is_born_filed_whichever_way_it_leaves),
     "no write says what the project was started as (the first save, on the wire)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_the_first_save_says_what_the_project_was_started_as),
+        "world", NOTHING_SAYS, test_the_first_save_says_what_the_project_was_started_as),
     "no write says what the project was started as (every other door)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_every_other_door_out_of_the_intake_leaves_one_row_born_filed),
+        "world", NOTHING_SAYS, test_every_other_door_out_of_the_intake_leaves_one_row_born_filed),
     "no write says what the project was started as (the next new estimate)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_the_next_new_estimate_does_not_leave_the_first_one_behind),
+        "world", NOTHING_SAYS, test_the_next_new_estimate_does_not_leave_the_first_one_behind),
     "no write says what the project was started as (the latencies)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_whatever_the_latencies_the_new_project_is_born_filed_and_never_forked),
+        "world", NOTHING_SAYS, test_whatever_the_latencies_the_new_project_is_born_filed_and_never_forked),
     "no write says what the project was started as (a /test that goes wrong)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), check_nothing_depends_on_a_filing_request),
+        "world", NOTHING_SAYS, check_nothing_depends_on_a_filing_request),
     "no write says what the project was started as (a save that fails once)": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), check_a_save_that_fails_once),
     "no write says what the project was started as (a stale tab)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_stale_tab_cannot_undo_a_humans_filing),
+        "world", NOTHING_SAYS, test_a_stale_tab_cannot_undo_a_humans_filing),
     "no write says what the project was started as (a save that cannot be made at all)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
+        "world", NOTHING_SAYS, test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
     "a server that never answers: the first save says nothing": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
     "a save that fails at once: the first save says nothing": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_save_that_fails_at_once_is_not_waited_out),
     "the sandbox never says the project is a test (every flow)": (
-        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),), test_a_new_project_is_born_filed_whichever_way_it_leaves),
+        "world", NEITHER_PAGE_NOR_BOARD, test_a_new_project_is_born_filed_whichever_way_it_leaves),
     "the sandbox never says the project is a test (every other door)": (
-        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),), test_every_other_door_out_of_the_intake_leaves_one_row_born_filed),
+        "world", NEITHER_PAGE_NOR_BOARD, test_every_other_door_out_of_the_intake_leaves_one_row_born_filed),
     "the sandbox never says the project is a test (a save that cannot be made at all)": (
-        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),),
+        "world", NEITHER_PAGE_NOR_BOARD,
         test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
     "the sandbox never says the project is a test (two tabs)": (
-        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),), test_two_tabs_each_start_their_own_project_and_keep_their_own_start),
+        "world", NEITHER_PAGE_NOR_BOARD, test_two_tabs_each_start_their_own_project_and_keep_their_own_start),
     # ── the stamp's own rules ──
     "an empty write says it and uses the start up": (
         "world", (broken(SHARED, STAMP_CONTENT, "    void 0;"),),
@@ -1484,7 +1511,7 @@ BREAKS = {
         "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = true;"),),
         test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before),
     "everything is taken to be written already (Continue after the wipe)": (
-        "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = true;"),),
+        "world", WRITTEN_AND_NO_START,
         test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued),
     "a start the Projects page left beats this page's own word": (
         "world", (broken(SHARED, STAMP_WANT,
@@ -1641,6 +1668,26 @@ BREAKS = {
     "the page alone has no Continue button to speak through": (
         "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
         test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    # ── round 4, F2: the board leaves a start, so each mechanism on its own is proved on a flow that has none ──
+    "no write says what the project was started as (a project with no start)": (
+        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),),
+        test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_in_its_own_first_write),
+    "the sandbox never says the project is a test (a project with no start)": (
+        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),),
+        test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_in_its_own_first_write),
+    # ── round 4, F2: the v2 board says what a project is started as; an abandoned start is not work ──
+    "the v2 board starts a project without saying what it is started as (the start)": (
+        "world", (broken(V2_BOARD, BOARD_STARTS_AS_TEST, "    void 0;"),),
+        test_the_v2_boards_new_estimate_starts_the_project_as_a_test_under_its_own_id),
+    "the v2 board starts a project without saying what it is started as (a live intake writes it)": (
+        "world", (broken(V2_BOARD, BOARD_STARTS_AS_TEST, "    void 0;"),),
+        test_a_project_started_on_the_v2_board_is_a_test_whichever_page_writes_it_first),
+    "a blob nobody typed into is flushed when another project opens (the Projects boards)": (
+        "world", (broken(SHARED, EVICTED_NEEDS_WORK, "    void 0;"),),
+        test_an_abandoned_board_start_with_nothing_typed_never_becomes_a_row),
+    "a blob nobody typed into is flushed when another project opens (the v2 board)": (
+        "world", (broken(SHARED, EVICTED_NEEDS_WORK, "    void 0;"),),
+        test_an_abandoned_v2_start_never_becomes_a_nameless_row),
     # ── round 4, F5: another project's blob is never saved under this project's id ──
     "the sandbox does not stop on a blob stamped for another project": (
         "world", (broken(SANDBOX, SANDBOX_FOREIGN_STOP, "    if (false) {"),),
@@ -1748,6 +1795,11 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
                  test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has,
                  # round 4
+                 test_an_abandoned_board_start_with_nothing_typed_never_becomes_a_row,
+                 test_the_v2_boards_new_estimate_starts_the_project_as_a_test_under_its_own_id,
+                 test_an_abandoned_v2_start_never_becomes_a_nameless_row,
+                 test_a_project_started_on_the_v2_board_is_a_test_whichever_page_writes_it_first,
+                 test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_in_its_own_first_write,
                  test_a_v2_page_whose_shared_blob_belongs_to_another_project_stops_and_saves_nothing,
                  test_a_save_made_for_one_project_never_carries_another_projects_blob,
                  test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request):
