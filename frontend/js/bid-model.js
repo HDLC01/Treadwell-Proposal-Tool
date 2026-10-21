@@ -1773,15 +1773,17 @@
     return true;
   }
 
-  /** THE OTHER BASES THAT KEEP A DRIVE OF THEIR OWN when the base filed under `tab` holds no Travel Labor line (round 7, part 4, P6: the round-7 audit's F5): the labels of every other base, on a
-   *  job of several bases that has not said it has no drive (J). The x on a Combo base's drive is that sheet's answer (S) and every other crew keeps its own drive, so the words of the sheet
-   *  that lost its line say THIS SHEET has none, never that the bid has none or that the drive adds nothing. [] for a single-base job, for a job that said it has no drive (the x on every
-   *  base's drive: then the bid has none) and for a section that is not a base. Reads only; never throws. */
+  /** THE OTHER BASES THAT KEEP A DRIVE OF THEIR OWN when the base filed under `tab` holds no Travel Labor line (round 7, part 4, P6: the round-7 audit's F5): the labels of every other base THAT HOLDS A
+   *  TRAVEL LABOR LINE (round 7 polish, W3), on a job of several bases that has not said it has no drive (J). The x on a Combo base's drive is that sheet's answer (S) and every other crew keeps its
+   *  own drive, so the words of the sheet that lost its line say THIS SHEET has none, never that the bid has none or that the drive adds nothing. A base with no line keeps nothing to name: a NEW
+   *  Combo whose library declined Travel gave every base its own answer (S) and no line, and the words said "The Epoxy sheet keeps its own Travel Labor line" beside "no line on that sheet, $0". [] for
+   *  a single-base job, for a job that said it has no drive (the x on every base's drive: then the bid has none), when no other base holds a line, and for a section that is not a base. Reads only;
+   *  never throws. */
   function otherDrives(model, tab) {
     if (!isObject(model) || model.no_travel_labor === true) return [];
     var drives = driveEntries(model);
     if (drives.length < 2 || !drives.some(function (e) { return e.tab === tab; })) return [];
-    return drives.filter(function (e) { return e.tab !== tab; }).map(function (e) { return e.label; });
+    return drives.filter(function (e) { return e.tab !== tab && travelRowsIn(e.section).length > 0; }).map(function (e) { return e.label; });
   }
 
   /** otherDrives in a sentence: "The Epoxy sheet keeps its own Travel Labor line.", "The Epoxy and Copy1 sheets keep their own Travel Labor lines.", "" for none. */
