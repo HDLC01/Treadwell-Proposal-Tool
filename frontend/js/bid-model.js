@@ -3791,8 +3791,8 @@
   function applyFeesDefault(model, fees) {
     var n = (fees === null || fees === undefined || fees === "") ? NaN : Number(fees);
     if (!model || !isFinite(n) || n <= 0) return model;
-    var out = {};
-    for (var k in model) if (Object.prototype.hasOwnProperty.call(model, k)) out[k] = model[k];
+    // Copied as data (Object.fromEntries defines each key), never by assigning a key read off the draft: a "__proto__" key would set the copy's prototype.
+    var out = Object.fromEntries(Object.entries(model));
     out.fees = n;
     out.fees_default = n;
     return out;
