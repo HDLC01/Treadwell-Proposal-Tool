@@ -9,7 +9,8 @@
  *
  *   N1  A GYP CREW IS ENTERED IN HOURS. Kyle's Gyp tab counts its own nights: Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`, per diem B65 `=B64`, so 4 guys for 120 hours is 48
  *       nights, not 0. `gyp` runs a far Gyp bid (Wichita, 190 miles) through the page: the nights and the per diem days follow the crew's hours, ten to a night, the card and the hints
- *       and the working say so, and the drive stays typed. `gypOption` and `gypCopy` are F3: a far Gyp option, or a copy of the Gyp sheet, priced $0 hotel and per diem under a
+ *       and the working say so, and (since round 7, Hanz's D2 of 2026-10-21) the drive fills from the miles too, where it stayed typed. `gypOption` and `gypCopy` are F3: a far Gyp
+ *       option, or a copy of the Gyp sheet, priced $0 hotel and per diem under a
  *       note that says it carries its own (an identical copy was $10,536 under its base).
  *   N2  A COMBO'S NIGHTS ARE BOTH CREWS'. The follow figure was the carrier's man-days only: a far Combo (Polish 4 x 12 and Epoxy 4 x 12) filled 48 nights under words that said
  *       "Kyle's way", $71,555 against $81,226 typed as Kyle types it (hotel on every sheet). `combo` runs it: 96, and the hint and the working say where the count comes from.

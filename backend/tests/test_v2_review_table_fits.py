@@ -41,6 +41,24 @@ MEASURED ONCE IN A BROWSER, which this file cannot repeat (a headless run lays n
 On the old rules the five % warnings were a column 35 to 46px wide that began 21px short of the Rate cell's right edge and ran 14 to 25px past it, every line of it under the Total cell. With the fix each is
 92px wide, the room a Rate cell has (104px in the Total cell, for the dollar box), and nothing paints over it: a Polish bid at 916 and 800px, an Epoxy bid at 916, 800 and 390px.
 
+ROUND 7, PART 2 (2026-10-21, the round-6 lows, L4): THE % BOX'S WHOLE LINE COMES CLEAR OF THE PINNED COLUMN, NOT ONLY THE BOX. The box's scroll padding was the pinned Total column's width (126px), so a %
+box tabbed or typed into was brought just clear of the column and what its Rate cell holds to the right of it, the "%" and its gap and the end of the refusal's line under the box, stayed under the
+column's opaque cells. Measured in Chrome on the real page (2026-10-21, the sidebar open, a % box typed "abc" so its refusal shows): at 880px (a 539px box, the table 11px wider) the box was left 8px
+clear and the "%" ran 3px under the column; at 850, 820 and 600px (boxes of 509, 479 and 499px) the browser scrolled the box's right edge to the column's edge exactly, and the "%", its gap and the
+refusal's line ran 11px under it; from 916px up the table fits and at 390px the table is scrolled to its end anyway. The padding is now the column's width and what a Rate cell holds to the right of a
+box (the "%" and its gap, and the cell's own padding), so the browser scrolls the table to its end for a box in that column: at 880, 850, 820, 600 and 390px the "%" and the refusal's line ended 8px
+clear of the column (688 against 696 at 880px). `refusal_line_problems` does that arithmetic on the CSS, and requires the padding to leave a % box's line room at the narrowest phone.
+
+ROUND 7, PART 4 (2026-10-21, P8: the round-6 staging walk's X2, a regression of #697): A RATE TOO WIDE FOR ITS CELL. On a Gyp bid the Takeoff card's Primer row prints its rate worked to four places,
+"$16.8113 / gallon" (the library's $891 drum over its 53 gallons), and Chrome measured that text at 116.8px in a Rate cell that holds 92px (108 less its 8px a side): with the cell `white-space: nowrap`
+the end ran under the pinned Total column and read "$16.8113 / gall" at 916px with the sidebar open. The arithmetic had typed the widest rate as twelve characters ("$0.0987 / SF"). The fix lets a Rate
+cell of the Review's cards break between its figure and its unit, balanced (`.rev-t td.rt{white-space:normal;text-wrap:balance}`: "$16.8113" over "/ gallon"), so what the cell needs is its widest piece,
+never the whole line, and no column or minimum moves (the table still fits from 900px with the sidebar open). WIDEST_RATE is that string, the real widest one: test_the_widest_rate_a_gyp_review_prints_is_the_one_the_arithmetic_holds
+runs the Gyp page (tests/js/gyp-page-harness.js) on the seeded library and reads every Rate cell it draws. The markup card's Rate cells do not wrap and hold the % boxes and twelve characters at most.
+MEASURED ONCE IN A BROWSER, which this file cannot repeat: on 2026-10-21 Chromium (Playwright) laid out the page's own stylesheet over a Gyp Takeoff card's rows in the 575px box of 916px with the sidebar
+open. With the old rule "$16.8113 / gallon" was 116.8px in its 92px content box and ran 16.8px under the Total column, and "$237.12 / roll" 4.2px past its content box; with the fix the Primer
+rate read "$16.8113" over "/ gallon" (55px), "$237.12" over "/ roll", no cell's content overflowed, and the table was exactly its 575px box.
+
 The last block puts the old rules (and each new rule, one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
 """
 from __future__ import annotations
@@ -50,8 +68,11 @@ import re
 import pytest
 
 from _golden_support import FRONTEND, break_source
+from _node import last_json_line, require_node, run_node
+from _seed_support import plan_json
 
 PAGE_PATH = FRONTEND / "polish-estimate.html"
+GYP_HARNESS = FRONTEND.parent / "backend" / "tests" / "js" / "gyp-page-harness.js"
 AUTH_PATH = FRONTEND / "auth.js"
 JS_PATH = FRONTEND / "js" / "polish-estimate.js"
 
@@ -64,8 +85,24 @@ QUANTITY_HEADER = 62         # "QUANTITY" at 10.5px with its letter-spacing, bef
 # Two more, by arithmetic and not by measurement (the audit measured the boxes and the words, which were what overflowed): the widest figure a card prints in each of these columns, at
 # 0.6em a character, the widest monospace face a browser falls back to.
 QUANTITY_WORKING = 66        # "4 × 12 × 8", the working under a labor line's hours: ten characters of 11px monospace
-RATE_FIGURE = 90             # "$0.0987 / SF", "$33.125 / hr": twelve characters of 12.5px monospace
+MK_RATE_FIGURE = 90          # the markup card's Rate cells do not wrap: "$123.45 / SF", the lump sum a square foot, twelve characters of 12.5px monospace
 ITEM_CONTENT_MIN = 122       # the Item column wraps; below this much room for its words a label of two words stands on a line of its own (round 5's 150px column less its 28px of padding)
+# THE WIDEST RATE THE REVIEW'S CARDS PRINT (round 7, part 4, P8: the round-6 staging walk's X2). The Gyp Primer row's rate on the seeded library, read off the page by
+# test_the_widest_rate_a_gyp_review_prints_is_the_one_the_arithmetic_holds. Chrome measured it at 116.8px on the walk (12.5px Consolas, 0.55em a character); at the 0.6em a character this file
+# takes for the widest monospace face a browser falls back to, it is 127.5px. A Rate cell holds 92px.
+WIDEST_RATE = "$16.8113 / gallon"
+WIDEST_RATE_MEASURED = 116.8
+RATE_CHAR = 0.6 * 12.5       # a character of the Review's 12.5px monospace, at 0.6em
+
+
+def rate_text_width(text: str) -> float:
+    """What a rate's text needs to stand on one line: the walk's measurement for the widest string, and 0.6em a character for any text (the larger of the two)."""
+    return max(len(text) * RATE_CHAR, WIDEST_RATE_MEASURED if text == WIDEST_RATE else 0)
+
+
+def widest_piece(text: str) -> str:
+    """The widest piece a cell that may wrap can break `text` into: its longest run between spaces (a no-break space holds its neighbours together)."""
+    return max(text.split(" "), key=len)
 
 # The staging walk of #694 (a real browser): the table's box at 916px with the sidebar open was 575px. A classic vertical scrollbar of 15px is the one value for which every number below holds.
 SCROLLBAR = 15
@@ -239,6 +276,14 @@ def out_of_view(f: dict, window: int, rail_open: bool, scrollbar: int = SCROLLBA
 
 
 # ── what each column needs, and what it has ─────────────────────────────────────────────────────────────
+def rate_cell_wraps(css: str) -> bool:
+    """May a Rate cell of the Review's cards (`.rev-t td.rt`) break its text over lines? Every rule whose selector list names it, merged in the page's order (a later one wins): white-space normal (or a
+    pre-wrap kind), and no text-wrap or text-wrap-mode that says nowrap."""
+    d = _decls_for(css, ".rev-t td.rt")
+    ws = d.get("white-space", "normal")
+    return ws in ("normal", "pre-wrap", "pre-line", "break-spaces") and d.get("text-wrap", "").split(" ")[0] != "nowrap" and d.get("text-wrap-mode", "wrap") != "nowrap"
+
+
 def needs(f: dict) -> dict:
     """{column: px} the column must be, from what the cards put in it plus the cell's own padding (the stricter of the two tables, and of the header and the body cells)."""
     css = f["css"]
@@ -247,11 +292,14 @@ def needs(f: dict) -> dict:
     pct_box = _px(_rule(css, ".adjbox input,.mk .adjbox input"), "width")
     amt_box = _px(_rule(css, ".adjbox.adjamt input,.mk .adjbox.adjamt input"), "width")
     unit_wraps = _rule(css, ".rev-t td.u,.mk td.u").replace(" ", "").split("white-space:")[-1].startswith("normal")
+    # A Rate cell of the Review's cards that may wrap needs its widest piece; one that may not needs the whole text (round 7, part 4, P8). Every rule naming `.rev-t td.rt` counts, the later winning.
+    rate_wraps = rate_cell_wraps(css)
+    rev_rate = rate_text_width(widest_piece(WIDEST_RATE)) if rate_wraps else rate_text_width(WIDEST_RATE)
     content = {                                   # column: (what the header holds, what a body cell holds)
         1: (0, ITEM_CONTENT_MIN),
         2: (QUANTITY_HEADER, QUANTITY_WORKING),
         3: (0, LONGEST_UNIT_WORD if unit_wraps else LONGEST_UNIT_TEXT),
-        4: (0, max(pct_box + PERCENT_AND_GAP, RATE_FIGURE)),
+        4: (0, max(pct_box + PERCENT_AND_GAP, MK_RATE_FIGURE, rev_rate)),
         5: (0, max(mk_box, amt_box + DOLLAR_AND_GAP)),
     }
     out = {}
@@ -365,8 +413,38 @@ def at_916_problems(page: str) -> list[str]:
     return ["the table is %dpx wide in a %dpx box: the last %dpx of it, the TOTAL column, are out of view until the box is scrolled (916px, sidebar open)" % (f["min_width"], box_width(f, 916, True), hidden)]
 
 
+def refusal_line_problems(page: str) -> list[str]:
+    """ROUND 7, PART 2 (L4): does a % box tabbed or typed into come clear of the pinned Total column WITH THE REST OF ITS LINE? The browser scrolls a focused box (and a caret) clear of the box's
+    scroll padding, and no further: a padding as wide as the pinned column alone brings the box to the column's edge and leaves the "%" after it, its gap and the refusal's line under the box
+    (which is as wide as the box's line) under the column. So the padding must be the pinned column's width and what the Rate cell holds to the right of a box: the "%" and its gap, and the cell's
+    own right padding (the wider of the two tables'). And it must leave a % box's line room in the box at the narrowest phone, or the browser cannot honour it."""
+    f = facts(page)
+    css = f["css"]
+    found = []
+    total = f["columns"][5]
+    padding = _decls_for(css, ".tscroll").get("scroll-padding-right", "")
+    if total[0] != "px" or not re.fullmatch(r"\d+px", padding):
+        return found                       # pin_problems names a padding that is not a plain figure, and a Total column that is a share
+    pads = _cell_pads(css, "td")
+    rate_right = max(r for _l, r in (pads[tbl][3] for tbl in pads))
+    need = total[1] + PERCENT_AND_GAP + rate_right
+    have = int(padding[:-2])
+    if have < need:
+        found.append("refusal: the .tscroll box has scroll-padding-right %dpx, which brings a %% box typed into clear of the pinned Total column (%dpx) but leaves what its Rate cell holds to the right "
+                     "of it under the column: the %% and its gap (%dpx) and the cell's padding (%dpx), the refusal's line with them. It needs %dpx" % (have, total[1], PERCENT_AND_GAP, rate_right, need))
+    pct_box = _px(_rule(css, ".adjbox input,.mk .adjbox input"), "width")
+    line = pct_box + PERCENT_AND_GAP
+    for scrollbar in SCROLLBARS:
+        for rail_open in (False, True):
+            narrowest = min((box_width(f, w, rail_open, scrollbar), w) for w in range(PIN_FROM, FIT_FROM))
+            if narrowest[0] - have < line:
+                found.append("refusal: at a window %dpx wide (sidebar %s, scrollbar %dpx) the box is %dpx and its scroll padding %dpx leaves %dpx, under the %dpx a %% box's line needs"
+                             % (narrowest[1], "open" if rail_open else "shut", scrollbar, narrowest[0], have, narrowest[0] - have, line))
+    return sorted(set(found))
+
+
 def problems(page: str) -> list[str]:
-    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page) + at_916_problems(page)))
+    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page) + at_916_problems(page) + refusal_line_problems(page)))
 
 
 # ── the assertions ───────────────────────────────────────────────────────────────────────────────────────
@@ -442,12 +520,51 @@ def test_the_pinned_total_cells_are_opaque_pinned_to_the_right_edge_and_keep_the
     assert pin_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
 
 
+def test_a_box_tabbed_or_typed_into_comes_clear_of_the_pinned_column_with_the_rest_of_its_line():
+    """ROUND 7, PART 2 (L4): the box's scroll padding is the pinned Total column's width (126px) and what a Rate cell holds to the right of a % box (the "%" and its gap, 16px, and the cell's padding, 8px):
+    150px. With 126px Chrome left the "%" and the refusal's last 11px under the column at 850, 820 and 600px (sidebar open); with 150px the table scrolls to its end and they end 8px clear. The padding
+    still leaves a % box's line room at a 360px phone.
+
+    Mutation: the round-6 padding (the column's width alone); a padding that eats a phone's box."""
+    assert refusal_line_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
 def test_every_column_holds_what_the_cards_put_in_it():
     """Every column of every Review table is wide enough for what the markup card puts in it, at the narrowest table the page allows (550px): Total holds the 104px Contingency and Fees boxes and
     the $ box beside the Discount; Rate holds the % box and a twelve-character figure; Unit holds its words (they wrap); Quantity holds its heading and a working line; Item keeps 122px of room.
 
     Mutation: percentage columns; Unit words that cannot wrap; wider cell padding between columns, and at the card's two edges; a minimum width under what the columns and Item need."""
     assert fit_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_a_rate_too_wide_for_its_cell_wraps_its_unit_under_its_figure_and_the_total_stays_in_view():
+    """ROUND 7, PART 4 (P8: the walk's X2). The widest rate the Review prints, "$16.8113 / gallon" (116.8px measured, 127.5px at 0.6em), is wider than the 92px a Rate cell holds, so the cell may
+    break it between its figure and its unit: its widest piece, "$16.8113", needs 60px, and the % box's line (80px) is what the column is sized for. No width or minimum moved: the table fits its 575px
+    box at 916px with the sidebar open, the Total column in view, and from 900px up.
+
+    Mutation: the Rate cell's rule taken away (nowrap again), which the check names as the Rate column too narrow for what it holds."""
+    page = PAGE_PATH.read_text(encoding="utf-8")
+    css = _css(page)
+    assert rate_cell_wraps(css)
+    assert widest_piece(WIDEST_RATE) == "$16.8113" and rate_text_width(widest_piece(WIDEST_RATE)) == 60
+    f = facts(page)
+    room = f["columns"][4][1] - max(l + r for l, r in (_cell_pads(css, "td")[".rev-t"][3],))
+    assert room == 92 and rate_text_width(WIDEST_RATE) > room >= rate_text_width(widest_piece(WIDEST_RATE)), "the whole line does not fit a Rate cell, its widest piece does"
+    assert fit_problems(page) == [] and at_916_problems(page) == []
+
+
+def test_the_widest_rate_a_gyp_review_prints_is_the_one_the_arithmetic_holds(tmp_path):
+    """EXECUTED: the Gyp page on the seeded library, taken to its Review (tests/js/gyp-page-harness.js), and every Rate cell it draws read back. "$16.8113 / gallon" (the Primer row) is among them and no
+    rate is longer, so the content width above is the real widest string, not a guess; and every rate's widest piece fits the 92px of a Rate cell at 0.6em a character, which is what lets the cell
+    wrap instead of running under the pinned Total column."""
+    require_node()
+    proc = run_node(GYP_HARNESS, FRONTEND, plan_json(tmp_path))
+    assert proc.returncode == 0, "the Gyp page harness failed:\n" + proc.stderr[-1500:]
+    rates = last_json_line(proc.stdout)["review"]["rates"]
+    assert WIDEST_RATE in rates and max(len(t) for t in rates) == len(WIDEST_RATE), rates
+    css = _css(PAGE_PATH.read_text(encoding="utf-8"))
+    room = facts(PAGE_PATH.read_text(encoding="utf-8"))["columns"][4][1] - max(l + r for l, r in (_cell_pads(css, "td")[".rev-t"][3],))
+    assert [t for t in rates if rate_text_width(widest_piece(t)) > room] == [], "a rate has a piece wider than its cell"
 
 
 def scroll_problems(page: str) -> list[str]:
@@ -551,7 +668,8 @@ ROUND_6 = {
     "last": (".rev-t th:last-child,.mk th:last-child,.rev-t td:last-child,.mk td:last-child{padding-right:14px}", ""),
     "pin": (".rev-t th:nth-child(5),.mk th:nth-child(5),.rev-t td:nth-child(5),.mk td:nth-child(5){position:sticky;right:0}", ""),
     "fill": (".rev-t td:nth-child(5),.mk td:nth-child(5){background:var(--card)}", ""),
-    "box": (".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:126px}",
+    # (150px since round 7, part 2, L4: the pinned column and what a Rate cell holds to the right of a box; round 6 made it the column's 126px)
+    "box": (".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:150px}",
             ".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}"),
     "focus": (".tscroll:has(td:nth-child(5):focus-within){scroll-padding-right:0}", ""),
     "rev_table": (".rev-t{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}", ".rev-t{width:100%;border-collapse:collapse;font-size:12.5px}"),
@@ -617,6 +735,9 @@ MUTATIONS = [
     ("a Quantity column too narrow for its heading", NEW["qty"], ".rev-t th:nth-child(2),.mk th:nth-child(2){width:70px}", "Quantity column"),
     ("the old Unit share", NEW["unit"], ".rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}", "Unit column"),
     ("a Rate column too narrow for its box", NEW["rate"], ".rev-t th:nth-child(4),.mk th:nth-child(4){width:96px}", "Rate column"),
+    # round 7, part 4 (P8: the walk's X2): a Rate cell that may not wrap holds "$16.8113 / gallon" on one line, wider than the cell, which runs under the pinned Total column
+    ("a Rate cell that may not wrap its unit under its figure", ".rev-t td.rt{white-space:normal;text-wrap:balance}", "", "Rate column is 108px and its contents need 143px"),
+    ("a Rate cell told not to wrap after all", ".rev-t td.rt{white-space:normal;text-wrap:balance}", ".rev-t td.rt{white-space:normal;text-wrap:nowrap}", "Rate column"),
     ("the old Total share", NEW["total"], ".rev-t th:nth-child(5),.mk th:nth-child(5){width:14%}", "Total column"),
     ("Unit words that cannot wrap", NEW["words"], ".rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}", "Unit column"),
     ("the old padding between the Review cells", ROUND_6["rev_cells"][0], ROUND_6["rev_cells"][1], "Unit column"),
@@ -629,7 +750,12 @@ MUTATIONS = [
     ("the Total cells are pinned to the other edge", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("right:0", "left:0"), "pin: the Total"),
     ("the pinned Total cells have no background", ROUND_6["fill"][0], ROUND_6["fill"][0].replace("background:var(--card)", "background:transparent"), "pin: a pinned Total cell"),
     ("no scroll padding for the pinned column", ROUND_6["box"][0], ROUND_6["box"][1], "pin: the .tscroll box"),
-    ("a scroll padding narrower than the pinned column", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:126px", "scroll-padding-right:60px"), "pin: the .tscroll box"),
+    ("a scroll padding narrower than the pinned column", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:150px", "scroll-padding-right:60px"), "pin: the .tscroll box"),
+    # round 7, part 2 (L4): the round-6 padding, as wide as the pinned column alone, leaves the % after a box and the refusal's line under the column
+    ("the round-6 scroll padding, the pinned column's width alone", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:150px", "scroll-padding-right:126px"),
+     "refusal: the .tscroll box has scroll-padding-right 126px"),
+    ("a scroll padding that leaves a phone's box no room for a % box's line", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:150px", "scroll-padding-right:260px"),
+     "refusal: at a window"),
     ("scroll padding while focus is in the pinned column", ROUND_6["focus"][0], ROUND_6["focus"][0].replace("scroll-padding-right:0", "scroll-padding-right:126px"), "pin: the .tscroll box keeps"),
     ("collapsed borders on the Review tables", ROUND_6["rev_table"][0], ROUND_6["rev_table"][1], "pin: the .rev-t table"),
     ("collapsed borders on the markup table", ROUND_6["mk_table"][0], ROUND_6["mk_table"][1], "pin: the .mk table"),

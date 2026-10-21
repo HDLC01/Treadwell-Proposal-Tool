@@ -59,8 +59,9 @@ FILLS = "var fills = !row.hours_typed && (isBlank(row.days) || wrote);"
 GUYS_ON = 'if (!row.guys_typed && !row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }'
 OFF_GUARD = "if (!rowOn(row)) return;   // switched off: no fill and no take-back"
 ESTIMATORS = "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));"
-OPTION_ROW = 'if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true);'
-SYNC = "r.guys = followsCrew(r) ? (s.option ? ownCrewSize(model, s.section.labor) : crewSize(model)) : manDays;"
+# (round 7, part 4, P2: the option's own round trips ride along, and the 8 spaces keep the anchor off followDriveTrips' line, which reads the same)
+OPTION_ROW = '        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true, driveTripsOf(e));'
+SYNC = 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? ownCrewSize(model, lines) : manDays;'
 
 # name -> (old, new, mode, depth, the rules the walk must report)
 BREAKS = {
@@ -72,7 +73,9 @@ BREAKS = {
         "if (own && travelRowIsAutoFilled(row)) clearQuantities(row);", "if (false) clearQuantities(row);", "dist", 2, {"OPT_FOLLOWS"}),
     "an option's empty row is not filled by a far answer": (
         OPTION_ROW, OPTION_ROW.replace('r.unit === "hours")', 'r.unit === "hours" && travelRowIsAutoFilled(r))'), "dist@local", 2, {"OPT_FOLLOWS"}),
-    "an option's guys follow the job's base crew": (SYNC, "r.guys = followsCrew(r) ? crewSize(model) : manDays;", "dist", 2, {"OPT_FOLLOWS"}),
+    # (round 7, D1: every drive follows its own section's crew, a base's as an option's, so the break reaches the bases too)
+    "a drive's guys follow the job's base crew": (
+        SYNC, 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? crewSize(model) : manDays;', "dist", 2, {"OPT_FOLLOWS", "FAR_BASES"}),
     "a switched-off option row is filled": (OFF_GUARD, "void 0;", "distOff", 2, {"OPT_OWNED"}),
     "a typed option row is overwritten by the next answer": (FILLS, "var fills = true;", "distTyped", 2, {"OPT_OWNED"}),
     "a cleared option guys box is refilled by the next answer": (

@@ -18,6 +18,10 @@
  *       the option has none and records nothing on the job; the x on a base that does not carry the travel (a leftover row) says nothing. Add Travel Labor is drawn on any sheet that
  *       can hold a drive and has none (the carrier, or an option) and takes back only that sheet's answer. A job-type switch after the carrier's x HONOURS it (the new carrier is not
  *       seeded a row), and a saved bid's flag, which the round-5 x set for ANY row, is read as what it is now (the job's) and dropped when the carrier holds a row. `migrate` is the table.
+ *       ROUND 7 (Hanz's decisions of 2026-10-21) split it three ways, and the scenarios below are read under that law: every BASE drives its own crew (D1), so the x on the drive of a
+ *       SINGLE-base job is the job's answer (J), the x on one base's drive of a Combo is that SHEET's own (S, `sheet_no_travel_labor`; a Combo's second base is never a leftover now), an
+ *       option's records nothing (O), Add Travel Labor is drawn on every base and option that has no line, and an option made the base keeps a line the estimator added or typed while
+ *       the job's answer releases one the tool filled (the round-6 audit's F-C). test_polish_travel_round7.py holds S and that rule.
  *   X3  `keyboard`: the x on a labor line, pressed from the keyboard, leaves focus on a control that exists afterwards.
  *   X4  `handoff` and `holes`: the round-5 lows that reproduce. (b) A Lodging or Per Diem line switched off by hand was filled by a far answer: an answer leaves it alone now and switching it ON fills
  *       it. (c) A labor or takeoff list holding a null threw on open: a null reads as no row. (a), a typed drive edit lost when the base flips back, is left (docs/v2-architecture.md).
@@ -227,8 +231,9 @@ async function readBid(b) {
 
 async function main() {
   // ═══ X1. THE ROOT CAUSE: migrateModel's blank Travel row ═══════════════════════════════════════════════════════════════════════════════════════════
-  // The saved draft right after the job type is switched from Combo to Epoxy holds NO Travel row on the (off) Polish root: the row went with the carrier. migrateModel then put a blank one
-  // back on every open (the root had none and the job had not said no), and the next far answer filled and priced it: the session had no such row, the reload did.
+  // The saved draft right after the job type is switched from Combo to Epoxy held NO Travel row on the (off) Polish root: the row went with the carrier. migrateModel then put a blank one
+  // back on every open (the root had none and the job had not said no), and the next far answer filled and priced it: the session had no such row, the reload did. (Since round 7 the off root
+  // keeps its OWN row, its fill given back, Hanz's D1 of 2026-10-21: each base drives its own crew, and Epoxy has its own. So the draft holds one row there, and a reload gives it no second.)
   await section("rootCause", async () => {
     const s = await newBid(comboDraft(), CREW.polish);
     const sw = await reopen(Object.assign(clone(s.saved), { work_type: "epoxy" }));
@@ -275,12 +280,12 @@ async function main() {
   };
   await section("f1", async () => ({ A: await f1(false), B: await f1(true) }));
 
-  // THE ORACLE for F1 and F2: the same far Combo (and Polish) with the x pressed on the carrier's Travel Labor and nothing else done. Whatever the bid is after any sequence that ends with no
-  // drive on a Combo, it prices as this does.
+  // THE ORACLE for F1 and F2: the same far Combo (and Polish) with the x pressed on its drives and nothing else done. Whatever the bid is after any sequence that ends with no drive on a
+  // Combo, it prices as this does. (Since round 7 a Combo has TWO drives, one per base crew, Hanz's D1 of 2026-10-21, and the x on one is that sheet's own answer: no drive is both x's.)
   await section("oracle", async () => {
     const c = await newBid(comboDraft(), CREW.polish);
     const b = await reopen(c.saved);
-    const pressed = await pressX(b, B.ROOT_TAB);
+    const pressed = (await pressX(b, B.ROOT_TAB)) && (await pressX(b, "Epoxy"));
     const saved = clone(b.store.blob);
     const again = await reopen(saved);
     return { combo: Object.assign({ pressed: pressed, flagAfterX: savedFlag(saved) }, await readBid(again)) };
@@ -377,18 +382,21 @@ async function main() {
       const added = await pressAdd(r, B.ROOT_TAB);
       res.optionRoot = { before: before, pressed: pressed, afterX: afterX, reloaded: reloaded, added: added, afterAdd: { flag: flagOf(r), rows: driveRows(r), saved: savedFlag(r.store.blob) } };
     }
-    // 4. A BASE THAT DOES NOT CARRY THE TRAVEL (a leftover row on a Combo's Epoxy base, typed by the estimator): its x says nothing about the job, and Add Travel Labor is never drawn there
-    //    (the job's drive is charged once, on the carrier).
+    // 4. A BASE THAT DOES NOT CARRY THE JOB'S HOTEL AND PER DIEM (a Combo's Epoxy base, its own drive typed by the estimator, 2 x 3). Until round 7 that line was a leftover: its x said nothing
+    //    and Add Travel Labor was never drawn there. Since Hanz's D1 (2026-10-21) every base drives its own crew, so the x is that SHEET's own answer (S): the job's flag stays off, the carrier
+    //    keeps its line, a reload does not bring the line back, and Add Travel Labor is drawn there.
     {
       const s = await newBid(comboDraft(), CREW.polish);
       const stray = clone(s.saved);
-      stray.polish_estimate.tabs.Epoxy.labor.push({ id: "travel", label: "Travel Labor", guys: "2", days: "3", rate: 33, unit: "hours", guys_auto: false, guys_typed: true, hours_typed: true });
+      const epoxyLabor = stray.polish_estimate.tabs.Epoxy.labor.filter((r) => !(r && r.id === "travel"));
+      stray.polish_estimate.tabs.Epoxy.labor = epoxyLabor.concat([{ id: "travel", label: "Travel Labor", guys: "2", days: "3", rate: 33, unit: "hours", guys_auto: false, guys_typed: true, hours_typed: true }]);
       const b = await reopen(stray);
+      const sheetSaid = (page) => (page.api.root().tabs.Epoxy || {}).sheet_no_travel_labor === true;
       const before = { rows: driveRows(b), addOnStray: addShown(b, "Epoxy") };
       const pressed = await pressX(b, "Epoxy");
-      const afterX = { flag: flagOf(b), rows: driveRows(b), saved: savedFlag(b.store.blob), addOnStray: addShown(b, "Epoxy") };
+      const afterX = { flag: flagOf(b), sheet: sheetSaid(b), rows: driveRows(b), saved: savedFlag(b.store.blob), addOnStray: addShown(b, "Epoxy") };
       const r = await reopen(b.store.blob);
-      res.stray = { before: before, pressed: pressed, afterX: afterX, reloaded: { flag: flagOf(r), rows: driveRows(r) } };
+      res.stray = { before: before, pressed: pressed, afterX: afterX, reloaded: { flag: flagOf(r), sheet: sheetSaid(r), rows: driveRows(r) } };
     }
     // 5. AN OPTION'S ADD TAKES BACK ONLY THE OPTION'S ANSWER, AND FILLS THE LINE ON THE OPTION'S OWN CREW. Far Polish (4 x 12) copied as an option whose Polishing the estimator made 2 x 12; the x on
     //    the CARRIER's line (the job says it has no drive), the x on the option's, then Add Travel Labor on the option: the job's answer is still said (flag on, the carrier has no line), and the
@@ -409,15 +417,19 @@ async function main() {
       const r = await reopen(b.store.blob);
       res.optionKeepsJobAnswer = { before: before, added: added, afterAdd: afterAdd, reloaded: { flag: flagOf(r), rows: driveRows(r) } };
     }
-    // 6. THE JOB IS HANDED A LINE: a far Polish bid copied as an option (its own line), the x on the carrier (the job says it has no drive), then the option made the base: the new carrier holds a line
-    //    of its own, so the job has a drive and the answer is gone (it was the carrier's, and the carrier is another section now). The model's pickBase says it too, on a bid the page has not
-    //    settled, and a reload agrees.
+    // 6. THE JOB IS HANDED A LINE: a far Polish bid copied as an option (its own line), the x on the carrier (the job says it has no drive), 3 x 5 typed on the option's line, then the option made
+    //    the base: the new carrier holds a line of the estimator's, so the job has a drive and the answer is gone. The model's pickBase says it too, on a bid the page has not settled, and a reload
+    //    agrees. (Round 7, the promotion rule: a line the TOOL filled on an option made the base is released while the job says it has no drive, so the line here is typed; the copy's own
+    //    tool-filled line is test_polish_travel_round7.py's `copyUnderJob`.)
     {
       const s = await newBid(polishDraft(), CREW.polish);
       const b = await reopen(s.saved);
       await copyActive(b);
       const copy = B.sectionsOf(b.api.root()).filter((e) => e.kind === "option")[0].tab;
       await pressX(b, B.ROOT_TAB);
+      typeCrew(b, copy, "travel", "3", "5");
+      b.api.saveSoon();
+      b.clock.fire();
       const said = { flag: flagOf(b), rows: driveRows(b) };
       const model = clone(b.api.root());
       const picked = B.pickBase(model, [copy], { state: {} });
@@ -459,7 +471,11 @@ async function main() {
       // (a carrier that holds no line, so that a sheet the bid does not have would be given one if the answer fell back to the carrier)
       const carrierWithoutLine = clone(comboModel);
       carrierWithoutLine.labor = carrierWithoutLine.labor.filter((r) => r.id !== "travel");
-      const refused = { holdsOne: B.addTravelLabor(clone(withCopy), B.freshTravelRow(LABOR, 33), copy), strayBase: B.addTravelLabor(clone(comboModel), B.freshTravelRow(LABOR, 33), "Epoxy"),
+      // (round 7: every base drives, so the section a line is refused on is one that is OFF: the Combo's Epoxy section switched off, its line taken away)
+      const offEpoxy = clone(comboModel);
+      offEpoxy.tabs.Epoxy.kind = "off";
+      offEpoxy.tabs.Epoxy.labor = offEpoxy.tabs.Epoxy.labor.filter((r) => r.id !== "travel");
+      const refused = { holdsOne: B.addTravelLabor(clone(withCopy), B.freshTravelRow(LABOR, 33), copy), offSection: B.addTravelLabor(clone(offEpoxy), B.freshTravelRow(LABOR, 33), "Epoxy"),
         unknownTab: B.addTravelLabor(carrierWithoutLine, B.freshTravelRow(LABOR, 33), "Nope") };
       // the x on an option when the CARRIER holds no line (and the job has not said so): the option's x says nothing about the job; the carrier's says it
       const m3 = clone(withCopy);
@@ -468,7 +484,7 @@ async function main() {
       const optionX = { said: B.travelLaborRemoved(m3, copy), flag: m3.no_travel_labor === true };
       const carrierX = { said: B.travelLaborRemoved(m4, B.ROOT_TAB), flag: m4.no_travel_labor === true };
       const canAdd = { carrier: B.travelLaborCanBeAdded(m3, B.ROOT_TAB), option: B.travelLaborCanBeAdded(m3, copy), carrierWithLine: B.travelLaborCanBeAdded(clone(withCopy), B.ROOT_TAB), optionWithLine: B.travelLaborCanBeAdded(clone(withCopy), copy), optionWithoutLine: optionWithoutLine,
-        strayBase: B.travelLaborCanBeAdded(clone(comboModel), "Epoxy"), unknown: B.travelLaborCanBeAdded(clone(comboModel), "Nope") };
+        offSection: B.travelLaborCanBeAdded(clone(offEpoxy), "Epoxy"), unknown: B.travelLaborCanBeAdded(clone(comboModel), "Nope") };
       // a job that said it has no drive is not seeded one on the section a job-type switch adds (a job that did not say so is)
       const seed = (flag) => {
         const m = B.migrateModel(clone(saved));

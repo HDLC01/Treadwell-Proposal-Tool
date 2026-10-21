@@ -306,20 +306,22 @@ def test_the_travel_labor_line_the_cards_x_took_away_can_be_added_back_and_the_s
     add = a["added"]
     assert add["rows"][tab] == _fill(4, 6.5, 858) and add["button"] is False
     assert (add["guysBox"], add["hoursBox"], add["rate"], add["label"]) == ("4", "6.5", 33, "Travel Labor")
-    assert add["keys"] == ["days", "guys", "guys_auto", "guys_follow", "hours_seed", "id", "label", "rate", "rate_default", "unit"]
+    # (round 7: the line Add brings back carries `hand_added`, the mark that keeps it when an option is made a base under the job's answer: the round-6 audit's F-C, Hanz 2026-10-21)
+    assert add["keys"] == ["days", "guys", "guys_auto", "guys_follow", "hand_added", "hours_seed", "id", "label", "rate", "rate_default", "unit"]
     assert "Travel Labor, Lodging and Per Diem come on." in add["how"] and "no line" not in add["how"]
     assert a["addedAgain"] == {"returned": False, "count": 1}
     assert a["reopened"]["rows"][tab] == _fill(4, 6.5, 858), "the restored row is on the draft"
 
 
-def test_a_gyp_carriers_line_comes_back_empty_and_a_double_press_reads_the_library_once(ran):
-    """A Gyp carrier's drive is typed (the Gyp sheet works its own drive time, so a far answer fills nothing there, and neither does the control): the line comes back as the empty
-    row a new bid holds, on a 190 mile job. Pressed twice before the library has answered, the control reads the library once and adds one line.
+def test_a_gyp_carriers_line_comes_back_filled_and_a_double_press_reads_the_library_once(ran):
+    """A Gyp carrier's drive FILLS from the miles like the others (round 7, Hanz 2026-10-21, D2), so the line the control brings back on a 190 mile job is filled on the crew's size read off
+    the crew lines (entered in hours): 4 x 6.5 x $33 = $858. Until round 7 the Gyp sheet's drive was typed and the line came back as the empty row a new bid holds. Pressed twice before the
+    library has answered, the control reads the library once and adds one line.
 
-    Mutation: fill a Gyp carrier's added line; let a second press read the library again."""
+    Mutation: leave a Gyp carrier's added line empty; let a second press read the library again."""
     g = ran["addTravel"]["gypFar"]
     assert g["carrier"] == 'Gyp (USG 1-8")' and g["count"] == 1
-    assert g["row"] == {"guys": "", "days": "", "auto": False, "follow": None, "seed": None, "typed": False, "hoursTyped": False, "on": True, "cost": 0}
+    assert g["row"] == _fill(4, 6.5, 858)
     assert g["libraryReads"] == 1
 
 
@@ -339,7 +341,8 @@ def test_a_travel_labor_line_added_back_on_a_local_job_comes_up_empty(ran):
 # ── F. the note under an option names the sheet by its name on screen ───────────────────────────────────────────────────────────────────────
 def test_the_note_under_an_option_names_the_carrier_by_its_name_on_screen(ran):
     """A copy of the Polish sheet (id Copy1, named "Polish copy" on the sheet bar) made the base: the Polish root is an option, and its Labor step and its Review card said "at the rates
-    set on the Copy1 section", a tab id nobody sees. They name the sheet as the sheet bar does. (A Combo's other base names its carrier too.)
+    set on the Copy1 section", a tab id nobody sees. They name the sheet as the sheet bar does. (A Combo's other base names its carrier too: since round 7 its crew drives on its own,
+    Hanz's D1 of 2026-10-21, and the note says so, and that Hotel and Per Diem are charged once, on the Polish section.)
 
     Mutation: name the section by its tab id."""
     n = ran["notes"]
@@ -347,7 +350,8 @@ def test_the_note_under_an_option_names_the_carrier_by_its_name_on_screen(ran):
     assert n["labor"]["note"] == ("This option is priced apart, so it carries its own Hotel and Per Diem for its own crew when the job is on the road, "
                                   "at the rates set on the Polish copy section. Open it to change them.")
     assert n["review"] == "rates set on the Polish copy section"
-    assert n["comboNote"] == "Travel, Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them."
+    assert n["comboNote"] == ("This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the Polish section. "
+                              "Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them.")
 
 
 # ── G. the patch note moves with the takeoff ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -365,7 +369,7 @@ def test_the_patch_note_on_the_material_step_moves_with_the_takeoff(ran, sheet, 
 
 # ── red without the code: break a COPY of the page or the model one line at a time ──────────────────────────────────────────────────────────
 DEMOTED = '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catch (err) { demoted = false; }'
-GUARD = "if (entries === null) return;   // unreadable tabs (a section with no layout): there are no options to follow, only the carrier's row (followDistanceHours)"
+GUARD = "if (entries === null) return;   // unreadable tabs (a section with no layout): there are no options to follow, only the root's row (followDistanceHours)"
 GUARD_BACK = "if (entries === null) return;   // unreadable tabs (a section with no layout): there are no sections to give a row back from"
 FILL_IF = "if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) {"
 SYNC_QTY = "if (l && l.qty_auto !== false) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;"
@@ -373,7 +377,8 @@ NORMALIZE_TYPED = "if (l.qty_typed === true) out[k].qty_typed = true;"
 NORMALIZE_FOLLOW = 'if (l.qty_follow === "labor" && out[k].qty_auto && l.qty_typed !== true) out[k].qty_follow = "labor";'
 OWN_LINE = "function ownLineCost(line) { return (line && rowOn(line)) ? roundUp(days * num(line.rate)) : 0; }"
 SYNC_OPEN = "      var carrier = multi ? sectionOf(model, travelCarrier(model)).section : model;"
-HOW_DECISION = ('        (tr ? "Travel Labor, Lodging and Per Diem come on." : "Lodging and Per Diem come on, and there is no Travel Labor line to price the drive: add it below.");')
+# (round 7, part 4, P6: the decision is three lines now, the carrier of a job of several bases saying THIS SHEET has no line; the first holds the "come on" the break makes always)
+HOW_DECISION = '        (tr ? "Travel Labor, Lodging and Per Diem come on."'
 RAIL_LABOR = "    (M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });"
 RAIL_TAKEOFF = "    (M.takeoff instanceof Array ? M.takeoff : []).forEach(function (r) {"
 CAP_EPOXY = 'if (epoxyCapEl && capEntry && capEntry.role === "epoxy") epoxyCapEl.innerHTML = epoxyCaptionText(capEntry);'
@@ -385,16 +390,16 @@ HINT_REPAINT = "if (l) el.textContent = B.travelQtyHint(ROOT, activeTab, key, l,
 FOLLOW_NOTE = 'var followNote = !ownTravel && B.qtyFollows(tl) ? B.travelFollowWords(ROOT, activeTab, k, M.labor) : "";'
 CONTROL = "      html += (travelRows || addTravelHtml()) + travelCard(\"lodging\") + travelCard(\"per_diem\");"
 CLICK = '    if (t.closest("[data-add-travel]")) { addTravelLaborPress(); return; }'
-ADD_FILL = "    if (miles !== null && layout !== \"gyp\") followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);"
+ADD_FILL = "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !drive, trips);"
 ADD_ONCE = "    if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;"
 ADD_FRESH = "    return stampRateDefaults([laborRowStartsEmpty(seed)])[0];"
-HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : "Travel Labor: no line on this bid, $0");'
+HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : others.length ? "Travel Labor on this sheet: no line, $0" : "Travel Labor: no line on this bid, $0");'
 HOW_FOLLOWED = "    if (followed.length) {"
 NOTE_NAME = "    var name = carrierName();"
 
 # (Round-5 audit, medium: a far Gyp job's nights were TYPED, because a Gyp crew is entered in hours and the man-days counted day rows only. SUPERSEDED in round 6 by Hanz's decision to fill
-# them: Kyle's Gyp tab counts its own nights from those hours, ten to a night (Gyp!B64), so a Gyp carrier's nights follow the crew like every carrier's and the card says so. The Gyp DRIVE is
-# the one thing that stays typed. Held by test_polish_travel_round6.py, the sequence walk's NIGHTS rule, and test_gyp_v2_proof.py's 40 lodging vectors.)
+# them: Kyle's Gyp tab counts its own nights from those hours, ten to a night (Gyp!B64), so a Gyp carrier's nights follow the crew like every carrier's and the card says so. The Gyp DRIVE
+# stayed typed until round 7, when Hanz's D2 (2026-10-21) filled it from the miles too. Held by test_polish_travel_round6.py, the sequence walk's NIGHTS rule, and test_gyp_v2_proof.py's 40 lodging vectors.)
 
 
 def test_a_travel_labor_line_taken_away_stays_away_after_a_reload_and_add_brings_it_back(ran):
@@ -414,7 +419,7 @@ BREAKS = {
         "js/polish-estimate.js", "      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);", "      void gone;",
         lambda g: g["xStays"]["flag"] is False or g["xStays"]["rowAfterReload"] is not None or g["xStays"]["session"] != g["xStays"]["reloaded"]),
     "Add does not take the answer back": (
-        "js/bid-model.js", "    if (isCarrier) delete model.no_travel_labor;", "    void 0;",
+        "js/bid-model.js", "        delete model.no_travel_labor;", "        void 0;",
         lambda g: g["xStays"]["flagAfterAdd"] is not False),
     "a base the pick demoted loses its row to the new carrier": (
         "js/bid-model.js", DEMOTED, "    demoted = false;",
@@ -478,7 +483,7 @@ BREAKS = {
         "js/bid-model.js", NORMALIZE_FOLLOW, "void l;",
         lambda g: g["nights"]["reopenedFollowing"]["local"]["lodging"]["qty"] != ""),
     "a carrier that moves does not bring the nights under the rule": (
-        "js/bid-model.js", "      if (miles !== null) followDistanceNights(model, miles);", "      void miles;",
+        "js/bid-model.js", "    if (miles !== null && (arrived.length || !carrierKept(model, fromTab))) followDistanceNights(model, miles);", "    void miles;",
         lambda g: g["nights"]["carrierMoved"]["n"]["lodging"]["follow"] != "labor"),
     "an option is charged the quantity the job's line holds": (
         "js/bid-model.js", OWN_LINE, "function ownLineCost(line) { return (line && rowOn(line)) ? roundUp(travelQty(line, rows) * num(line.rate)) : 0; }",
@@ -521,14 +526,17 @@ BREAKS = {
         "js/bid-model.js", ADD_FRESH, "    return seed;",
         lambda g: g["addTravel"]["polishLocal"]["added"]["keys"] != ["days", "guys", "guys_auto", "id", "label", "rate", "rate_default", "unit"]),
     "the summary claims Travel Labor comes on over a job with no line": (
-        "js/bid-model.js", HOW_DECISION, '        "Travel Labor, Lodging and Per Diem come on.";',
+        "js/bid-model.js", HOW_DECISION, '        (true ? "Travel Labor, Lodging and Per Diem come on."',
         lambda g: "Travel Labor, Lodging and Per Diem come on" in g["addTravel"]["polishFar"]["removed"]["how"]),
     "the summary calls a missing line a switched-off one": (
         "js/bid-model.js", HOW_NO_LINE, 'lines.push("Travel Labor: off, $0");',
         lambda g: "Travel Labor: off, $0" in g["addTravel"]["polishFar"]["removed"]["how"]),
-    "a Gyp carrier's added line is filled by the distance": (
-        "js/bid-model.js", ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);",
-        lambda g: g["addTravel"]["gypFar"]["row"]["days"] != ""),
+    # (round 7, D2: the break is the old rule now, a Gyp carrier's added line left empty)
+    "a Gyp carrier's added line is not filled by the distance": (
+        "js/bid-model.js", ADD_FILL,
+        '    if (miles !== null && (readableSections(model) || []).every(function (e) { return e.section !== holder || e.layout !== "gyp"; })) '
+        'followDistanceOnRow(model, added, holder.labor, miles, !drive, trips);',
+        lambda g: g["addTravel"]["gypFar"]["row"]["days"] != 6.5),
     "a second press of the control reads the library again": (
         "js/polish-estimate.js", "    if (travelAdding) return;", "    void travelAdding;",
         lambda g: g["addTravel"]["gypFar"]["libraryReads"] != 1),

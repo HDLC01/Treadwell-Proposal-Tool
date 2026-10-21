@@ -467,17 +467,23 @@ def test_a_saved_bid_is_given_nothing_and_the_input_is_never_edited(ran):
 
 
 def test_a_new_tab_section_is_seeded_by_its_own_layout_and_a_saved_one_is_left_alone(ran):
+    """The Epoxy BASE beside the Polish root is seeded the Epoxy defaults and, since round 7, its own Travel line: every base crew drives its own (Hanz's D1 of 2026-10-21; it held
+    none, the job's one drive being the carrier's). The Seal option, given its own labor, is left alone."""
     m = ran["seeding"]["multi"]
-    assert m["epoxyLabor"] == ["lab-x", "lab-ep"], "the Epoxy defaults, not the Polish-only one"
+    assert m["epoxyLabor"] == ["travel", "lab-x", "lab-ep"], "the Epoxy defaults, not the Polish-only one, and its own Travel line"
     assert "lab-po" not in m["epoxyLabor"] and "lab-ep" not in m["rootLabor"]
-    assert m["epoxyRates"] == [50, 50] and m["epoxyTakeoff"] == [4000] and m["rootTakeoff"] == [8000]
+    assert m["epoxyRates"] == [41, 50, 50] and m["epoxyTakeoff"] == [4000] and m["rootTakeoff"] == [8000]
     assert m["epoxyKeepsItsSnapshot"] is True
     assert m["sealLabor"] == ["sealing"] and m["sealLaborKept"] is True and m["sealTakeoff"] == [5000]
 
 
-def test_travel_and_the_fees_default_go_to_the_carrier_only(ran):
+def test_travel_goes_to_every_base_and_the_fees_default_to_the_carrier_only(ran):
+    """Every BASE is seeded its own Travel line (round 7, Hanz's D1 of 2026-10-21: until then only the carrier was), an option is not, and the fees default goes to the carrier alone. A new
+    Combo whose library puts Travel on Polish bids only seeds the Polish root's line and none on the Epoxy base, whose decline is that SHEET's answer and not the job's."""
     s = ran["seeding"]
-    assert s["multi"]["rootHasTravel"] is True and s["multi"]["epoxyHasTravel"] is False
+    assert s["multi"]["rootHasTravel"] is True and s["multi"]["epoxyHasTravel"] is True and "travel" not in s["multi"]["sealLabor"]
+    assert s["comboDeclined"] == {"rootHasTravel": True, "epoxyHasTravel": False, "epoxySaid": True, "job": False}
+    assert s["newOption"] == {"epoxyHasTravel": True, "sealHasTravel": False}, "a new option is seeded no Travel line beside two bases that are"
     assert s["multi"]["rootFees"] == 250 and s["multi"]["epoxyFees"] == 0
     e = s["epoxyOnly"]
     assert e["carrier"] == "Epoxy" and e["epoxyLabor"] == ["travel", "lab-x", "lab-ep"]
@@ -636,11 +642,12 @@ BREAKS = {
         "js/bid-model.js", "      return e.kind !== \"off\" && (e.root || isNewSection(e.section, false));",
         '      return e.kind !== "off";',
         lambda r: "error" in r["seeding"] or r["seeding"]["multi"]["sealLaborKept"] is False),
+    # (round 7: every BASE is seeded Travel, Hanz's D1 of 2026-10-21, so what this holds is an OPTION: a new one is seeded none)
     "every section gets Travel": (
         "js/bid-model.js",
-        "      s.labor = drives ? rows : rows.filter(function (r) { return !r || r.id !== \"travel\"; });",
+        "      s.labor = seeded ? rows : rows.filter(function (r) { return !r || r.id !== \"travel\"; });",
         "      s.labor = rows;",
-        lambda r: r["seeding"]["multi"]["epoxyHasTravel"] is True),
+        lambda r: r["seeding"]["newOption"]["sealHasTravel"] is True),
     "the calculator runs on a saved bid": (
         "js/bid-model.js", "        if (e.root && !laborGate) return;", "        void laborGate;",
         lambda r: r["seeding"]["savedUntouched"] is False),

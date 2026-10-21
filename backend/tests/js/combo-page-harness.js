@@ -211,7 +211,8 @@ async function main() {
     lump: savedT.proposal_lump_sum, handLump: handT.polish.total + handT.epoxy.total,
     handLumpBefore: noTravel.polish.total + noTravel.epoxy.total,
   };
-  // the Epoxy section's Labor step has no travel block, and its Review says where travel is charged
+  // the Epoxy section's Labor step has none of the carrier's travel block (since round 7 it draws its own Travel Labor card: its crew drives on its own, Hanz's D1 of 2026-10-21),
+  // and its Review says where Hotel and Per Diem are charged
   api.go(1);
   const epoxyLabor = html(b, "panels");
   out.travel.epoxyLaborHasBlock = epoxyLabor.indexOf("data-trv-how") >= 0;

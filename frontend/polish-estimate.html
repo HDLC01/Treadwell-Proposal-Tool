@@ -639,10 +639,13 @@
            background:var(--rev-tot,transparent)}
     /* THE WORKING (Hanz, 2026-10-19): every Review table has a labelled header row, Item | Quantity | Unit | Rate | Total. The
        table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page.
-       THE SCROLL PADDING is the pinned Total column's width (see the pin below): a box tabbed into scrolls clear of that column, not under it. WHILE FOCUS IS IN THAT
+       THE SCROLL PADDING is the pinned Total column's width (see the pin below) AND what a Rate cell holds to the right of a box: a box tabbed or typed into scrolls clear of
+       that column with the rest of its line, not under it. 126px + 16px for the "%" and its gap + the cell's 8px of padding = 150px (round 7, part 2, L4, 2026-10-21): at the
+       column's 126px alone the browser brought a % box just to the column's edge and left the "%", its gap and the end of the refusal's line under it (Chrome, sidebar open:
+       11px at 850, 820 and 600px wide); at 150px it scrolls the table to its end and they end 8px clear. WHILE FOCUS IS IN THAT
        COLUMN THE PADDING IS NOTHING: its boxes sit inside the padded-off band, so a focus or a keystroke in one would scroll the table to put it clear of itself (the
        cost the sticky head found in a browser, see .v2head), and a pinned box is on screen already. */
-    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:126px}
+    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:150px}
     .tscroll:has(td:nth-child(5):focus-within){scroll-padding-right:0}
     /* 550: THE FOUR FIXED COLUMNS (below) AND 144px FOR ITEM, 122px of it room for words. It was 640 until the 2026-10-20 sixth round. Round 5 chose 640 for the
        markup card's boxes, with columns wider than their contents need, and at 916px with the staff sidebar open the table's box is 575px: every card scrolled 65px
@@ -673,6 +676,11 @@
     .rev-t th.r,.mk th.r{text-align:right}
     .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}
     .rev-t td.q,.rev-t td.rt,.mk td.q,.mk td.rt{white-space:nowrap}
+    /* A RATE'S UNIT WRAPS UNDER ITS FIGURE (round 7, part 4, P8: the round-6 staging walk's X2, a regression of #697). A Rate cell holds 92px of text (108 less its padding), and a rate worked
+       to four places with a long unit is wider: "$16.8113 / gallon", the Gyp Primer row, is 116.8px in Chrome, and it ran under the pinned Total column ("$16.8113 / gall"). The cell may break
+       between the figure and its unit, balanced, so it reads "$16.8113" over "/ gallon"; its widest piece is the figure, never the whole line, so no width or minimum moves and the table still
+       fits from 900px with the sidebar open. A browser without text-wrap:balance breaks at the last space that fits. backend/tests/test_v2_review_table_fits.py does this arithmetic. */
+    .rev-t td.rt{white-space:normal;text-wrap:balance}
     .rev-t .note.work,.mk .note.work{display:block;font:11px var(--mono);color:var(--ink-3)}
     .mk td.q,.mk td.rt{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-3)}
     .mk td.rt{min-width:96px}
@@ -752,6 +760,12 @@
     .bid{position:fixed;left:0;right:0;bottom:0;background:var(--card);
          border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9;transition:left .2s ease}
     @media (min-width:768px){ html.tw-nav-open .bid{left:var(--tw-w,240px)} }
+    /* A FOCUSED FIELD SCROLLS CLEAR OF THE BAR (round 7, part 2, L3, 2026-10-21). The body's padding keeps the page's LAST row above the bar, but a field anywhere else that is focused (a Tab, a
+       focus() the page makes) was scrolled only just into the window, whose bottom is the bar's: Chrome left the Review's Shipping % box at 673 to 700px of a 700px window, the bar's top at 616,
+       wholly behind it. html's scroll-padding-bottom is the bar's measured height (--bid-h, which js/polish-estimate.js writes; 132px until it has, as the body's padding) and 8px of air, so the
+       browser brings a focused field into the part of the window the bar does not cover. The bar holds nothing that takes focus, so this needs no :focus-within exception like the sticky head's
+       scroll-padding-top. backend/tests/test_v2_bid_bar_height.py reads the rule and that premise. */
+    html{scroll-padding-bottom:calc(var(--bid-h,132px) + 8px)}
     .bid-in{max-width:1000px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;
          gap:18px;flex-wrap:wrap}
     .maths{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;

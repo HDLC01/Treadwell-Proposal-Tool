@@ -542,6 +542,8 @@ function build(opts) {
       return { json: async () => ({ ok: true, calc: clone(opts.laborCalc === undefined ? [] : opts.laborCalc) }) };
     }
     if (/\/labor/.test(url)) {
+      // `laborGate`: a promise the answer waits on (a slow library), so a scenario can act on the page while the read is out (round 7, part 4, P5). Read when the page asks.
+      if (opts.laborGate) await opts.laborGate;
       if (opts.laborFails) throw new Error("the defaults table is not there");
       return { json: async () => (opts.laborBody !== undefined
         ? clone(opts.laborBody)
