@@ -36,10 +36,14 @@
  *   fast                Continue pressed 100 ms after the last edit: nothing has been saved yet.
  *   fastAfterAutosave   Continue at 700 ms: the 600 ms autosave has run, and the 2.5 s timer that sends it is armed.
  *   slow                Continue at 3.3 s: the autosave PUT has landed on the live page. The path that always worked.
+ *   gcTab               "+ New" from the GC tab, which starts the bid with { audience: "GC" } already in the draft: the
+ *                       sandbox has something to save, so it saves and files the project as the page opens, and no
+ *                       filing is left pending. Fast Continue after that must leave it as it is.
  *   slowFiling          a fast Continue with a server that takes 600 ms to file the project (the filing is a second
  *                       request, so a page that leaves while it is in flight races the estimate page's first read).
- *   sweep               the fast flows over eight sets of latencies (a slow save, a slow filing, a slow link, a page
- *                       that boots at once or late): the answer must not depend on who is faster.
+ *   sweep               the fast flows (Continue at 100 ms and at 700 ms) over eight sets of latencies (a slow save, a
+ *                       slow filing, both, a slow link, a page that boots at once or late, everything fast): sixteen
+ *                       runs, and the answer must not depend on who is faster.
  *   hang                the first PUT is never answered: Continue must not trap the estimator on the page.
  *   offline             the first PUT fails at once (no network): Continue must not wait for anything.
  *   failedFiling        the server will not file the project, three ways (HTTP 500, a 200 carrying {"ok": false}, no
@@ -78,9 +82,7 @@ const L = require("./_lib.js");
 
 const ROOT = path.resolve(process.argv[2] || path.join(__dirname, "..", "..", "..", "frontend"));
 
-const clone = (v) => JSON.parse(JSON.stringify(v));
-
-/** The seconds Continue will wait for the save, read off the page so the test does not restate it. */
+/** The milliseconds Continue will wait for the save, read off the page so the test does not restate it. */
 function saveWaitMs() {
   const m = /var SAVE_WAIT_MS = (\d+);/.exec(L.read(path.join(ROOT, "js", "polish-intake.js")));
   return m ? Number(m[1]) : null;
@@ -108,9 +110,9 @@ function summary(w, id, extra) {
 /** The board's "+ New estimate" on the Direct tab: the intake on a fresh draft, a name and an address typed,
  *  Continue pressed `waitMs` after the last edit, then everything is left to finish. */
 async function newEstimate(opts) {
-  const o = Object.assign({ waitMs: 100, world: {}, faults: [] }, opts || {});
+  const o = Object.assign({ waitMs: 100, world: {}, faults: [], gc: false }, opts || {});
   const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
-  const intake = await w.startNewEstimate();
+  const intake = await w.startNewEstimate({ gc: o.gc });
   const id = intake.draftId();
   const pendingAtOpen = w.localKey("intent");
   const noteAtOpen = intake.text("sandbox-note");
@@ -160,6 +162,24 @@ async function modelChecks() {
       await v.settle();
       const d = v.rows.get("owned").data;
       return { is_test: d.is_test, archived: d.archived, assigned_estimator: d.assigned_estimator, project_name: d.project_name };
+    })(),
+    // What the model answers on each route the fix touches, so the driver can put the real routes beside it.
+    routeAnswers: await (async () => {
+      const v = W.createWorld({ frontend: ROOT });
+      const p = v.load("/blank.html");
+      const out = {};
+      const ask = async (key, url, init) => {
+        let got = null;
+        p.win.fetch(url, init).then(async (r) => { const j = await r.json(); got = { status: r.status, keys: Object.keys(j).sort(), body: j }; });
+        await v.settle();
+        out[key] = got;
+      };
+      await ask("getMissing", "/api/draft/m1");
+      await ask("putNew", "/api/draft/m1", { method: "PUT", body: JSON.stringify({ data: { project_name: "A" } }) });
+      await ask("getThere", "/api/draft/m1");
+      await ask("fileThere", "/api/draft/m1/test", { method: "POST", body: JSON.stringify({ is_test: true }) });
+      await ask("fileMissing", "/api/draft/m2/test", { method: "POST", body: JSON.stringify({ is_test: true }) });
+      return out;
     })(),
     fileMissingRow: await (async () => {
       const v = W.createWorld({ frontend: ROOT });
@@ -264,12 +284,11 @@ const projectData = (over) => Object.assign({
 }, over || {});
 
 async function openProject(opts) {
-  const o = Object.assign({ row: {}, intent: undefined, faults: [] }, opts || {});
+  const o = Object.assign({ row: {}, intent: undefined }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   w.seed(PROJECT, projectData(o.row));
   w.holdLocally(PROJECT, projectData());
   if (o.intent !== undefined) w.local.setItem(W.KEYS.intent, o.intent);
-  o.faults.forEach((f) => w.fault(f));
   w.load("/polish-estimate.html?d=" + PROJECT);
   await w.settle();
   return summary(w, PROJECT, { pendingBefore: o.intent === undefined ? null : o.intent });
@@ -285,6 +304,7 @@ const FILING_FAULTS = ["http500", "okfalse", "network", "html", "gone"];
   out.fastAfterAutosave = await newEstimate({ waitMs: 700 });
   out.slow = await newEstimate({ waitMs: 3300 });
   out.slowFiling = await newEstimate({ waitMs: 100, world: { proc: { TEST: 600 } } });
+  out.gcTab = await newEstimate({ waitMs: 100, gc: true });
   out.sweep = await sweep();
   out.hang = await newEstimate({ waitMs: 100, faults: [{ route: "PUT", mode: "hang", times: 1 }] });
   out.offline = await newEstimate({ waitMs: 100, faults: [{ route: "PUT", mode: "network", times: 1 }] });
@@ -305,7 +325,7 @@ const FILING_FAULTS = ["http500", "okfalse", "network", "html", "gone"];
     intent: PROJECT + ":1" });
   out.unfiled = {};
   for (const mode of FILING_FAULTS) {
-    const run = await leave({ faults: [{ route: "TEST", mode: mode, id: undefined }] });
+    const run = await leave({ faults: [{ route: "TEST", mode: mode }] });
     out.unfiled[mode] = summary(run.w, run.id, { mode: mode });
   }
   console.log(JSON.stringify(out));

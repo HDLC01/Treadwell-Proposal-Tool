@@ -22,8 +22,11 @@ HOW THESE TESTS RUN. tests/js/new-estimate-test-flag-harness.js runs the REAL sh
 js/polish-intake.js, whole, in tests/js/_world.js: a browser model with virtual time in which a page's timers and
 replies die with it and a keepalive request survives it with nobody to hear the answer. The intake is driven as a
 person drives it (the board's New estimate, typing, Continue); every fact is read off the server's rows and the
-pages after everything has settled. The model reproduces X1 on 59922bd (see the first test of each flow), and the
-MUTATION tests at the end break a COPY of each source one line at a time and require a named check to go red.
+pages after everything has settled. On 59922bd the model reproduces X1 (both fast flows fork), which is what makes
+its green on the fix worth something; its browser rules and its server are held to the real thing by the first tests
+below (what a browser does with a page it is leaving, and the real routes of backend/main.py answering the same
+requests). The MUTATION tests at the end break a COPY of the sources, one or two lines at a time, and require a named
+check to go red.
 """
 import pathlib
 import re
@@ -31,7 +34,10 @@ import shutil
 
 import pytest
 
+from fastapi.testclient import TestClient
+
 import drafts
+import main
 from _golden_support import FRONTEND, break_source
 from _node import last_json_line, require_node, run_node
 
@@ -45,6 +51,7 @@ PAGE_FILES = ["shared.js", "polish-intake.html", "js/polish-intake.js", "js/poli
               "js/intake-scope.js", "js/bid-model.js", "js/excel-math.js"]
 INTAKE_FILES = ["shared.js", "polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
+client = TestClient(main.app)
 INTENT_KEY = "treadwell.proposal_tool.new_is_test"
 DIRECT = "editing it directly"            # showDirectNote(false): "... Estimating Tool v2 is editing it directly."
 COPY = "test copy"                        # showCopyNote: "You are editing a test copy. ..."
@@ -134,6 +141,46 @@ def test_the_server_model_is_the_route_contract_of_the_backend(ran):
     assert m["fileMissingRow"] == {"ok": True, "existed": False, "is_test": True}
 
 
+@pytest.fixture()
+def store(fake_supabase, monkeypatch):
+    """The real routes over the in-memory fake (conftest), never the live client: see test_projects_test_flag.py."""
+    st = {"drafts": [], "events": []}
+    monkeypatch.setattr(drafts, "get_client", lambda: fake_supabase(st))
+    return st
+
+
+def test_the_model_answers_like_the_real_routes(ran, store):
+    """The same five requests, sent to backend/main.py's real routes (over the in-memory store) and to the model:
+    a read of a project nobody saved, the first save, a read of what was saved, filing it, and filing a project that
+    is not there. Status codes agree, the filing answers are equal, a save answers the same keys, and what the
+    model's read hands back is a subset of the real one's (the pages read `data` and `updated_at`). A model of a
+    server that answered differently from the server would prove the fix against a server that is not there."""
+    got = ran["model"]["routeAnswers"]
+    real = {}
+    r = client.get("/api/draft/m1")
+    real["getMissing"] = {"status": r.status_code, "keys": sorted(r.json())}
+    r = client.put("/api/draft/m1", json={"data": {"project_name": "A"}})
+    real["putNew"] = {"status": r.status_code, "keys": sorted(r.json()), "body": r.json()}
+    r = client.get("/api/draft/m1")
+    real["getThere"] = {"status": r.status_code, "keys": sorted(r.json()), "body": r.json()}
+    r = client.post("/api/draft/m1/test", json={"is_test": True})
+    real["fileThere"] = {"status": r.status_code, "body": r.json()}
+    r = client.post("/api/draft/m2/test", json={"is_test": True})
+    real["fileMissing"] = {"status": r.status_code, "body": r.json()}
+
+    assert (got["getMissing"]["status"], got["getMissing"]["keys"]) == (real["getMissing"]["status"], real["getMissing"]["keys"])
+    assert got["putNew"]["status"] == real["putNew"]["status"] == 200
+    assert got["putNew"]["keys"] == real["putNew"]["keys"], (got["putNew"]["keys"], real["putNew"]["keys"])
+    assert got["getThere"]["status"] == real["getThere"]["status"] == 200
+    assert set(got["getThere"]["keys"]) <= set(real["getThere"]["keys"]) and {"ok", "data", "updated_at"} <= set(got["getThere"]["keys"])
+    assert got["getThere"]["body"]["data"] == real["getThere"]["body"]["data"] == {"project_name": "A"}
+    for key in ("fileThere", "fileMissing"):
+        assert got[key]["status"] == real[key]["status"] == 200, key
+        assert got[key]["body"] == real[key]["body"], (key, got[key]["body"], real[key]["body"])
+    assert real["fileThere"]["body"] == {"ok": True, "existed": True, "is_test": True}
+    assert real["fileMissing"]["body"] == {"ok": True, "existed": False, "is_test": True}
+
+
 def test_the_board_opens_the_intake_the_way_the_harness_does():
     """The harness does what js/v2-board.js startNew() does before the intake opens: clear the three keys that
     make shared.js mint a fresh draft, then open /polish-intake.html with no ?d=. Read from the board's source so
@@ -145,6 +192,8 @@ def test_the_board_opens_the_intake_the_way_the_harness_does():
     assert sorted(cleared) == sorted(["treadwell.proposal_tool.state", "treadwell.proposal_tool.draft_id",
                                       "treadwell.proposal_tool.hydrated_once"]), cleared
     assert 'window.location.assign("/polish-intake.html")' in body, "the board no longer sends the browser to a bare intake"
+    assert 'if (TAB === "gc") localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify({ audience: "GC" }));' in body, (
+        "the GC tab no longer starts a bid with { audience: GC } in the draft")
 
 
 def test_the_estimate_page_the_harness_runs_is_the_real_ones_first_lines():
@@ -196,6 +245,18 @@ def test_a_slow_continue_is_unchanged(ran):
     assert first["keepalive"] is False and first["outcome"] == "replied" and first["at"] < r["continueAt"], first
     filing = reqs(r, "TEST", r["id"], page="intake")
     assert len(filing) == 1 and filing[0]["at"] < r["continueAt"], "the filing waited for Continue: %r" % filing
+
+
+def test_a_new_gc_estimate_is_filed_as_the_page_opens_and_stays_filed(ran):
+    """The GC tab's + New leaves { audience: "GC" } in the draft before the intake opens, so the sandbox has something
+    to save: it saves the project and files it at once, and no filing is left pending (the intent is for a project
+    with nothing in it). A fast Continue after that leaves the project as it is: filed, nothing forked, and the
+    first save was the sandbox's, before Continue was pressed."""
+    r = ran["gcTab"]
+    assert_filed_and_edited_directly(r, "gcTab")
+    first = reqs(r, "PUT", r["id"])[0]
+    assert first["at"] < r["continueAt"] and first["keepalive"] is False and first["outcome"] == "replied", first
+    assert r["pendingAtOpen"] is None, "a filing was left pending for a project that is filed as the page opens"
 
 
 def test_a_slow_filing_is_waited_for(ran):

@@ -62,7 +62,7 @@ const SERVER_OWNED = ["is_test", "archived", "assigned_estimator"];
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-const read = (file) => fs.readFileSync(file, "utf8").replace(/^﻿/, "");
+const read = (file) => fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
 
 // ── time ─────────────────────────────────────────────────────────────────────────────────────────────────
 function createSim() {
@@ -220,7 +220,8 @@ function createWorld(cfg) {
     return { route: "OTHER" };
   }
 
-  /** A fault for this request, used up as it is handed out. `which` matches the route, or "TEST", "PUT"... */
+  /** The fault that applies to this request, if any, used up as it is handed out. A fault names a route ("GET",
+   *  "PUT" or "TEST"), optionally one draft id, and how many requests it spoils (all of them when it says nothing). */
   function faultFor(req) {
     for (const f of world.faults) {
       if (f.used >= f.times) continue;
@@ -265,7 +266,7 @@ function createWorld(cfg) {
   world.seed = (id, data) => {
     world.rows.set(id, { data: clone(data), created_at: stamp(), updated_at: stamp() });
   };
-  /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang", id?, times? } */
+  /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang"|"html"|"gone", id?, times? } */
   world.fault = (spec) => { world.faults.push(Object.assign({ times: Infinity, used: 0 }, spec)); };
 
   // ── fetch, per page ────────────────────────────────────────────────────────────────────────────────────
@@ -438,7 +439,7 @@ function createWorld(cfg) {
       page.form.fire("input", { target: c });
     };
     /** Press Continue (or Enter in a box): the form's own submit handlers. */
-    page.pressContinue = () => { page.pressedAt = sim.now; page.form.fire("submit", {}); };
+    page.pressContinue = () => { page.form.fire("submit", {}); };
     /** Click a link: the browser is sent to `href`. */
     page.follow = (href) => world.navigate(page, href);
     page.text = (id) => page.el(id).textContent;
@@ -451,8 +452,7 @@ function createWorld(cfg) {
    *  decision is the whole of what this harness needs the estimate page for (see the header). */
   function openEstimate(page) {
     const win = page.win;
-    page.adopted = 0;
-    const adopt = () => { page.adopted++; };
+    const adopt = () => {};                         // the real page rebuilds its model here; this one has none
     (async () => {
       try { if (win.TWAuth && win.TWAuth.ready) await win.TWAuth.ready; } catch (e) { /* none here */ }
       try { await win.TW.draftReady; } catch (e) { /* the page carries on */ }
@@ -492,15 +492,14 @@ function createWorld(cfg) {
   world.now = () => sim.now;
   world.localKey = (k) => local.getItem(KEYS[k] || k);
 
-  /** What this browser has stored as the pending filing of a new project (shared.js and the sandbox's key). */
-  world.armIntent = (id, value) => { local.setItem(KEYS.intent, id + ":" + value); };
-
   /** The board's "+ New estimate": the same keys js/v2-board.js startNew() clears so shared.js mints a new
-   *  draft id, then the intake page opens with no ?d=. Resolves once the page has booted. */
-  world.startNewEstimate = async () => {
+   *  draft id, then the intake page opens with no ?d=. From the GC tab the bid starts as a GC one, which startNew
+   *  does by leaving { audience: "GC" } behind (`opts.gc`). Resolves once the page has booted. */
+  world.startNewEstimate = async (opts) => {
     local.removeItem(KEYS.state);
     local.removeItem(KEYS.draftId);
     session.removeItem(KEYS.guard);
+    if (opts && opts.gc) local.setItem(KEYS.state, JSON.stringify({ audience: "GC" }));
     const page = world.load("/polish-intake.html");
     await world.settle();
     return page;
