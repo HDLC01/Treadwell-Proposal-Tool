@@ -929,7 +929,13 @@
   }
 
   // ── the bid bar ─────────────────────────────────────────────────────────────
+  /** Draw the bar and, where nothing is watching it (no ResizeObserver), measure it: AFTER its words are written, because a bar that says more wraps onto another row. One place, so the
+   *  bar drawn for one sheet and the bar drawn for several (paintBidFigures returns early after paintJobBid) are both measured. See the total bar's height, below. */
   function paintBid() {
+    paintBidFigures();
+    if (!barObserver) syncBarHeight();
+  }
+  function paintBidFigures() {
     var b = bid();
     $("bidbar").hidden = false;
     paintSections();
@@ -1092,6 +1098,32 @@
     syncHeadHeight();
   }
   watchHead();
+
+  // ── the total bar's height ──────────────────────────────────────────────────
+  // THE BAR IS position:fixed (#bidbar, .bid in polish-estimate.html), so it takes no room in the page, and the page keeps its last row (the step's Back / Next row) clear of it with the
+  // body's padding-bottom: the bar's height and a little air, held in --bid-h on the html element. That padding was a fixed 132px until the 2026-10-20 audit of the sixth round, and the bar
+  // is not a fixed height: with the staff sidebar open it is narrower than the window by the rail's width and its sums, its note and its total wrap onto a second row (154px tall at 1000px
+  // in Chrome, against 84px of one row), so the Back / Next row stood under it. So the height is read off the bar, as the sticky head's is (--v2head-h, above): a ResizeObserver says when it
+  // changes (an open sidebar changes the bar's width and fires no window resize), and a browser without one is told by the two things that change it, a repaint of the bar (paintBid) and a
+  // resize of the window. A page run without a layout (the harnesses' stand-in DOM) has no box to measure and nothing happens, and a bar with no height (it is hidden until its first drawing)
+  // leaves the last good figure, or the 132px the CSS stands on until there is one.
+  var barObserver = null;
+  function syncBarHeight() {
+    var bar = $("bidbar"), root = document.documentElement;
+    if (!bar || !root || !root.style || typeof root.style.setProperty !== "function" || typeof bar.getBoundingClientRect !== "function") return;
+    var box = bar.getBoundingClientRect();
+    var bh = box && typeof box.height === "number" ? Math.ceil(box.height) : 0;
+    if (bh > 0) root.style.setProperty("--bid-h", bh + "px");
+  }
+  function watchBar() {
+    var bar = $("bidbar"), RO = window.ResizeObserver;
+    if (bar && typeof RO === "function") {
+      try { barObserver = new RO(syncBarHeight); barObserver.observe(bar); } catch (err) { barObserver = null; }
+    }
+    if (!barObserver) window.addEventListener("resize", syncBarHeight);
+    syncBarHeight();
+  }
+  watchBar();
 
   /** Draw the sheet bar (the tabs and the open sheet's controls). Redrawn only when what it says changed.
    *
