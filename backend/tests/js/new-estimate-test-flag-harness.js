@@ -87,6 +87,8 @@
  *   abandonedV2Start    the v2 board's New estimate (the real startNew), Direct and GC, and the estimator opens another project: the GC
  *                       tab's first save refused, and the page left before it heard from the server (F2).
  *   v2BoardThenLiveIntake  a project the v2 board started, written first by the LIVE intake (F2).
+ *   twoSavesPending     the v2 intake left with both its own timer and shared.js's pending (a small draft; the first save sent slow; a ~36 KiB
+ *                       draft that fits one keepalive request and not two): ONE save is sent as the page goes, carrying the newest edit (F4).
  *   betaDoor            the live intake's "Continue with Estimating Tool v2" on a new bid from each Projects tab, fast and slow server: the v2
  *                       page must find the saved project (copy a real one, edit a test one), never stop for a row that is on its way (F3).
  *   betaDoorFeedback    the door while it waits (disabled, "Saving..."), on a server that hangs, on a save that fails, and in a browser that
@@ -1107,6 +1109,42 @@ async function bytesNotCharacters(fill, count) {
   return summary(w, BIG, { fill: fill, count: count });
 }
 
+/** F4. The v2 intake is left with TWO saves pending: the page's own 600 ms save has run (so shared.js's 2.5 s save of that copy is queued) and
+ *  the estimator edits once more (so the page's own 600 ms timer is pending too). Both pagehide handlers have something to send, and they used to
+ *  send it BOTH: shared.js's, as the shared blob stood (the older copy), and then the page's, which saves and sends the newest, two keepalive
+ *  PUTs of one draft. A server that finishes them out of order keeps the older copy, and the browser counts keepalive bodies against ONE
+ *  64 KiB budget, so for a draft of half that size the second (the newest) is refused outright. `opts.slowFirst`: the server takes that many
+ *  ms longer over the first save sent as the page goes, so it finishes last. `opts.big`: a saved Test project of about 36 KiB. */
+async function twoSavesPending(opts) {
+  const o = Object.assign({ big: false, slowFirst: 0 }, opts || {});
+  const w = W.createWorld({ frontend: ROOT });
+  let intake, id;
+  if (o.big) {
+    const data = { is_test: true, notes_text: "x".repeat(36 * 1024), project_name: "Overland Park Warehouse", address: "100 Main St",
+      city: "Overland Park", state: "KS", zip: "66212", work_type: "polish", audience: "Direct", polish_sf: 6000,
+      polish_estimate: { version: 2, conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } };
+    w.seed(BIG, data);
+    w.holdLocally(BIG, data);
+    intake = w.load("/polish-intake.html?d=" + BIG);
+    await w.settle();
+    id = BIG;
+  } else {
+    intake = await w.startNewEstimate();
+    id = intake.draftId();
+    intake.type("project_name", "Two Saves");
+  }
+  intake.type("address", "1 First St");
+  await w.advance(900);                                       // the page's 600 ms save has run: shared.js's 2.5 s save of that copy is queued
+  intake.type("address", NEWEST_ADDRESS);
+  await w.advance(150);                                       // the page's own 600 ms timer is pending
+  if (o.slowFirst) w.fault({ route: "PUT", mode: "slow", ms: o.slowFirst, times: 1 });   // the first save sent as the page goes finishes last
+  intake.follow("/projects.html");
+  const pagehideAt = w.now() + w.net.commitMs;
+  await w.settle();
+  return summary(w, id, { big: o.big, slowFirst: o.slowFirst, pagehideAt: pagehideAt });
+}
+const NEWEST_ADDRESS = "2 SECOND St (newest)";
+
 /** F3. The live intake's "Continue with Estimating Tool v2" (the beta door), pressed on a NEW bid started from the Projects page's `tab`. The door
  *  saves the project and opens the v2 intake on it, which asks the server whether the project has a row: a project that is not a test is
  *  COPIED (the real bid left alone), one that is a test is edited directly, and one that has been written into and has no row yet cannot be
@@ -1324,6 +1362,11 @@ process.on("exit", (code) => {
     "2-byte": await bytesNotCharacters("é", 36000),            // é: two bytes, one UTF-16 unit
     "3-byte": await bytesNotCharacters("€", 24000),            // the euro sign: three bytes, one UTF-16 unit
     "4-byte": await bytesNotCharacters("😀", 18000),      // an emoji: four bytes, TWO UTF-16 units (a surrogate pair)
+  };
+  out.twoSavesPending = {
+    "small": await twoSavesPending(),
+    "small, the first save slow": await twoSavesPending({ slowFirst: 400 }),
+    "big": await twoSavesPending({ big: true }),
   };
   out.betaDoorMs = betaDoorMs();
   const SLOW_SAVE = { proc: { PUT: 1500 } };

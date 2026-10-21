@@ -629,6 +629,29 @@ def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
 
 
 @needs_node
+def test_the_intake_tells_shared_js_when_its_own_pagehide_save_will_send_and_sends_even_if_its_save_throws(ran):
+    """X1, round 4, F4. shared.js registers its own pagehide handler FIRST, and with the page's own timer and shared.js's both pending it
+    sent the shared blob as it stood (the older copy) and then the page's handler saved and sent the newest: two keepalive PUTs of one
+    draft, which a server can finish out of order and a browser counts against ONE 64 KiB budget (tests/test_v2_new_estimate_test_flag.py runs
+    that through the real shared.js). So the page tells shared.js, through TW.pageSavesOnLeave, whether its own handler is about to save and
+    send: while its timer is pending, and not otherwise (so shared.js still sends its own when the page has nothing pending).
+
+    And because shared.js stands down on the page's word, the handler must not be able to fail before it has asked for the flush: a save that
+    throws on the way out still sends what is pending (try ... finally), or nothing would be sent at all.
+
+    Mutations: do not register the check (or register one that is always true, or always false); let a throwing save skip the flush."""
+    p = ran["pagehideFlush"]
+    lc = p["leaveCheck"]
+    assert lc["registered"], "the page never tells shared.js that its own pagehide handler saves and sends"
+    assert lc["armed"] is True, "the page says its pagehide handler will send nothing while its save is pending: %r" % (lc, )
+    assert lc["afterLeaving"] is False and lc["quiet"] is False, (
+        "the page says its pagehide handler will send when it has nothing pending, so shared.js would stand down and nothing would be sent: %r" % (lc, ))
+    t = p["whenTheSaveThrows"]
+    assert t["threw"] and t["flushed"] == 1 and t["asKeepalive"] == [True], (
+        "a save that threw on the way out left what was pending unsent: %r" % (t, ))
+
+
+@needs_node
 def test_a_refused_cross_tab_write_now_tells_the_estimator(ran):
     """shared.js silently refuses a write when another browser tab has re-stamped the shared
     localStorage blob onto a different draft — a console.warn only, invisible to an estimator, and

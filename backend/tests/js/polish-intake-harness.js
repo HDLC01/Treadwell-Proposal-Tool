@@ -432,6 +432,9 @@ function build(opts) {
     flushState: opts.flushState ? (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); return opts.flushState(); }
                                 : (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); },
     saveBlocked: () => (opts.saveBlockedReason || null),
+    // What the page tells shared.js about its own pagehide save (X1, round 4, F4): "I will save what I hold and send it, once, as I go", asked by
+    // shared.js's pagehide handler just before it would send its own. Kept so a scenario can ask it as shared.js would.
+    pageSavesOnLeave: (fn) => { rec.leaveCheck = fn; },
   };
 
   const SB = {
@@ -1168,9 +1171,13 @@ out.engineMoves = (function () {
       .filter((l) => l.type === "input")
       .forEach((l) => l.handler({ target: { name: "project_name" } }));
     const armedBeforeLeaving = b.clock.armed();
+    const leaveCheckArmed = b.rec.leaveCheck ? b.rec.leaveCheck() : null;       // what shared.js would be told as the page goes
     b.win.fire("pagehide");
     out.pagehideFlush = {
       wired: b.win.listeners.some((l) => l.type === "pagehide"),
+      // The page says, to shared.js, when its own handler will send the save: while its timer is pending, and not otherwise.
+      leaveCheck: { registered: typeof b.rec.leaveCheck === "function", armed: leaveCheckArmed,
+                    afterLeaving: b.rec.leaveCheck ? b.rec.leaveCheck() : null },
       armedBeforeLeaving,
       savedSynchronously: b.rec.saves.length,       // save() ran inline, not on the timer
       armedAfterLeaving: b.clock.armed(),            // the timer it cleared
@@ -1183,6 +1190,20 @@ out.engineMoves = (function () {
     await d.api.boot();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+    out.pagehideFlush.leaveCheck.quiet = d.rec.leaveCheck ? d.rec.leaveCheck() : null;
+
+    // A save that THROWS on the way out still sends what is pending. shared.js's own handler stands down when the page's will send, so if the
+    // page's save threw before it asked for the flush, nothing would be sent at all (the edit would be left on this computer).
+    const flag = { fail: false };
+    const t = build({ readForm: () => { if (flag.fail) throw new Error("the form could not be read"); return Object.assign({}, FORM_VALUES); } });
+    await t.api.boot();
+    t.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "input")
+      .forEach((l) => l.handler({ target: { name: "project_name" } }));
+    flag.fail = true;
+    let threw = false;
+    try { t.win.fire("pagehide"); } catch (e) { threw = true; }
+    out.pagehideFlush.whenTheSaveThrows = { threw: threw, flushed: t.rec.flushed, asKeepalive: (t.rec.flushOpts || []).map((o) => !!(o && o.keepalive)) };
   }
 
   // ── Fault 2 made visible: a refused cross-tab write now says so ──────────────────

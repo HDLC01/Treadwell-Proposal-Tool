@@ -435,6 +435,7 @@ function build(opts) {
   const TW = {
     getState: () => clone(store.blob),
     setState: (partial) => {
+      if (rec.failSetState) throw new Error("setState failed");     // a scenario can make the save on the way out throw
       rec.saves.push(clone(partial));
       store.blob = Object.assign(store.blob, clone(partial));
       return store.blob;
@@ -450,6 +451,9 @@ function build(opts) {
     // The pagehide flush calls this after pushing the pending save through synchronously --
     // counted separately from rec.saves so it does not masquerade as a second save.
     flushState: (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); },
+    // What the page tells shared.js about its own pagehide save (X1, round 4, F4): "I will save what I hold and send it, once, as I go", asked by
+    // shared.js's pagehide handler just before it would send its own.
+    pageSavesOnLeave: (fn) => { rec.leaveCheck = fn; },
     // shared.js's two-button question. Absent unless a scenario answers it, so no other build is ever asked anything.
     confirmDanger: opts.confirmDanger,
   };
@@ -2911,9 +2915,13 @@ const rendered = [];      // every string the page put on screen, for the Labour
     typeInto(b, '[data-tk="0"][data-k="measurement"]', "12000");
     const armedBeforeLeaving = b.clock.armed();
     const before = b.rec.saves.length;
+    const leaveCheckArmed = b.rec.leaveCheck ? b.rec.leaveCheck() : null;       // what shared.js would be told as the page goes
     b.win.fire("pagehide");
     out.pagehideFlush = {
       wired: b.win.listeners.some((l) => l.type === "pagehide"),
+      // The page says, to shared.js, when its own handler will send the save: while its timer is pending, and not otherwise.
+      leaveCheck: { registered: typeof b.rec.leaveCheck === "function", armed: leaveCheckArmed,
+                    afterLeaving: b.rec.leaveCheck ? b.rec.leaveCheck() : null },
       armedBeforeLeaving,
       savedSynchronously: b.rec.saves.length - before,   // save ran inline, not on the timer
       armedAfterLeaving: b.clock.armed(),                // the timer it cleared
@@ -2928,6 +2936,17 @@ const rendered = [];      // every string the page put on screen, for the Labour
     await d.api.init();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+    out.pagehideFlush.leaveCheck.quiet = d.rec.leaveCheck ? d.rec.leaveCheck() : null;
+
+    // A save that THROWS on the way out still sends what is pending. shared.js's own handler stands down when the page's will send, so if the
+    // page's save threw before it asked for the flush, nothing would be sent at all (the edit would be left on this computer).
+    const t = build();
+    await t.api.init();
+    typeInto(t, '[data-tk="0"][data-k="measurement"]', "12000");
+    t.rec.failSetState = true;
+    let threw = false;
+    try { t.win.fire("pagehide"); } catch (e) { threw = true; }
+    out.pagehideFlush.whenTheSaveThrows = { threw: threw, flushed: t.rec.flushed, asKeepalive: (t.rec.flushOpts || []).map((o) => !!(o && o.keepalive)) };
 
     // AN EDIT ALREADY SAVED, THEN A NEWER SAVE FROM ANOTHER PAGE, THEN THIS PAGE LEAVES (2026-10-19). The autosave has
     // run, so nothing is pending; another estimate page (a second tab, or the page the browser's Back reloads) has since

@@ -1783,6 +1783,29 @@ def test_leaving_the_page_flushes_a_pending_save_instead_of_losing_it(ran):
 
 
 @needs_node
+def test_the_estimate_page_tells_shared_js_when_its_own_pagehide_save_will_send_and_sends_even_if_its_save_throws(ran):
+    """X1, round 4, F4. shared.js registers its own pagehide handler FIRST, and with the page's own timer and shared.js's both pending it
+    sent the shared blob as it stood (the older copy) and then the page's handler saved and sent the newest: two keepalive PUTs of one
+    draft, which a server can finish out of order and a browser counts against ONE 64 KiB budget (tests/test_v2_new_estimate_test_flag.py runs
+    that through the real shared.js). So the page tells shared.js, through TW.pageSavesOnLeave, whether its own handler is about to save and
+    send: while its timer is pending, and not otherwise (so shared.js still sends its own when the page has nothing pending).
+
+    And because shared.js stands down on the page's word, the handler must not be able to fail before it has asked for the flush: a save that
+    throws on the way out still sends what is pending (try ... finally), or nothing would be sent at all.
+
+    Mutations: do not register the check (or register one that is always true, or always false); let a throwing save skip the flush."""
+    p = ran["pagehideFlush"]
+    lc = p["leaveCheck"]
+    assert lc["registered"], "the page never tells shared.js that its own pagehide handler saves and sends"
+    assert lc["armed"] is True, "the page says its pagehide handler will send nothing while its save is pending: %r" % (lc, )
+    assert lc["afterLeaving"] is False and lc["quiet"] is False, (
+        "the page says its pagehide handler will send when it has nothing pending, so shared.js would stand down and nothing would be sent: %r" % (lc, ))
+    t = p["whenTheSaveThrows"]
+    assert t["threw"] and t["flushed"] == 1 and t["asKeepalive"] == [True], (
+        "a save that threw on the way out left what was pending unsent: %r" % (t, ))
+
+
+@needs_node
 def test_leaving_after_the_autosave_ran_writes_nothing_over_a_newer_save(ran):
     """Hanz, 2026-10-19: "When I go back from proposal to estimate it doesnt save my values." The autosave's timer was
     never cleared once it fired, so the pagehide save above ran on EVERY exit and rewrote the blob from the page's own
@@ -3855,6 +3878,35 @@ def test_the_page_scenarios_go_red_when_the_page_changes(tmp_path, name):
     assert proc.returncode == 0, "the scratch copy would not even run:\n" + proc.stderr
     got = json.loads(proc.stdout.strip().splitlines()[-1])["travelFill"]
     assert noticed(got), name
+
+
+# ── what the page tells shared.js as it goes (X1, round 4, F4), each line broken in a scratch copy ───────────
+PAGEHIDE_MUTATIONS = {
+    "the estimate page does not tell shared.js its own pagehide save will send": (
+        "js/polish-estimate.js", "  TW.pageSavesOnLeave(function () { return !!saveTimer; });", "  void 0;"),
+    "the estimate page tells shared.js its own pagehide save will send when nothing is pending": (
+        "js/polish-estimate.js", "TW.pageSavesOnLeave(function () { return !!saveTimer; });", "TW.pageSavesOnLeave(function () { return true; });"),
+    "the estimate page's pagehide save that throws skips the flush": (
+        "js/polish-estimate.js", "try { TW.setState(Object.assign({}, cur, savePatch(cur))); }",
+        "TW.setState(Object.assign({}, cur, savePatch(cur))); try { }"),
+}
+
+
+@needs_node
+@pytest.mark.parametrize("name", sorted(PAGEHIDE_MUTATIONS))
+def test_the_estimate_pages_pagehide_hand_over_goes_red_when_it_changes(tmp_path, name):
+    """The check above, called on the answers of a scratch copy of the page with one line of the hand-over broken. The anchor line must exist
+    exactly once (break_source refuses otherwise), so none of these can pass by applying nowhere. The harness runs outside the `raises`, so a
+    copy that would not even run is an error and never counts as the check noticing."""
+    from _golden_support import break_source, copy_unmodified
+    rel, old, new = PAGEHIDE_MUTATIONS[name]
+    frontend = break_source(tmp_path, rel, old, new)
+    copy_unmodified(frontend, PAGE_FILES)
+    proc = subprocess.run(["node", str(HARNESS), str(frontend)], capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, "the scratch copy would not even run:\n" + proc.stderr
+    broken_answers = json.loads(proc.stdout.strip().splitlines()[-1])
+    with pytest.raises(AssertionError):
+        test_the_estimate_page_tells_shared_js_when_its_own_pagehide_save_will_send_and_sends_even_if_its_save_throws(broken_answers)
 
 
 # ── "HOW THIS IS WORKED OUT" under the Travel heading (Hanz, 2026-10-06) ─────────────────────────

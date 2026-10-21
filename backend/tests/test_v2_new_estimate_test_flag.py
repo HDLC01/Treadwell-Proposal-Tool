@@ -1110,6 +1110,28 @@ def test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_i
         assert_filed_and_edited_directly(r, name)
 
 
+def test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit(ran):
+    """F4 of the audit of round 3. The v2 intake is left with TWO saves pending: the page's own 600 ms save has run (so shared.js's 2.5 s save of
+    that copy is queued) and the estimator edits once more (so the page's own 600 ms timer is pending too). shared.js registers its pagehide
+    handler first, so it sent the shared blob as it stood (the older copy), and then the page's handler saved and sent the newest: two keepalive
+    PUTs of one draft. A server that finishes them out of order keeps the older copy (the first save sent is made slow here, and the row ended
+    on the old address), and the browser counts keepalive bodies against ONE 64 KiB budget, so for a draft of half that size the second, the
+    newest, is refused outright (a 36 KiB draft here: the row ended on the old address, nothing said). ONE save goes as the page goes, and it
+    carries the newest edit."""
+    runs = ran["twoSavesPending"]
+    assert sorted(runs) == ["big", "small", "small, the first save slow"], sorted(runs)
+    for name, r in sorted(runs.items()):
+        gone = [q for q in reqs(r, "PUT", r["id"], page="intake") if q["at"] == r["pagehideAt"]]
+        assert len(gone) == 1, "%s: %d saves were sent as the page went: %r" % (name, len(gone), [(q["sentAddress"], q["outcome"]) for q in gone])
+        q = gone[0]
+        assert q["keepalive"] is True and q["status"] == 200, "%s: the save was not sent as one that outlives the page, or was not stored: %r" % (name, q)
+        assert q["sentAddress"] == NEWEST_ADDRESS, "%s: the save carried an older copy of the draft: %r" % (name, q["sentAddress"])
+        assert r["xData"]["address"] == NEWEST_ADDRESS, "%s: the row holds %r, not the newest edit" % (name, r["xData"])
+    big = [q for q in reqs(runs["big"], "PUT", runs["big"]["id"], page="intake") if q["at"] == runs["big"]["pagehideAt"]][0]
+    assert big["bytes"] <= KEEPALIVE_ASKED and 2 * big["bytes"] > KEEPALIVE_LIMIT, (
+        "the big draft is not one that fits a keepalive request and not two, so this checks nothing about the shared budget: %r" % big["bytes"])
+
+
 DOOR_OPENING = "Opening Estimating Tool v2…"       # the beta door once it has asked the browser to leave
 WANT_FLAG = {"test": True, "active": False, "all": None}     # what the Projects page's tab starts a project as
 
@@ -1314,6 +1336,7 @@ def test_a_save_sent_as_the_page_goes_is_never_a_keepalive_request_the_browser_r
 # REAL startNew, holds keepalive requests to one shared 64 KiB budget, and presses the live intake's beta door.
 KEEPALIVE_LIMIT = 64 * 1024
 KEEPALIVE_ASKED = 60 * 1024         # shared.js KEEPALIVE_MAX_BYTES: a little under the limit is the most a keepalive request is asked to carry
+NEWEST_ADDRESS = "2 SECOND St (newest)"         # the last thing typed in the two-saves-pending run (the harness's own)
 
 
 def test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request(ran):
@@ -1408,6 +1431,7 @@ QUEUED_REMEMBERS = "    _queued = { id: id, state: state };"
 QUEUED_EMPTY = "    if (Object.keys(blob).some((k) => k !== STAMP)) return blob;"
 QUEUED_FOREIGN = "    if (blob[STAMP] && blob[STAMP] !== id) return null;"
 PAGEHIDE_PUT = "    putDraft(id, blob, true);   // a save racing page teardown, as flushState({ keepalive: true }) is for a page that flushes its own"
+SHARED_STANDS_DOWN = "    if (pageSends) return;"
 FLUSH_PUT = "        putDraft(id, blob, !!(opts && opts.keepalive));"
 WITH_START_CONTENT = "    if (!Object.keys(blob).some((k) => k !== STAMP)) return blob;"
 WITH_START_WORD = '    if (!id || Object.prototype.hasOwnProperty.call(blob, "is_test")) return blob;'
@@ -1430,7 +1454,9 @@ SANDBOX_EXACT_TRISTATE = "    if (row.is_test === true || row.beta_sandbox_of) {
 SANDBOX_FOREIGN_STOP = "    if (state.__draft_id && state.__draft_id !== id) {"
 SANDBOX_FOREIGN_SAVE = "    if (blob && blob.__draft_id && blob.__draft_id !== id) {"
 # the intake
-INTAKE_PAGEHIDE = "      TW.flushState({ keepalive: true });"
+INTAKE_PAGEHIDE = "      try { save(); } finally { TW.flushState({ keepalive: true }); }"
+INTAKE_DECLARES_LEAVE = "    TW.pageSavesOnLeave(function () { return !!saveTimer; });"
+INTAKE_SAVE_TRY = "try { save(); }"
 LEAVING_GUARD = "    if (leaving) return;"
 SAY_SAVING = '      say("Saving…", true);'
 SAY_OPENING = '      say("Opening the estimate…", true);'
@@ -1484,6 +1510,14 @@ def every(test, modes):
             test(ran, mode)
     check.__name__ = test.__name__
     return check
+
+
+# the intake page's own test of what it tells shared.js as it goes (tests/test_polish_intake_page.py), called on the answers of a broken copy
+import test_polish_intake_page as _intake_page_tests
+
+
+def check_the_intake_hands_the_pagehide_save_over(intake):
+    _intake_page_tests.test_the_intake_tells_shared_js_when_its_own_pagehide_save_will_send_and_sends_even_if_its_save_throws(intake)
 
 
 FILING_MODES = ("http500", "okfalse", "network", "hang", "html", "gone")
@@ -1652,7 +1686,7 @@ BREAKS = {
         "world", (broken(SHARED, WITH_START_WORD, "    if (!id) return blob;"),), test_a_copy_that_already_says_is_test_is_sent_as_it_is),
     # ── leaving inside the debounce ──
     "the intake's pagehide save is not a keepalive request": (
-        "world", (broken(INTAKE, INTAKE_PAGEHIDE, "      TW.flushState();"),),
+        "world", (broken(INTAKE, INTAKE_PAGEHIDE, "      try { save(); } finally { TW.flushState(); }"),),
         test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce),
     "flushState drops the keepalive it was asked for": (
         "world", (broken(SHARED, FLUSH_KEEPALIVE, "        putDraft(id, blob);"),),
@@ -1749,6 +1783,23 @@ BREAKS = {
     "the page alone has no Continue button to speak through": (
         "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
         test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    # ── round 4, F4: one save as the page goes ──
+    "shared.js sends its own save as the page goes although the page's will send": (
+        "world", (broken(SHARED, SHARED_STANDS_DOWN, "    void 0;"),),
+        test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit),
+    "the intake does not tell shared.js its own pagehide save will send (the real pages)": (
+        "world", (broken(INTAKE, INTAKE_DECLARES_LEAVE, "    void 0;"),),
+        test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit),
+    "the intake tells shared.js its own pagehide save will send when nothing is pending (the real pages)": (
+        "world", (broken(INTAKE, INTAKE_DECLARES_LEAVE, "    TW.pageSavesOnLeave(function () { return true; });"),),
+        test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce),
+    "the intake does not tell shared.js its own pagehide save will send (the page alone)": (
+        "intake", (broken(INTAKE, INTAKE_DECLARES_LEAVE, "    void 0;"),), check_the_intake_hands_the_pagehide_save_over),
+    "the intake tells shared.js its own pagehide save will send when nothing is pending (the page alone)": (
+        "intake", (broken(INTAKE, INTAKE_DECLARES_LEAVE, "    TW.pageSavesOnLeave(function () { return true; });"),),
+        check_the_intake_hands_the_pagehide_save_over),
+    "the intake's pagehide save that throws skips the flush (the page alone)": (
+        "intake", (broken(INTAKE, INTAKE_SAVE_TRY, "save(); try { }"),), check_the_intake_hands_the_pagehide_save_over),
     # ── round 4, F3: the beta door waits for the save, says so, and gives itself back ──
     "the beta door leaves without waiting for its save": (
         "world", (broken(INDEX, DOOR_FLUSH, "        Promise.resolve(true),"),),
@@ -1904,6 +1955,7 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
                  test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has,
                  # round 4
+                 test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit,
                  test_the_beta_door_waits_for_the_project_to_be_saved_before_it_opens_the_v2_intake,
                  test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back,
                  test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends,
