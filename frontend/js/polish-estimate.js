@@ -166,9 +166,13 @@
     // A BASE THAT DOES NOT CARRY THE JOB'S HOTEL AND PER DIEM DRIVES ITS OWN CREW (round 7, Hanz 2026-10-21, D1: Kyle puts a drive on both sheets of a combo-like job). Its Travel
     // Labor is its own, below on the Labor step and under its Labor on the Review; the job's Hotel and Per Diem are charged once, on the carrier, where the miles are typed.
     if (drivesOnItsOwn()) {
+      // A SHEET WHOSE x TOOK ITS TRAVEL LABOR LINE AWAY HAS NO DRIVE OF ITS OWN TO DESCRIBE (round 7 polish, W1; the sheet's own answer, S). "Its Travel Labor below is one round trip for each of them" stood
+      // directly above "This sheet has no Travel Labor line, so its drive adds nothing to the price", and the Review's "This sheet's own drive is its Travel Labor line, under Labor" pointed at a line that
+      // is not there. With no line the Hotel and Per Diem sentence is what is left.
+      var ownLine = (M.labor instanceof Array ? M.labor : []).some(function (r) { return B.isTravelRow(r); });
       return onReview
-        ? "Hotel and Per Diem are charged once for the whole job, on the " + name + " section. This sheet's own drive is its Travel Labor line, under Labor."
-        : "This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the " + name + " section. " +
+        ? "Hotel and Per Diem are charged once for the whole job, on the " + name + " section." + (ownLine ? " This sheet's own drive is its Travel Labor line, under Labor." : "")
+        : (ownLine ? "This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the " + name + " section. " : "") +
           "Hotel and Per Diem are charged once for the whole job, on the " + name + " section. Open it to change them.";
     }
     return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + name +
