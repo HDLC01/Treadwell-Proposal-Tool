@@ -345,6 +345,14 @@ def test_the_carriers_words_say_this_sheet_has_no_line_and_the_epoxy_sheet_keeps
     assert w["reloaded"] == c
 
 
+def test_a_sheet_name_the_estimator_typed_is_said_as_text_never_as_markup(ran):
+    """Round 7, pass-2 audit A3: the carrier's words name the other base by its label, which the estimator can type (Rename), and the Add Travel
+    Labor block wrote them into the Labor step's markup as they were. A name holding a tag is drawn as the text it is."""
+    h = ran["words"]["hostile"]
+    assert h["block"] is True and h["escaped"] is True, "the fixture never reached the words that name the other sheet, so this proves nothing"
+    assert h["raw"] is False, "a sheet name the estimator typed was written into the page as markup"
+
+
 def test_with_both_drives_gone_and_on_a_single_base_job_the_words_say_the_bid_has_none(ran):
     w = ran["words"]
     for k in ("both", "single"):
@@ -355,6 +363,10 @@ def test_with_both_drives_gone_and_on_a_single_base_job_the_words_say_the_bid_ha
 # ── red without the code: break a COPY of the page or the model one line at a time; a fact must change, never a crash ─────────────────────────────────────────────────────
 # name -> (file, old, new, the facts that notice)
 BREAKS = {
+    # --- A3 ---
+    "a typed sheet name goes into the markup as it is": (
+        "js/polish-estimate.js", """'><p class="cap">' + esc(words) + '</p>' +""", """'><p class="cap">' + words + '</p>' +""",
+        lambda g: g["words"]["hostile"]["raw"] is not False),
     # --- P2 ---
     "a Gyp drive is one round trip whatever the mobilizations": (
         "js/bid-model.js", '    var hours = trip === "" ? "" : trip * (trips === undefined ? 1 : trips);', "    var hours = trip;",

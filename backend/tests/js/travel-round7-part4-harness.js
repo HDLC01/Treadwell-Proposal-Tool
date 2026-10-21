@@ -564,7 +564,14 @@ async function main() {
     const p = await newBid(POLISH(), [CREW_POLISH]);
     await pressX(p, B.ROOT_TAB);
     const single = await laborFacts(p, B.ROOT_TAB);
-    return { x: x, carrier: carrier, epoxyDrive: epoxyDrive, reloaded: reloaded, both: both, single: single };
+    // A SHEET NAME THE ESTIMATOR TYPED is said as text, never as markup (round 7, pass-2 audit A3): the carrier's words name the other base by its label.
+    const h = await newBid(COMBO(), [CREW_POLISH, CREW_EPOXY]);
+    h.api.root().tabs.Epoxy.label = '<b data-x="1">Big</b> Epoxy';
+    await pressX(h, B.ROOT_TAB);
+    await laborFacts(h, B.ROOT_TAB);
+    const block = /<div class="trvadd"[^>]*>[\s\S]*?<\/div>/.exec(panelHtml(h));
+    const hostile = { block: !!block, raw: !!block && block[0].indexOf('<b data-x=') >= 0, escaped: !!block && block[0].indexOf("&lt;b data-x=") >= 0 };
+    return { x: x, carrier: carrier, epoxyDrive: epoxyDrive, reloaded: reloaded, both: both, single: single, hostile: hostile };
   });
 
   return out;

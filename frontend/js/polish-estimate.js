@@ -4294,7 +4294,8 @@
       : option ? "This option has no Travel Labor line, so its drive adds nothing to its price."
       : others.length ? "This sheet has no Travel Labor line, so its own crew's drive is not charged. " + B.otherDrivesWords(others)
       : "This bid has no Travel Labor line, so the drive adds nothing to the price.";
-    return '<div class="trvadd" data-trv-none' + (option === "sheet" || others.length ? '="sheet"' : option ? '="option"' : '') + '><p class="cap">' + words + '</p>' +
+    // ESCAPED (round 7, pass-2 audit A3): the words name the other bases by their labels, which the estimator can type (Rename).
+    return '<div class="trvadd" data-trv-none' + (option === "sheet" || others.length ? '="sheet"' : option ? '="option"' : '') + '><p class="cap">' + esc(words) + '</p>' +
       '<button class="btn addline below" data-add-travel="1">' + icon("plus", 16) + ' Add Travel Labor</button></div>';
   }
 
