@@ -769,16 +769,40 @@
    *  `text` is `qty`, the count the price used, to as many places as it takes for `text` x `rate` to come to the same cent as the count x the rate (the product the working prints) and, rounded up,
    *  to `cost`, the line's charge: two places, as every quantity on the page reads, and more only while those do not, to six at most. At the library's Gyp rate 4 guys for 120 hours are 48.0006
    *  nights and $3,361 at $70: "48" x $70 is $3,360, and "48.0006" x $70 is the $3,360.04 the price rounded up. `roundedUp` says the count x the rate is not a whole number of dollars, which the
-   *  page says in words. Pure. */
-  function travelQtyShown(qty, rate, cost) {
+   *  page says in words, the product taken to twelve figures as the sheet's ROUNDUP is: it is THE verdict on rounding, the Review's row and the working on the Labor step both say it (round 7,
+   *  part 2, L1: the working compared the bare product with the charge and called a whole count rounded, "$3,500.00, rounded up to $3,500", where 50 nights carried float noise).
+   *  `also` ([{ rate, cost }], optional) is every OTHER line that charges the same count: the text then reads true for each of them too (round 7, part 2, L2: travelQtysShown). Pure. */
+  function travelQtyShown(qty, rate, cost, also) {
     var q = num(qty), r = num(rate), c = num(cost);
     var cents = function (n) { return Math.round(parseFloat(n.toPrecision(12)) * 100); };
+    var charges = [{ r: r, c: c }].concat((also instanceof Array ? also : []).map(function (o) { return { r: num(o && o.rate), c: num(o && o.cost) }; }));
     var text = fmtSf(q);
-    var reads = function (t) { var v = num(t.replace(/,/g, "")) * r; return cents(v) === cents(q * r) && roundUp(v) === c; };
+    var reads = function (t) {
+      var v = num(t.replace(/,/g, ""));
+      return charges.every(function (ch) { return cents(v * ch.r) === cents(q * ch.r) && roundUp(v * ch.r) === ch.c; });
+    };
     for (var places = 3; places <= 6 && !reads(text); places++) {
       text = q.toLocaleString("en-US", { maximumFractionDigits: places });
     }
     return { text: text, roundedUp: parseFloat((q * r).toPrecision(12)) !== c };
+  }
+
+  /** ONE COUNT, SHOWN ONE WAY (round 7, part 2, L2; the round-6 lows): travelQtyShown for the travel lines of ONE place at once. `charged` is { key: { qty, rate, cost } }, each line as that place
+   *  charges it (the job's Lodging and Per Diem on the Review or in the working, or an option's own); the answer is { key: { text, roundedUp } }. Lines that charge the SAME count (both follow the
+   *  labor, or an option's own nights) show it to the same places, as many as the line that needs the most, so the one count reads the same on both and true times each rate: a far Epoxy crew
+   *  of 5 for 10 days with its drive counts 50.0019 nights, which needs four places at $70 and three at $45, and the Review showed it as 50.0019 nights beside 50.002 days. A count typed on one
+   *  line is that line's own and is shown its own way. Pure. */
+  function travelQtysShown(charged) {
+    var out = {};
+    var keys = isObject(charged) ? Object.keys(charged) : [];
+    keys.forEach(function (k) {
+      var l = charged[k];
+      var same = keys.map(function (j) { return charged[j]; }).filter(function (o) {
+        return o !== l && num(o.qty) === num(l.qty);
+      });
+      out[k] = travelQtyShown(l.qty, l.rate, l.cost, same);
+    });
+    return out;
   }
 
   /** Both lines and their sum. `travel` may be absent (an old model that never migrated). */
@@ -2186,21 +2210,30 @@
     });
     // The lines that follow the labor (a far answer filled them: followDistanceNights), said once below in Kyle's words.
     var followed = [];
+    // EVERY LINE THAT IS ON IS CHARGED FIRST (round 7, part 2, L1 and L2; the round-6 lows), so the count Lodging and Per Diem both charge is shown to the same places on both (travelQtysShown),
+    // and "rounded up" is travelQtyShown's own verdict, the one the Review's row says it by: the bare product against the charge called 50 nights carrying float noise rounded ("$3,500.00,
+    // rounded up to $3,500"), where the Review beside it said nothing.
+    var charged = {};
+    TRAVEL_LINE_KEYS.forEach(function (k) {
+      var l = trv[k];
+      if (l && rowOn(l)) charged[k] = { qty: travelQty(l, rows, trvOpts), rate: l.rate, cost: travelLineCost(l, rows, trvOpts) };
+    });
+    var shownAt = travelQtysShown(charged);
     TRAVEL_LINE_KEYS.forEach(function (k) {
       var l = trv[k];
       if (!l || !rowOn(l)) { lines.push(names[k] + ": off, $0"); return; }
-      var q = travelQty(l, rows, trvOpts);
+      var q = charged[k].qty;
       var prod = q * num(l.rate);
-      var cost = travelLineCost(l, rows, trvOpts);
+      var cost = charged[k].cost;
       var follows = qtyFollows(l);
       if (follows) followed.push(k);
       else if (l.qty_auto !== false) usesAuto = true;
       var typedQty = l.qty_auto === false && filledIn(l.qty);
       if (l.qty_auto === false) showManDays = true;
       // The count to the places the price needs (travelQtyShown, round 6, part 3, M4): "48 nights x $70.00 = $3,360.04" read false where the count was 48.0006.
-      lines.push(names[k] + ": " + travelQtyShown(q, l.rate, cost).text + (k === "lodging" ? " nights" : " days") +
+      lines.push(names[k] + ": " + shownAt[k].text + (k === "lodging" ? " nights" : " days") +
         (follows ? " (follows the labor)" : typedQty ? " (typed)" : "") + " x " + money2(l.rate) + " = " +
-        (prod === cost ? money2(cost) : money2(prod) + ", rounded up to " + money(cost)) +
+        (shownAt[k].roundedUp ? money2(prod) + ", rounded up to " + money(cost) : money2(cost)) +
         (typedQty || l.qty_auto !== false ? "" : ". Type the " + (k === "lodging" ? "nights." : "days.")));
     });
     // THE CREW'S SIZE, said once, where Travel Labor's guys came from (a far answer put them on it). It is a head count, one
@@ -6876,7 +6909,8 @@
     // Round 6 (2026-10-20): what a section's own labor counts in nights, tab by tab (the hours a night is worth on a tab, a Gyp crew in hours, an option's own, every base section of the job together).
     nightsDivisor: nightsDivisor, optionNights: optionNights, jobNights: jobNights, jobFollowQty: jobFollowQty,
     // Round 6, part 3 (2026-10-21): the count a travel line was charged for, as the Review's row says it (the places the price needs, and whether the sheet rounded the dollars up).
-    travelQtyShown: travelQtyShown,
+    // Round 7, part 2 (2026-10-21, L2): the lines of one place at once, so a count two lines charge is shown one way on both.
+    travelQtyShown: travelQtyShown, travelQtysShown: travelQtysShown,
     travelFollowWords: travelFollowWords, travelQtyHint: travelQtyHint, freshTravelRow: freshTravelRow, addTravelLabor: addTravelLabor,
     // Round 6, part 2 (2026-10-20): the "no Travel Labor" answer belongs to the sheet whose line went (the carrier's says the job has no drive, an option's says only that the option has none).
     travelLaborRemoved: travelLaborRemoved, travelLaborCanBeAdded: travelLaborCanBeAdded, carrierHoldsTravel: carrierHoldsTravel, settleTravelAnswer: settleTravelAnswer,

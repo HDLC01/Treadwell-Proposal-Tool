@@ -3456,19 +3456,27 @@
     // section's crew. Its own crew's drive is its Travel Labor line, under its Labor (round 7, Hanz's D1 of 2026-10-21).
     var carries = carriesTravel();
     var ownTravel = !carries && activeIsOption();   // an option lists its own lines, for its own crew's man-days
+    // EVERY LINE LISTED IS CHARGED FIRST (round 7, part 2, L2; the round-6 lows): its count and its charge, so a count Lodging and Per Diem both charge reads the same on both rows
+    // (B.travelQtysShown): the one count was shown as 50.0019 nights beside 50.002 days, each line to the places its own rate needs.
+    var trvLines = {};
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
       var tl = (M.travel || {})[k];
       if ((!carries && !ownTravel) || !tl || !tl.enabled) return;
-      var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
       // Nights (lodging) or days (per diem) at the line's own rate: the quantity the chain charged, times the rate.
       // An option's own lines are its own nights (B.optionNights: a Gyp sheet's crew in hours is counted ten to a night, as the sheet counts it), charged at the job's rates.
       var qty = ownTravel ? B.optionNights(ROOT, activeTab) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));
-      var cost = ownTravel ? B.optionTravelCosts(M.travel, M.labor, qty)[k]
-                           : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab));
+      trvLines[k] = { qty: qty, rate: tl.rate, cost: ownTravel ? B.optionTravelCosts(M.travel, M.labor, qty)[k] : B.travelLineCost(tl, M.labor, B.travelOpts(ROOT, activeTab)) };
+    });
+    var shownTrv = B.travelQtysShown(trvLines);
+    B.TRAVEL_LINE_KEYS.forEach(function (k) {
+      var tl = (M.travel || {})[k];
+      if (!trvLines[k]) return;
+      var name = (k === "lodging" && (!tl.label || tl.label === "Lodging")) ? "Hotel" : tl.label;
+      var cost = trvLines[k].cost;
       var per = k === "lodging" ? "night" : "day";
       // THE ROW READS TRUE (round 6, part 3, M4): the count to as many places as the charge needs (48.0006 nights at $70 is $3,361, and "48" x $70 is not), and, under the total, that the sheet
-      // rounds each line up to the dollar whenever the count x the rate is not whole dollars (B.travelQtyShown).
-      var shown = B.travelQtyShown(qty, tl.rate, cost);
+      // rounds each line up to the dollar whenever the count x the rate is not whole dollars (B.travelQtyShown). The count both lines charge is shown one way on both (round 7, part 2, L2).
+      var shown = shownTrv[k];
       // THE JOB'S LINE SAYS WHERE ITS QUANTITY CAME FROM while a far answer filled it (B.followDistanceNights): the nights and the per diem days follow the
       // man-days, Kyle's way, said in the line's own words under its name. A keyed figure like the drive sentence above, so a late answer repaints it
       // in place, and empty (no height) for a line the estimator typed. An option's own lines count their own man-days and say nothing here.

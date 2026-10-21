@@ -127,8 +127,9 @@ def test_a_whole_count_reads_as_it_always_did(ran):
 # ── red without the code: break a COPY of the page or the model one line at a time ──────────────────────────────────────────────────────────────────────────────
 # (round 7: the rule that keeps the added line is the promotion rule's, in settleArrivals; it was sectionsForJob's own settling)
 OPTION_BRINGS_ITS_DRIVE = '        releaseNobodysTravelRow(model, tab, wasKind === "option");'
-REVIEW_QTY_TEXT = "      var shown = B.travelQtyShown(qty, tl.rate, cost);"
-WORKING_QTY = '      lines.push(names[k] + ": " + travelQtyShown(q, l.rate, cost).text + (k === "lodging" ? " nights" : " days") +'
+# (round 7, part 2, L2: the Review and the working charge every line first and show a count two lines charge one way, B.travelQtysShown; the lines these two anchors name moved with it)
+REVIEW_QTY_TEXT = "      var shown = shownTrv[k];"
+WORKING_QTY = '      lines.push(names[k] + ": " + shownAt[k].text + (k === "lodging" ? " nights" : " days") +'
 REVIEW_UP = "                    rv(\"trv.\" + k + \".tot\", moneyAuto(cost)) + '<span class=\"note work\">' + rv(\"trv.\" + k + \".up\", shown.roundedUp ? ROUNDED_UP : \"\") + '</span>']);"
 
 # name -> (file, old, new, a fact that must change)
@@ -137,7 +138,7 @@ BREAKS = {
         MODEL, OPTION_BRINGS_ITS_DRIVE, "        releaseNobodysTravelRow(model, tab, false);",
         lambda g: g["m3"]["switched"]["rows"]["Epoxy:base"] != DRIVE or g["m3"]["switched"]["price"]["lump"] != g["m3"]["pick"]["price"]["lump"]),
     "the Review shows the count to two places": (
-        PAGE, REVIEW_QTY_TEXT, "      var shown = { text: B.fmtSf(B.num(qty)), roundedUp: B.travelQtyShown(qty, tl.rate, cost).roundedUp };",
+        PAGE, REVIEW_QTY_TEXT, "      var shown = { text: B.fmtSf(B.num(trvLines[k].qty)), roundedUp: shownTrv[k].roundedUp };",
         lambda g: g["m4"]["gyp"]["lodging"]["qty"] != "48.0006"),
     "the Review does not say the sheet rounds the dollars up": (
         PAGE, REVIEW_UP, "                    rv(\"trv.\" + k + \".tot\", moneyAuto(cost))]);",
