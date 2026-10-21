@@ -124,25 +124,29 @@ def test_only_travel_is_dimmed_on_a_local_job_and_a_crew_line_is_not_drive_time(
     assert c["pourHint"] is True and c["driveHint"] == 1 and c["hourCards"] == 6
 
 
-def test_a_far_gyp_jobs_travel_labor_is_not_filled_and_its_card_does_not_say_it_is(ran):
-    """The 2026-10-20 audit: the Travel card promised "where the hours fill in from the miles and the guys follow the man-days" on every
-    bid, and a Gyp bid never gets that fill (it is priced by the hour in ten hour days and the sheet works its own drive time, per
-    mobilization). A far Gyp job (190 miles) leaves Travel Labor empty and typed, says nothing under it, and its card says so in plain words
-    instead: type the guys and the hours. A Gyp bid that is not far words it the same way.
+def test_a_far_gyp_jobs_travel_labor_fills_from_the_miles_and_its_card_says_so(ran):
+    """ROUND 7 (Hanz's D2 of 2026-10-21): a Gyp base's drive fills from the miles like the others, its crew read off its crew lines (entered in hours) by the same rule, and its
+    card says so in the words every other base's says. A far Gyp job (190 miles) fills Travel Labor with one round trip, 6.5 hours, on the crew's size (none typed yet: 0 guys, so
+    it prices nothing until a crew line has guys), says under it where the hours came from, and stays typeable. Until round 7 (the 2026-10-20 audit's rule) a Gyp bid's Travel
+    Labor was left empty and typed, because the Gyp sheet works its own drive time per mobilization, and its card said "A Gyp bid does not fill this line in from the miles:
+    type its guys and its hours". A Gyp bid that is not far words it the same way.
 
-    Mutation: give the Gyp card the Polish wording again (MUTATIONS below)."""
+    Mutation: give the Gyp card its old words again; leave a Gyp base out of the fill (MUTATIONS below)."""
     f = ran["farGyp"]
     assert f["distance"] == 190 and f["local"] is False and f["lodging"] is True and f["perDiem"] is True
-    assert (f["row"]["days"], f["row"]["guys"], f["row"]["guys_auto"]) == ("", "", False), "the distance filled a Gyp bid's Travel Labor"
-    for marker in ("hours_seed", "guys_follow", "guys_typed", "hours_typed"):
+    assert (f["row"]["days"], f["row"]["guys"], f["row"]["guys_auto"]) == (6.5, 0, True), "the distance fills a Gyp bid's Travel Labor"
+    assert (f["row"]["hours_seed"], f["row"]["guys_follow"]) == (6.5, "crew")
+    for marker in ("guys_typed", "hours_typed"):
         assert marker not in f["row"], marker
-    assert (f["hoursBox"], f["guysBox"]) == ("", "") and f["srcNote"]["hidden"] is True
-    expected = ("Drive time is expected at 70 miles or more from the office. A Gyp bid does not fill this line in from the miles: type its "
-                "guys and its hours. Under 70 miles this line stays gray.")
+    assert (f["hoursBox"], f["guysBox"]) == ("6.5", "0") and f["srcNote"]["hidden"] is False
+    assert f["srcNote"]["text"] == ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each guy on the labor lines above. "
+                                    "It prices once those lines have guys. Type more trips for a long job.")
+    expected = ("Drive time is expected at 70 miles or more from the office. There the hours fill in from the miles, one round trip, and the "
+                "guys are the most on any labor line. Under 70 miles this line stays gray.")
     assert f["cardNote"] == expected
     assert ran["laborCards"]["travelNote"] == expected
     for note in (f["cardNote"], ran["laborCards"]["travelNote"]):
-        assert "fill in from the miles, one round trip" not in note and "man-days" not in note and "crew" not in note.lower()
+        assert "does not fill" not in note and "man-days" not in note and "crew" not in note.lower()
 
 
 def test_the_labor_step_quotes_the_hours_the_sheet_would_work_out(ran):
@@ -469,10 +473,15 @@ MUTATIONS = {
         "js/bid-model.js", '    if (e.role === "gyp") return gypAreaFields(rows);',
         '    if (e.role === "gyp") return { gyp_soft_sf: takeoffSf(rows) };',
         lambda r: r["priced"]["sheetArea"] != {"gyp_soft_sf": 9000, "gyp_hard_sf": 6000, "gyp_corridor_sf": 2000}),
-    "a Gyp bid's Travel card promises the fill a Gyp bid never gets": (
-        "js/polish-estimate.js", "              ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours. '",
-        "              ? 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. '",
-        lambda r: "does not fill" not in r["farGyp"]["cardNote"]),
+    # (round 7, Hanz's D2 of 2026-10-21: the break is the old rule now, a Gyp bid's card telling the estimator to type the drive the miles fill)
+    "a Gyp bid's Travel card says to type a drive the miles fill": (
+        "js/polish-estimate.js", "                : 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ') +",
+        "                : (gypOpen() ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours. ' "
+        ": 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ')) +",
+        lambda r: "does not fill" in r["farGyp"]["cardNote"]),
+    "a far Gyp job's drive is not filled": (
+        "js/bid-model.js", "    if (row) followDistanceOnRow(model, row, lines, miles, false);", '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false);',
+        lambda r: r["farGyp"]["row"]["days"] != 6.5),
     "the proposal names a Gyp system by its first row": (
         "js/bid-model.js", '    if (entry && (entry.role === "gyp" || entry.role === "seal")) {', "    if (false) {",
         lambda r: r["priced"]["pricedTabs"][0][5] != 'N12 1/8" + 3/4" Gyp'),

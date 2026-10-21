@@ -6,7 +6,8 @@ were wrong with that, and each had a skeptic's script that priced it:
   N1  Kyle's Gyp tab counts its own nights: Gyp!B64 is `=IF(B5="No",((E52-E51)/C46)/10)` and per diem B65 is `=B64` (the labor dollars, less the drive's, over the first crew row's
       rate, over TEN hours). A Gyp crew is entered in hours, so v2's man-days (guys x days) counted it as nothing: round 5 made a far Gyp job's nights TYPED and said so. They are
       filled now, 4 guys for 120 hours = 480 man-hours = 48 nights = 48 days of per diem ($3,360 and $2,160), and the Gyp card says they fill in from the crew's hours, ten hours a night,
-      as Kyle's Gyp sheet counts them. The Gyp DRIVE stays typed (the Gyp sheet works its own drive time per mobilization). F3 is the same bug in an option: a far Gyp option, or a copy
+      as Kyle's Gyp sheet counts them. The Gyp DRIVE stayed typed then (the Gyp sheet works its own drive time per mobilization); since round 7 it fills from the miles too, on the crew's
+      size (Hanz's D2 of 2026-10-21). F3 is the same bug in an option: a far Gyp option, or a copy
       of the Gyp sheet, priced $0 hotel and per diem under a note that says it carries its own (an identical copy was $10,536 under its base).
   N2  The follow figure was the CARRIER's man-days only, so a far Combo (Polish 4 x 12 and Epoxy 4 x 12) filled 48 nights under words that said "Kyle's way": $71,555 against
       $81,226 for the 96 Kyle types (13.5% short; all-years scan of his Dropbox: 136 of 140 far jobs with two or more priced sheets carry hotel on every sheet). The job's figure is the
@@ -47,8 +48,9 @@ GYP_CARD_PER_DIEM = ("Meals while the guys are away, expected at 70 miles or mor
                      "a day of per diem for each, as Kyle's Gyp sheet counts them. Type your own to use them instead. Under 70 miles this line stays gray.")
 CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. "
        "On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.")
+# (Round 7, D2: a Gyp carrier's drive fills from the miles too, so its sentence says so; it said "On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time.")
 GYP_CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. "
-           "On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew's hours, "
+           "On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew's hours, "
            "10 hours a night; type over any of them to use your own.")
 
 # What sits under the Nights and Days boxes (and under the line's name on the Review) while a far answer's figure follows the labor.
@@ -90,13 +92,16 @@ def _line(qty):
 
 
 EMPTY_DRIVE = {"guys": "", "days": "", "auto": False, "follow": None, "seed": None, "typed": False, "hoursTyped": False, "on": True, "cost": 0}
+GYP_DRIVE = {"guys": 4, "days": 6.5, "auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hoursTyped": False, "on": True, "cost": 858}
 
 
 # ── N1. a Gyp crew is entered in hours: a far Gyp job's nights follow them ──────────────────────────────────────────────────────────────────────────────────
 def test_a_far_gyp_job_fills_its_nights_from_the_crews_hours_ten_to_a_night(ran):
-    """4 guys for 120 hours at $33 is 480 man-hours, 48 nights at ten hours a night (Gyp!B64: $15,840 / $33 / 10) and 48 days of per diem: $3,360 and $2,160 beside the drive, which stays
-    typed (empty, $0). The boxes show 48, the words under them say it is the crew's hours at ten a night, the working says each line follows them and says once what that means, and the
-    Review lists the two lines with their dollars and the same words. The price is the price of the same bid with the 48 and the 48 TYPED: $46,088 (it was $35,552 with the nights left at 0).
+    """4 guys for 120 hours at $33 is 480 man-hours, 48 nights at ten hours a night (Gyp!B64: $15,840 / $33 / 10) and 48 days of per diem: $3,360 and $2,160 beside the drive, which since
+    round 7 fills from the miles on the crew's size (Hanz's D2 of 2026-10-21: 4 x 6.5 x $33 = $858; it stayed typed, empty and $0, until then). Gyp!B64 takes the drive off the labor dollars,
+    so the nights are still 48. The boxes show 48, the words under them say it is the crew's hours at ten a night, the working says each line follows them and says once what that means, and
+    the Review lists the two lines with their dollars and the same words. The price is the price of the same bid with the 48 and the 48 TYPED: $44,321. (It was $46,088 with the drive empty:
+    the drive's $858 takes the Gyp sheet's subtotal from $24,148 over its $25,000 tier, Gyp!B72, so its gross profit is 35% and not 40%. It was $35,552 with the nights left at 0 too.)
 
     Mutation: leave a Gyp carrier's nights typed again; charge the carrier from its own rows; leave the box empty; count the crew in people and not in the sheet's dollars; take every hours row off
     as the drive; divide by 8; say man-days where the hint and the working say the crew's hours."""
@@ -104,29 +109,31 @@ def test_a_far_gyp_job_fills_its_nights_from_the_crews_hours_ten_to_a_night(ran)
     assert g["saved"]["carrier"] == GYP_TAB
     assert g["saved"]["lodging"] == _line(48) and g["saved"]["perDiem"] == _line(48)
     assert g["saved"]["costs"] == {"lodging": 3360, "per_diem": 2160, "total": 5520}
-    assert g["saved"]["drive"] == EMPTY_DRIVE, "a Gyp carrier's drive is typed: the distance fills nothing there"
+    assert g["saved"]["drive"] == GYP_DRIVE, "a Gyp carrier's drive fills from the miles (round 7, D2)"
     assert (g["labor"]["lodgingBox"], g["labor"]["perDiemBox"]) == ("48", "48")
     assert (g["labor"]["lodgingHint"], g["labor"]["perDiemHint"]) == (GYP_FOLLOW_LODGING, GYP_FOLLOW_PER_DIEM)
     how = g["labor"]["how"].split("\n")
-    assert "Travel Labor: 0 guys x 0 drive hours x $33.00 = $0.00. Type the drive hours." in how
+    assert "Travel Labor: 4 guys x 6.5 drive hours (one 380 mile round trip at 60 mph from the Olathe office, for each guy) x $33.00 = $858.00" in how
     assert "Lodging: 48 nights (follows the labor) x $70.00 = $3,360.00" in how and "Per Diem: 48 days (follows the labor) x $45.00 = $2,160.00" in how
     assert GYP_HOW in how
     r = g["review"]
     assert (r["lodgingQty"], r["lodgingTotal"], r["perDiemQty"], r["perDiemTotal"]) == ("48", "$3,360", "48", "$2,160")
     assert (r["lodgingNote"], r["perDiemNote"]) == (GYP_FOLLOW_LODGING, GYP_FOLLOW_PER_DIEM)
     assert g["typedFacts"]["costs"] == g["saved"]["costs"], "the typed twin is the same two lines"
-    assert g["price"]["lump"] == g["typedPrice"]["lump"] == 46088, "the filled nights price the same as nights typed as the sheet counts them"
+    assert g["price"]["lump"] == g["typedPrice"]["lump"] == 44321, "the filled nights price the same as nights typed as the sheet counts them"
     assert g["price"]["sections"][GYP_TAB]["travel"] == 5520
 
 
 def test_a_far_gyp_jobs_nights_follow_the_crew_as_it_changes(ran):
-    """5 guys for 120 hours is 600 man-hours, 60 nights ($4,200 and $2,700); then 4 guys for 150 hours is 60 again. The boxes, the hints and the charge move with them.
+    """5 guys for 120 hours is 600 man-hours, 60 nights; then 4 guys for 150 hours is 60 again. The boxes, the hints and the charge move with them. Since round 7 the drive is filled too
+    (D2), and Gyp!B64 takes it off the labor dollars ROUNDED UP: five guys' drive is $1,072.50, so the sheet counts 60.0015 nights, $4,201 and $2,701 (it was $4,200 and $2,700 with the
+    drive empty); four guys' is $858, whole dollars, and 60 is $4,200 and $2,700.
 
     Mutation: leave a following line's figure where the first answer put it; leave the box without a figure."""
-    for key in ("moreGuys", "moreHours"):
+    for key, costs in (("moreGuys", {"lodging": 4201, "per_diem": 2701, "total": 6902}), ("moreHours", {"lodging": 4200, "per_diem": 2700, "total": 6900})):
         m = ran["gyp"][key]
         assert (m["n"]["lodging"], m["n"]["perDiem"]) == (_line(60), _line(60)), key
-        assert m["n"]["costs"] == {"lodging": 4200, "per_diem": 2700, "total": 6900}, key
+        assert m["n"]["costs"] == costs, key
         assert (m["l"]["lodgingBox"], m["l"]["perDiemBox"]) == ("60", "60"), key
         assert m["l"]["lodgingHint"] == "Follows the crew's hours on the labor lines above, 10 hours a night (60): a night for each, Kyle's way.", key
 
@@ -159,18 +166,18 @@ def test_going_local_takes_a_far_gyp_jobs_figure_back_and_a_far_answer_fills_it_
 
 def test_a_saved_far_gyp_bid_is_never_moved_by_opening_it(ran):
     """The draft a far Gyp bid saved, reopened plain: the lines still follow (48 and 48), nothing is armed, saved or asked, and the price is the one it was saved at. A far bid saved with its two
-    lines ON and BLANK (what a bid held before an answer filled them) is not filled by being opened either: the lines stay blank, nothing is armed, saved or asked, and it opens at $35,552, the
-    figure the page of 619f092 gives the same draft.
+    lines ON and BLANK (what a bid held before an answer filled them) is not filled by being opened either: the lines stay blank, nothing is armed, saved or asked, and it opens at $37,479.
+    (It was $35,552, the figure the page of 619f092 gives the draft, before the draft held a drive: since round 7, D2, it holds the crew's 4 x 6.5 x $33 = $858.)
 
     Mutation: fill the lines when a bid is opened."""
     r = ran["gyp"]["reopened"]
     assert r["n"]["lodging"] == _line(48) and r["n"]["perDiem"] == _line(48)
     assert (r["armed"], r["saves"], r["asked"]) == (0, 0, 0)
-    assert r["price"] == ran["gyp"]["price"]["lump"] == 46088
+    assert r["price"] == ran["gyp"]["price"]["lump"] == 44321
     b = ran["gyp"]["savedBlank"]
     blank = {"on": True, "qty": "", "auto": False, "follow": None, "typed": False, "hand": False}
     assert b["n"]["lodging"] == blank and b["n"]["perDiem"] == blank and b["quiet"] == {"armed": 0, "saves": 0, "asked": 0}
-    assert b["price"] == 35552
+    assert b["price"] == 37479
 
 
 # ── F3. a far Gyp option, and a copy of the Gyp sheet, carry their own nights ──────────────────────────────────────────────────────────────────────────────
@@ -194,28 +201,29 @@ def test_a_far_gyp_option_prices_its_own_hotel_and_per_diem_from_its_own_crew_ho
 
 def test_an_identical_copy_of_a_far_gyp_sheet_prices_the_same_as_its_base(ran):
     """The audit's script: a far Gyp bid (4 x 120 hours, the nights typed as 48 and 48), then the Gyp sheet copied as an alternate. The copy is an option and carries its own 48 nights and 48 days
-    ($5,520), so an identical sheet is the same price as its base to the dollar ($46,088); it was $35,552, $10,536 under.
+    ($5,520), so an identical sheet is the same price as its base to the dollar ($44,321: the drive filled on both since round 7, D2, $46,088 with it empty); it was $35,552, $10,536 under.
 
     Mutation: charge a copy of the Gyp sheet no hotel."""
     c = ran["gypCopy"]
     assert c["carrier"] == GYP_TAB and c["copy"] == "Copy1" and c["kinds"] == [["Polish", "off"], [GYP_TAB, "base"], ["Copy1", "option"]]
-    assert c["alone"] == {"total": 46088, "travel": 5520}
-    assert c["base"] == {"total": 46088, "travel": 5520, "labor": 15840}
-    assert c["copied"] == {"total": 46088, "travel": 5520, "labor": 15840}
+    assert c["alone"] == {"total": 44321, "travel": 5520}
+    assert c["base"] == {"total": 44321, "travel": 5520, "labor": 15840 + 858}
+    assert c["copied"] == {"total": 44321, "travel": 5520, "labor": 15840 + 858}
 
 
 # ── N2. a Combo's nights are the man-days of every base section ────────────────────────────────────────────────────────────────────────────────────────────
 def test_a_far_combo_fills_the_nights_of_both_crews(ran):
-    """Wichita, Polish 4 x 12 and Epoxy 4 x 12: 48 + 48 = 96 nights and 96 days of per diem ($6,720 and $4,320, $11,040 with the one $858 drive), on the Polish carrier. The hint under each box, the
-    working and the Review all say the count is the man-days of the base sheets and not of the sheet on show. The price is the price of the same bid with 96 and 96 typed, $81,226 (it was
-    $71,555, 13.5% short, under words that said "Kyle's way").
+    """Wichita, Polish 4 x 12 and Epoxy 4 x 12: 48 + 48 = 96 nights and 96 days of per diem ($6,720 and $4,320, $11,040), on the Polish carrier. The hint under each box, the working and the
+    Review all say the count is the man-days of the base sheets and not of the sheet on show. The price is the price of the same bid with 96 and 96 typed, $82,947: since round 7 each crew
+    drives its own (Hanz's D1 of 2026-10-21), the Polish crew's $858 and the Epoxy crew's $858, where the one drive was $858 and the bid $81,226 (it was $71,555 with the nights the carrier's
+    48, 13.5% short, under words that said "Kyle's way").
 
     Mutation: count only the carrier's labor; leave the base sheets out of the words."""
     c = ran["combo"]
     assert c["carrier"] == "Polish" and c["bases"] == [["Polish", "base"], ["Epoxy", "base"]]
     assert c["n"]["lodging"] == _line(96) and c["n"]["perDiem"] == _line(96)
     assert c["n"]["costs"] == {"lodging": 6720, "per_diem": 4320, "total": 11040}
-    assert c["n"]["drive"] == {"guys": 4, "days": 6.5, "auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hoursTyped": False, "on": True, "cost": 858}, "the drive stays ONE, on the carrier"
+    assert c["n"]["drive"] == {"guys": 4, "days": 6.5, "auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hoursTyped": False, "on": True, "cost": 858}, "the Polish crew's own drive"
     assert (c["l"]["lodgingBox"], c["l"]["perDiemBox"]) == ("96", "96")
     assert (c["l"]["lodgingHint"], c["l"]["perDiemHint"]) == (COMBO_FOLLOW_LODGING, COMBO_FOLLOW_PER_DIEM)
     how = c["l"]["how"].split("\n")
@@ -224,7 +232,7 @@ def test_a_far_combo_fills_the_nights_of_both_crews(ran):
     r = c["review"]
     assert (r["lodgingQty"], r["lodgingTotal"], r["perDiemQty"], r["perDiemTotal"]) == ("96", "$6,720", "96", "$4,320")
     assert (r["lodgingNote"], r["perDiemNote"]) == (COMBO_FOLLOW_LODGING, COMBO_FOLLOW_PER_DIEM)
-    assert c["price"]["lump"] == c["typedPrice"]["lump"] == 81226 and c["price"]["rootTravel"] == 11040
+    assert c["price"]["lump"] == c["typedPrice"]["lump"] == 82947 and c["price"]["rootTravel"] == 11040
 
 
 def test_a_typed_quantity_on_a_combo_is_told_what_both_base_sheets_count(ran):
@@ -240,9 +248,10 @@ def test_a_typed_quantity_on_a_combo_is_told_what_both_base_sheets_count(ran):
 
 
 def test_the_nights_follow_either_base_crew_as_it_changes(ran):
-    """The Epoxy crew to 5 guys (60 man-days) moves the figure to 108 (the Polish sheet's 48, which the sheet counts as 48.0019 once the drive is five guys' $1,072.50, and the Epoxy 60): 108.0019
-    nights x $70 = $7,560.13, rounded up to $7,561, and x $45 = $4,860.09, up to $4,861. The Polish crew to 6 guys after it is 72 + 60 = 132 ($9,240 and $5,940 with the drive at $1,287), and the box,
-    the hints and the working move with it.
+    """The Epoxy crew to 5 guys (60 man-days) moves the figure to 108 (the Polish sheet's 48 and the Epoxy 60, which the sheet counts as 60.0019 once its drive is five guys' $1,072.50): 108.0019
+    nights x $70 = $7,560.13, rounded up to $7,561, and x $45 = $4,860.09, up to $4,861. The Polish crew to 6 guys after it is 72 + 60.0019 = 132.0019: $9,241 and $5,941, the Epoxy drive's half
+    dollar still in (round 7, D1: each crew drives its own, the Polish 6 x 6.5 = $1,287 and the Epoxy 5 x 6.5 = $1,072.50; the one drive was the bigger crew's $1,287, whole dollars, and the
+    figure 132, $9,240 and $5,940). The box, the hints and the working move with it.
 
     Mutation: leave the other base's labor out of the figure."""
     e = ran["combo"]["moreEpoxy"]
@@ -250,7 +259,7 @@ def test_the_nights_follow_either_base_crew_as_it_changes(ran):
     assert e["n"]["lodging"] == _line(108) and e["n"]["perDiem"] == _line(108)
     assert e["n"]["costs"] == {"lodging": 7561, "per_diem": 4861, "total": 12422}
     p = ran["combo"]["morePolish"]
-    assert p["n"]["lodging"] == _line(132) and p["n"]["costs"] == {"lodging": 9240, "per_diem": 5940, "total": 15180}
+    assert p["n"]["lodging"] == _line(132) and p["n"]["costs"] == {"lodging": 9241, "per_diem": 5941, "total": 15182}
     assert (p["l"]["lodgingBox"], p["l"]["perDiemBox"]) == ("132", "132")
     assert p["l"]["lodgingHint"] == "Follows the man-days on the labor lines of the base sheets (132): a night for each, Kyle's way."
     assert "Nights and per diem days follow the man-days on the labor lines of the base sheets (132 now), a night and a day of per diem for each man-day, Kyle's way." in p["l"]["how"].split("\n")
@@ -279,23 +288,24 @@ def test_an_option_beside_a_far_combo_keeps_pricing_its_own_and_is_not_in_the_jo
 
 
 def test_a_saved_combo_is_never_moved_by_opening_it(ran):
-    """The draft a far Combo saved, reopened plain: the lines follow 96 and 96, nothing is armed, saved or asked, and the price is the one it was saved at ($81,226). The same Combo saved with its
-    lines on and blank is not filled by being opened: it stays blank and opens at $63,323, the figure the page of 619f092 gives that draft.
+    """The draft a far Combo saved, reopened plain: the lines follow 96 and 96, nothing is armed, saved or asked, and the price is the one it was saved at ($82,947). The same Combo saved with its
+    lines on and blank is not filled by being opened: it stays blank and opens at $65,044. (Before round 7 these were $81,226 and $63,323, the figure the page of 619f092 gives that draft: the draft
+    now holds the Epoxy crew's own drive, Hanz's D1 of 2026-10-21, $858 and $1,721 after the markups.)
 
     Mutation: fill the lines when a bid is opened."""
     r = ran["combo"]["reopened"]
-    assert r["n"]["lodging"] == _line(96) and (r["armed"], r["saves"], r["asked"]) == (0, 0, 0) and r["price"] == 81226
+    assert r["n"]["lodging"] == _line(96) and (r["armed"], r["saves"], r["asked"]) == (0, 0, 0) and r["price"] == 82947
     b = ran["combo"]["savedBlank"]
     blank = {"on": True, "qty": "", "auto": False, "follow": None, "typed": False, "hand": False}
     assert b["n"]["lodging"] == blank and b["n"]["perDiem"] == blank and b["quiet"] == {"armed": 0, "saves": 0, "asked": 0}
-    assert b["price"] == 63323
+    assert b["price"] == 65044
 
 
 # ── N4. the words on BOTH cards, on a Gyp carrier and on every other ───────────────────────────────────────────────────────────────────────────────────────
 def test_both_travel_cards_say_where_their_quantity_comes_from_on_a_gyp_carrier_and_on_every_other(ran):
     """The Lodging card and the Per Diem card each say it (a Gyp carrier's: the crew's hours, ten hours a night, as Kyle's Gyp sheet counts them; every other carrier's: the man-days), and the sentence
-    above the travel block keeps the Gyp DRIVE honest (typed, because the Gyp sheet works its own drive time) while saying the nights fill in. Round 5's Gyp words ("Type the nights: a Gyp crew
-    is entered in hours, so they do not fill in by themselves") are gone.
+    above the travel block says the Gyp drive fills in from the miles and the nights from the crew's hours (round 7, D2: it said to type the drive hours, because the Gyp sheet works its own drive
+    time). Round 5's Gyp words ("Type the nights: a Gyp crew is entered in hours, so they do not fill in by themselves") are gone.
 
     Mutation: revert the Lodging Gyp words; revert the Per Diem Gyp words; revert the Gyp sentence above the block; revert the other carriers' Lodging words; their Per Diem words; their sentence."""
     c = ran["cards"]
@@ -310,10 +320,13 @@ def test_both_travel_cards_say_where_their_quantity_comes_from_on_a_gyp_carrier_
 # ── a bid saved before this change prices as it did ────────────────────────────────────────────────────────────────────────────────────────────────────────
 # Pinned from the page of 619f092, the parent of this change (the same fixtures run over `git archive 619f092 frontend`): the totals and travel a bid saved on the OLDER auto (on auto, no marker)
 # opened at then, and the same Combo with its nights typed. Nothing is converted: the older line follows the carrier's man-days, day rows only, as it always did.
+# ROUND 7 (Hanz's decisions of 2026-10-21): the fixtures are drafts this page saves, and since D1 and D2 they hold drives they did not: the Gyp crew's 4 x 6.5 x $33 = $858 (D2) and the Epoxy
+# crew's own $858 beside the Polish crew's (D1). So the Gyp and Combo lumps are 619f092's $35,552 and $71,555 with that drive after the markups ($1,927 and $1,721); the travel and the quantity,
+# what these pins hold, are 619f092's to the dollar.
 LEGACY_PINNED = {
-    "gypOlderAuto": {"lump": 35552, "travel": 0, "qty": 0},
+    "gypOlderAuto": {"lump": 37479, "travel": 0, "qty": 0},
     "polishOlderAuto": {"lump": 40864, "travel": 5520, "qty": 48},
-    "comboOlderAuto": {"lump": 71555, "travel": 5520, "qty": 48},
+    "comboOlderAuto": {"lump": 73276, "travel": 5520, "qty": 48},
 }
 
 
@@ -332,11 +345,11 @@ def test_a_bid_saved_on_the_older_auto_opens_at_the_price_it_was_saved_at(ran, n
 
 
 def test_nights_the_estimator_typed_on_a_combo_are_theirs_whatever_the_crews(ran):
-    """The same Combo with 96 and 96 typed: typed is the estimator's, $81,226, $11,040 of hotel and per diem, and nothing converts it.
+    """The same Combo with 96 and 96 typed: typed is the estimator's, $82,947 ($81,226 before round 7's second drive, D1), $11,040 of hotel and per diem, and nothing converts it.
 
     Mutation: let a typed quantity follow the labor."""
     got = ran["legacy"]["comboTyped"]
-    assert got["lump"] == 81226 and got["travel"] == 11040
+    assert got["lump"] == 82947 and got["travel"] == 11040
     assert got["lodging"] == {"on": True, "qty": "96", "auto": False, "follow": None, "typed": True, "hand": False}
 
 
@@ -484,7 +497,7 @@ CARD_GYP_LODGING = ('        ? (isNight ? "Overnight stays are expected at 70 mi
 CARD_GYP_PER_DIEM = '          : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the crew\'s hours, " +'.replace("\\'", "'")
 CARD_LODGING_LINE = '        ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the man-days, a night for each, " +'
 CARD_PER_DIEM_LINE = '        : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the man-days, a day of " +'
-CAP_GYP = "          ? 'On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew\\'s hours, ' +"
+CAP_GYP = "          ? 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew\\'s hours, ' +"
 CAP_LINE = "          : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');"
 REVIEW_QTY = "      var qty = ownTravel ? B.optionNights(ROOT, activeTab) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));"
 
@@ -530,7 +543,7 @@ BREAKS = {
     # the follow figure is the job's: every base section together
     "a line that follows is charged the carrier's own rows": (
         MODEL, FOLLOW_GUARD, "    void opts;",
-        lambda g: g["combo"]["price"]["lump"] != 81226 or g["gyp"]["price"]["lump"] != 46088),
+        lambda g: g["combo"]["price"]["lump"] != 82947 or g["gyp"]["price"]["lump"] != 44321),
     "the job's figure counts only the carrier": (
         MODEL, FOLLOW_LIST, "      list = live.slice(0, 1);",
         lambda g: g["combo"]["n"]["lodging"]["qty"] != 96),
@@ -545,7 +558,7 @@ BREAKS = {
         lambda g: g["gyp"]["saved"]["lodging"]["qty"] != 48),
     "the page prices the carrier from its own rows": (
         MODEL, CARRIER_COST, "      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,",
-        lambda g: g["gyp"]["price"]["lump"] != 46088),
+        lambda g: g["gyp"]["price"]["lump"] != 44321),
     "the figure does not follow the crew when it changes": (
         MODEL, SYNC_QTY, "if (l && l.qty_auto !== false && !qtyFollows(l)) l.qty = days;",
         lambda g: g["gyp"]["moreGuys"]["n"]["lodging"]["qty"] != 60 or g["combo"]["morePolish"]["n"]["lodging"]["qty"] != 132),
@@ -622,10 +635,7 @@ BREAKS = {
     "an older auto line reads a rounding as the same count": (
         MODEL, "    var one = nights === null || Math.abs(nights - days) < (auto ? 1e-9 : 0.005);", "    var one = nights === null || Math.abs(nights - days) < 0.005;",
         lambda g: g["words"]["olderAutoNear"]["hint"] != "Nights counted from the labor above, as the sheet does."),
-    # N1: the Gyp DRIVE stays typed
-    "a far answer fills a Gyp carrier's drive": (
-        MODEL, '    if (layout === "gyp") return null;', "    void layout;",
-        lambda g: g["gyp"]["saved"]["drive"]["days"] != ""),
+    # (N1's "the Gyp DRIVE stays typed" went in round 7: Hanz's D2 of 2026-10-21 fills it, and test_polish_travel_round7.py breaks that fill: "a Gyp base's drive is not filled".)
     # N4: the cards, both of them, on a Gyp carrier and on every other
     "the Gyp Lodging card says the man-days": (
         PAGE, CARD_GYP_LODGING, CARD_GYP_LODGING.replace("the crew's hours, ", "the man-days, "),
@@ -634,7 +644,7 @@ BREAKS = {
         PAGE, CARD_GYP_PER_DIEM, CARD_GYP_PER_DIEM.replace("the crew's hours, ", "the man-days, "),
         lambda g: g["cards"]["gyp"]["perDiem"] != GYP_CARD_PER_DIEM),
     "the Gyp sentence above the travel block says the nights are typed": (
-        PAGE, CAP_GYP, CAP_GYP.replace("fill in from the crew\\'s hours, ", "are typed, because a crew in hours does not count, "),
+        PAGE, CAP_GYP, CAP_GYP.replace("the nights and per diem days from the crew\\'s hours, ", "the nights and per diem days are typed, because a crew in hours does not count, "),
         lambda g: g["cards"]["gyp"]["cap"] != GYP_CAP),
     "the Lodging card of every other carrier loses its words": (
         PAGE, CARD_LODGING_LINE, CARD_LODGING_LINE.replace("a night for each, ", "a night each, "),
@@ -648,13 +658,13 @@ BREAKS = {
     # a bid saved before this change
     "an older auto line counts a crew's hours": (
         MODEL, "    return travelManDays(rows);", "    return travelManDays(rows, 10);",
-        lambda g: g["legacy"]["gypOlderAuto"]["lump"] != 35552),
+        lambda g: g["legacy"]["gypOlderAuto"]["lump"] != 37479),
     "an older auto line is charged the job's figure": (
         MODEL, FOLLOW_GUARD, "    if (opts && opts.follow !== undefined) return opts.follow;",
         lambda g: g["legacy"]["comboOneFollows"]["costs"]["per_diem"] != 2160),
     "a typed quantity follows the labor": (
         MODEL, "    if (line.qty_auto === false) return num(line.qty);", "    void line;",
-        lambda g: g["legacy"]["comboTyped"]["lump"] != 81226),
+        lambda g: g["legacy"]["comboTyped"]["lump"] != 82947),
 }
 
 

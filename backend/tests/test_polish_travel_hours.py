@@ -10,8 +10,10 @@ round trip's drive hours (median 5.5; most often 4, 6, 5.5, 7 and 5), while hote
 man-day on the same jobs. So a far answer fills the line's two boxes the way he types them:
 
     hours  one round trip at 60 mph, to the half hour (190 miles -> 6.5)
-    guys   the CREW'S SIZE: the most guys on any labor line, the fourth hand of "Remove existing joint filler" counted,
-           the most over both base sheets of a Combo; on auto, following the crew as it is typed
+    guys   the CREW'S SIZE: the most guys on any labor line of the sheet, the fourth hand of "Remove existing joint filler" counted;
+           on auto, following the crew as it is typed. EVERY BASE SHEET has its own (round 7, Hanz 2026-10-21, D1: a Combo's
+           Epoxy and Polish crews travel separately, each its own crew x its own round trip; until then one drive, on the
+           carrier, for the most guys over both base sheets), a Gyp base included (D2: it was typed and never filled)
 
 Wichita, 190 miles, four guys for twelve days: 4 x 6.5 x $33 = $858 (the version this replaces said 48 x 6.5 x $33 = $10,296).
 
@@ -159,17 +161,24 @@ def test_the_fourth_hand_on_the_joint_filler_line_counts_as_a_guy(ran):
     assert ran["handLine"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
 
 
-def test_a_combo_has_one_crew_the_most_over_both_base_sheets(ran):
-    """Polish 3 guys and Epoxy 4 guys: the carrier is Polish, but one crew drives once, so it is 4 (not the carrier's 3, not the sum 7),
-    and the words say whose lines they are. Polish 5 against Epoxy 4 is 5. An Epoxy sheet that is an OPTION is not the base crew: 3.
+def test_each_base_of_a_combo_drives_its_own_crew(ran):
+    """ROUND 7 (Hanz, 2026-10-21, D1): A FAR COMBO HAS TWO DRIVES, ONE PER BASE CREW. Polish 3 guys and Epoxy 4 guys: the Polish sheet's Travel Labor is
+    the Polish crew's, 3 x 6.5 = $643.50, and the Epoxy sheet holds its own, the Epoxy crew's, 4 x 6.5 = $858; each says "the labor lines above" (its own),
+    and the how-note on the carrier names the Epoxy sheet's drive too. Polish 5 against Epoxy 4 is 5 on Polish. An Epoxy sheet that is an OPTION is not a
+    base: the Polish drive is its own 3. crewSize still reads the most over the bases (4), but no drive is filled with it now. UNTIL ROUND 7 one crew drove once,
+    the most over both base sheets (4 on Polish, nothing on Epoxy, "the labor lines of the base sheets"): Kyle's own combo-like estimates put a drive on BOTH
+    sheets, each its own crew x its own round trip ("Epoxy trv 4x4; Polish trv 6x4"), so that figure was the wrong one.
 
-    Mutation: read the carrier's lines only; sum the sections."""
+    Mutation: fill a base's drive with the biggest crew of the bases; leave the second base without a line (BREAKS below)."""
     c = ran["comboJob"]
-    assert c["carrier"] == "Polish" and c["epoxyHasTravel"] is False and c["manDays"] == 15
-    assert (c["hours"], c["guys"], c["crew"], c["cost"]) == (6.5, 4, 4, 858)
-    assert c["words"].endswith("for each of the 4 guys on the labor lines of the base sheets")
-    assert c["hint"] == "Most guys on one labor line of the base sheets: 4."
-    assert c["howGuys"] == "Guys = the most guys on any one labor line of the base sheets (4 now), one round trip each."
+    assert c["carrier"] == "Polish" and c["epoxyHasTravel"] is True and c["manDays"] == 15 and c["crew"] == 4
+    assert (c["hours"], c["guys"], c["cost"]) == (6.5, 3, 643.5)
+    assert c["epoxy"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
+    assert c["words"].endswith("for each of the 3 guys on the labor lines above")
+    assert c["epoxyWords"].endswith("for each of the 4 guys on the labor lines above")
+    assert c["hint"] == "Most guys on one labor line above: 3."
+    assert c["howGuys"] == "Guys = the most guys on any one labor line above (3 now), one round trip each."
+    assert c["howEpoxy"] == "Travel Labor on the Epoxy sheet: 4 guys x 6.5 drive hours x $33.00 = $858.00 (that sheet's own guys)."
     assert ran["comboPolishBigger"]["guys"] == 5
     assert (ran["comboOptionLeftOut"]["guys"], ran["comboOptionLeftOut"]["crew"]) == (3, 3)
 
@@ -370,13 +379,15 @@ def test_an_epoxy_job_fills_the_epoxy_sections_row_with_the_epoxy_crew(ran):
     assert (e["hours"], e["guys"], e["crew"], e["manDays"], e["cost"]) == (6.5, 4, 4, 48, 858)
 
 
-def test_a_gyp_job_is_left_exactly_as_it_was(ran):
-    """A Gyp crew is priced by the hour and the Gyp sheet works its own drive time, so the answer leaves its Travel row alone. The
-    answer is still recorded (far, not local).
+def test_a_gyp_jobs_drive_fills_from_the_miles_on_its_crews_size(ran):
+    """ROUND 7 (Hanz, 2026-10-21, D2): A GYP BASE'S DRIVE FILLS FROM THE MILES like Polish and Epoxy. Its crew is priced by the hour, and its crew's size is
+    read off its crew lines the same way (the most guys on one line: a pour of 4 guys entered in hours is 4), so a far answer fills 4 x 6.5 x $33 = $858. It
+    was left exactly as it was (the Gyp sheet works its own drive time), and a far Gyp quote priced no drive until somebody typed one.
 
-    Mutation: take the Gyp carrier out of the guard."""
+    Mutation: leave a Gyp base out of the fill (BREAKS below)."""
     g = ran["gypJob"]
-    assert g["untouched"] is True and g["local"] is False and g["distance"]["miles"] == 190
+    assert g["untouched"] is False and g["local"] is False and g["distance"]["miles"] == 190
+    assert g["row"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
 
 
 def test_a_bid_with_no_travel_labor_row_takes_the_answer_and_nothing_throws(ran):
@@ -436,38 +447,37 @@ def test_an_epoxy_job_switched_to_polish_prices_the_drive_on_the_crew_and_not_on
     assert m["rootRows"] == 1, "the root keeps its one Travel Labor row"
 
 
-def test_an_epoxy_job_switched_to_combo_prices_the_drive_once(ran):
-    """The root is the new carrier (the first base) and Epoxy is STILL a base, so its filled row would be priced beside the root's: Travel charged
-    twice ($858 and $10,617.75 on the first version). The carrier move fills the new carrier's row and TAKES BACK the one the distance filled on
-    Epoxy: guys and hours empty, every marker cleared. One row is priced.
+def test_an_epoxy_job_switched_to_combo_gives_each_base_crew_its_own_drive(ran):
+    """ROUND 7 (Hanz, 2026-10-21, D1). The root is the new carrier (the first base) and Epoxy is STILL a base: each crew drives, so Epoxy KEEPS its own
+    drive (its crew of 4 x 6.5 = $858) and the root, which became a base, is filled on its own crew (4 x 6.5 = $858): two drives, $1,716. Until round 7 the
+    switch took Epoxy's drive back (emptied, markers cleared) so ONE row was priced for the job; that was the one-drive law Hanz replaced. A caller that
+    does not name the old carrier (or the sections as they were) gets the same: both bases are settled as bases.
 
-    Mutation: leave the take-back out of the carrier move."""
+    Mutation: take a base's drive back as if it were a leftover (BREAKS below)."""
+    filledFour = {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
     m = ran["moveEpoxyToCombo"]
     assert m["carrier"] == "Polish" and m["kinds"] == [["Polish", "base"], ["Epoxy", "base"]]
-    assert m["root"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
-    assert m["epoxy"] == {"hours": "", "seed": None, "auto": False, "follow": None, "guys": "", "cost": 0, "on": True}
-    assert m["epoxyKeys"] == ["days", "guys", "guys_auto", "id", "label", "rate", "unit"], "no marker is left on the emptied row"
-    assert m["drive"] == 858 and m["rootRows"] == 1 and m["epoxyRows"] == 1, "each section keeps its one row; only the carrier's is priced"
+    assert m["root"] == filledFour and m["epoxy"] == filledFour
+    assert m["epoxyKeys"] == ["days", "guys", "guys_auto", "guys_follow", "hours_seed", "id", "label", "rate", "unit"], "the Epoxy drive is its own fill"
+    assert m["drive"] == 1716 and m["rootRows"] == 1 and m["epoxyRows"] == 1, "each base holds its one row, and each is priced"
     n = ran["moveEpoxyToComboInferred"]
-    assert (n["root"]["cost"], n["epoxy"]["cost"], n["drive"], n["rootRows"], n["epoxyRows"]) == (858, 0, 858, 1, 1), (
-        "a caller that does not name the old carrier gets the same settling: the filled row is found on the base that is not the carrier")
+    assert (n["root"]["cost"], n["epoxy"]["cost"], n["drive"], n["rootRows"], n["epoxyRows"]) == (858, 858, 1716, 1, 1)
 
 
-def test_a_combo_switched_to_epoxy_carries_the_travel_labor_row_to_the_new_carrier(ran):
-    """The root carried the job's travel, so Epoxy had no Travel Labor row, and the root is off now: the filled row was stranded there while
-    Lodging and Per Diem stayed on and the how-note said Travel Labor was off. The row goes WITH the carrier, the way pickBase moves it, and is
-    filled by the rule: Epoxy carries 4 guys x 6.5 x $33 = $858, the root keeps no row, and the how-note shows the line.
+def test_a_combo_switched_to_epoxy_leaves_epoxy_its_own_drive_and_the_off_root_gives_its_fill_back(ran):
+    """ROUND 7 (Hanz, 2026-10-21, D1). On the Combo both bases drove; switched to Epoxy, the remaining base KEEPS ITS OWN drive (4 guys x 6.5 x $33 = $858,
+    the Epoxy crew's) and the root, which is off now, gives back what the distance filled on it (its row stays, emptied): the how-note shows Epoxy's line. Until
+    round 7 Epoxy had no row on the Combo and the root's row was carried to it; a base that stays a base now keeps its own, and nothing is carried between bases.
 
-    Mutation: leave the carry out of the carrier move."""
+    Mutation: carry the old carrier's row onto a base that drives already; leave the off root's fill on it (BREAKS below)."""
     m = ran["moveComboToEpoxy"]
     assert m["carrier"] == "Epoxy" and m["kinds"] == [["Polish", "off"], ["Epoxy", "base"]]
     assert m["epoxy"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
-    assert m["rootHasRow"] is False and m["root"] is None and m["drive"] == 858
+    assert m["rootHasRow"] is True and m["root"] == EMPTIED and m["drive"] == 858
     assert m["how"] == ("Travel Labor: 4 guys x 6.5 drive hours (one 380 mile round trip at 60 mph from the Olathe office, for each guy) "
                         "x $33.00 = $858.00")
     n = ran["moveComboToEpoxyInferred"]
-    assert n["epoxy"] == m["epoxy"] and n["rootHasRow"] is False and n["drive"] == 858, (
-        "a caller that does not name the old carrier gets the same: the stranded row is found on the off root")
+    assert n["epoxy"] == m["epoxy"] and n["rootHasRow"] is True and n["drive"] == 858, "a caller that does not name the old carrier gets the same"
     assert ran["moveOptionNotCarried"] == {"epoxyHasRow": False, "rootKeepsRow": True, "kinds": [["Polish", "option"], ["Epoxy", "base"]]}, (
         "an option's Travel Labor row is its own: it is never carried to the carrier")
     assert ran["moveNoTravelLabor"] == {"epoxyHasRow": False, "rootKeepsRow": True}, (
@@ -480,42 +490,47 @@ EMPTIED_KEYS = ["days", "guys", "guys_auto", "id", "label", "rate", "unit"]
 TYPED_KEYS = ["days", "guys", "guys_auto", "guys_typed", "hours_seed", "hours_typed", "id", "label", "rate", "unit"]
 
 
-def test_a_row_the_estimator_typed_follows_the_job_s_drive_to_the_new_carrier(ran):
-    """THE THIRD AUDIT (2026-10-20, of 7d32336). Epoxy's row was typed (3 guys, 5 hours, both marked): it is theirs, and it is the JOB'S drive. The
-    switch to Combo makes the root the carrier, so the typed row goes with it, markers and all, and Epoxy gives the row back empty: the drive is
-    priced once, as typed ($495). Before, the typed row was left behind on Epoxy and priced beside the root's own fill: $858 + $495 = $1,353.
+FILLED_FOUR = {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
+FILLED_KEYS = ["days", "guys", "guys_auto", "guys_follow", "hours_seed", "id", "label", "rate", "unit"]
 
-    Mutation: leave what the estimator typed on the old carrier."""
+
+def test_a_row_the_estimator_typed_on_a_base_that_stays_a_base_stays_its_own(ran):
+    """ROUND 7 (Hanz, 2026-10-21, D1). Epoxy's row was typed (3 guys, 5 hours, both marked): it is theirs, and it is the EPOXY CREW's drive. The switch to Combo
+    keeps Epoxy a base, so it keeps what was typed, markers and all, and the root, which became a base, drives its own crew: 4 x 6.5 = $858 beside the typed $495.
+    Until round 7 there was one drive for the job, so the typed row went to the new carrier and Epoxy gave its row back ($495 in all); the third audit's "$858 +
+    $495" was a double charge under that law and is the two crews' two drives under Hanz's. What the estimator typed still follows the job's drive when a
+    SINGLE-base job's base moves (test_what_the_estimator_said_follows_a_newly_seeded_carrier_and_only_a_row_nobody_touched_is_filled).
+
+    Mutation: carry the typed row off a base that stays a base (BREAKS below)."""
     t = ran["moveTypedFollows"]
-    assert t["root"] == TYPED_ROOT and t["rootMarks"] == {"typed": True, "hoursTyped": True, "off": False, "keys": TYPED_KEYS}
-    assert t["epoxy"] == EMPTIED and t["epoxyMarks"]["keys"] == EMPTIED_KEYS, "the old carrier gives the row back with no marker left on it"
-    assert t["drive"] == 495 and t["rootRows"] == 1 and t["epoxyRows"] == 1
+    assert t["epoxy"] == TYPED_ROOT and t["epoxyMarks"] == {"typed": True, "hoursTyped": True, "off": False, "keys": TYPED_KEYS}
+    assert t["root"] == FILLED_FOUR and t["rootMarks"]["keys"] == FILLED_KEYS
+    assert t["drive"] == 495 + 858 and t["rootRows"] == 1 and t["epoxyRows"] == 1
 
 
-def test_a_cleared_box_follows_the_job_s_drive_and_is_never_refilled_on_the_new_carrier(ran):
-    """The Hours box cleared on Epoxy, or the Guys box: the empty box is the estimator's answer, and it moves to the root with the drive. The root is
-    NOT filled (the audit: a new carrier's blank row was auto-filled to $858 in every case), and a later answer leaves it empty.
+def test_a_cleared_box_on_a_base_that_stays_a_base_is_never_refilled(ran):
+    """ROUND 7 (D1). The Hours box cleared on Epoxy, or the Guys box: the empty box is the estimator's answer for the Epoxy crew, and Epoxy stays a base on the
+    switch to Combo, so it keeps it ($0); the root, a base now, drives its own crew ($858). A later answer (300 miles) leaves the cleared box empty and moves only
+    the tool's own figure. (Until round 7 the cleared box moved to the root with the job's one drive.)
 
-    Mutation: leave what the estimator cleared on the old carrier; fill the new carrier whatever it was handed."""
+    Mutation: refill a box the estimator cleared."""
     c = ran["moveClearedFollows"]
     h, g = c["hours"], c["guys"]
-    assert (h["root"]["hours"], h["rootMarks"]["hoursTyped"], h["root"]["cost"], h["drive"]) == ("", True, 0, 0)
-    assert (g["root"]["guys"], g["rootMarks"]["typed"], g["root"]["cost"], g["drive"]) == ("", True, 0, 0)
-    assert h["epoxy"] == EMPTIED and g["epoxy"] == EMPTIED, "the old carrier keeps nothing"
+    assert (h["epoxy"]["hours"], h["epoxy"]["cost"]) == ("", 0) and (g["epoxy"]["guys"], g["epoxy"]["cost"]) == ("", 0)
+    assert h["root"] == FILLED_FOUR and g["root"] == FILLED_FOUR and h["drive"] == g["drive"] == 858
     s = ran["moveClearedStaysEmpty"]
     assert s["hours"]["hours"] == "" and s["guys"]["guys"] == "" and s["guys"]["hours"] == 10, "the answer moved the tool's hours, never the box they cleared"
 
 
-def test_a_switched_off_row_follows_the_job_s_drive_and_is_never_filled(ran):
-    """The slider is the estimator's too: Epoxy's Travel Labor switched off, the switch to Combo, and the root's row is the one switched off (with the
-    figures the row held), Epoxy's is back on and empty, and nothing is priced. It was left behind off on the old carrier while the new carrier was
-    filled to $858.
+def test_a_switched_off_row_on_a_base_that_stays_a_base_stays_off(ran):
+    """ROUND 7 (D1). The slider is the estimator's too: Epoxy's Travel Labor switched off, the switch to Combo, and Epoxy, still a base, keeps its row
+    switched off with the figures it held; the root, a base now, drives its own crew (the shipped mock-up's 3 guys: 3 x 6.5 = $643.50), the only drive priced.
+    (Until round 7 the switched-off row moved to the root with the job's one drive, and nothing was priced.)
 
-    Mutation: leave the switched-off row on the old carrier."""
+    Mutation: switch a row the estimator switched off back on, or fill it."""
     o = ran["moveOffFollows"]
-    assert o["rootMarks"]["off"] is True and o["root"]["on"] is False and o["drive"] == 0
-    assert o["movedFigures"] is True, "the row that moved is the row that was switched off, figures and all"
-    assert o["epoxy"] == EMPTIED and "enabled" not in o["epoxyMarks"]["keys"], "the old carrier's row is back on and empty"
+    assert o["epoxyMarks"]["off"] is True and o["epoxy"]["on"] is False and o["epoxy"]["cost"] == 0
+    assert o["root"]["on"] is True and o["root"]["follow"] == "crew" and o["root"]["guys"] == 3 and o["drive"] == 643.5
 
 
 def test_an_options_row_and_a_carrier_that_did_not_move_are_left_alone(ran):
@@ -537,35 +552,36 @@ def test_a_row_is_copied_and_never_shared_when_the_old_carrier_keeps_no_other_ro
     assert c["rootKeeps"] is True and c["epoxy"] is not None and c["aliased"] is False
 
 
-def test_a_carrier_move_under_a_local_job_carries_the_row_and_fills_nothing(ran):
-    """Under 70 miles there is nothing to fill: the row still goes with the carrier (Combo to Epoxy), empty of hours, on the crew it follows."""
+def test_a_carrier_move_under_a_local_job_fills_nothing(ran):
+    """Under 70 miles there is nothing to fill: Combo to Epoxy leaves Epoxy its own row (round 7: it was a base, and drives its own crew), empty of hours, on
+    the crew it follows, and the root, off now, keeps its own."""
     m = ran["moveLocal"]
-    assert m["local"] is True and m["rootHasRow"] is False
+    assert m["local"] is True and m["rootHasRow"] is True
     assert (m["epoxy"]["hours"], m["epoxy"]["cost"]) == ("", 0)
 
 
 # ── the third audit (2026-10-20, of 7d32336): EVERY restructure settles the job's one drive ─────────────────────────────────────
-def test_every_section_that_is_not_the_carrier_gives_the_filled_row_back_off_sections_too(ran):
-    """THE HIGH FINDING. Epoxy to Polish to Combo priced the drive twice ($858 + $858 = $1,716; combo to epoxy to polish to combo: $858 + $1,072.50): the
-    take-back only ran when the carrier MOVED and only on a base, so Epoxy's row, filled for the Epoxy job and left on the section when Polish switched it off,
-    was priced again the day Combo turned the section back on, beside the root's own. Now every Travel Labor row the distance filled and nobody touched, on
-    ANY section that is not the carrier (an option excepted: it is priced apart), is emptied with its markers when the job restructures. Through
-    Epoxy -> Polish -> Combo -> Epoxy -> Combo, ONE row is priced every time and the section that is not the carrier holds an empty row.
+def test_every_section_that_is_off_gives_the_filled_row_back_and_every_base_drives_its_own(ran):
+    """THE HIGH FINDING, under round 7's law. Epoxy to Polish to Combo once priced the drive twice for ONE crew: Epoxy's row, filled for the Epoxy job and left on the
+    section when Polish switched it off, was priced again the day Combo turned the section back on. Every Travel Labor row the distance filled and nobody touched,
+    on a section that is OFF, is still emptied with its markers when the job restructures, so a sheet that comes back is filled afresh for its own crew. What changed
+    (Hanz, 2026-10-21, D1) is that a Combo's two bases are two crews, and each drives: through Epoxy -> Polish -> Combo -> Epoxy -> Combo the drives priced are
+    $858, $858 + $858, $858 and $858 + $858, each base its own crew of 4 x 6.5, and the sheet that is off at each step holds an empty row. (Until round 7 the
+    Combo's second base gave its drive back and one row was priced every time.)
 
-    Mutation: take back only from bases; leave the take-back out of a restructure that keeps the carrier (BREAKS below)."""
+    Mutation: leave an off section's fill on it; take a base's drive back (BREAKS below)."""
     s = ran["settleSequence"]
     for step, carrier in (("toPolish", "Polish"), ("toCombo", "Polish"), ("toEpoxy", "Epoxy"), ("toComboAgain", "Polish")):
         assert s[step]["carrier"] == carrier, step
-    assert [s[k]["drive"] for k in ("toPolish", "toCombo", "toEpoxy", "toComboAgain")] == [858, 858, 0, 858], (
-        "one drive each time (the 0 is the Epoxy job before its crew is typed on Epoxy: the carrier's row is filled with no guys yet)")
-    assert s["toPolish"]["epoxy"] == EMPTIED and s["toPolish"]["epoxyKeys"] == EMPTIED_KEYS, "Epoxy is OFF here and still gives its row back"
-    assert s["toCombo"]["epoxy"] == EMPTIED and s["toComboAgain"]["epoxy"] == EMPTIED
-    assert s["toEpoxy"]["polish"]["cost"] == 0 or s["toEpoxy"]["carrier"] == "Epoxy"
+    assert [s[k]["drive"] for k in ("toPolish", "toCombo", "toEpoxy", "toComboAgain")] == [858, 1716, 858, 1716], "each base crew's own drive, every time"
+    assert s["toPolish"]["epoxy"] == EMPTIED and s["toPolish"]["epoxyKeys"] == EMPTIED_KEYS, "Epoxy is OFF here and gives its row back"
+    assert s["toCombo"]["epoxy"] == FILLED_FOUR and s["toComboAgain"]["epoxy"] == FILLED_FOUR, "a base again: its own crew's drive, filled afresh"
+    assert s["toEpoxy"]["polish"] == EMPTIED and s["toComboAgain"]["polish"] == FILLED_FOUR
     t = ran["takeBackOff"]
     assert t["off"] == EMPTIED and t["offKeys"] == EMPTIED_KEYS, "an off section's filled row is taken back, markers and all"
     assert t["option"] is True, "an option's row is its own"
     assert t["typedOff"] is True, "a row the estimator typed is theirs, on an off section too"
-    assert t["offRowStays"] is True, "a row the estimator switched off is theirs, on a base that does not carry the travel"
+    assert t["offRowStays"] is True, "a row the estimator switched off is theirs, on a base that does not carry the travel (its own drive, round 7)"
 
 
 def test_the_estimators_row_is_told_from_one_the_distance_filled(ran):
@@ -605,18 +621,20 @@ def test_what_the_estimator_said_follows_a_newly_seeded_carrier_and_only_a_row_n
 
 
 def test_when_the_new_carriers_own_row_is_the_estimators_too_both_stay(ran):
-    """Epoxy typed 3 x 5 and the root typed 2 x 4, switched to Combo: neither is the tool's to move, and there is nothing to choose between them, so both
-    stay exactly as typed (the card of the section that does not carry the travel says so).
+    """Epoxy typed 3 x 5 and the root typed 2 x 4, switched to Polish (a single-base job's one base moves, so the job's drive would follow it): neither is the tool's to
+    move, and there is nothing to choose between them, so both stay exactly as typed, and the drive priced is the new base's own 2 x 4. (Switched to Combo, both are bases
+    since round 7 and each keeps its own anyway.)
 
     Mutation: let the old carrier's row replace a new carrier's row that is the estimator's too (BREAKS below)."""
     b = ran["ownedBothStay"]
     assert b["root"]["guys"] == "2" and b["root"]["hours"] == "4" and b["epoxy"] == TYPED_ROOT
-    assert b["drive"] == 2 * 4 * 33 + 3 * 5 * 33
+    assert b["drive"] == 2 * 4 * 33
 
 
 def test_a_section_that_holds_only_its_travel_labor_row_hands_the_estimators_over_and_is_never_left_with_nothing(ran):
     """A root (or any section) whose only labor row is Travel Labor: the rows change places, so each section keeps its one row and no labor list is left
-    empty (an empty root reads as the four shipped rows). The typed row goes to the carrier; the lone section keeps an empty one.
+    empty (an empty root reads as the four shipped rows). The typed row goes to the new base; the lone section keeps an empty one. (A SINGLE-base job's switch,
+    Epoxy to Polish and Polish to Epoxy, since round 7: the job's one drive follows its one base, and a Combo's bases each keep their own.)
 
     Mutation: leave what the estimator said on the old carrier (BREAKS below)."""
     o = ran["ownedFromLoneRow"]
@@ -638,16 +656,19 @@ def test_the_callers_name_for_the_old_carrier_beats_looking_for_it(ran):
     assert n["looked"]["gyp"]["cost"] == 0 and n["looked"]["epoxy"] == TYPED_ROOT, "the proof the two readings differ: the lookup strands the typed row"
 
 
-def test_a_gyp_carrier_is_never_filled_not_even_by_a_row_that_arrives_filled(ran):
-    """A Gyp bid's Travel Labor is typed (the Gyp sheet works its own drive time per mobilization), so the distance never fills it. A job switched to Gyp
-    from an Epoxy job whose Travel Labor was filled used to carry that FILLED row to Gyp and leave it there (the fuzz at 7d32336: a Gyp carrier priced at
-    $0 x 6.5 'crew'); now the row the distance filled is given back wherever it lands, and what the estimator typed goes to Gyp as theirs.
+def test_a_gyp_base_is_filled_like_any_other_and_what_the_estimator_typed_goes_to_it(ran):
+    """ROUND 7 (Hanz, 2026-10-21, D2). A Gyp base's drive fills from the miles like Polish and Epoxy: an Epoxy job switched to Gyp gives the new Gyp base its own
+    row filled by the rule (6.5 hours, its crew's size: 0 until a crew line has guys, then 4 x 6.5 x $33 = $858 with a pour of 4), and the Epoxy section, off now,
+    gives its fill back. Carried to a Gyp section that had no row (the job's one drive follows its one base), the row is filled there on Gyp's crew. What the estimator
+    typed goes to Gyp as theirs. Until round 7 a Gyp base's drive was typed and the distance never filled it (the fill given back wherever it landed).
 
-    Mutation: leave a row the distance filled on a Gyp carrier (BREAKS below)."""
+    Mutation: leave a Gyp base out of the fill (BREAKS below)."""
     g = ran["gypNeverFilled"]
-    assert g["carrier"] == 'Gyp (USG 1-8")' and g["gyp"] == EMPTIED and g["epoxy"] == EMPTIED and g["drive"] == 0
+    assert g["carrier"] == 'Gyp (USG 1-8")' and g["epoxy"] == EMPTIED
+    assert g["gypNoCrew"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 0, "cost": 0, "on": True}
+    assert g["gyp"] == FILLED_FOUR and g["drive"] == 858
     c = ran["gypCarriedUnfilled"]
-    assert c["gyp"] == EMPTIED and c["gypKeys"] == EMPTIED_KEYS and c["drive"] == 0, "carried to a Gyp section that had no row: emptied there"
+    assert c["gyp"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 0, "cost": 0, "on": True} and c["gypKeys"] == FILLED_KEYS
     t = ran["gypTypedFollows"]
     assert t["gyp"] == TYPED_ROOT and t["gypMarks"]["typed"] is True and t["epoxy"] == EMPTIED
 
@@ -661,34 +682,35 @@ def test_followDistance_never_throws_for_a_section_it_cannot_find_or_read(ran):
     assert n["namelessThrew"] is None and n["brokenThrew"] is None and n["namelessRowKept"] is True
 
 
-def test_a_restructure_that_keeps_the_carrier_re_derives_the_guys_and_fills_nothing(ran):
-    """THE SECOND MEDIUM FINDING. A Combo (Polish 4 guys, Epoxy 6) made Polish keeps the root as the carrier, so nothing moved, and nothing re-derived the
-    root's crew-following Travel Labor: it read 6 guys ($1,287) over a crew of 4, and the draft saved a price a plain reopen then contradicted ($33,514
-    and $32,632 on the audit's bid). The settling now ends with syncAutoGuys, so the guys are the crew of the bid as it is: 4, $858. A carrier that
-    stayed fills NOTHING, so a far bid saved with a blank row is not filled by it.
+def test_a_restructure_that_keeps_the_carrier_keeps_its_own_crew_and_fills_nothing(ran):
+    """THE SECOND MEDIUM FINDING, under round 7's law. A Combo (Polish 4 guys, Epoxy 6) made Polish keeps the root as the carrier. The root's drive is the Polish crew's
+    own, 4 x 6.5 = $858, on the Combo and after the switch alike (round 7, D1: each base its own crew; until then it read the Combo's bigger 6 guys, $1,287, and the
+    settling had to re-derive it), and the Epoxy section, off now, gives its own drive back (its row stays, emptied). A carrier that stayed fills NOTHING, so a far bid
+    saved with a blank row is not filled by it.
 
-    Mutation: leave the sync out of the settling; settle a carrier that stayed as if it had moved (BREAKS below)."""
+    Mutation: settle a carrier that stayed as if it had moved (BREAKS below)."""
     k = ran["carrierKept"]
-    assert k["before"]["guys"] == 6 and k["before"]["cost"] == 6 * 6.5 * 33
-    assert k["after"] == {"hours": 6.5, "seed": 6.5, "auto": True, "follow": "crew", "guys": 4, "cost": 858, "on": True}
-    assert k["crew"] == 4 and k["carrier"] == "Polish" and k["epoxyRows"] == 0 and k["drive"] == 858
+    assert k["before"] == FILLED_FOUR and k["after"] == FILLED_FOUR
+    assert k["crew"] == 4 and k["carrier"] == "Polish" and k["epoxyRows"] == 1 and k["epoxy"] == EMPTIED and k["drive"] == 858
     assert ran["carrierKeptFillsNothing"] == EMPTIED
 
 
-def test_a_copy_of_the_carriers_typed_row_made_a_base_beside_it_is_given_back_but_a_different_one_stays(ran):
-    """A COPY of the carrier's sheet carries the row the carrier had, the estimator's typed 3 x 5 included (it is priced apart, as an option, which is why it
-    has one). Made a base beside the carrier (the Sheets panel's combined pair) it would charge the drive a second time: $495 + $495. A row that REPEATS the
-    carrier's exactly (the same guys, hours and hands on them) is a copy's leftover and is given back (emptied, markers gone); one that says something else
-    (typed 2 x 4 on the copy) is the estimator's own choice and stays. (Every clause of "exactly" is pinned ALONE, by a copy that differs in nothing else, in
-    test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect: here the guys and the hours differ together.)
+def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_back_but_a_different_one_stays(ran):
+    """A section that holds an exact repeat of the carrier's row is what the job's one drive leaves behind when it is CARRIED to a new base as a copy (the old base kept no
+    other row). On a section that is OFF, a row that REPEATS the carrier's exactly (the same guys, hours and hands on them) is that leftover and is given back (emptied,
+    markers gone); one that says something else (typed 2 x 4) is the estimator's own choice and stays. ON A BASE it is that base's own drive and stays (round 7, D1:
+    every base crew drives, where until then a copy made a base beside the carrier gave a repeat back so the one drive was charged once). (Every clause of "exactly" is
+    pinned ALONE in test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect.)
 
-    Mutation: leave the copy's repeat on its section (BREAKS below)."""
+    Mutation: leave the repeat on its off section (BREAKS below)."""
     c = ran["copyRepeat"]
     s = c["same"]
-    assert s["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
+    assert s["kinds"] == [["Polish", "base"], ["Copy1", "off"]]
     assert s["root"] == TYPED_ROOT and s["copy"] == EMPTIED and s["copyMarks"]["keys"] == EMPTIED_KEYS and s["drive"] == 495
     d = c["different"]
-    assert d["root"] == TYPED_ROOT and d["copy"]["guys"] == "2" and d["copy"]["hours"] == "4" and d["copy"]["cost"] == 2 * 4 * 33 and d["drive"] == 495 + 264
+    assert d["root"] == TYPED_ROOT and d["copy"]["guys"] == "2" and d["copy"]["hours"] == "4" and d["copy"]["cost"] == 2 * 4 * 33 and d["drive"] == 495
+    b = c["base"]
+    assert b["kinds"] == [["Polish", "base"], ["Copy1", "base"]] and b["copy"] == TYPED_ROOT and b["drive"] == 495 + 495
 
 
 def test_an_options_own_crew_counts_the_fourth_hand_of_remove_existing_joint_filler(ran):
@@ -716,8 +738,8 @@ def test_which_rows_the_distance_filled_and_so_may_be_taken_back(ran):
 def test_an_options_travel_labor_follows_its_own_lines_not_the_base_crew(ran):
     """A copy of the carrier made as an OPTION carries its own Travel Labor row (priced apart, for its own crew). Its guys follow the option's OWN
     labor lines: 6 guys typed on the copy's Polishing are 6 on its Travel Labor, 6 x 6.5 x $33 = $1,287, while the base crew, and the base's own row,
-    stay 4. (The first version made them 4: the option's row followed the base crew.) The words say "above" for an option's own lines in a Combo, whose
-    carrier reads the base sheets'.
+    stay 4. (The first version made them 4: the option's row followed the base crew.) The words say "above" for an option's own lines, and since round 7 for a
+    base's too (each base drives its own crew, D1: a Combo's carrier said "the labor lines of the base sheets" while its one drive was the bigger crew of both).
 
     Mutation: make an option's crew-following row follow the job's base crew."""
     o = ran["optionCrew"]
@@ -726,9 +748,8 @@ def test_an_options_travel_labor_follows_its_own_lines_not_the_base_crew(ran):
     assert (o["root"]["guys"], o["root"]["cost"]) == (4, 858)
     w = ran["optionWords"]
     assert (w["guys"], w["jobCrew"]) == (6, 4)
-    assert w["own"].endswith("for each of the 6 guys on the labor lines above")
-    assert w["base"].endswith("for each of the 6 guys on the labor lines of the base sheets")
-    assert w["ownHint"] == "Most guys on one labor line above: 6." and w["baseHint"] == "Most guys on one labor line of the base sheets: 6."
+    assert w["own"].endswith("for each of the 6 guys on the labor lines above") and w["base"] == w["own"]
+    assert w["ownHint"] == w["baseHint"] == "Most guys on one labor line above: 6."
     assert w["ownNote"].endswith("for each of the 6 guys on the labor lines above. Type more trips for a long job.")
 
 
@@ -913,53 +934,59 @@ def test_a_sheet_the_sheets_panel_demoted_keeps_following_the_answers_as_an_opti
     assert d["farther"]["polish"] == filled(10, 4) and d["farther"]["epoxy"] == filled(10, 5)
 
 
-def test_an_options_empty_row_is_filled_by_a_far_answer_and_a_gyp_option_never_is(ran):
+def test_an_options_empty_row_is_filled_by_a_far_answer_and_a_gyp_option_is_too(ran):
     """An option's row that nobody has filled or typed in (the copy was made on a local job) is a row like the carrier's empty one, and a far answer fills it: 4 x 6.5 x $33 beside the
-    base's. A Gyp section is left alone as a Gyp carrier is: the Gyp sheet works its own drive time, so its Travel Labor is typed.
+    base's. A Gyp option follows the answers like any other since round 7 (Hanz, 2026-10-21, D2: a Gyp base's drive fills, so a demoted Gyp base must follow the miles too): far, its
+    own crew of 4 x 6.5 x $33; under 70 miles the fill goes back whole. (It was left alone, as a Gyp carrier was.)
 
-    Mutation: fill only a row the distance has filled before; fill a Gyp option."""
+    Mutation: fill only a row the distance has filled before; leave a Gyp option out of the answers (BREAKS below)."""
     b = ran["optionBlankFilled"]
     assert "error" not in b, b.get("error")
     assert b["before"]["hours"] == "" and b["before"]["keys"] == EMPTIED_KEYS
     assert b["base"] == filled(6.5, 4) and core(b["option"]) == filled(6.5, 4)
     g = ran["optionGyp"]
     assert "error" not in g, g.get("error")
-    assert g["untouchedFar"] is True and g["untouchedLocal"] is True and g["base"]["hours"] == ""
+    assert g["untouchedFar"] is False and g["far"] == filled(6.5, 4) and g["local"] == EMPTIED and g["base"]["hours"] == ""
 
 
-def test_the_settling_puts_the_guys_on_the_crew_before_it_gives_a_repeat_back(ran):
-    """THE FOURTH AUDIT'S LOW FINDING. The carrier's Travel Labor is switched off, and a base beside it holds an exact copy of the row whose guys are those of a crew since gone (3, where
-    the crew is 4 now). A restructure gave repeats back BEFORE it put the guys on the crew, compared 4 with 3, found two different rows, and then made them the same: an exact duplicate
-    of the carrier's switched-off row stayed on the base (price neutral while both are off, a second drive the day either is switched on). The guys come first now, so the copy is
-    recognised and given back: empty, no marker, and switched ON again (releaseTravelRow), while the carrier's row stays as the estimator left it.
+def test_the_repeat_a_carried_drive_leaves_behind_is_given_back_switched_on_and_no_other(ran):
+    """THE FOURTH AUDIT'S LOW FINDING, under round 7's law. The job's one drive is CARRIED when a single-base job's base moves, and it goes as a COPY when the old base keeps no other row:
+    a Polish job whose root holds only its Travel Labor, switched OFF, switched to Epoxy. The new base holds the switched-off row (its guys put on the Epoxy crew, 0 until typed), and
+    the root, off now, holds a repeat of it, which is given back AT THE CARRY, while it still reads as one: empty, no marker, switched ON again (releaseTravelRow). The sync that follows
+    puts the copy's guys on the new crew and never touches a section that is off, so a repeat looked for after it is not one any more (the round-7 walk found the repeat of a switched-off
+    row left on the root; the audit's case was the reverse, a repeat on a base compared before the sync). A switched-off row on a sheet the drive was NOT carried from is that sheet's
+    own and stays (round 7's walk found a root's typed row given back because a copy of the root made the base held the same figures).
 
-    Mutation: give repeats back before the guys are put on the crew; leave a given-back row switched off."""
+    Mutation: leave the carry's repeat; give a repeat back from a sheet the drive was not carried from; leave a given-back row switched off (BREAKS below)."""
     d = ran["duplicateOff"]
     assert "error" not in d, d.get("error")
-    assert d["root"]["on"] is False and (d["root"]["guys"], d["root"]["hours"], d["root"]["follow"]) == (4, 6.5, "crew") and d["rootMarks"]["off"] is True
-    assert d["epoxy"] == EMPTIED and d["epoxyMarks"]["keys"] == EMPTIED_KEYS and d["epoxyRows"] == 1, "given back, switched on, empty, markers gone"
+    assert d["epoxy"]["on"] is False and (d["epoxy"]["guys"], d["epoxy"]["hours"], d["epoxy"]["follow"]) == (0, 6.5, "crew") and d["epoxyMarks"]["off"] is True
+    assert d["root"] == EMPTIED and d["rootMarks"]["keys"] == EMPTIED_KEYS and d["rootRows"] == 1, "given back, switched on, empty, markers gone"
     assert d["drive"] == 0
+    n = d["notCarried"]
+    assert n["epoxy"]["on"] is False and n["epoxyMarks"]["off"] is True and n["epoxy"]["guys"] == 4, "a sheet the drive was not carried from keeps its own"
 
 
 def test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect(ran):
-    """THE FOURTH AUDIT'S TEST GAP. The carrier's Travel Labor is typed 3 x 5 (both boxes marked), its sheet is copied and the copy made a base beside it. A copy that says exactly what the
-    carrier's row says is the copy's leftover and is given back (emptied, switched on). A copy that says something else is the estimator's own choice and stays, and it is told from the
-    carrier's by ANY one thing: its guys (2), its hours (4), the Guys box being on auto, the row being switched off, its guys or its hours not carrying the typed marker. Each of those is
-    checked alone, so a clause that goes missing from the comparison gives a copy back that the estimator wrote. (The copy's own figures are priced beside the carrier's: the one-drive rule
-    is about what the distance filled; this row is theirs.) A switched-off carrier row and a copy switched off too are the same row, and it is switched on again when given back.
+    """THE FOURTH AUDIT'S TEST GAP. The carrier's Travel Labor is typed 3 x 5 (both boxes marked), its sheet is copied and the copy put OFF (round 7: the repeat is looked for on a
+    section that is off, what a carried drive leaves behind; a base keeps its own drive). A copy that says exactly what the carrier's row says is the leftover and is given back (emptied,
+    switched on). A copy that says something else is the estimator's own choice and stays, and it is told from the carrier's by ANY one thing: its guys (2), its hours (4), the Guys box
+    being on auto, the row being switched off, its guys or its hours not carrying the typed marker. Each of those is checked alone, so a clause that goes missing from the comparison
+    gives a copy back that the estimator wrote. (A section that is off is not in the bid, so the job's Travel Labor is the carrier's $495 whatever the copy holds.) A switched-off
+    carrier row and a copy switched off too are the same row, and it is switched on again when given back.
 
     Mutation: leave the guys, the hours, the auto flag, the switch, or either typed marker out of the comparison; leave a given-back row switched off."""
     r = ran["repeatVariants"]
     assert "error" not in r, r.get("error")
     s = r["same"]
     assert s["copy"] == EMPTIED and s["copyMarks"]["keys"] == EMPTIED_KEYS and s["root"] == TYPED_ROOT and s["drive"] == 495
-    kept = {                    # what the copy's row still holds: (guys, hours, cost, on), and what the job's Travel Labor adds up to beside the carrier's $495
-        "guysOnly": (("2", "5", 330, True), 825),
-        "hoursOnly": (("3", "4", 396, True), 891),
-        "autoOnly": (("3", "5", 495, True), 990),
+    kept = {                    # what the copy's row still holds: (guys, hours, cost, on), and what the job's Travel Labor adds up to (the carrier's $495: the copy is off)
+        "guysOnly": (("2", "5", 330, True), 495),
+        "hoursOnly": (("3", "4", 396, True), 495),
+        "autoOnly": (("3", "5", 495, True), 495),
         "offOnly": (("3", "5", 0, False), 495),
-        "guysMarkerOnly": (("3", "5", 495, True), 990),
-        "hoursMarkerOnly": (("3", "5", 495, True), 990),
+        "guysMarkerOnly": (("3", "5", 495, True), 495),
+        "hoursMarkerOnly": (("3", "5", 495, True), 495),
     }
     for name, (figures, drive) in kept.items():
         c = r[name]["copy"]
@@ -979,8 +1006,8 @@ def test_a_typed_rate_follows_the_jobs_drive_like_typed_guys_and_hours(ran):
     case a number cannot tell: a typed $33 over a default of $33), makes the row the estimator's: it goes to the new carrier with the job's drive (the rows change places, markers and rate
     and all), whose boxes are then filled by the rule (4 x 6.5 x $40 = $1,040, 4 x 10 x $40 at 300 miles), and it follows the carrier back. The old carrier is left holding the new
     carrier's former row, at its own rate. A row with no default to compare to (the older row the Polish root of an Epoxy or Gyp job holds, a bid saved before the stamp) is told by the
-    way the box holds the figure, as the Hours box is: a rate typed over it is text and is the estimator's, a number says nothing. Both carriers' rows typed: both stay, and the drive is
-    priced once, at the carrier's own rate.
+    way the box holds the figure, as the Hours box is: a rate typed over it is text and is the estimator's, a number says nothing. Both rows typed on an Epoxy job switched to Combo: both stay,
+    and since round 7 each base drives its own crew at its own rate (D1: $45 on Polish, $40 on Epoxy; until then one drive, the carrier's, and Epoxy's was given back).
 
     Mutation: make a typed rate not the estimator's; lose the marker; take a number over an unknown default for a typed one, or a text rate over it for a number."""
     t = ran["typedRate"]
@@ -1003,7 +1030,7 @@ def test_a_typed_rate_follows_the_jobs_drive_like_typed_guys_and_hours(ran):
     assert n["toEpoxy"]["epoxy"]["rate"] == 33 and n["toEpoxy"]["epoxy"]["cost"] == 858 and n["toEpoxy"]["root"]["rate"] == 40
     b = t["bothTyped"]
     assert b["root"] == {"rate": "45", "marked": False, "hours": 6.5, "guys": 4, "follow": "crew", "cost": 4 * 6.5 * 45}
-    assert b["epoxy"]["rate"] == "40" and (b["epoxy"]["hours"], b["epoxy"]["guys"], b["epoxy"]["cost"]) == ("", "", 0) and b["drive"] == 4 * 6.5 * 45
+    assert b["epoxy"] == {"rate": "40", "marked": False, "hours": 6.5, "guys": 4, "follow": "crew", "cost": 4 * 6.5 * 40} and b["drive"] == 4 * 6.5 * 45 + 4 * 6.5 * 40
     r = ran["rateRows"]
     assert r == {"typedOverDefault": True, "typedText": True, "atDefault": False, "markedAtDefault": True, "blank": False, "zero": True, "noDefaultAtShipped": False,
                  "noDefaultOther": False, "noDefaultText": True, "noRow": False, "estimatorsFilled": True, "autoFilledStill": True, "estimatorsAtDefault": False}
@@ -1026,47 +1053,57 @@ def test_a_section_whose_labor_is_not_a_list_never_makes_the_answers_or_the_sett
 
 
 # ── red without the code: break a COPY of the model one line at a time ───────────────────────────
-FILLS ="var fills = !row.hours_typed && (isBlank(row.days) || wrote);"
+# (Round 7, Hanz 2026-10-21: every base crew drives its own (D1), a Gyp base fills (D2), and the job's one drive is carried only on a single-base job. The entries for the
+# Gyp carrier's guard and a Gyp carrier keeping its fill are gone with them; the release of the row a swap leaves on the old base, and the settling's order of the sync and the
+# take-back, are redundant now (the take-back reads only sections that are off, which hold no fill nobody touched by then, and the sync does not touch them), so a break of either
+# changes nothing a scenario can see and they are not listed.)
+FILLS = "var fills = !row.hours_typed && (isBlank(row.days) || wrote);"
 FILL = "if (fills) { row.days = hours; row.hours_seed = hours; }"
 GUYS_ON = 'if (!row.guys_typed && !row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }'
 LEGACY_ON = 'if (!row.guys_typed && row.guys_auto && !row.guys_follow && fills) row.guys_follow = "crew";'
-GUYS_SET = "if (followsCrew(row)) row.guys = own ? ownCrewSize(model, rows) : crewSize(model);"
-SYNC = "r.guys = followsCrew(r) ? (s.option ? ownCrewSize(model, s.section.labor) : crewSize(model)) : manDays;"
-CARRY_CALL = "carryTravelRow(model, fromTab);"
-TAKE_BACK_CALL = "takeBackStrayTravel(model);"
+GUYS_SET = "if (followsCrew(row)) row.guys = ownCrewSize(model, rows);"
+SYNC = 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? ownCrewSize(model, lines) : manDays;'
+CARRY_CALL = 'var carriedFrom = carriesOneDrive(model, was, drives, arrived) ? carryTravelRow(model, was.drives[0], was.kindOf(drives[0])) : "";'
+TAKE_BACK_CALL = "    takeBackStrayTravel(model, carriedFrom);"
+LOOKED_FOR = '    if (!from) { try { from = strandedTravelTab(model, travelCarrier(model)); } catch (err) { from = ""; } }'
 CARRY_FROM = 'var from = typeof fromTab === "string" && fromTab !== "" ? fromTab : strandedTravelTab(model, to);'
-STRANDED_SKIP = 'if (e.tab === carrier || e.kind === "option" || !isObject(e.section)) continue;'
-STRANDED_NO_TRAVEL = 'if (model.no_travel_labor === true) return "";'
+STRANDED_SKIP = 'if (e.tab === carrier || drives.indexOf(e.tab) >= 0 || e.kind === "option" || !isObject(e.section)) continue;'
+CARRY_NO_DRIVE = '      if (model.no_travel_labor === true || sheetSaidNoDrive(toSection)) return "";'
+BASES_BEFORE = "      return { drives: list.map(function (k) { return k.tab; }), kindOf: function (tab) { return kinds.get(tab); } };"
 
-STRAY_GUARD = 'if (e.kind === "option" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;'
+STRAY_GUARD = 'if (e.kind === "option" || !isObject(e.section) || drives.indexOf(e.tab) >= 0) return;'
 STRAY_ROW = "if (rowOn(r) && travelRowIsAutoFilled(r)) clearQuantities(r);"
 TYPED_GUYS = "if (travelGuysAreTyped(row)) return false;"
 TYPED_HOURS = "return isBlank(row.days) || driveHoursAreTools(row);"
 TYPED_MARKS = "if (!row || row.guys_typed === true || row.hours_typed === true) return false;"
 NOTHING_WRITTEN = "return travelRowIsHandsOff(row) && (driveHoursAreTools(row) || followsCrew(row));"
-ELSE_OWNED = "followOwnedRow(model, from, to);"
+ELSE_OWNED = 'return followOwnedRow(model, from, to) ? from : "";'
 OWNED_BOTH = "if (!travelRowIsTheEstimators(row) || theirs.some(travelRowIsTheEstimators)) return false;"
 SWAP = "from.labor[from.labor.indexOf(row)] = leaves;"
-RELEASE_LEAVES = "releaseTravelRow(leaves);"
-CARRIER_KEPT = "return travelCarrier(model) === fromTab;"
 SYNC_CALL = "syncAutoGuys(model);"
-CATCH_CARRY = "} catch (err) { /* nothing to carry */ }"
+CATCH_CARRY = '} catch (err) { return ""; /* nothing to carry */ }'
 OWN_CREW = "return mostGuysOn(rows, isObject(model) && isObject(model.conditions) ? model.conditions : {}, 0);"
 STRAY_FILLED = "if (travelRowIsAutoFilled(row)) {"
 STRAY_OFF = 'if (!rowOn(row)) return where + " This line holds figures but is switched off'
 ESTIMATORS = "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));"
 TYPED_RATE = 'return row.rate_typed === true || (own !== null ? num(row.rate) !== own : typeof row.rate === "string");'
-REPEAT_GIVEN_BACK = "else if (e.tab !== carrier && travelRowRepeats(r, carrierRow)) releaseTravelRow(r);"
+REPEAT_GIVEN_BACK = "else if (repeatsOn(e.tab) && travelRowRepeats(r, carrierRow)) releaseTravelRow(r);"
+REPEATS_ON = 'var repeatsOn = function (tab) { return typeof carriedFrom !== "string" || carriedFrom === tab; };'
+COPY_RELEASED = "        if (!demoted) travelRowsIn(fromSection).forEach(releaseTravelRow);"
 CLEARED = "delete row.hours_seed; delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;"
 COPY_NOT_SHARED = "to.labor = (to.labor instanceof Array ? to.labor : []).concat(rest.length ? mine : mine.map(jsonCopy));"
 NOTE_TYPED = "return head + (filledIn(row.guys)"
 HINT_TYPED = 'if (isTravelRow(row) && !row.guys_auto) return "One round trip for each guy.";'
 HOW_UNIT = 'lines.push("Travel Labor: " + qty(tr.guys) + (oldAuto ? " man-days" : " guys") +'
-WHERE_OWN = 'return !own && baseCount(model) > 1 ? "the labor lines of the base sheets" : "the labor lines above";'
+WHERE = 'return "the labor lines above";'
+HINT_WHERE = 'return "Most guys on one labor line above" + (n > 0 ? ": " + plainNum(n) : "") + ".";'
 STRAY_TYPED = "if (row && (filledIn(row.guys) || filledIn(row.days))) {"
 SHIFT_CASE = "if (!mine.length || theirs.length) return false;"
 TAKE_BACK = 'if (wrote) { row.days = ""; row.hours_seed = ""; }'
-GYP_GUARD = 'if (layout === "gyp") return null;'
+EVERY_BASE = "    driveEntries(model).forEach(function (e) { fillOwnDrive(model, e, miles); });"
+OWN_LINES = "    var lines = laborLinesOf(e.section);"
+FILL_ARRIVALS = "    if (miles !== null) fillArrivals(model, arrived, miles);"
+OPTIONS_SKIP = 'if (e.kind !== "option" || drives.indexOf(e.tab) >= 0 || !isObject(e.section)) return;'
 TOOLS = 'typeof row.days === "number" && typeof row.hours_seed === "number" && row.days === row.hours_seed'
 OFF_GUARD = "if (!rowOn(row)) return;   // switched off: no fill and no take-back"
 CREW_LINES = "(bases.length ? bases : live.slice(0, 1)).forEach(function (e) { lists.push(e.section.labor); });"
@@ -1109,17 +1146,20 @@ MUTATIONS = {
         GUYS_SET, "if (followsCrew(row)) void 0;", lambda g: g["wichitaBare"]["guys"] != 4),
     "the guys are the man-days and not the crew's size": (
         GUYS_SET, "if (followsCrew(row)) row.guys = travelManDays(rows);", lambda g: g["wichitaBare"]["guys"] != 4),
+    "a drive's guys follow the bases' biggest crew when an answer fills them": (
+        GUYS_SET, "if (followsCrew(row)) row.guys = crewSize(model);",
+        lambda g: g["optionsFollow"]["bare"]["guys"] != 6 or g["comboJob"]["guys"] != 3),
     "the page's sync puts the guys on the man-days": (
-        SYNC, "r.guys = manDays;", lambda g: g["crewAfter"]["guys"] != 4),
+        SYNC, 'if (r && r.unit === "hours" && r.guys_auto) r.guys = manDays;', lambda g: g["crewAfter"]["guys"] != 4),
     "the sync leaves a reopened crew row to follow nothing": (
-        SYNC, "r.guys = followsCrew(r) ? r.guys : manDays;",
+        SYNC, 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? r.guys : manDays;',
         lambda g: g["savedCrewRow"]["afterCrewChange"]["guys"] != 6),
-    "an option's crew-following row follows the base crew and not its own lines": (
-        SYNC, "r.guys = followsCrew(r) ? crewSize(model) : manDays;",
-        lambda g: g["optionCrew"]["copy"]["guys"] != 6 or g["optionCrew"]["copy"]["cost"] != 6 * 6.5 * 33),
-    "the crew is read from the carrier's lines only": (
+    "a crew-following row follows the bases' biggest crew and not its own lines": (
+        SYNC, 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? crewSize(model) : manDays;',
+        lambda g: g["optionCrew"]["copy"]["guys"] != 6 or g["optionCrew"]["copy"]["cost"] != 6 * 6.5 * 33 or g["comboJob"]["guys"] != 3),
+    "the bases' crew is read from the carrier's lines only": (
         CREW_LINES, "live.slice(0, 1).forEach(function (e) { lists.push(e.section.labor); });",
-        lambda g: g["comboJob"]["guys"] != 4),
+        lambda g: g["comboJob"]["crew"] != 4),
     "the crew is the sum of the guys on every line": (
         "if (guys > most) most = guys;", "most += guys;", lambda g: g["sizes"]["mockup6"] != 6),
     "the fourth hand is left out of the crew": (
@@ -1135,10 +1175,15 @@ MUTATIONS = {
         TAKE_BACK, '{ row.days = ""; row.hours_seed = ""; }', lambda g: g["localKeepsTyped"]["hours"] != "4"),
     "clearing the miles leaves the tool's hours": (
         "followDistanceHours(model, null);", "void 0;", lambda g: g["cleared"]["hours"] != ""),
-    "a Gyp carrier is filled like the rest": (
-        GYP_GUARD, "void 0;", lambda g: g["gypJob"]["untouched"] is False),
-    "the fill lands on the model's own rows, not the carrier's": (
-        "holder = carrier.section;", "holder = model;",
+    # --- round 7 (Hanz, 2026-10-21): every base crew drives its own (D1), a Gyp base included (D2) ---
+    "a Gyp base is left out of the fill": (
+        EVERY_BASE, '    driveEntries(model).forEach(function (e) { if (e.layout !== "gyp") fillOwnDrive(model, e, miles); });',
+        lambda g: g["gypJob"]["row"]["hours"] != 6.5),
+    "only the carrier's drive is filled": (
+        EVERY_BASE, "    driveEntries(model).slice(0, 1).forEach(function (e) { fillOwnDrive(model, e, miles); });",
+        lambda g: g["comboJob"]["epoxy"]["hours"] != 6.5),
+    "the fill lands on the model's own rows, not the section's": (
+        OWN_LINES, "    var lines = laborLinesOf(model);",
         lambda g: g["epoxyJob"]["hours"] != 6.5 or g["epoxyJob"]["rootRowUntouched"] is False),
     "a switched-off row is filled": (
         OFF_GUARD, "void 0;", lambda g: g["offBefore"]["untouched"] is False),
@@ -1150,46 +1195,46 @@ MUTATIONS = {
         MARK_HOURS, 'else if (key === "days") { }', lambda g: g["clearedHours"]["hours"] != ""),
     "typing in the Guys box leaves it on the crew's size": (
         MARK_GUYS, 'if (key === "guys") { row.guys_typed = true; }', lambda g: g["markTravel"]["follow"] is not None),
-    "the distance on file is not put on a new carrier's row": (
-        "if (miles !== null) followDistanceHours(model, miles);", "void miles;",
-        lambda g: g["followDistance"]["after"]["hours"] != 6.5),
-    # --- a carrier move: one drive, one Travel Labor row priced (the 2026-10-20 audit) ---
-    "the row does not go with the carrier": (
-        CARRY_CALL, "void fromTab;",
-        lambda g: g["moveComboToEpoxy"]["epoxy"] is None or g["moveComboToEpoxy"]["rootHasRow"] is True),
-    "the old carrier keeps charging the drive": (
-        TAKE_BACK_CALL, "void fromTab;",
-        lambda g: g["moveEpoxyToCombo"]["drive"] != 858 or g["moveEpoxyToCombo"]["epoxy"]["cost"] != 0),
+    "the distance on file is not put on a base that arrived": (
+        FILL_ARRIVALS, "    void miles;",
+        lambda g: g["followDistance"]["after"]["hours"] != 6.5 or g["moveEpoxyToCombo"]["root"]["hours"] != 6.5),
+    "a base that stayed a base is filled as if it had arrived": (
+        BASES_BEFORE, "      return { drives: [], kindOf: function (tab) { return kinds.get(tab); } };",
+        lambda g: g["carrierKeptFillsNothing"] != EMPTIED),
+    # --- the single-base carry: the job's one drive follows its one base ---
+    "the row does not go with a single-base job's base": (
+        CARRY_CALL, 'var carriedFrom = "";',
+        lambda g: g["copyReleased"]["epoxy"] != TYPED_ROOT or g["followsSeeded"]["typed"]["epoxy"] != TYPED_ROOT),
+    "an off section keeps the drive the distance filled on it": (
+        TAKE_BACK_CALL, "    void carriedFrom;",
+        lambda g: g["settleSequence"]["toPolish"]["epoxy"] != EMPTIED or g["moveComboToEpoxy"]["root"] != EMPTIED),
     "a stranded row is not looked for when the old carrier is not named": (
-        CARRY_FROM, 'var from = typeof fromTab === "string" && fromTab !== "" ? fromTab : "";',
-        lambda g: g["moveComboToEpoxyInferred"]["epoxy"] is None),
-    "an option's row is carried to the carrier": (
-        STRANDED_SKIP, 'if (e.tab === carrier || !isObject(e.section)) continue;',
+        LOOKED_FOR, "    void from;",
+        lambda g: g["namedBeatsLooked"]["looked"]["gyp"] is None),
+    "an option's row is carried to a new base": (
+        STRANDED_SKIP, 'if (e.tab === carrier || drives.indexOf(e.tab) >= 0 || !isObject(e.section)) continue;',
         lambda g: g["moveOptionNotCarried"]["epoxyHasRow"] is not False),
-    "a bid whose library said no Travel Labor is given a row": (
-        STRANDED_NO_TRAVEL, "void 0;",
-        lambda g: g["moveNoTravelLabor"]["epoxyHasRow"] is not False or g["moveNoTravelLabor"]["rootKeepsRow"] is not True),
+    "a job that said it has no drive has its old base's row carried to the new one": (
+        CARRY_NO_DRIVE, '      if (sheetSaidNoDrive(toSection)) return "";',
+        lambda g: g["moveNoTravelLaborNamed"]["epoxyHasRow"] is not False),
     "an option gives its row back": (
-        STRAY_GUARD, 'if (!isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;',
+        STRAY_GUARD, 'if (!isObject(e.section) || drives.indexOf(e.tab) >= 0) return;',
         lambda g: g["moveOptionStays"]["same"] is not True or g["takeBackOff"]["option"] is not True),
-    "the carrier's own row is taken back": (
+    "a base gives its own drive back": (
         STRAY_GUARD, 'if (e.kind === "option" || !isObject(e.section)) return;',
-        lambda g: g["moveEpoxyToCombo"]["root"]["cost"] != 858 or g["moveEpoxyToCombo"]["drive"] != 858),
+        lambda g: g["moveEpoxyToCombo"]["epoxy"]["cost"] != 858 or g["moveEpoxyToCombo"]["drive"] != 1716),
     "an off section keeps the row the distance filled": (
-        STRAY_GUARD, 'if (e.kind !== "base" || !isObject(e.section) || (e.tab === carrier && e.layout !== "gyp")) return;',
+        STRAY_GUARD, 'if (e.kind !== "base" || !isObject(e.section) || drives.indexOf(e.tab) >= 0) return;',
         lambda g: g["takeBackOff"]["off"] != EMPTIED or g["settleSequence"]["toPolish"]["epoxy"] != EMPTIED),
-    "a Gyp carrier keeps a row the distance filled": (
-        STRAY_GUARD, 'if (e.kind === "option" || !isObject(e.section) || e.tab === carrier) return;',
-        lambda g: g["gypCarriedUnfilled"]["gyp"] != EMPTIED or g["gypCarriedUnfilled"]["drive"] != 0),
     "a switched-off row is taken back": (
         STRAY_ROW, "if (travelRowIsAutoFilled(r)) clearQuantities(r);",
-        lambda g: g["takeBackOff"]["offRowStays"] is not True),
+        lambda g: g["duplicateOff"]["notCarried"]["epoxy"]["guys"] != 4),
     "a row taken back keeps its markers": (
         CLEARED, "delete row.hours_seed; delete row.guys_typed; delete row.hours_typed;",
-        lambda g: g["moveEpoxyToCombo"]["epoxy"]["follow"] is not None or "guys_follow" in g["moveEpoxyToCombo"]["epoxyKeys"]),
+        lambda g: g["settleSequence"]["toPolish"]["epoxy"]["follow"] is not None or "guys_follow" in g["settleSequence"]["toPolish"]["epoxyKeys"]),
     "a row taken back keeps the hours the tool wrote": (
         CLEARED, "delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;",
-        lambda g: g["moveEpoxyToCombo"]["epoxy"]["seed"] is not None),
+        lambda g: g["settleSequence"]["toPolish"]["epoxy"]["seed"] is not None),
     "typed guys are taken back": (
         TYPED_GUYS, "void 0;", lambda g: g["autoFilled"]["typedGuysNoMarker"] is not False or g["autoFilled"]["estimators"]["typedGuysNoMarker"] is not True),
     "typed hours are taken back": (
@@ -1201,46 +1246,42 @@ MUTATIONS = {
     "a row nothing was written in counts as filled": (
         NOTHING_WRITTEN, "return travelRowIsHandsOff(row);",
         lambda g: g["autoFilled"]["empty"] is not False or g["autoFilled"]["legacyBlank"] is not False),
-    "a copy of the row shares its object with the old carrier": (
+    "a copy of the row shares its object with the old base": (
         COPY_NOT_SHARED, "to.labor = (to.labor instanceof Array ? to.labor : []).concat(mine);",
         lambda g: g["moveCopy"]["aliased"] is not False),
-    "a new carrier that has a row of its own is given a second one": (
+    "a new base that has a row of its own is given a second one": (
         SHIFT_CASE, "if (!mine.length) return false;",
-        lambda g: g["moveEpoxyToCombo"]["rootRows"] != 1 or g["moveEpoxyToPolish"]["rootRows"] != 1),
-    # --- the third audit: what the estimator said follows the carrier, every section gives the fill back, the carrier that stayed is still settled ---
-    "what the estimator typed stays behind on the old carrier": (
-        ELSE_OWNED, "void from;",
-        lambda g: g["moveTypedFollows"]["root"] != TYPED_ROOT or g["moveTypedFollows"]["drive"] != 495 or g["followsSeeded"]["typed"]["drive"] != 495),
-    "what the estimator cleared is refilled on the new carrier": (
-        ELSE_OWNED, "void from;",
-        lambda g: g["moveClearedFollows"]["hours"]["root"]["hours"] != "" or g["moveClearedFollows"]["guys"]["root"]["guys"] != ""),
-    "a copy of the carrier's typed row made a base keeps pricing the drive beside it": (
+        lambda g: g["moveEpoxyToPolish"]["rootRows"] != 1),
+    "what the estimator typed stays behind on a single-base job's old base": (
+        ELSE_OWNED, 'return "";',
+        lambda g: g["followsSeeded"]["typed"]["epoxy"] != TYPED_ROOT or g["followsSeeded"]["typed"]["drive"] != 495),
+    "what the estimator cleared is refilled on a single-base job's new base": (
+        ELSE_OWNED, 'return "";',
+        lambda g: g["followsSeeded"]["clearedHours"]["epoxy"]["hours"] != "" or g["followsSeeded"]["clearedGuys"]["epoxy"]["guys"] != ""),
+    "a row the estimator switched off stays behind on a single-base job's old base": (
+        ELSE_OWNED, 'return "";',
+        lambda g: g["followsSeeded"]["off"]["epoxyMarks"]["off"] is not True),
+    "a repeat on an off section is not given back": (
         REPEAT_GIVEN_BACK, "else void r;",
-        lambda g: g["copyRepeat"]["same"]["copy"] != EMPTIED or g["copyRepeat"]["same"]["drive"] != 495),
-    "a row the estimator switched off stays behind on the old carrier": (
-        ELSE_OWNED, "void from;",
-        lambda g: g["moveOffFollows"]["rootMarks"]["off"] is not True or g["followsSeeded"]["off"]["epoxyMarks"]["off"] is not True),
-    "the estimator's row overwrites a new carrier's row that is the estimator's too": (
+        lambda g: g["copyRepeat"]["same"]["copy"] != EMPTIED),
+    "a repeat is given back from a section the drive was not carried from": (
+        REPEATS_ON, "var repeatsOn = function (tab) { return true; };",
+        lambda g: g["duplicateOff"]["notCarried"]["epoxy"]["on"] is not False),
+    "a copy the old base keeps of the carried row is not given back": (
+        COPY_RELEASED, "        void demoted;",
+        lambda g: g["copyReleased"]["root"] != EMPTIED or g["duplicateOff"]["root"] != EMPTIED),
+    "the estimator's row overwrites a new base's row that is the estimator's too": (
         OWNED_BOTH, "if (!travelRowIsTheEstimators(row)) return false;",
-        lambda g: g["ownedBothStay"]["root"]["guys"] != "2" or g["ownedBothStay"]["drive"] != 2 * 4 * 33 + 3 * 5 * 33),
-    "the old carrier keeps the estimator's row when it is handed over": (
+        lambda g: g["ownedBothStay"]["root"]["guys"] != "2" or g["ownedBothStay"]["drive"] != 2 * 4 * 33),
+    "the old base keeps the estimator's row when it is handed over": (
         SWAP, "void leaves;",
-        lambda g: g["moveTypedFollows"]["drive"] != 495 or g["moveTypedFollows"]["epoxy"] != EMPTIED),
-    "the row the estimator's replaced keeps its fill": (
-        RELEASE_LEAVES, "void leaves;",
-        lambda g: g["moveTypedFollows"]["epoxy"] != EMPTIED or g["followsSeeded"]["typed"]["root"] != EMPTIED),
-    "a copy the old carrier keeps of the estimator's row is not given back": (
-        REPEAT_GIVEN_BACK, "else void r;",
-        lambda g: g["copyReleased"]["root"] != EMPTIED or g["copyReleased"]["drive"] != 495),
-    "the caller's name for the old carrier is ignored": (
+        lambda g: g["followsSeeded"]["typed"]["root"] != EMPTIED),
+    "the caller's name for the old base is ignored": (
         CARRY_FROM, "var from = strandedTravelTab(model, to);",
         lambda g: g["namedBeatsLooked"]["named"]["gyp"] != TYPED_ROOT),
-    "a carrier that stayed is settled as if it had moved": (
-        CARRIER_KEPT, "return false;",
-        lambda g: g["carrierKeptFillsNothing"] != EMPTIED),
-    "the settling leaves the guys on the old crew": (
+    "the settling leaves a carried row's guys on the old crew": (
         SYNC_CALL, "void model;",
-        lambda g: g["carrierKept"]["after"]["guys"] != 4 or g["carrierKept"]["drive"] != 858),
+        lambda g: g["localCarry"]["epoxy"]["guys"] != 0),
     "the carry throws for a section it cannot find or read": (
         CATCH_CARRY, "} catch (err) { throw err; }",
         lambda g: g["followNeverThrows"]["namelessThrew"] is not None or g["followNeverThrows"]["brokenThrew"] is not None),
@@ -1249,7 +1290,7 @@ MUTATIONS = {
         lambda g: g["optionHand"]["withHand"] != 4),
     "a switched-off row is not the estimator's": (
         ESTIMATORS, "return !!row && (!travelRowIsHandsOff(row) || travelRateIsTyped(row));",
-        lambda g: g["autoFilled"]["estimators"]["off"] is not True or g["moveOffFollows"]["rootMarks"]["off"] is not True),
+        lambda g: g["autoFilled"]["estimators"]["off"] is not True or g["followsSeeded"]["off"]["epoxyMarks"]["off"] is not True),
     # --- the fourth audit (2026-10-20, of c0255de): an option follows every answer ---
     "an answer never reaches an option's Travel Labor": (
         "followDistanceOptions(model, miles);", "void miles;",
@@ -1260,16 +1301,13 @@ MUTATIONS = {
     "an option keeps its fill markers when the job goes local": (
         "if (own && travelRowIsAutoFilled(row)) clearQuantities(row);", "if (false) clearQuantities(row);",
         lambda g: g["optionsFollow"]["local"]["option"]["keys"] != EMPTIED_KEYS or g["optionsDemoted"]["local"]["epoxy"] != EMPTIED),
-    "an option's guys follow the base crew when an answer fills them": (
-        GUYS_SET, "if (followsCrew(row)) row.guys = crewSize(model);",
-        lambda g: g["optionsFollow"]["bare"]["guys"] != 6),
     "an option's empty row is not filled by a far answer": (
         'if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true);',
         'if (isTravelRow(r) && r.unit === "hours" && travelRowIsAutoFilled(r)) followDistanceOnRow(model, r, rows, miles, true);',
         lambda g: g["optionsFollow"]["farAgain"]["option"]["hours"] != 6.5 or g["optionBlankFilled"]["option"]["hours"] != 6.5),
-    "a Gyp option is filled like the rest": (
-        'e.layout === "gyp" || ', "",
-        lambda g: g["optionGyp"]["untouchedFar"] is not True),
+    "a Gyp option is left out of the answers": (
+        OPTIONS_SKIP, 'if (e.kind !== "option" || drives.indexOf(e.tab) >= 0 || e.layout === "gyp" || !isObject(e.section)) return;',
+        lambda g: g["optionGyp"]["far"]["hours"] != 6.5),
     "a switched-off option row is filled": (
         OFF_GUARD, "void 0;",
         lambda g: g["optionsOwned"]["off"]["far300"]["hours"] != 6.5),
@@ -1279,33 +1317,30 @@ MUTATIONS = {
     "a cleared option guys box is refilled by the next answer": (
         GUYS_ON, 'if (!row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }',
         lambda g: g["optionsOwned"]["clearedGuys"]["far300"]["guys"] != ""),
-    # --- the settling's order, and what a given-back row is left as ---
-    "the take-back runs before the guys are put on the crew": (
-        SYNC_CALL, "takeBackStrayTravel(model); syncAutoGuys(model); return model;",
-        lambda g: g["duplicateOff"]["epoxy"] != EMPTIED),
+    # --- what a given-back row is left as ---
     "a given-back row is left switched off": (
         "delete row.enabled;", "void row;",
-        lambda g: g["duplicateOff"]["epoxy"]["on"] is not True or "enabled" in g["duplicateOff"]["epoxyMarks"]["keys"]
+        lambda g: g["duplicateOff"]["root"]["on"] is not True or "enabled" in g["duplicateOff"]["rootMarks"]["keys"]
         or g["repeatVariants"]["bothOff"]["copy"]["on"] is not True),
     # --- every clause of "repeats the carrier's row" ---
     "a copy that says other guys is given back": (
         'same("guys") && ', "",
-        lambda g: g["repeatVariants"]["guysOnly"]["copy"]["guys"] != "2" or g["repeatVariants"]["guysOnly"]["drive"] != 825),
+        lambda g: g["repeatVariants"]["guysOnly"]["copy"]["guys"] != "2"),
     "a copy that says other hours is given back": (
         'same("days") && ', "",
-        lambda g: g["repeatVariants"]["hoursOnly"]["copy"]["hours"] != "4" or g["repeatVariants"]["hoursOnly"]["drive"] != 891),
+        lambda g: g["repeatVariants"]["hoursOnly"]["copy"]["hours"] != "4"),
     "a copy on auto when the carrier's is not is given back": (
         '!!row.guys_auto === !!carrierRow.guys_auto && ', "",
-        lambda g: g["repeatVariants"]["autoOnly"]["copy"]["auto"] is not True or g["repeatVariants"]["autoOnly"]["drive"] != 990),
+        lambda g: g["repeatVariants"]["autoOnly"]["copy"]["auto"] is not True),
     "a copy switched off when the carrier's is on is given back": (
         "(row.enabled === false) === (carrierRow.enabled === false) &&", "true &&",
         lambda g: g["repeatVariants"]["offOnly"]["copy"]["on"] is not False),
     "a copy whose guys were not typed by hand when the carrier's were is given back": (
         "(row.guys_typed === true) === (carrierRow.guys_typed === true) && ", "",
-        lambda g: g["repeatVariants"]["guysMarkerOnly"]["copy"]["guys"] != "3" or g["repeatVariants"]["guysMarkerOnly"]["drive"] != 990),
+        lambda g: g["repeatVariants"]["guysMarkerOnly"]["copy"]["guys"] != "3"),
     "a copy whose hours were not typed by hand when the carrier's were is given back": (
         "(row.hours_typed === true) === (carrierRow.hours_typed === true);", "true;",
-        lambda g: g["repeatVariants"]["hoursMarkerOnly"]["copy"]["hours"] != "5" or g["repeatVariants"]["hoursMarkerOnly"]["drive"] != 990),
+        lambda g: g["repeatVariants"]["hoursMarkerOnly"]["copy"]["hours"] != "5"),
     # --- a typed rate follows the job's drive ---
     "a rate the estimator typed does not make the row theirs": (
         ESTIMATORS, "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row));",
@@ -1345,9 +1380,12 @@ MUTATIONS = {
     "a typed count is worded as man-days": (
         HOW_UNIT, 'lines.push("Travel Labor: " + qty(tr.guys) + (crewFollow ? " guys" : " man-days") +',
         lambda g: "man-days (typed)" in g["notesTyped"]["how"]),
-    "an option's guys are said to be the base sheets'": (
-        WHERE_OWN, 'return baseCount(model) > 1 ? "the labor lines of the base sheets" : "the labor lines above";',
-        lambda g: g["optionWords"]["own"].endswith("base sheets")),
+    "a base's guys are said to be the base sheets'": (
+        WHERE, 'return baseCount(model) > 1 ? "the labor lines of the base sheets" : "the labor lines above";',
+        lambda g: g["comboJob"]["words"].endswith("base sheets")),
+    "the hint under a base's guys says the base sheets'": (
+        HINT_WHERE, 'return "Most guys on one labor line" + (baseCount(model) > 1 ? " of the base sheets" : " above") + (n > 0 ? ": " + plainNum(n) : "") + ".";',
+        lambda g: g["comboJob"]["hint"] != "Most guys on one labor line above: 3."),
     "a leftover row says the same whatever it holds": (
         STRAY_TYPED, "if (false) {", lambda g: "left as typed" not in g["strayWords"]["typed"]),
 }

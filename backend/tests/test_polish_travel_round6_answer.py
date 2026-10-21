@@ -13,6 +13,10 @@ had happened in between. Everything here is run on the page, and every reload is
       (the carrier, or an option) and has none, and takes back only that sheet's answer. A job-type switch after the carrier's x HONOURS it: the job has no drive, so the new carrier is not
       seeded a row and none is carried to it, in the session and after a reload alike. A saved bid's flag, which the round-5 x set for ANY row, is read as the job's answer it is now and is dropped
       when the carrier holds a row (the flag prices nothing: no saved bid moves), and a legacy Travel row is upgraded whether or not the flag is on the bid.
+      ROUND 7 (Hanz's decisions of 2026-10-21) split the answer three ways and these tests read under it: every BASE drives its own crew (D1), so the x on the drive of a SINGLE-base job is
+      the job's answer (J, what "the carrier's x" was), the x on one base's drive of a Combo is that SHEET's own (S, `sheet_no_travel_labor`: a Combo's second base holds no leftover now),
+      an option's records nothing (O), and an option made the base keeps a line the estimator added or typed while the job's answer releases one the tool filled (the round-6 audit's F-C).
+      test_polish_travel_round7.py holds S and that rule.
   X3  THE x ON A LABOR LINE, FROM THE KEYBOARD. The panel is drawn again, the button is destroyed with it and focus fell to <body>: it goes to the next row's x, else the previous row's, else the
       Add Travel Labor button (when the Travel line was the one that went), else the Add labor line.
   X4  THE ROUND-5 LOWS that reproduce: (b) an answer filled the nights of a Lodging or Per Diem line the estimator had switched OFF (now it leaves a line that is off alone, and switching the line ON
@@ -68,17 +72,19 @@ SAVED_TOTAL = 39742               # the far bid of the savedBid section, priced 
 
 # ── X1. the blank row ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 def test_a_root_that_does_not_carry_the_jobs_travel_is_never_given_the_blank_row(ran):
-    """The draft saved right after a far Combo is switched to Epoxy holds no Travel Labor row on the off Polish root (the row went with the carrier). A reload put a blank one back
+    """The draft saved right after a far Combo is switched to Epoxy held no Travel Labor row on the off Polish root (the row went with the carrier). A reload put a blank one back
     (migrateModel appended it: the root had none, and the job had not said no). Now the root is off and carries nothing, so it is left as saved, and a plain reopen holds exactly what was saved.
+    (Since round 7 the off root keeps its OWN row, its fill given back: each base drives its own crew, Hanz's D1 of 2026-10-21, and Epoxy has its own. So the draft holds one row there, the
+    reload gives it no second, and the table below holds the case of a root that has none.)
 
     The table: an off root and a root that is an option are left alone, whatever they hold; a root that carries the travel still gets the row a stale draft (saved before 2026-09-12) never had, and
     so does a root whose sections cannot be read (it is its own carrier, as it always was); a root that carries it and said it has no drive keeps none.
 
     Mutation: append the blank row to any root; to a root that is off; to a root that is an option; leave the stale draft without it."""
     r = ran["rootCause"]
-    assert r["savedKinds"] == ["Polish:off", "Epoxy:base"] and r["savedRootRows"] == 0 and r["flag"] is False
-    assert r["migratedRootRows"] == 0, "a reload gave the off root a blank Travel Labor row"
-    assert r["reopenRows"] == {"Polish:off": None, "Epoxy:base": "0 x 6.5 = $0"}, r["reopenRows"]
+    assert r["savedKinds"] == ["Polish:off", "Epoxy:base"] and r["savedRootRows"] == 1 and r["flag"] is False
+    assert r["migratedRootRows"] == 1, "a reload gave the off root a second, blank Travel Labor row"
+    assert r["reopenRows"] == {"Polish:off": " x  = $0", "Epoxy:base": "0 x 6.5 = $0"}, r["reopenRows"]
     assert r["reopenQuiet"] == {"armed": 0, "saves": 0}
     assert r["table"] == {
         "an off root (an Epoxy job's Polish)": 0,
@@ -94,13 +100,15 @@ def test_a_root_that_does_not_carry_the_jobs_travel_is_never_given_the_blank_row
 def test_f1_a_session_and_a_reload_price_a_combo_switched_to_epoxy_and_back_after_the_x_the_same(ran):
     """F1 (audit): a far Combo (Polish 4 x 12, 190 miles, the drive 4 x 6.5 = $858), switched to Epoxy on the intake step, the x on the Epoxy sheet's Travel Labor, switched back to Combo, then 300
     miles typed. With no refresh after the switch the Combo came back with no Travel Labor line and 300 miles changed nothing ($48,133); with one refresh it came back with a blank line that the
-    distance filled to 4 x 6.5 = $858 ($48,009) and 300 miles to 4 x 10 = $1,320 ($48,916). Now both are the bid that had the x pressed on a Combo and nothing else: no drive, and the answer stays.
+    distance filled to 4 x 6.5 = $858 ($48,009) and 300 miles to 4 x 10 = $1,320 ($48,916). Now both are the bid that had the x pressed on a Combo's drives and nothing else: no drive, and the
+    answer stays. (Since round 7 a Combo has two drives, one per base crew, Hanz's D1 of 2026-10-21, so "the x on a Combo" is the x on both: the oracle presses both.)
 
     Mutation: append the blank row to an off root."""
     a, b, o = ran["f1"]["A"], ran["f1"]["B"], ran["oracle"]["combo"]
     assert a["pressed"] is True and b["pressed"] is True and a["flagAfterX"] is True and b["flagAfterX"] is True
     assert a == b, "a session and a reload of the same draft differ:\nA %r\nB %r" % (a, b)
     assert a["rows"] == {"Polish:base": None, "Epoxy:base": None} and a["flag"] is True and a["carrier"] == "Polish"
+    assert o["pressed"] is True and o["rows"] == {"Polish:base": None, "Epoxy:base": None}
     assert a["open"] == o["open"] and a["at300"] == o["at300"], "the bid is not the one that had the x pressed on a Combo and nothing else"
 
 
@@ -174,15 +182,16 @@ def test_the_root_that_is_an_option_has_its_own_answer_not_the_jobs(ran):
     assert o["afterAdd"]["flag"] is False and o["afterAdd"]["saved"] is False and o["afterAdd"]["rows"]["Polish:option"] == DRIVE
 
 
-def test_the_x_on_a_leftover_row_says_nothing_and_add_is_never_drawn_on_a_base_that_does_not_carry_the_travel(ran):
-    """A Combo's Epoxy base holding a leftover Travel Labor line the estimator typed (2 x 3): its x removes the line and says nothing about the job (the flag stays off, the carrier keeps its
-    line), a reload does not bring it back, and Add Travel Labor is not drawn there before or after: the job's drive is charged once, on the carrier.
+def test_the_x_on_a_combo_bases_own_drive_is_that_sheets_answer_and_add_is_drawn_there(ran):
+    """A Combo's Epoxy base whose own drive the estimator typed (2 x 3): its x removes the line and is the Epoxy SHEET's answer (S), never the job's: the job's flag stays off, the carrier keeps its
+    line, a reload does not bring the line back, and Add Travel Labor is drawn there (not before, while the line was there). Until round 7 the line was a leftover of the job's one drive: its x
+    said nothing and Add was never drawn on a base that does not carry the travel. Every base drives its own crew now (Hanz's D1 of 2026-10-21).
 
-    Mutation: let a leftover row's x say the job has no drive; draw Add Travel Labor on every section."""
+    Mutation: let a base's x say the job has no drive; record the sheet's answer nowhere."""
     s = ran["answer"]["stray"]
     assert s["before"] == {"rows": {"Polish:base": DRIVE, "Epoxy:base": "2 x 3 = $198"}, "addOnStray": False} and s["pressed"] is True
-    assert s["afterX"] == {"flag": False, "rows": {"Polish:base": DRIVE, "Epoxy:base": None}, "saved": False, "addOnStray": False}
-    assert s["reloaded"] == {"flag": False, "rows": {"Polish:base": DRIVE, "Epoxy:base": None}}
+    assert s["afterX"] == {"flag": False, "sheet": True, "rows": {"Polish:base": DRIVE, "Epoxy:base": None}, "saved": False, "addOnStray": True}
+    assert s["reloaded"] == {"flag": False, "sheet": True, "rows": {"Polish:base": DRIVE, "Epoxy:base": None}}
 
 
 def test_a_job_type_switch_after_the_carriers_x_honours_the_answer(ran):
@@ -223,15 +232,16 @@ def test_an_options_add_takes_back_only_the_options_answer_and_fills_its_line_on
 
 
 def test_an_option_made_the_base_that_holds_a_line_hands_the_job_a_drive_and_the_answer_goes(ran):
-    """A far Polish bid copied as an option (its own line), the x on the carrier (the job says it has no drive), then the option made the base: the new carrier holds a line of its own, so the
-    job has a drive and the answer, which was the old carrier's, is gone, in the page's save and after a reload. The model's pickBase says it on a bid the page has not settled, and does not touch
-    the model it was given.
+    """A far Polish bid copied as an option (its own line), the x on the carrier (the job says it has no drive), 3 x 5 typed on the option's line, then the option made the base: the new carrier holds a
+    line of the estimator's, so the job has a drive and the answer, which was the old carrier's, is gone, in the page's save and after a reload. The model's pickBase says it on a bid the page has not
+    settled, and does not touch the model it was given. (Round 7, the promotion rule, the round-6 audit's F-C: a line the TOOL filled, the copy's own drive as it was, is released while the job says
+    it has no drive and the answer stays; that is test_polish_travel_round7.py's. Until then any line the option held handed the job a drive.)
 
     Mutation: leave the answer in place when the job is handed a line (the page's settling; pickBase)."""
     p = ran["answer"]["promoted"]
-    assert p["said"] == {"flag": True, "rows": {"Polish:base": None, "Copy1:option": DRIVE}}
+    assert p["said"] == {"flag": True, "rows": {"Polish:base": None, "Copy1:option": "3 x 5 = $495"}}
     assert p["modelSays"] == {"flag": False, "inputFlag": True}
-    assert p["after"] == {"flag": False, "rows": {"Polish:option": None, "Copy1:base": DRIVE}, "carrier": "Copy1", "saved": False}
+    assert p["after"] == {"flag": False, "rows": {"Polish:option": None, "Copy1:base": "3 x 5 = $495"}, "carrier": "Copy1", "saved": False}
     assert p["reloaded"] == {"flag": False, "rows": p["after"]["rows"]}
 
 
@@ -250,17 +260,17 @@ def test_a_blank_line_a_new_carrier_already_held_is_not_the_drive_a_job_that_sai
 
 def test_the_models_own_answers_for_the_x_add_and_the_seeding(ran):
     """The same rules read straight off the model (no page to re-sync or settle anything after it, which hides some of what a wrong model does): Add Travel Labor on an option whose crew is 2 x 12
-    puts 2 guys x 6.5 hours on it (the carrier's crew is 4) and leaves the job's answer alone; a sheet that already holds a line, a base that does not carry the travel and a sheet the bid
-    does not have are refused. The x on an OPTION says nothing about the job even when the carrier holds no line, and the carrier's says it. Add is offered on the carrier and on an option with
-    no line, never on one that holds a line, a base that does not carry the travel or a sheet that is not there. A job that said it has no drive is not seeded a line on the section a job-type
-    switch adds; one that did not say so is.
+    puts 2 guys x 6.5 hours on it (the carrier's crew is 4) and leaves the job's answer alone; a sheet that already holds a line, a section that is OFF and a sheet the bid does not have are
+    refused. The x on an OPTION says nothing about the job even when the carrier holds no line, and the carrier's says it. Add is offered on the carrier and on an option with no line, never on
+    one that holds a line, a section that is off or a sheet that is not there. A job that said it has no drive is not seeded a line on the section a job-type switch adds; one that did not say so
+    is. (Round 7: every base can hold its own drive, D1, so the section refused is one that is off; it was a Combo's second base, which held the job's drive nowhere.)
 
-    Mutation: add to an option on the carrier's crew; take back the job's answer from an option; refuse an option; offer a base; let any sheet's x say it; seed against the answer."""
+    Mutation: add to an option on the carrier's crew; take back the job's answer from an option; refuse an option; offer a section that is off; let any sheet's x say it; seed against the answer."""
     d = ran["answer"]["direct"]
     assert d["addOnOption"] == {"added": True, "guys": 2, "hours": 6.5, "flag": False}
-    assert d["refused"] == {"holdsOne": False, "strayBase": False, "unknownTab": False}
+    assert d["refused"] == {"holdsOne": False, "offSection": False, "unknownTab": False}
     assert d["optionX"] == {"said": False, "flag": False} and d["carrierX"] == {"said": True, "flag": True}
-    assert d["canAdd"] == {"carrier": True, "option": False, "carrierWithLine": False, "optionWithLine": False, "optionWithoutLine": True, "strayBase": False, "unknown": False}
+    assert d["canAdd"] == {"carrier": True, "option": False, "carrierWithLine": False, "optionWithLine": False, "optionWithoutLine": True, "offSection": False, "unknown": False}
     assert d["seeded"] == {"said": False, "notSaid": True}
 
 
@@ -308,7 +318,8 @@ def test_a_saved_far_bid_with_the_flag_over_its_travel_line_opens_at_the_price_i
 def test_the_flag_still_stops_a_stranded_row_being_carried_when_no_carrier_is_named(ran):
     """followDistance with no old carrier named looks for a stranded row; a job that said it has no drive carries none to the new carrier, and one that did not say so does.
 
-    Mutation: take the guard out of the search for a stranded row."""
+    (Since round 7 the carry itself refuses under the job's answer, carryTravelRow, so taking the guard out of the search alone changes no fact here, and taking the carry's out alone neither:
+    each stops the other. The carry's guard is broken in test_polish_travel_hours.py, where the old base is named.)"""
     s = ran["stranded"]
     assert s["said"] == {"epoxyRow": False, "rootRow": True, "flag": True}
     assert s["notSaid"] == {"epoxyRow": True, "rootRow": False, "flag": False}
@@ -392,9 +403,9 @@ def test_a_labor_or_takeoff_list_that_holds_a_null_is_read_as_one_without_it(ran
 MODEL = "js/bid-model.js"
 PAGE = "js/polish-estimate.js"
 
-APPEND = "if (!said && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);"
-KEEP_FLAG = "if (said && !carrierHoldsTravel(model, hasTravel ? out.labor : laborIn)) out.no_travel_labor = true;"
-ADD_FILL = '    if (miles !== null && layout !== "gyp") followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);'
+APPEND = "if (!said && model.sheet_no_travel_labor !== true && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);"
+KEEP_FLAG = "if (said && !drivesHoldTravel(model, hasTravel ? out.labor : laborIn)) out.no_travel_labor = true;"
+ADD_FILL = "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !drive);"
 REFOCUS_ROWS = "    if (left > 1) { refocus('[data-del-lab=\"' + (at < left ? at : left - 1) + '\"]'); return; }"
 REFOCUS_TRAVEL = '    if (wasTravel && document.querySelector("[data-add-travel]")) { refocus("[data-add-travel]"); return; }'
 OFF_LINE = "      if (far && l.enabled !== true && !qtyFollows(l)) return;      // a line that is off is left as it is (see above)"
@@ -404,7 +415,8 @@ HOLES_TAKEOFF = "        takeoff: withoutHoles(model.takeoff), labor: laborIn,"
 HOLES_SECTION_LABOR = "      if (badLabor) section.labor = s.labor instanceof Array ? withoutHoles(s.labor) : [];"
 HOLES_SECTION_TAKEOFF = "      if (badTakeoff) section.takeoff = s.takeoff instanceof Array ? withoutHoles(s.takeoff) : [];"
 HOLES_FILTER = "    return hasHoles(rows) ? rows.filter(function (r) { return r !== null && r !== undefined; }) : rows;"
-SETTLE = "    if (isObject(model) && model.no_travel_labor === true && carrierHoldsTravel(model)) delete model.no_travel_labor;"
+SETTLE = "    if (model.no_travel_labor === true && drivesHoldTravel(model)) {"
+CARRY_CALL = '    var carriedFrom = carriesOneDrive(model, was, drives, arrived) ? carryTravelRow(model, was.drives[0], was.kindOf(drives[0])) : "";'
 TABLE_OFF_ROOT = "an off root (an Epoxy job's Polish)"
 TABLE_OPTION_ROOT = "a root that is an option beside an Epoxy base"
 TABLE_STALE = "a stale draft with no sections (saved before 2026-09-12)"
@@ -421,22 +433,22 @@ def _holey(g, name):
 BREAKS = {
     # X1: the blank row
     "the blank row is appended to any root": (
-        MODEL, APPEND, "if (!said) out.labor = laborIn.concat([travelSeed()]);",
-        lambda g: g["rootCause"]["migratedRootRows"] != 0 or g["f1"]["A"] != g["f1"]["B"] or g["s1"]["A"] != g["s1"]["B"]),
+        MODEL, APPEND, "if (!said && model.sheet_no_travel_labor !== true) out.labor = laborIn.concat([travelSeed()]);",
+        lambda g: g["rootCause"]["table"][TABLE_OFF_ROOT] != 0 or g["rootCause"]["table"][TABLE_OPTION_ROOT] != 0 or g["f1"]["A"] != g["f1"]["B"] or g["s1"]["A"] != g["s1"]["B"]),
     "the blank row is appended to a root that is an option": (
-        MODEL, APPEND, 'if (!said && model.kind !== "off") out.labor = laborIn.concat([travelSeed()]);',
+        MODEL, APPEND, 'if (!said && model.sheet_no_travel_labor !== true && model.kind !== "off") out.labor = laborIn.concat([travelSeed()]);',
         lambda g: g["rootCause"]["table"][TABLE_OPTION_ROOT] != 0 or g["f2"]["session"] != g["f2"]["reloaded"]),
     "the blank row is appended to a root that is off": (
-        MODEL, APPEND, 'if (!said && model.kind !== "option") out.labor = laborIn.concat([travelSeed()]);',
+        MODEL, APPEND, 'if (!said && model.sheet_no_travel_labor !== true && model.kind !== "option") out.labor = laborIn.concat([travelSeed()]);',
         lambda g: g["rootCause"]["table"][TABLE_OFF_ROOT] != 0 or g["f1"]["A"] != g["f1"]["B"]),
     "a stale draft is no longer given its row": (
         MODEL, APPEND, "if (false) out.labor = laborIn.concat([travelSeed()]);",
         lambda g: g["rootCause"]["table"][TABLE_STALE] != 1),
     "a root whose sections cannot be read is given no row": (
-        MODEL, APPEND, "if (!said && readableSections(model) !== null && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);",
+        MODEL, APPEND, "if (!said && model.sheet_no_travel_labor !== true && readableSections(model) !== null && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);",
         lambda g: g["rootCause"]["table"][TABLE_UNREADABLE] != 1),
     "a job that said it has no drive is given the row": (
-        MODEL, APPEND, "if (carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);",
+        MODEL, APPEND, "if (model.sheet_no_travel_labor !== true && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);",
         lambda g: g["rootCause"]["table"][TABLE_SAID] != 0),
     # X2: a saved bid's flag
     "a flag over a carrier that holds a row is carried": (
@@ -449,10 +461,10 @@ BREAKS = {
         MODEL, KEEP_FLAG, 'if (said) out.labor = out.labor.map(function (r) { if (!r || r.id !== "travel") return r; var c = copyInto({}, r); c.guys_auto = false; return c; });',
         lambda g: g["savedBid"]["withFlag"]["row"]["auto"] is not True and g["savedBid"]["withFlag"]["total"] == SAVED_TOTAL),
     "a job-type switch leaves the drive's row on the sheet it left": (
-        MODEL, "      carryTravelRow(model, fromTab);", "      void fromTab;",
+        MODEL, CARRY_CALL, '    var carriedFrom = "";',
         lambda g: g["s1"]["A"]["afterSwitch"]["rows"]["Polish:off"] is not None),
     "a bid is migrated differently the second time": (
-        MODEL, KEEP_FLAG, "if (said !== carrierHoldsTravel(model, hasTravel ? out.labor : laborIn)) out.no_travel_labor = true;",
+        MODEL, KEEP_FLAG, "if (said !== drivesHoldTravel(model, hasTravel ? out.labor : laborIn)) out.no_travel_labor = true;",
         lambda g: g["migrate"]["idempotent"] is not True),
     "the legacy upgrade is never made": (
         MODEL, "            if (current) return r;", "            return r;",
@@ -471,55 +483,56 @@ BREAKS = {
         PAGE, "      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);", "      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;",
         lambda g: g["answer"]["option"]["afterX"]["flag"] is not False or g["answer"]["stray"]["afterX"]["flag"] is not False or g["answer"]["optionRoot"]["afterX"]["flag"] is not False),
     "the x is recorded whichever sheet it was pressed on": (
-        MODEL, 'if (typeof tab === "string" && tab !== "" && tab !== carrier) return false;', "void tab;",
-        lambda g: g["answer"]["direct"]["optionX"] != {"said": False, "flag": False}),
+        MODEL, "    var hit = drives.filter(function (e) { return e.tab === want; })[0];", "    var hit = (readableSections(model) || drives).filter(function (e) { return e.tab === want; })[0];",
+        lambda g: g["answer"]["direct"]["optionX"] != {"said": False, "flag": False} or g["answer"]["option"]["afterX"]["flag"] is not False),
     "the carrier's x is not recorded": (
-        MODEL, "    model.no_travel_labor = true;", "    void model;",
+        MODEL, "    else model.no_travel_labor = true;", "    else void model;",
         lambda g: g["answer"]["carrier"]["afterX"]["flag"] is not True),
+    "a Combo base's x records the sheet's answer nowhere": (
+        MODEL, "    if (drives.length > 1) hit.section.sheet_no_travel_labor = true;", "    if (drives.length > 1) void hit;",
+        lambda g: g["answer"]["stray"]["afterX"]["sheet"] is not True or g["answer"]["stray"]["reloaded"]["sheet"] is not True),
     # X2: Add Travel Labor on any sheet that can hold a drive
     "Add Travel Labor is refused on an option": (
-        MODEL, 'if (hit.tab !== carrierTab && hit.kind !== "option") return false;', "if (hit.tab !== carrierTab) return false;",
+        MODEL, '        if (!drive && hit.kind !== "option") return false;', "        if (!drive) return false;",
         lambda g: g["answer"]["direct"]["addOnOption"]["added"] is not True or g["answer"]["option"]["afterAdd"]["rows"]["Copy1:option"] != DRIVE or g["answer"]["optionRoot"]["afterAdd"]["rows"]["Polish:option"] != DRIVE),
-    "Add Travel Labor is offered on every base": (
-        MODEL, 'if (want !== carrier && entry.kind !== "option") return false;', "void want;",
-        lambda g: g["answer"]["stray"]["afterX"]["addOnStray"] is not False or g["answer"]["direct"]["canAdd"]["strayBase"] is not False),
-    "Add Travel Labor is accepted on a base that does not carry the travel": (
-        MODEL, 'if (hit.tab !== carrierTab && hit.kind !== "option") return false;', "void carrierTab;",
-        lambda g: g["answer"]["direct"]["refused"]["strayBase"] is not False),
+    "Add Travel Labor is offered on a section that is off": (
+        MODEL, '    if (entry.kind !== "option" && !isDriveTab(model, want)) return false;', "    void want;",
+        lambda g: g["answer"]["direct"]["canAdd"]["offSection"] is not False),
+    "Add Travel Labor is accepted on a section that is off": (
+        MODEL, '        if (!drive && hit.kind !== "option") return false;', "        void drive;",
+        lambda g: g["answer"]["direct"]["refused"]["offSection"] is not False),
     "Add Travel Labor adds a second line to a sheet that has one": (
         MODEL, "    if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;", "    void holder;",
         lambda g: g["answer"]["direct"]["refused"]["holdsOne"] is not False),
     "Add Travel Labor on a sheet the bid does not have goes to the carrier": (
-        MODEL, "        if (!hit || !isObject(hit.section)) return false;", "        if (!hit) hit = entries.filter(function (e) { return e.tab === carrierTab; })[0];",
+        MODEL, "        if (!hit || !isObject(hit.section)) return false;",
+        "        if (!hit) { hit = entries.filter(function (e) { return e.tab === travelCarrier(model); })[0]; want = hit.tab; }",
         lambda g: g["answer"]["direct"]["refused"]["unknownTab"] is not False),
     "Add Travel Labor is not drawn on an option": (
-        PAGE, "      if (B.travelLaborCanBeAdded(ROOT, activeTab)) html += addTravelHtml(true);", "      if (false) html += addTravelHtml(true);",
+        PAGE, "      else if (B.travelLaborCanBeAdded(ROOT, activeTab)) html += addTravelHtml(true);", "      else if (false) html += addTravelHtml(true);",
         lambda g: g["answer"]["option"]["afterX"]["addOnOption"] is not True),
     "an option's Add takes back the job's answer": (
-        MODEL, "    if (isCarrier) delete model.no_travel_labor;", "    delete model.no_travel_labor;",
+        MODEL, "    if (drive) {", "    if (true) {",
         lambda g: g["answer"]["optionKeepsJobAnswer"]["afterAdd"]["flag"] is not True),
     "the carrier's Add leaves the answer in place": (
-        MODEL, "    if (isCarrier) delete model.no_travel_labor;", "    void isCarrier;",
+        MODEL, "        delete model.no_travel_labor;", "        void 0;",
         lambda g: g["answer"]["carrier"]["afterAdd"]["flag"] is not False),
     "an option's line is filled on the carrier's crew": (
-        MODEL, ADD_FILL, '    if (miles !== null && layout !== "gyp") followDistanceOnRow(model, added, holder.labor, miles, false);',
+        MODEL, ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, laborLinesOf(sectionOf(model, travelCarrier(model)).section), miles, !drive);",
         lambda g: g["answer"]["direct"]["addOnOption"]["guys"] != 2),
     # X2: a job-type switch honours the answer
     "the new carrier is seeded a line against the answer": (
-        MODEL, "      var drives = carrierTab === e.tab && out.no_travel_labor !== true;", "      var drives = carrierTab === e.tab;",
+        MODEL, "      var seeded = drive && out.no_travel_labor !== true && s.sheet_no_travel_labor !== true;", "      var seeded = drive && s.sheet_no_travel_labor !== true;",
         lambda g: g["switchAfterX"]["toEpoxy"]["rows"]["Epoxy:base"] is not None or g["answer"]["direct"]["seeded"]["said"] is not False),
     "a new carrier keeps a blank line the job said it does not have": (
-        MODEL, "      if (model.no_travel_labor === true) releaseNobodysTravelRow(model);", "      void model;",
+        MODEL, "      if (model.no_travel_labor === true || sheetSaidNoDrive(e.section)) {", "      if (sheetSaidNoDrive(e.section)) {",
         lambda g: g["answer"]["newEpoxy"]["toCombo"]["rows"]["Polish:base"] is not None),
     "the answer is left in place when the job is handed a line": (
-        MODEL, SETTLE, "    void model;",
+        MODEL, SETTLE, "    if (false) {",
         lambda g: g["answer"]["promoted"]["after"]["flag"] is not False or g["answer"]["promoted"]["modelSays"]["flag"] is not False),
     "pickBase leaves the answer in place": (
-        MODEL, "    if (out !== model) settleTravelAnswer(out);", "    void out;",
+        MODEL, "    if (out !== model) { settleArrivals(out, arrived, kindOf, false); settleTravelAnswer(out); }", "    if (out !== model) { settleArrivals(out, arrived, kindOf, false); }",
         lambda g: g["answer"]["promoted"]["modelSays"]["flag"] is not False),
-    "the stranded-row guard is gone": (
-        MODEL, 'if (model.no_travel_labor === true) return "";', "void 0;",
-        lambda g: g["stranded"]["said"]["rootRow"] is not True),
     # X3: focus
     "focus is left where it falls": (
         PAGE, "      refocusAfterRemoval(delAt, B.isTravelRow(gone));", "      void delAt;",

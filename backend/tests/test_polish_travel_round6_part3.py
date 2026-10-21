@@ -4,8 +4,10 @@ M3. AN OPTION MADE THE CARRIER BY A JOB-TYPE SWITCH BRINGS ITS OWN DRIVE, AS A B
 the x on the Polish carrier's Travel Labor (the job says it has no drive), then Add Travel Labor on the Epoxy option (its own drive, filled on its own crew: 5 guys x 6.5 hours, $1,072.50). Epoxy
 is then made the base two ways. The Sheets panel's pick kept the option's line and dropped the job's answer (pickBase's settleTravelAnswer: the new carrier holds a line). The intake's job type
 took the line off (followDistance's release of a blank line nobody typed, which is for a section that was OFF) and kept the answer: the same base, $41,410 against $39,350. Now the switch settles
-the flag the same way the pick does (sectionsForJob: an option made the carrier brings its own line), and the two paths price, hold and reopen the same. HANZ'S DECISION OF 2026-10-21 stands beside
-it: after the carrier's x, a job-type switch keeps the JOB's drive removed (no seed, no carry; Add Travel Labor is the way back): `keeps` holds that a new carrier the switch makes is seeded no line.
+the flag the same way the pick does, and the two paths price, hold and reopen the same. Since round 7 one rule does it for both (Hanz's decisions of 2026-10-21, the promotion rule): an option made
+a base keeps a line the estimator ADDED or typed and releases one the tool filled while the job says it has no drive (followDistance and pickBase: settleArrivals), and a base that holds a line
+takes the job's answer back (settleTravelAnswer). HANZ'S DECISION OF 2026-10-21 stands beside it: after the carrier's x, a job-type switch keeps the JOB's drive removed (no seed, no carry; Add
+Travel Labor is the way back): `keeps` holds that a new carrier the switch makes is seeded no line.
 
 M4. THE REVIEW ROW READS TRUE. At the library's own Gyp rate ($33.66) a far Gyp crew of 4 for 120 hours is $16,156.80 of labor, which the sheet rounds UP to $16,157 before it divides: 48.0006
 nights, and each line rounded up to the dollar, $3,361 and $2,161. The Review said "48 nights x $70 / night = $3,361", and the working on the Labor step "48 nights x $70.00 = $3,360.04". Both show
@@ -123,8 +125,8 @@ def test_a_whole_count_reads_as_it_always_did(ran):
 
 
 # ── red without the code: break a COPY of the page or the model one line at a time ──────────────────────────────────────────────────────────────────────────────
-OPTION_BRINGS_ITS_DRIVE = ("    if (out !== model && out.no_travel_labor === true && held.some(function (e) { return e.kind === \"option\" && e.tab === carrierTabOf(out); })) "
-                           "settleTravelAnswer(out);")
+# (round 7: the rule that keeps the added line is the promotion rule's, in settleArrivals; it was sectionsForJob's own settling)
+OPTION_BRINGS_ITS_DRIVE = '        releaseNobodysTravelRow(model, tab, wasKind === "option");'
 REVIEW_QTY_TEXT = "      var shown = B.travelQtyShown(qty, tl.rate, cost);"
 WORKING_QTY = '      lines.push(names[k] + ": " + travelQtyShown(q, l.rate, cost).text + (k === "lodging" ? " nights" : " days") +'
 REVIEW_UP = "                    rv(\"trv.\" + k + \".tot\", moneyAuto(cost)) + '<span class=\"note work\">' + rv(\"trv.\" + k + \".up\", shown.roundedUp ? ROUNDED_UP : \"\") + '</span>']);"
@@ -132,7 +134,7 @@ REVIEW_UP = "                    rv(\"trv.\" + k + \".tot\", moneyAuto(cost)) + 
 # name -> (file, old, new, a fact that must change)
 BREAKS = {
     "a job-type switch takes the option's own drive off its new carrier": (
-        MODEL, OPTION_BRINGS_ITS_DRIVE, "    void held;",
+        MODEL, OPTION_BRINGS_ITS_DRIVE, "        releaseNobodysTravelRow(model, tab, false);",
         lambda g: g["m3"]["switched"]["rows"]["Epoxy:base"] != DRIVE or g["m3"]["switched"]["price"]["lump"] != g["m3"]["pick"]["price"]["lump"]),
     "the Review shows the count to two places": (
         PAGE, REVIEW_QTY_TEXT, "      var shown = { text: B.fmtSf(B.num(qty)), roundedUp: B.travelQtyShown(qty, tl.rate, cost).roundedUp };",

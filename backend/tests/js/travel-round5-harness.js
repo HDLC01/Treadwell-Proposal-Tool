@@ -490,7 +490,7 @@ async function main() {
       res.reopened = { rows: driveRows(r) };
       return res;
     };
-    // a Gyp carrier's drive is typed (the Gyp sheet works its own drive time): the line comes back EMPTY on a far job
+    // a Gyp carrier's drive fills from the miles like the others (round 7, Hanz 2026-10-21, D2): the line comes back FILLED on a far job (it came back empty while the drive was typed)
     const gyp = await (async () => {
       const gypTab = 'Gyp (USG 1-8")';
       const s = await newBid(draftOf("gyp", { gyp_soft_sf: 9000, gyp_hard_sf: 6000, gyp_corridor_sf: 2000 }), [gypTab, "gyp-pour", "4", "12"], FAR);

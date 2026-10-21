@@ -249,7 +249,7 @@ async function laborFacts(b, tab) {
   const card = i >= 0 ? html.indexOf('data-lab-card="' + i + '"') : -1;
   const cap = /<p class="cap">(Travel is expected[^<]*)<\/p>/.exec(html);
   const cardNote = /<p class="hint trvnote">(Drive time is expected[^<]*)<\/p>/.exec(html);
-  return { note: textOf(b, "[data-travel-note]"), card: card >= 0 && sep >= 0 && card > sep,
+  return { note: textOf(b, "[data-travel-note]"), card: card >= 0 && sep >= 0 && card > sep, how: textOf(b, "[data-trv-how]"),
     src: i >= 0 ? textOf(b, '[data-trv-src="' + i + '"]') : null, hint: i >= 0 ? textOf(b, '[data-hint-lab="' + i + '"]') : null,
     add: has(b, "[data-add-travel]"), none: attrOf(b, "[data-trv-none]", "data-trv-none"), miles: has(b, "[data-dist-miles]"), lodging: has(b, '[data-trv-card="lodging"]'),
     cap: cap ? cap[1] : null, cardNote: cardNote ? cardNote[1] : null };
@@ -266,7 +266,8 @@ async function reviewFacts(b, tab) {
   const hotel = card >= 0 ? html.slice(card, html.indexOf("</table>", card)) : "";
   const one = (k) => textOf(b, '[data-rv="lab.' + i + "." + k + '"]');
   return { drive: i >= 0 ? { sentence: one("drive"), q: one("q"), w: one("w"), tot: one("tot") } : null,
-    lodging: textOf(b, '[data-rv="trv.lodging.q"]'), hotelOnce: hotel.indexOf("charged once for the whole job") >= 0 };
+    lodging: textOf(b, '[data-rv="trv.lodging.q"]'), hotelOnce: hotel.indexOf("charged once for the whole job") >= 0,
+    ownDrive: hotel.indexOf("own drive is its Travel Labor line, under Labor.") >= 0 };
 }
 
 const out = {};
@@ -402,6 +403,14 @@ async function main() {
     swB.api.saveSoon();
     swB.clock.fire();
     res.addedUnderJob = { x: xb, added: addedB, marks: marks(p, "Epoxy"), pick: state(pickB), switched: state(swB), pickReloaded: state(await reload(pickB)), switchReloaded: state(await reload(swB)) };
+    // ...and made ONE OF A PAIR of bases (the combined pick, and the job type Combo): the job has a drive again, on Epoxy, and the Polish sheet, which has none, goes on saying so as its own
+    //     answer (S), so a reload does not give the root a blank line.
+    const pairB = await reopen(savedB);
+    await makeBase(pairB, "combined");
+    const comboB = await reopen(Object.assign(clone(savedB), { work_type: "combo" }));
+    comboB.api.saveSoon();
+    comboB.clock.fire();
+    res.addedUnderJobPair = { pick: state(pairB), switched: state(comboB), pickReloaded: state(await reload(pairB)), switchReloaded: state(await reload(comboB)) };
 
     // (c) a copy's TOOL-FILLED line under the job's "no drive", and a TYPED one: far Polish 4 x 12 copied (the copy holds the drive the tool filled), the x on the Polish
     //     drive, the copy made the base. Released; and with 3 x 5 typed on the copy's line first, kept.
@@ -438,6 +447,90 @@ async function main() {
     await typeMiles(d, 300);
     res.refill = { session: dSession, epoxyMarks: marks(d, "Epoxy"), reloaded: dReloaded, at300: driveRows(d) };
     return res;
+  });
+
+  // ═══ A SHEET THAT BECOMES A BASE WITH NO TRAVEL LABOR LINE IS GIVEN ITS OWN (D1) ═══════════════════════════════════════════════════════════════════════════════════
+  // Far Polish 4 x 12, the library's Travel at $36 an hour, the Epoxy sheet added (an option: a fresh sheet holds no Travel Labor line) and its crew typed 5 x 12. Then the pair is made the base
+  // by the Sheets panel, and the job type made Combo by the intake. The Epoxy sheet becomes a base with no line, so it is given one at the bid's own Travel rate ($36, the root's line's
+  // default) and the distance on file fills it on its own crew: 5 x 6.5 x $36 = $1,170. A reload prices the same.
+  await section("added", async () => {
+    const LAB36 = [Object.assign({}, TRAVEL_ROW, { rate: 36 }), EPOXY_ROW, GYP_ROW];
+    const b = await open(POLISH(), { distance: FAR, labor: LAB36 });
+    b.api.go(1);
+    await settle();
+    typeCrew(b, CREW_POLISH[0], CREW_POLISH[1], CREW_POLISH[2], CREW_POLISH[3]);
+    await addSheet(b, "Epoxy");
+    typeCrew(b, "Epoxy", "epoxy-install", "5", "12");
+    b.api.saveSoon();
+    b.clock.fire();
+    const before = driveRows(b);
+    const saved = clone(b.store.blob);
+    const again = async (page) => { page.api.saveSoon(); page.clock.fire(); return state(await reopen(clone(page.store.blob), { labor: LAB36 })); };
+    const pick = await reopen(saved, { labor: LAB36 });
+    await makeBase(pick, "combined");
+    const sw = await reopen(Object.assign(clone(saved), { work_type: "combo" }), { labor: LAB36 });
+    sw.api.saveSoon();
+    sw.clock.fire();
+    return { before: before, pick: state(pick), pickMarks: marks(pick, "Epoxy"), switched: state(sw), switchMarks: marks(sw, "Epoxy"),
+      pickReloaded: await again(pick), switchReloaded: await again(sw) };
+  });
+
+  // ═══ A COPY OF A SHEET IS A NEW SHEET: it takes neither the sheet's own answer (S) nor the mark of a line the estimator added ═══════════════════════════════════════════
+  await section("copies", async () => {
+    const b = await newBid(COMBO(), [CREW_POLISH, CREW_EPOXY]);
+    const x = await pressX(b, "Epoxy");
+    const first = await copySheet(b, "Epoxy");
+    const afterFirst = { answers: answers(b), rows: driveRows(b) };
+    const added = await pressAdd(b, "Epoxy");
+    const second = await copySheet(b, "Epoxy");
+    return { x: x, added: added, first: first, second: second, afterFirst: afterFirst, answers: answers(b), rows: driveRows(b),
+      epoxyMarks: marks(b, "Epoxy"), secondMarks: second ? marks(b, second) : null };
+  });
+
+  // ═══ THE LIBRARY'S DECLINE ON A NEW COMBO IS EACH SHEET'S OWN ANSWER (S) ═══════════════════════════════════════════════════════════════════════════════════════════
+  // The library's Travel row put on Polish bids only, then on Epoxy bids only: a new far Combo seeds the drive on the sheet the library puts it on, and the other sheet says it has none, as
+  // its own answer and not the job's. A reload agrees.
+  await section("declined", async () => {
+    const bid = async (types) => {
+      const lab = [Object.assign({}, TRAVEL_ROW, { default_work_types: types }), EPOXY_ROW, GYP_ROW];
+      const b = await open(COMBO(), { distance: FAR, labor: lab });
+      b.api.go(1);
+      await settle();
+      [CREW_POLISH, CREW_EPOXY].forEach((c) => typeCrew(b, c[0], c[1], c[2], c[3]));
+      b.api.saveSoon();
+      b.clock.fire();
+      const r = await reopen(clone(b.store.blob), { labor: lab });
+      return { session: state(b), quiet: { armed: r.clock.armed(), saves: r.rec.saves.length }, reloaded: state(r) };
+    };
+    return { polishOnly: await bid(["polish"]), epoxyOnly: await bid(["epoxy"]) };
+  });
+
+  // ═══ A COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7) ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+  // The job's one drive sat on the carrier, for the bigger crew (Epoxy's 5 here), and the Epoxy sheet holds no Travel Labor line. Opened plainly, nothing is saved or asked and
+  // the Epoxy sheet offers Add Travel Labor (its drive adds nothing until then). Switched to Epoxy, the job's one drive follows its one base, as it did before round 7: the
+  // Epoxy sheet holds it, on its own crew (5 x 6.5), and the reload prices the same. Made Polish, the root keeps its own.
+  await section("legacy", async () => {
+    const b = await newBid(COMBO(), [CREW_POLISH, CREW_EPOXY]);
+    const saved = clone(b.store.blob);
+    const pe = saved.polish_estimate;
+    pe.tabs.Epoxy.labor = pe.tabs.Epoxy.labor.filter((r) => !(r && r.id === "travel"));
+    pe.labor.filter((r) => r && r.id === "travel").forEach((r) => { r.guys = 5; });
+    const o = await reopen(saved);
+    const opened = { quiet: { armed: o.clock.armed(), saves: o.rec.saves.length }, rows: driveRows(o), epoxy: await laborFacts(o, "Epoxy"),
+      bid: { root: o.api.bid().total, epoxy: (o.api.sectionBids().Epoxy || {}).total } };
+    const e = await reopen(Object.assign(clone(saved), { work_type: "epoxy" }));
+    e.api.saveSoon();
+    e.clock.fire();
+    const toEpoxy = { state: state(e), marks: marks(e, "Epoxy"), reloaded: state(await reload(e)) };
+    const p = await reopen(Object.assign(clone(saved), { work_type: "polish" }));
+    p.api.saveSoon();
+    p.clock.fire();
+    const toPolish = { state: state(p), reloaded: state(await reload(p)) };
+    // ...and with the Sheets panel: Epoxy picked alone, the Polish root an option that keeps its own drive (a copy goes to Epoxy)
+    const k = await reopen(saved);
+    await makeBase(k, "Epoxy");
+    const picked = { state: state(k), reloaded: state(await reload(k)) };
+    return { opened: opened, toEpoxy: toEpoxy, toPolish: toPolish, picked: picked };
   });
 
   return out;

@@ -25,17 +25,20 @@ import pathlib
 
 import pytest
 
-from _golden_support import FRONTEND
+from _golden_support import FRONTEND, break_source, copy_unmodified
 from _node import last_json_line, require_node, run_node
 
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "travel-round7-harness.js"
-SECTIONS = ("combo", "single", "gyp", "sheet", "rootSheet", "job", "promotion")
+SECTIONS = ("combo", "single", "gyp", "sheet", "rootSheet", "job", "promotion", "added", "copies", "declined", "legacy")
+PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
+              "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
+              "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 
 POLISH_DRIVE = "4 x 6.5 = $858"
 EPOXY_DRIVE = "5 x 6.5 = $1072.5"
 TRIP = "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the %d guys on the labor lines above"
-NOTE = ("This sheet's crew drives on its own: its Travel Labor below is one round trip for each of its guys, from the miles on the Polish section. "
+NOTE = ("This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the Polish section. "
         "Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them.")
 FILL_CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. On a far job Travel Labor "
             "fills in from the miles, and the nights and per diem days from the crew's hours, 10 hours a night; type over any of them to use your own.")
@@ -43,6 +46,9 @@ FILL_CARD = ("Drive time is expected at 70 miles or more from the office. There 
              "Under 70 miles this line stays gray.")
 FILLED = {"auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hand": False}
 NO_ANSWER = {"job": False, "sheets": {}}
+# A far Epoxy 5 x 12 bid with its crew's drive (5 x 6.5 = $1,072.50): what the saved one-drive Combo is once it is made Epoxy, the same as an Epoxy job bid from scratch on that crew
+# (test_polish_travel_switch.py's demoted Epoxy at 190 miles is $49,281 too). With no drive it was $47,221.
+LEGACY_EPOXY_LUMP = 49281
 
 
 def run(frontend=FRONTEND):
@@ -97,17 +103,29 @@ def test_each_base_shows_its_own_travel_card_on_the_labor_step(ran):
 
 
 def test_each_bases_drive_is_under_its_own_section_on_the_review(ran):
+    """Each base's Review lists its own crew's drive under its Labor. The Epoxy sheet's Hotel and Per Diem card says they are charged once, on the Polish section, and that this sheet's own
+    drive is its Travel Labor line, under Labor (until round 7 it said Travel was charged there too)."""
     r = ran["combo"]["review"]
     assert r["polish"]["drive"]["sentence"] == TRIP % 4 and r["polish"]["drive"]["q"] == "26" and r["polish"]["drive"]["tot"] == "$858"
     assert r["epoxy"]["drive"]["sentence"] == TRIP % 5 and r["epoxy"]["drive"]["q"] == "32.5" and r["epoxy"]["drive"]["tot"] == "$1,072.50"
+    assert r["epoxy"]["ownDrive"] is True and r["polish"]["ownDrive"] is False
+
+
+def test_the_carriers_how_note_lists_the_other_bases_own_drive(ran):
+    """The how-it-is-worked-out note on the carrier's Labor step (where the miles are) lists the other base's own drive, on that sheet's own guys, beside its own."""
+    how = ran["combo"]["labor"]["polish"]["how"]
+    assert "Travel Labor: 4 guys x 6.5 drive hours" in how
+    assert "Travel Labor on the Epoxy sheet: 5 guys x 6.5 drive hours x $33.00 = $1,072.50 (that sheet's own guys)." in how
+    assert "Guys = the most guys on any one labor line above (4 now), one round trip each." in how
 
 
 def test_a_far_combo_prices_the_second_crews_drive_and_a_reload_prices_it_the_same(ran):
-    """The price effect: the Epoxy section carries its crew's drive (the one-drive law priced the bid at $90,422, the Polish section at $53,378 with the bigger crew's drive and the Epoxy section at
-    $37,044 with none). A jsonb reload of what the session saved opens quietly at the same prices; 300 miles typed then moves each base's drive to its own crew x 10 hours, in the session and
-    after the reload alike."""
+    """THE PRICE EFFECT (D1). Far Combo, Polish 4 x 12 and Epoxy 5 x 12, 190 miles: the bid is $92,153, the Polish section $52,956 with its own crew's 4 x 6.5 = $858 and the Epoxy section
+    $39,197 with its crew's 5 x 6.5 = $1,072.50. The one-drive law priced it at $90,422: the Polish section $53,378 with the bigger crew's drive (5 x 6.5) and the Epoxy section $37,044 with
+    none. So the bid rises by the smaller crew's drive, $858 before the markups and $1,731 after them. A jsonb reload of what the session saved opens
+    quietly at the same prices; 300 miles typed then moves each base's drive to its own crew x 10 hours, in the session and after the reload alike."""
     c = ran["combo"]
-    assert c["price"]["sections"]["Epoxy"] > 37044 and c["price"]["root"] < 53378
+    assert c["price"] == {"lump": 92153, "root": 52956, "sections": {"Epoxy": 39197}}
     assert c["reopened"]["quiet"] == {"armed": 0, "saves": 0}
     assert c["reopened"]["state"]["rows"] == c["session"]["rows"] and c["reopened"]["state"]["price"] == c["price"]
     assert c["at300"]["session"]["rows"] == {"Polish:base": "4 x 10 = $1320", "Epoxy:base": "5 x 10 = $1650"}
@@ -233,3 +251,215 @@ def test_an_option_made_the_base_keeps_its_own_drive_refilled_and_the_old_bases_
     assert r["epoxyMarks"]["follow"] == "crew" and r["epoxyMarks"]["typed"] is False
     _same_after_a_reload(r["session"], r["reloaded"])
     assert r["at300"] == {"Polish:option": "3 x 5 = $495", "Epoxy:base": "5 x 10 = $1650"}
+
+
+# ── D1: a sheet that becomes a base with no line is given its own; a copy is a new sheet; the library's decline is a sheet's answer ───────────────────────────────────────
+def test_a_sheet_that_becomes_a_base_with_no_line_is_given_its_own_drive_at_the_bids_rate(ran):
+    """Far Polish 4 x 12 (the library's Travel at $36), the Epoxy sheet added as an option (a fresh sheet holds no Travel Labor line) with its crew 5 x 12, then the pair made the base: by the Sheets
+    panel's combined pick and by the intake's job type Combo alike, the Epoxy sheet is given its own line at the bid's own Travel rate (the root's line's default, $36; the shipped rate is $33) and
+    the distance on file fills it on its own crew, 5 x 6.5 x $36 = $1,170, beside the Polish crew's 4 x 6.5 x $36 = $936. Under the one-drive law it was given none. A reload prices the same."""
+    a = ran["added"]
+    assert a["before"] == {"Polish:base": "4 x 6.5 = $936", "Epoxy:option": None}
+    for k in ("pick", "switched"):
+        assert a[k]["rows"] == {"Polish:base": "4 x 6.5 = $936", "Epoxy:base": "5 x 6.5 = $1170"} and a[k]["answers"] == NO_ANSWER, k
+    assert a["pickMarks"] == FILLED and a["switchMarks"] == FILLED
+    assert a["pick"]["price"] == a["switched"]["price"] == {"lump": 91616, "root": 53104, "sections": {"Epoxy": 38512}}
+    _same_after_a_reload(a["pick"], a["pickReloaded"])
+    _same_after_a_reload(a["switched"], a["switchReloaded"])
+
+
+def test_a_copy_of_a_sheet_takes_neither_its_answer_nor_the_mark_of_an_added_line(ran):
+    """A copy is a new sheet, an option priced apart. The x on the Epoxy base's drive of a far Combo is the Epoxy sheet's own answer (S); a copy of the sheet made then does not say it (it is an
+    option, whose x records nothing). Add Travel Labor on the Epoxy sheet marks the line as the estimator's own (`hand_added`, which keeps it when an option is made a base under the job's answer);
+    a copy of the sheet made then holds its own line, a copy of the drive, without the mark: nobody added it to the copy."""
+    c = ran["copies"]
+    assert c["x"] is True and c["added"] is True and (c["first"], c["second"]) == ("Copy1", "Copy2")
+    assert c["afterFirst"]["answers"] == {"job": False, "sheets": {"Epoxy": True}}
+    assert c["afterFirst"]["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": None, "Copy1:option": None}
+    assert c["answers"] == NO_ANSWER and c["epoxyMarks"]["hand"] is True
+    assert c["rows"]["Copy2:option"] == EPOXY_DRIVE and c["secondMarks"] == FILLED
+
+
+def test_the_librarys_decline_on_a_new_combo_is_each_sheets_own_answer(ran):
+    """The library's Travel row on Polish bids only: a new far Combo seeds the Polish sheet's drive, and the Epoxy sheet says it has none as its own answer (S), not the job's (J). On Epoxy bids only:
+    the Epoxy sheet's drive, and the Polish sheet's own answer (the root's `sheet_no_travel_labor`), so a reload gives the root no blank line. Until round 7 only the carrier was seeded, and the
+    decline read off it said the JOB had no drive. Each reloads quietly at the same prices."""
+    d = ran["declined"]
+    p, e = d["polishOnly"], d["epoxyOnly"]
+    assert p["session"]["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": None} and p["session"]["answers"] == {"job": False, "sheets": {"Epoxy": True}}
+    assert e["session"]["rows"] == {"Polish:base": None, "Epoxy:base": EPOXY_DRIVE} and e["session"]["answers"] == {"job": False, "sheets": {"Polish": True}}
+    for s in (p, e):
+        assert s["quiet"] == {"armed": 0, "saves": 0}
+        _same_after_a_reload(s["session"], s["reloaded"])
+
+
+def test_a_line_added_on_an_option_made_one_of_a_pair_of_bases_leaves_the_other_sheet_its_answer(ran):
+    """The job said it has no drive (the x on far Polish's drive), the Epoxy sheet was added and given its own drive with Add Travel Labor, and then the pair is made the base: by the combined
+    pick and by the job type Combo alike, the added line stays (the job has a drive again, on Epoxy) and the job's answer goes on speaking for the Polish sheet, which has no line, as its own (S),
+    so a reload gives the root no blank line. A reload prices the same."""
+    a = ran["promotion"]["addedUnderJobPair"]
+    for k in ("pick", "switched"):
+        assert a[k]["rows"] == {"Polish:base": None, "Epoxy:base": EPOXY_DRIVE} and a[k]["answers"] == {"job": False, "sheets": {"Polish": True}}, k
+    assert a["pick"]["price"] == a["switched"]["price"]
+    _same_after_a_reload(a["pick"], a["pickReloaded"])
+    _same_after_a_reload(a["switched"], a["switchReloaded"])
+
+
+# ── a Combo saved under the one-drive law (before round 7) ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+def test_a_combo_saved_under_the_one_drive_law_opens_quietly_and_offers_the_epoxy_sheet_its_drive(ran):
+    """A far Combo saved before round 7: the job's one drive on the Polish root, for the bigger crew (Epoxy's 5), and no Travel Labor line on the Epoxy sheet. Opened plainly, nothing is saved
+    or asked. The root's drive reads the Polish crew's own 4 (the guys are kept in step with the crews on every open, and since D1 a base's drive is its own crew's: Hanz, 2026-10-21, "saved v2
+    bids may re-price"), and the Epoxy sheet's Labor step offers Add Travel Labor, saying its drive adds nothing until then. Nothing gives a saved bid a line on open. So the page shows
+    $52,953 + $37,044 = $89,997 where the one-drive law priced it at $53,378 + $37,044 = $90,422 (the Epoxy crew's drive, the bigger, is not charged until Add Travel Labor gives the Epoxy
+    sheet its own, or a restructure carries one to it); the draft keeps what it was saved with until the next save."""
+    o = ran["legacy"]["opened"]
+    assert o["quiet"] == {"armed": 0, "saves": 0}
+    assert o["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": None}
+    assert o["bid"] == {"root": 52953, "epoxy": 37044}
+    assert o["epoxy"]["add"] is True and o["epoxy"]["none"] == "sheet" and o["epoxy"]["note"] == NOTE and o["epoxy"]["card"] is False
+
+
+def test_a_combo_saved_under_the_one_drive_law_made_epoxy_carries_the_jobs_drive_to_epoxy(ran):
+    """The same saved Combo made Epoxy (the intake's job type) or with Epoxy picked alone (the Sheets panel). The job has ONE base now, which holds no Travel Labor line and whose own answer does
+    not say it has none, so the job's one drive follows it, as it did before round 7: the root's line goes to Epoxy (a copy, when the pick leaves the root an option with its own drive), on the
+    Epoxy crew's 5 x 6.5. Round 7's first cut carried only when the job had ONE base before, so this Epoxy job priced no Travel Labor at all ($47,221 both ways). A reload prices the same.
+    Made Polish, the root keeps its own drive."""
+    leg = ran["legacy"]
+    e = leg["toEpoxy"]
+    assert e["state"]["rows"] == {"Polish:off": None, "Epoxy:base": EPOXY_DRIVE} and e["state"]["answers"] == NO_ANSWER
+    assert e["marks"] == FILLED
+    assert e["state"]["price"]["lump"] == LEGACY_EPOXY_LUMP and e["state"]["price"]["lump"] > 47221
+    _same_after_a_reload(e["state"], e["reloaded"])
+    k = leg["picked"]
+    assert k["state"]["rows"] == {"Polish:option": POLISH_DRIVE, "Epoxy:base": EPOXY_DRIVE} and k["state"]["answers"] == NO_ANSWER
+    assert k["state"]["price"]["lump"] == LEGACY_EPOXY_LUMP
+    _same_after_a_reload(k["state"], k["reloaded"])
+    p = leg["toPolish"]
+    assert p["state"]["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:off": None}
+    _same_after_a_reload(p["state"], p["reloaded"])
+
+
+# ── red without the code: break a COPY of the page or the model one line at a time; a fact must change, never a crash ───────────────────────────────────────────────────
+BREAKS = {
+    # --- D1: every base drives its own crew ---
+    "only the first base drives": (
+        "js/bid-model.js", "      if (list.length) return list;", "      if (list.length) return list.slice(0, 1);",
+        lambda g: g["combo"]["session"]["rows"].get("Epoxy:base") != EPOXY_DRIVE),
+    "a base's drive follows the biggest crew of both bases": (
+        "js/bid-model.js", 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? ownCrewSize(model, lines) : manDays;',
+        'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? crewSize(model) : manDays;',
+        lambda g: g["combo"]["session"]["rows"].get("Polish:base") != POLISH_DRIVE),
+    "a sheet that becomes a base with no line is given none": (
+        "js/bid-model.js", "        e.section.labor.push(freshDriveRow(model));", "        void freshDriveRow;",
+        lambda g: g["added"]["pick"]["rows"].get("Epoxy:base") != "5 x 6.5 = $1170" or g["added"]["switched"]["rows"].get("Epoxy:base") != "5 x 6.5 = $1170"),
+    "the line a new base is given is not at the bid's own Travel rate": (
+        "js/bid-model.js", "if (rate === null && !isBlank(r.rate_default) && isFinite(Number(r.rate_default)) && Number(r.rate_default) > 0) rate = Number(r.rate_default);",
+        "void r;",
+        lambda g: g["added"]["pick"]["rows"].get("Epoxy:base") != "5 x 6.5 = $1170"),
+    "the page does not say what every sheet was before a base pick": (
+        "js/polish-estimate.js", "      kindsBefore = B.sectionKinds(ROOT);", "      kindsBefore = null;",
+        lambda g: g["added"]["pick"]["rows"].get("Epoxy:base") != "5 x 6.5 = $1170"),
+    "the page does not say what every sheet was before a job-type switch": (
+        "js/polish-estimate.js", "      var kindsBefore = B.sectionKinds(ROOT);", "      var kindsBefore = null;",
+        lambda g: g["added"]["switched"]["rows"].get("Epoxy:base") != "5 x 6.5 = $1170"),
+    "the settling leaves a carried drive on the old base's crew": (
+        "js/bid-model.js", "    syncAutoGuys(model);", "    void model;",
+        lambda g: g["legacy"]["toEpoxy"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["legacy"]["toEpoxy"]["state"] != g["legacy"]["toEpoxy"]["reloaded"]),
+    "a Combo saved under the one-drive law made Epoxy has no drive": (
+        "js/bid-model.js", "    return !!e && !travelRowsIn(e.section).length;", "    return false;",
+        lambda g: g["legacy"]["toEpoxy"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["legacy"]["picked"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE),
+    # --- D2: a Gyp base's drive fills ---
+    "a Gyp base's drive is not filled": (
+        "js/bid-model.js", "    if (row) followDistanceOnRow(model, row, lines, miles, false);", '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false);',
+        lambda g: g["gyp"]["filled"]["rows"].get('Gyp (USG 1-8"):base') != POLISH_DRIVE),
+    "the Gyp travel block says to type the drive": (
+        "js/polish-estimate.js", "          ? 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew\\'s hours, ' +",
+        "          ? 'On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew\\'s hours, ' +",
+        lambda g: g["gyp"]["labor"]["cap"] != FILL_CAP),
+    "the Gyp Travel Labor card says to type its guys and hours": (
+        "js/polish-estimate.js", "              (r.id !== \"travel\" ? ''", "              (r.id !== \"travel\" || gypOpen() ? ''",
+        lambda g: g["gyp"]["labor"]["cardNote"] != FILL_CARD),
+    # --- the second base's own words ---
+    "a base with no line is offered an option's Add": (
+        "js/polish-estimate.js", '      if (ownDrive) html += travelRows || addTravelHtml("sheet");', "      if (ownDrive) html += travelRows || addTravelHtml(true);",
+        lambda g: g["sheet"]["labor"]["none"] != "sheet"),
+    "a base with no line is offered no Add": (
+        "js/polish-estimate.js", '      if (ownDrive) html += travelRows || addTravelHtml("sheet");', "      if (ownDrive) html += travelRows;",
+        lambda g: g["sheet"]["labor"]["add"] is not True),
+    "the second base's Review says Travel is charged on the carrier": (
+        "js/polish-estimate.js", '      trvRows.push([travelNote(true), "", "", "", ""]);', '      trvRows.push([travelNote(), "", "", "", ""]);',
+        lambda g: g["combo"]["review"]["epoxy"]["ownDrive"] is not True),
+    "the carrier's how-note leaves out the other base's drive": (
+        "js/bid-model.js", "    driveEntries(W).forEach(function (e) {", "    [].forEach(function (e) {",
+        lambda g: "Travel Labor on the Epoxy sheet" not in (g["combo"]["labor"]["polish"]["how"] or "")),
+    # --- the answers ---
+    "the x on one base of a Combo is the job's answer": (
+        "js/bid-model.js", "    if (drives.length > 1) hit.section.sheet_no_travel_labor = true;", "    if (false) hit.section.sheet_no_travel_labor = true;",
+        lambda g: g["sheet"]["afterX"]["answers"] != {"job": False, "sheets": {"Epoxy": True}}),
+    "a reload gives a root that said it has no drive a blank line": (
+        "js/bid-model.js", "if (!said && model.sheet_no_travel_labor !== true && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);",
+        "if (!said && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);",
+        lambda g: g["rootSheet"]["reloaded"]["state"]["rows"].get("Polish:base") is not None),
+    "a sheet's answer does not keep the job's drive off it when the job goes back to one base": (
+        "js/bid-model.js", '      if (model.no_travel_labor === true || sheetSaidNoDrive(toSection)) return "";', '      if (model.no_travel_labor === true) return "";',
+        lambda g: g["sheet"]["oneBase"]["state"]["rows"].get("Epoxy:base") is not None),
+    "Add Travel Labor on a base is refused": (
+        "js/bid-model.js", "        if (!drive && hit.kind !== \"option\") return false;", "        if (want !== travelCarrier(model) && hit.kind !== \"option\") return false;",
+        lambda g: g["job"]["afterAdd"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["copies"]["epoxyMarks"]["hand"] is not True),
+    "Add Travel Labor leaves the sheet's own answer": (
+        "js/bid-model.js", "    delete holder.sheet_no_travel_labor;", "    void holder;",
+        lambda g: g["sheet"]["afterAdd"]["state"]["answers"] != NO_ANSWER),
+    "Add Travel Labor under the job's answer leaves the other base nothing to say": (
+        "js/bid-model.js", "          if (e.section !== holder && isObject(e.section) && !travelRowsIn(e.section).length) e.section.sheet_no_travel_labor = true;", "          void e;",
+        lambda g: g["job"]["afterAdd"]["state"]["answers"] != {"job": False, "sheets": {"Polish": True}} or g["job"]["addReloaded"]["rows"].get("Polish:base") is not None),
+    "a restructure that brings back a line under the job's answer leaves the other base nothing to say": (
+        "js/bid-model.js", "      if (drives.length > 1) drives.forEach(function (e) { if (isObject(e.section) && !travelRowsIn(e.section).length) e.section.sheet_no_travel_labor = true; });",
+        "      void drives;",
+        lambda g: g["promotion"]["addedUnderJobPair"]["pick"]["answers"] != {"job": False, "sheets": {"Polish": True}}
+        or g["promotion"]["addedUnderJobPair"]["switched"]["answers"] != {"job": False, "sheets": {"Polish": True}}),
+    "the library's decline on a base of a Combo is not that sheet's answer": (
+        "js/bid-model.js", "      if (drive && drives.length > 1 && travelDeclined(ctx.laborRows, kindOfSection(e.layout))) s.sheet_no_travel_labor = true;", "      void drive;",
+        lambda g: g["declined"]["polishOnly"]["session"]["answers"] != {"job": False, "sheets": {"Epoxy": True}}),
+    "the library's decline on a Combo's carrier is the job's answer": (
+        "js/bid-model.js", "      if (drives.length < 2 && travelDeclined(ctx.laborRows, kindOfSection(sectionOf(out, carrierTab).layout))) out = Object.assign(out, { no_travel_labor: true });",
+        "      if (travelDeclined(ctx.laborRows, kindOfSection(sectionOf(out, carrierTab).layout))) out = Object.assign(out, { no_travel_labor: true });",
+        lambda g: g["declined"]["epoxyOnly"]["session"]["answers"] != {"job": False, "sheets": {"Polish": True}}),
+    "a copy takes the sheet's own answer": (
+        "js/bid-model.js", "      delete body.sheet_no_travel_labor;", "      void body;",
+        lambda g: g["copies"]["afterFirst"]["answers"] != {"job": False, "sheets": {"Epoxy": True}}),
+    "a copy's line keeps the mark of a line the estimator added": (
+        "js/bid-model.js", "(body.labor instanceof Array ? body.labor : []).forEach(function (r) { if (isTravelRow(r)) delete r.hand_added; });", "void body;",
+        lambda g: (g["copies"]["secondMarks"] or {}).get("hand") is not False),
+    # --- an option made a base (F-C): the promotion rule ---
+    "the line Add brings back is not marked as the estimator's": (
+        "js/bid-model.js", "    added.hand_added = true;", "    void added;",
+        lambda g: g["promotion"]["addedUnderJob"]["pick"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["sheet"]["afterAdd"]["marks"]["hand"] is not True),
+    "an option made a base under the job's answer loses the line the estimator added": (
+        "js/bid-model.js", "        releaseNobodysTravelRow(model, tab, wasKind === \"option\");", "        releaseNobodysTravelRow(model, tab, false);",
+        lambda g: g["promotion"]["addedUnderJob"]["pick"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["promotion"]["addedUnderJob"]["switched"]["rows"].get("Epoxy:base") != EPOXY_DRIVE),
+    "a line nobody added is kept as if it had been": (
+        "js/bid-model.js", "!(keepAdded === true && r.hand_added === true)", "!(keepAdded === true)",
+        lambda g: g["promotion"]["toolUnderJob"]["pick"]["rows"].get("Epoxy:base") is not None or g["promotion"]["toolUnderJob"]["switched"]["rows"].get("Epoxy:base") is not None),
+    "an option made a base under the job's answer keeps the line the tool filled": (
+        "js/bid-model.js", "      if (model.no_travel_labor === true || sheetSaidNoDrive(e.section)) {", "      if (false) {",
+        lambda g: g["promotion"]["toolUnderJob"]["pick"]["rows"].get("Epoxy:base") is not None or g["promotion"]["toolUnderJob"]["switched"]["rows"].get("Epoxy:base") is not None),
+    "the old base's typed line changes places with an option made the base": (
+        "js/bid-model.js", '      if (newKind === "option" && travelRowsIn(toSection).length) return "";', "      void newKind;",
+        lambda g: g["promotion"]["refill"]["session"]["rows"] != {"Polish:option": "3 x 5 = $495", "Epoxy:base": EPOXY_DRIVE}),
+}
+
+
+@pytest.mark.parametrize("name", sorted(BREAKS))
+def test_the_scenarios_go_red_when_the_page_or_the_model_changes(tmp_path, name):
+    """Each change is a line round 7's law depends on, broken in a scratch copy of the page or the model; a FACT must change. A break that stops the harness, or makes a section throw, is not
+    counted as noticed: it has no facts to compare."""
+    require_node()
+    rel, old, new, noticed = BREAKS[name]
+    frontend = break_source(tmp_path, rel, old, new)
+    copy_unmodified(frontend, PAGE_FILES)
+    proc = run_node(HARNESS, frontend)
+    assert proc.returncode == 0, "the break stopped the harness outright, so no fact noticed it: " + name + "\n" + proc.stderr[-600:]
+    got = last_json_line(proc.stdout)
+    crashed = sorted(k for k in SECTIONS if "error" in got.get(k, {}))
+    assert not crashed, "the break crashed %s instead of changing a fact: %s" % (", ".join(crashed), name)
+    assert noticed(got), "the scenarios did not notice: " + name

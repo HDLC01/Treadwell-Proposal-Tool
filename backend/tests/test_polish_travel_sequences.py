@@ -32,24 +32,27 @@ from _node import require_node
 from _travel_sequences import explain, run
 
 # The 54 sequences the audit found pricing the drive twice, and what each prices now. A "+" is the crew typed on the carrier of that step (5 guys on Epoxy, 6 on the
-# Polish root); the start crew is 4. Every one is ONE row: the crew of the bid as it is x 6.5 hours x $33 (4 guys $858, 5 guys $1,072.50, 6 guys $1,287); a Combo's crew
-# is the most guys on any one line of EITHER base.
+# Polish root); the start crew is 4, and the Polish root of a job that started as Epoxy or Gyp holds the shipped rows (a mock-up of 3 guys). SINCE ROUND 7 (Hanz,
+# 2026-10-21, D1) each ends on a far Combo with TWO drives, one per base crew, each its own crew x 6.5 hours x $33 (3 guys $643.50, 4 $858, 5 $1,072.50, 6 $1,287, an
+# Epoxy sheet whose crew was never typed $0): "epoxy epoxy polish combo" is the root's 3 and Epoxy's 4, $643.50 + $858 = $1,501.50. Until round 7 each was ONE row on the
+# Polish carrier for the most guys on any line of either base ($858 for that one), the figure Kyle's own combo-like sheets contradict: they put a drive on both sheets,
+# each its own crew ("Epoxy trv 4x4; Polish trv 6x4"). What the audit found, the SAME crew's drive priced twice, is what DOUBLE now holds against: one drive per base.
 AUDIT54 = {
-    "epoxy epoxy polish combo": 858, "epoxy epoxy polish combo+": 1287, "epoxy epoxy polish+ combo": 1287, "epoxy epoxy polish+ combo+": 1287,
-    "epoxy epoxy+ polish combo": 1072.5, "epoxy epoxy+ polish combo+": 1287, "epoxy epoxy+ polish+ combo": 1287, "epoxy epoxy+ polish+ combo+": 1287,
-    "epoxy polish polish combo": 858, "epoxy polish polish combo+": 1287, "epoxy polish polish+ combo": 1287, "epoxy polish polish+ combo+": 1287,
-    "epoxy polish combo": 858, "epoxy polish combo combo": 858, "epoxy polish combo combo+": 1287, "epoxy polish combo+": 1287,
-    "epoxy polish combo+ combo": 1287, "epoxy polish combo+ combo+": 1287, "epoxy polish+ polish combo": 1287, "epoxy polish+ polish combo+": 1287,
-    "epoxy polish+ polish+ combo": 1287, "epoxy polish+ polish+ combo+": 1287, "epoxy polish+ combo": 1287, "epoxy polish+ combo combo": 1287,
-    "epoxy polish+ combo combo+": 1287, "epoxy polish+ combo+": 1287, "epoxy polish+ combo+ combo": 1287, "epoxy polish+ combo+ combo+": 1287,
-    "epoxy gyp polish combo": 858, "epoxy gyp polish combo+": 1287, "epoxy gyp polish+ combo": 1287, "epoxy gyp polish+ combo+": 1287,
-    "epoxy gyp+ polish combo": 858, "epoxy gyp+ polish combo+": 1287, "epoxy gyp+ polish+ combo": 1287, "epoxy gyp+ polish+ combo+": 1287,
-    "polish epoxy polish combo+": 1287, "polish epoxy polish+ combo+": 1287, "polish epoxy+ polish combo": 1072.5, "polish epoxy+ polish combo+": 1287,
-    "polish epoxy+ polish+ combo": 1287, "polish epoxy+ polish+ combo+": 1287,
-    "combo epoxy polish combo+": 1287, "combo epoxy polish+ combo+": 1287, "combo epoxy+ polish combo": 1072.5, "combo epoxy+ polish combo+": 1287,
-    "combo epoxy+ polish+ combo": 1287, "combo epoxy+ polish+ combo+": 1287,
-    "gyp epoxy polish combo+": 1287, "gyp epoxy polish+ combo+": 1287, "gyp epoxy+ polish combo": 1072.5, "gyp epoxy+ polish combo+": 1287,
-    "gyp epoxy+ polish+ combo": 1287, "gyp epoxy+ polish+ combo+": 1287,
+    "epoxy epoxy polish combo": 1501.5, "epoxy epoxy polish combo+": 2145, "epoxy epoxy polish+ combo": 2145, "epoxy epoxy polish+ combo+": 2145,
+    "epoxy epoxy+ polish combo": 1716, "epoxy epoxy+ polish combo+": 2359.5, "epoxy epoxy+ polish+ combo": 2359.5, "epoxy epoxy+ polish+ combo+": 2359.5,
+    "epoxy polish polish combo": 1501.5, "epoxy polish polish combo+": 2145, "epoxy polish polish+ combo": 2145, "epoxy polish polish+ combo+": 2145,
+    "epoxy polish combo": 1501.5, "epoxy polish combo combo": 1501.5, "epoxy polish combo combo+": 2145, "epoxy polish combo+": 2145,
+    "epoxy polish combo+ combo": 2145, "epoxy polish combo+ combo+": 2145, "epoxy polish+ polish combo": 2145, "epoxy polish+ polish combo+": 2145,
+    "epoxy polish+ polish+ combo": 2145, "epoxy polish+ polish+ combo+": 2145, "epoxy polish+ combo": 2145, "epoxy polish+ combo combo": 2145,
+    "epoxy polish+ combo combo+": 2145, "epoxy polish+ combo+": 2145, "epoxy polish+ combo+ combo": 2145, "epoxy polish+ combo+ combo+": 2145,
+    "epoxy gyp polish combo": 1501.5, "epoxy gyp polish combo+": 2145, "epoxy gyp polish+ combo": 2145, "epoxy gyp polish+ combo+": 2145,
+    "epoxy gyp+ polish combo": 1501.5, "epoxy gyp+ polish combo+": 2145, "epoxy gyp+ polish+ combo": 2145, "epoxy gyp+ polish+ combo+": 2145,
+    "polish epoxy polish combo+": 1287, "polish epoxy polish+ combo+": 1287, "polish epoxy+ polish combo": 1930.5, "polish epoxy+ polish combo+": 2359.5,
+    "polish epoxy+ polish+ combo": 2359.5, "polish epoxy+ polish+ combo+": 2359.5,
+    "combo epoxy polish combo+": 1287, "combo epoxy polish+ combo+": 1287, "combo epoxy+ polish combo": 1930.5, "combo epoxy+ polish combo+": 2359.5,
+    "combo epoxy+ polish+ combo": 2359.5, "combo epoxy+ polish+ combo+": 2359.5,
+    "gyp epoxy polish combo+": 1287, "gyp epoxy polish+ combo+": 1287, "gyp epoxy+ polish combo": 1716, "gyp epoxy+ polish combo+": 2359.5,
+    "gyp epoxy+ polish+ combo": 2359.5, "gyp epoxy+ polish+ combo+": 2359.5,
 }
 
 
@@ -60,8 +63,9 @@ def audit54():
 
 
 def test_the_54_sequences_the_audit_found_pricing_the_drive_twice_price_it_once_and_break_no_rule(audit54):
-    """The sequences are the audit's, one by one, each judged by every rule after every step (158 pages), and each ends on the Combo with ONE row priced:
-    the crew of the bid as it is x 6.5 hours x $33, exactly. Before the fix each was two rows ($643.50 + $858, $1,287 + $1,287, $858 + $1,072.50, ...)."""
+    """The sequences are the audit's, one by one, each judged by every rule after every step (158 pages), and each ends on the Combo with one drive per base crew
+    (round 7, D1): each base's own crew x 6.5 hours x $33, exactly. Before the audit's fix the SAME crew's drive was priced twice ($1,287 + $1,287 for the Polish
+    crew alone); from the fix to round 7 the Combo priced ONE row, the bigger crew's."""
     assert audit54["sequences"] == 54 and audit54["runs"] >= 150
     assert audit54["violations"] == {} and audit54["crashes"] == [], explain(audit54)
     got = {line: v["dollars"] for line, v in audit54["exact"].items()}

@@ -729,9 +729,11 @@ BREAKS = {
     "the new base stays an option on the draft": (
         MODEL, "      if (!has.call(held, id) || !isObject(held[id]) || held[id].is_option !== true) return;", "      return;",
         lambda r: r["baseBid"]["backAgain"]["patch"]["tab_opts"]["Polish"]["is_option"] is not False),
+    # (round 7: a single-base job's drive follows its one base, and so does a one-drive-era pair's when one base of the two is left holding no line; it was "when the carrier moved")
     "the jobs travel labor stays on the old carrier": (
-        MODEL, "    if (carrierAfter !== carrierBefore) out = moveTravelLabor(out, carrierBefore, carrierAfter);", "    void moveTravelLabor;",
-        lambda r: r["baseBid"]["travelLaborRow"]["epoxyAfter"] != ["installing", "travel"]),
+        MODEL, "      out = moveTravelLabor(out, drivesBefore[0], drivesAfter[0]);", "      void moveTravelLabor;",
+        lambda r: r["baseBid"]["travelLaborRow"]["epoxyAfter"] != ["installing", "travel"]
+        or r["combinedBase"]["fromCombinedToEpoxy"]["rows"][1] != ["installing", "travel"]),
     "the demoted base loses its Travel Labor row to the new carrier": (
         MODEL, '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catch (err) { demoted = false; }', "    demoted = false;",
         lambda r: r["baseBid"]["travelLaborRow"]["polishAfter"] != ["polishing", "travel"]),

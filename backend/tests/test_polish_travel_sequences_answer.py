@@ -86,32 +86,52 @@ def test_the_answers_own_sequences_are_clean_and_none_is_cut_short():
 
 
 # ── red without the code: break a COPY of the page or the model one line at a time ──────────────────────────────────────────────────────────────────────────
-APPEND = "if (!said && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);"
-RELEASE = "      if (model.no_travel_labor === true) releaseNobodysTravelRow(model);"
+APPEND = "if (!said && model.sheet_no_travel_labor !== true && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);"
+RELEASE = "      if (model.no_travel_labor === true || sheetSaidNoDrive(e.section)) {"
 OPTION_X = "      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);"
-CARRIER_X = "    model.no_travel_labor = true;"
-ADD_TAKES_BACK = "    if (isCarrier) delete model.no_travel_labor;"
+CARRIER_X = "    else model.no_travel_labor = true;"
+SHEET_X = "    if (drives.length > 1) hit.section.sheet_no_travel_labor = true;"
+ADD_ON_A_BASE = "    if (drive) {"
+ADD_HANDS_ON = "          if (e.section !== holder && isObject(e.section) && !travelRowsIn(e.section).length) e.section.sheet_no_travel_labor = true;"
+CARRY_REFUSED = '      if (model.no_travel_labor === true || sheetSaidNoDrive(toSection)) return "";'
+KEEP_ADDED = '        releaseNobodysTravelRow(model, tab, wasKind === "option");'
+FRESH_LINE = "        e.section.labor.push(freshDriveRow(model));"
 SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
 
-# (The settling of the answer when an option that holds a line is made the base is held on the page: test_polish_travel_round6_answer.py reads it before and after. The walk cannot see it, because
-# without it the release a base pick runs removes the promoted line instead and leaves a state every rule above accepts: a different answer, not a wrong one.)
+# (Until round 7 the settling of the answer when an option that holds a line is made the base was held on the page alone (test_polish_travel_round6_answer.py): the walk ended its rule at
+# a Sheets action. Since Hanz's decisions of 2026-10-21 no step is exempt (the round-6 audit's F-D) and PROMOTED judges every promotion, so the walk sees it: the last entries below.)
 
 # name -> (file, old, new, mode, depth, the rules the walk must report)
 BREAKS = {
     "a reload appends the blank row to an off root and to a root that is an option (every older walk sees it too)": (
-        "js/bid-model.js", APPEND, "if (!said) out.labor = laborIn.concat([travelSeed()]);", "far", 2, {"PLAIN_REOPEN", "REOPEN_AGREES"}),
+        "js/bid-model.js", APPEND, "if (!said && model.sheet_no_travel_labor !== true) out.labor = laborIn.concat([travelSeed()]);", "answerSheets", 2,
+        {"PLAIN_REOPEN", "REOPEN_AGREES", "RELOAD_AGREES"}),
     "the blank row of a reload is priced differently from the session (F1, F2)": (
-        "js/bid-model.js", APPEND, "if (!said) out.labor = laborIn.concat([travelSeed()]);", "answers", 0, {"RELOAD_AGREES", "REOPEN_AGREES", "PLAIN_REOPEN"}),
+        "js/bid-model.js", APPEND, "if (!said && model.sheet_no_travel_labor !== true) out.labor = laborIn.concat([travelSeed()]);", "answers", 0,
+        {"RELOAD_AGREES", "REOPEN_AGREES", "PLAIN_REOPEN"}),
     "an option's x says the job has no drive": (
         "js/polish-estimate.js", OPTION_X, "      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;", "answers", 0, {"ANSWER_OWNER"}),
-    "the carrier's x is not recorded": (
-        "js/bid-model.js", CARRIER_X, "    void model;", "answers", 0, {"ANSWER_HELD"}),
+    "the x on a single-base job's drive is not recorded": (
+        "js/bid-model.js", CARRIER_X, "    else void model;", "answers", 0, {"ANSWER_HELD", "FAR_BASES"}),
     "an option's Add takes back the job's answer": (
-        "js/bid-model.js", ADD_TAKES_BACK, "    delete model.no_travel_labor;", "answers", 0, {"ANSWER_HELD"}),
-    "a new carrier keeps a blank line the job said it does not have": (
-        "js/bid-model.js", RELEASE, "      void model;", "answerJobs", 2, {"ANSWER_HELD"}),
-    "a job-type switch seeds the new carrier a line and the blank one is not taken off": (
-        "js/bid-model.js", RELEASE, "      void model;", "answers", 0, {"ANSWER_HELD"}),
+        "js/bid-model.js", ADD_ON_A_BASE, "    if (true) {", "answers", 0, {"ANSWER_HELD"}),
+    "a new base keeps a blank line the job said it does not have": (
+        "js/bid-model.js", RELEASE, "      if (sheetSaidNoDrive(e.section)) {", "answerJobs", 2, {"ANSWER_HELD"}),
+    "a job-type switch seeds the new base a line and the blank one is not taken off": (
+        "js/bid-model.js", RELEASE, "      if (sheetSaidNoDrive(e.section)) {", "answers", 0, {"ANSWER_HELD"}),
+    # round 7 (Hanz's decisions of 2026-10-21): the sheet's answer, the job's held, and an option made a base
+    "the x on one base's drive of a Combo is the job's answer": (
+        "js/bid-model.js", SHEET_X, "    if (false) hit.section.sheet_no_travel_labor = true;", "answers", 0, {"ANSWER_OWNER"}),
+    "Add on one base under the job's answer leaves the other base nothing to say": (
+        "js/bid-model.js", ADD_HANDS_ON, "          void e;", "answers", 0, {"ANSWER_HELD", "FAR_BASES"}),
+    "a job-type switch carries a drive onto a sheet that said it has none": (
+        "js/bid-model.js", CARRY_REFUSED, '      if (model.no_travel_labor === true) return "";', "answers", 0, {"ANSWER_HELD"}),
+    "an option made the base under the job's answer keeps the line the tool filled": (
+        "js/bid-model.js", RELEASE, "      if (false) {", "answers", 0, {"PROMOTED"}),
+    "an option made the base under the job's answer loses the line the estimator added": (
+        "js/bid-model.js", KEEP_ADDED, "        releaseNobodysTravelRow(model, tab, false);", "answers", 0, {"PROMOTED"}),
+    "an option made a base with no line is given none": (
+        "js/bid-model.js", FRESH_LINE, "        void freshDriveRow;", "reload", 2, {"PROMOTED", "FAR_BASES"}),
     # round 6, part 3 (M1): the Epoxy + Polish-copy pair's carrier is the order of its two bases, which a reload hands back in jsonb's order; the answers' own sequences see the code from before `seq`
     "the sheets are listed in the order the server returns their keys (the pair's carrier moves on a reload)": (
         "js/bid-model.js", SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "answers", 0, {"RELOAD_AGREES"}),
