@@ -48,6 +48,26 @@
  *   realThroughIntake   a REAL project opened in the v2 intake: it is copied (the sandbox's whole job) and the real
  *                       row is never written to or filed, through Continue and onto the estimate page.
  *
+ * AND THE NET UNDER EVERY OTHER WAY OF LEAVING (T2). Continue is one door out of the intake; the "2 · Estimate"
+ * step link, a closed tab and a reload are others, and none of them waits for anything. Whatever sends the first
+ * PUT as the page goes leaves the project saved, unfiled, and the pending filing still in storage. The estimate
+ * page's sandbox must file such a project instead of forking it, and must never file one that is not that.
+ *
+ *   pill                the "2 · Estimate" step link 700 ms after the last edit (the autosave has run, so the pagehide
+ *                       handler sends the keepalive PUT): the estimate page finds the project saved and unfiled.
+ *   pillFast            the same link 100 ms after the last edit: nothing is queued yet, the page's own pagehide save is
+ *                       a plain request and is dropped with the page, so the estimate page finds NO row. (Unchanged.)
+ *   closedThenReopened  the tab goes (the same keepalive PUT), and the board's link to the project is followed a
+ *                       minute later: the v2 INTAKE's own sandbox finds the project saved and unfiled.
+ *   realProject         a real project, no pending filing: copied as ever, never filed, never written to.
+ *   anotherProjects     a real project while ANOTHER project's filing is pending: copied as ever, the other one's
+ *                       filing is neither used nor lost.
+ *   saidReal            a project a human filed as a real bid (is_test false) with its own filing still pending: copied.
+ *   filingAsReal        a pending filing that says "real" (the Active tab's "+ New project", "<id>:0"): copied.
+ *   unfiled<mode>       the pill flow with a server that will not file (HTTP 500, {"ok": false}, no network, a non-JSON
+ *                       200, a 200 that says the row is not there): the project is left unfiled, nothing says it is
+ *                       filed, and the filing stays pending for the next visit.
+ *
  * Usage: node new-estimate-test-flag-harness.js <frontend-dir>   ->   one line of JSON
  */
 const path = require("path");
@@ -79,6 +99,7 @@ function summary(w, id, extra) {
     pages: rep.pages.map((p) => ({ label: p.label, bornAt: p.bornAt, diedAt: p.diedAt, crashed: p.crashed })),
     console: rep.console,
     unmocked: rep.unmocked,
+    runaway: rep.runaway,
   }, extra || {});
 }
 
@@ -198,6 +219,62 @@ async function realThroughIntake() {
     realAddress: (w.rows.get(REAL).data || {}).address });
 }
 
+// ── the net under every other way out (T2) ────────────────────────────────────────────────────────────────
+/** The new estimate typed into, then left by a link or a closing tab (never by Continue), `waitMs` after the last edit. */
+async function leave(opts) {
+  const o = Object.assign({ waitMs: 700, to: null, faults: [] }, opts || {});
+  const w = W.createWorld({ frontend: ROOT });
+  const intake = await w.startNewEstimate();
+  const id = intake.draftId();
+  o.faults.forEach((f) => w.fault(f));
+  intake.type("project_name", "Fast Job");
+  intake.type("address", "100 Main St");
+  await w.advance(o.waitMs);
+  // The "2 · Estimate" pill's href once repointWizardLinks has stamped it (polish-intake.html links /polish-estimate.html);
+  // "/blank.html" stands for a closed tab or any other page.
+  intake.follow(o.to || ("/polish-estimate.html?d=" + id));
+  await w.settle();
+  return { w: w, id: id };
+}
+
+async function pill(opts) {
+  const run = await leave(opts);
+  return summary(run.w, run.id, { name: "pill" });
+}
+
+async function closedThenReopened() {
+  const run = await leave({ to: "/blank.html" });
+  const w = run.w;
+  const before = summary(w, run.id);
+  await w.advance(60000);
+  const intake = w.load("/polish-intake.html?d=" + run.id);
+  await w.settle();
+  return summary(w, run.id, { before: { x: before.x, beta: before.beta, intent: before.intent },
+    intakeNote: intake.text("sandbox-note"), intakeDraft: intake.draftId(), intakeLoading: intake.text("loading") });
+}
+
+/** A project the server holds, opened on the estimate page by a browser that has been working on it. */
+const PROJECT = "proj-9";
+const projectData = (over) => Object.assign({
+  project_name: "Wichita Warehouse", address: "100 Main St", city: "Wichita", state: "KS", zip: "67202",
+  work_type: "polish", audience: "Direct", polish_sf: 6000,
+  polish_estimate: { version: 2, conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } },
+}, over || {});
+
+async function openProject(opts) {
+  const o = Object.assign({ row: {}, intent: undefined, faults: [] }, opts || {});
+  const w = W.createWorld({ frontend: ROOT });
+  w.seed(PROJECT, projectData(o.row));
+  w.holdLocally(PROJECT, projectData());
+  if (o.intent !== undefined) w.local.setItem(W.KEYS.intent, o.intent);
+  o.faults.forEach((f) => w.fault(f));
+  w.load("/polish-estimate.html?d=" + PROJECT);
+  await w.settle();
+  return summary(w, PROJECT, { pendingBefore: o.intent === undefined ? null : o.intent });
+}
+
+const FILING_FAULTS = ["http500", "okfalse", "network", "html", "gone"];
+
 (async () => {
   const out = {};
   out.saveWaitMs = saveWaitMs();
@@ -215,5 +292,17 @@ async function realThroughIntake() {
   }
   out.hangFiling = await newEstimate({ waitMs: 100, faults: [{ route: "TEST", mode: "hang", times: 1 }] });
   out.realThroughIntake = await realThroughIntake();
+  out.pill = await pill({ waitMs: 700 });
+  out.pillFast = await pill({ waitMs: 100 });
+  out.closedThenReopened = await closedThenReopened();
+  out.realProject = await openProject({});
+  out.anotherProjects = await openProject({ intent: "other-1:1" });
+  out.saidReal = await openProject({ row: { is_test: false }, intent: PROJECT + ":1" });
+  out.filingAsReal = await openProject({ intent: PROJECT + ":0" });
+  out.unfiled = {};
+  for (const mode of FILING_FAULTS) {
+    const run = await leave({ faults: [{ route: "TEST", mode: mode, id: undefined }] });
+    out.unfiled[mode] = summary(run.w, run.id, { mode: mode });
+  }
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

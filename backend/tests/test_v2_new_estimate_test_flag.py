@@ -281,6 +281,96 @@ def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
     assert (r["estimate"] or {}).get("draftId") == "real-1-beta" and r["intent"] is None
 
 
+# ══ T2: the net under every other way out of the intake ════════════════════════════════════════════════
+REAL_PROJECT = "proj-9"
+FAILURE = "filing it under the Test tab did not work"      # the sentence showCopyNote adds when the filing failed
+
+
+def test_the_estimate_page_files_a_new_project_the_intake_left_unfiled(ran):
+    """The "2 · Estimate" step link 700 ms after the last edit: Continue is not the only door out of the intake, and
+    this one waits for nothing, so the first PUT goes out as the page goes and the project is saved, unfiled, with the
+    pending filing still in storage. The estimate page's sandbox finds exactly that and files the project instead of
+    forking it: filed, nothing forked, the intent used up, and the page says it is editing the test project directly.
+
+    Red without the net (js/polish-sandbox.js): the project sits unfiled and a "(beta test)" copy is made of it."""
+    r = ran["pill"]
+    first = reqs(r, "PUT", r["id"], page="intake")[0]
+    assert (first["keepalive"], first["outcome"]) == (True, "reply dropped"), (
+        "the run does not start from the state the net is for (a project saved by the pagehide path): %r" % first)
+    assert_filed_and_edited_directly(r, "pill")
+    filing = reqs(r, "TEST", r["id"])
+    assert len(filing) == 1 and filing[0]["page"].startswith("estimate") and filing[0]["outcome"] == "replied", filing
+    assert r["estimate"]["settledAt"] >= filing[0]["repliedAt"], "the page said so before the server had answered"
+
+
+def test_the_intake_files_a_project_it_is_opened_on_after_the_tab_was_closed(ran):
+    """The tab goes as the first PUT is sent (the same keepalive request), and the board's link to the project is
+    followed a minute later. The v2 INTAKE'S own sandbox is the one that finds the project saved and unfiled: it
+    files it, edits it directly, and does not fork it."""
+    r = ran["closedThenReopened"]
+    assert r["before"]["x"]["is_test"] is None and r["before"]["beta"] is None and r["before"]["intent"] == r["id"] + ":1", (
+        "the run does not start from a saved, unfiled project with its filing pending: %r" % r["before"])
+    assert r["x"]["is_test"] is True and r["beta"] is None and r["intent"] is None, describe(r)
+    assert r["intakeDraft"] == r["id"] and DIRECT in r["intakeNote"] and COPY not in r["intakeNote"], (r["intakeDraft"], r["intakeNote"])
+
+
+def test_the_door_that_always_worked_still_does(ran):
+    """The same step link 100 ms after the last edit: nothing is queued yet, the page's own pagehide save is a plain
+    request and goes with the page, so the estimate page finds NO row, and the sandbox saves and files what it holds.
+    Filed and not forked, before the net and after it."""
+    r = ran["pillFast"]
+    assert r["x"] is not None and r["x"]["is_test"] is True and r["beta"] is None, describe(r)
+    assert (r["estimate"] or {}).get("draftId") == r["id"] and DIRECT in says(r), describe(r)
+
+
+@pytest.mark.parametrize("scenario, row, pending", [
+    ("realProject", {"is_test": None}, None),
+    ("anotherProjects", {"is_test": None}, "other-1:1"),
+    ("saidReal", {"is_test": False}, REAL_PROJECT + ":1"),
+    ("filingAsReal", {"is_test": None}, REAL_PROJECT + ":0"),
+])
+def test_a_real_project_is_copied_never_filed_and_never_written_to(ran, scenario, row, pending):
+    """THE RULE THE NET MUST NOT BREAK. A project nobody here made as a new test project, whatever else is in
+    storage, is a real bid: the sandbox copies it as it always did, files the copy, and never writes to the real row.
+      realProject      nothing pending at all
+      anotherProjects  ANOTHER project's filing is pending: it is neither used nor lost
+      saidReal         a human filed this one as a real bid (is_test false) and its own filing is still pending
+      filingAsReal     the pending filing says "real" ("<id>:0", the Active tab's New project), not "test"
+    In every one the real row is read and nothing else: no save, no filing, and its is_test is what it was."""
+    r = ran[scenario]
+    assert r["x"] == {"is_test": row["is_test"], "beta_sandbox_of": None, "project_name": "Wichita Warehouse"}, r["x"]
+    assert [q for q in reqs(r, id_=REAL_PROJECT) if q["method"] != "GET"] == [], "the real project was written to or filed"
+    assert r["beta"] == {"is_test": True, "beta_sandbox_of": REAL_PROJECT, "project_name": "Wichita Warehouse (beta test)"}, r["beta"]
+    est = r["estimate"] or {}
+    assert est.get("draftId") == REAL_PROJECT + "-beta" and COPY in says(r) and DIRECT not in says(r), describe(r)
+    assert r["intent"] == pending, "the pending filing was used up or changed: %r, was %r" % (r["intent"], pending)
+
+
+@pytest.mark.parametrize("mode", ["http500", "okfalse", "network", "html", "gone"])
+def test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed(ran, mode):
+    """The net's own filing fails: HTTP 500, a 200 carrying {"ok": false}, no network, a 200 that is not JSON (a
+    proxy's error page), and a 200 that says there is no such row. In every one the project is left unfiled and
+    the page does not pretend: it does what it does for any unfiled project (a copy, which it says it is) and adds
+    that this project was meant to be a test and could not be filed. Nothing says "editing it directly". The pending
+    filing is NOT used up, so the next time the project is opened it is tried again."""
+    r = ran["unfiled"][mode]
+    est = r["estimate"] or {}
+    assert r["x"] is not None and r["x"]["is_test"] is None, "the project was filed, or its row is gone: " + describe(r)
+    assert est.get("draftId") == r["id"] + "-beta" and COPY in says(r) and DIRECT not in says(r), describe(r)
+    assert FAILURE in says(r), "the page does not say the filing failed: %r" % says(r)
+    assert r["intent"] == r["id"] + ":1", "the pending filing was used up by a filing that failed: %r" % r["intent"]
+
+
+def test_no_flow_reloads_the_page_in_a_loop(ran):
+    """Not a check of the fix, a check of the model's runs: shared.js hydrates a project and reloads, and anything
+    that claims the one storage slot in between would have it do that for ever. Every run ends."""
+    flows = [ran[k] for k in ("fast", "fastAfterAutosave", "slow", "slowFiling", "hang", "offline", "hangFiling",
+                              "realThroughIntake", "pill", "pillFast", "closedThenReopened", "realProject",
+                              "anotherProjects", "saidReal", "filingAsReal")]
+    flows += list(ran["failedFiling"].values()) + list(ran["unfiled"].values()) + ran["sweep"]
+    assert [f for f in flows if f.get("runaway")] == []
+
+
 # ══ the intake page alone: what Continue does with the answer to its save ═════════════════════════════
 def test_continue_saves_first_waits_for_the_answer_and_then_leaves(intake):
     """The REAL onSubmit, lifted into tests/js/polish-intake-harness.js with a save the test answers BY HAND:

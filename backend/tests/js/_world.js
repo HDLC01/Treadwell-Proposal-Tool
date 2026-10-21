@@ -35,7 +35,8 @@
  *   drafts.save_draft does with keep_server_owned), POST /api/draft/{id}/test (sets is_test; 200 with
  *   {"ok": true, "existed": false} when there is no row), and GET /api/condition-defaults. It can be told
  *   to fail a route (`fault`): an HTTP 500, a 200 carrying {"ok": false} (which is how both /test and
- *   the save route answer a caught exception), a network error, or no answer at all.
+ *   the save route answer a caught exception), a network error, no answer at all, a 200 that is not JSON
+ *   (a proxy's error page) and a 200 that says the row is not there ({"ok": true, "existed": false}).
  *
  * WHAT IS REAL. The page scripts (shared.js, js/polish-sandbox.js, js/polish-intake.js) and the modules they
  * read (work-types, intake-scope, bid-model, excel-math): every one is read from the frontend directory the
@@ -293,6 +294,8 @@ function createWorld(cfg) {
             let res;
             if (fault && fault.mode === "http500") res = { status: 500, body: { detail: "boom" } };
             else if (fault && fault.mode === "okfalse") res = { status: 200, body: { ok: false, error: "Couldn't do that. Please try again." } };
+            else if (fault && fault.mode === "html") res = { status: 200, body: undefined };
+            else if (fault && fault.mode === "gone") res = { status: 200, body: { ok: true, existed: false, is_test: true } };
             else res = handle(req);
             req.doneAt = sim.now;
             req.status = res.status;
@@ -302,7 +305,11 @@ function createWorld(cfg) {
               req.repliedAt = sim.now;
               resolve({
                 ok: res.status >= 200 && res.status < 300, status: res.status, statusText: String(res.status),
-                json: async () => clone(res.body), text: async () => JSON.stringify(res.body),
+                json: async () => {
+                  if (res.body === undefined) throw new SyntaxError("Unexpected token '<', \"<html>\" is not valid JSON");
+                  return clone(res.body);
+                },
+                text: async () => (res.body === undefined ? "<html>bad gateway</html>" : JSON.stringify(res.body)),
               });
             });
           });
@@ -472,6 +479,9 @@ function createWorld(cfg) {
       page.dead = true;
       page.diedAt = sim.now;
       if (world.current === page) world.current = null;
+      // A page that keeps asking for itself (shared.js's hydrate-and-reload, with something else claiming the
+      // slot each time) must show up in the report as a fact, not as a run that never ends.
+      if (pageCount >= (o.maxPages || 30)) { world.runaway = true; return; }
       sim.at(net.bootMs, () => { world.load(target); });
     });
   };
@@ -481,6 +491,9 @@ function createWorld(cfg) {
   world.settle = (capMs) => sim.settle(capMs);
   world.now = () => sim.now;
   world.localKey = (k) => local.getItem(KEYS[k] || k);
+
+  /** What this browser has stored as the pending filing of a new project (shared.js and the sandbox's key). */
+  world.armIntent = (id, value) => { local.setItem(KEYS.intent, id + ":" + value); };
 
   /** The board's "+ New estimate": the same keys js/v2-board.js startNew() clears so shared.js mints a new
    *  draft id, then the intake page opens with no ?d=. Resolves once the page has booted. */
@@ -540,6 +553,7 @@ function createWorld(cfg) {
     pages: world.pages.map(world.pageReport),
     console: world.console.slice(),
     unmocked: world.unmocked.slice(),
+    runaway: !!world.runaway,
   });
 
   return world;
