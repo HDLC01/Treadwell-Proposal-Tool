@@ -1602,8 +1602,9 @@
    *  THE PAGE SAVES WHAT THIS GIVES, once, when the open has settled and a drive it gave prices something (givenDrivesPrice; polish-estimate.js, init: drivesGiven; the pass-2 audit's A1): the
    *  Review and the Proposal read the draft's saved price, and an open that re-priced the bar without saving left them printing the old one (the bid above showed $92,153 and the Proposal printed
    *  the $90,422 it was saved at). A line given empty, switched off or cleared moves no price, and the next save writes it, so such an open still writes nothing. The page calls it on every open
-   *  (adopt), after migrateModel and withSectionOrder; a bid saved since round 7 holds a line or an answer on every base and is handed back as it is. A NEW model when a line is given (the sections
-   *  it touches are new objects too), else the one handed in. Never throws. */
+   *  (adopt), after migrateModel and withSectionOrder; a bid saved since round 7 holds a line or an answer on every base and is handed back as it is, but for a new Combo made on a library that
+   *  offers no labor rows, whose Epoxy base is seeded none and is given its line on the next open like a one-drive bid's (tests/test_v2_intake_sf_sections.py: with no distance the line is
+   *  empty, prices nothing and is not saved on open). A NEW model when a line is given (the sections it touches are new objects too), else the one handed in. Never throws. */
   function giveEveryBaseItsDrive(model) {
     if (!isObject(model)) return model;
     var drives = driveEntries(model);
