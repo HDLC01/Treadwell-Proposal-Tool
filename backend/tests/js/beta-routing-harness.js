@@ -193,6 +193,10 @@ function build(seed, countyOpts, condOpts, pageOpts) {
   const NAV = [];
   const REPLACED = [];
   const SAVES = [];
+  // The beta door waits for its save to be answered (X1, round 4, F3): every flushState it asks is counted, and the page's timers are the
+  // harness's own (index.js uses none but the door's), so that nothing real is left running when the run is over.
+  const FLUSHES = [];
+  const TIMERS = [];
   const STATE = JSON.parse(JSON.stringify(seed || {}));
   const nodes = {};
   const flags = { valid: true, reportValidityCalls: 0 };
@@ -432,6 +436,8 @@ const documentStub = {
     isThisDraft: twScope.isThisDraft,
     getState: () => STATE,
     setState: (partial) => { SAVES.push(JSON.parse(JSON.stringify(partial))); Object.assign(STATE, partial); },
+    // "The server holds what this page shows": the answer to a save that has been sent. Counted, and answered at once unless a scenario holds it.
+    flushState: () => { FLUSHES.push(1); return (pageOpts && pageOpts.flush) ? pageOpts.flush() : Promise.resolve(true); },
     // js/county-picker.js builds its request out of these two, the way every other fetch in
     // the app does. Leave them off and its load() throws inside its own catch, the reference
     // table arrives empty, and the search box goes quiet in a way that is indistinguishable
@@ -495,8 +501,10 @@ const documentStub = {
   // identifier must still fail loudly here.
   let stopped = null;
   try {
-    new Function("document", "window", "TW", "fetch", indexJs)(
-      documentStub, windowStub, TW, conditionFetchStub);
+    new Function("document", "window", "TW", "fetch", "setTimeout", "clearTimeout", indexJs)(
+      documentStub, windowStub, TW, conditionFetchStub,
+      (fn, ms) => { const t = { fn: fn, ms: ms, live: true }; TIMERS.push(t); return t; },
+      (t) => { if (t) t.live = false; });
   } catch (e) {
     if (!/a v2 draft belongs on polish-intake/.test(String(e && e.message))) throw e;
     stopped = String(e.message);
@@ -557,7 +565,7 @@ const documentStub = {
     fns.forEach((fn) => fn({ target: target }));
     return fns.length;
   }
-  return { NAV, REPLACED, stopped, SAVES, STATE, nodes, flags, form, radios, systems, documentStub,
+  return { NAV, REPLACED, stopped, SAVES, STATE, nodes, flags, form, radios, systems, documentStub, FLUSHES, TIMERS,
            condBox, switches, switchFor, press, clickSwitch,
            countyFetches, conditionFetches, releaseAuth: () => releaseAuthFn(), typeCounty, pressCounty, countyRowList, pageClick,
            fire, setWorkType, fill, byName };
@@ -646,27 +654,35 @@ function runHandler(which) {
   return b;
 }
 
+// The beta door leaves AFTER its save has been answered, so what it did is read a few microtasks later: `later` is what the async main below
+// waits for before it prints.
+const later = [];
+const settled = () => new Promise((r) => setImmediate(r));
 {
   const beta = runHandler("beta");
   const submit = runHandler("submit");
-  out.nav = {
-    beta: beta.NAV,
-    submit: submit.NAV,
-  };
-  out.saves = {
-    betaCount: beta.SAVES.length,
-    submitCount: submit.SAVES.length,
-    beta: beta.SAVES[0] || null,
-    submit: submit.SAVES[0] || null,
-  };
-  // Two copies of one composition. Compared key for key so a change to either one that is not
-  // made to the other fails here rather than in production.
-  const norm = (o) => JSON.stringify(Object.keys(o || {}).sort().map((k) => [k, o[k]]));
-  out.saves.identical = norm(beta.SAVES[0]) === norm(submit.SAVES[0]);
-  out.saves.betaOnlyKeys = Object.keys(beta.SAVES[0] || {})
-    .filter((k) => !(k in (submit.SAVES[0] || {})));
-  out.saves.submitOnlyKeys = Object.keys(submit.SAVES[0] || {})
-    .filter((k) => !(k in (beta.SAVES[0] || {})));
+  later.push(settled().then(function () {
+    out.nav = {
+      beta: beta.NAV,
+      submit: submit.NAV,
+    };
+    out.saves = {
+      betaCount: beta.SAVES.length,
+      submitCount: submit.SAVES.length,
+      beta: beta.SAVES[0] || null,
+      submit: submit.SAVES[0] || null,
+    };
+    // Two copies of one composition. Compared key for key so a change to either one that is not
+    // made to the other fails here rather than in production.
+    const norm = (o) => JSON.stringify(Object.keys(o || {}).sort().map((k) => [k, o[k]]));
+    out.saves.identical = norm(beta.SAVES[0]) === norm(submit.SAVES[0]);
+    out.saves.betaOnlyKeys = Object.keys(beta.SAVES[0] || {})
+      .filter((k) => !(k in (submit.SAVES[0] || {})));
+    out.saves.submitOnlyKeys = Object.keys(submit.SAVES[0] || {})
+      .filter((k) => !(k in (beta.SAVES[0] || {})));
+    // The door asks for the save to be answered once, before it leaves; the spreadsheet's Continue does not wait at all.
+    out.waits = { beta: beta.FLUSHES.length, submit: submit.FLUSHES.length };
+  }));
 }
 
 // ── the beta button is not a way around the required fields ─────────────────
@@ -727,6 +743,7 @@ function runHandler(which) {
 (async function () {
   const tick = () => new Promise((r) => setImmediate(r));
   const cells = (b) => (b.STATE.cell_values || {});
+  await Promise.all(later);                // what the beta door did once its save was answered (see above)
 
   // Which questions each work type is asked. Read off the rendered nodes, in order.
   out.conditions = { byWorkType: {}, shape: null, defaults: null };

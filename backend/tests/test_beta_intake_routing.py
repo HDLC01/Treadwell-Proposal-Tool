@@ -139,6 +139,16 @@ def test_the_live_intake_still_gates_its_fields_the_way_it_did(ran):
 
 # ── where each door goes ─────────────────────────────────────────────────────
 @needs_node
+def test_the_beta_door_waits_for_its_save_to_be_answered_and_the_red_button_does_not(ran):
+    """X1, round 4, F3. The page the beta door opens asks the server whether the project has a row, and a project that has been written into with
+    no row yet makes that page STOP; so the door asks for its save to be answered (TW.flushState, once, bounded) before it leaves, and it did not
+    wait at all. The red button goes to the spreadsheet's Estimate step, which asks the server nothing, and is not made to wait.
+    (tests/js/_world.js and test_v2_new_estimate_test_flag.py run the wait against a slow server, a server that never answers and a browser
+    that does not go; this is the shape of it on the page alone: once, and only on the beta door.)"""
+    assert ran["waits"] == {"beta": 1, "submit": 0}, ran["waits"]
+
+
+@needs_node
 def test_the_beta_door_goes_to_the_beta_intake_with_the_draft_id(ran):
     """Through the real TW.withDraft (lifted out of shared.js), because shared.js's anchor
     rewriter covers the four wizard pages only — a bare path opens the beta with no project."""

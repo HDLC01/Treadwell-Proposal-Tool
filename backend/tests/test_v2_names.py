@@ -442,7 +442,14 @@ def test_the_sandbox_names_the_tool_wherever_it_stops(ran):
                          "risk editing the real bid. Reload to try again." % TOOL,
         "copyCannotBeMade": "Couldn't make the test copy, so %s stopped rather than edit the real "
                             "project itself. Reload to try again." % TOOL,
+        "realBidNotSavedYet": "%s stopped rather than edit a project that has not been saved yet. Its first "
+                              "save has not reached the server, so there is no test copy to make. Reload this "
+                              "page once it has saved." % TOOL,
     }
+    stops["unsavedProjectNoWord"] = stops["realBidNotSavedYet"]
+    stops["foreignBlob"] = ("%s stopped rather than save another project's copy under this one. This browser's saved copy belongs "
+                            "to a project that is open in another tab, and that tab has the keys. Close the other tab, then reload "
+                            "this page." % TOOL)
     for case, message in stops.items():
         assert s[case]["settled"] is False, "%s let the page carry on after a failed read" % case
         assert " ".join(s[case]["loading"].split()) == message, (case, s[case]["loading"])
