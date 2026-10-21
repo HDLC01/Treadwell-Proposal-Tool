@@ -17,14 +17,22 @@ project's OWN blob, on the first write that has anything in it, so the first PUT
 over a blob's whenever the row has one. test_v2_new_estimate_test_flag.py EXECUTES all of it (the real shared.js, the real
 click handler of projects.js and the real routes); this file keeps the cheap source-level pins of the wiring.
 
-THE THREE WAYS THIS GOES WRONG, WHICH IS WHAT THESE TESTS GUARD.
+AND IT CHANGED AGAIN IN ROUND 3. The start had been ONE localStorage slot for the whole browser ("<id>:<0|1>", bound to the id
+when shared.js minted it), and the audit found it overwritten by a page that only LOOKED at a project (a v2 page, F1) and by a
+second tab's New project (F3), and unreachable for a blob that never went through setState (F2). Now each project's start is
+its OWN key (NEW_IS_TEST_KEY + ":" + id), minted together with the project's id by setNewProjectTestIntent as New project is
+pressed, so the id never has to be bound later and no other project's start can be read as this one's; a v2 page's own word
+("this page created the project") is held in that page's memory (startsAsTest) and goes into the first write that page makes;
+and putDraft puts the start on a copy that never went through setState (withStart).
+
+THE WAYS THIS GOES WRONG, WHICH IS WHAT THESE TESTS GUARD.
 
 1. **The flag overruling somebody.** A blob that already says is_test (a hydrate wrote what the server holds) is never
    overwritten by a start, and the server keeps a stored value over any blob. File a project as real, leave yesterday's tab
    open, and its next autosave must not file it back as a test.
 
-2. **The intent left unbound.** It would attach to whichever project was written next — press New project, change your
-   mind, open a real customer bid, and that bid gets filed as a test.
+2. **The start read as another project's.** Press New project, change your mind, open a real customer bid, and that bid
+   must not be filed as a test: a start is under its own project's key and can only ever be read by that project.
 
 3. **A second request.** A /test after the save is what failed (a page that had left, a failure nobody read, an answer
    nobody waited for). Nothing in shared.js files a project with a request of its own any more.
@@ -107,11 +115,12 @@ def test_all_and_inactive_state_no_opinion(projects):
 
 
 def test_the_flag_goes_into_the_blob_only_as_a_new_projects_own_first_write(shared):
-    """The rule this file used to hold the other way round. The intent lives under its own localStorage key; setState is what
-    says it in the project's blob (and nothing else writes it there on this browser's own authority); and putDraft never
-    adds is_test to what it sends, so a blob that does not say it (a project somebody has since filed) is not re-flagged from
-    there. The executed counterparts are in test_v2_new_estimate_test_flag.py (the first PUT carries it; a stale tab cannot
-    undo a human's filing, against the real routes)."""
+    """The rule this file used to hold the other way round. The start lives under its own localStorage key; setState is what
+    says it in the project's blob (and nothing else writes it there on this browser's own authority); and putDraft adds
+    is_test to a COPY it sends only through withStart, which does it from a start this browser holds for that very id and
+    never over a word the blob already has, so a project somebody has since filed is not re-flagged from there. The executed
+    counterparts are in test_v2_new_estimate_test_flag.py (the first PUT carries it; a stale tab cannot undo a human's
+    filing, against the real routes)."""
     assert "treadwell.proposal_tool.new_is_test" in shared
     set_state = _body(shared, "setState")
     assert "sayWhatItWasStartedAs(id, merged)" in set_state, "setState does not say what the project was started as"
@@ -119,6 +128,10 @@ def test_the_flag_goes_into_the_blob_only_as_a_new_projects_own_first_write(shar
         "setLocalState is for facts the server holds already: it must not start saying one of its own")
     put = _body(shared, "putDraft")
     assert "is_test" not in put, "putDraft adds is_test to the blob it sends, which re-flags a project somebody filed since"
+    assert "withStart(id, blob)" in put, "putDraft does not put a start on a copy that never went through setState"
+    with_start = _exact(shared, "withStart")
+    assert 'hasOwnProperty.call(blob, "is_test")) return blob' in with_start, "withStart overrules a word the blob already holds"
+    assert "startOf(id)" in with_start and "Object.assign({}, blob," in with_start, "withStart changes the caller's blob or reads another key"
 
 
 def test_nothing_in_shared_js_files_a_project_with_a_request_of_its_own(shared):
@@ -135,30 +148,33 @@ def test_nothing_in_shared_js_files_a_project_with_a_request_of_its_own(shared):
         "projects.js no longer posts to /test: the Test? button has moved, and this file's reference point with it")
 
 
-def test_the_intent_is_bound_to_an_id_before_it_can_be_used(shared):
-    """Unbound, it would land on whichever project was written next."""
-    assert "bindNewProjectTestIntent" in shared
+def test_a_start_is_under_its_own_projects_key(shared):
+    """One key per project, so no other project's start (or another tab's) can be read as this one's: the key carries the id, the
+    stamp and putDraft read only that key, and New project writes it for the id it has just minted."""
+    assert 'function startKey(id) { return NEW_IS_TEST_KEY + ":" + id; }' in shared
+    assert "startKey(id)" in _exact(shared, "startOf"), "the start is read from a key that is not the project's own"
     stamp = _exact(shared, "sayWhatItWasStartedAs")
-    assert "pendingTestIntentFor(id)" in stamp
-    match = _body(shared, "pendingTestIntentFor")
-    assert "raw.slice(0, i) !== id" in match, (
-        "the pending intent is not checked against the draft it was meant for")
+    assert "startOf(id)" in stamp and "startKey(id)" in stamp
+    setter = _exact(shared, "setNewProjectTestIntent")
+    assert "newDraftId()" in setter and "DRAFT_ID_KEY" in setter and "startKey(id)" in setter, (
+        "New project does not leave the project's id and its own start together")
 
 
-def test_an_abandoned_intent_is_dropped_when_an_existing_project_is_opened(shared):
-    """Press New project, change your mind, open a real customer bid: that bid must not be
-    filed as a test."""
-    assert "dropUnboundTestIntent" in shared
+def test_arriving_at_an_existing_project_has_no_start_to_drop(shared):
+    """Press New project, change your mind, open a real customer bid: that bid must not be filed as a test. It cannot be: the
+    abandoned project's start is under that project's own key, and initDraftSync neither reads nor drops one (it used to drop
+    the one global slot here, and to bind it when it minted an id)."""
+    assert "dropUnboundTestIntent" not in shared and "bindNewProjectTestIntent" not in shared
     init = _body(shared, "initDraftSync")
-    assert "dropUnboundTestIntent()" in init
+    assert "NEW_IS_TEST_KEY" not in init and "startOf(" not in init and "minting" not in init
 
 
-def test_the_intent_is_only_bound_when_a_NEW_id_is_minted(shared):
-    """Resuming a project the browser already had an id for is not a new project, and binding
-    there would file whatever the estimator last worked on."""
-    init = _body(shared, "initDraftSync")
-    assert "minting" in init and "!localId" in init
-    assert re.search(r'if\s*\(minting\)\s*bindNewProjectTestIntent', init)
+def test_new_project_mints_an_id_only_for_a_position(shared):
+    """A position (the Test tab, the Active tab) mints the project's id with its start. All and Inactive say nothing, so there
+    is nothing to keep and the page that opens mints the project as it always did."""
+    setter = _exact(shared, "setNewProjectTestIntent")
+    assert re.search(r"if \(want === null \|\| want === undefined\) return;", setter), setter
+    assert setter.index("want === null") < setter.index("newDraftId()"), "All and Inactive mint an id"
 
 
 def test_the_start_is_used_up_by_the_write_that_says_it(shared):

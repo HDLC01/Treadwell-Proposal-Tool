@@ -23,6 +23,10 @@
  *   replies arrive) until that document commits, `commitMs` later. Then `pagehide` runs on the old page,
  *   the old page is gone, and `bootMs` after that the new page's scripts run.
  *
+ *   TABS. One browser has ONE localStorage and one clock; each tab has its own sessionStorage and its own page, which a navigation in
+ *   that tab replaces (world.openTab, world.load(url, { tab }), world.pageOf(kind, tab)). Two tabs share the one current draft and
+ *   the one blob, as two tabs of a browser do.
+ *
  *   A REQUEST takes `up` to reach the server, `proc` (per route) to be worked on, and `down` to come back.
  *   Once it has ARRIVED the server finishes it whatever happens to the page, which is what a server does
  *   with a request it has read. What happens to the page decides only three things: a request that has not
@@ -636,6 +640,8 @@ function createWorld(cfg) {
   /** What this browser holds of how a project was STARTED: the value under its own key ("1" a test, "0" a real bid, null when
    *  nothing is pending for it). Every project has its own key, so no other project's start can touch it. */
   world.startOf = (id) => local.getItem(KEYS.intent + ":" + id);
+  /** Put a start under a project's own key, as the Projects page or a board leaves one ("1" a test, "0" a real bid). */
+  world.setStart = (id, value) => { local.setItem(KEYS.intent + ":" + id, value); };
   /** Every start this browser holds, { id: "1" | "0" }. */
   world.starts = () => {
     const out = {};

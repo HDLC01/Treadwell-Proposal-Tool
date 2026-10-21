@@ -22,11 +22,25 @@ and a failed filing is a failed save, which is read as one. Of round 1, T1's wai
 before the browser leaves, answered to a page that is still there) with feedback on the button, and the sandbox's net (T2)
 is gone: it had nothing left to catch, and it filed whatever a stale intent named, from inside the next page's boot.
 
+THE AUDIT OF ROUND 2 (11 of its 14 claims held) found five more ways to file a project wrongly, and ROUND 3 closes them. The seed was kept
+in ONE localStorage slot ("<id>:<0|1>"), and the slot was the weak point: (F1) a page that only LOOKED at a project overwrote it, so a
+real bid started on the Active tab was born a test after a look at a v2 page; (F2) a blob that never went through setState (the GC
+board's { audience: "GC" }) had nowhere to carry it, so flushing it when another project was opened created it unfiled; (F3) a second
+tab's New project overwrote the first tab's start before its first write; (F4) /api/generate's write-back put a payload's old is_test
+over a person's filing; (F5) the intake's pagehide save was a plain request, which a page that is going cannot finish. Now each
+project's start is its OWN key, minted together with its id as New project is pressed; a v2 page's own word ("this page created the
+project") is held in that page's memory and goes into the first write that page makes, so a look arms nothing; putDraft puts the start
+on a copy that never went through setState and spends it only once the server has stored the copy; the write-back keeps what a person
+filed (test_generate_writeback.py); and the pagehide saves are keepalive requests (a draft too big for one goes plain). By design,
+pinned: a project typed into on a v2 page is a test project whichever tab started it. Only a LOOK leaves it as its tab started it.
+
 HOW THESE TESTS RUN. tests/js/new-estimate-test-flag-harness.js runs the REAL shared.js, js/polish-sandbox.js,
 js/polish-intake.js and js/index.js, whole, in tests/js/_world.js: a browser model with virtual time in which a page's
 timers and replies die with it and a keepalive request survives it with nobody to hear the answer. The intake is driven as
 a person drives it; every fact is read off the server's rows (what each was BORN as, and what it is now) and the pages after
-everything has settled. The model's SERVER is held to the real routes by the first tests below (the same requests go to
+everything has settled. Round 3 adds the model's TABS (one localStorage, a sessionStorage and a page per tab) and runs the real
+Projects-page and board starts (js/projects.js's "+ New project" handler and js/portal.js's startNewProposal, lifted out of their
+files). The model's SERVER is held to the real routes by the first tests below (the same requests go to
 backend/main.py over an in-memory store). Its BROWSER rules (a page being left, keepalive, a reply nobody sees) are only stated
 by the first of them: nothing in this suite can check a browser against the model, so they were walked by hand in a real Chrome
 on 2026-10-21 (the fast Continue, the step link, a closed tab, the live intake from the Test tab, a navigation that does not go),
@@ -53,7 +67,7 @@ INTAKE_HARNESS = TESTS / "js" / "polish-intake-harness.js"
 # What each harness reads from a frontend directory (they do not fall back to the real one), so that a scratch
 # copy that breaks ONE file can be completed with the rest.
 PAGE_FILES = ["shared.js", "polish-intake.html", "index.html", "js/polish-intake.js", "js/polish-sandbox.js", "js/index.js",
-              "js/projects.js", "js/work-types.js", "js/intake-scope.js", "js/bid-model.js", "js/excel-math.js"]
+              "js/projects.js", "js/portal.js", "js/work-types.js", "js/intake-scope.js", "js/bid-model.js", "js/excel-math.js"]
 INTAKE_FILES = ["shared.js", "polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 client = TestClient(main.app)
@@ -280,12 +294,12 @@ def test_the_estimate_page_the_harness_runs_is_the_real_ones_first_lines():
 
 def test_the_projects_page_hands_the_live_intake_the_tab_it_started_from(ran):
     """The harness runs the REAL click handler of js/projects.js (lifted out of the file) and then the live intake's
-    own shared.js: "+ New project" on Test leaves "<id>:1" bound to the id the intake minted, on Active "<id>:0", and on All
-    nothing. The v1 flows below start from exactly this."""
+    own shared.js: "+ New project" on Test leaves "1" under the new project's own key, on Active "0", and on All nothing, and
+    the live intake opens on that very project (the id the click minted). The v1 flows below start from exactly this."""
     v1 = ran["v1"]
-    assert v1["test"]["intentOnArrival"] == v1["test"]["id"] + ":1", "Test: %r" % v1["test"]["intentOnArrival"]
-    assert v1["active"]["intentOnArrival"] == v1["active"]["id"] + ":0", "Active: %r" % v1["active"]["intentOnArrival"]
-    assert v1["all"]["intentOnArrival"] is None, "All: %r" % v1["all"]["intentOnArrival"]
+    assert v1["test"]["startOnArrival"] == "1", "Test: %r" % v1["test"]["startOnArrival"]
+    assert v1["active"]["startOnArrival"] == "0", "Active: %r" % v1["active"]["startOnArrival"]
+    assert v1["all"]["startOnArrival"] is None, "All: %r" % v1["all"]["startOnArrival"]
 
 
 # ══ S1: the seed. A new project is born filed, whichever way it leaves ══════════════════════════════════
@@ -314,6 +328,15 @@ def test_a_new_project_is_born_filed_whichever_way_it_leaves(ran):
     assert [p["accepted"] for p in dbl["presses"]] == [True, False] and len(dbl["navs"]) == 1, dbl["presses"]
 
 
+def test_a_gc_tab_bid_is_saved_and_filed_as_the_intake_opens(ran):
+    """The GC tab starts the bid with { audience: "GC" } already in the draft, so the sandbox has something to save as the intake
+    opens and saves it, filed as a test: its row is on the server before anything is typed. A new estimate with nothing in it
+    saves nothing (opening the beta must not create a project)."""
+    gc, plain = ran["gcTab"], ran["fast"]
+    assert gc["rowAtOpen"] is not None and gc["rowAtOpen"]["bornIsTest"] is True and gc["rowAtOpen"]["is_test"] is True, gc["rowAtOpen"]
+    assert plain["rowAtOpen"] is None, "opening the intake on a project with nothing in it created a row: %r" % plain["rowAtOpen"]
+
+
 def test_the_first_save_says_what_the_project_was_started_as(ran):
     """WHY it works, on the wire. The project's FIRST PUT (the autosave's, Continue's, the pagehide keepalive's, the estimate
     page's, whichever goes first) carries is_test in its body: true for a project started as a test, false for one started
@@ -323,7 +346,7 @@ def test_the_first_save_says_what_the_project_was_started_as(ran):
         r = ran[flow]
         first = reqs(r, "PUT", r["id"])[0]
         assert first["sentIsTest"] is True, "%s: the first save did not say the project is a test: %r" % (flow, first)
-        assert r["intent"] is None, "%s: the start was not used up by the first write (%r)" % (flow, r["intent"])
+        assert r["starts"] == {}, "%s: a start was left armed by the first write (%r)" % (flow, r["starts"])
     v1 = ran["v1"]
     assert reqs(v1["test"], "PUT", v1["test"]["id"])[0]["sentIsTest"] is True
     assert reqs(v1["active"], "PUT", v1["active"]["id"])[0]["sentIsTest"] is False
@@ -332,21 +355,63 @@ def test_the_first_save_says_what_the_project_was_started_as(ran):
 
 def test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project(ran):
     """shared.js's stamp, executed on its own. A start for THIS project is said in the blob by the first write that holds
-    anything, and the slot is emptied by it: true for a test, false for a real bid. A write that holds nothing yet (an empty
+    anything, and its key is removed by it: true for a test, false for a real bid. A write that holds nothing yet (an empty
     partial on a project nobody has typed into) says nothing and leaves the start where it is, so an untouched project stays
     a blob with nothing in it and never becomes a row. A blob that already says is_test (a human's word, written by a
-    hydrate) is not overruled, and the start is used up all the same. A start for ANOTHER project, or an unbound one, is not
-    applied here and not used up. And a second write has nothing left to say."""
+    hydrate) is not overruled, and the start is used up all the same. A start for ANOTHER project is under that project's own
+    key: not read here and not used up here. The one slot of an earlier version is read by nothing, whatever it holds. And a
+    second write has nothing left to say."""
     s = ran["stampRules"]
-    assert s["test"]["blob"].get("is_test") is True and s["test"]["slot"] is None, s["test"]
-    assert s["real"]["blob"].get("is_test") is False and s["real"]["slot"] is None, s["real"]
-    assert "is_test" not in s["empty"]["blob"] and s["empty"]["slot"] == s["empty"]["id"] + ":1", s["empty"]
+    assert s["test"]["blob"].get("is_test") is True and s["test"]["starts"] == {}, s["test"]
+    assert s["real"]["blob"].get("is_test") is False and s["real"]["starts"] == {}, s["real"]
+    assert "is_test" not in s["empty"]["blob"] and s["empty"]["starts"] == {s["empty"]["id"]: "1"}, s["empty"]
     assert set(s["empty"]["blob"]) <= {"__draft_id"}, "an empty write made the project non-empty: %r" % s["empty"]["blob"]
-    assert s["emptyThenContent"]["blob"].get("is_test") is True and s["emptyThenContent"]["slot"] is None, s["emptyThenContent"]
-    assert s["says"]["blob"].get("is_test") is False and s["says"]["slot"] is None, s["says"]
-    assert "is_test" not in s["other"]["blob"] and s["other"]["slot"] == "someone-else:1", s["other"]
-    assert "is_test" not in s["unbound"]["blob"] and s["unbound"]["slot"] == "1", s["unbound"]
-    assert s["later"]["blob"].get("is_test") is True and s["later"]["blob"]["project_name"] == "B" and s["later"]["slot"] is None, s["later"]
+    assert s["emptyThenContent"]["blob"].get("is_test") is True and s["emptyThenContent"]["starts"] == {}, s["emptyThenContent"]
+    assert s["says"]["blob"].get("is_test") is False and s["says"]["starts"] == {}, s["says"]
+    assert "is_test" not in s["other"]["blob"] and s["other"]["starts"] == {"someone-else": "1"}, s["other"]
+    assert "is_test" not in s["legacyBare"]["blob"] and s["legacyBare"]["bare"] == "1", s["legacyBare"]
+    assert "is_test" not in s["legacyBound"]["blob"] and s["legacyBound"]["bare"] == s["legacyBound"]["id"] + ":1", s["legacyBound"]
+    assert s["later"]["blob"].get("is_test") is True and s["later"]["blob"]["project_name"] == "B" and s["later"]["starts"] == {}, s["later"]
+
+
+def test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that(ran):
+    """The other source of a start: a v2 page's sandbox found no row for the project, which makes it a test (TW.startsAsTest).
+    Held in this page's memory, it is said by the first write that holds anything, over the Active tab's start (whatever a v2
+    page writes is a test) and never over a word the blob already holds; a write with nothing in it does not spend it; a word
+    for ANOTHER project is not said here; and once it is said it is spent."""
+    s = ran["stampRules"]
+    assert s["mark"]["blob"].get("is_test") is True and s["mark"]["starts"] == {}, s["mark"]
+    assert s["markOverReal"]["blob"].get("is_test") is True and s["markOverReal"]["starts"] == {}, s["markOverReal"]
+    assert "is_test" not in s["markEmpty"]["blob"] and set(s["markEmpty"]["blob"]) <= {"__draft_id"}, s["markEmpty"]
+    assert s["markEmptyThenContent"]["blob"].get("is_test") is True, s["markEmptyThenContent"]
+    assert s["markSaysFalse"]["blob"].get("is_test") is False, s["markSaysFalse"]
+    assert "is_test" not in s["markOther"]["blob"], s["markOther"]
+    assert s["markUsedUp"]["blob"].get("is_test") is True and s["markUsedUp"]["blob"]["project_name"] == "B", s["markUsedUp"]
+    assert "is_test" not in s["markUsedUpThenFresh"]["blob"] and s["markUsedUpThenFresh"]["blob"]["project_name"] == "C", (
+        "the word was said again after it was spent: %r" % s["markUsedUpThenFresh"])
+
+
+def test_new_project_mints_the_projects_id_with_its_own_start(ran):
+    """What "+ New project" leaves, on shared.js's own function: a position (the Test tab, the Active tab) mints the new project's
+    id as the browser's current draft and puts "1" or "0" under THAT id's key, so a second New project leaves the first one's
+    start where it was; All and Inactive say nothing (no id, no start). The one slot of an earlier version is removed by every one
+    of them."""
+    s = ran["stampRules"]
+    t, r, n = s["newTest"], s["newReal"], s["newSaidNothing"]
+    assert t["bare"] is None and r["bare"] is None and n["bare"] is None, (
+        "the earlier version's slot was left behind: %r" % [t["bare"], r["bare"], n["bare"]])
+    assert t["draftId"] and t["draftId"] != t["before"] and t["starts"] == {t["draftId"]: "1"}, t
+    assert r["draftId"] != t["draftId"] and r["starts"] == {t["draftId"]: "1", r["draftId"]: "0"}, (
+        "the second New project touched the first one's start: %r" % r["starts"])
+    assert n["draftId"] == r["draftId"] and n["starts"] == r["starts"], "All said something: %r" % n
+
+
+def test_a_blob_with_nothing_in_it_is_sent_as_it_is(ran):
+    """putDraft puts a start on a blob that has content and never on one that holds nothing but the stamp, and does not spend the
+    start on it: an untouched project must not become a row that says it is a test."""
+    e = ran["stampRules"]["emptyPut"]
+    assert e["puts"] == [None], "the start was put on a copy with nothing in it: %r" % e["puts"]
+    assert e["starts"] == {e["id"]: "1"}, "the start was spent on a copy with nothing in it: %r" % e["starts"]
 
 
 def test_every_other_door_out_of_the_intake_leaves_one_row_born_filed(ran):
@@ -360,12 +425,12 @@ def test_every_other_door_out_of_the_intake_leaves_one_row_born_filed(ran):
     they did not (Back, a closed tab) the project is reopened a minute later in the v2 intake and is filed, directly
     editable and still the only row, whether the first leg left a row (a keepalive PUT) or none (a plain one dropped).
 
-    Not vacuous: both legs occur in the matrix (a closed tab that left a row, and one that left none), and so do all
-    four doors at all seven times."""
+    Not vacuous: all four doors at all seven times, and every one of them that did not go to the estimate page leaves a row, the
+    first PUT included at 100 ms (inside the intake's own 600 ms debounce, where round 2 left none: F5)."""
     exits = ran["exits"]
     assert len(exits) == 28 and {(e["door"], e["waitMs"]) for e in exits} == {
         (d, w) for d in ("link", "back", "close", "reload") for w in (100, 600, 700, 1500, 3000, 3100, 3200)}
-    left_a_row, left_none = 0, 0
+    left_a_row = 0
     for r in exits:
         flow = "%s at %d ms" % (r["door"], r["waitMs"])
         assert_born_filed(r, flow)
@@ -375,16 +440,14 @@ def test_every_other_door_out_of_the_intake_leaves_one_row_born_filed(ran):
                 "%s: %s" % (flow, describe(r)))
             continue
         before = r["before"]
-        if before["x"] is None:
-            left_none += 1
-        else:
-            left_a_row += 1
-            assert before["x"]["bornIsTest"] is True and before["x"]["is_test"] is True, (
-                "%s: the row the closed tab left behind was unfiled: %r" % (flow, before["x"]))
+        assert before["x"] is not None, "%s: the page left and no row was saved: %r" % (flow, before)
+        left_a_row += 1
+        assert before["x"]["bornIsTest"] is True and before["x"]["is_test"] is True, (
+            "%s: the row the closed tab left behind was unfiled: %r" % (flow, before["x"]))
         assert before["beta"] is None
         assert r["intakeDraft"] == r["id"] and DIRECT in r["intakeNote"] and COPY not in r["intakeNote"], (
             "%s: the reopened project is not edited directly: %r %r" % (flow, r["intakeDraft"], r["intakeNote"]))
-    assert left_a_row >= 12 and left_none >= 2, (left_a_row, left_none)
+    assert left_a_row == 21, left_a_row
 
 
 def test_the_next_new_estimate_does_not_leave_the_first_one_behind(ran):
@@ -683,19 +746,22 @@ REAL_PROJECT = "proj-9"
 
 def test_a_real_bid_saved_in_the_live_intake_is_never_flagged(ran):
     """A real spreadsheet bid opened in the live intake from the Projects page (the real shared.js hydrates it, the real
-    index.js saves it), its address changed and Continue pressed, with something else in the one localStorage slot: nothing at
-    all; ANOTHER project's start (which is neither applied to this one nor used up); and the bare "1" that a "+ New project" on
-    the Test tab leaves behind when it is abandoned (which arriving at an existing project drops). The bid is saved, as itself:
-    no is_test in what was sent, none on the row, no filing request, and the one row there is."""
-    for name, slot in (("clean", None), ("anotherStart", "other-1:1"), ("abandonedNew", None)):
+    index.js saves it), its address changed and Continue pressed, with something else in this browser: nothing at all;
+    ANOTHER project's start (which is neither applied to this one nor used up); and the start of a "+ New project" pressed on the
+    Test tab and abandoned for this bid (the real click, then the bid opened from the new project's page: its start is under
+    ITS key, which this bid can never read). The bid is saved, as itself: no is_test in what was sent, none on the row, no
+    filing request, and the one row there is."""
+    for name in ("clean", "anotherStart", "abandonedNew"):
         r = ran["v1Real"][name]
+        starts = {"clean": {}, "anotherStart": {"other-1": "1"}, "abandonedNew": {r["abandoned"]: "1"}}[name]
         assert r["x"] == {"is_test": None, "bornIsTest": None, "flips": 0, "beta_sandbox_of": None,
                           "project_name": "Nearman Creek Epoxy"}, (name, r["x"])
         assert r["address"] == "9 New Address" and r["draftOnIntake"] == "sheet-3", "%s: the bid was not saved as itself: %r" % (name, r["address"])
         puts = reqs(r, "PUT", "sheet-3")
         assert puts and [p["sentIsTest"] for p in puts] == [None] * len(puts), "%s: a save said is_test: %r" % (name, puts)
         assert reqs(r, "TEST") == [] and r["rowIds"] == ["sheet-3"], (name, r["rowIds"])
-        assert r["intent"] == slot and r["intentBeforeContinue"] == slot, "%s: the slot is %r, expected %r" % (name, r["intent"], slot)
+        assert r["starts"] == starts and r["startsBeforeContinue"] == starts, (
+            "%s: the starts this browser holds are %r, expected %r" % (name, r["starts"], starts))
 
 
 def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
@@ -712,12 +778,12 @@ def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
     assert (r["estimate"] or {}).get("draftId") == "real-1-beta"
 
 
-# (run, what the real row's is_test is, what is left pending in storage)
+# (run, what the real row's is_test is, the starts this browser still holds at the end)
 REAL_CASES = [
-    ("realProject", None, None),
-    ("anotherProjects", None, "other-1:1"),
-    ("saidReal", False, REAL_PROJECT + ":1"),
-    ("filingAsReal", None, REAL_PROJECT + ":0"),
+    ("realProject", None, {}),
+    ("anotherProjects", None, {"other-1": "1"}),
+    ("saidReal", False, {REAL_PROJECT: "1"}),
+    ("filingAsReal", None, {REAL_PROJECT: "0"}),
 ]
 
 
@@ -727,7 +793,7 @@ def test_a_real_project_is_copied_never_filed_and_never_written_to(ran):
       realProject      nothing pending at all
       anotherProjects  ANOTHER project's start is pending: it is neither used nor lost
       saidReal         a human filed this one as a real bid (is_test false) and a start for it is still pending
-      filingAsReal     the pending start says "real" ("<id>:0", the Active tab's New project), not "test"
+      filingAsReal     the pending start says "real" ("0", the Active tab's New project), not "test"
     In every one the real row is read and nothing else: no save, no filing, and its is_test is what it was."""
     for scenario, is_test, pending in REAL_CASES:
         r = ran[scenario]
@@ -741,7 +807,7 @@ def test_a_real_project_is_copied_never_filed_and_never_written_to(ran):
         est = r["estimate"] or {}
         assert est.get("draftId") == REAL_PROJECT + "-beta" and COPY in says(r) and DIRECT not in says(r), (
             "%s: %s" % (scenario, describe(r)))
-        assert r["intent"] == pending, "%s: the pending start was used up or changed: %r, was %r" % (scenario, r["intent"], pending)
+        assert r["starts"] == pending, "%s: the pending start was used up or changed: %r, was %r" % (scenario, r["starts"], pending)
 
 
 def test_a_copy_is_edited_directly_and_nothing_is_filed_for_it(ran):
@@ -752,7 +818,7 @@ def test_a_copy_is_edited_directly_and_nothing_is_filed_for_it(ran):
                       "project_name": "Wichita Warehouse (beta test)"}, r["x"]
     assert [q for q in reqs(r, id_=REAL_PROJECT) if q["method"] != "GET"] == [], "something was sent for a copy"
     assert (r["estimate"] or {}).get("draftId") == REAL_PROJECT and DIRECT in says(r), describe(r)
-    assert r["intent"] == REAL_PROJECT + ":1"
+    assert r["starts"] == {REAL_PROJECT: "1"}
 
 
 def test_no_flow_reloads_the_page_in_a_loop(ran):
@@ -772,18 +838,19 @@ def _sandbox_code():
     return (FRONTEND / "js" / "polish-sandbox.js").read_text(encoding="utf-8")
 
 
-def test_the_two_places_that_name_the_pending_start_agree():
-    """shared.js owns the pending start and the sandbox's markNewProjectAsTest writes it. Two spellings of one key: if they
-    drift apart the start is written where nothing reads it, and a new test project is quietly created unfiled (the runs above
-    would still be red, but for a reason nobody could see in the diff)."""
+def test_the_model_spells_the_start_key_the_way_shared_js_does():
+    """shared.js is the only file that names a project's start (the sandbox used to write one too, and no longer does: a v2 page
+    says it to shared.js's memory). The model reads the starts under the same key, so a rename in one place is a red test here and
+    not a start that is written where nothing reads it."""
     shared = (FRONTEND / "shared.js").read_text(encoding="utf-8")
-    sandbox = _sandbox_code()
+    world = (TESTS / "js" / "_world.js").read_text(encoding="utf-8")
     keys = {
         "shared.js NEW_IS_TEST_KEY": re.search(r'const NEW_IS_TEST_KEY = "([^"]+)";', shared).group(1),
-        "markNewProjectAsTest": re.search(r'function markNewProjectAsTest\(id\) \{\s*try \{ localStorage\.setItem\("([^"]+)", id \+ ":1"\)',
-                                          sandbox).group(1),
+        "_world.js KEYS.intent": re.search(r'intent: "([^"]+)",', world).group(1),
     }
     assert len(set(keys.values())) == 1 and INTENT_KEY in keys.values(), keys
+    assert 'function startKey(id) { return NEW_IS_TEST_KEY + ":" + id; }' in shared, "a project's start is no longer under its own key"
+    assert "markNewProjectAsTest" not in _sandbox_code(), "the sandbox writes a start of its own again"
 
 
 # ══ ROUND 3: a project's start is its own, and a look at a page starts nothing ══════════════════════════
@@ -810,7 +877,7 @@ def test_a_look_at_a_v2_page_starts_nothing_and_changes_nothing(ran):
         tab = r["tab"]
         saw = r["looked"]
         assert saw["kind"] == r["door"] and saw["draft"] == r["id"], "%s: the look is not on the project: %r" % (name, saw)
-        assert saw["report"]["settled"] is True and "Nothing has been priced here yet" in saw["report"]["note"], (
+        assert saw["report"]["crashed"] is None and "Nothing has been priced here yet" in saw["report"]["note"], (
             "%s: the v2 page did not open on a project nobody has saved: %r" % (name, saw["report"]))
         assert r["afterLook"]["rows"] == [], "%s: a look at a v2 page wrote a row: %r" % (name, r["afterLook"]["rows"])
         x = r["x"]
@@ -842,6 +909,37 @@ def test_a_project_typed_into_on_a_v2_page_is_a_test_project_whichever_tab_start
     assert r["starts"] == {}, r["starts"]
 
 
+def test_a_real_bid_that_wrote_something_is_copied_by_v2_and_never_edited_or_filed(ran):
+    """A real bid started on the Active tab that has WRITTEN something on the live intake (a condition flipped), and is then opened on a
+    v2 page. Its first save, sent as the live intake was left, has landed by then (the default timing): the v2 page finds a real
+    project and does what it does with every real project, copies it. The real row is born a real bid and is only ever read by the
+    v2 page; the copy is filed as a test."""
+    r = ran["writtenThenLook"]["saved"]
+    assert r["blobAfterWrite"].get("is_test") is False, r["blobAfterWrite"]
+    assert r["x"] == {"is_test": False, "bornIsTest": False, "flips": 0, "beta_sandbox_of": None, "project_name": None}, r["x"]
+    assert [q for q in reqs(r, "PUT", r["id"]) if not q["page"].startswith("v1intake")] == [], "the v2 page wrote to the real bid"
+    assert r["beta"] is not None and r["beta"]["is_test"] is True and r["beta"]["beta_sandbox_of"] == r["id"], r["beta"]
+    assert r["look"]["draftId"] == r["id"] + "-beta" and COPY in r["look"]["note"], r["look"]
+
+
+def test_a_real_bid_the_server_has_not_got_yet_stops_the_v2_page_and_is_never_made_a_test(ran):
+    """The same, with the first save still on its way when the v2 page asks (a slow server, or one that refused it): the v2 page finds
+    no row, and the project's own blob already says it is a real bid. It used to treat it as a project nobody has saved and save it as
+    a test, which files a real bid under Test. It must not do that, and it must not let the estimator edit it either (its note would
+    say "saved as a NEW test project" over a real bid): it stops, says why, and writes nothing. The save that was on its way lands, and
+    the project is the real bid it was started as, with no test copy and nothing the v2 page wrote."""
+    for name in ("notSavedYet", "notSavedYetEstimate"):
+        r = ran["writtenThenLook"][name]
+        assert r["x"] == {"is_test": False, "bornIsTest": False, "flips": 0, "beta_sandbox_of": None, "project_name": None}, (name, r["x"])
+        assert r["rowIds"] == [r["id"]], "%s: a test copy or another row appeared: %r" % (name, r["rowIds"])
+        assert [q for q in reqs(r, "PUT", r["id"]) if not q["page"].startswith("v1intake")] == [], "%s: the v2 page wrote to the real bid" % name
+        look = r["look"]
+        assert look["draftId"] == r["id"], (name, look)
+        text = " ".join(look["loading"].split())
+        assert "Estimating Tool v2 stopped" in text and "real bid" in text and "has not reached the server yet" in text, (name, look["loading"])
+        assert look["settled"] is not True, "%s: the page carried on" % name
+
+
 def test_a_gc_boards_active_start_is_not_filed_as_a_test_by_a_look_at_v2(ran):
     """F1's other door. A GC board's "+ New proposal" starts the bid with { audience: "GC" } already in the draft, so on the v2
     intake the sandbox sees a project WITH content and no row, which it saves at once, as a test. From the Active tab that is a
@@ -864,7 +962,8 @@ def test_an_abandoned_board_start_is_flushed_born_as_its_tab_said(ran):
     row is born a test from the Test tab and a real bid from the Active tab, where round 2 created it unfiled on the board. The
     Direct board leaves nothing to flush. The other project's page boots and it is only read."""
     ab = ran["abandonedBoardStart"]
-    assert sorted(ab) == ["direct/active", "direct/test", "gc/active", "gc/test", "gc/test, its save refused"], sorted(ab)
+    assert sorted(ab) == ["direct/active", "direct/test", "gc/active", "gc/test", "gc/test, its blob says real",
+                          "gc/test, its save refused"], sorted(ab)
     for name, want in (("gc/test", True), ("gc/active", False)):
         r = ab[name]
         assert r["blobAtArrival"] == {"audience": "GC", "__draft_id": r["id"]}, "%s: %r" % (name, r["blobAtArrival"])
@@ -879,6 +978,16 @@ def test_an_abandoned_board_start_is_flushed_born_as_its_tab_said(ran):
         assert r["lastKind"] == "v1intake" and r["lastDraft"] == ELSEWHERE, "%s: the other project's page did not boot" % name
         assert [q for q in reqs(r, id_=ELSEWHERE) if q["method"] != "GET"] == [], "%s: the other project was written to" % name
         assert r["other"]["is_test"] is None and r["other"]["bornIsTest"] is None, "%s: %r" % (name, r["other"])
+
+
+def test_a_copy_that_already_says_is_test_is_sent_as_it_is(ran):
+    """The start is a default, never an order. The abandoned GC start (a Test-tab start, "1") is flushed from a blob that already
+    holds a word of its own (is_test false: a hydrate wrote what the server said, or a person did), and the PUT carries that
+    word, not the start's."""
+    r = ran["abandonedBoardStart"]["gc/test, its blob says real"]
+    assert r["blobAtArrival"].get("is_test") is False and r["startAtArrival"] == "1", (r["blobAtArrival"], r["startAtArrival"])
+    assert r["x"] is not None and r["x"]["bornIsTest"] is False and r["x"]["is_test"] is False, (
+        "the start overruled the blob's own word: %r" % r["x"])
 
 
 def test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save(ran):
@@ -952,26 +1061,38 @@ INTAKE = "js/polish-intake.js"
 PAGE = "polish-intake.html"
 PROJECTS = "js/projects.js"
 
-# shared.js: the stamp, its rules and the two places a start is bound
+# shared.js: the stamp and its rules, where a project's start lives, and the copy that goes to the server
 STAMP_CALL = "    if (id) sayWhatItWasStartedAs(id, merged);   // a NEW project's first write says what it was started as"
 STAMP_CONTENT = '    if (!Object.keys(blob).some((k) => k !== STAMP && k !== "is_test")) return;'
-STAMP_USE_UP = "    try { localStorage.removeItem(NEW_IS_TEST_KEY); } catch {}"
+STAMP_USE_UP = "    try { localStorage.removeItem(startKey(id)); } catch {}"
 STAMP_KEEPS_A_WORD = '    if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;'
 STAMP_NONE_PENDING = "    if (want === null) return;"
-STAMP_THIS_ID = "      if (i < 0 || raw.slice(0, i) !== id) return null;"
+STAMP_WANT = "    const want = _startsAsTest === id ? true : startOf(id);"
+START_KEY = '  function startKey(id) { return NEW_IS_TEST_KEY + ":" + id; }'
+START_MINTS_THE_ID = "      localStorage.setItem(DRAFT_ID_KEY, id);"
+START_VALUE = '      localStorage.setItem(startKey(id), want ? "1" : "0");'
+START_SAYS_NOTHING = "      if (want === null || want === undefined) return;"
+START_LEGACY_SLOT = "      localStorage.removeItem(NEW_IS_TEST_KEY);"
+STARTS_AS_TEST = "  function startsAsTest(id) { _startsAsTest = id || null; }"
+PUT_WITH_START = "      const out = withStart(id, blob);"
+PUT_USES_UP = "        if (ok && out !== blob) { try { localStorage.removeItem(startKey(id)); } catch {} }"
+WITH_START_CONTENT = "    if (!Object.keys(blob).some((k) => k !== STAMP)) return blob;"
+WITH_START_WORD = '    if (!id || Object.prototype.hasOwnProperty.call(blob, "is_test")) return blob;'
+KEEPALIVE_GATE = "        keepalive: keepalive && keepaliveFits(body),"
+FLUSH_KEEPALIVE = "        putDraft(id, blob, !!(opts && opts.keepalive));"
 SYNCED_LINE = "        if (ok && id === getDraftId() && getState()[STAMP] === id) markSynced(id, sent);"
-BIND_AT_MINTING = "      if (minting) bindNewProjectTestIntent(getDraftId());"
-BIND_WRITES = '      if (raw === "1" || raw === "0") localStorage.setItem(NEW_IS_TEST_KEY, id + ":" + raw);'
 # the sandbox
 SANDBOX_SAYS_TEST = "      body: JSON.stringify({ data: Object.assign({}, blob, { is_test: true }) }),"
 SANDBOX_NOTE_UNSAVED = "          showUnsavedNote();"
-SANDBOX_REARMS = "          markNewProjectAsTest(id);"
+SANDBOX_MARK = "      TW.startsAsTest(id);"
+SANDBOX_REAL = "      var real = TW.startOf(id) === false;"
+SANDBOX_STOPS_REAL = "      if (state.is_test === false) {"
 SANDBOX_IF_SAVED = "        if (saved) {"
 SANDBOX_SAVES = "        try { await saveThenFileAsTest(id, state); }"
 SANDBOX_SAVE_FN = "  async function saveThenFileAsTest(id, blob) {"
 SANDBOX_EXACT_TRISTATE = "    if (row.is_test === true || row.beta_sandbox_of) {"
-MARK_LINE = '    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}'
 # the intake
+INTAKE_PAGEHIDE = "      TW.flushState({ keepalive: true });"
 LEAVING_GUARD = "    if (leaving) return;"
 SAY_SAVING = '      say("Saving…", true);'
 SAY_OPENING = '      say("Opening the estimate…", true);'
@@ -1028,18 +1149,21 @@ BREAKS = {
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), check_a_save_that_fails_once),
     "no write says what the project was started as (a stale tab)": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_stale_tab_cannot_undo_a_humans_filing),
-    "no write says what the project was started as (the live intake)": (
-        "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_project_started_from_the_test_tab_is_born_filed_through_the_live_intake),
     "no write says what the project was started as (a save that cannot be made at all)": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
     "a server that never answers: the first save says nothing": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
     "a save that fails at once: the first save says nothing": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),), test_a_save_that_fails_at_once_is_not_waited_out),
-    "a pending start written without the project's id, so nothing can find it": (
-        "world", (broken(SANDBOX, MARK_LINE,
-                         '    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", "1"); } catch (e) {}'),),
-        test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "the sandbox never says the project is a test (every flow)": (
+        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),), test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "the sandbox never says the project is a test (every other door)": (
+        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),), test_every_other_door_out_of_the_intake_leaves_one_row_born_filed),
+    "the sandbox never says the project is a test (a save that cannot be made at all)": (
+        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),),
+        test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
+    "the sandbox never says the project is a test (two tabs)": (
+        "world", (broken(SANDBOX, SANDBOX_MARK, "      void 0;"),), test_two_tabs_each_start_their_own_project_and_keep_their_own_start),
     # ── the stamp's own rules ──
     "an empty write says it and uses the start up": (
         "world", (broken(SHARED, STAMP_CONTENT, "    void 0;"),),
@@ -1047,23 +1171,87 @@ BREAKS = {
     "the start is not used up by the write that says it": (
         "world", (broken(SHARED, STAMP_USE_UP, "    void 0;"),),
         test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
-    "the start is not used up (on the wire)": (
-        "world", (broken(SHARED, STAMP_USE_UP, "    void 0;"),), test_the_first_save_says_what_the_project_was_started_as),
     "a start overrules a blob that already says is_test": (
         "world", (broken(SHARED, STAMP_KEEPS_A_WORD, "    blob.is_test = want;"),),
         test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
     "a write says something even when no start is pending": (
         "world", (broken(SHARED, STAMP_NONE_PENDING, "    if (want === undefined) return;"),),
         test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
-    "another project's start is applied to this one": (
-        "world", (broken(SHARED, STAMP_THIS_ID, "      if (i < 0) return null;"),),
-        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
-    "another project's start files a real bid saved in the live intake": (
-        "world", (broken(SHARED, STAMP_THIS_ID, "      if (i < 0) return null;"),),
-        test_a_real_bid_saved_in_the_live_intake_is_never_flagged),
-    "a real bid's write uses up another project's start": (
+    "a write for a project with no start says is_test null": (
         "world", (broken(SHARED, STAMP_NONE_PENDING, "    if (want === undefined) return;"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    # ── a project's start is its own: one key per project, minted with the project ──
+    "every project's start is under one key (another project's start is applied to this one)": (
+        "world", (broken(SHARED, START_KEY, "  function startKey(id) { return NEW_IS_TEST_KEY; }"),),
+        test_the_start_is_said_once_by_the_first_write_that_has_content_and_only_for_its_own_project),
+    "every project's start is under one key (a real bid opened after an abandoned New project)": (
+        "world", (broken(SHARED, START_KEY, "  function startKey(id) { return NEW_IS_TEST_KEY; }"),),
         test_a_real_bid_saved_in_the_live_intake_is_never_flagged),
+    "every project's start is under one key (two tabs)": (
+        "world", (broken(SHARED, START_KEY, "  function startKey(id) { return NEW_IS_TEST_KEY; }"),),
+        test_two_tabs_each_start_their_own_project_and_keep_their_own_start),
+    "New project does not leave the project's id behind (the live intake)": (
+        "world", (broken(SHARED, START_MINTS_THE_ID, "      void 0;"),),
+        test_a_project_started_from_the_test_tab_is_born_filed_through_the_live_intake),
+    "New project does not leave the project's id behind (what the Projects page hands over)": (
+        "world", (broken(SHARED, START_MINTS_THE_ID, "      void 0;"),),
+        test_the_projects_page_hands_the_live_intake_the_tab_it_started_from),
+    "New project stores the Active tab's start as a test": (
+        "world", (broken(SHARED, START_VALUE, '      localStorage.setItem(startKey(id), "1");'),),
+        test_a_project_started_from_the_active_tab_is_born_as_a_real_bid),
+    "New project from All or Inactive mints a start too": (
+        "world", (broken(SHARED, START_SAYS_NOTHING, "      if (false) return;"),), test_new_project_mints_the_projects_id_with_its_own_start),
+    "New project leaves the earlier version's slot where it was": (
+        "world", (broken(SHARED, START_LEGACY_SLOT, "      void 0;"),), test_new_project_mints_the_projects_id_with_its_own_start),
+    # ── a look starts nothing; a v2 page's own first write says test ──
+    "a write ignores this page's own word": (
+        "world", (broken(SHARED, STAMP_WANT, "    const want = startOf(id);"),),
+        test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
+    "a start the Projects page left beats this page's own word": (
+        "world", (broken(SHARED, STAMP_WANT,
+                         "    const want = startOf(id) !== null ? startOf(id) : (_startsAsTest === id ? true : null);"),),
+        test_a_project_typed_into_on_a_v2_page_is_a_test_project_whichever_tab_started_it),
+    "a start the Projects page left beats this page's own word (the stamp's own rules)": (
+        "world", (broken(SHARED, STAMP_WANT,
+                         "    const want = startOf(id) !== null ? startOf(id) : (_startsAsTest === id ? true : null);"),),
+        test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
+    "a look arms the project as a test (every look)": (
+        "world", (broken(SHARED, STARTS_AS_TEST,
+                         '  function startsAsTest(id) { _startsAsTest = id || null; try { localStorage.setItem(startKey(id), "1"); } catch {} }'),),
+        test_a_look_at_a_v2_page_starts_nothing_and_changes_nothing),
+    "a look arms the project as a test (the Active tab's real bid)": (
+        "world", (broken(SHARED, STARTS_AS_TEST,
+                         '  function startsAsTest(id) { _startsAsTest = id || null; try { localStorage.setItem(startKey(id), "1"); } catch {} }'),),
+        test_the_active_tabs_real_bid_is_not_made_a_test_by_a_look_at_v2),
+    "a look at a v2 page creates a test row for a real bid that has content": (
+        "world", (broken(SANDBOX, SANDBOX_REAL, "      var real = false;"),),
+        test_a_gc_boards_active_start_is_not_filed_as_a_test_by_a_look_at_v2),
+    "a real bid the server has not got yet is saved as a test by a look": (
+        "world", (broken(SANDBOX, SANDBOX_STOPS_REAL, "      if (false) {"),),
+        test_a_real_bid_the_server_has_not_got_yet_stops_the_v2_page_and_is_never_made_a_test),
+    # ── a copy that never went through setState carries the start, and spends it only when it is stored ──
+    "a copy that never went through setState goes without the start": (
+        "world", (broken(SHARED, PUT_WITH_START, "      const out = blob;"),), test_an_abandoned_board_start_is_flushed_born_as_its_tab_said),
+    "the start is not spent once the server has stored it": (
+        "world", (broken(SHARED, PUT_USES_UP, "        void 0;"),), test_an_abandoned_board_start_is_flushed_born_as_its_tab_said),
+    "the start is spent by a save the server refused": (
+        "world", (broken(SHARED, PUT_USES_UP,
+                         "        if (out !== blob) { try { localStorage.removeItem(startKey(id)); } catch {} }"),),
+        test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save),
+    "the start is put on a copy with nothing in it": (
+        "world", (broken(SHARED, WITH_START_CONTENT, "    void 0;"),), test_a_blob_with_nothing_in_it_is_sent_as_it_is),
+    "the start overrules a word the copy already holds": (
+        "world", (broken(SHARED, WITH_START_WORD, "    if (!id) return blob;"),), test_a_copy_that_already_says_is_test_is_sent_as_it_is),
+    # ── leaving inside the debounce ──
+    "the intake's pagehide save is not a keepalive request": (
+        "world", (broken(INTAKE, INTAKE_PAGEHIDE, "      TW.flushState();"),),
+        test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce),
+    "flushState drops the keepalive it was asked for": (
+        "world", (broken(SHARED, FLUSH_KEEPALIVE, "        putDraft(id, blob);"),),
+        test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce),
+    "a draft too big for a keepalive request is asked to go as one": (
+        "world", (broken(SHARED, KEEPALIVE_GATE, "        keepalive: keepalive,"),),
+        test_a_save_sent_as_the_page_goes_is_never_a_keepalive_request_the_browser_refuses),
     # ── the sandbox: a save that creates a project as a test, and says so honestly ──
     "the sandbox's save does not say is_test (the page that creates the project)": (
         "world", (broken(SANDBOX, SANDBOX_SAYS_TEST, "      body: JSON.stringify({ data: blob }),"),),
@@ -1073,14 +1261,11 @@ BREAKS = {
         test_a_real_project_is_copied_never_filed_and_never_written_to),
     "the sandbox never saves the project it says it saved": (
         "world", (broken(SANDBOX, SANDBOX_SAVES, "        try { void 0; }"),),
-        test_a_new_project_is_born_filed_whichever_way_it_leaves),
+        test_a_gc_tab_bid_is_saved_and_filed_as_the_intake_opens),
     "a save that failed is said to be filed": (
         "world", (broken(SANDBOX, SANDBOX_IF_SAVED, "        if (true) {"),), check_a_save_that_cannot_be_made),
     "a save that failed is not said at all": (
         "world", (broken(SANDBOX, SANDBOX_NOTE_UNSAVED, "          showDirectNote(false);"),), check_a_save_that_cannot_be_made),
-    "a save that failed does not arm the start again": (
-        "world", (broken(SANDBOX, SANDBOX_REARMS, "          void 0;"),),
-        test_a_new_project_that_could_not_be_saved_as_the_page_opened_is_still_created_filed),
     "a page's save waits for a filing that never answers": (
         "world", (broken(SANDBOX, SANDBOX_SAVE_FN, SANDBOX_SAVE_FN + " await fileAsTest(id);"),),
         test_the_next_page_boots_while_a_filing_never_answers),
@@ -1094,15 +1279,6 @@ BREAKS = {
         "world", (broken(SANDBOX, SANDBOX_EXACT_TRISTATE, "    if (row.is_test !== false || row.beta_sandbox_of) {"),),
         test_a_real_project_is_copied_and_never_written_to_or_filed),
     # ── the live intake, through the Projects page ──
-    "a new project's start is never bound to the id the live intake mints": (
-        "world", (broken(SHARED, BIND_AT_MINTING, "      void 0;"),),
-        test_a_project_started_from_the_test_tab_is_born_filed_through_the_live_intake),
-    "a new project's start is never bound (what the Projects page hands over)": (
-        "world", (broken(SHARED, BIND_AT_MINTING, "      void 0;"),),
-        test_the_projects_page_hands_the_live_intake_the_tab_it_started_from),
-    "the Active tab's start is bound as a test": (
-        "world", (broken(SHARED, BIND_WRITES, '      if (raw === "1" || raw === "0") localStorage.setItem(NEW_IS_TEST_KEY, id + ":1");'),),
-        test_a_project_started_from_the_active_tab_is_born_as_a_real_bid),
     "the Active tab says nothing": (
         "world", (broken(PROJECTS, ACTIVE_TAB, '        else if (CURRENT_FILTER === "active") TW.setNewProjectTestIntent(null);'),),
         test_a_project_started_from_the_active_tab_is_born_as_a_real_bid),
@@ -1234,7 +1410,22 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_all_and_inactive_start_a_project_that_nobody_has_said_anything_about,
                  test_the_projects_page_hands_the_live_intake_the_tab_it_started_from,
                  test_a_real_project_is_copied_never_filed_and_never_written_to,
-                 test_a_real_project_is_copied_and_never_written_to_or_filed):
+                 test_a_real_project_is_copied_and_never_written_to_or_filed,
+                 test_a_real_bid_saved_in_the_live_intake_is_never_flagged,
+                 # round 3
+                 test_a_look_at_a_v2_page_starts_nothing_and_changes_nothing,
+                 test_the_active_tabs_real_bid_is_not_made_a_test_by_a_look_at_v2,
+                 test_a_project_typed_into_on_a_v2_page_is_a_test_project_whichever_tab_started_it,
+                 test_a_gc_boards_active_start_is_not_filed_as_a_test_by_a_look_at_v2,
+                 test_an_abandoned_board_start_is_flushed_born_as_its_tab_said,
+                 test_a_copy_that_already_says_is_test_is_sent_as_it_is,
+                 test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save,
+                 test_two_tabs_each_start_their_own_project_and_keep_their_own_start,
+                 test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce,
+                 test_a_save_sent_as_the_page_goes_is_never_a_keepalive_request_the_browser_refuses,
+                 test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that,
+                 test_new_project_mints_the_projects_id_with_its_own_start,
+                 test_a_blob_with_nothing_in_it_is_sent_as_it_is):
         assert must.__name__ in named, "no break turns %s red" % must.__name__
 
 

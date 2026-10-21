@@ -429,7 +429,8 @@ function build(opts) {
     // so every existing test keeps seeing a hidden #save-note unless a test opts into the
     // foreign-blob case via opts.saveBlockedReason -- mirrors the real shared.js contract.
     // `opts.flushState` is the answer to the save, handed over by a test that wants to hold it (Continue waits for it).
-    flushState: opts.flushState ? () => { rec.flushed++; return opts.flushState(); } : () => { rec.flushed++; },
+    flushState: opts.flushState ? (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); return opts.flushState(); }
+                                : (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); },
     saveBlocked: () => (opts.saveBlockedReason || null),
   };
 
@@ -446,7 +447,6 @@ function build(opts) {
       return opts.sandboxOk !== false;
     },
     repointWizardLinks: function () { log.push("repoint"); },
-    markNewProjectAsTest: function () { log.push("markTest"); },
   };
 
   const clock = makeClock();
@@ -1175,6 +1175,7 @@ out.engineMoves = (function () {
       savedSynchronously: b.rec.saves.length,       // save() ran inline, not on the timer
       armedAfterLeaving: b.clock.armed(),            // the timer it cleared
       flushedTheNetwork: b.rec.flushed,              // TW.flushState(), forcing the PUT now
+      flushedAsKeepalive: (b.rec.flushOpts || []).map((o) => !!(o && o.keepalive)),   // and what it asked for: a request that outlives the page
     };
 
     // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.

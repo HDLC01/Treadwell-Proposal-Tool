@@ -297,6 +297,8 @@ async function runSandbox(route, state) {
     TW: {
       getState() { return state; }, getDraftId() { return "d1"; }, resolveApiBase() { return ""; },
       authHeaders() { return {}; }, clearState() {}, setState() {},
+      // What the sandbox asks shared.js on a project nobody has saved: what was it started as, and "this page creates it as a test".
+      startOf() { return null; }, startsAsTest() {},
     },
     localStorage: { setItem() {}, getItem() { return null; } },
     location: { origin: "https://app.test", href: "https://app.test/polish-intake.html?d=d1" },
@@ -338,6 +340,8 @@ async function sandboxScenarios() {
     }, {}),
     // never saved and nothing typed: the "nothing priced yet" note
     nothingPricedYet: await runSandbox(function () { return reply(404, null); }, {}),
+    // never saved, but the project's own blob says it is a real bid (something was written under the Active tab's start): stop
+    realBidNotSavedYet: await runSandbox(function () { return reply(404, null); }, { project_name: "Real job", is_test: false }),
   };
   // What a test copy is CALLED is saved data, not a label: the sandbox and the Test tab find a copy
   // by it. Run through the sandbox's own exports so a rename of words cannot reach it unseen.

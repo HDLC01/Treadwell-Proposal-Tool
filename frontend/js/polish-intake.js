@@ -796,10 +796,15 @@
     // does that synchronously; leaving through a step-nav tab, closing the tab, or switching tabs
     // did not -- and shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page
     // armed, which before the listener above was never armed by typing at all.
+    //
+    // THE SAVE IT SENDS GOES AS A KEEPALIVE REQUEST (F5 of the audit of X1, round 2). It was a plain one, which a page that is going
+    // cannot finish: leaving by a link, Back, a reload or a closed tab within 600 ms of an edit saved nothing at all (no row, the
+    // typed text only in localStorage), under a comment that said keepalive. A keepalive request outlives the page, and the row it
+    // creates is born filed. A draft too big to go that way (shared.js keepaliveFits) is sent plain, as it always was.
     window.addEventListener("pagehide", function () {
       if (!saveTimer) return;
       save();            // clears the 600ms timer, runs TW.setState synchronously
-      TW.flushState();   // fires the keepalive PUT now instead of waiting on the 2.5s debounce
+      TW.flushState({ keepalive: true });   // sends the save now instead of waiting on the 2.5s debounce
     });
   }
 

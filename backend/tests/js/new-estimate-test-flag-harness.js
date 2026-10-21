@@ -52,8 +52,9 @@
  *                       be claimed filed, and the estimate page must say it is not saved).
  *   feedback            Continue's button while it waits: disabled and relabelled, ignored on a second press, and given back
  *                       when the browser does not go.
- *   stampRules          shared.js's stamp on its own: which start it applies, to which project, on which write, and what it
- *                       leaves in the one localStorage slot (its own, another project's, an unbound one, one already said).
+ *   stampRules          shared.js's stamp on its own: which start it applies (a project's own key, or a v2 page's own word held in
+ *                       memory), to which project, on which write, what it leaves behind, what New project mints, and that a copy
+ *                       with nothing in it is sent as it is.
  *   synced              the record of what the server holds, written as the first save is stored.
  *   v1                  the Projects page's "+ New project" on each tab, through the LIVE intake's Continue.
  *   realThroughIntake, realProject, anotherProjects, saidReal, filingAsReal, aCopy, staleStart
@@ -63,6 +64,17 @@
  *   v1Real              a real spreadsheet bid opened in the LIVE intake from the Projects page and saved, with another
  *                       project's start (or the bare "1" an abandoned "+ New project" leaves) in the one slot: saved as
  *                       the real bid it is.
+ *
+ * ROUND 3 (the audit of round 2: a project's start is its own, and a look at a page starts nothing):
+ *   looks               "+ New project" on each Projects tab, a LOOK at the v2 intake and at the v2 estimate page (the sidebar's
+ *                       link), Back to the live intake, the bid typed there: born as its tab said, and nothing left by the look (F1).
+ *   activeThenTypedInV2 the look that is not a look: typed into on a v2 page, a project is a test whichever tab started it (pinned).
+ *   gcBoardThenLook     the GC board's New proposal from each tab, then a look at the v2 intake: no test row for a real bid (F1).
+ *   abandonedBoardStart a board's New proposal (the real startNewProposal), nothing typed, another project opened: the abandoned
+ *                       blob is flushed under what it was started as; with its save refused, with its own word, Direct (F2).
+ *   twoTabs             two tabs each starting a project (the v2 board, or the Projects page's Test and Active tabs), either one
+ *                       typing first: each keeps its own start (F3).
+ *   bigDraftLeftEarly   a draft too big for keepalive, left inside the debounce: no keepalive request the browser will refuse (F5).
  *
  * Usage: node new-estimate-test-flag-harness.js <frontend-dir>   ->   one line of JSON
  */
@@ -119,8 +131,9 @@ async function drive(opts) {
   o.faultsAtOpen.forEach((f) => w.fault(f));                     // a server that is already down as the intake opens
   const intake = await w.startNewEstimate({ gc: o.gc });
   const id = intake.draftId();
-  const pendingAtOpen = w.localKey("intent");
+  const startAtOpen = w.startOf(id);
   const noteAtOpen = intake.text("sandbox-note");
+  const rowAtOpen = w.row(id);
   const labelAtOpen = button(intake).label;
   o.faults.forEach((f) => w.fault(f));
   if (o.blocked) w.navigationBlocked = true;
@@ -142,7 +155,7 @@ async function drive(opts) {
   }
   await w.settle(o.settleMs);
   return { w: w, id: id, intake: intake, result: summary(w, id, {
-    continueAt: continueAt, presses: presses, samples: samples, pendingAtOpen: pendingAtOpen, noteAtOpen: noteAtOpen,
+    continueAt: continueAt, presses: presses, samples: samples, startAtOpen: startAtOpen, noteAtOpen: noteAtOpen, rowAtOpen: rowAtOpen,
     labelAtOpen: labelAtOpen, startedAt: t0, name: o.name || null }) };
 }
 
@@ -490,27 +503,86 @@ async function stampRules() {
     await w.settle();
     return { w: w, TW: page.win.TW, id: page.win.TW.getDraftId() };
   };
-  const seen = (w, id) => ({ id: id, blob: w.blob(), slot: w.localKey("intent") });
+  // `starts` is every start the browser holds, { id: "1" | "0" }: each project's own key.
+  const seen = (w, id) => ({ id: id, blob: w.blob(), starts: w.starts(), bare: w.localKey("intent"), draftId: w.localKey("draftId") });
   const out = {};
-  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, r.id + ":1"); r.TW.setState({ project_name: "A" }); out.test = seen(r.w, r.id); }
-  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, r.id + ":0"); r.TW.setState({ project_name: "A" }); out.real = seen(r.w, r.id); }
+  // a start for THIS project: said by the first write that has content, and used up by it
+  { const r = await fresh(); r.w.setStart(r.id, "1"); r.TW.setState({ project_name: "A" }); out.test = seen(r.w, r.id); }
+  { const r = await fresh(); r.w.setStart(r.id, "0"); r.TW.setState({ project_name: "A" }); out.real = seen(r.w, r.id); }
   {
     const r = await fresh();
-    r.w.local.setItem(W.KEYS.intent, r.id + ":1");
+    r.w.setStart(r.id, "1");
     r.TW.setState({});                                                  // nothing in it yet
     out.empty = seen(r.w, r.id);
     r.TW.setState({ project_name: "A" });                               // the first write that has something in it
     out.emptyThenContent = seen(r.w, r.id);
   }
-  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, r.id + ":1"); r.TW.setState({ project_name: "A", is_test: false }); out.says = seen(r.w, r.id); }
-  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, "someone-else:1"); r.TW.setState({ project_name: "A" }); out.other = seen(r.w, r.id); }
-  { const r = await fresh(); r.w.local.setItem(W.KEYS.intent, "1"); r.TW.setState({ project_name: "A" }); out.unbound = seen(r.w, r.id); }
+  { const r = await fresh(); r.w.setStart(r.id, "1"); r.TW.setState({ project_name: "A", is_test: false }); out.says = seen(r.w, r.id); }
+  // another project's start is under that project's own key: not read here, not used up here
+  { const r = await fresh(); r.w.setStart("someone-else", "1"); r.TW.setState({ project_name: "A" }); out.other = seen(r.w, r.id); }
+  // the ONE SLOT of an earlier version is read by nothing, whatever it holds
   {
     const r = await fresh();
+    r.w.local.setItem(W.KEYS.intent, "1");
+    r.TW.setState({ project_name: "A" });
+    out.legacyBare = seen(r.w, r.id);
     r.w.local.setItem(W.KEYS.intent, r.id + ":1");
+    r.TW.setState({ project_name: "B" });
+    out.legacyBound = seen(r.w, r.id);
+  }
+  {
+    const r = await fresh();
+    r.w.setStart(r.id, "1");
     r.TW.setState({ project_name: "A" });
     r.TW.setState({ project_name: "B" });                               // a later write: nothing left to say
     out.later = seen(r.w, r.id);
+  }
+  // THIS PAGE'S OWN WORD (a v2 page's sandbox found no row for the project: TW.startsAsTest), held in memory, said by the first
+  // write that has content, over the Active tab's start and never over a word the blob already holds
+  { const r = await fresh(); r.TW.startsAsTest(r.id); r.TW.setState({ project_name: "A" }); out.mark = seen(r.w, r.id); }
+  { const r = await fresh(); r.w.setStart(r.id, "0"); r.TW.startsAsTest(r.id); r.TW.setState({ project_name: "A" }); out.markOverReal = seen(r.w, r.id); }
+  {
+    const r = await fresh();
+    r.TW.startsAsTest(r.id);
+    r.TW.setState({});                                                  // nothing in it yet: the word is not spent
+    out.markEmpty = seen(r.w, r.id);
+    r.TW.setState({ project_name: "A" });
+    out.markEmptyThenContent = seen(r.w, r.id);
+  }
+  { const r = await fresh(); r.TW.startsAsTest(r.id); r.TW.setState({ project_name: "A", is_test: false }); out.markSaysFalse = seen(r.w, r.id); }
+  { const r = await fresh(); r.TW.startsAsTest("someone-else"); r.TW.setState({ project_name: "A" }); out.markOther = seen(r.w, r.id); }
+  {
+    const r = await fresh();
+    r.TW.startsAsTest(r.id);
+    r.TW.setState({ project_name: "A" });
+    r.TW.setState({ project_name: "B" });
+    out.markUsedUp = seen(r.w, r.id);
+    r.w.local.removeItem(W.KEYS.state);
+    r.TW.setState({ project_name: "C" });                               // the word was spent: a later blob of the same id is not stamped again
+    out.markUsedUpThenFresh = seen(r.w, r.id);
+  }
+  // what "+ New project" leaves: a position mints the project's id and its start; All and Inactive say nothing
+  {
+    const r = await fresh();
+    r.w.local.setItem(W.KEYS.intent, "1");                              // the earlier version's slot, still in this browser
+    const before = r.w.localKey("draftId");
+    r.TW.setNewProjectTestIntent(true);
+    out.newTest = Object.assign(seen(r.w, r.id), { before: before });
+    r.TW.setNewProjectTestIntent(false);
+    out.newReal = Object.assign(seen(r.w, r.id), { before: out.newTest.draftId });
+    r.w.local.setItem(W.KEYS.intent, "0");
+    r.TW.setNewProjectTestIntent(null);
+    out.newSaidNothing = Object.assign(seen(r.w, r.id), { before: out.newReal.draftId });
+  }
+  // a blob with nothing in it is sent as it is: putDraft does not put a start on it, and does not spend it
+  {
+    const r = await fresh();
+    r.w.setStart(r.id, "1");
+    r.TW.setState({});
+    const flushed = r.TW.flushState();
+    await r.w.settle();
+    await flushed;
+    out.emptyPut = Object.assign(seen(r.w, r.id), { puts: r.w.requestsLog().filter((q) => q.route === "PUT").map((q) => q.sentIsTest) });
   }
   return out;
 }
@@ -531,7 +603,7 @@ async function v1Start(tab, opts) {
   const w = W.createWorld({ frontend: ROOT });
   const intake = await w.pressNewProject({ tab: tab });
   const id = intake.draftId();
-  const intentOnArrival = w.localKey("intent");
+  const startOnArrival = w.startOf(id);
   intake.type("project_name", "Walk-in Job");
   intake.type("address", "5 Elm St");
   await w.advance(1500);
@@ -542,7 +614,7 @@ async function v1Start(tab, opts) {
     w.pageOf("review").follow("/blank.html");
   }
   await w.settle();
-  return summary(w, id, { tab: tab, intentOnArrival: intentOnArrival, pressedAt: pressedAt,
+  return summary(w, id, { tab: tab, startOnArrival: startOnArrival, pressedAt: pressedAt,
     nextPage: (w.pageOf("review") || {}).label || null });
 }
 
@@ -580,24 +652,35 @@ async function realThroughIntake() {
 }
 
 /** A REAL spreadsheet bid, opened in the LIVE intake from the Projects page (js/projects.js open(): "/?d=<id>&edit=1"), its address
- *  changed and Continue pressed. It has no start of its own pending, whatever else is in the one localStorage slot: another
- *  project's start, or the bare "1" that a "+ New project" on the Test tab left behind when it was abandoned. It must be saved
- *  as the real bid it is: no is_test in what is sent, none on the row, and no filing request. */
+ *  changed and Continue pressed. It has no start of its own, whatever else this browser holds: nothing at all (`clean`);
+ *  ANOTHER project's start (`anotherStart`); or the start of a "+ New project" pressed on the Test tab and abandoned for this
+ *  bid (`abandonedNew`: the REAL click, then the bid opened from the new project's own page). It must be saved as the real bid it
+ *  is: no is_test in what is sent, none on the row, and no filing request. `startsBeforeContinue` and `starts` are what the browser
+ *  holds at Continue and at the end: another project's start is neither applied to this bid nor used up by it. */
 const SHEET = "sheet-3";
-async function v1RealOpen(intent) {
+async function v1RealOpen(how) {
   const w = W.createWorld({ frontend: ROOT });
   w.seed(SHEET, { project_name: "Nearman Creek Epoxy", address: "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101",
     bid_date: "2026-09-01", work_type: "epoxy", audience: "Direct", system_1_sf: 8000 });
-  if (intent !== undefined) w.local.setItem(W.KEYS.intent, intent);
-  w.load("/?d=" + SHEET + "&edit=1");
+  let abandoned = null;
+  if (how === "anotherStart") {
+    w.setStart("other-1", "1");
+    w.load("/?d=" + SHEET + "&edit=1");
+  } else if (how === "abandonedNew") {
+    const fresh = await w.pressNewProject({ tab: "test" });
+    abandoned = fresh.draftId();
+    fresh.follow("/?d=" + SHEET + "&edit=1");
+  } else {
+    w.load("/?d=" + SHEET + "&edit=1");
+  }
   await w.settle();                                  // shared.js reads the project, adopts it and reloads the page
   const intake = w.pageOf("v1intake");
   intake.type("address", "9 New Address");
   await w.advance(100);
-  const intentBefore = w.localKey("intent");
+  const startsBefore = w.starts();
   intake.pressContinue();
   await w.settle();
-  return summary(w, SHEET, { intentBeforeContinue: intentBefore, draftOnIntake: intake.draftId(),
+  return summary(w, SHEET, { how: how, abandoned: abandoned, startsBeforeContinue: startsBefore, draftOnIntake: intake.draftId(),
     address: (w.rows.get(SHEET).data || {}).address });
 }
 
@@ -632,14 +715,14 @@ const projectData = (over) => Object.assign({
 }, over || {});
 
 async function openProject(opts) {
-  const o = Object.assign({ row: {}, intent: undefined }, opts || {});
+  const o = Object.assign({ row: {}, starts: {} }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   w.seed(PROJECT, projectData(o.row));
   w.holdLocally(PROJECT, projectData());
-  if (o.intent !== undefined) w.local.setItem(W.KEYS.intent, o.intent);
+  Object.keys(o.starts).forEach((id) => w.setStart(id, o.starts[id]));
   w.load("/polish-estimate.html?d=" + PROJECT);
   await w.settle();
-  return summary(w, PROJECT, { pendingBefore: o.intent === undefined ? null : o.intent });
+  return summary(w, PROJECT, { startsBefore: o.starts });
 }
 
 // ══ ROUND 3: the start of a project is its own, and a look at a page starts nothing ══════════════════════════
@@ -716,19 +799,39 @@ async function gcBoardThenLook(tab) {
   return summary(w, id, { tab: tab, startAtArrival: startAtArrival, afterLook: afterLook });
 }
 
+/** A real bid that has WRITTEN something (a condition flipped on the live intake: its first write, under the Active tab's start, so the
+ *  blob says is_test false) and is then looked at on a v2 page. By default the save the live intake sends as it goes has landed by
+ *  then and the v2 page finds a real project, which it copies. With a slow server (`world.proc.PUT`) the save has NOT reached the
+ *  server when the v2 page asks: it finds no row, and the blob already says it is a real bid. */
+async function writtenThenLook(opts) {
+  const o = Object.assign({ world: {}, door: "intake" }, opts || {});
+  const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
+  const v1 = await w.pressNewProject({ tab: "active" });
+  const id = v1.draftId();
+  v1.win.TW.setState({ cell_values: { "Epoxy!B4": "Yes" } });
+  const blobAfterWrite = w.blob();
+  await w.advance(300);
+  v1.follow(LOOK_DOORS[o.door]);
+  await w.settle();
+  const look = w.pages[w.pages.length - 1];
+  return summary(w, id, { blobAfterWrite: blobAfterWrite, look: Object.assign(w.pageReport(look), { kind: look.kind }) });
+}
+
 /** F2. A board's "+ New proposal" (the REAL startNewProposal of js/portal.js) opens the live intake. Nothing is typed and the
  *  estimator opens ANOTHER project from the Projects page, so shared.js flushes the abandoned blob under its own id before it
  *  takes the other project's place. That blob never went through setState (the GC board writes { audience: "GC" } into it
  *  before the page exists), so what it was started as can only travel in the PUT itself. */
 const ELSEWHERE = "sheet-7";
 async function abandonedBoardStart(pipeline, tab, opts) {
-  const o = Object.assign({ faults: [] }, opts || {});
+  const o = Object.assign({ faults: [], blobSays: undefined }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   w.seed(ELSEWHERE, { project_name: "Nearman Creek Epoxy", address: "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101",
     bid_date: "2026-09-01", work_type: "epoxy", audience: "Direct", system_1_sf: 8000 });
   const v1 = await w.pressNewProposal({ pipeline: pipeline, tab: tab });
   const id = v1.draftId();
   o.faults.forEach((f) => w.fault(Object.assign({ id: id }, f)));          // the abandoned project's own save goes wrong
+  // a blob that already holds a word of its own (a hydrate wrote what the server says), which the start must not overrule
+  if (o.blobSays !== undefined) w.local.setItem(W.KEYS.state, JSON.stringify(Object.assign({}, w.blob(), { is_test: o.blobSays })));
   const blobAtArrival = w.blob();
   const startAtArrival = w.startOf(id);
   await w.advance(3000);
@@ -827,31 +930,34 @@ process.on("exit", (code) => {
   out.synced = await synced();
   out.v1 = await v1();
   out.realThroughIntake = await realThroughIntake();
-  out.v1Real = { clean: await v1RealOpen(undefined), anotherStart: await v1RealOpen("other-1:1"), abandonedNew: await v1RealOpen("1") };
+  out.v1Real = { clean: await v1RealOpen("clean"), anotherStart: await v1RealOpen("anotherStart"), abandonedNew: await v1RealOpen("abandonedNew") };
   out.bigDraft = await bigDraft();
   out.looks = {};
   for (const tab of ["test", "active", "all"]) {
     for (const door of ["intake", "estimate"]) out.looks[tab + "/" + door] = await startThenLook(tab, door);
   }
   out.activeThenTypedInV2 = await activeThenTypedInV2();
+  out.writtenThenLook = { saved: await writtenThenLook(), notSavedYet: await writtenThenLook({ world: { proc: { PUT: 1500 } } }),
+                          notSavedYetEstimate: await writtenThenLook({ world: { proc: { PUT: 1500 } }, door: "estimate" }) };
   out.gcBoardThenLook = { test: await gcBoardThenLook("test"), active: await gcBoardThenLook("active") };
   out.abandonedBoardStart = {};
   for (const pipeline of ["gc", "direct"]) {
     for (const tab of ["test", "active"]) out.abandonedBoardStart[pipeline + "/" + tab] = await abandonedBoardStart(pipeline, tab);
   }
   out.abandonedBoardStart["gc/test, its save refused"] = await abandonedBoardStart("gc", "test", { faults: [{ route: "PUT", mode: "http500" }] });
+  out.abandonedBoardStart["gc/test, its blob says real"] = await abandonedBoardStart("gc", "test", { blobSays: false });
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
   out.realProject = await openProject({});
-  out.anotherProjects = await openProject({ intent: "other-1:1" });
-  out.saidReal = await openProject({ row: { is_test: false }, intent: PROJECT + ":1" });
-  out.filingAsReal = await openProject({ intent: PROJECT + ":0" });
+  out.anotherProjects = await openProject({ starts: { "other-1": "1" } });
+  out.saidReal = await openProject({ row: { is_test: false }, starts: { [PROJECT]: "1" } });
+  out.filingAsReal = await openProject({ starts: { [PROJECT]: "0" } });
   out.aCopy = await openProject({ row: { beta_sandbox_of: "some-real-project", project_name: "Wichita Warehouse (beta test)" },
-    intent: PROJECT + ":1" });
+    starts: { [PROJECT]: "1" } });
   // A pending start for a project that has been worked on and SENT since (the stale case): it has files, a sent proposal.
   out.staleStart = await openProject({ row: { generate_result: { files: ["a.xlsx"] }, proposal_payload: { sent: true } },
-    intent: PROJECT + ":1" });
+    starts: { [PROJECT]: "1" } });
   console.log(JSON.stringify(out));
   answered = true;
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

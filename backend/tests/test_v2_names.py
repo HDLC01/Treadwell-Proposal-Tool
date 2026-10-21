@@ -442,6 +442,9 @@ def test_the_sandbox_names_the_tool_wherever_it_stops(ran):
                          "risk editing the real bid. Reload to try again." % TOOL,
         "copyCannotBeMade": "Couldn't make the test copy, so %s stopped rather than edit the real "
                             "project itself. Reload to try again." % TOOL,
+        "realBidNotSavedYet": "%s stopped rather than edit a real bid. This project was started as one and has "
+                              "not reached the server yet, so there is nothing to copy. Open it again from "
+                              "Projects once it has saved." % TOOL,
     }
     for case, message in stops.items():
         assert s[case]["settled"] is False, "%s let the page carry on after a failed read" % case

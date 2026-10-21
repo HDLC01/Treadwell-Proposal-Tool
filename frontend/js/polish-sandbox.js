@@ -130,23 +130,6 @@
     return Object.keys(blob).filter(function (k) { return k !== "__draft_id"; }).length > 0;
   }
 
-  /** Ask shared.js to say, in this project's own blob, that it is a test: setState does it on the project's
-   *  FIRST write that has anything in it (sayWhatItWasStartedAs), so that write's save creates the row already
-   *  filed, instead of this page creating the row here to have something to file.
-   *
-   *  The sidebar door is a bare /polish-estimate.html with no ?d=, so shared.js has already minted
-   *  an id by the time enterSandbox runs, and saving unconditionally filed a nameless "Untitled"
-   *  row under Test every time somebody opened the beta to look at it, `created` event and all.
-   *  That is the same thing ae23c5d stopped the server doing ("the server stops creating projects
-   *  nobody asked for").
-   *
-   *  Bound to this id ("<id>:1", the format pendingTestIntentFor reads) rather than the bare "1"
-   *  that setNewProjectTestIntent writes: an unbound intent lands on whatever project is written
-   *  next, which is how a real customer bid would end up filed as a test. */
-  function markNewProjectAsTest(id) {
-    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}
-  }
-
   /** A draft's blob, or null when that id has never been saved.
    *
    *  READ ONLY, deliberately: no method, no body. This is the one call that touches the real
@@ -455,27 +438,48 @@
     }
 
     // Never saved: this id IS the sandbox, there is nothing to copy, and Hanz asked for
-    // everything the beta touches to land under Test. Save it so the row exists, already filed.
+    // everything the beta touches to land under Test.
     //
-    // Only when there is something to save, though. Opening the beta must not CREATE a project:
-    // see markNewProjectAsTest, which hands the filing to the first save the estimator earns.
+    // THIS PAGE'S OWN FIRST WRITE SAYS "TEST" (TW.startsAsTest), AND A LOOK SAYS NOTHING. The sidebar door is a bare
+    // /polish-estimate.html with no ?d=, so shared.js has already minted an id by the time this runs, and saving unconditionally
+    // filed a nameless "Untitled" row under Test every time somebody opened the beta to look at it, `created` event and all
+    // (the same thing ae23c5d stopped the server doing: "the server stops creating projects nobody asked for"). So a project with
+    // nothing in it is not written here, and nothing is stored for another page to find: the word lives in this page's memory
+    // and goes into the first write THIS page makes. It used to be a start written under the project's id, over whatever the
+    // Projects page had left there, so a real bid started on the Active tab was born a test after a look at a v2 page.
+    //
+    // A PROJECT WITH CONTENT (the GC tab starts the bid with { audience: "GC" } in it) is saved at once, as a test, so that its row
+    // exists. NOT when it was started as a real bid on the Active tab: a look at a v2 page must not create a test row for it, so
+    // it is treated like a project with nothing in it.
+    //
+    // A REAL BID THE SERVER HAS NOT GOT YET STOPS THE PAGE. The project's own blob says is_test false once a page has WRITTEN
+    // something into it under the Active tab's start, so a blob that says so and has no row is a real bid whose first save has not
+    // landed (a slow server, a refused save) or whose row is gone. It is not a sandbox: saving it would file a real bid as a test,
+    // and editing it here would be the beta editing a real bid under a note that says "a NEW test project". Stopping, as every
+    // other read that cannot be trusted does, writes nothing; the save on its way lands, and opening it again finds a real project
+    // to copy.
     //
     // A SAVE THAT DID NOT LAND IS SAID, NEVER CLAIMED AS A FILING: there is no row on the server to be filed. The project
-    // stays on this computer, and its start is armed again (markNewProjectAsTest), so the first write after the server is
-    // back says "test" in its own blob and creates the row filed. (This page used to say "filed as a test" over it.)
+    // stays on this computer, and this page's first write says "test" in its own blob and creates the row filed. (This page
+    // used to say "filed as a test" over it.)
     if (row === null) {
-      if (hasContent(state)) {
+      if (state.is_test === false) {
+        loadingNote("Estimating Tool v2 stopped rather than edit a real bid. This project was started as one and has not " +
+          "reached the server yet, so there is nothing to copy. Open it again from Projects once it has saved.");
+        return false;
+      }
+      var real = TW.startOf(id) === false;
+      TW.startsAsTest(id);
+      if (hasContent(state) && !real) {
         var saved = true;
         try { await saveThenFileAsTest(id, state); }
         catch (e) { saved = false; console.warn("[polish beta] could not save the new project as a test", e); }
         if (saved) {
           showDirectNote(false);
         } else {
-          markNewProjectAsTest(id);
           showUnsavedNote();
         }
       } else {
-        markNewProjectAsTest(id);
         showDirectNote(true);
       }
       return true;
@@ -524,7 +528,6 @@
 
   window.TWPolishSandbox = {
     enterSandbox: enterSandbox,
-    markNewProjectAsTest: markNewProjectAsTest,
     repointWizardLinks: repointWizardLinks,
     sandboxIdFor: sandboxIdFor,
     betaName: betaName,
