@@ -1283,6 +1283,8 @@ SANDBOX_IF_SAVED = "        if (saved) {"
 SANDBOX_SAVES = "        try { await saveThenFileAsTest(id, state); }"
 SANDBOX_SAVE_FN = "  async function saveThenFileAsTest(id, blob) {"
 SANDBOX_EXACT_TRISTATE = "    if (row.is_test === true || row.beta_sandbox_of) {"
+SANDBOX_FOREIGN_STOP = "    if (state.__draft_id && state.__draft_id !== id) {"
+SANDBOX_FOREIGN_SAVE = "    if (blob && blob.__draft_id && blob.__draft_id !== id) {"
 # the intake
 INTAKE_PAGEHIDE = "      TW.flushState({ keepalive: true });"
 LEAVING_GUARD = "    if (leaving) return;"
@@ -1579,6 +1581,13 @@ BREAKS = {
     "the page alone has no Continue button to speak through": (
         "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
         test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    # ── round 4, F5: another project's blob is never saved under this project's id ──
+    "the sandbox does not stop on a blob stamped for another project": (
+        "world", (broken(SANDBOX, SANDBOX_FOREIGN_STOP, "    if (false) {"),),
+        test_a_v2_page_whose_shared_blob_belongs_to_another_project_stops_and_saves_nothing),
+    "the sandbox's save writes another project's blob under this project's id": (
+        "world", (broken(SANDBOX, SANDBOX_FOREIGN_SAVE, "    if (false) {"),),
+        test_a_save_made_for_one_project_never_carries_another_projects_blob),
     # ── round 4, F6: the size of a save sent as the page goes is counted in bytes ──
     "a three-byte character is counted as one byte": (
         "world", (broken(SHARED, KEEPALIVE_THREE_BYTES, "      else bytes += 1;"),),
@@ -1679,6 +1688,8 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
                  test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has,
                  # round 4
+                 test_a_v2_page_whose_shared_blob_belongs_to_another_project_stops_and_saves_nothing,
+                 test_a_save_made_for_one_project_never_carries_another_projects_blob,
                  test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_goes_as_a_plain_request):
         assert must.__name__ in named, "no break turns %s red" % must.__name__
 

@@ -344,6 +344,10 @@ async function sandboxScenarios() {
     realBidNotSavedYet: await runSandbox(function () { return reply(404, null); }, { project_name: "Real job", is_test: false }),
     // the same for a project from the All tab, which says nothing of test-ness: written into, no word, no row
     unsavedProjectNoWord: await runSandbox(function () { return reply(404, null); }, { project_name: "From the All tab", address: "1 Main St" }),
+    // the browser's one copy of the draft belongs to ANOTHER project (another tab has it): stop before reading or saving anything, so a read
+    // made for this project at all is the failure (it would be answered by the first stop's words instead of these)
+    foreignBlob: await runSandbox(function () { throw new Error("a read was made while the blob belongs to another project"); },
+      { __draft_id: "d2", project_name: "Another tab's project", is_test: true }),
   };
   // What a test copy is CALLED is saved data, not a label: the sandbox and the Test tab find a copy
   // by it. Run through the sandbox's own exports so a rename of words cannot reach it unseen.

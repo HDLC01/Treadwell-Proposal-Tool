@@ -447,6 +447,9 @@ def test_the_sandbox_names_the_tool_wherever_it_stops(ran):
                               "again from Projects once it has saved." % TOOL,
     }
     stops["unsavedProjectNoWord"] = stops["realBidNotSavedYet"]
+    stops["foreignBlob"] = ("%s stopped rather than save another project's copy under this one. This browser's saved copy belongs "
+                            "to a project that is open in another tab, and that tab has the keys. Close the other tab, then reload "
+                            "this page." % TOOL)
     for case, message in stops.items():
         assert s[case]["settled"] is False, "%s let the page carry on after a failed read" % case
         assert " ".join(s[case]["loading"].split()) == message, (case, s[case]["loading"])

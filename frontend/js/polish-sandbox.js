@@ -174,6 +174,12 @@
    *  {"ok": false, "error": ...}, so a save that never happened looks like a success to anyone
    *  checking the status alone. The caller must not say the project is filed when this threw. */
   async function saveThenFileAsTest(id, blob) {
+    // NEVER ANOTHER PROJECT'S BLOB (X1, round 4, F5): a blob stamped for a different id is some other project's copy, and writing it under
+    // this id would put that project's name, address and stamp into this row. enterSandbox stops before it gets here; this is the same
+    // rule held at the one place that writes, so that no path, present or future, can send it.
+    if (blob && blob.__draft_id && blob.__draft_id !== id) {
+      throw new Error("refusing to save the copy stamped for " + blob.__draft_id + " under " + id);
+    }
     var res = await fetch(draftUrl(id), {
       method: "PUT",
       headers: TW.authHeaders(),
@@ -428,6 +434,19 @@
 
     var id = TW.getDraftId();
     if (!id) return true;                        // no project at all, nothing to protect
+
+    // A BLOB STAMPED FOR ANOTHER PROJECT IS NOT THIS PROJECT'S, AND NOTHING BELOW MAY TOUCH IT (X1, round 4, F5). The browser keeps ONE copy of
+    // the draft, and another tab can have put its own project into it while this page is on a different id: a second tab's New project wipes
+    // it, the first tab's next write refills it stamped for the first tab's project, and a page opened by its bare link resumes the second
+    // tab's id over it (shared.js's hydration guard also leaves a page on its own id over a blob it did not adopt). The never-saved branch
+    // below then saved that blob under THIS page's id, as a test: one project became a Test project holding another's name and address.
+    // So this is asked before anything is read or written, and the page stops, as for every other read it cannot trust. Nothing is saved,
+    // the other tab's project is left alone, and a reload finds the slot as the other tab left it.
+    if (state.__draft_id && state.__draft_id !== id) {
+      loadingNote("Estimating Tool v2 stopped rather than save another project's copy under this one. This browser's saved copy belongs " +
+        "to a project that is open in another tab, and that tab has the keys. Close the other tab, then reload this page.");
+      return false;
+    }
 
     var row;
     try { row = await loadRow(id); }

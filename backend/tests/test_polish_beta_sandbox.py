@@ -329,7 +329,8 @@ def test_a_project_saved_as_a_test_is_filed_by_the_save_that_creates_it():
     body = _block(PAGE, "saveThenFileAsTest")
     put = body.index('method: "PUT"')
     says_test = body.index("is_test: true")
-    thrown = body.index("throw new Error")
+    # the throw that JUDGES THE ANSWER, which is the one after the request (an earlier one refuses another project's blob: X1, round 4, F5)
+    thrown = body.index("throw new Error", put)
     assert put < says_test < thrown, "the save does not say is_test, or says it after it has been judged"
     assert "res.ok" in body
     assert "body.ok === false" in body, (
