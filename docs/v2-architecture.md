@@ -882,7 +882,8 @@ of the sheet the line is on: since round 7 each base of a Combo drives its own c
 sheets), so each guy is charged one round trip, as Kyle types it on 9 of 10 out-of-town sheets.
 A figure the estimator typed, or cleared, always wins; a switched-off row is left as it is; a bid saved before 2026-10-12
 that is on the old man-days auto keeps them while it merely opens; and a saved bid never moves on open (`followDistanceHours`
-in `js/bid-model.js`, held by `tests/test_polish_travel_hours.py`). An answer applied in a session puts every Travel Labor row
+in `js/bid-model.js`, held by `tests/test_polish_travel_hours.py`), but for a Combo saved under the one-drive law, which since round 7,
+part 4 opens with every base's drive and saves it once when that drive prices something (P4 and the pass-2 audit's A1, below). An answer applied in a session puts every Travel Labor row
 it FILLS on the crew's size, the older man-days auto row included (leaving it on the man-days charged 49.5 man-days x 6.5 x $33
 = $10,617.75 for an Epoxy job switched to Polish, where Kyle types $858).
 
@@ -985,13 +986,13 @@ answer nor typed on it: it is the estimator's say on ANOTHER sheet. So:
 - **The rule.** When a restructure makes sheets bases (`followDistance`), a base whose row is the tool's copy of what ANOTHER base's row says (`travelSay`: the same guys and hours typed or cleared,
   the same rate typed, the same switch) gives the copy back (`giveBackRepeatedCopies`; `giveBackToolCopy`: empty, at the line's own default rate, no longer an added line) and drives its own crew,
   filled from the miles on file like any base's drive nobody typed. The sheets that became bases are asked first, so of two copies the one that came with a sheet gives its back and the base the
-  job's drive was on keeps it. (Part 4, P1, refined what a copy given back keeps: the trip the estimator typed, its hours and rate, on its own crew. See below.)
+  job's drive was on keeps it. (Part 4's P1 had the copy keep the trip the estimator typed, its hours and rate; the pass-2 audit's A2 withdrew it, below.)
 - **Kept.** A copy that is the only base holding the say (a copy made the base by itself prices as its source does; the source is an option, priced apart), a copy that says something else (the
   original changed after the copy was made), and two rows the estimator typed alike, each on its own sheet (nothing was copied: Kyle's sheets often carry the same hours on both crews). A bid saved
   before the mark has no copy marked and keeps what it holds.
 - **Price.** The finding's bid was $91,063 in part 3 (the Polish section $52,746, Epoxy $38,317 with its own crew's 5 x 6.5 = $1,072.50), exactly the bid of the same pair made at once from the Polish
   base, where the Epoxy sheet was never handed a copy: $647 more than round 7 priced it, because the Epoxy crew's own drive is more than the copy it replaces, and $2,152 more than round 6, which gave
-  the Epoxy crew no drive. Part 4 (P1) prices it at $89,988, the Epoxy crew on the typed trip.
+  the Epoxy crew no drive. (Part 4's P1 priced it at $89,988, the Epoxy crew on the copied trip, by that route alone: withdrawn by the pass-2 audit's A2, below, and it is $91,063 again.)
 Held on the page by `tests/test_polish_travel_round7_part3.py` (every reopen a jsonb one, a mutation entry for each line), and over sequences by the walks' rule SAID_TWICE (what the estimator said
 once is on one base) with the `said` mode (`SAID_SEQUENCES`: the four sequences that copy a say onto a second base, after each of the five say-sos, on a far job, a 40 mile one and one with no
 distance); OWNED and PROMOTED take a copy given back as the rule. Before the fix the `said` walk reported SAID_TWICE in all 20 of its sequences and the Sheets walk with the typed say in two.
@@ -999,16 +1000,10 @@ distance); OWNED and PROMOTED take a copy given back as the rule. Before the fix
 **Round 7, part 4 (2026-10-21): the round-7 audit's remaining findings that move a price or contradict a decision, and a clip from the round-6 staging walk.** Read from Hanz's decisions of
 2026-10-21: D1, a far Combo has two drives, one per base crew (Kyle's combo-like estimates: "Epoxy trv 4x4; Polish trv 6x4", the SAME trip hours for both crews, each its own guys); D2, a Gyp base's
 drive fills from the miles; D3, after the x on a single-base job's drive a job-type switch keeps it removed; saved v2 bids may re-price (every v2 bid is a test copy); typed figures stay the estimator's.
-- **P1 (part 3's F1, refined by D1's evidence): a copy given back keeps the trip.** The tool's copy given back when its sheet becomes a base beside the one holding its say keeps the trip as it holds it:
-  the hours in its Hours box (a figure the estimator typed stays theirs, marked typed; a figure the tool wrote is the tool's, and the fill that follows writes it again) and a rate the estimator typed.
-  Its guys go on its own sheet's crew, on auto and marked as the crew's, which the settling counts (`giveBackToolCopy`). A copy whose Hours box holds no figure (a box the estimator cleared, which is
-  no trip, or one never filled) is given back empty and refilled by the rule, as part 3 gave every copy back; a rate typed on it stays. Part 3 refilled every copy from the computed round trip and
-  put a typed rate back to the line's own default. The finding's bid (far Polish 4 x 12, its drive typed 7 x 3.25, an Epoxy sheet 5 x 12 made the base, then the job Combo): the Epoxy base is its own
-  crew on the typed trip, 5 x 3.25 = $536.25, and the bid $89,988 (Polish $52,746, Epoxy $37,242), exactly the pair made at once with that trip typed into the Epoxy drive's Hours box (part 3 priced
-  it $91,063, the Epoxy crew on 6.5 hours nobody typed for it). A Sheets copy of a typed 3 x 5 made a base beside its source drives its own crew of 4 on the 5 hours: $495 + $660. Held by
-  `tests/test_polish_travel_round7_part3.py` (its `direct` oracle, and `noTrip` for the copies that are refilled) and `tests/test_polish_travel_hours.py`, and in the walks by COPY_TRIP, judged as a
-  transition after every step (a copy given back keeps the typed hours and rate, its guys are its own crew's, it is switched on and the tool's no longer); SAID_TWICE now judges only what was said of
-  one crew (the typed guys, a cleared box, the switch), since the trip is meant to be on both bases.
+- **P1 (part 3's F1, refined by D1's evidence): a copy given back kept the trip. WITHDRAWN by the pass-2 audit's A2 (below).** The tool's copy given back when its sheet became a base beside the one
+  holding its say kept the hours in its Hours box (marked typed) and a rate the estimator typed, on its own crew, reading Kyle's combo-like sheets (the same trip on both crews) as a reason to carry a
+  trip typed on one sheet to the other: the finding's Epoxy base was 5 x 3.25 = $536.25 and the bid $89,988, against an oracle that added a typing step to the pair made at once. No other route gave
+  the Epoxy crew that trip, and the copy charged it on a local job; a copy given back is refilled by the rule again, as part 3 had it, and the walks' COPY_TRIP is COPY_REFILLED.
 - **P2 (F2): a Gyp drive is a round trip for each mobilization.** Kyle's Gyp travel line multiplies the round trip by the mobilizations: Gyp (USG 1-8")!B51 is `=((B6*2)/60)*T28` (S28 on Gyp (FR)),
   its crew A51 is `=A46` and its dollars E51 `=A51*B51*C51`, the profile's `travelLabor`, which the nights take off the labor dollars (B64). A Gyp section's drive is now the rule's round trip times the
   Mobilizations typed on its Gyp card (`driveTripsOf`); a box that is blank, or holds no positive number, is one trip, since the crew comes out at least once (the sheet's blank T28 drives nobody).
@@ -1026,8 +1021,9 @@ drive fills from the miles; D3, after the x on a single-base job's drive a job-t
   more of the answers' own sequences (twenty-four now).
 - **P4 (F7): a Combo saved under the one-drive law opens with every base's drive.** Its other base (no line and no answer of its own) is given its line on open (`giveEveryBaseItsDrive`, from the
   page's `adopt`, after `migrateModel` and `withSectionOrder`), filled by the rule from the distance on file: the far Polish 4 x 12 and Epoxy 5 x 12 opens at $92,153 (Polish $52,956, Epoxy $39,197
-  with its crew's 5 x 6.5), the price of the same Combo bid since round 7, where part 1 opened it at $89,997 with the Epoxy crew's drive missing. The open writes nothing and asks no save: the next
-  save carries it, as every figure the rule re-prices is carried, and the session and a jsonb reload price the same. The carrier keeps its own crew's drive. A base whose x was pressed (S) is left as
+  with its crew's 5 x 6.5), the price of the same Combo bid since round 7, where part 1 opened it at $89,997 with the Epoxy crew's drive missing. Part 4 wrote nothing on open and left it to the
+  next save; since the pass-2 audit's A1 (below) the page saves it once when the drive it gives prices something, so the Review and the Proposal read the price the bar shows, and the line
+  given says what the job's one drive said of every crew. The session and a jsonb reload price the same. The carrier keeps its own crew's drive. A base whose x was pressed (S) is left as
   it is, a section whose labor is not a list too (reading that is `migrateModel`'s), and on a job under 70 miles, or with no distance, the line is given empty (the rule fills nothing there, and a
   later far answer fills it in the session as after a reload). Made one base, each crew keeps its own drive and the other, off, gives its fill back. The one-drive carry (`carriesOneDrive`) stays for
   a model handed to the restructure without the page's open, and is held on the model. `tests/test_v2_model_safety.py` names the drive the open gives as the third thing a save may write in a section.
@@ -1044,6 +1040,34 @@ drive fills from the miles; D3, after the x on a single-base job's drive a job-t
   575px box at 916px with the sidebar open, the Total column in view, and fits from 900px up. `tests/test_v2_review_table_fits.py` sizes the column by the real widest string, read off the Gyp page's
   Review (the twelve characters it had assumed were five short). Laid out once in Chromium on the page's own stylesheet: with the old rule the Primer rate ran 16.8px under the Total column and
   "$237.12 / roll" 4.2px past its content box; with the fix both wrap ("$16.8113" over "/ gallon") and no cell overflows.
+
+**Round 7, the pass-2 audit (2026-10-21): the open of a one-drive Combo saves what it shows and keeps a drive the estimator took away off; a copy given back is refilled by the rule.** Read from
+Hanz's decisions of 2026-10-21 (D1, one drive per base crew; saved v2 bids may re-price; typed figures stay the estimator's).
+- **A1: the open of a Combo saved under the one-drive law saves a drive it gives that prices something, and the line it gives says what the job's one drive said of every crew.** P4 re-priced the bar on open and wrote
+  nothing, so the Review and the Proposal, which read the draft's saved price (`priced_tabs`, `proposal_lump_sum`), disagreed with it until some edit saved: far Polish 4 x 12 and Epoxy 5 x 12 at
+  190 miles showed $92,153 and Continue to proposal printed the $90,422 it was saved at. The page now SAVES the open once when a drive it gave prices something (`givenDrivesPrice`, the
+  labor cost of the lines given, read once the guys are synced; `js/polish-estimate.js`: `adopt` holds the stamped model as `ordered` and keeps the answer, `drivesGiven`; `init` arms the save after
+  the sandbox has put the page on its test copy, as it does for a restructure; a page left inside the debounce writes it on its way out, `pagehide`). A line given empty (no distance, a job under 70
+  miles), switched off or cleared prices nothing, so that open writes nothing, as a plain reopen never does, and the next save writes the line: a new Combo made on a library that offers no labor
+  rows leaves its Epoxy base bare and reopens so (`tests/test_v2_intake_sf_sections.py` holds that a reopen that agrees writes nothing), and figures typed on the one drive of a job 40 miles out
+  are the carrier crew's own, not a drive the open gave. Under the one-drive law the one row was the JOB's drive, every crew's, so switching it off, or clearing its Guys or Hours box,
+  said no crew is charged a drive, and the open brought the Epoxy crew's 5 x 6.5 back on such a bid (saved at $88,312, the price with no drive, shown at $90,468). The line the open gives now says the
+  same, switched off or with the same box cleared and marked as the estimator's (`oneDriveSaid`, `noDriveSay`, `sayNoDrive`): the bid opens and reloads at $88,312, the price it holds, so nothing is
+  saved, and 300 miles typed after it charges neither crew. Figures typed on the one drive (7 guys x 3.25 hours, saved at $89,790) are the carrier crew's own; the Epoxy crew drives the rule's 5 x 6.5, as every way a base arrives
+  beside a typed drive gives it (A2), and the open saves the $91,943 it shows. The x on the one drive (the job's answer, J) gives no line, as before, and nothing is saved. A saved bid otherwise still
+  never moves on open, and PLAIN_REOPEN holds every draft a walk makes to an open that arms no save (no walk makes the one-drive shape). Held by `tests/test_polish_travel_round7_part4.py` (`legacy`:
+  the page saves the one-drive shape itself, so the draft holds the one-drive price the Proposal read; the open's save, the page left at once, and `said`: switched off, a cleared Hours box, a
+  cleared Guys box, typed figures, typed figures on a 40 mile job and the x), with a mutation entry for each line.
+- **A2: part 4's P1 is withdrawn, and a copy given back is refilled by the rule, as part 3 had it.** By the pick and then the Combo the Epoxy crew drove the copied 5 x 3.25 = $536.25 ($89,988); by
+  "Make Epoxy + Polish the base" at once, by the intake's Combo and on a new Combo it drove the rule's 5 x 6.5 = $1,072.50 ($91,063 on the Sheets panel's sheets, $91,943 on the intake's, whose Epoxy
+  section holds the intake's own areas), so the same typed figures priced $1,075 apart by the button pressed; and the copy, marked typed on a sheet nobody typed on, went on charging $536.25 when the
+  miles were corrected to 40. Each base's drive is its own answer (D1) and a figure the estimator typed is theirs on the sheet they typed it on, so the copy is given back empty, at its line's own
+  default rate, the tool's no longer and not an added line, and the distance on file refills it on its own crew (`giveBackToolCopy`): one rule for every way a base arrives beside a typed drive (the
+  copy given back; a line of its own or a fresh one, `settleArrivals`; a section the library seeds; the open's `giveEveryBaseItsDrive`). The finding's bid is $91,063 by every route, the price of the
+  natural pair made at once, which is the test's oracle again (P1's oracle added a typing step to it); a Sheets copy of a typed 3 x 5 made a base beside its source drives 4 x 6.5 = $858 again
+  ($495 + $858). Held by `tests/test_polish_travel_round7_part3.py` (`picked`, and `routes`: the four routes, then 300 and 40 miles by two of them) and `tests/test_polish_travel_hours.py`, and in the
+  walks by COPY_REFILLED (a copy given back says nothing the estimator said on the other sheet; it was COPY_TRIP) and SAID_TWICE on the whole say again, each with a mutation entry
+  (`tests/test_polish_travel_sequences_mutations.py`). With P1 in place the `said` walk reports COPY_REFILLED 8 times and SAID_TWICE 4 times at each of its three distances.
 
 A base the Sheets panel DEMOTES keeps its Travel Labor row (the fifth audit, 2026-10-20): `moveTravelLabor` gives the new carrier a copy and leaves the old carrier,
 an option now, the row it had, so the option prices its own drive from the moment of the pick and follows every later answer on its own crew. Before, the row MOVED, and the
