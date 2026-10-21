@@ -1202,6 +1202,16 @@ def test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit(
         "the big draft is not one that fits a keepalive request and not two, so this checks nothing about the shared budget: %r" % big["bytes"])
 
 
+def test_shared_js_still_sends_its_own_save_as_the_page_goes_when_the_page_says_nothing_or_its_check_throws(ran):
+    """F4's other side. shared.js stands down only when a page says its own pagehide handler will send. A page that registered nothing, and a page
+    whose check THROWS (read as "no"), are covered by shared.js's own save as they always were: one keepalive save, stored, carrying the edit."""
+    runs = ran["leavingWithoutAPageHandler"]
+    assert sorted(runs) == ["no check", "throws"], sorted(runs)
+    for name, r in sorted(runs.items()):
+        assert r["puts"] == [{"keepalive": True, "status": 200}], "%s: the save was not sent as the page went, or was sent twice: %r" % (name, r["puts"])
+        assert r["xData"]["project_name"] == "Left with " + name, "%s: the row does not hold the edit: %r" % (name, r["xData"])
+
+
 DOOR_OPENING = "Opening Estimating Tool v2…"       # the beta door once it has asked the browser to leave
 WANT_FLAG = {"test": True, "active": False, "all": None}     # what the Projects page's tab starts a project as
 
@@ -1516,6 +1526,7 @@ QUEUED_EMPTY = "    if (Object.keys(blob).some((k) => k !== STAMP)) return blob;
 QUEUED_FOREIGN = "    if (blob[STAMP] && blob[STAMP] !== id) return null;"
 PAGEHIDE_PUT = "    putDraft(id, blob, true);   // a save racing page teardown, as flushState({ keepalive: true }) is for a page that flushes its own"
 SHARED_STANDS_DOWN = "    if (pageSends) return;"
+SHARED_READS_THE_CHECK = "    try { pageSends = !!(_pageSavesOnLeave && _pageSavesOnLeave()); } catch { pageSends = false; }"
 FLUSH_PUT = "        putDraft(id, blob, !!(opts && opts.keepalive));"
 WITH_START_CONTENT = "    if (!Object.keys(blob).some((k) => k !== STAMP)) return blob;"
 WITH_START_WORD = '    if (!id || Object.prototype.hasOwnProperty.call(blob, "is_test")) return blob;'
@@ -1914,6 +1925,12 @@ BREAKS = {
     "shared.js sends its own save as the page goes although the page's will send": (
         "world", (broken(SHARED, SHARED_STANDS_DOWN, "    void 0;"),),
         test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit),
+    "shared.js stands down for a page that registered nothing": (
+        "world", (broken(SHARED, SHARED_READS_THE_CHECK, "    pageSends = true;"),),
+        test_shared_js_still_sends_its_own_save_as_the_page_goes_when_the_page_says_nothing_or_its_check_throws),
+    "shared.js does not survive a check that throws": (
+        "world", (broken(SHARED, SHARED_READS_THE_CHECK, "    pageSends = !!(_pageSavesOnLeave && _pageSavesOnLeave());"),),
+        test_shared_js_still_sends_its_own_save_as_the_page_goes_when_the_page_says_nothing_or_its_check_throws),
     "the intake does not tell shared.js its own pagehide save will send (the real pages)": (
         "world", (broken(INTAKE, INTAKE_DECLARES_LEAVE, "    void 0;"),),
         test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit),
@@ -2085,6 +2102,7 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it,
                  test_a_stale_queued_save_never_overwrites_what_another_page_saved_since,
                  test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit,
+                 test_shared_js_still_sends_its_own_save_as_the_page_goes_when_the_page_says_nothing_or_its_check_throws,
                  test_the_beta_door_waits_for_the_project_to_be_saved_before_it_opens_the_v2_intake,
                  test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back,
                  test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends,

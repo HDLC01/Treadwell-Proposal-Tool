@@ -93,6 +93,8 @@
  *                       tab has saved since (F1).
  *   twoSavesPending     the v2 intake left with both its own timer and shared.js's pending (a small draft; the first save sent slow; a ~36 KiB
  *                       draft that fits one keepalive request and not two): ONE save is sent as the page goes, carrying the newest edit (F4).
+ *   leavingWithoutAPageHandler  a page that tells shared.js nothing about its pagehide save, and one whose check throws: shared.js still
+ *                       sends its own save as the page goes (F4).
  *   betaDoor            the live intake's "Continue with Estimating Tool v2" on a new bid from each Projects tab, fast and slow server: the v2
  *                       page must find the saved project (copy a real one, edit a test one), never stop for a row that is on its way (F3).
  *   betaDoorFeedback    the door while it waits (disabled, "Saving..."), on a server that hangs, on a save that fails, and in a browser that
@@ -1244,6 +1246,21 @@ async function twoSavesPending(opts) {
 }
 const NEWEST_ADDRESS = "2 SECOND St (newest)";
 
+/** F4, the cases where shared.js must still send its own save as the page goes: a page that registered NOTHING with TW.pageSavesOnLeave, and a page
+ *  whose check THROWS. Run on a page that has shared.js and nothing else, left with a save queued. */
+async function leavingWithoutAPageHandler(mode) {
+  const w = W.createWorld({ frontend: ROOT });
+  const page = w.load("/projects.html");
+  await w.settle();
+  const TW = page.win.TW;
+  const id = TW.getDraftId();
+  if (mode === "throws") TW.pageSavesOnLeave(function () { throw new Error("the page's check threw"); });
+  TW.setState({ project_name: "Left with " + mode });             // its 2.5 s server save is queued
+  w.navigate(page, "/blank.html");
+  await w.settle();
+  return summary(w, id, { mode: mode, puts: w.requestsLog().filter((q) => q.route === "PUT" && q.id === id).map((q) => ({ keepalive: q.keepalive, status: q.status })) });
+}
+
 /** F3. The live intake's "Continue with Estimating Tool v2" (the beta door), pressed on a NEW bid started from the Projects page's `tab`. The door
  *  saves the project and opens the v2 intake on it, which asks the server whether the project has a row: a project that is not a test is
  *  COPIED (the real bid left alone), one that is a test is edited directly, and one that has been written into and has no row yet cannot be
@@ -1476,6 +1493,7 @@ process.on("exit", (code) => {
     "small, the first save slow": await twoSavesPending({ slowFirst: 400 }),
     "big": await twoSavesPending({ big: true }),
   };
+  out.leavingWithoutAPageHandler = { "no check": await leavingWithoutAPageHandler("no check"), "throws": await leavingWithoutAPageHandler("throws") };
   out.betaDoorMs = betaDoorMs();
   const SLOW_SAVE = { proc: { PUT: 1500 } };
   out.betaDoor = {};
