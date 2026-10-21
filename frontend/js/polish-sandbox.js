@@ -424,7 +424,8 @@
   /** Another page has written the project this page opened as NEW, so this page's copy of it is older than the project and shared.js has
    *  stopped it saving (TW.startsAsTest's callback, X1, round 4, F1). Said in place of the banner this page opened with ("saved as a NEW test
    *  project"), which is no longer true: leaving it up would claim a save that is not being made. Static words, no project name, so nothing
-   *  here is markup. Reloading finds the project as the other page left it, which is a project with a row. */
+   *  here is markup. Reloading reads the project as the other page left it in this browser; what that page does with it is its own
+   *  business (the sandbox asks the server about it again, as for any project it is opened on). */
   function showTakenOverNote() {
     var el = $("sandbox-note");
     if (!el) return;
@@ -434,9 +435,9 @@
     ic.innerHTML = icon("copy", 14);
     el.appendChild(ic);
     var p = document.createElement("span");
-    p.textContent = "Estimating Tool v2 stopped saving on this page: this project was saved in another tab after this page opened, " +
-      "and saving this page's older copy would overwrite it. Nothing typed here is being saved. " +
-      "Reload this page to carry on from what was saved.";
+    p.textContent = "Estimating Tool v2 stopped saving on this page: this project was changed in another tab after this page opened, " +
+      "and saving this page's older copy would overwrite that. Nothing typed here is being saved. " +
+      "Reload this page to carry on from the project as that tab left it.";
     el.appendChild(p);
     el.hidden = false;
   }
