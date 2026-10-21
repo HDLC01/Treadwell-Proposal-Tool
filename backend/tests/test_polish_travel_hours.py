@@ -698,11 +698,16 @@ def test_a_restructure_that_keeps_the_carrier_keeps_its_own_crew_and_fills_nothi
 def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_back_but_a_different_one_stays(ran):
     """A section that holds an exact repeat of the carrier's row is what the job's one drive leaves behind when it is CARRIED to a new base as a copy (the old base kept no
     other row). On a section that is OFF, a row that REPEATS the carrier's exactly (the same guys, hours and hands on them) is that leftover and is given back (emptied,
-    markers gone); one that says something else (typed 2 x 4) is the estimator's own choice and stays. ON A BASE it is that base's own drive and stays (round 7, D1:
-    every base crew drives, where until then a copy made a base beside the carrier gave a repeat back so the one drive was charged once). (Every clause of "exactly" is
-    pinned ALONE in test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect.)
+    markers gone); one that says something else (typed 2 x 4) is the estimator's own choice and stays. (Every clause of "exactly" is pinned ALONE in
+    test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect.)
 
-    Mutation: leave the repeat on its off section (BREAKS below)."""
+    ON A BASE (round 7, part 3: the round-7 audit's F1). The copy made a base beside the carrier, settled as the page settles it (followDistance), gives the repeat back too, and drives
+    its OWN crew, filled from the miles: 4 x 6.5 = $858 beside the carrier's typed 3 x 5 = $495. Round 7, part 1 pinned $495 + $495 here, "a base keeps its own drive (D1)", and that was
+    wrong: the copy's 3 x 5 is not that sheet's drive, it is the tool's copy (copySection marks it `tool_copy`) of the one figure the estimator typed once, on the carrier's sheet, so it priced
+    one typed figure on two crews. Under Hanz's D1 of 2026-10-21 a base's own drive is its crew's size x the round trip unless the estimator typed it on THAT sheet. A copy that says
+    something else (2 x 4) does not repeat the carrier's and stays.
+
+    Mutation: leave the repeat on its off section (BREAKS below); never give a copy on a base back (test_polish_travel_round7_part3.py)."""
     c = ran["copyRepeat"]
     s = c["same"]
     assert s["kinds"] == [["Polish", "base"], ["Copy1", "off"]]
@@ -710,7 +715,11 @@ def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_ba
     d = c["different"]
     assert d["root"] == TYPED_ROOT and d["copy"]["guys"] == "2" and d["copy"]["hours"] == "4" and d["copy"]["cost"] == 2 * 4 * 33 and d["drive"] == 495
     b = c["base"]
-    assert b["kinds"] == [["Polish", "base"], ["Copy1", "base"]] and b["copy"] == TYPED_ROOT and b["drive"] == 495 + 495
+    assert b["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
+    assert b["root"] == TYPED_ROOT and b["copy"] == FILLED_FOUR and b["copyMarks"]["keys"] == FILLED_KEYS and b["drive"] == 495 + 858
+    bd = c["baseDifferent"]
+    assert bd["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
+    assert bd["root"] == TYPED_ROOT and bd["copy"]["guys"] == "2" and bd["copy"]["hours"] == "4" and bd["copy"]["cost"] == 2 * 4 * 33 and bd["drive"] == 495 + 2 * 4 * 33
 
 
 def test_an_options_own_crew_counts_the_fourth_hand_of_remove_existing_joint_filler(ran):
@@ -1264,6 +1273,10 @@ MUTATIONS = {
     "a repeat on an off section is not given back": (
         REPEAT_GIVEN_BACK, "else void r;",
         lambda g: g["copyRepeat"]["same"]["copy"] != EMPTIED),
+    # round 7, part 3 (the round-7 audit's F1): the tool's copy made a base beside the row it repeats is given back and drives its own crew
+    "a copy made a base beside the row it repeats is not given back": (
+        "    var gaveBack = giveBackRepeatedCopies(model, arrived);", "    var gaveBack = [];",
+        lambda g: g["copyRepeat"]["base"]["copy"] != FILLED_FOUR or g["copyRepeat"]["base"]["drive"] != 495 + 858),
     "a repeat is given back from a section the drive was not carried from": (
         REPEATS_ON, "var repeatsOn = function (tab) { return true; };",
         lambda g: g["duplicateOff"]["notCarried"]["epoxy"]["on"] is not False),

@@ -45,6 +45,7 @@ RULES = {
     "DEMOTED_KEEPS": "a base the Sheets panel's pick demoted to an option lost the Travel Labor line it held (it keeps its own, and the new carrier takes a copy)",
     "ANSWER_HELD": "an answer said was taken back by a step that may not (the job's goes only with Add Travel Labor on a base, or a base an option became bringing the estimator's line, and then every other base that holds none says it as its own; a sheet's only with Add on that sheet)",
     "PROMOTED": "an option a job-type switch or a base pick made a base lost a line the estimator added or typed, kept a line the tool filled while the job says it has no drive, lost one the tool filled while it does not, or was given no line though nothing said it has none (the round-6 audit's F-C)",
+    "SAID_TWICE": "what the estimator said ONCE on a Travel Labor row (typed, a cleared box, switched off, a typed rate) is on TWO bases: the tool's copy of it (the job's one drive following a base pick, or a Sheets copy of the sheet) was not given back when its sheet became a base beside the one holding it, so one figure is priced on two crews' drives (round 7, part 3: the round-7 audit's F1)",
     "SESSION_AGREES": "a session that made its changes without reloading and a reload of what it saved hold other prices, other sheets or sheets in another order, other Travel Labor rows, or leave other ones after a distance answer",
     "CRASH": "the page threw",
 }

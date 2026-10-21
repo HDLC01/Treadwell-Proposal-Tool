@@ -5,7 +5,9 @@ A clean walk (parts 1 and 2) proves the rule only if the walk could have seen a 
 rule the line keeps to be reported. The first entries are the third audit's own findings put back one at a time (2026-10-20, of 7d32336): the take-back skipping the sections
 that are off, the estimator's typed / cleared / switched-off row left on the old base and the new base filled beside it. ROUND 7 (Hanz's decisions of 2026-10-21) put the walk
 under one drive per base crew (D1) and a Gyp base filled (D2), and the entries after the third audit's break those: the one-drive law put back, a Gyp base left unfilled, a
-second drive carried onto a base that holds its own, and a base that stays a base handed the old base's typed drive.
+second drive carried onto a base that holds its own, and a base that stays a base handed the old base's typed drive. ROUND 7, PART 3 (the round-7 audit's F1) holds what the
+estimator said once to one base (SAID_TWICE), and its entries break that: the tool's copy never given back, the copies the pick and a Sheets copy make never marked as the
+tool's, the estimator's own row given back in place of the copy, and a copy given back that repeats no other base's row.
 """
 import pytest
 
@@ -24,11 +26,17 @@ FILL_OWN = "    if (row) followDistanceOnRow(model, row, lines, miles, false);"
 INIT_FOLLOW = "if (restructured) B.followDistance(ROOT, carrierBefore, kindsBefore);"
 BASE_FOLLOW = "    B.followDistance(ROOT, carrierBefore, kindsBefore);"       # four spaces: init's own call has one space before the B
 SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
+GIVE_BACK = "    var gaveBack = giveBackRepeatedCopies(model, arrived);"
+MARK_PICK = "    if (keep === true) travelRowsIn(to).forEach(markToolCopy);"
+MARK_COPY = "    travelRowsIn(body).forEach(markToolCopy);"
+ONLY_COPIES = '        if (!isToolCopy(r) || say === "") return;'
+ONLY_REPEATS = "        if (!repeats) return;"
 
 # (Round 7 retired three entries with the one-drive law. "The settling does not re-derive the guys": since Hanz's D1 a base's drive is its own crew's from the start, so a restructure
 # that keeps the base moves no guys and a carried drive is refilled where it lands; the sync is held by test_polish_travel_round7.py's Combo saved under the one-drive law and by
 # test_polish_travel_hours.py. "A copy of the carrier's typed row made a base keeps pricing the drive beside it": a copy made a base keeps its OWN line now, the base it came from too,
-# and a carried copy is given back where it is carried (test_polish_travel_hours.py breaks both). ONE_DRIVE and FAR_CARRIER are DOUBLE and FAR_BASES.)
+# and a carried copy is given back where it is carried (test_polish_travel_hours.py breaks both); since round 7, part 3 a copy made a base BESIDE the base whose line it repeats gives
+# the repeat back (SAID_TWICE and the entries at the end). ONE_DRIVE and FAR_CARRIER are DOUBLE and FAR_BASES.)
 # name -> (file, old, new, mode, depth, the rules the walk must report)
 BREAKS = {
     "the take-back is only for a base (off sections keep the row the distance filled)": (
@@ -61,6 +69,17 @@ BREAKS = {
     # round 6, item C2: every reopen of a walk is the server's (jsonb keeps no key order), so a plain reopen that lists the sheets in the order their keys come back in moves the sheets
     "the sheets are listed in the order the server returns their keys (the code before the order was kept)": (
         "js/bid-model.js", SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "far", 2, {"PLAIN_REOPEN", "REOPEN_AGREES"}),
+    # round 7, part 3 (the round-7 audit's F1): what the estimator said once is on one base; the tool's copy of it is given back when its sheet becomes a base beside the one holding it
+    "the tool's copy of a say another base holds is never given back": (
+        "js/bid-model.js", GIVE_BACK, "    var gaveBack = [];", "said", 0, {"SAID_TWICE"}),
+    "the copy the pick hands the new base is not marked as the tool's": (
+        "js/bid-model.js", MARK_PICK, "    void keep;", "said", 0, {"SAID_TWICE"}),
+    "a Sheets copy of a sheet is not marked as the tool's": (
+        "js/bid-model.js", MARK_COPY, "    void body;", "said", 0, {"SAID_TWICE"}),
+    "the estimator's own row is given back as if the tool had copied it": (
+        "js/bid-model.js", ONLY_COPIES, '        if (say === "") return;', "said", 0, {"OWNED", "PROMOTED"}),
+    "a copy that repeats no other base's row is given back": (
+        "js/bid-model.js", ONLY_REPEATS, "        void repeats;", "sheetsTyped", 3, {"OWNED"}),
 }
 
 

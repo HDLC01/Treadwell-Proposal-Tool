@@ -670,18 +670,23 @@ out.optionHand = { withHand: later("ownCrewSize")(oh, oh.labor), noConditions: l
 // (x) A COPY OF THE CARRIER'S SHEET carries the row the carrier had, the estimator's typed 3 x 5 included (it is priced apart, as an option). Made a base beside the
 //     carrier it would charge the drive a second time, so a row that REPEATS the carrier's exactly is given back when its section is a base that does not carry the
 //     travel; one that says something else (typed 2 x 4) is theirs and stays.
+//     A BASE (round 7, part 3, the round-7 audit's F1): the copy made a base beside the carrier is settled as the page settles it (followDistance, told the copy was an option), and the
+//     tool's copy that repeats the carrier's typed row is given back and filled on the copy's own crew (Hanz's D1 of 2026-10-21); one that says something else stays.
 const copyTyped = (typeGuys, typeDays, kind) => {
   const m = crewed(newBid()); ask(m, 190);
   typeIn(m, "guys", "3"); typeIn(m, "days", "5");
   const made = B.copySection(m, "Polish", { state: {} });
   const n = made.model;
   if (typeGuys) { const r = travelIn(n, made.id); r.guys = typeGuys; r.days = typeDays; }
+  const before = B.sectionKinds(n);
   n.tabs[made.id].kind = kind || "off";
-  B.takeBackStrayTravel(n);
+  if (kind === "base") B.followDistance(n, B.ROOT_TAB, before);
+  else B.takeBackStrayTravel(n);
   return { id: made.id, root: factsIn(n, B.ROOT_TAB), copy: factsIn(n, made.id), copyMarks: marksIn(n, made.id), drive: drive$(n), kinds: tabsOf(n) };
 };
-// (round 7) the repeat is looked for on a section that is OFF (what the job's one drive, carried to a new base, leaves behind); a BASE beside the carrier keeps its own drive (D1).
-out.copyRepeat = { same: copyTyped(), different: copyTyped("2", "4"), base: copyTyped(null, null, "base") };
+// (round 7) the repeat is looked for on a section that is OFF (what the job's one drive, carried to a new base, leaves behind); on a BASE beside the carrier (round 7, part 3) the tool's copy
+// is given back when it repeats the carrier's row, and one that says something else is the estimator's and stays.
+out.copyRepeat = { same: copyTyped(), different: copyTyped("2", "4"), base: copyTyped(null, null, "base"), baseDifferent: copyTyped("2", "4", "base") };
 
 // 15. AN OPTION IS PRICED APART, FOR ITS OWN CREW (2026-10-20 audit): a copy of the carrier made as an option carries its own Travel Labor row,
 //     and its guys follow the option's OWN labor lines and not the base crew the job's one drive is charged for.

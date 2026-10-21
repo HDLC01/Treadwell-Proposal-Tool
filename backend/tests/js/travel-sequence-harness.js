@@ -87,6 +87,16 @@
  *                    not said no and on a sheet that has not, is given one. Judged after every such step, of every walk.
  * The steps `x:base` and `addTravel:base` press the x and Add Travel Labor on a base that does not carry the job's Hotel and Per Diem (the Combo's Epoxy sheet).
  *
+ * ROUND 7, PART 3 (2026-10-21, the round-7 audit's F1) holds what the estimator said ONCE to ONE base. The walk says it once (the variant, on the carrier's row); the tool COPIES it when a
+ * single-base job's drive follows a base pick (the new base takes a copy, the demoted base keeps its own) and when a sheet is copied, and until this round a copy that later became a base
+ * beside the base holding the original priced the one figure on two crews' drives (far Polish 4 x 12, its drive typed 7 x 3.25, Epoxy made the base, then Combo: 7 x 3.25 on the Epoxy
+ * crew too, +$1,505). DOUBLE (one priced drive per base crew) could not see it: each base prices one row. So:
+ *   SAID_TWICE       the variant is on TWO bases: a copy the tool made of it was not given back when its sheet became a base beside the one holding it (a base nobody typed on drives its own
+ *                    crew, D1, and the tool's copy of another sheet's say is not this sheet's own).
+ *   (OWNED and PROMOTED take it as the rule: a sheet that held the say only as the TOOL'S COPY (`tool_copy`, read off the draft the step started from) and is a base now beside a base that
+ *                    holds it has given the repeat back, and an option made a base whose line was such a copy is judged as a line the tool filled.)
+ * The `said` mode walks the sequences that copy it there (SAID_SEQUENCES), for each of the five variants.
+ *
  * THE SIXTH ROUND (2026-10-20, item C2) made every reopen go through the SERVER'S key order (js/_jsonb.js: the draft's jsonb column keeps no key order, so every object of a reopened blob
  * has its keys sorted by length and then by bytes), and added the one walk that had never been possible: a SESSION that does not reload. Every other walk starts each step from the draft
  * the step before saved, reopened, so a bid it is judging was always read back from the server before anything was done to it, and a Sheets action that puts a sheet into the bid
@@ -106,7 +116,7 @@
  * sequences build it with Epoxy added first, so the reload moves it.
  *
  * MODES (argv[3]): far | farplain | local | unknown | nightsTyped | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys |
- *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | answer | answerJobs | answerSheets | answers | session | audit54.
+ *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | answer | answerJobs | answerSheets | answers | session | said | audit54.
  *   answers               the twenty-two sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them, the Epoxy + Polish-copy pair, and since round 7
  *                         the sheet's answer, the job's held through a Combo, and a tool-filled line released on promotion: ANSWER_SEQUENCES),
  *                         every rule judged after every step.
@@ -132,6 +142,8 @@
  *   session               the job types, the Sheets panel's base changes, a copy of the carrier, a fresh Epoxy or Polish sheet and the Epoxy + Polish-copy pair, in ONE continuous session
  *                         (see above), judged against a reload after every prefix of every sequence.
  *   audit54               the 54 sequences the 2026-10-20 audit found pricing the drive twice at 7d32336, with their exact dollars.
+ *   said                  (round 7, part 3) the sequences that copy what the estimator said onto a second base (SAID_SEQUENCES), each said first in each of the five ways (typed, a cleared box, the row
+ *                         switched off, a typed rate), every rule judged after every step, and every Sheets action against a jsonb reload too (RELOAD_AGREES).
  * Any mode but audit54 takes a distance after an at-sign (typed@local, sheetsOff@unknown, mixed@local): the same walk on a 40 mile job or one with no distance.
  * argv[4] is the depth (the number of steps after the start).
  *
@@ -202,6 +214,8 @@ const RELOAD = MODE === "reload" || /^reload(Typed|ClearHours|ClearGuys|Off|Rate
 /** The ANSWER walks (round 6, part 2): the x and Add Travel Labor are steps, and the reload a step is judged against is a jsonb one. */
 const ANSWER = MODE === "answer" || MODE === "answerJobs" || MODE === "answerSheets" || MODE === "answers";
 const SESSION = MODE === "session";
+/** The sequences that copy what the estimator said onto a second base (round 7, part 3): SAID_SEQUENCES, each after each of the five variants. */
+const SAID = MODE === "said";
 const SHEETS = MODE === "sheets" || /^sheets(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE) || DIST || RELOAD || SESSION;      // a distance walk takes every step of the Sheets walk too
 /** The miles a distance step types: under 70 (local), 300 (farther than the 190 a new bid starts on), 190 again, and the box cleared (the lookup then finds nothing). */
 const DIST_TEXT = { local: "50", farther: "300", far: "190", cleared: "" };
@@ -243,6 +257,18 @@ const rateTyped = (r) => !!r && !blank(r.rate) && (r.rate_typed === true || (r.r
 /** A line the estimator put on the sheet (Add Travel Labor marks it `hand_added`, round 7) or said something on (typed, cleared, switched off, re-rated): what an option made a base keeps
  *  (PROMOTED). */
 const kept = (r) => owned(r) || rateTyped(r) || (!!r && r.hand_added === true);
+/** WHAT THE ESTIMATOR SAID ON A TRAVEL LABOR ROW, as one comparable string, "" when they said nothing (round 7, part 3): the guys they typed or cleared, the hours they typed or cleared, the rate
+ *  they typed and the switch they turned off. A box on auto, or holding the tool's own figure, says nothing. Written out here and not asked of the model. */
+const sayOf = (r) => {
+  if (!r) return "";
+  const guys = r.guys_typed === true || (!r.guys_auto && !blank(r.guys)) ? String(r.guys) : null;
+  const hours = r.hours_typed === true || (!blank(r.days) && !(typeof r.days === "number" && r.days === r.hours_seed)) ? String(r.days) : null;
+  const rate = rateTyped(r) ? String(Number(r.rate)) : null;
+  const off = r.enabled === false;
+  return guys === null && hours === null && rate === null && !off ? "" : JSON.stringify([guys, hours, rate, off]);
+};
+/** The TOOL'S COPY of what the estimator said on another sheet (round 7, part 3): the mark the model leaves on a row it copied (`tool_copy`), read as data. */
+const toolCopy = (r) => !!r && r.tool_copy === true;
 const fmtRow = (r) => (r ? r.guys + "x" + r.days + (r.enabled === false ? " OFF" : "") + (r.guys_typed ? " Tg" : "") + (r.hours_typed ? " Th" : "") +
   (r.guys_follow ? " crew" : "") + (r.hand_added ? " added" : "") + " =$" + cost(r) : "none");
 /** THE SECTIONS THAT DRIVE (round 7, D1), written out here and not asked of the model: every BASE section, else the first live one (the root when there is none). Each is a crew that
@@ -486,6 +512,12 @@ function judge(b, ctx) {
   if (ctx && ctx.variant && !f.entries.some((e) => travelRows(e.section).some((r) => variantHolds(ctx.variant, r)))) {
     note("OWNED", ctx.variant + " is on no sheet any more (carrier " + f.carrier + " holds " + fmtRow(travelRows(carrierEntry && carrierEntry.section)[0] || null) + ")");
   }
+  // SAID_TWICE (round 7, part 3: the round-7 audit's F1): what the estimator said ONCE is on ONE base. The walk says it once, on the carrier; a second base holding it holds the tool's copy
+  // of it (the job's one drive followed a base pick, or the sheet was copied), and that copy prices the one figure on a second crew's drive.
+  if (ctx && ctx.variant) {
+    const holders = f.entries.filter((e) => e.kind === "base" && travelRows(e.section).some((r) => variantHolds(ctx.variant, r)));
+    if (holders.length > 1) note("SAID_TWICE", ctx.variant + " is on " + holders.length + " bases: " + holders.map((e) => e.tab + " " + fmtRow(travelRows(e.section)[0])).join(", "));
+  }
   return bad;
 }
 
@@ -513,12 +545,17 @@ function judgeTransitions(b, parentSaved, got, ctx) {
   // A section that was an OPTION and is a base now (a job-type switch or a base pick made it one), with the line it held before.
   const promoted = f.drives.filter((e) => { const w = was(e.tab); return !!w && w.kind === "option"; })
     .map((e) => ({ tab: e.tab, before: travelRows(was(e.tab).section)[0] || null, after: travelRows(e.section)[0] || null }));
-  const promotedKept = promoted.some((p) => p.before && kept(p.before) && p.after);
+  /** The line `r` (from the draft before the step) was the TOOL'S COPY of a say another base holds now: the repeat that is given back (round 7, part 3; SAID_TWICE), on the sheet `tab`. */
+  const copyOfAnotherBases = (tab, r) => toolCopy(r) && sayOf(r) !== "" &&
+    f.drives.some((e) => e.tab !== tab && travelRows(e.section).some((x) => sayOf(x) === sayOf(r)));
+  const promotedKept = promoted.some((p) => p.before && kept(p.before) && !copyOfAnotherBases(p.tab, p.before) && p.after);
 
   // ── PROMOTED (the round-6 audit's F-C) ──
   promoted.forEach((p) => {
     const at = p.tab + " (an option made a base)";
-    if (p.before && kept(p.before)) {
+    // (round 7, part 3) a line that was only the tool's copy of what the estimator said on ANOTHER sheet, which another base holds, is not the estimator's line on this one: it is judged as a
+    // line the tool filled (released under the job's answer, else kept and refilled by its new role).
+    if (p.before && kept(p.before) && !copyOfAnotherBases(p.tab, p.before)) {
       if (!p.after) note("PROMOTED", at + " held the estimator's line " + fmtRow(p.before) + " and lost it");
       else if (owned(p.before) && (owned(p.after) !== true || String(p.after.guys) !== String(p.before.guys) && p.before.guys_typed === true ||
                String(p.after.days) !== String(p.before.days) && p.before.hours_typed === true || (p.before.enabled === false) !== (p.after.enabled === false))) {
@@ -565,7 +602,10 @@ function judgeTransitions(b, parentSaved, got, ctx) {
     before.filter(holds).forEach((h) => {
       if (holdersNow.indexOf(h.tab) >= 0) return;
       const carried = pDrives.length === 1 && pDrives[0] === h.tab && cDrives.length === 1 && cDrives[0] !== h.tab && holdersNow.indexOf(cDrives[0]) >= 0;
-      if (!carried) note("OWNED", h.tab + " held " + ctx.variant + " and lost it (it is on " + (holdersNow.join(", ") || "no sheet") + ")");
+      // THE TOOL'S COPY GIVEN BACK (round 7, part 3): the sheet held the say only as the tool's copy of it, it is a base now, and another base holds the say. The say is on one base (SAID_TWICE).
+      const c = now(h.tab);
+      const gaveBack = !!c && c.kind === "base" && toolCopy(travelRows(h.section)[0]) && f.entries.some((e) => e.kind === "base" && e.tab !== h.tab && holds(e));
+      if (!carried && !gaveBack) note("OWNED", h.tab + " held " + ctx.variant + " and lost it (it is on " + (holdersNow.join(", ") || "no sheet") + ")");
     });
     // A SINGLE-base job whose one base moved takes what the estimator said to the new base, unless that base brought a line of its own (an option holding one) or held one of theirs.
     if (pDrives.length === 1 && cDrives.length === 1 && pDrives[0] !== cDrives[0] && holds(was(pDrives[0])) && holdersNow.indexOf(cDrives[0]) < 0) {
@@ -902,7 +942,7 @@ async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
   if (got.dist) judgeOptions(b, got.dist).forEach(([code, detail]) => record(code, label, detail));
   if (got.step && (got.step.base !== undefined || got.step.pair) && parent && parent.saved) demotedKeeps(b, parent.saved).forEach(([code, detail]) => record(code, label, detail));
   // THE SHEETS ACTIONS ARE JUDGED ONE MORE WAY, in the `reload` mode: the session against a reload (RELOAD_AGREES).
-  if ((RELOAD || ANSWER) && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add || got.step.x || got.step.addTravel || got.step.pair)) {
+  if ((RELOAD || ANSWER || SAID) && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add || got.step.x || got.step.addTravel || got.step.pair)) {
     report.reloadJudged = (report.reloadJudged || 0) + 1;
     await judgeReload(parent.saved, got.step, distanceAnswer, label);
   }
@@ -1115,6 +1155,20 @@ const ANSWER_SEQUENCES = [
   { start: "combo", steps: [{ base: "Polish" }, { x: "carrier" }, "epoxy", "combo"] },
 ];
 
+/** WHAT THE ESTIMATOR SAID ONCE, AND THE SEQUENCES THAT COPY IT ONTO A SECOND BASE (round 7, part 3: the round-7 audit's F1). The `said` mode says it first on the carrier (each of the five
+ *  variants), then takes the steps; a string is a job type, anything else a Sheets action. Each is judged after every step by every rule above (SAID_TWICE among them), and every Sheets action
+ *  against a jsonb reload too:
+ *    F1     far Polish -> an Epoxy sheet added -> Epoxy made the base (the job's one drive follows it: the Epoxy base takes a COPY, the demoted Polish keeps its own) -> the job type Combo
+ *    F1'    the same, the pair made the base on the Sheets panel ("Make Epoxy + Polish the base")
+ *    F1''   far Epoxy -> a Polish sheet added -> that sheet made the base (it takes the copy) -> the pair made the base
+ *    copy   far Polish -> a copy of the sheet (it holds a copy of the row) -> the job type Epoxy (the job's drive goes to the Epoxy base) -> the copy and Epoxy made the pair */
+const SAID_SEQUENCES = [
+  { start: "polish", steps: [{ add: "Epoxy" }, { base: "Epoxy" }, "combo"] },
+  { start: "polish", steps: [{ add: "Epoxy" }, { base: "Epoxy" }, { base: "combined" }] },
+  { start: "epoxy", steps: [{ add: "Polish" }, { base: "Copy1" }, { base: "combined" }] },
+  { start: "polish", steps: [{ copy: true }, "epoxy", { base: "combined" }] },
+];
+
 async function newBid(start, distanceAnswer) {
   const c = START_CREW[start];
   const b = await open(DRAFTS[start](), { distance: distanceAnswer });
@@ -1182,6 +1236,45 @@ async function main() {
         parent = { shape: shape(got.b), lump: lumpOf(got.b.store.blob), saved: clone(got.b.store.blob) };
       }
       report.sequences++;
+    }
+    return;
+  }
+  if (SAID) {
+    report.sequences = 0;
+    for (const variant of VARIANTS) {
+      for (const seq of SAID_SEQUENCES) {
+        // the estimator says it once, on the carrier's row, on a reopen of the new bid (as the variant modes do)
+        const first = await newBid(seq.start, distanceAnswer);
+        const said = await reopen(first.b.store.blob, { distance: distanceAnswer });
+        said.api.go(1);
+        await settle();
+        if (!applyVariant(said, variant)) { report.skipped = (report.skipped || 0) + 1; continue; }
+        said.clock.fire();
+        const ctx = { variant: variant };
+        let label = "start:" + seq.start + "[" + variant + "]";
+        let parent = { shape: shape(said), lump: lumpOf(said.store.blob), saved: clone(said.store.blob) };
+        judge(said, ctx).forEach(([code, detail]) => record(code, label, detail));
+        report.runs++;
+        for (let i = 0; i < seq.steps.length; i++) {
+          const s = seq.steps[i];
+          const step = typeof s === "string" ? { job: s.replace("+", ""), crew: s.indexOf("+") >= 0 } : s;
+          label += " -> " + stepLabel(step);
+          let next = null;
+          try { next = await take(parent.saved, step, distanceAnswer); } catch (e) {
+            report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
+            record("CRASH", label, String((e && e.message) || e).slice(0, 200));
+            break;
+          }
+          if (!next) { report.skipped = (report.skipped || 0) + 1; (report.skippedAt = report.skippedAt || []).push(label); break; }
+          try { await judgeStep(label, next, parent, ctx, i === seq.steps.length - 1, distanceAnswer); } catch (e) {
+            report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
+            record("CRASH", label, "while judging: " + String((e && e.message) || e).slice(0, 200));
+            break;
+          }
+          parent = { shape: shape(next.b), lump: lumpOf(next.b.store.blob), saved: clone(next.b.store.blob) };
+        }
+        report.sequences++;
+      }
     }
     return;
   }
