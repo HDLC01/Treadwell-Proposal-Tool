@@ -445,27 +445,31 @@
     // filed a nameless "Untitled" row under Test every time somebody opened the beta to look at it, `created` event and all
     // (the same thing ae23c5d stopped the server doing: "the server stops creating projects nobody asked for"). So a project with
     // nothing in it is not written here, and nothing is stored for another page to find: the word lives in this page's memory
-    // and goes into the first write THIS page makes. It used to be a start written under the project's id, over whatever the
+    // and goes into the writes THIS page makes. It used to be a start written under the project's id, over whatever the
     // Projects page had left there, so a real bid started on the Active tab was born a test after a look at a v2 page.
     //
     // A PROJECT WITH CONTENT (the GC tab starts the bid with { audience: "GC" } in it) is saved at once, as a test, so that its row
     // exists. NOT when it was started as a real bid on the Active tab: a look at a v2 page must not create a test row for it, so
     // it is treated like a project with nothing in it.
     //
-    // A REAL BID THE SERVER HAS NOT GOT YET STOPS THE PAGE. The project's own blob says is_test false once a page has WRITTEN
-    // something into it under the Active tab's start, so a blob that says so and has no row is a real bid whose first save has not
-    // landed (a slow server, a refused save) or whose row is gone. It is not a sandbox: saving it would file a real bid as a test,
-    // and editing it here would be the beta editing a real bid under a note that says "a NEW test project". Stopping, as every
-    // other read that cannot be trusted does, writes nothing; the save on its way lands, and opening it again finds a real project
-    // to copy.
+    // A PROJECT THAT HAS BEEN WRITTEN INTO, IS NOT KNOWN TO BE A TEST, AND HAS NO ROW YET STOPS THE PAGE. The live intake's "Continue
+    // with Estimating Tool v2" saves as it goes and opens this page at once, so when the server is slow the row is still on its way
+    // (or its save was refused, or the row is gone) when this page asks. The blob says what was written: is_test false is the Active
+    // tab's bid, and content with no word at all is a project from the All tab; only is_test true is a test. Neither of those is a
+    // sandbox. Saving it as one would file a bid under Test (the All tab's by SEEDING the row the other page's save then creates),
+    // and editing it here would be the beta editing a bid under a note that says "a NEW test project". Stopping, as every other read
+    // that cannot be trusted does, writes nothing; the save on its way lands, and opening it again finds a project to copy. What a
+    // board's New button leaves ({ audience: "GC" }) is not written content.
     //
     // A SAVE THAT DID NOT LAND IS SAID, NEVER CLAIMED AS A FILING: there is no row on the server to be filed. The project
-    // stays on this computer, and this page's first write says "test" in its own blob and creates the row filed. (This page
+    // stays on this computer, and this page's writes say "test" in their own blob and create the row filed. (This page
     // used to say "filed as a test" over it.)
     if (row === null) {
-      if (state.is_test === false) {
-        loadingNote("Estimating Tool v2 stopped rather than edit a real bid. This project was started as one and has not " +
-          "reached the server yet, so there is nothing to copy. Open it again from Projects once it has saved.");
+      var said = state.is_test;
+      var written = Object.keys(state).some(function (k) { return k !== "__draft_id" && k !== "audience" && k !== "is_test"; });
+      if (said === false || (said !== true && written)) {
+        loadingNote("Estimating Tool v2 stopped rather than edit a project that has not been saved yet. Its first save has not " +
+          "reached the server, so there is no test copy to make. Open it again from Projects once it has saved.");
         return false;
       }
       var real = TW.startOf(id) === false;

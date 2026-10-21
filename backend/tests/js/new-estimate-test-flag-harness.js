@@ -551,15 +551,50 @@ async function stampRules() {
   }
   { const r = await fresh(); r.TW.startsAsTest(r.id); r.TW.setState({ project_name: "A", is_test: false }); out.markSaysFalse = seen(r.w, r.id); }
   { const r = await fresh(); r.TW.startsAsTest("someone-else"); r.TW.setState({ project_name: "A" }); out.markOther = seen(r.w, r.id); }
+  // A START IS SPENT WHEN THE SERVER HAS STORED A COPY THAT CARRIES IT, not when a write says it. A write only says it (the blob carries
+  // it), so a blob that another tab's New project wipes before the save went does not take the start with it: the next write says it again.
   {
     const r = await fresh();
+    r.w.setStart(r.id, "1");
+    r.TW.setState({ project_name: "A" });
+    out.stampKeepsTheStart = seen(r.w, r.id);
+    r.w.local.removeItem(W.KEYS.state);                                 // the shared blob is wiped before the queued save went
+    r.TW.setState({ project_name: "B" });
+    out.saidAgainAfterAWipe = seen(r.w, r.id);
+    const sent = r.TW.flushState();
+    await r.w.settle();
+    await sent;
+    out.spentOnceStored = Object.assign(seen(r.w, r.id), { puts: r.w.requestsLog().filter((q) => q.route === "PUT").map((q) => q.sentIsTest) });
+  }
+  {
+    const r = await fresh();
+    r.w.setStart(r.id, "0");
+    r.w.fault({ route: "PUT", mode: "http500", times: 1 });
+    r.TW.setState({ project_name: "A" });
+    const refused = r.TW.flushState();
+    await r.w.settle();
+    await refused;
+    out.refusedSpendsNothing = Object.assign(seen(r.w, r.id), { puts: r.w.requestsLog().filter((q) => q.route === "PUT").map((q) => q.sentIsTest) });
+    r.TW.setState({ project_name: "A2" });                              // the next save, which the server takes, carries it again
+    const taken = r.TW.flushState();
+    await r.w.settle();
+    await taken;
+    out.takenSpends = Object.assign(seen(r.w, r.id), { puts: r.w.requestsLog().filter((q) => q.route === "PUT").map((q) => q.sentIsTest) });
+  }
+  {
+    const r = await fresh();                                            // the page's own word, spent the same way
     r.TW.startsAsTest(r.id);
     r.TW.setState({ project_name: "A" });
-    r.TW.setState({ project_name: "B" });
-    out.markUsedUp = seen(r.w, r.id);
+    out.markKeptAfterSaying = seen(r.w, r.id);
     r.w.local.removeItem(W.KEYS.state);
-    r.TW.setState({ project_name: "C" });                               // the word was spent: a later blob of the same id is not stamped again
-    out.markUsedUpThenFresh = seen(r.w, r.id);
+    r.TW.setState({ project_name: "B" });
+    out.markSaidAgainAfterAWipe = seen(r.w, r.id);
+    const sent = r.TW.flushState();
+    await r.w.settle();
+    await sent;
+    r.w.local.removeItem(W.KEYS.state);
+    r.TW.setState({ project_name: "C" });                               // stored: the word is spent, a later blob is not stamped again
+    out.markSpentOnceStored = seen(r.w, r.id);
   }
   // what "+ New project" leaves: a position mints the project's id and its start; All and Inactive say nothing
   {
@@ -799,14 +834,14 @@ async function gcBoardThenLook(tab) {
   return summary(w, id, { tab: tab, startAtArrival: startAtArrival, afterLook: afterLook });
 }
 
-/** A real bid that has WRITTEN something (a condition flipped on the live intake: its first write, under the Active tab's start, so the
- *  blob says is_test false) and is then looked at on a v2 page. By default the save the live intake sends as it goes has landed by
- *  then and the v2 page finds a real project, which it copies. With a slow server (`world.proc.PUT`) the save has NOT reached the
- *  server when the v2 page asks: it finds no row, and the blob already says it is a real bid. */
+/** A project that has WRITTEN something (a condition flipped on the live intake: its first write, under its tab's start, so the blob says
+ *  is_test false from the Active tab, true from Test and nothing from All) and is then looked at on a v2 page. By default the save the
+ *  live intake sends as it goes has landed by then and the v2 page finds a project with a row, which it copies (a test is edited
+ *  directly). With a slow server (`world.proc.PUT`) the save has NOT reached the server when the v2 page asks: it finds no row. */
 async function writtenThenLook(opts) {
-  const o = Object.assign({ world: {}, door: "intake" }, opts || {});
+  const o = Object.assign({ world: {}, door: "intake", tab: "active" }, opts || {});
   const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
-  const v1 = await w.pressNewProject({ tab: "active" });
+  const v1 = await w.pressNewProject({ tab: o.tab });
   const id = v1.draftId();
   v1.win.TW.setState({ cell_values: { "Epoxy!B4": "Yes" } });
   const blobAfterWrite = w.blob();
@@ -870,6 +905,72 @@ async function twoTabs(how, first) {
   return { how: how, first: first, ids: ids, startsAtOpen: startsAtOpen, rows: rep.rows, rowIds: Object.keys(rep.rows),
     requests: rep.requests, console: rep.console, unmocked: rep.unmocked, runaway: rep.runaway,
     pages: rep.pages.map((p) => ({ label: p.label, settled: p.settled, crashed: p.crashed, note: p.note })) };
+}
+
+/** THE ONE SHARED BLOB (found by random walks over the model, with a latency sweep, while checking F3). The browser has one copy of the draft in
+ *  localStorage, and another tab's New project / New estimate WIPES it. The estimator's own page still has its 2.5 s save queued (its timer
+ *  holds a copy of what it wrote), and when that page goes inside the window shared.js used to re-read the shared blob, find it empty, and PUT
+ *  the empty object: it created the project's row EMPTY and UNFILED, or emptied a project that was saved. `kind`: "saved" (a saved test
+ *  project open in the v2 intake, an address changed), "new" (a new test project typed into on the v2 intake) or "v1" (a project started
+ *  on the Projects page's Active tab, Continue pressed on the live intake, whose save goes as the page goes). `startB` is the other tab's
+ *  start ("v2": the v2 board's New estimate, "projects": the Projects page's New project on the Test tab). */
+const WIPED = "wiped-1";
+async function wipedByAnotherTab(kind, startB, opts) {
+  const o = Object.assign({ bTypes: false, leave: "close" }, opts || {});
+  const w = W.createWorld({ frontend: ROOT });
+  const tabA = w.mainTab;
+  const tabB = w.openTab();
+  let pageA, id;
+  if (kind === "saved") {
+    const data = { is_test: true, project_name: "Saved Test Job", address: "100 Main St", city: "Wichita", state: "KS", zip: "67202",
+      work_type: "polish", audience: "Direct", polish_sf: 6000,
+      polish_estimate: { version: 2, conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } };
+    w.seed(WIPED, data);
+    w.holdLocally(WIPED, data);
+    pageA = w.load("/polish-intake.html?d=" + WIPED, { tab: tabA });
+    await w.settle();
+    id = WIPED;
+    pageA.type("address", "999 New Address");
+    await w.advance(700);                                  // the page's own 600 ms save has run; the 2.5 s server save is queued
+  } else if (kind === "new") {
+    pageA = await w.startNewEstimate({ tab: tabA });
+    id = pageA.draftId();
+    pageA.type("project_name", "Wiped New Job");
+    pageA.type("address", "100 Main St");
+    await w.advance(700);
+  } else {
+    pageA = await w.pressNewProject({ tab: "active", browserTab: tabA });
+    id = pageA.draftId();
+    pageA.type("project_name", "Wiped Walk-in");
+    pageA.type("address", "5 Elm St");
+    await w.advance(300);
+    pageA.pressContinue();                                 // setState and location.assign in one breath: the save goes as the page goes
+    await w.advance(20);
+  }
+  const blobBefore = w.blob();
+  let pageB;
+  if (startB === "v2") pageB = await w.startNewEstimate({ tab: tabB, hold: 100 });
+  else pageB = await w.pressNewProject({ tab: "test", browserTab: tabB, hold: 100 });
+  const blobWiped = w.blob();
+  // the other tab's estimator goes on to TYPE, so the shared blob is no longer empty: it is now ANOTHER project's, and this page's queued save
+  // must not write it under this project's id (the page's own copy is lost with it, as it has always been when another tab has the keys)
+  if (o.bTypes) {
+    pageB.type("project_name", "Tab B Typed");
+    await w.advance(700);
+  }
+  // the estimator leaves this tab inside the queued save's window: closes it, or presses Continue (a flush, not the page going)
+  if (kind !== "v1") {
+    if (o.leave === "continue") pageA.pressContinue();
+    else if (o.leave === "flush") pageA.win.TW.flushState();                // Ctrl+S, Send, the Files page's read: a flush with nothing written first
+    else pageA.follow("/blank.html");
+  }
+  await w.settle();
+  const row = w.rows.get(id);
+  const idB = tabB.page && tabB.page.draftId ? tabB.page.draftId() : null;      // the page the other tab ended on
+  const rowB = idB ? w.rows.get(idB) : null;
+  return summary(w, id, { kind: kind, startB: startB, blobBeforeKeys: Object.keys(blobBefore || {}).length, blobWipedKeys: Object.keys(blobWiped || {}).length,
+    rowData: row ? { project_name: row.data.project_name || null, address: row.data.address || null, keys: Object.keys(row.data).length } : null,
+    idB: idB, rowB: rowB ? { project_name: rowB.data.project_name || null, is_test: rowB.data.is_test === undefined ? null : rowB.data.is_test } : null });
 }
 
 /** F5 with a draft that is too big for a keepalive request: a saved TEST project of about 90 KB is edited on the v2 intake and
@@ -937,8 +1038,12 @@ process.on("exit", (code) => {
     for (const door of ["intake", "estimate"]) out.looks[tab + "/" + door] = await startThenLook(tab, door);
   }
   out.activeThenTypedInV2 = await activeThenTypedInV2();
-  out.writtenThenLook = { saved: await writtenThenLook(), notSavedYet: await writtenThenLook({ world: { proc: { PUT: 1500 } } }),
-                          notSavedYetEstimate: await writtenThenLook({ world: { proc: { PUT: 1500 } }, door: "estimate" }) };
+  const SLOW = { proc: { PUT: 1500 } };
+  out.writtenThenLook = { saved: await writtenThenLook(), notSavedYet: await writtenThenLook({ world: SLOW }),
+                          notSavedYetEstimate: await writtenThenLook({ world: SLOW, door: "estimate" }),
+                          allSaved: await writtenThenLook({ tab: "all" }), allNotSavedYet: await writtenThenLook({ tab: "all", world: SLOW }),
+                          allNotSavedYetEstimate: await writtenThenLook({ tab: "all", world: SLOW, door: "estimate" }),
+                          testNotSavedYet: await writtenThenLook({ tab: "test", world: SLOW }) };
   out.gcBoardThenLook = { test: await gcBoardThenLook("test"), active: await gcBoardThenLook("active") };
   out.abandonedBoardStart = {};
   for (const pipeline of ["gc", "direct"]) {
@@ -949,6 +1054,14 @@ process.on("exit", (code) => {
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
+  out.wiped = {};
+  for (const kind of ["saved", "new", "v1"]) {
+    for (const startB of ["v2", "projects"]) out.wiped[kind + "/" + startB] = await wipedByAnotherTab(kind, startB);
+  }
+  out.wiped["new/v2, Continue pressed after the wipe"] = await wipedByAnotherTab("new", "v2", { leave: "continue" });
+  out.wiped["new/v2, flushed after the wipe"] = await wipedByAnotherTab("new", "v2", { leave: "flush" });
+  out.wiped["new/v2, the other tab types"] = await wipedByAnotherTab("new", "v2", { bTypes: true });
+  out.wiped["saved/v2, the other tab types"] = await wipedByAnotherTab("saved", "v2", { bTypes: true });
   out.realProject = await openProject({});
   out.anotherProjects = await openProject({ starts: { "other-1": "1" } });
   out.saidReal = await openProject({ row: { is_test: false }, starts: { [PROJECT]: "1" } });

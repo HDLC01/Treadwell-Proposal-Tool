@@ -127,7 +127,7 @@ def test_the_flag_goes_into_the_blob_only_as_a_new_projects_own_first_write(shar
     assert "sayWhatItWasStartedAs" not in _body(shared, "setLocalState"), (
         "setLocalState is for facts the server holds already: it must not start saying one of its own")
     put = _body(shared, "putDraft")
-    assert "is_test" not in put, "putDraft adds is_test to the blob it sends, which re-flags a project somebody filed since"
+    assert "blob.is_test" not in put and "{ is_test" not in put, "putDraft adds is_test to the blob it sends, which re-flags a project somebody filed since"
     assert "withStart(id, blob)" in put, "putDraft does not put a start on a copy that never went through setState"
     with_start = _exact(shared, "withStart")
     assert 'hasOwnProperty.call(blob, "is_test")) return blob' in with_start, "withStart overrules a word the blob already holds"
@@ -154,7 +154,8 @@ def test_a_start_is_under_its_own_projects_key(shared):
     assert 'function startKey(id) { return NEW_IS_TEST_KEY + ":" + id; }' in shared
     assert "startKey(id)" in _exact(shared, "startOf"), "the start is read from a key that is not the project's own"
     stamp = _exact(shared, "sayWhatItWasStartedAs")
-    assert "startOf(id)" in stamp and "startKey(id)" in stamp
+    assert "startOf(id)" in stamp
+    assert "startKey(id)" in _exact(shared, "spendStart"), "the start is spent from a key that is not the project's own"
     setter = _exact(shared, "setNewProjectTestIntent")
     assert "newDraftId()" in setter and "DRAFT_ID_KEY" in setter and "startKey(id)" in setter, (
         "New project does not leave the project's id and its own start together")
@@ -177,17 +178,20 @@ def test_new_project_mints_an_id_only_for_a_position(shared):
     assert setter.index("want === null") < setter.index("newDraftId()"), "All and Inactive mint an id"
 
 
-def test_the_start_is_used_up_by_the_write_that_says_it(shared):
-    """One shot. A start left in the one localStorage slot after it has been said would wait there for a stranger (the next
-    new project overwrites the slot, a project that has moved on would be filed by it). It is emptied by the first write that
-    holds anything, before the blob is touched, and not by a write that holds nothing."""
+def test_the_start_is_said_by_a_write_that_has_content_and_spent_only_by_a_stored_save(shared):
+    """A write SAYS the start and spends nothing: it is checked for content first, and a blob that already says is_test is not
+    overruled (a human's word, or the server's, would lose). The start is SPENT when the server has stored a copy that carries it
+    (putDraft's success branch), so a blob that is wiped before the save goes (another tab's New project does that) does not take the
+    start with it. Executed in test_v2_new_estimate_test_flag.py."""
     body = _exact(shared, "sayWhatItWasStartedAs")
-    assert "removeItem" in body
-    content_check = body.index("k !== STAMP")
-    assert content_check < body.index("removeItem") < body.index("blob.is_test = want"), (
-        "the start is not checked for content first, or not used up before it is said")
+    assert "removeItem" not in body and "spendStart" not in body, "the write that says the start spends it, and a wiped blob loses it"
+    assert body.index("k !== STAMP") < body.index("blob.is_test = want"), "the start is said before the blob is checked for content"
     assert 'hasOwnProperty.call(blob, "is_test")' in body, (
         "a blob that already says is_test is overwritten by a start (a human's word, or the server's, would lose)")
+    put = _body(shared, "putDraft")
+    assert re.search(r'if \(ok && Object\.prototype\.hasOwnProperty\.call\(out, "is_test"\)\) spendStart\(id\);', put), (
+        "putDraft does not spend the start when the server has stored a copy that carries it")
+    assert put.index("if (ok &&") < put.index("spendStart(id)"), "a save that was not stored spends the start"
 
 
 def test_shared_exports_the_setter_projects_calls(shared):

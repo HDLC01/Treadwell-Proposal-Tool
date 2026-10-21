@@ -68,6 +68,8 @@ const KEYS = {
   state: "treadwell.proposal_tool.state",
   draftId: "treadwell.proposal_tool.draft_id",
   guard: "treadwell.proposal_tool.hydrated_once",
+  // The PREFIX of a project's start: each project's own key is `<intent>:<id>` (world.startOf, world.setStart, world.starts). The bare
+  // key is the one slot of an earlier version, which nothing reads now; the model still reports it (report().intent).
   intent: "treadwell.proposal_tool.new_is_test",
   synced: "treadwell.proposal_tool.synced",
 };
@@ -570,7 +572,8 @@ function createWorld(cfg) {
   /** The board's "+ New estimate": the same keys js/v2-board.js startNew() clears so shared.js mints a new
    *  draft id, then the intake page opens with no ?d=. From the GC tab the bid starts as a GC one, which startNew
    *  does by leaving { audience: "GC" } behind (`opts.gc`). `opts.tab` is the browser tab it is pressed in (the first by
-   *  default). Resolves once the page has booted. */
+   *  default). Resolves once the page has booted, with the clock run on to the end, unless `opts.hold` (ms) says to step it by that
+   *  much instead: another tab's timers (a queued save) are then left where they are, which is what a person's second click does. */
   world.startNewEstimate = async (opts) => {
     const tab = (opts && opts.tab) || mainTab;
     local.removeItem(KEYS.state);
@@ -578,7 +581,7 @@ function createWorld(cfg) {
     tab.session.removeItem(KEYS.guard);
     if (opts && opts.gc) local.setItem(KEYS.state, JSON.stringify({ audience: "GC" }));
     const page = world.load("/polish-intake.html", { tab });
-    await world.settle();
+    await (opts && opts.hold ? world.advance(opts.hold) : world.settle());
     return page;
   };
 
@@ -602,12 +605,13 @@ function createWorld(cfg) {
     if (at < 0) throw new Error("projects.js no longer starts a new project with a click handler on #new-project: retarget _world.js");
     const open = at + head.length - 1;
     const body = src.slice(open + 1, L.balanced(src, open));
+    const step = () => (opts && opts.hold ? world.advance(opts.hold) : world.settle());
     const page = world.load("/projects.html", { tab: browserTab });
-    await world.settle();
+    await step();
     const win = page.win;
     new Function("CURRENT_FILTER", "window", "TW", "localStorage", "sessionStorage", "e", body)(
       tab, win, win.TW, win.localStorage, win.sessionStorage, { preventDefault() {} });
-    await world.settle();
+    await step();
     return world.pageOf("v1intake", browserTab);
   };
 

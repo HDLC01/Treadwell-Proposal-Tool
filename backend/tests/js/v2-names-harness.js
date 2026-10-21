@@ -340,8 +340,10 @@ async function sandboxScenarios() {
     }, {}),
     // never saved and nothing typed: the "nothing priced yet" note
     nothingPricedYet: await runSandbox(function () { return reply(404, null); }, {}),
-    // never saved, but the project's own blob says it is a real bid (something was written under the Active tab's start): stop
+    // never saved, but written into and not a test (the Active tab's bid says it is not one): stop
     realBidNotSavedYet: await runSandbox(function () { return reply(404, null); }, { project_name: "Real job", is_test: false }),
+    // the same for a project from the All tab, which says nothing of test-ness: written into, no word, no row
+    unsavedProjectNoWord: await runSandbox(function () { return reply(404, null); }, { project_name: "From the All tab", address: "1 Main St" }),
   };
   // What a test copy is CALLED is saved data, not a label: the sandbox and the Test tab find a copy
   // by it. Run through the sandbox's own exports so a rename of words cannot reach it unseen.

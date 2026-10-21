@@ -182,7 +182,7 @@
 
   // ── "the new project lands in the tab you started it from" ────────────────
   //
-  // What a project was STARTED AS (a test, a real bid, or nothing said) goes into the project's OWN blob, in the first write that
+  // What a project was STARTED AS (a test, a real bid, or nothing said) goes into the project's OWN blob, in every write that
   // holds anything (setState: sayWhatItWasStartedAs), and into a copy that goes to the server without having been through
   // setState (putDraft: withStart). It is not a second request after the first save: the backend inserts a new row as it is sent
   // and, on an update, keeps a server-owned key the row already has (drafts.save_draft keep_server_owned), so the first PUT, by
@@ -197,7 +197,7 @@
   //
   // A LOOK STARTS NOTHING. A v2 page that finds no row for the project it opened on used to write a start of its own, over the
   // Projects page's, so a real bid started on the Active tab was born a test after a look at a v2 page. A v2 page now says
-  // so to THIS page only (startsAsTest, held in memory and gone with the page), and the word goes into the first write this page
+  // so to THIS page only (startsAsTest, held in memory and gone with the page), and the word goes into the writes this page
   // makes. A page that only looked has written nothing, so it has said nothing.
   const NEW_IS_TEST_KEY = "treadwell.proposal_tool.new_is_test";
 
@@ -238,11 +238,12 @@
    *  for it, because whatever a v2 page writes is a test (Hanz, 2026-08-11); the Active tab's start still decides every
    *  project a v2 page has not written.
    *
-   *  ONE-SHOT. The first write that has anything in it uses the start up (its key is removed, and so is this page's word) whether or not
-   *  it had anything to add, so nothing stays armed to file this project later.
+   *  IT SPENDS NOTHING. A write only says the start, and putDraft spends it once the server has stored a copy that carries it
+   *  (spendStart). A start spent by the write that said it went with the blob when another tab's New project wiped the shared blob
+   *  before the save went, and the page's next write, on an empty blob, then said nothing: the project was created unsaid.
    *
-   *  NOT BEFORE THERE IS CONTENT. A write whose blob holds nothing but the stamp (and the flag) leaves the start where it is, so an
-   *  untouched project stays a blob with nothing in it. The sandbox and flushEvictedBlob both read "nothing but the stamp" as
+   *  NOT BEFORE THERE IS CONTENT. A write whose blob holds nothing but the stamp (and the flag) says nothing, so an untouched
+   *  project stays a blob with nothing in it. The sandbox and flushEvictedBlob both read "nothing but the stamp" as
    *  "nothing to save", and a project nobody typed into must never become a row.
    *
    *  A blob that already says is_test is left as it is: a hydrate, or a refresh of the server-owned keys, wrote what the server
@@ -252,9 +253,14 @@
     const want = _startsAsTest === id ? true : startOf(id);
     if (want === null) return;
     if (!Object.keys(blob).some((k) => k !== STAMP && k !== "is_test")) return;
+    if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;
+  }
+
+  /** The server has stored a copy of the project that carries is_test, so what it was started as has been said: the start (its key, and
+   *  this page's own word) has done its job. Called by putDraft on a stored save and by nothing else. */
+  function spendStart(id) {
     try { localStorage.removeItem(startKey(id)); } catch {}
     if (_startsAsTest === id) _startsAsTest = null;
-    if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;
   }
 
   /** The copy of `blob` that goes to the server as `id`: with what this browser started the project as, when it holds a start for
@@ -551,9 +557,9 @@
   // (sayWhatItWasStartedAs in setState, withStart for a blob that never went through it), so a caller
   // that awaits this leaves with the project created filed.
   //
-  // THE START IS USED UP ONLY WHEN THE SERVER HAS STORED A COPY THAT CARRIED IT (withStart's word, from
-  // the key under startKey). A save that is refused, or lost with the page that sent it, leaves it armed
-  // for the next one.
+  // THE START IS SPENT ONLY WHEN THE SERVER HAS STORED A COPY THAT CARRIED IT (spendStart): whether the
+  // blob said it (sayWhatItWasStartedAs) or withStart added it. A save that is refused, or lost with the
+  // page that sent it, leaves it armed for the next one.
   function putDraft(id, blob, keepalive = false) {
     try {
       // Taken as the body is, before anything can change the blob, so a stored write records
@@ -583,7 +589,7 @@
           ? await res.json().catch(() => null)
           : null;
         const ok = !!(res && res.ok) && !(body && body.ok === false);
-        if (ok && out !== blob) { try { localStorage.removeItem(startKey(id)); } catch {} }
+        if (ok && Object.prototype.hasOwnProperty.call(out, "is_test")) spendStart(id);
         // Only for the draft this page is on: an evicted blob flushed to its own id must not
         // overwrite the marker of the draft being adopted in its place.
         //
@@ -685,9 +691,9 @@
     if (_saveTimer) {
       clearTimeout(_saveTimer); _saveTimer = null;
       const id = getDraftId();
-      const blob = getState();
-      // Same refusal rule as scheduleServerSave — never write a blob owned by another draft.
-      if (id && !(blob[STAMP] && blob[STAMP] !== id) && !isUnverified(id)) {
+      // Same refusal rule as scheduleServerSave — never write a blob owned by another draft (queuedBlob).
+      const blob = id ? queuedBlob(id) : null;
+      if (blob && !isUnverified(id)) {
         putDraft(id, blob, !!(opts && opts.keepalive));
       }
     }
@@ -925,6 +931,9 @@
   }
 
   let _saveTimer = null;
+  // The copy this page queued for its server save, kept beside the timer that will send it. Read only while that timer is pending
+  // (queuedBlob), so nothing clears it: a timer that has run or been cleared leaves it unread.
+  let _queued = null;
   function scheduleServerSave(state) {
     const id = getDraftId();
     if (!id) return;            // no id yet → nothing to sync
@@ -939,6 +948,7 @@
     }
     if (_hold) { _hold.dirty = true; return; }   // waits for the gate (holdServerSaves)
     if (_saveTimer) clearTimeout(_saveTimer);
+    _queued = { id: id, state: state };
     _saveTimer = setTimeout(() => {
       _saveTimer = null;
       // Re-check at FIRE time — a bfcache-resumed timer may fire after the URL/draft changed.
@@ -949,6 +959,17 @@
       }
       putDraft(id, state);
     }, 2500);                    // debounce: save 2.5s after the last edit
+  }
+
+  /** What this page's queued save sends when it goes EARLY (flushState, or the page going), as a copy of the draft, or null for nothing:
+   *  the shared blob while it is this page's project's and holds something (it carries every write the page has made); and when another
+   *  tab's New project has WIPED the shared blob to nothing, the copy this page itself queued, which is exactly what its timer would send.
+   *  Never an empty blob (PUTting one empties the project's row, or creates it empty and unfiled), and never another project's. */
+  function queuedBlob(id) {
+    const blob = getState();
+    if (blob[STAMP] && blob[STAMP] !== id) return null;
+    if (Object.keys(blob).some((k) => k !== STAMP)) return blob;
+    return (_queued && _queued.id === id) ? _queued.state : null;
   }
 
   // sessionStorage reload-guard, time-windowed so it only breaks reload LOOPS
@@ -1127,8 +1148,8 @@
     if (!_saveTimer) return;
     clearTimeout(_saveTimer); _saveTimer = null;
     const id = getDraftId();
-    const blob = getState();
-    if (!id || (blob[STAMP] && blob[STAMP] !== id)) return;
+    const blob = id ? queuedBlob(id) : null;
+    if (!blob) return;
     putDraft(id, blob, true);   // a save racing page teardown, as flushState({ keepalive: true }) is for a page that flushes its own
   });
 
