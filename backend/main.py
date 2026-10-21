@@ -6904,7 +6904,12 @@ def _generate(payload: GenerateIn, request: Request, *,
             proj_data.setdefault("project_name", project_name)
             if payload.computed_bid and "computed_bid" not in existing:
                 proj_data["computed_bid"] = payload.computed_bid
-            drafts.save_draft(draft_id, proj_data, owner_email=_user_email(request))
+            # AND NEVER LET IT UNDO A PERSON'S FILING EITHER. `values` also echoes the server-owned keys (is_test, archived,
+            # assigned_estimator) as that page's blob held them when the payload was built, and `proj_data` above lays the echo
+            # over the stored copy. keep_server_owned makes the stored value of each of the three win, as it does for the
+            # browser's own save, so a payload built before Test? or Move to Active was pressed (or the project was reassigned or
+            # archived) cannot put the old answer back; a key the row has never had is still seeded from the payload.
+            drafts.save_draft(draft_id, proj_data, owner_email=_user_email(request), keep_server_owned=True)
         except Exception as exc:  # noqa: BLE001 — never block the download
             log.warning("generate: project save failed: %s", exc)
 
