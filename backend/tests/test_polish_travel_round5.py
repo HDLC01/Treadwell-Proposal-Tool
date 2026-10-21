@@ -377,7 +377,8 @@ NORMALIZE_TYPED = "if (l.qty_typed === true) out[k].qty_typed = true;"
 NORMALIZE_FOLLOW = 'if (l.qty_follow === "labor" && out[k].qty_auto && l.qty_typed !== true) out[k].qty_follow = "labor";'
 OWN_LINE = "function ownLineCost(line) { return (line && rowOn(line)) ? roundUp(days * num(line.rate)) : 0; }"
 SYNC_OPEN = "      var carrier = multi ? sectionOf(model, travelCarrier(model)).section : model;"
-HOW_DECISION = ('        (tr ? "Travel Labor, Lodging and Per Diem come on." : "Lodging and Per Diem come on, and there is no Travel Labor line to price the drive: add it below.");')
+# (round 7, part 4, P6: the decision is three lines now, the carrier of a job of several bases saying THIS SHEET has no line; the first holds the "come on" the break makes always)
+HOW_DECISION = '        (tr ? "Travel Labor, Lodging and Per Diem come on."'
 RAIL_LABOR = "    (M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });"
 RAIL_TAKEOFF = "    (M.takeoff instanceof Array ? M.takeoff : []).forEach(function (r) {"
 CAP_EPOXY = 'if (epoxyCapEl && capEntry && capEntry.role === "epoxy") epoxyCapEl.innerHTML = epoxyCaptionText(capEntry);'
@@ -389,10 +390,10 @@ HINT_REPAINT = "if (l) el.textContent = B.travelQtyHint(ROOT, activeTab, key, l,
 FOLLOW_NOTE = 'var followNote = !ownTravel && B.qtyFollows(tl) ? B.travelFollowWords(ROOT, activeTab, k, M.labor) : "";'
 CONTROL = "      html += (travelRows || addTravelHtml()) + travelCard(\"lodging\") + travelCard(\"per_diem\");"
 CLICK = '    if (t.closest("[data-add-travel]")) { addTravelLaborPress(); return; }'
-ADD_FILL = "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !drive);"
+ADD_FILL = "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !drive, trips);"
 ADD_ONCE = "    if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;"
 ADD_FRESH = "    return stampRateDefaults([laborRowStartsEmpty(seed)])[0];"
-HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : "Travel Labor: no line on this bid, $0");'
+HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : others.length ? "Travel Labor on this sheet: no line, $0" : "Travel Labor: no line on this bid, $0");'
 HOW_FOLLOWED = "    if (followed.length) {"
 NOTE_NAME = "    var name = carrierName();"
 
@@ -525,7 +526,7 @@ BREAKS = {
         "js/bid-model.js", ADD_FRESH, "    return seed;",
         lambda g: g["addTravel"]["polishLocal"]["added"]["keys"] != ["days", "guys", "guys_auto", "id", "label", "rate", "rate_default", "unit"]),
     "the summary claims Travel Labor comes on over a job with no line": (
-        "js/bid-model.js", HOW_DECISION, '        "Travel Labor, Lodging and Per Diem come on.";',
+        "js/bid-model.js", HOW_DECISION, '        (true ? "Travel Labor, Lodging and Per Diem come on."',
         lambda g: "Travel Labor, Lodging and Per Diem come on" in g["addTravel"]["polishFar"]["removed"]["how"]),
     "the summary calls a missing line a switched-off one": (
         "js/bid-model.js", HOW_NO_LINE, 'lines.push("Travel Labor: off, $0");',
@@ -534,7 +535,7 @@ BREAKS = {
     "a Gyp carrier's added line is not filled by the distance": (
         "js/bid-model.js", ADD_FILL,
         '    if (miles !== null && (readableSections(model) || []).every(function (e) { return e.section !== holder || e.layout !== "gyp"; })) '
-        'followDistanceOnRow(model, added, holder.labor, miles, !drive);',
+        'followDistanceOnRow(model, added, holder.labor, miles, !drive, trips);',
         lambda g: g["addTravel"]["gypFar"]["row"]["days"] != 6.5),
     "a second press of the control reads the library again": (
         "js/polish-estimate.js", "    if (travelAdding) return;", "    void travelAdding;",

@@ -40,10 +40,11 @@ EPOXY_DRIVE = "5 x 6.5 = $1072.5"
 TRIP = "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the %d guys on the labor lines above"
 NOTE = ("This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the Polish section. "
         "Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them.")
+# (Since round 7, part 4, P2, a Gyp drive is a round trip for each mobilization on the Gyp card, and the Gyp words say so: test_polish_travel_round7_part4.py.)
 FILL_CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. On a far job Travel Labor "
-            "fills in from the miles, and the nights and per diem days from the crew's hours, 10 hours a night; type over any of them to use your own.")
-FILL_CARD = ("Drive time is expected at 70 miles or more from the office. There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. "
-             "Under 70 miles this line stays gray.")
+            "fills in from the miles, a round trip for each mobilization, and the nights and per diem days from the crew's hours, 10 hours a night; type over any of them to use your own.")
+FILL_CARD = ("Drive time is expected at 70 miles or more from the office. There the hours fill in from the miles, one round trip for each mobilization on the Gyp card, and the guys are "
+             "the most on any labor line. Under 70 miles this line stays gray.")
 FILLED = {"auto": True, "follow": "crew", "seed": 6.5, "typed": False, "hand": False}
 NO_ANSWER = {"job": False, "sheets": {}}
 # A far Epoxy 5 x 12 bid with its crew's drive (5 x 6.5 = $1,072.50): what the saved one-drive Combo is once it is made Epoxy, the same as an Epoxy job bid from scratch on that crew
@@ -150,7 +151,7 @@ def test_a_far_gyp_bases_drive_fills_from_the_miles_on_its_crews_size(ran):
 def test_the_gyp_cards_say_the_drive_fills_in(ran):
     lab = ran["gyp"]["labor"]
     assert lab["cap"] == FILL_CAP and lab["cardNote"] == FILL_CARD
-    assert lab["src"] == TRIP % 4 + ". Type more trips for a long job." and lab["hint"] == "Most guys on one labor line above: 4."
+    assert lab["src"] == TRIP % 4 + ". A round trip for each mobilization typed on the Gyp card." and lab["hint"] == "Most guys on one labor line above: 4."
 
 
 # ── S: the x on one base's drive of a Combo is that sheet's answer ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -306,27 +307,26 @@ def test_a_line_added_on_an_option_made_one_of_a_pair_of_bases_leaves_the_other_
 
 
 # ── a Combo saved under the one-drive law (before round 7) ───────────────────────────────────────────────────────────────────────────────────────────────────────────
-def test_a_combo_saved_under_the_one_drive_law_opens_quietly_and_offers_the_epoxy_sheet_its_drive(ran):
+def test_a_combo_saved_under_the_one_drive_law_opens_with_the_epoxy_crews_own_drive(ran):
     """A far Combo saved before round 7: the job's one drive on the Polish root, for the bigger crew (Epoxy's 5), and no Travel Labor line on the Epoxy sheet. Opened plainly, nothing is saved
-    or asked. The root's drive reads the Polish crew's own 4 (the guys are kept in step with the crews on every open, and since D1 a base's drive is its own crew's: Hanz, 2026-10-21, "saved v2
-    bids may re-price"), and the Epoxy sheet's Labor step offers Add Travel Labor, saying its drive adds nothing until then. Nothing gives a saved bid a line on open. So the page shows
-    $52,953 + $37,044 = $89,997 where the one-drive law priced it at $53,378 + $37,044 = $90,422 (the Epoxy crew's drive, the bigger, is not charged until Add Travel Labor gives the Epoxy
-    sheet its own, or a restructure carries one to it); the draft keeps what it was saved with until the next save."""
+    or asked. Since round 7, part 4 (P4: the round-7 audit's F7, Hanz's D1 and "let them re-price") the Epoxy base is given its own drive on open, filled by the rule on its own crew (5 x 6.5), and
+    the root's drive reads the Polish crew's own 4 (the guys are kept in step with the crews on every open), so the page shows $52,956 + $39,197, the price of the same Combo bid since round 7, and
+    the Epoxy sheet's Labor step draws its drive. Until part 4 nothing gave a saved bid a line on open, and the page showed $52,953 + $37,044 = $89,997 with the Epoxy crew's drive missing; the
+    one-drive law priced it at $53,378 + $37,044 = $90,422. The draft keeps what it was saved with until the next save (test_polish_travel_round7_part4.py holds the session and the reloads)."""
     o = ran["legacy"]["opened"]
     assert o["quiet"] == {"armed": 0, "saves": 0}
-    assert o["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": None}
-    assert o["bid"] == {"root": 52953, "epoxy": 37044}
-    assert o["epoxy"]["add"] is True and o["epoxy"]["none"] == "sheet" and o["epoxy"]["note"] == NOTE and o["epoxy"]["card"] is False
+    assert o["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": EPOXY_DRIVE}
+    assert o["bid"] == {"root": 52956, "epoxy": 39197}
+    assert o["epoxy"]["add"] is False and o["epoxy"]["none"] is None and o["epoxy"]["note"] == NOTE and o["epoxy"]["card"] is True
 
 
-def test_a_combo_saved_under_the_one_drive_law_made_epoxy_carries_the_jobs_drive_to_epoxy(ran):
-    """The same saved Combo made Epoxy (the intake's job type) or with Epoxy picked alone (the Sheets panel). The job has ONE base now, which holds no Travel Labor line and whose own answer does
-    not say it has none, so the job's one drive follows it, as it did before round 7: the root's line goes to Epoxy (a copy, when the pick leaves the root an option with its own drive), on the
-    Epoxy crew's 5 x 6.5. Round 7's first cut carried only when the job had ONE base before, so this Epoxy job priced no Travel Labor at all ($47,221 both ways). A reload prices the same.
-    Made Polish, the root keeps its own drive."""
+def test_a_combo_saved_under_the_one_drive_law_made_one_base_keeps_each_crews_own_drive(ran):
+    """The same saved Combo made Epoxy (the intake's job type) or with Epoxy picked alone (the Sheets panel). The Epoxy base opened with its own drive (P4), so it keeps it, on the Epoxy crew's
+    5 x 6.5, the Polish root, off, gives its fill back, and the Epoxy job prices $49,281 both ways (round 7's first cut priced it with no Travel Labor at all, $47,221; part 1 carried the root's line
+    to Epoxy). A reload prices the same. Made Polish, the root keeps its own drive and the Epoxy sheet, off, gives its fill back."""
     leg = ran["legacy"]
     e = leg["toEpoxy"]
-    assert e["state"]["rows"] == {"Polish:off": None, "Epoxy:base": EPOXY_DRIVE} and e["state"]["answers"] == NO_ANSWER
+    assert e["state"]["rows"] == {"Polish:off": " x  = $0", "Epoxy:base": EPOXY_DRIVE} and e["state"]["answers"] == NO_ANSWER
     assert e["marks"] == FILLED
     assert e["state"]["price"]["lump"] == LEGACY_EPOXY_LUMP and e["state"]["price"]["lump"] > 47221
     _same_after_a_reload(e["state"], e["reloaded"])
@@ -335,7 +335,7 @@ def test_a_combo_saved_under_the_one_drive_law_made_epoxy_carries_the_jobs_drive
     assert k["state"]["price"]["lump"] == LEGACY_EPOXY_LUMP
     _same_after_a_reload(k["state"], k["reloaded"])
     p = leg["toPolish"]
-    assert p["state"]["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:off": None}
+    assert p["state"]["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:off": " x  = $0"}
     _same_after_a_reload(p["state"], p["reloaded"])
 
 
@@ -362,18 +362,15 @@ BREAKS = {
     "the page does not say what every sheet was before a job-type switch": (
         "js/polish-estimate.js", "      var kindsBefore = B.sectionKinds(ROOT);", "      var kindsBefore = null;",
         lambda g: g["added"]["switched"]["rows"].get("Epoxy:base") != "5 x 6.5 = $1170"),
-    "the settling leaves a carried drive on the old base's crew": (
-        "js/bid-model.js", "    syncAutoGuys(model);", "    void model;",
-        lambda g: g["legacy"]["toEpoxy"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["legacy"]["toEpoxy"]["state"] != g["legacy"]["toEpoxy"]["reloaded"]),
-    "a Combo saved under the one-drive law made Epoxy has no drive": (
-        "js/bid-model.js", "    return !!e && !travelRowsIn(e.section).length;", "    return false;",
-        lambda g: g["legacy"]["toEpoxy"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE or g["legacy"]["picked"]["state"]["rows"].get("Epoxy:base") != EPOXY_DRIVE),
+    # (The settling's sync of a carried drive's guys, and the carry of a one-drive-law Combo's drive to the one base left, moved to test_polish_travel_round7_part4.py with round 7, part 4's P4: the
+    # open now gives that Combo's second base its own drive, so no page path here reaches the carry, and the part-4 harness holds it on the model.)
     # --- D2: a Gyp base's drive fills ---
     "a Gyp base's drive is not filled": (
-        "js/bid-model.js", "    if (row) followDistanceOnRow(model, row, lines, miles, false);", '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false);',
+        "js/bid-model.js", "    if (row) followDistanceOnRow(model, row, lines, miles, false, driveTripsOf(e));",
+        '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false, driveTripsOf(e));',
         lambda g: g["gyp"]["filled"]["rows"].get('Gyp (USG 1-8"):base') != POLISH_DRIVE),
     "the Gyp travel block says to type the drive": (
-        "js/polish-estimate.js", "          ? 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew\\'s hours, ' +",
+        "js/polish-estimate.js", "          ? 'On a far job Travel Labor fills in from the miles, a round trip for each mobilization, and the nights and per diem days from the crew\\'s hours, ' +",
         "          ? 'On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew\\'s hours, ' +",
         lambda g: g["gyp"]["labor"]["cap"] != FILL_CAP),
     "the Gyp Travel Labor card says to type its guys and hours": (

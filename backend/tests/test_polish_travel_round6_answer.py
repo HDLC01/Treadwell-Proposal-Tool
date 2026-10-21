@@ -405,7 +405,7 @@ PAGE = "js/polish-estimate.js"
 
 APPEND = "if (!said && model.sheet_no_travel_labor !== true && carrierTabOf(model) === ROOT_TAB) out.labor = laborIn.concat([travelSeed()]);"
 KEEP_FLAG = "if (said && !drivesHoldTravel(model, hasTravel ? out.labor : laborIn)) out.no_travel_labor = true;"
-ADD_FILL = "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !drive);"
+ADD_FILL = "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !drive, trips);"
 REFOCUS_ROWS = "    if (left > 1) { refocus('[data-del-lab=\"' + (at < left ? at : left - 1) + '\"]'); return; }"
 REFOCUS_TRAVEL = '    if (wasTravel && document.querySelector("[data-add-travel]")) { refocus("[data-add-travel]"); return; }'
 OFF_LINE = "      if (far && l.enabled !== true && !qtyFollows(l)) return;      // a line that is off is left as it is (see above)"
@@ -518,7 +518,7 @@ BREAKS = {
         MODEL, "        delete model.no_travel_labor;", "        void 0;",
         lambda g: g["answer"]["carrier"]["afterAdd"]["flag"] is not False),
     "an option's line is filled on the carrier's crew": (
-        MODEL, ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, laborLinesOf(sectionOf(model, travelCarrier(model)).section), miles, !drive);",
+        MODEL, ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, laborLinesOf(sectionOf(model, travelCarrier(model)).section), miles, !drive, trips);",
         lambda g: g["answer"]["direct"]["addOnOption"]["guys"] != 2),
     # X2: a job-type switch honours the answer
     "the new carrier is seeded a line against the answer": (

@@ -97,6 +97,17 @@
  *                    holds it has given the repeat back, and an option made a base whose line was such a copy is judged as a line the tool filled.)
  * The `said` mode walks the sequences that copy it there (SAID_SEQUENCES), for each of the five variants.
  *
+ * ROUND 7, PART 4 (2026-10-21, the round-7 audit's remaining findings) changed three laws the walk judges, and the walk judges them as they are now:
+ *   COPY_TRIP        (P1, part 3's F1 refined by Hanz's D1 evidence: Kyle's combo-like sheets carry the SAME trip on both crews, each its own guys) a copy the tool made that was given back when its
+ *                    sheet became a base beside the base holding the say KEEPS THE TRIP it held: the hours, when its Hours box held a figure the estimator typed, and the rate they typed; its guys are
+ *                    its own crew's, it is switched on, and it is the tool's copy no longer. SAID_TWICE now judges only what the say is of ONE CREW (CREW_SAY: the typed guys, a cleared box, the
+ *                    switch), since the trip is meant to be on both bases; the rate variant's $40 is the trip's.
+ *   ANSWER_OWNER     (P3) the x on the LAST base's drive of a job of several bases (every other base held no line before it) sets the job's answer (J), as the x on a single-base job's drive does,
+ *                    and folds the sheets' answers into it (ANSWER_HELD lets those go with it); an x that leaves no base a line and does not say so is a violation.
+ *   FAR_BASES, OPT_FOLLOWS  (P2) a Gyp section's drive is a round trip for each mobilization on its Gyp card (tripsOf, Kyle's B51 `=((B6*2)/60)*T28`), and every walk that starts from Gyp types 2
+ *                    of them on its card first, so the rule is judged on a box somebody typed in (a copy of the sheet carries them; a Gyp section a later switch adds has one trip).
+ * The answers' own sequences gained two (the x on both drives of a Combo, either order, then switches and Add), twenty-four now.
+ *
  * THE SIXTH ROUND (2026-10-20, item C2) made every reopen go through the SERVER'S key order (js/_jsonb.js: the draft's jsonb column keeps no key order, so every object of a reopened blob
  * has its keys sorted by length and then by bytes), and added the one walk that had never been possible: a SESSION that does not reload. Every other walk starts each step from the draft
  * the step before saved, reopened, so a bid it is judging was always read back from the server before anything was done to it, and a Sheets action that puts a sheet into the bid
@@ -117,8 +128,8 @@
  *
  * MODES (argv[3]): far | farplain | local | unknown | nightsTyped | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys |
  *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | answer | answerJobs | answerSheets | answers | session | said | audit54.
- *   answers               the twenty-two sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them, the Epoxy + Polish-copy pair, and since round 7
- *                         the sheet's answer, the job's held through a Combo, and a tool-filled line released on promotion: ANSWER_SEQUENCES),
+ *   answers               the twenty-four sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them, the Epoxy + Polish-copy pair, and since round 7
+ *                         the sheet's answer, the job's held through a Combo, a tool-filled line released on promotion, and the x on both drives of a Combo: ANSWER_SEQUENCES),
  *                         every rule judged after every step.
  *   answer, answerJobs, answerSheets   the steps of `reload` plus the ANSWER (the x on the carrier's Travel Labor line, on the other base's, on an option's, and Add Travel Labor on each),
  *                         with RELOAD_AGREES judged after every Sheets action, x and Add, against a JSONB reload of the draft the session saved. `answer` takes every kind of step, two deep,
@@ -200,6 +211,8 @@ const TYPES = ["epoxy", "polish", "combo", "gyp"];
 // The crew a new bid is given on its first carrier, and the (bigger) one typed by a "+crew" step on the carrier a job type leaves it with.
 const START_CREW = { epoxy: ["Epoxy", "epoxy-install", "4", "12"], polish: ["Polish", "polishing", "4", "12"], combo: ["Polish", "polishing", "4", "12"], gyp: [GYP_TAB, "gyp-pour", "4", "12"] };
 const STEP_CREW = { epoxy: ["Epoxy", "epoxy-install", "5", "12"], polish: ["Polish", "polishing", "6", "12"], combo: ["Polish", "polishing", "6", "12"], gyp: [GYP_TAB, "gyp-pour", "5", "12"] };
+/** The Mobilizations a new Gyp bid's card is given (round 7, part 4, P2): its drive is that many round trips. */
+const START_MOBS = "2";
 const VARIANTS = ["typed", "clearHours", "clearGuys", "off", "rate"];
 /** `nightsTyped`: the estimator's own say on the job's NIGHTS (Lodging typed 10, Per Diem cleared) on the carrier's Labor step, before any switch. Typed lines are THEIRS: through every sequence they hold what was typed. */
 const NIGHTS_TYPED = MODE === "nightsTyped";
@@ -280,6 +293,13 @@ function drivesOf(entries) {
 }
 /** The sheet said it has no drive (S, round 7). */
 const sheetSaid = (e) => !!e && !!e.section && e.section.sheet_no_travel_labor === true;
+/** HOW MANY ROUND TRIPS A SECTION'S DRIVE IS (round 7, part 4, P2), written out here and not asked of the model: one, and on a Gyp section the mobilizations typed on its Gyp card when they are
+ *  a positive number (Kyle's Gyp travel line, B51, multiplies the round trip by them; a blank box is one trip). */
+const tripsOf = (e) => {
+  if (!e || e.layout !== "gyp") return 1;
+  const n = Number(((e.section || {}).gyp || {}).mobs);
+  return n > 0 ? n : 1;
+};
 /** The crew a section's own drive is for (D1, D2): the most guys on any ONE of its labor lines that is on and is not Travel Labor (a Gyp crew line, in hours, counts its guys the same
  *  way), the fourth hand of Remove existing joint filler counted through the joint-filler line. */
 function ownCrewOf(m, rows) {
@@ -372,6 +392,17 @@ function variantHolds(name, r) {
   return false;
 }
 
+/** WHAT A VARIANT SAYS OF ONE CREW (round 7, part 4, P1: the copy given back keeps the trip the estimator typed and takes its own crew's guys): the part of the say that is that crew's alone
+ *  and is never on a second base. The typed variant's guys (3, typed; its 5 hours are the trip), a cleared Hours box (no figure, so no trip: a copy of it is refilled), a cleared Guys box and the
+ *  switch turned off (a copy given back is switched on). The rate variant's $40 is the trip's rate and says nothing of a crew. */
+const CREW_SAY = {
+  typed: (r) => r.guys === "3" && r.guys_typed === true,
+  clearHours: (r) => variantHolds("clearHours", r),
+  clearGuys: (r) => variantHolds("clearGuys", r),
+  off: (r) => r.enabled === false,
+  rate: null,
+};
+
 /** Every Travel Labor row of every sheet that is an option (and not the one that carries the job's travel), as it stands: the row's whole JSON, by the sheet and the row's place on
  *  it. What a distance step is compared against. A Gyp option is one of them since round 7 (D2: a Gyp drive fills like the others). */
 function optionRows(b) {
@@ -389,10 +420,11 @@ function judgeOptions(b, d) {
   const bad = [];
   const f = facts(b);
   const far = d.miles !== null && d.miles >= B.LOCAL_MILES;
-  const hours = far ? B.driveHoursFor(d.miles) : "";
   f.entries.forEach((e) => {
     if (e.kind !== "option" || e.tab === f.carrier) return;
     const crew = ownCrewOf(f.m, e.section.labor);
+    // a Gyp option's drive is a round trip for each of ITS mobilizations (round 7, part 4, P2)
+    const hours = far ? B.driveHoursFor(d.miles) * tripsOf(e) : "";
     travelRows(e.section).forEach((r, i) => {
       if (r.unit !== "hours") return;
       const was = d.before.filter((x) => x.tab === e.tab && x.i === i)[0];
@@ -448,9 +480,8 @@ function judge(b, ctx) {
   }
   f.entries.forEach((e) => { const r = travelRows(e.section)[0]; if (sheetSaid(e) && r) note("ANSWER_OWNER", "the sheet " + e.tab + " says it has no drive (sheet_no_travel_labor) and holds " + fmtRow(r)); });
 
-  // FAR_BASES (round 7, D1 and D2): on a far job every base drives on ITS OWN crew, a Gyp base like the others.
+  // FAR_BASES (round 7, D1 and D2): on a far job every base drives on ITS OWN crew, a Gyp base like the others, for ITS OWN round trips (round 7, part 4, P2: a Gyp base's mobilizations).
   if (f.far) {
-    const hours = B.driveHoursFor(f.miles);
     f.drives.forEach((e) => {
       const r = travelRows(e.section)[0] || null;
       if (!r) {
@@ -459,8 +490,9 @@ function judge(b, ctx) {
       }
       if (owned(r)) return;
       const crew = ownCrewOf(m, e.section.labor);
+      const hours = B.driveHoursFor(f.miles) * tripsOf(e);
       const ok = r.guys_follow === "crew" && r.guys_auto === true && r.days === hours && r.hours_seed === hours && Number(r.guys) === crew;
-      if (!ok) note("FAR_BASES", "base " + e.tab + " row " + fmtRow(r) + " is not its own crew (" + crew + ") x " + hours + " hours");
+      if (!ok) note("FAR_BASES", "base " + e.tab + " row " + fmtRow(r) + " is not its own crew (" + crew + ") x " + hours + " hours (" + tripsOf(e) + " round trip" + (tripsOf(e) === 1 ? "" : "s") + ")");
     });
   }
   if (!f.far) {
@@ -512,10 +544,11 @@ function judge(b, ctx) {
   if (ctx && ctx.variant && !f.entries.some((e) => travelRows(e.section).some((r) => variantHolds(ctx.variant, r)))) {
     note("OWNED", ctx.variant + " is on no sheet any more (carrier " + f.carrier + " holds " + fmtRow(travelRows(carrierEntry && carrierEntry.section)[0] || null) + ")");
   }
-  // SAID_TWICE (round 7, part 3: the round-7 audit's F1): what the estimator said ONCE is on ONE base. The walk says it once, on the carrier; a second base holding it holds the tool's copy
-  // of it (the job's one drive followed a base pick, or the sheet was copied), and that copy prices the one figure on a second crew's drive.
-  if (ctx && ctx.variant) {
-    const holders = f.entries.filter((e) => e.kind === "base" && travelRows(e.section).some((r) => variantHolds(ctx.variant, r)));
+  // SAID_TWICE (round 7, part 3: the round-7 audit's F1; part 4, P1): what the estimator said ONCE of a CREW is on ONE base. The walk says it once, on the carrier; a second base holding it holds
+  // the tool's copy of it (the job's one drive followed a base pick, or the sheet was copied), and that copy prices one crew's figure on a second crew's drive. The TRIP the estimator typed (the
+  // hours, a figure, and the rate) is the same for both crews, as Kyle's sheets carry it, so a copy given back keeps it (COPY_TRIP) and it is not judged here: see CREW_SAY.
+  if (ctx && ctx.variant && CREW_SAY[ctx.variant]) {
+    const holders = f.entries.filter((e) => e.kind === "base" && travelRows(e.section).some(CREW_SAY[ctx.variant]));
     if (holders.length > 1) note("SAID_TWICE", ctx.variant + " is on " + holders.length + " bases: " + holders.map((e) => e.tab + " " + fmtRow(travelRows(e.section)[0])).join(", "));
   }
   return bad;
@@ -570,9 +603,13 @@ function judgeTransitions(b, parentSaved, got, ctx) {
   });
 
   // ── ANSWER_OWNER and ANSWER_HELD: the job's answer ──
-  if (!pJob && cJob && !(step.x && pDrives.length === 1 && pressedOn === pDrives[0])) {
-    note("ANSWER_OWNER", "the job's no_travel_labor was set by " + stepLabel(step) + " (only the x on the drive of a single-base job sets it)");
+  // The x on the LAST drive of a job of several bases (every other base held no line before it) is the job's answer too, as the x on a single-base job's drive is (round 7, part 4, P3: the round-7
+  // audit's F3): the sheets' answers are folded into it, and a later switch keeps the drive removed.
+  const lastX = !!step.x && pDrives.length > 1 && pDrives.indexOf(pressedOn) >= 0 && pDrives.every((t) => t === pressedOn || !travelRows((was(t) || {}).section).length);
+  if (!pJob && cJob && !(step.x && pDrives.length === 1 && pressedOn === pDrives[0]) && !lastX) {
+    note("ANSWER_OWNER", "the job's no_travel_labor was set by " + stepLabel(step) + " (only the x on the drive of a single-base job, or on the last base's drive of a job of several, sets it)");
   }
+  if (lastX && !cJob) note("ANSWER_OWNER", "the x on " + pressedOn + "'s drive, the last base holding one, did not say the job has no drive (no_travel_labor)");
   if (pJob && !cJob) {
     const byAdd = step.addTravel && cDrives.indexOf(pressedOn) >= 0;
     if (!byAdd && !promotedKept) note("ANSWER_HELD", "the job said it has no drive and " + stepLabel(step) + " took the answer back (only Add Travel Labor on a base, or a base an option became bringing the estimator's line, does)");
@@ -585,7 +622,10 @@ function judgeTransitions(b, parentSaved, got, ctx) {
   before.forEach((w) => {
     const c = now(w.tab);
     if (!sheetSaid(w) || !c) return;
-    if (!sheetSaid(c) && !(step.addTravel && pressedOn === w.tab)) note("ANSWER_HELD", "the sheet " + w.tab + " said it has no drive and " + stepLabel(step) + " took the answer back");
+    // (the x on the last base's drive folds a base's own answer into the job's: P3)
+    if (!sheetSaid(c) && !(step.addTravel && pressedOn === w.tab) && !(lastX && cJob && pDrives.indexOf(w.tab) >= 0)) {
+      note("ANSWER_HELD", "the sheet " + w.tab + " said it has no drive and " + stepLabel(step) + " took the answer back");
+    }
   });
   f.entries.forEach((c) => {
     const w = was(c.tab);
@@ -593,6 +633,27 @@ function judgeTransitions(b, parentSaved, got, ctx) {
     const byX = step.x && pressedOn === c.tab && pDrives.length > 1;
     const byJob = pJob && !cJob;
     if (!byX && !byJob) note("ANSWER_OWNER", "the sheet " + c.tab + "'s sheet_no_travel_labor was set by " + stepLabel(step) + " (only the x on its drive, the job having two bases, sets it)");
+  });
+
+  // ── COPY_TRIP (round 7, part 4, P1: part 3's F1 refined by Hanz's D1 evidence): a base whose line was the TOOL'S COPY of a say another base holds now has given it back, and the copy given back
+  // keeps the trip it held (Kyle's sheets carry the same trip on both crews, each its own guys): the hours, when its Hours box held a figure the estimator typed (a figure the tool wrote is FAR_BASES'
+  // to judge, and a box with no figure is given back empty and refilled), and the rate, when it was typed; its guys are ITS OWN crew's; it is switched on, and the tool's copy no longer.
+  f.drives.forEach((e) => {
+    const w = was(e.tab);
+    const r0 = w ? travelRows(w.section)[0] || null : null;
+    if (!r0 || !copyOfAnotherBases(e.tab, r0)) return;
+    const r = travelRows(e.section)[0] || null;
+    const at = e.tab + " (its line " + fmtRow(r0) + " was the tool's copy of another base's say)";
+    if (!r) { note("COPY_TRIP", at + " holds no line"); return; }
+    if (toolCopy(r)) { note("COPY_TRIP", at + " still holds the tool's copy " + fmtRow(r)); return; }
+    if (r.enabled === false) note("COPY_TRIP", at + " was given back switched off: " + fmtRow(r));
+    if (rateTyped(r0) ? String(Number(r.rate)) !== String(Number(r0.rate)) : rateTyped(r)) note("COPY_TRIP", at + " holds the rate " + r.rate + " where the copy's was " + r0.rate);
+    const typedFigure = !blank(r0.days) && (r0.hours_typed === true || !(typeof r0.days === "number" && r0.days === r0.hours_seed));
+    if (typedFigure) {
+      if (String(r.days) !== String(r0.days) || (r0.hours_typed === true && r.hours_typed !== true)) note("COPY_TRIP", at + " holds " + fmtRow(r) + ": the trip typed was " + r0.days + " hours");
+      const crew = ownCrewOf(m, e.section.labor);
+      if (!(r.guys_follow === "crew" && r.guys_auto === true && Number(r.guys) === crew)) note("COPY_TRIP", at + " holds " + fmtRow(r) + ": the guys are not its own crew of " + crew);
+    }
   });
 
   // ── OWNED: what the estimator said, against the draft the step started from ──
@@ -1153,6 +1214,10 @@ const ANSWER_SEQUENCES = [
   // base, by the pick and by the job type alike.
   { start: "combo", steps: [{ base: "Polish" }, { x: "carrier" }, { base: "Epoxy" }, { addTravel: "carrier" }] },
   { start: "combo", steps: [{ base: "Polish" }, { x: "carrier" }, "epoxy", "combo"] },
+  // ROUND 7, PART 4 (P3: the round-7 audit's F3). The x on BOTH drives of a far Combo is the job's answer, as the x on a single-base job's drive is: the job types after it (Epoxy, then Gyp, a new
+  // section the library would seed a drive) keep the drive removed, Add on the Gyp base takes the answer back, and Combo again gives each crew its drive. And the other order, back to Polish and Combo.
+  { start: "combo", steps: [{ x: "base" }, { x: "carrier" }, "epoxy", "gyp", { addTravel: "carrier" }, "combo"] },
+  { start: "combo", steps: [{ x: "carrier" }, { x: "base" }, "polish", "combo"] },
 ];
 
 /** WHAT THE ESTIMATOR SAID ONCE, AND THE SEQUENCES THAT COPY IT ONTO A SECOND BASE (round 7, part 3: the round-7 audit's F1). The `said` mode says it first on the carrier (each of the five
@@ -1175,6 +1240,14 @@ async function newBid(start, distanceAnswer) {
   b.api.go(1);
   await settle();
   typeCrew(b, c[0], c[1], c[2], c[3]);
+  // A GYP JOB IS MOBILIZED TWICE (round 7, part 4, P2): typed on its Gyp card, so its drive is two round trips and FAR_BASES and OPT_FOLLOWS judge the mobilizations in every walk that starts
+  // from Gyp (a copy of the sheet carries them; a Gyp section a job-type switch adds later has a blank box, one trip).
+  if (start === "gyp") {
+    b.api.show(GYP_TAB);
+    b.api.go(0);
+    if (b.doc.querySelector('[data-gyp="mobs"]')) P.typeInto(b, '[data-gyp="mobs"]', START_MOBS);
+    b.api.go(1);
+  }
   b.clock.fire();
   return { b: b };
 }

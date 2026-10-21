@@ -7,7 +7,9 @@ that are off, the estimator's typed / cleared / switched-off row left on the old
 under one drive per base crew (D1) and a Gyp base filled (D2), and the entries after the third audit's break those: the one-drive law put back, a Gyp base left unfilled, a
 second drive carried onto a base that holds its own, and a base that stays a base handed the old base's typed drive. ROUND 7, PART 3 (the round-7 audit's F1) holds what the
 estimator said once to one base (SAID_TWICE), and its entries break that: the tool's copy never given back, the copies the pick and a Sheets copy make never marked as the
-tool's, the estimator's own row given back in place of the copy, and a copy given back that repeats no other base's row.
+tool's, the estimator's own row given back in place of the copy, and a copy given back that repeats no other base's row. ROUND 7, PART 4 changed two of the laws: the copy given back
+keeps the trip it held, the hours and the rate the estimator typed (COPY_TRIP; part 3 refilled it from the round trip and put its rate back), and a Gyp drive is a round trip for each
+mobilization on its card (FAR_BASES on a Gyp base, OPT_FOLLOWS on a copy of the Gyp sheet, every Gyp walk starting on two); the last entries break those.
 """
 import pytest
 
@@ -22,7 +24,7 @@ LEGACY_CARRY = "    return !!e && !travelRowsIn(e.section).length;"
 CLEARED = "delete row.hours_seed; delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;"
 SHIFT_ONCE = "    if (!mine.length || theirs.length) return false;"
 DRIVES = "      if (list.length) return list;"
-FILL_OWN = "    if (row) followDistanceOnRow(model, row, lines, miles, false);"
+FILL_OWN = "    if (row) followDistanceOnRow(model, row, lines, miles, false, driveTripsOf(e));"
 INIT_FOLLOW = "if (restructured) B.followDistance(ROOT, carrierBefore, kindsBefore);"
 BASE_FOLLOW = "    B.followDistance(ROOT, carrierBefore, kindsBefore);"       # four spaces: init's own call has one space before the B
 SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
@@ -31,6 +33,10 @@ MARK_PICK = "    if (keep === true) travelRowsIn(to).forEach(markToolCopy);"
 MARK_COPY = "    travelRowsIn(body).forEach(markToolCopy);"
 ONLY_COPIES = '        if (!isToolCopy(r) || say === "") return;'
 ONLY_REPEATS = "        if (!repeats) return;"
+KEEP_TRIP = "    if (isBlank(row.days)) {"
+GIVEN_BACK = "    delete row.hand_added;"
+TRIPS = '    var hours = trip === "" ? "" : trip * (trips === undefined ? 1 : trips);'
+OPTION_TRIPS = '        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true, driveTripsOf(e));'
 
 # (Round 7 retired three entries with the one-drive law. "The settling does not re-derive the guys": since Hanz's D1 a base's drive is its own crew's from the start, so a restructure
 # that keeps the base moves no guys and a carried drive is refilled where it lands; the sync is held by test_polish_travel_round7.py's Combo saved under the one-drive law and by
@@ -61,7 +67,7 @@ BREAKS = {
     "only the first base drives (the one-drive law)": (
         "js/bid-model.js", DRIVES, "      if (list.length) return list.slice(0, 1);", "far", 2, {"FAR_BASES"}),
     "a Gyp base's drive is not filled": (
-        "js/bid-model.js", FILL_OWN, '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false);', "far", 2, {"FAR_BASES"}),
+        "js/bid-model.js", FILL_OWN, '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false, driveTripsOf(e));', "far", 2, {"FAR_BASES"}),
     "a new base that holds its own drive is carried a second one": (
         "js/bid-model.js", SHIFT_ONCE, "    if (!mine.length) return false;", "far", 2, {"DOUBLE", "ONE_ROW"}),
     "a base that stays a base is carried the old base's typed drive": (
@@ -80,6 +86,15 @@ BREAKS = {
         "js/bid-model.js", ONLY_COPIES, '        if (say === "") return;', "said", 0, {"OWNED", "PROMOTED"}),
     "a copy that repeats no other base's row is given back": (
         "js/bid-model.js", ONLY_REPEATS, "        void repeats;", "sheetsTyped", 3, {"OWNED"}),
+    # round 7, part 4 (P1: Kyle's sheets carry the same trip on both crews, each its own guys): the copy given back keeps the trip it held; (P2) a Gyp drive is a round trip for each mobilization
+    "a copy given back is refilled from the round trip (part 3's rule)": (
+        "js/bid-model.js", KEEP_TRIP, "    if (true) {", "said", 0, {"COPY_TRIP"}),
+    "a copy given back is put back to its own default rate (part 3's rule)": (
+        "js/bid-model.js", GIVEN_BACK, "    delete row.hand_added; row.rate = 33; delete row.rate_typed;", "said", 0, {"COPY_TRIP"}),
+    "a Gyp base's drive is one round trip whatever the mobilizations": (
+        "js/bid-model.js", TRIPS, "    var hours = trip;", "far", 2, {"FAR_BASES"}),
+    "a far answer gives a Gyp option one round trip whatever its own mobilizations": (
+        "js/bid-model.js", OPTION_TRIPS, '        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true, 1);', "dist", 2, {"OPT_FOLLOWS"}),
 }
 
 

@@ -182,7 +182,7 @@ def test_a_gyp_jobs_drive_fills_and_switched_to_polish_prices_the_drive_on_the_c
     s = ran["gypToPolish"]
     assert s["gyp"]["pricedOn"] == ['Gyp (USG 1-8")'] and s["gyp"]["travelDollars"] == 858 and s["gyp"]["distance"] == 190
     assert _row(s["gyp"], 'Gyp (USG 1-8")') == CREW_ROW and s["gyp"]["laborTotals"] == {'Gyp (USG 1-8")': 1584 + 858}, "the typed pour and the crew's own drive"
-    assert s["gypCard"] == TRIP + ". Type more trips for a long job."
+    assert s["gypCard"] == TRIP + ". A round trip for each mobilization typed on the Gyp card.", "a Gyp drive's trips are its mobilizations (round 7, part 4, P2)"
     o = s["open"]
     assert (o["job"]["carrier"], o["job"]["jobType"]) == ("Polish", "polish")
     assert o["job"]["saves"] == 0 and o["job"]["asked"] == 0

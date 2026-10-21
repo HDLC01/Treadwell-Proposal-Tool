@@ -18,7 +18,7 @@ F2: a far Polish, the x, an Epoxy sheet made the base, Add Travel Labor on it, t
     on a demotion that loses its line; the two part-5 entries that put that loss back (test_polish_travel_sequences_reload.py) now see it through this rule.
 
 `answerJobs` is F1's family (three steps among the four job types and the answer), `answerSheets` F2's (the Sheets actions and the answer), `answer` every kind of step two deep, and `answers` the
-twenty-two sequences of the answer's own, the audit's three among them.
+twenty-four sequences of the answer's own, the audit's three among them (twenty-two until round 7, part 4 added the x on both drives of a Combo, P3).
 
 ROUND 7, PART 1 (2026-10-21, Hanz's decisions D1 to D3): a far Combo has two drives, one per base crew, so the answer is three answers. The x on the drive of a SINGLE-base job is the job's
 (`no_travel_labor`, J), and holds through every switch (D3); the x on one base's drive of a Combo is that sheet's (`sheet_no_travel_labor`, S), and the remaining base keeps it when the job goes
@@ -74,14 +74,15 @@ def test_the_answer_walk_is_clean_on_a_job_that_starts_local_or_with_no_distance
 
 
 def test_the_answers_own_sequences_are_clean_and_none_is_cut_short():
-    """The twenty-two sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
+    """The twenty-four sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
     it, the Epoxy + Polish-copy pair, twice, an option holding its own drive made the carrier by a job-type switch and by a base pick, and since round 7 a Combo sheet's own answer on either
-    base, the job's answer held through a Combo and taken back on its second base, and a tool line released on promotion by a pick and by a switch): every rule after every step. None may be
-    skipped (a step the page offers nothing to press on would shorten the sequence without a word)."""
+    base, the job's answer held through a Combo and taken back on its second base, a tool line released on promotion by a pick and by a switch, and since round 7, part 4 the x on both drives
+    of a Combo, in either order, held through the switches after it, a new Gyp section among them, and taken back by Add): every rule after every step. None may be skipped (a step the page
+    offers nothing to press on would shorten the sequence without a word)."""
     require_node()
     got = run("answers", 0)
     _walked(got, 55, 8, 30)
-    assert got["sequences"] == 22 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
+    assert got["sequences"] == 24 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
     assert got["violations"] == {} and got["crashes"] == [], explain(got)
 
 
@@ -97,6 +98,7 @@ CARRY_REFUSED = '      if (model.no_travel_labor === true || sheetSaidNoDrive(to
 KEEP_ADDED = '        releaseNobodysTravelRow(model, tab, wasKind === "option");'
 FRESH_LINE = "        e.section.labor.push(freshDriveRow(model));"
 SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
+LAST_X = "    if (drives.length > 1 && !drivesHoldTravel(model)) {"
 
 # (Until round 7 the settling of the answer when an option that holds a line is made the base was held on the page alone (test_polish_travel_round6_answer.py): the walk ended its rule at
 # a Sheets action. Since Hanz's decisions of 2026-10-21 no step is exempt (the round-6 audit's F-D) and PROMOTED judges every promotion, so the walk sees it: the last entries below.)
@@ -132,6 +134,9 @@ BREAKS = {
         "js/bid-model.js", KEEP_ADDED, "        releaseNobodysTravelRow(model, tab, false);", "answers", 0, {"PROMOTED"}),
     "an option made a base with no line is given none": (
         "js/bid-model.js", FRESH_LINE, "        void freshDriveRow;", "reload", 2, {"PROMOTED", "FAR_BASES"}),
+    # round 7, part 4 (P3: the round-7 audit's F3): the x on the last base's drive of a Combo is the job's answer, which a later switch holds (D3)
+    "the x on both drives of a Combo leaves the job without its answer": (
+        "js/bid-model.js", LAST_X, "    if (false) {", "answers", 0, {"ANSWER_OWNER"}),
     # round 6, part 3 (M1): the Epoxy + Polish-copy pair's carrier is the order of its two bases, which a reload hands back in jsonb's order; the answers' own sequences see the code from before `seq`
     "the sheets are listed in the order the server returns their keys (the pair's carrier moves on a reload)": (
         "js/bid-model.js", SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "answers", 0, {"RELOAD_AGREES"}),

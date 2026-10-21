@@ -48,9 +48,10 @@ GYP_CARD_PER_DIEM = ("Meals while the guys are away, expected at 70 miles or mor
                      "a day of per diem for each, as Kyle's Gyp sheet counts them. Type your own to use them instead. Under 70 miles this line stays gray.")
 CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. "
        "On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.")
-# (Round 7, D2: a Gyp carrier's drive fills from the miles too, so its sentence says so; it said "On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time.")
+# (Round 7, D2: a Gyp carrier's drive fills from the miles too, so its sentence says so; it said "On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time."
+# Round 7, part 4, P2: a round trip for each mobilization on its Gyp card.)
 GYP_CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. "
-           "On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew's hours, "
+           "On a far job Travel Labor fills in from the miles, a round trip for each mobilization, and the nights and per diem days from the crew's hours, "
            "10 hours a night; type over any of them to use your own.")
 
 # What sits under the Nights and Days boxes (and under the line's name on the Review) while a far answer's figure follows the labor.
@@ -497,7 +498,7 @@ CARD_GYP_LODGING = ('        ? (isNight ? "Overnight stays are expected at 70 mi
 CARD_GYP_PER_DIEM = '          : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the crew\'s hours, " +'.replace("\\'", "'")
 CARD_LODGING_LINE = '        ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the man-days, a night for each, " +'
 CARD_PER_DIEM_LINE = '        : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the man-days, a day of " +'
-CAP_GYP = "          ? 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew\\'s hours, ' +"
+CAP_GYP = "          ? 'On a far job Travel Labor fills in from the miles, a round trip for each mobilization, and the nights and per diem days from the crew\\'s hours, ' +"
 CAP_LINE = "          : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');"
 REVIEW_QTY = "      var qty = ownTravel ? B.optionNights(ROOT, activeTab) : B.travelQty(tl, M.labor, B.travelOpts(ROOT, activeTab));"
 

@@ -224,7 +224,9 @@ def test_editing_a_section_beside_the_polish_root_never_writes_over_the_roots_ro
     assert b["stripTabs"] == ['data-section-tab="Polish"', 'data-section-tab="Epoxy"']
     assert b["epoxyMeasurement"] == "5500", "the number typed on the Epoxy tab is the Epoxy section's"
     assert b["rootTakeoff"] == b["rootBefore"] and len(b["rootTakeoff"]) == 3, "the root's own takeoff is as it was"
-    assert "polishing" in b["rootLaborIds"] and b["epoxyLaborIds"] == ["epoxy-install"]
+    # The Epoxy base's own lines, and since round 7, part 4 (P4) its own Travel Labor line: the fixture is a Combo saved with no line on its Epoxy base and no answer of its own (the one-drive
+    # law's shape), which opens with that base's drive given (B.giveEveryBaseItsDrive; test_polish_travel_round7_part4.py). The root's rows are its own.
+    assert "polishing" in b["rootLaborIds"] and b["epoxyLaborIds"] == ["epoxy-install", "travel"]
 
 
 def test_the_add_pop_up_offers_the_work_types_own_rows_first_in_an_epoxy_section_and_leaves_the_roots_order_alone(ran):

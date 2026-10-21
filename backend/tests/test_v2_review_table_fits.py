@@ -49,6 +49,16 @@ refusal's line ran 11px under it; from 916px up the table fits and at 390px the 
 box (the "%" and its gap, and the cell's own padding), so the browser scrolls the table to its end for a box in that column: at 880, 850, 820, 600 and 390px the "%" and the refusal's line ended 8px
 clear of the column (688 against 696 at 880px). `refusal_line_problems` does that arithmetic on the CSS, and requires the padding to leave a % box's line room at the narrowest phone.
 
+ROUND 7, PART 4 (2026-10-21, P8: the round-6 staging walk's X2, a regression of #697): A RATE TOO WIDE FOR ITS CELL. On a Gyp bid the Takeoff card's Primer row prints its rate worked to four places,
+"$16.8113 / gallon" (the library's $891 drum over its 53 gallons), and Chrome measured that text at 116.8px in a Rate cell that holds 92px (108 less its 8px a side): with the cell `white-space: nowrap`
+the end ran under the pinned Total column and read "$16.8113 / gall" at 916px with the sidebar open. The arithmetic had typed the widest rate as twelve characters ("$0.0987 / SF"). The fix lets a Rate
+cell of the Review's cards break between its figure and its unit, balanced (`.rev-t td.rt{white-space:normal;text-wrap:balance}`: "$16.8113" over "/ gallon"), so what the cell needs is its widest piece,
+never the whole line, and no column or minimum moves (the table still fits from 900px with the sidebar open). WIDEST_RATE is that string, the real widest one: test_the_widest_rate_a_gyp_review_prints_is_the_one_the_arithmetic_holds
+runs the Gyp page (tests/js/gyp-page-harness.js) on the seeded library and reads every Rate cell it draws. The markup card's Rate cells do not wrap and hold the % boxes and twelve characters at most.
+MEASURED ONCE IN A BROWSER, which this file cannot repeat: on 2026-10-21 Chromium (Playwright) laid out the page's own stylesheet over a Gyp Takeoff card's rows in the 575px box of 916px with the sidebar
+open. With the old rule "$16.8113 / gallon" was 116.8px in its 92px content box and ran 16.8px under the Total column, and "$237.12 / roll" 4.2px past its content box; with the fix the Primer
+rate read "$16.8113" over "/ gallon" (55px), "$237.12" over "/ roll", no cell's content overflowed, and the table was exactly its 575px box.
+
 The last block puts the old rules (and each new rule, one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
 """
 from __future__ import annotations
@@ -58,8 +68,11 @@ import re
 import pytest
 
 from _golden_support import FRONTEND, break_source
+from _node import last_json_line, require_node, run_node
+from _seed_support import plan_json
 
 PAGE_PATH = FRONTEND / "polish-estimate.html"
+GYP_HARNESS = FRONTEND.parent / "backend" / "tests" / "js" / "gyp-page-harness.js"
 AUTH_PATH = FRONTEND / "auth.js"
 JS_PATH = FRONTEND / "js" / "polish-estimate.js"
 
@@ -72,8 +85,24 @@ QUANTITY_HEADER = 62         # "QUANTITY" at 10.5px with its letter-spacing, bef
 # Two more, by arithmetic and not by measurement (the audit measured the boxes and the words, which were what overflowed): the widest figure a card prints in each of these columns, at
 # 0.6em a character, the widest monospace face a browser falls back to.
 QUANTITY_WORKING = 66        # "4 × 12 × 8", the working under a labor line's hours: ten characters of 11px monospace
-RATE_FIGURE = 90             # "$0.0987 / SF", "$33.125 / hr": twelve characters of 12.5px monospace
+MK_RATE_FIGURE = 90          # the markup card's Rate cells do not wrap: "$123.45 / SF", the lump sum a square foot, twelve characters of 12.5px monospace
 ITEM_CONTENT_MIN = 122       # the Item column wraps; below this much room for its words a label of two words stands on a line of its own (round 5's 150px column less its 28px of padding)
+# THE WIDEST RATE THE REVIEW'S CARDS PRINT (round 7, part 4, P8: the round-6 staging walk's X2). The Gyp Primer row's rate on the seeded library, read off the page by
+# test_the_widest_rate_a_gyp_review_prints_is_the_one_the_arithmetic_holds. Chrome measured it at 116.8px on the walk (12.5px Consolas, 0.55em a character); at the 0.6em a character this file
+# takes for the widest monospace face a browser falls back to, it is 127.5px. A Rate cell holds 92px.
+WIDEST_RATE = "$16.8113 / gallon"
+WIDEST_RATE_MEASURED = 116.8
+RATE_CHAR = 0.6 * 12.5       # a character of the Review's 12.5px monospace, at 0.6em
+
+
+def rate_text_width(text: str) -> float:
+    """What a rate's text needs to stand on one line: the walk's measurement for the widest string, and 0.6em a character for any text (the larger of the two)."""
+    return max(len(text) * RATE_CHAR, WIDEST_RATE_MEASURED if text == WIDEST_RATE else 0)
+
+
+def widest_piece(text: str) -> str:
+    """The widest piece a cell that may wrap can break `text` into: its longest run between spaces (a no-break space holds its neighbours together)."""
+    return max(text.split(" "), key=len)
 
 # The staging walk of #694 (a real browser): the table's box at 916px with the sidebar open was 575px. A classic vertical scrollbar of 15px is the one value for which every number below holds.
 SCROLLBAR = 15
@@ -247,6 +276,14 @@ def out_of_view(f: dict, window: int, rail_open: bool, scrollbar: int = SCROLLBA
 
 
 # ── what each column needs, and what it has ─────────────────────────────────────────────────────────────
+def rate_cell_wraps(css: str) -> bool:
+    """May a Rate cell of the Review's cards (`.rev-t td.rt`) break its text over lines? Every rule whose selector list names it, merged in the page's order (a later one wins): white-space normal (or a
+    pre-wrap kind), and no text-wrap or text-wrap-mode that says nowrap."""
+    d = _decls_for(css, ".rev-t td.rt")
+    ws = d.get("white-space", "normal")
+    return ws in ("normal", "pre-wrap", "pre-line", "break-spaces") and d.get("text-wrap", "").split(" ")[0] != "nowrap" and d.get("text-wrap-mode", "wrap") != "nowrap"
+
+
 def needs(f: dict) -> dict:
     """{column: px} the column must be, from what the cards put in it plus the cell's own padding (the stricter of the two tables, and of the header and the body cells)."""
     css = f["css"]
@@ -255,11 +292,14 @@ def needs(f: dict) -> dict:
     pct_box = _px(_rule(css, ".adjbox input,.mk .adjbox input"), "width")
     amt_box = _px(_rule(css, ".adjbox.adjamt input,.mk .adjbox.adjamt input"), "width")
     unit_wraps = _rule(css, ".rev-t td.u,.mk td.u").replace(" ", "").split("white-space:")[-1].startswith("normal")
+    # A Rate cell of the Review's cards that may wrap needs its widest piece; one that may not needs the whole text (round 7, part 4, P8). Every rule naming `.rev-t td.rt` counts, the later winning.
+    rate_wraps = rate_cell_wraps(css)
+    rev_rate = rate_text_width(widest_piece(WIDEST_RATE)) if rate_wraps else rate_text_width(WIDEST_RATE)
     content = {                                   # column: (what the header holds, what a body cell holds)
         1: (0, ITEM_CONTENT_MIN),
         2: (QUANTITY_HEADER, QUANTITY_WORKING),
         3: (0, LONGEST_UNIT_WORD if unit_wraps else LONGEST_UNIT_TEXT),
-        4: (0, max(pct_box + PERCENT_AND_GAP, RATE_FIGURE)),
+        4: (0, max(pct_box + PERCENT_AND_GAP, MK_RATE_FIGURE, rev_rate)),
         5: (0, max(mk_box, amt_box + DOLLAR_AND_GAP)),
     }
     out = {}
@@ -497,6 +537,36 @@ def test_every_column_holds_what_the_cards_put_in_it():
     assert fit_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
 
 
+def test_a_rate_too_wide_for_its_cell_wraps_its_unit_under_its_figure_and_the_total_stays_in_view():
+    """ROUND 7, PART 4 (P8: the walk's X2). The widest rate the Review prints, "$16.8113 / gallon" (116.8px measured, 127.5px at 0.6em), is wider than the 92px a Rate cell holds, so the cell may
+    break it between its figure and its unit: its widest piece, "$16.8113", needs 60px, and the % box's line (80px) is what the column is sized for. No width or minimum moved: the table fits its 575px
+    box at 916px with the sidebar open, the Total column in view, and from 900px up.
+
+    Mutation: the Rate cell's rule taken away (nowrap again), which the check names as the Rate column too narrow for what it holds."""
+    page = PAGE_PATH.read_text(encoding="utf-8")
+    css = _css(page)
+    assert rate_cell_wraps(css)
+    assert widest_piece(WIDEST_RATE) == "$16.8113" and rate_text_width(widest_piece(WIDEST_RATE)) == 60
+    f = facts(page)
+    room = f["columns"][4][1] - max(l + r for l, r in (_cell_pads(css, "td")[".rev-t"][3],))
+    assert room == 92 and rate_text_width(WIDEST_RATE) > room >= rate_text_width(widest_piece(WIDEST_RATE)), "the whole line does not fit a Rate cell, its widest piece does"
+    assert fit_problems(page) == [] and at_916_problems(page) == []
+
+
+def test_the_widest_rate_a_gyp_review_prints_is_the_one_the_arithmetic_holds(tmp_path):
+    """EXECUTED: the Gyp page on the seeded library, taken to its Review (tests/js/gyp-page-harness.js), and every Rate cell it draws read back. "$16.8113 / gallon" (the Primer row) is among them and no
+    rate is longer, so the content width above is the real widest string, not a guess; and every rate's widest piece fits the 92px of a Rate cell at 0.6em a character, which is what lets the cell
+    wrap instead of running under the pinned Total column."""
+    require_node()
+    proc = run_node(GYP_HARNESS, FRONTEND, plan_json(tmp_path))
+    assert proc.returncode == 0, "the Gyp page harness failed:\n" + proc.stderr[-1500:]
+    rates = last_json_line(proc.stdout)["review"]["rates"]
+    assert WIDEST_RATE in rates and max(len(t) for t in rates) == len(WIDEST_RATE), rates
+    css = _css(PAGE_PATH.read_text(encoding="utf-8"))
+    room = facts(PAGE_PATH.read_text(encoding="utf-8"))["columns"][4][1] - max(l + r for l, r in (_cell_pads(css, "td")[".rev-t"][3],))
+    assert [t for t in rates if rate_text_width(widest_piece(t)) > room] == [], "a rate has a piece wider than its cell"
+
+
 def scroll_problems(page: str) -> list[str]:
     """Does a table wider than its box scroll INSIDE its own box (the page never scrolls sideways for a table), and is every Review card drawn in such a box?"""
     css = _css(page)
@@ -665,6 +735,9 @@ MUTATIONS = [
     ("a Quantity column too narrow for its heading", NEW["qty"], ".rev-t th:nth-child(2),.mk th:nth-child(2){width:70px}", "Quantity column"),
     ("the old Unit share", NEW["unit"], ".rev-t th:nth-child(3),.mk th:nth-child(3){width:12%}", "Unit column"),
     ("a Rate column too narrow for its box", NEW["rate"], ".rev-t th:nth-child(4),.mk th:nth-child(4){width:96px}", "Rate column"),
+    # round 7, part 4 (P8: the walk's X2): a Rate cell that may not wrap holds "$16.8113 / gallon" on one line, wider than the cell, which runs under the pinned Total column
+    ("a Rate cell that may not wrap its unit under its figure", ".rev-t td.rt{white-space:normal;text-wrap:balance}", "", "Rate column is 108px and its contents need 143px"),
+    ("a Rate cell told not to wrap after all", ".rev-t td.rt{white-space:normal;text-wrap:balance}", ".rev-t td.rt{white-space:normal;text-wrap:nowrap}", "Rate column"),
     ("the old Total share", NEW["total"], ".rev-t th:nth-child(5),.mk th:nth-child(5){width:14%}", "Total column"),
     ("Unit words that cannot wrap", NEW["words"], ".rev-t td.u,.mk td.u{color:var(--ink-3);white-space:nowrap}", "Unit column"),
     ("the old padding between the Review cells", ROUND_6["rev_cells"][0], ROUND_6["rev_cells"][1], "Unit column"),

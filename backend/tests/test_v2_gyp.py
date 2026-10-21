@@ -139,10 +139,11 @@ def test_a_far_gyp_jobs_travel_labor_fills_from_the_miles_and_its_card_says_so(r
     for marker in ("guys_typed", "hours_typed"):
         assert marker not in f["row"], marker
     assert (f["hoursBox"], f["guysBox"]) == ("6.5", "0") and f["srcNote"]["hidden"] is False
+    # (since round 7, part 4, P2, a Gyp drive is a round trip for each mobilization on its Gyp card: one with the box blank, as here; test_polish_travel_round7_part4.py holds three)
     assert f["srcNote"]["text"] == ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each guy on the labor lines above. "
-                                    "It prices once those lines have guys. Type more trips for a long job.")
-    expected = ("Drive time is expected at 70 miles or more from the office. There the hours fill in from the miles, one round trip, and the "
-                "guys are the most on any labor line. Under 70 miles this line stays gray.")
+                                    "It prices once those lines have guys. A round trip for each mobilization typed on the Gyp card.")
+    expected = ("Drive time is expected at 70 miles or more from the office. There the hours fill in from the miles, one round trip for each mobilization on the Gyp card, "
+                "and the guys are the most on any labor line. Under 70 miles this line stays gray.")
     assert f["cardNote"] == expected
     assert ran["laborCards"]["travelNote"] == expected
     for note in (f["cardNote"], ran["laborCards"]["travelNote"]):
@@ -475,12 +476,12 @@ MUTATIONS = {
         lambda r: r["priced"]["sheetArea"] != {"gyp_soft_sf": 9000, "gyp_hard_sf": 6000, "gyp_corridor_sf": 2000}),
     # (round 7, Hanz's D2 of 2026-10-21: the break is the old rule now, a Gyp bid's card telling the estimator to type the drive the miles fill)
     "a Gyp bid's Travel card says to type a drive the miles fill": (
-        "js/polish-estimate.js", "                : 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ') +",
-        "                : (gypOpen() ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours. ' "
-        ": 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ')) +",
+        "js/polish-estimate.js", "                : 'There the hours fill in from the miles, ' + (gypOpen() ? 'one round trip for each mobilization on the Gyp card' : 'one round trip') +",
+        "                : (gypOpen() ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours' : 'There the hours fill in from the miles, one round trip') +",
         lambda r: "does not fill" in r["farGyp"]["cardNote"]),
     "a far Gyp job's drive is not filled": (
-        "js/bid-model.js", "    if (row) followDistanceOnRow(model, row, lines, miles, false);", '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false);',
+        "js/bid-model.js", "    if (row) followDistanceOnRow(model, row, lines, miles, false, driveTripsOf(e));",
+        '    if (row && e.layout !== "gyp") followDistanceOnRow(model, row, lines, miles, false, driveTripsOf(e));',
         lambda r: r["farGyp"]["row"]["days"] != 6.5),
     "the proposal names a Gyp system by its first row": (
         "js/bid-model.js", '    if (entry && (entry.role === "gyp" || entry.role === "seal")) {', "    if (false) {",

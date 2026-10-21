@@ -76,7 +76,8 @@ def test_wichita_190_miles_with_four_guys_is_858_dollars_not_ten_thousand(ran):
     assert w["manDays"] == 48 and w["crew"] == 4 and w["on"] is True and w["local"] is False
     assert w["cost"] == w["expected"] == 858 and w["rate"] == 33
     assert w["lodging"] is True and w["perDiem"] is True
-    assert w["source"] == {"hours": 6.5, "roundTrip": 380, "mph": 60}
+    # (since round 7, part 4, P2, the source also says how many round trips the hours are, each one's hours, and whether the section is a Gyp one, whose trips are its mobilizations)
+    assert w["source"] == {"hours": 6.5, "roundTrip": 380, "mph": 60, "trips": 1, "each": 6.5, "gyp": False}
     assert w["words"] == "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the labor lines above"
     assert w["note"] == w["words"] + ". Type more trips for a long job."
     assert "crew" not in w["note"].lower() and "man-days" not in w["note"], "the note claims no man-days and never says crew"
@@ -701,11 +702,11 @@ def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_ba
     markers gone); one that says something else (typed 2 x 4) is the estimator's own choice and stays. (Every clause of "exactly" is pinned ALONE in
     test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect.)
 
-    ON A BASE (round 7, part 3: the round-7 audit's F1). The copy made a base beside the carrier, settled as the page settles it (followDistance), gives the repeat back too, and drives
-    its OWN crew, filled from the miles: 4 x 6.5 = $858 beside the carrier's typed 3 x 5 = $495. Round 7, part 1 pinned $495 + $495 here, "a base keeps its own drive (D1)", and that was
-    wrong: the copy's 3 x 5 is not that sheet's drive, it is the tool's copy (copySection marks it `tool_copy`) of the one figure the estimator typed once, on the carrier's sheet, so it priced
-    one typed figure on two crews. Under Hanz's D1 of 2026-10-21 a base's own drive is its crew's size x the round trip unless the estimator typed it on THAT sheet. A copy that says
-    something else (2 x 4) does not repeat the carrier's and stays.
+    ON A BASE (round 7, part 3: the round-7 audit's F1; part 4, P1). The copy made a base beside the carrier, settled as the page settles it (followDistance), gives the repeat back too, and
+    drives its OWN crew on the TRIP the estimator typed: 4 x 5 = $660 beside the carrier's typed 3 x 5 = $495 (Kyle's sheets carry the same trip on both crews, each its own guys). Round 7,
+    part 1 pinned $495 + $495 here, "a base keeps its own drive (D1)", and that was wrong: the copy's 3 guys are not that sheet's crew, they are the tool's copy (copySection marks it
+    `tool_copy`) of the one figure the estimator typed once, on the carrier's sheet. Part 3 gave the whole copy back and refilled it from the miles, 4 x 6.5 = $858, a trip nobody typed for
+    it; part 4 keeps the typed 5 hours (marked typed) and puts the guys on the copy's own crew of 4. A copy that says something else (2 x 4) does not repeat the carrier's and stays.
 
     Mutation: leave the repeat on its off section (BREAKS below); never give a copy on a base back (test_polish_travel_round7_part3.py)."""
     c = ran["copyRepeat"]
@@ -716,7 +717,8 @@ def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_ba
     assert d["root"] == TYPED_ROOT and d["copy"]["guys"] == "2" and d["copy"]["hours"] == "4" and d["copy"]["cost"] == 2 * 4 * 33 and d["drive"] == 495
     b = c["base"]
     assert b["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
-    assert b["root"] == TYPED_ROOT and b["copy"] == FILLED_FOUR and b["copyMarks"]["keys"] == FILLED_KEYS and b["drive"] == 495 + 858
+    assert b["root"] == TYPED_ROOT and b["copy"] == dict(FILLED_FOUR, hours="5", cost=4 * 5 * 33) and b["copyMarks"]["hoursTyped"] is True and b["copyMarks"]["typed"] is False
+    assert b["copyMarks"]["keys"] == sorted(FILLED_KEYS + ["hours_typed"]) and b["drive"] == 495 + 4 * 5 * 33
     bd = c["baseDifferent"]
     assert bd["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
     assert bd["root"] == TYPED_ROOT and bd["copy"]["guys"] == "2" and bd["copy"]["hours"] == "4" and bd["copy"]["cost"] == 2 * 4 * 33 and bd["drive"] == 495 + 2 * 4 * 33
@@ -1315,8 +1317,8 @@ MUTATIONS = {
         "if (own && travelRowIsAutoFilled(row)) clearQuantities(row);", "if (false) clearQuantities(row);",
         lambda g: g["optionsFollow"]["local"]["option"]["keys"] != EMPTIED_KEYS or g["optionsDemoted"]["local"]["epoxy"] != EMPTIED),
     "an option's empty row is not filled by a far answer": (
-        'if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true);',
-        'if (isTravelRow(r) && r.unit === "hours" && travelRowIsAutoFilled(r)) followDistanceOnRow(model, r, rows, miles, true);',
+        '        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true, driveTripsOf(e));',
+        '        if (isTravelRow(r) && r.unit === "hours" && travelRowIsAutoFilled(r)) followDistanceOnRow(model, r, rows, miles, true, driveTripsOf(e));',
         lambda g: g["optionsFollow"]["farAgain"]["option"]["hours"] != 6.5 or g["optionBlankFilled"]["option"]["hours"] != 6.5),
     "a Gyp option is left out of the answers": (
         OPTIONS_SKIP, 'if (e.kind !== "option" || drives.indexOf(e.tab) >= 0 || e.layout === "gyp" || !isObject(e.section)) return;',
@@ -1332,7 +1334,7 @@ MUTATIONS = {
         lambda g: g["optionsOwned"]["clearedGuys"]["far300"]["guys"] != ""),
     # --- what a given-back row is left as ---
     "a given-back row is left switched off": (
-        "delete row.enabled;", "void row;",
+        "    delete row.enabled;", "    void row;",
         lambda g: g["duplicateOff"]["root"]["on"] is not True or "enabled" in g["duplicateOff"]["rootMarks"]["keys"]
         or g["repeatVariants"]["bothOff"]["copy"]["on"] is not True),
     # --- every clause of "repeats the carrier's row" ---

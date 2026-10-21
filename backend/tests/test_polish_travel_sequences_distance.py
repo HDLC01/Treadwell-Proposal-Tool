@@ -59,7 +59,8 @@ FILLS = "var fills = !row.hours_typed && (isBlank(row.days) || wrote);"
 GUYS_ON = 'if (!row.guys_typed && !row.guys_auto && !filledIn(row.guys)) { row.guys_auto = true; row.guys_follow = "crew"; }'
 OFF_GUARD = "if (!rowOn(row)) return;   // switched off: no fill and no take-back"
 ESTIMATORS = "return !!row && (!rowOn(row) || !travelRowIsHandsOff(row) || travelRateIsTyped(row));"
-OPTION_ROW = 'if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true);'
+# (round 7, part 4, P2: the option's own round trips ride along, and the 8 spaces keep the anchor off followDriveTrips' line, which reads the same)
+OPTION_ROW = '        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true, driveTripsOf(e));'
 SYNC = 'if (r && r.unit === "hours" && r.guys_auto) r.guys = followsCrew(r) ? ownCrewSize(model, lines) : manDays;'
 
 # name -> (old, new, mode, depth, the rules the walk must report)

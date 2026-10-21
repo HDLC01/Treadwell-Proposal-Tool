@@ -506,9 +506,10 @@ async function main() {
   });
 
   // ═══ A COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7) ═══════════════════════════════════════════════════════════════════════════════════════════════════════
-  // The job's one drive sat on the carrier, for the bigger crew (Epoxy's 5 here), and the Epoxy sheet holds no Travel Labor line. Opened plainly, nothing is saved or asked and
-  // the Epoxy sheet offers Add Travel Labor (its drive adds nothing until then). Switched to Epoxy, the job's one drive follows its one base, as it did before round 7: the
-  // Epoxy sheet holds it, on its own crew (5 x 6.5), and the reload prices the same. Made Polish, the root keeps its own.
+  // The job's one drive sat on the carrier, for the bigger crew (Epoxy's 5 here), and the Epoxy sheet holds no Travel Labor line. Opened plainly, nothing is saved or asked, and since round
+  // 7, part 4 (P4) the Epoxy base is given its own drive on open, filled by the rule on its own crew (5 x 6.5): until then it offered Add Travel Labor and priced no drive. Switched to Epoxy,
+  // the Epoxy base keeps that drive, and the reload prices the same. Made Polish, the root keeps its own. (test_polish_travel_round7_part4.py holds the rest: the session, the reloads, a sheet
+  // that said it has none, and the one-drive carry on a model that never went through the open.)
   await section("legacy", async () => {
     const b = await newBid(COMBO(), [CREW_POLISH, CREW_EPOXY]);
     const saved = clone(b.store.blob);

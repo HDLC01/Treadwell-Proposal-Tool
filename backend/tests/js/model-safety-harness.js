@@ -53,6 +53,15 @@ const withoutTotals = (tabs) => (tabs === undefined ? null : JSON.stringify(Obje
   Object.entries(tabs).map(([id, s]) => [id, Object.fromEntries(Object.entries(s).filter(([k]) => k !== "totals" && k !== "seq"))]))));
 /** Each section's place in the bid, [id, seq] in the order the keys are held, or null when there are no `tabs`. */
 const seqsOfTabs = (tabs) => (tabs === undefined || tabs === null ? null : Object.entries(tabs).map(([id, s]) => [id, s && s.seq !== undefined ? s.seq : null]));
+/** THE DRIVE THE OPEN GIVES (round 7, part 4, P4), the third thing a save may write in a section: a Combo saved under the one-drive law (a base with no Travel Labor line and no answer of its own,
+ *  as every Combo was before round 7) opens with that base given its own line (B.giveEveryBaseItsDrive), and the next save writes it. `tabs` with the Travel Labor rows of every section that held
+ *  none in `sent` taken out, and the ids of those sections. */
+const isTravel = (r) => !!r && r.id === "travel";
+const heldDrive = (sent, id) => !!sent && !!sent[id] && Array.isArray(sent[id].labor) && sent[id].labor.some(isTravel);
+const withoutGivenDrives = (tabs, sent) => (tabs === undefined || tabs === null ? tabs : Object.fromEntries(Object.entries(tabs).map(([id, s]) =>
+  [id, heldDrive(sent, id) || !s || !Array.isArray(s.labor) ? s : Object.assign({}, s, { labor: s.labor.filter((r) => !isTravel(r)) })])));
+const givenDrives = (tabs, sent) => (tabs === undefined || tabs === null ? null :
+  Object.entries(tabs).filter(([id, s]) => !heldDrive(sent, id) && s && Array.isArray(s.labor) && s.labor.some(isTravel)).map(([id]) => id));
 
 /** Where two values first part, as a sentence, or null when they do not. */
 function where(want, got) {
@@ -356,12 +365,13 @@ async function estimateSection() {
     // a model that carries what migrateModel does not know
     withTabs: { model: withModel(EVERYTHING), sf: TOTAL_SF, drive: typeMeasure },
   };
-  const pick = (s) => ({
+  const pick = (s, sent) => ({
     polish_sf: s.polish_sf, polish_2_sf: s.polish_2_sf, lump: s.computed_bid.lump_sum,
     computedSf: s.computed_bid.polish_sf,
     cells: s.cell_values ? Object.fromEntries(CELLS.filter((c) => has(s.cell_values, c)).map((c) => [c, s.cell_values[c]])) : null,
     modelKeys: Object.keys(s.polish_estimate).sort(),
-    tabs: withoutTotals(s.polish_estimate.tabs),
+    tabs: withoutTotals(withoutGivenDrives(s.polish_estimate.tabs, sent)),
+    givenDrives: givenDrives(s.polish_estimate.tabs, sent),
     seqs: seqsOfTabs(s.polish_estimate.tabs),
     taxable: s.polish_estimate.conditions.taxable,
     totalsTotal: s.polish_estimate.totals && s.polish_estimate.totals.total,
@@ -402,7 +412,7 @@ async function estimateSection() {
       // the tab closing AFTER the autosave must leave the draft as the autosave wrote it
       settled: !!(both.first && both.saved) && G.same(both.first, both.saved),
       settledDiff: both.first && both.saved ? where(both.first, both.saved) : "nothing was saved",
-      autosave: a.saved ? pick(a.saved) : null, pagehide: p.saved ? pick(p.saved) : null,
+      autosave: a.saved ? pick(a.saved, sc.model.tabs) : null, pagehide: p.saved ? pick(p.saved, sc.model.tabs) : null,
       sentTabs: withoutTotals(sc.model.tabs),
       expectedSf: sc.sf,
     }]);
@@ -437,7 +447,7 @@ async function intakeSection() {
   I.clickSwitch(i, "prevailing_wage");
   i.clock.fire();
   const afterIntake = last(i.rec.saves);
-  const tabsOf = (m) => withoutTotals((m || {}).tabs);
+  const tabsOf = (m) => withoutTotals(withoutGivenDrives((m || {}).tabs, TABS));
   const rawTabsOf = (m) => text((m || {}).tabs);
   return {
     alone: {
@@ -453,6 +463,8 @@ async function intakeSection() {
       intakeLeavesTabsAsSaved: rawTabsOf(afterIntake.polish_estimate) === rawTabsOf(afterEstimate.polish_estimate),
       tabsAfterEstimate: tabsOf(afterEstimate.polish_estimate),
       tabsAfterIntake: tabsOf(afterIntake.polish_estimate),
+      givenDrivesAfterEstimate: givenDrives((afterEstimate.polish_estimate || {}).tabs, TABS),
+      givenDrivesAfterIntake: givenDrives((afterIntake.polish_estimate || {}).tabs, TABS),
       seqsAfterEstimate: seqsOfTabs((afterEstimate.polish_estimate || {}).tabs),
       seqsAfterIntake: seqsOfTabs((afterIntake.polish_estimate || {}).tabs),
       extrasMissingAfterEstimate: Object.keys(EVERYTHING).filter((k) => !has(afterEstimate.polish_estimate, k)),
