@@ -585,7 +585,17 @@
   // epoxy, combo and gyp bids and is not being restructured for the sake of the beta.
   // test_beta_intake_routing.py runs BOTH handlers on one form and compares the saved state key
   // for key, so the two cannot drift apart quietly.
-  if (betaBtn) betaBtn.addEventListener("click", () => {
+  //
+  // IT WAITS FOR THE SAVE BEFORE IT LEAVES (X1, round 4, F3), as the v2 intake's own Continue does. The page it opens asks the server whether
+  // this project has a row, and a project that has been written into and has no row yet looks like one the server never heard of, so that page
+  // STOPS (it must not save someone's bid as a test). The door used to leave at once, so its save went out as the page went and, on a server
+  // that takes a moment over it, the v2 page asked before the row was there. flushState sends the save now and resolves once it has been
+  // answered. BOUNDED: a server that never answers must not leave the estimator on this page, and past the bound this is what the door always
+  // did. A save that FAILS answers at once and is not waited out. The button says what it is doing, ignores a second press, and gives itself
+  // back (with its own markup, the BETA tag) if the browser does not go.
+  let betaLeaving = false;
+  if (betaBtn) betaBtn.addEventListener("click", async () => {
+    if (betaLeaving) return;
     // type="button" never triggers the browser's required-field check, which is the only thing
     // making Continue refuse a project with no name and no bid date. Without this the beta door
     // would be the way to skip validation the spreadsheet path enforces.
@@ -604,7 +614,26 @@
       deadline: values.bid_date || values.deadline || "",
       num_systems: 2,
     });
+    // Set before anything is awaited, so a second press (or Enter, or a script) finds the door busy.
+    betaLeaving = true;
+    const SAVE_WAIT_MS = 8000;               // how long the save is waited for
+    const GIVE_BACK_MS = 10000;              // how long before the door is given back when the browser does not go
+    const markup = betaBtn.innerHTML;        // its words AND the BETA tag, which a plain label would lose
+    betaBtn.disabled = true;
+    betaBtn.textContent = "Saving…";
+    let timer = null;
+    try {
+      await Promise.race([
+        TW.flushState(),
+        new Promise((resolve) => { timer = setTimeout(resolve, SAVE_WAIT_MS); }),
+      ]);
+    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }
+    if (timer) clearTimeout(timer);
+    betaBtn.textContent = "Opening Estimating Tool v2…";
     // withDraft, not a bare path: shared.js's anchor rewriter only covers the four wizard pages
     // (_WIZARD_PATH), so a literal href would open the beta with no project.
     window.location.assign(TW.withDraft("/polish-intake.html"));
+    // The browser may not go (the load was stopped, a prompt was answered no). Then this page is still here, and a door left saying
+    // "Opening..." would be a dead end.
+    setTimeout(() => { betaLeaving = false; betaBtn.disabled = false; betaBtn.innerHTML = markup; }, GIVE_BACK_MS);
   });

@@ -1154,7 +1154,9 @@ def test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_bac
     early = s["samples"]["early"]
     assert early["disabled"] is True and early["saying"] == SAVING, "the door says nothing while it waits: %r" % early
     assert [p["accepted"] for p in s["presses"]] == [True, False], "a second press was taken: %r" % s["presses"]
-    assert len(s["asked"]) == 1 and [q for q in reqs(s, "PUT", s["id"], page="v1intake")] and len(reqs(s, "PUT", s["id"], page="v1intake")) == 1, (
+    # and one that goes ROUND the disabled button (Enter in a box, a script) is ignored by the page itself
+    assert s["forced"] == [400], s["forced"]
+    assert len(s["asked"]) == 1 and len(reqs(s, "PUT", s["id"], page="v1intake")) == 1, (
         "one press must be one save and one move: %r %r" % (s["asked"], reqs(s, "PUT", s["id"], page="v1intake")))
     b = fb["blocked"]
     waiting = b["samples"]["waiting"]
@@ -1382,6 +1384,7 @@ INTAKE = "js/polish-intake.js"
 PAGE = "polish-intake.html"
 PROJECTS = "js/projects.js"
 V2_BOARD = "js/v2-board.js"
+INDEX = "js/index.js"
 
 # shared.js: the stamp and its rules, where a project's start lives, and the copy that goes to the server
 STAMP_CALL = "    if (id) sayWhatItWasStartedAs(id, merged, written);   // a NEW project's first write says what it was started as"
@@ -1444,6 +1447,15 @@ BUTTON_TAG = '        <button type="submit" class="btn-primary" id="continue-btn
 # the v2 board: what a New estimate starts the project as; and what shared.js does with a project nobody typed into
 BOARD_STARTS_AS_TEST = "    TW.setNewProjectTestIntent(true);"
 EVICTED_NEEDS_WORK = "    if (!hasWork(blob)) return;"
+# the live intake's beta door (js/index.js)
+DOOR_FLUSH = "        TW.flushState(),"
+DOOR_BOUND = "        new Promise((resolve) => { timer = setTimeout(resolve, SAVE_WAIT_MS); }),"
+DOOR_GUARD = "    if (betaLeaving) return;"
+DOOR_SAYS_SAVING = '    betaBtn.textContent = "Saving…";'
+DOOR_DISABLES = "    betaBtn.disabled = true;"
+DOOR_SAYS_OPENING = '    betaBtn.textContent = "Opening Estimating Tool v2…";'
+DOOR_GIVEN_BACK = "{ betaLeaving = false; betaBtn.disabled = false; betaBtn.innerHTML = markup; }"
+DOOR_MARKUP_BACK = "betaBtn.innerHTML = markup;"
 # the Projects page
 ACTIVE_TAB = '        else if (CURRENT_FILTER === "active") TW.setNewProjectTestIntent(false);'
 OTHER_TABS = "        else                                  TW.setNewProjectTestIntent(null);"
@@ -1737,6 +1749,34 @@ BREAKS = {
     "the page alone has no Continue button to speak through": (
         "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
         test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    # ── round 4, F3: the beta door waits for the save, says so, and gives itself back ──
+    "the beta door leaves without waiting for its save": (
+        "world", (broken(INDEX, DOOR_FLUSH, "        Promise.resolve(true),"),),
+        test_the_beta_door_waits_for_the_project_to_be_saved_before_it_opens_the_v2_intake),
+    "the beta door waits for a save that never answers, for ever": (
+        "world", (broken(INDEX, DOOR_BOUND, "        new Promise(() => {}),"),),
+        test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends),
+    "the beta door waits for a save that failed at once, for the whole bound": (
+        "world", (broken(INDEX, DOOR_FLUSH, "        new Promise(() => {}),"),),
+        test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends),
+    "the beta door says nothing while it saves": (
+        "world", (broken(INDEX, DOOR_SAYS_SAVING, "    void 0;"),),
+        test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back),
+    "the beta door is never disabled": (
+        "world", (broken(INDEX, DOOR_DISABLES, "    void 0;"),),
+        test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back),
+    "the beta door takes a second press": (
+        "world", (broken(INDEX, DOOR_GUARD, "    void 0;"),),
+        test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back),
+    "the beta door does not say it has asked to leave": (
+        "world", (broken(INDEX, DOOR_SAYS_OPENING, "    void 0;"),),
+        test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back),
+    "the beta door is not given back when the browser does not go": (
+        "world", (broken(INDEX, DOOR_GIVEN_BACK, "{ void 0; }"),),
+        test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back),
+    "the beta door is given back without its markup": (
+        "world", (broken(INDEX, DOOR_MARKUP_BACK, "void 0;"),),
+        test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back),
     # ── round 4, F2: the board leaves a start, so each mechanism on its own is proved on a flow that has none ──
     "no write says what the project was started as (a project with no start)": (
         "world", (broken(SHARED, STAMP_CALL, "    void 0;"),),
@@ -1864,6 +1904,9 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
                  test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has,
                  # round 4
+                 test_the_beta_door_waits_for_the_project_to_be_saved_before_it_opens_the_v2_intake,
+                 test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back,
+                 test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends,
                  test_an_abandoned_board_start_with_nothing_typed_never_becomes_a_row,
                  test_the_v2_boards_new_estimate_starts_the_project_as_a_test_under_its_own_id,
                  test_an_abandoned_v2_start_never_becomes_a_nameless_row,

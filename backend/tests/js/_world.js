@@ -149,9 +149,10 @@ function textNode(text) { return { isText: true, textContent: String(text) }; }
 function makeNode(tag) {
   const listeners = {};
   let own = "";
+  let markup = "";
   const n = {
     tagName: String(tag || "div").toUpperCase(),
-    id: "", name: "", type: "", value: "", checked: false, hidden: false, className: "", innerHTML: "",
+    id: "", name: "", type: "", value: "", checked: false, hidden: false, className: "",
     style: {}, dataset: {}, children: [], elements: [], attrs: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
@@ -180,9 +181,15 @@ function makeNode(tag) {
     closest() { return null; },
     focus() {}, blur() {}, select() {},
   };
+  // As in a DOM: setting the text replaces whatever markup the node held, and setting the markup replaces the text; the text of a node
+  // that holds only markup is that markup without its tags (so a button given back its markup reads as its words again).
+  Object.defineProperty(n, "innerHTML", {
+    get() { return markup; },
+    set(v) { markup = String(v); own = ""; n.children = []; },
+  });
   Object.defineProperty(n, "textContent", {
-    get() { return own + n.children.map((c) => c.textContent).join(""); },
-    set(v) { n.children = []; own = String(v); },
+    get() { return markup && !own && !n.children.length ? markup.replace(/<[^>]*>/g, "") : own + n.children.map((c) => c.textContent).join(""); },
+    set(v) { n.children = []; own = String(v); markup = ""; },
   });
   return n;
 }

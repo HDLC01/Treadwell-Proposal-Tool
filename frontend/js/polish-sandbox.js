@@ -472,12 +472,14 @@
     // it is treated like a project with nothing in it.
     //
     // A PROJECT THAT HAS BEEN WRITTEN INTO, IS NOT KNOWN TO BE A TEST, AND HAS NO ROW YET STOPS THE PAGE. The live intake's "Continue
-    // with Estimating Tool v2" saves as it goes and opens this page at once, so when the server is slow the row is still on its way
-    // (or its save was refused, or the row is gone) when this page asks. The blob says what was written: is_test false is the Active
+    // with Estimating Tool v2" waits for its save to be answered before it opens this page (js/index.js, bounded), so what gets here without a
+    // row is a save that was refused, or one the server has not answered within that bound, or a row that is gone, or a page opened by a link
+    // while another page's save is still on its way. The blob says what was written: is_test false is the Active
     // tab's bid, and content with no word at all is a project from the All tab; only is_test true is a test. Neither of those is a
     // sandbox. Saving it as one would file a bid under Test (the All tab's by SEEDING the row the other page's save then creates),
     // and editing it here would be the beta editing a bid under a note that says "a NEW test project". Stopping, as every other read
-    // that cannot be trusted does, writes nothing; the save on its way lands, and opening it again finds a project to copy. What a
+    // that cannot be trusted does, writes nothing; if the save on its way lands, reloading this page finds a project to copy (a save
+    // that was refused does not land, and the note says only that it has not reached the server). What a
     // board's New button leaves ({ audience: "GC" }) is not written content.
     //
     // A SAVE THAT DID NOT LAND IS SAID, NEVER CLAIMED AS A FILING: there is no row on the server to be filed. The project
@@ -488,7 +490,7 @@
       var written = Object.keys(state).some(function (k) { return k !== "__draft_id" && k !== "audience" && k !== "is_test"; });
       if (said === false || (said !== true && written)) {
         loadingNote("Estimating Tool v2 stopped rather than edit a project that has not been saved yet. Its first save has not " +
-          "reached the server, so there is no test copy to make. Open it again from Projects once it has saved.");
+          "reached the server, so there is no test copy to make. Reload this page once it has saved.");
         return false;
       }
       var real = TW.startOf(id) === false;

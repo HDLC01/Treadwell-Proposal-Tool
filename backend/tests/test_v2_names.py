@@ -443,8 +443,8 @@ def test_the_sandbox_names_the_tool_wherever_it_stops(ran):
         "copyCannotBeMade": "Couldn't make the test copy, so %s stopped rather than edit the real "
                             "project itself. Reload to try again." % TOOL,
         "realBidNotSavedYet": "%s stopped rather than edit a project that has not been saved yet. Its first "
-                              "save has not reached the server, so there is no test copy to make. Open it "
-                              "again from Projects once it has saved." % TOOL,
+                              "save has not reached the server, so there is no test copy to make. Reload this "
+                              "page once it has saved." % TOOL,
     }
     stops["unsavedProjectNoWord"] = stops["realBidNotSavedYet"]
     stops["foreignBlob"] = ("%s stopped rather than save another project's copy under this one. This browser's saved copy belongs "

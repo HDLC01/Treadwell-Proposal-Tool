@@ -1125,17 +1125,19 @@ async function betaDoor(tab, opts) {
   if (o.blocked) w.navigationBlocked = true;
   const t0 = w.now();
   const presses = [];
+  const forced = [];
   const samples = {};
   for (const s of o.steps.slice().sort((a, b) => a.at - b.at)) {
     const dt = t0 + s.at - w.now();
     if (dt > 0) await w.advance(dt);
     if (s.press) presses.push({ at: w.now() - t0, accepted: live.pressBetaDoor() !== false, door: live.betaDoor() });
+    if (s.force) { live.nodes["beta-continue"].fire("click"); forced.push(w.now() - t0); }   // goes round a disabled button, as a script does
     if (s.sample) samples[s.sample] = Object.assign({ at: w.now() - t0 }, live.betaDoor());
   }
   await w.settle(o.settleMs);
   const v2 = w.pageOf("intake");
   const puts = w.requestsLog().filter((q) => q.route === "PUT" && q.id === id && q.page.startsWith("v1intake"));
-  return summary(w, id, { tab: tab, shipped: shipped, t0: t0, presses: presses, samples: samples, doorAtEnd: live.betaDoor(),
+  return summary(w, id, { tab: tab, shipped: shipped, t0: t0, presses: presses, forced: forced, samples: samples, doorAtEnd: live.betaDoor(),
     v2: v2 ? Object.assign(w.pageReport(v2), { kind: v2.kind }) : null,
     asked: w.navs.filter((n) => n.from.indexOf("v1intake") === 0).map((n) => ({ at: n.askedAt - t0, to: n.to, blocked: !!n.blocked })),
     livePuts: puts.map((q) => ({ at: q.at - t0, repliedAt: q.repliedAt === null ? null : q.repliedAt - t0, keepalive: q.keepalive, status: q.status })) });
@@ -1333,7 +1335,7 @@ process.on("exit", (code) => {
   out.betaDoorFeedback = {
     // a slow server: the door says what it is doing and a second press does nothing
     saving: await betaDoor("active", { world: SLOW_SAVE, steps: [{ at: 0, press: true }, { at: 50, sample: "early" }, { at: 300, press: true },
-                                                                  { at: 1000, sample: "late" }] }),
+                                                                  { at: 400, force: true }, { at: 1000, sample: "late" }] }),
     // a server that never answers: the door leaves when its wait is over
     hung: await betaDoor("active", { faults: [{ route: "PUT", mode: "hang", times: 1 }], steps: [{ at: 0, press: true }, { at: 4000, sample: "midway" }] }),
     // a save that fails at once is not waited out
