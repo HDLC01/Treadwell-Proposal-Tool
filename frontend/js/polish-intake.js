@@ -801,10 +801,16 @@
     // cannot finish: leaving by a link, Back, a reload or a closed tab within 600 ms of an edit saved nothing at all (no row, the
     // typed text only in localStorage), under a comment that said keepalive. A keepalive request outlives the page, and the row it
     // creates is born filed. A draft too big to go that way (shared.js keepaliveFits) is sent plain, as it always was.
+    //
+    // ONE SAVE GOES, AND IT IS THIS PAGE'S (X1, round 4, F4). shared.js's own pagehide handler runs first and used to send the shared blob as it
+    // stood, then this one saved and sent the newest: two keepalive PUTs of one draft, which a server can finish out of order and a browser counts
+    // against one 64 KiB budget. The page says, through TW.pageSavesOnLeave, that while its own timer is pending this handler saves and sends, so
+    // shared.js stands down; and because it stands down on that word, the flush happens even if the save throws.
+    TW.pageSavesOnLeave(function () { return !!saveTimer; });
     window.addEventListener("pagehide", function () {
       if (!saveTimer) return;
-      save();            // clears the 600ms timer, runs TW.setState synchronously
-      TW.flushState({ keepalive: true });   // sends the save now instead of waiting on the 2.5s debounce
+      // save() clears the 600ms timer and runs TW.setState synchronously; flushState sends the save now instead of waiting on the 2.5s debounce
+      try { save(); } finally { TW.flushState({ keepalive: true }); }
     });
   }
 

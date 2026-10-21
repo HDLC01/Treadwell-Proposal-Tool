@@ -1159,8 +1159,21 @@
   window.addEventListener("pageshow", (e) => { if (e.persisted) window.location.reload(); });
   // Flush the pending debounced save on navigation so the last ≤2.5s of edits
   // aren't dropped (same refusal rule as scheduleServerSave).
+  //
+  // ONE SAVE AS THE PAGE GOES (X1, round 4, F4). This handler is registered first, so it ran before a page's own pagehide handler, and a page
+  // that saves and sends its own newest copy there (the v2 intake and the v2 estimate page: save(), then flushState with keepalive) made TWO
+  // keepalive PUTs of one draft: the shared blob as it stood, then the newest. A server can finish them out of order and keep the older, and the
+  // browser counts keepalive bodies against ONE 64 KiB budget, so for a draft half that size the newest was refused outright. A page says,
+  // through pageSavesOnLeave, when its own handler is about to save and send, and this handler then stands down: the page's runs next, and its
+  // flushState sends the shared blob (which carries every write the page has made) once. A page that says nothing, or whose own save is not
+  // pending, is covered here as it always was.
+  let _pageSavesOnLeave = null;
+  function pageSavesOnLeave(isPending) { _pageSavesOnLeave = typeof isPending === "function" ? isPending : null; }
   window.addEventListener("pagehide", () => {
     if (!_saveTimer) return;
+    let pageSends = false;
+    try { pageSends = !!(_pageSavesOnLeave && _pageSavesOnLeave()); } catch { pageSends = false; }
+    if (pageSends) return;
     clearTimeout(_saveTimer); _saveTimer = null;
     const id = getDraftId();
     const blob = id ? queuedBlob(id) : null;
@@ -1975,6 +1988,7 @@
     setNewProjectTestIntent,
     startOf,
     startsAsTest,
+    pageSavesOnLeave,
     withDraft,
     draftReady,
     publishDigest,

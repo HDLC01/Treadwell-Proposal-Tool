@@ -862,13 +862,17 @@
   //
   // THE FLUSH IS A KEEPALIVE REQUEST, as the intake page's is (F5 of the audit of X1, round 2): a plain request is dropped with the
   // page that sent it, so leaving within the 600 ms still lost the edit. A draft too big for one (shared.js keepaliveFits) goes plain.
+  //
+  // ONE SAVE GOES, AND IT IS THIS PAGE'S (X1, round 4, F4), as on the intake page: shared.js's own pagehide handler runs first and used to send
+  // the shared blob as it stood before this one saved and sent the newest, two keepalive PUTs of one draft. The page tells shared.js, through
+  // TW.pageSavesOnLeave, that while its timer is pending this handler saves and sends, and the flush happens even if the save throws.
+  TW.pageSavesOnLeave(function () { return !!saveTimer; });
   window.addEventListener("pagehide", function () {
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
     var cur = TW.getState();
-    TW.setState(Object.assign({}, cur, savePatch(cur)));
-    TW.flushState({ keepalive: true });
+    try { TW.setState(Object.assign({}, cur, savePatch(cur))); } finally { TW.flushState({ keepalive: true }); }
   });
 
   /** Write the derived Guys figure INTO any auto travel row, so the model holds what the screen
