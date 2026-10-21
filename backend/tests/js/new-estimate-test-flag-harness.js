@@ -1082,6 +1082,60 @@ async function bytesNotCharacters(fill, count) {
   return summary(w, BIG, { fill: fill, count: count });
 }
 
+/** F5. The browser has ONE copy of the draft in localStorage, and it can hold ANOTHER tab's project while this tab's page is on its own id.
+ *  Tab A: the v2 board's New estimate, a name and an address typed. Tab B: the Projects page's New project (the All tab), which wipes the shared
+ *  blob and makes B's own project the browser's current draft. Tab A types once more: its write lands in the wiped blob, stamped for A.
+ *  Tab B then opens a v2 page by its bare link, which resumes B's own project (the current draft) with the shared blob stamped for A. The sandbox
+ *  found no row for B and used to save that blob under B's id, as a test: B's project became a Test project holding tab A's project. */
+async function foreignBlob(door) {
+  const w = W.createWorld({ frontend: ROOT });
+  const tabA = w.mainTab;
+  const tabB = w.openTab();
+  const a = await w.startNewEstimate({ tab: tabA });
+  const idA = a.draftId();
+  a.type("project_name", "Tab A Estimate");
+  a.type("address", "1 A Street");
+  await w.advance(800);                                           // A's own 600 ms save has run; its 2.5 s server save is queued
+  const b = await w.pressNewProject({ tab: "all", browserTab: tabB, hold: 400 });
+  const idB = b.draftId();
+  const blobAfterB = w.blob();
+  a.type("zip", "66101");                                         // A's write lands in the wiped blob
+  await w.advance(1300);
+  const blobAfterA = w.blob() || {};
+  b.follow(LOOK_DOORS[door]);                                     // B's bare link: resumes the current draft, which is B's
+  await w.settle();
+  const v2 = w.pageOf(door, tabB);
+  const rowB = w.rows.get(idB);
+  const rowA = w.rows.get(idA);
+  return summary(w, idB, { door: door, idA: idA, idB: idB, blobAfterBKeys: Object.keys(blobAfterB || {}).length,
+    blobAfterA: { stamp: blobAfterA.__draft_id || null, name: blobAfterA.project_name || null }, blobEnd: { stamp: (w.blob() || {}).__draft_id || null },
+    v2: Object.assign(w.pageReport(v2), { kind: v2.kind }),
+    rowBData: rowB ? { project_name: rowB.data.project_name || null, stamp: rowB.data.__draft_id || null, is_test: flagOf(rowB.data) } : null,
+    rowAData: rowA ? { project_name: rowA.data.project_name || null, address: rowA.data.address || null, is_test: flagOf(rowA.data) } : null });
+}
+const flagOf = (data) => (Object.prototype.hasOwnProperty.call(data, "is_test") && data.is_test !== undefined ? data.is_test : null);
+
+/** F5, the other half: a save made for one project never carries a blob stamped for another, whoever asks. The sandbox's own save is the one
+ *  that writes the page's blob under an id it names; asked to write another project's blob under this project's id it must refuse. */
+async function savingAnotherProjectsBlob() {
+  const w = W.createWorld({ frontend: ROOT });
+  w.load("/polish-intake.html?d=mine-1");
+  await w.settle();                                               // shared.js reads the project (none), adopts it and reloads the page
+  const api = w.pageOf("intake").win.TWPolishSandbox;
+  const out = { threw: null };
+  const asked = api.saveThenFileAsTest("mine-1", { __draft_id: "other-1", project_name: "Not this project's", address: "9 Other St" })
+    .then(() => { out.threw = false; }, (e) => { out.threw = String((e && e.message) || e); });
+  await w.settle();
+  await asked;
+  const own = api.saveThenFileAsTest("mine-1", { __draft_id: "mine-1", project_name: "This project's" })
+    .then(() => true, () => false);
+  await w.settle();
+  out.ownStored = await own;
+  out.puts = w.requestsLog().filter((r) => r.route === "PUT").map((r) => ({ id: r.id, name: r.sentName }));
+  out.rowIds = Array.from(w.rows.keys());
+  return out;
+}
+
 // VIRTUAL TIME MOVES ONLY WHEN THE MODEL IS ASKED TO RUN IT (world.advance / world.settle). A harness that awaits a request
 // before doing so waits for an event nobody will run, node finds nothing left to do and exits 0 with nothing printed, which
 // reads as "the harness printed nothing". Say so instead.
@@ -1145,6 +1199,8 @@ process.on("exit", (code) => {
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
+  out.foreignBlob = { intake: await foreignBlob("intake"), estimate: await foreignBlob("estimate") };
+  out.savingAnotherProjectsBlob = await savingAnotherProjectsBlob();
   out.bytesNotCharacters = {
     "2-byte": await bytesNotCharacters("é", 36000),            // é: two bytes, one UTF-16 unit
     "3-byte": await bytesNotCharacters("€", 24000),            // the euro sign: three bytes, one UTF-16 unit

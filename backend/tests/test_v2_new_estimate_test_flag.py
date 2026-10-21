@@ -1193,6 +1193,44 @@ def test_a_draft_under_the_keepalive_limit_in_characters_and_over_it_in_bytes_go
                 "%s: the page asked for a keepalive request the browser refuses (it counted characters, not bytes): %r" % (name, q))
 
 
+def test_a_v2_page_whose_shared_blob_belongs_to_another_project_stops_and_saves_nothing(ran):
+    """F5 of the audit of round 3. The browser keeps ONE copy of the draft, and it can hold another tab's project while this tab's page
+    is on its own id: tab A (the v2 board's New estimate, a name and an address typed), then tab B's New project from the Projects page,
+    which wipes the shared blob, then tab A typing once more, which writes A's project into it, stamped for A. Tab B then opens a v2
+    page by its bare link, which resumes B's own project, with the shared blob stamped for A. The sandbox found no row for B and saved
+    that blob under B's id AS A TEST: B's project (started on the All tab) became a Test project holding tab A's name and address, with
+    A's id inside it. It must STOP instead (the page stays on its loading line and says why), before it reads or saves anything: no row
+    for B, nothing sent for B, A's project only A's, and the shared blob left as it was found."""
+    runs = ran["foreignBlob"]
+    assert sorted(runs) == ["estimate", "intake"], sorted(runs)
+    for door, r in sorted(runs.items()):
+        flow = "the v2 %s page" % door
+        a, b = r["idA"], r["idB"]
+        assert a != b and r["blobAfterBKeys"] == 0, "%s: the run did not start two projects and wipe the blob: %r" % (flow, (a, b, r["blobAfterBKeys"]))
+        assert r["blobAfterA"] == {"stamp": a, "name": "Tab A Estimate"}, (
+            "%s: the shared blob does not hold tab A's project while tab B is on its own, so this checks nothing: %r" % (flow, r["blobAfterA"]))
+        assert r["v2"]["draftId"] == b, "%s: the page is not on tab B's project: %r" % (flow, r["v2"])
+        text = " ".join(r["v2"]["loading"].split())
+        assert "Estimating Tool v2 stopped" in text and "another tab" in text, "%s did not stop and say why: %r" % (flow, r["v2"])
+        assert r["v2"]["settled"] is not True and r["v2"]["noteHidden"] is True, "%s carried on: %r" % (flow, r["v2"])
+        assert r["rowBData"] is None and r["rowIds"] == [a], (
+            "%s: tab B's project got a row (it holds %r) or another row appeared: %r" % (flow, r["rowBData"], r["rowIds"]))
+        assert reqs(r, "PUT", b) == [], "%s: something was saved under tab B's id: %r" % (flow, reqs(r, "PUT", b))
+        assert r["rowAData"] == {"project_name": "Tab A Estimate", "address": "1 A Street", "is_test": True}, (
+            "%s: tab A's project is not its own any more: %r" % (flow, r["rowAData"]))
+        assert r["blobEnd"]["stamp"] == a, "%s: the shared blob was changed: %r" % (flow, r["blobEnd"])
+
+
+def test_a_save_made_for_one_project_never_carries_another_projects_blob(ran):
+    """F5, the other half. The sandbox's own save writes the page's blob under an id it names. Asked to write a blob stamped for ANOTHER
+    project under this project's id it must refuse (so that no path, now or later, can PUT it), and it still saves this project's own."""
+    r = ran["savingAnotherProjectsBlob"]
+    assert r["threw"], "the sandbox saved another project's blob under this project's id: %r" % r
+    assert [p["name"] for p in r["puts"]] == ["This project's"] and r["ownStored"] is True, (
+        "something other than this project's own save was sent: %r" % r["puts"])
+    assert r["rowIds"] == ["mine-1"], r["rowIds"]
+
+
 # ══ every check goes red when the code is changed ═════════════════════════════════════════════════════
 # Each entry breaks one LINE of the sources in a scratch copy of the frontend, runs a harness on it, and the named check (a test
 # above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not there exactly once, so
