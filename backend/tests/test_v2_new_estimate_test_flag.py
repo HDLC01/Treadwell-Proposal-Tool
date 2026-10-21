@@ -1110,6 +1110,75 @@ def test_a_v2_page_opened_by_a_bare_link_on_a_project_nobody_started_says_test_i
         assert_filed_and_edited_directly(r, name)
 
 
+DOOR_OPENING = "Opening Estimating Tool v2…"       # the beta door once it has asked the browser to leave
+WANT_FLAG = {"test": True, "active": False, "all": None}     # what the Projects page's tab starts a project as
+
+
+def test_the_beta_door_waits_for_the_project_to_be_saved_before_it_opens_the_v2_intake(ran):
+    """F3 of the audit of round 3. The live intake's "Continue with Estimating Tool v2" saves the project and opens the v2 intake on it, which asks
+    the server whether the project has a row: a project that is not a test is COPIED (the real bid left alone), one that is a test is edited
+    directly, and one that has been written into and has no row yet looks like a project the server never heard of, so the page STOPS. The door
+    left at once, and its save went out as the page went, so with a slow server (here: over a second) the v2 page asked before the row existed and
+    stopped on a bid that was a moment from being saved. Now the door waits for the save to be answered, and the v2 page finds the project: from
+    each Projects tab, on a fast server and a slow one, the real bid is born as its tab said and never written to by the v2 page, the Test tab's
+    project is edited directly, and a project from Active or All is copied."""
+    doors = ran["betaDoor"]
+    assert sorted(doors) == sorted(t + "/" + s for t in WANT_FLAG for s in ("fast", "slow")), sorted(doors)
+    for name, r in sorted(doors.items()):
+        tab, slow, v2 = r["tab"], name.endswith("/slow"), r["v2"]
+        assert v2 is not None and v2["kind"] == "intake", "%s: the door did not open the v2 intake: %r" % (name, v2)
+        assert v2["loading"] == "", "%s: the v2 page STOPPED (%r) for a project that was a moment from being saved" % (name, v2["loading"])
+        want = WANT_FLAG[tab]
+        assert r["x"] == {"is_test": want, "bornIsTest": want, "flips": 0, "beta_sandbox_of": None, "project_name": "Real Polish Bid"}, (name, r["x"])
+        if tab == "test":
+            assert DIRECT in v2["note"] and COPY not in v2["note"] and r["beta"] is None and r["rowIds"] == [r["id"]], (name, v2["note"], r["rowIds"])
+        else:
+            assert COPY in v2["note"], "%s: the v2 page did not make a test copy of the bid: %r" % (name, v2["note"])
+            assert r["beta"] is not None and r["beta"]["is_test"] is True and r["beta"]["beta_sandbox_of"] == r["id"], (name, r["beta"])
+            assert r["rowIds"] == [r["id"], r["id"] + "-beta"], (name, r["rowIds"])
+            assert [q for q in reqs(r, "PUT", r["id"]) if not q["page"].startswith("v1intake")] == [], "%s: the v2 page wrote to the real bid" % name
+        # the door left only after the server had answered the save (and the slow runs really did take over a second to answer)
+        first = r["livePuts"][0]
+        assert first["repliedAt"] is not None and r["asked"][0]["at"] >= first["repliedAt"], (
+            "%s: the door asked the browser to leave before its save was answered: %r %r" % (name, first, r["asked"]))
+        if slow:
+            assert first["repliedAt"] - first["at"] > 1000, "%s: the slow server was not slow, so this checks nothing: %r" % (name, first)
+
+
+def test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back(ran):
+    """The door's wait is shown (disabled, "Saving..."), as Continue's is on the v2 intake: a second press while it waits does nothing, one press is
+    one save and one move, and when the browser does not go (the load was stopped, a prompt was answered no) the door gives itself back with its own
+    markup (the BETA tag, not just its words) and works again."""
+    fb = ran["betaDoorFeedback"]
+    s = fb["saving"]
+    early = s["samples"]["early"]
+    assert early["disabled"] is True and early["saying"] == SAVING, "the door says nothing while it waits: %r" % early
+    assert [p["accepted"] for p in s["presses"]] == [True, False], "a second press was taken: %r" % s["presses"]
+    assert len(s["asked"]) == 1 and [q for q in reqs(s, "PUT", s["id"], page="v1intake")] and len(reqs(s, "PUT", s["id"], page="v1intake")) == 1, (
+        "one press must be one save and one move: %r %r" % (s["asked"], reqs(s, "PUT", s["id"], page="v1intake")))
+    b = fb["blocked"]
+    waiting = b["samples"]["waiting"]
+    assert waiting["disabled"] is True and waiting["saying"] == DOOR_OPENING, "the door does not say it has asked to leave: %r" % waiting
+    back = b["samples"]["afterGiveBack"]
+    assert back["disabled"] is False and back["html"] == b["shipped"], "the door was not given back as it shipped: %r" % back
+    assert [p["accepted"] for p in b["presses"]] == [True, True] and [a["blocked"] for a in b["asked"]] == [True, True], (
+        "the door does not work again once it is given back: %r %r" % (b["presses"], b["asked"]))
+
+
+def test_the_beta_door_leaves_when_its_wait_is_over_however_it_ends(ran):
+    """A server that never answers does not trap the estimator on the live intake: the door waits at most its bound and then goes, as it always did
+    (the v2 page then says there is no saved project to copy yet). A save that fails at once is not waited out."""
+    ms = ran["betaDoorMs"]
+    fb = ran["betaDoorFeedback"]
+    hung = fb["hung"]
+    assert hung["samples"]["midway"]["saying"] == SAVING and hung["samples"]["midway"]["disabled"] is True, hung["samples"]
+    assert ms["wait"] is not None and 3000 <= ms["wait"] <= 15000 and ms["giveBack"] > ms["wait"], ms
+    assert len(hung["asked"]) == 1 and abs(hung["asked"][0]["at"] - ms["wait"]) <= 60, (
+        "the door did not leave when its wait was over (%r ms): %r" % (ms["wait"], hung["asked"]))
+    failed = fb["failed"]
+    assert len(failed["asked"]) == 1 and failed["asked"][0]["at"] < 1000, "a save that failed at once was waited out: %r" % failed["asked"]
+
+
 def test_a_project_started_on_the_v2_board_is_a_test_whichever_page_writes_it_first(ran):
     """What a project is started as follows the PROJECT, not the page that happens to write it. The estimator starts a New estimate on the v2
     board and takes the same project to the LIVE intake (the sidebar's link resumes the browser's current draft), where a page that knows

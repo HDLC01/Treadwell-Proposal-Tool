@@ -87,6 +87,10 @@
  *   abandonedV2Start    the v2 board's New estimate (the real startNew), Direct and GC, and the estimator opens another project: the GC
  *                       tab's first save refused, and the page left before it heard from the server (F2).
  *   v2BoardThenLiveIntake  a project the v2 board started, written first by the LIVE intake (F2).
+ *   betaDoor            the live intake's "Continue with Estimating Tool v2" on a new bid from each Projects tab, fast and slow server: the v2
+ *                       page must find the saved project (copy a real one, edit a test one), never stop for a row that is on its way (F3).
+ *   betaDoorFeedback    the door while it waits (disabled, "Saving..."), on a server that hangs, on a save that fails, and in a browser that
+ *                       does not go (F3).
  *   abandonedWithWork   a board's New proposal whose blob holds work that never went through setState: flushed, born as its tab said.
  *                       (abandonedBoardStart, with nothing typed, is never flushed.)
  *
@@ -102,6 +106,14 @@ const ROOT = path.resolve(process.argv[2] || path.join(__dirname, "..", "..", ".
 function saveWaitMs() {
   const m = /var SAVE_WAIT_MS = (\d+);/.exec(L.read(path.join(ROOT, "js", "polish-intake.js")));
   return m ? Number(m[1]) : null;
+}
+
+/** The milliseconds the live intake's beta door will wait for the save, and how long it takes to give itself back, read off the page. */
+function betaDoorMs() {
+  const src = L.read(path.join(ROOT, "js", "index.js"));
+  const wait = /const SAVE_WAIT_MS = (\d+);/.exec(src);
+  const back = /const GIVE_BACK_MS = (\d+);/.exec(src);
+  return { wait: wait ? Number(wait[1]) : null, giveBack: back ? Number(back[1]) : null };
 }
 
 /** What a run leaves behind, as the tests read it. */
@@ -1095,6 +1107,40 @@ async function bytesNotCharacters(fill, count) {
   return summary(w, BIG, { fill: fill, count: count });
 }
 
+/** F3. The live intake's "Continue with Estimating Tool v2" (the beta door), pressed on a NEW bid started from the Projects page's `tab`. The door
+ *  saves the project and opens the v2 intake on it, which asks the server whether the project has a row: a project that is not a test is
+ *  COPIED (the real bid left alone), one that is a test is edited directly, and one that has been written into and has no row yet cannot be
+ *  told from a project the server never heard of, so the page STOPS. The door used to leave at once, so with a slow server the page asked
+ *  before the row was there. `opts.steps` are timed presses and samples of the door (`at` is ms after the first press may be made),
+ *  `opts.world` the model's latencies, `opts.faults` its faults (after the project is typed), `opts.blocked` a browser that does not go. */
+async function betaDoor(tab, opts) {
+  const o = Object.assign({ world: {}, faults: [], blocked: false, steps: [{ at: 0, press: true }], settleMs: undefined }, opts || {});
+  const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
+  const live = await w.pressNewProject({ tab: tab });
+  const id = live.draftId();
+  const shipped = live.betaDoor().html;
+  live.type("project_name", "Real Polish Bid");
+  live.type("address", "1 Main St");
+  o.faults.forEach((f) => w.fault(f));
+  if (o.blocked) w.navigationBlocked = true;
+  const t0 = w.now();
+  const presses = [];
+  const samples = {};
+  for (const s of o.steps.slice().sort((a, b) => a.at - b.at)) {
+    const dt = t0 + s.at - w.now();
+    if (dt > 0) await w.advance(dt);
+    if (s.press) presses.push({ at: w.now() - t0, accepted: live.pressBetaDoor() !== false, door: live.betaDoor() });
+    if (s.sample) samples[s.sample] = Object.assign({ at: w.now() - t0 }, live.betaDoor());
+  }
+  await w.settle(o.settleMs);
+  const v2 = w.pageOf("intake");
+  const puts = w.requestsLog().filter((q) => q.route === "PUT" && q.id === id && q.page.startsWith("v1intake"));
+  return summary(w, id, { tab: tab, shipped: shipped, t0: t0, presses: presses, samples: samples, doorAtEnd: live.betaDoor(),
+    v2: v2 ? Object.assign(w.pageReport(v2), { kind: v2.kind }) : null,
+    asked: w.navs.filter((n) => n.from.indexOf("v1intake") === 0).map((n) => ({ at: n.askedAt - t0, to: n.to, blocked: !!n.blocked })),
+    livePuts: puts.map((q) => ({ at: q.at - t0, repliedAt: q.repliedAt === null ? null : q.repliedAt - t0, keepalive: q.keepalive, status: q.status })) });
+}
+
 /** F2. The v2 board's "+ New estimate" (the REAL startNew of js/v2-board.js) opens the v2 intake on a new project, and the estimator opens
  *  ANOTHER project before anything has been typed. From the GC tab the board leaves { audience: "GC" } in the draft, which the sandbox saves at
  *  once as a test so that its row exists: unless that first save does not land (it is refused, or the page is left before it has heard from
@@ -1276,6 +1322,25 @@ process.on("exit", (code) => {
     "2-byte": await bytesNotCharacters("é", 36000),            // é: two bytes, one UTF-16 unit
     "3-byte": await bytesNotCharacters("€", 24000),            // the euro sign: three bytes, one UTF-16 unit
     "4-byte": await bytesNotCharacters("😀", 18000),      // an emoji: four bytes, TWO UTF-16 units (a surrogate pair)
+  };
+  out.betaDoorMs = betaDoorMs();
+  const SLOW_SAVE = { proc: { PUT: 1500 } };
+  out.betaDoor = {};
+  for (const tab of ["test", "active", "all"]) {
+    out.betaDoor[tab + "/fast"] = await betaDoor(tab);
+    out.betaDoor[tab + "/slow"] = await betaDoor(tab, { world: SLOW_SAVE });
+  }
+  out.betaDoorFeedback = {
+    // a slow server: the door says what it is doing and a second press does nothing
+    saving: await betaDoor("active", { world: SLOW_SAVE, steps: [{ at: 0, press: true }, { at: 50, sample: "early" }, { at: 300, press: true },
+                                                                  { at: 1000, sample: "late" }] }),
+    // a server that never answers: the door leaves when its wait is over
+    hung: await betaDoor("active", { faults: [{ route: "PUT", mode: "hang", times: 1 }], steps: [{ at: 0, press: true }, { at: 4000, sample: "midway" }] }),
+    // a save that fails at once is not waited out
+    failed: await betaDoor("active", { faults: [{ route: "PUT", mode: "network", times: 1 }], steps: [{ at: 0, press: true }] }),
+    // the browser does not go: the door is given back, with its own markup, and works again
+    blocked: await betaDoor("active", { blocked: true, steps: [{ at: 0, press: true }, { at: 5000, sample: "waiting" }, { at: 12000, sample: "afterGiveBack" },
+                                                                { at: 12000, press: true }] }),
   };
   out.twoPagesOneProject = {};
   for (const tab of ["all", "active", "test"]) out.twoPagesOneProject[tab] = await twoPagesOneProject(tab);
