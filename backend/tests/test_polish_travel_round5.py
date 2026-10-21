@@ -30,7 +30,7 @@ HARNESS = TESTS / "js" / "travel-round5-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
-SECTIONS = ["demotion", "badShapes", "unreadableTabs", "nights", "addTravel", "notes", "patchNote", "gypNights", "xStays"]
+SECTIONS = ["demotion", "badShapes", "unreadableTabs", "nights", "addTravel", "notes", "patchNote", "xStays"]
 
 LODGING_WORDS = "Follows the man-days on the labor lines above (48): a night for each, Kyle's way."
 PER_DIEM_WORDS = "Follows the man-days on the labor lines above (48): a day of per diem for each, Kyle's way."
@@ -230,14 +230,19 @@ def test_a_saved_bid_never_moves_on_open_and_the_next_answer_fills_it(ran):
 
 def test_a_carrier_that_moves_under_a_far_distance_on_file_brings_the_lines_under_the_rule(ran):
     """A Polish bid saved far with blank lines, opened as Epoxy (the job type switched in the session): the new carrier's crew (5 x 10 days) gives 50 man-days, and Lodging and Per Diem
-    follow them ($3,500 and $2,250, charged on the Epoxy carrier's man-days, as the price charges them). A line the estimator typed (9 nights) is carried through the same switch as theirs.
+    follow them, charged on the Epoxy carrier as the price charges them. A line the estimator typed (9 nights) is carried through the same switch as theirs.
+
+    ROUND 6, PART 3 (M2, 2026-10-21): the Epoxy tab counts its nights the sheet's way, from its labor DOLLARS (Epoxy!B65 `((D53-D52)/C47)/8`), as every tab does now: the crew's $13,200 and the drive's
+    five guys x 6.5 hours, $1,072.50, round up to $14,273, so 50.0019 nights where the head count says 50, and the lines charge a dollar more each, $3,501 and $2,251 (this test pinned $3,500 and $2,250,
+    the head count the Epoxy tab no longer charges; Hanz, 2026-10-21: "Let them re-price"). The box still shows 50: it holds the figure to two places. The working shows the count to the places
+    the price needs (M4): "50.0019 nights x $70.00 = $3,500.13, rounded up to $3,501", where "50 nights" times $70 was not the $3,500.13 it printed.
 
     Mutation: leave the nights out of the carrier's settling."""
     m = ran["nights"]["carrierMoved"]
     assert m["n"]["carrier"] == "Epoxy" and m["manDays"] == 50
     assert m["n"]["lodging"]["qty"] == 50 and m["n"]["lodging"]["follow"] == "labor" and m["n"]["perDiem"]["follow"] == "labor"
-    assert m["n"]["costs"] == {"lodging": 3500, "per_diem": 2250, "total": 5750}
-    assert "Lodging: 50 nights (follows the labor) x $70.00 = $3,500.00" in m["l"]["how"].split("\n"), "worked out on the Epoxy carrier's own man-days, as the price is"
+    assert m["n"]["costs"] == {"lodging": 3501, "per_diem": 2251, "total": 5752}
+    assert "Lodging: 50.0019 nights (follows the labor) x $70.00 = $3,500.13, rounded up to $3,501" in m["l"]["how"].split("\n"), "worked out on the Epoxy carrier's own labor, as the price is"
     t = ran["nights"]["carrierMovedTyped"]["n"]
     assert t["lodging"]["qty"] == "9" and t["lodging"]["typed"] is True and t["lodging"]["follow"] is None and t["perDiem"]["qty"] == 50
 
@@ -380,24 +385,16 @@ HINT_REPAINT = "if (l) el.textContent = B.travelQtyHint(ROOT, activeTab, key, l,
 FOLLOW_NOTE = 'var followNote = !ownTravel && B.qtyFollows(tl) ? B.travelFollowWords(ROOT, activeTab, k, M.labor) : "";'
 CONTROL = "      html += (travelRows || addTravelHtml()) + travelCard(\"lodging\") + travelCard(\"per_diem\");"
 CLICK = '    if (t.closest("[data-add-travel]")) { addTravelLaborPress(); return; }'
-ADD_FILL = "    if (miles !== null && layout !== \"gyp\") followDistanceOnRow(model, added, holder.labor, miles, false);"
+ADD_FILL = "    if (miles !== null && layout !== \"gyp\") followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);"
 ADD_ONCE = "    if (holder.labor.some(function (r) { return isTravelRow(r); })) return false;"
 ADD_FRESH = "    return stampRateDefaults([laborRowStartsEmpty(seed)])[0];"
 HOW_NO_LINE = 'lines.push(tr ? "Travel Labor: off, $0" : "Travel Labor: no line on this bid, $0");'
 HOW_FOLLOWED = "    if (followed.length) {"
 NOTE_NAME = "    var name = carrierName();"
 
-def test_a_far_gyp_jobs_nights_are_typed_and_its_card_says_so(ran):
-    """Round-5 audit, medium: a Gyp crew is entered in hours, which the man-days do not count, so the nights a far answer set to follow the labor sat at 0
-    while the card promised they fill in: a far Gyp quote carried $0 hotel and per diem with nothing saying so. On a Gyp carrier nothing follows; the card
-    asks for the nights, as it did before the nights followed anywhere."""
-    g = ran["gypNights"]
-    assert "error" not in g, g.get("error")
-    assert g["carrier"].startswith("Gyp") and g["miles"] == 190, "the fixture is not a far Gyp job, so this proves nothing"
-    for k in ("lodging", "perDiem", "savedLodging"):
-        assert g[k]["follow"] is None and g[k]["qty"] in ("", None), "a far Gyp job's %s follows the labor: %r" % (k, g[k])
-    assert g["saysTypeNights"] is True, "the Gyp card does not ask for the nights"
-    assert g["promisesFill"] is False, "the Gyp card promises a fill that never happens"
+# (Round-5 audit, medium: a far Gyp job's nights were TYPED, because a Gyp crew is entered in hours and the man-days counted day rows only. SUPERSEDED in round 6 by Hanz's decision to fill
+# them: Kyle's Gyp tab counts its own nights from those hours, ten to a night (Gyp!B64), so a Gyp carrier's nights follow the crew like every carrier's and the card says so. The Gyp DRIVE is
+# the one thing that stays typed. Held by test_polish_travel_round6.py, the sequence walk's NIGHTS rule, and test_gyp_v2_proof.py's 40 lodging vectors.)
 
 
 def test_a_travel_labor_line_taken_away_stays_away_after_a_reload_and_add_brings_it_back(ran):
@@ -413,14 +410,11 @@ def test_a_travel_labor_line_taken_away_stays_away_after_a_reload_and_add_brings
 
 
 BREAKS = {
-    "a Gyp carrier's nights follow the labor": (
-        "js/bid-model.js", '    var gyp = carrierLayoutOf(model) === "gyp";', "    var gyp = false;",
-        lambda g: g["gypNights"]["lodging"]["follow"] is not None or g["gypNights"]["savedLodging"]["follow"] is not None),
     "the x does not record the answer": (
-        "js/polish-estimate.js", "      if (B.isTravelRow(gone)) ROOT.no_travel_labor = true;", "      void gone;",
+        "js/polish-estimate.js", "      if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);", "      void gone;",
         lambda g: g["xStays"]["flag"] is False or g["xStays"]["rowAfterReload"] is not None or g["xStays"]["session"] != g["xStays"]["reloaded"]),
     "Add does not take the answer back": (
-        "js/bid-model.js", "    delete model.no_travel_labor;", "    void 0;",
+        "js/bid-model.js", "    if (isCarrier) delete model.no_travel_labor;", "    void 0;",
         lambda g: g["xStays"]["flagAfterAdd"] is not False),
     "a base the pick demoted loses its row to the new carrier": (
         "js/bid-model.js", DEMOTED, "    demoted = false;",
@@ -428,10 +422,10 @@ BREAKS = {
         or g["demotion"]["addedSheet"]["session"]["at300"] != g["demotion"]["addedSheet"]["reloaded"]["at300"]),
     # B
     "a section's labor that is not a list is left as it was saved": (
-        "js/bid-model.js", "      if (badLabor) section.labor = [];", "      void badLabor;",
+        "js/bid-model.js", "      if (badLabor) section.labor = s.labor instanceof Array ? withoutHoles(s.labor) : [];", "      void badLabor;",
         lambda g: any(p["threw"] or not p["opened"] for shape in ("string", "number", "object", "boolean", "null") for p in g["badShapes"][shape]["labor"].values())),
     "a section's takeoff that is not a list is left as it was saved": (
-        "js/bid-model.js", "      if (badTakeoff) section.takeoff = [];", "      void badTakeoff;",
+        "js/bid-model.js", "      if (badTakeoff) section.takeoff = s.takeoff instanceof Array ? withoutHoles(s.takeoff) : [];", "      void badTakeoff;",
         lambda g: any(p["threw"] or not p["opened"] for shape in ("string", "number", "object", "boolean", "null") for p in g["badShapes"][shape]["takeoff"].values())),
     "the rail walks a labor that is not a list": (
         "js/polish-estimate.js", RAIL_LABOR, "    M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
@@ -442,9 +436,9 @@ BREAKS = {
     "a tabs entry that is not a section is read as one": (
         "js/bid-model.js", "      if (!isObject(s)) return;", "      void s;",
         lambda g: any(v["threw"] is not None for v in g["badShapes"]["notSections"].values())),
-    "the nights are counted from sections that cannot be read": (
-        "js/bid-model.js", "      } catch (err) { tab = ROOT_TAB; rows = laborLinesOf(model); }", "      } catch (err) { throw err; }",
-        lambda g: g["unreadableTabs"]["applied"] is not None),
+    "the nights of a bid whose sections cannot be read are not counted from the root": (
+        "js/bid-model.js", "    if (!list.length) {", "    if (false) {",
+        lambda g: g["unreadableTabs"]["far"]["lodging"]["qty"] != 48),
     # C
     "the answers walk the options of a bid whose sections cannot be read": (
         "js/bid-model.js", GUARD, "void entries;",
@@ -533,7 +527,7 @@ BREAKS = {
         "js/bid-model.js", HOW_NO_LINE, 'lines.push("Travel Labor: off, $0");',
         lambda g: "Travel Labor: off, $0" in g["addTravel"]["polishFar"]["removed"]["how"]),
     "a Gyp carrier's added line is filled by the distance": (
-        "js/bid-model.js", ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, false);",
+        "js/bid-model.js", ADD_FILL, "    if (miles !== null) followDistanceOnRow(model, added, holder.labor, miles, !isCarrier);",
         lambda g: g["addTravel"]["gypFar"]["row"]["days"] != ""),
     "a second press of the control reads the library again": (
         "js/polish-estimate.js", "    if (travelAdding) return;", "    void travelAdding;",

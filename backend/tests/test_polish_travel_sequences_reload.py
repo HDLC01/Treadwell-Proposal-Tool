@@ -14,8 +14,10 @@ tests/js/travel-sequence-harness.js now has a `reload` mode (and `reloadTyped`, 
 At b14bc98 the depth-2 walk of the far job reported it in 18 sequences (Combo then Epoxy made the base, Gyp then Combo then Epoxy, ...); it is clean now, and so is the depth-3 walk
 (1,548 pages, 700 Sheets actions, four answers each, run for the commit message: it takes two minutes, which is why the committed slices are two steps deep).
 
-The same walks also judge NIGHTS after every step, Hanz's decision of the same day ("Fill them automatically"): a far job's Lodging and Per Diem hold the man-days of the carrier, on
-auto and marked as following the labor; a job under 70 miles, or with no distance, fills nothing. (Every older walk is judged by it too: none of them types in those boxes.)
+The same walks also judge NIGHTS after every step, Hanz's decision of the same day ("Fill them automatically"): a far job's Lodging and Per Diem hold the man-days of EVERY base section
+(round 6: a Combo's hotel is on both sheets, and a Gyp crew entered in hours is counted ten hours to a night), each section counted with its own tab's divisor, on auto and marked as
+following the labor; a job under 70 miles, or with no distance, fills nothing. An option is priced apart and counts nothing in it, and a section that is off counts nothing.
+(Every older walk is judged by it too: none of them types in those boxes. The `nightsTyped` walk does, and holds the typed lines to what was typed: part 2.)
 
 ROUND 6 (2026-10-20, item C2): "a plain reopen" in these walks was a JSON copy, which keeps the order the saving page wrote. The draft is a jsonb column, which keeps no key order, so every
 reopen of every walk now goes through tests/js/_jsonb.js (every object's keys sorted by length and then by bytes), and the walk refuses to pass unless a good share of its reopens brought the
@@ -55,20 +57,48 @@ DEMOTED = '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catc
 NIGHTS_ANSWER = "    followDistanceNights(model, miles);"
 NIGHTS_LOCAL = "      } else if (qtyFollows(l)) {"
 NIGHTS_SYNC = "if (l && l.qty_auto !== false) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;"
+NIGHTS_BASES = "      list = bases.length ? bases : live.slice(0, 1);"
+NIGHTS_GYP = "      if (far) {"
+NIGHTS_DIVIDE = "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);"
+NIGHTS_FILL_IF = '        if (l.qty_typed !== true && l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }'
+NIGHTS_MARK = "    line.qty_typed = true;"
 SECTIONS_OF = "    tabIdsInOrder(tabs).forEach(function (id) {"
 
 # name -> (old, new, mode, depth, the rules the walk must report)
 BREAKS = {
+    # (Since round 6, part 2 a reload no longer gives a demoted root a blank line, so the session and a reload agree even when the demotion loses its line: DEMOTED_KEEPS says what the session must hold.)
     "a base the pick demoted loses its Travel Labor row to the new carrier": (
-        DEMOTED, "    demoted = false;", "reload", 2, {"RELOAD_AGREES"}),
+        DEMOTED, "    demoted = false;", "reload", 2, {"DEMOTED_KEEPS"}),
     "a base the pick demoted loses its row (the estimator's typed one)": (
-        DEMOTED, "    demoted = false;", "reloadTyped", 2, {"RELOAD_AGREES"}),
+        DEMOTED, "    demoted = false;", "reloadTyped", 2, {"DEMOTED_KEEPS"}),
     "a far answer fills no nights": (
         NIGHTS_ANSWER, "    void miles;", "far", 1, {"NIGHTS"}),
     "going local keeps the figure the labor filled": (
         NIGHTS_LOCAL, "      } else if (false) {", "dist", 1, {"NIGHTS"}),
     "the nights do not follow the labor when it changes": (
         NIGHTS_SYNC, "if (l && l.qty_auto !== false && !qtyFollows(l)) l.qty = days;", "far", 2, {"NIGHTS"}),
+    # round 6: the job's figure is every base section's, each by its own tab's rule
+    "a Gyp carrier's nights are typed again": (
+        NIGHTS_GYP, '      if (far && (entryOrNull(model, carrierTabOf(model)) || {}).layout !== "gyp") {', "far", 1, {"NIGHTS"}),
+    "the job's nights count only the carrier": (
+        NIGHTS_BASES, "      list = live.slice(0, 1);", "far", 1, {"NIGHTS"}),
+    "a section that is off is counted in the job's nights": (
+        NIGHTS_BASES, '      list = entries.filter(function (e) { return e.kind === "base" || e.kind === "off"; });', "far", 1, {"NIGHTS"}),
+    "an option is counted in the job's nights": (
+        NIGHTS_BASES, "      list = live;", "sheets", 1, {"NIGHTS"}),
+    "a Gyp crew's nights are divided by the Polish tab's 8": (
+        NIGHTS_DIVIDE, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);", "far", 1, {"NIGHTS"}),
+    # round 6, N4: a line the estimator typed is theirs (the nightsTyped walk types Lodging 10 and clears Per Diem first)
+    "a far answer fills a box the estimator typed over and left empty": (
+        NIGHTS_FILL_IF, '        if (l.qty_auto === false && !filledIn(l.qty)) { l.qty_auto = true; l.qty_follow = "labor"; }', "nightsTyped", 2, {"NIGHTS"}),
+    "typing in a nights box marks nothing": (
+        NIGHTS_MARK, "    void line;", "nightsTyped", 1, {"NIGHTS"}),
+    "typing in a nights box leaves it following the labor": (
+        NIGHTS_MARK, "    line.qty_typed = true; return line;", "nightsTyped", 1, {"NIGHTS"}),
+    "going local empties a figure the estimator typed": (
+        NIGHTS_LOCAL, "      } else {", "nightsTyped@local", 1, {"NIGHTS"}),
+    "a crew change writes the nights over a box the estimator typed": (
+        NIGHTS_SYNC, "if (l) l.qty = qtyFollows(l) ? laborFollowQty(model, l) : days;", "nightsTyped", 1, {"NIGHTS"}),
     # round 6, item C2: every reopen is the server's (jsonb keeps no key order), so a model that lists the sheets in the order their keys come back in is seen
     "the sheets are listed in the order the server returns their keys (the code before the order was kept)": (
         SECTIONS_OF, "    Object.keys(tabs).forEach(function (id) {", "reload", 2, {"RELOAD_AGREES"}),

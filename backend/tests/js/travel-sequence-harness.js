@@ -37,10 +37,14 @@
  * (LOCAL, judged on every live section, options included, already says that a job under 70 miles prices no row nobody touched.)
  *
  * HANZ'S DECISION OF THE FIFTH AUDIT ("Fill them automatically", 2026-10-20) added NIGHTS, judged after every step of every walk (a walk never types in the Lodging or Per Diem box, so none
- * of its lines is the estimator's):
- *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the man-days of the section that carries the job's travel (guys x days, as a person counts them),
- *                    on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). A GYP carrier is the
- *                    exception (round-5 audit): its crew is entered in hours, which the man-days do not count, so its nights are typed and hold nothing until someone does.
+ * of its lines is the estimator's, but in the `nightsTyped` mode, which types in both first and judges them as the estimator's: they hold what was typed, through every step):
+ *   NIGHTS           the job's Lodging and Per Diem, on a job 70 miles or more out, hold the summed man-days of EVERY base section (round 6: Kyle carries hotel on every sheet of a Combo), each
+ *                    section counted with its own tab's divisor (guys x days, as a person counts them, and a crew entered in hours over the hours a night is worth on its tab: a Gyp crew's
+ *                    hours over 10), on auto and marked as following the labor; under 70 miles, or with no distance, they hold nothing (empty, off auto, no marker). An option is priced apart
+ *                    and a section that is off counts nothing. (Round 5 made a Gyp carrier's nights typed, because the man-days then counted day rows only: that exception is gone.)
+ *                    The model counts every tab's nights from its labor DOLLARS (round 6, part 3, M2: Epoxy!B65, Polish!B58, Leveling!B61, Gyp!B64), and the box holds that count to two
+ *                    places. Every crew of these walks is paid $33 for a day of 8 hours or an hour, so the dollars count the man-days to two places and this head count is the rule's figure;
+ *                    a crew paid two rates, a Leveling day of ten hours, and every tab's own vectors are tests/test_tab_nights_proof.py's, against the workbook.
  *
  * THE FIFTH AUDIT (2026-10-20, of b14bc98) added the RELOAD, which every other step lacks: a step of the walk always starts from the draft the step before SAVED, so every walk above
  * is "reload, then step" and could never see a Sheets panel action that prices differently in the session than after a reload (a base the pick demoted lost its Travel Labor row
@@ -48,6 +52,22 @@
  * added) is judged one more way, after every step it ends:
  *   RELOAD_AGREES    the SAME distance answer typed in the session that made the change, and typed after a plain reopen of the draft that session saved, leaves the same prices (the lump
  *                    sum a save writes, the root sheet's bid, every other section's) and the same Travel Labor rows, for each of the four answers (50, 300, 190 and cleared).
+ *
+ * ROUND 6, PART 2 (2026-10-20) added the ANSWER: the x on a Travel Labor line and Add Travel Labor, as steps of the walk. The verification of round 5 found a session and a reload of the SAME draft
+ * pricing $783 apart (F1: a far Combo, switched to Epoxy, the x on the Epoxy sheet's Travel Labor, back to Combo; F2: a far Polish, the x, an Epoxy sheet made the base, Add Travel Labor on it,
+ * the Polish option read) and traced it to migrateModel appending a blank Travel Labor row to a root that was off or an option. The walks above could not see it, for two reasons that are fixed:
+ * `shape` LEFT BLANK ROWS OUT of "as it was" (so a reopen that put one back looked the same), and no step pressed the x. Now a plain reopen is judged on every row, the blob a reload is judged on is
+ * re-keyed as the drafts table's jsonb column hands it back (key length, then bytes), and:
+ *   ANSWER_OWNER     the root's `no_travel_labor` is the JOB's answer: it is set only while the section that carries the job's travel holds no Travel Labor line. An option's x and a leftover row's x
+ *                    record nothing on the job, a job-type switch after the carrier's x does not seed the new carrier a line, and a flag over a carrier that holds a line is a violation.
+ *   ANSWER_HELD      the job's answer HOLDS (decided 2026-10-20; Hanz, 2026-10-21: "a job-type switch keeps the drive REMOVED, no seed, no carry, Add Travel Labor is the way back"): after the x
+ *                    on the carrier's line and until Add Travel Labor on the carrier, a job-type switch or a crew typed leaves the job with no drive: the flag still set, and no line on the carrier
+ *                    (not seeded to a new section, not carried to it, not a blank one the new carrier already held filled by the distance on file). A Sheets action (a base pick, a copy, a sheet
+ *                    added) ends the rule: an option made the base can hold a line of its own, and then the job has a drive (the answer goes). So does a job-type switch that makes an OPTION holding
+ *                    a line of its own the carrier (round 6, part 3, M3: it brings its own drive, exactly as the base pick does; promotedOwnLine).
+ *   DEMOTED_KEEPS    a base the Sheets panel's pick demotes to an option keeps the Travel Labor line it held (the fifth audit's decision). The blank line a reload gave a demoted root is gone, so a session
+ *                    and a reload now agree even on a demotion that loses the line, and RELOAD_AGREES no longer says so: this says what the session must hold.
+ *   (FAR_CARRIER     no longer calls a far carrier with no line a violation while the job's answer says it has no drive.)
  *
  * THE SIXTH ROUND (2026-10-20, item C2) made every reopen go through the SERVER'S key order (js/_jsonb.js: the draft's jsonb column keeps no key order, so every object of a reopened blob
  * has its keys sorted by length and then by bytes), and added the one walk that had never been possible: a SESSION that does not reload. Every other walk starts each step from the draft
@@ -60,10 +80,26 @@
  *                    blob as the session saved it, and on a page opened on it after the server, leaves the same prices and rows. The report marks a divergence "PRICES DIFFER" when a
  *                    price is not the same (`priced`), and "same prices, other rows or order" when only the sheets or the rows are.
  *
- * MODES (argv[3]): far | farplain | local | unknown | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys | sheetsOff |
- *   sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | session | audit54.
+ * ROUND 6, PART 3 (2026-10-21, M1) put the ANSWER walks under the server's order too. Until the sheet-order work was merged they re-keyed a reloaded blob as jsonb does EXCEPT the sheets under
+ * `tabs`, which they kept in the order they were saved (a tree without `seq` reads them back in another order, and every reopen would have reported the sheet bar moving); every reopen now goes
+ * through reopen(), sheets and all. And the one shape that order decides a PRICE on is a step of its own: THE EPOXY + POLISH-COPY PAIR (`pair`, pairOfCopy), the two bases an Epoxy sheet and a copy
+ * of the Polish root, both under `tabs`, the root an option. Which of the two carries the job's travel (crew, drive, nights) is their order alone, and jsonb hands "Copy1" back before "Epoxy".
+ * It is a step of the `answer` and `session` walks, judged after it as every Sheets action is (RELOAD_AGREES there, SESSION_AGREES here, DEMOTED_KEEPS in both), and two of the `answers`
+ * sequences build it with Epoxy added first, so the reload moves it.
+ *
+ * MODES (argv[3]): far | farplain | local | unknown | nightsTyped | typed | clearHours | clearGuys | off | rate | mixed | sheets | sheetsTyped | sheetsClearHours | sheetsClearGuys |
+ *   sheetsOff | sheetsRate | dist | distTyped | distClearHours | distClearGuys | distOff | distRate | reload | answer | answerJobs | answerSheets | answers | session | audit54.
+ *   answers               the fifteen sequences of the answer's own (F1, F2, S1 of the round-5 verification and the ones around them, and the Epoxy + Polish-copy pair: ANSWER_SEQUENCES),
+ *                         every rule judged after every step.
+ *   answer, answerJobs, answerSheets   the steps of `reload` plus the ANSWER (the x on the carrier's Travel Labor line, the x on an option's, Add Travel Labor on the carrier, on an option),
+ *                         with RELOAD_AGREES judged after every Sheets action, x and Add, against a JSONB reload of the draft the session saved. `answer` takes every kind of step, two deep,
+ *                         the Epoxy + Polish-copy pair among them;
+ *                         `answerJobs` the four job types and the answer, three deep (F1's family: switch, x, switch back); `answerSheets` the Sheets actions and the answer, three deep (F2's family).
  *   far, local, unknown   steps are the four job types, each plain or with the crew typed on the new carrier.
  *   farplain              the same far job, with the four job types only (no crew typed): the deeper walk.
+ *   nightsTyped           the estimator's say on the job's NIGHTS is applied first (Lodging typed 10, Per Diem typed over and cleared, on the Labor step of the carrier), then the steps are the
+ *                         far mode's. A typed line is THEIRS (round 6, N4): through every sequence after it, on a far job, under 70 miles and with no distance (nightsTyped@local,
+ *                         nightsTyped@unknown), Lodging holds "10" and Per Diem holds nothing, both typed, off auto, with no follow marker: no answer fills them, no crew changes them.
  *   typed, clearHours, clearGuys, off, rate   the estimator's variant is applied to the carrier's Travel Labor row first, then the steps are the four job types. (`rate` types $40
  *                         over the line's $33 and nothing else: the guys and the hours stay on the distance, and the typed rate follows the job's drive.)
  *   mixed                 the steps are the four job types and, once on any path, ONE of the variants (anywhere in the sequence).
@@ -74,8 +110,8 @@
  *   distTyped, distClearHours, distClearGuys, distOff, distRate   the same steps, with the estimator's variant applied to the carrier's row first (a copy carries it).
  *   reload                the `sheets` steps and a fresh Epoxy sheet added, and RELOAD_AGREES judged after every sheets action (the session against a reload, four answers each).
  *   reloadTyped, reloadClearHours, reloadClearGuys, reloadOff, reloadRate   the same, with the estimator's variant applied to the carrier's row first.
- *   session               the job types, the Sheets panel's base changes, a copy of the carrier and a fresh Epoxy or Polish sheet, in ONE continuous session (see above), judged against a
- *                         reload after every prefix of every sequence.
+ *   session               the job types, the Sheets panel's base changes, a copy of the carrier, a fresh Epoxy or Polish sheet and the Epoxy + Polish-copy pair, in ONE continuous session
+ *                         (see above), judged against a reload after every prefix of every sequence.
  *   audit54               the 54 sequences the 2026-10-20 audit found pricing the drive twice at 7d32336, with their exact dollars.
  * Any mode but audit54 takes a distance after an at-sign (typed@local, sheetsOff@unknown, mixed@local): the same walk on a 40 mile job or one with no distance.
  * argv[4] is the depth (the number of steps after the start).
@@ -134,6 +170,8 @@ const TYPES = ["epoxy", "polish", "combo", "gyp"];
 const START_CREW = { epoxy: ["Epoxy", "epoxy-install", "4", "12"], polish: ["Polish", "polishing", "4", "12"], combo: ["Polish", "polishing", "4", "12"], gyp: [GYP_TAB, "gyp-pour", "4", "12"] };
 const STEP_CREW = { epoxy: ["Epoxy", "epoxy-install", "5", "12"], polish: ["Polish", "polishing", "6", "12"], combo: ["Polish", "polishing", "6", "12"], gyp: [GYP_TAB, "gyp-pour", "5", "12"] };
 const VARIANTS = ["typed", "clearHours", "clearGuys", "off", "rate"];
+/** `nightsTyped`: the estimator's own say on the job's NIGHTS (Lodging typed 10, Per Diem cleared) on the carrier's Labor step, before any switch. Typed lines are THEIRS: through every sequence they hold what was typed. */
+const NIGHTS_TYPED = MODE === "nightsTyped";
 /** The variant a mode starts from, or "": the variant modes, and the sheets and dist modes that name one (sheetsTyped, sheetsOff, distRate, ...). */
 const MODE_VARIANT = (function () {
   if (VARIANTS.indexOf(MODE) >= 0) return MODE;
@@ -142,6 +180,8 @@ const MODE_VARIANT = (function () {
 })();
 const DIST = MODE === "dist" || /^dist(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE);
 const RELOAD = MODE === "reload" || /^reload(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE);
+/** The ANSWER walks (round 6, part 2): the x and Add Travel Labor are steps, and the reload a step is judged against is a jsonb one. */
+const ANSWER = MODE === "answer" || MODE === "answerJobs" || MODE === "answerSheets" || MODE === "answers";
 const SESSION = MODE === "session";
 const SHEETS = MODE === "sheets" || /^sheets(Typed|ClearHours|ClearGuys|Off|Rate)$/.test(MODE) || DIST || RELOAD || SESSION;      // a distance walk takes every step of the Sheets walk too
 /** The miles a distance step types: under 70 (local), 300 (farther than the 190 a new bid starts on), 190 again, and the box cleared (the lookup then finds nothing). */
@@ -198,15 +238,13 @@ function facts(b) {
     jobType: B.baseOf(m).jobType };
 }
 
-/** A Travel Labor row with nothing in it: no hours, no marker of a fill, nobody's box. migrateModel puts one back on a section whose draft was saved without
- *  (a Combo's off root, after its row went with the carrier to Epoxy), and it prices nothing and says nothing, so "as it was" does not count it. */
-const emptyRow = (r) => !owned(r) && blank(r.days) && !r.guys_follow && typeof r.hours_seed !== "number";
-
-/** The same facts as a string, for "is it as it was". */
+/** The same facts as a string, for "is it as it was". EVERY Travel Labor row counts, a blank one too (round 6, part 2): this used to leave a row with nothing in it out ("migrateModel puts one back on a
+ *  section whose draft was saved without, and it prices nothing"), which is exactly how a reopen that appended a blank row to an off root looked the same as the page that saved it, and the next far
+ *  answer filled and priced that row (+$783 between a session and a reload). The answer is part of it: the job's `no_travel_labor`. */
 function shape(b) {
   const f = facts(b);
-  return JSON.stringify({ car: f.carrier, kinds: f.entries.map((e) => [e.tab, e.kind]),
-    rows: f.entries.map((e) => [e.tab, travelRows(e.section).filter((r) => !emptyRow(r)).map((r) => [r.guys, r.days, !!r.guys_auto, r.guys_follow === undefined ? null : r.guys_follow,
+  return JSON.stringify({ car: f.carrier, said: f.m.no_travel_labor === true, kinds: f.entries.map((e) => [e.tab, e.kind]),
+    rows: f.entries.map((e) => [e.tab, travelRows(e.section).map((r) => [r.guys, r.days, !!r.guys_auto, r.guys_follow === undefined ? null : r.guys_follow,
       r.hours_seed === undefined ? null : r.hours_seed, r.guys_typed === true, r.hours_typed === true, r.enabled === false, cost(r)])]) });
 }
 
@@ -233,6 +271,19 @@ function applyVariant(b, name) {
   else if (name === "off") P.clickOn(b, '[data-on-lab="' + i + '"]');
   else if (name === "rate") P.typeInto(b, sel("rate"), "40");
   else throw new Error("no such variant " + name);
+  return true;
+}
+
+/** The estimator's own say on the job's nights, through the two boxes on the Labor step of the sheet that carries the job's travel: Lodging typed as 10, Per Diem typed over and cleared.
+ *  False when the step has no such boxes. */
+function applyNights(b) {
+  b.api.show(B.travelCarrier(b.api.root()));
+  b.api.go(1);
+  const lodging = '[data-trv="lodging"][data-k="qty"]', perDiem = '[data-trv="per_diem"][data-k="qty"]';
+  if (!b.doc.querySelector(lodging) || !b.doc.querySelector(perDiem)) return false;
+  P.typeInto(b, lodging, "10");
+  P.typeInto(b, perDiem, "7");
+  P.typeInto(b, perDiem, "");
   return true;
 }
 
@@ -283,7 +334,7 @@ function judgeOptions(b, d) {
         if (far && !(r.days === hours && r.hours_seed === hours)) bad.push(["OPT_FOLLOWS", at + ": the hours are not " + hours]);
         if (!far && !(blank(r.days) && typeof r.hours_seed !== "number")) bad.push(["OPT_FOLLOWS", at + ": the hours of a job under 70 miles were not taken back"]);
       }
-      // (A row the distance never filled has nothing to take back: migrateModel gives a root that lost its row the blank older man-days one, which a job under 70 miles leaves as it is.)
+      // (A row the distance never filled has nothing to take back: a blank row, such as the shipped older man-days one an Epoxy bid's off root keeps, is left as it is by a job under 70 miles.)
       const wasFilled = !!wasRow && ((typeof wasRow.days === "number" && wasRow.days === wasRow.hours_seed) || wasRow.guys_follow === "crew");
       if (r.guys_typed !== true) {
         if (far && !(r.guys_follow === "crew" && r.guys_auto === true && Number(r.guys) === crew)) bad.push(["OPT_FOLLOWS", at + ": the guys are not the option's own crew of " + crew]);
@@ -314,8 +365,15 @@ function judge(b, ctx) {
   }));
 
   const crow = travelRows(carrierEntry && carrierEntry.section)[0] || null;
+  // THE JOB'S ANSWER (round 6, part 2): `no_travel_labor` says the job has no drive, which is what a carrier with no line is when it is set, so that carrier is not a violation. It is the carrier's
+  // answer and nobody else's: set while the carrier holds a Travel Labor line, it is a flag that has outlived its meaning (an option's x, a leftover row's x, a job-type switch that seeded a line).
+  if (m.no_travel_labor === true && crow) note("ANSWER_OWNER", "the job says it has no drive (no_travel_labor) and the carrier " + f.carrier + " holds " + fmtRow(crow));
+  if (ctx && ctx.said === true) {
+    if (m.no_travel_labor !== true) note("ANSWER_HELD", "the job said it has no drive (the x on the carrier) and the answer is gone");
+    if (crow) note("ANSWER_HELD", "the job said it has no drive (the x on the carrier) and the carrier " + f.carrier + " holds " + fmtRow(crow));
+  }
   if (f.far && carrierEntry && carrierEntry.layout !== "gyp") {
-    if (!crow) note("FAR_CARRIER", "carrier " + f.carrier + " has no Travel Labor row at " + f.miles + " miles");
+    if (!crow) { if (m.no_travel_labor !== true) note("FAR_CARRIER", "carrier " + f.carrier + " has no Travel Labor row at " + f.miles + " miles"); }
     else if (!owned(crow)) {
       const hours = B.driveHoursFor(f.miles);
       const ok = crow.guys_follow === "crew" && crow.guys_auto === true && crow.days === hours && crow.hours_seed === hours && crow.guys === B.crewSize(m);
@@ -333,21 +391,36 @@ function judge(b, ctx) {
     if (!owned(r) && (!blank(r.days) || r.guys_follow || typeof r.hours_seed === "number")) note("STALE", e.tab + " (" + e.kind + ") still holds the filled row " + fmtRow(r));
   }));
 
-  // NIGHTS. Counted here from the carrier's own rows, and not asked of the model, so the check does not agree with a model that has the same mistake in it.
+  // NIGHTS. Counted here from the rows of EVERY base section (everything in the lump sum), each by its own tab's divisor, and not asked of the model, so the check does not agree
+  // with a model that has the same mistake in it. A section's man-days are guys x days over its day rows and guys x hours over the hours a night is worth on its tab (10 on a Gyp
+  // tab, whose crew is entered in hours; 8 on every other) over its crew rows in hours; the drive is never one. An option counts apart, and an off section counts nothing.
   if (m.travel) {
-    const carrierRows = carrierEntry && carrierEntry.section.labor instanceof Array ? carrierEntry.section.labor : [];
+    const nightHours = (e) => (e.layout === "gyp" ? 10 : 8);
     let manDays = 0;
-    carrierRows.forEach((r) => { if (r && r.unit !== "hours" && r.enabled !== false) manDays += (Number(r.guys) || 0) * (Number(r.days) || 0); });
+    f.entries.filter((e) => e.kind === "base").forEach((e) => {
+      (e.section.labor instanceof Array ? e.section.labor : []).forEach((r) => {
+        if (!r || r.enabled === false || r.id === "travel") return;
+        if (r.unit === "hours") manDays += (Number(r.guys) || 0) * (Number(r.days) || 0) / nightHours(e);
+        else manDays += (Number(r.guys) || 0) * (Number(r.days) || 0);
+      });
+    });
     manDays = Math.round(manDays * 100) / 100;
     ["lodging", "per_diem"].forEach((k) => {
       const l = m.travel[k];
       if (!l) return;
       const says = k + " " + JSON.stringify({ qty: l.qty, auto: l.qty_auto, follow: l.qty_follow, typed: l.qty_typed });
-      const gypCarrier = !!(carrierEntry && carrierEntry.layout === "gyp");
-      if (f.far && gypCarrier) {
-        if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " is Gyp: its nights are typed");
-      } else if (f.far) {
-        if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) note("NIGHTS", says + " on a " + f.miles + " mile job whose carrier " + f.carrier + " has " + manDays + " man-days");
+      // A TYPED LINE IS THE ESTIMATOR'S (`nightsTyped`): it holds exactly what they left, whatever the distance, the carrier or the other base's crew do: never filled, never emptied, never followed.
+      if (ctx && ctx.nights) {
+        const want = k === "lodging" ? "10" : "";
+        if (!(l.qty_typed === true && l.qty_auto === false && l.qty_follow === undefined && String(blank(l.qty) ? "" : l.qty) === want)) {
+          note("NIGHTS", says + " was left by the estimator as " + JSON.stringify(want) + " and the walk changed it");
+        }
+        return;
+      }
+      if (f.far) {
+        if (!(l.qty_auto === true && l.qty_follow === "labor" && Number(l.qty) === manDays)) {
+          note("NIGHTS", says + " on a " + f.miles + " mile job whose bases (carrier " + f.carrier + ") have " + manDays + " man-days between them");
+        }
       } else if (!(l.qty_auto === false && l.qty_follow === undefined && blank(l.qty))) {
         note("NIGHTS", says + " on a job " + (f.miles === null ? "with no distance" : "of " + f.miles + " miles") + ": nothing was to be filled");
       }
@@ -388,7 +461,19 @@ function record(code, label, detail) {
   return v;
 }
 
-/** Take a step from the draft `saved`: returns the page after it, saved, plus the label's piece. `step` is { job, crew } | { variant } | { base } | { copy }. */
+/** The section an answer step is about, on the page `b`: "carrier" is the section that carries the job's travel, "option" the first option (which is not the carrier). `want` says whether it must
+ *  hold a Travel Labor line ("row", the x) or not ("none", Add Travel Labor). null when the bid has no such section. */
+function answerTarget(b, which, want) {
+  const m = b.api.root();
+  let entries;
+  try { entries = B.sectionsOf(m); } catch (e) { return null; }
+  const carrier = B.travelCarrier(m);
+  const held = (e) => travelRows(e.section).length > 0;
+  const fit = entries.filter((e) => (which === "carrier" ? e.tab === carrier : e.kind === "option" && e.tab !== carrier) && (want === "row" ? held(e) : !held(e)));
+  return fit.length ? fit[0].tab : null;
+}
+
+/** Take a step from the draft `saved`: returns the page after it, saved, plus the label's piece. `step` is { job, crew } | { variant } | { base } | { copy } | { x } | { addTravel }. */
 async function take(saved, step, distanceAnswer) {
   const here = typeOfBlob(saved);
   const answer = { distance: Object.assign({}, distanceAnswer, { miles: distanceAnswer.miles === null ? null : 300 }) };
@@ -424,15 +509,91 @@ async function take(saved, step, distanceAnswer) {
     b.clock.fire();
     return { b: b, plain: false, piece: "[" + step.variant + "]", step: step };
   }
+  if (step.x) {
+    // THE x ON A TRAVEL LABOR LINE (round 6, part 2): the carrier's says the job has no drive, an option's says only that the option has none. Skipped when the bid has no such line to press it on.
+    const tab = answerTarget(b, step.x, "row");
+    if (tab === null) return null;
+    b.api.show(tab);
+    b.api.go(1);
+    const i = idxIn(secOf(b.api.root(), tab), "travel");
+    if (i < 0 || !b.doc.querySelector('[data-del-lab="' + i + '"]')) return null;
+    P.clickOn(b, '[data-del-lab="' + i + '"]');
+    await settle();
+    b.clock.fire();
+    return { b: b, plain: false, piece: "x:" + step.x, step: step };
+  }
+  if (step.addTravel) {
+    // ADD TRAVEL LABOR on the carrier, or on an option that has none: skipped when the page draws no such button there.
+    const tab = answerTarget(b, step.addTravel, "none");
+    if (tab === null) return null;
+    b.api.show(tab);
+    b.api.go(1);
+    if (!b.doc.querySelector("[data-add-travel]")) return null;
+    P.clickOn(b, "[data-add-travel]");
+    await settle();
+    b.clock.fire();
+    return { b: b, plain: false, piece: "addTravel:" + step.addTravel, step: step };
+  }
   if (!(await sheetsAction(b, step))) return null;
-  return { b: b, plain: false, piece: step.copy ? "copy" : step.add ? "add:" + step.add : "base:" + step.base, step: step };
+  return { b: b, plain: false, piece: stepLabel(step), step: step };
 }
 
-/** The Sheets panel's three actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (a sheet's radio, or the "Make Epoxy + Polish the base" button for the pair, and then its yes). The page is saved
- *  after it. False when the control is not there (the panel does not offer it at this state). A FRESH SHEET is an option that starts on the proposal. It holds no Travel Labor row:
- *  only the section that carries the job's travel has one. */
+/** THE EPOXY + POLISH-COPY PAIR (round 6, part 3, M1), made on the page `b` with the Sheets panel's own controls: the two bases are an Epoxy sheet and a COPY of the Polish root, and the root is
+ *  an option. Both bases live under `tabs`, so which of them carries the job's travel (the first base) is decided by their order alone, and a reload hands `tabs` back in jsonb's order ("Copy1"
+ *  before "Epoxy"): only each section's `seq` keeps it (the sheet-order work, round 6, C1; a far Combo of Epoxy 4 x 12 and a Polish copy 6 x 10 as the two bases was $78,628 as saved and
+ *  $81,086 with the copy first). Made as the estimator makes it: an Epoxy sheet from the Add menu when the bid has none, a copy of the root from the root's bar when the bid holds none, the copy
+ *  made the base (its radio, and yes), then "Make Epoxy + Polish the base" on the copy's bar. Its yes is left to sheetsAction, which saves after it. False when a control is not there, when the
+ *  root is off (a Gyp or Epoxy job: the root would not be an option) and when the bases are that pair already (nothing would change). */
+async function pairOfCopy(b) {
+  const entries = () => B.sectionsOf(b.api.root());
+  const copyOfRoot = () => entries().filter((e) => !e.root && e.role === "polish" && e.source === B.ROOT_TAB);
+  if (entries()[0].kind === "off") return false;
+  const bases = B.baseOf(b.api.root()).ids;
+  if (bases.length === 2 && copyOfRoot().some((e) => bases.indexOf(e.tab) >= 0) && entries().some((e) => e.role === "epoxy" && bases.indexOf(e.tab) >= 0)) return false;
+  if (!entries().some((e) => e.role === "epoxy")) {
+    b.api.go(1);
+    await settle();
+    if (b.doc.querySelector('[data-sh-act="add-menu"]')) P.clickOn(b, '[data-sh-act="add-menu"]');
+    const add = '[data-sh-act="add"][data-sh-sheet="Epoxy"]';
+    if (!b.doc.querySelector(add)) return false;
+    P.clickOn(b, add);
+    await settle();
+  }
+  if (!copyOfRoot().length) {
+    const rootTab = '[data-section-tab="' + attrOf(B.ROOT_TAB) + '"]';
+    if (b.doc.querySelector(rootTab)) { P.clickOn(b, rootTab); await settle(); }
+    if (!b.doc.querySelector('[data-sh-act="copy"]')) return false;
+    P.clickOn(b, '[data-sh-act="copy"]');
+    await settle();
+    if (!copyOfRoot().length) return false;
+  }
+  const copy = copyOfRoot().filter((e) => e.kind === "base")[0] || copyOfRoot()[0];
+  if (copy.kind !== "base") {
+    const radio = '[data-sh-base="' + attrOf(copy.tab) + '"]';
+    if (!b.doc.querySelector(radio)) return false;
+    b.doc.fire("change", { target: P.need(b, radio) });
+    if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return false;
+    P.clickOn(b, '[data-sh-act="base-yes"]');
+    await settle();
+  }
+  const pair = B.combinedPair(b.api.root());
+  if (!pair || pair.indexOf(copy.tab) < 0) return false;
+  const copyTab = '[data-section-tab="' + attrOf(copy.tab) + '"]';
+  if (b.doc.querySelector(copyTab)) { P.clickOn(b, copyTab); await settle(); }
+  if (!b.doc.querySelector('[data-sh-act="combine"]')) return false;
+  P.clickOn(b, '[data-sh-act="combine"]');
+  return true;
+}
+
+/** The Sheets panel's actions, made on an open page `b`: a copy of the sheet on show, a fresh sheet from the Add menu, a base change (a sheet's radio, or the "Make Epoxy + Polish the base" button for the
+ *  pair, and then its yes), and the Epoxy + Polish-copy pair (pairOfCopy: several of them in a row, then its yes). The page is saved after it. False when the control is not there (the panel does not offer it at
+ *  this state). A FRESH SHEET is an option that starts on the proposal. It holds no Travel Labor row: only the section that carries the job's travel has one. */
 async function sheetsAction(b, step) {
-  if (step.copy) {
+  if (step.pair) {
+    if (!(await pairOfCopy(b))) return false;
+    if (!b.doc.querySelector('[data-sh-act="base-yes"]')) return false;
+    P.clickOn(b, '[data-sh-act="base-yes"]');
+  } else if (step.copy) {
     const sel = '[data-sh-act="copy"]';
     if (!b.doc.querySelector(sel)) return false;
     P.clickOn(b, sel);
@@ -468,9 +629,35 @@ async function sheetsAction(b, step) {
   return true;
 }
 
-/** A step as a piece of a label. */
-const stepLabel = (step) => (step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add :
-  step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base);
+/** The context a path carries after a step. In the ANSWER walks `said` is true from the x on the carrier's line until the job's drive is back or a Sheets action ends the rule (a base pick can
+ *  promote an option that holds a line of its own, a copy or a sheet added changes what the carrier is next to); a variant starts a context of its own. */
+function nextCtx(ctx, step) {
+  if (!ANSWER) return ctx;
+  if (step.x === "carrier") return Object.assign({}, ctx, { said: true });
+  if (step.addTravel === "carrier" || step.base !== undefined || step.copy || step.add || step.pair) return Object.assign({}, ctx, { said: null });
+  return ctx;
+}
+
+/** ROUND 6, PART 3 (M3): did the job-type switch that ended a step make an OPTION that held a Travel Labor line of its own the carrier? Then it brought its own drive, as the Sheets panel's pick does
+ *  (sectionsForJob settles the job's answer as pickBase does), and ANSWER_HELD ends with it. `parentSaved` is the draft before the step, read as the page would read it (migrateModel); `b` the page after. */
+function promotedOwnLine(parentSaved, b) {
+  if (!parentSaved || !parentSaved.polish_estimate) return false;
+  let before, carrier;
+  try { before = B.sectionsOf(B.migrateModel(clone(parentSaved.polish_estimate))); carrier = B.travelCarrier(b.api.root()); } catch (e) { return false; }
+  const was = before.filter((e) => e.tab === carrier)[0];
+  return !!was && was.kind === "option" && travelRows(was.section).length > 0;
+}
+
+/** The context to judge a step's page by and to carry on from it: nextCtx's, and ANSWER_HELD ended by a job-type switch that promoted an option holding its own line (promotedOwnLine). */
+function ctxAfter(ctx, step, parentSaved, b) {
+  return ANSWER && ctx && ctx.said === true && step.job && promotedOwnLine(parentSaved, b) ? Object.assign({}, ctx, { said: null }) : ctx;
+}
+
+/** A step as the walk's labels say it. */
+function stepLabel(step) {
+  return step.job ? step.job + (step.crew ? "+crew" : "") : step.variant ? "[" + step.variant + "]" : step.copy ? "copy" : step.add ? "add:" + step.add : step.x ? "x:" + step.x :
+    step.addTravel ? "addTravel:" + step.addTravel : step.pair ? "pair:" + step.pair : step.dist !== undefined ? "{" + step.dist + "}" : "base:" + step.base;
+}
 
 /** The base changes the Sheets panel of this page offers, other than the base it already has: one sheet to a radio, and the pair priced
  *  together. The pair is a button on the bar of either sheet of it, drawn only while one of them is on show, so it is offered whenever the bid
@@ -493,17 +680,24 @@ function basePicks(b) {
 function stepsFor(page, path) {
   const used = path.some((p) => p.variant);
   const out = [];
-  if (MODE === "far" || MODE === "local" || MODE === "unknown") {
+  if (MODE === "far" || MODE === "local" || MODE === "unknown" || NIGHTS_TYPED) {
     TYPES.forEach((t) => { out.push({ job: t }); out.push({ job: t, crew: true }); });
   } else if (MODE === "mixed") {
     TYPES.forEach((t) => out.push({ job: t }));
     if (!used) VARIANTS.forEach((v) => out.push({ variant: v }));
+  } else if (ANSWER) {
+    // The job types (not in answerSheets), the Sheets actions (not in answerJobs: no sheet but the job's own, so no option to press anything on), and the answer.
+    if (MODE !== "answerSheets") TYPES.forEach((t) => out.push({ job: t }));
+    if (MODE !== "answerJobs") { basePicks(page).forEach((v) => out.push({ base: v })); out.push({ copy: true }); out.push({ add: "Epoxy" }); }
+    if (MODE === "answer") out.push({ pair: "copy" });          // the Epoxy + Polish-copy pair (pairOfCopy): two bases under `tabs`, the root an option
+    (MODE === "answerJobs" ? ["carrier"] : ["carrier", "option"]).forEach((w) => { out.push({ x: w }); out.push({ addTravel: w }); });
   } else if (SHEETS) {
     TYPES.forEach((t) => out.push({ job: t }));
     basePicks(page).forEach((v) => out.push({ base: v }));
     out.push({ copy: true });
     if (RELOAD || SESSION) out.push({ add: "Epoxy" });
     if (SESSION) out.push({ add: "Polish" });                // beside the root a Polish sheet is a Copy<N>: with an Epoxy base it is the other half of a pair that lives under `tabs`
+    if (SESSION) out.push({ pair: "copy" });                 // the Epoxy + Polish-copy pair (pairOfCopy): bases Epoxy and a copy of the root, the root an option
     if (DIST) Object.keys(DIST_TEXT).forEach((k) => out.push({ dist: k }));
   } else {
     TYPES.forEach((t) => out.push({ job: t }));
@@ -551,13 +745,31 @@ async function judgeReload(parentSaved, step, distanceAnswer, label) {
   }
 }
 
+/** DEMOTED_KEEPS (the fifth audit's decision, held by a rule of its own since round 6, part 2): a base the Sheets panel's pick DEMOTES to an option keeps the Travel Labor line it held, so the option prices its
+ *  own drive from the moment of the pick (moveTravelLabor gives the new carrier a COPY). Until round 6 the walk saw a demotion that lost its line only through RELOAD_AGREES (the reload then gave the root a blank line,
+ *  which the next answer filled, and the session had none); that blank line is gone, so a session and a reload now agree on a demotion that loses the line, and this says what the session must hold. */
+function demotedKeeps(b, savedBefore) {
+  const bad = [];
+  let before;
+  try { before = B.sectionsOf(B.migrateModel(clone(savedBefore.polish_estimate))); } catch (e) { return bad; }
+  const after = facts(b).entries;
+  before.forEach((e0) => {
+    const e1 = after.filter((e) => e.tab === e0.tab)[0];
+    if (e0.kind === "base" && e1 && e1.kind === "option" && travelRows(e0.section).length > 0 && travelRows(e1.section).length === 0) {
+      bad.push(["DEMOTED_KEEPS", e0.tab + " was a base holding a Travel Labor line and is an option holding none"]);
+    }
+  });
+  return bad;
+}
+
 async function judgeStep(label, got, parent, ctx, leaf, distanceAnswer) {
   const b = got.b;
   report.runs++;
   judge(b, ctx).forEach(([code, detail]) => record(code, label, detail));
   if (got.dist) judgeOptions(b, got.dist).forEach(([code, detail]) => record(code, label, detail));
+  if (got.step && (got.step.base !== undefined || got.step.pair) && parent && parent.saved) demotedKeeps(b, parent.saved).forEach(([code, detail]) => record(code, label, detail));
   // THE SHEETS ACTIONS ARE JUDGED ONE MORE WAY, in the `reload` mode: the session against a reload (RELOAD_AGREES).
-  if (RELOAD && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add)) {
+  if ((RELOAD || ANSWER) && parent && parent.saved && got.step && (got.step.base !== undefined || got.step.copy || got.step.add || got.step.x || got.step.addTravel || got.step.pair)) {
     report.reloadJudged = (report.reloadJudged || 0) + 1;
     await judgeReload(parent.saved, got.step, distanceAnswer, label);
   }
@@ -605,7 +817,7 @@ async function walk(label, got, path, depth, ctx, distanceAnswer) {
       continue;
     }
     if (!child) continue;
-    const ctx2 = step.variant ? { variant: step.variant } : ctx;
+    const ctx2 = ctxAfter(step.variant ? { variant: step.variant } : nextCtx(ctx, step), step, saved, child.b);
     try { await judgeStep(childLabel, child, node, ctx2, depth === 1, distanceAnswer); } catch (e) {
       report.crashes.push([childLabel, String((e && e.stack) || e).slice(0, 400)]);
       record("CRASH", childLabel, "while judging: " + String((e && e.message) || e).slice(0, 200));
@@ -727,6 +939,37 @@ const AUDIT54 = [
   "gyp epoxy polish combo+", "gyp epoxy polish+ combo+", "gyp epoxy+ polish combo", "gyp epoxy+ polish combo+", "gyp epoxy+ polish+ combo", "gyp epoxy+ polish+ combo+",
 ];
 
+/** THE ANSWER'S OWN SEQUENCES (round 6, part 2): the ones the round-5 verification found, and the ones around them. A string is a job type ("epoxy", a "+" after it types the crew on the new
+ *  carrier), anything else a step. Each is judged after every step by every rule above, and a Sheets action, an x and an Add are judged against a jsonb reload too. The audit's own labels:
+ *    F1  far Combo -> Epoxy -> the x on the Epoxy carrier's Travel Labor -> Combo again (a session and a reload priced it $783 apart once the distance was typed)
+ *    F2  far Polish -> the x -> an Epoxy sheet added and made the base -> Add Travel Labor on it (the demoted Polish option, $40,988 in the session and $41,771 after a reload)
+ *    S1  far Polish -> an Epoxy sheet added -> job type Epoxy -> the x on the Epoxy carrier -> job type Polish
+ *  and the answer's owner: an option's x, the root that is an option, a switch after the carrier's x, and Add on the carrier and on an option. */
+const ANSWER_SEQUENCES = [
+  { start: "combo", steps: ["epoxy", { x: "carrier" }, "combo"] },
+  { start: "combo", steps: ["epoxy+", { x: "carrier" }, "combo+"] },
+  { start: "polish", steps: [{ x: "carrier" }, { add: "Epoxy" }, { base: "Epoxy" }, { addTravel: "carrier" }] },
+  { start: "polish", steps: [{ add: "Epoxy" }, "epoxy", { x: "carrier" }, "polish"] },
+  { start: "polish", steps: [{ copy: true }, { x: "option" }, { addTravel: "option" }, { x: "carrier" }, { addTravel: "carrier" }] },
+  { start: "polish", steps: [{ add: "Epoxy" }, { base: "Epoxy" }, { x: "option" }, { addTravel: "option" }, { base: "Polish" }] },
+  { start: "polish", steps: [{ x: "carrier" }, "epoxy", "polish", "combo", "gyp", "polish"] },
+  { start: "epoxy", steps: [{ x: "carrier" }, "combo", { addTravel: "carrier" }, "epoxy", "polish"] },
+  { start: "combo", steps: [{ base: "Epoxy" }, { x: "carrier" }, { base: "Polish" }, { x: "carrier" }, { addTravel: "carrier" }] },
+  { start: "gyp", steps: [{ x: "carrier" }, "polish", { addTravel: "carrier" }, "gyp"] },
+  { start: "polish", steps: [{ copy: true }, { x: "carrier" }, { base: "Copy1" }, { x: "carrier" }] },
+  { start: "polish", steps: [{ copy: true }, { x: "carrier" }, { x: "option" }, { addTravel: "option" }, "epoxy", "polish"] },
+  { start: "epoxy", steps: [{ x: "carrier" }, "combo", "gyp", "epoxy+", "polish+"] },
+  // THE EPOXY + POLISH-COPY PAIR (round 6, part 3, M1): an Epoxy sheet added first, so a reload's jsonb order puts the copy ("Copy1") before it and only `seq` keeps Epoxy the carrier; then the
+  // job's answer on that carrier, a job-type switch and the answer taken back; and a Combo whose copy is made after its Epoxy base and paired, the demoted root's own line taken off and added back, and two switches.
+  { start: "polish", steps: [{ add: "Epoxy" }, { pair: "copy" }, { x: "carrier" }, "combo", { addTravel: "carrier" }] },
+  { start: "combo", steps: [{ pair: "copy" }, { x: "option" }, { addTravel: "option" }, "epoxy", "combo"] },
+  // AN OPTION MADE THE CARRIER BRINGS ITS OWN DRIVE (round 6, part 3, M3): far Polish, an Epoxy option, the x on the Polish carrier, Add Travel Labor on the Epoxy option, then Epoxy made the base by
+  // the intake's job type, and by the Sheets panel's pick. Both hand the job the option's own line (the answer goes), and the switch back to Polish carries that drive to the root, as a job's drive
+  // follows its carrier.
+  { start: "polish", steps: [{ add: "Epoxy" }, { x: "carrier" }, { addTravel: "option" }, "epoxy", "polish"] },
+  { start: "polish", steps: [{ add: "Epoxy" }, { x: "carrier" }, { addTravel: "option" }, { base: "Epoxy" }] },
+];
+
 async function newBid(start, distanceAnswer) {
   const c = START_CREW[start];
   const b = await open(DRAFTS[start](), { distance: distanceAnswer });
@@ -764,6 +1007,40 @@ async function main() {
     report.sequences = AUDIT54.length;
     return;
   }
+  if (MODE === "answers") {
+    report.sequences = 0;
+    for (const seq of ANSWER_SEQUENCES) {
+      let got = await newBid(seq.start, distanceAnswer);
+      let label = "start:" + seq.start;
+      let parent = { shape: shape(got.b), lump: lumpOf(got.b.store.blob), saved: clone(got.b.store.blob) };
+      let ctx = null;
+      judge(got.b, ctx).forEach(([code, detail]) => record(code, label, detail));
+      report.runs++;
+      for (let i = 0; i < seq.steps.length; i++) {
+        const s = seq.steps[i];
+        const step = typeof s === "string" ? { job: s.replace("+", ""), crew: s.indexOf("+") >= 0 } : s;
+        label += " -> " + stepLabel(step);
+        ctx = nextCtx(ctx, step);
+        let next = null;
+        try { next = await take(parent.saved, step, distanceAnswer); } catch (e) {
+          report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
+          record("CRASH", label, String((e && e.message) || e).slice(0, 200));
+          break;
+        }
+        if (!next) { report.skipped = (report.skipped || 0) + 1; (report.skippedAt = report.skippedAt || []).push(label); break; }     // the page offers nothing to press (it is what the walk would skip)
+        ctx = ctxAfter(ctx, step, parent.saved, next.b);
+        try { await judgeStep(label, next, parent, ctx, i === seq.steps.length - 1, distanceAnswer); } catch (e) {
+          report.crashes.push([label, String((e && e.stack) || e).slice(0, 400)]);
+          record("CRASH", label, "while judging: " + String((e && e.message) || e).slice(0, 200));
+          break;
+        }
+        got = next;
+        parent = { shape: shape(got.b), lump: lumpOf(got.b.store.blob), saved: clone(got.b.store.blob) };
+      }
+      report.sequences++;
+    }
+    return;
+  }
   if (SESSION) {
     for (const start of TYPES) await walkSession(start, [], DEPTH, distanceAnswer);
     return;
@@ -782,7 +1059,16 @@ async function main() {
       first = { b: reopened };
       ctx = { variant: MODE_VARIANT };
     }
-    const label = label0 + (ctx ? "[" + MODE_VARIANT + "]" : "");
+    if (NIGHTS_TYPED) {
+      const reopened = await reopen(first.b.store.blob, { distance: distanceAnswer });
+      reopened.api.go(1);
+      await settle();
+      if (!applyNights(reopened)) { report.skipped = (report.skipped || 0) + 1; continue; }
+      reopened.clock.fire();
+      first = { b: reopened };
+      ctx = { nights: true };
+    }
+    const label = label0 + (ctx ? "[" + (MODE_VARIANT || "nights") + "]" : "");
     report.runs++;
     judge(first.b, ctx).forEach(([code, detail]) => record(code, label, detail));
     await walk(label, first, [], DEPTH, ctx, distanceAnswer);

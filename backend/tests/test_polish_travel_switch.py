@@ -275,7 +275,9 @@ def test_combo_to_epoxy_to_polish_to_combo_prices_one_drive_on_the_crew_of_the_b
     assert [steps[k]["pricedOn"] for k in order] == [["Polish"], ["Epoxy"], ["Polish"], ["Polish"]]
     assert [steps[k]["travelDollars"] for k in order] == [858, 1072.5, 858, 1072.5]
     assert [steps[k]["carrier"] for k in order] == ["Polish", "Epoxy", "Polish", "Polish"]
-    assert _row(steps["combo"], "Epoxy") == EMPTY_ROW and _row(steps["polish"], "Epoxy") == EMPTY_ROW
+    # (Round 6, part 2: the row MOVES with the carrier now, and the root that is off is no longer given a blank one on a reload, so a section that does not carry the drive holds no row at
+     # all where it used to hold the emptied copy of one: nothing is priced there either way.)
+    assert _row(steps["combo"], "Epoxy") is None and _row(steps["polish"], "Epoxy") is None
 
 
 def test_a_bid_saved_with_the_filled_row_left_on_a_section_that_does_not_carry_the_travel_is_not_moved_by_a_reopen(ran):
@@ -531,11 +533,15 @@ def test_a_demoted_bases_drive_follows_the_miles_as_an_option_on_the_page(ran):
 
     (The base's totals at 190 and 300 miles, $40,864 and $41,771, carry its own Lodging and Per Diem on the labor's 48 man-days now: a far answer fills them, 2026-10-20.)
 
+    (Round 6, part 3, M2, 2026-10-21: Epoxy counts its nights from its own labor DOLLARS, Epoxy!B65, as every tab does now. With a drive of five guys x 6.5 hours, $1,072.50, its labor rounds up to
+    $14,273, 50.0019 nights where 5 x 10 is 50, a dollar more on each of its Lodging and Per Diem: $49,281 at 190 miles where the head count priced it $49,278, and $48,440 for the Epoxy BASE of the
+    added-sheet route where it was $48,437. At 300 miles the drive is a whole $1,650 and the count is 50 again.)
+
     Mutation: leave the options out of an answer."""
     d = ran["demotedOptionFollowsMiles"]
     assert d["epoxyBase"] == {"carrier": "Epoxy", "kinds": [["Polish", "option"], ["Epoxy", "base"]]}
     for step, totals, polish, epoxy in (
-            ("start", (40864, 49278), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("start", (40864, 49281), _filled_row(6.5), _filled_row(6.5, 5)),
             ("local", (30872, 37044), LOCAL_CARRIER_ROW, EMPTY_ROW),
             ("farther", (41771, 50383), _filled_row(10), _filled_row(10, 5))):
         s = d[step]
@@ -549,7 +555,7 @@ def test_a_demoted_bases_drive_follows_the_miles_as_an_option_on_the_page(ran):
     a = d["addedSheet"]
     carrier_local = {"guys": 5, "days": "", "auto": True, "follow": "crew", "seed": "", "typed": False, "hoursTyped": False, "cost": 0}
     for step, totals, polish, epoxy in (
-            ("start", (40864, 48437), _filled_row(6.5), _filled_row(6.5, 5)),
+            ("start", (40864, 48440), _filled_row(6.5), _filled_row(6.5, 5)),
             ("local", (30872, 36165), EMPTY_ROW, carrier_local),
             ("farther", (41771, 49542), _filled_row(10), _filled_row(10, 5))):
         s = a[step]
@@ -703,7 +709,7 @@ BREAKS = {
         "js/bid-model.js", '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catch (err) { demoted = false; }', "    demoted = false;",
         lambda g: g["demotedOptionFollowsMiles"]["addedSheet"]["start"]["polishRow"] is None),
     "a section's labor that is not a list is not read as an empty one": (
-        "js/bid-model.js", "      if (badLabor) section.labor = [];", "      void badLabor;",
+        "js/bid-model.js", "      if (badLabor) section.labor = s.labor instanceof Array ? withoutHoles(s.labor) : [];", "      void badLabor;",
         lambda g: any(page.get("showedEpoxy") is not True for jobs in g["corruptLabor"].values() for page in jobs.values())),
     # --- the page ---
     "the lookup's answer is handed the section on show": (

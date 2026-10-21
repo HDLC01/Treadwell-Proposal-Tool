@@ -257,7 +257,7 @@ REV2_BREAKS = {
         PROFILES, 'quirks: { toolingInSubTotal: true, remodelBase: "sheet" }',
         'quirks: { toolingInSubTotal: true, remodelBase: "model" }', "remodel-base-widened"),
     "rev2 counts nights in people-days": (
-        MODEL, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        MODEL, "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
         "    return travelManDays(rows);", "lodging-by-man-days"),
     "rev2 forgets to ask for the sheet's nights": (
         MODEL, "    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions, opts.prevailing);",
@@ -427,8 +427,8 @@ MODEL_BREAKS = {
         "    void r;",
         lambda m: not m["chain"]["rev2Keys"]),
     "a saved bid's lodging hint says nights": (
-        MODEL, "    if (!opts) return manDaysHint(auto, travelManDays(rows));",
-        "    if (!opts) return \"Nights from the labor above, as the sheet counts them: 0.\";",
+        MODEL, "    if (one) return manDaysHint(auto, days);",
+        "    if (one) return \"Nights from the labor above, as the sheet counts them: 0.\";",
         lambda m: m["nights"]["hintLegacy"] != "Man-days from the tasks above: 19."),
 }
 

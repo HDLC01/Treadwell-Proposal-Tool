@@ -418,7 +418,7 @@ PAGE_BREAKS = {
         "js/bid-model.js", '    function byLine(k) { return k === mine || k.indexOf(mine + ":") === 0; }', "    function byLine(k) { return false; }",
         lambda r: "option:Seal" in r["remove"]["leftovers"]["price"]["lines2"]),
     "an option carries none of the job's lodging": (
-        "js/bid-model.js", '    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor).total;', "    void 0;",
+        "js/bid-model.js", '    if (!carrier && e.kind === "option") input.travel = optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;', "    void 0;",
         lambda r: r["model"]["lodging"]["away"] != 15293),
     "a removed option's settings stay on the draft": (
         "js/bid-model.js", "    function byTab(k) { return k === tab; }", "    function byTab(k) { return false; }",
