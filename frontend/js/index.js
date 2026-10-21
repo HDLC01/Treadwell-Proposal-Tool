@@ -591,7 +591,8 @@
   // STOPS (it must not save someone's bid as a test). The door used to leave at once, so its save went out as the page went and, on a server
   // that takes a moment over it, the v2 page asked before the row was there. flushState sends the save now and resolves once it has been
   // answered. BOUNDED: a server that never answers must not leave the estimator on this page, and past the bound this is what the door always
-  // did. A save that FAILS answers at once and is not waited out. The button says what it is doing, ignores a second press, and gives itself
+  // did. A save that FAILS answers at once and is not waited out. A save still on its way up when the bound runs out goes again as the page
+  // goes (shared.js's pagehide, a keepalive request: X1, round 5, B1), so leaving does not lose it. The button says what it is doing, ignores a second press, and gives itself
   // back (with its own markup, the BETA tag) if the browser does not go.
   let betaLeaving = false;
   if (betaBtn) betaBtn.addEventListener("click", async () => {

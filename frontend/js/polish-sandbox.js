@@ -180,6 +180,8 @@
     if (blob && blob.__draft_id && blob.__draft_id !== id) {
       throw new Error("refusing to save the copy stamped for " + blob.__draft_id + " under " + id);
     }
+    // Told to shared.js first: a row with this content is THIS page's, so the page's next save does not take it for another page's (X1, round 5, C1).
+    if (typeof TW.noteOwnSave === "function") TW.noteOwnSave(id, blob);
     var res = await fetch(draftUrl(id), {
       method: "PUT",
       headers: TW.authHeaders(),

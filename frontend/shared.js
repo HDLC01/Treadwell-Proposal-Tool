@@ -232,14 +232,22 @@
       if (want === null || want === undefined) return;
       const id = newDraftId();
       localStorage.setItem(DRAFT_ID_KEY, id);
-      localStorage.setItem(startKey(id), want ? "1" : "0");
+      localStorage.setItem(startKey(id), want === "v2" ? V2_START : (want ? "1" : "0"));
     } catch {}
   }
 
-  /** What this browser started project `id` as: true (a test), false (a real bid), or null when nothing is held for it. Reads only. */
+  // THE V2 BOARD'S START BELONGS TO THE V2 PAGE IT OPENS (X1, round 5, L1). The board's New estimate (setNewProjectTestIntent("v2")) mints the
+  // project's id with this value under it. It used to be "1", a test like the Test tab's, and the browser has ONE current draft: the live intake (the
+  // sidebar's link, "/?new=1", a bare "/") resumes it, so a real bid typed there was born a test. startOf answers null for this value to every page
+  // but a v2 page that created the project (startsAsTest), which says test in its own words anyway, so the live intake's write says nothing of it.
+  const V2_START = "1v2";
+
+  /** What this browser started project `id` as: true (a test), false (a real bid), or null when nothing is held for it. Reads only.
+   *  The v2 board's start (V2_START) is a test for the v2 page that created the project and nothing to any other page. */
   function startOf(id) {
     try {
       const v = localStorage.getItem(startKey(id));
+      if (v === V2_START) return _startsAsTest === id ? true : null;
       return v === "1" ? true : (v === "0" ? false : null);
     } catch { return null; }
   }
@@ -257,8 +265,28 @@
   function startsAsTest(id, whenTakenOver) {
     _startsAsTest = id || null;
     _takenOver = null;
+    _ownDigests = [];
     _onTakenOver = typeof whenTakenOver === "function" ? whenTakenOver : null;
     _seenRaw = readRaw();                  // what this page knows of the shared blob as it decides
+  }
+
+  // The digests of every copy this page has SENT for the project it created, so that a row the server holds can be told from one another page wrote
+  // (askBeforeFirstSave). Memory only, like the page's word; a few are enough, the page's own saves are the same few rows.
+  let _ownDigests = [];
+  function rememberOwn(id, digest) {
+    if (_startsAsTest !== id || !digest) return;
+    _ownDigests.push(digest);
+    if (_ownDigests.length > 32) _ownDigests.shift();
+  }
+  /** This page is about to put `blob` under `id` by a request of its own (the sandbox's save of a project that already holds something): a row
+   *  with that content is this page's, not another page's. */
+  function noteOwnSave(id, blob) { rememberOwn(id, draftDigest(blob)); }
+
+  /** This page has found out that another page wrote project `id`: its copy is older than the project for good. Says so once. */
+  function markTakenOver(id) {
+    if (_takenOver === id) return;
+    _takenOver = id;
+    if (_onTakenOver) { try { _onTakenOver(); } catch {} }
   }
 
   /** Has another page written project `id` since THIS PAGE decided it was creating it? Answered only for the project this page created and
@@ -267,7 +295,9 @@
    *  THE PAGE'S COPY IS OLDER THAN THE PROJECT, AND SAVING IT WOULD PUT IT OVER THE PROJECT (X1, round 4, F1). The v2 pages save their whole
    *  form, which holds what this page knew when it opened: a real bid typed and saved by the live intake in another tab (which resumes the same
    *  draft) was emptied by one character typed here, and a save this page had queued before the other page wrote went to the server over the
-   *  newer row. So the write is refused, and a queued save is not sent (the timer asks again as it fires), and the page says so (`whenTakenOver`).
+   *  newer row. So the write is refused, and a save is not sent (putDraft asks again as it sends), and the page says so (`whenTakenOver`).
+   *  (This answer is LAZY: it reads the blob as it stands. Round 5 added the nets under it, because a third tab's New project wipes the blob and with it
+   *  the evidence: heardStateWrite, which hears the other page's write as it happens, and askBeforeFirstSave, which asks the server.)
    *
    *  WHAT COUNTS AS "WRITTEN BY ANOTHER PAGE": the shared blob holds WORK (hasWork), for THIS project (a blob stamped for another is setState's own
    *  refusal), and no longer reads back as what this page last knew (readRaw against _seenRaw: what it read as it decided, then what it wrote).
@@ -281,10 +311,29 @@
     if (cur[STAMP] && cur[STAMP] !== id) return false;
     if (!hasWork(cur)) return false;
     if (readRaw() === _seenRaw) return false;
-    _takenOver = id;
-    if (_onTakenOver) { try { _onTakenOver(); } catch {} }
+    markTakenOver(id);
     return true;
   }
+
+  /** ANOTHER PAGE'S WRITE IS HEARD AS IT HAPPENS, NOT FOUND LATER (X1, round 5, C1 and S1). takenOver reads the shared blob, and a THIRD tab's New
+   *  project wipes it: the other page's write was no longer there to be found, and this page's older copy went over the project it had saved. The
+   *  browser tells every other page of the origin when a page writes localStorage (a `storage` event, one per write, with the new value), so the
+   *  moment another page writes WORK stamped for the project this page created, this page has been taken over, whatever is done to the blob
+   *  after. It stays so (markTakenOver), and says so on screen at once: a page that only looked used to keep saying "saved as a NEW test project"
+   *  over a project another tab had written. A write that removes the blob (a wipe: newValue null) is nobody writing the project. A browser that
+   *  does not deliver the event to a page (a frozen tab, a page restored from the back/forward cache) is covered by askBeforeFirstSave. */
+  function heardStateWrite(e) {
+    const id = _startsAsTest;
+    if (!id || _takenOver === id || !e || e.key !== STATE_KEY) return;
+    if (e.storageArea && e.storageArea !== localStorage) return;
+    let next = null;
+    try { next = JSON.parse(e.newValue); } catch { next = null; }
+    if (!next || typeof next !== "object" || Array.isArray(next)) return;
+    if (next[STAMP] && next[STAMP] !== id) return;
+    if (!hasWork(next)) return;
+    markTakenOver(id);
+  }
+  window.addEventListener("storage", heardStateWrite);
 
   /** Has anything been written into this blob beyond the stamp, the flag and what a board's New button leaves ({ audience: "GC" })? */
   function hasWork(blob) {
@@ -633,11 +682,25 @@
   // THE START IS SPENT ONLY WHEN THE SERVER HAS STORED A COPY THAT CARRIED IT (spendStart): whether the
   // blob said it (sayWhatItWasStartedAs) or withStart added it. A save that is refused, or lost with the
   // page that sent it, leaves it armed for the next one.
-  function putDraft(id, blob, keepalive = false) {
+  function putDraft(id, blob, keepalive = false, asked = false) {
     try {
+      // A page that created this project and has been written over by another page sends nothing, whoever asks (the timer, flushState, the page
+      // going): its copy is older than the project (takenOver).
+      const stale = takenOver(id);
+      if (stale) {
+        console.warn("[TW] refused server save: another page has written draft", id, "since this page created it");
+        return Promise.resolve(false);
+      }
+      // THE FIRST SAVE OF A PROJECT THIS PAGE CREATED ASKS THE SERVER FIRST (askBeforeFirstSave), unless it is sent as the page goes, which cannot wait.
+      if (!asked && !keepalive && _startsAsTest === id) {
+        const first = trackUnanswered(id, askBeforeFirstSave(id, blob));
+        _inFlight = first;                  // flushState waits for the save that is being asked about, not an older one
+        return first;
+      }
       // Taken as the body is, before anything can change the blob, so a stored write records
       // exactly the copy the server now holds (see SYNCED_KEY).
       const sent = draftDigest(blob);
+      rememberOwn(id, sent);
       const out = withStart(id, blob);
       const body = JSON.stringify({ data: out });
       const p = fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), {
@@ -663,6 +726,7 @@
           : null;
         const ok = !!(res && res.ok) && !(body && body.ok === false);
         if (ok && Object.prototype.hasOwnProperty.call(out, "is_test")) spendStart(id);
+        if (ok) dropV2Start(id);           // a stored save of a project the v2 board started, by a page that is not a v2 page creating it: the start can no longer be used
         // Only for the draft this page is on: an evicted blob flushed to its own id must not
         // overwrite the marker of the draft being adopted in its place.
         //
@@ -675,10 +739,60 @@
         return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
+      if (!keepalive) trackUnanswered(id, p);
       return p;
     } catch {
       return Promise.resolve(false);
     }
+  }
+
+  /** The v2 board's start for `id` is of no use once the project has a row that does not say it is a test: it is only read by a v2 page that
+   *  creates the project, and a row exists now. Dropped, so it does not stay in this browser for ever. */
+  function dropV2Start(id) {
+    try {
+      if (_startsAsTest !== id && localStorage.getItem(startKey(id)) === V2_START) localStorage.removeItem(startKey(id));
+    } catch {}
+  }
+
+  // The saves this page has asked for and has not heard back from, per project (a plain request: a keepalive one outlives the page). One that is
+  // still unanswered when the page goes is lost with it (a request that has not reached the server is dropped, and nobody sees its answer), so
+  // the page goes with the newest copy sent again (the pagehide handler below). X1, round 5, B1: the beta door's wait ran out while its save was
+  // still uploading, and nothing sent it again.
+  const _unanswered = new Map();
+  function trackUnanswered(id, p) {
+    _unanswered.set(id, (_unanswered.get(id) || 0) + 1);
+    const done = () => {
+      const n = (_unanswered.get(id) || 1) - 1;
+      if (n > 0) _unanswered.set(id, n); else _unanswered.delete(id);
+    };
+    p.then(done, done);
+    return p;
+  }
+
+  /** The first save of a project this page created (startsAsTest) is sent only over a row nobody else has written. The page decided the project was
+   *  new when it opened, which may be long ago, and another page can have saved it since (the live intake, which resumes the browser's current
+   *  draft): the page's whole form, older and emptier, would then replace the real bid. takenOver finds that from the shared blob, and the
+   *  `storage` event (heardStateWrite) as it happens; this asks the one party that cannot have forgotten. No row (404) goes ahead. A row this page
+   *  wrote itself (rememberOwn: its first save was stored and its answer is late, or the sandbox saved the project at once) goes ahead. Any other
+   *  row means another page wrote it: this page is taken over and sends nothing. A server that cannot be asked (an error, no answer) sends nothing
+   *  either, which loses nothing: the copy is on this computer and the next save asks again. */
+  async function askBeforeFirstSave(id, blob) {
+    let row = null;
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id), { headers: authHeaders() });
+      if (res.status !== 404) {
+        if (!res.ok) return false;
+        const body = await res.json();
+        row = body && body.data;
+        if (!(row && typeof row === "object" && !Array.isArray(row))) return false;
+      }
+    } catch { return false; }
+    if (row !== null && _ownDigests.indexOf(draftDigest(row)) < 0) {
+      markTakenOver(id);
+      console.warn("[TW] refused server save: draft", id, "has a row this page did not write");
+      return false;
+    }
+    return putDraft(id, blob, false, true);
   }
 
   /** Why a server save would be REFUSED for this draft right now, or null when one would go
@@ -1035,12 +1149,8 @@
         console.warn("[TW] skipped queued save — draft changed since it was scheduled");
         return;
       }
-      // And ask again whether another page has written the project since this page queued its copy: sending it now would put an OLDER copy
-      // over the newer row (takenOver).
-      if (takenOver(id)) {
-        console.warn("[TW] skipped queued save — another page has written draft", id, "since this page created it");
-        return;
-      }
+      // Whether another page has written the project since this page queued its copy is asked again by putDraft, which sends nothing over a
+      // project this page created and another page has since written (takenOver): an OLDER copy would replace the newer row.
       putDraft(id, state);
     }, 2500);                    // debounce: save 2.5s after the last edit
   }
@@ -1239,11 +1349,17 @@
   let _pageSavesOnLeave = null;
   function pageSavesOnLeave(isPending) { _pageSavesOnLeave = typeof isPending === "function" ? isPending : null; }
   window.addEventListener("pagehide", () => {
-    if (!_saveTimer) return;
+    // A SAVE THAT HAS NOT BEEN ANSWERED GOES AGAIN (X1, round 5, B1). A plain request is dropped with its page if it has not reached the server,
+    // and a page that waited a bounded time for its save and left (Continue, the beta door) left it uploading. Sent again as a keepalive request,
+    // which the page's going cannot cancel; the same copy twice is harmless. Not for a page that holds its saves behind a gate, has given its
+    // copy up, or is reloading onto another draft: those are never sent on this page's own say-so.
+    const here = getDraftId();
+    const resend = !_saveTimer && !!here && _unanswered.has(here) && !_hold && !_reloadPending && !_givenUp && !isUnverified(here);
+    if (!_saveTimer && !resend) return;
     let pageSends = false;
     try { pageSends = !!(_pageSavesOnLeave && _pageSavesOnLeave()); } catch { pageSends = false; }
     if (pageSends) return;
-    clearTimeout(_saveTimer); _saveTimer = null;
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     const id = getDraftId();
     const blob = id ? queuedBlob(id) : null;
     if (!blob) return;
@@ -2057,6 +2173,7 @@
     setNewProjectTestIntent,
     startOf,
     startsAsTest,
+    noteOwnSave,
     pageSavesOnLeave,
     withDraft,
     draftReady,
