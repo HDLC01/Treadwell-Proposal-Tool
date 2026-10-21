@@ -124,9 +124,10 @@ function dec(s) {
 }
 const strip = (html) => dec(String(html).replace(/<[^>]*>/g, ""));
 
-/** `input`, `[data-k="unit"]`, `select[data-tk="0"][data-k="unit"]` — the shapes this page uses. */
+/** `input`, `[data-k="unit"]`, `select[data-tk="0"][data-k="unit"]` — the shapes this page uses. A tag name may hold digits (`h2`: the step's heading is asked for by it, round 7 polish, K2),
+ *  as every heading's does; before that only letters were allowed and an `h2` selector threw. */
 function matchesSel(el, sel) {
-  const m = /^\s*([a-zA-Z]*)((?:\[[^\]]*\])*)\s*$/.exec(String(sel));
+  const m = /^\s*([a-zA-Z0-9]*)((?:\[[^\]]*\])*)\s*$/.exec(String(sel));
   if (!m) throw new Error("this DOM stub cannot answer the selector " + sel);
   if (m[1] && el.tag !== m[1].toLowerCase()) return false;
   return (m[2].match(/\[[^\]]*\]/g) || []).every((part) => {

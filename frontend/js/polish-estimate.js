@@ -1592,7 +1592,7 @@
       else pip.textContent = String(i + 1);
       b.appendChild(pip);
       b.appendChild(document.createTextNode(s.label));
-      b.addEventListener("click", function () { go(i); });
+      b.addEventListener("click", function () { go(i); focusStepHeading(); });
       rail.appendChild(b);
     });
   }
@@ -1630,6 +1630,18 @@
     paintRail();
     renderPanel();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** THE CARET FOLLOWS A STEP THE ESTIMATOR PRESSED (round 7 polish, K2: Next, Back, a step on the rail, Edit on a Review card). The press rebuilds the panel and the rail, so the button that had the caret
+   *  is gone, focus fell to <body> and the next Tab started again from the top of the page: the sheet strip, the sidebar, then the step. The new step's heading takes it. It is made focusable here (tabindex
+   *  -1: a script can put the caret on it, Tab never stops on it) and focused WITHOUT scrolling, because go() has just asked the page to scroll to the top, smoothly, on purpose, and a plain focus() would
+   *  jump past that. The page's own `[tabindex]:focus-visible` ring shows where it is to someone on the keyboard, and not to a mouse. A page run without a layout (the harnesses' stand-in DOM) has no focus()
+   *  and nothing happens. Only a press calls it: opening the page, and a step set by a script (go), never take the caret. */
+  function focusStepHeading() {
+    var panels = $("panels"), head = panels ? panels.querySelector("h2") : null;
+    if (!head || typeof head.focus !== "function") return;
+    head.setAttribute("tabindex", "-1");
+    head.focus({ preventScroll: true });
   }
 
   // ── panels ──────────────────────────────────────────────────────────────────
@@ -4414,7 +4426,7 @@
     if (!t || !t.closest) return;
 
     var go_ = t.closest("[data-go]");
-    if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
+    if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); focusStepHeading(); return; }
 
     // THE SHEETS PANEL's buttons (see sheetsAct). Any other click puts an armed Delete back to what it was, so a single
     // press never deletes a sheet that a later click has nothing to do with.
