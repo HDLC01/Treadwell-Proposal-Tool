@@ -21,8 +21,13 @@
       --sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
       --r:12px; --r-s:7px; --shadow:0 1px 3px rgba(0,0,0,.05); }
     *{box-sizing:border-box}
+    /* THE PAGE'S BOTTOM PADDING IS THE TOTAL BAR'S HEIGHT AND 24px OF AIR (2026-10-21, the audit of the sixth round). The bar (.bid, below) is position:fixed, so it takes no room in the page, and the
+       step's last row, Back / Next, has to end above it. The bar is not a fixed height: with the staff sidebar open it wraps its sums onto a second row, 154px tall at 1000px in Chrome against 84px of
+       one row, and the 132px this padding was left that row 21px under it. js/polish-estimate.js reads the bar's height and writes it onto the html element as --bid-h (a ResizeObserver on the bar,
+       with a fallback on its repaint and the window's resize); 132px stands until it has, which is what the page reserved before. backend/tests/test_v2_bid_bar_height.py reads this rule and runs
+       the script. */
     body{margin:0;background:var(--surf);color:var(--ink);font:400 14px/1.55 var(--sans);
-         padding:0 22px 132px}
+         padding:0 22px calc(var(--bid-h,132px) + 24px)}
     [hidden]{display:none!important}
     .wrap{max-width:1000px;margin:0 auto}
 
@@ -626,29 +631,44 @@
            background:var(--rev-band,var(--surf-low));font:600 12.5px var(--sans)}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
            cursor:pointer;text-decoration:underline}
-    .rev-t{width:100%;border-collapse:collapse;font-size:12.5px}
-    .rev-t td{padding:7px 14px;border-top:1px solid var(--line-2);color:var(--ink-v)}
+    .rev-t{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+    .rev-t td{padding:7px 8px;border-top:1px solid var(--line-2);color:var(--ink-v)}
     .rev-t td.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;
            color:var(--ink)}
     .rev-t tr.tot td{border-top:1px solid var(--line);font-weight:700;color:var(--ink);
            background:var(--rev-tot,transparent)}
     /* THE WORKING (Hanz, 2026-10-19): every Review table has a labelled header row, Item | Quantity | Unit | Rate | Total. The
-       table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page. */
-    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
-    /* 640 AND NOT 560 (2026-10-20 fifth audit): at about 916px the markup card cut off the Discount $ box, the Contingency and Fees boxes (a 104px box in a
-       column of 14% of the table, 78px at the old 560) and the "margin on cost" / "of subtotal + markups" words beside them. The three right-hand columns
-       now hold their boxes at every width the table can have, and below this width the table scrolls inside its own box instead of squeezing them. */
-    .rev-t,.mk{min-width:640px}
+       table keeps a width a row can be read in and scrolls inside its own box, so a phone scrolls the table, never the page.
+       THE SCROLL PADDING is the pinned Total column's width (see the pin below): a box tabbed into scrolls clear of that column, not under it. WHILE FOCUS IS IN THAT
+       COLUMN THE PADDING IS NOTHING: its boxes sit inside the padded-off band, so a focus or a keystroke in one would scroll the table to put it clear of itself (the
+       cost the sticky head found in a browser, see .v2head), and a pinned box is on screen already. */
+    .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:126px}
+    .tscroll:has(td:nth-child(5):focus-within){scroll-padding-right:0}
+    /* 550: THE FOUR FIXED COLUMNS (below) AND 144px FOR ITEM, 122px of it room for words. It was 640 until the 2026-10-20 sixth round. Round 5 chose 640 for the
+       markup card's boxes, with columns wider than their contents need, and at 916px with the staff sidebar open the table's box is 575px: every card scrolled 65px
+       and the TOTAL column, the one figure the page is for, was the part out of view. 550 fits a 575px box (916px, sidebar open) and a 559px one (900px, sidebar open).
+       Below it the box scrolls and the Total column is pinned to its edge (below). backend/tests/test_v2_review_table_fits.py does this arithmetic on this CSS. */
+    .rev-t,.mk{min-width:550px}
     /* ONE SET OF COLUMNS FOR EVERY CARD (browser walk, 2026-10-20: each card sized its own, so Quantity and Unit wandered
-       from card to card). Fixed layout takes the widths from the header row. The Unit, Rate and Total columns are PIXELS, each wide enough for what
-       the markup card puts in it (a 104px box and the cell's own padding in Total, the % box in Rate, the words of Unit over two lines); Quantity is
-       a share of the table, and Item, which wraps, takes what is left. */
+       from card to card). Fixed layout takes the widths from the header row. Quantity, Unit, Rate and Total are PIXELS, each as wide as what the cards put in
+       it needs and no wider (the heading and a working line in Quantity, the longest word of Unit, which wraps, the % box and a twelve character figure in Rate,
+       and in Total the 104px box and the cell's padding); Item, which wraps, takes what is left. */
     .rev-t,.mk{table-layout:fixed}
-    .rev-t th:nth-child(2),.mk th:nth-child(2){width:15%}
-    .rev-t th:nth-child(3),.mk th:nth-child(3){width:124px}
-    .rev-t th:nth-child(4),.mk th:nth-child(4){width:132px}
-    .rev-t th:nth-child(5),.mk th:nth-child(5){width:132px}
-    .rev-t th,.mk th{padding:6px 14px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
+    .rev-t th:nth-child(2),.mk th:nth-child(2){width:82px}
+    .rev-t th:nth-child(3),.mk th:nth-child(3){width:90px}
+    .rev-t th:nth-child(4),.mk th:nth-child(4){width:108px}
+    .rev-t th:nth-child(5),.mk th:nth-child(5){width:126px}
+    /* THE CELLS' PADDING: 8px between columns and 14px at the card's two edges (the inset of its title). Padding is the one thing in a column that holds nothing,
+       and the table has no room to spare at 916px. */
+    .rev-t th:first-child,.mk th:first-child,.rev-t td:first-child,.mk td:first-child{padding-left:14px}
+    .rev-t th:last-child,.mk th:last-child,.rev-t td:last-child,.mk td:last-child{padding-right:14px}
+    /* THE TOTAL STAYS IN VIEW (2026-10-20 sixth round). Where the box is narrower than the table it scrolls, and the Total column, header and cells, is pinned to the
+       box's right edge, so the figure is on screen at every width down to a phone while Quantity, Unit and Rate scroll beneath it. The pinned cells are opaque (a
+       tinted row keeps its own tint: those rules weigh more), and the tables' borders are the cells' own (border-collapse above), because a collapsed border belongs
+       to the table and would not travel with a pinned cell. Where the table fits its box, a pinned cell is where it would have been. */
+    .rev-t th:nth-child(5),.mk th:nth-child(5),.rev-t td:nth-child(5),.mk td:nth-child(5){position:sticky;right:0}
+    .rev-t td:nth-child(5),.mk td:nth-child(5){background:var(--card)}
+    .rev-t th,.mk th{padding:6px 8px;text-align:left;font:700 10.5px var(--sans);letter-spacing:.06em;
            text-transform:uppercase;color:var(--ink-v);background:var(--rev-band,var(--surf-low));white-space:nowrap}
     .rev-t th.r,.mk th.r{text-align:right}
     .rev-t td.u,.mk td.u{color:var(--ink-3);white-space:normal}
@@ -662,8 +682,8 @@
 
     /* The markup block, laid out like rows 64-82 of the Polish tab so an estimator who knows
        Kyle's sheet can read down it and recognise every line. */
-    .mk{width:100%;border-collapse:collapse;font-size:13px;margin:0}
-    .mk td{padding:7px 12px;border-top:1px solid var(--line-2)}
+    .mk{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;margin:0}
+    .mk td{padding:7px 8px;border-top:1px solid var(--line-2)}
     .mk td.pct,.mk td.amt{text-align:right;font-family:var(--mono);
         font-variant-numeric:tabular-nums}
     .mk td.pct{color:var(--ink-3);width:104px}
@@ -693,7 +713,12 @@
        wears the brand tint, so what somebody changed stands out from what the sheet decided. The rate the chain used
        is kept beside it for the repaint, not drawn (.mkused). */
     .mkused{display:none}
-    .adjbox{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+    /* THE WARNING GETS A LINE OF ITS OWN INSIDE ITS CELL (2026-10-21, the audit of the sixth round). It was a third item in a one-line row (nowrap, no narrower than the 64px box, its "%" and the
+       warning's longest word side by side, which is more than the 92px a Rate cell holds), so the words stood in a column that began inside the cell and ended under the pinned Total column,
+       whose opaque background painted over them. Now the row wraps and the warning takes the whole line (flex-basis 100%), so it is as wide as its cell and no wider, wraps there, may break a
+       long word and is not capped. The box and its % keep to the right of the cell, where they sit with no warning, so nothing jumps when one appears. The dollar box in the Total cell does
+       the same inside its own. backend/tests/test_v2_review_table_fits.py reads these two rules, and test_v2_review_working.py draws a Review with every box invalid to see the warning is in its cell. */
+    .adjbox{display:inline-flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px;white-space:nowrap}
     .adjbox input,.mk .adjbox input{width:64px;text-align:right;font:600 13px var(--mono);
         font-variant-numeric:tabular-nums;border:1.5px solid var(--ink-3);border-radius:6px;padding:5px 8px;
         background:var(--card);color:var(--ink);box-shadow:inset 0 1px 2px rgba(27,28,28,.06)}
@@ -704,7 +729,7 @@
     .adjbox input:focus,.mk input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(200,16,46,.16)}
     .mk .hbline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
     .mk tr.band .bandnote{margin-left:8px;font:500 11px var(--sans);letter-spacing:0;text-transform:none;color:var(--ink-v)}
-    .adjwarn{display:block;white-space:normal;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:220px}
+    .adjwarn{display:block;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:none}
     .adjwarn[hidden]{display:none}
 
     /* Intake's `.sw` switch (styles.css), shrunk to sit inside a table cell instead of its own
@@ -720,8 +745,13 @@
     .mw-sw.on .track{background:var(--red);border-color:transparent}
     .mw-sw.on .track::after{left:13px;background:#fff}
 
+    /* THE BAR STARTS WHERE THE PAGE DOES (2026-10-20 sixth round, the staging walk). It is position:fixed, and a fixed element is not moved by the body's margin-left,
+       so with the staff sidebar open (a 240px rail beside the page from 768px up, auth.js) the bar ran UNDER it and the first 240px of its text were hidden at 916px.
+       It follows the rail as auth.js's own top bar does, from the same breakpoint, and slides when the body does. Under 768px the sidebar is a sheet over the page
+       with a scrim and the body does not move, so the bar does not either. backend/tests/test_v2_total_bar_beside_sidebar.py reads the cascade for every width and state. */
     .bid{position:fixed;left:0;right:0;bottom:0;background:var(--card);
-         border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9}
+         border-top:1px solid var(--line);box-shadow:0 -3px 14px rgba(0,0,0,.07);z-index:9;transition:left .2s ease}
+    @media (min-width:768px){ html.tw-nav-open .bid{left:var(--tw-w,240px)} }
     .bid-in{max-width:1000px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;
          gap:18px;flex-wrap:wrap}
     .maths{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;

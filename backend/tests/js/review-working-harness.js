@@ -87,6 +87,51 @@ function rowFacts(api) {
   });
 }
 
+// ── where each override box's warning sits (round 6 audit, U1) ──────────────────────────────────────────────
+// The red refusal beside a box typed with something the engine cannot use is drawn by adjWarnHtml() as the LAST child of the same .adjbox span its box is in,
+// hidden until the box is typed:
+//   <span class="adjbox"><input data-adj="gp_pct" ...>%<span class="adjwarn" data-adjwarn="gp_pct">not a number, so it is not used</span></span>
+// (the dollar box has its "$" before the input, not after it). A cell is the <td> it is in, counted from 0: Item, Quantity, Unit, Rate, Total.
+const BOX_WARN = /<span class="adjbox(?: adjamt)?">\$?<input data-adj="([^"]*)"[^>]*>[%$]?<span class="adjwarn" data-adjwarn="\1"( hidden)?>([^<]*)<\/span><\/span>/g;
+
+/** Every warning the Review's markup holds, as { card, row, cell, key, inBox, hidden, text }: inBox is true when it is the last child of the .adjbox of the box with its own key. */
+function warningsOf(h) {
+  const found = [];
+  String(h).split('<div data-rev="').slice(1).forEach((part) => {
+    const card = part.slice(0, part.indexOf('"'));
+    (part.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || []).forEach((r) => {
+      (r.match(/<td[^>]*>[\s\S]*?<\/td>/g) || []).forEach((c, cell) => {
+        const inBox = {};
+        c.replace(BOX_WARN, (m, key, hidden, said) => { inBox[key] = { hidden: !!hidden, text: dec(said) }; return m; });
+        (c.match(/<span class="adjwarn" data-adjwarn="[^"]*"(?: hidden)?>[^<]*<\/span>/g) || []).forEach((m) => {
+          const x = /data-adjwarn="([^"]*)"( hidden)?>([^<]*)</.exec(m);
+          const box = inBox[x[1]];
+          found.push({ card: card, row: text((/<td[^>]*>([\s\S]*?)<\/td>/.exec(r) || [])[1] || ""), cell: cell, key: x[1], inBox: !!box,
+                       hidden: box ? box.hidden : !!x[2], text: box ? box.text : dec(x[3]) });
+        });
+      });
+    });
+  });
+  return found;
+}
+
+// What the audit typed to make a box unusable: "abc" in GP %, "5+5" in Soft costs, "150" in Shipping, "x" in Discount %; and the same for the boxes it did not name
+// (Superintendent and PTO, the dollar box) and the two an Epoxy bid adds (the supplier and the Poly-Crete discount).
+const BAD_BOXES = { gp_pct: "abc", soft_pct: "5+5", ship_pct: "150", discount_pct: "x", super_pct: "abc", supplier_pct: "x", polycrete_pct: "5+5", discount_amt: "abc" };
+
+/** The Review of the section on show, drawn again with every box it has typed with something unusable, and where each warning sits in what the page drew
+ *  (the page's own first paint from the model, not a repaint of nodes that were there). */
+function invalidReview(b) {
+  const typed = {};
+  Object.keys(BAD_BOXES).forEach((k) => {
+    if (!b.doc.querySelector('[data-adj="' + k + '"]')) return;          // a Polish bid has no supplier or Poly-Crete box
+    P.typeInto(b, '[data-adj="' + k + '"]', BAD_BOXES[k]);
+    typed[k] = BAD_BOXES[k];
+  });
+  b.api.renderPanel();
+  return { typed: typed, warns: warningsOf(html(b, "panels")) };
+}
+
 /** The figures on screen NOW, read off the live nodes: a repaint changes a node's text and never the panel's markup, so the
  *  panel's innerHTML is the first paint and these are what a person sees after typing. */
 function live(b) {
@@ -203,6 +248,10 @@ async function main() {
     P.typeInto(ep, '[data-adj="ship_pct"]', "12");
     out.epoxy.shipping = { live: live(ep), bid: clone(ep.api.activeBid()) };
   }
+
+  // Every override box typed with something unusable, on each bid, and the Review drawn again (round 6 audit, U1).
+  out.polish.invalid = invalidReview(pol);
+  out.epoxy.invalid = invalidReview(ep);
 
   console.log(JSON.stringify(out));
 }
