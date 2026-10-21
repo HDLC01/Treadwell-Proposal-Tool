@@ -179,6 +179,67 @@
     });
   }
 
+  // ── a new project this browser made as a test, found saved and still unfiled ─────────────────────────────
+  //
+  // The pending filing is shared.js's (NEW_IS_TEST_KEY): "<id>:1" while a project this browser started as a NEW
+  // test project has not been seen filed. markNewProjectAsTest above writes it; test_v2_new_estimate_test_flag.py
+  // holds the three spellings of the key equal.
+  var NEW_TEST_KEY = "treadwell.proposal_tool.new_is_test";
+
+  /** Did THIS browser start `id` as a new TEST project, and has nobody seen it filed? Exactly "<id>:1" and
+   *  nothing else: "<id>:0" is a project started as a real bid, "<other>:1" is some other project's, and a bare
+   *  "1" belongs to no id at all (shared.js binds it to the id it mints, and drops it otherwise). Read straight
+   *  from storage, as markNewProjectAsTest writes it, so this module asks nothing of TW that its callers' stubs lack. */
+  function newTestPending(id) {
+    try { return localStorage.getItem(NEW_TEST_KEY) === id + ":1"; } catch (e) { return false; }
+  }
+
+  function forgetNewTest(id) {
+    try { if (newTestPending(id)) localStorage.removeItem(NEW_TEST_KEY); } catch (e) {}
+  }
+
+  /** THE NET UNDER EVERY OTHER WAY OUT OF THE INTAKE (X1, walked on staging 2026-10-21).
+   *
+   *  The intake's Continue now waits until a new project is saved and filed. The "2 · Estimate" step link, a closed
+   *  tab and a reload do not, so each sends the first PUT as the page goes (keepalive; nobody sees the reply) and
+   *  leaves the project SAVED and UNFILED with its pending filing still in storage. Arriving here, that project looks
+   *  exactly like a real bid somebody has not said anything about, and the sandbox forks a copy of it, leaving the
+   *  estimator's own new project on the board where staff work.
+   *
+   *  So it is filed here instead, but ONLY a project that is all three of these, and never any other:
+   *    * made by this browser as a new test project: the pending filing names THIS id and says "test" (`:1`);
+   *    * nobody has said anything about it: no is_test at all. `true` is filed already, and `false` is a human
+   *      saying "this IS a real bid", which beats a pending intent;
+   *    * not itself a copy.
+   *  A real project is never one of these: it was not made by this browser as a test, and the sandbox's whole job is
+   *  that it is only ever read.
+   *
+   *  The answer is the BODY, as for the save: the route answers a caught exception with a 200 carrying
+   *  {"ok": false}, and a row that is not there with {"ok": true, "existed": false}. Anything but ok and existing is a
+   *  failure.
+   *
+   *  Resolves true when the project is now filed (the pending filing is used up), false when filing it failed (it is
+   *  NOT used up: the next visit tries again, and nothing can fight a choice made since because a project with any
+   *  is_test is skipped above), and null when this is not that case. A project that could not be filed is not edited
+   *  directly here: the caller does what it does for every unfiled project, and says why. */
+  async function fileOwnNewProject(id, row) {
+    if (!row || row.beta_sandbox_of) return null;
+    if (row.is_test != null) return null;
+    if (!newTestPending(id)) return null;
+    try {
+      var res = await fileAsTest(id);
+      var body = res.ok ? await res.json().catch(function () { return null; }) : null;
+      if (!body || body.ok !== true || body.existed === false) {
+        throw new Error("not filed: " + (res.ok ? JSON.stringify(body) : res.status));
+      }
+    } catch (e) {
+      console.warn("[polish beta] could not file the new project as a test", e);
+      return false;
+    }
+    forgetNewTest(id);
+    return true;
+  }
+
   /** Write `blob` under `id`, and file it as a test only once that has actually landed.
    *
    *  Ordering is not stylistic. set_test_flag returns False on a missing draft, so filing before
@@ -367,8 +428,11 @@
   }
 
   /** Say so, on screen. Working on a different project than the one clicked is worse than the bug
-   *  being fixed if nobody is told. textContent throughout: a project name is not markup. */
-  function showCopyNote(srcName, copyName) {
+   *  being fixed if nobody is told. textContent throughout: a project name is not markup.
+   *
+   *  `unfiled`: the project was this browser's own new test project and filing it failed (fileOwnNewProject), so
+   *  it is still in Active, and the note says so rather than leave "untouched" to explain it. */
+  function showCopyNote(srcName, copyName, unfiled) {
     var el = $("sandbox-note");
     if (!el) return;
     el.textContent = "";
@@ -386,6 +450,10 @@
     b2.textContent = srcName || "the one you opened";
     p.appendChild(b2);
     p.appendChild(document.createTextNode(", is untouched in Active."));
+    if (unfiled) {
+      p.appendChild(document.createTextNode(
+        " It was started as a new test project, and filing it under the Test tab did not work."));
+    }
     el.appendChild(p);
     el.hidden = false;
   }
@@ -454,6 +522,15 @@
       return true;
     }
 
+    // A new project of this browser's that was saved but never filed: file it and edit it, rather than fork
+    // it (fileOwnNewProject says which projects, and why only those). `filedNow` is false when the filing failed,
+    // and the copy note then says so.
+    var filedNow = await fileOwnNewProject(id, row);
+    if (filedNow === true) {
+      showDirectNote(false);
+      return true;
+    }
+
     // Already filed as a test, or a copy this page made earlier. Work on it directly: no copy, no
     // rename. This is the normal path once somebody is working in the sandbox.
     //
@@ -491,7 +568,7 @@
       }
       adoptDraft(copyId, blob);
     }
-    showCopyNote(row.project_name, state.project_name);
+    showCopyNote(row.project_name, state.project_name, filedNow === false);
     return true;
   }
 

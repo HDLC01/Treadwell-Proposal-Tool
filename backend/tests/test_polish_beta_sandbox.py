@@ -192,6 +192,13 @@ def test_only_the_copy_is_ever_written_to(sandbox):
     """The one write aimed at the page's OWN id is the never-saved case, where there is no source
     row in existence to protect. Once a source row is known to exist, nothing writes to it.
 
+    THE ONE EXCEPTION, added for X1 (2026-10-21): fileOwnNewProject, called just ABOVE the filed-as-test
+    check and so outside the slice read below, files (never saves, never edits into) a project that this
+    browser itself started as a new test project and finds saved and still unfiled. It is a filing, it
+    acts only when the pending filing names this id and says "test", no is_test has been set and the row
+    is no copy, and it is the one filing the guard below does not read.
+    test_v2_new_estimate_test_flag.py executes it and proves it never acts on a real project.
+
     Mutation: file the source as a test (its updated_at moves, it leaves Active, and Kyle's real
     bid is now a test project), or save the sandbox state under the source id."""
     own = sandbox.index("saveThenFileAsTest(id, state)")
@@ -199,6 +206,8 @@ def test_only_the_copy_is_ever_written_to(sandbox):
     known_row = sandbox.index("row.is_test === true")
     assert guard < own < known_row, (
         "the page saves under the id it was given outside the never-saved branch")
+    assert sandbox.index("fileOwnNewProject(") < known_row, (
+        "the one filing of the page's own id that is allowed has moved below the check this test reads from")
     after = sandbox[known_row:]
     for forbidden in ("saveThenFileAsTest(id", "fileAsTest(id)", "adoptDraft(id"):
         assert forbidden not in after, (

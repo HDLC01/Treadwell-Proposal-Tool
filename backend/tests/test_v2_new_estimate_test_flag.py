@@ -323,13 +323,16 @@ def test_the_door_that_always_worked_still_does(ran):
     assert (r["estimate"] or {}).get("draftId") == r["id"] and DIRECT in says(r), describe(r)
 
 
-@pytest.mark.parametrize("scenario, row, pending", [
-    ("realProject", {"is_test": None}, None),
-    ("anotherProjects", {"is_test": None}, "other-1:1"),
-    ("saidReal", {"is_test": False}, REAL_PROJECT + ":1"),
-    ("filingAsReal", {"is_test": None}, REAL_PROJECT + ":0"),
-])
-def test_a_real_project_is_copied_never_filed_and_never_written_to(ran, scenario, row, pending):
+# (run, what the real row's is_test is, what is left pending in storage)
+REAL_CASES = [
+    ("realProject", None, None),
+    ("anotherProjects", None, "other-1:1"),
+    ("saidReal", False, REAL_PROJECT + ":1"),
+    ("filingAsReal", None, REAL_PROJECT + ":0"),
+]
+
+
+def test_a_real_project_is_copied_never_filed_and_never_written_to(ran):
     """THE RULE THE NET MUST NOT BREAK. A project nobody here made as a new test project, whatever else is in
     storage, is a real bid: the sandbox copies it as it always did, files the copy, and never writes to the real row.
       realProject      nothing pending at all
@@ -337,28 +340,32 @@ def test_a_real_project_is_copied_never_filed_and_never_written_to(ran, scenario
       saidReal         a human filed this one as a real bid (is_test false) and its own filing is still pending
       filingAsReal     the pending filing says "real" ("<id>:0", the Active tab's New project), not "test"
     In every one the real row is read and nothing else: no save, no filing, and its is_test is what it was."""
-    r = ran[scenario]
-    assert r["x"] == {"is_test": row["is_test"], "beta_sandbox_of": None, "project_name": "Wichita Warehouse"}, r["x"]
-    assert [q for q in reqs(r, id_=REAL_PROJECT) if q["method"] != "GET"] == [], "the real project was written to or filed"
-    assert r["beta"] == {"is_test": True, "beta_sandbox_of": REAL_PROJECT, "project_name": "Wichita Warehouse (beta test)"}, r["beta"]
-    est = r["estimate"] or {}
-    assert est.get("draftId") == REAL_PROJECT + "-beta" and COPY in says(r) and DIRECT not in says(r), describe(r)
-    assert r["intent"] == pending, "the pending filing was used up or changed: %r, was %r" % (r["intent"], pending)
+    for scenario, is_test, pending in REAL_CASES:
+        r = ran[scenario]
+        assert r["x"] == {"is_test": is_test, "beta_sandbox_of": None, "project_name": "Wichita Warehouse"}, (scenario, r["x"])
+        assert [q for q in reqs(r, id_=REAL_PROJECT) if q["method"] != "GET"] == [], (
+            "%s: the real project was written to or filed" % scenario)
+        assert r["beta"] == {"is_test": True, "beta_sandbox_of": REAL_PROJECT,
+                             "project_name": "Wichita Warehouse (beta test)"}, (scenario, r["beta"])
+        est = r["estimate"] or {}
+        assert est.get("draftId") == REAL_PROJECT + "-beta" and COPY in says(r) and DIRECT not in says(r), (
+            "%s: %s" % (scenario, describe(r)))
+        assert r["intent"] == pending, "%s: the pending filing was used up or changed: %r, was %r" % (scenario, r["intent"], pending)
 
 
-@pytest.mark.parametrize("mode", ["http500", "okfalse", "network", "html", "gone"])
-def test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed(ran, mode):
+def test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed(ran):
     """The net's own filing fails: HTTP 500, a 200 carrying {"ok": false}, no network, a 200 that is not JSON (a
     proxy's error page), and a 200 that says there is no such row. In every one the project is left unfiled and
     the page does not pretend: it does what it does for any unfiled project (a copy, which it says it is) and adds
     that this project was meant to be a test and could not be filed. Nothing says "editing it directly". The pending
     filing is NOT used up, so the next time the project is opened it is tried again."""
-    r = ran["unfiled"][mode]
-    est = r["estimate"] or {}
-    assert r["x"] is not None and r["x"]["is_test"] is None, "the project was filed, or its row is gone: " + describe(r)
-    assert est.get("draftId") == r["id"] + "-beta" and COPY in says(r) and DIRECT not in says(r), describe(r)
-    assert FAILURE in says(r), "the page does not say the filing failed: %r" % says(r)
-    assert r["intent"] == r["id"] + ":1", "the pending filing was used up by a filing that failed: %r" % r["intent"]
+    assert sorted(ran["unfiled"]) == ["gone", "html", "http500", "network", "okfalse"]
+    for mode, r in sorted(ran["unfiled"].items()):
+        est = r["estimate"] or {}
+        assert r["x"] is not None and r["x"]["is_test"] is None, "%s: the project was filed, or its row is gone: %s" % (mode, describe(r))
+        assert est.get("draftId") == r["id"] + "-beta" and COPY in says(r) and DIRECT not in says(r), "%s: %s" % (mode, describe(r))
+        assert FAILURE in says(r), "%s: the page does not say the filing failed: %r" % (mode, says(r))
+        assert r["intent"] == r["id"] + ":1", "%s: the pending filing was used up by a filing that failed: %r" % (mode, r["intent"])
 
 
 def test_no_flow_reloads_the_page_in_a_loop(ran):
@@ -369,6 +376,48 @@ def test_no_flow_reloads_the_page_in_a_loop(ran):
                               "anotherProjects", "saidReal", "filingAsReal")]
     flows += list(ran["failedFiling"].values()) + list(ran["unfiled"].values()) + ran["sweep"]
     assert [f for f in flows if f.get("runaway")] == []
+
+
+def test_a_copy_is_edited_directly_and_nothing_is_filed_for_it(ran):
+    """A test copy whose own filing is somehow pending (it never is: nothing writes one for a copy) is still what it
+    always was to the sandbox: edited directly, with no filing sent for it. The net is for a project this browser made
+    as a new test project, and a copy is not one."""
+    r = ran["aCopy"]
+    assert r["x"] == {"is_test": None, "beta_sandbox_of": "some-real-project", "project_name": "Wichita Warehouse (beta test)"}, r["x"]
+    assert reqs(r, "TEST", REAL_PROJECT) == [], "a filing was sent for a copy"
+    assert (r["estimate"] or {}).get("draftId") == REAL_PROJECT and DIRECT in says(r), describe(r)
+    assert r["intent"] == REAL_PROJECT + ":1"
+
+
+def _sandbox_code():
+    return (FRONTEND / "js" / "polish-sandbox.js").read_text(encoding="utf-8")
+
+
+def test_the_three_places_that_name_the_pending_filing_agree():
+    """shared.js owns the pending filing, the sandbox's markNewProjectAsTest writes it and its net reads it. Three
+    spellings of one key: if they drift apart the intent is written where nothing reads it, and the net quietly never
+    fires (the pill and reopened runs above would still be red, but for a reason nobody could see in the diff)."""
+    shared = (FRONTEND / "shared.js").read_text(encoding="utf-8")
+    sandbox = _sandbox_code()
+    keys = {
+        "shared.js NEW_IS_TEST_KEY": re.search(r'const NEW_IS_TEST_KEY = "([^"]+)";', shared).group(1),
+        "markNewProjectAsTest": re.search(r'function markNewProjectAsTest\(id\) \{\s*try \{ localStorage\.setItem\("([^"]+)", id \+ ":1"\)',
+                                          sandbox).group(1),
+        "the net's NEW_TEST_KEY": re.search(r'var NEW_TEST_KEY = "([^"]+)";', sandbox).group(1),
+    }
+    assert len(set(keys.values())) == 1 and INTENT_KEY in keys.values(), keys
+
+
+def test_the_net_stands_between_the_missing_row_and_the_filed_as_test_check():
+    """Where the net is called matters as much as what it does. After the never-saved branch (a row that does not
+    exist has nothing to file) and before the page commits to editing a row directly, which it does for a row that is
+    already filed and for a copy, both of which the net leaves alone. test_polish_beta_sandbox.py reads the slice from
+    the filed-as-test check down for writes to the page's own id, and the net is the one filing that is not in it."""
+    body = _sandbox_code()
+    body = body[body.index("async function enterSandbox"):]
+    order = [body.index("if (row === null) {"), body.index("await fileOwnNewProject(id, row)"),
+             body.index("row.is_test === true || row.beta_sandbox_of"), body.index("sandboxIdFor(id)")]
+    assert order == sorted(order), order
 
 
 # ══ the intake page alone: what Continue does with the answer to its save ═════════════════════════════
@@ -394,54 +443,135 @@ def test_continue_leaves_when_the_wait_is_over_however_it_ends(intake):
 
 
 # ══ every check goes red when the code is changed ═════════════════════════════════════════════════════
-# Each entry breaks ONE line of ONE source in a scratch copy of the frontend, runs a harness on it, and the named
-# check (a test above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not
-# there exactly once, so none of them can pass by applying nowhere; the harness runs outside the `raises`, so a
-# break that merely crashes it is an error and never counts as the check noticing.
+# Each entry breaks one or more LINES of the sources in a scratch copy of the frontend, runs a harness on it, and the
+# named check (a test above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not
+# there exactly once, so none of them can pass by applying nowhere; the harness runs outside the `raises`, so a break
+# that merely crashes it is an error and never counts as the check noticing.
+#
+# TWO LAYERS, SO TWO KINDS OF ENTRY. Continue's wait (T1) and the sandbox's net (T2) each make a fast Continue end
+# filed and unforked, so breaking ONE of them does not move that end state, which is the point of having both. What
+# breaks one is seen in how it got there (the first save is a plain request answered to a page that is still there; the
+# filing is answered before the page leaves). The end state itself is shown by an entry that breaks BOTH.
 FLUSH_LINE = "        TW.flushState(),"
 BOUND_LINE = "        new Promise(function (resolve) { timer = setTimeout(resolve, SAVE_WAIT_MS); })"
 CLEAR_LINE = "    if (timer) clearTimeout(timer);"
 CATCH_LINE = "    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }"
 AWAIT_FILING_LINE = "        if (ok) await applyPendingTestIntent(id);"
 
-# name -> (harness, file, anchor line, what it becomes, the check)
+NET_CALL = "    var filedNow = await fileOwnNewProject(id, row);"
+NET_NOT_A_COPY = "    if (!row || row.beta_sandbox_of) return null;"
+NET_UNSET = "    if (row.is_test != null) return null;"
+NET_PENDING = "    if (!newTestPending(id)) return null;"
+NET_BINDING = '    try { return localStorage.getItem(NEW_TEST_KEY) === id + ":1"; } catch (e) { return false; }'
+NET_BODY = "      if (!body || body.ok !== true || body.existed === false) {"
+NET_WARN = '      console.warn("[polish beta] could not file the new project as a test", e);'
+NET_FORGET = "    forgetNewTest(id);"
+NET_DIRECT = "    if (filedNow === true) {"
+NET_NOTE = "    showCopyNote(row.project_name, state.project_name, filedNow === false);"
+
+SANDBOX = "js/polish-sandbox.js"
+INTAKE = "js/polish-intake.js"
+SHARED = "shared.js"
+
+
+def broken(rel, old, new):
+    return (rel, old, new)
+
+
+# name -> (harness, (the lines to break: (file, anchor line, what it becomes), ...), the check)
 BREAKS = {
+    # ── T1: Continue waits for the save and the filing ──
     "Continue leaves without waiting for the save": (
-        "world", "js/polish-intake.js", FLUSH_LINE, "        Promise.resolve(true),",
-        test_a_fast_continue_files_the_new_project_under_test),
-    "Continue leaves without waiting for the save (the first PUT goes out as the page goes)": (
-        "world", "js/polish-intake.js", FLUSH_LINE, "        Promise.resolve(true),",
+        "world", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),),
         test_the_first_save_and_its_filing_are_answered_to_a_page_that_is_still_there),
+    "Continue does not wait and nothing else catches the project": (
+        "world", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),
+                  broken(SANDBOX, NET_CALL, "    var filedNow = null;")),
+        test_a_fast_continue_files_the_new_project_under_test),
     "the save is waited for and the filing that follows it is not": (
-        "world", "shared.js", AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);",
+        "world", (broken(SHARED, AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);"),),
         test_a_slow_filing_is_waited_for),
     "the answer depends on who is faster (the filing is not waited for)": (
-        "world", "shared.js", AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);",
+        "world", (broken(SHARED, AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);"),),
         test_whatever_the_latencies_the_new_project_is_filed_and_never_forked),
     "Continue waits for a save that never answers, for ever": (
-        "world", "js/polish-intake.js", BOUND_LINE, "        new Promise(function () {})",
+        "world", (broken(INTAKE, BOUND_LINE, "        new Promise(function () {})"),),
         test_a_server_that_never_answers_does_not_trap_the_estimator),
     "Continue waits for a filing that never answers, for ever": (
-        "world", "js/polish-intake.js", BOUND_LINE, "        new Promise(function () {})",
+        "world", (broken(INTAKE, BOUND_LINE, "        new Promise(function () {})"),),
         test_a_filing_nobody_answers_does_not_trap_the_estimator_either),
     "Continue does not wait for the save (the page alone)": (
-        "intake", "js/polish-intake.js", FLUSH_LINE, "        Promise.resolve(true),",
+        "intake", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),),
         test_continue_saves_first_waits_for_the_answer_and_then_leaves),
     "Continue's wait has no bound (the page alone)": (
-        "intake", "js/polish-intake.js", BOUND_LINE, "        new Promise(function () {})",
+        "intake", (broken(INTAKE, BOUND_LINE, "        new Promise(function () {})"),),
         test_continue_leaves_when_the_wait_is_over_however_it_ends),
     "Continue leaves its wait's timer armed": (
-        "intake", "js/polish-intake.js", CLEAR_LINE, "    void 0;",
+        "intake", (broken(INTAKE, CLEAR_LINE, "    void 0;"),),
         test_continue_saves_first_waits_for_the_answer_and_then_leaves),
     "a save that throws stops Continue": (
-        "intake", "js/polish-intake.js", CATCH_LINE, "    } catch (err) { return; }",
+        "intake", (broken(INTAKE, CATCH_LINE, "    } catch (err) { return; }"),),
         test_continue_leaves_when_the_wait_is_over_however_it_ends),
+    # ── T2: the sandbox's net ──
+    "the net is never called": (
+        "world", (broken(SANDBOX, NET_CALL, "    var filedNow = null;"),),
+        test_the_estimate_page_files_a_new_project_the_intake_left_unfiled),
+    "the net is never called (a project reopened after its tab was closed)": (
+        "world", (broken(SANDBOX, NET_CALL, "    var filedNow = null;"),),
+        test_the_intake_files_a_project_it_is_opened_on_after_the_tab_was_closed),
+    "the net files a project whether or not this browser made it": (
+        "world", (broken(SANDBOX, NET_PENDING, "    void 0;"),),
+        test_a_real_project_is_copied_never_filed_and_never_written_to),
+    "the pending filing is read as any project's": (
+        "world", (broken(SANDBOX, NET_BINDING,
+                         "    try { return /:1$/.test(localStorage.getItem(NEW_TEST_KEY) || \"\"); } catch (e) { return false; }"),),
+        test_a_real_project_is_copied_never_filed_and_never_written_to),
+    "a pending filing that says real counts as one that says test": (
+        "world", (broken(SANDBOX, NET_BINDING,
+                         "    try { return (localStorage.getItem(NEW_TEST_KEY) || \"\").indexOf(id + \":\") === 0; } catch (e) { return false; }"),),
+        test_a_real_project_is_copied_never_filed_and_never_written_to),
+    "a project a human filed as real is filed again": (
+        "world", (broken(SANDBOX, NET_UNSET, "    if (row.is_test === true) return null;"),),
+        test_a_real_project_is_copied_never_filed_and_never_written_to),
+    "the net acts on a copy": (
+        "world", (broken(SANDBOX, NET_NOT_A_COPY, "    if (!row) return null;"),),
+        test_a_copy_is_edited_directly_and_nothing_is_filed_for_it),
+    "the net takes a 200 for a filing": (
+        "world", (broken(SANDBOX, NET_BODY, "      if (false) {"),),
+        test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed),
+    "the net takes a row that is not there for a filed one": (
+        "world", (broken(SANDBOX, NET_BODY, "      if (!body || body.ok !== true) {"),),
+        test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed),
+    "a filing that failed uses up the pending filing": (
+        "world", (broken(SANDBOX, NET_WARN, NET_WARN + " forgetNewTest(id);"),),
+        test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed),
+    "a filing that worked leaves the pending filing": (
+        "world", (broken(SANDBOX, NET_FORGET, "    void 0;"),),
+        test_the_estimate_page_files_a_new_project_the_intake_left_unfiled),
+    "a project that could not be filed is edited directly": (
+        "world", (broken(SANDBOX, NET_DIRECT, "    if (filedNow !== null) {"),),
+        test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed),
+    "a filing that failed is not said": (
+        "world", (broken(SANDBOX, NET_NOTE, "    showCopyNote(row.project_name, state.project_name);"),),
+        test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed),
 }
 
 
-def _on_broken_tree(tmp_path, which, rel, old, new):
+def _break_more(frontend, rel, old, new):
+    """Another line broken in the scratch copy break_source made: the same rule, the anchor is there exactly once."""
+    target = frontend / rel
+    src = target.read_bytes().decode("utf-8")
+    seen = src.count(old)
+    assert seen == 1, "the mutation anchor %r appears %d times in %s, not once" % (old, seen, rel)
+    target.write_bytes(src.replace(old, new).encode("utf-8"))
+
+
+def _on_broken_tree(tmp_path, which, edits):
     files = PAGE_FILES if which == "world" else INTAKE_FILES
+    rel, old, new = edits[0]
     frontend = break_source(tmp_path, rel, old, new, also=files)
+    for rel, old, new in edits[1:]:
+        _break_more(frontend, rel, old, new)
     if which == "intake":
         # the intake harness parses the county table out of backend/reference_tax.py, beside the frontend
         (tmp_path / "backend").mkdir(exist_ok=True)
@@ -452,21 +582,21 @@ def _on_broken_tree(tmp_path, which, rel, old, new):
 @pytest.mark.parametrize("name", sorted(BREAKS))
 def test_the_checks_go_red_when_the_code_changes(tmp_path, name):
     require_node()
-    which, rel, old, new, check = BREAKS[name]
-    broken = _on_broken_tree(tmp_path, which, rel, old, new)
+    which, edits, check = BREAKS[name]
+    broken_answer = _on_broken_tree(tmp_path, which, edits)
     with pytest.raises(AssertionError):
-        check(broken)
+        check(broken_answer)
 
 
 def test_the_unbroken_answers_pass_every_check_the_table_names(ran, intake):
     """The other half: the same checks, called the same way, are green on the real code."""
     real = {"world": ran, "intake": intake}
-    for which, _rel, _old, _new, check in BREAKS.values():
+    for which, _edits, check in BREAKS.values():
         check(real[which])
 
 
 def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a_break():
-    named = {check.__name__ for *_, check in BREAKS.values()}
+    named = {check.__name__ for _which, _edits, check in BREAKS.values()}
     for must in (test_a_fast_continue_files_the_new_project_under_test,
                  test_the_first_save_and_its_filing_are_answered_to_a_page_that_is_still_there,
                  test_a_slow_filing_is_waited_for,
@@ -474,5 +604,20 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_a_server_that_never_answers_does_not_trap_the_estimator,
                  test_a_filing_nobody_answers_does_not_trap_the_estimator_either,
                  test_continue_saves_first_waits_for_the_answer_and_then_leaves,
-                 test_continue_leaves_when_the_wait_is_over_however_it_ends):
+                 test_continue_leaves_when_the_wait_is_over_however_it_ends,
+                 test_the_estimate_page_files_a_new_project_the_intake_left_unfiled,
+                 test_the_intake_files_a_project_it_is_opened_on_after_the_tab_was_closed,
+                 test_a_real_project_is_copied_never_filed_and_never_written_to,
+                 test_a_copy_is_edited_directly_and_nothing_is_filed_for_it,
+                 test_a_filing_the_estimate_page_could_not_do_is_said_and_never_claimed):
         assert must.__name__ in named, "no break turns %s red" % must.__name__
+
+
+def test_every_anchor_a_break_uses_is_still_one_line_of_its_file():
+    """The anchors are lines of the real sources, and a break_source run would refuse one that moved. This says it
+    without running a harness: every entry's anchor is a single line, found exactly once, in the file it names."""
+    for name, (_which, edits, _check) in sorted(BREAKS.items()):
+        for rel, old, _new in edits:
+            src = (FRONTEND / rel).read_bytes().decode("utf-8")
+            assert "\n" not in old and "\r" not in old, name
+            assert src.count(old) == 1, "%s: %r is in %s %d times" % (name, old, rel, src.count(old))

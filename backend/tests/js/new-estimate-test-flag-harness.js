@@ -64,6 +64,8 @@
  *                       filing is neither used nor lost.
  *   saidReal            a project a human filed as a real bid (is_test false) with its own filing still pending: copied.
  *   filingAsReal        a pending filing that says "real" (the Active tab's "+ New project", "<id>:0"): copied.
+ *   aCopy               a test copy whose own filing is pending (it never is, but the net must not be what files a copy):
+ *                       edited directly, as ever, with no filing sent for it.
  *   unfiled<mode>       the pill flow with a server that will not file (HTTP 500, {"ok": false}, no network, a non-JSON
  *                       200, a 200 that says the row is not there): the project is left unfiled, nothing says it is
  *                       filed, and the filing stays pending for the next visit.
@@ -299,6 +301,8 @@ const FILING_FAULTS = ["http500", "okfalse", "network", "html", "gone"];
   out.anotherProjects = await openProject({ intent: "other-1:1" });
   out.saidReal = await openProject({ row: { is_test: false }, intent: PROJECT + ":1" });
   out.filingAsReal = await openProject({ intent: PROJECT + ":0" });
+  out.aCopy = await openProject({ row: { beta_sandbox_of: "some-real-project", project_name: "Wichita Warehouse (beta test)" },
+    intent: PROJECT + ":1" });
   out.unfiled = {};
   for (const mode of FILING_FAULTS) {
     const run = await leave({ faults: [{ route: "TEST", mode: mode, id: undefined }] });
