@@ -65,14 +65,23 @@
   // What this page last wrote to the blob, exactly. localStorage is shared by every tab of this
   // browser, so when it no longer reads back as this, another tab has written since (dropHeldChanges).
   let _lastWrittenRaw = null;
+  // The blob as this page last KNEW it: what it read when it decided it was creating a project (startsAsTest), then what it wrote. A blob that no
+  // longer reads back as this, and holds work this page did not write, has been written by another page (takenOver).
+  let _seenRaw = null;
   function writeBlob(obj) {
     try {
       const raw = JSON.stringify(obj);
       localStorage.setItem(STATE_KEY, raw);
       _lastWrittenRaw = raw;
+      _seenRaw = raw;
       return true;
     }
     catch { return false; /* quota / private mode */ }
+  }
+
+  /** The shared blob exactly as stored, or null (nothing stored, or storage unavailable). */
+  function readRaw() {
+    try { return localStorage.getItem(STATE_KEY); } catch { return null; }
   }
 
   function setState(partial) {
@@ -91,6 +100,12 @@
     }
     if (_givenUp) {
       console.warn("[TW] refused state write: this page gave its copy of draft", id, "back");
+      return cur;
+    }
+    // A page that created this project (a v2 page's sandbox found no row for it) writes from a copy that was made BEFORE another page wrote
+    // it. Its save reads its whole form, so what it would write over the project is that older, emptier copy (takenOver).
+    if (id && takenOver(id, cur)) {
+      console.warn("[TW] refused state write: this page created draft", id, "as a new project, and another page has written it since");
       return cur;
     }
     const written = hasWork(cur);   // before the merge: was anything already in the project's blob when this write came?
@@ -230,7 +245,44 @@
   // The id of the project THIS PAGE created as a test, or null: a v2 page's sandbox found no row for it. Memory only, on purpose: it
   // dies with the page, so it can never be found by another page or another tab, and a look that writes nothing leaves nothing.
   let _startsAsTest = null;
-  function startsAsTest(id) { _startsAsTest = id || null; }
+  // The id of a project this page created and another page has since written, or null (X1, round 4, F1). Once it is set it stays: this page's
+  // copy of that project is older than what the other page wrote for good, and every write from it is refused (as _givenUp's are).
+  let _takenOver = null;
+  // What to say on screen when that happens, told by the page that decided it was creating the project (the sandbox's note).
+  let _onTakenOver = null;
+  /** This page created project `id`: it found no row and nothing written. `whenTakenOver` is called, once, if another page writes the project
+   *  before this page's first save of it is stored, and this page's writes are then refused (takenOver). Memory only, like the word itself. */
+  function startsAsTest(id, whenTakenOver) {
+    _startsAsTest = id || null;
+    _takenOver = null;
+    _onTakenOver = typeof whenTakenOver === "function" ? whenTakenOver : null;
+    _seenRaw = readRaw();                  // what this page knows of the shared blob as it decides
+  }
+
+  /** Has another page written project `id` since THIS PAGE decided it was creating it? Answered only for the project this page created and
+   *  only until its first save of it is stored (spendStart): after that the row exists and this is every other tab on a saved project.
+   *
+   *  THE PAGE'S COPY IS OLDER THAN THE PROJECT, AND SAVING IT WOULD PUT IT OVER THE PROJECT (X1, round 4, F1). The v2 pages save their whole
+   *  form, which holds what this page knew when it opened: a real bid typed and saved by the live intake in another tab (which resumes the same
+   *  draft) was emptied by one character typed here, and a save this page had queued before the other page wrote went to the server over the
+   *  newer row. So the write is refused, and a queued save is not sent (the timer asks again as it fires), and the page says so (`whenTakenOver`).
+   *
+   *  WHAT COUNTS AS "WRITTEN BY ANOTHER PAGE": the shared blob holds WORK (hasWork), for THIS project (a blob stamped for another is setState's own
+   *  refusal), and no longer reads back as what this page last knew (readRaw against _seenRaw: what it read as it decided, then what it wrote).
+   *  A blob that was WIPED to nothing by another tab's New project is not that: nobody wrote the project, and this page's queued copy is still
+   *  the only one there is (test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued). */
+  function takenOver(id, blob) {
+    if (!id) return false;
+    if (_takenOver === id) return true;
+    if (_startsAsTest !== id) return false;
+    const cur = blob || getState();
+    if (cur[STAMP] && cur[STAMP] !== id) return false;
+    if (!hasWork(cur)) return false;
+    if (readRaw() === _seenRaw) return false;
+    _takenOver = id;
+    if (_onTakenOver) { try { _onTakenOver(); } catch {} }
+    return true;
+  }
 
   /** Has anything been written into this blob beyond the stamp, the flag and what a board's New button leaves ({ audience: "GC" })? */
   function hasWork(blob) {
@@ -970,6 +1022,12 @@
       const nowId = getDraftId();
       if (!nowId || nowId !== id || (state[STAMP] && state[STAMP] !== nowId)) {
         console.warn("[TW] skipped queued save — draft changed since it was scheduled");
+        return;
+      }
+      // And ask again whether another page has written the project since this page queued its copy: sending it now would put an OLDER copy
+      // over the newer row (takenOver).
+      if (takenOver(id)) {
+        console.warn("[TW] skipped queued save — another page has written draft", id, "since this page created it");
         return;
       }
       putDraft(id, state);

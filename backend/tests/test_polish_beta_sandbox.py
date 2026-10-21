@@ -222,10 +222,10 @@ def test_opening_the_beta_does_not_create_a_project(sandbox):
     branch = sandbox[sandbox.index("row === null"):sandbox.index("row.is_test === true")]
     assert branch.index("hasContent(state)") < branch.index("saveThenFileAsTest(id, state)"), (
         "the never-saved branch writes a row before asking whether anything was typed into it")
-    assert "TW.startsAsTest(id)" in branch, (
+    assert "TW.startsAsTest(id, showTakenOverNote)" in branch, (
         "an untouched project is never filed as a test at all, so the estimator's first real save "
         "in the beta would land in Active")
-    assert branch.index("TW.startsAsTest(id)") < branch.index("saveThenFileAsTest(id, state)"), (
+    assert branch.index("TW.startsAsTest(id, showTakenOverNote)") < branch.index("saveThenFileAsTest(id, state)"), (
         "the page's word is only said after a save that can fail, so a project that could not be "
         "saved is created unfiled by the first write after the server is back")
     assert "TW.startOf(id) === false" in branch and branch.index("TW.startOf(id)") < branch.index("saveThenFileAsTest(id, state)"), (
@@ -242,7 +242,7 @@ def test_the_sandbox_stores_no_start_of_its_own():
     code = _code(PAGE)
     assert "markNewProjectAsTest" not in code and "new_is_test" not in code, "the sandbox stores a start of its own again"
     assert "setItem" not in _block(PAGE, "enterSandbox"), "enterSandbox writes to storage"
-    assert "TW.startsAsTest(id)" in code
+    assert "TW.startsAsTest(id, showTakenOverNote)" in code
 
 
 def test_the_content_check_ignores_shared_js_s_own_stamp():
@@ -561,7 +561,7 @@ def test_the_notice_cannot_be_markup():
     below reads every innerHTML assignment rather than just counting them, so a second one that
     carries anything else fails here."""
     assign = re.compile(r"\.innerHTML\s*=\s*([^;]+);")
-    for fn in ("showCopyNote", "showDirectNote", "showUnsavedNote"):
+    for fn in ("showCopyNote", "showDirectNote", "showUnsavedNote", "showTakenOverNote"):
         body = _block(PAGE, fn)
         for rhs in assign.findall(body):
             assert re.fullmatch(r'icon\("[a-z-]+",\s*\d+\)', rhs.strip()), (

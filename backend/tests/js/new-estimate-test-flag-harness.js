@@ -622,6 +622,9 @@ async function stampRules() {
   }
   { const r = await fresh(); r.TW.startsAsTest(r.id); r.TW.setState({ project_name: "A", is_test: false }); out.markSaysFalse = seen(r.w, r.id); }
   { const r = await fresh(); r.TW.startsAsTest("someone-else"); r.TW.setState({ project_name: "A" }); out.markOther = seen(r.w, r.id); }
+  // ... and never over WORK this page did not write: the blob already holds work with no word when the page decides, so nothing says the project
+  // was created by this page. (The sandbox stops on such a project, so no page reaches this; the rule is held here, where it can be asked.)
+  { const r = await fresh(); r.w.holdLocally(r.id, { project_name: "Written elsewhere" }); r.TW.startsAsTest(r.id); r.TW.setState({ address: "A" }); out.markOverWork = seen(r.w, r.id); }
   // A START IS SPENT WHEN THE SERVER HAS STORED A COPY THAT CARRIES IT, not when a write says it. A write only says it (the blob carries
   // it), so a blob that another tab's New project wipes before the save went does not take the start with it: the next write says it again.
   {
@@ -990,7 +993,7 @@ async function twoTabs(how, first) {
  *  start ("v2": the v2 board's New estimate, "projects": the Projects page's New project on the Test tab). */
 const WIPED = "wiped-1";
 async function wipedByAnotherTab(kind, startB, opts) {
-  const o = Object.assign({ bTypes: false, leave: "close" }, opts || {});
+  const o = Object.assign({ bTypes: false, leave: "close", aTypesAgain: false }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   const tabA = w.mainTab;
   const tabB = w.openTab();
@@ -1027,6 +1030,11 @@ async function wipedByAnotherTab(kind, startB, opts) {
   else pageB = await w.pressNewProject({ tab: "test", browserTab: tabB, hold: 100 });
   // as the other tab's press left it (the board's own press is followed by a navigation, a commit and a boot before its page exists)
   const blobWiped = startB === "v2" ? pageB.blobAtStart : w.blob();
+  // this page's own estimator edits again after the wipe: nobody has written THIS project, so the edit is written, into the wiped blob
+  if (o.aTypesAgain) {
+    pageA.type("address", "200 Main St");
+    await w.advance(700);
+  }
   // the other tab's estimator goes on to TYPE, so the shared blob is no longer empty: it is now ANOTHER project's, and this page's queued save
   // must not write it under this project's id (the page's own copy is lost with it, as it has always been when another tab has the keys)
   if (o.bTypes) {
@@ -1037,6 +1045,7 @@ async function wipedByAnotherTab(kind, startB, opts) {
   if (kind !== "v1") {
     if (o.leave === "continue") pageA.pressContinue();
     else if (o.leave === "flush") pageA.win.TW.flushState();                // Ctrl+S, Send, the Files page's read: a flush with nothing written first
+    else if (o.leave === "stay") { /* this page stays open: its own queued save fires when its timer does */ }
     else pageA.follow("/blank.html");
   }
   await w.settle();
@@ -1129,7 +1138,7 @@ const rowOf = (w, id) => {
            zip: d.zip === undefined ? null : d.zip, has_v2_model: !!d.polish_estimate, is_test: flagOf(d) };
 };
 async function staleNewPage(how, opts) {
-  const o = Object.assign({ tab: "all", continueStale: false }, opts || {});
+  const o = Object.assign({ tab: "all", continueStale: false, wipeAfterFirstEdit: false }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   const tabA = w.mainTab;                                       // the v2 page's tab
   const tabB = w.openTab();                                     // the live intake's tab
@@ -1155,6 +1164,10 @@ async function staleNewPage(how, opts) {
   const rowAfterLive = rowOf(w, id);
   v2.type("zip", "66101");                                      // the v2 page's estimator types one character
   await w.advance(1000);
+  if (o.wipeAfterFirstEdit) {
+    // a THIRD tab's New project wipes the shared blob: nobody has written the project now, but this page's copy is still older than it
+    await w.pressNewProject({ tab: "test", browserTab: w.openTab(), hold: 100 });
+  }
   v2.type("city", "Kansas City");                               // and another: a refused page stays refused
   await w.advance(9000);
   const noteAfterTyping = v2.text("sandbox-note");
@@ -1452,6 +1465,7 @@ process.on("exit", (code) => {
   out.staleNewPage = {
     "board": await staleNewPage("board"),
     "board, Continue pressed on the stale page": await staleNewPage("board", { continueStale: true }),
+    "board, the blob wiped by a third tab after the first refusal": await staleNewPage("board", { wipeAfterFirstEdit: true }),
     "projects/all": await staleNewPage("projects", { tab: "all" }),
     "projects/active": await staleNewPage("projects", { tab: "active" }),
     "projects/test": await staleNewPage("projects", { tab: "test" }),
@@ -1491,6 +1505,8 @@ process.on("exit", (code) => {
   out.wiped["new/v2, flushed after the wipe"] = await wipedByAnotherTab("new", "v2", { leave: "flush" });
   out.wiped["new/v2, the other tab types"] = await wipedByAnotherTab("new", "v2", { bTypes: true });
   out.wiped["saved/v2, the other tab types"] = await wipedByAnotherTab("saved", "v2", { bTypes: true });
+  out.wiped["new/v2, the other tab types, this page stays"] = await wipedByAnotherTab("new", "v2", { bTypes: true, leave: "stay" });
+  out.wiped["new/v2, this page types again after the wipe"] = await wipedByAnotherTab("new", "v2", { aTypesAgain: true });
   out.realProject = await openProject({});
   out.anotherProjects = await openProject({ starts: { "other-1": "1" } });
   out.saidReal = await openProject({ row: { is_test: false }, starts: { [PROJECT]: "1" } });

@@ -424,6 +424,9 @@ def test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_tha
     assert s["markEmptyThenContent"]["blob"].get("is_test") is True, s["markEmptyThenContent"]
     assert s["markSaysFalse"]["blob"].get("is_test") is False, s["markSaysFalse"]
     assert "is_test" not in s["markOther"]["blob"], s["markOther"]
+    # never over WORK this page did not write: a blob that already holds work with no word when the page decides is not a project this page created
+    over = s["markOverWork"]["blob"]
+    assert over.get("project_name") == "Written elsewhere" and over.get("address") == "A" and "is_test" not in over, over
 
 
 def test_new_project_mints_the_projects_id_with_its_own_start(ran):
@@ -1123,7 +1126,8 @@ def test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page
     reaches the project. From the board's New estimate and from each Projects tab; and its Continue still leaves cleanly, to the estimate page,
     which edits the saved project."""
     runs = ran["staleNewPage"]
-    assert sorted(runs) == ["board", "board, Continue pressed on the stale page", "projects/active", "projects/all", "projects/test"], sorted(runs)
+    assert sorted(runs) == ["board", "board, Continue pressed on the stale page", "board, the blob wiped by a third tab after the first refusal",
+                            "projects/active", "projects/all", "projects/test"], sorted(runs)
     for name, r in sorted(runs.items()):
         assert r["sameProject"] and "Nothing has been priced here yet" in r["noteAtOpen"], (
             "%s: the v2 page did not open on a project nobody had saved: %r" % (name, r["noteAtOpen"]))
@@ -1138,6 +1142,8 @@ def test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page
         note = " ".join(r["noteAfterTyping"].split())
         assert STOPPED_SAVING in note and "another tab" in note, "%s: the page does not say it stopped saving: %r" % (name, note)
         assert "NEW test project" not in note, "%s: the page still says what is no longer true: %r" % (name, note)
+    # a page that has been refused stays refused: a third tab's New project wipes the shared blob (nobody has written the project now, and this page's
+    # older copy is still older than it), and the page's next edit still does not reach the project (the loop above has read the row and the PUTs)
     c = runs["board, Continue pressed on the stale page"]
     est = c["estimate"]
     assert c["staleNavs"] == ["https://proposals.test/polish-estimate.html?d=" + c["id"]], "Continue on the stale page did not leave: %r" % c["staleNavs"]
@@ -1313,7 +1319,9 @@ def test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_tes
     can open on the project another tab has just started, find no row and nothing written, and say "this page creates it as a test". The
     other tab's estimator then writes the project and its save creates the row, and the v2 page's estimator types. The v2 page's decision has
     gone stale, and its word is not the project's: the project stays what its own start said (a test from Test, a real bid from Active,
-    unsaid from All) and is never SEEDED a test by the v2 page's write. (Both pages are on it, as they always were.)"""
+    unsaid from All) and is never SEEDED a test by the v2 page's write. (Since round 4 the v2 page's write is refused outright once the other page has
+    written the project, test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it; this is the flags, whichever of
+    the two things holds.)"""
     runs = ran["twoPagesOneProject"]
     assert sorted(runs) == ["active", "all", "test"], sorted(runs)
     want = {"all": None, "active": False, "test": True}
@@ -1336,8 +1344,14 @@ def test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued(ran
     has no row."""
     runs = ran["wiped"]
     assert sorted(runs) == ["new/projects", "new/v2", "new/v2, Continue pressed after the wipe", "new/v2, flushed after the wipe",
-                            "new/v2, the other tab types", "saved/projects", "saved/v2", "saved/v2, the other tab types", "v1/projects",
-                            "v1/v2"], sorted(runs)
+                            "new/v2, the other tab types", "new/v2, the other tab types, this page stays", "new/v2, this page types again after the wipe",
+                            "saved/projects", "saved/v2", "saved/v2, the other tab types", "v1/projects", "v1/v2"], sorted(runs)
+    # a wipe does not stop this page writing its OWN project: nobody has written it, so an edit made after the wipe is written into the wiped
+    # blob, and goes to the server with the rest (a page that took the wiped blob for another page's write would refuse it: takenOver)
+    again = runs["new/v2, this page types again after the wipe"]
+    assert again["rowData"] is not None and (again["rowData"]["project_name"], again["rowData"]["address"]) == ("Wiped New Job", "200 Main St"), (
+        "the edit made after the wipe did not reach the project: %r" % (again["rowData"], ))
+    assert again["x"]["bornIsTest"] is True and again["x"]["is_test"] is True and again["rowIds"] == [again["id"]], again["x"]
     for name, r in sorted(runs.items()):
         if "types" in name:
             continue
@@ -1366,6 +1380,12 @@ def test_the_queued_save_never_writes_another_projects_blob_under_this_projects_
     assert new["rowData"] is None or new["rowData"]["project_name"] != "Tab B Typed", new["rowData"]
     saved = ran["wiped"]["saved/v2, the other tab types"]
     assert saved["rowData"]["project_name"] == "Saved Test Job", "the saved project took another project's blob: %r" % saved["rowData"]
+    # and a page that STAYS open sends its own copy when its timer fires, under its own id: the shared blob is another project's, which is not "another page
+    # has written this project" (takenOver), so this page's queued save is not skipped
+    stay = ran["wiped"]["new/v2, the other tab types, this page stays"]
+    assert stay["rowData"] is not None and stay["rowData"]["project_name"] == "Wiped New Job", (
+        "the page that stayed open did not send its own copy under its own id: %r" % (stay["rowData"], ))
+    assert (stay["rowB"] or {}).get("project_name") == "Tab B Typed", stay["rowB"]
     for name in ("new/v2, the other tab types", "saved/v2, the other tab types"):
         r = ran["wiped"][name]
         assert (r["rowB"] or {}).get("project_name") == "Tab B Typed" and r["rowB"]["is_test"] is True, (
@@ -1476,7 +1496,7 @@ START_MINTS_THE_ID = "      localStorage.setItem(DRAFT_ID_KEY, id);"
 START_VALUE = '      localStorage.setItem(startKey(id), want ? "1" : "0");'
 START_SAYS_NOTHING = "      if (want === null || want === undefined) return;"
 START_LEGACY_SLOT = "      localStorage.removeItem(NEW_IS_TEST_KEY);"
-STARTS_AS_TEST = "  function startsAsTest(id) { _startsAsTest = id || null; }"
+STARTS_AS_TEST = "  function startsAsTest(id, whenTakenOver) {"
 PUT_WITH_START = "      const out = withStart(id, blob);"
 PUT_SPENDS = '        if (ok && Object.prototype.hasOwnProperty.call(out, "is_test")) spendStart(id);'
 QUEUED_FALLBACK = "    return (_queued && _queued.id === id) ? _queued.state : null;"
@@ -1497,7 +1517,7 @@ KEEPALIVE_FOUR_BYTES = "      else if (c >= 0xd800 && c <= 0xdbff) { bytes += 4;
 # the sandbox
 SANDBOX_SAYS_TEST = "      body: JSON.stringify({ data: Object.assign({}, blob, { is_test: true }) }),"
 SANDBOX_NOTE_UNSAVED = "          showUnsavedNote();"
-SANDBOX_MARK = "      TW.startsAsTest(id);"
+SANDBOX_MARK = "      TW.startsAsTest(id, showTakenOverNote);"
 SANDBOX_REAL = "      var real = TW.startOf(id) === false;"
 SANDBOX_STOPS_WRITTEN = "      if (said === false || (said !== true && written)) {"
 SANDBOX_IF_SAVED = "        if (saved) {"
@@ -1523,6 +1543,17 @@ BOUND_LINE = "        new Promise(function (resolve) { timer = setTimeout(resolv
 CLEAR_LINE = "    if (timer) clearTimeout(timer);"
 CATCH_LINE = "    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }"
 BUTTON_TAG = '        <button type="submit" class="btn-primary" id="continue-btn">Continue to the estimate →</button>'
+# shared.js: a page that created a project stops saving it once another page has written it (takenOver)
+TAKEN_OVER_REFUSES = "    if (id && takenOver(id, cur)) {"
+TAKEN_OVER_TIMER = "      if (takenOver(id)) {"
+TAKEN_OVER_STICKY = "    if (_takenOver === id) return true;"
+TAKEN_OVER_FOREIGN = "    if (cur[STAMP] && cur[STAMP] !== id) return false;"
+TAKEN_OVER_NEEDS_WORK = "    if (!hasWork(cur)) return false;"
+TAKEN_OVER_RAW = "    if (readRaw() === _seenRaw) return false;"
+TAKEN_OVER_SAYS = "    if (_onTakenOver) { try { _onTakenOver(); } catch {} }"
+SEEN_ON_WRITE = "      _seenRaw = raw;"
+SEEN_ON_DECIDING = "    _seenRaw = readRaw();"
+SANDBOX_TELLS = "      TW.startsAsTest(id, showTakenOverNote);"
 # the v2 board: what a New estimate starts the project as; and what shared.js does with a project nobody typed into
 BOARD_STARTS_AS_TEST = "    TW.setNewProjectTestIntent(true);"
 EVICTED_NEEDS_WORK = "    if (!hasWork(blob)) return;"
@@ -1669,12 +1700,16 @@ BREAKS = {
     "a write ignores this page's own word": (
         "world", (broken(SHARED, STAMP_WANT, "    const want = startOf(id);"),),
         test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
-    "this page's own word is said over a project somebody else has since written": (
+    "this page's own word is said over work it did not write": (
         "world", (broken(SHARED, STAMP_WANT, "    const want = _startsAsTest === id ? true : startOf(id);"),),
+        test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
+    "this page's own word is said over a project another page has written (nothing refuses the write, nothing looks for work)": (
+        "world", (broken(SHARED, TAKEN_OVER_REFUSES, "    if (false) {"),
+                  broken(SHARED, STAMP_WANT, "    const want = _startsAsTest === id ? true : startOf(id);")),
         test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has),
     "nothing is ever taken to be written already": (
         "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = false;"),),
-        test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has),
+        test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
     "everything is taken to be written already (a blob that was wiped to nothing)": (
         "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = true;"),),
         test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before),
@@ -1691,11 +1726,11 @@ BREAKS = {
         test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
     "a look arms the project as a test (every look)": (
         "world", (broken(SHARED, STARTS_AS_TEST,
-                         '  function startsAsTest(id) { _startsAsTest = id || null; try { localStorage.setItem(startKey(id), "1"); } catch {} }'),),
+                         '  function startsAsTest(id, whenTakenOver) { try { localStorage.setItem(startKey(id), "1"); } catch {}'),),
         test_a_look_at_a_v2_page_starts_nothing_and_changes_nothing),
     "a look arms the project as a test (the Active tab's real bid)": (
         "world", (broken(SHARED, STARTS_AS_TEST,
-                         '  function startsAsTest(id) { _startsAsTest = id || null; try { localStorage.setItem(startKey(id), "1"); } catch {} }'),),
+                         '  function startsAsTest(id, whenTakenOver) { try { localStorage.setItem(startKey(id), "1"); } catch {}'),),
         test_the_active_tabs_real_bid_is_not_made_a_test_by_a_look_at_v2),
     "a look at a v2 page creates a test row for a real bid that has content": (
         "world", (broken(SANDBOX, SANDBOX_REAL, "      var real = false;"),),
@@ -1836,6 +1871,34 @@ BREAKS = {
     "the page alone has no Continue button to speak through": (
         "intake", (broken(PAGE, BUTTON_TAG, BUTTON_TAG.replace(' id="continue-btn"', "")),),
         test_continue_says_it_is_saving_and_ignores_a_second_press_on_the_page_alone),
+    # ── round 4, F1: a page that created a project stops saving it once another page has written it ──
+    "a stale page keeps saving a project another page has written (setState)": (
+        "world", (broken(SHARED, TAKEN_OVER_REFUSES, "    if (false) {"),),
+        test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it),
+    "a stale page's queued save is sent over a project another page has saved": (
+        "world", (broken(SHARED, TAKEN_OVER_TIMER, "      if (false) {"),),
+        test_a_stale_queued_save_never_overwrites_what_another_page_saved_since),
+    "a refused page is refused only while the blob differs (a wipe lets it write again)": (
+        "world", (broken(SHARED, TAKEN_OVER_STICKY, "    void 0;"),),
+        test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it),
+    "a blob wiped by another tab counts as written by another page": (
+        "world", (broken(SHARED, TAKEN_OVER_NEEDS_WORK, "    void 0;"),),
+        test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued),
+    "another project's blob counts as written by another page": (
+        "world", (broken(SHARED, TAKEN_OVER_FOREIGN, "    void 0;"),),
+        test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id),
+    "a page's own writes count as written by another page": (
+        "world", (broken(SHARED, TAKEN_OVER_RAW, "    void 0;"),), test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "a page does not remember its own writes": (
+        "world", (broken(SHARED, SEEN_ON_WRITE, "      void 0;"),), test_a_new_project_is_born_filed_whichever_way_it_leaves),
+    "a page does not take in what it found as it decided": (
+        "world", (broken(SHARED, SEEN_ON_DECIDING, "    void 0;"),), test_a_stale_queued_save_never_overwrites_what_another_page_saved_since),
+    "a page that is taken over says nothing": (
+        "world", (broken(SHARED, TAKEN_OVER_SAYS, "    void 0;"),),
+        test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it),
+    "the sandbox does not hand its note to shared.js": (
+        "world", (broken(SANDBOX, SANDBOX_TELLS, "      TW.startsAsTest(id);"),),
+        test_a_stale_queued_save_never_overwrites_what_another_page_saved_since),
     # ── round 4, F4: one save as the page goes ──
     "shared.js sends its own save as the page goes although the page's will send": (
         "world", (broken(SHARED, SHARED_STANDS_DOWN, "    void 0;"),),
@@ -2008,6 +2071,8 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
                  test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has,
                  # round 4
+                 test_a_v2_page_that_decided_a_project_was_new_stops_saving_once_another_page_has_written_it,
+                 test_a_stale_queued_save_never_overwrites_what_another_page_saved_since,
                  test_leaving_with_two_saves_pending_sends_one_save_carrying_the_newest_edit,
                  test_the_beta_door_waits_for_the_project_to_be_saved_before_it_opens_the_v2_intake,
                  test_the_beta_door_says_it_is_saving_ignores_a_second_press_and_is_given_back,
