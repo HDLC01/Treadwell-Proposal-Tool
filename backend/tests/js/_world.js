@@ -28,7 +28,9 @@
  *   with a request it has read. What happens to the page decides only three things: a request that has not
  *   arrived when its page goes is dropped unless it was sent with keepalive; a reply that comes back to a
  *   page that has gone is never seen by anyone; and a reply that comes back to a page that is still
- *   running, even one that has asked to leave, is.
+ *   running, even one that has asked to leave, is. One more browser rule is modelled, because it is why a
+ *   save sent as a page goes cannot be relied on for a big draft: a keepalive request whose body is over
+ *   64 KiB is refused on the spot (TypeError: Failed to fetch) and nothing is sent.
  *
  *   THE SERVER is the route contract of backend/main.py, nothing more: GET /api/draft/{id} (200, or 404
  *   when the row does not exist), PUT /api/draft/{id} (an upsert that INSERTS a new row as sent, so a first
@@ -67,6 +69,7 @@ const KEYS = {
 };
 // Mirror of drafts._SERVER_OWNED_KEYS. test_v2_new_estimate_test_flag.py compares the two.
 const SERVER_OWNED = ["is_test", "archived", "assigned_estimator"];
+const KEEPALIVE_CAP = 64 * 1024;
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -296,6 +299,14 @@ function createWorld(cfg) {
         sentAt: sim.now, outcome: "sent", status: null,
       });
       world.requests.push(req);
+      // A keepalive request whose body is over 64 KiB is refused on the spot, with "TypeError: Failed to fetch" and nothing sent
+      // (the browser's limit is 64 KiB of keepalive bodies in flight at once; this model refuses any single one over it, which
+      // is the case the real drafts hit: shared.js putDraft measured a real bid at about 89 KB). It is why a save sent as a page
+      // goes cannot be relied on for a big draft.
+      if (req.keepalive && req.body !== null && Buffer.byteLength(req.body, "utf8") > KEEPALIVE_CAP) {
+        req.outcome = "refused (keepalive body over 64 KiB)";
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
       return new Promise((resolve, reject) => {
         const fault = faultFor(req);
         sim.at(net.up, () => {
@@ -516,9 +527,10 @@ function createWorld(cfg) {
     if (page.dead || page.leaving) return;
     const target = new URL(String(href), page.url).href;
     // A browser that does not go (the load was stopped, a prompt was answered no): the page is still there, as it was.
-    if (world.navigationBlocked) { world.navs.push({ from: page.label, to: target, askedAt: sim.now, blocked: true }); return; }
+    if (world.navigationBlocked) { world.navs.push({ from: page.label, to: target, askedAt: sim.now, blocked: true, syncedAtAsk: local.getItem(KEYS.synced) }); return; }
     page.leaving = true;
-    world.navs.push({ from: page.label, to: target, askedAt: sim.now });
+    // `syncedAtAsk`: the browser's record of what the server holds (SYNCED_KEY) at the moment the page asked to leave.
+    world.navs.push({ from: page.label, to: target, askedAt: sim.now, syncedAtAsk: local.getItem(KEYS.synced) });
     sim.at(net.commitMs, () => {
       if (page.dead) return;
       // pagehide runs on a page that still exists, and what it sends goes out as it goes.

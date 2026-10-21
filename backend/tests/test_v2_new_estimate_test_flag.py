@@ -137,6 +137,9 @@ def test_the_model_is_a_browser_that_drops_what_a_browser_drops(ran):
     assert m["timerOfAGonePageFired"] is False
     assert m["pageDiedAt"] == m["commitMs"], "the old page does not run until the new document commits"
     assert m["stay"] == {"dead": False, "leaving": False, "blockedNavs": 1, "pages": 1}, m["stay"]
+    cap = m["keepaliveCap"]
+    assert (cap["keepaliveBig"], cap["plainBig"], cap["keepaliveSmall"]) == ("Failed to fetch", "sent", "sent"), cap
+    assert cap["stored"] == ["ka-small", "plain-big"], "a keepalive request over 64 KiB reached the server (or a plain one did not): %r" % cap
 
 
 def test_the_server_model_is_the_route_contract_of_the_backend(ran):
@@ -434,6 +437,20 @@ def test_a_server_that_never_answers_does_not_trap_the_estimator(ran):
     assert r["blob"].get("is_test") is True, "the project's own blob does not say it is a test: %r" % r["blob"]
 
 
+def test_continue_saves_a_draft_too_big_for_a_keepalive_request_before_it_leaves(ran):
+    """WHAT CONTINUE'S WAIT STILL GUARDS, now that it is no longer what files a new project. A saved project whose draft is over
+    64 KiB (a real bid has measured about 89 KB; see shared.js putDraft) cannot be sent as the page goes: the browser refuses a
+    keepalive request that big on the spot and nothing is sent. Before Continue waited, the last edits made on the intake
+    reached the server only when the estimate page's own autosave went, and the server held the stale draft until then.
+    Waiting sends the save as a plain request, answered to a page that is still there, before the browser leaves."""
+    r = ran["bigDraft"]
+    assert DIRECT in r["noteOnOpen"], "the run does not start from a saved test project: %r" % r["noteOnOpen"]
+    first = reqs(r, "PUT", "big-4", page="intake")[0]
+    assert (first["keepalive"], first["outcome"]) == (False, "replied"), first
+    assert r["address"] == "9 Big Address", (
+        "the last edit made on the intake never reached the server (the save that went as the page left was refused): %r" % r["address"])
+
+
 def test_a_save_that_fails_at_once_is_not_waited_out(ran):
     """No network: the first PUT fails immediately. Continue goes on at once (the local copy is safe, and the estimate page
     saves what it finds unsaved), it does not sit out the bound, and the project still ends born filed."""
@@ -616,6 +633,7 @@ def test_the_record_of_what_the_server_holds_is_written_as_the_first_save_is_sto
     on every project started as a test)."""
     r = ran["synced"]
     assert r["synced"] == r["id"] + ":" + r["digestNow"] and r["digestNow"], (r["synced"], r["digestNow"])
+    assert r["navs"][0]["syncedAtAsk"] == r["synced"], "Continue asked to leave before the record was written: %r" % r["navs"][0]
     assert r["blob"].get("is_test") is True and r["x"]["bornIsTest"] is True
 
 
@@ -940,6 +958,9 @@ BREAKS = {
         "world", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
     "Continue waits for a save that never answers, for ever": (
         "world", (broken(INTAKE, BOUND_LINE, "        new Promise(function () {})"),), test_a_server_that_never_answers_does_not_trap_the_estimator),
+    "Continue leaves without waiting for a draft too big for a keepalive request": (
+        "world", (broken(INTAKE, FLUSH_LINE, "        Promise.resolve(true),"),),
+        test_continue_saves_a_draft_too_big_for_a_keepalive_request_before_it_leaves),
     "Continue waits for a save that failed at once, for the whole bound": (
         "world", (broken(INTAKE, FLUSH_LINE, "        new Promise(function () {}),"),), test_a_save_that_fails_at_once_is_not_waited_out),
     "Continue does not wait for the save (the page alone)": (

@@ -58,6 +58,8 @@
  *   v1                  the Projects page's "+ New project" on each tab, through the LIVE intake's Continue.
  *   realThroughIntake, realProject, anotherProjects, saidReal, filingAsReal, aCopy, staleStart
  *                       projects that are NOT a new test project of this browser's: copied as ever, never flagged.
+ *   bigDraft            a saved test project too big for a keepalive request: Continue's wait is what gets its last edit to
+ *                       the server, because the save that goes as the page leaves is refused by the browser.
  *   v1Real              a real spreadsheet bid opened in the LIVE intake from the Projects page and saved, with another
  *                       project's start (or the bare "1" an abandoned "+ New project" leaves) in the one slot: saved as
  *                       the real bid it is.
@@ -180,7 +182,25 @@ async function modelChecks() {
     await v.settle();
     return { dead: p.dead, leaving: p.leaving, blockedNavs: v.navs.filter((n) => n.blocked).length, pages: v.pages.length };
   })();
+  // The one size rule: a keepalive body over 64 KiB is refused on the spot, a plain one of that size and a small keepalive one are not.
+  const cap = await (async () => {
+    const v = W.createWorld({ frontend: ROOT });
+    const p = v.load("/blank.html");
+    const big = JSON.stringify({ data: { n: "x".repeat(70 * 1024) } });
+    const small = JSON.stringify({ data: { n: "x" } });
+    const out = {};
+    const send = (key, id, body, keepalive) => p.win.fetch("/api/draft/" + id, { method: "PUT", body: body, keepalive: keepalive })
+      .then(() => { out[key] = "sent"; }, (e) => { out[key] = String(e && e.message); });
+    const sent = [send("keepaliveBig", "ka-big", big, true), send("plainBig", "plain-big", big, false),
+                  send("keepaliveSmall", "ka-small", small, true)];
+    await v.settle();                                  // virtual time moves only when the model is asked to run it
+    await Promise.all(sent);
+    out.stored = Array.from(v.rows.keys()).sort();
+    out.outcomes = v.requestsLog().map((r) => r.id + ":" + r.outcome);
+    return out;
+  })();
   return {
+    keepaliveCap: cap,
     commitMs: w.net.commitMs,
     pageDiedAt: page.diedAt,
     earlyStored: w.rows.has("early"), earlyReplySeen: !!seen.early, earlyOutcome: outcome("early"),
@@ -580,6 +600,28 @@ async function v1RealOpen(intent) {
     address: (w.rows.get(SHEET).data || {}).address });
 }
 
+/** A saved TEST project whose draft is too big for a keepalive request (a real bid has measured about 89 KB: shared.js putDraft),
+ *  opened in the v2 intake, its address changed and Continue pressed. The save that goes as the page leaves is refused by the
+ *  browser outright, so the last edits reach the server only if Continue's own wait has sent them first. */
+const BIG = "big-4";
+async function bigDraft() {
+  const w = W.createWorld({ frontend: ROOT });
+  const data = Object.assign({ is_test: true, notes_text: "x".repeat(90 * 1024) }, {
+    project_name: "Overland Park Warehouse", address: "100 Main St", city: "Overland Park", state: "KS", zip: "66212",
+    work_type: "polish", audience: "Direct", polish_sf: 6000,
+    polish_estimate: { version: 2, conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: false } } });
+  w.seed(BIG, data);
+  w.holdLocally(BIG, data);
+  const intake = w.load("/polish-intake.html?d=" + BIG);
+  await w.settle();
+  const noteOnOpen = intake.text("sandbox-note");
+  intake.type("address", "9 Big Address");
+  await w.advance(100);
+  intake.pressContinue();
+  await w.settle();
+  return summary(w, BIG, { noteOnOpen: noteOnOpen, address: (w.rows.get(BIG).data || {}).address });
+}
+
 /** A project the server holds, opened on the estimate page by a browser that has been working on it. */
 const PROJECT = "proj-9";
 const projectData = (over) => Object.assign({
@@ -598,6 +640,18 @@ async function openProject(opts) {
   await w.settle();
   return summary(w, PROJECT, { pendingBefore: o.intent === undefined ? null : o.intent });
 }
+
+// VIRTUAL TIME MOVES ONLY WHEN THE MODEL IS ASKED TO RUN IT (world.advance / world.settle). A harness that awaits a request
+// before doing so waits for an event nobody will run, node finds nothing left to do and exits 0 with nothing printed, which
+// reads as "the harness printed nothing". Say so instead.
+let answered = false;
+process.on("exit", (code) => {
+  if (code === 0 && !answered) {
+    console.error("the harness ended without an answer: it is awaiting something on virtual time that nothing advanced "
+      + "(call world.settle() or world.advance() before awaiting a request)");
+    process.exitCode = 2;
+  }
+});
 
 (async () => {
   const out = {};
@@ -628,6 +682,7 @@ async function openProject(opts) {
   out.v1 = await v1();
   out.realThroughIntake = await realThroughIntake();
   out.v1Real = { clean: await v1RealOpen(undefined), anotherStart: await v1RealOpen("other-1:1"), abandonedNew: await v1RealOpen("1") };
+  out.bigDraft = await bigDraft();
   out.realProject = await openProject({});
   out.anotherProjects = await openProject({ intent: "other-1:1" });
   out.saidReal = await openProject({ row: { is_test: false }, intent: PROJECT + ":1" });
@@ -638,4 +693,5 @@ async function openProject(opts) {
   out.staleStart = await openProject({ row: { generate_result: { files: ["a.xlsx"] }, proposal_payload: { sent: true } },
     intent: PROJECT + ":1" });
   console.log(JSON.stringify(out));
+  answered = true;
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
