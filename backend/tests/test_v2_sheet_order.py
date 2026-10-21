@@ -529,8 +529,9 @@ UNSTAMPED_KEYS = "        if (a.seq === b.seq) return a.held - b.held;      // n
 BY_SEQ = "      if (a.seq !== b.seq) return a.seq - b.seq;"
 PRESET = "    var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });"
 COPY_PRESET = "    if (COPY_ID.test(fromTab)) return withSectionPatch(model, fromTab, { sheet: toTab, profile: profile.stamp });"
-# (round 7, part 4, P4: the open also gives a one-drive-law Combo's second base its drive, B.giveEveryBaseItsDrive, around the stamp)
-ADOPT = "    ROOT = B.giveEveryBaseItsDrive(B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs));"
+# (round 7, part 4, P4: the open also gives a one-drive-law Combo's second base its drive, B.giveEveryBaseItsDrive, after the stamp; since the pass-2 audit's A1 the stamped model is held
+# as `ordered`, so the page can tell that a drive was given and save it)
+ADOPT = "    var ordered = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);"
 SAVE_ON_OPEN = "    if (restructured) saveSoon();"
 HELD = ["Copy1", "Copy2", "Epoxy"]
 
@@ -558,7 +559,7 @@ MUTATIONS = {
         MODEL, COMPOSE, "    var entries = sectionsOf(model);",
         lambda r: r["model"]["composed"].get("seqs") != {"Copy2": 1, "Epoxy": 2, "Copy1": 3}),
     "a bid is not stamped when it opens": (
-        PAGE, ADOPT, "    ROOT = B.giveEveryBaseItsDrive(B.migrateModel(state.polish_estimate));",
+        PAGE, ADOPT, "    var ordered = B.migrateModel(state.polish_estimate);",
         lambda r: r["legacy"]["opened"]["seqs"] != [1, 2, 3]),
     "a bid that opens is stamped in the wrong order": (
         MODEL, STAMP_LIST, "    out.tabs = copyInto({}, Object.fromEntries(Object.keys(tabs).reverse().map(function (id, i) {",
@@ -594,7 +595,7 @@ MUTATIONS = {
         lambda r: r["legacy"]["quiet"] != {"armed": 0, "saves": 0, "asked": 0}),
     # round 6, O1: a bid with no places is stamped in the order its saved price was computed in (the draft's priced_tabs)
     "the page does not hand the saved list to the stamp": (
-        PAGE, ADOPT, "    ROOT = B.giveEveryBaseItsDrive(B.withSectionOrder(B.migrateModel(state.polish_estimate)));",
+        PAGE, ADOPT, "    var ordered = B.withSectionOrder(B.migrateModel(state.polish_estimate));",
         lambda r: r["legacy"]["facts"]["prices"]["lump"] != r["legacy"]["savedLump"] and r["legacy"]["opened"]["order"] != r["legacy"]["pricedTabs"]),
     "a bid with no places is stamped in the order its keys are held in, whatever its list says": (
         MODEL, LISTED, "    var listed = tabIdsInOrder(tabs);",

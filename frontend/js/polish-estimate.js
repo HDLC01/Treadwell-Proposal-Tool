@@ -81,6 +81,9 @@
   // every section, the strip) reads ROOT, never M. See show().
   var ROOT = null;
   var M = null;
+  // Did the open give a base a drive that prices something (adopt: a Combo saved under the one-drive law, B.giveEveryBaseItsDrive, B.givenDrivesPrice)? Then the draft's price is behind the
+  // page's and init saves it once (the pass-2 audit's A1).
+  var drivesGiven = false;
   // The takeoff SF the labor days last followed (null until the page has opened). See changed().
   var followSf = null;
 
@@ -177,11 +180,15 @@
     // THE ORDER OF THE SHEETS IS WRITTEN DOWN WHEN A BID OPENS (B.withSectionOrder): the draft's sections are keys of one object and the server's jsonb column keeps no key
     // order, so each section carries its place (`seq`). A bid saved before that has none: it is stamped here in memory, and saved by its next save, in the order its saved price
     // was computed in (the draft's priced_tabs, an array, which jsonb keeps in order; the order the keys are held in when the list names fewer than two sheets), so its first save
-    // writes the price it was saved at. Nothing is written on open and no price moves. A bid with one sheet has no `tabs` and is left exactly as it was.
+    // writes the price it was saved at. The stamp writes nothing on open and moves no price. A bid with one sheet has no `tabs` and is left exactly as it was.
     // A COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7: one drive, on the carrier, and no line on its other base) OPENS WITH EVERY BASE'S OWN DRIVE (round 7, part 4, P4; Hanz's D1 of
     // 2026-10-21 and "let them re-price"): B.giveEveryBaseItsDrive gives the other base its line, filled by the rule from the distance on file, so the open, the session and a reload price a
-    // drive for each crew. A base whose x said it has none keeps its answer. Nothing is written until the next save.
-    ROOT = B.giveEveryBaseItsDrive(B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs));
+    // drive for each crew. A base whose x said it has none keeps its answer, and a line given says what the job's one drive said of every crew (switched off, a box cleared: the pass-2 audit's
+    // A1). When a drive it gave prices something (drivesGiven, below), init SAVES THE OPEN ONCE when the page has settled: the Review and the Proposal read the draft's saved price, and until
+    // then the bar showed $92,153 while the Proposal printed the $90,422 the bid was saved at (A1). Nothing is written here: a save armed this early would land on the real bid before the
+    // sandbox has switched the page to its test copy (init).
+    var ordered = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);
+    ROOT = B.giveEveryBaseItsDrive(ordered);
     M = ROOT;
     // THE CELL WINS WHERE THERE IS ONE, the same rule polish-intake.js has always applied, through
     // the same shared reader so the two screens cannot disagree about one answer.
@@ -205,6 +212,9 @@
     // Travel's Guys box empty until somebody touches an unrelated field, and prices it at nothing
     // in the meantime.
     syncAutoGuys();
+    // THE DRIVES THE OPEN GAVE PRICE SOMETHING (B.givenDrivesPrice, on the crews as they are now): the bar shows a price the draft does not hold, so init saves the open once (the pass-2 audit's
+    // A1). A line given empty, switched off or cleared moves no price, so such an open writes nothing, as a plain reopen never does; the next save writes the line.
+    drivesGiven = B.givenDrivesPrice(ordered, ROOT) > 0;
     show(openingTab());
   }
 
@@ -5423,6 +5433,10 @@
     show(openingTab());
     followSf = B.takeoffSf(M.takeoff);
     if (restructured) saveSoon();
+    // A COMBO SAVED UNDER THE ONE-DRIVE LAW WAS GIVEN A PRICED DRIVE ON OPEN (adopt, B.giveEveryBaseItsDrive, B.givenDrivesPrice): the page prices it, so the draft is behind what the page
+    // shows, and the Review's figures and the Proposal step read the draft's saved price (priced_tabs, proposal_lump_sum). Saved once here, as a restructure is, so the three say the same price
+    // (round 7, the pass-2 audit's A1: the bar showed $92,153 and Continue to proposal printed $90,422 until some edit saved). Left inside the save's debounce, the page's exit writes it (pagehide).
+    if (drivesGiven) saveSoon();
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
     // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the
