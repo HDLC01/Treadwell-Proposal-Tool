@@ -20,7 +20,8 @@ Wichita, 190 miles, four guys for twelve days: 4 x 6.5 x $33 = $858 (the version
 Also pinned here, each from an auditor's reproduction on the page harness: a figure the estimator typed OR CLEARED always
 wins (the typing leaves a marker on the row, saved with it); a switched-off row is left exactly as it is; a job type
 switched in the session fills the new carrier's blank row (B.followDistance); a bid saved before 2026-10-12 on the old
-man-days auto keeps them; and a saved bid never moves on open. The page-level half (the lookup landing over a box somebody
+man-days auto keeps them; and a saved bid never moves on open, but for a Combo saved under the one-drive law, which since round 7,
+part 4 opens with every base's drive and saves it once (the pass-2 audit's A1: test_polish_travel_round7_part4.py). The page-level half (the lookup landing over a box somebody
 is typing in, the notes, the Review, the Gyp wording) is in test_polish_estimate_page.py, test_epoxy_estimate_page.py and
 test_v2_gyp.py. Runs the real engine through travel-hours-harness.js.
 
@@ -702,11 +703,12 @@ def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_ba
     markers gone); one that says something else (typed 2 x 4) is the estimator's own choice and stays. (Every clause of "exactly" is pinned ALONE in
     test_a_copy_is_given_back_only_when_it_repeats_the_carriers_row_in_every_respect.)
 
-    ON A BASE (round 7, part 3: the round-7 audit's F1; part 4, P1). The copy made a base beside the carrier, settled as the page settles it (followDistance), gives the repeat back too, and
-    drives its OWN crew on the TRIP the estimator typed: 4 x 5 = $660 beside the carrier's typed 3 x 5 = $495 (Kyle's sheets carry the same trip on both crews, each its own guys). Round 7,
-    part 1 pinned $495 + $495 here, "a base keeps its own drive (D1)", and that was wrong: the copy's 3 guys are not that sheet's crew, they are the tool's copy (copySection marks it
-    `tool_copy`) of the one figure the estimator typed once, on the carrier's sheet. Part 3 gave the whole copy back and refilled it from the miles, 4 x 6.5 = $858, a trip nobody typed for
-    it; part 4 keeps the typed 5 hours (marked typed) and puts the guys on the copy's own crew of 4. A copy that says something else (2 x 4) does not repeat the carrier's and stays.
+    ON A BASE (round 7, part 3: the round-7 audit's F1). The copy made a base beside the carrier, settled as the page settles it (followDistance), gives the repeat back too, and drives
+    its OWN crew, filled from the miles: 4 x 6.5 = $858 beside the carrier's typed 3 x 5 = $495. Round 7, part 1 pinned $495 + $495 here, "a base keeps its own drive (D1)", and that was
+    wrong: the copy's 3 x 5 is not that sheet's drive, it is the tool's copy (copySection marks it `tool_copy`) of the one figure the estimator typed once, on the carrier's sheet, so it priced
+    one typed figure on two crews. Under Hanz's D1 of 2026-10-21 a base's own drive is its crew's size x the round trip unless the estimator typed it on THAT sheet. (Part 4's P1 kept the typed
+    5 hours on the copy, marked typed, 4 x 5 = $660: the pass-2 audit's A2 withdrew it, since no other way a base arrives beside a typed drive gives it the typed trip, and the copy went on
+    charging it on a local job.) A copy that says something else (2 x 4) does not repeat the carrier's and stays.
 
     Mutation: leave the repeat on its off section (BREAKS below); never give a copy on a base back (test_polish_travel_round7_part3.py)."""
     c = ran["copyRepeat"]
@@ -717,8 +719,7 @@ def test_a_repeat_of_the_carriers_typed_row_on_a_section_that_is_off_is_given_ba
     assert d["root"] == TYPED_ROOT and d["copy"]["guys"] == "2" and d["copy"]["hours"] == "4" and d["copy"]["cost"] == 2 * 4 * 33 and d["drive"] == 495
     b = c["base"]
     assert b["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
-    assert b["root"] == TYPED_ROOT and b["copy"] == dict(FILLED_FOUR, hours="5", cost=4 * 5 * 33) and b["copyMarks"]["hoursTyped"] is True and b["copyMarks"]["typed"] is False
-    assert b["copyMarks"]["keys"] == sorted(FILLED_KEYS + ["hours_typed"]) and b["drive"] == 495 + 4 * 5 * 33
+    assert b["root"] == TYPED_ROOT and b["copy"] == FILLED_FOUR and b["copyMarks"]["keys"] == FILLED_KEYS and b["drive"] == 495 + 858
     bd = c["baseDifferent"]
     assert bd["kinds"] == [["Polish", "base"], ["Copy1", "base"]]
     assert bd["root"] == TYPED_ROOT and bd["copy"]["guys"] == "2" and bd["copy"]["hours"] == "4" and bd["copy"]["cost"] == 2 * 4 * 33 and bd["drive"] == 495 + 2 * 4 * 33

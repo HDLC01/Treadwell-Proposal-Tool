@@ -15,8 +15,8 @@ the settling did not hold:
   sheetsTyped, ...    the Sheets walk with the estimator's say on the carrier's row first: a copy carries that row too, and made a base it must not price the drive twice.
   said                (round 7, part 3: the round-7 audit's F1) the sequences that copy the say onto a SECOND base, each after each of the five say-sos: far Polish, an Epoxy sheet
                       added and made the base (the job's one drive follows it as a copy), then Combo by the job type or by the pair; far Epoxy and a Polish sheet the same way; and a
-                      copy of the Polish sheet made the pair with Epoxy after the job's drive went to Epoxy. SAID_TWICE: what was said once of one crew is on one base;
-                      COPY_TRIP (round 7, part 4, P1): the copy given back keeps the trip, the hours and the rate the estimator typed, on its own crew's guys.
+                      copy of the Polish sheet made the pair with Epoxy after the job's drive went to Epoxy. SAID_TWICE: what was said once is on one base;
+                      COPY_REFILLED (the pass-2 audit's A2): the copy given back is given back whole and refilled by the rule on its own crew.
   typed@local, ...    the estimator's say on a 40 mile job, and on one whose distance could not be found (typed hours are priced there: typing lifts the grey).
   nightsTyped         (round 6, N4) the estimator's say on the job's NIGHTS: Lodging typed as 10 and Per Diem typed over and cleared, on the Labor step of the carrier, before any
                       switch. "Typed lines are the estimator's": through every sequence of job types and crews after it, on a far job, a 40 mile one and one with no distance, Lodging
@@ -85,10 +85,10 @@ def test_what_the_estimator_said_once_is_on_one_base_through_every_sequence_that
     Polish option keeps its own), then Combo by the intake's job type or by "Make Epoxy + Polish the base"; far Epoxy and a Polish sheet the same way; and a copy of the Polish sheet made the
     pair with Epoxy after the job's typed drive went to Epoxy. 20 sequences, 80 pages, every rule judged after every step and every Sheets action against a jsonb reload at four distance
     answers. Until this round each ended with the say on BOTH bases (SAID_TWICE in all 20: the Polish crew's typed 7 x 3.25 priced on the Epoxy crew too, +$1,505 in the audit's own bid); now
-    the tool's copy is given back and the base drives its own crew (Hanz's D1 of 2026-10-21), and the estimator's own row stays where the job's drive took it. SINCE PART 4 (P1) the copy given
-    back keeps the TRIP it held, the hours the estimator typed (the typed variant's 5) and the rate ($40), on its own crew's guys (COPY_TRIP), as Kyle's sheets carry the same trip on both crews;
-    SAID_TWICE judges what was said of one crew (the typed guys, a cleared box, the switch). A copy with no figure in its Hours box (a cleared box, or on a 40 mile job and one with no distance
-    a copy of a drive whose hours nobody typed) is given back empty, as a base's drive nobody typed is there."""
+    the tool's copy is given back and the base drives its own crew (Hanz's D1 of 2026-10-21), and the estimator's own row stays where the job's drive took it. The copy is given back WHOLE, at its
+    own default rate, and refilled by the rule (COPY_REFILLED), as every other way a base arrives beside a typed drive gives it, and SAID_TWICE judges the whole say (the typed guys and hours, a
+    cleared box, the switch, the rate). Part 4's P1 kept the trip on the copy, the hours the estimator typed and the rate (COPY_TRIP); the pass-2 audit's A2 withdrew it: one typed trip priced the
+    second crew two ways by the route, and the copy's hours, marked typed, were charged on a 40 mile job."""
     require_node()
     got = run("said" + where, 0)
     assert got["sequences"] == 20 and got["runs"] >= 80 and got.get("reloadJudged", 0) >= 50, "the walk was cut short: %r" % ({k: got.get(k) for k in ("sequences", "runs", "reloadJudged")},)

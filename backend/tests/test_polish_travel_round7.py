@@ -308,13 +308,14 @@ def test_a_line_added_on_an_option_made_one_of_a_pair_of_bases_leaves_the_other_
 
 # ── a Combo saved under the one-drive law (before round 7) ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 def test_a_combo_saved_under_the_one_drive_law_opens_with_the_epoxy_crews_own_drive(ran):
-    """A far Combo saved before round 7: the job's one drive on the Polish root, for the bigger crew (Epoxy's 5), and no Travel Labor line on the Epoxy sheet. Opened plainly, nothing is saved
-    or asked. Since round 7, part 4 (P4: the round-7 audit's F7, Hanz's D1 and "let them re-price") the Epoxy base is given its own drive on open, filled by the rule on its own crew (5 x 6.5), and
+    """A far Combo saved before round 7: the job's one drive on the Polish root, for the bigger crew (Epoxy's 5), and no Travel Labor line on the Epoxy sheet. Opened plainly, nothing is asked.
+    Since round 7, part 4 (P4: the round-7 audit's F7, Hanz's D1 and "let them re-price") the Epoxy base is given its own drive on open, filled by the rule on its own crew (5 x 6.5), and
     the root's drive reads the Polish crew's own 4 (the guys are kept in step with the crews on every open), so the page shows $52,956 + $39,197, the price of the same Combo bid since round 7, and
     the Epoxy sheet's Labor step draws its drive. Until part 4 nothing gave a saved bid a line on open, and the page showed $52,953 + $37,044 = $89,997 with the Epoxy crew's drive missing; the
-    one-drive law priced it at $53,378 + $37,044 = $90,422. The draft keeps what it was saved with until the next save (test_polish_travel_round7_part4.py holds the session and the reloads)."""
+    one-drive law priced it at $53,378 + $37,044 = $90,422. The open arms ONE save, so the draft, and the Proposal that reads it, holds the price the page shows (the pass-2 audit's A1;
+    test_polish_travel_round7_part4.py holds that save, the session and the reloads)."""
     o = ran["legacy"]["opened"]
-    assert o["quiet"] == {"armed": 0, "saves": 0}
+    assert o["quiet"] == {"armed": 1, "saves": 0}
     assert o["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": EPOXY_DRIVE}
     assert o["bid"] == {"root": 52956, "epoxy": 39197}
     assert o["epoxy"]["add"] is False and o["epoxy"]["none"] is None and o["epoxy"]["note"] == NOTE and o["epoxy"]["card"] is True

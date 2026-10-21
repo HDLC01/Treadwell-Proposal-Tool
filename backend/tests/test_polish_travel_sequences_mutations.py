@@ -7,9 +7,10 @@ that are off, the estimator's typed / cleared / switched-off row left on the old
 under one drive per base crew (D1) and a Gyp base filled (D2), and the entries after the third audit's break those: the one-drive law put back, a Gyp base left unfilled, a
 second drive carried onto a base that holds its own, and a base that stays a base handed the old base's typed drive. ROUND 7, PART 3 (the round-7 audit's F1) holds what the
 estimator said once to one base (SAID_TWICE), and its entries break that: the tool's copy never given back, the copies the pick and a Sheets copy make never marked as the
-tool's, the estimator's own row given back in place of the copy, and a copy given back that repeats no other base's row. ROUND 7, PART 4 changed two of the laws: the copy given back
-keeps the trip it held, the hours and the rate the estimator typed (COPY_TRIP; part 3 refilled it from the round trip and put its rate back), and a Gyp drive is a round trip for each
-mobilization on its card (FAR_BASES on a Gyp base, OPT_FOLLOWS on a copy of the Gyp sheet, every Gyp walk starting on two); the last entries break those.
+tool's, the estimator's own row given back in place of the copy, and a copy given back that repeats no other base's row. ROUND 7, PART 4 made a Gyp drive a round trip for each
+mobilization on its card (FAR_BASES on a Gyp base, OPT_FOLLOWS on a copy of the Gyp sheet, every Gyp walk starting on two). Its P1 (the copy given back keeping the trip the estimator typed on
+the other sheet, COPY_TRIP) was withdrawn by the pass-2 audit's A2: the copy is given back whole, at its own default rate, and refilled by the rule, as part 3 had it (COPY_REFILLED, and
+SAID_TWICE on the whole say again). The last entries break those.
 """
 import pytest
 
@@ -33,8 +34,8 @@ MARK_PICK = "    if (keep === true) travelRowsIn(to).forEach(markToolCopy);"
 MARK_COPY = "    travelRowsIn(body).forEach(markToolCopy);"
 ONLY_COPIES = '        if (!isToolCopy(r) || say === "") return;'
 ONLY_REPEATS = "        if (!repeats) return;"
-KEEP_TRIP = "    if (isBlank(row.days)) {"
-GIVEN_BACK = "    delete row.hand_added;"
+RELEASE = "    releaseTravelRow(row);"
+OWN_RATE = "    if (own !== null) row.rate = own;"
 TRIPS = '    var hours = trip === "" ? "" : trip * (trips === undefined ? 1 : trips);'
 OPTION_TRIPS = '        if (isTravelRow(r) && r.unit === "hours") followDistanceOnRow(model, r, rows, miles, true, driveTripsOf(e));'
 
@@ -86,11 +87,12 @@ BREAKS = {
         "js/bid-model.js", ONLY_COPIES, '        if (say === "") return;', "said", 0, {"OWNED", "PROMOTED"}),
     "a copy that repeats no other base's row is given back": (
         "js/bid-model.js", ONLY_REPEATS, "        void repeats;", "sheetsTyped", 3, {"OWNED"}),
-    # round 7, part 4 (P1: Kyle's sheets carry the same trip on both crews, each its own guys): the copy given back keeps the trip it held; (P2) a Gyp drive is a round trip for each mobilization
-    "a copy given back is refilled from the round trip (part 3's rule)": (
-        "js/bid-model.js", KEEP_TRIP, "    if (true) {", "said", 0, {"COPY_TRIP"}),
-    "a copy given back is put back to its own default rate (part 3's rule)": (
-        "js/bid-model.js", GIVEN_BACK, "    delete row.hand_added; row.rate = 33; delete row.rate_typed;", "said", 0, {"COPY_TRIP"}),
+    # the pass-2 audit's A2: the copy given back is given back whole and refilled by the rule (part 3's law; part 4's P1 kept the trip on it, marked typed); round 7, part 4 (P2): a Gyp drive is a
+    # round trip for each mobilization
+    "a copy given back keeps the trip it held (part 4's P1, withdrawn)": (
+        "js/bid-model.js", RELEASE, '    delete row.tool_copy; delete row.enabled; delete row.guys_typed; row.guys_auto = true; row.guys_follow = "crew";', "said", 0, {"COPY_REFILLED"}),
+    "a copy given back keeps the rate typed on its source": (
+        "js/bid-model.js", OWN_RATE, "    void own;", "said", 0, {"COPY_REFILLED", "SAID_TWICE"}),
     "a Gyp base's drive is one round trip whatever the mobilizations": (
         "js/bid-model.js", TRIPS, "    var hours = trip;", "far", 2, {"FAR_BASES"}),
     "a far answer gives a Gyp option one round trip whatever its own mobilizations": (

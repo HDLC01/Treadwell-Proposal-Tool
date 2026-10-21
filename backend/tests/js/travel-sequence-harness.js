@@ -98,15 +98,23 @@
  * The `said` mode walks the sequences that copy it there (SAID_SEQUENCES), for each of the five variants.
  *
  * ROUND 7, PART 4 (2026-10-21, the round-7 audit's remaining findings) changed three laws the walk judges, and the walk judges them as they are now:
- *   COPY_TRIP        (P1, part 3's F1 refined by Hanz's D1 evidence: Kyle's combo-like sheets carry the SAME trip on both crews, each its own guys) a copy the tool made that was given back when its
- *                    sheet became a base beside the base holding the say KEEPS THE TRIP it held: the hours, when its Hours box held a figure the estimator typed, and the rate they typed; its guys are
- *                    its own crew's, it is switched on, and it is the tool's copy no longer. SAID_TWICE now judges only what the say is of ONE CREW (CREW_SAY: the typed guys, a cleared box, the
- *                    switch), since the trip is meant to be on both bases; the rate variant's $40 is the trip's.
+ *   (P1, a copy given back KEEPING the trip the estimator typed on another sheet, judged by COPY_TRIP, with SAID_TWICE cut down to what was said of one crew, was WITHDRAWN by the pass-2 audit's
+ *                    A2, below: it priced one typed trip on the second crew by one route only, and froze it there.)
  *   ANSWER_OWNER     (P3) the x on the LAST base's drive of a job of several bases (every other base held no line before it) sets the job's answer (J), as the x on a single-base job's drive does,
  *                    and folds the sheets' answers into it (ANSWER_HELD lets those go with it); an x that leaves no base a line and does not say so is a violation.
  *   FAR_BASES, OPT_FOLLOWS  (P2) a Gyp section's drive is a round trip for each mobilization on its Gyp card (tripsOf, Kyle's B51 `=((B6*2)/60)*T28`), and every walk that starts from Gyp types 2
  *                    of them on its card first, so the rule is judged on a box somebody typed in (a copy of the sheet carries them; a Gyp section a later switch adds has one trip).
  * The answers' own sequences gained two (the x on both drives of a Combo, either order, then switches and Add), twenty-four now.
+ *
+ * THE PASS-2 AUDIT OF ROUND 7 (2026-10-21) put part 3's law back, and the walk judges it as a transition after every step:
+ *   COPY_REFILLED    (A2) a base whose line was the TOOL'S COPY of a say another base holds now has given it back WHOLE: nothing the estimator said on the other sheet stays on it (no box typed
+ *                    or cleared, switched on, its rate the line's own default), it is the tool's copy no longer and not an added line, and the distance on file refills it on its own crew
+ *                    (FAR_BASES judges the fill on a far job, LOCAL that it prices nothing on a short one): every way a base arrives beside a typed drive gives it the rule's drive. SAID_TWICE
+ *                    judges the whole say again (the typed guys AND hours, a cleared box, the switch, the rate). Part 4's COPY_TRIP had the copy KEEP the trip: by the pick and then the Combo
+ *                    the Epoxy crew drove 5 x 3.25 beside the Polish crew's typed 7 x 3.25, where the pair made at once, the intake's Combo and a new Combo gave it 5 x 6.5, and the copy's
+ *                    hours, marked typed, went on being charged on a 40 mile job.
+ *   (A1, a Combo saved under the one-drive law opening with every base's drive and SAVING it once, is no walk's: no walk makes that shape, and PLAIN_REOPEN holds every draft a walk makes to
+ *                    an open that arms no save. tests/test_polish_travel_round7_part4.py holds it.)
  *
  * THE SIXTH ROUND (2026-10-20, item C2) made every reopen go through the SERVER'S key order (js/_jsonb.js: the draft's jsonb column keeps no key order, so every object of a reopened blob
  * has its keys sorted by length and then by bytes), and added the one walk that had never been possible: a SESSION that does not reload. Every other walk starts each step from the draft
@@ -392,17 +400,6 @@ function variantHolds(name, r) {
   return false;
 }
 
-/** WHAT A VARIANT SAYS OF ONE CREW (round 7, part 4, P1: the copy given back keeps the trip the estimator typed and takes its own crew's guys): the part of the say that is that crew's alone
- *  and is never on a second base. The typed variant's guys (3, typed; its 5 hours are the trip), a cleared Hours box (no figure, so no trip: a copy of it is refilled), a cleared Guys box and the
- *  switch turned off (a copy given back is switched on). The rate variant's $40 is the trip's rate and says nothing of a crew. */
-const CREW_SAY = {
-  typed: (r) => r.guys === "3" && r.guys_typed === true,
-  clearHours: (r) => variantHolds("clearHours", r),
-  clearGuys: (r) => variantHolds("clearGuys", r),
-  off: (r) => r.enabled === false,
-  rate: null,
-};
-
 /** Every Travel Labor row of every sheet that is an option (and not the one that carries the job's travel), as it stands: the row's whole JSON, by the sheet and the row's place on
  *  it. What a distance step is compared against. A Gyp option is one of them since round 7 (D2: a Gyp drive fills like the others). */
 function optionRows(b) {
@@ -544,11 +541,11 @@ function judge(b, ctx) {
   if (ctx && ctx.variant && !f.entries.some((e) => travelRows(e.section).some((r) => variantHolds(ctx.variant, r)))) {
     note("OWNED", ctx.variant + " is on no sheet any more (carrier " + f.carrier + " holds " + fmtRow(travelRows(carrierEntry && carrierEntry.section)[0] || null) + ")");
   }
-  // SAID_TWICE (round 7, part 3: the round-7 audit's F1; part 4, P1): what the estimator said ONCE of a CREW is on ONE base. The walk says it once, on the carrier; a second base holding it holds
-  // the tool's copy of it (the job's one drive followed a base pick, or the sheet was copied), and that copy prices one crew's figure on a second crew's drive. The TRIP the estimator typed (the
-  // hours, a figure, and the rate) is the same for both crews, as Kyle's sheets carry it, so a copy given back keeps it (COPY_TRIP) and it is not judged here: see CREW_SAY.
-  if (ctx && ctx.variant && CREW_SAY[ctx.variant]) {
-    const holders = f.entries.filter((e) => e.kind === "base" && travelRows(e.section).some(CREW_SAY[ctx.variant]));
+  // SAID_TWICE (round 7, part 3: the round-7 audit's F1): what the estimator said ONCE is on ONE base. The walk says it once, on the carrier; a second base holding it holds the tool's copy
+  // of it (the job's one drive followed a base pick, or the sheet was copied), and that copy prices the one figure on a second crew's drive. The whole say: the typed guys and hours, a cleared
+  // box, the switch and the rate (part 4's P1 judged what was said of one crew only, the trip being kept on both: withdrawn by the pass-2 audit's A2).
+  if (ctx && ctx.variant) {
+    const holders = f.entries.filter((e) => e.kind === "base" && travelRows(e.section).some((r) => variantHolds(ctx.variant, r)));
     if (holders.length > 1) note("SAID_TWICE", ctx.variant + " is on " + holders.length + " bases: " + holders.map((e) => e.tab + " " + fmtRow(travelRows(e.section)[0])).join(", "));
   }
   return bad;
@@ -635,25 +632,19 @@ function judgeTransitions(b, parentSaved, got, ctx) {
     if (!byX && !byJob) note("ANSWER_OWNER", "the sheet " + c.tab + "'s sheet_no_travel_labor was set by " + stepLabel(step) + " (only the x on its drive, the job having two bases, sets it)");
   });
 
-  // ── COPY_TRIP (round 7, part 4, P1: part 3's F1 refined by Hanz's D1 evidence): a base whose line was the TOOL'S COPY of a say another base holds now has given it back, and the copy given back
-  // keeps the trip it held (Kyle's sheets carry the same trip on both crews, each its own guys): the hours, when its Hours box held a figure the estimator typed (a figure the tool wrote is FAR_BASES'
-  // to judge, and a box with no figure is given back empty and refilled), and the rate, when it was typed; its guys are ITS OWN crew's; it is switched on, and the tool's copy no longer.
+  // ── COPY_REFILLED (round 7, part 3's rule, put back by the pass-2 audit's A2): a base whose line was the TOOL'S COPY of a say another base holds now has given it back WHOLE. Nothing the
+  // estimator said on the other sheet stays on it (sayOf: no box typed or cleared, switched on, its rate the line's own default), it is the tool's copy no longer and not an added line, and the
+  // distance on file refills it on its own crew (FAR_BASES judges the fill on a far job, LOCAL that it prices nothing on a short one), as every way a base arrives beside a typed drive does.
   f.drives.forEach((e) => {
     const w = was(e.tab);
     const r0 = w ? travelRows(w.section)[0] || null : null;
     if (!r0 || !copyOfAnotherBases(e.tab, r0)) return;
     const r = travelRows(e.section)[0] || null;
     const at = e.tab + " (its line " + fmtRow(r0) + " was the tool's copy of another base's say)";
-    if (!r) { note("COPY_TRIP", at + " holds no line"); return; }
-    if (toolCopy(r)) { note("COPY_TRIP", at + " still holds the tool's copy " + fmtRow(r)); return; }
-    if (r.enabled === false) note("COPY_TRIP", at + " was given back switched off: " + fmtRow(r));
-    if (rateTyped(r0) ? String(Number(r.rate)) !== String(Number(r0.rate)) : rateTyped(r)) note("COPY_TRIP", at + " holds the rate " + r.rate + " where the copy's was " + r0.rate);
-    const typedFigure = !blank(r0.days) && (r0.hours_typed === true || !(typeof r0.days === "number" && r0.days === r0.hours_seed));
-    if (typedFigure) {
-      if (String(r.days) !== String(r0.days) || (r0.hours_typed === true && r.hours_typed !== true)) note("COPY_TRIP", at + " holds " + fmtRow(r) + ": the trip typed was " + r0.days + " hours");
-      const crew = ownCrewOf(m, e.section.labor);
-      if (!(r.guys_follow === "crew" && r.guys_auto === true && Number(r.guys) === crew)) note("COPY_TRIP", at + " holds " + fmtRow(r) + ": the guys are not its own crew of " + crew);
-    }
+    if (!r) { note("COPY_REFILLED", at + " holds no line"); return; }
+    if (toolCopy(r)) { note("COPY_REFILLED", at + " still holds the tool's copy " + fmtRow(r)); return; }
+    if (sayOf(r) !== "") note("COPY_REFILLED", at + " was given back still saying " + sayOf(r) + ": " + fmtRow(r) + " at $" + r.rate);
+    if (r.hand_added === true) note("COPY_REFILLED", at + " was given back still an added line: " + fmtRow(r));
   });
 
   // ── OWNED: what the estimator said, against the draft the step started from ──

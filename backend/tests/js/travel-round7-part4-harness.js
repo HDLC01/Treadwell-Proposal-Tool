@@ -2,7 +2,7 @@
 /* ROUND 7, PART 4 (2026-10-21): THE ROUND-7 AUDIT'S REMAINING FINDINGS, run on the REAL estimate page: js/polish-estimate.js, whole, booted the way polish-estimate-harness.js boots it, with the
  * REAL js/bid-model.js beneath it. Every fact below is read off the page after it ran (the model it held, the panels it drew, what it saved). Nothing is a source assertion. EVERY REOPEN IS A
  * JSONB REOPEN (tests/js/_jsonb.js): the draft comes back as the drafts table hands it. test_polish_travel_round7_part4.py holds each fact and breaks a COPY of the page or the model one line at a
- * time to prove each can change. (Part 3's F1, refined by P1, is held by travel-round7-part3-harness.js.)
+ * time to prove each can change. (Part 3's F1 is held by travel-round7-part3-harness.js, where part 4's P1 was withdrawn by the pass-2 audit's A2.)
  *
  *   mobs     P2 (F2): A GYP DRIVE IS A ROUND TRIP FOR EACH MOBILIZATION, as Kyle's Gyp travel line multiplies the round trip by them (Gyp (USG 1-8")!B51 `=((B6*2)/60)*T28`). Far Gyp
  *            (190 miles), crew 4 x 120 hours: the drive is 4 x 6.5 with the Mobilizations box blank and 4 x 19.5 with 3 typed; it follows the box both ways, moves with the miles (3 x 10 at
@@ -13,6 +13,10 @@
  *   legacy   P4 (F7): A FAR COMBO SAVED UNDER THE ONE-DRIVE LAW (its one drive on the carrier, no line and no answer on the Epoxy base) OPENS WITH THE EPOXY BASE'S DRIVE FILLED BY THE RULE (D1
  *            and "let them re-price"): the open, the session and a jsonb reload price two drives; the carrier keeps its own crew's drive. One whose Epoxy x was pressed (S) is left as it is.
  *            `guard`: the model handed the old shape without the open (B.followDistance alone) still carries the job's one drive to the one base left, on that base's crew.
+ *            THE PASS-2 AUDIT'S A1: the open SAVES what it gives (`openSave`, `leftAtOnce`: the timer, and the page left inside the debounce window), so the price the Review and the Proposal
+ *            read is the price the bar shows; and the job's one drive the estimator switched off, or whose Guys or Hours box they cleared, is said on the line the Epoxy base is given too, so no
+ *            drive they took away comes back (`said`: off, clearedHours, clearedGuys, beside `none`, the same bid with no drive at all, and `typed`, figures typed, which the Epoxy crew's own
+ *            drive does not take).
  *   addTarget P5 (F4): ADD TRAVEL LABOR PUTS THE LINE ON THE SHEET IT WAS PRESSED ON, though another sheet is put on show while the library answers.
  *   words    P6 (F5): AFTER THE x ON THE CARRIER'S OWN DRIVE OF A COMBO the carrier's Labor step says THIS SHEET has no Travel Labor line and that the Epoxy sheet keeps its own, never that the bid
  *            has none or that the drive adds nothing; after the x on both drives (J) it says the bid has none.
@@ -108,6 +112,19 @@ function marks(b, tab) {
   const r = rowIn(secOf(b.api.root(), tab));
   return r ? { auto: r.guys_auto === true, follow: r.guys_follow || null, seed: r.hours_seed === undefined ? null : r.hours_seed, typed: r.guys_typed === true || r.hours_typed === true,
     hand: r.hand_added === true } : null;
+}
+
+/** What one section's Travel Labor row says, box by box: its figures, its switch, and which box the estimator's hand is on. */
+function says(b, tab) {
+  const r = rowIn(secOf(b.api.root(), tab));
+  return r ? { guys: r.guys, hours: r.days, on: r.enabled !== false, guysTyped: r.guys_typed === true, hoursTyped: r.hours_typed === true, follow: r.guys_follow || null } : null;
+}
+
+/** The figure the bid bar shows, as a number (the whole job's lump sum on a bid of several sheets), or null when it shows none. */
+function barOf(b) {
+  const el = b.doc.getElementById("bid-total");
+  const n = el ? Number(String(el.textContent).replace(/[^0-9.]/g, "")) : NaN;
+  return isFinite(n) && n > 0 ? n : null;
 }
 
 /** Every price the page holds: the root sheet's own bid, each other section's, and what a save writes (the lump sum). A save is forced, so run it after everything else is read. */
@@ -235,6 +252,18 @@ async function pressAdd(b, tab) {
   return true;
 }
 
+/** The switch on the Travel Labor line of the section `tab`, flipped on its card. Answers whether the page drew it. */
+function flipDrive(b, tab) {
+  b.api.show(tab);
+  b.api.go(1);
+  const i = idxIn(secOf(b.api.root(), tab), "travel");
+  if (i < 0 || !has(b, '[data-on-lab="' + i + '"]')) return false;
+  P.clickOn(b, '[data-on-lab="' + i + '"]');
+  b.api.saveSoon();
+  b.clock.fire();
+  return true;
+}
+
 /** The miles typed on the Labor step of the sheet that carries the job's travel. */
 async function typeMiles(b, miles) {
   b.api.show(B.travelCarrier(b.api.root()));
@@ -282,18 +311,48 @@ async function section(name, fn) {
   try { out[name] = await fn(); } catch (e) { out[name] = { error: String((e && e.stack) || e) }; }
 }
 
-/** A FAR COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7): built from a Combo saved now, its Epoxy base's Travel Labor line taken off and the job's one drive on the Polish root for the bigger
- *  crew (Epoxy's 5), as the one-drive law left it. `extra` is put on the Epoxy section (its own answer, for one), and `miles` is the distance it was saved on. */
-async function oneDriveCombo(extra, miles, polishCrew) {
+/** WHAT THE ESTIMATOR SAID ON THE JOB'S ONE DRIVE of a Combo saved under the one-drive law, said on the Polish carrier's card by the page itself before the Epoxy line is taken off: the switch flipped
+ *  off, the Hours box cleared, the Guys box cleared, 7 guys x 3.25 hours typed; and `removed`, the x on it (the job's answer, J), which the one-drive law left as no line at all. */
+const ONE_DRIVE_SAYS = {
+  off: (b) => flipDrive(b, B.ROOT_TAB),
+  clearedHours: (b) => typeDrive(b, B.ROOT_TAB, { hours: "" }),
+  clearedGuys: (b) => typeDrive(b, B.ROOT_TAB, { guys: "" }),
+  typed: (b) => typeDrive(b, B.ROOT_TAB, { guys: "7", hours: "3.25" }),
+  removed: (b) => pressX(b, B.ROOT_TAB),
+};
+
+/** A FAR COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7): built from a Combo made now, its Epoxy base's Travel Labor line taken off and the job's one drive on the Polish root for the bigger
+ *  crew (Epoxy's 5), as the one-drive law left it, and SAVED THAT WAY BY THE PAGE, so the draft holds the one-drive price (its lump sum and each sheet's total, which the Review and the Proposal
+ *  read) as a Combo saved before round 7 does: far Polish 4 x 12 and Epoxy 5 x 12 at 190 miles, $90,422. `extra` is put on the Epoxy section (its own answer, for one), `miles` is the distance it
+ *  was saved on, and `say` (ONE_DRIVE_SAYS) is what the estimator said on the job's one drive before it was saved. */
+async function oneDriveCombo(extra, miles, polishCrew, say) {
   const crew = polishCrew || CREW_POLISH;
   const b = await newBid(COMBO(), [crew, CREW_EPOXY], miles === undefined ? FAR : AT(miles));
-  const saved = clone(b.store.blob);
-  const pe = saved.polish_estimate;
-  pe.tabs.Epoxy.labor = pe.tabs.Epoxy.labor.filter((r) => !(r && r.id === "travel"));
-  // the one drive was the bigger crew's
-  pe.labor.filter((r) => r && r.id === "travel").forEach((r) => { r.guys = Math.max(Number(crew[2]), Number(CREW_EPOXY[2])); });
-  Object.assign(pe.tabs.Epoxy, extra || {});
-  return saved;
+  if (say) await ONE_DRIVE_SAYS[say](b);
+  const m = b.api.root();
+  m.tabs.Epoxy.labor = m.tabs.Epoxy.labor.filter((r) => !(r && r.id === "travel"));
+  // the one drive was the bigger crew's (a Guys box the estimator typed in, or cleared, holds what they left)
+  m.labor.filter((r) => r && r.id === "travel" && r.guys_follow === "crew").forEach((r) => { r.guys = Math.max(Number(crew[2]), Number(CREW_EPOXY[2])); });
+  // the x on the job's one drive was the JOB's answer: the one-drive law left no line and no answer on any sheet
+  if (say === "removed") { delete m.sheet_no_travel_labor; m.no_travel_labor = true; }
+  Object.assign(m.tabs.Epoxy, extra || {});
+  b.api.saveSoon();
+  b.clock.fire();
+  return clone(b.store.blob);
+}
+
+/** THE OPEN OF A COMBO SAVED UNDER THE ONE-DRIVE LAW, as the estimator meets it (the pass-2 audit's A1): what the page armed and showed before anything ran, what the open saved once its timer
+ *  ran (the price the Review and the Proposal read), a jsonb reload of that, and 300 miles typed after it. */
+async function openOneDrive(saved) {
+  const o = await reopen(saved);
+  const opened = { armed: o.clock.armed(), saves: o.rec.saves.length, bar: barOf(o), rows: driveRows(o), polish: says(o, B.ROOT_TAB), epoxy: says(o, "Epoxy"), answers: answers(o) };
+  o.clock.fire();
+  const kept = { saves: o.rec.saves.length, lump: lumpOf(o.store.blob) };
+  const r = await reopen(clone(o.store.blob));
+  const reloaded = { quiet: { armed: r.clock.armed(), saves: r.rec.saves.length }, bar: barOf(r), rows: driveRows(r), epoxy: says(r, "Epoxy") };
+  await typeMiles(r, 300);
+  const at300 = { rows: driveRows(r), bar: barOf(r) };
+  return { opened: opened, kept: kept, reloaded: reloaded, at300: at300 };
 }
 
 async function main() {
@@ -405,6 +464,18 @@ async function main() {
     const o = await reopen(saved);
     const opened = { quiet: { armed: o.clock.armed(), saves: o.rec.saves.length }, rows: driveRows(o), answers: answers(o), marks: marks(o, "Epoxy"),
       bid: { root: o.api.bid().total, epoxy: (o.api.sectionBids().Epoxy || {}).total }, epoxy: await laborFacts(o, "Epoxy") };
+    // THE OPEN SAVES WHAT IT GIVES (the pass-2 audit's A1): nothing typed, the save the open armed runs, and the draft holds the price the bar shows, which is what the Review and the Proposal
+    // read; and the page left at once (Continue to proposal inside the debounce window) writes it on the way out.
+    const shown = barOf(o);
+    o.clock.fire();
+    const openSave = { bar: shown, saves: o.rec.saves.length, lump: lumpOf(o.store.blob), pricedTabs: (o.store.blob.priced_tabs || []).map((t) => [t.id, t.kind, t.total]) };
+    const quick = await reopen(saved);
+    const quickBar = barOf(quick);
+    quick.win.fire("pagehide");
+    const leftAtOnce = { bar: quickBar, flushed: quick.rec.flushed, saves: quick.rec.saves.length, lump: lumpOf(quick.store.blob) };
+    // WHAT THE ESTIMATOR SAID ON THE JOB'S ONE DRIVE (the pass-2 audit's A1): switched off, its Hours or Guys box cleared, figures typed; and the same bid with no drive at all (the x)
+    const said = {};
+    for (const k of ["off", "clearedHours", "clearedGuys", "typed", "removed"]) said[k] = await openOneDrive(await oneDriveCombo(undefined, undefined, undefined, k));
     // the session goes on (the crew retyped) and saves; a jsonb reload of what it saved, and of the draft as it was saved under the one-drive law, price the same
     typeCrew(o, "Epoxy", "epoxy-install", "5", "12");
     const session = state(o);
@@ -430,7 +501,7 @@ async function main() {
     const kinds = B.sectionKinds(m0);
     const m1 = B.sectionsForJob(m0, "epoxy", { rules: [] });
     B.followDistance(m1, B.ROOT_TAB, kinds);
-    return { opened: opened, session: session, sessionReloaded: { quiet: r.quiet, state: state(r) }, savedReloaded: state(again),
+    return { opened: opened, openSave: openSave, leftAtOnce: leftAtOnce, said: said, session: session, sessionReloaded: { quiet: r.quiet, state: state(r) }, savedReloaded: state(again),
       toEpoxy: state(e), toPolish: state(p), sheetSaid: sheetSaid, local: local, guard: { rows: rowsOf(m1), answers: answersOf(m1) } };
   });
 

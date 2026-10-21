@@ -12,19 +12,22 @@
  * THE RULE (round 7, part 3). A Travel Labor row the TOOL copied (the job's one drive following a base pick while the old base keeps its own, or a Sheets copy of a sheet) is marked as the tool's copy
  * (`tool_copy`), and the mark goes the moment the estimator types in the row (its Guys, Hours or Rate box). When a sheet becomes a base beside another base and a base's row is the tool's copy of what
  * the other base's row says (the same typed or cleared guys and hours, typed rate and switch), the copy is GIVEN BACK and the base drives its own crew (D1): one figure the estimator typed once is
- * priced on one base. Of two copies, the one on the sheet that became a base gives its back. SINCE PART 4 (P1, from Hanz's D1 evidence: Kyle's combo-like sheets carry the SAME trip on both crews,
- * each its own guys, "Epoxy trv 4x4; Polish trv 6x4") the copy given back KEEPS the trip the estimator typed, the hours (a figure, not a cleared box) and the rate, and takes its own sheet's crew
- * for the guys; a copy whose hours were not typed is refilled from the miles as part 3 refilled every copy. The sections:
- *   picked     the finding, by the intake's job type and by the pair made on the Sheets panel: Polish keeps 7 x 3.25, Epoxy is its own crew of 5 on the same typed trip, 5 x 3.25 = $536.25, the bid
- *              priced exactly as the pair made at once with that trip typed on the Epoxy drive (`direct`, where the Epoxy sheet was never handed a copy; `filled` is it before the typing)
+ * priced on one base. Of two copies, the one on the sheet that became a base gives its back. The copy given back is EMPTY AND NOBODY'S, at its line's own default rate, and the distance on file
+ * refills it on its own crew, like every base's drive nobody typed on. (Part 4's P1 kept the trip the estimator typed on the copy given back, its hours marked typed and its rate; the pass-2 audit's
+ * A2 found that it priced one typed trip on the Epoxy crew by one route only, the pick and then the Combo, where the pair made at once, the intake's Combo and a new Combo gave that crew the rule's
+ * trip, and that it froze hours nobody typed on that sheet, so a local job went on charging them. Withdrawn: every way a base arrives beside a typed drive gives it the rule's drive.) The sections:
+ *   picked     the finding, by the intake's job type and by the pair made on the Sheets panel: Polish keeps 7 x 3.25, Epoxy is its own crew of 5 on the rule's round trip, 5 x 6.5 = $1,072.50, the
+ *              bid priced exactly as the same sheets made the pair at once (`direct`, the natural oracle: the Epoxy sheet never handed a copy, and nothing typed on it)
+ *   routes     the pass-2 audit's A2: the intake's job type Combo straight from the typed Polish bid, and a new Combo whose Polish drive is typed, give the Epoxy crew the same drive; and the
+ *              pick-then-Combo and the pair made at once follow 300 miles and then a local 40 alike (the Epoxy crew's drive moves, then is taken back; the typed one stays)
  *   epoxyFirst far Epoxy typed, a Polish sheet added and made the base, then the pair
  *   sheetCopy  far Polish typed, the sheet copied, the job made Epoxy (the typed drive goes with it), then the copy and Epoxy made the pair: the copy gives its repeat back
  *   copyAlone  a copy made the base by itself keeps the typed row, as its source prices; and beside an Epoxy base that does not hold it, it keeps it still
  *   handTyped  a far Combo whose two drives the estimator typed alike, on each sheet (4 x 4), keeps both through a pick and the pair again: no copy, nothing given back
  *   retyped    the estimator types in the Epoxy base's copy before the Combo: it is theirs on that sheet, and stays
- *   hoursOnly  only the hours typed (the guys on the crew): the copy given back keeps them (part 3 refilled them from the miles)
- *   noTrip     no hours typed (the guys alone, a rate alone, the Hours box cleared): the copy given back is refilled from the miles on its own crew, and a typed rate stays with it
- *   rated      the rate typed ($40) as well: the copy given back keeps the $40 with the trip (part 3 put it back to its own default, $33); typed again on the copy, it stays at $40
+ *   hoursOnly  only the hours typed (the guys on the crew): the copy given back is refilled from the miles, its hours the rule's
+ *   noTrip     no hours typed (the guys alone, a rate alone, the Hours box cleared): the copy given back is refilled from the miles on its own crew, at its own default rate
+ *   rated      the rate typed ($40) as well: the copy given back is filled at its own default rate ($33); typed again on the copy, it is the estimator's there and stays at $40
  *   twoCopies  two copies on the two bases (an Epoxy drive copied to a Polish sheet, then to a second Epoxy sheet): the one on the sheet that became a base gives its repeat back
  *   fillCopied the distance's own fill copied by the pick: nothing the estimator said, so it is not marked, and each crew drives its own
  *   diverged   the original changed after the pick (other guys, other hours, another rate, switched off): the copy says something no other base says, and stays
@@ -292,6 +295,17 @@ async function pickedBid(say) {
 }
 const TYPED = { guys: "7", hours: "3.25" };
 
+/** THE NATURAL PAIR (the pass-2 audit's A2): far Polish 4 x 12, its Travel Labor typed 7 x 3.25, an Epoxy sheet added with its crew 5 x 12, and "Make Epoxy + Polish the base" at once: the Epoxy
+ *  sheet is never handed a copy of the typed drive, and nothing is typed on it. */
+async function directPair() {
+  const d = await newBid(POLISH(), [["Polish", "polishing", "4", "12"]]);
+  typeDrive(d, B.ROOT_TAB, TYPED);
+  await addSheet(d, "Epoxy");
+  typeCrew(d, "Epoxy", "epoxy-install", "5", "12");
+  await makeBase(d, "combined");
+  return d;
+}
+
 /** The end of a path, as a test reads it: the page's state, the marks on the named sections' rows, and the same after a jsonb reload (and whether the reload armed a save). */
 async function ending(b, tabs) {
   const mk = Object.fromEntries(tabs.map((t) => [t, marks(b, t)]));
@@ -323,17 +337,37 @@ async function main() {
     const p = await pickedBid(TYPED);
     await makeBase(p, "combined");
     const pair = await ending(p, [B.ROOT_TAB, "Epoxy"]);
-    // THE ORACLE (round 7, part 4, P1): the pair made at once from the Polish base, the Epoxy sheet never handed a copy (it is given its own line, filled on its own crew), and the estimator
-    // typing the Polish crew's trip, 3.25 hours, into the Epoxy drive's Hours box: the same trip for both crews, each its own guys, as Kyle's combo-like sheets carry it
-    const d = await newBid(POLISH(), [["Polish", "polishing", "4", "12"]]);
-    typeDrive(d, B.ROOT_TAB, TYPED);
-    await addSheet(d, "Epoxy");
-    typeCrew(d, "Epoxy", "epoxy-install", "5", "12");
-    await makeBase(d, "combined");
-    const filled = { rows: driveRows(d), marks: marks(d, "Epoxy") };
-    typeDrive(d, "Epoxy", { hours: TYPED.hours });
+    // THE ORACLE (the pass-2 audit's A2: the natural pair, nothing typed on it): the same sheets made the pair at once from the Polish base, the Epoxy sheet never handed a copy (it is given its
+    // own line, filled on its own crew)
+    const d = await directPair();
     const direct = await ending(d, [B.ROOT_TAB, "Epoxy"]);
-    return { afterPick: afterPick, combo: combo, epoxyLabor: epoxyLabor, at300: at300, pair: pair, filled: filled, direct: direct };
+    return { afterPick: afterPick, combo: combo, epoxyLabor: epoxyLabor, at300: at300, pair: pair, direct: direct };
+  });
+
+  // ═══ EVERY ROUTE TO THE PAIR (the pass-2 audit's A2): the Epoxy crew's drive beside the typed Polish one is the same whichever way the Epoxy base arrived ═══════════════════════════════
+  await section("routes", async () => {
+    // the intake's job type Combo straight from the typed Polish bid (the Epoxy section is new: the library seeds it)
+    const i = await newBid(POLISH(), [["Polish", "polishing", "4", "12"]]);
+    typeDrive(i, B.ROOT_TAB, TYPED);
+    const ic = await switchJob(i, "combo");
+    typeCrew(ic, "Epoxy", "epoxy-install", "5", "12");
+    ic.api.saveSoon();
+    ic.clock.fire();
+    const intake = await ending(ic, [B.ROOT_TAB, "Epoxy"]);
+    // a new Combo, the trip typed on the Polish drive alone
+    const f = await newBid(COMBO(), [["Polish", "polishing", "4", "12"], ["Epoxy", "epoxy-install", "5", "12"]]);
+    typeDrive(f, B.ROOT_TAB, TYPED);
+    const fresh = await ending(f, [B.ROOT_TAB, "Epoxy"]);
+    // the pick then the Combo, and the pair made at once, as the miles move: 300, then a local job (40)
+    const picked = await switchJob(await pickedBid(TYPED), "combo");
+    const pair = await directPair();
+    const miles = {};
+    for (const m of [300, 40]) {
+      await typeMiles(picked, m);
+      await typeMiles(pair, m);
+      miles[m] = { picked: state(picked), pair: state(pair), pickedMarks: marks(picked, "Epoxy"), pairMarks: marks(pair, "Epoxy") };
+    }
+    return { intake: intake, fresh: fresh, miles: miles };
   });
 
   // ═══ THE SAME FROM EPOXY: far Epoxy typed, a Polish sheet added and made the base, then the pair ═════════════════════════════════════════════════════════════════════════
@@ -406,8 +440,8 @@ async function main() {
     return Object.assign({ afterPick: afterPick }, await ending(c, [B.ROOT_TAB, "Epoxy"]));
   });
 
-  // ═══ NO TRIP TYPED (round 7, part 4, P1): a copy whose hours the estimator did not type is given back and refilled from the miles, as part 3 refilled every copy: the guys alone typed (7),
-  // a rate alone typed ($40: it stays with the copy), and the Hours box cleared (a cleared box is no trip) ═══════════════════════════════════════════════════════════════════════════════
+  // ═══ NO TRIP TYPED: a copy whose hours the estimator did not type is given back and refilled from the miles, as every copy is: the guys alone typed (7), a rate alone typed ($40: the
+  // copy is filled at its own default rate), and the Hours box cleared (a cleared box is that sheet's say, not the Epoxy crew's) ═══════════════════════════════════════════════════════
   await section("noTrip", async () => {
     const one = async (say) => {
       const b = await pickedBid(say);

@@ -506,8 +506,9 @@ async function main() {
   });
 
   // ═══ A COMBO SAVED UNDER THE ONE-DRIVE LAW (before round 7) ═══════════════════════════════════════════════════════════════════════════════════════════════════════
-  // The job's one drive sat on the carrier, for the bigger crew (Epoxy's 5 here), and the Epoxy sheet holds no Travel Labor line. Opened plainly, nothing is saved or asked, and since round
-  // 7, part 4 (P4) the Epoxy base is given its own drive on open, filled by the rule on its own crew (5 x 6.5): until then it offered Add Travel Labor and priced no drive. Switched to Epoxy,
+  // The job's one drive sat on the carrier, for the bigger crew (Epoxy's 5 here), and the Epoxy sheet holds no Travel Labor line. Opened plainly, nothing is asked, and since round
+  // 7, part 4 (P4) the Epoxy base is given its own drive on open, filled by the rule on its own crew (5 x 6.5), which the open saves once (the pass-2 audit's A1): until then it offered Add
+  // Travel Labor and priced no drive. Switched to Epoxy,
   // the Epoxy base keeps that drive, and the reload prices the same. Made Polish, the root keeps its own. (test_polish_travel_round7_part4.py holds the rest: the session, the reloads, a sheet
   // that said it has none, and the one-drive carry on a model that never went through the open.)
   await section("legacy", async () => {
