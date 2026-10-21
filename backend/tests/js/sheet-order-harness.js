@@ -23,6 +23,9 @@
  *                   base change and a job-type switch, compared with a reload after EVERY step.
  *   staleCopy       a copy made by a page that was still running the code from before this round (it copies a section whole, `seq` and all, so the copy holds its
  *                   source's place) is added to a saved bid: it opens right after its source, not in front of it because its id sorts first.
+ *   partlyStamped   (round 7, part 2, L5) a bid ONE of whose sheets says its place (Epoxy) and three of which do not (Gyp and two copies an older tab added): opened, every
+ *                   sheet's place is written down, nothing is saved on open, and the next save carries all four, so a reload keeps Gyp where it was.
+ *   gypCopyPreset   (round 7, part 2, L5) a COPY of the Gyp sheet that changes preset keeps its Copy<N> key and its place, third of four, in the session and after a reload.
  *   afterReload     a rename, a delete, a kind change (a base picked), a copy and a job switch, each made on a page opened on what the server returned, on a bid
  *                   whose sheets' places are not the order jsonb holds their keys in: none moves a sheet that was not meant to move. (In a session that never
  *                   reloaded the keys are in the order of the places, so a step that renumbered the sheets by their keys would move nothing there.)
@@ -352,6 +355,57 @@ async function main() {
     again.api.go(1);
     await settle();
     return { held: held, opened: opened, savedSeqs: Object.fromEntries(Object.keys(savedAgain.polish_estimate.tabs).map((id) => [id, savedAgain.polish_estimate.tabs[id].seq])), reload: facts(again, true) };
+  });
+
+  // ═══ partlyStamped: a bid some of whose sheets say their place and some do not (round 7, part 2, L5; the round-6 order audit's gap) ══════════════════════════════════
+  // A page that kept the order wrote Epoxy's place, and a tab still running the code from before it added Gyp and two copies with none: the draft holds Epoxy (1), Gyp, Copy1, Copy2, the last three
+  // with no place, in the order that page wrote them (the same browser's copy keeps it). Opened, the page writes the places down for EVERY sheet (withSectionOrder completes the stamping: its early
+  // return is for a bid whose every sheet already says its place, `ids.every`), nothing is saved on open, and its next save carries all four. jsonb hands the keys back as Copy1, Copy2, Epoxy, Gyp,
+  // so a save that left the three without a place would come back with Gyp moved to the end.
+  await section("partlyStamped", async () => {
+    const b = await newBid(epoxyDraft(), [["Epoxy", "epoxy-install", "4", "12"]]);
+    await addSheet(b, GYP_TAB);
+    await copySheet(b, "Epoxy");                          // Copy1
+    await copySheet(b, "Epoxy");                          // Copy2
+    b.clock.fire();
+    const saved = clone(b.store.blob);
+    const tabs = saved.polish_estimate.tabs;
+    [GYP_TAB, "Copy1", "Copy2"].forEach((id) => { if (tabs[id]) delete tabs[id].seq; });
+    const held = { keys: Object.keys(tabs), seqs: Object.fromEntries(Object.keys(tabs).map((id) => [id, tabs[id].seq === undefined ? null : tabs[id].seq])) };
+    const o = await carryOn(saved);
+    o.api.go(1);
+    await settle();
+    const quiet = { armed: o.clock.armed(), saves: o.rec.saves.length };
+    const stamped = Object.fromEntries(Object.keys(o.api.root().tabs || {}).map((id) => [id, o.api.root().tabs[id].seq === undefined ? null : o.api.root().tabs[id].seq]));
+    const res = await sessionAndReload(o, { label: "partlyStamped" });           // facts() forces a save: the draft is saved, then reloaded through the server
+    const savedTabs = (o.store.blob.polish_estimate || {}).tabs || {};
+    return Object.assign(res, { held: held, quiet: quiet, stamped: stamped, savedSeqs: Object.fromEntries(Object.keys(savedTabs).map((id) => [id, savedTabs[id].seq === undefined ? null : savedTabs[id].seq])) });
+  });
+
+  // ═══ gypCopyPreset: a COPY of a Gyp sheet that changes preset keeps its place (round 7, part 2, L5; the round-6 order audit's gap) ═════════════════════════════════════
+  // A copy keeps its Copy<N> key when its preset changes (moveSectionSheet writes the new sheet into the section and leaves the key), where the Gyp sheet itself is re-filed under the new
+  // sheet's key (lifecycle). A Gyp job, an Epoxy sheet added, the Gyp sheet copied (Copy1), the Epoxy sheet copied (Copy2); then Copy1's Gyp card moves it to Gyp (FR). It stays third.
+  await section("gypCopyPreset", async () => {
+    const b = await newBid(gypDraft(), [[GYP_TAB, "gyp-pour", "4", "12"]]);
+    await addSheet(b, "Epoxy");
+    const keysNow = () => Object.keys(b.api.root().tabs || {});
+    let held = keysNow();
+    await copySheet(b, GYP_TAB);
+    const gypCopy = keysNow().filter((k) => held.indexOf(k) < 0)[0] || null;
+    held = keysNow();
+    await copySheet(b, "Epoxy");
+    const epoxyCopy = keysNow().filter((k) => held.indexOf(k) < 0)[0] || null;
+    b.clock.fire();
+    const before = facts(b);
+    await openSheet(b, gypCopy);
+    b.api.go(0);
+    if (GYPT.tabs().indexOf(GYP_FR) >= 0 && b.doc.querySelector('[data-gyp="preset"]')) P.changeTo(b, '[data-gyp="preset"]', GYP_FR);
+    b.clock.fire();
+    const sheetOf = (page) => { const s = (page.api.root().tabs || {})[gypCopy]; return s ? s.sheet : null; };
+    const seqOf = (page) => { const s = (page.api.root().tabs || {})[gypCopy]; return s && s.seq !== undefined ? s.seq : null; };
+    const moved = { sheet: sheetOf(b), seq: seqOf(b) };
+    const res = await sessionAndReload(b, { doc: true, label: "gypCopyPreset" });
+    return Object.assign(res, { gypCopy: gypCopy, epoxyCopy: epoxyCopy, before: { order: before.order, kinds: before.kinds }, moved: moved });
   });
 
   // ═══ afterReload: a rename, a delete, a kind change, a copy and a job switch made on a page opened on what the server returned ═════════════════════════

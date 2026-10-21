@@ -36,7 +36,8 @@ HARNESS = TESTS / "js" / "sheet-order-harness.js"
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js", "js/proposal-review.js"]
-SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "staleCopy", "afterReload", "legacy", "model", "invariance"]
+SECTIONS = ["comboCopyBase", "epoxyAddPolish", "stripOrder", "documentOrder", "lifecycle", "staleCopy", "partlyStamped", "gypCopyPreset", "afterReload", "legacy", "model",
+            "invariance"]
 GYP = 'Gyp (USG 1-8")'
 GYP_FR = "Gyp (FR)"
 # What a page shows that depends on the order of the sheets, as the harness reads it. (Not `open`: a session is on whatever sheet the estimator was last
@@ -160,6 +161,38 @@ def test_a_gyp_sheet_that_changes_preset_keeps_its_place(ran):
     assert step["reload"]["order"] == step["session"]["order"], step["reload"]["order"]
 
 
+# ── round 7, part 2 (L5): the two shapes the round-6 order audit found no test held ─────────────────────────
+PARTLY_STAMPED = {"Epoxy": 1, GYP: 2, "Copy1": 3, "Copy2": 4}
+
+
+def test_a_bid_some_of_whose_sheets_say_no_place_has_every_place_written_down_when_it_opens(ran):
+    """A page that kept the order wrote Epoxy's place, and a tab running the code from before it added Gyp and two copies with none (the draft holds them in the order that tab wrote them). Opened, the
+    page writes down the place of EVERY sheet (withSectionOrder completes the stamping; its early return is only for a bid whose every sheet says its place), saves nothing on open, and its next save
+    carries all four places, so a reload lists the sheets exactly as the session did. jsonb hands the keys back as Copy1, Copy2, Epoxy, Gyp: a save that left the three without a place came back with
+    Gyp moved to the end.
+
+    Mutation: the early return taken when ANY sheet says its place (`ids.some`): the three are never stamped, and the reload moves Gyp."""
+    got = ran["partlyStamped"]
+    assert got["held"] == {"keys": ["Epoxy", GYP, "Copy1", "Copy2"], "seqs": {"Epoxy": 1, GYP: None, "Copy1": None, "Copy2": None}}, "not the shape the case needs: %r" % (got["held"],)
+    assert got["quiet"] == {"armed": 0, "saves": 0}
+    assert got["stamped"] == PARTLY_STAMPED and got["savedSeqs"] == PARTLY_STAMPED
+    assert got["session"]["order"] == ["Polish", "Epoxy", GYP, "Copy1", "Copy2"], got["session"]["order"]
+    assert differences(got["session"], got["reload"]) == []
+
+
+def test_a_copy_of_the_gyp_sheet_that_changes_preset_keeps_its_place(ran):
+    """A copy keeps its Copy<N> key when its preset changes (moveSectionSheet writes the new sheet into it), where the Gyp sheet itself is re-filed under the new sheet's key
+    (test_a_gyp_sheet_that_changes_preset_keeps_its_place). Gyp, Epoxy, Copy1 (the Gyp copy), Copy2 (an Epoxy copy): Copy1 moved to Gyp (FR) holds its place, third, in the session and after a reload.
+
+    Mutation: the copy's preset change drops its place."""
+    got = ran["gypCopyPreset"]
+    order = ["Polish", GYP, "Epoxy", "Copy1", "Copy2"]
+    assert (got["gypCopy"], got["epoxyCopy"]) == ("Copy1", "Copy2") and got["before"]["order"] == order, got["before"]
+    assert got["moved"] == {"sheet": GYP_FR, "seq": 3}
+    assert got["session"]["order"] == order and got["session"]["strip"] == order[1:], got["session"]
+    assert differences(got["session"], got["reload"]) == []
+
+
 def test_a_rename_moves_nothing(ran):
     before = [s for s in ran["lifecycle"]["steps"] if s["step"] == "copy Polish (Copy2)"][0]
     after = [s for s in ran["lifecycle"]["steps"] if s["step"] == "rename Copy1"][0]
@@ -216,12 +249,13 @@ def test_the_pure_steps_made_on_a_model_the_server_returned_move_no_sheet(ran):
 
 # ── nothing else depends on key order either ─────────────────────────────────────────────────
 def test_nothing_a_saved_draft_shows_or_does_depends_on_the_order_of_any_objects_keys(ran):
-    """Every draft the scenarios saved (eighteen of them: the pairs, the bar, the document, every step of the lifecycle, and a bid saved before the order was kept), opened with the keys of EVERY object in five orders (as saved,
+    """Every draft the scenarios saved (twenty of them: the pairs, the bar, the document, every step of the lifecycle, a bid saved before the order was kept, and since round 7, part 2 a bid some of
+    whose sheets said no place and a Gyp copy moved to another preset), opened with the keys of EVERY object in five orders (as saved,
     jsonb's, jsonb's reversed, two seeded shuffles): the sheets in order with their kinds, the carrier, the bases, the bar, every price, what the customer's document lists and the whole
     blob the page then saves are the same each time. The sheets under `tabs` were the only thing that read an object's key order (run the same check over a bid saved by 619f092 and the
     keys of `tabs` are the only ones whose order moves anything); this holds the rest of the draft to it."""
     got = ran["invariance"]
-    assert got["blobs"] >= 18 and got["compared"] >= 72, "the check was cut short: %r" % ({k: got[k] for k in ("blobs", "compared")},)
+    assert got["blobs"] >= 20 and got["compared"] >= 80, "the check was cut short: %r" % ({k: got[k] for k in ("blobs", "compared")},)
     assert got["differ"] == [], got["differ"][:5]
 
 
@@ -438,6 +472,8 @@ def test_a_list_is_read_only_when_no_sheet_says_its_place(ran):
     """One sheet that says its place makes the places the order (the others are newer, in key order); a bid that says every place is handed back as it is."""
     got = ran["model"]["priced"]
     assert got["partlyStamped"]["order"] == ["Polish", "Epoxy", "Copy2", GYP, "Copy1"], got["partlyStamped"]
+    # ...and every sheet of it has its place written down, not only the one that had one (round 7, part 2, L5: withSectionOrder's early return is for a bid that says EVERY place)
+    assert got["partlyStamped"]["seqs"] == {"Epoxy": 1, "Copy2": 2, GYP: 3, "Copy1": 4} and got["partlyStamped"]["same"] is False, got["partlyStamped"]
     assert got["allStamped"]["same"] is True and got["allStamped"]["order"] == ["Polish", "Epoxy", "Copy1", "Copy2", GYP], got["allStamped"]
 
 
@@ -492,6 +528,7 @@ UNSTAMPED_LAST = "        return a.seq === null ? 1 : -1;                   // o
 UNSTAMPED_KEYS = "        if (a.seq === b.seq) return a.held - b.held;      // neither says its place: the order the keys are held in"
 BY_SEQ = "      if (a.seq !== b.seq) return a.seq - b.seq;"
 PRESET = "    var moved = Object.assign({}, out.tabs[fromTab], { profile: profile.stamp });"
+COPY_PRESET = "    if (COPY_ID.test(fromTab)) return withSectionPatch(model, fromTab, { sheet: toTab, profile: profile.stamp });"
 ADOPT = "    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);"
 SAVE_ON_OPEN = "    if (restructured) saveSoon();"
 HELD = ["Copy1", "Copy2", "Epoxy"]
@@ -528,6 +565,14 @@ MUTATIONS = {
     "a bid that is already stamped is stamped again": (
         MODEL, STAMPED_ALREADY, "    void ids;",
         lambda r: r["model"]["alreadyStampedSame"] is not True and r["model"]["stampedTwiceSame"] is not True),
+    # round 7, part 2 (L5): a bid some of whose sheets say no place, and a Gyp copy that changes preset
+    "a bid that says some places is left with the others unsaid": (
+        MODEL, STAMPED_ALREADY, "    if (ids.some(function (id) { return hasSeq(tabs[id]); })) return model;",
+        lambda r: r["partlyStamped"]["stamped"] != PARTLY_STAMPED and r["partlyStamped"]["savedSeqs"] != PARTLY_STAMPED
+        and differences(r["partlyStamped"]["session"], r["partlyStamped"]["reload"]) != [] and r["model"]["priced"]["partlyStamped"]["same"] is True),
+    "a Gyp copy that changes preset loses its place": (
+        MODEL, COPY_PRESET, "    if (COPY_ID.test(fromTab)) return withSectionPatch(model, fromTab, { sheet: toTab, profile: profile.stamp, seq: undefined });",
+        lambda r: r["gypCopyPreset"]["moved"]["seq"] is None and r["gypCopyPreset"]["session"]["order"] != r["gypCopyPreset"]["before"]["order"]),
     "a bid whose sections cannot be read is stamped": (
         MODEL, READABLE, "    void model;",
         lambda r: r["model"]["unreadable"] != {"same": True} and r["model"]["hostile"] != {"same": True, "strange": 5, "seqsUntouched": True}),
