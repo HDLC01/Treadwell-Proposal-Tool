@@ -2072,6 +2072,14 @@
     return "one " + plainNum(src.roundTrip) + " mile round trip at " + src.mph + " mph from the Olathe office";
   }
 
+  /** THE ROUND TRIPS A TRAVEL LABOR ROW'S HOURS ARE, AS THE PRICE USES THEM (round 7 polish, W2): the trips of hours the distance wrote (driveHoursSource: a Gyp section's mobilizations, 3 for the 19.5 hours
+   *  of three trips at 190 miles), and 1 for hours the estimator typed, a row the distance did not write and every other line, where the figure is the one trip they said. The summary of how the guys are
+   *  counted and the hint under a typed Guys box say it: they said "one round trip" over three. `model` is the whole model or the page's view of a section (driveHoursSource). Reads only. */
+  function driveTripsPriced(model, row) {
+    var src = driveHoursSource(model, row);
+    return src && src.trips > 1 ? src.trips : 1;
+  }
+
   /** Who the trip is charged to, in words, while Travel Labor's guys are on the crew's size: "for each of the 4 guys on the
    *  labor lines above". "" when the guys are typed (the note says so itself) or are the older man-days. `own`: the row is an
    *  option's, whose guys are the lines of its own section (crewWhere). */
@@ -2132,6 +2140,9 @@
       var n = num(row.guys);
       return "Most guys on one labor line above" + (n > 0 ? ": " + plainNum(n) : "") + ".";
     }
+    // A DRIVE OF SEVERAL ROUND TRIPS says how many (round 7 polish, W2): typed guys over the hours of three mobilizations are three round trips each, and "One round trip for each guy" read false under them.
+    var trips = isTravelRow(row) && !row.guys_auto ? driveTripsPriced(model, row) : 1;
+    if (trips > 1) return plainNum(trips) + " round trips for each guy, one for each mobilization.";
     if (isTravelRow(row) && !row.guys_auto) return "One round trip for each guy.";
     return manDaysHint(!!(row && row.guys_auto), travelManDays(rows));
   }
@@ -2523,7 +2534,9 @@
     // round trip each, and is never worded as man-days: those are the nights and days below, a different figure.
     if (crewFollow && tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
       // The lines of the sheet the row is on: every drive is its own crew's (round 7, D1), where a Combo's one drive was the bigger crew "of the base sheets".
-      lines.push("Guys = the most guys on any one labor line above (" + qty(tr.guys) + " now), one round trip each.");
+      // A DRIVE OF SEVERAL ROUND TRIPS says how many (round 7 polish, W2): the hours of three mobilizations are three round trips each, as the line above says.
+      var trips = driveTripsPriced(M, tr);
+      lines.push("Guys = the most guys on any one labor line above (" + qty(tr.guys) + " now), " + (trips > 1 ? qty(trips) + " round trips each, one for each mobilization" : "one round trip each") + ".");
     }
     // A LINE ON THE OLDER AUTO (a bid saved before 2026-10-12) is charged as it always was, the carrier's own rows: the sheet's count where its Polish root is priced by rev 2 (a fourth hand on the
     // joint-filler line, or a row paid more, makes that more than guys x days), guys x days otherwise. Its words are the carrier's alone.
