@@ -27,18 +27,24 @@ MUTATION tests at the end break a COPY of each source one line at a time and req
 """
 import pathlib
 import re
+import shutil
 
 import pytest
 
 import drafts
-from _golden_support import FRONTEND
+from _golden_support import FRONTEND, break_source
 from _node import last_json_line, require_node, run_node
 
 TESTS = pathlib.Path(__file__).resolve().parent
+ROOT = TESTS.parents[1]
 HARNESS = TESTS / "js" / "new-estimate-test-flag-harness.js"
-# What the harness reads from a frontend directory (a scratch copy for the mutation runs must hold all of it).
+INTAKE_HARNESS = TESTS / "js" / "polish-intake-harness.js"
+# What each harness reads from a frontend directory (they do not fall back to the real one), so that a scratch
+# copy that breaks ONE file can be completed with the rest.
 PAGE_FILES = ["shared.js", "polish-intake.html", "js/polish-intake.js", "js/polish-sandbox.js", "js/work-types.js",
               "js/intake-scope.js", "js/bid-model.js", "js/excel-math.js"]
+INTAKE_FILES = ["shared.js", "polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
+                "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 INTENT_KEY = "treadwell.proposal_tool.new_is_test"
 DIRECT = "editing it directly"            # showDirectNote(false): "... Estimating Tool v2 is editing it directly."
 COPY = "test copy"                        # showCopyNote: "You are editing a test copy. ..."
@@ -50,10 +56,22 @@ def run(frontend=FRONTEND):
     return last_json_line(proc.stdout)
 
 
+def run_intake(frontend=FRONTEND):
+    proc = run_node(INTAKE_HARNESS, frontend, timeout=600)
+    assert proc.returncode == 0, "the intake harness itself failed:\n" + proc.stderr[-1500:]
+    return last_json_line(proc.stdout)
+
+
 @pytest.fixture(scope="module")
 def ran():
     require_node()
     return run()
+
+
+@pytest.fixture(scope="module")
+def intake():
+    require_node()
+    return run_intake()
 
 
 # ── reading a run ────────────────────────────────────────────────────────────────────────────────────────
@@ -141,15 +159,15 @@ def test_the_estimate_page_the_harness_runs_is_the_real_ones_first_lines():
 
 
 # ══ T1: a fast Continue files the project ═══════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("flow", ["fast", "fastAfterAutosave"])
-def test_a_fast_continue_files_the_new_project_under_test(ran, flow):
+def test_a_fast_continue_files_the_new_project_under_test(ran):
     """THE DEFECT. Continue 100 ms after the last edit (nothing has been saved), and at 700 ms (the 600 ms autosave
     has run and the 2.5 s timer that sends it is armed): the project is filed under Test, nothing is forked, the
     intent is used up and the estimate page says it is editing the test project directly.
 
     Red on 59922bd: the project sits unfiled, est-1-beta exists, and the estimate page says "You are editing a
     test copy ... The real project ... is untouched in Active"."""
-    assert_filed_and_edited_directly(ran[flow], flow)
+    for flow in ("fast", "fastAfterAutosave"):
+        assert_filed_and_edited_directly(ran[flow], flow)
 
 
 def test_the_first_save_and_its_filing_are_answered_to_a_page_that_is_still_there(ran):
@@ -225,15 +243,30 @@ def test_a_save_that_fails_at_once_is_not_waited_out(ran):
 
 
 # ── what is never claimed ────────────────────────────────────────────────────────────────────────────────
-def test_a_filing_the_server_refused_is_not_reported_as_filed(ran):
-    """The server answers every filing with HTTP 500. The project is left unfiled, and no page says otherwise: the
-    estimate page is never on an unfiled project editing it as if it were a test, and never says "editing it
-    directly" about one."""
-    r = ran["failedFiling"]
+@pytest.mark.parametrize("mode", ["http500", "okfalse", "network"])
+def test_a_filing_the_server_would_not_do_is_not_reported_as_filed(ran, mode):
+    """The server will not file the project: HTTP 500, a 200 carrying {"ok": false} (how the route answers a caught
+    exception), or no network. The project is left unfiled, Continue still leaves at once, and no page says
+    otherwise: the estimate page is never on an unfiled project editing it as if it were a test, and never says
+    "editing it directly" about one. (It moves the estimator onto a copy, which is the sandbox's answer to a project
+    nobody has filed, and says so.)"""
+    r = ran["failedFiling"][mode]
     assert r["x"] is not None and r["x"]["is_test"] is None, describe(r)
     est = r["estimate"] or {}
     assert est.get("draftId") != r["id"] and DIRECT not in says(r), describe(r)
     assert COPY in says(r), "the estimate page does not say it moved the estimator onto a copy: " + describe(r)
+    assert len(r["navs"]) == 1 and r["navs"][0]["askedAt"] - r["continueAt"] < 1000, r["navs"]
+
+
+def test_a_filing_nobody_answers_does_not_trap_the_estimator_either(ran):
+    """The save is answered and the filing that follows it is not. Waiting is bounded for this too: the estimator is
+    on the estimate page within ten seconds of pressing Continue, the project is still unfiled, and nothing says
+    it is filed."""
+    r = ran["hangFiling"]
+    assert len(r["navs"]) == 1, "Continue never left the intake: %r" % r["navs"]
+    assert r["navs"][0]["askedAt"] - r["continueAt"] <= 10000, r["navs"][0]
+    assert r["x"] is not None and r["x"]["is_test"] is None, describe(r)
+    assert DIRECT not in says(r) and (r["estimate"] or {}).get("draftId") != r["id"], describe(r)
 
 
 def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
@@ -246,3 +279,110 @@ def test_a_real_project_is_copied_and_never_written_to_or_filed(ran):
     assert r["beta"] == {"is_test": True, "beta_sandbox_of": "real-1", "project_name": "Nearman Creek (beta test)"}
     assert r["draftOnOpen"] == "real-1-beta" and COPY in r["noteOnOpen"]
     assert (r["estimate"] or {}).get("draftId") == "real-1-beta" and r["intent"] is None
+
+
+# ══ the intake page alone: what Continue does with the answer to its save ═════════════════════════════
+def test_continue_saves_first_waits_for_the_answer_and_then_leaves(intake):
+    """The REAL onSubmit, lifted into tests/js/polish-intake-harness.js with a save the test answers BY HAND:
+    save() runs at once (the page's own copy is written before anything is waited for), nothing has been sent to
+    the estimate page while the save is out, the page's own bound is the only timer armed, and when the answer
+    comes Continue leaves for the estimate page on the right draft and clears the timer."""
+    c = intake["continueWaits"]
+    assert c["whileWaiting"] == {"navigated": 0, "savedFirst": 1, "flushes": 1, "armed": 1}, c["whileWaiting"]
+    assert c["afterAnswer"] == {"navigated": ["/polish-estimate.html?d=proj-1"], "armed": 0}, c["afterAnswer"]
+
+
+def test_continue_leaves_when_the_wait_is_over_however_it_ends(intake):
+    """Four endings the real flushState or the clock can produce. A save nobody answers is let go by the page's own
+    bound (and not before it); a save that failed (flushState answers false) and a save that threw (it never does,
+    so this is the page's own `catch`, which no other test reaches) both leave at once; and in all of them the
+    wait's timer is cleared."""
+    c = intake["continueWaits"]
+    assert c["neverAnswered"] == {"beforeBound": 0, "afterBound": ["/polish-estimate.html?d=proj-1"], "armedAfter": 0}, c["neverAnswered"]
+    assert c["failedSave"] == {"navigated": ["/polish-estimate.html?d=proj-1"], "armedAfter": 0}, c["failedSave"]
+    assert c["threw"] == {"navigated": ["/polish-estimate.html?d=proj-1"], "armedAfter": 0, "saved": True}, c["threw"]
+
+
+# ══ every check goes red when the code is changed ═════════════════════════════════════════════════════
+# Each entry breaks ONE line of ONE source in a scratch copy of the frontend, runs a harness on it, and the named
+# check (a test above, called on the broken run's answers) has to fail. break_source refuses an anchor that is not
+# there exactly once, so none of them can pass by applying nowhere; the harness runs outside the `raises`, so a
+# break that merely crashes it is an error and never counts as the check noticing.
+FLUSH_LINE = "        TW.flushState(),"
+BOUND_LINE = "        new Promise(function (resolve) { timer = setTimeout(resolve, SAVE_WAIT_MS); })"
+CLEAR_LINE = "    if (timer) clearTimeout(timer);"
+CATCH_LINE = "    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }"
+AWAIT_FILING_LINE = "        if (ok) await applyPendingTestIntent(id);"
+
+# name -> (harness, file, anchor line, what it becomes, the check)
+BREAKS = {
+    "Continue leaves without waiting for the save": (
+        "world", "js/polish-intake.js", FLUSH_LINE, "        Promise.resolve(true),",
+        test_a_fast_continue_files_the_new_project_under_test),
+    "Continue leaves without waiting for the save (the first PUT goes out as the page goes)": (
+        "world", "js/polish-intake.js", FLUSH_LINE, "        Promise.resolve(true),",
+        test_the_first_save_and_its_filing_are_answered_to_a_page_that_is_still_there),
+    "the save is waited for and the filing that follows it is not": (
+        "world", "shared.js", AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);",
+        test_a_slow_filing_is_waited_for),
+    "the answer depends on who is faster (the filing is not waited for)": (
+        "world", "shared.js", AWAIT_FILING_LINE, "        if (ok) applyPendingTestIntent(id);",
+        test_whatever_the_latencies_the_new_project_is_filed_and_never_forked),
+    "Continue waits for a save that never answers, for ever": (
+        "world", "js/polish-intake.js", BOUND_LINE, "        new Promise(function () {})",
+        test_a_server_that_never_answers_does_not_trap_the_estimator),
+    "Continue waits for a filing that never answers, for ever": (
+        "world", "js/polish-intake.js", BOUND_LINE, "        new Promise(function () {})",
+        test_a_filing_nobody_answers_does_not_trap_the_estimator_either),
+    "Continue does not wait for the save (the page alone)": (
+        "intake", "js/polish-intake.js", FLUSH_LINE, "        Promise.resolve(true),",
+        test_continue_saves_first_waits_for_the_answer_and_then_leaves),
+    "Continue's wait has no bound (the page alone)": (
+        "intake", "js/polish-intake.js", BOUND_LINE, "        new Promise(function () {})",
+        test_continue_leaves_when_the_wait_is_over_however_it_ends),
+    "Continue leaves its wait's timer armed": (
+        "intake", "js/polish-intake.js", CLEAR_LINE, "    void 0;",
+        test_continue_saves_first_waits_for_the_answer_and_then_leaves),
+    "a save that throws stops Continue": (
+        "intake", "js/polish-intake.js", CATCH_LINE, "    } catch (err) { return; }",
+        test_continue_leaves_when_the_wait_is_over_however_it_ends),
+}
+
+
+def _on_broken_tree(tmp_path, which, rel, old, new):
+    files = PAGE_FILES if which == "world" else INTAKE_FILES
+    frontend = break_source(tmp_path, rel, old, new, also=files)
+    if which == "intake":
+        # the intake harness parses the county table out of backend/reference_tax.py, beside the frontend
+        (tmp_path / "backend").mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / "backend" / "reference_tax.py", tmp_path / "backend" / "reference_tax.py")
+    return run(frontend) if which == "world" else run_intake(frontend)
+
+
+@pytest.mark.parametrize("name", sorted(BREAKS))
+def test_the_checks_go_red_when_the_code_changes(tmp_path, name):
+    require_node()
+    which, rel, old, new, check = BREAKS[name]
+    broken = _on_broken_tree(tmp_path, which, rel, old, new)
+    with pytest.raises(AssertionError):
+        check(broken)
+
+
+def test_the_unbroken_answers_pass_every_check_the_table_names(ran, intake):
+    """The other half: the same checks, called the same way, are green on the real code."""
+    real = {"world": ran, "intake": intake}
+    for which, _rel, _old, _new, check in BREAKS.values():
+        check(real[which])
+
+
+def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a_break():
+    named = {check.__name__ for *_, check in BREAKS.values()}
+    for must in (test_a_fast_continue_files_the_new_project_under_test,
+                 test_the_first_save_and_its_filing_are_answered_to_a_page_that_is_still_there,
+                 test_a_slow_filing_is_waited_for,
+                 test_whatever_the_latencies_the_new_project_is_filed_and_never_forked,
+                 test_a_server_that_never_answers_does_not_trap_the_estimator,
+                 test_a_filing_nobody_answers_does_not_trap_the_estimator_either,
+                 test_continue_saves_first_waits_for_the_answer_and_then_leaves,
+                 test_continue_leaves_when_the_wait_is_over_however_it_ends):
+        assert must.__name__ in named, "no break turns %s red" % must.__name__

@@ -685,9 +685,26 @@
     if (county) county.onDocumentClick(e);
   }
 
-  function onSubmit(e) {
+  async function onSubmit(e) {
+    var SAVE_WAIT_MS = 8000;                 // local, so that whatever lifts onSubmit by name takes it along
     if (e && e.preventDefault) e.preventDefault();
     save();                                  // synchronously, not on the 600ms timer
+    // WAIT FOR THE SAVE, ON THIS PAGE, BEFORE LEAVING (X1, staging 2026-10-21). save() only queues the draft's
+    // server save, and the assign() below used to follow it at once, so a project's first PUT went out through
+    // shared.js's pagehide handler (keepalive) and its reply reached no page: the call that files a NEW project
+    // under Test never ran, and the estimate page forked a "(beta test)" copy of the unfiled project. flushState
+    // sends the save now and resolves once it has been answered, and for a first save the filing after it too.
+    // BOUNDED: a server that never answers must not leave the button doing nothing, and past the bound this is
+    // what Continue always did (the estimate page's sandbox files what it finds unfiled). A save that FAILS
+    // answers false at once and is not waited out.
+    var timer = null;
+    try {
+      await Promise.race([
+        TW.flushState(),
+        new Promise(function (resolve) { timer = setTimeout(resolve, SAVE_WAIT_MS); })
+      ]);
+    } catch (err) { /* flushState reports a failed save as false; it does not throw */ }
+    if (timer) clearTimeout(timer);
     // withDraft, not a bare path: on a test copy the id shared.js has stored may still be the
     // REAL project's, and this button must carry the draft the page was actually editing.
     window.location.assign(TW.withDraft("/polish-estimate.html"));

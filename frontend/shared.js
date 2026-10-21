@@ -231,9 +231,17 @@
     } catch { return null; }
   }
 
+  /** File the project this browser started as a test (or as a real bid), now that its row exists, and
+   *  hand back the POST's promise so a caller can WAIT for the filing instead of racing it. The promise
+   *  never rejects, and it resolves at once when nothing was pending for `id`.
+   *
+   *  putDraft waits on it, which is the reason it is returned. keepalive lets the POST outlive a page
+   *  that is leaving, but surviving is not landing: the next page to read the row (the estimate page's
+   *  sandbox, which forks a project it finds unfiled) asks within a few hundred milliseconds, and on a
+   *  server that takes longer than that to file it found the project unfiled (X1, 2026-10-21). */
   function applyPendingTestIntent(id) {
     const want = pendingTestIntentFor(id);
-    if (want === null) return;
+    if (want === null) return Promise.resolve();
     // Cleared before the call, win or lose. A retry that outlived the page would fight whatever
     // the estimator has since chosen on the card, and filing is one click to redo.
     try { localStorage.removeItem(NEW_IS_TEST_KEY); } catch {}
@@ -246,13 +254,14 @@
       // keepalive because the first save often coincides with leaving the page: intake submits
       // and navigates straight to Estimate Review, and a plain fetch is cancelled on unload —
       // the PUT above carries it for exactly the same reason.
-      fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + "/test", {
+      return fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id) + "/test", {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ is_test: want }),
         keepalive: true,
       }).catch(() => {});
     } catch {}
+    return Promise.resolve();
   }
 
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
@@ -514,6 +523,10 @@
   // resend of "Hanz Company 123" pinned revision 2 to a draft two minutes older than the
   // base-bid change the estimator had just made, so the portal showed Epoxy as the base
   // and the PDF (regenerated from the live draft) showed Room 1. Both were "right".
+  //
+  // THE PROMISE ALSO COVERS THE FILING UNDER TEST that follows the first save of a new project
+  // (applyPendingTestIntent, awaited in the `.then` below): a caller that awaits the save leaves
+  // with the project filed, not with the request to file it still in flight.
   function putDraft(id, blob, keepalive = false) {
     try {
       // Taken as the body is, before anything can change the blob, so a stored write records
@@ -539,9 +552,6 @@
           ? await res.json().catch(() => null)
           : null;
         const ok = !!(res && res.ok) && !(body && body.ok === false);
-        // Only after the row exists: set_test_flag returns false on a missing draft, so filing
-        // before the first save would be a silent no-op and the project would stay in Active.
-        if (ok) applyPendingTestIntent(id);
         // Only for the draft this page is on: an evicted blob flushed to its own id must not
         // overwrite the marker of the draft being adopted in its place.
         //
@@ -551,6 +561,15 @@
         // still said Y — so X's record was gone, and the Files page then put the server's copy of
         // X over an edit of Kyle's that had not saved.
         if (ok && id === getDraftId() && getState()[STAMP] === id) markSynced(id, sent);
+        // Only after the row exists: set_test_flag returns false on a missing draft, so filing
+        // before the first save would be a silent no-op and the project would stay in Active.
+        //
+        // AND WAITED FOR, so that this promise (and flushState, which hands it on) resolves once the
+        // project is saved AND filed. It comes after the record above on purpose: a slow filing
+        // delays this promise and nothing else. The v2 intake's Continue awaits it before it leaves,
+        // which is what puts the first save, and the filing that follows it, in front of a page that
+        // is still there to see the answer (X1).
+        if (ok) await applyPendingTestIntent(id);
         return ok;
       }).catch(() => false /* offline / backend down — local copy still safe */);
       _inFlight = p;
@@ -625,7 +644,9 @@
   }
 
   /** Wait until this draft's edits are on the server. Resolves true when the server holds
-   *  what this page shows, false if the write failed or was refused.
+   *  what this page shows, false if the write failed or was refused. For the first save of a new
+   *  project that includes the filing under Test (putDraft): a page that leaves right after this
+   *  leaves with the project saved and filed, which the v2 intake's Continue relies on.
    *
    *  Anything that makes the SERVER read the draft — publishing to the portal, generating
    *  files — must await this first. The debounce is 2.5s; a person who edits and clicks

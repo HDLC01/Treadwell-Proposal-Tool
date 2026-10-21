@@ -42,7 +42,9 @@
  *                       that boots at once or late): the answer must not depend on who is faster.
  *   hang                the first PUT is never answered: Continue must not trap the estimator on the page.
  *   offline             the first PUT fails at once (no network): Continue must not wait for anything.
- *   failedFiling        the server refuses to file (HTTP 500): the project is not claimed to be filed.
+ *   failedFiling        the server will not file the project, three ways (HTTP 500, a 200 carrying {"ok": false}, no
+ *                       network): the project is left unfiled and is not claimed to be filed.
+ *   hangFiling          the filing is never answered: Continue must not trap the estimator waiting for it either.
  *   realThroughIntake   a REAL project opened in the v2 intake: it is copied (the sandbox's whole job) and the real
  *                       row is never written to or filed, through Continue and onto the estimate page.
  *
@@ -207,7 +209,11 @@ async function realThroughIntake() {
   out.sweep = await sweep();
   out.hang = await newEstimate({ waitMs: 100, faults: [{ route: "PUT", mode: "hang", times: 1 }] });
   out.offline = await newEstimate({ waitMs: 100, faults: [{ route: "PUT", mode: "network", times: 1 }] });
-  out.failedFiling = await newEstimate({ waitMs: 100, faults: [{ route: "TEST", mode: "http500" }] });
+  out.failedFiling = {};
+  for (const mode of ["http500", "okfalse", "network"]) {
+    out.failedFiling[mode] = await newEstimate({ waitMs: 100, faults: [{ route: "TEST", mode: mode }] });
+  }
+  out.hangFiling = await newEstimate({ waitMs: 100, faults: [{ route: "TEST", mode: "hang", times: 1 }] });
   out.realThroughIntake = await realThroughIntake();
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

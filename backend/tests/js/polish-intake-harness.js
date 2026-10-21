@@ -422,7 +422,8 @@ function build(opts) {
     // The pagehide flush in wire() calls both of these. saveBlocked defaults to "answered" (null)
     // so every existing test keeps seeing a hidden #save-note unless a test opts into the
     // foreign-blob case via opts.saveBlockedReason -- mirrors the real shared.js contract.
-    flushState: () => { rec.flushed++; },
+    // `opts.flushState` is the answer to the save, handed over by a test that wants to hold it (Continue waits for it).
+    flushState: opts.flushState ? () => { rec.flushed++; return opts.flushState(); } : () => { rec.flushed++; },
     saveBlocked: () => (opts.saveBlockedReason || null),
   };
 
@@ -1016,6 +1017,66 @@ out.engineMoves = (function () {
       savedBeforeLeaving: b.rec.saves.length - n === 1,
       savedConditions: b.rec.saves.length > n
         ? !!b.rec.saves[b.rec.saves.length - 1].polish_estimate.conditions : false,
+    };
+  }
+
+  // ── Continue waits for the save to be answered, then leaves (X1) ────────────────────────────────
+  //
+  // onSubmit used to save and navigate in the same breath, so a project's first PUT left through shared.js's
+  // pagehide handler and no page ever saw its reply (tests/js/new-estimate-test-flag-harness.js runs that on the
+  // real shared.js). It now asks TW.flushState to send the save and leaves when it has been ANSWERED, or when the
+  // wait is over. Here the answer is given BY HAND, so the order is observable: nothing has gone while the save
+  // is out, the page's own bound timer is the only thing armed, and it is cleared once the page has left.
+  //
+  // The four ways a wait can end that the real flushState can produce are all here, and one it cannot: it
+  // answers true or false and never throws, so the throw is the page's own `catch`, which nothing else reaches.
+  {
+    const press = (b) => b.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "submit").map((l) => l.handler({ preventDefault() {} }));
+    const tick = () => new Promise((r) => setImmediate(r));
+    // Until the presses have finished, or a few turns of the event loop have gone by. A Continue that waits for
+    // ever must show up as a page that has not left, not as a harness that never prints anything.
+    const finished = async (presses) => {
+      let over = false;
+      Promise.all(presses).then(() => { over = true; });
+      for (let i = 0; i < 20 && !over; i++) await tick();
+      return over;
+    };
+
+    let answer = null;
+    const held = new Promise((r) => { answer = r; });
+    const b = build({ flushState: () => held });
+    await b.api.boot();
+    const savesBefore = b.rec.saves.length;
+    const pressed = press(b);
+    await tick();
+    const whileWaiting = { navigated: b.rec.navigated.length, savedFirst: b.rec.saves.length - savesBefore,
+                           flushes: b.rec.flushed, armed: b.clock.armed() };
+    answer(true);
+    await finished(pressed);
+    const afterAnswer = { navigated: b.rec.navigated.slice(), armed: b.clock.armed() };
+
+    const c = build({ flushState: () => new Promise(() => {}) });      // never answered
+    await c.api.boot();
+    const pressedC = press(c);
+    await tick();
+    const beforeBound = c.rec.navigated.length;
+    c.clock.fire();                                                    // the page's own wait, cranked by hand
+    await finished(pressedC);
+
+    const d = build({ flushState: () => Promise.resolve(false) });     // the save failed
+    await d.api.boot();
+    await finished(press(d));
+
+    const e = build({ flushState: () => Promise.reject(new Error("boom")) });
+    await e.api.boot();
+    await finished(press(e));
+
+    out.continueWaits = {
+      whileWaiting, afterAnswer,
+      neverAnswered: { beforeBound, afterBound: c.rec.navigated.slice(), armedAfter: c.clock.armed() },
+      failedSave: { navigated: d.rec.navigated.slice(), armedAfter: d.clock.armed() },
+      threw: { navigated: e.rec.navigated.slice(), armedAfter: e.clock.armed(), saved: e.rec.saves.length > 0 },
     };
   }
 
@@ -2130,9 +2191,10 @@ out.engineMoves = (function () {
     try { oldB.api.save(); } catch (e) { threw = String(e); }
     const oldSave = lastSave(oldB);
     // submit (Continue) with the blank name: onSubmit saves and navigates, no validity gate in JS.
+    // AWAITED since X1: onSubmit waits for the save (TW.flushState) before it navigates, so it is async.
     const subB = build({ blob: oldBlob, formValues: { project_name: "", bid_date: "" } });
     await subB.api.boot();
-    subB.api.onSubmit({ preventDefault() {} });
+    await subB.api.onSubmit({ preventDefault() {} });
     out.f5 = {
       oldBlob: { threw: threw, saved: !!oldSave, dateAfterBoot: dateAfterBoot,
         savedName: oldSave && oldSave.project_name,
