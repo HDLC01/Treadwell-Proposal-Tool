@@ -213,8 +213,47 @@ async function modelChecks() {
     out.outcomes = v.requestsLog().map((r) => r.id + ":" + r.outcome);
     return out;
   })();
+  // The budget is shared: two keepalive bodies that each fit but not together are not both sent (the second is refused on the spot while
+  // the first is in flight), a plain request has no share of it, the size is counted in UTF-8 BYTES (3-byte characters), and a share comes
+  // back once its request has been answered.
+  const budget = await (async () => {
+    const v = W.createWorld({ frontend: ROOT });
+    const p = v.load("/blank.html");
+    const out = {};
+    const body = (n, ch) => JSON.stringify({ data: { n: (ch || "x").repeat(n) } });
+    const send = (key, id, text, keepalive) => p.win.fetch("/api/draft/" + id, { method: "PUT", body: text, keepalive: keepalive })
+      .then(() => { out[key] = "sent"; }, (e) => { out[key] = String(e && e.message); });
+    const early = [send("first", "b1", body(40 * 1024), true), send("second", "b2", body(40 * 1024), true),
+                   send("plain", "b3", body(40 * 1024), false)];
+    // 30,000 three-byte characters are 30,000 characters long and 90,000 bytes: over the cap for the browser, under it for `.length`
+    const wide = body(30000, "€");
+    out.wideChars = wide.length;
+    out.wideBytes = Buffer.byteLength(wide, "utf8");
+    early.push(send("wide", "b4", wide, true));
+    await v.settle();
+    await Promise.all(early);
+    out.heldAfterReplies = p.keepaliveBytes;
+    const later = send("afterReply", "b5", body(40 * 1024), true);
+    await v.settle();
+    await later;
+    out.stored = Array.from(v.rows.keys()).sort();
+    return out;
+  })();
+  // A request the server is slow over finishes after one sent later (what "slow" is for).
+  const slow = await (async () => {
+    const v = W.createWorld({ frontend: ROOT });
+    const p = v.load("/blank.html");
+    v.fault({ route: "PUT", mode: "slow", ms: 500, times: 1 });
+    p.win.fetch("/api/draft/s1", { method: "PUT", body: JSON.stringify({ data: { n: 1 } }) });
+    p.win.fetch("/api/draft/s2", { method: "PUT", body: JSON.stringify({ data: { n: 2 } }) });
+    await v.settle();
+    const log = v.requestsLog();
+    return { doneAt: { s1: log[0].doneAt, s2: log[1].doneAt }, outcomes: [log[0].outcome, log[1].outcome] };
+  })();
   return {
     keepaliveCap: cap,
+    sharedBudget: budget,
+    slowRequest: slow,
     commitMs: w.net.commitMs,
     pageDiedAt: page.diedAt,
     earlyStored: w.rows.has("early"), earlyReplySeen: !!seen.early, earlyOutcome: outcome("early"),
@@ -951,7 +990,8 @@ async function wipedByAnotherTab(kind, startB, opts) {
   let pageB;
   if (startB === "v2") pageB = await w.startNewEstimate({ tab: tabB, hold: 100 });
   else pageB = await w.pressNewProject({ tab: "test", browserTab: tabB, hold: 100 });
-  const blobWiped = w.blob();
+  // as the other tab's press left it (the board's own press is followed by a navigation, a commit and a boot before its page exists)
+  const blobWiped = startB === "v2" ? pageB.blobAtStart : w.blob();
   // the other tab's estimator goes on to TYPE, so the shared blob is no longer empty: it is now ANOTHER project's, and this page's queued save
   // must not write it under this project's id (the page's own copy is lost with it, as it has always been when another tab has the keys)
   if (o.bTypes) {

@@ -34,7 +34,9 @@
  *   page that has gone is never seen by anyone; and a reply that comes back to a page that is still
  *   running, even one that has asked to leave, is. One more browser rule is modelled, because it is why a
  *   save sent as a page goes cannot be relied on for a big draft: a keepalive request whose body is over
- *   64 KiB is refused on the spot (TypeError: Failed to fetch) and nothing is sent.
+ *   64 KiB, or that would take the keepalive bodies its page already has in flight over 64 KiB between them
+ *   (the limit is one budget, not one allowance each), is refused on the spot (TypeError: Failed to fetch)
+ *   and nothing is sent. The size is the body's UTF-8 bytes, as the browser counts it, not its `.length`.
  *
  *   THE SERVER is the route contract of backend/main.py, nothing more: GET /api/draft/{id} (200, or 404
  *   when the row does not exist), PUT /api/draft/{id} (an upsert that INSERTS a new row as sent, so a first
@@ -44,12 +46,14 @@
  *   what its first save said (`born`), because "was it ever on the board unfiled" is a fact about its birth. It can be told
  *   to fail a route (`fault`): an HTTP 500, a 200 carrying {"ok": false} (which is how both /test and
  *   the save route answer a caught exception), a network error, no answer at all, a 200 that is not JSON
- *   (a proxy's error page) and a 200 that says the row is not there ({"ok": true, "existed": false}).
+ *   (a proxy's error page), a 200 that says the row is not there ({"ok": true, "existed": false}) and a request the
+ *   server is merely slow over ("slow", `ms` more), so that one request can finish after a later one.
  *
  * WHAT IS REAL. The page scripts (shared.js, js/polish-sandbox.js, js/polish-intake.js, and js/index.js, the
  * live intake) and the modules they read (work-types, intake-scope, bid-model, excel-math): every one is read
  * from the frontend directory the harness is given and run unchanged, and so is the body of js/projects.js's
- * "+ New project" click handler (world.pressNewProject lifts it out of the file and runs it). WHAT IS NOT:
+ * "+ New project" click handler (world.pressNewProject lifts it out of the file and runs it), js/portal.js's
+ * startNewProposal (world.pressNewProposal) and js/v2-board.js's startNew (world.startNewEstimate). WHAT IS NOT:
  * the DOM (a permissive tree of nodes, enough for these pages), the network, the address lookup index.js
  * mounts (a no-op), and two pages that are only as much of themselves as the facts need. The estimate page is
  * a copy of the first lines of polish-estimate.js's init() (see openEstimate): the real file is 5,000 lines of
@@ -298,7 +302,8 @@ function createWorld(cfg) {
     world.rows.set(id, { data: clone(data), created_at: stamp(), updated_at: stamp(),
                          born: { at: sim.now, is_test: flagOf(data) }, flips: [] });
   };
-  /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang"|"html"|"gone", id?, times? } */
+  /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang"|"html"|"gone"|"slow", id?, times?, ms? }
+   *  ("slow" does not fail it: the server takes `ms` longer over the requests it is handed to, and answers them as usual). */
   world.fault = (spec) => { world.faults.push(Object.assign({ times: Infinity, used: 0 }, spec)); };
 
   // ── fetch, per page ────────────────────────────────────────────────────────────────────────────────────
@@ -311,14 +316,28 @@ function createWorld(cfg) {
         sentAt: sim.now, outcome: "sent", status: null,
       });
       world.requests.push(req);
-      // A keepalive request whose body is over 64 KiB is refused on the spot, with "TypeError: Failed to fetch" and nothing sent
-      // (the browser's limit is 64 KiB of keepalive bodies in flight at once; this model refuses any single one over it, which
-      // is the case the real drafts hit: shared.js putDraft measured a real bid at about 89 KB). It is why a save sent as a page
-      // goes cannot be relied on for a big draft.
-      if (req.keepalive && req.body !== null && Buffer.byteLength(req.body, "utf8") > KEEPALIVE_CAP) {
-        req.outcome = "refused (keepalive body over 64 KiB)";
-        return Promise.reject(new TypeError("Failed to fetch"));
+      // A keepalive request is refused on the spot, with "TypeError: Failed to fetch" and nothing sent, when its body is over
+      // 64 KiB, and ALSO when it and the keepalive bodies its page already has in flight add up to more than that: the limit is
+      // one budget shared by every keepalive request in flight (the fetch spec's inflightKeepaliveBytes), not one allowance each.
+      // The first is the case the real drafts hit (shared.js putDraft measured a real bid at about 89 KB); the second is what two
+      // saves sent as a page goes do to a draft of half that size. It is why a save sent as a page goes cannot be relied on for a
+      // big draft, and why one page must send ONE.
+      if (req.keepalive && req.body !== null) {
+        const size = Buffer.byteLength(req.body, "utf8");
+        if (size > KEEPALIVE_CAP) {
+          req.outcome = "refused (keepalive body over 64 KiB)";
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        if (page.keepaliveBytes + size > KEEPALIVE_CAP) {
+          req.outcome = "refused (keepalive bodies in flight over 64 KiB)";
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        page.keepaliveBytes += size;
+        req.heldBytes = size;
       }
+      // The budget comes back when the request is over (answered, or lost to the network), not before: a request that never
+      // answers holds its share.
+      const release = () => { if (req.heldBytes) { page.keepaliveBytes -= req.heldBytes; req.heldBytes = 0; } };
       return new Promise((resolve, reject) => {
         const fault = faultFor(req);
         sim.at(net.up, () => {
@@ -326,12 +345,15 @@ function createWorld(cfg) {
           if (page.dead && !req.keepalive) { req.outcome = "aborted"; return; }
           if (fault && fault.mode === "network") {
             req.outcome = "network error";
+            release();
             if (!page.dead) reject(new TypeError("Failed to fetch"));
             return;
           }
           req.arrivedAt = sim.now;
           if (fault && fault.mode === "hang") { req.outcome = "hung"; return; }
-          sim.at(procMs[req.route] === undefined ? 10 : procMs[req.route], () => {
+          // "slow": the server takes `ms` longer over THIS request, so a later one can finish first (a request that is handed a
+          // fault says which: `times`, `id`).
+          sim.at((procMs[req.route] === undefined ? 10 : procMs[req.route]) + (fault && fault.mode === "slow" ? fault.ms : 0), () => {
             let res;
             if (fault && fault.mode === "http500") res = { status: 500, body: { detail: "boom" } };
             else if (fault && fault.mode === "okfalse") res = { status: 200, body: { ok: false, error: "Couldn't do that. Please try again." } };
@@ -341,6 +363,7 @@ function createWorld(cfg) {
             req.doneAt = sim.now;
             req.status = res.status;
             sim.at(net.down, () => {
+              release();
               if (page.dead) { req.outcome = "reply dropped"; return; }
               req.outcome = "replied";
               req.repliedAt = sim.now;
@@ -439,12 +462,14 @@ function createWorld(cfg) {
   }
   const mod = (rel) => require(path.join(frontend, rel));
 
-  /** Load a page: a new document in `opts.tab` (the first tab when none is named). */
+  /** Load a page: a new document in `opts.tab` (the first tab when none is named). `opts.standIn` marks a page that only stands for one
+   *  the model does not run (the board that starts a project): its leaving is not a fact about the flow under test, so it is not
+   *  recorded in `navs`. */
   world.load = (urlString, opts) => {
     const u = new URL(urlString, ORIGIN);
     const tab = (opts && opts.tab) || mainTab;
     const page = { n: ++pageCount, url: u.href, kind: kindOf(u.pathname), dead: false, leaving: false, bornAt: sim.now,
-                   diedAt: null, settled: null, settledAt: null, tab: tab };
+                   diedAt: null, settled: null, settledAt: null, tab: tab, keepaliveBytes: 0, standIn: !!(opts && opts.standIn) };
     page.label = page.kind + "#" + page.n;
     tab.page = page;
     page.win = makeWindow(page);
@@ -476,10 +501,14 @@ function createWorld(cfg) {
       runScript(page, "js/polish-intake.js");
     }
     if (page.kind === "v1intake") {
+      const html = read(path.join(frontend, "index.html"));
       const form = makeNode("form");
       form.id = "intake-form";
-      form.elements = formControls(read(path.join(frontend, "index.html")), "index.html");
+      form.elements = formControls(html, "index.html");
       page.nodes["intake-form"] = form;
+      // The beta door ("Continue with Estimating Tool v2") as the page ships it: its markup is what it must give back.
+      const door = /<button\b[^>]*\bid="beta-continue"[^>]*>([\s\S]*?)<\/button>/.exec(html);
+      if (door) { const b = makeNode("button"); b.id = "beta-continue"; b.innerHTML = door[1].trim(); page.nodes["beta-continue"] = b; }
       runScript(page, "js/index.js");
     }
     if (page.kind === "review") {
@@ -514,6 +543,20 @@ function createWorld(cfg) {
       page.form.fire("submit", {});
       return true;
     };
+    /** Press the live intake's "Continue with Estimating Tool v2" (the beta door): its own click handler. A disabled button does
+     *  nothing, and a press that finds it disabled answers false. */
+    page.pressBetaDoor = () => {
+      const b = page.nodes["beta-continue"];
+      if (!b) throw new Error("no beta door on " + page.label);
+      if (b.disabled) return false;
+      b.fire("click");
+      return true;
+    };
+    /** The beta door as a person sees it right now: disabled or not, what it says while it works (textContent), and its markup. */
+    page.betaDoor = () => {
+      const b = page.nodes["beta-continue"];
+      return b ? { disabled: !!b.disabled, saying: b.textContent, html: b.innerHTML } : null;
+    };
     /** Click a link: the browser is sent to `href`. */
     page.follow = (href) => world.navigate(page, href);
     page.text = (id) => page.el(id).textContent;
@@ -542,10 +585,13 @@ function createWorld(cfg) {
     if (page.dead || page.leaving) return;
     const target = new URL(String(href), page.url).href;
     // A browser that does not go (the load was stopped, a prompt was answered no): the page is still there, as it was.
-    if (world.navigationBlocked) { world.navs.push({ from: page.label, to: target, askedAt: sim.now, blocked: true, syncedAtAsk: local.getItem(KEYS.synced) }); return; }
+    if (world.navigationBlocked) {
+      if (!page.standIn) world.navs.push({ from: page.label, to: target, askedAt: sim.now, blocked: true, syncedAtAsk: local.getItem(KEYS.synced) });
+      return;
+    }
     page.leaving = true;
     // `syncedAtAsk`: the browser's record of what the server holds (SYNCED_KEY) at the moment the page asked to leave.
-    world.navs.push({ from: page.label, to: target, askedAt: sim.now, syncedAtAsk: local.getItem(KEYS.synced) });
+    if (!page.standIn) world.navs.push({ from: page.label, to: target, askedAt: sim.now, syncedAtAsk: local.getItem(KEYS.synced) });
     sim.at(net.commitMs, () => {
       if (page.dead) return;
       // pagehide runs on a page that still exists, and what it sends goes out as it goes.
@@ -569,20 +615,27 @@ function createWorld(cfg) {
   world.now = () => sim.now;
   world.localKey = (k) => local.getItem(KEYS[k] || k);
 
-  /** The board's "+ New estimate": the same keys js/v2-board.js startNew() clears so shared.js mints a new
-   *  draft id, then the intake page opens with no ?d=. From the GC tab the bid starts as a GC one, which startNew
-   *  does by leaving { audience: "GC" } behind (`opts.gc`). `opts.tab` is the browser tab it is pressed in (the first by
-   *  default). Resolves once the page has booted, with the clock run on to the end, unless `opts.hold` (ms) says to step it by that
-   *  much instead: another tab's timers (a queued save) are then left where they are, which is what a person's second click does. */
+  /** The v2 board's "+ New estimate", executed: the REAL startNew of js/v2-board.js, lifted out of the file and run on a page that has
+   *  shared.js loaded (the board's own page is not modelled), with `opts.gc` as the board's TAB (the GC tab leaves { audience: "GC" }
+   *  in the fresh draft; the Direct tab leaves nothing). It clears what makes shared.js mint a new draft id, records what the project is
+   *  started as, and sends the browser to the v2 intake with no ?d=. `opts.tab` is the browser tab it is pressed in (the first by
+   *  default). Resolves with the intake page once it has booted, with the clock run on to the end, unless `opts.hold` (ms) says to
+   *  step it that much past the intake's boot instead: another tab's timers (a queued save) are then left where they are, which is what
+   *  a person's second click does. (It used to copy what startNew did, so a line added to startNew was never run here.) */
   world.startNewEstimate = async (opts) => {
     const tab = (opts && opts.tab) || mainTab;
-    local.removeItem(KEYS.state);
-    local.removeItem(KEYS.draftId);
-    tab.session.removeItem(KEYS.guard);
-    if (opts && opts.gc) local.setItem(KEYS.state, JSON.stringify({ audience: "GC" }));
-    const page = world.load("/polish-intake.html", { tab });
-    await (opts && opts.hold ? world.advance(opts.hold) : world.settle());
-    return page;
+    const src = L.read(path.join(frontend, "js", "v2-board.js"));
+    const fn = L.liftSource(src, "startNew", { where: "js/v2-board.js" });
+    const page = world.load("/projects.html", { tab, standIn: true });
+    await world.advance(0);                                     // shared.js settles which draft the page is on
+    const win = page.win;
+    new Function("window", "TW", "localStorage", "sessionStorage", "TAB", fn + "\nstartNew();")(
+      win, win.TW, win.localStorage, win.sessionStorage, opts && opts.gc ? "gc" : "direct");
+    const blobAtStart = world.blob();                           // as the press leaves it, before any time passes
+    await (opts && opts.hold ? world.advance(net.commitMs + net.bootMs + opts.hold) : world.settle());
+    const intake = world.pageOf("intake", tab);
+    if (intake) intake.blobAtStart = blobAtStart;
+    return intake;
   };
 
   /** This browser has been working on a project: its blob is stored, stamped for the project, and is the
@@ -676,9 +729,19 @@ function createWorld(cfg) {
     try { return flagOf(JSON.parse(r.body).data || {}); } catch (e) { return undefined; }
   };
 
+  /** One field of the draft a save carried (undefined when the request was not a save, or did not say it). */
+  const sentField = (r, key) => {
+    if (r.route !== "PUT" || !r.body) return undefined;
+    try { return (JSON.parse(r.body).data || {})[key]; } catch (e) { return undefined; }
+  };
+
   world.requestsLog = () => world.requests.map((r) => ({
     n: r.n, at: r.sentAt, page: r.page.label, route: r.route, method: r.method, id: r.id || null,
     keepalive: r.keepalive, outcome: r.outcome, status: r.status, sentIsTest: sentFlag(r),
+    // The size of the body, as characters (what `.length` says) and as UTF-8 bytes (what the browser counts against its limit).
+    chars: r.body === null ? 0 : r.body.length, bytes: r.body === null ? 0 : Buffer.byteLength(r.body, "utf8"),
+    // What the save said the project's name and address were: the data a stale page can empty (PUTs only).
+    sentName: sentField(r, "project_name"), sentAddress: sentField(r, "address"),
     arrivedAt: r.arrivedAt === undefined ? null : r.arrivedAt, doneAt: r.doneAt === undefined ? null : r.doneAt,
     repliedAt: r.repliedAt === undefined ? null : r.repliedAt,
   }));

@@ -67,7 +67,8 @@ INTAKE_HARNESS = TESTS / "js" / "polish-intake-harness.js"
 # What each harness reads from a frontend directory (they do not fall back to the real one), so that a scratch
 # copy that breaks ONE file can be completed with the rest.
 PAGE_FILES = ["shared.js", "polish-intake.html", "index.html", "js/polish-intake.js", "js/polish-sandbox.js", "js/index.js",
-              "js/projects.js", "js/portal.js", "js/work-types.js", "js/intake-scope.js", "js/bid-model.js", "js/excel-math.js"]
+              "js/projects.js", "js/portal.js", "js/v2-board.js", "js/work-types.js", "js/intake-scope.js", "js/bid-model.js",
+              "js/excel-math.js"]
 INTAKE_FILES = ["shared.js", "polish-intake.html", "js/polish-intake.js", "js/bid-model.js", "js/work-types.js",
                 "js/polish-sandbox.js", "js/intake-scope.js", "js/county-picker.js"]
 client = TestClient(main.app)
@@ -158,6 +159,15 @@ def test_the_model_is_a_browser_that_drops_what_a_browser_drops(ran):
     cap = m["keepaliveCap"]
     assert (cap["keepaliveBig"], cap["plainBig"], cap["keepaliveSmall"]) == ("Failed to fetch", "sent", "sent"), cap
     assert cap["stored"] == ["ka-small", "plain-big"], "a keepalive request over 64 KiB reached the server (or a plain one did not): %r" % cap
+    # the limit is ONE budget for the keepalive bodies in flight, and the size is counted in bytes
+    b = m["sharedBudget"]
+    assert (b["first"], b["second"], b["plain"], b["wide"], b["afterReply"]) == (
+        "sent", "Failed to fetch", "sent", "Failed to fetch", "sent"), b
+    assert b["wideChars"] < 64 * 1024 < b["wideBytes"], "the wide body must be under the cap as characters and over it as bytes: %r" % b
+    assert b["heldAfterReplies"] == 0 and b["stored"] == ["b1", "b3", "b5"], b
+    # a request the server is slow over finishes after one sent later
+    s = m["slowRequest"]
+    assert s["doneAt"]["s1"] - s["doneAt"]["s2"] == 500 and s["outcomes"] == ["replied", "replied"], s
 
 
 def test_the_server_model_is_the_route_contract_of_the_backend(ran):
@@ -267,9 +277,10 @@ def test_the_real_routes_create_a_row_filed_and_never_let_a_stale_blob_undo_a_fi
 
 
 def test_the_board_opens_the_intake_the_way_the_harness_does():
-    """The harness does what js/v2-board.js startNew() does before the intake opens: clear the three keys that
-    make shared.js mint a fresh draft, then open /polish-intake.html with no ?d=. Read from the board's source so
-    the harness cannot keep walking a flow the board no longer starts."""
+    """The harness RUNS js/v2-board.js startNew() (world.startNewEstimate lifts it out of the file; it used to copy what it does),
+    so it cannot walk a flow the board no longer starts. This is the board's shape the rest of the file leans on: it clears the
+    three keys that make shared.js mint a fresh draft, leaves { audience: "GC" } behind on the GC tab, and opens /polish-intake.html
+    with no ?d=."""
     src = (FRONTEND / "js" / "v2-board.js").read_text(encoding="utf-8")
     body = src[src.index("function startNew()"):]
     body = body[:body.index("\n  }\n")]
