@@ -41,6 +41,14 @@ MEASURED ONCE IN A BROWSER, which this file cannot repeat (a headless run lays n
 On the old rules the five % warnings were a column 35 to 46px wide that began 21px short of the Rate cell's right edge and ran 14 to 25px past it, every line of it under the Total cell. With the fix each is
 92px wide, the room a Rate cell has (104px in the Total cell, for the dollar box), and nothing paints over it: a Polish bid at 916 and 800px, an Epoxy bid at 916, 800 and 390px.
 
+ROUND 7, PART 2 (2026-10-21, the round-6 lows, L4): THE % BOX'S WHOLE LINE COMES CLEAR OF THE PINNED COLUMN, NOT ONLY THE BOX. The box's scroll padding was the pinned Total column's width (126px), so a %
+box tabbed or typed into was brought just clear of the column and what its Rate cell holds to the right of it, the "%" and its gap and the end of the refusal's line under the box, stayed under the
+column's opaque cells. Measured in Chrome on the real page (2026-10-21, the sidebar open, a % box typed "abc" so its refusal shows): at 880px (a 539px box, the table 11px wider) the box was left 8px
+clear and the "%" ran 3px under the column; at 850, 820 and 600px (boxes of 509, 479 and 499px) the browser scrolled the box's right edge to the column's edge exactly, and the "%", its gap and the
+refusal's line ran 11px under it; from 916px up the table fits and at 390px the table is scrolled to its end anyway. The padding is now the column's width and what a Rate cell holds to the right of a
+box (the "%" and its gap, and the cell's own padding), so the browser scrolls the table to its end for a box in that column: at 880, 850, 820, 600 and 390px the "%" and the refusal's line ended 8px
+clear of the column (688 against 696 at 880px). `refusal_line_problems` does that arithmetic on the CSS, and requires the padding to leave a % box's line room at the narrowest phone.
+
 The last block puts the old rules (and each new rule, one at a time) back into a COPY of the page and requires the check to find the problem: a check that has never failed proves nothing.
 """
 from __future__ import annotations
@@ -365,8 +373,38 @@ def at_916_problems(page: str) -> list[str]:
     return ["the table is %dpx wide in a %dpx box: the last %dpx of it, the TOTAL column, are out of view until the box is scrolled (916px, sidebar open)" % (f["min_width"], box_width(f, 916, True), hidden)]
 
 
+def refusal_line_problems(page: str) -> list[str]:
+    """ROUND 7, PART 2 (L4): does a % box tabbed or typed into come clear of the pinned Total column WITH THE REST OF ITS LINE? The browser scrolls a focused box (and a caret) clear of the box's
+    scroll padding, and no further: a padding as wide as the pinned column alone brings the box to the column's edge and leaves the "%" after it, its gap and the refusal's line under the box
+    (which is as wide as the box's line) under the column. So the padding must be the pinned column's width and what the Rate cell holds to the right of a box: the "%" and its gap, and the cell's
+    own right padding (the wider of the two tables'). And it must leave a % box's line room in the box at the narrowest phone, or the browser cannot honour it."""
+    f = facts(page)
+    css = f["css"]
+    found = []
+    total = f["columns"][5]
+    padding = _decls_for(css, ".tscroll").get("scroll-padding-right", "")
+    if total[0] != "px" or not re.fullmatch(r"\d+px", padding):
+        return found                       # pin_problems names a padding that is not a plain figure, and a Total column that is a share
+    pads = _cell_pads(css, "td")
+    rate_right = max(r for _l, r in (pads[tbl][3] for tbl in pads))
+    need = total[1] + PERCENT_AND_GAP + rate_right
+    have = int(padding[:-2])
+    if have < need:
+        found.append("refusal: the .tscroll box has scroll-padding-right %dpx, which brings a %% box typed into clear of the pinned Total column (%dpx) but leaves what its Rate cell holds to the right "
+                     "of it under the column: the %% and its gap (%dpx) and the cell's padding (%dpx), the refusal's line with them. It needs %dpx" % (have, total[1], PERCENT_AND_GAP, rate_right, need))
+    pct_box = _px(_rule(css, ".adjbox input,.mk .adjbox input"), "width")
+    line = pct_box + PERCENT_AND_GAP
+    for scrollbar in SCROLLBARS:
+        for rail_open in (False, True):
+            narrowest = min((box_width(f, w, rail_open, scrollbar), w) for w in range(PIN_FROM, FIT_FROM))
+            if narrowest[0] - have < line:
+                found.append("refusal: at a window %dpx wide (sidebar %s, scrollbar %dpx) the box is %dpx and its scroll padding %dpx leaves %dpx, under the %dpx a %% box's line needs"
+                             % (narrowest[1], "open" if rail_open else "shut", scrollbar, narrowest[0], have, narrowest[0] - have, line))
+    return sorted(set(found))
+
+
 def problems(page: str) -> list[str]:
-    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page) + at_916_problems(page)))
+    return sorted(set(fit_problems(page) + pin_problems(page) + view_problems(page) + scroll_problems(page) + at_916_problems(page) + refusal_line_problems(page)))
 
 
 # ── the assertions ───────────────────────────────────────────────────────────────────────────────────────
@@ -440,6 +478,15 @@ def test_the_pinned_total_cells_are_opaque_pinned_to_the_right_edge_and_keep_the
 
     Mutation: static cells; the other edge; no background; a see-through card tint; no scroll padding, and one too small; collapsed borders."""
     assert pin_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_a_box_tabbed_or_typed_into_comes_clear_of_the_pinned_column_with_the_rest_of_its_line():
+    """ROUND 7, PART 2 (L4): the box's scroll padding is the pinned Total column's width (126px) and what a Rate cell holds to the right of a % box (the "%" and its gap, 16px, and the cell's padding, 8px):
+    150px. With 126px Chrome left the "%" and the refusal's last 11px under the column at 850, 820 and 600px (sidebar open); with 150px the table scrolls to its end and they end 8px clear. The padding
+    still leaves a % box's line room at a 360px phone.
+
+    Mutation: the round-6 padding (the column's width alone); a padding that eats a phone's box."""
+    assert refusal_line_problems(PAGE_PATH.read_text(encoding="utf-8")) == []
 
 
 def test_every_column_holds_what_the_cards_put_in_it():
@@ -551,7 +598,8 @@ ROUND_6 = {
     "last": (".rev-t th:last-child,.mk th:last-child,.rev-t td:last-child,.mk td:last-child{padding-right:14px}", ""),
     "pin": (".rev-t th:nth-child(5),.mk th:nth-child(5),.rev-t td:nth-child(5),.mk td:nth-child(5){position:sticky;right:0}", ""),
     "fill": (".rev-t td:nth-child(5),.mk td:nth-child(5){background:var(--card)}", ""),
-    "box": (".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:126px}",
+    # (150px since round 7, part 2, L4: the pinned column and what a Rate cell holds to the right of a box; round 6 made it the column's 126px)
+    "box": (".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scroll-padding-right:150px}",
             ".tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}"),
     "focus": (".tscroll:has(td:nth-child(5):focus-within){scroll-padding-right:0}", ""),
     "rev_table": (".rev-t{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}", ".rev-t{width:100%;border-collapse:collapse;font-size:12.5px}"),
@@ -629,7 +677,12 @@ MUTATIONS = [
     ("the Total cells are pinned to the other edge", ROUND_6["pin"][0], ROUND_6["pin"][0].replace("right:0", "left:0"), "pin: the Total"),
     ("the pinned Total cells have no background", ROUND_6["fill"][0], ROUND_6["fill"][0].replace("background:var(--card)", "background:transparent"), "pin: a pinned Total cell"),
     ("no scroll padding for the pinned column", ROUND_6["box"][0], ROUND_6["box"][1], "pin: the .tscroll box"),
-    ("a scroll padding narrower than the pinned column", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:126px", "scroll-padding-right:60px"), "pin: the .tscroll box"),
+    ("a scroll padding narrower than the pinned column", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:150px", "scroll-padding-right:60px"), "pin: the .tscroll box"),
+    # round 7, part 2 (L4): the round-6 padding, as wide as the pinned column alone, leaves the % after a box and the refusal's line under the column
+    ("the round-6 scroll padding, the pinned column's width alone", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:150px", "scroll-padding-right:126px"),
+     "refusal: the .tscroll box has scroll-padding-right 126px"),
+    ("a scroll padding that leaves a phone's box no room for a % box's line", ROUND_6["box"][0], ROUND_6["box"][0].replace("scroll-padding-right:150px", "scroll-padding-right:260px"),
+     "refusal: at a window"),
     ("scroll padding while focus is in the pinned column", ROUND_6["focus"][0], ROUND_6["focus"][0].replace("scroll-padding-right:0", "scroll-padding-right:126px"), "pin: the .tscroll box keeps"),
     ("collapsed borders on the Review tables", ROUND_6["rev_table"][0], ROUND_6["rev_table"][1], "pin: the .rev-t table"),
     ("collapsed borders on the markup table", ROUND_6["mk_table"][0], ROUND_6["mk_table"][1], "pin: the .mk table"),
