@@ -127,12 +127,19 @@
     try { return B.sectionOf(ROOT, activeTab).kind === "option"; } catch (err) { return false; }
   }
 
-  /** Is the section on show a BASE of the bid that does not carry the job's travel? The job's one drive is charged on the carrier, so a
-   *  Travel Labor row sitting here is a leftover of a carrier move (B.followDistance): empty, or typed and left as typed. Its card
-   *  says the drive is charged elsewhere (B.strayTravelNote). An option is not this: it is priced apart and its Travel Labor is its own. */
+  /** Is the section on show one that is neither a base nor an option (off)? A Travel Labor row sitting there is a leftover of a restructure (B.followDistance): empty, or typed and
+   *  left as typed, and priced nowhere. Its card says where the drive is charged (B.strayTravelNote). Since round 7 a base never holds a leftover: every base drives its own crew
+   *  (Hanz, 2026-10-21, D1), and an option is priced apart with its Travel Labor its own. */
   function holdsStrayTravel() {
     if (!ROOT || !ROOT.tabs) return false;
-    try { return B.sectionOf(ROOT, activeTab).kind === "base" && B.travelCarrier(ROOT) !== activeTab; } catch (err) { return false; }
+    try { return B.sectionOf(ROOT, activeTab).kind !== "option" && !B.isDriveTab(ROOT, activeTab); } catch (err) { return false; }
+  }
+
+  /** Is the section on show a BASE that does not carry the job's Hotel and Per Diem (a Combo's second sheet)? Its crew drives on its own (round 7, D1): its Labor step draws its own
+   *  Travel Labor card in a travel block of its own, and its Review lists that drive under its own Labor, while the job's Lodging and Per Diem stay on the carrier. */
+  function drivesOnItsOwn() {
+    if (!ROOT || !ROOT.tabs) return false;
+    try { return B.isDriveTab(ROOT, activeTab) && B.travelCarrier(ROOT) !== activeTab; } catch (err) { return false; }
   }
 
   /** What the notes call the section that carries the job's travel: its name on screen (a sheet the estimator renamed is called that),
@@ -147,11 +154,19 @@
   /** The words on the Labor and Review steps of a section that does not carry the job's travel. THE SECTION IS NAMED BY ITS NAME ON SCREEN
    *  (carrierName: a sheet the estimator renamed, or a copy, is called what the sheet bar calls it), never by its tab id: "at the rates set on
    *  the Copy1 section" told nobody which sheet that was. */
-  function travelNote() {
+  function travelNote(onReview) {
     var name = carrierName();
     if (activeIsOption()) {
       return "This option is priced apart, so it carries its own Hotel and Per Diem for its own crew when the job is on the road, " +
         "at the rates set on the " + name + " section. Open it to change them.";
+    }
+    // A BASE THAT DOES NOT CARRY THE JOB'S HOTEL AND PER DIEM DRIVES ITS OWN CREW (round 7, Hanz 2026-10-21, D1: Kyle puts a drive on both sheets of a combo-like job). Its Travel
+    // Labor is its own, below on the Labor step and under its Labor on the Review; the job's Hotel and Per Diem are charged once, on the carrier, where the miles are typed.
+    if (drivesOnItsOwn()) {
+      return onReview
+        ? "Hotel and Per Diem are charged once for the whole job, on the " + name + " section. This sheet's own drive is its Travel Labor line, under Labor."
+        : "This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the " + name + " section. " +
+          "Hotel and Per Diem are charged once for the whole job, on the " + name + " section. Open it to change them.";
     }
     return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + name +
       " section. Open it to change them.";
@@ -881,8 +896,8 @@
     // The rule moved into the model (B.syncAutoGuys) so the new-bid seeding can run it between its steps:
     // Lodging and Per Diem count the same nights while they are on auto (a night for every man-day, the way backend/pricing.py counts
     // them: a line a far answer filled follows the JOB'S figure, what every base section counts by its own tab's rule, B.jobNights; an
-    // older line follows the carrier's man-days), and a Travel row on auto follows the job's crew SIZE (the most guys on any labor
-    // line of the base sections), or its own section's lines when the section is an option; an older row follows the man-days.
+    // older line follows the carrier's man-days), and a Travel row on auto follows its own section's crew SIZE (the most guys on any
+    // one of that section's labor lines: every base crew drives its own, round 7, D1, and an option always did); an older row follows the man-days.
     B.syncAutoGuys(ROOT);
   }
 
@@ -1387,10 +1402,11 @@
     sheetsUi.confirm = null;
     if (!asked) { paintSheets(); return; }
     var st = TW.getState();
-    var made, before, carrierBefore;
+    var made, before, carrierBefore, kindsBefore;
     try {
       before = B.baseOf(ROOT);
       carrierBefore = B.travelCarrier(ROOT);
+      kindsBefore = B.sectionKinds(ROOT);
       made = B.pickBase(ROOT, asked.ids, { state: st });
     } catch (err) {
       say("The base bid could not be changed: " + (err && err.message));
@@ -1411,12 +1427,14 @@
     }
     ROOT = made.model;
     // A BASE CHANGE IS A JOB TYPE SWITCHED IN THE SESSION TOO (2026-10-20 audits), and is settled the same way, after EVERY change of the
-    // base: when it moves the job's travel to another sheet, the Travel Labor row moves with it (B.pickBase), what the estimator typed,
-    // cleared or switched off follows the carrier, a row that was left blank under a far distance on file is filled by the same rule an
-    // answer follows, and every other section's filled row (an old carrier that is still a base, or a sheet that was off) is emptied, so
-    // one Travel Labor row is priced for the job's one drive (B.followDistance). A base change that keeps the carrier fills nothing but
-    // still gives the old rows back. It is given the WHOLE model (ROOT): M is the section on show, of the model from before the change.
-    B.followDistance(ROOT, carrierBefore);
+    // base (B.followDistance): a single-base job's drive goes with its one base (B.pickBase moves the row) and what the estimator typed,
+    // cleared or switched off goes with it, every sheet that became a base settles its own drive (a line nobody touched is filled by the
+    // rule an answer follows, one with no line is given one), and a sheet that is off gives its fill back. Since round 7 every base drives
+    // its own crew (Hanz's D1 of 2026-10-21), so a base that stays a base keeps its drive. It is given the WHOLE model (ROOT): M is the
+    // section on show, of the model from before the change.
+    // SINCE ROUND 7 EVERY BASE DRIVES ITS OWN CREW (Hanz, 2026-10-21, D1), so it is told what every sheet WAS (kindsBefore): a sheet that becomes a base beside another gets its own
+    // drive, and an option made a base keeps a line the estimator added or typed, and releases one the tool filled while the job says it has no drive.
+    B.followDistance(ROOT, carrierBefore, kindsBefore);
     TW.setState(patch);
     sheetsChanged(activeTab, asked.row === "combined" ? activeTab + "|open" : asked.row + "|base");
   }
@@ -2749,8 +2767,8 @@
     // the hour (a Gyp pour) is an ordinary line whose second box is hours.
     var travelRow = travelLike(r);
     var auto = !!(hours && r.guys_auto);
-    // A Travel Labor row on an option follows its OWN section's lines, and one on a base that does not carry the job's travel is a
-    // leftover of a carrier move that says so (B.strayTravelNote).
+    // A Travel Labor row follows its OWN section's lines (a base's and an option's, round 7), and one on a section that is off is a
+    // leftover of a restructure that says so (B.strayTravelNote; a base never holds one since round 7).
     var ownCrew = activeIsOption();     // first drawing (repaintNumbers asks again on every keystroke)
     var stray = travelRow && r.id === "travel" && holdsStrayTravel();
     // WHERE THE HOURS CAME FROM, when the distance wrote them (Hanz, 2026-10-20): said full width under the card, and "" (the line
@@ -2834,18 +2852,16 @@
         // and the caption, and the two cannot drift apart on a live repaint.
         '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
           'anyway if it needs drive time.</p>' +
-          // A TRAVEL LABOR ROW ON A BASE THAT DOES NOT CARRY THE JOB'S TRAVEL is a leftover of a carrier move: the job's one drive is
-          // charged on the carrier, so this card says so (typed figures were left as typed) instead of promising a fill it will not get.
+          // A TRAVEL LABOR ROW ON A SECTION THAT IS OFF is a leftover of a restructure: the job's drives are charged on its bases, so this
+          // card says so (typed figures were left as typed) instead of promising a fill it will not get. (Until round 7 a Combo's second
+          // base drew this too; it drives its own crew now, Hanz's D1 of 2026-10-21.)
           (stray
             ? '<p class="hint trvnote" data-trv-stray="' + i + '">' + esc(B.strayTravelNote(carrierName(), r)) + '</p>'
-            // WHAT THE LINE PROMISES IS WHAT IT DOES. A job on any sheet but Gyp fills the hours from the miles and the guys
-            // with the crew's size (B.followDistanceHours); a Gyp bid fills nothing here (the Gyp sheet works its own drive
-            // time), so its card must not say the hours "fill in".
+            // WHAT THE LINE PROMISES IS WHAT IT DOES. Every base fills the hours from the miles and the guys with its own crew's size (B.followDistanceHours), a Gyp
+            // base too since round 7 (Hanz, 2026-10-21, D2), whose crew lines are entered in hours: its card said "type its guys and its hours" while the line was typed.
             : '<p class="hint trvnote">Drive time is expected at 70 miles or more from the office. ' +
               (r.id !== "travel" ? ''
-                : gypOpen()
-                  ? 'A Gyp bid does not fill this line in from the miles: type its guys and its hours. '
-                  : 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ') +
+                : 'There the hours fill in from the miles, one round trip, and the guys are the most on any labor line. ') +
               'Under 70 miles this line stays gray.</p>')
         : "") + '</div>';
   }
@@ -2894,7 +2910,7 @@
       '<p class="hint">' + unitWord.toLowerCase() + ' × rate</p></div>' +
       '</div><p class="hint trvnote">' + (gypOpen()
         // A Gyp crew is entered in HOURS, and Kyle's Gyp sheet counts its nights from them, ten to a night (Gyp!B64): the nights and the per diem days fill in like every carrier's (round 6).
-        // Only the drive stays typed (the sheet works its own drive time), and the sentence above the travel block says so.
+        // Since round 7 the drive fills too (Hanz's D2 of 2026-10-21: it was typed, the sheet working its own drive time), and the sentence above the travel block says so.
         ? (isNight ? "Overnight stays are expected at 70 miles or more from the office, and then the nights fill in from the crew's hours, " +
             B.nightsDivisor(ROOT, activeTab) + " hours a night, as Kyle's Gyp sheet counts them. Type your own to use them instead. Under 70 miles this line stays gray."
           : "Meals while the guys are away, expected at 70 miles or more from the office, and then the days fill in from the crew's hours, " +
@@ -3050,11 +3066,12 @@
     // "prevailing wage should be at the bottom not at the top"), after the crew lines and the travel block.
     var html = "";
     var travelRows = "";
-    // The job's travel is charged ONCE, on the section that carries it (B.travelCarrier). Any other section of a
-    // combo bid has no Travel block to draw: its crew is priced as labor and nothing else (see travelNote).
+    // The job's Hotel and Per Diem are charged ONCE, on the section that carries them (B.travelCarrier). EVERY BASE DRIVES ITS OWN CREW (round 7, Hanz 2026-10-21, D1): a Combo's other
+    // base draws its own Travel Labor card in a travel block of its own, under a note that says where the miles, Hotel and Per Diem are (see travelNote).
     var carries = carriesTravel();
+    var ownDrive = drivesOnItsOwn();
     M.labor.forEach(function (r, i) {
-      if ((r || {}).id === "travel" && carries) travelRows += laborCard(r, i);
+      if ((r || {}).id === "travel" && (carries || ownDrive)) travelRows += laborCard(r, i);
       else html += laborCard(r, i);
     });
 
@@ -3068,15 +3085,17 @@
     if (!carries) {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap" data-travel-note>' + esc(travelNote()) + '</p>';
-      // AN OPTION WITH NO TRAVEL LABOR LINE of its own is offered one (round 6, part 2): it is priced apart and carries its own drive. A base that does not carry the job's travel is not:
-      // the job's drive is charged once, on the carrier.
-      if (B.travelLaborCanBeAdded(ROOT, activeTab)) html += addTravelHtml(true);
+      // A BASE THAT DOES NOT CARRY THE JOB'S HOTEL AND PER DIEM draws its own Travel Labor card here, or the control that adds one when its x took the line away (round 7: its own
+      // answer, the sheet's). AN OPTION WITH NO TRAVEL LABOR LINE of its own is offered one (round 6, part 2): it is priced apart and carries its own drive.
+      if (ownDrive) html += travelRows || addTravelHtml("sheet");
+      else if (B.travelLaborCanBeAdded(ROOT, activeTab)) html += addTravelHtml(true);
     } else {
       html += '<div class="trvsep" role="separator"><span>Travel</span></div>' +
         '<p class="cap">Travel is expected when the job is 70 miles or more from the office. Under ' +
         '70 miles all three lines below stay gray until you switch one on. ' + (gypOpen()
-          // THE DRIVE STAYS TYPED on a Gyp carrier (the Gyp sheet works its own drive time per mobilization); the nights and the per diem days are filled from the crew's hours (round 6).
-          ? 'On a far Gyp job type the drive hours, because the Gyp sheet works its own drive time. The nights and per diem days fill in from the crew\'s hours, ' +
+          // A GYP BASE'S DRIVE FILLS FROM THE MILES like the others (round 7, Hanz 2026-10-21, D2): its crew is the most guys on one of its crew lines, entered in hours. The nights and the
+          // per diem days are filled from the crew's hours (round 6).
+          ? 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the crew\'s hours, ' +
             B.nightsDivisor(ROOT, activeTab) + ' hours a night; type over any of them to use your own.</p>'
           : 'On a far job Travel Labor fills in from the miles, and the nights and per diem days from the man-days; type over any of them to use your own.</p>');
       html += distanceBlock();
@@ -3432,9 +3451,9 @@
     // alone -- every other screen still calls the line "Lodging". The lodging line shows "Hotel"
     // here unless the estimator typed a label of their own over the default.
     var trvRows = [];
-    // A section that does not carry the job's travel (the second section of a combo bid) prices none: the job's
-    // Hotel and Per Diem are charged once, on the carrier, and this card says where instead of listing lines
-    // that belong to another section's crew.
+    // A section that does not carry the job's travel (the second section of a combo bid) prices none of the job's Hotel and Per
+    // Diem: they are charged once, on the carrier, and this card says where instead of listing lines that belong to another
+    // section's crew. Its own crew's drive is its Travel Labor line, under its Labor (round 7, Hanz's D1 of 2026-10-21).
     var carries = carriesTravel();
     var ownTravel = !carries && activeIsOption();   // an option lists its own lines, for its own crew's man-days
     B.TRAVEL_LINE_KEYS.forEach(function (k) {
@@ -3459,7 +3478,7 @@
                     rv("trv." + k + ".tot", moneyAuto(cost)) + '<span class="note work">' + rv("trv." + k + ".up", shown.roundedUp ? ROUNDED_UP : "") + '</span>']);
     });
     if (!carries) {
-      trvRows.push([travelNote(), "", "", "", ""]);
+      trvRows.push([travelNote(true), "", "", "", ""]);
     } else if (!trvRows.length) {
       trvRows.push(["Not included. Switch Lodging or Per Diem on in the Labor step.", "", "", "", ""]);
     }
@@ -3986,8 +4005,8 @@
       el.textContent = note;
       el.hidden = !note;
     });
-    // The words on a leftover Travel Labor row (a base that does not carry the job's travel) say whether it holds typed figures,
-    // and typing in it changes that.
+    // The words on a leftover Travel Labor row (a section that is off; a base never holds one since round 7) say whether it holds
+    // typed figures, and typing in it changes that.
     document.querySelectorAll("[data-trv-stray]").forEach(function (el) {
       var r = M.labor[parseInt(el.getAttribute("data-trv-stray"), 10)];
       if (r) el.textContent = B.strayTravelNote(carrierName(), r);
@@ -4239,16 +4258,20 @@
    *  Travel Labor line. Drawn in the travel block, in place of the card, only while the job's carrier has no such line.
    *
    *  ON ANY SECTION THAT CAN HOLD A DRIVE (round 6, part 2): `option` is the same control drawn under the note of an OPTION that has no Travel Labor line, which is priced apart
-   *  and carries its own drive (B.travelLaborCanBeAdded: the carrier or an option, and no line). It brings back that option's line and takes back only that option's answer. */
+   *  and carries its own drive (B.travelLaborCanBeAdded: a base or an option, and no line). It brings back that option's line and takes back only that option's answer.
+   *  `"sheet"` (round 7, Hanz's D1 of 2026-10-21) is the control on a BASE that does not carry the job's Hotel and Per Diem, whose crew drives on its own: it brings back that
+   *  sheet's line and takes back that sheet's answer (and the job's, which then goes on speaking for every other base that holds none). */
   function addTravelHtml(option) {
-    return '<div class="trvadd" data-trv-none' + (option ? '="option"' : '') + '><p class="cap">' +
-      (option ? "This option has no Travel Labor line, so its drive adds nothing to its price." : "This bid has no Travel Labor line, so the drive adds nothing to the price.") + '</p>' +
+    // "sheet" (round 7): a base that does not carry the job's Hotel and Per Diem, whose crew drives on its own, and whose x took its line away (its own answer).
+    var words = option === "sheet" ? "This sheet has no Travel Labor line, so its drive adds nothing to the price."
+      : option ? "This option has no Travel Labor line, so its drive adds nothing to its price." : "This bid has no Travel Labor line, so the drive adds nothing to the price.";
+    return '<div class="trvadd" data-trv-none' + (option === "sheet" ? '="sheet"' : option ? '="option"' : '') + '><p class="cap">' + words + '</p>' +
       '<button class="btn addline below" data-add-travel="1">' + icon("plus", 16) + ' Add Travel Labor</button></div>';
   }
 
   var travelAdding = false;
-  /** Add the line back: a fresh row, the one a new bid is seeded with (the library's Travel name and rate, empty), on the section on show (the carrier, or an option that has none),
-   *  filled by the distance on file by the rule when the job is far (B.addTravelLabor: the carrier's by the crew of the bid, an option's by its own). The library is read first, like the
+  /** Add the line back: a fresh row, the one a new bid is seeded with (the library's Travel name and rate, empty), on the section on show (a base or an option that has none),
+   *  filled by the distance on file by the rule when the job is far (B.addTravelLabor: on the section's own crew, a base's as an option's since round 7). The library is read first, like the
    *  Add labor pop-up, and a double click adds one line (B.addTravelLabor refuses a section that already has one). The model is read AFTER the library answers, so a figure typed meanwhile is kept. */
   async function addTravelLaborPress() {
     if (travelAdding) return;
@@ -4450,10 +4473,10 @@
       if (M.labor.length <= 1) return;
       var delAt = parseInt(dl.getAttribute("data-del-lab"), 10);
       var gone = M.labor.splice(delAt, 1)[0];
-      // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY, AND THE ANSWER BELONGS TO THE SHEET WHOSE LINE WENT (round 6, part 2). The x on the CARRIER's line says the job has no drive:
-      // B.travelLaborRemoved records it on the model (no_travel_labor), so a reload does not append a blank row (migrateModel), a job-type switch does not seed the new carrier a
-      // priced one, and Add Travel Labor on the carrier (B.addTravelLabor) takes it back. The x on an OPTION's line says only that the option has none, and the x on a leftover row
-      // on a base that does not carry the job's travel says nothing: neither touches the job (round 5 set the job's flag for ANY line, which outlived its meaning).
+      // A TRAVEL LABOR LINE TAKEN AWAY STAYS AWAY, AND THE ANSWER BELONGS TO THE SHEET WHOSE LINE WENT (round 6, part 2; three answers since round 7, Hanz's decisions of
+      // 2026-10-21). B.travelLaborRemoved records it: the x on the drive of a SINGLE-base job says the JOB has no drive (no_travel_labor, J), so a reload does not append a
+      // blank row (migrateModel) and a job-type switch neither seeds nor carries one (D3); the x on one base's drive of a Combo says only that SHEET has none (its
+      // sheet_no_travel_labor, S), and the other base keeps its drive; the x on an OPTION's line records nothing (O). Add Travel Labor on that sheet takes its answer back.
       if (B.isTravelRow(gone)) B.travelLaborRemoved(ROOT, activeTab);
       changed(true);
       refocusAfterRemoval(delAt, B.isTravelRow(gone));
@@ -5328,6 +5351,8 @@
       // draft holds is behind what the page shows. A Polish bid with no other sections adds and changes nothing.
       var sectionsBefore = JSON.stringify(ROOT);
       var carrierBefore = openingTab();
+      // What every sheet WAS before the job type moved it (round 7): B.followDistance below settles each base's own drive by it.
+      var kindsBefore = B.sectionKinds(ROOT);
       if (jobSections) ROOT = B.sectionsForJob(ROOT, jobType, { rules: await loadMarkupRules() });
       var restructured = !newBid && JSON.stringify(ROOT) !== sectionsBefore;
       ROOT = B.seedNewSections(ROOT, {
@@ -5356,16 +5381,15 @@
     // A JOB TYPE SWITCHED IN THE SESSION IS SETTLED AFTER EVERY RESTRUCTURE (2026-10-20 audits), whether or not the carrier moved:
     // Polish saved at 190 miles and switched to Epoxy on the intake step opens with the Epoxy section carrying the job's travel, and the
     // seeding above gave that section a blank Travel Labor row while the distance on file still says far and Lodging and Per Diem are on.
-    // The switch is the estimator's own action, so B.followDistance (given the carrier the job had, and the WHOLE model) settles the
-    // job's ONE drive: a new carrier with no row of its own takes the old one's (a Combo switched to Epoxy left the filled row on the
-    // Polish root, which is off); what the estimator typed, cleared or switched off follows the carrier; the new carrier's row is filled
-    // on the crew's size by the same rule an answer follows; and every other section's filled row, off sections too, is emptied (Epoxy
-    // to Polish to Combo priced the drive twice). A switch that keeps the carrier (Combo made Polish) fills nothing but still gives the
-    // old rows back. It ends by putting the guys on the crew of the bid as it is NOW, before the first paint and the first save: adopt()
-    // synced them for the sections the draft was saved with, and a Combo made Polish still read the Combo's bigger crew (6 guys, $1,287
-    // over a crew of 4) and saved a price a plain reopen then disagreed with. A plain reopen is not a switch (sectionsForJob hands back
-    // the model it was given, so nothing restructured) and moves nothing.
-    if (restructured) B.followDistance(ROOT, carrierBefore);
+    // The switch is the estimator's own action, so B.followDistance (given the carrier the job had, what every sheet WAS, and the WHOLE
+    // model) settles the drives. Since round 7 every BASE crew drives its own (Hanz's D1 of 2026-10-21): a single-base job's drive goes
+    // with its one base, and what the estimator typed, cleared or switched off goes with it; every sheet that became a base settles its
+    // own drive (filled on its own crew by the rule an answer follows; an option keeps a line the estimator added or typed, and while the
+    // job says it has no drive a line the tool filled is released: D3 and the promotion rule); a base that stays a base keeps its own; and
+    // a sheet that is off gives its fill back (Epoxy to Polish to Combo priced the drive twice). It ends by putting the guys on each crew
+    // as it is NOW, before the first paint and the first save. A plain reopen is not a switch (sectionsForJob hands back the model it was
+    // given, so nothing restructured) and moves nothing.
+    if (restructured) B.followDistance(ROOT, carrierBefore, kindsBefore);
     // The model was replaced above (the seeding hands back a new one), so the panels' view of it is made again.
     show(openingTab());
     followSf = B.takeoffSf(M.takeoff);
