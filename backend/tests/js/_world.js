@@ -23,6 +23,9 @@
  *   replies arrive) until that document commits, `commitMs` later. Then `pagehide` runs on the old page,
  *   the old page is gone, and `bootMs` after that the new page's scripts run.
  *
+ *   STORAGE EVENTS. A write to localStorage is announced to every OTHER page that is still running, a task later, as a `storage` event
+ *   (world.load gives each page its own view of the one store). { storageEvents: false } is a browser that does not deliver them.
+ *
  *   TABS. One browser has ONE localStorage and one clock; each tab has its own sessionStorage and its own page, which a navigation in
  *   that tab replaces (world.openTab, world.load(url, { tab }), world.pageOf(kind, tab)). Two tabs share the one current draft and
  *   the one blob, as two tabs of a browser do.
@@ -47,7 +50,9 @@
  *   to fail a route (`fault`): an HTTP 500, a 200 carrying {"ok": false} (which is how both /test and
  *   the save route answer a caught exception), a network error, no answer at all, a 200 that is not JSON
  *   (a proxy's error page), a 200 that says the row is not there ({"ok": true, "existed": false}) and a request the
- *   server is merely slow over ("slow", `ms` more), so that one request can finish after a later one.
+ *   server is merely slow over ("slow", `ms` more), so that one request can finish after a later one, and a request that is slow to REACH it
+ *   ("slowup", `ms` more on the way up), which a page that goes before it has arrived takes with it, and one whose
+ *   answer is slow to come back ("slowdown", `ms` more on the way down: the server has the request, its page has not heard).
  *
  * WHAT IS REAL. The page scripts (shared.js, js/polish-sandbox.js, js/polish-intake.js, and js/index.js, the
  * live intake) and the modules they read (work-types, intake-scope, bid-model, excel-math): every one is read
@@ -309,7 +314,7 @@ function createWorld(cfg) {
     world.rows.set(id, { data: clone(data), created_at: stamp(), updated_at: stamp(),
                          born: { at: sim.now, is_test: flagOf(data) }, flips: [] });
   };
-  /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang"|"html"|"gone"|"slow", id?, times?, ms? }
+  /** Fail a route. { route: "PUT"|"GET"|"TEST", mode: "http500"|"okfalse"|"network"|"hang"|"html"|"gone"|"slow"|"slowup"|"slowdown", id?, times?, ms? }
    *  ("slow" does not fail it: the server takes `ms` longer over the requests it is handed to, and answers them as usual). */
   world.fault = (spec) => { world.faults.push(Object.assign({ times: Infinity, used: 0 }, spec)); };
 
@@ -347,7 +352,9 @@ function createWorld(cfg) {
       const release = () => { if (req.heldBytes) { page.keepaliveBytes -= req.heldBytes; req.heldBytes = 0; } };
       return new Promise((resolve, reject) => {
         const fault = faultFor(req);
-        sim.at(net.up, () => {
+        // "slowup": the request is slow to REACH the server (a poor uplink), `ms` more than usual: a page that goes before it has
+        // arrived takes a plain request with it.
+        sim.at(net.up + (fault && fault.mode === "slowup" ? fault.ms : 0), () => {
           // Not there yet when its page went: a plain request dies with the page, a keepalive one does not.
           if (page.dead && !req.keepalive) { req.outcome = "aborted"; return; }
           if (fault && fault.mode === "network") {
@@ -369,7 +376,8 @@ function createWorld(cfg) {
             else res = handle(req);
             req.doneAt = sim.now;
             req.status = res.status;
-            sim.at(net.down, () => {
+            // "slowdown": the answer is slow to come BACK, `ms` more (the server has stored the request; its page has not heard yet).
+            sim.at(net.down + (fault && fault.mode === "slowdown" ? fault.ms : 0), () => {
               release();
               if (page.dead) { req.outcome = "reply dropped"; return; }
               req.outcome = "replied";
@@ -431,8 +439,32 @@ function createWorld(cfg) {
     const history = { replaceState(_s, _t, u) { if (u) page.url = new URL(String(u), page.url).href; }, pushState() {} };
     const timers = new Map();
     let timerSeq = 0;
+    // THIS PAGE'S VIEW OF THE BROWSER'S ONE localStorage. A write through it is announced to every OTHER page that is still running, as a
+    // `storage` event (never to the page that wrote it, and only when the value changed, as the browser does it), a task later. A page that
+    // has gone hears nothing. A world made with { storageEvents: false } is a browser that does not deliver them (a tab the browser has
+    // frozen, a page restored from the back/forward cache), which is the case the server's word has to cover.
+    const announce = (key, oldValue, newValue) => {
+      if (o.storageEvents === false || oldValue === newValue) return;
+      world.pages.forEach((p) => {
+        if (p === page || p.dead) return;
+        sim.at(0, () => {
+          if (p.dead) return;
+          (p.winListeners.storage || []).slice().forEach((fn) => {
+            try { fn({ type: "storage", key: key, oldValue: oldValue, newValue: newValue, storageArea: p.win.localStorage }); }
+            catch (e) { world.console.push({ page: p.label, level: "error", text: "storage handler threw: " + e }); }
+          });
+        });
+      });
+    };
+    const pageLocal = {
+      getItem: (k) => local.getItem(k),
+      setItem(k, v) { const old = local.getItem(k); local.setItem(k, v); announce(String(k), old, String(v)); },
+      removeItem(k) { const old = local.getItem(k); local.removeItem(k); announce(String(k), old, null); },
+      clear() { Object.keys(local.dump()).forEach((k) => pageLocal.removeItem(k)); },
+      dump: () => local.dump(),
+    };
     const win = {
-      document: doc, location, history, localStorage: local, sessionStorage: page.tab.session,
+      document: doc, location, history, localStorage: pageLocal, sessionStorage: page.tab.session,
       crypto: { randomUUID: () => "est-" + (++uuids) },
       fetch: makeFetch(page),
       setTimeout(fn, ms) {

@@ -97,7 +97,22 @@
  *                       sends its own save as the page goes (F4).
  *   betaDoor            the live intake's "Continue with Estimating Tool v2" on a new bid from each Projects tab, fast and slow server: the v2
  *                       page must find the saved project (copy a real one, edit a test one), never stop for a row that is on its way (F3).
- *   betaDoorFeedback    the door while it waits (disabled, "Saving..."), on a server that hangs, on a save that fails, and in a browser that
+ *
+ * ROUND 5 (the audit of round 4, C1, L1, B1, S1):
+ *   staleNewPageWiped   the stale v2 page of staleNewPage, with the evidence that another page wrote the project WIPED from localStorage by a
+ *                       third tab before the page acts (the page edits, is closed, or presses Continue), in a browser that tells the page
+ *                       (a `storage` event) and in one that does not (the server's word then): C1. And a page that only looked (S1).
+ *   staleQueuedCopyClosed  staleQueuedCopy with a third tab's New project wiping the blob and the stale page closed inside the debounce: what it sends
+ *                       as it goes (a keepalive request, which cannot ask the server) is refused by the page itself (C1).
+ *   quietWrites         a write to the shared blob that is not another page writing this project (no work in it; another project's) does not take a page
+ *                       that created the project over (C1's false positives).
+ *   ownRowNotRefused    the server's check must never refuse a row THIS page wrote itself (its first save stored, its answer slow); a GC start
+ *                       whose own first save the sandbox made is the same row.
+ *   v2BoardThenLiveIntake  (L1) a project the v2 board started, written first by the LIVE intake, in the same tab and in another, by "?new=1"
+ *                       and by the bare link: born as nobody said, never a test.
+ *   betaDoorSlowUplink  the beta door's wait runs out while its save is still on the way up (B1): what it sends as the page goes is what
+ *                       gets the project to the server.
+ * *   betaDoorFeedback    the door while it waits (disabled, "Saving..."), on a server that hangs, on a save that fails, and in a browser that
  *                       does not go (F3).
  *   abandonedWithWork   a board's New proposal whose blob holds work that never went through setState: flushed, born as its tab said.
  *                       (abandonedBoardStart, with nothing typed, is never flushed.)
@@ -1140,8 +1155,9 @@ const rowOf = (w, id) => {
            zip: d.zip === undefined ? null : d.zip, has_v2_model: !!d.polish_estimate, is_test: flagOf(d) };
 };
 async function staleNewPage(how, opts) {
-  const o = Object.assign({ tab: "all", continueStale: false, wipeAfterFirstEdit: false }, opts || {});
-  const w = W.createWorld({ frontend: ROOT });
+  const o = Object.assign({ tab: "all", continueStale: false, wipeAfterFirstEdit: false, wipeBeforeFirstEdit: false, leaveInstead: false,
+                            lookOnly: false, world: {} }, opts || {});
+  const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
   const tabA = w.mainTab;                                       // the v2 page's tab
   const tabB = w.openTab();                                     // the live intake's tab
   let live, v2, id;
@@ -1164,13 +1180,30 @@ async function staleNewPage(how, opts) {
   live.pressContinue();                                         // the live intake writes the project: its save creates the row
   await w.advance(3500);
   const rowAfterLive = rowOf(w, id);
+  const noteAfterLive = v2.text("sandbox-note");                // what the page says before anybody has typed in it (S1)
+  if (o.wipeBeforeFirstEdit) {
+    // a THIRD tab's New project wipes the shared blob BEFORE this page has written anything since the other tab saved the project (X1, round 5, C1):
+    // the evidence that the project was written is gone from localStorage, and what this page decided about it when it opened is all it has
+    await w.pressNewProject({ tab: "test", browserTab: w.openTab(), hold: 100 });
+  }
+  if (o.lookOnly) {
+    await w.advance(9000);
+    await w.settle();
+    return summary(w, id, { how: how, tab: o.tab, noteAtOpen: noteAtOpen, sameProject: sameProject, rowAfterLive: rowAfterLive,
+      noteAfterLive: noteAfterLive, noteAfterTyping: v2.text("sandbox-note"), final: rowOf(w, id), staleNavs: [] });
+  }
   v2.type("zip", "66101");                                      // the v2 page's estimator types one character
+  if (o.leaveInstead) {
+    // ... and closes the page inside the debounce: what is sent is sent by the page going, as a keepalive request
+    await w.advance(300);
+    v2.follow("/blank.html");
+  }
   await w.advance(1000);
   if (o.wipeAfterFirstEdit) {
     // a THIRD tab's New project wipes the shared blob: nobody has written the project now, but this page's copy is still older than it
     await w.pressNewProject({ tab: "test", browserTab: w.openTab(), hold: 100 });
   }
-  v2.type("city", "Kansas City");                               // and another: a refused page stays refused
+  if (!o.leaveInstead) v2.type("city", "Kansas City");          // and another: a refused page stays refused
   await w.advance(9000);
   const noteAfterTyping = v2.text("sandbox-note");
   if (o.continueStale) {
@@ -1178,7 +1211,7 @@ async function staleNewPage(how, opts) {
     await w.settle();
   }
   await w.settle();
-  return summary(w, id, { how: how, tab: o.tab, noteAtOpen: noteAtOpen, sameProject: sameProject,
+  return summary(w, id, { how: how, tab: o.tab, noteAtOpen: noteAtOpen, sameProject: sameProject, noteAfterLive: noteAfterLive,
     rowAfterLive: rowAfterLive, noteAfterTyping: noteAfterTyping, final: rowOf(w, id),
     staleNavs: w.navs.filter((n) => n.from === v2.label).map((n) => n.to) });
 }
@@ -1188,7 +1221,8 @@ async function staleNewPage(how, opts) {
  *  row now exists), adopts what is in it, and its estimator adds an address and presses Continue, which saves at once. Tab A's queued save then
  *  fires with ITS older copy, which has no address, over the row tab B just saved. The page that thought it was creating the project was
  *  overwriting a newer row with its own older copy, though it had typed nothing since. */
-async function staleQueuedCopy() {
+async function staleQueuedCopy(opts) {
+  const o = Object.assign({ wipeThenClose: false }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   const tabA = w.mainTab;
   const tabB = w.openTab();
@@ -1205,9 +1239,54 @@ async function staleQueuedCopy() {
   p2.pressContinue();                                           // its save is awaited and goes now
   await w.advance(1000);
   const rowAfterP2 = rowOf(w, id);
+  if (o.wipeThenClose) {
+    // X1, round 5, C1: a THIRD tab's New project wipes the blob, and tab A is closed inside the debounce: what is sent is its queued copy (the shared blob
+    // is empty), as the page goes, and a request sent as a page goes cannot ask the server first
+    await w.pressNewProject({ tab: "test", browserTab: w.openTab(), hold: 100 });
+    p1.follow("/blank.html");
+  }
   await w.settle();                                             // tab A's queued save fires (or is not sent)
   return summary(w, id, { p2NoteAtOpen: p2NoteAtOpen, p2Draft: p2Draft, rowAfterP2: rowAfterP2, final: rowOf(w, id),
     p1Note: p1.text("sandbox-note"), p1Label: p1.label });
+}
+
+/** C1's control. The server's check before a created project's first save must never refuse a row THIS page wrote itself: the page's first save is
+ *  STORED and its answer is slow to come back (so the page has not yet spent its start), and the estimator edits again; the second save asks the server
+ *  and finds the row, which is the page's own. `gc`: the board's GC tab, whose { audience: "GC" } the sandbox saves at once as a test, and the first
+ *  edit's save then finds that row. Both edits must reach the server, and the page must not say it stopped. */
+async function ownRowNotRefused(gc) {
+  const w = W.createWorld({ frontend: ROOT });
+  const v2 = await w.startNewEstimate({ gc: gc });
+  const id = v2.draftId();
+  if (!gc) w.fault({ route: "PUT", mode: "slowdown", ms: 4000, times: 1 });          // the first save is stored; the page hears 4 s late
+  v2.type("project_name", "First Edit");
+  await w.advance(gc ? 100 : 3300);                                                  // (not gc: the first save has gone and is stored)
+  const rowAfterFirst = rowOf(w, id);
+  v2.type("address", "2 Second St");
+  await w.settle();
+  return summary(w, id, { gc: gc, rowAfterFirst: rowAfterFirst, final: rowOf(w, id), note: v2.text("sandbox-note") });
+}
+
+/** Writes to the shared blob that are NOT another page writing this project, heard by a v2 page that created it: a blob with no work in it, stamped for
+ *  this project (a board's New button leaves one), and a blob that is ANOTHER project's, work and all. Neither takes the page over: nothing was written to
+ *  this project. (A plain page in a second tab stands for whichever page wrote it.) The page then types, and its project is saved as it always was. */
+async function quietWrites(kind) {
+  const w = W.createWorld({ frontend: ROOT });
+  const v2 = await w.startNewEstimate({});
+  const id = v2.draftId();
+  const other = w.load("/projects.html", { tab: w.openTab(), standIn: true });
+  await w.advance(0);
+  const blob = kind === "workless" ? { __draft_id: id, audience: "GC", is_test: true } : { __draft_id: "other-project", project_name: "Somebody Else's Bid" };
+  other.win.localStorage.setItem("treadwell.proposal_tool.state", JSON.stringify(blob));
+  await w.advance(400);
+  const noteAfterWrite = v2.text("sandbox-note");
+  if (kind === "workless") {
+    v2.type("project_name", "Typed After A Quiet Write");
+    await w.settle();
+  } else {
+    await w.settle();
+  }
+  return summary(w, id, { kind: kind, noteAfterWrite: noteAfterWrite, noteAtEnd: v2.text("sandbox-note"), final: rowOf(w, id) });
 }
 
 /** F4. The v2 intake is left with TWO saves pending: the page's own 600 ms save has run (so shared.js's 2.5 s save of that copy is queued) and
@@ -1321,22 +1400,26 @@ async function abandonedV2Start(gc, opts) {
     other: w.row(ELSEWHERE), lastDraft: last.win.TW.getDraftId(), lastKind: last.kind, startAfter: w.startOf(id) });
 }
 
-/** F2, the other half. What a project is STARTED AS follows the project, not the page: a project the v2 board started and that the estimator
- *  then takes to the LIVE intake (the sidebar's link resumes the browser's current draft) is written there by a page that said nothing of it. */
-async function v2BoardThenLiveIntake() {
+/** F2, the other half, as round 5 (L1) has it. A project the v2 board started and that the estimator then takes to the LIVE intake (the sidebar's
+ *  link resumes the browser's current draft; `opts.otherTab`: in another tab, `opts.link`: "?new=1" or the bare link) is written there by a page
+ *  that is not a v2 page. The board's start belongs to the v2 page it opens, so a real bid typed there is NOT born a test: it is born as nobody said. */
+async function v2BoardThenLiveIntake(opts) {
+  const o = Object.assign({ otherTab: false, link: "/?new=1" }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
+  const tabB = o.otherTab ? w.openTab() : w.mainTab;
   const v2 = await w.startNewEstimate({});
   const id = v2.draftId();
-  v2.follow("/?new=1");
-  await w.settle();
-  const live = w.pageOf("v1intake");
+  const startAtBoard = w.startOf(id);
+  let live;
+  if (o.otherTab) { live = w.load(o.link, { tab: tabB }); await w.settle(); }
+  else { v2.follow(o.link); await w.settle(); live = w.pageOf("v1intake"); }
   const liveDraft = live.draftId();
   live.type("project_name", "Walk-in Job");
   live.type("address", "5 Elm St");
   await w.advance(1500);
   live.pressContinue();
   await w.settle();
-  return summary(w, id, { liveDraft: liveDraft });
+  return summary(w, id, { liveDraft: liveDraft, startAtBoard: startAtBoard, otherTab: o.otherTab, link: o.link });
 }
 
 /** F5. The browser has ONE copy of the draft in localStorage, and it can hold ANOTHER tab's project while this tab's page is on its own id.
@@ -1468,7 +1551,12 @@ process.on("exit", (code) => {
     "gc, first save refused": await abandonedV2Start(true, { faults: [{ route: "PUT", mode: "network", times: 1 }] }),
     "gc, left before the page heard from the server": await abandonedV2Start(true, { world: { net: { up: 150, down: 150 } }, leaveAt: 100 }),
   };
-  out.v2BoardThenLiveIntake = await v2BoardThenLiveIntake();
+  out.v2BoardThenLiveIntake = {
+    "same tab, ?new=1": await v2BoardThenLiveIntake(),
+    "same tab, the bare link": await v2BoardThenLiveIntake({ link: "/" }),
+    "another tab, ?new=1": await v2BoardThenLiveIntake({ otherTab: true }),
+    "another tab, the bare link": await v2BoardThenLiveIntake({ otherTab: true, link: "/" }),
+  };
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
@@ -1487,7 +1575,20 @@ process.on("exit", (code) => {
     "projects/active": await staleNewPage("projects", { tab: "active" }),
     "projects/test": await staleNewPage("projects", { tab: "test" }),
   };
+  // X1, round 5, C1 and S1: the evidence of another page's write is wiped from localStorage by a third tab before this page has acted on it
+  out.staleNewPageWiped = {
+    "board, the blob wiped by a third tab before the first edit": await staleNewPage("board", { wipeBeforeFirstEdit: true }),
+    "projects/active, the blob wiped by a third tab before the first edit": await staleNewPage("projects", { tab: "active", wipeBeforeFirstEdit: true }),
+    "board, wiped, the page is closed inside the debounce": await staleNewPage("board", { wipeBeforeFirstEdit: true, leaveInstead: true }),
+    "board, wiped, a browser that delivers no storage events": await staleNewPage("board", { wipeBeforeFirstEdit: true, world: { storageEvents: false } }),
+    "board, wiped, no events, Continue pressed": await staleNewPage("board", { wipeBeforeFirstEdit: true, continueStale: true, world: { storageEvents: false } }),
+    "board, only looked": await staleNewPage("board", { lookOnly: true }),
+    "projects/test, only looked": await staleNewPage("projects", { tab: "test", lookOnly: true }),
+  };
   out.staleQueuedCopy = await staleQueuedCopy();
+  out.staleQueuedCopyClosed = await staleQueuedCopy({ wipeThenClose: true });
+  out.quietWrites = { workless: await quietWrites("workless"), foreign: await quietWrites("foreign") };
+  out.ownRowNotRefused = { direct: await ownRowNotRefused(false), gc: await ownRowNotRefused(true) };
   out.twoSavesPending = {
     "small": await twoSavesPending(),
     "small, the first save slow": await twoSavesPending({ slowFirst: 400 }),
@@ -1513,6 +1614,11 @@ process.on("exit", (code) => {
     blocked: await betaDoor("active", { blocked: true, steps: [{ at: 0, press: true }, { at: 5000, sample: "waiting" }, { at: 12000, sample: "afterGiveBack" },
                                                                 { at: 12000, press: true }] }),
   };
+  // B1: the door's wait runs out while its save is still on the way UP (a poor uplink): a plain request does not outlive its page
+  out.betaDoorSlowUplink = {};
+  for (const tab of ["test", "active"]) {
+    out.betaDoorSlowUplink[tab] = await betaDoor(tab, { faults: [{ route: "PUT", mode: "slowup", ms: 9000, times: 1 }] });
+  }
   out.twoPagesOneProject = {};
   for (const tab of ["all", "active", "test"]) out.twoPagesOneProject[tab] = await twoPagesOneProject(tab);
   out.wiped = {};
