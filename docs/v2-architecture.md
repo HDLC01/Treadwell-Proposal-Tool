@@ -812,7 +812,10 @@ name (an `off` one is never priced) go after them, in key order. A list that nam
 bid is stamped in its keys' order. Without that, a far Combo with Epoxy and a Polish copy both bases, saved at $78,628, opened on the
 copy as the carrier (it sorts first in jsonb) and its first save wrote $81,086 for good. A section with no place is newer than one that
 has one. A tie (a tab still running the code from before this copied a section whole, so the copy holds its source's place) puts a copy after the
-sheet it was copied from, however many copies deep (`source`), and is settled by the sheet's id for the rest, never by key order. `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
+sheet it was copied from, however many copies deep (`source`), and is settled by the sheet's id for the rest, never by key order. A bid SOME of whose sheets say their place (a tab still running the
+code from before this added the others) has EVERY place written down when it opens, and its next save carries them all: `withSectionOrder` hands a bid back untouched only when every sheet says its place.
+A COPY of the Gyp sheet that changes preset keeps its Copy<N> key and its place (`moveSectionSheet` writes the new sheet into it; the Gyp sheet itself is re-filed under the new sheet's key and keeps its
+place too). No test held either until round 7, part 2 (the round-6 order audit's gaps, L5). `tests/js/_jsonb.js` re-keys a reopened blob the way jsonb does, and the harnesses that reopen a saved
 estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
 (`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session*.py`: the session walk in three files).
 
@@ -925,7 +928,11 @@ for a SINGLE-base job only, and a Gyp base is filled like the others:
   the Gyp cards say it fills. It was typed (the Gyp sheet works its own drive time per mobilization) and a far Gyp quote priced no drive until somebody typed one.
   PRICE: a far Gyp crew of 4 for 120 hours gains 4 x 6.5 x $33 = $858 of labor; on that bid it takes the Gyp sheet's subtotal from $24,148 over its $25,000 tier
   (Gyp!B72), so the gross profit is 35% and not 40% and the bid FALLS, $46,088 to $44,321. Gyp!B64 takes the drive off the labor dollars, so the nights do not move
-  (a drive of $1,072.50, five guys, leaves the half dollar of the rounded-up labor in: 60.0015 nights, a dollar on each line).
+  (a drive of $1,072.50, five guys, leaves the half dollar of the rounded-up labor in: 60.0015 nights, a dollar on each line). Round 7, part 2 holds the rest of D2 on the page
+  (`tests/test_polish_travel_round7_part2.py`, every reopen a jsonb one): a drive the estimator TYPED on a Gyp base stays typed through every answer and a reload (3 x 5 = $495 at
+  300, 50 and 190 miles), and a far Gyp OPTION, a copy of the Gyp sheet, prices its own drive on its own crew (6 guys: 6 x 6.5 = $1,287, inside the option's own labor), follows
+  every answer (6 x 10 at 300 miles) and gives a fill nobody touched back whole under 70 miles. Before part 1 a Gyp option's drive was never filled (`followDistanceOptions`
+  skipped every Gyp section), and all three of these fail on that tree.
 - **D3, after the x on a SINGLE-base job's drive, a job-type switch keeps it removed:** no seed, no carry; Add Travel Labor brings it back. Saved v2 bids may re-price;
   a figure the estimator typed stays theirs.
 - **THE ANSWERS.** J, the job's (`no_travel_labor` on the root): the x on the drive of a single-base job; it survives switches (D3), and Add Travel Labor on a base takes
@@ -947,6 +954,22 @@ a mutation entry for each line), and over every sequence by the walks, which hol
 Travel Labor rows; it was ONE_DRIVE), FAR_BASES (every base on a far job holds its own crew's drive unless J or S says it has none, a Gyp base too; it was FAR_CARRIER),
 OWNED, and ANSWER_OWNER, ANSWER_HELD and PROMOTED judged as transitions against the draft each step started from, each shown to fire by a mutation entry
 (`tests/test_polish_travel_sequences_mutations.py`, `tests/test_polish_travel_sequences_answer.py`).
+
+**Round 7, part 2 (2026-10-21): the Gyp drive held on the page, and the round-6 lows.** G1 is Hanz's D2 above, built in part 1; part 2 adds the page tests D2 still lacked (see D2). The lows:
+- **L1, one verdict on rounding.** The working on the Labor step said "rounded up" by comparing the bare count x rate with the charge, so a whole count carrying float noise read as rounded: a far
+  Gyp crew of 4 for 125 hours at the library's $33.66 counts (17,688 - 858) / 33.66 / 10 = 50 nights, 50.00000000000001 in floating point, and the working said "$3,500.00, rounded up to $3,500" beside
+  a Review row that said nothing. Both now say it by `travelQtyShown`'s own verdict (the product to twelve figures, as the sheet's ROUNDUP is guarded).
+- **L2, one count shown one way.** The Review's Hotel and Per Diem rows, and the two lines of the working, each showed the count to the places its own rate needed, so the one count a far Epoxy
+  crew of 5 for 10 days with its drive charges on both read 50.0019 nights beside 50.002 days. Each place charges its lines first and `travelQtysShown` shows a count two lines charge to the places
+  the line that needs the most needs (50.0019 on both); a count typed on one line is that line's own. Held by `tests/test_polish_travel_round7_part2.py`.
+- **L3, a focused field scrolls clear of the fixed total bar.** html's `scroll-padding-bottom` is the bar's measured height (`--bid-h`, which the page writes) and 8px of air
+  (`polish-estimate.html`); Chrome had left the Review's Shipping % box wholly behind the bar after a focus (673 to 700px of a 700px window, the bar's top at 616). The bar holds nothing that takes focus,
+  so it needs no exception like the sticky head's. Held by `tests/test_v2_bid_bar_height.py` (`focus_problems`).
+- **L4, a % box comes clear of the pinned Total column with the rest of its line.** The Review tables' scroll padding was the pinned column's 126px, so the browser brought a % box typed into just to the
+  column's edge and left the "%", its gap and the end of the refusal's line under it (11px at 850, 820 and 600px, sidebar open). It is 150px, the column and what a Rate cell holds to the right of a box,
+  and the table scrolls to its end. Held by `tests/test_v2_review_table_fits.py` (`refusal_line_problems`).
+- **L5, two order shapes the round-6 order audit found unguarded**, now held by `tests/test_v2_sheet_order.py` with a mutation each (see 7.10's order paragraph): a bid some of whose sheets say no place,
+  and a copy of the Gyp sheet that changes preset. The walk harness header's count of the answers' own sequences, stale at fifteen when there were seventeen, was put right by part 1 (twenty-two now).
 
 A base the Sheets panel DEMOTES keeps its Travel Labor row (the fifth audit, 2026-10-20): `moveTravelLabor` gives the new carrier a copy and leaves the old carrier,
 an option now, the row it had, so the option prices its own drive from the moment of the pick and follows every later answer on its own crew. Before, the row MOVED, and the
@@ -988,8 +1011,10 @@ the count comes from under each box (`travelQtyHint`: "the labor lines of the ba
 sentence, "Nights and per diem days follow the man-days ..., Kyle's way"), and the Review's Hotel and Per Diem rows say it under the line's name. A Review row reads true (round 6, part 3, M4): its quantity
 is the count the price used, to as many places as it takes for the count x the rate to come to the cent the price worked out (`travelQtyShown`: at the library's Gyp rate, 4 guys for 120 hours are 48.0006
 nights and $3,361 at $70, so the row says 48.0006, not 48), and under the total it says "rounded up to the dollar, as the sheet does" whenever the count x the rate is not whole dollars (each line is
-ROUNDUP'd, Polish!D58); the working under the travel block shows the same count ("48.0006 nights x $70.00 = $3,360.04, rounded up to $3,361"). Held by `tests/test_polish_travel_round5.py`,
-`tests/test_polish_travel_round6.py` and `tests/test_polish_travel_round6_part3.py`, and by `NIGHTS`, judged after every step of every walk. The Travel Labor card's x can be undone: with no Travel Labor line on the
+ROUNDUP'd, Polish!D58); the working under the travel block shows the same count ("48.0006 nights x $70.00 = $3,360.04, rounded up to $3,361"). Since round 7, part 2 the two say "rounded up" by ONE
+verdict, `travelQtyShown`'s (L1: the working had called a whole count carrying float noise rounded), and a count Lodging and Per Diem both charge is shown one way on both (L2, `travelQtysShown`).
+Held by `tests/test_polish_travel_round5.py`, `tests/test_polish_travel_round6.py`, `tests/test_polish_travel_round6_part3.py` and `tests/test_polish_travel_round7_part2.py`, and by `NIGHTS`, judged after
+every step of every walk. The Travel Labor card's x can be undone: with no Travel Labor line on the
 carrier the travel block draws an Add Travel Labor control (`addTravelLabor`: the row a new bid is seeded with, filled by the rule on a far job), and the summary no longer says Travel Labor
 "comes on" over a job with no line.
 
