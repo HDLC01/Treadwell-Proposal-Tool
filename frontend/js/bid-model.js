@@ -1405,6 +1405,24 @@
     return model;
   }
 
+  /** A DRIVE LINE THE TOOL FILLED, SWITCHED BACK ON, IS FILLED AGAIN BY THE RULE (round 7 polish, W4). An answer leaves a line that is switched off alone (followDistanceOnRow: no fill and no take-back), so the
+   *  miles typed, the job gone local or the Gyp card's Mobilizations moved while the line was off left its hours at the old answer, and switching it back on priced them, with mobilizations a figure N
+   *  trips long. The page calls this when the switch on a labor line is flipped ON: `row` is that line, on the section filed under `tab` of the WHOLE model. It is filled by the rule from the distance and
+   *  the trips on file, as the answer it missed would have filled it (followDistanceOnRow: an option's line goes back whole when the job is local, a base's loses its hours), so the price is the price of
+   *  the same bid that was never switched off. ONLY HOURS THE TOOL WROTE ARE MOVED (driveHoursAreTools): a figure the estimator typed or a box they cleared is theirs, and a line the tool never filled
+   *  (blank, off from the start) is left for them to fill, which is what travelHow tells them to do. Another labor line, a line still switched off (the rule leaves it) and a section that is off are left as
+   *  they are. MUTATES the row; returns the model. */
+  function followDriveSwitchedOn(model, tab, row) {
+    if (!isObject(model) || !isTravelRow(row) || !driveHoursAreTools(row)) return model;
+    var e = entryOrNull(model, tab);
+    if (!e || e.kind === "off") return model;
+    var rows = laborLinesOf(e.section);
+    if (rows.indexOf(row) < 0) return model;
+    var d = model.distance;
+    followDistanceOnRow(model, row, rows, d ? milesOrNull(d.miles) : null, !isDriveTab(model, tab), driveTripsOf(e));
+    return model;
+  }
+
   /** THE RULE ABOVE, FOR ONE TRAVEL LABOR ROW: `row`, one of the labor lines `rows` (the older man-days auto counts the others' man-days). Its guys are the crew of the
    *  lines beside it, `rows` (ownCrewSize), whichever section it is on: a base's own crew (round 7, D1: a Combo's bases each drive their own; until then a base's row took the
    *  biggest crew of both bases, crewSize) and an option's own (`own`). An option's row, when the job goes local or the miles are cleared, gives a fill nobody touched back
@@ -1773,15 +1791,17 @@
     return true;
   }
 
-  /** THE OTHER BASES THAT KEEP A DRIVE OF THEIR OWN when the base filed under `tab` holds no Travel Labor line (round 7, part 4, P6: the round-7 audit's F5): the labels of every other base, on a
-   *  job of several bases that has not said it has no drive (J). The x on a Combo base's drive is that sheet's answer (S) and every other crew keeps its own drive, so the words of the sheet
-   *  that lost its line say THIS SHEET has none, never that the bid has none or that the drive adds nothing. [] for a single-base job, for a job that said it has no drive (the x on every
-   *  base's drive: then the bid has none) and for a section that is not a base. Reads only; never throws. */
+  /** THE OTHER BASES THAT KEEP A DRIVE OF THEIR OWN when the base filed under `tab` holds no Travel Labor line (round 7, part 4, P6: the round-7 audit's F5): the labels of every other base THAT HOLDS A
+   *  TRAVEL LABOR LINE (round 7 polish, W3), on a job of several bases that has not said it has no drive (J). The x on a Combo base's drive is that sheet's answer (S) and every other crew keeps its
+   *  own drive, so the words of the sheet that lost its line say THIS SHEET has none, never that the bid has none or that the drive adds nothing. A base with no line keeps nothing to name: a NEW
+   *  Combo whose library declined Travel gave every base its own answer (S) and no line, and the words said "The Epoxy sheet keeps its own Travel Labor line" beside "no line on that sheet, $0". [] for
+   *  a single-base job, for a job that said it has no drive (the x on every base's drive: then the bid has none), when no other base holds a line, and for a section that is not a base. Reads only;
+   *  never throws. */
   function otherDrives(model, tab) {
     if (!isObject(model) || model.no_travel_labor === true) return [];
     var drives = driveEntries(model);
     if (drives.length < 2 || !drives.some(function (e) { return e.tab === tab; })) return [];
-    return drives.filter(function (e) { return e.tab !== tab; }).map(function (e) { return e.label; });
+    return drives.filter(function (e) { return e.tab !== tab && travelRowsIn(e.section).length > 0; }).map(function (e) { return e.label; });
   }
 
   /** otherDrives in a sentence: "The Epoxy sheet keeps its own Travel Labor line.", "The Epoxy and Copy1 sheets keep their own Travel Labor lines.", "" for none. */
@@ -2072,6 +2092,14 @@
     return "one " + plainNum(src.roundTrip) + " mile round trip at " + src.mph + " mph from the Olathe office";
   }
 
+  /** THE ROUND TRIPS A TRAVEL LABOR ROW'S HOURS ARE, AS THE PRICE USES THEM (round 7 polish, W2): the trips of hours the distance wrote (driveHoursSource: a Gyp section's mobilizations, 3 for the 19.5 hours
+   *  of three trips at 190 miles), and 1 for hours the estimator typed, a row the distance did not write and every other line, where the figure is the one trip they said. The summary of how the guys are
+   *  counted and the hint under a typed Guys box say it: they said "one round trip" over three. `model` is the whole model or the page's view of a section (driveHoursSource). Reads only. */
+  function driveTripsPriced(model, row) {
+    var src = driveHoursSource(model, row);
+    return src && src.trips > 1 ? src.trips : 1;
+  }
+
   /** Who the trip is charged to, in words, while Travel Labor's guys are on the crew's size: "for each of the 4 guys on the
    *  labor lines above". "" when the guys are typed (the note says so itself) or are the older man-days. `own`: the row is an
    *  option's, whose guys are the lines of its own section (crewWhere). */
@@ -2132,6 +2160,9 @@
       var n = num(row.guys);
       return "Most guys on one labor line above" + (n > 0 ? ": " + plainNum(n) : "") + ".";
     }
+    // A DRIVE OF SEVERAL ROUND TRIPS says how many (round 7 polish, W2): typed guys over the hours of three mobilizations are three round trips each, and "One round trip for each guy" read false under them.
+    var trips = isTravelRow(row) && !row.guys_auto ? driveTripsPriced(model, row) : 1;
+    if (trips > 1) return plainNum(trips) + " round trips for each guy, one for each mobilization.";
     if (isTravelRow(row) && !row.guys_auto) return "One round trip for each guy.";
     return manDaysHint(!!(row && row.guys_auto), travelManDays(rows));
   }
@@ -2523,7 +2554,9 @@
     // round trip each, and is never worded as man-days: those are the nights and days below, a different figure.
     if (crewFollow && tr && rowOn(tr) && (num(tr.days) > 0 || !local)) {
       // The lines of the sheet the row is on: every drive is its own crew's (round 7, D1), where a Combo's one drive was the bigger crew "of the base sheets".
-      lines.push("Guys = the most guys on any one labor line above (" + qty(tr.guys) + " now), one round trip each.");
+      // A DRIVE OF SEVERAL ROUND TRIPS says how many (round 7 polish, W2): the hours of three mobilizations are three round trips each, as the line above says.
+      var trips = driveTripsPriced(M, tr);
+      lines.push("Guys = the most guys on any one labor line above (" + qty(tr.guys) + " now), " + (trips > 1 ? qty(trips) + " round trips each, one for each mobilization" : "one round trip each") + ".");
     }
     // A LINE ON THE OLDER AUTO (a bid saved before 2026-10-12) is charged as it always was, the carrier's own rows: the sheet's count where its Polish root is priced by rev 2 (a fourth hand on the
     // joint-filler line, or a row paid more, makes that more than guys x days), guys x days otherwise. Its words are the carrier's alone.
@@ -7212,7 +7245,7 @@
     driveTabs: driveTabs, isDriveTab: isDriveTab, sectionKinds: sectionKinds, drivesHoldTravel: drivesHoldTravel, releaseNobodysTravelRow: releaseNobodysTravelRow,
     // Round 7, part 4 (the round-7 audit's remaining findings): a Gyp drive's round trips are its mobilizations (P2), a Combo saved under the one-drive law opens with every base's drive (P4), and a
     // sheet whose line went beside a base that keeps its own says so (P6).
-    driveTripsOf: driveTripsOf, followDriveTrips: followDriveTrips, giveEveryBaseItsDrive: giveEveryBaseItsDrive, givenDrivesPrice: givenDrivesPrice, otherDrives: otherDrives, otherDrivesWords: otherDrivesWords,
+    driveTripsOf: driveTripsOf, followDriveTrips: followDriveTrips, followDriveSwitchedOn: followDriveSwitchedOn, giveEveryBaseItsDrive: giveEveryBaseItsDrive, givenDrivesPrice: givenDrivesPrice, otherDrives: otherDrives, otherDrivesWords: otherDrivesWords,
     rowOn: rowOn, sliderHtml: sliderHtml, manDaysHint: manDaysHint, lodgingHint: lodgingHint,
     filledIn: filledIn,
     takeoffSf: takeoffSf, measuredSf: measuredSf, measuredSfAreas: measuredSfAreas, measuredSfRows: measuredSfRows,
