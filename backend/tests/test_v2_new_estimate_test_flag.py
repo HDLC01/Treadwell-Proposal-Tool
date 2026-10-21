@@ -1007,47 +1007,107 @@ def test_a_gc_boards_active_start_is_not_filed_as_a_test_by_a_look_at_v2(ran):
     assert t["startAtArrival"] == "1", t["startAtArrival"]
 
 
-def test_an_abandoned_board_start_is_flushed_born_as_its_tab_said(ran):
-    """F2 of the audit of round 2. A board's "+ New proposal" (the real startNewProposal of js/portal.js) opens the live intake;
-    from the GC board it leaves { audience: "GC" } in the draft, which never went through setState. Nothing is typed and the
-    estimator opens ANOTHER project, so shared.js flushes the abandoned blob under its own id. The start travels in that PUT: the
-    row is born a test from the Test tab and a real bid from the Active tab, where round 2 created it unfiled on the board. The
-    Direct board leaves nothing to flush. The other project's page boots and it is only read."""
+def _other_project_untouched(name, r):
+    """What every abandoned-start run shares: the other project's page booted and it was only read."""
+    assert r["lastKind"] == "v1intake" and r["lastDraft"] == ELSEWHERE, "%s: the other project's page did not boot" % name
+    assert [q for q in reqs(r, id_=ELSEWHERE) if q["method"] != "GET"] == [], "%s: the other project was written to" % name
+    assert r["other"]["is_test"] is None and r["other"]["bornIsTest"] is None, "%s: %r" % (name, r["other"])
+
+
+def test_an_abandoned_board_start_with_nothing_typed_never_becomes_a_row(ran):
+    """F2 of the audit of round 3 (and what became of round 3's own answer to F2 of round 2). A board's "+ New proposal" (the real
+    startNewProposal of js/portal.js) opens the live intake; from the GC board it leaves { audience: "GC" } in the draft. Nothing is
+    typed and the estimator opens ANOTHER project, so shared.js decides what to do with the abandoned blob under its own id. Round 3
+    flushed it with the start in the PUT (a test from the Test tab, a real bid from the Active tab), which put a NAMELESS GC row on the
+    board where staff work. A start is not work: the blob holds nothing the estimator typed (hasWork), so it is not flushed, and no row
+    is ever made for it. The other project's page boots and it is only read."""
     ab = ran["abandonedBoardStart"]
-    assert sorted(ab) == ["direct/active", "direct/test", "gc/active", "gc/test", "gc/test, its blob says real",
-                          "gc/test, its save refused"], sorted(ab)
+    assert sorted(ab) == ["direct/active", "direct/test", "gc/active", "gc/test"], sorted(ab)
+    for name, r in sorted(ab.items()):
+        gc = name.startswith("gc/")
+        assert r["blobAtArrival"] == ({"audience": "GC", "__draft_id": r["id"]} if gc else {}), "%s: %r" % (name, r["blobAtArrival"])
+        assert r["x"] is None and r["rowIds"] == [ELSEWHERE], "%s: the abandoned start became a row: %r %r" % (name, r["x"], r["rowIds"])
+        assert [q for q in reqs(r, id_=r["id"]) if q["method"] != "GET"] == [], "%s: something was sent for the abandoned project" % name
+        assert r["startAfter"] == r["startAtArrival"], "%s: a start was spent although nothing was stored: %r" % (name, r["startAfter"])
+        _other_project_untouched(name, r)
+
+
+def test_an_abandoned_board_blob_that_holds_work_is_flushed_born_as_its_tab_said(ran):
+    """The other side of the rule above, and what withStart is for. A blob that holds WORK which never went through setState (written by a
+    page that did not say what the project was started as) is flushed as another project opens, and what the project was started as
+    travels in that PUT: the row is born a test from the Test tab and a real bid from the Active tab. The start is used up once the
+    server has stored it."""
+    ab = ran["abandonedWithWork"]
+    assert sorted(ab) == ["gc/active", "gc/test", "gc/test, its blob says real", "gc/test, its save refused"], sorted(ab)
     for name, want in (("gc/test", True), ("gc/active", False)):
         r = ab[name]
-        assert r["blobAtArrival"] == {"audience": "GC", "__draft_id": r["id"]}, "%s: %r" % (name, r["blobAtArrival"])
+        assert r["blobAtArrival"] == {"audience": "GC", "__draft_id": r["id"], "project_name": "Typed Before Leaving"}, (
+            "%s: %r" % (name, r["blobAtArrival"]))
         x = r["x"]
         assert x is not None and x["bornIsTest"] is want and x["is_test"] is want and x["flips"] == 0, (
-            "%s: the abandoned start was flushed unfiled: %r" % (name, x))
+            "%s: the abandoned blob was flushed without what it was started as: %r" % (name, x))
         assert r["startAtArrival"] == ("1" if want else "0"), "%s: %r" % (name, r["startAtArrival"])
         assert r["startAfter"] is None, "%s: the start was left armed after the row was stored: %r" % (name, r["startAfter"])
-    for name in ("direct/test", "direct/active"):
-        assert ab[name]["blobAtArrival"] == {} and ab[name]["x"] is None, "%s: %r %r" % (name, ab[name]["blobAtArrival"], ab[name]["x"])
     for name, r in sorted(ab.items()):
-        assert r["lastKind"] == "v1intake" and r["lastDraft"] == ELSEWHERE, "%s: the other project's page did not boot" % name
-        assert [q for q in reqs(r, id_=ELSEWHERE) if q["method"] != "GET"] == [], "%s: the other project was written to" % name
-        assert r["other"]["is_test"] is None and r["other"]["bornIsTest"] is None, "%s: %r" % (name, r["other"])
+        _other_project_untouched(name, r)
 
 
 def test_a_copy_that_already_says_is_test_is_sent_as_it_is(ran):
-    """The start is a default, never an order. The abandoned GC start (a Test-tab start, "1") is flushed from a blob that already
-    holds a word of its own (is_test false: a hydrate wrote what the server said, or a person did), and the PUT carries that
-    word, not the start's."""
-    r = ran["abandonedBoardStart"]["gc/test, its blob says real"]
+    """The start is a default, never an order. The abandoned blob (a Test-tab start, "1") is flushed holding a word of its own (is_test
+    false: a hydrate wrote what the server said, or a person did), and the PUT carries that word, not the start's."""
+    r = ran["abandonedWithWork"]["gc/test, its blob says real"]
     assert r["blobAtArrival"].get("is_test") is False and r["startAtArrival"] == "1", (r["blobAtArrival"], r["startAtArrival"])
     assert r["x"] is not None and r["x"]["bornIsTest"] is False and r["x"]["is_test"] is False, (
         "the start overruled the blob's own word: %r" % r["x"])
 
 
 def test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save(ran):
-    """The abandoned GC start's own save is refused (HTTP 500): no row exists, so the start must NOT be spent. It is used up only
-    once the server has stored a copy that carries it."""
-    r = ran["abandonedBoardStart"]["gc/test, its save refused"]
+    """The abandoned blob's own save is refused (HTTP 500): no row exists, so the start must NOT be spent. It is used up only once the
+    server has stored a copy that carries it."""
+    r = ran["abandonedWithWork"]["gc/test, its save refused"]
     assert r["x"] is None, "a row exists although the only save was refused: %r" % r["x"]
     assert r["startAtArrival"] == "1" and r["startAfter"] == "1", (r["startAtArrival"], r["startAfter"])
+
+
+def test_the_v2_boards_new_estimate_starts_the_project_as_a_test_under_its_own_id(ran):
+    """F2 of the audit of round 3, first half. The board's New estimate (the REAL startNew of js/v2-board.js, on the Direct and on the GC
+    tab) clears the keys that make shared.js mint a new draft and then says what the project is started as, like every other door that
+    starts one: a test. The start is minted with the project's id, so the page that opens finds it under the id it is on. (A
+    { audience: "GC" } the GC tab leaves behind is not disturbed.)"""
+    runs = ran["abandonedV2Start"]
+    for name, blob in (("direct", {}), ("gc", {"audience": "GC"})):
+        r = runs[name]
+        assert r["startAtArrival"] == "1", "%s: the board started the project as %r, not as a test" % (name, r["startAtArrival"])
+        assert r["blobAtStart"] == blob, "%s: the board left %r in the draft" % (name, r["blobAtStart"])
+
+
+def test_an_abandoned_v2_start_never_becomes_a_nameless_row(ran):
+    """F2 of the audit of round 3, second half. The GC tab's New estimate leaves { audience: "GC" } in the draft, which the page saves at once
+    as a test. When that first save does not land (it is refused, or the estimator goes before the page has heard from the server) the blob is
+    all that is left, and shared.js flushed it under its own id as the next project's page opened: a NAMELESS GC row born UNFILED, on the real
+    board. Nothing the estimator typed is in it, so it is not flushed. The Direct tab leaves nothing at all. No save of the abandoned project is
+    stored, and no row exists for it."""
+    runs = ran["abandonedV2Start"]
+    for name in ("direct", "gc, first save refused", "gc, left before the page heard from the server"):
+        r = runs[name]
+        assert r["x"] is None and r["rowIds"] == [ELSEWHERE], "%s: the abandoned start became a row: %r %r" % (name, r["x"], r["rowIds"])
+        assert [q for q in reqs(r, "PUT", r["id"]) if q["status"] == 200] == [], "%s: a save of the abandoned project was stored" % name
+        _other_project_untouched(name, r)
+    # the control: when the page's own first save lands, the row is there, born a test, and nothing else has to be said
+    g = runs["gc"]
+    assert g["x"] is not None and g["x"]["bornIsTest"] is True and g["x"]["is_test"] is True and g["x"]["flips"] == 0, g["x"]
+    _other_project_untouched("gc", g)
+
+
+def test_a_project_started_on_the_v2_board_is_a_test_whichever_page_writes_it_first(ran):
+    """What a project is started as follows the PROJECT, not the page that happens to write it. The estimator starts a New estimate on the v2
+    board and takes the same project to the LIVE intake (the sidebar's link resumes the browser's current draft), where a page that knows
+    nothing of the board writes it: the row is born what the board started it as, a test, and not left unfiled on the board where staff work."""
+    r = ran["v2BoardThenLiveIntake"]
+    assert r["liveDraft"] == r["id"], "the live intake did not open on the board's project: %r" % (r["liveDraft"], )
+    x = r["x"]
+    assert x is not None and x["bornIsTest"] is True and x["is_test"] is True and x["flips"] == 0 and r["rowIds"] == [r["id"]], (
+        "the project was born %r: %r" % ((x or {}).get("bornIsTest"), x))
 
 
 def test_two_tabs_each_start_their_own_project_and_keep_their_own_start(ran):
@@ -1366,7 +1426,7 @@ BREAKS = {
         "world", (broken(SHARED, SPEND_KEY, "    void 0;"),),
         test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before),
     "the start is never spent, even by a stored save (an abandoned board start)": (
-        "world", (broken(SHARED, SPEND_KEY, "    void 0;"),), test_an_abandoned_board_start_is_flushed_born_as_its_tab_said),
+        "world", (broken(SHARED, SPEND_KEY, "    void 0;"),), test_an_abandoned_board_blob_that_holds_work_is_flushed_born_as_its_tab_said),
     "this page's own word is never spent": (
         "world", (broken(SHARED, SPEND_MARK, "    void 0;"),),
         test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before),
@@ -1450,9 +1510,9 @@ BREAKS = {
         test_a_project_somebody_has_written_into_and_the_server_has_not_got_yet_stops_the_v2_page),
     # ── a copy that never went through setState carries the start, and spends it only when it is stored ──
     "a copy that never went through setState goes without the start": (
-        "world", (broken(SHARED, PUT_WITH_START, "      const out = blob;"),), test_an_abandoned_board_start_is_flushed_born_as_its_tab_said),
+        "world", (broken(SHARED, PUT_WITH_START, "      const out = blob;"),), test_an_abandoned_board_blob_that_holds_work_is_flushed_born_as_its_tab_said),
     "the start is not spent once the server has stored it": (
-        "world", (broken(SHARED, PUT_SPENDS, "        void 0;"),), test_an_abandoned_board_start_is_flushed_born_as_its_tab_said),
+        "world", (broken(SHARED, PUT_SPENDS, "        void 0;"),), test_an_abandoned_board_blob_that_holds_work_is_flushed_born_as_its_tab_said),
     "the start is spent by a save the server refused": (
         "world", (broken(SHARED, PUT_SPENDS, '        if (Object.prototype.hasOwnProperty.call(out, "is_test")) spendStart(id);'),),
         test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save),
@@ -1674,7 +1734,7 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_the_active_tabs_real_bid_is_not_made_a_test_by_a_look_at_v2,
                  test_a_project_typed_into_on_a_v2_page_is_a_test_project_whichever_tab_started_it,
                  test_a_gc_boards_active_start_is_not_filed_as_a_test_by_a_look_at_v2,
-                 test_an_abandoned_board_start_is_flushed_born_as_its_tab_said,
+                 test_an_abandoned_board_blob_that_holds_work_is_flushed_born_as_its_tab_said,
                  test_a_copy_that_already_says_is_test_is_sent_as_it_is,
                  test_a_start_whose_flush_was_refused_stays_armed_for_the_next_save,
                  test_two_tabs_each_start_their_own_project_and_keep_their_own_start,

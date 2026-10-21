@@ -79,6 +79,14 @@
  * ROUND 4 (the audit of round 3, F1 to F6):
  *   bytesNotCharacters  a draft under the keepalive limit as characters and over it as UTF-8 bytes (2-, 3- and 4-byte characters),
  *                       left inside the debounce: sent as a plain request, never a keepalive one the browser refuses (F6).
+ *   foreignBlob         tab A's project in the shared slot while tab B's page (the v2 intake, then the v2 estimate page) is on its own id:
+ *                       the page must stop, and nothing may be saved under B's id (F5).
+ *   savingAnotherProjectsBlob  the sandbox's own save asked to write a blob stamped for another project under this id (F5).
+ *   abandonedV2Start    the v2 board's New estimate (the real startNew), Direct and GC, and the estimator opens another project: the GC
+ *                       tab's first save refused, and the page left before it heard from the server (F2).
+ *   v2BoardThenLiveIntake  a project the v2 board started, written first by the LIVE intake (F2).
+ *   abandonedWithWork   a board's New proposal whose blob holds work that never went through setState: flushed, born as its tab said.
+ *                       (abandonedBoardStart, with nothing typed, is never flushed.)
  *
  * Usage: node new-estimate-test-flag-harness.js <frontend-dir>   ->   one line of JSON
  */
@@ -895,19 +903,22 @@ async function writtenThenLook(opts) {
   return summary(w, id, { blobAfterWrite: blobAfterWrite, look: Object.assign(w.pageReport(look), { kind: look.kind }) });
 }
 
-/** F2. A board's "+ New proposal" (the REAL startNewProposal of js/portal.js) opens the live intake. Nothing is typed and the
- *  estimator opens ANOTHER project from the Projects page, so shared.js flushes the abandoned blob under its own id before it
- *  takes the other project's place. That blob never went through setState (the GC board writes { audience: "GC" } into it
- *  before the page exists), so what it was started as can only travel in the PUT itself. */
+/** F2 (round 3). A board's "+ New proposal" (the REAL startNewProposal of js/portal.js) opens the live intake. Nothing is typed and the
+ *  estimator opens ANOTHER project from the Projects page, so shared.js decides what to do with the abandoned blob under its own id
+ *  before it takes the other project's place. The GC board writes { audience: "GC" } into it before the page exists, which is no work
+ *  (round 4, F2: it is never flushed, so it never becomes a nameless row). `opts.work` puts something that IS work into the blob, written
+ *  without going through setState (as a page that did not say what the project was started as would leave it), which is flushed, and
+ *  what the project was started as can then only travel in the PUT itself (withStart). */
 const ELSEWHERE = "sheet-7";
 async function abandonedBoardStart(pipeline, tab, opts) {
-  const o = Object.assign({ faults: [], blobSays: undefined }, opts || {});
+  const o = Object.assign({ faults: [], blobSays: undefined, work: null }, opts || {});
   const w = W.createWorld({ frontend: ROOT });
   w.seed(ELSEWHERE, { project_name: "Nearman Creek Epoxy", address: "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101",
     bid_date: "2026-09-01", work_type: "epoxy", audience: "Direct", system_1_sf: 8000 });
   const v1 = await w.pressNewProposal({ pipeline: pipeline, tab: tab });
   const id = v1.draftId();
   o.faults.forEach((f) => w.fault(Object.assign({ id: id }, f)));          // the abandoned project's own save goes wrong
+  if (o.work) w.local.setItem(W.KEYS.state, JSON.stringify(Object.assign({}, w.blob(), o.work)));   // work that never went through setState
   // a blob that already holds a word of its own (a hydrate wrote what the server says), which the start must not overrule
   if (o.blobSays !== undefined) w.local.setItem(W.KEYS.state, JSON.stringify(Object.assign({}, w.blob(), { is_test: o.blobSays })));
   const blobAtArrival = w.blob();
@@ -1082,6 +1093,48 @@ async function bytesNotCharacters(fill, count) {
   return summary(w, BIG, { fill: fill, count: count });
 }
 
+/** F2. The v2 board's "+ New estimate" (the REAL startNew of js/v2-board.js) opens the v2 intake on a new project, and the estimator opens
+ *  ANOTHER project before anything has been typed. From the GC tab the board leaves { audience: "GC" } in the draft, which the sandbox saves at
+ *  once as a test so that its row exists: unless that first save does not land (it is refused, or the page is left before it has heard from
+ *  the server), in which case the blob is all that is left, and shared.js decides what to do with it as the other project's page opens.
+ *  `opts.faults` are the model's faults, set before the press (the first PUT of the run is the page's own save), `opts.world` its latencies,
+ *  `opts.leaveAt` how long after the intake booted the estimator goes. */
+const elsewhereRow = () => ({ project_name: "Nearman Creek Epoxy", address: "1 Water Works Dr", city: "Kansas City", state: "KS", zip: "66101",
+  bid_date: "2026-09-01", work_type: "epoxy", audience: "Direct", system_1_sf: 8000 });
+async function abandonedV2Start(gc, opts) {
+  const o = Object.assign({ faults: [], world: {}, leaveAt: 800 }, opts || {});
+  const w = W.createWorld(Object.assign({ frontend: ROOT }, o.world));
+  w.seed(ELSEWHERE, elsewhereRow());
+  o.faults.forEach((f) => w.fault(f));
+  const intake = await w.startNewEstimate({ gc: gc, hold: o.leaveAt });
+  const id = intake.draftId();
+  const startAtArrival = w.startOf(id);
+  const noteAtLeaving = intake.text("sandbox-note");
+  intake.follow("/?d=" + ELSEWHERE + "&edit=1");
+  await w.settle();
+  const last = w.pages[w.pages.length - 1];
+  return summary(w, id, { gc: gc, startAtArrival: startAtArrival, blobAtStart: intake.blobAtStart, noteAtLeaving: noteAtLeaving,
+    other: w.row(ELSEWHERE), lastDraft: last.win.TW.getDraftId(), lastKind: last.kind, startAfter: w.startOf(id) });
+}
+
+/** F2, the other half. What a project is STARTED AS follows the project, not the page: a project the v2 board started and that the estimator
+ *  then takes to the LIVE intake (the sidebar's link resumes the browser's current draft) is written there by a page that said nothing of it. */
+async function v2BoardThenLiveIntake() {
+  const w = W.createWorld({ frontend: ROOT });
+  const v2 = await w.startNewEstimate({});
+  const id = v2.draftId();
+  v2.follow("/?new=1");
+  await w.settle();
+  const live = w.pageOf("v1intake");
+  const liveDraft = live.draftId();
+  live.type("project_name", "Walk-in Job");
+  live.type("address", "5 Elm St");
+  await w.advance(1500);
+  live.pressContinue();
+  await w.settle();
+  return summary(w, id, { liveDraft: liveDraft });
+}
+
 /** F5. The browser has ONE copy of the draft in localStorage, and it can hold ANOTHER tab's project while this tab's page is on its own id.
  *  Tab A: the v2 board's New estimate, a name and an address typed. Tab B: the Projects page's New project (the All tab), which wipes the shared
  *  blob and makes B's own project the browser's current draft. Tab A types once more: its write lands in the wiped blob, stamped for A.
@@ -1194,8 +1247,22 @@ process.on("exit", (code) => {
   for (const pipeline of ["gc", "direct"]) {
     for (const tab of ["test", "active"]) out.abandonedBoardStart[pipeline + "/" + tab] = await abandonedBoardStart(pipeline, tab);
   }
-  out.abandonedBoardStart["gc/test, its save refused"] = await abandonedBoardStart("gc", "test", { faults: [{ route: "PUT", mode: "http500" }] });
-  out.abandonedBoardStart["gc/test, its blob says real"] = await abandonedBoardStart("gc", "test", { blobSays: false });
+  // the same, with work in the blob that never went through setState: it is flushed, and the start travels in the PUT itself
+  const WORK = { project_name: "Typed Before Leaving" };
+  out.abandonedWithWork = {
+    "gc/test": await abandonedBoardStart("gc", "test", { work: WORK }),
+    "gc/active": await abandonedBoardStart("gc", "active", { work: WORK }),
+    "gc/test, its save refused": await abandonedBoardStart("gc", "test", { work: WORK, faults: [{ route: "PUT", mode: "http500" }] }),
+    "gc/test, its blob says real": await abandonedBoardStart("gc", "test", { work: WORK, blobSays: false }),
+  };
+  // F2 of the audit of round 3: the v2 board's own New estimate
+  out.abandonedV2Start = {
+    "direct": await abandonedV2Start(false),
+    "gc": await abandonedV2Start(true),
+    "gc, first save refused": await abandonedV2Start(true, { faults: [{ route: "PUT", mode: "network", times: 1 }] }),
+    "gc, left before the page heard from the server": await abandonedV2Start(true, { world: { net: { up: 150, down: 150 } }, leaveAt: 100 }),
+  };
+  out.v2BoardThenLiveIntake = await v2BoardThenLiveIntake();
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
