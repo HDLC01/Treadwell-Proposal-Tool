@@ -123,7 +123,8 @@ def test_the_flag_goes_into_the_blob_only_as_a_new_projects_own_first_write(shar
     filing, against the real routes)."""
     assert "treadwell.proposal_tool.new_is_test" in shared
     set_state = _body(shared, "setState")
-    assert "sayWhatItWasStartedAs(id, merged)" in set_state, "setState does not say what the project was started as"
+    assert "sayWhatItWasStartedAs(id, merged, written)" in set_state, "setState does not say what the project was started as"
+    assert set_state.index("hasWork(cur)") < set_state.index("Object.assign(cur, partial"), "setState asks what was written after it merged its own write"
     assert "sayWhatItWasStartedAs" not in _body(shared, "setLocalState"), (
         "setLocalState is for facts the server holds already: it must not start saying one of its own")
     put = _body(shared, "putDraft")

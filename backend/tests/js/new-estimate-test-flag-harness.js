@@ -973,6 +973,32 @@ async function wipedByAnotherTab(kind, startB, opts) {
     idB: idB, rowB: rowB ? { project_name: rowB.data.project_name || null, is_test: rowB.data.is_test === undefined ? null : rowB.data.is_test } : null });
 }
 
+/** TWO PAGES, ONE PROJECT (found by the same random walks). The sidebar's bare link to a v2 page resumes the browser's CURRENT draft, which
+ *  is whatever project was started last, in whichever tab. Tab B starts a project from the Projects page's `tab` and the live intake opens on
+ *  it; tab A follows the sidebar link to the v2 intake and lands on that same project, finding no row (nobody has written anything). Then tab
+ *  B's estimator writes the project (Continue) and its save creates the row; then tab A's estimator types. The v2 page decided "this is
+ *  a project nobody has written" when it opened, and that has stopped being true: it must not make the project a test. */
+async function twoPagesOneProject(tab) {
+  const w = W.createWorld({ frontend: ROOT });
+  const tabA = w.mainTab;
+  const tabB = w.openTab();
+  const live = await w.pressNewProject({ tab: tab, browserTab: tabB });
+  const id = live.draftId();
+  const v2 = w.load("/polish-intake.html", { tab: tabA });             // the sidebar's bare link: resumes the browser's current draft
+  await w.settle();
+  const v2Id = v2.draftId();
+  const noteAtOpen = v2.text("sandbox-note");
+  live.type("project_name", "Live Intake Bid");
+  live.type("address", "5 Elm St");
+  await w.advance(300);
+  live.pressContinue();                                                // the live intake writes the project: its save creates the row
+  await w.advance(1500);
+  v2.type("address", "100 Main St");                                   // and now the v2 page's estimator types into it
+  await w.advance(4000);
+  await w.settle();
+  return summary(w, id, { tab: tab, v2Id: v2Id, noteAtOpen: noteAtOpen });
+}
+
 /** F5 with a draft that is too big for a keepalive request: a saved TEST project of about 90 KB is edited on the v2 intake and
  *  left by a link inside the 600 ms debounce. The page must not ask the browser for a keepalive request that it will refuse. */
 async function bigDraftLeftEarly() {
@@ -1054,6 +1080,8 @@ process.on("exit", (code) => {
   out.twoTabs = { v2A: await twoTabs("v2", "A"), v2B: await twoTabs("v2", "B"),
                   projectsA: await twoTabs("projects", "A"), projectsB: await twoTabs("projects", "B") };
   out.bigDraftLeftEarly = await bigDraftLeftEarly();
+  out.twoPagesOneProject = {};
+  for (const tab of ["all", "active", "test"]) out.twoPagesOneProject[tab] = await twoPagesOneProject(tab);
   out.wiped = {};
   for (const kind of ["saved", "new", "v1"]) {
     for (const startB of ["v2", "projects"]) out.wiped[kind + "/" + startB] = await wipedByAnotherTab(kind, startB);

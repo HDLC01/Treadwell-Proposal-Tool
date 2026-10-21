@@ -1080,6 +1080,23 @@ def test_every_door_out_of_the_intake_leaves_a_row_even_inside_the_debounce(ran)
         assert first["keepalive"] is True, "%s: the save sent as the page goes is not a keepalive request: %r" % (flow, first)
 
 
+def test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has(ran):
+    """TWO PAGES, ONE PROJECT (found by the same random walks). The sidebar's bare link resumes the browser's CURRENT draft, so a v2 page
+    can open on the project another tab has just started, find no row and nothing written, and say "this page creates it as a test". The
+    other tab's estimator then writes the project and its save creates the row, and the v2 page's estimator types. The v2 page's decision has
+    gone stale, and its word is not the project's: the project stays what its own start said (a test from Test, a real bid from Active,
+    unsaid from All) and is never SEEDED a test by the v2 page's write. (Both pages are on it, as they always were.)"""
+    runs = ran["twoPagesOneProject"]
+    assert sorted(runs) == ["active", "all", "test"], sorted(runs)
+    want = {"all": None, "active": False, "test": True}
+    for tab, r in sorted(runs.items()):
+        assert r["v2Id"] == r["id"] and "Nothing has been priced here yet" in r["noteAtOpen"], (tab, r["v2Id"], r["noteAtOpen"])
+        x = r["x"]
+        assert x is not None and x["bornIsTest"] is want[tab] and x["is_test"] is want[tab] and x["flips"] == 0, (
+            "%s: the project was born %r and ends %r, expected %r: %r" % (tab, (x or {}).get("bornIsTest"), (x or {}).get("is_test"), want[tab], x))
+        assert r["rowIds"] == [r["id"]], (tab, r["rowIds"])
+
+
 def test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued(ran):
     """THE ONE SHARED BLOB (found by random walks over the model while checking F3, and present in round 2 too). The browser keeps one copy
     of the draft in localStorage, and another tab's New project or New estimate WIPES it. This page's own 2.5 s save is still queued (its
@@ -1151,13 +1168,14 @@ PAGE = "polish-intake.html"
 PROJECTS = "js/projects.js"
 
 # shared.js: the stamp and its rules, where a project's start lives, and the copy that goes to the server
-STAMP_CALL = "    if (id) sayWhatItWasStartedAs(id, merged);   // a NEW project's first write says what it was started as"
+STAMP_CALL = "    if (id) sayWhatItWasStartedAs(id, merged, written);   // a NEW project's first write says what it was started as"
+SET_STATE_WRITTEN = "    const written = hasWork(cur);   // before the merge: was anything already in the project's blob when this write came?"
 STAMP_CONTENT = '    if (!Object.keys(blob).some((k) => k !== STAMP && k !== "is_test")) return;'
 SPEND_KEY = "    try { localStorage.removeItem(startKey(id)); } catch {}"
 SPEND_MARK = "    if (_startsAsTest === id) _startsAsTest = null;"
 STAMP_KEEPS_A_WORD = '    if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;'
 STAMP_NONE_PENDING = "    if (want === null) return;"
-STAMP_WANT = "    const want = _startsAsTest === id ? true : startOf(id);"
+STAMP_WANT = "    const want = (_startsAsTest === id && !written) ? true : startOf(id);"
 START_KEY = '  function startKey(id) { return NEW_IS_TEST_KEY + ":" + id; }'
 START_MINTS_THE_ID = "      localStorage.setItem(DRAFT_ID_KEY, id);"
 START_VALUE = '      localStorage.setItem(startKey(id), want ? "1" : "0");'
@@ -1316,6 +1334,18 @@ BREAKS = {
     "a write ignores this page's own word": (
         "world", (broken(SHARED, STAMP_WANT, "    const want = startOf(id);"),),
         test_a_v2_pages_own_word_is_said_by_the_first_write_it_makes_and_only_by_that),
+    "this page's own word is said over a project somebody else has since written": (
+        "world", (broken(SHARED, STAMP_WANT, "    const want = _startsAsTest === id ? true : startOf(id);"),),
+        test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has),
+    "nothing is ever taken to be written already": (
+        "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = false;"),),
+        test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has),
+    "everything is taken to be written already (a blob that was wiped to nothing)": (
+        "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = true;"),),
+        test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before),
+    "everything is taken to be written already (Continue after the wipe)": (
+        "world", (broken(SHARED, SET_STATE_WRITTEN, "    const written = true;"),),
+        test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued),
     "a start the Projects page left beats this page's own word": (
         "world", (broken(SHARED, STAMP_WANT,
                          "    const want = startOf(id) !== null ? startOf(id) : (_startsAsTest === id ? true : null);"),),
@@ -1558,7 +1588,8 @@ def test_every_check_a_break_names_is_a_real_test_and_each_part_of_the_fix_has_a
                  test_a_blob_with_nothing_in_it_is_sent_as_it_is,
                  test_a_start_is_spent_when_the_server_has_stored_a_copy_that_carries_it_and_not_before,
                  test_another_tabs_new_project_cannot_empty_the_save_this_page_has_queued,
-                 test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id):
+                 test_the_queued_save_never_writes_another_projects_blob_under_this_projects_id,
+                 test_a_v2_page_opened_on_a_project_nobody_had_written_does_not_make_it_a_test_once_somebody_has):
         assert must.__name__ in named, "no break turns %s red" % must.__name__
 
 

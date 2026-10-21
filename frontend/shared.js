@@ -93,9 +93,10 @@
       console.warn("[TW] refused state write: this page gave its copy of draft", id, "back");
       return cur;
     }
+    const written = hasWork(cur);   // before the merge: was anything already in the project's blob when this write came?
     const merged = Object.assign(cur, partial || {});
     if (id) merged[STAMP] = id;   // force-stamp AFTER the merge (partials can carry a stale stamp)
-    if (id) sayWhatItWasStartedAs(id, merged);   // a NEW project's first write says what it was started as
+    if (id) sayWhatItWasStartedAs(id, merged, written);   // a NEW project's first write says what it was started as
     writeBlob(merged);
     scheduleServerSave(merged);   // debounced push to the server draft
     return merged;
@@ -231,12 +232,21 @@
   let _startsAsTest = null;
   function startsAsTest(id) { _startsAsTest = id || null; }
 
+  /** Has anything been written into this blob beyond the stamp, the flag and what a board's New button leaves ({ audience: "GC" })? */
+  function hasWork(blob) {
+    return Object.keys(blob).some((k) => k !== STAMP && k !== "is_test" && k !== "audience");
+  }
+
   /** Say, in `blob`, what the project was started as. Called by setState on every write for `id`, and a no-op unless this page created
    *  `id` as a test (startsAsTest) or this browser holds a start for it (startOf): a start for another project is never read here.
+   *  `written`: the project's blob already held work before this write (hasWork).
    *
-   *  THIS PAGE'S OWN WORD COMES FIRST. A v2 page that created the project says "test" even over a "real bid" the Projects page left
-   *  for it, because whatever a v2 page writes is a test (Hanz, 2026-08-11); the Active tab's start still decides every
-   *  project a v2 page has not written.
+   *  THIS PAGE'S OWN WORD COMES FIRST, WHILE NOBODY HAS WRITTEN THE PROJECT. A v2 page that created the project says "test" even over a
+   *  "real bid" the Projects page left for it, because whatever a v2 page writes is a test (Hanz, 2026-08-11); the Active tab's start
+   *  still decides every project a v2 page has not written. But the page decided it was creating the project when it opened and found no
+   *  row, and another page (the sidebar's bare link resumes the browser's current draft, so two tabs can be on one project) may have
+   *  written it since: that page's word, or its silence, stands, and this page's stale decision does not SEED a test onto it. A write
+   *  into a blob that was wiped to nothing (another tab's New project) still says it: nothing was written.
    *
    *  IT SPENDS NOTHING. A write only says the start, and putDraft spends it once the server has stored a copy that carries it
    *  (spendStart). A start spent by the write that said it went with the blob when another tab's New project wiped the shared blob
@@ -249,8 +259,8 @@
    *  A blob that already says is_test is left as it is: a hydrate, or a refresh of the server-owned keys, wrote what the server
    *  holds, and that is the more recent word. `false` is a word like any other (somebody saying "this IS a real bid", which is
    *  what the Active tab's New project starts), so it is never mistaken for silence. */
-  function sayWhatItWasStartedAs(id, blob) {
-    const want = _startsAsTest === id ? true : startOf(id);
+  function sayWhatItWasStartedAs(id, blob, written) {
+    const want = (_startsAsTest === id && !written) ? true : startOf(id);
     if (want === null) return;
     if (!Object.keys(blob).some((k) => k !== STAMP && k !== "is_test")) return;
     if (!Object.prototype.hasOwnProperty.call(blob, "is_test")) blob.is_test = want;
