@@ -1433,7 +1433,8 @@
     // its own crew (Hanz's D1 of 2026-10-21), so a base that stays a base keeps its drive. It is given the WHOLE model (ROOT): M is the
     // section on show, of the model from before the change.
     // SINCE ROUND 7 EVERY BASE DRIVES ITS OWN CREW (Hanz, 2026-10-21, D1), so it is told what every sheet WAS (kindsBefore): a sheet that becomes a base beside another gets its own
-    // drive, and an option made a base keeps a line the estimator added or typed, and releases one the tool filled while the job says it has no drive.
+    // drive, and an option made a base keeps a line the estimator added or typed, and releases one the tool filled while the job says it has no drive. A base's line that is only the
+    // tool's copy of what the other base's line says (the pick's copy, a Sheets copy) is given back and drives its own crew: one typed figure on one base (round 7, part 3).
     B.followDistance(ROOT, carrierBefore, kindsBefore);
     TW.setState(patch);
     sheetsChanged(activeTab, asked.row === "combined" ? activeTab + "|open" : asked.row + "|base");
@@ -4549,6 +4550,8 @@
       var ol = parseInt(onLab.getAttribute("data-on-lab"), 10);
       if (M.labor[ol]) {
         if (B.rowOn(M.labor[ol])) M.labor[ol].enabled = false; else delete M.labor[ol].enabled;
+        // A Travel Labor line the tool copied from another sheet is this sheet's own once its switch is flipped here, as after a keystroke in it (round 7, part 3: B.markSwitchedByHand).
+        B.markSwitchedByHand(M.labor[ol]);
       }
       changed(true);
       return;
@@ -5393,8 +5396,9 @@
     // model) settles the drives. Since round 7 every BASE crew drives its own (Hanz's D1 of 2026-10-21): a single-base job's drive goes
     // with its one base, and what the estimator typed, cleared or switched off goes with it; every sheet that became a base settles its
     // own drive (filled on its own crew by the rule an answer follows; an option keeps a line the estimator added or typed, and while the
-    // job says it has no drive a line the tool filled is released: D3 and the promotion rule); a base that stays a base keeps its own; and
-    // a sheet that is off gives its fill back (Epoxy to Polish to Combo priced the drive twice). It ends by putting the guys on each crew
+    // job says it has no drive a line the tool filled is released: D3 and the promotion rule); a base that stays a base keeps its own, unless
+    // its line is only the tool's copy of what another base's says (given back and filled on its own crew: round 7, part 3, the round-7
+    // audit's F1); and a sheet that is off gives its fill back (Epoxy to Polish to Combo priced the drive twice). It ends by putting the guys on each crew
     // as it is NOW, before the first paint and the first save. A plain reopen is not a switch (sectionsForJob hands back the model it was
     // given, so nothing restructured) and moves nothing.
     if (restructured) B.followDistance(ROOT, carrierBefore, kindsBefore);

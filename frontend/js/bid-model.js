@@ -332,6 +332,8 @@
     var own = ownDefaultRate(row);
     if (!isBlank(value) && own !== null && num(value) === own) row.rate_typed = true;
     else delete row.rate_typed;
+    // A Travel Labor row the tool copied from another sheet is this sheet's own once its rate is typed (round 7, part 3: see markToolCopy).
+    if (isTravelRow(row)) delete row.tool_copy;
   }
 
   /** Is this the Travel Labor row? It is the one labor line the prevailing wage never touches: the
@@ -1021,12 +1023,13 @@
   }
 
   /** A labor row's quantities put back to nothing, IN PLACE: no guys, no days or hours, off auto, and none of the markers a far
-   *  distance answer or the estimator's typing leaves on Travel Labor (hours_seed, guys_follow, guys_typed, hours_typed). The one
+   *  distance answer or the estimator's typing leaves on Travel Labor (hours_seed, guys_follow, guys_typed, hours_typed), nor the mark of
+   *  the tool's copy of another sheet's row (tool_copy, round 7, part 3: the figures it marks are gone). The one
    *  statement of "a row with nothing in it", for a NEW bid's rows (laborRowStartsEmpty) and for the Travel Labor row an old carrier
    *  gives back when the job's drive moves to another section (takeBackStrayTravel). */
   function clearQuantities(row) {
     row.guys = ""; row.days = ""; row.guys_auto = false;
-    delete row.hours_seed; delete row.guys_follow; delete row.guys_typed; delete row.hours_typed;
+    delete row.hours_seed; delete row.guys_follow; delete row.guys_typed; delete row.hours_typed; delete row.tool_copy;
     return row;
   }
 
@@ -1284,6 +1287,16 @@
     if (!isTravelRow(row)) return row;
     if (key === "guys") { row.guys_typed = true; delete row.guys_follow; }
     else if (key === "days") { row.hours_typed = true; }
+    // A copy the tool made of another sheet's row is this sheet's own from the first keystroke in it (round 7, part 3: the round-7 audit's F1; see markToolCopy).
+    delete row.tool_copy;
+    return row;
+  }
+
+  /** THE ESTIMATOR FLIPS A LABOR LINE'S SWITCH ON ITS CARD (round 7, part 3): a Travel Labor row the tool copied from another sheet is this sheet's own from then on, as it is after a keystroke
+   *  in it (markTypedByHand), so a later Combo never gives back the switch the estimator turned off on this sheet (see markToolCopy). The page calls it after flipping any labor line's switch;
+   *  only a Travel Labor row ever carries the mark. MUTATES the row; returns it. */
+  function markSwitchedByHand(row) {
+    if (row && typeof row === "object") delete row.tool_copy;
     return row;
   }
 
@@ -1423,7 +1436,11 @@
    *       the one-drive law (its drive sat on the carrier alone), and the job's one drive follows its one base, as it did then (carriesOneDrive). NOT onto an OPTION made the base
    *       that holds a line of its own (the promotion rule, step 2: until round 7 a typed line on the old base changed places with it), and not while the job (J) or the new base
    *       (S) says it has no drive.
-   *    2. EVERY SECTION THAT BECAME A BASE SETTLES ITS OWN DRIVE (settleArrivals). While the job says it has no drive (J), or the sheet does (S), a line nobody typed is released, not
+   *    2. FIRST, ONE FIGURE THE ESTIMATOR TYPED IS PRICED ON ONE BASE (giveBackRepeatedCopies; round 7, part 3: the round-7 audit's F1, read from Hanz's D1 and D3 of 2026-10-21). A base
+   *       whose row is the TOOL'S COPY (`tool_copy`: the job's one drive following a base pick while the old base keeps its own, or a Sheets copy) of what another base's row says gives
+   *       the copy back, and is filled below on its own crew like any base's drive nobody typed: far Polish's typed 7 x 3.25, copied to Epoxy by the pick, priced on the Epoxy crew too
+   *       once the job was a Combo ($90,416, where the same pair made at once is $91,063). Only when sheets became bases; of two copies, the one that came with a sheet gives its back.
+   *       THEN EVERY SECTION THAT BECAME A BASE SETTLES ITS OWN DRIVE (settleArrivals). While the job says it has no drive (J), or the sheet does (S), a line nobody typed is released, not
    *       re-added: Hanz, 2026-10-21, "a job-type switch keeps the drive REMOVED", no seed and no carry (D3), and for an OPTION made the base a line the TOOL filled (a copy's, a
    *       demoted base's) is released too, where a line the estimator ADDED (Add Travel Labor, `hand_added`) or typed stays, and then the job has a drive (the round-6 audit's F-C).
    *       Otherwise a line nobody touched is filled by the distance on file by the rule of its new role, and a section that was an option or off and holds NO line is given one
@@ -1445,11 +1462,15 @@
     var arrived = drives.filter(function (tab) { return was.drives.indexOf(tab) < 0; });
     // 1. the job's one drive follows its one base (and the section it was carried from is the only one a repeat of it is looked for on, step 4)
     var carriedFrom = carriesOneDrive(model, was, drives, arrived) ? carryTravelRow(model, was.drives[0], was.kindOf(drives[0])) : "";
-    // 2. every section that became a base settles its own drive (and a promoted option's tool line is released while the job says it has no drive)
+    // 2. the tool's copy of what another base's row says is given back (round 7, part 3: the round-7 audit's F1), before the arrivals settle, so to them it is a line nobody touched
+    var gaveBack = giveBackRepeatedCopies(model, arrived);
+    // ...every section that became a base settles its own drive (and a promoted option's tool line is released while the job says it has no drive)
     settleArrivals(model, arrived, was.kindOf, true);
     var d = model.distance;
     var miles = d ? milesOrNull(d.miles) : null;
     if (miles !== null) fillArrivals(model, arrived, miles);
+    // ...and a base that stayed a base and gave its copy back drives its own crew, filled as an arrival is
+    if (miles !== null) fillArrivals(model, gaveBack.filter(function (tab) { return arrived.indexOf(tab) < 0; }), miles);
     // A base that moved or arrived under a far distance on file brings the nights and the per diem days under the rule too (followDistanceNights): a quantity nobody typed follows the
     // count of the bases' labor (jobNights), the new base's among them.
     if (miles !== null && (arrived.length || !carrierKept(model, fromTab))) followDistanceNights(model, miles);
@@ -1745,7 +1766,8 @@
   /** EVERY SECTION OUTSIDE THE BID GIVES ITS FILL BACK (2026-10-20 audits; every base keeps its own since round 7). Every Travel Labor row the distance filled and nobody touched
    *  (travelRowIsAutoFilled), on a section that is neither a base nor an option, is taken back: guys and hours empty, every fill marker gone. That is a section that is OFF: it prices
    *  nothing, but its row would be priced again the day its job type came back (Epoxy to Polish to Combo charged $858 twice). EVERY BASE KEEPS ITS OWN: since Hanz's D1 of 2026-10-21 a
-   *  Combo's bases each drive their own crew, where until round 7 every base but the carrier gave its fill back (and a Gyp carrier too, whose drive was typed; D2 fills it). Left alone: a
+   *  Combo's bases each drive their own crew, where until round 7 every base but the carrier gave its fill back (and a Gyp carrier too, whose drive was typed; D2 fills it). (A base's row
+   *  that is only the TOOL'S COPY of what another base's row says is not its own: followDistance gives it back first, giveBackRepeatedCopies, round 7, part 3.) Left alone: a
    *  row somebody typed in or cleared or switched off (it is theirs), and an option's row (an option is priced apart and carries its own). ONE EXCEPTION to "theirs": the estimator's row on
    *  such a section that says exactly what the carrier's row says is a COPY of it (the job's one drive, carried to a new base, leaves a copy behind when the old base kept no other row), so
    *  it is given back too: the drive is typed once. ONLY ON THE SECTION THE DRIVE WAS CARRIED FROM, when the caller says which (`carriedFrom`; followDistance says, "" when nothing was
@@ -1776,6 +1798,82 @@
     var same = function (k) { return String(row[k] == null ? "" : row[k]) === String(carrierRow[k] == null ? "" : carrierRow[k]); };
     return same("guys") && same("days") && !!row.guys_auto === !!carrierRow.guys_auto && (row.enabled === false) === (carrierRow.enabled === false) &&
       (row.guys_typed === true) === (carrierRow.guys_typed === true) && (row.hours_typed === true) === (carrierRow.hours_typed === true);
+  }
+
+  // ══ ONE FIGURE THE ESTIMATOR TYPED IS PRICED ON ONE BASE (round 7, part 3: the round-7 audit's F1; Hanz's decisions of 2026-10-21) ═══════════════════════════════════════════════════════
+  //
+  // THE TOOL COPIES A TRAVEL LABOR ROW in two places: when a single-base job's drive follows a base pick and the old base keeps its own (shiftTravelRow, `keep`: the new base takes a copy, the
+  // demoted option keeps the row it had), and when a sheet is copied (copySection). A copy carries the figures and the hands on them and prices as its source does, which is right while it is the
+  // only base that holds them (the job's one drive; a copy made the base by itself). But D1 makes every BASE drive ITS OWN crew (each base's row is that crew's size x the round trip x the rate, filled
+  // on a far answer, typeable, its own answer) and D3 keeps what the estimator typed theirs, and a copy is neither: it is the estimator's say on ANOTHER sheet. The audit's bid: far Polish 4 x 12, its
+  // drive typed 7 x 3.25 ($750.75), an Epoxy sheet (5 x 12) made the base (it takes the copy), then Combo: the Epoxy crew of 5 was priced the Polish crew's 7 x 3.25 on top of the Polish row ($90,416);
+  // round 6 gave the repeat back and left the Epoxy crew no drive at all ($88,911).
+  //   THE MARK   a copy of a row that holds something the estimator said (travelRowIsTheEstimators) is marked `tool_copy` (markToolCopy). It goes the moment the estimator's hand is on the row on
+  //              its own sheet (its Guys or Hours box, markTypedByHand; its Rate box, setLaborRate; its switch, markSwitchedByHand): the row is theirs on that sheet then. It goes with the figures
+  //              too (clearQuantities: a row given back is nobody's).
+  //   THE RULE   when sheets become bases (followDistance), a base whose row is the tool's copy of what ANOTHER base's row says (travelSay: the same guys and hours typed or cleared, the same rate
+  //              typed, the same switch) gives the copy back (giveBackToolCopy) and drives its own crew, filled from the miles on file like any base's drive nobody typed. Of two copies, the one on
+  //              a sheet that became a base gives its back (the base the job's drive was on keeps it). The audit's bid is then $91,063, exactly the pair made at once from the Polish base, where the
+  //              Epoxy sheet was never handed a copy: its crew's own 5 x 6.5 = $1,072.50 beside the Polish sheet's typed 7 x 3.25.
+  //   KEPT       a copy that is the only base holding the say (a copy made the base by itself; its source is an option, priced apart), a copy that says something else, and two rows the estimator
+  //              typed alike, each on its own sheet (nothing was copied: Kyle's sheets often carry the same hours on both crews). A bid saved before the mark has no copy marked and keeps what it holds.
+
+  /** THE TOOL'S COPY (the block above): marks `row`, a Travel Labor row the tool has just copied from another sheet, as the tool's, when it holds something the estimator said on that sheet
+   *  (travelRowIsTheEstimators). A copy of the distance's own fill says nothing and is not marked: it is the new sheet's own fill. MUTATES the row; returns it. */
+  function markToolCopy(row) {
+    if (isTravelRow(row) && travelRowIsTheEstimators(row)) row.tool_copy = true;
+    return row;
+  }
+
+  /** Is this Travel Labor row the tool's copy of what the estimator said on another sheet, untouched since (markToolCopy)? */
+  function isToolCopy(row) { return isTravelRow(row) && row.tool_copy === true; }
+
+  /** WHAT THE ESTIMATOR SAID ON A TRAVEL LABOR ROW, as one comparable string, "" when nothing: the guys they typed or cleared, the hours they typed or cleared, the rate they typed and the
+   *  switch they turned off, read as travelRowIsTheEstimators reads them (travelGuysAreTyped, driveHoursAreTools, travelRateIsTyped, rowOn). A box on auto, or holding the tool's own figure,
+   *  says nothing. Two rows that say the same are one say. Reads only. */
+  function travelSay(row) {
+    if (!isTravelRow(row)) return "";
+    var text = function (v) { return String(v == null ? "" : v); };
+    var guys = travelGuysAreTyped(row) ? text(row.guys) : null;
+    var hours = row.hours_typed === true || (!isBlank(row.days) && !driveHoursAreTools(row)) ? text(row.days) : null;
+    var rate = travelRateIsTyped(row) ? text(num(row.rate)) : null;
+    var off = !rowOn(row);
+    return guys === null && hours === null && rate === null && !off ? "" : JSON.stringify([guys, hours, rate, off]);
+  }
+
+  /** THE TOOL'S COPY GIVEN BACK: empty and nobody's (releaseTravelRow: no guys or hours, off auto, no marker, switched on), at the line's own default rate when it has one (a rate typed on the
+   *  source sheet is that sheet's), and no longer an added line (Add Travel Labor was pressed on the source, not here). The distance on file then fills it on its own crew (followDistance).
+   *  IN PLACE; returns the row. */
+  function giveBackToolCopy(row) {
+    releaseTravelRow(row);
+    var own = ownDefaultRate(row);
+    if (own !== null) row.rate = own;
+    delete row.rate_typed;
+    delete row.hand_added;
+    return row;
+  }
+
+  /** ONE FIGURE THE ESTIMATOR TYPED IS PRICED ON ONE BASE (the block above). After a restructure that made sheets bases (`arrived`, followDistance's), every base whose Travel Labor row is the
+   *  tool's copy of what another base's row says gives the copy back (giveBackToolCopy). The sheets in `arrived` are asked first, and each group from the last in the bid's order, so of two copies
+   *  the one on a sheet that became a base gives its back and the carrier keeps its own. Nothing while nothing arrived or the job has one base. Answers the tabs whose copy was given back. IN PLACE. */
+  function giveBackRepeatedCopies(model, arrived) {
+    var drives = driveEntries(model);
+    var came = arrived instanceof Array ? arrived : [];
+    if (!came.length || drives.length < 2) return [];
+    var last = drives.slice().reverse();
+    var order = last.filter(function (e) { return came.indexOf(e.tab) >= 0; }).concat(last.filter(function (e) { return came.indexOf(e.tab) < 0; }));
+    var gave = [];
+    order.forEach(function (e) {
+      travelRowsIn(e.section).forEach(function (r) {
+        var say = travelSay(r);
+        if (!isToolCopy(r) || say === "") return;
+        var repeats = drives.some(function (o) { return o.tab !== e.tab && travelRowsIn(o.section).some(function (x) { return travelSay(x) === say; }); });
+        if (!repeats) return;
+        giveBackToolCopy(r);
+        if (gave.indexOf(e.tab) < 0) gave.push(e.tab);
+      });
+    });
+    return gave;
   }
 
   /** The number as it reads in a sentence: at most two places, none when it is whole. */
@@ -5760,7 +5858,9 @@
    *
    *  Money by role is not copied: an option carries its own travel (optionTravelCosts), so the copy matches its source in
    *  every figure but the job's Lodging and Per Diem, which only the carrier takes. Made the base (pickBase) it prices like the
-   *  source. THROWS for a sheet the bid does not have, and at the limit of twelve copies. */
+   *  source. Its Travel Labor line is the TOOL'S COPY of the source's (`tool_copy`, markToolCopy; round 7, part 3, the round-7 audit's
+   *  F1): made a base beside a base whose line says the same, it is given back and drives its own crew (giveBackRepeatedCopies), so the
+   *  one figure the estimator typed is priced on one base. THROWS for a sheet the bid does not have, and at the limit of twelve copies. */
   function copySection(model, sourceId, ctx) {
     if (!isObject(model)) throw new Error("copySection needs the model");
     var src = sectionOf(model, sourceId);
@@ -5786,6 +5886,8 @@
     // A COPY'S TRAVEL LABOR LINE IS THE TOOL'S COPY, NOT A LINE THE ESTIMATOR ADDED TO IT (round 7, the round-6 audit's F-C): the `hand_added` mark says Add Travel Labor was pressed on
     // THIS sheet, which an option made a base keeps while the job says it has no drive. The copy's figures and their typed marks are kept: it prices as its source does.
     (body.labor instanceof Array ? body.labor : []).forEach(function (r) { if (isTravelRow(r)) delete r.hand_added; });
+    // ...and it is the TOOL'S COPY of what the estimator said on the source (round 7, part 3: the round-7 audit's F1): made a base beside a base that says the same, it is given back.
+    travelRowsIn(body).forEach(markToolCopy);
     body = Object.assign(body, { kind: "option", sheet: src.sheet, label: uniqueLabel(model, src.label + " copy"),
                                  source: sourceId, totals: {} });
     return { model: withSectionPut(model, id, body), id: id,
@@ -5853,7 +5955,8 @@
    *  NEW model and the draft's side. THE PRIOR BASE BECOMES AN OPTION that is ON the proposal, priced as a total, and the new
    *  base is no option, so nothing is dropped from what the customer sees. Every other sheet keeps its kind. The job's
    *  Lodging and Per Diem follow the carrier (the first base). EVERY BASE DRIVES ITS OWN CREW (round 7, D1): a single-base job whose base moved gives the
-   *  new base a copy of its Travel Labor row when the new base has none, so the base the job is priced on is the one that drives; a base that stays a base
+   *  new base a copy of its Travel Labor row when the new base has none (the tool's copy, marked: made a base beside the old base later, a copy that still says what
+   *  the old base's row says is given back by followDistance, round 7, part 3), so the base the job is priced on is the one that drives; a base that stays a base
    *  keeps its own; an option made a base keeps a line the estimator added or typed, and a line the tool filled on it is released while the job says it has no
    *  drive (the round-6 audit's F-C), else followDistance refills it, or gives it one. A base that was DEMOTED keeps its row as well (a copy goes to the
    *  new carrier, see moveTravelLabor): an option is priced apart and prices its own drive, in the session and after a reload alike. `patch` carries `work_type` (what baseOf
@@ -5943,7 +6046,9 @@
   /** moveTravelLabor's move, IN PLACE on the model it is handed, which is also how followDistance carries the row when the job type
    *  (and not the Sheets panel) moves the carrier. True when a row moved. A copy is a COPY: when the old carrier keeps no other row the
    *  row stays there, and the new carrier takes its own object, so the two sections never share one row. `keep` says the old carrier
-   *  keeps its row whatever else it holds (an option: moveTravelLabor). THROWS for a section the model does not have, like sectionOf. */
+   *  keeps its row whatever else it holds (an option: moveTravelLabor), and then the new carrier's copy is marked as the TOOL'S (`tool_copy`,
+   *  markToolCopy; round 7, part 3): made a base beside the old carrier later (a Combo), a copy that still says what the old carrier's row
+   *  says is given back and drives its own crew (giveBackRepeatedCopies). THROWS for a section the model does not have, like sectionOf. */
   function shiftTravelRow(model, fromTab, toTab, keep) {
     var from = sectionOf(model, fromTab).section, to = sectionOf(model, toTab).section;
     var isTravel = function (r) { return !!r && r.id === "travel"; };
@@ -5954,6 +6059,8 @@
     var rest = keep === true ? [] : from.labor.filter(function (r) { return !isTravel(r); });
     if (rest.length) from.labor = rest;
     to.labor = (to.labor instanceof Array ? to.labor : []).concat(rest.length ? mine : mine.map(jsonCopy));
+    // THE NEW CARRIER'S COPY IS THE TOOL'S while the old one keeps the row it copies (round 7, part 3: the round-7 audit's F1): made bases together later, the copy is given back (giveBackRepeatedCopies).
+    if (keep === true) travelRowsIn(to).forEach(markToolCopy);
     return true;
   }
 
@@ -6903,6 +7010,8 @@
     // estimator's own row), and the words on a row it leaves behind on a section that is off.
     travelRowIsAutoFilled: travelRowIsAutoFilled, travelRowIsTheEstimators: travelRowIsTheEstimators, travelRateIsTyped: travelRateIsTyped,
     takeBackStrayTravel: takeBackStrayTravel, strayTravelNote: strayTravelNote,
+    // One figure the estimator typed is priced on one base (round 7, part 3: the round-7 audit's F1): the switch flipped on a card makes a row the tool copied that sheet's own.
+    markSwitchedByHand: markSwitchedByHand,
     // The nights and the per diem days of a far job follow the labor (2026-10-20, Hanz: "Fill them automatically"), and the Travel Labor line the card's x took
     // away can be added back (the fifth audit).
     followDistanceNights: followDistanceNights, qtyFollows: qtyFollows, markTravelQtyTyped: markTravelQtyTyped, laborFollowQty: laborFollowQty,
