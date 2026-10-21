@@ -28,13 +28,12 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 
 RULES = {
-    "ONE_DRIVE": "more than one priced Travel Labor row on the bases of the bid",
+    "DOUBLE": "a base section prices more than one Travel Labor row: a crew's drive priced twice (since round 7 a far Combo prices one drive per base crew, a single-base job one; it was ONE_DRIVE, one for all the bases together)",
     "MAN_DAYS": "a Travel Labor row the tool filled is priced on the man-days",
-    "FAR_CARRIER": "a far job's carrier has no Travel Labor row, or one that is not the crew's size x one round trip",
-    "GYP_UNFILLED": "a Gyp carrier's Travel Labor row nobody touched was filled",
+    "FAR_BASES": "on a far job a base has no Travel Labor row though neither the job nor the sheet said it has no drive, or holds one nobody touched that is not its own crew's size x one round trip (a Gyp base too, since round 7)",
     "LOCAL": "a job under 70 miles (or with no distance) prices a Travel Labor row nobody touched",
-    "OWNED": "what the estimator typed, cleared or switched off is not on the carrier as they left it (or was left on another section)",
-    "STALE": "a Travel Labor row the distance filled is still on a section that does not carry the job's travel",
+    "OWNED": "what the estimator typed, cleared or switched off was lost: it is no longer on the sheet it was said on, and did not go with the job's drive to the new base of a single-base job whose base moved (or stayed behind when it had to go)",
+    "STALE": "a Travel Labor row the distance filled is still on a section that is neither a base nor an option (off)",
     "ONE_ROW": "a section holds two Travel Labor rows",
     "PLAIN_REOPEN": "a plain reopen armed a save, wrote something, or moved a row",
     "REOPEN_AGREES": "the price (or the rows) the draft saved is not what a plain reopen of it shows",
@@ -42,9 +41,10 @@ RULES = {
     "OPT_OWNED": "after the miles were typed, an option's switched-off row moved, or a box the estimator typed in or cleared on it changed",
     "NIGHTS": "a far job's Lodging or Per Diem quantity is not the man-days of every base section, each counted with its own tab's divisor (a Gyp crew's hours over 10), on auto and marked as following, or a job under 70 miles has one filled, or a quantity the estimator typed (or cleared) is not exactly as they left it",
     "RELOAD_AGREES": "the same distance answer typed in the session that made a Sheets change (or the x, or Add Travel Labor) and typed after a jsonb reload of what it saved leaves different prices or Travel Labor rows",
-    "ANSWER_OWNER": "the job says it has no drive (no_travel_labor) while the section that carries the job's travel holds a Travel Labor line: the flag is the carrier's answer, and nobody else's",
+    "ANSWER_OWNER": "an answer is said over a line (the job's no_travel_labor while a base holds one, a sheet's sheet_no_travel_labor while it holds one), or was set by a step that may not set it (only the x on a single-base job's drive sets the job's, only the x on a Combo base's drive sets that sheet's)",
     "DEMOTED_KEEPS": "a base the Sheets panel's pick demoted to an option lost the Travel Labor line it held (it keeps its own, and the new carrier takes a copy)",
-    "ANSWER_HELD": "after the x on the carrier's Travel Labor line (until Add Travel Labor on the carrier, a Sheets action, or a job-type switch that makes an option holding its own line the carrier) a job-type switch or a crew typed left the job a drive: the answer is gone, or the carrier holds a line",
+    "ANSWER_HELD": "an answer said was taken back by a step that may not (the job's goes only with Add Travel Labor on a base, or a base an option became bringing the estimator's line, and then every other base that holds none says it as its own; a sheet's only with Add on that sheet)",
+    "PROMOTED": "an option a job-type switch or a base pick made a base lost a line the estimator added or typed, kept a line the tool filled while the job says it has no drive, lost one the tool filled while it does not, or was given no line though nothing said it has none (the round-6 audit's F-C)",
     "SESSION_AGREES": "a session that made its changes without reloading and a reload of what it saved hold other prices, other sheets or sheets in another order, other Travel Labor rows, or leave other ones after a distance answer",
     "CRASH": "the page threw",
 }

@@ -6,11 +6,12 @@ contradicted, a typed or cleared or switched-off Travel Labor was refilled on th
 sequence of job types (Polish, Epoxy, Combo, Gyp), each plain or with the crew typed on the new carrier, on a NEW far bid (Wichita, 190 miles: a crew of 4 is 4 x 6.5 x
 $33 = $858) and judges the real estimate page after every step:
 
-    ONE_DRIVE       no more than one priced Travel Labor row on the bases of the bid
+    DOUBLE          no base section prices more than one Travel Labor row (round 7: ONE_DRIVE, "one priced row on all the bases together", until Hanz's D1 of 2026-10-21 gave a
+                    far Combo one drive per base crew)
     MAN_DAYS        no row the tool filled is priced on the man-days
-    FAR_CARRIER     a far job's carrier has a Travel Labor row, and one nobody touched is exactly the crew's size x one round trip
-    GYP_UNFILLED    a Gyp carrier's row nobody touched is empty (a Gyp bid's drive is typed)
-    STALE           no section that is not the carrier holds a row the distance filled (off sections included)
+    FAR_BASES       a far job's every base has a Travel Labor row (unless the job or the sheet said it has no drive), and one nobody touched is exactly ITS OWN crew's size x one
+                    round trip; a Gyp base too (round 7, D2: it was FAR_CARRIER, and GYP_UNFILLED held a Gyp carrier's row empty)
+    STALE           no section that is neither a base nor an option (off) holds a row the distance filled
     ONE_ROW         no section holds two Travel Labor rows
     PLAIN_REOPEN    a plain reopen arms no save, writes nothing and moves no row
     REOPEN_AGREES   the price the draft saved (proposal_lump_sum) is the price a plain reopen of it shows

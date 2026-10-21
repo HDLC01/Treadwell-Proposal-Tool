@@ -18,7 +18,16 @@ F2: a far Polish, the x, an Epoxy sheet made the base, Add Travel Labor on it, t
     on a demotion that loses its line; the two part-5 entries that put that loss back (test_polish_travel_sequences_reload.py) now see it through this rule.
 
 `answerJobs` is F1's family (three steps among the four job types and the answer), `answerSheets` F2's (the Sheets actions and the answer), `answer` every kind of step two deep, and `answers` the
-seventeen sequences of the answer's own, the audit's three among them.
+twenty-two sequences of the answer's own, the audit's three among them.
+
+ROUND 7, PART 1 (2026-10-21, Hanz's decisions D1 to D3): a far Combo has two drives, one per base crew, so the answer is three answers. The x on the drive of a SINGLE-base job is the job's
+(`no_travel_labor`, J), and holds through every switch (D3); the x on one base's drive of a Combo is that sheet's (`sheet_no_travel_labor`, S), and the remaining base keeps it when the job goes
+back to one base; an option's x records nothing (O). The walk judges the answers as TRANSITIONS, the page after a step against the draft the step started from, after every step of every walk:
+ANSWER_OWNER (who may set an answer, and that none is said over a line), ANSWER_HELD (an answer said goes only with Add Travel Labor on its sheet, or a base an option became bringing a line
+the estimator added or typed) and PROMOTED (the round-6 audit's F-C: an option made a base keeps a line the estimator added or typed, and a line the tool filled is released while the job says
+it has no drive). Until round 7 a Sheets action ENDED the rule, and so did a job-type switch that promoted an option holding a line: no step is exempt any more (the audit's F-D). The steps
+`x:base` and `addTravel:base` press them on the Combo's second base, and the answers' own sequences gained five (the sheet's answer both ways, the job's held through a Combo, a tool line
+released on promotion by a pick and by a switch); two older ones now press Add before the x they ended on, because the line the x was pressed on is released.
 
 ROUND 6, PART 3 (2026-10-21, M1): the sheets are re-keyed with everything else. Until the sheet-order work (each section's `seq`) was merged, these walks kept the sheets under `tabs` in the order they were
 saved, because a tree without it reads them back in jsonb's; now every reopen is the server's, sheets and all (tests/js/_jsonb.js, `run` refuses a walk none of whose reopens moved the sheets). The one
@@ -65,13 +74,14 @@ def test_the_answer_walk_is_clean_on_a_job_that_starts_local_or_with_no_distance
 
 
 def test_the_answers_own_sequences_are_clean_and_none_is_cut_short():
-    """The seventeen sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
-    it, the Epoxy + Polish-copy pair, twice, and an option holding its own drive made the carrier by a job-type switch and by a base pick): every rule after every step. None may be skipped (a
-    step the page offers nothing to press on would shorten the sequence without a word)."""
+    """The twenty-two sequences (the audit's F1, F2 and S1, an option's x and Add, the root that is an option, a switch after the carrier's x, an option made the base after it, a base pick around
+    it, the Epoxy + Polish-copy pair, twice, an option holding its own drive made the carrier by a job-type switch and by a base pick, and since round 7 a Combo sheet's own answer on either
+    base, the job's answer held through a Combo and taken back on its second base, and a tool line released on promotion by a pick and by a switch): every rule after every step. None may be
+    skipped (a step the page offers nothing to press on would shorten the sequence without a word)."""
     require_node()
     got = run("answers", 0)
     _walked(got, 55, 8, 30)
-    assert got["sequences"] == 17 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
+    assert got["sequences"] == 22 and got.get("skipped", 0) == 0, "a sequence was cut short: %r" % ({k: got.get(k) for k in ("sequences", "skipped")},)
     assert got["violations"] == {} and got["crashes"] == [], explain(got)
 
 
