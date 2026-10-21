@@ -819,7 +819,10 @@ place too). No test held either until round 7, part 2 (the round-6 order audit's
 estimate (the travel walks, the round-5 harness, the estimate page harness's reopens and the sheet-order harness) go through it
 (`tests/test_v2_sheet_order.py`, `tests/test_jsonb_key_order.py`, `tests/test_polish_travel_sequences_session*.py`: the session walk in three files).
 
-**How a saved bid is kept from repricing.** The live Markups rules are never read when a section is priced. A section
+**How a saved bid is kept from repricing.** Two moves are deliberate (Hanz, 2026-10-21, every v2 bid being a test copy): a far bid re-prices under
+the round-6 nights rule ("Let them re-price"; a typed figure never moves), and a far Combo saved under the one-drive law opens with its second
+base's drive (round 7, part 4, P4: `giveEveryBaseItsDrive` in the page's adopt(), carrying a drive the estimator switched off or cleared as
+that crew's answer), an open that is saved. Everything else below holds. The live Markups rules are never read when a section is priced. A section
 with no snapshot (every saved bid, and the Polish root always) prices at its profile's built-ins; a section
 activated after a rule was filed keeps that rule as text and is not moved by a later edit. The data dump of
 2026-10-12 had one production rule, `(polish, bond, '1%')`, and none the engine reads (bond is not taken, and a
