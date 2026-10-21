@@ -12,6 +12,18 @@
     return typeof TWIcon === "function" ? TWIcon(name, size) : "";
   }
   const state = TW.getState();
+
+  // THE STEP PILLS OF A v2 DRAFT GO TO THE v2 PAGES (browser walk, 2026-10-20): the pills are written for the spreadsheet
+  // flow (/?edit=1 and /estimate-review.html), which only bounce a v2 draft on to the v2 pages and log an error doing it.
+  try {
+    if (TW.isV2Draft && TW.isV2Draft(state)) {
+      document.querySelectorAll(".progress a.step").forEach(function (a) {
+        var h = a.getAttribute("href") || "";
+        if (/^\/estimate-review\.html/.test(h)) a.setAttribute("href", TW.withDraft("/polish-estimate.html"));
+        else if (/^\/(\?edit=1)?$|^\/\?edit=1/.test(h)) a.setAttribute("href", TW.withDraft("/polish-intake.html"));
+      });
+    }
+  } catch (e) { /* a stub DOM or an old shared.js: the pills keep their spreadsheet links, which still redirect */ }
   const result = state.generate_result;
 
   const preEl   = document.getElementById("pre-generate");

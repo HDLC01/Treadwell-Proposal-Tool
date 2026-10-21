@@ -667,8 +667,8 @@ MUTATIONS = {
         MODEL, "    if (pw > 0) opts.prevailing = pw;", "    void pw;",
         lambda r: r["sections"]["rev2Nights"]["optsPrevailing"] is None),
     "the sheet nights ignore the prevailing rate in the labor dollars": (
-        MODEL, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
-        "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        MODEL, "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions)), travelLabor, rate || SHIPPED_LABOR_RATE);",
         lambda r: abs(r["sections"]["rev2Nights"]["qty"] - r["sections"]["rev2Nights"]["expected"]) > 0.01),
     "the blockers ask for a rate the prevailing wage supplies": (
         MODEL, '      if (!filledIn(row.rate) && !(laborRateOf(row, prevailingApplied(m)) > 0)) missing.push("rate");',
@@ -709,7 +709,7 @@ MUTATIONS = {
         PAGE, "      var cost = B.laborCost(r, pwRev);", "      var cost = B.laborCost(r);",
         lambda r: r["page"]["review"]["polishing"] is False),
     "the review rate ignores the prevailing rate": (
-        PAGE, "B.money2(B.laborRateOf(r, pwRev)),", "B.money2(B.laborRateOf(r)),",
+        PAGE, 'rateMoney(B.laborRateOf(r, pwRev)) + " / hr"),', 'rateMoney(B.laborRateOf(r)) + " / hr"),',
         lambda r: r["page"]["review"]["polishing"] is False),
     "the default note ignores the prevailing rate": (
         PAGE, "    if (B.num(pw) > 0 && !B.isTravelRow(row)) {", "    if (false) {",
@@ -762,8 +762,8 @@ MUTATIONS = {
         lambda r: r["typedAtDefaultPage"]["clearedByChange"]["mark"] is True
         and r["typedAtDefaultPage"]["clearedByChange"]["box"] == "33"),
     "the step pips price the labor without the prevailing rate": (
-        PAGE, "M.labor.forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
-        "M.labor.forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });",
+        PAGE, "(M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r, pwStep) > 0) lab += 1; });",
+        "(M.labor instanceof Array ? M.labor : []).forEach(function (r) { if (B.laborCost(r) > 0) lab += 1; });",
         lambda r: r["steps"]["on"]["step"]["labor"] == "" and r["steps"]["on"]["step"]["review"] == ""),
     "the crew is not paid the trade picked": (
         MODEL, "    if (p.trades instanceof Array) p = prevailingCrewTrade(p) || {};",
@@ -788,8 +788,8 @@ MUTATIONS = {
         'if (!(total > 0)) return "On, with no rate yet." + " has no rate yet.',
         lambda r: not r["trades"]["noRate"]["note"].startswith("Cement Mason")),
     "the lodging hint counts nights without the prevailing rate": (
-        MODEL, "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions, opts.prevailing);",
-        "var days = travelManDays(rows), nights = sheetNights(rows, opts.conditions);",
+        MODEL, "      if (profile) nights = sheetNights(rows, model.conditions, prevailingApplied(model), profile);",
+        "      if (profile) nights = sheetNights(rows, model.conditions, undefined, profile);",
         lambda r: r["lodging"]["on"]["hint"].endswith("16.82.") and r["lodging"]["page"]["on"].endswith("16.82.")),
 }
 

@@ -4700,6 +4700,10 @@ async function laborChecks() {
       guysAutoIsExplained: /Night differential[\s\S]*?Typed on the estimate\. Older saved estimates take the crew man-days\./.test(h),
       // A new bid opens with guys empty, so the list must not promise man-days are filled in.
       noFillPromise: h.indexOf("come off the crew rows") === -1,
+      // TRAVEL LABOR is the one line the estimate fills itself (2026-10-20): on a job 70 miles or more out (any sheet but a Gyp bid), its hours
+      // from the miles and its guys the most on any labor line, when a distance is entered or looked up; an estimate saved earlier keeps its
+      // figures until then. A Gyp bid is never filled, so the words say it is typed.
+      travelExplained: ((/Travel Labor[\s\S]*?<td>(Typed on the estimate\.[^<]*)<\/td>/.exec(h) || [])[1]) || null,
     };
   }
 

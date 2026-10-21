@@ -139,7 +139,7 @@ async function main() {
   out.opened = {
     tabs: Object.keys(m0.tabs || {}), rootKind: m0.kind === undefined ? "base" : m0.kind,
     epoxyKind: m0.tabs && m0.tabs.Epoxy && m0.tabs.Epoxy.kind,
-    strip: panelTabs(b), stripHidden: !!b.doc.getElementById("sheet-now").hidden,
+    strip: panelTabs(b),
     activeIs: openSheet(b) === "Polish" ? "Polish" : "other",
     rootTakeoff: clone(m0.takeoff).map((r) => [r.measurement, r.unit]),
     epoxyTakeoff: clone(m0.tabs.Epoxy.takeoff).map((r) => [r.measurement, r.unit]),
@@ -211,7 +211,8 @@ async function main() {
     lump: savedT.proposal_lump_sum, handLump: handT.polish.total + handT.epoxy.total,
     handLumpBefore: noTravel.polish.total + noTravel.epoxy.total,
   };
-  // the Epoxy section's Labor step has no travel block, and its Review says where travel is charged
+  // the Epoxy section's Labor step has none of the carrier's travel block (since round 7 it draws its own Travel Labor card: its crew drives on its own, Hanz's D1 of 2026-10-21),
+  // and its Review says where Hotel and Per Diem are charged
   api.go(1);
   const epoxyLabor = html(b, "panels");
   out.travel.epoxyLaborHasBlock = epoxyLabor.indexOf("data-trv-how") >= 0;
@@ -227,23 +228,21 @@ async function main() {
   P.clickEl(b, P.need(b, '[data-section-tab="Polish"]'));
   api.go(2);
   const review = html(b, "panels");
-  const card = /data-job-card>([^]*?)<\/table>/.exec(review);
+  // REVIEW SHOWS ONE SHEET (Hanz, 2026-10-19): the open sheet's own cards, no whole-bid card for the pair and no option cards.
   out.review = {
-    hasCard: !!card, labels: card ? Array.from(card[1].matchAll(/<td>([^<]*)<\/td>/g)).map((m) => m[1]) : [],
-    before: (/data-job-total>([^<]*)</.exec(review) || [])[1],
-    polishFigure: (/data-job-sec="Polish">([^<]*)</.exec(review) || [])[1],
-    epoxyFigure: (/data-job-sec="Epoxy">([^<]*)</.exec(review) || [])[1],
-    // the card comes before the section's own cards
-    cardFirst: review.indexOf("data-job-card") >= 0 && review.indexOf("data-job-card") < review.indexOf("Takeoff and Material"),
-    hotelHasLodging: /Hotel<\/td>/.test(review),
+    noJobCard: review.indexOf("data-job-card") < 0 && review.indexOf("Whole bid") < 0 && review.indexOf("Combined base bid") < 0,
+    noOptionCard: review.indexOf("data-option-card") < 0,
+    ownCards: review.indexOf("Takeoff and Material") >= 0,
+    openTotal: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
+    // The job's lodging line: "Hotel" in a cell of its own, with the words that say where its quantity came from under the name when a far answer filled it (the fifth audit).
+    hotelHasLodging: /Hotel(<span class="note work">.*?<\/span>)?<\/td>/.test(review),
   };
-  // a figure typed on Review moves the card's figures live
+  // a figure typed on Review moves the open sheet's own total live
   P.typeInto(b, "[data-contingency]", "1000");
   const nowHand = byHand(clone(api.model()), undefined);
   const live = (sel) => (b.doc.querySelector(sel) || { textContent: null }).textContent;
   out.review.afterContingency = {
-    job: live("[data-job-total]"), polish: live('[data-job-sec="Polish"]'), epoxy: live('[data-job-sec="Epoxy"]'),
-    handJob: money(nowHand.polish.total + nowHand.epoxy.total), handPolish: money(nowHand.polish.total), handEpoxy: money(nowHand.epoxy.total),
+    total: live('[data-mk="total"]'), handPolish: money(nowHand.polish.total), handJob: money(nowHand.polish.total + nowHand.epoxy.total),
   };
 
   // ── 6. editing one section never touches the other's rows in what is saved ──

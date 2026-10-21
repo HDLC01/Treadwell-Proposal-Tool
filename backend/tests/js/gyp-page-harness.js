@@ -95,8 +95,8 @@ async function main() {
     takeoff: m0.takeoff.map((r) => [r.assembly_name, r.measurement, r.unit, r.bucket]),
     laborIds: m0.labor.map((r) => r.id), laborUnits: m0.labor.map((r) => r.unit), laborGuys: m0.labor.map((r) => r.guys),
     laborRates: m0.labor.map((r) => r.rate),
-    // The Sheets panel (Sheets phase 3) is drawn on every bid; the "Open sheet" line above the step rail hides itself for one sheet.
-    strip: { hidden: !!b.doc.getElementById("sheet-now").hidden,
+    // The Sheets panel (Sheets phase 3) is drawn on every bid; the strip of tabs has its one tab.
+    strip: {
              tabs: (b.doc.getElementById("sheets-panel").innerHTML.match(/data-section-tab="([^"]*)"/g) || []) },
     card: html(b, "panels").indexOf("data-gyp-card") >= 0,
     cardSheets: (html(b, "panels").match(/<option value="Gyp[^"]*"/g) || []).length,
@@ -216,10 +216,18 @@ async function main() {
     escalationLabel: review.indexOf("Labor escalation (always on for Gyp)") >= 0,
     noPrevailingSwitch: review.indexOf('data-cond="prevailing_wage"') < 0,
     materialEscalationRow: review.indexOf('data-mk="material_escalation"') >= 0,
-    shippingNoRate: /Shipping<\/td><td class="r"><\/td>/.test(review),
+    shippingNoRate: /Shipping<\/td><td class="q r"><\/td><td class="u"><\/td><td class="rt r"><\/td>/.test(review),
     tooling: review.indexOf("Tooling and consumables") >= 0,
     total: (/data-mk="total">([^<]*)</.exec(review) || [])[1],
     noDye: !/Dye/.test(review),
+    // EVERY RATE CELL'S TEXT (round 7, part 4, P8): what the Review's cards print in their Rate column on a Gyp bid, read off the page, so test_v2_review_table_fits.py sizes the column by the real widest
+    // string ("$16.8113 / gallon", the Primer row, ran under the pinned Total column at 916px with the sidebar open). Each cell's markup stripped to a fixed point; a rate holds no
+    // & < > " or ', so only the non-breaking space is read back (decoding the rest after a strip is what CodeQL's double-escaping and multi-character rules flag).
+    rates: [...review.matchAll(/<td class="rt r">([\s\S]*?)<\/td>/g)].map((mm) => {
+      let t = mm[1], prev;
+      do { prev = t; t = t.replace(/<[^>]*>/g, ""); } while (t !== prev);
+      return t.replace(/&nbsp;/g, " ");
+    }).filter((t) => t !== ""),
   };
 
   // ── 8. a thickness that cannot be worked out is NO PRICE, in the page's words, never a bid on the part that could be ──
@@ -272,9 +280,31 @@ async function main() {
 
   // ── 14. the labor rows are ordinary crew lines priced by the hour: not dimmed, no drive-time words ──
   const labPanel = (() => { api.go(1); return html(b, "panels"); })();
+  // The note's text is CAPTURED, not cut out of its tags: a tag-stripping replace trips CodeQL's incomplete-sanitization rule.
+  const trvNoteOf = (panel) => (panel.match(/<p class="hint trvnote">(Drive time is expected[^<]*)<\/p>/) || ["", ""])[1];
   out.laborCards = {
     pourHint: labPanel.indexOf("Hours on the job.") >= 0, driveHint: (labPanel.match(/Drive time, each way counted\./g) || []).length,
     hourCards: (labPanel.match(/data-lab-card="\d+"/g) || []).length,
+    travelNote: trvNoteOf(labPanel),
+  };
+
+  // ── 15. A FAR GYP JOB'S TRAVEL LABOR IS NOT FILLED, AND ITS CARD DOES NOT SAY IT IS (2026-10-20 audit). A far distance fills Travel Labor
+  //        on every sheet but Gyp (hours from the miles, guys the crew's size). A Gyp bid is priced by the hour and works its own
+  //        drive time, so its row is left empty and typed, and its card must not promise "the hours fill in from the miles".
+  const farGyp = await open(gypDraft({ address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" }),
+    { distance: { ok: true, miles: 190, reason: "" } });
+  farGyp.api.go(1);
+  for (let i = 0; i < 6; i++) await flush();
+  const gRoot = farGyp.api.root();
+  const gModel = farGyp.api.model();
+  const gi = gModel.labor.findIndex((r) => r.id === "travel");
+  const gPanel = html(farGyp, "panels");
+  out.farGyp = {
+    distance: gRoot.distance && gRoot.distance.miles, local: gRoot.conditions.local, travelCards: (gPanel.match(/data-trv-card="/g) || []).length,
+    row: clone(gModel.labor[gi]), hoursBox: String(P.need(farGyp, '[data-lab="' + gi + '"][data-k="days"]').value),
+    guysBox: String(P.need(farGyp, '[data-lab="' + gi + '"][data-k="guys"]').value), cardNote: trvNoteOf(gPanel),
+    srcNote: { text: P.need(farGyp, "[data-trv-src]").textContent, hidden: P.need(farGyp, "[data-trv-src]").hidden },
+    lodging: gRoot.travel.lodging.enabled, perDiem: gRoot.travel.per_diem.enabled,
   };
   return out;
 }

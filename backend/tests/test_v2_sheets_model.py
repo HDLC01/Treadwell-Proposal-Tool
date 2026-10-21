@@ -259,14 +259,20 @@ def test_picking_another_base_moves_the_lump_sum_and_the_travel(ran):
     assert b["pricedTabs"] == [["Polish", "option"], ["Epoxy", "base"]]
 
 
-def test_the_travel_labor_row_follows_the_carrier_and_comes_back_with_it(ran):
+def test_the_travel_labor_row_goes_to_the_carrier_and_the_demoted_base_keeps_its_own(ran):
+    """The job's drive is a Travel Labor row on the carrier, so the new carrier takes it. THE DEMOTED BASE KEEPS ITS OWN (the 2026-10-20 fifth audit): it is an option now, priced
+    apart with a drive of its own, and moving the row left it none until the draft was reloaded (migrateModel then gave a root a blank one): the bid priced one way in the session and
+    another after a reload. So the new carrier gets a COPY and the Polish root keeps the row it had. Picking the Polish base again leaves the Polish side exactly as it started, and
+    Epoxy, an option again, keeps the Travel Labor row it took as the base (before, the undo returned the whole model byte for byte).
+
+    Mutation: move the row off the demoted base; leave the carrier without the job's row."""
     b = ran["baseBid"]
     assert b["travelLaborRow"] == {"polishBefore": ["polishing", "travel"], "epoxyBefore": ["installing"],
-                                   "polishAfter": ["polishing"], "epoxyAfter": ["installing", "travel"]}
+                                   "polishAfter": ["polishing", "travel"], "epoxyAfter": ["installing", "travel"]}
     back = b["backAgain"]
-    assert back["base"] == {"ids": ["Polish"], "jobType": "polish"} and back["rowsBack"] == ["polishing", "travel"] and back["epoxyRows"] == ["installing"]
+    assert back["base"] == {"ids": ["Polish"], "jobType": "polish"} and back["rowsBack"] == ["polishing", "travel"] and back["epoxyRows"] == ["installing", "travel"]
     assert back["polishTotal"] == b["before"]["polishTotal"] and back["polishTravel"] == 1000
-    assert back["sameAsStart"] is True, "picking the base and picking it back leaves the model exactly as it was"
+    assert back["polishSideSameAsStart"] is True and back["epoxyOnlyGainedTravel"] is True and back["sameAsStart"] is False
 
 
 def test_the_prior_base_becomes_an_option_that_is_on_the_proposal_as_a_total_and_keeps_its_words(ran):
@@ -299,7 +305,7 @@ def test_the_combined_epoxy_and_polish_base_is_the_sum_of_both_and_names_no_one_
     assert c["otherOrder"] == {"sameModel": True, "patch": {"work_type": "combo", "base_tab_id": None}}
     e = c["fromCombinedToEpoxy"]
     assert e["base"] == {"ids": ["Epoxy"], "jobType": "epoxy"} and e["kinds"] == [["Polish", "option"], ["Epoxy", "base"]]
-    assert e["rows"] == [["polishing"], ["installing", "travel"]]
+    assert e["rows"] == [["polishing", "travel"], ["installing", "travel"]], "the demoted Polish keeps its row, and Epoxy, the new carrier, took a copy"
     assert e["patch"]["tab_opts"] == {"Polish": ON_THE_PROPOSAL}, "only the half that stopped being a base is demoted"
     assert "one Epoxy sheet and one Polish sheet" in c["twoPolish"]
 
@@ -678,8 +684,8 @@ BREAKS = {
         "    if (true) return travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total;",
         lambda r: r["copies"]["legacy"]["farAsOption"] != 1500),
     "polishBid gives an option no travel": (
-        MODEL, '    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor).total;',
-        '    if (false) return optionTravelCosts(model.travel, s.labor).total;',
+        MODEL, '    if (e.kind === "option") return optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;',
+        '    if (false) return optionTravelCosts(model.travel, s.labor, ownNights(model, e)).total;',
         lambda r: r["copies"]["legacy"]["farAsOption"] != 1500),
     "a rev 2 copy counts the nights of the people and not the sheet's": (
         MODEL, '    return isObject(s) && s.layout === "polish" && (s.profile === REV2.stamp || s.profile === REV3.stamp);', "    return false;",
@@ -723,11 +729,16 @@ BREAKS = {
     "the new base stays an option on the draft": (
         MODEL, "      if (!has.call(held, id) || !isObject(held[id]) || held[id].is_option !== true) return;", "      return;",
         lambda r: r["baseBid"]["backAgain"]["patch"]["tab_opts"]["Polish"]["is_option"] is not False),
+    # (round 7: a single-base job's drive follows its one base, and so does a one-drive-era pair's when one base of the two is left holding no line; it was "when the carrier moved")
     "the jobs travel labor stays on the old carrier": (
-        MODEL, "    if (carrierAfter !== carrierBefore) out = moveTravelLabor(out, carrierBefore, carrierAfter);", "    void moveTravelLabor;",
-        lambda r: r["baseBid"]["travelLaborRow"]["epoxyAfter"] != ["installing", "travel"]),
+        MODEL, "      out = moveTravelLabor(out, drivesBefore[0], drivesAfter[0]);", "      void moveTravelLabor;",
+        lambda r: r["baseBid"]["travelLaborRow"]["epoxyAfter"] != ["installing", "travel"]
+        or r["combinedBase"]["fromCombinedToEpoxy"]["rows"][1] != ["installing", "travel"]),
+    "the demoted base loses its Travel Labor row to the new carrier": (
+        MODEL, '    try { demoted = sectionOf(out, fromTab).kind === "option"; } catch (err) { demoted = false; }', "    demoted = false;",
+        lambda r: r["baseBid"]["travelLaborRow"]["polishAfter"] != ["polishing", "travel"]),
     "the travel labor row is added even when the new carrier has one": (
-        MODEL, "    if (!mine.length || theirs.length) return model;", "    if (!mine.length) return model;",
+        MODEL, "    if (!mine.length || theirs.length) return false;", "    if (!mine.length) return false;",
         lambda r: _all(r, "baseBid", "copies") or r["copies"]["legacy"]["farAsBase"] is not True),
     "a pick forgets the work type": (
         MODEL, "    var patch = { work_type: baseOf(out).jobType, base_tab_id: want.length === 1 ? want[0] : null };",

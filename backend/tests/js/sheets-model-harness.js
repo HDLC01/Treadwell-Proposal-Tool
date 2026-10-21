@@ -275,7 +275,12 @@ function baseBid() {
     travelLaborRow: { polishBefore: rowIds(m0, "Polish"), epoxyBefore: rowIds(m0, "Epoxy"), polishAfter: rowIds(m1, "Polish"), epoxyAfter: rowIds(m1, "Epoxy") },
     backAgain: { base: B.baseOf(back.model), polishTotal: B.polishBid(back.model, "Polish", CTX).total, polishTravel: B.polishBid(back.model, "Polish", CTX).travel,
                  rowsBack: rowIds(back.model, "Polish"), epoxyRows: rowIds(back.model, "Epoxy"), patch: back.patch,
-                 sameAsStart: JSON.stringify(back.model) === JSON.stringify(m0) },
+                 sameAsStart: JSON.stringify(back.model) === JSON.stringify(m0),
+                 // THE DEMOTED BASE KEEPS ITS DRIVE (the fifth audit), so a pick and its undo no longer return the Epoxy option byte for byte: it keeps the Travel Labor row it took
+                 // as the base. Everything else is as it was: the Polish side whole (the root's own keys), and Epoxy but for that one row.
+                 polishSideSameAsStart: JSON.stringify(Object.assign({}, back.model, { tabs: null })) === JSON.stringify(Object.assign({}, m0, { tabs: null })),
+                 epoxyOnlyGainedTravel: JSON.stringify(Object.assign({}, back.model.tabs.Epoxy, { labor: back.model.tabs.Epoxy.labor.filter((r) => r.id !== "travel") })) ===
+                   JSON.stringify(m0.tabs.Epoxy) },
     samePick: { sameModel: same.model === m0, patch: same.patch },
     inputUntouched: JSON.stringify(m0) === JSON.stringify(far(withEpoxy(polish(), "option"))),
     frozenThrew: threw(() => B.pickBase(frozen, ["Epoxy"], {})),

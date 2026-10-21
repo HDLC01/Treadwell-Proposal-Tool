@@ -375,6 +375,12 @@ function seeding() {
   const epoxyJob = () => B.activateSection(Object.assign(B.migrateModel(undefined), { kind: "off" }), "Epoxy", "base", {});
   const declinedEpoxy = B.seedNewSections(epoxyJob(), seedCtx({ laborRows: noTravel({ favorite: true, default_work_types: ["polish"] }) })).no_travel_labor === true;
   const keptEpoxy = B.seedNewSections(epoxyJob(), seedCtx({ laborRows: noTravel({ favorite: true, default_work_types: ["epoxy"] }) })).no_travel_labor === true;
+  // ...and a new COMBO whose library puts Travel on Polish bids only: every base drives its own crew (round 7, Hanz's D1 of 2026-10-21), so the decline is the Epoxy SHEET's own answer
+  // (`sheet_no_travel_labor`), the job's is not said, and the Epoxy base is seeded no Travel line while the Polish root is
+  const comboJob = () => B.activateSection(B.migrateModel(undefined), "Epoxy", "base", {});
+  const declinedCombo = B.seedNewSections(comboJob(), seedCtx({ laborRows: noTravel({ favorite: true, default_work_types: ["polish"] }) }));
+  // ...and a NEW option beside the two bases is seeded no Travel line: an option is priced apart and carries a drive only when the estimator adds one (or a copy brings one)
+  const newOption = B.seedNewSections(B.activateSection(comboJob(), "Seal", "option", {}), seedCtx({ sf: { Polish: [8000, ""], Epoxy: [4000, ""] } }));
   return {
     rootLaborIds: ids(root.labor), rootRates: root.labor.map((r) => r.rate), rootTakeoff: root.takeoff.map((r) => r.measurement),
     rootFees: [root.fees, root.fees_default], rootTravelRates: [root.travel.lodging.rate, root.travel.per_diem.rate], rootDye: root.conditions.dye,
@@ -400,6 +406,9 @@ function seeding() {
       unknownLayout: threw(() => B.seedNewSections(badLayout, seedCtx())),
     },
     noTravelLabor: { root: declined.no_travel_labor === true, carrierEpoxy: declinedEpoxy, carrierEpoxyKept: keptEpoxy },
+    comboDeclined: { rootHasTravel: ids(declinedCombo.labor).indexOf("travel") >= 0, epoxyHasTravel: ids(declinedCombo.tabs.Epoxy.labor).indexOf("travel") >= 0,
+                     epoxySaid: declinedCombo.tabs.Epoxy.sheet_no_travel_labor === true, job: declinedCombo.no_travel_labor === true },
+    newOption: { epoxyHasTravel: ids(newOption.tabs.Epoxy.labor).indexOf("travel") >= 0, sealHasTravel: ids(newOption.tabs.Seal.labor || []).indexOf("travel") >= 0 },
   };
 }
 
@@ -489,13 +498,13 @@ const est = () => ESTIMATE || (ESTIMATE = loadPrelude("polish-estimate-harness.j
 async function page() {
   const P = est();
   const last = (l) => l[l.length - 1];
-  // THE SHEETS PANEL replaced the strip (Sheets phase 3): it is drawn on every bid, one row per sheet; the "Open sheet" line above the
-  // step rail is what hides for a bid with one sheet.
+  // THE SHEET BAR replaced the strip (Sheets phase 3, then tabs on 2026-10-19): it is drawn on every bid, one tab per sheet, with the open
+  // sheet's bar under it; there is no "Open sheet" line above the step rail any more.
   const seg = (b) => {
-    const panel = b.doc.getElementById("sheets-panel"), now = b.doc.getElementById("sheet-now");
-    return { hidden: !!now.hidden, now: now.innerHTML, html: panel.innerHTML, rows: (panel.innerHTML.match(/data-sh-row="/g) || []).length };
+    const panel = b.doc.getElementById("sheets-panel");
+    return { html: panel.innerHTML, rows: (panel.innerHTML.match(/data-sh-row="/g) || []).length };
   };
-  // one section (every bid today): the panel has its one row, the Open sheet line is not drawn, and a save writes the five keys
+  // one section (every bid today): the panel has its one row, there is no Open sheet line, and a save writes the five keys
   const one = P.build({ blob: P.blob({ polish_estimate: clone(P.MODEL), polish_sf: 17500 }) });
   await one.api.init();
   P.typeInto(one, '[data-tk="0"][data-k="measurement"]', "12000");

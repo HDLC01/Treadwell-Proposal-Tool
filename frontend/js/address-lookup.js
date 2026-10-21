@@ -98,7 +98,30 @@
       if (el) el.dispatchEvent(new Event("input", { bubbles: true }));
     }
 
+    /** THE LIST BELONGS TO THE BOX THAT ASKED FOR IT (browser walk on staging, 2026-10-20): an address typed and then
+     *  Tab-bed out of left the list open over City, State and Zip; Escape did nothing, and a click on those boxes landed on
+     *  the list's rows. Leaving the box closes its list, an answer that lands after the box was left never opens it, and
+     *  Escape closes it. A press on a row keeps the focus in the box (its mousedown is not let through), so leaving the box
+     *  can never swallow the pick. `left` starts false, so a box that never reported focus behaves as before. */
+    function leaveCloses(input, results) {
+      var left = false;
+      if (!input || !results) return function () { return true; };
+      input.addEventListener("focus", function () { left = false; });
+      input.addEventListener("blur", function () { left = true; results.classList.remove("open"); });
+      input.addEventListener("keydown", function (e) {
+        if (e && e.key === "Escape" && results.classList.contains("open")) {
+          results.classList.remove("open");
+          if (e.preventDefault) e.preventDefault();
+        }
+      });
+      results.addEventListener("mousedown", function (e) { if (e && e.preventDefault) e.preventDefault(); });
+      return function () { return !left; };
+    }
+    var addrMayOpen = leaveCloses(addrInput, addrResults);
+    var businessMayOpen = leaveCloses(businessInput, businessResults);
+
     function showAddrMsg(text) {
+      if (!addrMayOpen()) return;
       addrResults.innerHTML = '<div class="addr-row addr-msg">' + text + "</div>";
       addrResults.classList.add("open");
     }
@@ -119,6 +142,7 @@
     }
 
     function renderAddr(features) {
+      if (!addrMayOpen()) return;          // the box was left while the answer was on its way
       var items = addressRows(features);
       if (!items.length) { showAddrMsg("No matches — keep typing the address"); return; }
       addrResults.innerHTML = items.map(function (it, i) {
@@ -135,6 +159,7 @@
     }
 
     function renderBusinesses(features) {
+      if (!businessMayOpen()) return;
       var items = businessRows(features);
       if (!items.length) {
         businessResults.innerHTML = '<div class="addr-row addr-msg">No business matches — enter the address manually</div>';
