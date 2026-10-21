@@ -422,8 +422,11 @@ def test_the_two_doors_into_polish_step_two_are_still_the_two_this_assumes():
     doors = sorted(p.name for p in list(frontend.glob("*.html")) + list((frontend / "js").glob("*.js"))
                    if p.name not in ("auth.js", "polish-estimate.js", "polish-sandbox.js")
                    and re.search(r'["\']/polish-estimate\.html', p.read_text(encoding="utf-8")))
-    assert doors == ["estimate-review.html", "estimate-review.js", "polish-intake.html",
-                     "polish-intake.js"], doors
+    # done.js and proposal-review.js joined on 2026-10-20: a v2 draft's step pills go straight to the v2 estimate rather
+    # than through estimate-review.js's redirect, which was already a door to it. The page is gated where it is served
+    # (page_denied), so a pill is no way past a denial.
+    assert doors == ["done.js", "estimate-review.html", "estimate-review.js", "polish-intake.html",
+                     "polish-intake.js", "proposal-review.js"], doors
 
 
 def test_the_pages_with_no_sidebar_row_are_never_denied():

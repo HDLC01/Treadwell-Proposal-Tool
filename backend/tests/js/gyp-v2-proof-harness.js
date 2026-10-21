@@ -111,16 +111,69 @@ const same = (a, b) => {
   return (typeof x === "number" && typeof y === "number") ? (x === y || Math.abs(x - y) < 1e-9) : x === y;
 };
 
+/** THE SHEET'S OWN LODGING, through a v2 section (the oracle's `travel: "template"` vectors: Gyp!B64 `=IF(B5="No",((E52-E51)/C46)/10)`, per diem B65 `=B64`). The vector's crew rows are
+ *  typed as a Gyp crew is typed in v2, in HOURS (a day of the sheet's `hoursPerDay`, ten, each), at their own rates, and the drive as its own row; the job is answered far by the model's own
+ *  distance answer, so the Lodging and Per Diem lines come on and FOLLOW THE LABOR (a new bid's lines open empty and off auto, and a far answer fills them), and the section is priced as the page
+ *  prices it. What comes back is the quantity the lines are charged for, each line's dollars and the chain's figures, each beside the workbook's, and what a head count (guys x hours over ten)
+ *  would have said, so the rule that was picked is pinned against the one that was not. */
+const GYP_TRAVEL_RATE = 33.66;
+function lodgingVector(tab, v) {
+  const i = v.in, a = v.out.answers, o = v.out;
+  const m = modelFor(tab);
+  m.conditions = Object.assign({}, m.conditions, {
+    local: !!a.local, taxable: !!a.taxable, prevailing_wage: !!a.prevailingWage, remodel_tax: !!a.remodel,
+  });
+  const sec = m.tabs[tab];
+  sec.takeoff = [{ assembly_id: "", assembly_name: "", measurement: i.sf, unit: "SF" }];
+  sec.labor = v.rows.map((r, n) => ({ id: "gyp-crew-" + n, label: "Crew " + (n + 1), guys: r.guys, days: Math.round(r.days * v.hoursPerDay * 1e6) / 1e6, rate: r.rate, unit: "hours" }));
+  if (i.travelLabor) {
+    sec.labor.push({ id: "travel", label: "Travel Labor", guys: 1, days: Math.round((i.travelLabor / GYP_TRAVEL_RATE) * 1e6) / 1e6, rate: GYP_TRAVEL_RATE, unit: "hours" });
+  }
+  sec.contingency = i.contingency || 0;
+  sec.fees = i.fees || 0;
+  // A NEW bid's lines (empty, off auto) at the tab's own rates, C64 and C65; a far answer then switches them on and fills them, a local one leaves them off.
+  m.travel = B.travelCostsSeed(70, 45);
+  ["lodging", "per_diem"].forEach((k) => { m.travel[k].qty_auto = false; m.travel[k].qty = ""; });
+  B.applyDistance(m, { miles: a.local ? 30 : 190, source: "typed", key: "" });
+  const r = B.priceSection(m, tab, {
+    material: () => ({ gyp: 0, extras: 0, sand: 0, soundMat: 0, soundMatRolls: 0, tooling: 0 }),
+  });
+  const opts = B.travelOpts(m, tab);
+  const line = m.travel.lodging;
+  const qty = B.travelQty(line, sec.labor, opts);
+  const costs = B.travelCosts(m.travel, sec.labor, opts);
+  const people = B.travelManDays(sec.labor, 10);
+  const wrong = [];
+  if (B.roundUp(B.laborTotal(sec.labor)) !== i.labor) wrong.push("labor: workbook " + i.labor + ", v2 rows " + B.roundUp(B.laborTotal(sec.labor)));
+  if (a.local) {
+    if (line.enabled) wrong.push("a local job has its Lodging on");
+  } else {
+    if (!(line.enabled && line.qty_auto === true && line.qty_follow === "labor")) wrong.push("the far job's nights are not following the labor");
+    if (!same(qty, o.lodgingQty)) wrong.push("nights: workbook " + o.lodgingQty + ", v2 " + qty);
+  }
+  if (costs.lodging !== o.lodging) wrong.push("lodging: workbook " + o.lodging + ", v2 " + costs.lodging);
+  if (costs.per_diem !== o.perDiem) wrong.push("per diem: workbook " + o.perDiem + ", v2 " + costs.per_diem);
+  if (costs.total !== o.travel) wrong.push("travel: workbook " + o.travel + ", v2 " + costs.total);
+  Object.keys(KEYS).forEach((k) => {
+    if (o[k] !== undefined && o[k] !== null && !same(o[k], r[KEYS[k]])) wrong.push(k + ": workbook " + o[k] + ", v2 " + r[KEYS[k]]);
+  });
+  return { tab: tab, id: v.id, lodging: true, far: !a.local, wrong: wrong, nights: a.local ? null : qty, sheetNights: a.local ? null : o.lodgingQty,
+    lodgingCost: costs.lodging, perDiemCost: costs.per_diem, sheet: { lodging: o.lodging, perDiem: o.perDiem, travel: o.travel },
+    // what counting people (guys x hours over ten) would have charged: the rule that was not picked
+    people: { nights: people, lodging: B.roundUp(people * 70), perDiem: B.roundUp(people * 45) } };
+}
+
 const chain = [];
 P.priced.filter((t) => t.indexOf("Gyp") === 0).forEach((tab) => {
   const slug = P.sheets[tab].slug;
   const oracle = JSON.parse(fs.readFileSync(path.join(ORACLE, slug + ".json"), "utf8"));
   oracle.vectors.forEach((v) => {
     const i = v.in, a = v.out.answers;
-    // The chain's own inputs the v2 model has no box for: a typed bond rate (bond is 0 and unwired), and the
-    // sheet's lodging, which v2 takes from the Lodging and Per Diem lines the estimator types. (The Hard Bid
-    // question changes nothing on a Gyp tab, so those vectors are priced like any other.)
-    const skip = i.bondPct ? "bond" : (i.travel === "template" || (i.travel === undefined && !a.local) ? "lodging" : null);
+    // THE SHEET'S OWN LODGING (the vectors that ask the template for it) is priced through a v2 section with the nights left to follow the labor: lodgingVector.
+    if (i.travel === "template" && !i.bondPct) { chain.push(lodgingVector(tab, v)); return; }
+    // The chain's own inputs the v2 model has no box for: a typed bond rate (bond is 0 and unwired), and a far job whose travel the vector does not give at all (none is recorded).
+    // (The Hard Bid question changes nothing on a Gyp tab, so those vectors are priced like any other.)
+    const skip = i.bondPct ? "bond" : (i.travel === undefined && !a.local ? "lodging" : null);
     if (skip) { chain.push({ tab: tab, id: v.id, skipped: skip }); return; }
     const m = modelFor(tab);
     m.conditions = Object.assign({}, m.conditions, {

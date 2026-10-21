@@ -66,6 +66,9 @@ NEWEST_TOTALS = {
     "v2_fees_contingency_no_travel_labor": 42759,
     "v2_remodel_rate_override_wins": 35834,
     "v2_remodel_county_without_a_rate": 34307,
+    # Added 2026-10-20 with the distance filling Travel Labor, and pinned the same way from a later staging commit, 15a959f (#689):
+    # the page BEFORE that change answers 36,836 for it, and so must the page after.
+    "v2_far_job_blank_travel_labor": 36836,
 }
 
 
@@ -253,6 +256,23 @@ def test_travel_lines_hotel_and_per_diem_stay_as_saved(ran):
 
 
 @needs_node
+def test_a_far_job_saved_with_travel_labor_blank_opens_blank_and_is_never_filled_by_the_open(ran):
+    """THE DISTANCE FILLS TRAVEL LABOR since 2026-10-20 (Hanz; Kyle's way: the hours from the miles, the guys the crew's size), when an
+    answer is APPLIED in a session. A far job saved with its distance (190 miles) and Travel Labor blank, which is what a new bid held from 2026-10-12 to
+    10-20, must not be filled by being opened: no hours, no guys, not on auto, no marker, no write, no lookup, with and without a
+    library whose distance stub is waiting with 150 miles, and the same again after a save and a reopen.
+
+    Mutation: apply the saved distance when a bid opens (NEWEST_MUTATIONS below)."""
+    for pass_name in ("fixtures", "withLibrary"):
+        got = _newest(ran, "v2_far_job_blank_travel_labor", pass_name)
+        assert got["laborDays"][3] == "" and got["laborGuys"][3] == "", (pass_name, "Travel Labor was filled on open", got["laborDays"])
+        assert got["saves"] == 0 and got["distanceAsked"] == 0, pass_name
+        assert got["distance"] == '{"miles":190,"source":"google","key":"1 water works dr|kansas city|ks|66101"}'
+    rt = ran["newest"]["roundTrip"]["v2_far_job_blank_travel_labor"]
+    assert rt["totalFirst"] == rt["savedLump"] == rt["totalAgain"] == NEWEST_TOTALS["v2_far_job_blank_travel_labor"] and rt["savesAgain"] == 0
+
+
+@needs_node
 def test_typed_travel_quantities_and_hand_flips_are_not_re_derived(ran):
     typed = _newest(ran, "v2_travel_typed_and_hand_flipped")
     t = json.loads(typed["travelDetail"])
@@ -343,6 +363,10 @@ NEWEST_MUTATIONS = {
     "migrate drops the saved distance": (
         "js/bid-model.js", "if (dist) out.distance = dist;", "void dist;",
         "v2_travel_block_far_job", lambda got: got["distance"] is None),
+    "opening a bid applies its saved distance, which fills Travel Labor": (
+        "js/polish-estimate.js", "renderDatalist();", "renderDatalist(); if (ROOT.distance) B.applyDistance(ROOT, ROOT.distance);",
+        "v2_far_job_blank_travel_labor",
+        lambda got: got["laborDays"][3] != "" and got["total"] != NEWEST_TOTALS["v2_far_job_blank_travel_labor"]),
     "migrate drops which cards a bid shows": (
         "js/bid-model.js", "out.conditions_shown = shown;", "void shown;",
         "v2_default_rows_saved", lambda got: got["conditionsShown"] is None),

@@ -47,7 +47,6 @@ def ran(tmp_path_factory):
 def test_a_new_epoxy_job_opens_as_an_epoxy_section_with_the_polish_root_off(ran):
     o = ran["opened"]
     assert o["tabs"] == ["Epoxy"] and o["rootKind"] == "off"
-    assert o["strip"]["hidden"] is True, "the bid is one sheet, so the Open sheet line has nothing to tell apart"
     assert o["strip"]["tabs"] == ['data-section-tab="Epoxy"'], "the Sheets panel is drawn for one sheet too, and lists only Epoxy"
     assert o["savesOnOpen"] == 0, "opening a job writes nothing until somebody edits it"
 
@@ -101,6 +100,113 @@ def test_the_labor_step_edits_the_epoxy_crew_and_the_price_follows(ran):
     assert lab["savedDays"] == "9" and lab["rootLaborUntouched"] == 4, "the day went to the Epoxy section, not the root"
 
 
+def test_the_distance_fills_the_epoxy_sections_travel_labor_on_its_own_crew(ran):
+    """THE DISTANCE FILLS TRAVEL LABOR since 2026-10-20, KYLE'S WAY: the hours from the miles, the guys the crew's size, so each guy is
+    charged one round trip (Hanz; a scan of Kyle's Dropbox shows he types the crew size on 9 of 10 out-of-town sheets). An Epoxy job's Polish
+    root is off and the Epoxy section carries the job's travel, so the row the answer fills is Epoxy's own, with Epoxy's own crew:
+    190 miles is 6.5 hours (a 380 mile round trip at 60 mph), and 4 guys for 12 days is a crew of 4 (48 man-days, which are not the guys), so
+    the line is 4 x 6.5 x $33 = $858. The root's own Travel row, which goes with the off root, is not the job's and is left alone.
+
+    Mutation: fill the model's own labor and not the carrier section's (BREAKS below)."""
+    t = ran["travelFill"]
+    b = t["before"]
+    assert b["carries"] is True, "the Epoxy section carries the job's travel, so its Labor step draws the distance"
+    assert (b["row"]["days"], b["row"]["hours_seed"], b["row"]["guys_auto"], b["row"]["guys_follow"]) == (6.5, 6.5, True, "crew")
+    assert (b["hoursBox"], b["guysBox"]) == ("6.5", "0"), "the answer is in and no crew is typed yet"
+    a = t["after"]
+    assert (a["row"]["guys"], a["guysBox"], a["manDays"], a["cost"]) == (4, "4", 48, 4 * 6.5 * 33)
+    assert a["note"]["hidden"] is False
+    assert a["note"]["text"] == ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the 4 guys on the labor "
+                                 "lines above. Type more trips for a long job.")
+    assert t["tabs"] == ["Epoxy"] and t["rootKind"] == "off" and t["distance"]["miles"] == 190
+    s = t["savedEpoxyTravel"]
+    assert (s["days"], s["hours_seed"], s["guys"], s["guys_auto"], s["guys_follow"]) == (6.5, 6.5, 4, True, "crew"), "the save keeps the figures on the Epoxy section"
+    # The control (the same job and crew with no distance answer at all) leaves the Epoxy row empty, so the fill above is the answer's;
+    # and the off root's Travel row is the same with the answer as without it.
+    assert t["controlEpoxyTravel"]["days"] == "" and "hours_seed" not in t["controlEpoxyTravel"]
+    assert t["rootTravelUntouched"] is True, t["rootTravel"]
+
+
+def test_a_job_type_switched_in_the_session_fills_the_new_carriers_travel_labor_from_the_distance_on_file(ran):
+    """The 2026-10-20 audit: a Polish bid saved at 190 miles and switched to Epoxy on the intake step opens with the Epoxy section
+    carrying the job's travel, and its Travel Labor row is NEW. It read blank while the distance said 190 and Lodging and Per Diem were
+    on. The switch is the estimator's own action, so the distance on file fills the new carrier's row by the same rule an answer does:
+    6.5 hours, the guys on Epoxy's crew (none typed yet: 0, then the 4 typed, so 4 x 6.5 x $33 = $858), the note under the card, and the
+    bid saved once. The root's own row, which goes off with the root, gives its fill back (the third audit, 2026-10-20: a filled row left on an
+    off section is priced again the day the job type comes back). A bid whose Travel Labor was left blank is filled the same way on a switch, a
+    root row switched off goes with the job's drive to the new carrier and is NOT filled there (it was the estimator's), and the sections after
+    it are as before.
+
+    Mutation: leave B.followDistance out of the page's init (BREAKS below)."""
+    j = ran["jobSwitch"]
+    s = j["switched"]
+    b = s["before"]
+    assert (b["carrier"], b["rootKind"], b["tabs"], b["distance"]) == ("Epoxy", "off", ["Epoxy"], 190)
+    for key in ("days", "hours_seed", "guys_auto", "guys_follow", "guys"):
+        assert b["row"][key] == {"days": 6.5, "hours_seed": 6.5, "guys_auto": True, "guys_follow": "crew", "guys": 0}[key], key
+    assert b["rootRow"]["guys"] == "" and b["rootRow"]["days"] == "" and b["rootRow"]["guys_auto"] is False, (
+        "the off root gives its filled row back, so the drive is priced once whatever job type the bid comes back to")
+    assert "hours_seed" not in b["rootRow"] and "guys_follow" not in b["rootRow"], "and no marker of the fill is left on it"
+    assert b["asked"] == 0, "nothing was looked up: the distance on file is what filled it"
+    assert s["boxes"]["hours"] == "6.5" and s["boxes"]["guys"] == "0"
+    assert s["boxes"]["note"] == ("6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each guy on the labor lines "
+                                  "above. It prices once those lines have guys. Type more trips for a long job.")
+    assert (s["after"]["row"]["guys"], s["after"]["guysBox"], s["after"]["cost"]) == (4, "4", 4 * 6.5 * 33)
+    assert (s["saved"]["days"], s["saved"]["hours_seed"], s["saved"]["guys"], s["saved"]["guys_follow"]) == (6.5, 6.5, 4, "crew")
+    assert s["savedKind"] == "off" and s["savedTabs"] == ["Epoxy"] and s["savedDistance"] == 190
+    bs = j["blankSwitch"]
+    assert (bs["carrier"], bs["row"]["days"], bs["row"]["guys_follow"]) == ("Epoxy", 6.5, "crew")
+    assert (bs["rootRow"]["days"], bs["rootRow"]["guys"], bs["rootRow"]["guys_auto"]) == ("", "", False), "the off root's blank row is not the job's"
+    orr = j["offRoot"]
+    assert (orr["row"]["days"], orr["row"]["guys_follow"], orr["row"]["enabled"]) == (6.5, "crew", False), (
+        "the switched-off row went with the job's drive to the new carrier, still off, with the figures it held, and was not filled")
+    assert orr["rootRow"]["guys"] == "" and orr["rootRow"]["days"] == "" and "enabled" not in orr["rootRow"], "the root gives it up, on and empty"
+
+
+def test_the_saved_crew_size_row_reopens_as_saved_and_keeps_following_the_sections_crew(ran):
+    """The bid saved after the switch (the Epoxy section's Travel Labor on the crew's size, the marker saved with the row), reopened: the row
+    is exactly as saved, nothing is saved or looked up, and it keeps following the section's crew (6 guys typed on Epoxy install are 6 on
+    Travel Labor: 6 x 6.5 x $33). The rule is the row's, not the session's.
+
+    Mutation: leave the crew marker out of syncAutoGuys (test_polish_travel_hours.py runs it on the model)."""
+    r = ran["jobSwitch"]["reopened"]
+    assert (r["carrier"], r["saves"], r["asked"]) == ("Epoxy", 0, 0)
+    assert (r["row"]["days"], r["row"]["guys"], r["row"]["guys_auto"], r["row"]["guys_follow"], r["row"]["hours_seed"]) == (6.5, 4, True, "crew", 6.5)
+    assert (r["after"]["row"]["guys"], r["after"]["guysBox"], r["after"]["cost"]) == (6, "6", 6 * 6.5 * 33)
+
+
+def test_a_box_cleared_on_the_epoxy_sections_travel_labor_is_marked_on_that_row_and_stays_empty(ran):
+    """The page edits a section through its view, so a keystroke in the Epoxy section's Travel Labor box must leave its mark on THAT row and
+    not on the off root's: the Hours box cleared, then the button's 300 mile answer, and the box is still empty (the tool's 6.5 would have
+    become 10). The root's own row, which goes off with the root, gave its filled row back when the job type was switched (empty) and carries no mark.
+
+    Mutation: leave the mark out of the page's input handler (BREAKS below)."""
+    c = ran["jobSwitch"]["clearedOnSection"]
+    assert (c["row"]["days"], c["hoursBox"], c["row"]["hours_typed"]) == ("", "", True)
+    assert c["rootRow"]["days"] == "" and "hours_typed" not in c["rootRow"] and "guys_typed" not in c["rootRow"]
+    assert "hours_seed" not in c["rootRow"], "and it holds no marker of the fill it gave back"
+
+
+def test_a_plain_reopen_and_a_switch_that_keeps_the_carrier_fill_nothing(ran):
+    """The other half of the same rule. The same Polish bid opened as Polish (a plain reopen) is exactly as saved: the crew-size row as it
+    was, no save, no lookup. A Polish bid whose Travel Labor was left blank is left blank by a plain reopen. Switching Polish to Combo keeps
+    the root as the carrier (the first base), so its blank row is not filled; and a switch with no distance on file has nothing to follow.
+
+    Mutation: fill on every restructure and not only on a sheet that became a base (BREAKS below; round 7: a base that stays a base keeps its own)."""
+    j = ran["jobSwitch"]
+    p = j["plain"]
+    assert (p["carrier"], p["tabs"], p["saves"], p["asked"]) == ("Polish", [], 0, 0)
+    assert (p["row"]["days"], p["row"]["guys"], p["row"]["guys_follow"]) == (6.5, 4, "crew")
+    bp = j["blankPlain"]
+    assert (bp["row"]["days"], bp["row"]["guys"], bp["row"]["guys_auto"], bp["saves"], bp["asked"]) == ("", "", False, 0, 0)
+    assert "hours_seed" not in bp["row"]
+    c = j["combo"]
+    assert (c["carrier"], c["tabs"], c["row"]["days"], c["row"]["guys"], c["rootKind"]) == ("Polish", ["Epoxy"], "", "", "base")
+    assert "hours_seed" not in c["row"] and "guys_follow" not in c["row"]
+    nd = j["noDistance"]
+    assert (nd["carrier"], nd["row"]["days"], nd["row"]["guys"], nd.get("distance")) == ("Epoxy", "", "", None)
+
+
 def test_a_row_added_beside_a_measured_one_shares_the_floor_in_a_section_other_than_the_root(ran):
     s = ran["sameFloor"]
     assert s["added"] == {"sameFloor": True, "measurement": 6000, "unit": "SF"}
@@ -118,7 +224,9 @@ def test_editing_a_section_beside_the_polish_root_never_writes_over_the_roots_ro
     assert b["stripTabs"] == ['data-section-tab="Polish"', 'data-section-tab="Epoxy"']
     assert b["epoxyMeasurement"] == "5500", "the number typed on the Epoxy tab is the Epoxy section's"
     assert b["rootTakeoff"] == b["rootBefore"] and len(b["rootTakeoff"]) == 3, "the root's own takeoff is as it was"
-    assert "polishing" in b["rootLaborIds"] and b["epoxyLaborIds"] == ["epoxy-install"]
+    # The Epoxy base's own lines, and since round 7, part 4 (P4) its own Travel Labor line: the fixture is a Combo saved with no line on its Epoxy base and no answer of its own (the one-drive
+    # law's shape), which opens with that base's drive given (B.giveEveryBaseItsDrive; test_polish_travel_round7_part4.py). The root's rows are its own.
+    assert "polishing" in b["rootLaborIds"] and b["epoxyLaborIds"] == ["epoxy-install", "travel"]
 
 
 def test_the_add_pop_up_offers_the_work_types_own_rows_first_in_an_epoxy_section_and_leaves_the_roots_order_alone(ran):
@@ -137,7 +245,7 @@ def test_a_saved_epoxy_bid_opens_as_saved_and_writes_nothing(ran):
 
 
 def test_a_polish_job_is_untouched_and_a_gyp_job_is_given_its_own_section(ran):
-    assert ran["polish"] == {"tabs": "none", "kind": "base", "strip": True, "bid": ran["polish"]["bid"], "activeBid": ran["polish"]["bid"]}
+    assert ran["polish"] == {"tabs": "none", "kind": "base", "bid": ran["polish"]["bid"], "activeBid": ran["polish"]["bid"]}
     assert ran["polish"]["bid"] > 0
     # Gyp is ready since Phase 14: its job opens on a Gyp section filed under the base sheet (test_v2_gyp.py holds the rest)
     assert ran["gyp"] == {"tabs": ['Gyp (USG 1-8")']}
@@ -145,7 +253,6 @@ def test_a_polish_job_is_untouched_and_a_gyp_job_is_given_its_own_section(ran):
 
 def test_the_strip_lists_what_the_bid_is_made_of_and_never_the_polish_root_of_an_epoxy_job(ran):
     s = ran["strip"]
-    assert s["hidden"] is False
     assert s["tabs"] == ['data-section-tab="Epoxy"', 'data-section-tab="Seal"']
     assert s["sealPanelIsTakeoff"] is True and s["epoxyPanelIsTakeoff"] is True, "both are edited on the page's own panels (Seal since Phase 15)"
 
@@ -284,6 +391,21 @@ BREAKS = {
         "js/bid-model.js", "      get: function (target, key) { return Reflect.get(ownerOf(target, key), key); },",
         "      get: function (target, key) { return Reflect.get(target, key); },",
         lambda r: r["labor"]["after"] == r["labor"]["before"] or "error" in r),
+    "the distance fills the model's own Travel Labor row and not the carrier section's": (
+        # (round 7: every base's drive is filled from its own lines, fillOwnDrive; it was the carrier's, travelLaborHeld)
+        "js/bid-model.js", "    var lines = laborLinesOf(e.section);", "    var lines = laborLinesOf(model);",
+        lambda r: r["travelFill"]["before"]["row"]["days"] != 6.5 or r["travelFill"]["rootTravelUntouched"] is not True),
+    "the distance on file is not put on the new carrier's row after a job type switch": (
+        "js/polish-estimate.js", "if (restructured) B.followDistance(ROOT, carrierBefore, kindsBefore);", "void 0;",
+        lambda r: r["jobSwitch"]["switched"]["before"]["row"]["days"] != 6.5 or r["jobSwitch"]["blankSwitch"]["row"]["days"] != 6.5),
+    "a box cleared on the Epoxy section's Travel Labor is refilled by the next answer": (
+        "js/polish-estimate.js", 'if (k === "guys" || k === "days") B.markTypedByHand(M.labor[j], k);', "void 0;",
+        lambda r: r["jobSwitch"]["clearedOnSection"]["hoursBox"] != ""),
+    # (round 7, Hanz's D1 of 2026-10-21: what is filled is a sheet that BECAME a base; a base that stays a base keeps its own, filled or blank. It was "only when the carrier moved".)
+    "every restructure fills the distance, even on a base that stays a base": (
+        "js/bid-model.js", "      return { drives: list.map(function (k) { return k.tab; }), kindOf: function (tab) { return kinds.get(tab); } };",
+        "      return { drives: [], kindOf: function (tab) { return kinds.get(tab); } };",
+        lambda r: r["jobSwitch"]["combo"]["row"]["days"] != ""),
     "the sections of an epoxy job leave the root on": (
         "js/bid-model.js", '      out = e.root ? Object.assign({}, out, { kind: "off" }) : withSectionKind(out, e.tab, "off");',
         "      out = e.root ? out : withSectionKind(out, e.tab, \"off\");",
@@ -345,7 +467,7 @@ def test_the_hard_bid_switch_fills_the_discount_with_kyles_rule_and_a_typed_figu
 def test_the_review_step_offers_every_box_with_the_rule_greyed_in(ran):
     a = ran["adjust"]["before"]
     assert a["adjust"] == "absent" and a["total"] == a["hand"]
-    assert all(present for _k, present in a["boxes"]) and a["bulkSwitch"] is True
+    assert all(present for _k, present in a["boxes"]) and a["bulkSwitch"] is False, "the Bulk switch is gone (2026-10-20)"
     assert a["gpPlaceholder"] == "35" and a["gpUsed"] == 0.35, "the greyed GP is the rule the bid is using"
     assert a["shipPlaceholder"] == "9" and a["shipUsed"] == 0.09
 
@@ -381,11 +503,12 @@ def test_the_discount_line_prices_shows_and_the_dollars_win(ran):
     assert a["percent"]["hardBid"] < 0 and a["percent"]["total"] == a["percent"]["hand"]
 
 
-def test_the_bulk_switch_answers_a_click_and_the_keyboard_in_place(ran):
-    a = ran["adjust"]
-    assert a["bulkClick"]["stored"] is True and a["bulkClick"]["aria"] == "true" and a["bulkClick"]["sameNode"] is True
-    assert a["bulkClick"]["total"] == a["bulkClick"]["hand"]
-    assert a["bulkKey"] == {"stored": False, "aria": "false"}, "Space on the switch turns it back off"
+def test_there_is_no_bulk_switch_and_a_saved_bulk_answer_buys_nothing_at_bulk(ran):
+    """Hanz, 2026-10-20: "Remove all bulk discount toggle in the V2 estimates". No bid on either database had it on."""
+    n = ran["adjust"]["noBulk"]
+    assert n["drawn"] is False, "the Review step still draws a Bulk Discount switch"
+    assert "bulk" not in (n["kept"] or {}), "the model still keeps a saved bulk answer"
+    assert n["same"] is True, "a saved bulk answer still changes the price"
 
 
 def test_the_save_carries_the_boxes_and_the_proposal_is_the_bid_shown(ran):

@@ -94,10 +94,12 @@ def test_what_the_page_saves_and_what_a_new_bid_opens_holding_is_the_golden_byte
     carries the sheet's patch line. The 26 `saved` records were not touched."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert want["meta"]["commit"] == "28a5d1f"
-    # The 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
+    # The first 26 `saved` records are still the 28a5d1f ones, byte for byte. The seven `newBid` records were
     # re-recorded on 2026-10-12 (meta.newBid_recut): a new bid's Labor step opens with every quantity empty.
-    assert "newBid_recut" in want["meta"]
-    assert len(want["golden"]["saved"]) == 26 and len(want["golden"]["newBid"]) == 7
+    # Two more `saved` records, for a far job saved with Travel Labor blank, were added on 2026-10-20
+    # (meta.far_job_blank_travel_labor_added), cut from the page before the distance filled Travel Labor.
+    assert "newBid_recut" in want["meta"] and "far_job_blank_travel_labor_added" in want["meta"]
+    assert len(want["golden"]["saved"]) == 28 and len(want["golden"]["newBid"]) == 7
     assert json.dumps(recorded) == json.dumps(want["golden"])
 
 
@@ -222,8 +224,9 @@ def test_a_tab_section_is_new_until_somebody_states_labor_or_a_takeoff_in_it(ran
 def test_activating_a_section_stamps_its_profile_and_keeps_the_rules_filed_at_that_moment(ran):
     a = ran["activation"]
     assert a["frozenThrew"] is None, "activateSection edited a frozen input: %s" % a["frozenThrew"]
+    # (`seq` is the section's place in the bid, written when it is put under `tabs`: the jsonb column that stores the draft keeps no key order. test_v2_sheet_order.py.)
     assert a["shape"] == {"keys": ["layout", "kind", "profile", "takeoff", "labor", "contingency", "fees", "rates",
-                                   "totals", "pool_packs"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
+                                   "totals", "pool_packs", "seq"], "layout": "epoxy", "kind": "base", "profile": "epoxy@1", "labor": 0,
                           "takeoffRows": 1, "contingency": 0, "fees": 0}
     assert a["snapshot"] == {"version": 1, "profile": "epoxy@1", "rates": {"soft_costs": "10%"},
                              "fees_default": None, "notes": []}
@@ -464,17 +467,23 @@ def test_a_saved_bid_is_given_nothing_and_the_input_is_never_edited(ran):
 
 
 def test_a_new_tab_section_is_seeded_by_its_own_layout_and_a_saved_one_is_left_alone(ran):
+    """The Epoxy BASE beside the Polish root is seeded the Epoxy defaults and, since round 7, its own Travel line: every base crew drives its own (Hanz's D1 of 2026-10-21; it held
+    none, the job's one drive being the carrier's). The Seal option, given its own labor, is left alone."""
     m = ran["seeding"]["multi"]
-    assert m["epoxyLabor"] == ["lab-x", "lab-ep"], "the Epoxy defaults, not the Polish-only one"
+    assert m["epoxyLabor"] == ["travel", "lab-x", "lab-ep"], "the Epoxy defaults, not the Polish-only one, and its own Travel line"
     assert "lab-po" not in m["epoxyLabor"] and "lab-ep" not in m["rootLabor"]
-    assert m["epoxyRates"] == [50, 50] and m["epoxyTakeoff"] == [4000] and m["rootTakeoff"] == [8000]
+    assert m["epoxyRates"] == [41, 50, 50] and m["epoxyTakeoff"] == [4000] and m["rootTakeoff"] == [8000]
     assert m["epoxyKeepsItsSnapshot"] is True
     assert m["sealLabor"] == ["sealing"] and m["sealLaborKept"] is True and m["sealTakeoff"] == [5000]
 
 
-def test_travel_and_the_fees_default_go_to_the_carrier_only(ran):
+def test_travel_goes_to_every_base_and_the_fees_default_to_the_carrier_only(ran):
+    """Every BASE is seeded its own Travel line (round 7, Hanz's D1 of 2026-10-21: until then only the carrier was), an option is not, and the fees default goes to the carrier alone. A new
+    Combo whose library puts Travel on Polish bids only seeds the Polish root's line and none on the Epoxy base, whose decline is that SHEET's answer and not the job's."""
     s = ran["seeding"]
-    assert s["multi"]["rootHasTravel"] is True and s["multi"]["epoxyHasTravel"] is False
+    assert s["multi"]["rootHasTravel"] is True and s["multi"]["epoxyHasTravel"] is True and "travel" not in s["multi"]["sealLabor"]
+    assert s["comboDeclined"] == {"rootHasTravel": True, "epoxyHasTravel": False, "epoxySaid": True, "job": False}
+    assert s["newOption"] == {"epoxyHasTravel": True, "sealHasTravel": False}, "a new option is seeded no Travel line beside two bases that are"
     assert s["multi"]["rootFees"] == 250 and s["multi"]["epoxyFees"] == 0
     e = s["epoxyOnly"]
     assert e["carrier"] == "Epoxy" and e["epoxyLabor"] == ["travel", "lab-x", "lab-ep"]
@@ -508,7 +517,7 @@ def test_the_page_draws_the_panel_with_one_row_and_no_open_sheet_line_for_one_se
     bid, and nothing to switch to. What hides is the "Open sheet" line above the step rail: with one sheet there is nothing to tell
     apart. What the save writes is the five keys it always wrote."""
     one = ran["page"]["one"]
-    assert one["strip"]["hidden"] is True and one["strip"]["now"] == "", "the Open sheet line is not drawn for one sheet"
+    assert "Open sheet" not in one["strip"]["html"], "there is no Open sheet line: the bar under the tab says what is open"
     assert one["strip"]["rows"] == 1 and "Base bid" in one["strip"]["html"]
     assert "Add a sheet to price an option" in one["strip"]["html"], "the empty state says how to get an option"
     assert one["keys"] == sorted(["__draft_id", "cell_values", "city", "computed_bid", "polish_2_sf",
@@ -518,7 +527,7 @@ def test_the_page_draws_the_panel_with_one_row_and_no_open_sheet_line_for_one_se
 
 def test_the_page_draws_the_strip_prices_every_section_and_switches_the_panel(ran):
     m = ran["page"]["multi"]
-    assert m["strip"]["hidden"] is False and "Open sheet" in m["strip"]["now"]
+    assert "Open sheet" not in m["strip"]["html"] and m["strip"]["html"].count('role="tab"') == 3
     assert m["strip"]["html"].count("data-section-tab=") == 3
     # Epoxy is edited on the page's own panels now (Phase 12): its Material panel is the takeoff, with the patch
     # that the sheet always charges, not a summary. A section not edited here yet keeps the summary.
@@ -582,8 +591,8 @@ BREAKS = {
         "js/bid-model.js", "    if (String(profile.rev) !== stamp[2]) {", "    if (false) {",
         lambda r: r["pricing"]["stale"]["priceable"] is True),
     "every section carries the jobs travel": (
-        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor).total : 0,",
-        "      travel: travelCosts(model.travel, s.labor).total,",
+        "js/bid-model.js", "      travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,",
+        "      travel: travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total,",
         lambda r: r["pricing"]["farTravel"]["epoxy"] != 0),
     "a section with no layout is read as one": (
         "js/bid-model.js",
@@ -633,11 +642,12 @@ BREAKS = {
         "js/bid-model.js", "      return e.kind !== \"off\" && (e.root || isNewSection(e.section, false));",
         '      return e.kind !== "off";',
         lambda r: "error" in r["seeding"] or r["seeding"]["multi"]["sealLaborKept"] is False),
+    # (round 7: every BASE is seeded Travel, Hanz's D1 of 2026-10-21, so what this holds is an OPTION: a new one is seeded none)
     "every section gets Travel": (
         "js/bid-model.js",
-        "      s.labor = carrierTab === e.tab ? rows : rows.filter(function (r) { return !r || r.id !== \"travel\"; });",
+        "      s.labor = seeded ? rows : rows.filter(function (r) { return !r || r.id !== \"travel\"; });",
         "      s.labor = rows;",
-        lambda r: r["seeding"]["multi"]["epoxyHasTravel"] is True),
+        lambda r: r["seeding"]["newOption"]["sealHasTravel"] is True),
     "the calculator runs on a saved bid": (
         "js/bid-model.js", "        if (e.root && !laborGate) return;", "        void laborGate;",
         lambda r: r["seeding"]["savedUntouched"] is False),

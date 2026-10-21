@@ -257,7 +257,7 @@ REV2_BREAKS = {
         PROFILES, 'quirks: { toolingInSubTotal: true, remodelBase: "sheet" }',
         'quirks: { toolingInSubTotal: true, remodelBase: "model" }', "remodel-base-widened"),
     "rev2 counts nights in people-days": (
-        MODEL, "    return engine.lodgingNights(REV2, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
+        MODEL, "    return engine.lodgingNights(profile, roundUp(laborTotal(rows, conditions, pw)), travelLabor, rate || SHIPPED_LABOR_RATE);",
         "    return travelManDays(rows);", "lodging-by-man-days"),
     "rev2 forgets to ask for the sheet's nights": (
         MODEL, "    if (opts && opts.sheetNights) return sheetNights(rows, opts.conditions, opts.prevailing);",
@@ -427,8 +427,8 @@ MODEL_BREAKS = {
         "    void r;",
         lambda m: not m["chain"]["rev2Keys"]),
     "a saved bid's lodging hint says nights": (
-        MODEL, "    if (!opts) return manDaysHint(auto, travelManDays(rows));",
-        "    if (!opts) return \"Nights from the labor above, as the sheet counts them: 0.\";",
+        MODEL, "    if (one) return manDaysHint(auto, days);",
+        "    if (one) return \"Nights from the labor above, as the sheet counts them: 0.\";",
         lambda m: m["nights"]["hintLegacy"] != "Man-days from the tasks above: 19."),
 }
 
@@ -447,13 +447,15 @@ def page():
 
 
 def test_the_page_saves_every_saved_bid_as_it_did_and_stamps_every_new_one(page):
-    """The REAL page (polish-estimate.js, whole) over the 26 saved-bid fixtures the ratchet pins and seven new or part-saved
-    bids. A saved bid's model has no `profile` and its bid no `tooling`, and the whole record equals the one cut from
-    origin/staging 28a5d1f; a new bid's model carries polish-rev3@1 (rev2 plus the patch line, since 2026-10-16: it was polish-rev2@1 before) and its
-    bid carries the tooling its area works out to. No saved bid, and no saved rev2 bid, is stamped rev3 or priced with a patch."""
+    """The REAL page (polish-estimate.js, whole) over the saved-bid fixtures the ratchet pins (14, each opened plain and over a
+    library: 28 records) and seven new or part-saved bids. A saved bid's model has no `profile` and its bid no `tooling`, and the
+    whole record equals the one cut from origin/staging (28a5d1f for the first 13 fixtures, 15a959f for the far job saved with
+    Travel Labor blank, added 2026-10-20); a new bid's model carries polish-rev3@1 (rev2 plus the patch line, since 2026-10-16: it
+    was polish-rev2@1 before) and its bid carries the tooling its area works out to. No saved bid, and no saved rev2 bid, is
+    stamped rev3 or priced with a patch."""
     want = json.loads(GOLDEN.read_text(encoding="utf-8"))["golden"]
     assert json.dumps(page["saved"]) == json.dumps(want["saved"]), "a saved bid's save moved"
-    assert len(page["saved"]) == 26
+    assert len(page["saved"]) == 28
     for name, rec in page["saved"].items():
         for key, blob in rec.items():
             text = json.dumps(blob)

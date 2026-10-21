@@ -46,10 +46,22 @@ const last = (list) => list[list.length - 1];
 const nn = (v) => (v === undefined ? null : v);
 /** A value as JSON text, or null when there is none (what an erased `tabs` looks like). */
 const text = (v) => (v === undefined ? null : JSON.stringify(v));
-/** `tabs` as JSON text with each section's `totals` taken out. A save restamps every section's totals from
- *  its bid (Phase 10, composePricingSnapshot), and that is the one thing about a section it may change. */
+/** `tabs` as JSON text with each section's `totals` and `seq` taken out. A save restamps every section's totals from
+ *  its bid (Phase 10, composePricingSnapshot), and writes down each section's place in the bid (`seq`, round 6: the
+ *  jsonb column that stores a draft keeps no key order), and those are the two things about a section it may change. */
 const withoutTotals = (tabs) => (tabs === undefined ? null : JSON.stringify(Object.fromEntries(
-  Object.entries(tabs).map(([id, s]) => [id, Object.fromEntries(Object.entries(s).filter(([k]) => k !== "totals"))]))));
+  Object.entries(tabs).map(([id, s]) => [id, Object.fromEntries(Object.entries(s).filter(([k]) => k !== "totals" && k !== "seq"))]))));
+/** Each section's place in the bid, [id, seq] in the order the keys are held, or null when there are no `tabs`. */
+const seqsOfTabs = (tabs) => (tabs === undefined || tabs === null ? null : Object.entries(tabs).map(([id, s]) => [id, s && s.seq !== undefined ? s.seq : null]));
+/** THE DRIVE THE OPEN GIVES (round 7, part 4, P4), the third thing a save may write in a section: a Combo saved under the one-drive law (a base with no Travel Labor line and no answer of its own,
+ *  as every Combo was before round 7) opens with that base given its own line (B.giveEveryBaseItsDrive), and the next save writes it. `tabs` with the Travel Labor rows of every section that held
+ *  none in `sent` taken out, and the ids of those sections. */
+const isTravel = (r) => !!r && r.id === "travel";
+const heldDrive = (sent, id) => !!sent && !!sent[id] && Array.isArray(sent[id].labor) && sent[id].labor.some(isTravel);
+const withoutGivenDrives = (tabs, sent) => (tabs === undefined || tabs === null ? tabs : Object.fromEntries(Object.entries(tabs).map(([id, s]) =>
+  [id, heldDrive(sent, id) || !s || !Array.isArray(s.labor) ? s : Object.assign({}, s, { labor: s.labor.filter((r) => !isTravel(r)) })])));
+const givenDrives = (tabs, sent) => (tabs === undefined || tabs === null ? null :
+  Object.entries(tabs).filter(([id, s]) => !heldDrive(sent, id) && s && Array.isArray(s.labor) && s.labor.some(isTravel)).map(([id]) => id));
 
 /** Where two values first part, as a sentence, or null when they do not. */
 function where(want, got) {
@@ -353,18 +365,21 @@ async function estimateSection() {
     // a model that carries what migrateModel does not know
     withTabs: { model: withModel(EVERYTHING), sf: TOTAL_SF, drive: typeMeasure },
   };
-  const pick = (s) => ({
+  const pick = (s, sent) => ({
     polish_sf: s.polish_sf, polish_2_sf: s.polish_2_sf, lump: s.computed_bid.lump_sum,
     computedSf: s.computed_bid.polish_sf,
     cells: s.cell_values ? Object.fromEntries(CELLS.filter((c) => has(s.cell_values, c)).map((c) => [c, s.cell_values[c]])) : null,
     modelKeys: Object.keys(s.polish_estimate).sort(),
-    tabs: withoutTotals(s.polish_estimate.tabs),
+    tabs: withoutTotals(withoutGivenDrives(s.polish_estimate.tabs, sent)),
+    givenDrives: givenDrives(s.polish_estimate.tabs, sent),
+    seqs: seqsOfTabs(s.polish_estimate.tabs),
     taxable: s.polish_estimate.conditions.taxable,
     totalsTotal: s.polish_estimate.totals && s.polish_estimate.totals.total,
   });
   /** `way`: "autosave" (the timer fires), "pagehide" (the tab closes inside the debounce window), or
-   *  "both" (the timer fires, THEN the tab closes). The page never clears its timer handle once the
-   *  timer has fired, so its pagehide handler runs after every edit, not only inside the window. */
+   *  "both" (the timer fires, THEN the tab closes). Since 2026-10-19 the fired timer clears its handle, so the pagehide
+   *  handler saves nothing after the autosave (it used to re-save after every edit, which let an older page rewind a
+   *  newer save); "both" holds that the close leaves the draft exactly as the autosave wrote it. */
   async function run(sc, way) {
     const b = E.build({ blob: E.blob({ work_type: "combo", polish_estimate: clone(sc.model), polish_sf: sc.sf }),
                         items: sc.items });
@@ -397,7 +412,7 @@ async function estimateSection() {
       // the tab closing AFTER the autosave must leave the draft as the autosave wrote it
       settled: !!(both.first && both.saved) && G.same(both.first, both.saved),
       settledDiff: both.first && both.saved ? where(both.first, both.saved) : "nothing was saved",
-      autosave: a.saved ? pick(a.saved) : null, pagehide: p.saved ? pick(p.saved) : null,
+      autosave: a.saved ? pick(a.saved, sc.model.tabs) : null, pagehide: p.saved ? pick(p.saved, sc.model.tabs) : null,
       sentTabs: withoutTotals(sc.model.tabs),
       expectedSf: sc.sf,
     }]);
@@ -432,7 +447,7 @@ async function intakeSection() {
   I.clickSwitch(i, "prevailing_wage");
   i.clock.fire();
   const afterIntake = last(i.rec.saves);
-  const tabsOf = (m) => withoutTotals((m || {}).tabs);
+  const tabsOf = (m) => withoutTotals(withoutGivenDrives((m || {}).tabs, TABS));
   const rawTabsOf = (m) => text((m || {}).tabs);
   return {
     alone: {
@@ -448,6 +463,10 @@ async function intakeSection() {
       intakeLeavesTabsAsSaved: rawTabsOf(afterIntake.polish_estimate) === rawTabsOf(afterEstimate.polish_estimate),
       tabsAfterEstimate: tabsOf(afterEstimate.polish_estimate),
       tabsAfterIntake: tabsOf(afterIntake.polish_estimate),
+      givenDrivesAfterEstimate: givenDrives((afterEstimate.polish_estimate || {}).tabs, TABS),
+      givenDrivesAfterIntake: givenDrives((afterIntake.polish_estimate || {}).tabs, TABS),
+      seqsAfterEstimate: seqsOfTabs((afterEstimate.polish_estimate || {}).tabs),
+      seqsAfterIntake: seqsOfTabs((afterIntake.polish_estimate || {}).tabs),
       extrasMissingAfterEstimate: Object.keys(EVERYTHING).filter((k) => !has(afterEstimate.polish_estimate, k)),
       extrasMissingAfterIntake: Object.keys(EVERYTHING).filter((k) => !has(afterIntake.polish_estimate, k)),
       measurementAfterEstimate: afterEstimate.polish_estimate.takeoff[0].measurement,

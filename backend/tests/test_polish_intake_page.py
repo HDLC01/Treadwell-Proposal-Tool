@@ -1824,6 +1824,22 @@ def test_the_shared_lookup_queries_fills_and_tells_the_form_so_it_can_save(addr)
     b = addr["business"]
     assert b["name"] == "Acme warehouse retrofit" and b["city"] == "Olathe" and b["zip"] == "66061"
     assert addr["clickAway"] == {"stayedOpenOnInputClick": True, "closedElsewhere": True}
+
+
+@needs_node
+def test_leaving_the_address_box_closes_its_list_and_a_late_answer_never_reopens_it(addr):
+    """Browser walk on staging, 2026-10-20: an address typed and then Tab-bed out of left the suggestion list open over
+    City, State and Zip, Escape did nothing, and clicks on those boxes landed on the list's rows.
+
+    Mutation: drop the blur listener in leaveCloses and closedOnLeave is False; drop the mayOpen check in renderAddr and
+    lateStaysShut is False."""
+    lv = addr["leave"]
+    assert lv["openWhileIn"] is True, "the fixture never opened the list, so this proves nothing"
+    assert lv["closedOnLeave"] is True, "leaving the address box left its list open over the boxes below"
+    assert lv["lateStaysShut"] is True, "an answer that landed after the box was left opened the list"
+    assert lv["reopened"] is True and lv["closedOnEsc"] is True and lv["escPrevented"] is True
+    assert lv["downPrevented"] is True, "a press on a row would blur the box first and lose the pick"
+    assert lv["bizOpen"] is True and lv["bizClosedOnLeave"] is True
     assert addr["noBusinessBox"] == {"threw": False}
 
 

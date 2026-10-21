@@ -207,6 +207,19 @@ const NEWEST = {
     conditions: { local: true, prevailing_wage: false, taxable: true, remodel_tax: true, bond: false,
                   dye: false, joint_filler: false, remove_existing_jf: false } }),
     extra: { county: "Jackson" } },
+
+  // 8. A FAR JOB SAVED WITH ITS DISTANCE AND NOTHING IN TRAVEL LABOR: what a new bid held between 2026-10-12 and 2026-10-20, when
+  //    the distance answer filled no hours. Since 2026-10-20 an answer APPLIED IN A SESSION fills Travel Labor (the miles typed, the
+  //    button, a new bid's own lookup); OPENING a bid must never run one. The distance is saved, the library's stub is waiting with
+  //    150 miles, and the row has to come through the open, and a save and a reopen, empty, off auto and with no marker.
+  v2_far_job_blank_travel_labor: { polish_estimate: newest({
+    labor: plainLabor([{ id: "travel", label: "Travel Labor", guys: "", days: "", rate: 33, unit: "hours",
+                         guys_auto: false, rate_default: 33 }]),
+    conditions: { local: false, prevailing_wage: false, taxable: true, remodel_tax: false, bond: false,
+                  dye: false, joint_filler: false, remove_existing_jf: false },
+    travel: { lodging: { label: "Lodging", enabled: true, qty: 12, qty_auto: false, rate: 70, rate_default: 70 },
+              per_diem: { label: "Per Diem", enabled: true, qty: 12, qty_auto: false, rate: 45, rate_default: 45 } },
+    distance: { miles: 190, source: "google", key: ADDR_KEY } }) },
 };
 
 function savedBlob(f) {
