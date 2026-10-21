@@ -113,8 +113,8 @@
  *                    judges the whole say again (the typed guys AND hours, a cleared box, the switch, the rate). Part 4's COPY_TRIP had the copy KEEP the trip: by the pick and then the Combo
  *                    the Epoxy crew drove 5 x 3.25 beside the Polish crew's typed 7 x 3.25, where the pair made at once, the intake's Combo and a new Combo gave it 5 x 6.5, and the copy's
  *                    hours, marked typed, went on being charged on a 40 mile job.
- *   (A1, a Combo saved under the one-drive law opening with every base's drive and SAVING it once, is no walk's: no walk makes that shape, and PLAIN_REOPEN holds every draft a walk makes to
- *                    an open that arms no save. tests/test_polish_travel_round7_part4.py holds it.)
+ *   (A1, a Combo saved under the one-drive law opening with every base's drive and SAVING it once when the drive it gives prices something, is no walk's: no walk makes that shape, and
+ *                    PLAIN_REOPEN holds every draft a walk makes to an open that arms no save. tests/test_polish_travel_round7_part4.py holds it.)
  *
  * THE SIXTH ROUND (2026-10-20, item C2) made every reopen go through the SERVER'S key order (js/_jsonb.js: the draft's jsonb column keeps no key order, so every object of a reopened blob
  * has its keys sorted by length and then by bytes), and added the one walk that had never been possible: a SESSION that does not reload. Every other walk starts each step from the draft

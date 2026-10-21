@@ -13,10 +13,10 @@
  *   legacy   P4 (F7): A FAR COMBO SAVED UNDER THE ONE-DRIVE LAW (its one drive on the carrier, no line and no answer on the Epoxy base) OPENS WITH THE EPOXY BASE'S DRIVE FILLED BY THE RULE (D1
  *            and "let them re-price"): the open, the session and a jsonb reload price two drives; the carrier keeps its own crew's drive. One whose Epoxy x was pressed (S) is left as it is.
  *            `guard`: the model handed the old shape without the open (B.followDistance alone) still carries the job's one drive to the one base left, on that base's crew.
- *            THE PASS-2 AUDIT'S A1: the open SAVES what it gives (`openSave`, `leftAtOnce`: the timer, and the page left inside the debounce window), so the price the Review and the Proposal
- *            read is the price the bar shows; and the job's one drive the estimator switched off, or whose Guys or Hours box they cleared, is said on the line the Epoxy base is given too, so no
- *            drive they took away comes back (`said`: off, clearedHours, clearedGuys, beside `none`, the same bid with no drive at all, and `typed`, figures typed, which the Epoxy crew's own
- *            drive does not take).
+ *            THE PASS-2 AUDIT'S A1: the open SAVES a drive it gives that prices something (`openSave`, `leftAtOnce`: the timer, and the page left inside the debounce window), so the price the
+ *            Review and the Proposal read is the price the bar shows; and the job's one drive the estimator switched off, or whose Guys or Hours box they cleared, is said on the line the Epoxy
+ *            base is given too, so no drive they took away comes back and nothing is saved (`said`: off, clearedHours, clearedGuys, beside `removed`, the same bid with no drive at all, and
+ *            `typed`, figures typed, which the Epoxy crew's own drive does not take; `typedLocal` the same at 40 miles, where the line given is empty and the open writes nothing).
  *   addTarget P5 (F4): ADD TRAVEL LABOR PUTS THE LINE ON THE SHEET IT WAS PRESSED ON, though another sheet is put on show while the library answers.
  *   words    P6 (F5): AFTER THE x ON THE CARRIER'S OWN DRIVE OF A COMBO the carrier's Labor step says THIS SHEET has no Travel Labor line and that the Epoxy sheet keeps its own, never that the bid
  *            has none or that the drive adds nothing; after the x on both drives (J) it says the bid has none.
@@ -476,6 +476,8 @@ async function main() {
     // WHAT THE ESTIMATOR SAID ON THE JOB'S ONE DRIVE (the pass-2 audit's A1): switched off, its Hours or Guys box cleared, figures typed; and the same bid with no drive at all (the x)
     const said = {};
     for (const k of ["off", "clearedHours", "clearedGuys", "typed", "removed"]) said[k] = await openOneDrive(await oneDriveCombo(undefined, undefined, undefined, k));
+    // ...and figures typed on the one drive of a job 40 miles out (typed hours are priced on a local job): the Epoxy line is given empty, so only the carrier's own drive is priced
+    said.typedLocal = await openOneDrive(await oneDriveCombo(undefined, 40, undefined, "typed"));
     // the session goes on (the crew retyped) and saves; a jsonb reload of what it saved, and of the draft as it was saved under the one-drive law, price the same
     typeCrew(o, "Epoxy", "epoxy-install", "5", "12");
     const session = state(o);

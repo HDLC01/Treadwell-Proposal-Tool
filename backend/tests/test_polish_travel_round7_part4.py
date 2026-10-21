@@ -9,10 +9,11 @@ the estimator typed, was withdrawn by the pass-2 audit's A2: a copy given back i
   P3 (F3)  THE x ON BOTH DRIVES OF A COMBO IS THE JOB'S ANSWER (J), as the x on a single-base job's drive is (D3): a later job-type switch keeps the drive removed, a new Gyp section included,
            and Add Travel Labor on a base takes it back.
   P4 (F7)  A FAR COMBO SAVED UNDER THE ONE-DRIVE LAW opens with its second base's drive filled by the rule (D1, and "let them re-price"): the open, the session and a jsonb reload price two drives,
-           the carrier keeps its own crew's drive. A Combo whose second base's x was pressed (S) is left as it is. THE PASS-2 AUDIT'S A1: the open SAVES what it gives, so the price the
-           Review and the Proposal read off the draft is the price the bar shows (it showed $92,153 and the Proposal printed the $90,422 the draft was saved at); and the job's one drive the
-           estimator switched off, or whose Guys or Hours box they cleared, is said on the line the second base is given, so no drive they took away comes back ($90,468 shown where it was
-           saved at $88,312). Figures they typed on it are the carrier crew's; the second crew drives its own, filled by the rule.
+           the carrier keeps its own crew's drive. A Combo whose second base's x was pressed (S) is left as it is. THE PASS-2 AUDIT'S A1: the open SAVES a drive it gives that prices
+           something, so the price the Review and the Proposal read off the draft is the price the bar shows (it showed $92,153 and the Proposal printed the $90,422 the draft was saved at);
+           and the job's one drive the estimator switched off, or whose Guys or Hours box they cleared, is said on the line the second base is given, so no drive they took away comes back
+           ($90,468 shown where it was saved at $88,312) and such an open moves no price and writes nothing. Figures they typed on it are the carrier crew's; the second crew drives its own,
+           filled by the rule.
   P5 (F4)  ADD TRAVEL LABOR PUTS THE LINE ON THE SHEET IT WAS PRESSED ON, though another sheet is on show by the time the library answers.
   P6 (F5)  AFTER THE x ON THE CARRIER'S OWN DRIVE OF A COMBO the carrier says THIS SHEET has no Travel Labor line and that the Epoxy sheet keeps its own, never that the bid has none or that the
            drive adds nothing; with both drives gone (J) it says the bid has none.
@@ -220,15 +221,16 @@ def test_the_page_left_at_once_writes_the_price_it_showed(ran):
 def test_a_drive_the_estimator_switched_off_or_cleared_on_the_jobs_one_drive_stays_off_for_every_crew(ran, say, polish, epoxy, epoxy_says):
     """THE PASS-2 AUDIT'S A1. Under the one-drive law the job's one drive was EVERY crew's, so switching it off, or clearing its Hours or Guys box, said the job's crews are charged no drive: the
     draft was saved at $88,312, the price of the same bid with no drive at all (the x). The open gives the Epoxy base its line and that line says the same, switched off or with the same box
-    cleared, as the estimator's: the bar is $88,312 and the open saves it (it showed $90,468, the Epoxy crew's 5 x 6.5 = $1,072.50 back on a bid whose drive was taken away). A jsonb reload of what
-    it saved agrees and opens quietly, and 300 miles typed after it charges neither crew a drive (a box the estimator never touched follows the miles: the Guys-cleared lines' hours go to 10)."""
+    cleared, as the estimator's: the bar is $88,312, the price the draft holds, so the open moves no price and writes nothing (it showed $90,468, the Epoxy crew's 5 x 6.5 = $1,072.50 back on a bid
+    whose drive was taken away). A jsonb reload agrees and opens quietly, and 300 miles typed after it charges neither crew a drive (a box the estimator never touched follows the miles: the
+    Guys-cleared lines' hours go to 10)."""
     s = ran["legacy"]["said"][say]
     none = ran["legacy"]["said"]["removed"]
     o = s["opened"]
-    assert o["armed"] == 1 and o["saves"] == 0 and o["answers"] == NO_ANSWER
+    assert o["armed"] == 0 and o["saves"] == 0 and o["answers"] == NO_ANSWER
     assert o["rows"] == {"Polish:base": polish, "Epoxy:base": epoxy} and o["epoxy"] == epoxy_says
     assert o["bar"] == none["opened"]["bar"] == NO_DRIVE_LUMP
-    assert s["kept"] == {"saves": 1, "lump": NO_DRIVE_LUMP}
+    assert s["kept"] == {"saves": 0, "lump": NO_DRIVE_LUMP}
     assert s["reloaded"]["quiet"] == QUIET and s["reloaded"]["rows"] == o["rows"] and s["reloaded"]["epoxy"] == epoxy_says and s["reloaded"]["bar"] == NO_DRIVE_LUMP
     assert s["at300"]["bar"] == NO_DRIVE_LUMP and s["at300"]["rows"] == ({k: v.replace("6.5", "10") for k, v in o["rows"].items()} if say == "clearedGuys" else o["rows"])
 
@@ -244,6 +246,16 @@ def test_figures_typed_on_the_jobs_one_drive_stay_the_carrier_crews_and_the_epox
     assert o["bar"] == 91943 and s["kept"] == {"saves": 1, "lump": 91943}
     assert s["reloaded"]["quiet"] == QUIET and s["reloaded"]["rows"] == o["rows"] and s["reloaded"]["bar"] == 91943
     assert s["at300"]["rows"] == {"Polish:base": "7 x 3.25 = $750.75", "Epoxy:base": "5 x 10 = $1650"}
+
+
+def test_figures_typed_on_the_one_drive_of_a_local_job_open_as_saved(ran):
+    """The same typed 7 x 3.25 on a job 40 miles out (typed hours are priced on a local job): the Epoxy line is given empty (the rule fills nothing under 70 miles), so the drives given price nothing
+    and the open writes nothing, though the carrier's own typed drive is priced (only the drives the open GAVE are counted)."""
+    s = ran["legacy"]["said"]["typedLocal"]
+    o = s["opened"]
+    assert o["armed"] == 0 and o["saves"] == 0 and o["rows"] == {"Polish:base": "7 x 3.25 = $750.75", "Epoxy:base": " x  = $0"}
+    assert s["kept"]["saves"] == 0 and s["kept"]["lump"] == o["bar"]
+    assert s["reloaded"]["quiet"] == QUIET and s["reloaded"]["rows"] == o["rows"] and s["reloaded"]["bar"] == o["bar"]
 
 
 def test_a_combo_whose_one_drive_was_removed_opens_as_saved(ran):
@@ -275,10 +287,10 @@ def test_a_combo_whose_second_base_said_it_has_no_drive_is_left_as_it_is(ran):
 
 
 def test_on_a_local_job_the_line_is_given_and_the_rule_fills_nothing(ran):
-    """The same Combo saved at 40 miles: the Epoxy base is given its line, empty, as a far answer would find it (the rule fills nothing under 70 miles); nothing is priced, and the open arms its one
-    save, which writes the line it gave (the pass-2 audit's A1)."""
+    """The same Combo saved at 40 miles: the Epoxy base is given its line, empty, as a far answer would find it (the rule fills nothing under 70 miles); nothing is priced, so nothing is saved
+    (the pass-2 audit's A1 saves an open only when a drive it gave prices something; the next save writes the line)."""
     loc = ran["legacy"]["local"]
-    assert loc["rows"]["Epoxy:base"] == " x  = $0" and loc["quiet"] == ARMED
+    assert loc["rows"]["Epoxy:base"] == " x  = $0" and loc["quiet"] == QUIET
 
 
 def test_a_model_handed_the_old_shape_without_the_open_still_carries_the_one_drive(ran):
@@ -389,8 +401,7 @@ BREAKS = {
         lambda g: g["bothX"]["afterBoth"]["answers"] != JOB_SAID),
     # --- P4 ---
     "a Combo saved under the one-drive law opens with one drive (the page)": (
-        "js/polish-estimate.js", "    ROOT = B.giveEveryBaseItsDrive(B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs));",
-        "    ROOT = B.withSectionOrder(B.migrateModel(state.polish_estimate), state.priced_tabs);",
+        "js/polish-estimate.js", "    ROOT = B.giveEveryBaseItsDrive(ordered);", "    ROOT = ordered;",
         lambda g: g["legacy"]["opened"]["rows"].get("Epoxy:base") != EPOXY_DRIVE),
     "the line the open gives is not filled": (
         "js/bid-model.js", "      if (miles !== null) followDistanceOnRow(out, row, held.labor, miles, false, driveTripsOf(entryOrNull(out, e.tab)));", "      void miles;",
@@ -416,8 +427,17 @@ BREAKS = {
         "js/polish-estimate.js", "    if (drivesGiven) saveSoon();", "    void drivesGiven;",
         lambda g: g["legacy"]["openSave"]["lump"] != COMBO_PRICE["lump"] or g["legacy"]["leftAtOnce"]["lump"] != COMBO_PRICE["lump"]),
     "the open does not say that it gave a drive (the page)": (
-        "js/polish-estimate.js", "    drivesGiven = ROOT !== ordered;", "    drivesGiven = false;",
+        "js/polish-estimate.js", "    drivesGiven = B.givenDrivesPrice(ordered, ROOT) > 0;", "    drivesGiven = false;",
         lambda g: g["legacy"]["openSave"]["lump"] != COMBO_PRICE["lump"] or g["legacy"]["opened"]["quiet"] != ARMED),
+    "an open that gave a drive pricing nothing saves too (the page)": (
+        "js/polish-estimate.js", "    drivesGiven = B.givenDrivesPrice(ordered, ROOT) > 0;", "    drivesGiven = ROOT !== ordered;",
+        lambda g: g["legacy"]["local"]["quiet"] != QUIET or any(g["legacy"]["said"][k]["opened"]["armed"] != 0 for k in ("off", "clearedHours", "clearedGuys", "typedLocal"))),
+    "the drives the open gave are priced at nothing": (
+        "js/bid-model.js", "      travelRowsIn(e.section).forEach(function (r) { total += laborCost(r); });", "      void e;",
+        lambda g: g["legacy"]["openSave"]["lump"] != COMBO_PRICE["lump"] or g["legacy"]["said"]["typed"]["kept"]["lump"] != 91943),
+    "a base that held its own drive is counted as given": (
+        "js/bid-model.js", "      if (was && travelRowsIn(was.section).length) return;", "      void was;",
+        lambda g: g["legacy"]["said"]["typedLocal"]["opened"]["armed"] != 0),
     "the job's one drive is not read for what it said of every crew": (
         "js/bid-model.js", "    var said = oneDriveSaid(drives);", "    var said = null;",
         lambda g: any(g["legacy"]["said"][k]["opened"]["bar"] != NO_DRIVE_LUMP for k in ("off", "clearedHours", "clearedGuys"))),
