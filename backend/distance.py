@@ -26,7 +26,7 @@ network call. A street the geocoder answers "no match" for falls back the same w
 (`street_not_found`). The point is then ROUTED through the same OSRM call from the office, so the
 figure is still driving miles. Every answer says how precise it is (`precision`: street | zip |
 city | county) and what it was measured to (`measured_to`), and the page words an approximate
-figure as one ("About 190 miles to Wichita, KS (city centre)").
+figure as one ("About 190 miles to Wichita, KS (city center)").
 
 NEVER GUESS BEYOND THAT. Every path that cannot produce a real figure answers `miles: None` with a
 `reason` (address not found, a service slow or down, address incomplete, rate limit). The page
@@ -467,9 +467,10 @@ def _free(addr: str, state: str, deadline: float) -> tuple:
     return miles, reason, False
 
 
-def _street(addr: str, state: Any) -> tuple:
+def _street(addr: str, state: Any, deadline: float) -> tuple:
     """(miles | None, reason, missed) for a street line, through the cache. A street the geocoder
-    could not find is kept as a short miss, so a re-ask goes straight to the fallback."""
+    could not find is kept as a short miss, so a re-ask goes straight to the fallback. `deadline`
+    is the whole lookup's (lookup), which a fallback to a centre then spends what is left of."""
     ck = _key(addr)
     hit = _cache_get(ck)
     if hit:
@@ -477,7 +478,6 @@ def _street(addr: str, state: Any) -> tuple:
     miles: Optional[float] = None
     reason = "error"
     missed = False
-    deadline = _now() + TOTAL_BUDGET_SECONDS
     key = api_key()
     if key:
         miles, reason = _google(addr, key, deadline)
@@ -493,13 +493,15 @@ def _street(addr: str, state: Any) -> tuple:
     return None, reason, missed
 
 
-def _centre(pt: Dict[str, Any]) -> tuple:
-    """(miles | None, reason): driving miles to a centre, the same OSRM call a street gets."""
+def _centre(pt: Dict[str, Any], deadline: float) -> tuple:
+    """(miles | None, reason): driving miles to a centre, the same OSRM call a street gets, inside
+    the lookup's one `deadline`: after a street the geocoder missed it gets only what that left
+    (the 2026-10-22 audit's finding 2: a fresh budget here ran past the page's abort)."""
     ck = _centre_key(pt)
     hit = _cache_get(ck)
     if hit:
         return hit[1], hit[2]
-    miles, reason = _osrm(pt["lon"], pt["lat"], _now() + TOTAL_BUDGET_SECONDS)
+    miles, reason = _osrm(pt["lon"], pt["lat"], deadline)
     if miles is not None:
         _cache_put(ck, miles, "", _CACHE_TTL_OK)
         return miles, ""
@@ -522,8 +524,10 @@ def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "", co
     if not can_place(address, city, state, zip_code, county):
         out["reason"] = "incomplete"
         return out
+    # ONE budget for the whole lookup, the street's calls and a centre's route together (WORST_CASE_SECONDS).
+    deadline = _now() + TOTAL_BUDGET_SECONDS
     if addr:
-        miles, reason, missed = _street(addr, state)
+        miles, reason, missed = _street(addr, state, deadline)
         if miles is not None:
             out.update(ok=True, miles=miles, precision="street", measured_to=addr)
             return out
@@ -535,7 +539,7 @@ def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "", co
     if pt is None:
         out["reason"] = "not_found"
         return out
-    miles, reason = _centre(pt)
+    miles, reason = _centre(pt, deadline)
     if miles is None:
         out["reason"] = reason or "error"
         return out
