@@ -2429,6 +2429,15 @@ async function runScenario(name, s) {
     page.renderDetail(FU_PID, mixed);
     out.fuTask.who = { html: dom.html };
 
+    // 13. THE AI BUDGET IS SPENT: still a draft to send, and the note says why it is the standard one.
+    reset();
+    answer(/\/followup-task\/t-14\/ai-draft$/, 200,
+           { ok: true, draft: DEFAULT_DRAFT, fallback: true, ai: false, rate_limited: true });
+    await openTask(TASK("t-14"));
+    page.focusSection("followup");
+    await settle();
+    out.fuTask.rateLimited = { compose: compose(), sendDisabled: !!el("fu-send").disabled };
+
     reset();
     out.fuTask.allPaths = fuAll.map((r) => r.path);
     futRow.followup_task = null;

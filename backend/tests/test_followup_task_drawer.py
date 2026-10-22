@@ -152,6 +152,15 @@ def test_the_recipient_sentence_names_exactly_the_ticked_contacts(fu):
     assert named == {names[e] for e in ticked}, (named, ticked)
 
 
+def test_a_spent_ai_budget_still_opens_a_sendable_draft_and_says_why(fu):
+    rl = fu["rateLimited"]
+    assert rl["sendDisabled"] is False, "a spent AI budget left nothing to send"
+    assert _value_of(rl["compose"], "fu-title") == "Following up"
+    text = _text(rl["compose"])
+    assert "standard wording" in text and "a lot of drafts" in text
+    assert "not usable" not in text, "a spent budget is not the AI failing"
+
+
 def test_the_fallback_says_it_is_the_standard_wording(fu):
     assert "standard wording" in _text(fu["gone"]["compose"])
     assert "not usable" in _text(fu["gone"]["compose"])

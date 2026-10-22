@@ -3804,6 +3804,7 @@
     }
     const src = d.source === "ai" ? "Drafted by AI from the conversation. Read it before you send it."
       : d.source === "blank" ? "Written by you."
+      : d.rateLimited ? "The standard wording: the AI has written a lot of drafts in the last few minutes."
       : d.fallback ? "The standard wording: the AI draft was not usable this time."
       : "The standard wording.";
     return `
@@ -3931,7 +3932,7 @@
       if (!d || typeof d !== "object") throw new Error("the server sent no draft");
       next = { state: "ready", title: String(d.title || ""), body: String(d.body || ""),
                cta: d.cta ? String(d.cta) : "", source: String(d.source || ""),
-               fallback: !!j.fallback };
+               fallback: !!j.fallback, rateLimited: !!j.rate_limited };
     } catch (err) {
       next = { state: "failed", msg: (err && err.message) || "" };
     }

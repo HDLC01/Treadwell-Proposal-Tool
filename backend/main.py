@@ -3066,8 +3066,43 @@ def _fu_ai_remember(task_id: str, answer: Dict[str, Any]) -> None:
     _FU_AI_DRAFTS[task_id] = (time.time(), answer)
 
 
+# THE COST CAP. The cache above only keeps a draft the portal accepted, so a task whose CLI run
+# keeps failing is re-run on every page load, by every estimator, and by anything that POSTs here
+# in a loop. Two budgets, both counted only when the CLI actually runs: per TASK (a failing task
+# stops costing money after a few tries) and per PERSON (one signed-in user cannot walk every task
+# on the board on repeat). Wider than autofill's 3 per 5 min because working the morning's
+# reminders is one draft per project, back to back; a cache hit costs nothing against either.
+# Over a cap the answer is the portal's default, as for any AI failure, never a 429: the compose
+# box always opens with something to send. Single uvicorn worker, so in-memory is shared; the lock
+# makes check-then-record one step under the threadpool that runs these sync routes.
+_FU_AI_RATE_WINDOW = 600      # seconds (10 minutes)
+_FU_AI_RATE_PER_TASK = 3
+_FU_AI_RATE_PER_USER = 10
+_FU_AI_HITS: Dict[str, List[float]] = {}
+_FU_AI_HITS_LOCK = threading.Lock()
+
+
+def _fu_ai_take_slot(task_id: str, email: Optional[str]) -> bool:
+    """Spend one CLI run against both budgets, or spend nothing and say no."""
+    now = time.time()
+    keys = ((f"task|{task_id}", _FU_AI_RATE_PER_TASK),
+            (f"user|{(email or 'anon').strip().lower()}", _FU_AI_RATE_PER_USER))
+    with _FU_AI_HITS_LOCK:
+        for key, _cap in keys:
+            hits = [t for t in _FU_AI_HITS.get(key, []) if now - t < _FU_AI_RATE_WINDOW]
+            if hits:
+                _FU_AI_HITS[key] = hits
+            else:
+                _FU_AI_HITS.pop(key, None)    # task ids never repeat; do not keep empty keys
+        if any(len(_FU_AI_HITS.get(key, [])) >= cap for key, cap in keys):
+            return False
+        for key, _cap in keys:
+            _FU_AI_HITS.setdefault(key, []).append(now)
+    return True
+
+
 @app.post("/api/portal/followup-task/{task_id}/ai-draft")
-def api_portal_followup_ai_draft(task_id: str) -> Any:
+def api_portal_followup_ai_draft(task_id: str, request: Request) -> Any:
     """The compose box's first draft, in ONE call: ask the portal for its safe default and the
     prompt that would do better, run that prompt through the CLI, and hand the model's answer back
     to the portal to be checked. The portal cannot run the model (it has no CLI); this app cannot
@@ -3102,6 +3137,9 @@ def api_portal_followup_ai_draft(task_id: str) -> Any:
     if not (isinstance(system, str) and system.strip()
             and isinstance(user_input, str) and user_input.strip()):
         return fallback
+    if not _fu_ai_take_slot(tid, _user_email(request)):
+        log.info("Follow-up draft for %s: AI budget spent; using the portal's default", tid)
+        return {**fallback, "rate_limited": True}
     try:
         ai = _autofill_via_cli(user_input, system)
     except FileNotFoundError:
