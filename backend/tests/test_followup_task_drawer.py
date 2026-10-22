@@ -134,6 +134,24 @@ def test_ai_authored_text_round_trips_escaped_and_never_executes(fu):
         assert "<script>" not in html and "<img src=x" not in html, "AI text reached the DOM raw"
 
 
+def test_the_recipient_sentence_names_exactly_the_ticked_contacts(fu):
+    """"Goes to everyone ticked under Who gets chased: ..." and the ticks under it are one fact
+    said twice. A contact whose row has no `followups` flag is unticked below, so the sentence must
+    leave him out too, or the card names somebody the estimator can see is not being chased."""
+    html = fu["who"]["html"]
+    m = re.search(r"Goes to everyone ticked under Who gets chased: ([^<.]*)\.", html)
+    assert m, "the recipient sentence is missing: " + _text(html)[:400]
+    named = {n.strip() for n in _decode(m.group(1)).split(",")}
+    ticked = set()
+    for tag in re.findall(r"<input[^>]*data-fu-contact=[^>]*>", html):
+        email = _decode(re.search(r'data-fu-contact="([^"]*)"', tag).group(1))
+        if re.search(r"\schecked\b", tag):
+            ticked.add(email)
+    names = {"dave@x.com": "Dave Nunn", "ap@x.com": "Ann Boyle", "joe@x.com": "Joe Park"}
+    assert ticked == {"dave@x.com"}, ticked
+    assert named == {names[e] for e in ticked}, (named, ticked)
+
+
 def test_the_fallback_says_it_is_the_standard_wording(fu):
     assert "standard wording" in _text(fu["gone"]["compose"])
     assert "not usable" in _text(fu["gone"]["compose"])

@@ -3825,9 +3825,11 @@
     const due = t.due_at ? "Due " + TW.fmtBizDate(t.due_at) : "Due now";
     const stage = t.stage === "deposit" ? "Chasing the deposit" : "Before they decide";
     // WHO IT GOES TO is the "Who gets chased" list further down this group, read off the same
-    // payload, so the two cannot disagree about a contact somebody just un-ticked.
+    // payload WITH THE SAME TEST, so the two cannot disagree about a contact. That list ticks a box
+    // only for a truthy `followups`; this used `!== false`, which counted a contact with no flag in
+    // the sentence while the box right below it sat unticked (audit, 2026-10-23).
     const who = ((data && data.recipient_activity) || [])
-      .filter((r) => r && r.followups !== false).map((r) => r.name || r.email).filter(Boolean);
+      .filter((r) => r && r.followups).map((r) => r.name || r.email).filter(Boolean);
     return `
       <div class="fu-task" id="fu-task" data-task="${esc(t.id)}">
         <div class="lbl fu-lbl">Follow-up waiting on you</div>

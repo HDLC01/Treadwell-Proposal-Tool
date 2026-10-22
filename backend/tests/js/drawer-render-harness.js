@@ -2415,6 +2415,20 @@ async function runScenario(name, s) {
     sched.refused = await save("fu-stop", "4");
     out.fuTask.schedule = sched;
 
+    // 12. WHO IT GOES TO agrees with the ticks below it, including a contact whose payload row
+    //     carries no `followups` flag at all: the sentence used to count him in while his box sat
+    //     unticked (audit, 2026-10-23).
+    reset();
+    futRow.followup_task = TASK("t-13");
+    const mixed = fuData();
+    mixed.recipient_activity = [{ email: "dave@x.com", name: "Dave Nunn", followups: true },
+                                { email: "ap@x.com", name: "Ann Boyle", followups: false },
+                                { email: "joe@x.com", name: "Joe Park" }];
+    page.open(FU_PID);
+    page.cache(FU_PID, mixed);
+    page.renderDetail(FU_PID, mixed);
+    out.fuTask.who = { html: dom.html };
+
     reset();
     out.fuTask.allPaths = fuAll.map((r) => r.path);
     futRow.followup_task = null;
