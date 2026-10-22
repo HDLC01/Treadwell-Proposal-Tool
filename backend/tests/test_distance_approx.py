@@ -239,6 +239,36 @@ def test_an_unknown_zip_falls_to_the_city_and_an_unknown_city_to_the_county():
     assert _pt(city="Smallville", state="KS", county="Sedgwick County, KS")[:2] == ("county", "Sedgwick County, KS")
 
 
+
+# ── a zip that disagrees with the typed city or county is a typo, not the job (the 2026-10-22 audit's finding 3) ────────────────────
+def test_a_zip_far_from_the_typed_city_is_set_aside_for_the_city():
+    """lookup('', 'Wichita', 'KS', '10001') measured to a New York zip and filled the travel lines with it. The zip table has no state
+    column, so the check is where the zip's centre lies: far from the typed city (or county), the city (or county) is what is meant."""
+    assert _pt(zip="10001", city="Wichita", state="KS")[:2] == ("city", "Wichita, KS")
+    assert _pt(zip="10001", city="Wichita", state="KS", county="Sedgwick County, KS")[:2] == ("city", "Wichita, KS")
+
+
+def test_a_zip_far_from_the_typed_county_is_set_aside_for_the_county():
+    assert _pt(zip="10001", county="Sedgwick County, KS")[:2] == ("county", "Sedgwick County, KS")
+    assert _pt(zip="10001", city="Smallville", state="KS", county="Sedgwick County, KS")[:2] == ("county", "Sedgwick County, KS")
+
+
+def test_a_zip_near_the_typed_city_is_still_the_tightest():
+    assert _pt(zip="67037", city="Wichita", state="KS")[:2] == ("zip", "zip 67037")      # Derby, next to Wichita
+    assert _pt(zip="66061", city="Olathe", state="KS", county="Johnson County, KS")[:2] == ("zip", "zip 66061")
+
+
+def test_a_zip_with_nothing_to_check_it_against_is_used():
+    assert _pt(zip="10001")[:2] == ("zip", "zip 10001")
+    assert _pt(zip="10001", city="Smallville", state="KS")[:2] == ("zip", "zip 10001")
+
+
+def test_the_lookup_with_a_typod_zip_measures_to_the_city(monkeypatch):
+    calls = _mock(monkeypatch, census=_c_none, osrm=_o_ok(306000))
+    out = distance.lookup("", "Wichita", "KS", "10001")
+    assert out["ok"] and out["precision"] == "city" and out["measured_to"] == "Wichita, KS"
+    assert _routed_to(calls[0]) == pytest.approx(WICHITA, abs=1e-4)
+
 # ── the lookup ──────────────────────────────────────────────────────────────────────────────────────
 def test_hanzs_bid_city_state_and_county_with_no_street_is_measured(monkeypatch):
     """The bid from the report: no street. One OSRM call to the centre of Wichita, no geocode at all."""
