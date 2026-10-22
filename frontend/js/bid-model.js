@@ -1161,6 +1161,18 @@
     return !!key && dist.key !== key;
   }
 
+  /** DOES THE PAGE MEASURE THIS BID WHEN IT OPENS? distanceWantsLookup, with one more rule for a SAVED bid
+   *  (`isNew` false) that has no distance at all: when its conditions already say FAR (`conditions.local === false`,
+   *  which only the old intake switch, the Polish!B4 cell or autofill's B4 flag can have written) it is a stated
+   *  answer and is left for the button. Measured on open, a near centre figure turned that bid's Lodging and Per
+   *  Diem off and saved a new price with no click (the 2026-10-22 audit's finding 1). A saved bid that says local
+   *  (the shipped default, Hanz's Wichita bid) is still measured, and a far answer fills its travel. */
+  function openWantsDistance(model, key, isNew) {
+    var dist = normalizeDistance(model && model.distance);
+    if (!dist && !isNew && isObject(model) && isObject(model.conditions) && model.conditions.local === false) return false;
+    return distanceWantsLookup(model && model.distance, key);
+  }
+
   /** Is a job at this many miles a travel job? Unknown is false: it is not asked to be anything. */
   function isFarMiles(miles) {
     var n = milesOrNull(miles);
@@ -7288,7 +7300,7 @@
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
     // A job with no street measured to a centre (2026-10-22): which figures are approximate, when the page measures on open, and the words of a dimmed card.
-    isApproxDistance: isApproxDistance, distanceWantsLookup: distanceWantsLookup, travelInertWords: travelInertWords,
+    isApproxDistance: isApproxDistance, distanceWantsLookup: distanceWantsLookup, openWantsDistance: openWantsDistance,travelInertWords: travelInertWords,
     // Travel Labor filled from the distance (2026-10-20): what it wrote, where it says so, the crew size its guys follow, and the
     // marker the estimator's typing leaves so an answer never writes into a box they have touched.
     driveHoursAreTools: driveHoursAreTools, driveHoursSource: driveHoursSource,

@@ -2974,7 +2974,8 @@
   // Per Diem line the estimator flipped by hand is never moved by an answer (B.applyDistance).
   //
   // WHO LOOKS IT UP BY ITSELF, ON OPEN (B.distanceWantsLookup). A new bid; a saved bid that has NO distance at all, never
-  // measured and never typed (Hanz, 2026-10-22: a Wichita bid with no street sat at "local" for good); and a figure measured
+  // measured and never typed (Hanz, 2026-10-22: a Wichita bid with no street sat at "local" for good), unless it already says
+  // FAR, a stated answer left for the button (B.openWantsDistance, the audit's finding 1); and a figure measured
   // to a CENTRE (no street: the zip's, the city's or the county's) whose address has changed since, so a street added on the
   // intake replaces the approximate figure with the exact one. A TYPED figure is never replaced without the button, and a
   // STREET figure whose address changed shows what it was saved with, says so, and offers the button.
@@ -5529,8 +5530,9 @@
     // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
     // nothing. A new bid asks once its labor defaults are in (the same gate as the defaults above);
     // a saved bid asks when it has no distance at all, or a centre figure whose address has changed
-    // (B.distanceWantsLookup, Hanz 2026-10-22). A typed figure, and a street figure, stay as saved.
-    if ((!newBid || laborDefaults) && B.distanceWantsLookup(ROOT.distance, addressKey())) lookupDistance(false);
+    // (B.distanceWantsLookup, Hanz 2026-10-22). A typed figure, and a street figure, stay as saved, and so does a saved bid with
+    // no distance whose conditions already say far: a stated answer, left for the button (B.openWantsDistance).
+    if ((!newBid || laborDefaults) && B.openWantsDistance(ROOT, addressKey(), newBid)) lookupDistance(false);
   }
 
   init();
