@@ -369,6 +369,29 @@
   .fu-lbl { margin-top:11px; }
   .fu-alert:empty { display:none; }
   .fu-alert { color:var(--red-dark); margin:0; }
+  /* ── the follow-up waiting on a human (remind mode) ────────────────────────
+     The one card on the tab that ends in an email to the customer, so it is the one with a frame:
+     everything else here is bookkeeping. The status lines are plain ink until they report a
+     refusal, and a notice that the portal flagged something reads amber rather than red, because
+     the customer-facing half of that action already happened. */
+  .fu-task { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line);
+    border-radius:9px; padding:11px 13px; background:#fff; }
+  .fu-compose { display:flex; flex-direction:column; gap:6px; }
+  .fu-title { flex:none; width:100%; min-height:38px; padding:8px 10px; font:inherit; }
+  .fu-body { width:100%; min-height:150px; padding:8px 10px; border:1px solid var(--line);
+    border-radius:7px; font:inherit; line-height:1.45; resize:vertical; box-sizing:border-box; }
+  .fu-body:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+  .fu-drafting { font-style:italic; }
+  .fu-more > .fu-line { margin-top:8px; }
+  .fu-msg { margin:0; }
+  .fu-msg:empty, .fu-notice:empty { display:none; }
+  .fu-msg.is-err { color:var(--red-dark); }
+  .fu-notice { margin:0; color:var(--ink); }
+  .fu-notice.is-warn { color:#8a5a00; }
+  .fu-sched { display:flex; flex-direction:column; gap:7px; }
+  .fu-sched label { font-size:12.5px; color:var(--ink); min-width:118px; }
+  .fu-date { flex:0 0 auto; min-height:36px; padding:6px 8px; font:inherit; }
+  .fu-num { flex:0 0 76px; width:76px; min-height:36px; padding:6px 8px; font:inherit; }
   /* The log. Three columns so the WHAT lines up down the page — scanning "did anyone
      call?" should not mean reading every row. Fixed-width first column, date last. */
   .fu-log { border:1px solid var(--line); border-radius:8px; background:var(--surf-low);
