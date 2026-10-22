@@ -130,22 +130,6 @@
     return Object.keys(blob).filter(function (k) { return k !== "__draft_id"; }).length > 0;
   }
 
-  /** Ask shared.js to file this project as a test on its FIRST real save, instead of creating the
-   *  row here to have something to file.
-   *
-   *  The sidebar door is a bare /polish-estimate.html with no ?d=, so shared.js has already minted
-   *  an id by the time enterSandbox runs, and saving unconditionally filed a nameless "Untitled"
-   *  row under Test every time somebody opened the beta to look at it, `created` event and all.
-   *  That is the same thing ae23c5d stopped the server doing ("the server stops creating projects
-   *  nobody asked for").
-   *
-   *  Bound to this id ("<id>:1", the format pendingTestIntentFor reads) rather than the bare "1"
-   *  that setNewProjectTestIntent writes: an unbound intent lands on whatever project is saved
-   *  next, which is how a real customer bid would end up filed as a test. */
-  function markNewProjectAsTest(id) {
-    try { localStorage.setItem("treadwell.proposal_tool.new_is_test", id + ":1"); } catch (e) {}
-  }
-
   /** A draft's blob, or null when that id has never been saved.
    *
    *  READ ONLY, deliberately: no method, no body. This is the one call that touches the real
@@ -179,23 +163,29 @@
     });
   }
 
-  /** Write `blob` under `id`, and file it as a test only once that has actually landed.
+  /** Write `blob` under `id` AS A TEST. Both callers are tests by definition (a project nobody has saved, which this page
+   *  edits and files under Test, and the copy of a real bid): the body says is_test true, so the row is created already
+   *  filed, and "saved" and "filed" are one fact that one answer reports. There is no second request to file it (a POST
+   *  /test here used to follow, and its answer was never read): a save that landed is a project that is filed, and a save
+   *  that did not throws. Nothing is lost by sending the flag on a copy: the page's later saves carry a blob that does not
+   *  say it, and the server keeps what the row has (drafts.save_draft keep_server_owned). The caller's blob is not touched.
    *
-   *  Ordering is not stylistic. set_test_flag returns False on a missing draft, so filing before
-   *  the first successful save is a silent no-op and the project stays in Active.
-   *
-   *  And "landed" is not res.ok: api_save_draft catches its own failures and answers 200 with
+   *  "Landed" is not res.ok: api_save_draft catches its own failures and answers 200 with
    *  {"ok": false, "error": ...}, so a save that never happened looks like a success to anyone
-   *  checking the status alone.
-   *
-   *  The flag POST is best-effort on purpose. If it fails the copy still exists and is still safe
-   *  to edit (it is not the real bid), and its "(beta test)" name puts it in the Test tab via
-   *  the projects-page name heuristic anyway. Refusing to open over that would be worse. */
+   *  checking the status alone. The caller must not say the project is filed when this threw. */
   async function saveThenFileAsTest(id, blob) {
+    // NEVER ANOTHER PROJECT'S BLOB (X1, round 4, F5): a blob stamped for a different id is some other project's copy, and writing it under
+    // this id would put that project's name, address and stamp into this row. enterSandbox stops before it gets here; this is the same
+    // rule held at the one place that writes, so that no path, present or future, can send it.
+    if (blob && blob.__draft_id && blob.__draft_id !== id) {
+      throw new Error("refusing to save the copy stamped for " + blob.__draft_id + " under " + id);
+    }
+    // Told to shared.js first: a row with this content is THIS page's, so the page's next save does not take it for another page's (X1, round 5, C1).
+    if (typeof TW.noteOwnSave === "function") TW.noteOwnSave(id, blob);
     var res = await fetch(draftUrl(id), {
       method: "PUT",
       headers: TW.authHeaders(),
-      body: JSON.stringify({ data: blob }),
+      body: JSON.stringify({ data: Object.assign({}, blob, { is_test: true }) }),
       // NO keepalive, and this is the whole bug it caused. Chromium caps a keepalive request
       // body at ~64KiB per origin, and blowing that cap fails SYNCHRONOUSLY with
       // "TypeError: Failed to fetch" -- so this PUT died for any project whose draft is bigger
@@ -217,7 +207,6 @@
     if (!res.ok || (body && body.ok === false)) {
       throw new Error("save refused: " + ((body && body.error) || res.status));
     }
-    await fileAsTest(id).catch(function (e) { console.warn("[polish beta] test flag failed", e); });
   }
 
   // ── what a test copy takes from its source ──────────────────────────────────────────────
@@ -411,6 +400,50 @@
     el.hidden = false;
   }
 
+  /** The new project could not be saved to the server just now. Said plainly, and never as "filed": nothing is on the
+   *  server to be filed. What is true of it, and all this note says: it stays on this computer (the browser's copy of the draft),
+   *  and what the estimator writes next is said as a test by this page's own word (TW.startsAsTest), so a save the server stores
+   *  creates the row under the Test tab. It promises no more than that. Left without anything typed, the project has no row at
+   *  all (shared.js does not flush a draft nobody typed into: hasWork), a project that is only the GC tab's { audience: "GC" } is
+   *  one of those, and if another page writes the project first this page stops saving and says so (showTakenOverNote), which
+   *  replaces this note. */
+  function showUnsavedNote() {
+    var el = $("sandbox-note");
+    if (!el) return;
+    el.textContent = "";
+    var ic = document.createElement("span");
+    ic.className = "ic";
+    ic.innerHTML = icon("copy", 14);
+    el.appendChild(ic);
+    var p = document.createElement("span");
+    p.textContent = "This is a new test project, and it has not been saved to the server yet. It stays on this " +
+      "computer and saves again as you work, and when it does it lands under the Test tab. " +
+      "No real bid is involved.";
+    el.appendChild(p);
+    el.hidden = false;
+  }
+
+  /** Another page has written the project this page opened as NEW, so this page's copy of it is older than the project and shared.js has
+   *  stopped it saving (TW.startsAsTest's callback, X1, round 4, F1). Said in place of the banner this page opened with ("saved as a NEW test
+   *  project"), which is no longer true: leaving it up would claim a save that is not being made. Static words, no project name, so nothing
+   *  here is markup. Reloading reads the project as the other page left it in this browser; what that page does with it is its own
+   *  business (the sandbox asks the server about it again, as for any project it is opened on). */
+  function showTakenOverNote() {
+    var el = $("sandbox-note");
+    if (!el) return;
+    el.textContent = "";
+    var ic = document.createElement("span");
+    ic.className = "ic";
+    ic.innerHTML = icon("copy", 14);
+    el.appendChild(ic);
+    var p = document.createElement("span");
+    p.textContent = "Estimating Tool v2 stopped saving on this page: this project was changed in another tab after this page opened, " +
+      "and saving this page's older copy would overwrite that. Nothing typed here is being saved. " +
+      "Reload this page to carry on from the project as that tab left it.";
+    el.appendChild(p);
+    el.hidden = false;
+  }
+
   /** Settle which draft this page may write to, BEFORE it can be typed into.
    *
    *  Returns false when it could not settle that safely, in which case the caller leaves the page
@@ -429,6 +462,19 @@
     var id = TW.getDraftId();
     if (!id) return true;                        // no project at all, nothing to protect
 
+    // A BLOB STAMPED FOR ANOTHER PROJECT IS NOT THIS PROJECT'S, AND NOTHING BELOW MAY TOUCH IT (X1, round 4, F5). The browser keeps ONE copy of
+    // the draft, and another tab can have put its own project into it while this page is on a different id: a second tab's New project wipes
+    // it, the first tab's next write refills it stamped for the first tab's project, and a page opened by its bare link resumes the second
+    // tab's id over it (shared.js's hydration guard also leaves a page on its own id over a blob it did not adopt). The never-saved branch
+    // below then saved that blob under THIS page's id, as a test: one project became a Test project holding another's name and address.
+    // So this is asked before anything is read or written, and the page stops, as for every other read it cannot trust. Nothing is saved,
+    // the other tab's project is left alone, and a reload finds the slot as the other tab left it.
+    if (state.__draft_id && state.__draft_id !== id) {
+      loadingNote("Estimating Tool v2 stopped rather than save another project's copy under this one. This browser's saved copy belongs " +
+        "to a project that is open in another tab, and that tab has the keys. Close the other tab, then reload this page.");
+      return false;
+    }
+
     var row;
     try { row = await loadRow(id); }
     catch (e) {
@@ -438,17 +484,55 @@
     }
 
     // Never saved: this id IS the sandbox, there is nothing to copy, and Hanz asked for
-    // everything the beta touches to land under Test. Save it so the row exists, then file it.
+    // everything the beta touches to land under Test.
     //
-    // Only when there is something to save, though. Opening the beta must not CREATE a project:
-    // see markNewProjectAsTest, which hands the filing to the first save the estimator earns.
+    // THIS PAGE'S OWN FIRST WRITE SAYS "TEST" (TW.startsAsTest), AND A LOOK SAYS NOTHING. The sidebar door is a bare
+    // /polish-estimate.html with no ?d=, so shared.js has already minted an id by the time this runs, and saving unconditionally
+    // filed a nameless "Untitled" row under Test every time somebody opened the beta to look at it, `created` event and all
+    // (the same thing ae23c5d stopped the server doing: "the server stops creating projects nobody asked for"). So a project with
+    // nothing in it is not written here, and nothing is stored for another page to find: the word lives in this page's memory
+    // and goes into the writes THIS page makes. It used to be a start written under the project's id, over whatever the
+    // Projects page had left there, so a real bid started on the Active tab was born a test after a look at a v2 page.
+    //
+    // A PROJECT WITH CONTENT (the GC tab starts the bid with { audience: "GC" } in it) is saved at once, as a test, so that its row
+    // exists. NOT when it was started as a real bid on the Active tab: a look at a v2 page must not create a test row for it, so
+    // it is treated like a project with nothing in it.
+    //
+    // A PROJECT THAT HAS BEEN WRITTEN INTO, IS NOT KNOWN TO BE A TEST, AND HAS NO ROW YET STOPS THE PAGE. The live intake's "Continue
+    // with Estimating Tool v2" waits for its save to be answered before it opens this page (js/index.js, bounded), so what gets here without a
+    // row is a save that was refused, or one the server has not answered within that bound, or a row that is gone, or a page opened by a link
+    // while another page's save is still on its way. The blob says what was written: is_test false is the Active
+    // tab's bid, and content with no word at all is a project from the All tab; only is_test true is a test. Neither of those is a
+    // sandbox. Saving it as one would file a bid under Test (the All tab's by SEEDING the row the other page's save then creates),
+    // and editing it here would be the beta editing a bid under a note that says "a NEW test project". Stopping, as every other read
+    // that cannot be trusted does, writes nothing; if the save on its way lands, reloading this page finds a project to copy (a save
+    // that was refused does not land, and the note says only that it has not reached the server). What a
+    // board's New button leaves ({ audience: "GC" }) is not written content.
+    //
+    // A SAVE THAT DID NOT LAND IS SAID, NEVER CLAIMED AS A FILING: there is no row on the server to be filed. The project
+    // stays on this computer, and this page's writes say "test" in their own blob, so the first one the server stores creates the
+    // row filed (unless another page has written the project first, in which case this page's writes are refused and it says so:
+    // showTakenOverNote). (This page used to say "filed as a test" over it.)
     if (row === null) {
-      if (hasContent(state)) {
+      var said = state.is_test;
+      var written = Object.keys(state).some(function (k) { return k !== "__draft_id" && k !== "audience" && k !== "is_test"; });
+      if (said === false || (said !== true && written)) {
+        loadingNote("Estimating Tool v2 stopped rather than edit a project that has not been saved yet. Its first save has not " +
+          "reached the server, so there is no test copy to make. Reload this page once it has saved.");
+        return false;
+      }
+      var real = TW.startOf(id) === false;
+      TW.startsAsTest(id, showTakenOverNote);
+      if (hasContent(state) && !real) {
+        var saved = true;
         try { await saveThenFileAsTest(id, state); }
-        catch (e) { console.warn("[polish beta] could not file the new project as a test", e); }
-        showDirectNote(false);
+        catch (e) { saved = false; console.warn("[polish beta] could not save the new project as a test", e); }
+        if (saved) {
+          showDirectNote(false);
+        } else {
+          showUnsavedNote();
+        }
       } else {
-        markNewProjectAsTest(id);
         showDirectNote(true);
       }
       return true;
@@ -497,7 +581,6 @@
 
   window.TWPolishSandbox = {
     enterSandbox: enterSandbox,
-    markNewProjectAsTest: markNewProjectAsTest,
     repointWizardLinks: repointWizardLinks,
     sandboxIdFor: sandboxIdFor,
     betaName: betaName,
@@ -511,5 +594,7 @@
     hasContent: hasContent,
     showCopyNote: showCopyNote,
     showDirectNote: showDirectNote,
+    showUnsavedNote: showUnsavedNote,
+    showTakenOverNote: showTakenOverNote,
   };
 })();

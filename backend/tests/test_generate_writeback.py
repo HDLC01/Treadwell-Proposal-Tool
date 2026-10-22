@@ -28,6 +28,7 @@ replays incapable of touching a draft even if a future key is added to the paylo
 the authority list.
 """
 import inspect
+import re
 
 import main
 import pytest
@@ -216,6 +217,102 @@ def test_no_project_id_header_writes_nothing(monkeypatch):
     assert c.post("/api/generate", json=_payload(),
                   headers={"X-Project-Id": "no-draft"}).status_code == 200
     assert called == []
+
+
+# ── a person's filing is not the payload's to undo ───────────────────────────
+# The audit of X1, round 2 (F4). `values` carries the server-owned keys (is_test, archived, assigned_estimator) as the page's blob
+# held them when the payload was built, and since X1 a project started as a test says is_test in its OWN blob from its first
+# write. The write-back merged `values` over the draft and saved it WITHOUT keep_server_owned, so a payload built before somebody
+# pressed Test? or Move to Active on the Projects card (or reassigned or archived the project) put the old answer back, and the
+# draft was filed the way it was before the human's say. The save is the same rule the browser's own PUT follows: the stored value
+# of a server-owned key wins, and the payload may only SEED a key the row has never had (a first save).
+SERVER_OWNED_STALE = {"is_test": True, "archived": False, "assigned_estimator": "kyle@wetreadwell.com"}
+SERVER_OWNED_LIVE = {"is_test": False, "archived": True, "assigned_estimator": "rj@wetreadwell.com"}
+
+
+@pytest.fixture
+def stored(monkeypatch, fake_supabase):
+    """The write-back on the REAL drafts.load_draft and drafts.save_draft, over the in-memory store (conftest). Only the file writers
+    and the profile lookup are stubbed: what lands in the row is what the real save decided."""
+    store = {"drafts": [], "events": []}
+    monkeypatch.setattr(main.drafts, "get_client", lambda: fake_supabase(store))
+    monkeypatch.setattr(main.estimate_writer, "fill_estimate", lambda *a, **k: b"xlsx")
+    monkeypatch.setattr(main.proposal_writer, "fill_proposal", lambda *a, **k: b"docx")
+    monkeypatch.setattr(main.profiles, "get_by_email", lambda e: {"email": e, "role": "admin"})
+    return store
+
+
+def _seed(store, draft_id, data):
+    store["drafts"].append({"id": draft_id, "data": dict(data), "owner_email": "kyle@wetreadwell.com",
+                            "created_at": "2026-10-01T00:00:00+00:00", "updated_at": "2026-10-01T00:00:00+00:00"})
+
+
+def _stored(store, draft_id):
+    return next(r for r in store["drafts"] if r["id"] == draft_id)["data"]
+
+
+def _post_generate(**values):
+    r = TestClient(main.app).post("/api/generate", json=_payload(**values), headers={"X-Project-Id": "d1"})
+    assert r.status_code == 200, r.text
+
+
+def test_a_stale_payload_cannot_undo_what_a_person_filed(stored):
+    """The real routes. The draft says what a person made of it (a real bid, archived, reassigned to RJ); the payload, built before
+    that, says what the page held (a test, active, Kyle's). The narrative the payload carries is saved, and the three server-owned
+    keys stay as the person left them.
+
+    Mutation: drop `keep_server_owned=True` from the write-back's save_draft call, and all three revert (the next test shows it)."""
+    _seed(stored, "d1", {"project_name": "Westport", **SERVER_OWNED_LIVE})
+    _post_generate(scope_notes="new scope", **SERVER_OWNED_STALE)
+    data = _stored(stored, "d1")
+    assert data["scope_notes"] == "new scope", "the write-back itself did not land"
+    for key, live in SERVER_OWNED_LIVE.items():
+        assert data[key] == live, "%s was put back to the payload's stale %r over a person's %r" % (key, SERVER_OWNED_STALE[key], live)
+
+
+def test_without_keep_server_owned_the_stale_payload_wins(stored, monkeypatch):
+    """The counterexample that keeps the test above from being vacuous: the same request with the keyword stripped from the call (which is
+    exactly what dropping it from the write-back does) puts all three keys back. If this ever stops being true, the test above is
+    not testing the keyword."""
+    real = main.drafts.save_draft
+    monkeypatch.setattr(main.drafts, "save_draft", lambda *a, **k: real(*a, **{n: v for n, v in k.items() if n != "keep_server_owned"}))
+    _seed(stored, "d1", {"project_name": "Westport", **SERVER_OWNED_LIVE})
+    _post_generate(**SERVER_OWNED_STALE)
+    data = _stored(stored, "d1")
+    assert {k: data[k] for k in SERVER_OWNED_LIVE} == SERVER_OWNED_STALE
+
+
+def test_the_write_back_still_seeds_a_project_that_has_no_row_yet(stored):
+    """The write-back's original purpose. A generate for a draft nobody has saved creates the row, and the payload's word on the
+    server-owned keys is what it is born with (a project started as a test is born one)."""
+    _post_generate(**SERVER_OWNED_STALE)
+    assert {k: _stored(stored, "d1")[k] for k in SERVER_OWNED_STALE} == SERVER_OWNED_STALE
+
+
+def test_the_write_back_still_seeds_a_key_the_row_has_never_had(stored):
+    """Keeping what the row has is not freezing it: a key the stored row never carried is the payload's to give, as it is for the
+    browser's own save. A row with only is_test has no archived and no estimator, so those two are seeded and is_test is kept."""
+    _seed(stored, "d1", {"project_name": "Westport", "is_test": False})
+    _post_generate(**SERVER_OWNED_STALE)
+    data = _stored(stored, "d1")
+    assert data["is_test"] is False
+    assert data["archived"] is False and data["assigned_estimator"] == "kyle@wetreadwell.com"
+
+
+def test_the_write_back_passes_keep_server_owned():
+    """The call itself, since a comment above it can say anything. Comment lines are stripped (`_statements`), so the prose that
+    explains the keyword does not satisfy this."""
+    src = _statements(main._generate)
+    saves = [m.start() for m in re.finditer(r"drafts\.save_draft\(", src)]
+    assert len(saves) == 1, "_generate saves a draft in %d places; rewrite this guard" % len(saves)
+    opening = src.index("(", saves[0])
+    depth, end = 0, opening
+    for end in range(opening, len(src)):
+        depth += {"(": 1, ")": -1}.get(src[end], 0)
+        if depth == 0:
+            break
+    call = src[saves[0]:end + 1]
+    assert "keep_server_owned=True" in call, call
 
 
 # ── the replay callers ───────────────────────────────────────────────────────

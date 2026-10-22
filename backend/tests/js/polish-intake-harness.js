@@ -307,6 +307,8 @@ const scope = new Function("$", "TW", "SB", "document", "window", "clock", "fetc
   // to land in humanConditions, which is what stops a second verbal run overriding it.
   var humanConditions = {};
   var saveTimer = null;
+  // Set while Continue is waiting for its save or has asked the browser to leave: a second press does nothing.
+  var leaving = false;
   ${fn("condOn")}
   ${fn("adoptModel")}
   ${fn("conditionCells")}
@@ -395,6 +397,10 @@ function build(opts) {
                   id: opts.id || "proj-1" };
   const dom = makeDom(log, opts.formValues || FORM_VALUES);
   const doc = makeDocument(log);
+  // The Continue button as the page ships it, so that "give the label back" has the page's own label to give. The write
+  // that puts it there is not the page's, so it is taken back out of the log.
+  const shipped = /<button\b[^>]*\bid="continue-btn"[^>]*>([^<]*)<\/button>/.exec(pageHtml);
+  if (shipped) { dom.el("continue-btn").textContent = shipped[1]; log.pop(); }
 
   const TW = {
     getState: () => JSON.parse(JSON.stringify(store.blob)),
@@ -422,8 +428,13 @@ function build(opts) {
     // The pagehide flush in wire() calls both of these. saveBlocked defaults to "answered" (null)
     // so every existing test keeps seeing a hidden #save-note unless a test opts into the
     // foreign-blob case via opts.saveBlockedReason -- mirrors the real shared.js contract.
-    flushState: () => { rec.flushed++; },
+    // `opts.flushState` is the answer to the save, handed over by a test that wants to hold it (Continue waits for it).
+    flushState: opts.flushState ? (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); return opts.flushState(); }
+                                : (o) => { rec.flushed++; (rec.flushOpts = rec.flushOpts || []).push(o); },
     saveBlocked: () => (opts.saveBlockedReason || null),
+    // What the page tells shared.js about its own pagehide save (X1, round 4, F4): "I will save what I hold and send it, once, as I go", asked by
+    // shared.js's pagehide handler just before it would send its own. Kept so a scenario can ask it as shared.js would.
+    pageSavesOnLeave: (fn) => { rec.leaveCheck = fn; },
   };
 
   const SB = {
@@ -439,7 +450,6 @@ function build(opts) {
       return opts.sandboxOk !== false;
     },
     repointWizardLinks: function () { log.push("repoint"); },
-    markNewProjectAsTest: function () { log.push("markTest"); },
   };
 
   const clock = makeClock();
@@ -1019,6 +1029,91 @@ out.engineMoves = (function () {
     };
   }
 
+  // ── Continue waits for the save to be answered, then leaves (X1) ────────────────────────────────
+  //
+  // onSubmit used to save and navigate in the same breath, so a project's first PUT left through shared.js's
+  // pagehide handler and no page ever saw its reply (tests/js/new-estimate-test-flag-harness.js runs that on the
+  // real shared.js). It now asks TW.flushState to send the save and leaves when it has been ANSWERED, or when the
+  // wait is over. Here the answer is given BY HAND, so the order is observable: nothing has gone while the save
+  // is out, the page's own bound timer is the only thing armed, and it is cleared once the page has left.
+  //
+  // The four ways a wait can end that the real flushState can produce are all here, and one it cannot: it
+  // answers true or false and never throws, so the throw is the page's own `catch`, which nothing else reaches.
+  //
+  // THE BUTTON (F5 of the audit of round 1). While it waits Continue says so (disabled, "Saving…"), a second press does
+  // nothing, and once it has asked the browser to leave it says that ("Opening the estimate…"). If the browser does not
+  // go, or the page throws before it asks, the button is given back with its own label and works again: the page's own
+  // timer (armed once it has asked the browser to leave, so it is the one timer left after the wait's own is cleared)
+  // is cranked by hand to stand for the time it takes.
+  {
+    const press = (b) => b.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "submit").map((l) => l.handler({ preventDefault() {} }));
+    const tick = () => new Promise((r) => setImmediate(r));
+    // Until the presses have finished, or a few turns of the event loop have gone by. A Continue that waits for
+    // ever must show up as a page that has not left, not as a harness that never prints anything.
+    const finished = async (presses) => {
+      let over = false;
+      Promise.all(presses).then(() => { over = true; }, () => { over = true; });
+      for (let i = 0; i < 20 && !over; i++) await tick();
+      return over;
+    };
+    const btnOf = (b) => { const n = b.dom.el("continue-btn"); return { disabled: !!n.disabled, label: n.textContent }; };
+
+    let answer = null;
+    const held = new Promise((r) => { answer = r; });
+    const b = build({ flushState: () => held });
+    await b.api.boot();
+    const labelBefore = btnOf(b);
+    const savesBefore = b.rec.saves.length;
+    const pressed = press(b);
+    await tick();
+    const whileWaiting = { navigated: b.rec.navigated.length, savedFirst: b.rec.saves.length - savesBefore,
+                           flushes: b.rec.flushed, armed: b.clock.armed(), button: btnOf(b) };
+    const second = press(b);                                           // a second press while it waits
+    await tick();
+    whileWaiting.flushesAfterASecondPress = b.rec.flushed;
+    whileWaiting.savesAfterASecondPress = b.rec.saves.length - savesBefore;
+    answer(true);
+    await finished(pressed.concat(second));
+    const afterAnswer = { navigated: b.rec.navigated.slice(), armed: b.clock.armed(), button: btnOf(b) };
+    b.clock.fire();                                                    // the browser has not gone: its timer, by hand
+    const afterGiveBack = { armed: b.clock.armed(), button: btnOf(b), navigated: b.rec.navigated.length };
+    await finished(press(b));                                          // and Continue works again
+    const pressedAgain = { navigated: b.rec.navigated.length, flushes: b.rec.flushed, button: btnOf(b) };
+
+    const c = build({ flushState: () => new Promise(() => {}) });      // never answered
+    await c.api.boot();
+    const pressedC = press(c);
+    await tick();
+    const beforeBound = c.rec.navigated.length;
+    const buttonBeforeBound = btnOf(c);
+    c.clock.fire();                                                    // the page's own wait, cranked by hand
+    await finished(pressedC);
+
+    const d = build({ flushState: () => Promise.resolve(false) });     // the save failed
+    await d.api.boot();
+    await finished(press(d));
+
+    const e = build({ flushState: () => Promise.reject(new Error("boom")) });
+    await e.api.boot();
+    await finished(press(e));
+
+    // the page throws BEFORE it asks the browser to leave (a draft it cannot read): nothing is saved, nothing is
+    // asked of the browser, and the button is not left saying "Saving…"
+    const f = build({ readForm: () => { throw new Error("cannot read the form"); } });
+    await f.api.boot();
+    const threwBefore = await press(f)[0].then(() => null, (err) => String(err && err.message));
+
+    out.continueWaits = {
+      labelBefore, whileWaiting, afterAnswer, afterGiveBack, pressedAgain,
+      neverAnswered: { beforeBound, afterBound: c.rec.navigated.slice(), armedAfter: c.clock.armed(),
+                       buttonBeforeBound, buttonAfter: btnOf(c) },
+      failedSave: { navigated: d.rec.navigated.slice(), armedAfter: d.clock.armed(), button: btnOf(d) },
+      threw: { navigated: e.rec.navigated.slice(), armedAfter: e.clock.armed(), saved: e.rec.saves.length > 0 },
+      threwBefore: { error: threwBefore, navigated: f.rec.navigated.length, flushes: f.rec.flushed, button: btnOf(f), armed: f.clock.armed() },
+    };
+  }
+
   // ── Fault 1, the actual bug: typing must arm the debounce ──────────────────────
   //
   // wire() had no `input` listener at all -- see wire()'s own comment. NAMED fields only: the
@@ -1076,13 +1171,18 @@ out.engineMoves = (function () {
       .filter((l) => l.type === "input")
       .forEach((l) => l.handler({ target: { name: "project_name" } }));
     const armedBeforeLeaving = b.clock.armed();
+    const leaveCheckArmed = b.rec.leaveCheck ? b.rec.leaveCheck() : null;       // what shared.js would be told as the page goes
     b.win.fire("pagehide");
     out.pagehideFlush = {
       wired: b.win.listeners.some((l) => l.type === "pagehide"),
+      // The page says, to shared.js, when its own handler will send the save: while its timer is pending, and not otherwise.
+      leaveCheck: { registered: typeof b.rec.leaveCheck === "function", armed: leaveCheckArmed,
+                    afterLeaving: b.rec.leaveCheck ? b.rec.leaveCheck() : null },
       armedBeforeLeaving,
       savedSynchronously: b.rec.saves.length,       // save() ran inline, not on the timer
       armedAfterLeaving: b.clock.armed(),            // the timer it cleared
       flushedTheNetwork: b.rec.flushed,              // TW.flushState(), forcing the PUT now
+      flushedAsKeepalive: (b.rec.flushOpts || []).map((o) => !!(o && o.keepalive)),   // and what it asked for: a request that outlives the page
     };
 
     // Nothing typed, nothing armed: leaving must not manufacture a save out of thin air.
@@ -1090,6 +1190,20 @@ out.engineMoves = (function () {
     await d.api.boot();
     d.win.fire("pagehide");
     out.pagehideFlush.quietWhenNothingArmed = d.rec.saves.length === 0 && d.rec.flushed === 0;
+    out.pagehideFlush.leaveCheck.quiet = d.rec.leaveCheck ? d.rec.leaveCheck() : null;
+
+    // A save that THROWS on the way out still sends what is pending. shared.js's own handler stands down when the page's will send, so if the
+    // page's save threw before it asked for the flush, nothing would be sent at all (the edit would be left on this computer).
+    const flag = { fail: false };
+    const t = build({ readForm: () => { if (flag.fail) throw new Error("the form could not be read"); return Object.assign({}, FORM_VALUES); } });
+    await t.api.boot();
+    t.dom.nodes["intake-form"].listeners
+      .filter((l) => l.type === "input")
+      .forEach((l) => l.handler({ target: { name: "project_name" } }));
+    flag.fail = true;
+    let threw = false;
+    try { t.win.fire("pagehide"); } catch (e) { threw = true; }
+    out.pagehideFlush.whenTheSaveThrows = { threw: threw, flushed: t.rec.flushed, asKeepalive: (t.rec.flushOpts || []).map((o) => !!(o && o.keepalive)) };
   }
 
   // ── Fault 2 made visible: a refused cross-tab write now says so ──────────────────
@@ -2130,9 +2244,10 @@ out.engineMoves = (function () {
     try { oldB.api.save(); } catch (e) { threw = String(e); }
     const oldSave = lastSave(oldB);
     // submit (Continue) with the blank name: onSubmit saves and navigates, no validity gate in JS.
+    // AWAITED since X1: onSubmit waits for the save (TW.flushState) before it navigates, so it is async.
     const subB = build({ blob: oldBlob, formValues: { project_name: "", bid_date: "" } });
     await subB.api.boot();
-    subB.api.onSubmit({ preventDefault() {} });
+    await subB.api.onSubmit({ preventDefault() {} });
     out.f5 = {
       oldBlob: { threw: threw, saved: !!oldSave, dateAfterBoot: dateAfterBoot,
         savedName: oldSave && oldSave.project_name,

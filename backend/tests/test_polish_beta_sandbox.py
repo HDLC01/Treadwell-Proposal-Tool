@@ -213,24 +213,36 @@ def test_opening_the_beta_does_not_create_a_project(sandbox):
     server doing this same thing ("the server stops creating projects nobody asked for").
 
     Mutation: save whatever the blob holds. Nothing on screen looks wrong, and the junk piles up in
-    the Projects list where Kyle has to sort it out."""
+    the Projects list where Kyle has to sort it out.
+
+    What stands in for the save is the page's own word to shared.js (TW.startsAsTest), said before
+    anything can be saved or fail, so the first write the estimator makes says "test" and creates the
+    row filed. And a project that was started as a real bid is not saved as a test by a look at this
+    page (X1, round 3, F1): it is asked of shared.js first."""
     branch = sandbox[sandbox.index("row === null"):sandbox.index("row.is_test === true")]
     assert branch.index("hasContent(state)") < branch.index("saveThenFileAsTest(id, state)"), (
         "the never-saved branch writes a row before asking whether anything was typed into it")
-    assert "markNewProjectAsTest(id)" in branch, (
+    assert "TW.startsAsTest(id, showTakenOverNote)" in branch, (
         "an untouched project is never filed as a test at all, so the estimator's first real save "
         "in the beta would land in Active")
+    assert branch.index("TW.startsAsTest(id, showTakenOverNote)") < branch.index("saveThenFileAsTest(id, state)"), (
+        "the page's word is only said after a save that can fail, so a project that could not be "
+        "saved is created unfiled by the first write after the server is back")
+    assert "TW.startOf(id) === false" in branch and branch.index("TW.startOf(id)") < branch.index("saveThenFileAsTest(id, state)"), (
+        "a project started as a real bid is saved as a test by a look at this page")
 
 
-def test_the_deferred_filing_is_bound_to_this_project():
-    """shared.js applies a pending intent after the first save that lands. Left unbound ("1"), it
-    applies to whatever project is saved NEXT, which is how a real customer bid ends up filed as a
-    test. That is the hazard bindNewProjectTestIntent was written for.
+def test_the_sandbox_stores_no_start_of_its_own():
+    """A look starts nothing (X1, round 3, F1). This file used to write a start under the project's id
+    (markNewProjectAsTest) as the page opened, over whatever the Projects page had left there, so a real
+    bid started on the Active tab was born a test after a look at this page. It tells shared.js instead
+    (TW.startsAsTest), in that page's memory only, and the word goes into the first write the page makes.
 
-    Mutation: write the bare "1" that setNewProjectTestIntent writes."""
-    body = _block(PAGE, "markNewProjectAsTest")
-    assert "new_is_test" in body, "the intent is stored under a key shared.js does not read"
-    assert 'id + ":1"' in body, "the pending test filing is not bound to this project's id"
+    Mutation: write a start again (any key under new_is_test), or give the word back by name."""
+    code = _code(PAGE)
+    assert "markNewProjectAsTest" not in code and "new_is_test" not in code, "the sandbox stores a start of its own again"
+    assert "setItem" not in _block(PAGE, "enterSandbox"), "enterSandbox writes to storage"
+    assert "TW.startsAsTest(id, showTakenOverNote)" in code
 
 
 def test_the_content_check_ignores_shared_js_s_own_stamp():
@@ -303,23 +315,28 @@ def test_the_copy_is_filed_through_the_same_route_projects_js_uses():
     assert '"POST"' in body and "is_test" in body
 
 
-def test_the_test_flag_is_only_set_after_a_save_that_landed():
-    """set_test_flag returns False on a missing draft, so filing before the first successful save
-    is a silent no-op and the copy stays in Active.
+def test_a_project_saved_as_a_test_is_filed_by_the_save_that_creates_it():
+    """THE SAVE IS THE FILING (X1, round 2). The PUT's own body says is_test true, so the row is CREATED filed and "saved" and
+    "filed" are one fact reported by one answer. There used to be a POST /test after the PUT, which set_test_flag could only do
+    once the row existed, and whose answer nobody read: a /test that failed left the project in Active with the page saying
+    it was filed, and one that never answered held the page that was booting on it.
 
     And "landed" is not res.ok: api_save_draft catches its own failures and answers 200 with
-    {"ok": false, "error": ...}.
+    {"ok": false, "error": ...}, so a save that did not land throws, and nothing downstream may say it is filed.
 
-    Mutations: file before the PUT; or trust res.ok alone."""
+    Mutations: drop `is_test: true` from the body (the row is born unfiled and nothing files it), trust res.ok alone, or put
+    a second request back whose answer is not read."""
     body = _block(PAGE, "saveThenFileAsTest")
     put = body.index('method: "PUT"')
-    thrown = body.index("throw new Error")
-    flag = body.index("fileAsTest(")
-    assert put < thrown < flag, "the test flag is set before the save is known to have worked"
+    says_test = body.index("is_test: true")
+    # the throw that JUDGES THE ANSWER, which is the one after the request (an earlier one refuses another project's blob: X1, round 4, F5)
+    thrown = body.index("throw new Error", put)
+    assert put < says_test < thrown, "the save does not say is_test, or says it after it has been judged"
     assert "res.ok" in body
     assert "body.ok === false" in body, (
         'a 200 carrying {"ok": false} is being read as a successful save')
-    assert re.search(r"await fileAsTest\(", body), "the filing is not awaited"
+    assert "fileAsTest(" not in body and "/test" not in body, (
+        "a second request files the project after the save, and nobody reads its answer")
 
 
 def test_only_the_small_write_survives_a_navigation_and_the_big_one_must_not_try():
@@ -544,7 +561,7 @@ def test_the_notice_cannot_be_markup():
     below reads every innerHTML assignment rather than just counting them, so a second one that
     carries anything else fails here."""
     assign = re.compile(r"\.innerHTML\s*=\s*([^;]+);")
-    for fn in ("showCopyNote", "showDirectNote"):
+    for fn in ("showCopyNote", "showDirectNote", "showUnsavedNote", "showTakenOverNote"):
         body = _block(PAGE, fn)
         for rhs in assign.findall(body):
             assert re.fullmatch(r'icon\("[a-z-]+",\s*\d+\)', rhs.strip()), (

@@ -483,9 +483,9 @@ BREAKS = {
     "the carrier's working says the bid has no line": (
         "js/bid-model.js", "    var others = tr ? [] : otherDrives(W, carrierTabOf(W));", "    var others = [];",
         lambda g: "Travel Labor on this sheet: no line, $0" not in (g["words"]["carrier"]["how"] or "")),
-    "with both drives gone the words still say this sheet": (
-        "js/bid-model.js", "    if (!isObject(model) || model.no_travel_labor === true) return [];", "    if (!isObject(model)) return [];",
-        lambda g: g["words"]["both"]["noneWords"] != BID_WORDS),
+    # (There was a break here that took the job's answer (J) out of otherDrives, to prove "with both drives gone the words say the bid has none". Since round 7 polish, W3 otherDrives names only the
+    # bases that HOLD a line, and with the job's answer no base does, so that guard is redundant and no state can notice it gone; the fact stays (test_with_both_drives_gone_and_on_a_single_base_job_
+    # the_words_say_the_bid_has_none) and the filter that carries it is broken by test_polish_travel_words_polish.py.)
 }
 
 

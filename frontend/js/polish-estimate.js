@@ -166,9 +166,13 @@
     // A BASE THAT DOES NOT CARRY THE JOB'S HOTEL AND PER DIEM DRIVES ITS OWN CREW (round 7, Hanz 2026-10-21, D1: Kyle puts a drive on both sheets of a combo-like job). Its Travel
     // Labor is its own, below on the Labor step and under its Labor on the Review; the job's Hotel and Per Diem are charged once, on the carrier, where the miles are typed.
     if (drivesOnItsOwn()) {
+      // A SHEET WHOSE x TOOK ITS TRAVEL LABOR LINE AWAY HAS NO DRIVE OF ITS OWN TO DESCRIBE (round 7 polish, W1; the sheet's own answer, S). "Its Travel Labor below is one round trip for each of them" stood
+      // directly above "This sheet has no Travel Labor line, so its drive adds nothing to the price", and the Review's "This sheet's own drive is its Travel Labor line, under Labor" pointed at a line that
+      // is not there. With no line the Hotel and Per Diem sentence is what is left.
+      var ownLine = (M.labor instanceof Array ? M.labor : []).some(function (r) { return B.isTravelRow(r); });
       return onReview
-        ? "Hotel and Per Diem are charged once for the whole job, on the " + name + " section. This sheet's own drive is its Travel Labor line, under Labor."
-        : "This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the " + name + " section. " +
+        ? "Hotel and Per Diem are charged once for the whole job, on the " + name + " section." + (ownLine ? " This sheet's own drive is its Travel Labor line, under Labor." : "")
+        : (ownLine ? "This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the " + name + " section. " : "") +
           "Hotel and Per Diem are charged once for the whole job, on the " + name + " section. Open it to change them.";
     }
     return "Travel, Hotel and Per Diem are charged once for the whole job, on the " + name +
@@ -887,13 +891,20 @@
   // Same gap as the intake page's Fault 3: nothing here flushed its own 600ms debounce before
   // navigating away, and shared.js's pagehide net only flushes a timer THIS page armed. A takeoff
   // number typed and then left via the step nav inside that window was silently lost.
+  //
+  // THE FLUSH IS A KEEPALIVE REQUEST, as the intake page's is (F5 of the audit of X1, round 2): a plain request is dropped with the
+  // page that sent it, so leaving within the 600 ms still lost the edit. A draft too big for one (shared.js keepaliveFits) goes plain.
+  //
+  // ONE SAVE GOES, AND IT IS THIS PAGE'S (X1, round 4, F4), as on the intake page: shared.js's own pagehide handler runs first and used to send
+  // the shared blob as it stood before this one saved and sent the newest, two keepalive PUTs of one draft. The page tells shared.js, through
+  // TW.pageSavesOnLeave, that while its timer is pending this handler saves and sends, and the flush happens even if the save throws.
+  TW.pageSavesOnLeave(function () { return !!saveTimer; });
   window.addEventListener("pagehide", function () {
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
     var cur = TW.getState();
-    TW.setState(Object.assign({}, cur, savePatch(cur)));
-    TW.flushState();
+    try { TW.setState(Object.assign({}, cur, savePatch(cur))); } finally { TW.flushState({ keepalive: true }); }
   });
 
   /** Write the derived Guys figure INTO any auto travel row, so the model holds what the screen
@@ -1588,7 +1599,7 @@
       else pip.textContent = String(i + 1);
       b.appendChild(pip);
       b.appendChild(document.createTextNode(s.label));
-      b.addEventListener("click", function () { go(i); });
+      b.addEventListener("click", function () { go(i); focusStepHeading(); });
       rail.appendChild(b);
     });
   }
@@ -1626,6 +1637,18 @@
     paintRail();
     renderPanel();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** THE CARET FOLLOWS A STEP THE ESTIMATOR PRESSED (round 7 polish, K2: Next, Back, a step on the rail, Edit on a Review card). The press rebuilds the panel and the rail, so the button that had the caret
+   *  is gone, focus fell to <body> and the next Tab started again from the top of the page: the sheet strip, the sidebar, then the step. The new step's heading takes it. It is made focusable here (tabindex
+   *  -1: a script can put the caret on it, Tab never stops on it) and focused WITHOUT scrolling, because go() has just asked the page to scroll to the top, smoothly, on purpose, and a plain focus() would
+   *  jump past that. The page's own `[tabindex]:focus-visible` ring shows where it is to someone on the keyboard, and not to a mouse. A page run without a layout (the harnesses' stand-in DOM) has no focus()
+   *  and nothing happens. Only a press calls it: opening the page, and a step set by a script (go), never take the caret. */
+  function focusStepHeading() {
+    var panels = $("panels"), head = panels ? panels.querySelector("h2") : null;
+    if (!head || typeof head.focus !== "function") return;
+    head.setAttribute("tabindex", "-1");
+    head.focus({ preventScroll: true });
   }
 
   // ── panels ──────────────────────────────────────────────────────────────────
@@ -4384,6 +4407,15 @@
     else if (e.key === "Escape") { e.preventDefault(); cancelRename(name); }
   });
 
+  // Esc closes the "Add a sheet" list the way its Close button does, and the caret goes back to the "Add sheet" button that opened it (round 7 polish, K1: only the rename box took Esc). Only for a key
+  // pressed on a control of the Sheets panel (every one carries a data-sh-key), and never over a key something else has taken: the rename box's Esc, above, cancels the rename and leaves the list
+  // for a second Esc, and the library pop-up's Esc closes the pop-up. Nothing happens, and the key is not taken, while the list is shut.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (e.key !== "Escape" || !sheetsUi.pick || e.defaultPrevented || !t || !t.closest || !t.closest("[data-sh-key]")) return;
+    e.preventDefault(); sheetsAct("add-close");
+  });
+
   // Space and Enter work the on/off slider from the keyboard, as they would a button.
   document.addEventListener("keydown", function (e) {
     var t = e.target;
@@ -4401,7 +4433,7 @@
     if (!t || !t.closest) return;
 
     var go_ = t.closest("[data-go]");
-    if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); return; }
+    if (go_) { e.preventDefault(); go(parseInt(go_.getAttribute("data-go"), 10)); focusStepHeading(); return; }
 
     // THE SHEETS PANEL's buttons (see sheetsAct). Any other click puts an armed Delete back to what it was, so a single
     // press never deletes a sheet that a later click has nothing to do with.
@@ -4577,6 +4609,9 @@
         if (B.rowOn(M.labor[ol])) M.labor[ol].enabled = false; else delete M.labor[ol].enabled;
         // A Travel Labor line the tool copied from another sheet is this sheet's own once its switch is flipped here, as after a keystroke in it (round 7, part 3: B.markSwitchedByHand).
         B.markSwitchedByHand(M.labor[ol]);
+        // A TOOL-FILLED DRIVE LINE SWITCHED BACK ON IS FILLED AGAIN BY THE RULE (round 7 polish, W4): an answer leaves a switched-off line alone, so the miles, the job's locality or the Gyp card's
+        // Mobilizations may have moved while it was off and its hours are the old answer's. Only hours the tool wrote move; what the estimator typed stays theirs (B.followDriveSwitchedOn).
+        if (B.rowOn(M.labor[ol])) B.followDriveSwitchedOn(ROOT, activeTab, M.labor[ol]);
       }
       changed(true);
       return;

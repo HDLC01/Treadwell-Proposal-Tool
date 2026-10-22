@@ -217,7 +217,12 @@ def test_the_old_copy_of_the_county_picker_is_gone_from_the_page():
     # save()) added ~45 lines of the page's own. The ceiling is for the county picker's old inline copy,
     # which was hundreds of lines; it moves with a named feature, not by habit. 830 from 2026-10-13: the county box
     # filling itself from the address (+5) and every quantity box mirroring the takeoff of its own section (+6).
-    assert len(src.splitlines()) < 830, "the page grew back toward its old size"
+    # 845 from 2026-10-21: Continue waits for its save before it leaves (X1, +17, eight of them the account of why).
+    # 870 from 2026-10-21: and says so (X1, F5): the button is disabled and relabelled while it waits, a second press does
+    # nothing, and the button is given back if the browser does not go or the page throws first (+26, again mostly the why).
+    # 880 from 2026-10-22: the page tells shared.js its own pagehide handler will save and send, so one save goes as the page
+    # goes instead of two (X1, round 4, F4: +6, five of them the account of why).
+    assert len(src.splitlines()) < 880, "the page grew back toward its old size"
 
 
 # ── the checks go red when the code changes ─────────────────────────────────────────────────────
