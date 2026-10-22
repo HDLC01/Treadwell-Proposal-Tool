@@ -285,6 +285,52 @@ def test_a_street_the_geocoder_cannot_find_falls_back_to_the_centre_and_says_so(
     assert _routed_to(calls[1]) == pytest.approx(WICHITA, abs=1e-4)
 
 
+
+class _Clock:
+    t = 100.0
+
+
+def _spy_timeouts(monkeypatch):
+    """Records the timeout each outgoing call was given, and lets a handler move a fake clock."""
+    seen = []
+    real = httpx.Client
+
+    def spy(*a, **kw):
+        seen.append(kw.get("timeout"))
+        return real(*a, **kw)
+    monkeypatch.setattr(distance.httpx, "Client", spy)
+    clock = _Clock()
+    monkeypatch.setattr(distance, "_now", lambda: clock.t)
+    return seen, clock
+
+
+def test_a_street_miss_and_its_centre_share_one_time_budget(monkeypatch):
+    """The audit's finding 2: the centre's route was given a FRESH budget after the street geocode had spent part of
+    its own, so a miss could take about twice the budget and run past the page's abort (WORST_CASE_SECONDS)."""
+    seen, clock = _spy_timeouts(monkeypatch)
+
+    def slow_miss(request):
+        clock.t += distance.TOTAL_BUDGET_SECONDS - 1.0        # the geocoder ate all but one second
+        return _c_none(request)
+    calls = _mock(monkeypatch, census=slow_miss, osrm=_o_ok(306000))
+    out = distance.lookup("1 Nowhere Ln", "Wichita", "KS", "", county="Sedgwick County, KS")
+    assert out["ok"] and out["precision"] == "city" and out["street_not_found"] is True
+    assert [c.url.host for c in calls] == [CENSUS_HOST, OSRM_HOST]
+    assert seen[0].read == distance.TIMEOUT_SECONDS
+    assert 0 < seen[1].read <= 1.0 + 1e-6 and seen[1].connect <= 1.0 + 1e-6, "the route got a fresh budget"
+
+
+def test_a_street_miss_that_spent_the_budget_routes_nothing_and_says_error(monkeypatch):
+    seen, clock = _spy_timeouts(monkeypatch)
+
+    def spent(request):
+        clock.t += distance.TOTAL_BUDGET_SECONDS + 0.5
+        return _c_none(request)
+    calls = _mock(monkeypatch, census=spent, osrm=_o_ok(306000))
+    out = distance.lookup("1 Nowhere Ln", "Wichita", "KS", "", county="Sedgwick County, KS")
+    assert out["ok"] is False and out["miles"] is None and out["reason"] == "error"
+    assert [c.url.host for c in calls] == [CENSUS_HOST]
+
 def test_a_street_not_found_with_nothing_to_fall_back_to_is_still_not_found(monkeypatch):
     calls = _mock(monkeypatch, census=_c_none, osrm=_o_ok(1))
     out = distance.lookup("1 Nowhere Ln", "Smallville", "KS", "")
