@@ -40,6 +40,8 @@ EPOXY_DRIVE = "5 x 6.5 = $1072.5"
 TRIP = "6.5 hrs: one 380 mile round trip at 60 mph from the Olathe office, for each of the %d guys on the labor lines above"
 NOTE = ("This sheet's guys drive on their own: its Travel Labor below is one round trip for each of them, from the miles on the Polish section. "
         "Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them.")
+# A base whose x took its Travel Labor line away holds no drive to describe, so its note is the Hotel and Per Diem sentence alone (round 7 polish, W1: test_polish_travel_words_polish.py holds it).
+NOTE_NO_LINE = "Hotel and Per Diem are charged once for the whole job, on the Polish section. Open it to change them."
 # (Since round 7, part 4, P2, a Gyp drive is a round trip for each mobilization on the Gyp card, and the Gyp words say so: test_polish_travel_round7_part4.py.)
 FILL_CAP = ("Travel is expected when the job is 70 miles or more from the office. Under 70 miles all three lines below stay gray until you switch one on. On a far job Travel Labor "
             "fills in from the miles, a round trip for each mobilization, and the nights and per diem days from the crew's hours, 10 hours a night; type over any of them to use your own.")
@@ -160,7 +162,7 @@ def test_the_x_on_one_bases_drive_of_a_combo_is_that_sheets_answer_and_the_other
     assert s["x"] is True
     assert s["afterX"]["rows"] == {"Polish:base": POLISH_DRIVE, "Epoxy:base": None}
     assert s["afterX"]["answers"] == {"job": False, "sheets": {"Epoxy": True}}
-    assert s["labor"]["add"] is True and s["labor"]["none"] == "sheet" and s["labor"]["note"] == NOTE
+    assert s["labor"]["add"] is True and s["labor"]["none"] == "sheet" and s["labor"]["note"] == NOTE_NO_LINE
     _same_after_a_reload(s["afterX"], s["reloaded"])
     assert s["at300"]["session"]["rows"] == {"Polish:base": "4 x 10 = $1320", "Epoxy:base": None}
     _same_after_a_reload(s["at300"]["session"], s["at300"]["reload"])

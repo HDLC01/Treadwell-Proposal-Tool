@@ -685,12 +685,55 @@
     if (county) county.onDocumentClick(e);
   }
 
-  function onSubmit(e) {
+  // Set from the moment Continue is pressed until the browser has gone (or has not): a second press does nothing.
+  var leaving = false;
+
+  async function onSubmit(e) {
+    var SAVE_WAIT_MS = 8000;                 // local, so that whatever lifts onSubmit by name takes it along
+    var GIVE_BACK_MS = 10000;
     if (e && e.preventDefault) e.preventDefault();
-    save();                                  // synchronously, not on the 600ms timer
-    // withDraft, not a bare path: on a test copy the id shared.js has stored may still be the
-    // REAL project's, and this button must carry the draft the page was actually editing.
-    window.location.assign(TW.withDraft("/polish-estimate.html"));
+    // A DISABLED BUTTON IS NOT ALL THAT STOPS A SECOND PRESS: Enter in a box and a script go round it. One press is one
+    // save and one wait, so the page is never left with two of them in flight.
+    if (leaving) return;
+    leaving = true;
+    // THE BUTTON SAYS WHAT IT IS DOING (F5 of the audit of X1). The wait below can be eight seconds on a slow server, and an
+    // estimator who sees nothing happen presses again. It is given back, with its own label, if the browser does not go.
+    var btn = $("continue-btn");
+    var label = btn ? btn.textContent : "";
+    var say = function (text, off) { if (btn) { btn.disabled = off; btn.textContent = text; } };
+    var givenBack = false;
+    var giveBack = function () { if (givenBack) return; givenBack = true; leaving = false; say(label, false); };
+    try {
+      say("Saving…", true);
+      save();                                  // synchronously, not on the 600ms timer
+      // WAIT FOR THE SAVE, ON THIS PAGE, BEFORE LEAVING (X1, staging 2026-10-21). save() only queues the draft's server
+      // save, and the assign() below used to follow it at once, so a project's first PUT went out through shared.js's
+      // pagehide handler (keepalive) and its reply reached no page. flushState sends the save now and resolves once it
+      // has been answered. What the wait buys is that the save is on the server before the browser leaves, answered to a
+      // page that is still there (a save sent as a page goes is a keepalive request: capped at about 64KiB, and its reply
+      // is seen by nobody). It is not what files a new project under Test: the project's own blob says it is a test
+      // (shared.js sayWhatItWasStartedAs), so the first save creates the row filed whichever way the page is left.
+      // BOUNDED: a server that never answers must not leave the button doing nothing, and past the bound this is what
+      // Continue always did. A save that FAILS answers false at once and is not waited out.
+      var timer = null;
+      try {
+        await Promise.race([
+          TW.flushState(),
+          new Promise(function (resolve) { timer = setTimeout(resolve, SAVE_WAIT_MS); })
+        ]);
+      } catch (err) { /* flushState reports a failed save as false; it does not throw */ }
+      if (timer) clearTimeout(timer);
+      say("Opening the estimate…", true);
+      // withDraft, not a bare path: on a test copy the id shared.js has stored may still be the
+      // REAL project's, and this button must carry the draft the page was actually editing.
+      window.location.assign(TW.withDraft("/polish-estimate.html"));
+    } catch (err) {
+      giveBack();                              // nothing was asked of the browser: the button works again at once
+      throw err;
+    }
+    // The browser may not go (the load was stopped, a prompt was answered no). Then this page is still here, and a
+    // button left saying "Opening the estimate..." would be a dead end.
+    setTimeout(giveBack, GIVE_BACK_MS);
   }
 
   /** Listeners go on only after the sandbox has settled. A toggle flipped before the page knows
@@ -753,10 +796,21 @@
     // does that synchronously; leaving through a step-nav tab, closing the tab, or switching tabs
     // did not -- and shared.js's own pagehide net (shared.js:513) only flushes a timer THIS page
     // armed, which before the listener above was never armed by typing at all.
+    //
+    // THE SAVE IT SENDS GOES AS A KEEPALIVE REQUEST (F5 of the audit of X1, round 2). It was a plain one, which a page that is going
+    // cannot finish: leaving by a link, Back, a reload or a closed tab within 600 ms of an edit saved nothing at all (no row, the
+    // typed text only in localStorage), under a comment that said keepalive. A keepalive request outlives the page, and the row it
+    // creates is born filed. A draft too big to go that way (shared.js keepaliveFits) is sent plain, as it always was.
+    //
+    // ONE SAVE GOES, AND IT IS THIS PAGE'S (X1, round 4, F4). shared.js's own pagehide handler runs first and used to send the shared blob as it
+    // stood, then this one saved and sent the newest: two keepalive PUTs of one draft, which a server can finish out of order and a browser counts
+    // against one 64 KiB budget. The page says, through TW.pageSavesOnLeave, that while its own timer is pending this handler saves and sends, so
+    // shared.js stands down; and because it stands down on that word, the flush happens even if the save throws.
+    TW.pageSavesOnLeave(function () { return !!saveTimer; });
     window.addEventListener("pagehide", function () {
       if (!saveTimer) return;
-      save();            // clears the 600ms timer, runs TW.setState synchronously
-      TW.flushState();   // fires the keepalive PUT now instead of waiting on the 2.5s debounce
+      // save() clears the 600ms timer and runs TW.setState synchronously; flushState sends the save now instead of waiting on the 2.5s debounce
+      try { save(); } finally { TW.flushState({ keepalive: true }); }
     });
   }
 
