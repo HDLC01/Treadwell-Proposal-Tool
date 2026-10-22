@@ -22,7 +22,8 @@ county and city and state it should have calculated it already"). The street geo
 street, so without one the job is placed at the US Census Gazetteer's internal point of, in this
 order, its ZIP (the tightest), its CITY + state, or its COUNTY (+ state): public-domain tables,
 trimmed and bundled in backend/geodata/ (rebuilt by backend/tools/build_gazetteer.py), so no extra
-network call. A street the geocoder answers "no match" for falls back the same way and says so
+network call. A zip whose centre lies far from the typed city (or county) is a typo and is set
+aside for that one. A street the geocoder answers "no match" for falls back the same way and says so
 (`street_not_found`). The point is then ROUTED through the same OSRM call from the office, so the
 figure is still driving miles. Every answer says how precise it is (`precision`: street | zip |
 city | county) and what it was measured to (`measured_to`), and the page words an approximate
@@ -42,6 +43,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import math
 import os
 import re
 import threading
@@ -249,21 +251,38 @@ def _county(text: Any, state: Any) -> Optional[Dict[str, Any]]:
     return _place(name, st) or one("~" + n)
 
 
+# A ZIP THAT LIES THIS FAR (straight line) FROM THE TYPED CITY'S, OR COUNTY'S, CENTRE IS A TYPO, NOT THE JOB (the 2026-10-22 audit's
+# finding 3: "Wichita", "KS", zip 10001 measured to New York). The zip table has no state column, so where its centre lies is the
+# check. Generous on purpose: a real zip of a big city, or of a big western county, stays well inside these.
+_ZIP_AGREES_MILES = {"city": 40.0, "county": 150.0}
+
+
+def _straight_miles(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """Great-circle miles between two `{lon, lat}` points. Used ONLY to check a zip against the typed
+    city or county; never as a distance answer (that is always OSRM's driving figure)."""
+    lon1, lat1, lon2, lat2 = map(math.radians, (a["lon"], a["lat"], b["lon"], b["lat"]))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 3958.8 * math.asin(min(1.0, math.sqrt(h)))
+
+
 def approx_point(city: Any = "", state: Any = "", zip_code: Any = "", county: Any = "") -> Optional[Dict[str, Any]]:
     """`{precision, label, lon, lat}` for a job with no usable street, or None: the ZIP's centre
-    (tightest), else the CITY's (within the typed state), else the COUNTY's."""
+    (tightest), else the CITY's (within the typed state), else the COUNTY's. A zip whose centre is
+    far from the typed city's (or, with no city found, the county's) is set aside for that one."""
+    zip_pt = None
     digits = re.sub(r"\D", "", str(zip_code or ""))
     if len(digits) >= 5:
         hit = _gazetteer()["zcta"].get(digits[:5])
         if hit:
-            return {"precision": "zip", "label": "zip " + digits[:5], "lon": hit[0], "lat": hit[1]}
+            zip_pt = {"precision": "zip", "label": "zip " + digits[:5], "lon": hit[0], "lat": hit[1]}
     st = _state_code(state)
-    found = _place(city, st) if st else None
-    if found:
-        return found
-    if str(county or "").strip():
-        return _county(county, state)
-    return None
+    named = _place(city, st) if st else None
+    if named is None and str(county or "").strip():
+        named = _county(county, state)
+    if zip_pt is not None and (named is None or
+                               _straight_miles(zip_pt, named) <= _ZIP_AGREES_MILES[named["precision"]]):
+        return zip_pt
+    return named
 
 
 def can_place(address: Any = "", city: Any = "", state: Any = "", zip_code: Any = "", county: Any = "") -> bool:
