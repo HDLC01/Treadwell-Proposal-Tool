@@ -200,8 +200,12 @@ def _state_code(v: Any) -> str:
 def _split_state(text: Any) -> tuple:
     """("Sedgwick County", "KS") from "Sedgwick County, KS"; (text, "") when it carries no state."""
     s = re.sub(r"\s+", " ", str(text or "")).strip()
-    m = re.match(r"^(.*?)\s*,\s*([A-Za-z]{2})\s*$", s)
-    return (m.group(1), m.group(2).upper()) if m else (s, "")
+    # rpartition, not a regex: the box is free text from the request, and a backtracking pattern over it is a ReDoS.
+    head, comma, tail = s.rpartition(",")
+    tail = tail.strip()
+    if comma and len(tail) == 2 and tail.isascii() and tail.isalpha():
+        return head.strip(), tail.upper()
+    return s, ""
 
 
 def _place(city: Any, st: str) -> Optional[Dict[str, Any]]:
