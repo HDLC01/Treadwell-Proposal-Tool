@@ -8,6 +8,7 @@
  *   newCity       a NEW bid with a city, a state and a county and no street asks on open, sends the county, and the answer (the city's centre) is kept
  *                 with its precision and worded as approximate.
  *   savedNone     a SAVED bid that never had a distance (nothing measured, nothing typed) asks on open too.
+ *   savedFar      a SAVED bid with no distance whose conditions already say FAR is not measured on open (a stated answer; the button still does).
  *   savedTyped    a saved bid whose miles were TYPED is never measured again without the button.
  *   approxMoved   a saved APPROXIMATE figure (zip / city / county centre) whose address gained a street since is measured again on open; approxSame,
  *                 the same figure with the address unchanged, is not.
@@ -129,7 +130,20 @@ async function section(fn) {
     const f = facts(b);
     b.clock.fire();
     f.saved = clone(b.store.blob.polish_estimate.distance || null);
+    // The open REPRICES this bid and saves it (Hanz's decision): what is saved is the far job, not the local one it was opened as.
+    f.savedLocal = !!(b.store.blob.polish_estimate.conditions || {}).local;
+    f.savedLodging = !!((b.store.blob.polish_estimate.travel || {}).lodging || {}).enabled;
     return f;
+  });
+
+  // A saved bid with no distance that ALREADY SAYS FAR (conditions.local === false: the old intake switch, the Polish!B4 cell or autofill's
+  // B4 flag) is a stated answer, and is not measured on open: a near centre figure would otherwise turn its Lodging and Per Diem off and
+  // save a new price with no click (the 2026-10-22 audit's finding 1). The button still measures it.
+  out.savedFar = await section(async () => {
+    const far = Object.assign(clone(P.MODEL.conditions), { local: false });
+    const b = await open(savedBid(CITY, null, { conditions: far }),
+      Object.assign({}, CITY_ANSWER, { miles: 20.4 }));
+    return facts(b);
   });
 
   out.savedTyped = await section(async () => facts(await open(savedBid(CITY, { miles: 40, source: "typed", key: "" }), CITY_ANSWER)));

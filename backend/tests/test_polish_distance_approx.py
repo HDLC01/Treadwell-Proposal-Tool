@@ -6,7 +6,8 @@ and city and state it should have calculated it already".
 
 HIS DECISIONS, as the page now keeps them (tests/js/distance-approx-harness.js runs the real page over the real js/bid-model.js):
   * A city + state, a zip, or a county is enough to ask (B.distanceKey, the same rule as distance.can_place: test_distance_key_parity.py).
-  * The page asks on open for a NEW bid (as before) AND for a saved bid that has no distance at all (never measured, never typed).
+  * The page asks on open for a NEW bid (as before) AND for a saved bid that has no distance at all (never measured, never typed), unless that
+    saved bid already says FAR (conditions.local false): a stated answer is left for the button (the 2026-10-22 audit's finding 1).
   * A figure measured to a centre (zip / city / county) is approximate: kept with its precision, worded "About 190 miles to Wichita, KS (city
     center)", and measured again on open once the address has changed (a street added). A TYPED figure is never replaced without the button; a
     STREET figure keeps today's "the address changed since this was measured" and the button.
@@ -25,7 +26,7 @@ from _node import last_json_line, require_node, run_node
 
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "distance-approx-harness.js"
-SECTIONS = ("newCity", "savedNone", "savedTyped", "approxMoved", "approxSame", "streetMoved", "legacyMoved", "legacySame", "unknown", "nearTyped",
+SECTIONS = ("newCity", "savedNone", "savedFar", "savedTyped", "approxMoved", "approxSame", "streetMoved", "legacyMoved", "legacySame", "unknown", "nearTyped",
             "reload", "blank", "streetMissed", "countyOnly", "cityOnly")
 PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js", "js/bid-engine.js", "js/bid-profiles.js",
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
@@ -73,6 +74,16 @@ def test_a_saved_bid_that_never_had_a_distance_asks_on_open(ran):
     assert f["asked"] == 1 and f["distance"]["miles"] == 190.1 and f["distance"]["precision"] == "city"
     assert f["lodging"] is True and f["local"] is False and f["hours"] == 6.5
     assert f["saved"]["miles"] == 190.1, "the figure the open measured is saved"
+    # The open reprices the bid and saves it as the far job (Hanz's decision, the audit's finding 1 pins it).
+    assert f["savedLocal"] is False and f["savedLodging"] is True
+
+
+def test_a_saved_bid_that_already_says_far_is_not_measured_on_open(ran):
+    """The audit's finding 1: a saved bid with no distance whose conditions say FAR (the old switch, Polish!B4, autofill's B4 flag) was
+    measured on open, and a near centre figure turned its Lodging off and saved a new price with no click. It is a stated answer now."""
+    f = ran["savedFar"]
+    assert f["asked"] == 0 and f["distance"] is None
+    assert f["local"] is False, "the far answer the bid was saved with stands"
 
 
 def test_a_typed_figure_is_never_measured_again_without_the_button(ran):
@@ -163,7 +174,8 @@ KEY_GUARD = "    if (!(z || (c && s) || (k && (s || countyState)))) return \"\";
 STREET_KEY = "    if (a && ((c && s) || z)) return [a, c, s, z].join(\"|\");"
 WANTS_APPROX = "    if (!isApproxDistance(dist)) return false;"
 WANTS_NONE = "    if (!dist) return true;"
-INIT_GATE = "    if ((!newBid || laborDefaults) && B.distanceWantsLookup(ROOT.distance, addressKey())) lookupDistance(false);"
+INIT_GATE = "    if ((!newBid || laborDefaults) && B.openWantsDistance(ROOT, addressKey(), newBid)) lookupDistance(false);"
+FAR_GUARD = "    if (!dist && !isNew && isObject(model) && isObject(model.conditions) && model.conditions.local === false) return false;"
 SEND_COUNTY = "                               zip: s.zip || \"\", county: s.county || \"\" }),"
 KEEP_PRECISION = "    if (APPROX_PRECISIONS.indexOf(d.precision) >= 0 || d.precision === \"street\") out.precision = d.precision;"
 APPLY_PRECISION = "    if (precision) model.distance.precision = precision;"
@@ -190,6 +202,9 @@ BREAKS = {
     "the open asks only for a new bid": (
         "js/polish-estimate.js", INIT_GATE, "    if (newBid && laborDefaults && !ROOT.distance) lookupDistance(false);",
         lambda g: g["savedNone"]["asked"] != 1 or g["approxMoved"]["asked"] != 1),
+    "a saved bid that says far is measured on open": (
+        "js/bid-model.js", FAR_GUARD, "    void isNew;",
+        lambda g: g["savedFar"]["asked"] != 0 or g["savedFar"]["local"] is not False),
     "the county is not sent": (
         "js/polish-estimate.js", SEND_COUNTY, "                               zip: s.zip || \"\" }),",
         lambda g: "county" not in g["newCity"]["bodies"][0]),
