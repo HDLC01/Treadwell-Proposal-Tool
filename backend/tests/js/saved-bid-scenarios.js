@@ -261,9 +261,15 @@ const LIBRARY_ON = {
 /** WHAT THE LOOKUP SAYS WHEN A SAVED BID ASKS. Since 2026-10-22 (Hanz) a saved bid with NO distance on file, never measured and never typed,
  *  asks on open as a new bid does, and an answer then moves it as it would move a new bid (tests/test_polish_distance_approx.py holds that).
  *  These fixtures pin something else, that OPENING an old shape moves nothing by itself, so a bid with no distance is answered "the service
- *  did not answer" (it asks, and nothing moves), and a bid WITH a distance keeps the far figure as the lure it must never ask for. */
+ *  did not answer" (it asks, and nothing moves), and a bid WITH a distance keeps the far figure as the lure it must never ask for.
+ *  A saved bid with no distance that ALREADY SAYS FAR (conditions.local false, as the old intake saved v2_far_job_no_distance) is a stated
+ *  answer and does not ask either (B.openWantsDistance, the 2026-10-22 audit's finding 1), so the far figure is its lure too. */
 const UNANSWERED = { ok: false, miles: null, reason: "error" };
-const owedLookups = (f) => (f.polish_estimate && f.polish_estimate.distance ? 0 : 1);
+const owedLookups = (f) => {
+  const m = f.polish_estimate || {};
+  if (m.distance) return 0;
+  return (m.conditions && m.conditions.local === false) ? 0 : 1;
+};
 const answerFor = (f) => (owedLookups(f) ? { distance: UNANSWERED } : {});
 
 async function runOne(f, lib) {
