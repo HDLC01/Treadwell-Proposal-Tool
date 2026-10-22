@@ -2887,8 +2887,9 @@
         // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
         // whether it shows, so the card's class is the one source of truth for both the dimming
         // and the caption, and the two cannot drift apart on a live repaint.
-        '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
-          'anyway if it needs drive time.</p>' +
+        // UNKNOWN IS NOT LOCAL (Hanz, 2026-10-22): with no distance on file the card says the distance is unknown and where to
+        // give it; only a job MEASURED under 70 miles is called local (B.travelInertWords). paintDistance repaints it in place.
+        '<p class="inertline" data-inertline>' + esc(B.travelInertWords(ROOT, carrierName())) + '</p>' +
           // A TRAVEL LABOR ROW ON A SECTION THAT IS OFF is a leftover of a restructure: the job's drives are charged on its bases, so this
           // card says so (typed figures were left as typed) instead of promising a fill it will not get. (Until round 7 a Combo's second
           // base drew this too; it drives its own crew now, Hanz's D1 of 2026-10-21.)
@@ -2972,8 +2973,15 @@
   // box to type the number in. Nothing is guessed. A typed figure always wins, and a Lodging /
   // Per Diem line the estimator flipped by hand is never moved by an answer (B.applyDistance).
   //
-  // ONLY A NEW BID LOOKS IT UP BY ITSELF. A saved bid opened later does not reprice behind
-  // anybody's back: it shows what it was saved with and offers the button.
+  // WHO LOOKS IT UP BY ITSELF, ON OPEN (B.distanceWantsLookup). A new bid; a saved bid that has NO distance at all, never
+  // measured and never typed (Hanz, 2026-10-22: a Wichita bid with no street sat at "local" for good), unless it already says
+  // FAR, a stated answer left for the button (B.openWantsDistance, the audit's finding 1); and a figure measured
+  // to a CENTRE (no street: the zip's, the city's or the county's) whose address has changed since, so a street added on the
+  // intake replaces the approximate figure with the exact one. A TYPED figure is never replaced without the button, and a
+  // STREET figure whose address changed shows what it was saved with, says so, and offers the button.
+  //
+  // NO STREET IS ENOUGH (2026-10-22): a city + state, a zip or the county places the job (B.distanceKey). The server measures
+  // it to that one's centre, by road, and says so (`precision`); the note words it as approximate.
   //
   // A FAR ANSWER ALSO FILLS TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20): its hours from the miles (one round trip), its
   // guys the crew's size, so each guy is charged one trip as on his own sheets. A figure the estimator typed in a box, or
@@ -2983,7 +2991,7 @@
   var distBusy = false;
   var distReason = "";
   var DIST_REASONS = {
-    incomplete: "Add the street, city and state on the intake step, or type the miles.",
+    incomplete: "Add the job's city and state, a zip or the county on the intake step, or type the miles.",
     no_key: "The distance service is not set up yet. Type the miles.",
     not_found: "That address could not be found. Check it on the intake step, or type the miles.",
     busy: "Too many lookups just now. Type the miles, or try again in a few minutes.",
@@ -2992,7 +3000,7 @@
 
   function addressKey() {
     var s = TW.getState() || {};
-    return B.distanceKey(s.address, s.city, s.state, s.zip);
+    return B.distanceKey(s.address, s.city, s.state, s.zip, s.county);
   }
 
   function distanceStatus() {
@@ -3001,6 +3009,11 @@
     if (d && d.source === "google" && addressKey() && d.key !== addressKey()) {
       return "The address changed since this was measured. Look it up again, or type the miles.";
     }
+    // MEASURED TO A CENTRE (2026-10-22): approximate, and the way to the exact figure is the street.
+    if (d && B.isApproxDistance(d)) return d.street_not_found
+      ? "The street was not found, so this is to the " + ({ zip: "zip code", city: "city", county: "county" })[d.precision] +
+        " center. Check the street on the intake step for the exact figure."
+      : "Add the street on the intake step for the exact figure.";
     if (!d && distReason) return DIST_REASONS[distReason] || DIST_REASONS.error;
     if (!d) return "Type the miles from the office, or look it up from the job address.";
     return "";
@@ -3027,6 +3040,10 @@
     if (how) how.textContent = B.travelHow(M, ROOT).text;
     var st = document.querySelector("[data-dist-status]");
     if (st) st.textContent = distanceStatus();
+    // A dimmed Travel Labor card's words follow the distance: unknown, or measured local (B.travelInertWords).
+    document.querySelectorAll("[data-inertline]").forEach(function (el) {
+      el.textContent = B.travelInertWords(ROOT, carrierName());
+    });
     var box = document.querySelector("[data-dist-miles]");
     if (box && document.activeElement !== box) {
       var v = M.distance && M.distance.miles != null ? String(M.distance.miles) : "";
@@ -3045,24 +3062,25 @@
    *  already measured for this exact address, is left alone. Never throws. */
   async function lookupDistance(force) {
     var s = TW.getState() || {};
-    var key = B.distanceKey(s.address, s.city, s.state, s.zip);
+    var key = B.distanceKey(s.address, s.city, s.state, s.zip, s.county);
     if (!key) { distReason = "incomplete"; paintDistance(); return; }
     if (!force && M.distance && (M.distance.source === "typed" || M.distance.key === key)) return;
     distBusy = true; distReason = "";
     paintDistance();
-    var miles = null, reason = "error";
+    var miles = null, reason = "error", answer = null;
     try {
       var res = await api("/api/distance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ address: s.address || "", city: s.city || "", state: s.state || "",
-                               zip: s.zip || "" }),
+                               zip: s.zip || "", county: s.county || "" }),
         signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
           ? AbortSignal.timeout(14000) : undefined
       });
       var j = await res.json();
       miles = B.milesOrNull(j && j.miles);
       reason = (j && j.reason) || "error";
+      answer = j;
     } catch (e) { miles = null; }
     distBusy = false;
     // The estimator can have typed miles while the answer was on its way. Theirs wins; this answer is dropped. NOTHING ELSE DROPS IT
@@ -3072,7 +3090,9 @@
     // under the page after init (the sandbox settles which draft this is before the lookup starts), so the model as it is NOW is the one.
     if (!force && ROOT.distance && ROOT.distance.source === "typed") { paintDistance(); return; }
     if (miles === null) { distReason = reason; paintDistance(); return; }
-    B.applyDistance(ROOT, { miles: miles, source: "google", key: key });
+    // What it was measured to rides along (B.normalizeDistance keeps only the shapes it knows): "street", or a centre.
+    B.applyDistance(ROOT, { miles: miles, source: "google", key: key, precision: answer && answer.precision,
+                            measured_to: answer && answer.measured_to, street_not_found: answer && answer.street_not_found });
     changed(false);
     paintDistance();
   }
@@ -5508,9 +5528,11 @@
     renderPanel();
 
     // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
-    // nothing. Only a NEW bid asks by itself (the same gate as the defaults above); a saved bid
-    // keeps what it was saved with and offers the button. See lookupDistance.
-    if (newBid && laborDefaults && !M.distance) lookupDistance(false);
+    // nothing. A new bid asks once its labor defaults are in (the same gate as the defaults above);
+    // a saved bid asks when it has no distance at all, or a centre figure whose address has changed
+    // (B.distanceWantsLookup, Hanz 2026-10-22). A typed figure, and a street figure, stay as saved, and so does a saved bid with
+    // no distance whose conditions already say far: a stated answer, left for the button (B.openWantsDistance).
+    if ((!newBid || laborDefaults) && B.openWantsDistance(ROOT, addressKey(), newBid)) lookupDistance(false);
   }
 
   init();

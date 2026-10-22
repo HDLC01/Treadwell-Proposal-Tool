@@ -720,8 +720,8 @@ BREAKS = {
         lambda g: any(page.get("showedEpoxy") is not True for jobs in g["corruptLabor"].values() for page in jobs.values())),
     # --- the page ---
     "the lookup's answer is handed the section on show": (
-        "js/polish-estimate.js", 'B.applyDistance(ROOT, { miles: miles, source: "google", key: key });',
-        'B.applyDistance(M, { miles: miles, source: "google", key: key });',
+        "js/polish-estimate.js", 'B.applyDistance(ROOT, { miles: miles, source: "google", key: key, precision: answer && answer.precision,',
+        'B.applyDistance(M, { miles: miles, source: "google", key: key, precision: answer && answer.precision,',
         lambda g: g["wholeModel"]["lookup"]["row"]["days"] != 10),
     "the typed miles are handed the section on show": (
         "js/polish-estimate.js", 'B.applyDistance(ROOT, { miles: typedMiles, source: "typed", key: addressKey() });',
