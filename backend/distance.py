@@ -144,12 +144,14 @@ _COUNTY_WORDS = re.compile(r" (county|parish|borough|census area|municipio|munic
 
 def _norm(v: Any) -> str:
     """A name as it is compared: accents, case, dots, apostrophes and spacing taken out, and
-    "St."/"Ste." spelled out. Nothing else: this is matching, not guessing."""
+    "St."/"Ste."/"Mt."/"Ft." spelled out. Nothing else: this is matching, not guessing."""
     s = unicodedata.normalize("NFKD", str(v or ""))
     s = "".join(ch for ch in s if not unicodedata.combining(ch)).lower().replace("’", "'")
     s = re.sub(r"\s+", " ", s).strip()
     s = re.sub(r"\bste\b\.?\s*", "sainte ", s)
     s = re.sub(r"\bst\b\.?\s*", "saint ", s)
+    s = re.sub(r"\bmt\b\.?\s*", "mount ", s)       # "Mt. Pleasant" (the audit's finding 4)
+    s = re.sub(r"\bft\b\.?\s*", "fort ", s)        # "Ft. Worth"
     s = re.sub(r"[.']", "", s)
     return re.sub(r"\s+", " ", s).strip()
 

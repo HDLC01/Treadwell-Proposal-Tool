@@ -148,6 +148,14 @@ def test_st_and_saint_are_the_same_word(city):
     assert _pt(city=city, state="MO") == ("city", "St. Joseph, MO", -94.8211, 39.7595)
 
 
+@pytest.mark.parametrize("city,state,label", [("Mt. Pleasant", "SC", "Mount Pleasant, SC"), ("Mt Pleasant", "SC", "Mount Pleasant, SC"),
+                                              ("Ft. Worth", "TX", "Fort Worth, TX"), ("Ft Scott", "KS", "Fort Scott, KS"),
+                                              ("Mount Bullion", "CA", "Mt. Bullion, CA")])
+def test_mt_and_ft_are_mount_and_fort(city, state, label):
+    """The audit's finding 4: "Mt. Pleasant" and "Ft. Worth" found nothing. Spelled out on both sides, as St. is."""
+    assert _pt(city=city, state=state)[:2] == ("city", label)
+
+
 def test_sainte_and_an_apostrophe():
     assert _pt(city="Sainte Genevieve", state="MO")[:2] == ("city", "Ste. Genevieve, MO")
     assert _pt(city="Ste Genevieve", state="MO")[:2] == ("city", "Ste. Genevieve, MO")
