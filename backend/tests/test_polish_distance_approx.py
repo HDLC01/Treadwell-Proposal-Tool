@@ -239,3 +239,23 @@ def test_the_scenarios_go_red_when_the_page_or_the_model_changes(tmp_path, name)
     crashed = sorted(k for k in SECTIONS if "error" in got.get(k, {}))
     assert not crashed, "the break crashed %s instead of changing a fact: %s (%s)" % (", ".join(crashed), name, "; ".join(got[k]["error"][:200] for k in crashed))
     assert noticed(got), "the scenarios did not notice: " + name
+
+
+TYPED_SKIP = "    if (!force && M.distance && (M.distance.source === \"typed\" || M.distance.key === key)) return;"
+
+
+def test_a_typed_figure_is_measured_again_when_both_of_its_guards_go(tmp_path):
+    """A typed figure is kept by TWO independent guards (B.distanceWantsLookup, and lookupDistance's own skip), so breaking either
+    one alone changes nothing a scenario can see. Broken together, the open asks for it: the fact savedTyped pins is a real one
+    (the 2026-10-22 audit's finding 5)."""
+    require_node()
+    break_source(tmp_path, "js/polish-estimate.js", TYPED_SKIP,
+                 "    if (!force && M.distance && M.distance.key === key) return;")
+    frontend = break_source(tmp_path, "js/bid-model.js", WANTS_APPROX, "    if (false) return false;")
+    assert TYPED_SKIP not in (frontend / "js" / "polish-estimate.js").read_text(encoding="utf-8"), "the first break was undone"
+    copy_unmodified(frontend, PAGE_FILES)
+    proc = run_node(HARNESS, frontend)
+    assert proc.returncode == 0, proc.stderr[-600:]
+    got = last_json_line(proc.stdout)
+    assert "error" not in got["savedTyped"], got["savedTyped"]["error"][:400]
+    assert got["savedTyped"]["asked"] != 0, "the scenarios did not notice both typed-figure guards gone"
