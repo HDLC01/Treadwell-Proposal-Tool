@@ -3807,12 +3807,131 @@
       : d.rateLimited ? "The standard wording: the AI has written a lot of drafts in the last few minutes."
       : d.fallback ? "The standard wording: the AI draft was not usable this time."
       : "The standard wording.";
+    // THE BUTTON, DRAWN. {link} in the message is where the portal puts the button to the
+    // customer's proposal page, and as a bare word in a textarea nothing showed that deleting it
+    // also deleted the button. So the button the customer gets is drawn here with its label, and
+    // the line under it reports on {link} as the estimator types (paintFuLink): fine, inline (a
+    // plain link, not the button), missing (with a one-press fix), or in more than once.
+    const st = fuLinkState(d.body);
+    const note = fuLinkNote(st, d);
+    const hide = (on) => (on ? "" : " hidden");
     return `
       <label class="lbl" for="fu-title">Subject</label>
       <input id="fu-title" class="tw-input fu-title" type="text" maxlength="200" value="${esc(d.title)}">
       <label class="lbl" for="fu-body">Message</label>
       <textarea id="fu-body" class="fu-body" rows="8">${esc(d.body)}</textarea>
-      <p class="note">${esc(src)} {link} becomes the button that opens their proposal, so keep it in, once.</p>`;
+      <p class="note">${esc(src)}</p>
+      <div class="fu-cta" id="fu-cta-box">
+        <div class="lbl">The button in the email</div>
+        <div class="fu-cta-row">
+          <span class="btn btn-p fu-cta-btn" id="fu-cta-preview" aria-hidden="true">${esc(fuCta(d))}</span>
+          <p class="note fu-link-ok" id="fu-link-ok"${hide(st === "ok" || st === "inline")}>${esc(note.ok)}</p>
+        </div>
+        <div class="fu-link-gone" id="fu-link-gone" role="status"${hide(st === "gone")}>
+          <p id="fu-link-gone-text">${esc(note.gone)}</p>
+          <button type="button" class="btn btn-s" id="fu-link-fix">${esc(note.fix)}</button>
+        </div>
+        <p class="note fu-link-many" id="fu-link-many" role="status"${hide(st === "many")}>${esc(note.many)}</p>
+        <label class="lbl" for="fu-cta">Button label</label>
+        <input id="fu-cta" class="tw-input fu-cta-in" type="text" maxlength="60"
+               placeholder="${esc(fuCta(null))}" value="${esc(d.cta || "")}">
+      </div>`;
+  }
+
+  /** The label on the customer's button: what the estimator typed, or the portal's own default for
+   *  an empty box. ALWAYS what is posted on Send, so the drawn button and the sent one agree; 60 is
+   *  the portal's own cap (followup_settings.validate_template). */
+  function fuCta(d) {
+    const s = String((d && d.cta) || "").trim();
+    return s ? s.slice(0, 60) : "View your proposal";
+  }
+
+  /** Where {link} stands in a message: "ok" once on a line of its own (the portal draws the button),
+   *  "inline" once inside a sentence (the portal turns it into a plain underlined link, not the
+   *  button: email_sender._block_html), "gone", or "many". A paragraph is what the portal splits
+   *  on, a blank line, so "a line of its own" means a paragraph that is {link} and nothing else. */
+  function fuLinkState(body) {
+    const s = String(body || "");
+    const n = s.split("{link}").length - 1;
+    if (n === 0) return "gone";
+    if (n > 1) return "many";
+    return s.split(/\n\s*\n/).some((p) => p.trim() === "{link}") ? "ok" : "inline";
+  }
+
+  /** The line {link} is on, counted in "\n"s, or null when it is not there. Remembered while the
+   *  token is present so the fix can put it back where it was rather than at the bottom. */
+  function fuLinkLine(body) {
+    const s = String(body || "");
+    const at = s.indexOf("{link}");
+    return at < 0 ? null : s.slice(0, at).split("\n").length - 1;
+  }
+
+  /** The words around the drawn button, for each state. A page started from blank never had a
+   *  link to lose, so it is not told one was removed. */
+  function fuLinkNote(st, d) {
+    const had = !!d && Number.isInteger(d.linkLine);
+    return {
+      ok: st === "inline"
+        ? "{link} is inside a sentence, so it arrives as a plain link, not this button. Put it on a line of its own for the button."
+        : "This goes where {link} is in the message, and opens their proposal.",
+      gone: had ? "Your portal link was removed, so this email has no button to their proposal."
+        : "This email has no portal link yet, so there is no button to their proposal.",
+      fix: had ? "Add the portal link back" : "Add the portal link",
+      many: "{link} is in the message more than once. The email has one button, so keep one and delete the rest.",
+    };
+  }
+
+  /** `body` with {link} put back as a paragraph of its own, nothing else removed. At line `at` (where
+   *  it last was) if that is known: onto the blank line deleting it left behind, or in front of the
+   *  line that now sits there. Otherwise after everything written. Blank lines are added around it
+   *  only where missing, because the portal draws the button only for a paragraph that is {link}
+   *  alone. */
+  function fuPutLinkBack(body, at) {
+    const lines = String(body || "").split("\n");
+    if (!lines.some((l) => l.trim())) return "{link}";
+    let i = Number.isInteger(at) && at >= 0 && at < lines.length ? at : lines.length;
+    if (i < lines.length && !lines[i].trim()) lines[i] = "{link}";
+    else lines.splice(i, 0, "{link}");
+    if (i > 0 && lines[i - 1].trim()) { lines.splice(i, 0, ""); i += 1; }
+    if (i + 1 < lines.length && lines[i + 1].trim()) lines.splice(i + 1, 0, "");
+    return lines.join("\n");
+  }
+
+  /** Bring the line under the drawn button up to date with the message as it stands. Per keystroke
+   *  and without a repaint, so the caret stays in the message. Every word set here is one of
+   *  fuLinkNote's fixed sentences, through textContent. */
+  function paintFuLink(tid) {
+    const d = FU_DRAFT.get(tid);
+    if (!d || d.state !== "ready") return;
+    const st = fuLinkState(d.body);
+    const note = fuLinkNote(st, d);
+    const ok = $("fu-link-ok"), gone = $("fu-link-gone"), many = $("fu-link-many");
+    const goneText = $("fu-link-gone-text"), fix = $("fu-link-fix");
+    if (ok) { ok.hidden = !(st === "ok" || st === "inline"); ok.textContent = note.ok; }
+    if (gone) gone.hidden = st !== "gone";
+    if (goneText) goneText.textContent = note.gone;
+    if (fix) fix.textContent = note.fix;
+    if (many) many.hidden = st !== "many";
+  }
+
+  /** "Add the portal link back": {link} into the message as its own paragraph, the box updated in
+   *  place, and the caret left on it so the estimator can see where it went. */
+  function fuLinkBack(tid) {
+    const d = FU_DRAFT.get(tid);
+    if (!d || d.state !== "ready") return;
+    if (fuLinkState(d.body) === "gone") {
+      d.body = fuPutLinkBack(d.body, d.linkLine);
+      d.linkLine = fuLinkLine(d.body);
+    }
+    const bo = $("fu-body");
+    if (bo) {
+      bo.value = d.body;
+      bo.focus();
+      const at = d.body.indexOf("{link}");
+      if (at >= 0 && typeof bo.setSelectionRange === "function") bo.setSelectionRange(at, at + 6);
+    }
+    paintFuLink(tid);
+    fuSay("");
   }
 
   /** The follow-up the portal is waiting on somebody here for, or nothing. `status` is pending or
@@ -3883,7 +4002,24 @@
     if (d.state === "ready") {
       const ti = $("fu-title"), bo = $("fu-body");
       if (ti) ti.addEventListener("input", () => { const x = FU_DRAFT.get(tid); if (x) x.title = ti.value; });
-      if (bo) bo.addEventListener("input", () => { const x = FU_DRAFT.get(tid); if (x) x.body = bo.value; });
+      if (bo) bo.addEventListener("input", () => {
+        const x = FU_DRAFT.get(tid);
+        if (!x) return;
+        x.body = bo.value;
+        const at = fuLinkLine(x.body);
+        if (at != null) x.linkLine = at;      // kept through a deletion: it is where the fix goes
+        paintFuLink(tid);
+      });
+      const ci = $("fu-cta");
+      if (ci) ci.addEventListener("input", () => {
+        const x = FU_DRAFT.get(tid);
+        if (!x) return;
+        x.cta = ci.value;
+        const pv = $("fu-cta-preview");
+        if (pv) pv.textContent = fuCta(x);
+      });
+      const fix = $("fu-link-fix");
+      if (fix) fix.addEventListener("click", () => fuLinkBack(tid));
     } else if (d.state === "failed") {
       const again = $("fu-draft-retry"), blank = $("fu-draft-blank");
       if (again) again.addEventListener("click", () => { FU_DRAFT.delete(tid); loadFuDraft(pid); });
@@ -3930,9 +4066,11 @@
       const d = j && j.draft;
       if (!r.ok || j.ok === false) throw new Error(fuErrText(j, r.status, "draft"));
       if (!d || typeof d !== "object") throw new Error("the server sent no draft");
-      next = { state: "ready", title: String(d.title || ""), body: String(d.body || ""),
+      const body = String(d.body || "");
+      next = { state: "ready", title: String(d.title || ""), body,
                cta: d.cta ? String(d.cta) : "", source: String(d.source || ""),
-               fallback: !!j.fallback, rateLimited: !!j.rate_limited };
+               fallback: !!j.fallback, rateLimited: !!j.rate_limited,
+               linkLine: fuLinkLine(body) };
     } catch (err) {
       next = { state: "failed", msg: (err && err.message) || "" };
     }
@@ -4157,14 +4295,20 @@
         const title = String(d.title || "").trim(), body = String(d.body || "").trim();
         if (!title || !body) { fuSay("Write a subject and a message first.", true); return; }
         // The portal refuses anything else (invalid_draft); said here first so a cleared-and-
-        // rewritten email does not cost a round trip to find out.
-        if (body.split("{link}").length !== 2) {
-          fuSay("Keep {link} in the message exactly once: it becomes the button to their proposal.", true);
+        // rewritten email does not cost a round trip to find out. The notice under the drawn
+        // button is repainted too, so the refusal points at a fix that is on screen.
+        const st = fuLinkState(body);
+        if (st === "gone" || st === "many") {
+          paintFuLink(tid);
+          fuSay(st === "gone"
+            ? "Nothing was sent: the message has no {link}, so the customer would get no button to their proposal. Press “"
+              + fuLinkNote(st, d).fix + "” above."
+            : "Keep {link} in the message exactly once: it becomes the button to their proposal.", true);
           return;
         }
-        const payload = { title, body };
-        if (d.cta) payload.cta = d.cta;
-        fuTaskAct(pid, tid, "send", payload, e.target);
+        // The label is always sent, the default included, so the button drawn above is the one
+        // the customer gets rather than whatever the portal's template default happens to be.
+        fuTaskAct(pid, tid, "send", { title, body, cta: fuCta(d) }, e.target);
       });
       const skipBtn = $("fu-skip");
       if (skipBtn) skipBtn.addEventListener("click", (e) => fuTaskAct(pid, tid, "skip", {}, e.target));

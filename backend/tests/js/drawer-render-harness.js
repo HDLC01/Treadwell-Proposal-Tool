@@ -230,6 +230,13 @@ const FN_NAMES = [
   "fuNoticeHtml", "followupScheduleHtml", "followupTaskHtml", "followupComposeHtml", "fuYmd",
   "fuAddDays", "wireFuCompose", "paintFuCompose", "loadFuDraft", "fuErrText", "fuGoneText",
   "fuDoneText", "fuSay", "fuSettle", "fuTaskAct", "saveFuPlan",
+  // THE BUTTON IN THE EMAIL (2026-10-23): the drawn button and the "your portal link was removed"
+  // notice. TENTH addition for the same reason: followupComposeHtml reads fuCta, fuLinkState and
+  // fuLinkNote on every ready paint; wireFuCompose binds paintFuLink (on every keystroke in the
+  // message) and fuLinkBack (the fix, which calls fuPutLinkBack); wireFollowup's Send calls
+  // fuLinkState, paintFuLink and fuCta; loadFuDraft records fuLinkLine. Any one left out is a
+  // ReferenceError on every drawer with a ready draft, or only on the press that reaches it.
+  "fuCta", "fuLinkState", "fuLinkLine", "fuLinkNote", "fuPutLinkBack", "paintFuLink", "fuLinkBack",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -2437,6 +2444,102 @@ async function runScenario(name, s) {
     page.focusSection("followup");
     await settle();
     out.fuTask.rateLimited = { compose: compose(), sendDisabled: !!el("fu-send").disabled };
+
+    // 14. THE BUTTON IN THE EMAIL (2026-10-23). {link} is what becomes the button to the customer's
+    //     portal page, and it was a bare word in a textarea that an edit could delete without a
+    //     sign. Now the button is drawn under the message, and the moment the token goes a notice
+    //     says so with a one-press fix. Driven as an estimator would: delete it, try to send anyway,
+    //     press the fix, relabel the button, send. The body is the AI's own convention, {link} on a
+    //     line of its own, so the fix has to put it back EXACTLY where it was.
+    reset();
+    const OWN_LINE = "Hi Dave,\n\nJust checking the slab plan still works for you.\n\n{link}\n\n"
+      + "Thanks,\nKyle";
+    answer(/\/followup-task\/t-15\/ai-draft$/, 200,
+           { ok: true, draft: { title: "Checking in", body: OWN_LINE, cta: "Review and approve",
+                                source: "ai" }, fallback: false, ai: true });
+    answer(/\/followup-task\/t-15\/send$/, 200, { ok: true, task: { id: "t-15", status: "sent" } });
+    await openTask(TASK("t-15"));
+    page.focusSection("followup");
+    await settle();
+    const linkVis = () => ({
+      ok: !el("fu-link-ok").hidden, okText: el("fu-link-ok").textContent,
+      gone: !el("fu-link-gone").hidden, goneText: el("fu-link-gone-text").textContent,
+      fixLabel: el("fu-link-fix").textContent, many: !el("fu-link-many").hidden,
+    });
+    const btn = { compose: compose() };
+    const b15 = el("fu-body");
+    b15.value = OWN_LINE.replace("{link}", "");          // the estimator deletes the token
+    await b15.fire("input");
+    btn.afterDelete = linkVis();
+    await el("fu-send").fire("click");                   // ...and presses Send without fixing it
+    await settle();
+    btn.ignored = { alert: alertOf(), sends: reqs(/\/send$/).length, still: linkVis() };
+    dom.focused = null;
+    await el("fu-link-fix").fire("click");               // the one-press fix
+    btn.fixed = { value: b15.value, draft: page.fuDraft("t-15").body, link: linkVis(),
+                  focused: dom.focused, alert: alertOf() };
+    b15.value = OWN_LINE + "\n\nP.S. {link}";              // in twice: one button, so refused
+    await b15.fire("input");
+    btn.twice = linkVis();
+    await el("fu-send").fire("click");
+    await settle();
+    btn.twiceRefused = { alert: alertOf(), sends: reqs(/\/send$/).length };
+    b15.value = OWN_LINE;
+    await b15.fire("input");
+    const c15 = el("fu-cta");
+    c15.value = "See the price";                         // relabel the button
+    await c15.fire("input");
+    btn.relabelled = { preview: el("fu-cta-preview").textContent,
+                       draftCta: page.fuDraft("t-15").cta };
+    await el("fu-send").fire("click");
+    await settle();
+    btn.sent = reqs(/\/send$/);
+    out.fuTask.button = btn;
+
+    // 15. THE BUTTON LABEL IS TEXT, NEVER MARKUP: from the AI (escaped into the markup) and from the
+    //     estimator (written as textContent, never as innerHTML). An empty label falls back to the
+    //     portal's own default, and what the preview shows is what is posted.
+    reset();
+    const XSS_CTA = '<script>alert(1)</script> &amp; "go"';
+    answer(/\/followup-task\/t-16\/ai-draft$/, 200,
+           { ok: true, draft: { title: "Hi", body: "Hello\n\n{link}", cta: XSS_CTA, source: "ai" },
+             fallback: false, ai: true });
+    answer(/\/followup-task\/t-16\/send$/, 200, { ok: true, task: { id: "t-16", status: "sent" } });
+    await openTask(TASK("t-16"));
+    page.focusSection("followup");
+    await settle();
+    const ctaEsc = { compose: compose() };
+    const c16 = el("fu-cta");
+    c16.value = "   ";
+    await c16.fire("input");
+    ctaEsc.emptyPreview = el("fu-cta-preview").textContent;
+    c16.value = 'Tom &amp; <b>Jerry</b>';
+    await c16.fire("input");
+    ctaEsc.typedPreview = el("fu-cta-preview").textContent;
+    ctaEsc.previewWroteHtml = dom.parts.has("#fu-cta-preview");
+    await el("fu-send").fire("click");
+    await settle();
+    ctaEsc.sent = reqs(/\/send$/);
+    out.fuTask.ctaEscape = ctaEsc;
+
+    // 16. A PAGE WRITTEN FROM BLANK never had a link to remove, so the notice says it has none yet,
+    //     and the fix appends it as its own paragraph after what was written.
+    reset();
+    answer(/\/followup-task\/t-17\/ai-draft$/, 502, { ok: false, error: "down", detail: "down" });
+    await openTask(TASK("t-17"));
+    page.focusSection("followup");
+    await settle();
+    await el("fu-draft-blank").fire("click");
+    await settle();
+    const blank = { compose: compose() };
+    const b17 = el("fu-body");
+    b17.value = "Any news on the pour?\n";
+    await b17.fire("input");
+    blank.before = linkVis();
+    await el("fu-link-fix").fire("click");
+    blank.value = b17.value;
+    blank.after = linkVis();
+    out.fuTask.blankLink = blank;
 
     reset();
     out.fuTask.allPaths = fuAll.map((r) => r.path);

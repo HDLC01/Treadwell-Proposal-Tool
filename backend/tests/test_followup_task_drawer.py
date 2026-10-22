@@ -166,6 +166,123 @@ def test_the_fallback_says_it_is_the_standard_wording(fu):
     assert "not usable" in _text(fu["gone"]["compose"])
 
 
+# ── the button in the email ──────────────────────────────────────────────────
+# {link} is the button to the customer's portal page. It used to be a bare word in the textarea that
+# an edit could delete with no sign until Send refused. Hanz: "There should still be a button that
+# leads to the portal when sending out that email so its not just an email."
+OWN_LINE = ("Hi Dave,\n\nJust checking the slab plan still works for you.\n\n{link}\n\n"
+            "Thanks,\nKyle")
+
+
+def _preview_label(html: str) -> str:
+    m = re.search(r'<span[^>]*id="fu-cta-preview"[^>]*>(.*?)</span>', html, re.S)
+    assert m, "no button preview in the compose box"
+    return _decode(m.group(1))
+
+
+def _is_hidden(html: str, el_id: str) -> bool:
+    m = re.search(r'<[a-z]+[^>]*\bid="%s"[^>]*>' % re.escape(el_id), html)
+    assert m, "#%s is not rendered" % el_id
+    return re.search(r"\shidden(?=[\s>])", m.group(0)) is not None
+
+
+def test_a_draft_with_its_link_draws_the_real_button(fu):
+    html = fu["button"]["compose"]
+    assert _preview_label(html) == "Review and approve"
+    tag = re.search(r'<span[^>]*id="fu-cta-preview"[^>]*>', html).group(0)
+    # The drawer's own primary button, not a lookalike: the same classes Send wears.
+    assert "btn" in tag.split('class="')[1].split('"')[0].split()
+    assert "btn-p" in tag
+    assert _value_of(html, "fu-cta") == "Review and approve"
+    assert _is_hidden(html, "fu-link-ok") is False
+    assert _is_hidden(html, "fu-link-gone") is True
+    assert _is_hidden(html, "fu-link-many") is True
+    # The message is still the AI's words, {link} included, exactly as drafted.
+    assert _textarea(html, "fu-body") == OWN_LINE
+
+
+def test_deleting_the_link_says_so_at_once_not_at_send(fu):
+    a = fu["button"]["afterDelete"]
+    assert a["gone"] is True and a["ok"] is False and a["many"] is False
+    assert "Your portal link was removed" in a["goneText"]
+    assert a["fixLabel"] == "Add the portal link back"
+
+
+def test_send_still_refuses_a_message_with_no_link(fu):
+    i = fu["button"]["ignored"]
+    assert i["sends"] == 0
+    assert i["alert"]["err"] is True and "{link}" in i["alert"]["text"]
+    assert "Add the portal link back" in i["alert"]["text"]
+    assert i["still"]["gone"] is True
+
+
+def test_the_fix_puts_the_link_back_where_it_was_and_send_goes(fu):
+    f = fu["button"]["fixed"]
+    assert f["value"] == OWN_LINE, "the fix moved the button or changed the wording"
+    assert f["draft"] == OWN_LINE
+    assert f["link"]["gone"] is False and f["link"]["ok"] is True
+    assert f["focused"] == "#fu-body"
+    assert f["alert"]["text"] == "", "the stale Send refusal stayed up after the fix"
+    sent = fu["button"]["sent"]
+    assert len(sent) == 1
+    assert sent[0]["body"]["body"] == OWN_LINE
+    assert sent[0]["body"]["body"].count("{link}") == 1
+
+
+def test_the_link_twice_is_refused_with_its_own_sentence(fu):
+    t = fu["button"]["twice"]
+    assert t["many"] is True and t["gone"] is False and t["ok"] is False
+    r = fu["button"]["twiceRefused"]
+    assert r["sends"] == 0 and r["alert"]["err"] is True and "once" in r["alert"]["text"]
+
+
+def test_the_button_label_is_editable_and_is_what_gets_sent(fu):
+    r = fu["button"]["relabelled"]
+    assert r["preview"] == "See the price" and r["draftCta"] == "See the price"
+    assert fu["button"]["sent"][0]["body"] == {"title": "Checking in", "body": OWN_LINE,
+                                               "cta": "See the price"}
+
+
+def test_the_button_label_round_trips_escaped(fu):
+    c = fu["ctaEscape"]
+    xss = '<script>alert(1)</script> &amp; "go"'
+    assert _preview_label(c["compose"]) == xss
+    assert _value_of(c["compose"], "fu-cta") == xss
+    assert "<script>" not in c["compose"], "an AI-written button label reached the DOM raw"
+    # An empty label is the portal's default, and the preview says so.
+    assert c["emptyPreview"] == "View your proposal"
+    # Typed text is shown as text: written through textContent, never innerHTML.
+    assert c["typedPreview"] == "Tom &amp; <b>Jerry</b>"
+    assert c["previewWroteHtml"] is False
+    assert c["sent"][0]["body"]["cta"] == "Tom &amp; <b>Jerry</b>"
+
+
+def test_an_inline_link_is_flagged_as_not_the_button(fu):
+    """The portal draws the red button only for a paragraph that is {link} alone; inside a
+    sentence it becomes a plain underlined link. The AI fixture writes it inline."""
+    text = _text(fu["draft"]["ready"]["compose"])
+    assert "inside a sentence" in text and "line of its own" in text
+
+
+def test_a_blank_page_offers_the_link_without_saying_it_was_removed(fu):
+    b = fu["blankLink"]
+    assert _is_hidden(b["compose"], "fu-link-gone") is False
+    assert "removed" not in b["before"]["goneText"]
+    assert b["before"]["fixLabel"] == "Add the portal link"
+    assert b["value"] == "Any news on the pour?\n\n{link}"
+    assert b["after"]["ok"] is True and b["after"]["gone"] is False
+
+
+def test_every_id_the_compose_wiring_reaches_for_is_rendered_by_it():
+    wanted = set()
+    for fn in ("wireFuCompose", "paintFuLink", "fuLinkBack"):
+        wanted |= set(re.findall(r'\$\("(fu-[a-z-]+)"\)', _block(fn)))
+    assert {"fu-cta", "fu-cta-preview", "fu-link-fix", "fu-link-gone"} <= wanted
+    compose = _block("followupComposeHtml") + _block("followupTaskHtml")
+    for i in sorted(wanted):
+        assert 'id="%s"' % i in compose, "#%s is wired but never rendered" % i
+
+
 # ── the four decisions ───────────────────────────────────────────────────────
 def test_send_posts_the_edited_words_and_takes_the_card_away(fu):
     s = fu["send"]
