@@ -47,7 +47,7 @@ const setAside = (v) => JSON.parse(JSON.stringify(v));
 /** One page, opened and saved two ways from the same blob. */
 async function savedTwoWays(f, lib) {
   const open = async () => {
-    const b = build(Object.assign({ blob: savedBlob(f) }, lib || {}, f.opts || {}));
+    const b = build(Object.assign({ blob: savedBlob(f) }, lib || {}, answerFor(f), f.opts || {}));
     await b.api.init();
     return b;
   };
@@ -62,11 +62,13 @@ async function savedTwoWays(f, lib) {
            flushed: p.rec.flushed };
 }
 
-/** A new bid: the model the page holds once init() has run, and what its first save writes. */
+/** A new bid: the model the page holds once init() has run, and what its first save writes. Its city and state are enough to ask
+ *  the distance since 2026-10-22 (Hanz); the lookup does not answer here (UNANSWERED, saved-bid-scenarios.js), because this golden
+ *  pins what a save writes, not the distance, whose answer tests/test_polish_distance_approx.py holds. */
 async function newBid(over, opts) {
   const nb = blob(over || {});
   delete nb.polish_estimate;
-  const b = build(Object.assign({ blob: nb }, opts || {}));
+  const b = build(Object.assign({ blob: nb }, opts || {}, { distance: UNANSWERED }));
   await b.api.init();
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
   const model = setAside(b.api.model());
@@ -94,7 +96,8 @@ async function newBid(over, opts) {
   {
     const sv = blob({ polish_sf: 9000, polish_estimate: staged({
       takeoff: [{ assembly_id: "", assembly_name: "", measurement: "", unit: "SF" }] }) });
-    const b = build(Object.assign({ blob: sv }, LIBRARY_ON));
+    // A saved bid with no distance asks on open since 2026-10-22; here the lookup does not answer (see newBid above).
+    const b = build(Object.assign({ blob: sv }, LIBRARY_ON, { distance: UNANSWERED }));
     await b.api.init();
     for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
     const model = setAside(b.api.model());

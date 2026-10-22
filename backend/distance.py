@@ -16,22 +16,40 @@ TWO PROVIDERS, in this order.
          addresses are served from the cache here. When it fails the page already falls back to its
          "type the miles" box, which is the designed answer, not a bug.
 
-NEVER GUESS. Every path that cannot produce a real figure answers `miles: None` with a `reason`
-(address not found, a service slow or down, address incomplete, rate limit). The page turns that
-into "Distance unknown -- enter miles" and lets the estimator type the number. There is no
-straight-line fallback, no city-centre guess and no default distance: a wrong answer near 70 miles
-moves a bid by thousands of dollars in either direction.
+NO STREET? THE CENTRE OF THE ZIP, THE CITY OR THE COUNTY (Hanz, 2026-10-22: a bid with City
+"Wichita", State "KS", County "Sedgwick County, KS" and no street was called local; "based on the
+county and city and state it should have calculated it already"). The street geocoder needs a
+street, so without one the job is placed at the US Census Gazetteer's internal point of, in this
+order, its ZIP (the tightest), its CITY + state, or its COUNTY (+ state): public-domain tables,
+trimmed and bundled in backend/geodata/ (rebuilt by backend/tools/build_gazetteer.py), so no extra
+network call. A zip whose centre lies far from the typed city (or county) is a typo and is set
+aside for that one. A street the geocoder answers "no match" for falls back the same way and says so
+(`street_not_found`). The point is then ROUTED through the same OSRM call from the office, so the
+figure is still driving miles. Every answer says how precise it is (`precision`: street | zip |
+city | county) and what it was measured to (`measured_to`), and the page words an approximate
+figure as one ("About 190 miles to Wichita, KS (city center)").
+
+NEVER GUESS BEYOND THAT. Every path that cannot produce a real figure answers `miles: None` with a
+`reason` (address not found, a service slow or down, address incomplete, rate limit). The page
+turns that into "Distance unknown -- enter miles" and lets the estimator type the number. There is
+no straight-line fallback and no default distance, a city name is matched exactly (case, spacing,
+"St."/"Saint" and a trailing ", KS" aside) and never fuzzily, and a geocoder OUTAGE is not a
+reason to fall back to a centre: a wrong answer near 70 miles moves a bid by thousands of dollars
+in either direction.
 
 NEVER SLOW THE PAGE. Short timeouts, no retry, and the page calls this after it has painted.
 """
 from __future__ import annotations
 
+import csv
 import logging
+import math
 import os
 import re
 import threading
 import time
-from typing import Any, Dict, Optional
+import unicodedata
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -103,6 +121,187 @@ def clean_address(address: Any, city: Any, state: Any, zip_code: Any) -> str:
     return ", ".join(p for p in (street, c, tail) if p)
 
 
+# ---------------------------------------------------------------------------------------------
+# THE CENTRES (no street). See the module docstring. The three tables are read once, on the first
+# lookup that needs one, and kept: about 70k rows, a few MB of memory.
+# ---------------------------------------------------------------------------------------------
+GEODATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "geodata")
+_gaz: Optional[Dict[str, Any]] = None
+_gaz_lock = threading.Lock()
+
+# The Census's own descriptor at the end of a place NAME ("Wichita city", "Abanda CDP"). Matched
+# CASE-SENSITIVELY, because the Census writes them in lower case and a capital is part of the name:
+# "Kansas City city" is Kansas City, while "Carson City" keeps its "City". Longest first.
+_PLACE_SUFFIXES = (" city and borough", " consolidated government", " metropolitan government",
+                   " metro government", " unified government", " metro township", " urban county",
+                   " municipality", " zona urbana", " comunidad", " corporation", " borough",
+                   " village", " town", " city", " CDP")
+# The same for a county NAME, so "Sedgwick" finds "Sedgwick County".
+_COUNTY_SUFFIXES = (" City and Borough", " Census Area", " Municipality", " Municipio", " County",
+                    " Parish", " Borough")
+_COUNTY_WORDS = re.compile(r" (county|parish|borough|census area|municipio|municipality)$")
+
+
+def _norm(v: Any) -> str:
+    """A name as it is compared: accents, case, dots, apostrophes and spacing taken out, and
+    "St."/"Ste."/"Mt."/"Ft." spelled out. Nothing else: this is matching, not guessing."""
+    s = unicodedata.normalize("NFKD", str(v or ""))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch)).lower().replace("’", "'")
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\bste\b\.?\s*", "sainte ", s)
+    s = re.sub(r"\bst\b\.?\s*", "saint ", s)
+    s = re.sub(r"\bmt\b\.?\s*", "mount ", s)       # "Mt. Pleasant" (the audit's finding 4)
+    s = re.sub(r"\bft\b\.?\s*", "fort ", s)        # "Ft. Worth"
+    s = re.sub(r"[.']", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _strip(name: str, suffixes) -> str:
+    name = re.sub(r"\s*\(balance\)$", "", name)
+    for suf in suffixes:
+        if name.endswith(suf) and len(name) > len(suf):
+            return name[:-len(suf)]
+    return name
+
+
+def _load_gazetteer() -> Dict[str, Any]:
+    places: Dict[tuple, List[tuple]] = {}
+    counties: Dict[tuple, List[tuple]] = {}
+    zcta: Dict[str, tuple] = {}
+
+    def rows(name):
+        with open(os.path.join(GEODATA_DIR, name), encoding="utf-8", newline="") as fh:
+            return list(csv.DictReader(fh))
+    for r in rows("gaz_places.csv"):
+        base = _strip(r["name"], _PLACE_SUFFIXES)
+        places.setdefault((r["usps"], _norm(base)), []).append(
+            (r["kind"], base, float(r["lon"]), float(r["lat"])))
+    for r in rows("gaz_counties.csv"):
+        pt = (r["name"], float(r["lon"]), float(r["lat"]))
+        full, bare = _norm(r["name"]), _norm(_strip(r["name"], _COUNTY_SUFFIXES))
+        counties.setdefault((r["usps"], full), []).append(pt)
+        if bare != full:
+            counties.setdefault((r["usps"], "~" + bare), []).append(pt)
+    for r in rows("gaz_zcta.csv"):
+        zcta[r["zcta"]] = (float(r["lon"]), float(r["lat"]))
+    return {"places": places, "counties": counties, "zcta": zcta}
+
+
+def _gazetteer() -> Dict[str, Any]:
+    global _gaz
+    if _gaz is None:
+        with _gaz_lock:
+            if _gaz is None:
+                _gaz = _load_gazetteer()
+    return _gaz
+
+
+def _state_code(v: Any) -> str:
+    s = re.sub(r"\s+", " ", str(v or "")).strip()
+    return s[:2].upper() if re.fullmatch(r"[A-Za-z]{2}", s) else ""
+
+
+def _split_state(text: Any) -> tuple:
+    """("Sedgwick County", "KS") from "Sedgwick County, KS"; (text, "") when it carries no state."""
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    # rpartition, not a regex: the box is free text from the request, and a backtracking pattern over it is a ReDoS.
+    head, comma, tail = s.rpartition(",")
+    tail = tail.strip()
+    if comma and len(tail) == 2 and tail.isascii() and tail.isalpha():
+        return head.strip(), tail.upper()
+    return s, ""
+
+
+def _place(city: Any, st: str) -> Optional[Dict[str, Any]]:
+    """The one place in state `st` called `city`, or None: a real town before a CDP, and two of
+    the same kind and name (Ohio's three Oakwoods) are not picked between."""
+    name = re.sub(r"\s+", " ", str(city or "")).strip()
+    name = name.split(",")[0].strip()              # "Wichita, KS" typed in the city box
+    if not (name and st):
+        return None
+    hits = _gazetteer()["places"].get((st, _norm(name))) or []
+    for kind in ("inc", "cdp"):
+        same = [h for h in hits if h[0] == kind]
+        if len(same) == 1:
+            _, base, lon, lat = same[0]
+            return {"precision": "city", "label": "%s, %s" % (base, st), "lon": lon, "lat": lat}
+        if len(same) > 1:
+            return None
+    return None
+
+
+def _county(text: Any, state: Any) -> Optional[Dict[str, Any]]:
+    """The county (or, for the tax picker's city rows, the city) the `county` box names, or None.
+    "Sedgwick County, KS", "Sedgwick County" + KS, "Sedgwick Co." and "Sedgwick" all find
+    Sedgwick County; "Overland Park, KS" is a city row and finds the city."""
+    name, st = _split_state(text)
+    st = st or _state_code(state)
+    if not (name and st):
+        return None
+    n = re.sub(r" co$", " county", _norm(name))
+    table = _gazetteer()["counties"]
+
+    def one(key):
+        hits = table.get((st, key)) or []
+        if len(hits) != 1:
+            return None
+        full, lon, lat = hits[0]
+        return {"precision": "county", "label": "%s, %s" % (full, st), "lon": lon, "lat": lat}
+    if _COUNTY_WORDS.search(n):
+        return one(n)
+    # A bare name: the picker's city row first ("Overland Park, KS"), then a county without "County".
+    return _place(name, st) or one("~" + n)
+
+
+# A ZIP THAT LIES THIS FAR (straight line) FROM THE TYPED CITY'S, OR COUNTY'S, CENTRE IS A TYPO, NOT THE JOB (the 2026-10-22 audit's
+# finding 3: "Wichita", "KS", zip 10001 measured to New York). The zip table has no state column, so where its centre lies is the
+# check. Generous on purpose: a real zip of a big city, or of a big western county, stays well inside these.
+_ZIP_AGREES_MILES = {"city": 40.0, "county": 150.0}
+
+
+def _straight_miles(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """Great-circle miles between two `{lon, lat}` points. Used ONLY to check a zip against the typed
+    city or county; never as a distance answer (that is always OSRM's driving figure)."""
+    lon1, lat1, lon2, lat2 = map(math.radians, (a["lon"], a["lat"], b["lon"], b["lat"]))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 2 * 3958.8 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def approx_point(city: Any = "", state: Any = "", zip_code: Any = "", county: Any = "") -> Optional[Dict[str, Any]]:
+    """`{precision, label, lon, lat}` for a job with no usable street, or None: the ZIP's centre
+    (tightest), else the CITY's (within the typed state), else the COUNTY's. A zip whose centre is
+    far from the typed city's (or, with no city found, the county's) is set aside for that one."""
+    zip_pt = None
+    digits = re.sub(r"\D", "", str(zip_code or ""))
+    if len(digits) >= 5:
+        hit = _gazetteer()["zcta"].get(digits[:5])
+        if hit:
+            zip_pt = {"precision": "zip", "label": "zip " + digits[:5], "lon": hit[0], "lat": hit[1]}
+    st = _state_code(state)
+    named = _place(city, st) if st else None
+    if named is None and str(county or "").strip():
+        named = _county(county, state)
+    if zip_pt is not None and (named is None or
+                               _straight_miles(zip_pt, named) <= _ZIP_AGREES_MILES[named["precision"]]):
+        return zip_pt
+    return named
+
+
+def can_place(address: Any = "", city: Any = "", state: Any = "", zip_code: Any = "", county: Any = "") -> bool:
+    """IS THERE ENOUGH TO ASK? A street that can be placed (city+state or a zip), OR a zip, OR a city
+    with its state, OR a county with a state (its own ", KS" or the state box). js/bid-model.js
+    distanceKey applies the same rule, so the page never asks for what this would call incomplete
+    (tests/test_distance_key_parity.py runs the two over one table)."""
+    def one(v: Any) -> str:
+        return re.sub(r"\s+", " ", str(v or "")).strip()
+    c, st, z, k = one(city), one(state), one(zip_code), one(county)
+    if clean_address(address, city, state, zip_code):
+        return True
+    if z or (c and st):
+        return True
+    return bool(k and (st or _split_state(k)[1]))
+
+
 def _key(addr: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", addr.lower()).strip()
 
@@ -121,6 +320,11 @@ def _cache_put(k: str, miles: Optional[float], reason: str, ttl: int) -> None:
         if len(_cache) >= _CACHE_MAX:
             _cache.clear()
         _cache[k] = (time.time() + ttl, miles, reason)
+
+
+def _centre_key(pt: Dict[str, Any]) -> str:
+    """A centre's cache key. "@" keeps it apart from every street key (_key never emits one)."""
+    return "@%s %.4f %.4f" % (pt["precision"], pt["lon"], pt["lat"])
 
 
 def rate_limited(bucket: str) -> bool:
@@ -274,45 +478,93 @@ def _osrm(lon: float, lat: float, deadline: float) -> tuple:
 
 
 def _free(addr: str, state: str, deadline: float) -> tuple:
-    """Census geocode of the job, then ONE OSRM route from the pinned office coordinates."""
+    """Census geocode of the job, then ONE OSRM route from the pinned office coordinates.
+    (miles | None, reason, missed): `missed` is True only when the GEOCODER said "no such street"
+    (not an outage, and not a route OSRM could not find), the one case that falls back to a centre."""
     lon, lat, why = _geocode(addr, state, deadline)
     if why:
-        return None, why
-    return _osrm(lon, lat, deadline)
+        return None, why, why == "not_found"
+    miles, reason = _osrm(lon, lat, deadline)
+    return miles, reason, False
 
 
-def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "") -> Dict[str, Any]:
-    """`{ok, miles, reason, address}`. `miles` is a float (one decimal) or None; `reason` is
-    "" on success, else one of incomplete | not_found | error. (`no_key` is no longer produced: the
-    free providers need none. The page still understands it.)"""
-    addr = clean_address(address, city, state, zip_code)
-    out: Dict[str, Any] = {"ok": False, "miles": None, "reason": "", "address": addr,
-                           "office": OFFICE_LABEL}
-    if not addr:
-        out["reason"] = "incomplete"
-        return out
+def _street(addr: str, state: Any, deadline: float) -> tuple:
+    """(miles | None, reason, missed) for a street line, through the cache. A street the geocoder
+    could not find is kept as a short miss, so a re-ask goes straight to the fallback. `deadline`
+    is the whole lookup's (lookup), which a fallback to a centre then spends what is left of."""
     ck = _key(addr)
     hit = _cache_get(ck)
     if hit:
-        out.update(ok=hit[1] is not None, miles=hit[1], reason=hit[2])
-        return out
+        return hit[1], hit[2], hit[1] is None and hit[2] == "not_found_street"
     miles: Optional[float] = None
     reason = "error"
-    deadline = _now() + TOTAL_BUDGET_SECONDS
+    missed = False
     key = api_key()
     if key:
         miles, reason = _google(addr, key, deadline)
     if miles is None:
         # No key, or Google failed: the free pair. Its answer is the final one.
         st = str(state or "").strip()[:2]
-        miles, reason = _free(addr, st, deadline)
+        miles, reason, missed = _free(addr, st, deadline)
     if miles is not None:
         _cache_put(ck, miles, "", _CACHE_TTL_OK)
-        out.update(ok=True, miles=miles)
-        return out
+        return miles, "", False
+    if reason == "not_found":
+        _cache_put(ck, None, "not_found_street" if missed else "not_found", _CACHE_TTL_MISS)
+    return None, reason, missed
+
+
+def _centre(pt: Dict[str, Any], deadline: float) -> tuple:
+    """(miles | None, reason): driving miles to a centre, the same OSRM call a street gets, inside
+    the lookup's one `deadline`: after a street the geocoder missed it gets only what that left
+    (the 2026-10-22 audit's finding 2: a fresh budget here ran past the page's abort)."""
+    ck = _centre_key(pt)
+    hit = _cache_get(ck)
+    if hit:
+        return hit[1], hit[2]
+    miles, reason = _osrm(pt["lon"], pt["lat"], deadline)
+    if miles is not None:
+        _cache_put(ck, miles, "", _CACHE_TTL_OK)
+        return miles, ""
     if reason == "not_found":
         _cache_put(ck, None, "not_found", _CACHE_TTL_MISS)
-    out["reason"] = reason
+    return None, reason
+
+
+def lookup(address: Any, city: Any = "", state: Any = "", zip_code: Any = "", county: Any = "") -> Dict[str, Any]:
+    """`{ok, miles, reason, address, office, precision, measured_to, street_not_found}`. `miles` is
+    a float (one decimal) or None; `reason` is "" on success, else one of incomplete | not_found |
+    error. `precision` says what was measured to: "street" (the address), "zip", "city" or "county"
+    (that one's centre: no street, or a street the geocoder could not find, which also sets
+    `street_not_found`), "" with no figure. `measured_to` names it ("Wichita, KS"). (`no_key` is no
+    longer produced: the free providers need none. The page still understands it.)"""
+    addr = clean_address(address, city, state, zip_code)
+    out: Dict[str, Any] = {"ok": False, "miles": None, "reason": "", "address": addr,
+                           "office": OFFICE_LABEL, "precision": "", "measured_to": "",
+                           "street_not_found": False}
+    if not can_place(address, city, state, zip_code, county):
+        out["reason"] = "incomplete"
+        return out
+    # ONE budget for the whole lookup, the street's calls and a centre's route together (WORST_CASE_SECONDS).
+    deadline = _now() + TOTAL_BUDGET_SECONDS
+    if addr:
+        miles, reason, missed = _street(addr, state, deadline)
+        if miles is not None:
+            out.update(ok=True, miles=miles, precision="street", measured_to=addr)
+            return out
+        if not missed:
+            out["reason"] = "not_found" if reason == "not_found_street" else reason
+            return out
+        out["street_not_found"] = True
+    pt = approx_point(city, state, zip_code, county)
+    if pt is None:
+        out["reason"] = "not_found"
+        return out
+    miles, reason = _centre(pt, deadline)
+    if miles is None:
+        out["reason"] = reason or "error"
+        return out
+    out.update(ok=True, miles=miles, precision=pt["precision"], measured_to=pt["label"])
     return out
 
 

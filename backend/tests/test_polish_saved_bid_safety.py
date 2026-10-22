@@ -109,16 +109,16 @@ def test_a_saved_bid_opens_at_the_total_staging_gives_it(ran, name):
 
 
 @needs_node
-def test_opening_a_saved_bid_writes_nothing_and_asks_the_server_nothing(ran):
+def test_opening_a_saved_bid_writes_nothing_and_asks_only_when_it_has_no_distance(ran):
     """polish_sf on an estimate-saved draft is already the takeoff total, so a plain reopen is not
-    a save; and the distance lookup belongs to a NEW bid only (a far answer would flip Travel on).
-
-    Mutation: `if (laborDefaults && !M.distance) lookupDistance(false)` -> `if (!M.distance)`."""
+    a save. CHANGED 2026-10-22 (Hanz): a saved bid with NO distance on file asks the lookup once on
+    open, as a new bid does (its answer is tests/test_polish_distance_approx.py's); one with a
+    distance never asks. Here the lookup does not answer, so the open still moves nothing."""
     for pass_name in ("fixtures", "withLibrary"):
         for name in STAGING_TOTALS:
             got = ran[pass_name][name]
             assert got["saves"] == 0, (pass_name, name)
-            assert got["distanceAsked"] == 0, (pass_name, name)
+            assert got["distanceAsked"] == got["distanceOwed"], (pass_name, name)
 
 
 @needs_node
@@ -224,7 +224,7 @@ def test_the_newest_saved_shapes_open_at_their_pinned_totals(ran, name):
         assert got["total"] == NEWEST_TOTALS[name], (pass_name, name, got["total"])
         assert got["totalAfterSettle"] == NEWEST_TOTALS[name], (pass_name, name)
         assert got["saves"] == 0, (pass_name, name, "opening a saved bid writes nothing")
-        assert got["distanceAsked"] == 0, (pass_name, name, "a saved bid never asks the server")
+        assert got["distanceAsked"] == got["distanceOwed"], (pass_name, name, "a saved bid asks only when it has no distance")
 
 
 @needs_node

@@ -3714,6 +3714,10 @@ class DistanceIn(BaseModel):
     city: str = ""
     state: str = ""
     zip: str = ""
+    # The intake's county ("Sedgwick County, KS", or a tax-picker city row "Overland Park, KS"). Only
+    # /api/distance reads it, as the last way to place a job with no street (distance.approx_point);
+    # /api/county ignores it. Optional, so a body without it means what it always did.
+    county: str = ""
 
 
 @app.post("/api/distance")
@@ -3725,6 +3729,10 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     or down, address too thin, rate limit -- answers `{ok: false, miles: null,
     reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
 
+    NO STREET (Hanz, 2026-10-22): a zip, a city + state or a county is enough. The job is measured
+    to that one's centre (Census Gazetteer, bundled), still by road, and `precision` (street | zip |
+    city | county) and `measured_to` say so, so the page can call the figure approximate.
+
     PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
     nav_access.TABS on purpose: the estimate step that calls it is read by every estimator
     mid-bid, and a per-tab gate would silently blank the distance halfway through a bid (the same
@@ -3733,7 +3741,7 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     bucket = getattr(request.state, "user_email", None) or "anon"
     if distance.rate_limited(bucket):
         return {"ok": False, "miles": None, "reason": "busy", "office": distance.OFFICE_LABEL}
-    return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
+    return distance.lookup(payload.address, payload.city, payload.state, payload.zip, payload.county)
 
 
 @app.post("/api/county")

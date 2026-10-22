@@ -1107,13 +1107,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // to represent an untouched row to still dim, because touched-vs-untouched is the new half
     // of the rule. See `notDimmedWhenAlreadyManual` below for the guys_auto:false half.
     {
+      // A job MEASURED local (30 miles, typed): the card says it is local. With NO distance it says the distance is unknown instead, never
+      // "local" (Hanz, 2026-10-22: tests/test_polish_distance_approx.py).
       const loc = build({ blob: blob({ polish_estimate: {
         version: 2,
         takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
         labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 },
                 { id: "travel", label: "Travel", guys: 6, days: "", rate: 33,
                   unit: "hours", guys_auto: true }],
-        conditions: { local: true }, contingency: 0
+        conditions: { local: true }, contingency: 0,
+        distance: { miles: 30, source: "typed", key: "" }
       } }) });
       await loc.api.init();
       loc.api.go(1);
@@ -3769,8 +3772,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     release(); await settle();
     const slowAfter = snap(slow);
 
-    // NO ADDRESS (or too thin to place): no request leaves, and the estimator is told.
-    const blank = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+    // NO ADDRESS (or too thin to place): no request leaves, and the estimator is told. (blob() holds a city and a state, which is enough to
+    // ask since 2026-10-22, so the blank one takes them away.)
+    const blank = build({ blob: (() => { const b = blob({ city: "", state: "" }); delete b.polish_estimate; return b; })(),
                           distance: { ok: true, miles: 99, reason: "" } });
     await blank.api.init(); blank.api.go(1); await settle();
     const blankSnap = snap(blank);
@@ -3778,8 +3782,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
       delete b.polish_estimate; return b; })(), distance: { ok: true, miles: 99, reason: "" } });
     await thin.api.init(); await settle();
 
-    // A SAVED BID is not repriced behind anybody's back: no automatic request, the line stays as
-    // saved, and the button is how the estimator asks. Pressing it applies the answer.
+    // A SAVED BID WITH NO DISTANCE AT ALL (never measured, never typed) is measured on open since 2026-10-22 (Hanz), as a new bid is,
+    // and the button still asks again and applies the answer. (A saved bid WITH a distance never asks on open: O2 below.)
     const savedModel = { version: 2, takeoff: clone(MODEL.takeoff),
       labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
               { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },
