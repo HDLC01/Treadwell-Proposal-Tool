@@ -258,8 +258,16 @@ const LIBRARY_ON = {
   asms: ASMS.map((a) => Object.assign({}, a, { favorite: true, default_on: false })),
 };
 
+/** WHAT THE LOOKUP SAYS WHEN A SAVED BID ASKS. Since 2026-10-22 (Hanz) a saved bid with NO distance on file, never measured and never typed,
+ *  asks on open as a new bid does, and an answer then moves it as it would move a new bid (tests/test_polish_distance_approx.py holds that).
+ *  These fixtures pin something else, that OPENING an old shape moves nothing by itself, so a bid with no distance is answered "the service
+ *  did not answer" (it asks, and nothing moves), and a bid WITH a distance keeps the far figure as the lure it must never ask for. */
+const UNANSWERED = { ok: false, miles: null, reason: "error" };
+const owedLookups = (f) => (f.polish_estimate && f.polish_estimate.distance ? 0 : 1);
+const answerFor = (f) => (owedLookups(f) ? { distance: UNANSWERED } : {});
+
 async function runOne(f, lib) {
-  const b = build(Object.assign({ blob: savedBlob(f) }, lib || {}, f.opts || {}));
+  const b = build(Object.assign({ blob: savedBlob(f) }, lib || {}, answerFor(f), f.opts || {}));
   await b.api.init();
   const total = b.api.bid().total;
   b.clock.fire();
@@ -282,6 +290,7 @@ async function runOne(f, lib) {
       per_diem: !!(M.travel.per_diem && M.travel.per_diem.enabled) }) : null,
     local: M.conditions && M.conditions.local,
     distanceAsked: (b.rec.distanceBodies || []).length,
+    distanceOwed: owedLookups(f),
     // What the page is holding after it opened, for the newest shapes' own assertions: every saved
     // figure the page could re-derive, and must not.
     laborDays: (M.labor || []).map((r) => r.days),
@@ -307,12 +316,12 @@ async function runOne(f, lib) {
  *  bid must come to the same total, and opening it must still write nothing: a save/reopen that
  *  drifted would move a customer's price on the SECOND open of a bid, which no single-open test sees. */
 async function roundTrip(f, lib) {
-  const first = build(Object.assign({ blob: savedBlob(f) }, lib || {}, f.opts || {}));
+  const first = build(Object.assign({ blob: savedBlob(f) }, lib || {}, answerFor(f), f.opts || {}));
   await first.api.init();
   first.api.saveSoon();
   first.clock.fire();
   const saved = first.rec.saves[first.rec.saves.length - 1];
-  const again = build(Object.assign({ blob: clone(first.store.blob) }, lib || {}, f.opts || {}));
+  const again = build(Object.assign({ blob: clone(first.store.blob) }, lib || {}, answerFor(f), f.opts || {}));
   await again.api.init();
   const totalAgain = again.api.bid().total;
   again.clock.fire();

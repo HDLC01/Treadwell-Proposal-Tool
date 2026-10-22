@@ -1073,7 +1073,10 @@
    *  `distance: {miles, source, key}`:
    *    miles   a number (0 is a real answer), or null for "unknown";
    *    source  "google" (the server's figure) or "typed" (the estimator's own, which always wins);
-   *    key     which address the figure belongs to (distanceKey), so a changed address is noticed.
+   *    key     which address the figure belongs to (distanceKey), so a changed address is noticed;
+   *    precision, measured_to, street_not_found   on a server figure since 2026-10-22: "street", or the centre of the "zip",
+   *            "city" or "county" a job with no street (or a street the geocoder could not find) was measured to, and its name.
+   *            A centre figure is approximate (isApproxDistance) and is measured again when the address changes (distanceWantsLookup).
    *  `conditions.local` stays on the model -- it is still what Polish!B4 / Epoxy!B4 are written from
    *  -- but it is DERIVED now: under 70 miles is local. At 70 or more the three travel lines come
    *  on (Travel Labor by un-graying, Lodging and Per Diem by switching on); under 70 they go gray.
@@ -1095,18 +1098,36 @@
     return (isFinite(n) && n >= 0) ? Math.round(n * 10) / 10 : null;
   }
 
-  /** The address a distance belongs to, lower-cased and squeezed -- or "" when the address is too
-   *  thin to look up (needs a street AND a city+state or a zip, the same rule the server applies in
-   *  distance.clean_address). "" means: do not ask, and say so. */
-  function distanceKey(address, city, state, zip) {
+  /** The address a distance belongs to, lower-cased and squeezed -- or "" when there is too little
+   *  to place the job. "" means: do not ask, and say so. ENOUGH IS (Hanz, 2026-10-22: a bid with a
+   *  city, a state and a county and no street was called local): a street that can be placed (a
+   *  city + state, or a zip), OR a zip, OR a city + state, OR a county with a state (its own ", KS",
+   *  or the state box). The server applies the same rule (distance.can_place;
+   *  tests/test_distance_key_parity.py runs the two over one table) and measures a job with no street
+   *  to the centre of its zip, city or county.
+   *
+   *  A STREET'S KEY IS THE FOUR PARTS IT ALWAYS WAS: its figure does not depend on the county, and
+   *  every street figure saved before the county counted keeps matching its address. Without a
+   *  street the county is part of the key, because it can be what the figure was measured to. */
+  function distanceKey(address, city, state, zip, county) {
     function one(v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().toLowerCase(); }
-    var a = one(address), c = one(city), s = one(state), z = one(zip);
-    if (!a) return "";
-    if (!((c && s) || z)) return "";
-    return [a, c, s, z].join("|");
+    var a = one(address), c = one(city), s = one(state), z = one(zip), k = one(county);
+    if (a && ((c && s) || z)) return [a, c, s, z].join("|");
+    // The county carries its own state ("sedgwick county, ks"): the text after its LAST comma is two letters (distance._split_state's rule).
+    var countyState = k.indexOf(",") >= 0 && /^[a-z]{2}$/.test(k.slice(k.lastIndexOf(",") + 1).trim());
+    if (!(z || (c && s) || (k && (s || countyState)))) return "";
+    return [a, c, s, z, k].join("|");
   }
 
-  /** A saved `distance` read as a full one, or undefined when there is none. Never throws. */
+  /** What an answer can have been measured to. "street" is the address itself; the other three are a
+   *  centre (the Census Gazetteer's), so the figure is approximate. */
+  var APPROX_PRECISIONS = ["zip", "city", "county"];
+  var PRECISION_WORDS = { zip: "zip code center", city: "city center", county: "county center" };
+
+  /** A saved `distance` read as a full one, or undefined when there is none. Never throws.
+   *  `precision` and `measured_to` (what a server figure was measured to) and `street_not_found` are
+   *  kept when the record has them and are absent otherwise, so a figure saved before they existed
+   *  reads, and saves, exactly as it did (as a street figure). */
   function normalizeDistance(d) {
     if (!d || typeof d !== "object") return undefined;
     var out = { miles: milesOrNull(d.miles), source: d.source === "typed" ? "typed" : "google",
@@ -1114,7 +1135,30 @@
     // A record with no figure says nothing (a failed lookup is never stored, so it is asked again
     // on the next open -- the key may have been configured since).
     if (out.miles === null) return undefined;
+    if (out.source === "typed") return out;
+    if (APPROX_PRECISIONS.indexOf(d.precision) >= 0 || d.precision === "street") out.precision = d.precision;
+    if (typeof d.measured_to === "string" && d.measured_to) out.measured_to = d.measured_to.slice(0, 200);
+    if (d.street_not_found === true && out.precision && out.precision !== "street") out.street_not_found = true;
     return out;
+  }
+
+  /** Is this distance a server figure measured to a CENTRE (zip, city or county), not to the street? */
+  function isApproxDistance(d) {
+    return !!d && typeof d === "object" && d.source !== "typed" && APPROX_PRECISIONS.indexOf(d.precision) >= 0 &&
+      milesOrNull(d.miles) !== null;
+  }
+
+  /** SHOULD THE PAGE MEASURE THE JOB WHEN IT OPENS? `d` is the distance on file, `key` the address's
+   *  distanceKey now. Yes when there is no distance at all (never measured, never typed: Hanz,
+   *  2026-10-22, a saved bid too), and when a CENTRE figure's address has changed since (a street was
+   *  added: the exact figure replaces the approximate one). Never for a typed figure (only the button
+   *  replaces one), and never for a street figure (it keeps "the address changed since this was
+   *  measured" and the button, as before). */
+  function distanceWantsLookup(d, key) {
+    var dist = normalizeDistance(d);
+    if (!dist) return true;
+    if (!isApproxDistance(dist)) return false;       // a typed figure (never a centre) or a street figure
+    return !!key && dist.key !== key;
   }
 
   /** Is a job at this many miles a travel job? Unknown is false: it is not asked to be anything. */
@@ -1124,12 +1168,20 @@
   }
 
   /** The model with a distance answer applied, IN PLACE (and returned). `result` is
-   *  `{miles, source, key}`; a result with no usable miles records nothing and changes nothing. */
+   *  `{miles, source, key}`, and for a server figure also `precision`, `measured_to` and
+   *  `street_not_found` (what /api/distance answers: see normalizeDistance); a result with no usable
+   *  miles records nothing and changes nothing. */
   function applyDistance(model, result) {
     var miles = milesOrNull(result && result.miles);
     if (!model || miles === null) return model;
-    model.distance = { miles: miles, source: (result.source === "typed" ? "typed" : "google"),
+    var typed = result.source === "typed";
+    model.distance = { miles: miles, source: (typed ? "typed" : "google"),
                        key: String(result.key || "") };
+    var kept = typed ? null : normalizeDistance(Object.assign({}, result, { miles: miles, source: "google" }));
+    var precision = kept && kept.precision;
+    if (precision) model.distance.precision = precision;
+    if (kept && kept.measured_to) model.distance.measured_to = kept.measured_to;
+    if (kept && kept.street_not_found) model.distance.street_not_found = true;
     var far = miles >= LOCAL_MILES;
     if (!model.conditions) model.conditions = {};
     model.conditions.local = !far;
@@ -2387,10 +2439,26 @@
     var d = model && model.distance;
     if (d && milesOrNull(d.miles) !== null) {
       var n = milesOrNull(d.miles);
+      // A figure measured to a CENTRE (no street, or a street the geocoder could not find) says it is one, in whole miles
+      // (Hanz, 2026-10-22): "About 190 miles to Wichita, KS (city center)".
+      if (isApproxDistance(d)) return "About " + Math.round(n) + " miles to " + (d.measured_to || "the job") + " (" + PRECISION_WORDS[d.precision] + ")";
       var shown = (n % 1 === 0) ? String(n) : n.toFixed(1);
       return shown + " mi from Olathe office" + (d.source === "typed" ? " (typed by you)" : "");
     }
     return "Distance unknown — enter miles";
+  }
+
+  /** The words on a dimmed Travel Labor card (the page's `.inertline`): why it is gray. A job MEASURED under 70 miles is local;
+   *  a job with NO distance is not known to be anything, and is never called local (Hanz, 2026-10-22: a Wichita bid with no
+   *  street said "This job is marked local" and filled no travel). `model` is the WHOLE model (the distance is the job's),
+   *  `carrier` the name on screen of the sheet the miles are typed on. Its price is not touched: an unknown distance still
+   *  prices no travel until miles arrive. */
+  function travelInertWords(model, carrier) {
+    var d = model && model.distance;
+    if (!d || milesOrNull(d.miles) === null) {
+      return "Distance unknown. Add the job's city and state on the intake step, or type the miles on the " + (carrier || "base") + " sheet.";
+    }
+    return "This job is marked local, so no travel is expected — type here anyway if it needs drive time.";
   }
 
   /** HOW THE TRAVEL LINES ARE WORKED OUT, in plain words (Hanz, 2026-10-06: "a note that it is
@@ -7219,6 +7287,8 @@
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
+    // A job with no street measured to a centre (2026-10-22): which figures are approximate, when the page measures on open, and the words of a dimmed card.
+    isApproxDistance: isApproxDistance, distanceWantsLookup: distanceWantsLookup, travelInertWords: travelInertWords,
     // Travel Labor filled from the distance (2026-10-20): what it wrote, where it says so, the crew size its guys follow, and the
     // marker the estimator's typing leaves so an answer never writes into a box they have touched.
     driveHoursAreTools: driveHoursAreTools, driveHoursSource: driveHoursSource,

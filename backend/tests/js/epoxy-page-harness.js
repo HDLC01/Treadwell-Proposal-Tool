@@ -324,8 +324,10 @@ async function jobSwitchSection() {
   const draftOf = (workType, estimate) => epoxyDraft(Object.assign({ work_type: workType, polish_estimate: estimate, polish_sf: savedSf }, ADDR));
   const rowIn = (sec) => (sec.labor || []).filter((r) => r.id === "travel")[0];
   const settle = async () => { for (let i = 0; i < 6; i++) await flush(); };
-  const opened = async (workType, estimate) => {
-    const x = await open(draftOf(workType, estimate), { distance: { ok: true, miles: 300, reason: "" } });
+  // `answer`: what the lookup says. A saved bid WITH a distance never asks; one with none asks on open since 2026-10-22, and for this
+  // address the server has no figure (scenario 5), so a far answer is never what a bid with no distance is handed.
+  const opened = async (workType, estimate, answer) => {
+    const x = await open(draftOf(workType, estimate), { distance: answer || { ok: true, miles: 300, reason: "" } });
     x.api.go(1); await settle();
     return x;
   };
@@ -371,7 +373,7 @@ async function jobSwitchSection() {
   const comboOut = report(combo);
 
   // 5. A Polish bid with NO distance on file switched to Epoxy: the new row has nothing to follow.
-  const noDist = await opened("epoxy", polishBid(null, { distance: undefined }));
+  const noDist = await opened("epoxy", polishBid(null, { distance: undefined }), { ok: false, miles: null, reason: "not_found" });
   const noDistOut = report(noDist);
 
   // 6. A root row switched OFF is the estimator's, and it follows the job's drive to the new carrier (the third audit, 2026-10-20): Epoxy's row is the
