@@ -2971,6 +2971,251 @@ def api_portal_set_status(proposal_id: str, request: Request,
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
 
 
+# ── follow-up TASKS: the reminder an estimator acts on (remind mode, v1) ──────────
+# The portal decides WHEN a follow-up is due and parks it as a task for the ASSIGNED ESTIMATOR (one
+# person, with the portal's own roster fallback when nobody is assigned). Nothing reaches the
+# customer until a human here presses Send. That estimator is NOT the "Tell the team" chips on the
+# Files page: those are a one-time send-confirmation list and have nothing to do with these.
+#
+# THESE PROXIES PASS THE PORTAL'S ANSWER THROUGH, status and body both. `_portal` raises on
+# anything over 400 and keeps only the `error` string, which is right for the controls that only
+# need "it failed", and wrong here: a 409 out_of_scope ("this proposal moved on, nothing was sent")
+# and a 502 send_failed ("nothing was sent, try again") are different sentences on screen, and the
+# drawer can only say the right one if it is handed the right status. Same transport as `_portal`
+# (service token header, 20s), so the two cannot disagree about how the portal is reached.
+def _portal_call(path: str, method: str = "GET",
+                 body: Optional[Dict[str, Any]] = None) -> Tuple[int, Dict[str, Any]]:
+    """The portal's status and JSON body, without raising on a 4xx.
+
+    A 5xx comes back as 502, exactly as `_portal` reports one. Unconfigured is still a 503 and
+    unreachable still a 502, raised, because there is no portal answer to pass through."""
+    import httpx
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        raise HTTPException(503, "Customer portal isn't configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).")
+    try:
+        with httpx.Client(timeout=20.0, headers={"X-Service-Token": token}) as c:
+            resp = c.request(method, base + path, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Could not reach the customer portal.") from exc
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        data = None
+    if not isinstance(data, dict):
+        data = {"error": "Portal error."} if resp.status_code >= 400 else {}
+    return (resp.status_code if resp.status_code < 500 else 502), data
+
+
+def _portal_answer(status: int, data: Dict[str, Any]) -> JSONResponse:
+    """A portal answer as this app's response. An error keeps every field the portal sent (error,
+    reason, status, message) and gains `ok: false` and a `detail`, which is the key every other
+    error in this app carries, so the browser's `j.error || j.detail` reads both kinds."""
+    out = dict(data)
+    if status >= 400:
+        out.setdefault("ok", False)
+        out.setdefault("detail", out.get("error") or "Portal error.")
+    return JSONResponse(status_code=status, content=jsonable_encoder(out))
+
+
+def _portal_pass(path: str, method: str = "GET",
+                 body: Optional[Dict[str, Any]] = None) -> JSONResponse:
+    return _portal_answer(*_portal_call(path, method, body))
+
+
+@app.get("/api/portal/followup-tasks")
+def api_portal_followup_tasks(estimator: str = "") -> JSONResponse:
+    """Every follow-up waiting on a human, oldest first. `?estimator=` narrows it to one person."""
+    path = "/api/admin/followup-tasks"
+    who = (estimator or "").strip().lower()
+    if who:
+        if not _PORTAL_EMAIL_RE.match(who) or len(who) > 254:
+            raise HTTPException(400, "That doesn't look like an email address.")
+        path += "?estimator=" + quote(who)
+    return _portal_pass(path)
+
+
+@app.get("/api/portal/followup-task/{task_id}")
+def api_portal_followup_task(task_id: str) -> JSONResponse:
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}")
+
+
+# An AI draft per TASK, for an hour. The CLI call is ~20s and paid, and the drawer asks once per
+# open per page load, so without this a task three people glance at costs three runs for the same
+# words. Only a draft the portal accepted as `ai` is kept: a fallback is cheap to ask for again and
+# caching one would pin the default wording for an hour after a passing CLI failure. Bounded,
+# because task ids never repeat and nothing else would ever evict them.
+_FU_AI_DRAFTS: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_FU_AI_TTL_S = 3600
+_FU_AI_MAX = 200
+
+
+def _fu_ai_cached(task_id: str) -> Optional[Dict[str, Any]]:
+    hit = _FU_AI_DRAFTS.get(task_id)
+    if hit and time.time() - hit[0] < _FU_AI_TTL_S:
+        return hit[1]
+    _FU_AI_DRAFTS.pop(task_id, None)
+    return None
+
+
+def _fu_ai_remember(task_id: str, answer: Dict[str, Any]) -> None:
+    if len(_FU_AI_DRAFTS) >= _FU_AI_MAX:
+        oldest = min(_FU_AI_DRAFTS, key=lambda k: _FU_AI_DRAFTS[k][0])
+        _FU_AI_DRAFTS.pop(oldest, None)
+    _FU_AI_DRAFTS[task_id] = (time.time(), answer)
+
+
+@app.post("/api/portal/followup-task/{task_id}/ai-draft")
+def api_portal_followup_ai_draft(task_id: str) -> Any:
+    """The compose box's first draft, in ONE call: ask the portal for its safe default and the
+    prompt that would do better, run that prompt through the CLI, and hand the model's answer back
+    to the portal to be checked. The portal cannot run the model (it has no CLI); this app cannot
+    be trusted to judge what is safe to put in front of a customer (the portal owns that rule:
+    plain text, one {link}, no URLs, known tokens only). So the work is split along those lines.
+
+    ALWAYS A DRAFT, NEVER A 500 FROM THE AI HALF. A CLI that is missing, slow, refuses, or answers
+    with something that is not `{title, body}` costs the estimator the better wording and nothing
+    else: the portal's own default comes back instead, flagged `fallback`. The only errors that
+    reach the browser are the portal's own (the task is gone, or the portal is down), passed
+    through with their status, because there is no draft to show for a task that does not exist.
+
+    The thread inside `ai_request.input` is customer-written text. It goes to the CLI on stdin as
+    DATA, never into the system prompt, and the CLI runs with no tools and no credentials (see
+    `_autofill_via_cli`). The system prompt is the portal's, which is the trusted half."""
+    tid = _safe_id(task_id)
+    cached = _fu_ai_cached(tid)
+    if cached is not None:
+        return cached
+    status, got = _portal_call(f"/api/admin/followup-task/{tid}/draft", "GET")
+    if status >= 400:
+        return _portal_answer(status, got)
+    default = got.get("draft") if isinstance(got.get("draft"), dict) else None
+    fallback: Dict[str, Any] = {"ok": True, "draft": default, "fallback": True, "ai": False}
+    # The portal already holds a checked AI draft for this task: nothing to improve on.
+    if default and default.get("source") == "ai":
+        answer = {"ok": True, "draft": default, "fallback": False, "ai": True}
+        _fu_ai_remember(tid, answer)
+        return answer
+    req = got.get("ai_request") if isinstance(got.get("ai_request"), dict) else {}
+    system, user_input = req.get("system"), req.get("input")
+    if not (isinstance(system, str) and system.strip()
+            and isinstance(user_input, str) and user_input.strip()):
+        return fallback
+    try:
+        ai = _autofill_via_cli(user_input, system)
+    except FileNotFoundError:
+        log.warning("Follow-up draft: the claude CLI is not on PATH; using the portal's default")
+        return fallback
+    except Exception as exc:  # noqa: BLE001 (an AI failure never reaches the estimator as an error)
+        log.warning("Follow-up draft AI failed: %s: %s", type(exc).__name__, exc)
+        return fallback
+    if not isinstance(ai, dict):
+        return fallback
+    # Strings only. Anything else the model sent is dropped here rather than str()'d into the body
+    # of a customer email; the portal then refuses the empty field and answers with its default.
+    output = {k: (ai.get(k) if isinstance(ai.get(k), str) else "") for k in ("title", "body")}
+    try:
+        st2, checked = _portal_call(f"/api/admin/followup-task/{tid}/draft", "POST",
+                                    {"model_output": output})
+    except HTTPException as exc:
+        log.warning("Follow-up draft: the portal could not check the AI draft: %s", exc.detail)
+        return fallback
+    draft = checked.get("draft") if isinstance(checked.get("draft"), dict) else None
+    if st2 >= 400 or not draft:
+        return fallback
+    answer = {"ok": True, "draft": draft, "fallback": bool(checked.get("fallback")),
+              "ai": draft.get("source") == "ai"}
+    if answer["ai"]:
+        _fu_ai_remember(tid, answer)
+    return answer
+
+
+class FollowupSendIn(BaseModel):
+    title: str = ""
+    body: str = ""
+    cta: Optional[str] = None
+
+
+class FollowupSkipIn(BaseModel):
+    note: str = ""
+
+
+class FollowupCalledIn(BaseModel):
+    kind: str = "call"
+    note: str = ""
+
+
+class FollowupSnoozeIn(BaseModel):
+    until: str = ""
+
+
+class FollowupPlanIn(BaseModel):
+    """Every field optional, and ABSENT is different from null: absent leaves that part of the
+    schedule alone, null puts it back on the global default. Forwarded with exclude_unset, so a
+    change to one field never resets the other two."""
+    interval_days: Optional[int] = None
+    stop_after: Optional[int] = None
+    next_at: Optional[str] = None
+
+
+@app.post("/api/portal/followup-task/{task_id}/send")
+def api_portal_followup_send(task_id: str, request: Request,
+                             payload: Optional[FollowupSendIn] = None) -> JSONResponse:
+    """Send the (possibly edited) email. The portal re-checks the draft and owns the send; `by` is
+    the signed-in user, never a name the browser supplies."""
+    p = payload or FollowupSendIn()
+    body: Dict[str, Any] = {"title": p.title, "body": p.body, "by": _user_email(request)}
+    if p.cta:
+        body["cta"] = p.cta
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/send", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/skip")
+def api_portal_followup_skip(task_id: str, request: Request,
+                             payload: Optional[FollowupSkipIn] = None) -> JSONResponse:
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
+    body: Dict[str, Any] = {"by": _user_email(request)}
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/skip", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/called")
+def api_portal_followup_called(task_id: str, request: Request,
+                               payload: Optional[FollowupCalledIn] = None) -> JSONResponse:
+    """The estimator reached them some other way. Same four kinds as Log a call, refused here
+    before a round trip, exactly as that route refuses them."""
+    kind = str((payload.kind if payload else "call") or "call").strip().lower()
+    if kind not in ("call", "email", "text", "note"):
+        raise HTTPException(400, "invalid_kind")
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
+    body: Dict[str, Any] = {"kind": kind, "by": _user_email(request)}
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/called", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/snooze")
+def api_portal_followup_snooze(task_id: str, request: Request,
+                               payload: Optional[FollowupSnoozeIn] = None) -> JSONResponse:
+    """Put it off to a date. The portal judges the date (past, too far, unreadable), so its own
+    400 is the one the estimator reads."""
+    until = str((payload.until if payload else "") or "").strip()[:64]
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/snooze", "POST",
+                        {"until": until, "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followup-plan")
+def api_portal_followup_plan(proposal_id: str, request: Request,
+                             payload: Optional[FollowupPlanIn] = None) -> JSONResponse:
+    """This proposal's reminder schedule: when the next one is due, how often after that, and when
+    to stop. Remind mode is the only mode in v1, so there is no mode field to forward."""
+    body: Dict[str, Any] = payload.model_dump(exclude_unset=True) if payload else {}
+    body["by"] = _user_email(request)
+    return _portal_pass(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-plan", "POST", body)
+
+
 @app.get("/api/admin/health")
 def api_admin_health(request: Request) -> Dict[str, Any]:
     """Are we currently skipping any upstream, and why.
