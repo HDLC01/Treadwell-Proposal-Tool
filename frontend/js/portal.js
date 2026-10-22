@@ -2070,7 +2070,9 @@
   const FU_DRAFT = new Map();
   // What the last Send / Skip / Snooze / "I called them" did, per project, so the sentence survives
   // the repaint that removes the card it was pressed on. { text, warn, at }
-  const FU_NOTICE = {};
+  // A Map, not an object, for the same reason as FU_DRAFT above: `pid` is server-chosen data, and a
+  // Map cannot have its prototype replaced through a key the way `obj["__proto__"] = …` can.
+  const FU_NOTICE = new Map();
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
   // A separate one-way latch from DEEPLINK_USED (see load() below): DEEPLINK_USED guards the &sec=
@@ -3753,7 +3755,7 @@
   /** The sentence an action left behind, for a minute or two after the card it was pressed on is
    *  gone. Read off CUR_PID because the panel is only ever painted for the open project. */
   function fuNoticeHtml() {
-    const n = CUR_PID ? FU_NOTICE[CUR_PID] : null;
+    const n = CUR_PID ? FU_NOTICE.get(CUR_PID) : null;
     if (!n || Date.now() - n.at > 120000) return "";
     return `<p class="note fu-notice${n.warn ? " is-warn" : ""}" role="status">${esc(n.text)}</p>`;
   }
@@ -4135,7 +4137,7 @@
    *  than at the next poll. */
   async function fuSettle(pid, tid, note, j) {
     FU_DRAFT.delete(tid);
-    FU_NOTICE[pid] = { text: note.text, warn: !!note.warn, at: Date.now() };
+    FU_NOTICE.set(pid, { text: note.text, warn: !!note.warn, at: Date.now() });
     const row = ALL.find((x) => x.proposal_id === pid);
     if (row) {
       row.followup_task = null;

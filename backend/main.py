@@ -3138,7 +3138,7 @@ def api_portal_followup_ai_draft(task_id: str, request: Request) -> Any:
             and isinstance(user_input, str) and user_input.strip()):
         return fallback
     if not _fu_ai_take_slot(tid, _user_email(request)):
-        log.info("Follow-up draft for %s: AI budget spent; using the portal's default", tid)
+        log.info("Follow-up draft for %s: AI budget spent; using the portal's default", _log_safe(tid))
         return {**fallback, "rate_limited": True}
     try:
         ai = _autofill_via_cli(user_input, system)
