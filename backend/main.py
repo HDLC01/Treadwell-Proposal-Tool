@@ -7825,7 +7825,8 @@ def _stale_draft_refusal(draft_id: str, checked: Optional[str], row: Dict[str, A
                 _log_safe(row.get("updated_at")))
     return JSONResponse(status_code=409, content={
         "ok": False, "code": "document_changed",
-        "error": "Nothing changed — this project was saved again after this page read it "
+        # No dash in this sentence: the CRM drawer prints it, and the drawer's copy style has none.
+        "error": "Nothing changed. This project was saved again after this page read it "
                  "(from another page or computer). Reload, check it, then try again."})
 
 

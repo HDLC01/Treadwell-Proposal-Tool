@@ -237,6 +237,10 @@ const FN_NAMES = [
   // fuLinkState, paintFuLink and fuCta; loadFuDraft records fuLinkLine. Any one left out is a
   // ReferenceError on every drawer with a ready draft, or only on the press that reaches it.
   "fuCta", "fuLinkState", "fuLinkLine", "fuLinkNote", "fuPutLinkBack", "paintFuLink", "fuLinkBack",
+  // THE PROJECT'S SCOPES (2026-10-24, RJ's split projects). ELEVENTH addition for the same reason:
+  // BOTH renderers embed scopeHtml in their Proposal panel and BOTH call wireScope at the end, so
+  // leaving either out is a ReferenceError on every drawer, sent and unsent at once.
+  "scopeHtml", "wireScope",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -2546,6 +2550,81 @@ async function runScenario(name, s) {
     futRow.followup_task = null;
   } catch (e) {
     out.errors.fuTask = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── the project's scopes (2026-10-24: RJ's split projects) ─────────────────
+  // Two rows of one scope group, added LAST so nothing above renders them: a scope nobody has built
+  // files for yet (not sent, files_pending) and a published one waiting for the combined email.
+  // Both drawers are rendered and every scope control is PRESSED, through the real wireScope.
+  const scopeAdded = [];
+  try {
+    out.scope = {};
+    const members = [{ id: "scope-a", label: "Breakroom", on_board: true },
+                     { id: "scope-b", label: "Lab 1", on_board: true },
+                     { id: "scope-c", label: "Lab <2>", on_board: false }];
+    const grp = { scope_group: "grp_x", scope_count: 3, scope_members: members };
+    const nsRow = Object.assign({ proposal_id: "scope-a", project_name: "Acme HQ", not_sent: true,
+      files_pending: true, drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com",
+      scope_label: "Breakroom", scope_index: 1 }, grp);
+    const sentRow = Object.assign({ proposal_id: "scope-b", project_name: "Acme HQ", proposal_status: "sent",
+      scope_label: "Lab 1", scope_index: 2, scope_send_pending: true }, grp);
+    BOARD_ROWS.push(nsRow, sentRow);
+    scopeAdded.push(nsRow, sentRow);
+    page.setBoard(BOARD_ROWS);
+    const q = (sel) => dom.query(sel);
+
+    page.open("scope-a");
+    dom.paints = 0;
+    page.renderNotSent("scope-a", nsRow);
+    out.scope.notSent = { html: dom.html, missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
+    net.requests.length = 0;
+    await q("#scope-new-btn").fire("click");
+    out.scope.emptyLabel = { note: q("#scope-note").textContent, requests: net.requests.length };
+    q("#scope-new-label").value = "  Lab   3 ";
+    fuNet.answers = [[/\/api\/draft\/scope-a\/scope$/, { status: 200,
+      body: { ok: true, id: "scope-new", group_id: "grp_x", label: "Lab 3", parent_label: "Breakroom" } }]];
+    nav.length = 0;
+    await q("#scope-new-btn").fire("click");
+    await tick();
+    out.scope.made = { requests: net.requests.filter((r) => /\/scope$/.test(r.path)), nav: nav.slice() };
+    // A stale copy: the server's sentence, after a word on what failed, and the button usable again.
+    fuNet.answers = [[/\/api\/draft\/scope-a\/scope$/, { status: 409,
+      body: { ok: false, code: "document_changed", error: "Nothing changed. This project was saved again after this page read it." } }]];
+    nav.length = 0;
+    await q("#scope-new-btn").fire("click");
+    await tick();
+    out.scope.stale = { note: q("#scope-note").textContent, disabled: q("#scope-new-btn").disabled, nav: nav.slice() };
+    // The siblings: one on the board opens its drawer, one that is not opens its estimate.
+    nav.length = 0;
+    const opens = dom.queryAll("[data-scope-open]");
+    for (const b of opens) await b.fire("click");
+    out.scope.siblingNav = nav.slice();
+    out.scope.siblingButtons = opens.map((b) => b.dataset.scopeOpen);
+
+    // The sent drawer: the same card, in SEC_TABS, with the combined email's button.
+    const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+    sentData.proposal.project_name = "Acme HQ";
+    page.open("scope-b");
+    page.renderDetail("scope-b", sentData);
+    out.scope.sent = { html: dom.html, eligible: page.eligible(),
+                       missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
+    net.requests.length = 0;
+    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send$/, { status: 409,
+      body: { ok: false, error: "scopes_not_published", missing: ["scope-a", "scope-c"] } }]];
+    await q("#scope-send").fire("click");
+    await tick();
+    out.scope.notPublished = { note: q("#scope-note").textContent,
+                               requests: net.requests.filter((r) => /scope-group/.test(r.path)) };
+    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send$/, { status: 200,
+      body: { ok: true, already_sent: false, emailed: ["a@x.test", "b@x.test"] } }]];
+    await q("#scope-send").fire("click");
+    await tick();
+    out.scope.sentOk = { note: q("#scope-note").textContent };
+  } catch (e) {
+    out.errors.scope = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    fuNet.answers = [];
+    for (const r of scopeAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
   }
 
   console.log(JSON.stringify(out));
