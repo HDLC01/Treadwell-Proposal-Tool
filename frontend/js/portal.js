@@ -3821,7 +3821,7 @@
       <label class="lbl" for="fu-title">Subject</label>
       <input id="fu-title" class="tw-input fu-title" type="text" maxlength="200" value="${esc(d.title)}">
       <label class="lbl" for="fu-body">Message</label>
-      <textarea id="fu-body" class="fu-body" rows="8">${esc(d.body)}</textarea>
+      <textarea id="fu-body" class="fu-body" rows="14">${esc(d.body)}</textarea>
       <p class="note">${esc(src)}</p>
       <div class="fu-cta" id="fu-cta-box">
         <div class="lbl">The button in the email</div>
