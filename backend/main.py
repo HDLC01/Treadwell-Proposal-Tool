@@ -1852,7 +1852,7 @@ def api_portal_publish(draft_id: str, request: Request,
     # body with `error` for the reason the stale-document refusal below gives.
     _scope_problem = drafts.scope_group_problem((row.get("data") or {}).get("scope_group"))
     if _scope_problem:
-        log.warning("publish refused for draft %s: %s", draft_id, _scope_problem)
+        log.warning("publish refused for draft %s: %s", _log_safe(draft_id), _scope_problem)
         return JSONResponse(status_code=400, content={
             "ok": False, "code": "invalid_scope_group",
             "error": "Not sent — this proposal's link to the other scopes of its project is "
@@ -7875,7 +7875,7 @@ class SplitIn(BaseModel):
 _SPLIT_WORK_TYPES = ("polish", "epoxy", "gyp")
 
 
-def _draft_was_sent(draft_id: str, data: Dict[str, Any]) -> bool:
+def _draft_was_sent(draft_id: str) -> bool:
     """Has the customer been sent this project? A revision is the local proof (create_revision runs
     on every publish and is rolled back when it fails); the portal is asked too, because a row there
     is what the customer has. 404 and 503 are "no row" (_portal_visibility's reading); anything else
@@ -7943,7 +7943,7 @@ def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
             "ok": False, "code": "invalid_scope",
             "error": "Nothing was split — one sheet was sent twice. Reload and try again."})
     try:
-        sent = _draft_was_sent(draft_id, data)
+        sent = _draft_was_sent(draft_id)
     except HTTPException as exc:
         log.warning("split refused for draft %s: the portal could not say whether it was sent (%s)",
                     _log_safe(draft_id), exc.status_code)

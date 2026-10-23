@@ -85,7 +85,12 @@ async function open(blob, answer) {
   return { b, seen };
 }
 const bar = (b) => b.doc.getElementById("scope-bar");
-const barText = (b) => String(bar(b).innerHTML).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+/** The bar's words: tags stripped to a fixed point (a removal can join two halves of one), spaces squeezed. */
+const barText = (b) => {
+  let s = String(bar(b).innerHTML), prev;
+  do { prev = s; s = s.replace(/<[^>]*>/g, " "); } while (s !== prev);
+  return s.replace(/\s+/g, " ").trim();
+};
 const press = async (b, act) => { P.clickEl(b, P.need(b, '[data-scope-act="' + act + '"]')); await settle(); };
 
 const out = {};

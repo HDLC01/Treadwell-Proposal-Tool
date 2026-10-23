@@ -232,6 +232,18 @@ def test_a_stale_tab_can_neither_clear_nor_overwrite_the_group(fake_supabase, mo
     assert held["id"] == j["group_id"]
 
 
+def test_a_browser_save_never_puts_a_project_into_a_group(fake_supabase, monkeypatch):
+    """The beta's sandbox PUTs a copy of a real bid under a NEW id. A copy that carried the real bid's
+    group would join the customer's project and hold its combined email back. Neither a new row nor an
+    ungrouped one takes a group from a browser's blob."""
+    store = _seed(fake_supabase, monkeypatch)
+    forged = dict(PARENT, scope_group={"id": GID, "label": "Copied along"})
+    assert client.put("/api/draft/p1", json={"data": forged}).json()["ok"] is True
+    assert "scope_group" not in _row(store, "p1")["data"]
+    assert client.put("/api/draft/new-copy", json={"data": forged}).json()["ok"] is True
+    assert "scope_group" not in _row(store, "new-copy")["data"]
+
+
 def test_the_browser_mirror_lists_the_same_keys():
     import pathlib
     import re

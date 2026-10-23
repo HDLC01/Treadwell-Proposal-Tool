@@ -67,6 +67,14 @@ _SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group"
 # the children also hold them (save_draft refuses it, StaleSplitWrite).
 SPLIT_MARK = "split_at"
 
+# Server-owned keys a BROWSER'S save may not even seed on a row that has never had them (the rest of
+# _SERVER_OWNED_KEYS may: "the blob may still seed a key the row has never had", save_draft). A scope
+# group is joined only through create_sibling and split_draft. The beta's sandbox PUTs a copy of a real
+# bid under a NEW id (polish-sandbox.js), and a copy that carried the real bid's group would join the
+# customer's project: drawn beside its scopes, and holding the combined email back until the test copy
+# was published too (the portal's scopes_not_published).
+_NEVER_SEEDED_BY_A_BROWSER = ("scope_group",)
+
 
 class StaleSplitWrite(Exception):
     """A browser save of a copy of the draft read before split_draft rewrote it."""
@@ -104,8 +112,12 @@ def save_draft(draft_id: str, data: Dict[str, Any],
         for key in _SERVER_OWNED_KEYS:
             if key in prior and (keep_server_owned or key not in data):
                 data[key] = prior[key]
+            elif keep_server_owned and key in _NEVER_SEEDED_BY_A_BROWSER:
+                data.pop(key, None)
         sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
     else:
+        if keep_server_owned:
+            data = {k: v for k, v in data.items() if k not in _NEVER_SEEDED_BY_A_BROWSER}
         sb.table("drafts").insert({
             "id": draft_id, "data": data, "owner_email": owner_email,
             "created_at": now, "updated_at": now,
