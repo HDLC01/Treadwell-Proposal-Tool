@@ -314,6 +314,12 @@ CONDITIONAL_IDS = {
     # state, so allowlisting it here leaves it covered rather than untested.
     "handoff-mark": "only rendered on a won project nobody has handed off yet",
     "handoff-undo": "only rendered on a project already handed to operations",
+    # Remind mode (2026-10-23). The task card exists only while the portal has a follow-up waiting
+    # on a human, and wireFollowup looks it up first and wires nothing else of it when it is absent;
+    # its own ids are pressed in test_followup_task_drawer.py, which renders one. The schedule is
+    # left off a closed-lost proposal, where nothing is being scheduled.
+    "fu-task": "only rendered while a follow-up task is waiting on a human",
+    "fu-sched": "not rendered on a closed-lost proposal",
 }
 
 # The NOT-SENT paint's own additions, kept out of the dict above on purpose. On a sent drawer
