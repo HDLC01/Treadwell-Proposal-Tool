@@ -83,7 +83,7 @@ const KEYS = {
   synced: "treadwell.proposal_tool.synced",
 };
 // Mirror of drafts._SERVER_OWNED_KEYS. test_v2_new_estimate_test_flag.py compares the two.
-const SERVER_OWNED = ["is_test", "archived", "assigned_estimator"];
+const SERVER_OWNED = ["is_test", "archived", "assigned_estimator", "scope_group"];
 const KEEPALIVE_CAP = 64 * 1024;
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
