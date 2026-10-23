@@ -458,6 +458,9 @@ function build(opts) {
     // shared.js's two-button question. Absent unless a scenario answers it, so no other build is ever asked anything.
     confirmDanger: opts.confirmDanger,
   };
+  // More of shared.js, for a scenario that needs it (the split into scopes reads the server's copy and adopts it): `opts.tw` lays
+  // its functions over the stub. Absent for every other build, so a page that reached for one where it had no business to throws.
+  if (opts.tw) Object.assign(TW, opts.tw(store, rec));
 
   const S = {
     enterSandbox: async function (adoptFn) {
@@ -481,7 +484,7 @@ function build(opts) {
     TWPrice: PRICE,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
-    location: { href: "https://x/polish-estimate.html?d=proj-1" },
+    location: Object.assign({ href: "https://x/polish-estimate.html?d=proj-1" }, opts.location || {}),
     // The page registers its own `pagehide` flush directly on window (mirrors shared.js's own
     // net at shared.js:513) -- exposed so a test can fire it like a real tab close/switch.
     listeners: winListeners,
@@ -503,6 +506,11 @@ function build(opts) {
     // Every request WITH ITS METHOD, so "never writes to the library" can be asserted on verbs.
     (rec.calls = rec.calls || []).push({ url: String(url), method: ((init || {}).method || "GET").toUpperCase() });
     log.push("fetch:" + url);
+    // A scenario's own routes (`opts.fetchHook`, the split into scopes): asked first, and an answer of undefined falls through.
+    if (opts.fetchHook) {
+      const hit = await opts.fetchHook(String(url), init || {});
+      if (hit !== undefined) return hit;
+    }
     // POST /api/distance -- the server's driving miles from the office. `distance` is the JSON body
     // it answers with; `distanceGate` is a promise the answer waits on (a slow Google);
     // `distanceFails` is the network going away. Its own arm so every older scenario, which has no
