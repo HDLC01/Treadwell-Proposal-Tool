@@ -179,7 +179,7 @@
   /* detail — centered modal pop-up (dimmed backdrop; Esc / backdrop / × to close) */
   #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10000; display:none; }
   #drawer { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
-    width:min(780px,95vw); max-height:92vh; background:#fff; z-index:10001;
+    width:clamp(320px,75vw,1400px); max-height:92vh; background:#fff; z-index:10001;
     border-radius:12px; box-shadow:0 16px 48px rgba(0,0,0,.30); overflow:hidden;
     display:none; flex-direction:column; }
   #drawer.open { display:flex; }
