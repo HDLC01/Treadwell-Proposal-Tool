@@ -8773,6 +8773,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             base_path=base_path,
             existing_folder_path=existing_path,
             known_paths=known_paths,
+            # One scope of a split project: its files carry its name, so the scopes share the
+            # project folder without one writing over another (dropbox_client._scoped_name).
+            scope_label=drafts._scope_of(data)[1],
         )
     except HTTPException:
         raise

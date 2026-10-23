@@ -574,15 +574,37 @@ def _proposal_date_yy(deadline: str | None, bid_date: str | None) -> str:
     return datetime.now().strftime("%m.%d.%y")
 
 
+def _scoped_name(project_name: str, scope_label: str | None) -> str:
+    """`<Project Name> - <Scope>` for one scope of a project that is split into several proposals
+    (Breakroom, Lab 1, Lab 2 under "Acme HQ"), else the project name alone.
+
+    THE SCOPES SHARE ONE PROJECT FOLDER, so without the scope in the file names two of them that are
+    the same work type land on the SAME paths: in a folder a human made the second one is silently
+    autorenamed "… (1)", and in a folder this tool makes it OVERWRITES the first one's estimate and
+    proposal (the bid-template path uploads with WriteMode overwrite). With it, siblings never share
+    a name, whatever their work types."""
+    label = (scope_label or "").strip()
+    return f"{project_name} - {label}" if label else project_name
+
+
 def _project_proposal_name(project_name: str, work_type: str | None,
-                           deadline: str | None, bid_date: str | None) -> str:
+                           deadline: str | None, bid_date: str | None,
+                           scope_label: str | None = None) -> str:
     """Treadwell project-folder proposal name, NO extension:
-        MM.DD.YY TREADWELL <TYPE> PROPOSAL - <Project Name>
-    TYPE per _PROPOSAL_TYPE_WORDS; the part after the dash is the project name."""
+        MM.DD.YY TREADWELL <TYPE> PROPOSAL - <Project Name>[ - <Scope>]
+    TYPE per _PROPOSAL_TYPE_WORDS; the part after the dash is the project name, and for one scope of
+    a split project the scope's name after it (_scoped_name)."""
     typ = _PROPOSAL_TYPE_WORDS.get((work_type or "").strip().lower(), "EPOXY")
     return _sanitize_folder_name(
-        f"{_proposal_date_yy(deadline, bid_date)} TREADWELL {typ} PROPOSAL - {project_name}"
+        f"{_proposal_date_yy(deadline, bid_date)} TREADWELL {typ} PROPOSAL - "
+        f"{_scoped_name(project_name, scope_label)}"
     )
+
+
+def _estimate_file_name(project_name: str, scope_label: str | None = None) -> str:
+    """`$ estimate sheet - <Project Name>[ - <Scope>].xlsx`, the workbook's name in a project
+    folder. One function for both filing paths, so the two can never name one scope differently."""
+    return f"$ estimate sheet - {_sanitize_folder_name(_scoped_name(project_name, scope_label))}.xlsx"
 
 
 def _find_numbers_subfolder(dbx, FolderMetadata, target: str) -> str:
@@ -600,10 +622,15 @@ def _find_numbers_subfolder(dbx, FolderMetadata, target: str) -> str:
 
 def _file_into_bid_template(dbx, dropbox, ApiError, FolderMetadata, *, base_path,
                             project_name, xlsx_bytes, docx_bytes, pdf_bytes,
-                            deadline, bid_date, work_type) -> dict:
+                            deadline, bid_date, work_type, scope_label=None) -> dict:
     """Copy the $$ Bid Template into <base>/YY.MM.DD <Project Name>, then file the
     filled estimate + proposal (+ PDF) into its Numbers sub-folder, replacing the
-    template's blank estimate sheet. Idempotent on re-run (overwrites the files)."""
+    template's blank estimate sheet. Idempotent on re-run (overwrites the files).
+
+    The FOLDER is the project's, so every scope of a split project files into the same one (the
+    second finds it there and skips the copy); the FILES carry the scope's name (`scope_label`,
+    _scoped_name), because the uploads below overwrite and two scopes of one work type would
+    otherwise write over each other's estimate and proposal."""
     # Destination category must exist (read-only guard) so a bad path can't
     # create a stray tree in the live Treadwell Dropbox.
     try:
@@ -625,9 +652,8 @@ def _file_into_bid_template(dbx, dropbox, ApiError, FolderMetadata, *, base_path
             raise
 
     numbers = _find_numbers_subfolder(dbx, FolderMetadata, target)
-    name = _sanitize_folder_name(project_name)
-    est_path = f"{numbers}/$ estimate sheet - {name}.xlsx"
-    prop_base = _project_proposal_name(project_name, work_type, deadline, bid_date)
+    est_path = f"{numbers}/{_estimate_file_name(project_name, scope_label)}"
+    prop_base = _project_proposal_name(project_name, work_type, deadline, bid_date, scope_label)
     docx_path = f"{numbers}/{prop_base}.docx"
 
     dbx.files_upload(xlsx_bytes, est_path, mode=dropbox.files.WriteMode("overwrite"))
@@ -740,9 +766,12 @@ def _existing_numbers_subfolder(dbx, FolderMetadata, target: str) -> str:
 
 def _file_into_existing_folder(dbx, dropbox, ApiError, FolderMetadata, *, folder_path,
                                project_name, xlsx_bytes, docx_bytes, pdf_bytes,
-                               deadline, bid_date, work_type, known_paths=()) -> dict:
+                               deadline, bid_date, work_type, known_paths=(),
+                               scope_label=None) -> dict:
     """File the estimate + proposal (+ PDF) into a project folder that ALREADY
-    exists — the one Kyle's team made by hand.
+    exists — the one Kyle's team made by hand. One scope of a split project names its
+    files after the scope too (`scope_label`, _scoped_name), so a sibling filed into the
+    same folder is never taken for a human's file and autorenamed "… (1)".
 
     The whole point is that this folder is somebody else's work, so this path is
     deliberately additive:
@@ -788,9 +817,8 @@ def _file_into_existing_folder(dbx, dropbox, ApiError, FolderMetadata, *, folder
     known = {str(p).strip().rstrip("/").lower() for p in (known_paths or ()) if p}
     renamed: list[str] = []
 
-    name = _sanitize_folder_name(project_name)
-    est_path = f"{numbers}/$ estimate sheet - {name}.xlsx"
-    prop_base = _project_proposal_name(project_name, work_type, deadline, bid_date)
+    est_path = f"{numbers}/{_estimate_file_name(project_name, scope_label)}"
+    prop_base = _project_proposal_name(project_name, work_type, deadline, bid_date, scope_label)
     docx_path = f"{numbers}/{prop_base}.docx"
 
     est_real = _upload_beside(dbx, dropbox, ApiError, est_path, xlsx_bytes, known, renamed)
@@ -829,8 +857,13 @@ def upload_project_files(
     pdf_bytes: bytes | None = None,
     existing_folder_path: str | None = None,
     known_paths: tuple | list = (),
+    scope_label: str | None = None,
 ) -> dict:
     """Create a project folder + upload the files. Returns links.
+
+    `scope_label` is the scope's name when the project is split into several proposals
+    (drafts.py scope groups): both step-5 paths then suffix the estimate and proposal names
+    with it, so the scopes share the project folder without sharing a file name.
 
     When `base_path` is given (the step-5 "To Dropbox" flow), the project folder
     is created UNDER that destination with the simple `YY.MM.DD Project Name`
@@ -879,7 +912,7 @@ def upload_project_files(
                 folder_path=existing_folder_path, project_name=project_name,
                 xlsx_bytes=xlsx_bytes, docx_bytes=docx_bytes, pdf_bytes=pdf_bytes,
                 deadline=deadline, bid_date=bid_date, work_type=work_type,
-                known_paths=known_paths,
+                known_paths=known_paths, scope_label=scope_label,
             )
 
         # Step-5 flow: copy the $$ Bid Template into the chosen Estimating folder
@@ -890,6 +923,7 @@ def upload_project_files(
                 base_path=base_path, project_name=project_name,
                 xlsx_bytes=xlsx_bytes, docx_bytes=docx_bytes, pdf_bytes=pdf_bytes,
                 deadline=deadline, bid_date=bid_date, work_type=work_type,
+                scope_label=scope_label,
             )
 
         # ── Legacy flat-folder flow (no base_path) — kept for compatibility ──
