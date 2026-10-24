@@ -7993,7 +7993,7 @@ async def api_scope_group_send(group_id: str, request: Request,
             body["message"] = msg[:2000]
         if payload.resend:
             body["resend"] = True
-    return await _portal_raw("/api/admin/scope-group/%s/send" % group_id, "POST",
+    return await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
                              json.dumps(body).encode("utf-8"), "application/json")
 
 
