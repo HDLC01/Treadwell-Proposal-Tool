@@ -13,7 +13,7 @@ What these pin, each against the BUILT .xlsx (openpyxl reads it back), never the
   * 12 scopes build, 13 are refused; colliding names are told apart;
   * a scope that cannot be put on a tab of its own is refused by name, never guessed at;
   * a second Gyp scope is its own tab, its square feet its own, with the note;
-  * every scope tab carries the "Job info and conditions only" note;
+  * every tab, scope tab or template tab, carries the "Job info and conditions only" note;
   * the route reads only LIVE members and answers in sentences.
 """
 import copy
@@ -152,12 +152,36 @@ def test_the_rate_locks_are_kept_on_every_scope_tab(built):
         assert ws["E20"].protection.locked == tpl["E20"].protection.locked is False
 
 
-def test_every_scope_tab_carries_the_note_and_no_other_tab_does(built):
-    for name in ("Lab 1", "Lab 2", "Breakroom", "Lab 3"):
+def _note_cells(ws):
+    return [c.coordinate for row in ws.iter_rows(min_row=1, max_row=1) for c in row
+            if c.value == ew.GROUP_WORKBOOK_NOTE]
+
+
+def test_every_tab_carries_the_note_scope_tabs_and_template_tabs_alike(built):
+    # Spec T2: "Every tab gets a visible note cell". The template tabs behind the scope tabs carry
+    # no pricing either, and the one no scope is on shows the first scope's answers.
+    for name in ("Lab 1", "Lab 2", "Breakroom", "Lab 3", "Seal", "Takeoff", "Gyp (FR)"):
         ws = built[name]
         assert ws["D1"].value == ew.GROUP_WORKBOOK_NOTE, name
         assert "D1:F1" in {str(r) for r in ws.merged_cells.ranges}, name
-    assert built["Seal"]["D1"].value is None
+    assert [ws.title for ws in built.worksheets if _note_cells(ws) != []] == built.sheetnames
+    assert all(len(_note_cells(ws)) == 1 for ws in built.worksheets)
+
+
+def test_a_tab_whose_d1_is_merged_gets_the_note_beside_it_not_over_it(built):
+    # Specs+Dwgs+Addn merges A1:D1 ("Drawings"): the note goes in the next free span, E1:G1, and
+    # the template's own heading and merge stay as they were.
+    ws = built["Specs+Dwgs+Addn"]
+    assert ws["A1"].value == _template()["Specs+Dwgs+Addn"]["A1"].value == "Drawings"
+    assert _note_cells(ws) == ["E1"]
+    merged = {str(r) for r in ws.merged_cells.ranges}
+    assert {"A1:D1", "E1:G1"} <= merged
+
+
+def test_the_tab_no_scope_is_on_carries_the_note():
+    # A Polish-only project: the Epoxy tab is filled with the first scope's answers, and says so.
+    wb = _load(ew.fill_group_estimate([polish("Breakroom"), polish("Lobby")]))
+    assert wb["Epoxy"]["D1"].value == ew.GROUP_WORKBOOK_NOTE
 
 
 def test_a_sheet_no_scope_is_on_gets_the_first_scopes_answers_and_only_its():

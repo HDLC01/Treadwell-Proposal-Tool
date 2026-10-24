@@ -1176,7 +1176,8 @@ def fill_estimate(
 # formulas that read them still see this project.
 #
 # THE v2 WORKBOOK CARRIES NO TAKEOFF AND NO PRICING (v2 prices itself, polish-estimate.js says why),
-# so every scope tab says so in a note across D1:F1. And a scope whose estimate carries what cannot be
+# so EVERY tab says so in a note across D1:F1 (the template tabs too: a tab no scope is on still
+# carries the first scope's answers, and none of them is priced). And a scope whose estimate carries what cannot be
 # moved onto a tab of its own (extra material lines, an alternate, rooms, grid copies, inserted rows
 # or columns, its own cell locks) is REFUSED with its name, rather than guessed at.
 GROUP_WORKBOOK_NOTE = "Job info and conditions only - the priced estimate is in the proposal."
@@ -1293,22 +1294,40 @@ def _named_sheet_cells(sheet: str, values: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _note_scope_tabs(count: int) -> Callable[[Any], None]:
-    """fill_estimate's `_finish` for a project workbook: the note on each of the first `count` tabs
-    (the scope tabs: tab_order put them first), across D1:F1, wrapped, so it reads whole. A tab
-    whose D1:F1 is not empty in the template is noted in D1 alone rather than written over."""
+def _group_note_span(ws) -> tuple[str, str] | None:
+    """(first, last) of the row-1 span a tab's note goes in: D1:F1, or, where any of those cells is
+    filled or part of a merged block (Specs+Dwgs+Addn merges A1:D1), the first three empty, unmerged
+    cells further along row 1. None when row 1 has no such span up to column Z."""
     first, last = GROUP_NOTE_RANGE
+    width = ws[last].column - ws[first].column + 1
+    merged = [r for r in ws.merged_cells.ranges if r.min_row <= 1 <= r.max_row]
+    for start in range(ws[first].column, 27 - width + 1):
+        cols = range(start, start + width)
+        if any(ws.cell(row=1, column=c).value not in (None, "") for c in cols):
+            continue
+        if any(r.min_col <= c <= r.max_col for r in merged for c in cols):
+            continue
+        return (ws.cell(row=1, column=start).coordinate,
+                ws.cell(row=1, column=start + width - 1).coordinate)
+    return None
+
+
+def _note_every_tab() -> Callable[[Any], None]:
+    """fill_estimate's `_finish` for a project workbook: the note on EVERY tab (the scope tabs, which
+    tab_order put first, and the template's tabs behind them),
+    across D1:F1, wrapped, so it reads whole. A tab whose D1:F1 is taken or merged is noted in the
+    next free span of row 1 (_group_note_span), never written over."""
 
     def finish(wb) -> None:
-        for ws in wb.worksheets[:count]:
-            span = ws[first + ":" + last][0]
-            if all(c.value in (None, "") for c in span):
-                ws.merge_cells(first + ":" + last)
-                ws.row_dimensions[1].height = max(ws.row_dimensions[1].height or 15, 30)
-            elif ws[first].value not in (None, ""):
-                log.warning("estimate_writer: %s!%s is not empty; the project note is not written",
-                            ws.title, first)
+        for ws in wb.worksheets:
+            span = _group_note_span(ws)
+            if span is None:
+                log.warning("estimate_writer: %s has no free cells in row 1; the project note is "
+                            "not written", ws.title)
                 continue
+            first, last = span
+            ws.merge_cells(first + ":" + last)
+            ws.row_dimensions[1].height = max(ws.row_dimensions[1].height or 15, 30)
             cell = ws[first]
             cell.value = GROUP_WORKBOOK_NOTE
             cell.font = Font(bold=True, color="9C0006")
@@ -1398,7 +1417,7 @@ def fill_group_estimate(members: list[Mapping[str, Any]]) -> bytes:
         tab_copies=plan["tab_copies"],
         tab_labels=plan["tab_labels"],
         tab_order=plan["tab_order"],
-        _finish=_note_scope_tabs(len(plan["tab_order"])),
+        _finish=_note_every_tab(),
     )
 
 
