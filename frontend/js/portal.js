@@ -5071,11 +5071,23 @@
     // there is no button, only the reason. An older portal reports only scope_send_pending, and keeps
     // the old pair of buttons (its send is refused as portal_not_ready, in words).
     const ss = grouped && p.scope_send && typeof p.scope_send === "object" ? p.scope_send : null;
+    // Scopes whose last send LOST ITS RESULT (the portal's unknown_scope_ids, findings 9 and 16):
+    // maybe emailed, maybe not. Never "the customer has every scope", and never re-sent by the
+    // ordinary button: a separate, explicit one asks the portal to send them again.
+    const lost = ss && Array.isArray(ss.unknown) ? ss.unknown : [];
     let send = "";
     if (grouped && sent && ss) {
       send = ss.label
         ? `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(ss.label)}</button></div>`
-        : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>';
+        : (lost.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>');
+      if (lost.length) {
+        const names = lost.map((id) => {
+          const m = members.filter((x) => x && x.id === id)[0];
+          return esc((m && m.label) || "a scope");
+        }).join(", ");
+        send += `<p class="note" id="scope-unknown">${esc(ss.unknown_text || "The result of the last send was lost. Check the thread, then send again.")} ${lost.length === 1 ? "Scope" : "Scopes"}: ${names}.</p>`
+          + `<div class="fu-line"><button type="button" class="btn btn-s" id="scope-resend-unknown">Send ${lost.length === 1 ? "it" : "them"} again</button></div>`;
+      }
     } else if (grouped && sent) {
       send = `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="${p.scope_send_pending ? "" : "1"}">${
           p.scope_send_pending ? "Send every scope in one email" : "Email every scope again"}</button></div>`;
@@ -5173,6 +5185,9 @@
       // one is asked to send once, or again on purpose.
       p.scope_send ? {} : { resend: send.dataset.resend === "1" }));
     if (retry && p && p.scope_group) retry.addEventListener("click", () => post(retry, { retry_failed: true }));
+    // The explicit answer to "the last send's result was lost": only this button sends resend_unknown.
+    const again = d.querySelector("#scope-resend-unknown");
+    if (again && p && p.scope_group) again.addEventListener("click", () => post(again, { resend_unknown: true }));
     // A REBUILT DRAWER STILL SAYS WHO WAS MISSED (SCOPE_SEND_NOTICE): the portal marks a scope
     // emailed once anybody got it, so without this the poll's repaint read "the customer has every
     // scope" and dropped the retry, and the contacts it missed never heard. Only where the retry
@@ -5215,7 +5230,15 @@
       ].filter(Boolean).join(" ") };
     }
     if (status === 409 && code === "nothing_to_send") {
+      const lostIds = Array.isArray(j.unknown) ? j.unknown : [];
+      if (lostIds.length) {
+        return { sent: false, retry: false, text: "Nothing new was sent. The result of the last send was lost for: " + lostIds.map(nameOf).join(", ") + ". Check the thread, then send again." };
+      }
       return { sent: false, retry: false, text: "Nothing was sent: the customer already has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here." };
+    }
+    if (code === "send_not_recorded") {
+      // The portal could not stamp the send before the first email, so it stopped: nobody was mailed.
+      return { sent: false, retry: false, text: "Nothing was sent: the portal could not record the send, so it stopped before emailing anybody. Try again in a minute." };
     }
     if (status === 502 && code === "delivery_failed") {
       const who = (j.results || j.deliveries || j.recipients || []).map((x) => (x && x.email) || x).filter((x) => typeof x === "string");
@@ -5249,9 +5272,13 @@
       return { sent: false, retry: false, text: "Nobody got the email" + (failed.length ? " (" + failed.join(", ") + ")" : "") + ". Nothing was marked as sent. Check the addresses, then try again." + leftText };
     }
     const n = delivered.length;
+    // recorded:false: the emails went out but the portal could not write down that they did. Its
+    // scopes then show as "result lost", and nobody should press send again before looking.
+    const unrecorded = j.recorded === false
+      ? " The portal could not record this send, so these scopes may show as not sent. Check the thread before sending again." : "";
     return { sent: true, retry: failed.length > 0,
       text: "Sent to " + n + " contact" + (n === 1 ? "" : "s") + ", one email with every scope."
-        + (failed.length ? " It did NOT reach: " + failed.join(", ") + "." : "") + leftText };
+        + (failed.length ? " It did NOT reach: " + failed.join(", ") + "." : "") + leftText + unrecorded };
   }
 
   /** The button, its confirmation, and what it does. Called by BOTH renderers.

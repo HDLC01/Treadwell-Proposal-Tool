@@ -187,16 +187,74 @@ SUMS = [_summ(1, "Breakroom"), _summ(2, "Lab 1"), _summ(3, "Lab 2")]
 
 
 def test_a_scope_added_and_one_revised_after_the_email_are_emailable_again(monkeypatch):
-    state = {"announced": True, "pending_scope_ids": ["s2", "s3"], "not_included": []}
-    rows = _board(monkeypatch, [_prow(1, state, last_sent_at="2026-10-02"),
-                                _prow(2, state, last_sent_at="2026-10-02"),   # revised since
-                                _prow(3, state)],                             # added since
+    """THE PORTAL'S REAL ROW SHAPE (/api/admin/pipeline, _apply_group_schedules): the board row has
+    `sent_at`, never `last_sent_at`, and which pending scope is new and which revised is the
+    portal's own `kinds` (finding 22). Lab 1 was emailed and then revised; Lab 2 was added since."""
+    state = {"announced": True, "pending_scope_ids": ["s2", "s3"], "not_included": [],
+             "unknown_scope_ids": [], "kinds": {"s2": "revised", "s3": "new"}}
+    rows = _board(monkeypatch, [_prow(1, state, sent_at="2026-10-02T15:00:00+00:00"),
+                                _prow(2, state, sent_at="2026-10-02T15:00:00+00:00"),
+                                _prow(3, state, sent_at="2026-10-21T15:00:00+00:00")],
                   SUMS)
     for pid in ("s1", "s2", "s3"):
         ss = rows[pid]["scope_send"]
         assert ss["label"] == "Email again: 1 new, 1 revised" and ss["pending"] == ["s2", "s3"]
+        assert (ss["new"], ss["revised"]) == (1, 1)
     assert [rows[p]["scope_send"]["mine"] for p in ("s1", "s2", "s3")] == [False, True, True]
     assert [m["pending"] for m in rows["s1"]["scope_members"]] == [False, True, True]
+
+
+def test_new_and_revised_come_from_the_portals_kinds_not_from_a_send_stamp(monkeypatch):
+    """A stray last_sent_at on a row says nothing: two revisions are two revisions."""
+    state = {"announced": True, "pending_scope_ids": ["s1", "s2"], "not_included": [],
+             "kinds": {"s1": "revised", "s2": "revised"}}
+    rows = _board(monkeypatch, [_prow(1, state), _prow(2, state, last_sent_at=None)], SUMS[:2])
+    assert rows["s1"]["scope_send"]["label"] == "Email again: 2 revised"
+
+
+def test_a_portal_that_does_not_say_which_are_new_gets_a_count_not_a_guess(monkeypatch):
+    state = {"announced": True, "pending_scope_ids": ["s2", "s3"], "not_included": []}
+    rows = _board(monkeypatch, [_prow(1, state, last_sent_at="2026-10-02"),
+                                _prow(2, state, last_sent_at="2026-10-02"), _prow(3, state)], SUMS)
+    ss = rows["s2"]["scope_send"]
+    assert ss["label"] == "Email again: 2 scopes" and ss["chip"] == "Email again: 2 scopes"
+    assert ss["new"] is None and ss["revised"] is None
+
+
+# ── a send whose result was lost (findings 9 and 16) ────────────────────────
+def test_a_scope_whose_send_lost_its_result_is_named_not_called_emailed(monkeypatch):
+    state = {"announced": True, "pending_scope_ids": [], "not_included": [],
+             "unknown_scope_ids": ["s2"], "kinds": {}}
+    rows = _board(monkeypatch, [_prow(1, state), _prow(2, state), _prow(3, state)], SUMS)
+    ss = rows["s1"]["scope_send"]
+    assert ss["label"] is None and ss["pending"] == []
+    assert ss["unknown"] == ["s2"]
+    assert ss["unknown_text"] == "The result of the last send was lost. Check the thread, then send again."
+    # the card of the scope in doubt says so; the others have nothing to say
+    assert rows["s2"]["scope_send"]["chip"] == "Email result lost" and rows["s2"]["scope_send"]["mine"]
+    assert rows["s1"]["scope_send"]["chip"] is None and not rows["s1"]["scope_send"]["mine"]
+
+
+def test_an_ordinary_view_reports_no_lost_send(monkeypatch):
+    state = {"announced": True, "pending_scope_ids": [], "not_included": []}
+    ss = _board(monkeypatch, [_prow(1, state), _prow(2, state)], SUMS[:2])["s1"]["scope_send"]
+    assert ss["unknown"] == [] and ss["unknown_text"] is None
+
+
+def test_the_combined_send_forwards_resend_unknown_only_when_asked(monkeypatch):
+    seen = {}
+
+    async def raw(path, method, blob, ctype):
+        seen["body"] = json.loads(blob)
+        return main.Response(content=b'{"ok": true}', status_code=200,
+                             headers={"content-type": "application/json"})
+    monkeypatch.setattr(main, "_portal_raw", raw)
+    monkeypatch.setattr(main, "_portal_capabilities", lambda: {"scope_groups": True})
+    assert client.post("/api/portal/scope-group/%s/send" % GID,
+                       json={"resend_unknown": True}).status_code == 200
+    assert seen["body"]["resend_unknown"] is True and "retry_failed" not in seen["body"]
+    client.post("/api/portal/scope-group/%s/send" % GID, json={})
+    assert "resend_unknown" not in seen["body"]
 
 
 def test_before_the_first_email_the_button_sends_every_scope(monkeypatch):
@@ -736,6 +794,38 @@ def test_every_refusal_is_a_sentence(drawer):
     assert "Not published yet: Lab 2." in note
     assert "Already with the customer as its own proposal" in note and "Breakroom" in note
     assert "Publish every scope from its Files page first. Not published yet: Breakroom" not in note
+
+
+@needs_node
+def test_a_lost_send_is_said_and_sent_again_only_on_purpose(drawer):
+    """Findings 9 and 16, EXECUTED: the drawer of a project whose last send lost its result never
+    says the customer has everything, names the scope in doubt, and its explicit button is the only
+    thing that sends resend_unknown."""
+    h = drawer["honest"]
+    html = h["lostHtml"]
+    assert 'id="scope-all-sent"' not in html, "a lost send was called delivered"
+    assert 'id="scope-send"' not in html
+    assert ('<p class="note" id="scope-unknown">The result of the last send was lost. Check the '
+            'thread, then send again. Scope: Lab 1.</p>') in html
+    assert '<button type="button" class="btn btn-s" id="scope-resend-unknown">Send it again</button>' in html
+    assert h["lostResend"]["requests"] == [{"path": "/api/portal/scope-group/grp_h/send", "method": "POST",
+                                            "body": {"resend_unknown": True}}]
+    assert h["lostResend"]["note"].startswith("Sent to 1 contact,")
+    assert "could not record" not in h["lostResend"]["note"]
+
+
+@needs_node
+def test_every_answer_about_a_lost_send_is_a_sentence(drawer):
+    h = drawer["honest"]
+    assert h["lostNothing"]["note"] == ("Nothing new was sent. The result of the last send was lost "
+                                        "for: Lab 1. Check the thread, then send again.")
+    assert h["notRecorded"]["note"] == ("Nothing was sent: the portal could not record the send, so "
+                                        "it stopped before emailing anybody. Try again in a minute.")
+    assert "send_not_recorded" not in h["notRecorded"]["note"]
+    assert h["sentUnrecorded"]["note"].startswith("Sent to 1 contact,")
+    assert h["sentUnrecorded"]["note"].endswith(
+        "The portal could not record this send, so these scopes may show as not sent. Check the "
+        "thread before sending again.")
 
 
 @needs_node

@@ -2591,7 +2591,11 @@ def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
                                  "sent": m["id"] in portal_rows,
                                  "pending": m["id"] in pending} for m in members]
         if view is not None:
-            row["scope_send"] = dict(view, mine=s["id"] in pending)
+            # A scope whose last send lost its result carries its own chip: it is neither waiting
+            # for its first email nor known to have gone out (findings 9 and 16).
+            lost = s["id"] in (view.get("unknown") or [])
+            row["scope_send"] = dict(view, mine=s["id"] in pending or lost,
+                                     chip="Email result lost" if lost else view["chip"])
 
 
 def _scope_send_view(members: List[Dict[str, Any]],
@@ -2603,9 +2607,18 @@ def _scope_send_view(members: List[Dict[str, Any]],
     portal_not_ready).
 
     `pending` are the live members the portal has not emailed at their current version: a scope
-    added or revised after the first email is emailable again (findings 1-3, 7, 11, 14). Of those,
-    one the customer has had before (`last_sent_at`) is REVISED, the rest NEW. `label` is the
-    button's words, None when there is nothing to email."""
+    added or revised after the first email is emailable again (findings 1-3, 7, 11, 14). Which of
+    them is NEW and which REVISED is the portal's own answer, `kinds` ({proposal_id: "new" |
+    "revised"}, finding 22): the board rows carry no last_sent_at to guess it from. A portal that
+    does not report `kinds` gets a button that counts the scopes without naming them ("Email again:
+    2 scopes"), never one that calls a revision new. `label` is the button's words, None when there
+    is nothing to email.
+
+    `unknown` are the members whose last send LOST ITS RESULT (the portal's `unknown_scope_ids`,
+    findings 9 and 16): the emails may or may not have gone out. The portal never re-sends them on
+    its own and never counts them as pending, so without this the drawer said "the customer has
+    every scope" and nobody could send them again. `unknown_text` says so, and the drawer offers a
+    separate, explicit "send them again" (the send's `resend_unknown`)."""
     states = [portal_rows[m["id"]].get("scope_send_state") for m in members
               if m["id"] in portal_rows]
     states = [st for st in states if isinstance(st, dict)]
@@ -2614,23 +2627,38 @@ def _scope_send_view(members: List[Dict[str, Any]],
     ids = [m["id"] for m in members]
     want: set = set()
     left_out: set = set()
+    lost: set = set()
+    kinds: Dict[str, str] = {}
+    told_kinds = False
     for st in states:
         want.update(x for x in (st.get("pending_scope_ids") or []) if isinstance(x, str))
         left_out.update(x for x in (st.get("not_included") or []) if isinstance(x, str))
+        lost.update(x for x in (st.get("unknown_scope_ids") or []) if isinstance(x, str))
+        if isinstance(st.get("kinds"), dict):
+            told_kinds = True
+            kinds.update({str(k): str(v) for k, v in st["kinds"].items()})
     announced = any(bool(st.get("announced")) for st in states)
     pending = [i for i in ids if i in want]
-    revised = [i for i in pending if (portal_rows.get(i) or {}).get("last_sent_at")]
+    unknown = [i for i in ids if i in lost and i not in want]
+    revised = [i for i in pending if kinds.get(i) == "revised"]
     new = [i for i in pending if i not in revised]
     if not pending:
         label = None
     elif not announced:
         label = "Send every scope in one email"
+    elif not told_kinds:
+        label = "Email again: %d scope%s" % (len(pending), "" if len(pending) == 1 else "s")
     else:
         parts = (["%d new" % len(new)] if new else []) + (["%d revised" % len(revised)] if revised else [])
         label = "Email again: " + ", ".join(parts)
-    return {"announced": announced, "pending": pending, "new": len(new), "revised": len(revised),
+    return {"announced": announced, "pending": pending,
+            "new": len(new) if told_kinds else None,
+            "revised": len(revised) if told_kinds else None,
             "not_included": [i for i in ids if i in left_out], "label": label,
-            "chip": (None if not pending else ("Email not sent" if not announced else label))}
+            "chip": (None if not pending else ("Email not sent" if not announced else label)),
+            "unknown": unknown,
+            "unknown_text": ("The result of the last send was lost. Check the thread, then send "
+                             "again." if unknown else None)}
 
 
 def _not_sent_rows(summaries: List[Dict[str, Any]],
@@ -8142,6 +8170,9 @@ class ScopeSendIn(BaseModel):
     # Mail ONLY the contacts the last send failed to reach (the portal reads who from its own mark),
     # never everybody again: the drawer's "try the failed contacts again".
     retry_failed: bool = False
+    # A PERSON'S "send them again" for scopes whose last send lost its result (the portal's
+    # `unknown`, findings 9 and 16). Never assumed: the portal mails them only when asked.
+    resend_unknown: bool = False
 
 
 @app.post("/api/portal/scope-group/{group_id}/send")
@@ -8157,7 +8188,8 @@ async def api_scope_group_send(group_id: str, request: Request,
 
     Asked of a portal that handles scope groups only (_scope_groups_refusal): 409 portal_not_ready
     or 502 portal_unreachable otherwise, and nothing is forwarded. `retry_failed` mails only the
-    contacts the last send missed."""
+    contacts the last send missed; `resend_unknown` is the drawer's explicit "send them again" for
+    scopes whose last send lost its result."""
     if not drafts.SCOPE_ID_RE.match(group_id or ""):
         return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
                                                       "error": "That is not a scope group."})
@@ -8176,6 +8208,8 @@ async def api_scope_group_send(group_id: str, request: Request,
             body["resend"] = True
         if payload.retry_failed:
             body["retry_failed"] = True
+        if payload.resend_unknown:
+            body["resend_unknown"] = True
     return await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
                              json.dumps(body).encode("utf-8"), "application/json")
 

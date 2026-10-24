@@ -2720,6 +2720,23 @@ async function runScenario(name, s) {
     row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
     page.renderDetail("hs-b", sentData);
     out.honest.allSentHtml = dom.html;
+    // A SEND WHOSE RESULT WAS LOST (findings 9 and 16): the portal reports Lab 1 as unknown, not
+    // pending, so there is no ordinary button; the drawer says so and offers an explicit resend.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: true, unknown: ["hs-b"], unknown_text: "The result of the last send was lost. Check the thread, then send again." });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.lostHtml = dom.html;
+    out.honest.lostResend = await press("#scope-resend-unknown", { status: 200,
+      body: { ok: true, recorded: true, results: [{ email: "a@x.test", delivered: true }] } });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.lostNothing = await press("#scope-resend-unknown", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: [], unknown: ["hs-b"] } });
+    out.honest.notRecorded = await press("#scope-resend-unknown", { status: 503,
+      body: { ok: false, error: "send_not_recorded", emailed: [] } });
+    out.honest.sentUnrecorded = await press("#scope-resend-unknown", { status: 200,
+      body: { ok: true, recorded: false, results: [{ email: "a@x.test", delivered: true }] } });
   } catch (e) {
     out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   } finally {
