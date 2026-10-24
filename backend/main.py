@@ -1918,7 +1918,7 @@ def api_portal_publish(draft_id: str, request: Request,
     if _gid:
         # A TEST PROJECT AND A REAL ONE ARE NEVER ONE PROJECT (finding 29), read off the STORED
         # drafts: a test scope published into a real customer's group would ride their email.
-        _mixed = drafts.scope_test_mix(draft_id, (row.get("data") or {}).get("is_test"), _gid)
+        _mixed = drafts.scope_test_mix(draft_id, row.get("data") or {}, _gid)
         if _mixed:
             log.warning("publish refused for draft %s: test and real scopes in one group",
                         _log_safe(draft_id))
@@ -8321,6 +8321,10 @@ def api_test_flag_draft(draft_id: str, payload: TestFlagIn, request: Request) ->
     try:
         existed = drafts.set_test_flag(draft_id, payload.is_test, _user_email(request))
         return {"ok": True, "existed": existed, "is_test": payload.is_test}
+    except drafts.ScopeError as exc:
+        # A scope of a project would be filed apart from its others (test and real in one group):
+        # refused in words, which the Projects page shows as it is (projects.js toggleTest).
+        return _scope_refusal(exc)
     except Exception as exc:  # noqa: BLE001
         log.warning("set_test_flag failed: %s", exc)
         return {"ok": False, "error": "Couldn't file that project."}

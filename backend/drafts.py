@@ -234,12 +234,21 @@ def set_test_flag(draft_id: str, is_test: bool,
     means "nobody has said", so the name heuristic still gets a vote, while `False` means
     "somebody looked at this and said it's a real bid" and must beat the heuristic. That's
     what lets a genuinely-named project like "Test Treadwell" be pulled back into Active.
+
+    A SCOPE OF A PROJECT IS NEVER FILED APART FROM ITS PROJECT (finding 7). A change that would put a
+    Test scope beside real ones, or a real scope beside Test ones, in one scope group RAISES
+    ScopeError test_mix (409) and writes nothing: the portal would quietly drop the odd one out of
+    the project's email and its follow-ups, and the board would draw a project nobody can email.
+
     Returns True if the project existed."""
     sb = get_client()
     cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
     if not cur.data:
         return False
     data = dict(cur.data[0].get("data") or {})
+    mixed = _test_flag_mix(draft_id, data, bool(is_test))
+    if mixed:
+        raise ScopeError("test_mix", mixed, 409)
     data["is_test"] = bool(is_test)
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "marked_test" if is_test else "marked_real",
@@ -752,44 +761,65 @@ def default_scope_label(data: Dict[str, Any]) -> str:
     return wt.capitalize() if wt else "Scope 1"
 
 
-def draft_is_test(flag: Any) -> bool:
-    """Is a draft a Test project, by its STORED `data.is_test` (the server's own flag, never a
-    request's). Only an explicit yes is a test: "nobody has said" and "said no" are both real here,
-    because the name heuristic the Projects page also uses is a browser-side guess, and a guess must
-    not decide whether a scope is emailed with a real customer's others."""
-    return _tribool(flag) is True
+# The Projects page's name heuristic (crm-core.js nameLooksLikeTest), character for character, and the
+# portal's (treadwell-portal scope_groups._TEST_WORD/_DELETE_ME/_ZZ). It decides test-ness only when
+# nobody has said: a stored `is_test` true or false wins in both directions. Narrow on purpose: "demo"
+# lives inside "demolition".
+_TEST_NAME_WORD = re.compile(r"\b(sample|test|verify|demo|qa|bugtest)\b", re.I)
+_TEST_NAME_DELETE_ME = re.compile(r"delete me", re.I)
+_TEST_NAME_ZZ = re.compile(r"^\s*zz", re.I)
+
+
+def draft_is_test(state: Any) -> bool:
+    """Is a draft a Test project? THE PORTAL'S RULE (scope_groups.draft_is_test), exactly, so the
+    tool and the portal agree about who is in a project (finding 7).
+
+    `state` is the draft's {is_test, project_name}, read off the STORED draft (the server's own
+    flag, never a request's). An explicit `is_test` wins either way; when nobody has said, a
+    test-looking project name makes it a test. A bare flag (not a dict) is judged by the flag alone,
+    as a draft with no name."""
+    if isinstance(state, dict):
+        flag, name = state.get("is_test"), state.get("project_name")
+    else:
+        flag, name = state, None
+    said = _tribool(flag)
+    if said is not None:
+        return said
+    name = str(name or "")
+    return bool(_TEST_NAME_WORD.search(name) or _TEST_NAME_DELETE_ME.search(name)
+                or _TEST_NAME_ZZ.search(name))
 
 
 def live_scope_members(members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """THE ONE "LIVE MEMBER" RULE for a scope group, oldest first (created_at, id).
 
-    `members` are the group's NOT-DELETED drafts as {id, created_at, archived, is_test, ...} (a
-    deleted draft never reaches this: every caller reads `deleted_at is null`). Live = not archived,
-    and of the same kind as the group's HOME (its earliest non-archived scope): a Test scope is never
-    a member of a real customer's project, nor a real scope of a test one. The portal applies the same
-    rule to the same drafts (treadwell-portal list_scope_group_drafts), so the board, the label checks
-    and the combined email agree about who is in a project. Before 2026-10-24 the board left archived
-    scopes out and the label check and the portal kept them, so an archived scope blocked an email
-    from a place nobody could see it."""
+    `members` are the group's NOT-DELETED drafts as {id, created_at, archived, is_test,
+    project_name, ...} (a deleted draft never reaches this: every caller reads `deleted_at is
+    null`). THE PORTAL'S split_members, ported exactly (finding 7): live = not archived, and of the
+    group's kind. A group is a REAL project as soon as ONE active draft in it is real, and then a
+    Test draft is never a member of it; a group whose active drafts are all Test is a test group, and
+    a real draft is never in one. tests/scope_member_cases.json holds the cases both repos assert.
+    Before 2026-10-25 the tool let the HOME (earliest scope) decide the kind and ignored the name
+    check, and disagreed with the portal in four of five mixed cases."""
     kept = [m for m in members if not _truthy(m.get("archived"))]
     kept.sort(key=lambda m: (str(m.get("created_at") or ""), str(m.get("id"))))
     if not kept:
         return []
-    home_test = draft_is_test(kept[0].get("is_test"))
-    return [m for m in kept if draft_is_test(m.get("is_test")) == home_test]
+    group_is_test = all(draft_is_test(m) for m in kept)
+    return [m for m in kept if draft_is_test(m) == group_is_test]
 
 
 def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
     """Every NOT-DELETED draft in a scope group, archived and test ones included, as {id, label,
-    created_at, archived, is_test}, oldest first. Callers want `_group_rows` (the live members)
-    unless they are checking the test rule itself.
+    created_at, archived, is_test, project_name}, oldest first. Callers want `_group_rows` (the live
+    members) unless they are checking the test rule itself.
 
-    ONE SMALL OBJECT PER DRAFT, never the blob: the projection names data->scope_group and two
-    scalars only, and the group is found in Python (the ids are a few hundred rows, the objects a few
-    dozen bytes each)."""
+    ONE SMALL OBJECT PER DRAFT, never the blob: the projection names data->scope_group and three
+    scalars only (the project name is the test rule's fallback, draft_is_test), and the group is
+    found in Python (the ids are a few hundred rows, the objects a few dozen bytes each)."""
     res = (get_client().table("drafts")
            .select("id,created_at,scope_group:data->scope_group,archived:data->>archived,"
-                   "is_test:data->>is_test")
+                   "is_test:data->>is_test,project_name:data->>project_name")
            .is_("deleted_at", "null").execute())
     out = []
     for r in res.data or []:
@@ -799,7 +829,9 @@ def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
             out.append({"id": r["id"], "label": sg.get("label") or "",
                         "created_at": r.get("created_at") or "",
                         "archived": _truthy(r["archived"] if "archived" in r else blob.get("archived")),
-                        "is_test": r["is_test"] if "is_test" in r else blob.get("is_test")})
+                        "is_test": r["is_test"] if "is_test" in r else blob.get("is_test"),
+                        "project_name": (r["project_name"] if "project_name" in r
+                                         else blob.get("project_name"))})
     out.sort(key=lambda m: (str(m["created_at"]), str(m["id"])))
     return out
 
@@ -810,23 +842,45 @@ def _group_rows(group_id: str) -> List[Dict[str, Any]]:
     return live_scope_members(_group_rows_all(group_id))
 
 
-def scope_test_mix(draft_id: str, is_test_flag: Any, group_id: str) -> Optional[str]:
+def scope_test_mix(draft_id: str, state: Any, group_id: str) -> Optional[str]:
     """The sentence refusing to put a Test project and a real one in one scope group, or None.
 
-    `is_test_flag` is the STORED flag of `draft_id` (read off its row, never off a request). Every
-    other not-deleted, not-archived draft of the group must be the same kind, both directions: a
-    test scope must not be emailed beside a real customer's scopes, and a real bid must not sit in a
-    test project where nobody chases it."""
-    mine = draft_is_test(is_test_flag)
+    `state` is the STORED draft blob of `draft_id` (its is_test and project_name, read off its row,
+    never off a request; a bare flag is judged alone, see draft_is_test). Every other not-deleted,
+    not-archived draft of the group must be the same kind, both directions: a test scope must not be
+    emailed beside a real customer's scopes, and a real bid must not sit in a test project where
+    nobody chases it."""
+    mine = draft_is_test(state)
     for m in _group_rows_all(group_id):
         if m["id"] == draft_id or m["archived"]:
             continue
-        if draft_is_test(m.get("is_test")) != mine:
+        if draft_is_test(m) != mine:
             return ("This is a Test project, and other scopes of this project are real customer "
                     "proposals." if mine else
                     "This is a real customer proposal, and other scopes of this project are Test "
                     "projects.") + " A Test project and a real one cannot be one project: mark them " \
                                    "the same way on the Projects page first."
+    return None
+
+
+def _test_flag_mix(draft_id: str, data: Dict[str, Any], want_test: bool) -> Optional[str]:
+    """The sentence refusing set_test_flag, or None: the stored draft `data` is a scope of a group,
+    marking it `want_test` changes its kind (draft_is_test), and another not-archived scope of the
+    group is of the other kind. A change that leaves its kind as it was (marking a test-named scope
+    Test by hand) never mixes anything and is allowed."""
+    gid, _label = _scope_of(data)
+    if not gid or draft_is_test(data) == want_test:
+        return None
+    for m in _group_rows_all(gid):
+        if m["id"] == draft_id or m["archived"]:
+            continue
+        if draft_is_test(m) != want_test:
+            return ("Nothing changed: this is one proposal of a project with several, and the "
+                    "others are %s. A Test project and a real one cannot be one project. To file "
+                    "the whole project %s, move its other scopes to Inactive first, change each "
+                    "one, then make them active again."
+                    % (("real customer proposals", "as a test") if want_test
+                       else ("Test projects", "as a real bid")))
     return None
 
 
@@ -868,7 +922,7 @@ def create_sibling(parent_id: str, label: Any, actor: Optional[str] = None) -> D
     # THE TEST RULE (scope_test_mix): the new scope inherits the parent's is_test, so the only way
     # this mixes kinds is a parent that differs from the group it is already in.
     if isinstance(existing, dict):
-        mixed = scope_test_mix(parent_id, parent.get("is_test"), gid)
+        mixed = scope_test_mix(parent_id, parent, gid)
         if mixed:
             raise ScopeError("test_mix", mixed, 409)
     members = [m for m in (_group_rows(gid) if existing else []) if m["id"] != parent_id]

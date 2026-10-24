@@ -249,10 +249,115 @@ def test_the_live_member_rule():
           {"id": "c", "created_at": "3", "archived": "false", "is_test": "true"},
           {"id": "d", "created_at": "4", "archived": None, "is_test": False}]
     assert [m["id"] for m in drafts.live_scope_members(ms)] == ["a", "d"]
-    # the home decides the kind: a test project's group keeps its test scopes
+    # ONE real active scope makes the group real (the portal's rule, finding 7): the home being a
+    # Test no longer turns the project into a test group.
     ms[0]["is_test"] = True
-    assert [m["id"] for m in drafts.live_scope_members(ms)] == ["a", "c"]
+    assert [m["id"] for m in drafts.live_scope_members(ms)] == ["d"]
+    # ...and a group whose active scopes are ALL tests keeps every one of them.
+    ms[3]["is_test"] = True
+    assert [m["id"] for m in drafts.live_scope_members(ms)] == ["a", "c", "d"]
     assert drafts.live_scope_members([]) == []
+
+
+CASES = json.loads((TESTS / "scope_member_cases.json").read_text(encoding="utf-8"))["cases"]
+PORTAL_REPO = pathlib.Path(__import__("os").environ.get("TW_PORTAL_REPO")
+                           or (TESTS.parents[2] / "treadwell-portal"))
+_IN_CI = (__import__("os").environ.get("CI", "").strip().lower() in ("1", "true", "yes")
+          or bool(__import__("os").environ.get("GITHUB_ACTIONS")))
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
+def test_the_shared_member_table_holds_in_the_tool(case):
+    """tests/scope_member_cases.json: the cases the tool AND the portal assert (finding 7). Four of
+    the first five disagreed before: the tool let the home decide the kind and ignored the name."""
+    live = [m["id"] for m in drafts.live_scope_members(copy.deepcopy(case["states"]))]
+    assert live == case["live"]
+    assert [s["id"] for s in case["states"] if s["id"] not in live] == case["parked"]
+
+
+def _portal_scope_groups():
+    path = PORTAL_REPO / "backend" / "scope_groups.py"
+    if not PORTAL_REPO.is_dir():
+        if _IN_CI:
+            pytest.fail("the portal is not checked out at %s" % PORTAL_REPO)
+        pytest.skip("the customer portal is not checked out beside this repo")
+    assert path.exists(), "the portal has no scope_groups.py: its membership rule moved; re-read it"
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_portal_scope_groups_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
+def test_the_shared_member_table_holds_in_the_portal(case):
+    """The same table through the PORTAL's own split_members, executed from its checkout, so the two
+    rules cannot drift apart while each repo's own tests stay green."""
+    live, parked = _portal_scope_groups().split_members(copy.deepcopy(case["states"]))
+    assert (live, parked) == (case["live"], case["parked"])
+
+
+def test_the_portals_copy_of_the_table_is_this_one():
+    """Each repo keeps the table in its own tests folder. Once the portal has its copy, the two must
+    be identical; until then this says so instead of passing on nothing."""
+    theirs = PORTAL_REPO / "backend" / "tests" / "scope_member_cases.json"
+    if not theirs.exists():
+        if _IN_CI:
+            pytest.fail("the portal has no tests/scope_member_cases.json beside its split_members")
+        pytest.skip("the portal's copy of scope_member_cases.json is not there yet")
+    assert json.loads(theirs.read_text(encoding="utf-8")) == json.loads(
+        (TESTS / "scope_member_cases.json").read_text(encoding="utf-8"))
+
+
+# ── set_test_flag never splits a project into test and real ───────────────────
+@pytest.mark.parametrize("now,want", [
+    (None, True),     # a real project: one scope marked Test
+    (True, False),    # a test project: one scope marked real
+])
+def test_marking_one_scope_of_a_project_the_other_kind_is_refused(fake_supabase, monkeypatch, now, want):
+    store = _store(fake_supabase, monkeypatch,
+                   _draft("s1", "Breakroom", is_test=now),
+                   _draft("s2", "Lab 1", created="2026-10-02", is_test=now),
+                   _draft("s3", "Lab 2", created="2026-10-03", is_test=now))
+    before = copy.deepcopy(store["drafts"])
+    events = len(store["events"])
+    r = client.post("/api/draft/s1/test", json={"is_test": want})
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["ok"] is False and j["code"] == "test_mix"
+    assert j["error"].startswith("Nothing changed:") and "cannot be one project" in j["error"]
+    assert store["drafts"] == before, "a refused flag was written"
+    assert len(store["events"]) == events, "a refused flag was logged"
+
+
+def test_a_flag_that_keeps_the_scope_its_kind_or_is_on_no_group_is_written(fake_supabase, monkeypatch):
+    store = _store(fake_supabase, monkeypatch,
+                   _draft("s1", "Breakroom", project_name="Sample HQ"),     # a test by its name
+                   _draft("s2", "Lab 1", created="2026-10-02", project_name="Sample HQ"),
+                   _draft("solo"))
+    # marking a test-named scope Test by hand changes nothing about the group
+    assert client.post("/api/draft/s1/test", json={"is_test": True}).json()["ok"] is True
+    assert _row(store, "s1")["data"]["is_test"] is True
+    # an ungrouped project is filed as before, either way
+    assert client.post("/api/draft/solo/test", json={"is_test": True}).json()["ok"] is True
+    assert client.post("/api/draft/solo/test", json={"is_test": False}).json()["ok"] is True
+    assert _row(store, "solo")["data"]["is_test"] is False
+
+
+def test_an_archived_sibling_does_not_block_the_flag(fake_supabase, monkeypatch):
+    store = _store(fake_supabase, monkeypatch, _draft("s1", "Breakroom"),
+                   _draft("s2", "Lab 1", created="2026-10-02", archived=True))
+    assert client.post("/api/draft/s1/test", json={"is_test": True}).json()["ok"] is True
+    assert _row(store, "s1")["data"]["is_test"] is True
+
+
+def test_the_test_rule_reads_the_project_name_too(fake_supabase, monkeypatch):
+    """The name check reaches the publish and the new-scope refusals: a real customer's group never
+    takes a scope whose project name reads as a test and that nobody has marked either way."""
+    _store(fake_supabase, monkeypatch, _draft("s1", "Breakroom"),
+           _draft("s2", "Lab 1", created="2026-10-02", project_name="Acme QA Lab"))
+    r = client.post("/api/draft/s2/scope", json={"label": "Lab 2"})
+    assert r.status_code == 409 and r.json()["code"] == "test_mix", r.text
 
 
 def test_an_archived_scope_holds_no_name_and_no_place(fake_supabase, monkeypatch):
@@ -270,6 +375,14 @@ def test_the_projection_reads_archived_and_test(monkeypatch):
     monkeypatch.setattr(drafts, "get_client", lambda: _ProjectingClient(store))
     every = drafts._group_rows_all(GID)
     assert [(m["id"], m["archived"]) for m in every] == [("p1", False), ("p2", True), ("p3", False)]
+    assert [m["id"] for m in drafts._group_rows(GID)] == ["p1"]
+
+
+def test_the_projection_reads_the_project_name_the_test_rule_falls_back_on(monkeypatch):
+    store = {"drafts": [_draft("p1", "Breakroom"),
+                        _draft("p2", "Lab 1", created="2026-10-02", project_name="Acme QA Lab")]}
+    monkeypatch.setattr(drafts, "get_client", lambda: _ProjectingClient(store))
+    assert [m["project_name"] for m in drafts._group_rows_all(GID)] == ["Acme HQ", "Acme QA Lab"]
     assert [m["id"] for m in drafts._group_rows(GID)] == ["p1"]
 
 
