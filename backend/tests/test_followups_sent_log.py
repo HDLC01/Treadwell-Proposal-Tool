@@ -33,6 +33,7 @@ out of follow-ups while still getting the proposal). A line may therefore say wh
 must not name anybody.
 """
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -49,6 +50,53 @@ FRONTEND = ROOT / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "followups-sent-harness.js"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+
+# THE PORTAL, found the way test_zap_baseline finds it (finding 25): TW_PORTAL_REPO first, which is
+# where CI checks it out ($workspace/portal), else the sibling checkout. In CI a missing portal is a
+# FAILURE, never a skip: these are the cross-repo drift checks, and a skip there kept CI green while
+# the portal grew a template the Follow-ups page cannot name.
+# Read from the environment at each call, so the tests below can set it.
+def _portal_repo() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("TW_PORTAL_REPO") or (ROOT.parent / "treadwell-portal"))
+
+
+def _in_ci() -> bool:
+    return (os.environ.get("CI", "").strip().lower() in ("1", "true", "yes")
+            or bool(os.environ.get("GITHUB_ACTIONS"))
+            or os.environ.get("TW_REQUIRE_PORTAL", "").strip() in ("1", "true", "yes"))
+
+
+def _portal_backend() -> pathlib.Path:
+    portal = _portal_repo() / "backend"
+    if not portal.is_dir():
+        if _in_ci():
+            pytest.fail("the portal is not checked out at %s, so the drift checks cannot run"
+                        % _portal_repo())
+        pytest.skip("the portal checkout is not beside this one")
+    return portal
+
+
+def test_the_portal_is_found_where_ci_puts_it(tmp_path, monkeypatch):
+    (tmp_path / "backend").mkdir()
+    monkeypatch.setenv("TW_PORTAL_REPO", str(tmp_path))
+    assert _portal_backend() == tmp_path / "backend"
+
+
+def test_a_missing_portal_fails_in_ci_and_skips_only_on_a_desk(tmp_path, monkeypatch):
+    monkeypatch.setenv("TW_PORTAL_REPO", str(tmp_path / "nowhere"))
+    for k in ("CI", "GITHUB_ACTIONS", "TW_REQUIRE_PORTAL"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        _portal_backend()
+    monkeypatch.setenv("CI", "true")
+    try:
+        _portal_backend()
+    except pytest.fail.Exception:
+        pass
+    except pytest.skip.Exception:
+        pytest.fail("a missing portal was SKIPPED in CI: the drift checks would pass on nothing")
+    else:
+        pytest.fail("a missing portal was not noticed in CI")
 
 
 @pytest.fixture(scope="module")
@@ -84,9 +132,7 @@ def test_the_pipeline_stamp_the_column_reads_is_the_staff_only_one():
     """Read out of the PORTAL, because that is where the exclusion is written and this repo cannot
     execute it. Two facts have to hold together for the rename to be right: the key the page reads
     is fed by last_staff_followup_at, and that column counts only the staff kinds."""
-    portal = ROOT.parent / "treadwell-portal" / "backend"
-    if not portal.is_dir():
-        pytest.skip("the portal checkout is not beside this one")
+    portal = _portal_backend()
     api = (portal / "main.py").read_text(encoding="utf-8")
     assert '"last_followup_at": _iso(r.get("last_staff_followup_at"))' in api, (
         "the pipeline no longer maps last_followup_at from the staff-only stamp; re-read whether "
@@ -266,9 +312,7 @@ def test_every_template_the_worker_can_send_has_a_label():
     """The maps above are only worth pinning if they are complete. Read out of the portal's worker
     and rules: an unmapped template renders as the bare "Automatic email", which is exactly the
     "something went out, no idea what" the panel exists to replace."""
-    portal = ROOT.parent / "treadwell-portal" / "backend"
-    if not portal.is_dir():
-        pytest.skip("the portal checkout is not beside this one")
+    portal = _portal_backend()
     sent = _portal_templates(portal)
     core = (FRONTEND / "js" / "followups-core.js").read_text(encoding="utf-8")
     labelled = set(_maps(core, "FU_TEMPLATE_LABEL"))
@@ -325,9 +369,7 @@ def _portal_templates(portal) -> set:
 def test_the_template_read_finds_every_shape_the_portal_uses():
     """A guard on the guard above: the read has to see the group surface as well as the cadence,
     or a new template could arrive unlabelled while the subset check passes on what it did see."""
-    portal = ROOT.parent / "treadwell-portal" / "backend"
-    if not portal.is_dir():
-        pytest.skip("the portal checkout is not beside this one")
+    portal = _portal_backend()
     found = _portal_templates(portal)
     for known in ("not_viewed", "checkin", "deposit_nudge", "staff_not_viewed",
                   "staff_deposit_outstanding", "staff_followup_due", "staff_scope_decision",
