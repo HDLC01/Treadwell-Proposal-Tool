@@ -269,18 +269,70 @@ def test_every_template_the_worker_can_send_has_a_label():
     portal = ROOT.parent / "treadwell-portal" / "backend"
     if not portal.is_dir():
         pytest.skip("the portal checkout is not beside this one")
-    rules = (portal / "followup_rules.py").read_text(encoding="utf-8")
-    # Every Due(...) the rule engine can return, whose three fields are (rule_key, audience,
-    # template). Matched on the audience/template pair because the rule_key is often a computed
-    # call spanning a line break, and the pair is what the worker stores.
-    sent = set(re.findall(r'"(?:customer|staff)",\s*"([a-z_]+)"', rules, re.S))
-    assert len(sent) >= 5, ("only found %s in followup_rules.py; this test needs rewriting rather "
-                            "than passing on an empty set" % sorted(sent))
+    sent = _portal_templates(portal)
     core = (FRONTEND / "js" / "followups-core.js").read_text(encoding="utf-8")
     labelled = set(_maps(core, "FU_TEMPLATE_LABEL"))
     assert sent <= labelled, (
         "the cadence can send %s, which the Follow-ups page has no wording for"
         % sorted(sent - labelled))
+
+
+def _portal_templates(portal) -> set:
+    """Every `template` the portal can write into portal_followups, read from its CURRENT source.
+
+    Remind-only (2026-10-23) and scope groups (2026-10-24) moved the customer templates out of
+    literal `Due(key, "customer", "x")` calls into the cadence's ladder tuples, which is why the old
+    one-pattern read found four. Each place a template can come from is read on its own, and each
+    has to find something, so a reshaped source fails here instead of shrinking the set quietly:
+
+      * the ladder tuples in followup_rules._customer_plan, `(offset?, "tag", "template", bool)`;
+      * followup_settings.TEMPLATE_KEYS, the cadence's own list of customer templates;
+      * every `Due(..., "customer"|"staff", "template")` with a literal template, in the rules,
+        the worker and main.py (the staff notes, the follow-up-due note, the scope decision email);
+      * every `"template": "x"` literal written into a row's detail (the decision re-nag), and the
+        task-template constants in followup_rules (GROUP_TASK_TEMPLATE_*: the decision task row).
+    """
+    rules = (portal / "followup_rules.py").read_text(encoding="utf-8")
+    worker = (portal / "followup_worker.py").read_text(encoding="utf-8")
+    main_src = (portal / "main.py").read_text(encoding="utf-8")
+    settings = (portal / "followup_settings.py").read_text(encoding="utf-8")
+
+    ladder = set(re.findall(
+        r'\(\s*(?:[\w.]+,\s*)?"[a-z0-9]+",\s*"([a-z_]+)",\s*(?:True|False)\s*\)', rules))
+    m = re.search(r"^TEMPLATE_KEYS\s*=\s*\(([^)]*)\)", settings, re.M)
+    keys = set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
+    dues = set()
+    for src in (rules, worker, main_src):
+        # Inside a Due( call only: a row's detail dict also reads `"audience": "staff", "template":`.
+        dues |= set(re.findall(
+            r'\bDue\((?:[^()]|\([^()]*\))*?"(?:customer|staff)",\s*"([a-z_]+)"\s*[,)]', src, re.S))
+    literal = set()
+    for src in (worker, main_src):
+        literal |= set(re.findall(r'"template":\s*"([a-z_]+)"', src))
+    consts = set(re.findall(r'^GROUP_TASK_TEMPLATE_\w+\s*=\s*"([a-z_]+)"', rules, re.M))
+
+    for name, found, floor in (("ladder tuples", ladder, 5), ("TEMPLATE_KEYS", keys, 5),
+                               ("Due(...) calls", dues, 5)):
+        assert len(found) >= floor, (
+            "only found %s from the portal's %s; this test needs rewriting rather than passing on "
+            "a short set" % (sorted(found), name))
+    # The ladder and the settings list are two spellings of one fact; if they disagree the read of
+    # one of them has broken.
+    assert ladder == keys, "ladder %s != TEMPLATE_KEYS %s" % (sorted(ladder), sorted(keys))
+    return ladder | keys | dues | literal | consts
+
+
+def test_the_template_read_finds_every_shape_the_portal_uses():
+    """A guard on the guard above: the read has to see the group surface as well as the cadence,
+    or a new template could arrive unlabelled while the subset check passes on what it did see."""
+    portal = ROOT.parent / "treadwell-portal" / "backend"
+    if not portal.is_dir():
+        pytest.skip("the portal checkout is not beside this one")
+    found = _portal_templates(portal)
+    for known in ("not_viewed", "checkin", "deposit_nudge", "staff_not_viewed",
+                  "staff_deposit_outstanding", "staff_followup_due", "staff_scope_decision",
+                  "scope_decision"):
+        assert known in found, "%s was not read out of the portal: %s" % (known, sorted(found))
 
 
 # ── the wiring the harness cannot see ─────────────────────────────────────────
