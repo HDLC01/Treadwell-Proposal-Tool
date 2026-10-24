@@ -386,6 +386,43 @@ def test_a_half_failed_split_takes_back_what_it_minted(fake_supabase, monkeypatc
         assert [x["id"] for x in store["drafts"]] == ["p1"]
 
 
+class _InsertLostAnswer(FakeClient):
+    """The `n`-th draft insert COMMITS, then its answer is lost (a read timeout after the write)."""
+
+    def __init__(self, store, n):
+        super().__init__(store)
+        self.n, self.inserts = n, 0
+
+    def table(self, name):
+        outer = self
+        t = FakeTable(self.store, name, self.captures)
+        real = t.execute
+
+        def execute():
+            if t._op == "insert" and name == "drafts":
+                outer.inserts += 1
+                if outer.inserts == outer.n:
+                    real()
+                    raise RuntimeError("read timeout")
+            return real()
+        t.execute = execute
+        return t
+
+
+def test_a_child_whose_insert_committed_but_lost_its_answer_is_taken_back(fake_supabase, monkeypatch):
+    """Finding 24: the second child's insert commits and its answer is lost. The split is refused,
+    and that child goes too: left behind it would hold the group's id and Lab 2's name, join the
+    project, block a retry with label_taken and be expected by the combined email."""
+    store = {"drafts": [_draft("p1", **COMBINED)], "events": [], "draft_revisions": []}
+    before = copy.deepcopy(store["drafts"][0])
+    monkeypatch.setattr(drafts, "get_client", lambda: _InsertLostAnswer(store, n=2))
+    monkeypatch.setattr(main, "_portal", _no_portal_row)
+    r = client.post("/api/draft/p1/split", json=SPLIT)
+    assert r.status_code == 503 and r.json()["code"] == "split_failed", r.text
+    assert _row(store, "p1") == before
+    assert [x["id"] for x in store["drafts"]] == ["p1"], "a committed child of a failed split survived"
+
+
 class _LostAnswer(FakeClient):
     """The parent's update COMMITS, then the answer is lost (a read timeout after the write).
     `reads_fail` makes the read-back fail too."""

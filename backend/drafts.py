@@ -1063,6 +1063,11 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
     stamp = _now_iso()
     intake = sibling_intake(parent)
     made: List[Dict[str, Any]] = []
+    # THE CHILD WHOSE INSERT IS IN FLIGHT (finding 24). Like the parent's update below, an insert
+    # can COMMIT and lose its answer (a read timeout, a 5xx after the write), so the id is on the
+    # cleanup list BEFORE the insert is sent: deleting an id that was never written is harmless,
+    # and a committed child left behind would join the project and hold a name a retry needs.
+    in_flight: List[str] = []
     rewritten = {k: v for k, v in parent.items() if k not in SPLIT_CLEARS}
     rewritten.update(_split_fields(children[0].get("data")))
     rewritten["scope_group"] = {"id": gid, "label": labels[0]}
@@ -1076,10 +1081,12 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
             d.update(_split_fields(c.get("data")))
             d["scope_group"] = {"id": gid, "label": lab}
             d["split_from"] = parent_id
+            in_flight[:] = [cid]
             sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,
                                        "created_at": stamp, "updated_at": stamp}).execute()
             log_event(cid, actor, "created", _summary_detail(d))
             made.append({"id": cid, "label": lab})
+            in_flight[:] = []
         sb.table("drafts").update({"data": rewritten, "updated_at": stamp}).eq("id", parent_id).execute()
     except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal once cleaned up
         # AN ERROR FROM THE PARENT'S UPDATE IS AMBIGUOUS: PostgREST may have committed it and the
@@ -1097,7 +1104,7 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
             # carries the group's id and a sheet's name: it would join the project, hold the name a
             # retry needs (label_taken) and be expected by the combined email for ever. Deleted
             # outright; a child that will not delete is stripped of its group instead.
-            _undo_split_children(sb, [m["id"] for m in made])
+            _undo_split_children(sb, [m["id"] for m in made] + in_flight)
             raise ScopeError("split_failed", "Nothing was split: the database did not take every "
                                              "part of it, and the parts that were made have been "
                                              "removed. Try again in a minute.", 503) from exc
