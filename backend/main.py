@@ -8143,6 +8143,52 @@ async def api_scope_group_send(group_id: str, request: Request,
                              json.dumps(body).encode("utf-8"), "application/json")
 
 
+@app.get("/api/scope-group/{group_id}/workbook")
+def api_scope_group_workbook(group_id: str) -> Any:
+    """ONE WORKBOOK FOR A PROJECT OF SEVERAL SCOPES, one tab per scope (estimate_writer's
+    fill_group_estimate; RJ's picture). Staff only, like every /api route (the sign-in gate), and a
+    download only: nothing is filed to Dropbox and no draft is written.
+
+    The scopes are the project's LIVE members (drafts._group_rows: not deleted, not archived, never
+    a Test scope beside real ones), each read from its stored draft, in the group's order.
+    200 {ok, xlsx_download_url, filename, tabs: [{id, label, tab, sheet}]} — the link is the usual
+    one-hour /api/file token. Refusals are flat {ok: false, code, error}: 400 invalid_scope_group,
+    404 not_found (no live scope), 409 with the builder's code (a scope it cannot put on a tab of
+    its own, too many scopes), 500 build_failed."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    members: List[Dict[str, Any]] = []
+    for m in drafts._group_rows(group_id):
+        row = drafts.load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        sg = data.get("scope_group")
+        if not row or not isinstance(sg, dict) or sg.get("id") != group_id:
+            continue                       # deleted or moved out between the two reads
+        members.append({"id": m["id"], "data": data,
+                        "label": sg.get("label") or m.get("label") or ""})
+    if not members:
+        return JSONResponse(status_code=404, content={
+            "ok": False, "code": "not_found", "error": "That project has no scopes any more."})
+    try:
+        plan_tabs = estimate_writer.plan_group_workbook(members)["tabs"]
+        content = estimate_writer.fill_group_estimate(members)
+    except estimate_writer.GroupWorkbookError as exc:
+        return JSONResponse(status_code=409, content={"ok": False, "code": exc.code,
+                                                      "error": exc.message})
+    except Exception:  # noqa: BLE001 — logged; the page gets a sentence, never a stack
+        log.exception("project workbook failed for scope group %s", _log_safe(group_id))
+        return JSONResponse(status_code=500, content={
+            "ok": False, "code": "build_failed",
+            "error": "The project workbook could not be built. Try again."})
+    name = str(members[0]["data"].get("project_name") or "project").replace(" ", "_")[:80]
+    filename = f"{name}_scopes_estimate.xlsx"
+    token = _cache_file(content, filename,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return {"ok": True, "xlsx_download_url": f"/api/file/{token}", "filename": filename,
+            "tabs": plan_tabs}
+
+
 @app.delete("/api/draft/{draft_id}")
 def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -> Dict[str, Any]:
     """Delete a project. Default = soft-delete (moves it to Trash, restorable).
