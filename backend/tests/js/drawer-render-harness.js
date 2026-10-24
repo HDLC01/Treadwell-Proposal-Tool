@@ -241,6 +241,10 @@ const FN_NAMES = [
   // BOTH renderers embed scopeHtml in their Proposal panel and BOTH call wireScope at the end, so
   // leaving either out is a ReferenceError on every drawer, sent and unsent at once.
   "scopeHtml", "wireScope",
+  // WHAT THE COMBINED SEND DID, IN WORDS (2026-10-24 hardening). TWELFTH addition: wireScope's
+  // send and retry buttons word every answer through it, so leaving it out is a ReferenceError on
+  // the press, which is the only place the delivery truth is said.
+  "scopeSendOutcome",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -2625,6 +2629,69 @@ async function runScenario(name, s) {
   } finally {
     fuNet.answers = [];
     for (const r of scopeAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+  }
+
+  // ── the project's one email, told honestly (2026-10-24 hardening) ─────────────
+  // A portal that reports the email's state (`scope_send`, main.py _scope_send_view): the button
+  // names what it will send, and every answer of the send is PRESSED through the real wireScope and
+  // worded by the real scopeSendOutcome: nobody reached, some reached (and the retry of only those),
+  // a scope left out, nothing new, a sent scope the portal does not link yet, an old portal's bare
+  // 404, and the tool's own portal_not_ready.
+  const honestAdded = [];
+  try {
+    out.honest = {};
+    const members = [{ id: "hs-a", label: "Breakroom", on_board: true, sent: true },
+                     { id: "hs-b", label: "Lab 1", on_board: true, sent: true },
+                     { id: "hs-c", label: "Lab 2", on_board: false, sent: false }];
+    const view = { announced: true, pending: ["hs-b", "hs-c"], new: 1, revised: 1, not_included: [],
+                   label: "Email again: 1 new, 1 revised", chip: "Email again: 1 new, 1 revised", mine: true };
+    const row = { proposal_id: "hs-b", project_name: "Acme HQ", proposal_status: "sent",
+      scope_group: "grp_h", scope_label: "Lab 1", scope_index: 2, scope_count: 3, scope_members: members,
+      scope_send: view };
+    BOARD_ROWS.push(row);
+    honestAdded.push(row);
+    page.setBoard(BOARD_ROWS);
+    const q = (sel) => dom.query(sel);
+    const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+    sentData.proposal.project_name = "Acme HQ";
+    const press = async (sel, answer) => {
+      net.requests.length = 0;
+      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send$/, answer]];
+      await q(sel).fire("click");
+      await tick();
+      return { note: q("#scope-note").textContent,
+               retryShown: q("#scope-retry-line").style.display !== "none",
+               requests: net.requests.filter((r) => /scope-group/.test(r.path)) };
+    };
+    page.open("hs-b");
+    page.renderDetail("hs-b", sentData);
+    out.honest.html = dom.html;
+    out.honest.noOne = await press("#scope-send", { status: 200,
+      body: { ok: true, results: [{ email: "a@x.test", delivered: false }, { email: "b@x.test", delivered: false }] } });
+    out.honest.legacyNoOne = await press("#scope-send", { status: 200,
+      body: { ok: true, already_sent: false, send_no: null, emailed: [] } });
+    out.honest.failed502 = await press("#scope-send", { status: 502,
+      body: { ok: false, error: "delivery_failed", results: [{ email: "a@x.test", delivered: false }] } });
+    out.honest.partial = await press("#scope-send", { status: 200,
+      body: { ok: true, results: [{ email: "a@x.test", delivered: true }, { email: "b@x.test", delivered: false }],
+              not_included: ["hs-c"] } });
+    out.honest.retry = await press("#scope-retry", { status: 200,
+      body: { ok: true, results: [{ email: "b@x.test", delivered: true }] } });
+    out.honest.nothing = await press("#scope-send", { status: 409, body: { ok: false, error: "nothing_to_send" } });
+    out.honest.notFound = await press("#scope-send", { status: 404, body: { detail: "Not Found" } });
+    out.honest.notReady = await press("#scope-send", { status: 409,
+      body: { ok: false, code: "portal_not_ready", error: "The customer portal has not been updated for projects with several proposals yet." } });
+    out.honest.sentMissing = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "scopes_not_published", missing: ["hs-a", "hs-c"] } });
+    // Nothing new to email: no button, the reason instead.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
+    page.renderDetail("hs-b", sentData);
+    out.honest.allSentHtml = dom.html;
+  } catch (e) {
+    out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    fuNet.answers = [];
+    for (const r of honestAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
   }
 
   console.log(JSON.stringify(out));

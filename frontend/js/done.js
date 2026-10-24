@@ -1754,8 +1754,8 @@
               const s = document.createElement("p");
               s.className = "portal-scope";
               s.textContent = "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
-                + "one scope of this project. The customer has not been emailed yet: they get one email with every "
-                + "scope, sent from the project's drawer on the board once every scope is published.";
+                + "one scope of this project. The customer has not been emailed about it yet: the project's one email, "
+                + "which names every new or revised scope, is sent from the project's drawer on the board.";
               r.appendChild(s);
             }
             // NO LINK AND NO RECIPIENT LIST. Removed on Hanz's ask (2026-08-26). The URL is a
