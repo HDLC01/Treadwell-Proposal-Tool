@@ -270,6 +270,25 @@ def test_the_bell_opens_the_open_scope_the_portal_names_not_the_home(monkeypatch
 def test_the_bell_says_what_a_decision_task_is(monkeypatch):
     row = _bell(monkeypatch, DECISION_TASK)["fut:d1"]
     assert row["body"] == "Decide the other scopes: Acme Labs"
+    assert row["link"] == "/portal.html?open=s2&sec=followup"
+
+
+def test_a_decision_task_opens_a_sibling_not_the_approved_scope_chasing_its_deposit(monkeypatch):
+    # The approved scope raised its own deposit task after the decision (a higher id, no
+    # scope_group): the portal's row query shows that scope only its newest open task, so its
+    # drawer has no decision card. A sibling's drawer still has it, so the bell opens a sibling.
+    deposit = {"id": "d2", "proposal_id": "s1", "link_proposal_id": "s1",
+               "project_name": "Acme Labs", "label": "Deposit reminder", "stage": "deposit",
+               "due_at": "2026-10-25T13:00:00Z", "scope_group": None, "scopes": []}
+    rows = _bell(monkeypatch, dict(DECISION_TASK, scopes=[
+        {"proposal_id": "s2", "label": "Lab 1", "status": "sent"},
+        {"proposal_id": "s3", "label": "Lab 2", "status": "viewed"}]), deposit)
+    assert rows["fut:d1"]["link"] == "/portal.html?open=s2&sec=followup"
+    assert rows["fut:d2"]["link"] == "/portal.html?open=s1&sec=followup"
+
+
+def test_a_decision_task_with_no_sibling_listed_keeps_the_portals_link(monkeypatch):
+    row = _bell(monkeypatch, dict(DECISION_TASK, scopes=[]))["fut:d1"]
     assert row["link"] == "/portal.html?open=s1&sec=followup"
 
 

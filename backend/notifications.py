@@ -475,6 +475,17 @@ def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         body = f"Follow-up due: {label}"
         if t.get("stage") == "decision":
             body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
+            # NOT the approved scope the task is filed on (the portal's link_proposal_id): once
+            # that scope raises its own deposit task, its drawer shows that card instead (a row
+            # shows only its newest open task). A sibling's drawer shows the decision card, so open
+            # the first scope the decision covers.
+            approved = (t.get("approved_scope") or {}).get("proposal_id") \
+                if isinstance(t.get("approved_scope"), dict) else None
+            sibs = [s.get("proposal_id") for s in (t.get("scopes") or [])
+                    if isinstance(s, dict) and s.get("proposal_id")
+                    and s.get("proposal_id") not in (approved, t.get("proposal_id"))]
+            if sibs:
+                pid = sibs[0]
         elif t.get("scope_group") and isinstance(t.get("scopes"), list) and t["scopes"]:
             # ONE reminder for the whole project, so the row names every scope it covers.
             names = [str((s or {}).get("label") or "a scope") for s in t["scopes"]
