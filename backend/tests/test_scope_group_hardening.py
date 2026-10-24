@@ -357,14 +357,31 @@ def test_the_shared_member_table_holds_in_the_portal(case):
 
 def test_the_portals_copy_of_the_table_is_this_one():
     """Each repo keeps the table in its own tests folder. Once the portal has its copy, the two must
-    be identical; until then this says so instead of passing on nothing."""
+    be identical. A MISSING copy skips even in CI: the copy is the portal's to add, and the drift that
+    matters is already caught above, where the portal's own split_members runs against this table.
+    Failing here would keep tool CI red after the portal ships correct code (review of 6C)."""
     theirs = PORTAL_REPO / "backend" / "tests" / "scope_member_cases.json"
     if not theirs.exists():
-        if _IN_CI:
-            pytest.fail("the portal has no tests/scope_member_cases.json beside its split_members")
-        pytest.skip("the portal's copy of scope_member_cases.json is not there yet")
+        pytest.skip("the portal keeps no copy of scope_member_cases.json; its split_members is "
+                    "asserted against this table by test_the_shared_member_table_holds_in_the_portal")
     assert json.loads(theirs.read_text(encoding="utf-8")) == json.loads(
         (TESTS / "scope_member_cases.json").read_text(encoding="utf-8"))
+
+
+def test_a_portal_without_the_copy_does_not_turn_ci_red(monkeypatch, tmp_path):
+    """The portal shipped scope groups but not the JSON copy: CI skips, it does not fail. A copy that
+    is there and differs still fails."""
+    import sys
+    mod = sys.modules[__name__]
+    monkeypatch.setattr(mod, "PORTAL_REPO", tmp_path)
+    monkeypatch.setattr(mod, "_IN_CI", True)
+    with pytest.raises(pytest.skip.Exception):
+        test_the_portals_copy_of_the_table_is_this_one()
+    (tmp_path / "backend" / "tests").mkdir(parents=True)
+    (tmp_path / "backend" / "tests" / "scope_member_cases.json").write_text(
+        json.dumps({"cases": []}), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        test_the_portals_copy_of_the_table_is_this_one()
 
 
 # ── set_test_flag never splits a project into test and real ───────────────────
