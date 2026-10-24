@@ -1005,6 +1005,18 @@ def _undo_split_children(sb: Any, ids: List[str]) -> None:
     _cache_clear()
 
 
+def _split_landed(sb: Any, parent_id: str, stamp: str) -> Optional[bool]:
+    """Did the parent's split update commit? True when the stored parent carries THIS split's mark,
+    False when it does not, None when the parent cannot be read back (the caller must not guess)."""
+    try:
+        cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+    except Exception:  # noqa: BLE001 — unknown, said as such
+        return None
+    if not cur.data:
+        return False
+    return (cur.data[0].get("data") or {}).get(SPLIT_MARK) == stamp
+
+
 def split_draft(parent_id: str, children: List[Dict[str, Any]],
                 actor: Optional[str] = None) -> Dict[str, Any]:
     """SPLIT ONE ESTIMATE INTO SEPARATE PROPOSALS (tier A1): `children[0]` becomes the parent itself,
@@ -1021,7 +1033,9 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
 
     Returns {"group_id", "parent": {"id", "label", "data", "updated_at"}, "children": [{"id",
     "label"}]}. RAISES ScopeError (not_found, invalid_label, label_taken, too_many_scopes,
-    invalid_scope_group, split_failed)."""
+    invalid_scope_group, split_failed, split_unconfirmed). An error from the parent's update is
+    checked against the stored parent first (_split_landed): a write that committed is a split that
+    happened, never one whose children are taken back."""
     sb = get_client()
     cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
     if not cur.data:
@@ -1068,14 +1082,25 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
             made.append({"id": cid, "label": lab})
         sb.table("drafts").update({"data": rewritten, "updated_at": stamp}).eq("id", parent_id).execute()
     except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal once cleaned up
-        # A HALF-FAILED SPLIT TAKES BACK WHAT IT MINTED (finding 27). A child left behind carries the
-        # group's id and a sheet's name: it would join the project, hold the name a retry needs
-        # (label_taken) and be expected by the combined email for ever. Deleted outright; a child
-        # that will not delete is stripped of its group instead, so it can join nothing.
-        _undo_split_children(sb, [m["id"] for m in made])
-        raise ScopeError("split_failed", "Nothing was split: the database did not take every "
-                                         "part of it, and the parts that were made have been "
-                                         "removed. Try again in a minute.", 503) from exc
+        # AN ERROR FROM THE PARENT'S UPDATE IS AMBIGUOUS: PostgREST may have committed it and the
+        # answer been lost (a read timeout, a 5xx after the write). The parent then already holds
+        # only children[0]'s sheet, so the children are the ONLY copy of the other sheets: taking
+        # them back would lose them for good. Read the parent back and let its split mark decide.
+        landed = _split_landed(sb, parent_id, stamp) if len(made) == len(children) - 1 else False
+        if landed is None:
+            raise ScopeError("split_unconfirmed", "The database did not confirm the split. Nothing "
+                                                  "was removed: reload the board to see whether the "
+                                                  "proposals were made before trying again.",
+                             503) from exc
+        if not landed:
+            # A HALF-FAILED SPLIT TAKES BACK WHAT IT MINTED (finding 27). A child left behind
+            # carries the group's id and a sheet's name: it would join the project, hold the name a
+            # retry needs (label_taken) and be expected by the combined email for ever. Deleted
+            # outright; a child that will not delete is stripped of its group instead.
+            _undo_split_children(sb, [m["id"] for m in made])
+            raise ScopeError("split_failed", "Nothing was split: the database did not take every "
+                                             "part of it, and the parts that were made have been "
+                                             "removed. Try again in a minute.", 503) from exc
     log_event(parent_id, actor, "split_into_scopes",
               {"project_name": parent.get("project_name"), "id": parent_id, "group": gid,
                "scopes": [labels[0]] + [m["label"] for m in made],

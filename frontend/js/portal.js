@@ -2094,6 +2094,11 @@
   // A Map, not an object, for the same reason as FU_DRAFT above: `pid` is server-chosen data, and a
   // Map cannot have its prototype replaced through a key the way `obj["__proto__"] = …` can.
   const FU_NOTICE = new Map();
+  // The contacts the project's one email did NOT reach, per scope GROUP, so the sentence and the
+  // retry button survive the 12s poll and the post-send reload that rebuild the drawer (wireScope).
+  // Without it they lasted one repaint, and the rebuilt drawer said the customer had everything.
+  // Cleared by the next send that reaches everybody. { text } A Map for FU_NOTICE's reason.
+  const SCOPE_SEND_NOTICE = new Map();
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
   // A separate one-way latch from DEEPLINK_USED (see load() below): DEEPLINK_USED guards the &sec=
@@ -4819,7 +4824,7 @@
     if (grouped && sent && ss) {
       send = ss.label
         ? `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(ss.label)}</button></div>`
-        : '<p class="note">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>';
+        : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>';
     } else if (grouped && sent) {
       send = `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="${p.scope_send_pending ? "" : "1"}">${
           p.scope_send_pending ? "Send every scope in one email" : "Email every scope again"}</button></div>`;
@@ -4904,6 +4909,9 @@
         return;
       }
       const out = scopeSendOutcome(r.status, j, p);
+      // Somebody got it: remember who did NOT (or forget, when everybody did) before the reload.
+      if (out.sent && out.retry) SCOPE_SEND_NOTICE.set(p.scope_group, { text: out.text });
+      else if (out.sent) SCOPE_SEND_NOTICE.delete(p.scope_group);
       say(out.text);
       if (out.retry && retryLine) retryLine.style.display = "";
       if (out.sent) load();
@@ -4914,6 +4922,17 @@
       // one is asked to send once, or again on purpose.
       p.scope_send ? {} : { resend: send.dataset.resend === "1" }));
     if (retry && p && p.scope_group) retry.addEventListener("click", () => post(retry, { retry_failed: true }));
+    // A REBUILT DRAWER STILL SAYS WHO WAS MISSED (SCOPE_SEND_NOTICE): the portal marks a scope
+    // emailed once anybody got it, so without this the poll's repaint read "the customer has every
+    // scope" and dropped the retry, and the contacts it missed never heard. Only where the retry
+    // button is drawn (the sent drawer of a grouped project).
+    const left = p && p.scope_group && retryLine ? SCOPE_SEND_NOTICE.get(p.scope_group) : null;
+    if (left) {
+      say(left.text);
+      retryLine.style.display = "";
+      const all = d.querySelector("#scope-all-sent");
+      if (all) all.style.display = "none";
+    }
   }
 
   /** WHAT THE COMBINED SEND DID, IN WORDS (review findings 12, 15, 51): "Sent" only when the portal

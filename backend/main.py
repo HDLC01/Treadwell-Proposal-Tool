@@ -2570,6 +2570,10 @@ def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
             continue
         gid = s.get("scope_group_id")
         members = groups.get(gid) if gid else None
+        # The live-member rule judges THIS row too: an archived scope, or a Test scope in a real
+        # project, is in no group, never "Scope 0 of N" beside the members that count.
+        if members and not any(m["id"] == s["id"] for m in members):
+            members = None
         if not members:
             if row.get("scope_group"):
                 row["scope_group"] = None

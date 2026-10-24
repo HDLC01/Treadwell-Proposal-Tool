@@ -123,6 +123,9 @@ const CONST_NAMES = [
   // The follow-up email being written per task, and the sentence an action leaves behind
   // (2026-10-23, remind mode). followupPanelHtml and the compose box read both on every paint.
   "FU_DRAFT", "FU_NOTICE",
+  // The contacts the project's one email missed, per scope group (2026-10-24 hardening): the lifted
+  // wireScope writes it on a partial send and re-reads it on every paint.
+  "SCOPE_SEND_NOTICE",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -2675,8 +2678,29 @@ async function runScenario(name, s) {
     out.honest.partial = await press("#scope-send", { status: 200,
       body: { ok: true, results: [{ email: "a@x.test", delivered: true }, { email: "b@x.test", delivered: false }],
               not_included: ["hs-c"] } });
+    // THE POLL (refreshLive re-runs openDetail every 12s, and a send that reached anybody reloads):
+    // the drawer is REBUILT, and the portal now calls every scope emailed. A fresh element has no
+    // inline style in this fake DOM, so "shown" reads the markup's own style until a script sets one.
+    const shown = (sel) => {
+      const el = q(sel);
+      if (el.style.display !== undefined) return el.style.display !== "none";
+      const m = new RegExp('id="' + sel.slice(1) + '"[^>]*>').exec(dom.html);
+      return !!m && !/display:\s*none/.test(m[0]);
+    };
+    const repaint = () => {
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      return { note: q("#scope-note").textContent, retryShown: shown("#scope-retry-line"),
+               allSentShown: /id="scope-all-sent"/.test(dom.html) && shown("#scope-all-sent") };
+    };
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
+    out.honest.afterPoll = repaint();
     out.honest.retry = await press("#scope-retry", { status: 200,
       body: { ok: true, results: [{ email: "b@x.test", delivered: true }] } });
+    out.honest.afterRetryPoll = repaint();
+    row.scope_send = view;
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
     out.honest.nothing = await press("#scope-send", { status: 409, body: { ok: false, error: "nothing_to_send" } });
     out.honest.notFound = await press("#scope-send", { status: 404, body: { detail: "Not Found" } });
     out.honest.notReady = await press("#scope-send", { status: 409,

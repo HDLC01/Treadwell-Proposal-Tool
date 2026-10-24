@@ -280,6 +280,20 @@ def test_the_board_draws_only_live_members(monkeypatch):
     assert rows["s1"]["scope_count"] == 1
 
 
+def test_an_excluded_scope_is_not_drawn_as_a_member_itself(monkeypatch):
+    """The live-member rule judges the card being stamped as well as its list: an archived scope and
+    a Test scope of a real project are ordinary proposals, never 'Scope 0 of 1' beside Breakroom."""
+    state = {"announced": True, "pending_scope_ids": [], "not_included": []}
+    rows = _board(monkeypatch, [_prow(1, state), _prow(2, state), _prow(3, state)],
+                  [_summ(1, "Breakroom"), _summ(2, "Lab 1", archived=True),
+                   _summ(3, "Lab 2", is_test=True)])
+    assert rows["s1"]["scope_index"] == 1 and rows["s1"]["scope_count"] == 1
+    for pid in ("s2", "s3"):
+        r = rows[pid]
+        assert r["scope_group"] is None and r["scope_label"] is None, (pid, r)
+        assert "scope_index" not in r and "scope_members" not in r and "scope_send" not in r, (pid, r)
+
+
 # ── 5. the test rule ────────────────────────────────────────────────────────
 @pytest.mark.parametrize("parent_test,other_test", [(True, None), (None, True), (False, True)])
 def test_a_new_scope_never_mixes_test_and_real(fake_supabase, monkeypatch, parent_test, other_test):
@@ -370,6 +384,51 @@ def test_a_half_failed_split_takes_back_what_it_minted(fake_supabase, monkeypatc
         assert len(orphan) == 1 and orphan[0]["data"]["archived"] is True
     else:
         assert [x["id"] for x in store["drafts"]] == ["p1"]
+
+
+class _LostAnswer(FakeClient):
+    """The parent's update COMMITS, then the answer is lost (a read timeout after the write).
+    `reads_fail` makes the read-back fail too."""
+
+    def __init__(self, store, reads_fail=False):
+        super().__init__(store)
+        self.reads_fail, self.updated = reads_fail, False
+
+    def table(self, name):
+        outer = self
+        t = FakeTable(self.store, name, self.captures)
+        real = t.execute
+
+        def execute():
+            if name == "drafts" and t._op == "update" and not outer.updated:
+                real()
+                outer.updated = True
+                raise RuntimeError("read timeout")
+            if name == "drafts" and t._op == "select" and outer.updated and outer.reads_fail:
+                raise RuntimeError("PostgREST blip")
+            return real()
+        t.execute = execute
+        return t
+
+
+@pytest.mark.parametrize("reads_fail", [False, True])
+def test_a_split_whose_parent_write_landed_keeps_every_sheet(fake_supabase, monkeypatch, reads_fail):
+    """The parent update committed and only its answer was lost: the parent already holds only the
+    Breakroom sheet, so deleting the Lab 1 and Lab 2 children would lose those sheets for good."""
+    store = {"drafts": [_draft("p1", **COMBINED)], "events": [], "draft_revisions": []}
+    monkeypatch.setattr(drafts, "get_client", lambda: _LostAnswer(store, reads_fail=reads_fail))
+    monkeypatch.setattr(main, "_portal", _no_portal_row)
+    r = client.post("/api/draft/p1/split", json=SPLIT)
+    labels = sorted(((x["data"] or {}).get("scope_group") or {}).get("label", "")
+                    for x in store["drafts"])
+    assert labels == ["Breakroom", "Lab 1", "Lab 2"], "a sheet of a split that happened was deleted"
+    assert _row(store, "p1")["data"].get("split_at")
+    if reads_fail:
+        assert r.status_code == 503 and r.json()["code"] == "split_unconfirmed", r.text
+        assert "Nothing was removed" in r.json()["error"]
+    else:
+        assert r.status_code == 200, r.text
+        assert sorted(c["label"] for c in r.json()["children"]) == ["Lab 1", "Lab 2"]
 
 
 def test_a_split_bid_stays_on_the_board_as_its_scopes(fake_supabase, monkeypatch):
@@ -500,6 +559,20 @@ def test_a_partial_send_names_who_it_missed_and_retries_only_them(drawer):
     assert h["retry"]["requests"] == [{"path": "/api/portal/scope-group/grp_h/send", "method": "POST",
                                        "body": {"retry_failed": True}}]
     assert h["retry"]["retryShown"] is False
+
+
+@needs_node
+def test_who_the_email_missed_survives_the_drawer_poll(drawer):
+    """The 12s poll rebuilds the drawer, and the portal by then calls every scope emailed (one
+    contact got it). The contacts it missed and the retry must still be on screen, not "the customer
+    has every scope"; a retry that reaches them clears it on the next rebuild."""
+    h = drawer["honest"]
+    assert "It did NOT reach: b@x.test." in h["afterPoll"]["note"], h["afterPoll"]
+    assert h["afterPoll"]["retryShown"] is True
+    assert h["afterPoll"]["allSentShown"] is False, "the drawer said the customer has everything"
+    assert "b@x.test" not in h["afterRetryPoll"]["note"]
+    assert h["afterRetryPoll"]["retryShown"] is False
+    assert h["afterRetryPoll"]["allSentShown"] is True
 
 
 @needs_node
