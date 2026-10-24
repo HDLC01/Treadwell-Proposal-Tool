@@ -431,3 +431,78 @@ def test_the_routes_sit_behind_the_same_sign_in_as_every_portal_proxy(monkeypatc
                          ("/api/portal/followup-task/x/send", "POST"),
                          ("/api/portal/proposal/x/followup-plan", "POST")):
         assert not main._auth_is_public(path, method), path
+
+
+# ── the scope decision (a scope group's sibling was approved) ───────────────
+# The portal's POST /api/admin/followup-task/{id}/scope-decision: {action, scope_ids, reason?,
+# note?, by}. Its refusals are sentences in the drawer, so they come back whole like every other.
+def test_a_scope_decision_forwards_the_ticked_scopes_and_who_decided(monkeypatch):
+    calls = _portal(monkeypatch, [(200, {"ok": True, "outcome": "close", "closed": ["s2"],
+                                         "failed": [], "skipped": []})])
+    r = client.post(f"/api/portal/followup-task/{TID}/scope-decision",
+                    json={"action": " Close ", "scope_ids": ["s2"], "reason": "Not_Low_Bid",
+                          "note": "  Went with the cheaper floor  ", "by": "someone-else@x.com"})
+    assert r.status_code == 200 and r.json()["closed"] == ["s2"]
+    assert calls[-1] == {"path": f"/api/admin/followup-task/{TID}/scope-decision",
+                         "method": "POST",
+                         "body": {"action": "close", "scope_ids": ["s2"],
+                                  "reason": "not_low_bid", "note": "Went with the cheaper floor",
+                                  "by": "tester@wetreadwell.com"}}
+
+
+@pytest.mark.parametrize("action", ["keep", "leave", "close"])
+def test_a_scope_decision_always_names_its_scopes_even_when_none_were_ticked(monkeypatch, action):
+    """The portal reads a MISSING scope_ids as "every scope the task lists". Nothing may be closed
+    that nobody ticked, so an empty or absent list goes over as an explicit []."""
+    calls = _portal(monkeypatch, [(200, {"ok": True, "outcome": action})])
+    client.post(f"/api/portal/followup-task/{TID}/scope-decision", json={"action": action})
+    assert calls[-1]["body"]["scope_ids"] == []
+    assert "reason" not in calls[-1]["body"] and "note" not in calls[-1]["body"]
+
+
+@pytest.mark.parametrize("status,body", [
+    (409, {"ok": False, "error": "scope_not_open", "scope_ids": ["s3"]}),
+    (409, {"ok": False, "error": "not_a_decision_task"}),
+    (409, {"ok": False, "error": "already_decided", "status": "decided"}),
+    (400, {"ok": False, "error": "invalid_reason"}),
+    (400, {"ok": False, "error": "note_required"}),
+    (400, {"ok": False, "error": "no_scopes"}),
+    (400, {"ok": False, "error": "unknown_scope"}),
+])
+def test_a_scope_decision_refusal_comes_back_whole(monkeypatch, status, body):
+    _portal(monkeypatch, [(status, body)])
+    r = client.post(f"/api/portal/followup-task/{TID}/scope-decision",
+                    json={"action": "close", "scope_ids": ["s3"], "reason": "x", "note": "y"})
+    assert r.status_code == status
+    for k, v in body.items():
+        assert r.json()[k] == v
+
+
+def test_a_scope_decision_passes_the_skipped_list_back(monkeypatch):
+    _portal(monkeypatch, [(200, {"ok": True, "outcome": "close", "closed": ["s2"], "failed": [],
+                                 "skipped": ["s3"]})])
+    got = client.post(f"/api/portal/followup-task/{TID}/scope-decision",
+                      json={"action": "close", "scope_ids": ["s2", "s3"], "reason": "other",
+                            "note": "n"}).json()
+    assert got["skipped"] == ["s3"] and got["closed"] == ["s2"]
+
+
+@pytest.mark.parametrize("payload", [{"action": "delete"}, {"action": ""}, {},
+                                     {"action": "close", "scope_ids": ["../x"]},
+                                     {"action": "close", "scope_ids": ["a/b"]}])
+def test_a_bad_scope_decision_never_reaches_the_portal(monkeypatch, payload):
+    calls = _portal(monkeypatch, [(200, {"ok": True})])
+    r = client.post(f"/api/portal/followup-task/{TID}/scope-decision", json=payload)
+    assert r.status_code in (400, 422), r.text
+    assert calls == []
+
+
+def test_an_unsafe_task_id_is_refused_for_the_scope_decision(monkeypatch):
+    calls = _portal(monkeypatch, [(200, {"ok": True})])
+    assert client.post("/api/portal/followup-task/a.b/scope-decision",
+                       json={"action": "leave"}).status_code == 400
+    assert calls == []
+
+
+def test_the_scope_decision_sits_behind_the_sign_in():
+    assert not main._auth_is_public("/api/portal/followup-task/x/scope-decision", "POST")

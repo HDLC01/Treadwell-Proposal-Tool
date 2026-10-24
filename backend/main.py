@@ -3470,6 +3470,43 @@ def api_portal_followup_snooze(task_id: str, request: Request,
                         {"until": until, "by": _user_email(request)})
 
 
+class FollowupScopeDecisionIn(BaseModel):
+    """The answer to a "Decide the other scopes" task (a scope group's sibling was approved)."""
+    action: str = ""
+    scope_ids: List[str] = []
+    reason: Optional[str] = None
+    note: Optional[str] = None
+
+
+_SCOPE_DECISIONS = ("keep", "close", "leave")
+
+
+@app.post("/api/portal/followup-task/{task_id}/scope-decision")
+def api_portal_followup_scope_decision(task_id: str, request: Request,
+                                       payload: Optional[FollowupScopeDecisionIn] = None
+                                       ) -> JSONResponse:
+    """Close the ticked scopes as lost, leave them as they are, or keep chasing them.
+
+    `scope_ids` is ALWAYS forwarded as a list, empty when nothing was ticked: the portal reads a
+    MISSING list as "every scope the task names", and nothing may ever be closed that nobody ticked.
+    Reason and note are judged by the portal (its 400 invalid_reason / note_required and its 409
+    scope_not_open come back whole, so the drawer can say which). `by` is the signed-in user."""
+    tid = _safe_id(task_id)
+    p = payload or FollowupScopeDecisionIn()
+    action = str(p.action or "").strip().lower()
+    if action not in _SCOPE_DECISIONS:
+        raise HTTPException(400, "invalid_action")
+    ids = [_safe_id(str(x or "").strip()) for x in (p.scope_ids or [])][:50]
+    body: Dict[str, Any] = {"action": action, "scope_ids": ids, "by": _user_email(request)}
+    reason = str(p.reason or "").strip().lower()[:64]
+    note = str(p.note or "").strip()[:_NOTE_MAX]
+    if reason:
+        body["reason"] = reason
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{tid}/scope-decision", "POST", body)
+
+
 @app.post("/api/portal/proposal/{proposal_id}/followup-plan")
 def api_portal_followup_plan(proposal_id: str, request: Request,
                              payload: Optional[FollowupPlanIn] = None) -> JSONResponse:
