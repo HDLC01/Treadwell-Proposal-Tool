@@ -23,13 +23,13 @@ import io
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Callable, Dict, Mapping
 
 log = logging.getLogger("proposal_tool.estimate_writer")
 
 from openpyxl import load_workbook
 from openpyxl.formatting.formatting import ConditionalFormattingList
-from openpyxl.styles import Protection
+from openpyxl.styles import Alignment, Font, Protection
 from openpyxl.styles.cell_style import StyleArray
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.cell_range import CellRange
@@ -972,8 +972,13 @@ def fill_estimate(
     tab_order: list | None = None,
     tab_structs: list[Mapping[str, Any]] | None = None,
     lock_overrides: Mapping[str, Any] | None = None,
+    *,
+    _finish: Callable[[Any], None] | None = None,
 ) -> bytes:
     """Open the template, write input cells, return filled workbook bytes.
+
+    `_finish` (private, fill_group_estimate's) is handed the finished workbook just before it is
+    saved, after every write, rename and lock; nothing else passes it.
 
     Three ways to specify what to write:
 
@@ -1139,11 +1144,262 @@ def fill_estimate(
                   for ws, addrs in ws_layouts]
     _apply_cell_protection(ws_layouts)
 
+    if _finish is not None:
+        _finish(wb)
+
     # Stream to bytes
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+# ─── One workbook for a project of several scopes (RJ, 2026-10-24; build spec T2) ─────────────────
+# A project split into scopes (Breakroom polish, Lab 1 epoxy, Lab 2 epoxy) is ONE workbook with one
+# tab per scope, the way RJ drew it. This first slice is a builder and a staff download only: nothing
+# here files to Dropbox, and the per-scope .xlsx /api/generate builds is untouched.
+#
+# HOW THE TABS ARE MADE. Each scope's tab is the workbook sheet of its estimate's BASE SECTION, read
+# off the v2 model's own `sheet` key (a split scope's base_tab_id can be a section id like "Copy1",
+# and the work type does not say which of the five Gyp sheets a Gyp scope is on). The first scope on
+# a sheet takes the sheet itself; every later scope on the same sheet is a Copy<N> of it, so two
+# Epoxy scopes are "Epoxy" and "Copy1". The tabs are renamed to the scopes' names and put first, in
+# the group's order; the template's other tabs stay behind them, because the scope tabs' own
+# formulas read them (a Polish tab's project info is `=Epoxy!B1`).
+#
+# EVERY SCOPE'S TAB SHOWS ITS OWN ANSWERS AND NOBODY ELSE'S. fill_estimate writes its named fields
+# BEFORE it copies tabs, so a copy made of a filled tab would show the first scope's figures under
+# the second scope's name. Nothing is written through `values` here (except the Specs tab, which is
+# the project's): each scope's named fields are turned into "<its tab>!<cell>" writes, which land
+# after the copies are made, with the scope's own typed cells winning over them as they always do.
+# Sheets no scope is on (the Epoxy tab of a Polish-only project) get the FIRST scope's answers, so the
+# formulas that read them still see this project.
+#
+# THE v2 WORKBOOK CARRIES NO TAKEOFF AND NO PRICING (v2 prices itself, polish-estimate.js says why),
+# so every scope tab says so in a note across D1:F1. And a scope whose estimate carries what cannot be
+# moved onto a tab of its own (extra material lines, an alternate, rooms, grid copies, inserted rows
+# or columns, its own cell locks) is REFUSED with its name, rather than guessed at.
+GROUP_WORKBOOK_NOTE = "Job info and conditions only - the priced estimate is in the proposal."
+GROUP_NOTE_RANGE = ("D1", "F1")
+GROUP_MAX_SCOPES = 12                # drafts.MAX_SCOPES: a project has 12 proposals at most
+_GROUP_COPY_ID = re.compile(r"^Copy[1-9]\d*$")
+_GROUP_ROOT_TAB = "Polish"          # bid-model.js ROOT_TAB: the root section IS the model
+_GROUP_SPECS_KEYS = ("plan_sheet", "finish_tag", "spec_section", "addenda_count")
+# Draft keys that describe a tab no copy can carry: the scope is refused (see the block above).
+_GROUP_REFUSED_KEYS = {
+    "extras": "extra material lines",
+    "rooms": "rooms",
+    "tab_copies": "copied sheets from the old estimate grid",
+    "tab_structs": "inserted or deleted rows or columns",
+    "lock_overrides": "its own locked or unlocked cells",
+}
+
+
+class GroupWorkbookError(Exception):
+    """A project workbook that cannot be built, said in the estimator's words. `code` is the API's."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _scope_name(m: Mapping[str, Any], i: int) -> str:
+    label = str(m.get("label") or "").strip()
+    return label or "Scope %d" % (i + 1)
+
+
+def group_member_sheet(data: Mapping[str, Any], name: str = "This scope") -> tuple[str, str]:
+    """(section id, workbook sheet) of a scope's estimate: its BASE SECTION, read off the v2 model.
+
+    The section is the one `base_tab_id` names when the model has it and it is part of the bid,
+    else the model's one base section; the sheet is that section's `sheet` key for a Copy<N> id and
+    the key itself otherwise (the root section is the Polish sheet). RAISES GroupWorkbookError for
+    anything else: no v2 estimate, no estimate yet, two bases priced together, a sheet the template
+    does not have."""
+    pe = data.get("polish_estimate") if isinstance(data, Mapping) else None
+    if not (isinstance(pe, Mapping) and pe.get("version") == 2):
+        raise GroupWorkbookError(
+            "member_not_v2", "“%s” is not an Estimating Tool v2 estimate, so it has no tab to put "
+                             "in the project workbook." % name)
+    if not str(data.get("work_type") or "").strip():
+        raise GroupWorkbookError(
+            "member_not_estimated", "“%s” has no estimate yet. Open it on the estimate page first."
+                                    % name)
+    sections: Dict[str, tuple[str, str]] = {}
+    root_kind = pe.get("kind") if pe.get("kind") in ("off", "option") else "base"
+    sections[_GROUP_ROOT_TAB] = (_GROUP_ROOT_TAB, root_kind)
+    tabs = pe.get("tabs") if isinstance(pe.get("tabs"), Mapping) else {}
+    for sid, sec in tabs.items():
+        if not isinstance(sec, Mapping) or sid == _GROUP_ROOT_TAB:
+            continue
+        sheet = sec.get("sheet") if _GROUP_COPY_ID.match(str(sid)) else sid
+        sections[str(sid)] = (str(sheet or ""), str(sec.get("kind") or ""))
+    base_id = data.get("base_tab_id")
+    if isinstance(base_id, str) and base_id in sections and sections[base_id][1] != "off":
+        sid = base_id
+    else:
+        bases = [k for k, (_s, kind) in sections.items() if kind == "base"]
+        if len(bases) != 1:
+            raise GroupWorkbookError(
+                "member_no_base",
+                "“%s” is not priced on one sheet (its estimate has %s), so the project workbook "
+                "cannot tell which tab it is. Make one sheet its base first."
+                % (name, "no base sheet" if not bases else "%d base sheets" % len(bases)))
+        sid = bases[0]
+    sheet = sections[sid][0]
+    if sheet not in FLAG_BLOCK_CELLS:
+        raise GroupWorkbookError(
+            "member_unknown_sheet", "“%s” is priced on a sheet the estimate workbook does not "
+                                    "have, so it cannot be a tab of the project workbook." % name)
+    return sid, sheet
+
+
+def _group_refusal(data: Mapping[str, Any], name: str) -> str | None:
+    """The sentence refusing a scope whose estimate carries what cannot be put on a tab of its own,
+    or None."""
+    for key, what in _GROUP_REFUSED_KEYS.items():
+        if data.get(key):
+            return ("“%s” has %s, which the project workbook cannot put on a tab of its own. "
+                    "Download that scope's own estimate instead." % (name, what))
+    acb = data.get("alternate_computed_bid")
+    alt_fb = acb.get("alternate_full_bid") if isinstance(acb, Mapping) else None
+    if isinstance(alt_fb, Mapping) and alt_fb.get("total_base_bid"):
+        return ("“%s” has an alternate system, which the project workbook cannot put on a tab of "
+                "its own. Download that scope's own estimate instead." % name)
+    return None
+
+
+def _named_sheet_cells(sheet: str, values: Mapping[str, Any]) -> Dict[str, Any]:
+    """{address: value} fill_estimate's named-field pass would write on `sheet` (template layout)
+    for `values`, blanks left out. Only that ONE sheet: the gyp square feet that fill_estimate
+    writes to all five gyp sheets go to this one, because each gyp tab here is its own scope."""
+    maps: list[Mapping[str, str]] = []
+    if sheet == "Epoxy":
+        maps.append(EPOXY_CELL_MAP)
+    elif sheet == "Polish":
+        maps.append(POLISH_CELL_MAP)
+    if sheet == GYP_SHEET:
+        maps.append(GYP_CELL_MAP)
+    if sheet in GYP_SHEETS:
+        maps.append(GYP_SF_MAP)
+    out: Dict[str, Any] = {}
+    for mp in maps:
+        for field, coord in mp.items():
+            if values.get(field) not in (None, ""):
+                out[coord] = values[field]
+    if sheet in TAXABLE_FLAG_CELLS and values.get("taxable") not in (None, ""):
+        out[TAXABLE_FLAG_CELLS[sheet]] = values["taxable"]
+    return out
+
+
+def _note_scope_tabs(count: int) -> Callable[[Any], None]:
+    """fill_estimate's `_finish` for a project workbook: the note on each of the first `count` tabs
+    (the scope tabs: tab_order put them first), across D1:F1, wrapped, so it reads whole. A tab
+    whose D1:F1 is not empty in the template is noted in D1 alone rather than written over."""
+    first, last = GROUP_NOTE_RANGE
+
+    def finish(wb) -> None:
+        for ws in wb.worksheets[:count]:
+            span = ws[first + ":" + last][0]
+            if all(c.value in (None, "") for c in span):
+                ws.merge_cells(first + ":" + last)
+                ws.row_dimensions[1].height = max(ws.row_dimensions[1].height or 15, 30)
+            elif ws[first].value not in (None, ""):
+                log.warning("estimate_writer: %s!%s is not empty; the project note is not written",
+                            ws.title, first)
+                continue
+            cell = ws[first]
+            cell.value = GROUP_WORKBOOK_NOTE
+            cell.font = Font(bold=True, color="9C0006")
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    return finish
+
+
+def plan_group_workbook(members: list[Mapping[str, Any]]) -> Dict[str, Any]:
+    """The fill_estimate arguments for a project's workbook, and the tab each scope got.
+
+    `members` are the project's LIVE scopes, in the group's order (drafts.live_scope_members), each
+    {"id", "label", "data": the draft blob}. Returns {"values", "cell_values", "tab_copies",
+    "tab_labels", "tab_order", "tabs": [{"id", "label", "tab", "sheet"}]}. RAISES
+    GroupWorkbookError: no scopes, more than GROUP_MAX_SCOPES, or a scope that is refused (see
+    group_member_sheet and _GROUP_REFUSED_KEYS). Pure: nothing handed in is changed."""
+    if not members:
+        raise GroupWorkbookError("no_scopes", "This project has no scopes to put in a workbook.")
+    if len(members) > GROUP_MAX_SCOPES:
+        raise GroupWorkbookError("too_many_scopes", "A project workbook holds %d scopes at most."
+                                 % GROUP_MAX_SCOPES)
+    resolved = []
+    for i, m in enumerate(members):
+        data = m.get("data") if isinstance(m.get("data"), Mapping) else {}
+        name = _scope_name(m, i)
+        refused = _group_refusal(data, name)
+        if refused:
+            raise GroupWorkbookError("member_not_supported", refused)
+        sid, sheet = group_member_sheet(data, name)
+        resolved.append((m, data, name, sid, sheet))
+
+    tab_copies: list[Dict[str, str]] = []
+    used: set[str] = set()
+    tabs = []
+    for m, data, name, sid, sheet in resolved:
+        if sheet in used:
+            tab = "Copy%d" % (len(tab_copies) + 1)
+            tab_copies.append({"id": tab, "source": sheet})
+        else:
+            tab = sheet
+            used.add(sheet)
+        tabs.append(tab)
+
+    occupied = {sheet for *_x, sheet in resolved}
+    cells: Dict[str, Any] = {}
+    lead = resolved[0][1]
+    # The sheets no scope is on, as the first scope answers them (see the block above).
+    for host in ("Epoxy", "Polish", GYP_SHEET):
+        if host not in occupied:
+            for addr, v in _named_sheet_cells(host, lead).items():
+                cells["%s!%s" % (host, addr)] = v
+    lead_cells = lead.get("cell_values") if isinstance(lead.get("cell_values"), Mapping) else {}
+    for key, v in lead_cells.items():
+        sheet_name = str(key).split("!", 1)[0] if "!" in str(key) else None
+        if sheet_name and sheet_name not in occupied and sheet_name in FLAG_BLOCK_CELLS:
+            cells[str(key)] = v
+    for (m, data, name, sid, sheet), tab in zip(resolved, tabs):
+        for addr, v in _named_sheet_cells(sheet, data).items():
+            cells["%s!%s" % (tab, addr)] = v
+        own = data.get("cell_values") if isinstance(data.get("cell_values"), Mapping) else {}
+        mine = {sid, sheet}
+        for key, v in own.items():
+            if "!" not in str(key):
+                continue
+            sheet_name, addr = str(key).split("!", 1)
+            if sheet_name in mine:
+                cells["%s!%s" % (tab, addr)] = v
+
+    return {
+        "values": {k: lead[k] for k in _GROUP_SPECS_KEYS if lead.get(k) not in (None, "")},
+        "cell_values": cells,
+        "tab_copies": tab_copies,
+        "tab_labels": {tab: name for (_m, _d, name, _s, _sh), tab in zip(resolved, tabs)},
+        "tab_order": list(tabs),
+        "tabs": [{"id": m.get("id"), "label": name, "tab": tab, "sheet": sheet}
+                 for (m, _d, name, _s, sheet), tab in zip(resolved, tabs)],
+    }
+
+
+def fill_group_estimate(members: list[Mapping[str, Any]]) -> bytes:
+    """ONE workbook for a project of several scopes, one tab per scope (the block above), built in a
+    single fill_estimate pass. `members` as plan_group_workbook takes them. RAISES
+    GroupWorkbookError for a project it refuses."""
+    plan = plan_group_workbook(members)
+    return fill_estimate(
+        plan["values"],
+        cell_values=plan["cell_values"],
+        tab_copies=plan["tab_copies"],
+        tab_labels=plan["tab_labels"],
+        tab_order=plan["tab_order"],
+        _finish=_note_scope_tabs(len(plan["tab_order"])),
+    )
 
 
 def _text_cell(v: Any) -> str:
