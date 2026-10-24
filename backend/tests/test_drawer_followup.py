@@ -48,9 +48,12 @@ def _block(name: str) -> str:
 # THREE MORE since 2026-10-23 (remind mode), for the same reason: followupPanelHtml interpolates the
 # reminder schedule and the pending-task card, and the task card interpolates the compose box, so
 # their ids are part of "the panel" for this check exactly as the contact list's are.
+#
+# ONE MORE on 2026-10-25 (scope groups): the task card renders the "Decide the other scopes" card in
+# its place for a decision task, so that card's ids are part of the panel too.
 PANEL = (_block("followupPanelHtml") + _block("followupContactsHtml")
          + _block("followupScheduleHtml") + _block("followupTaskHtml")
-         + _block("followupComposeHtml"))
+         + _block("followupComposeHtml") + _block("followupDecisionHtml"))
 WIRE = _block("wireFollowup")
 
 

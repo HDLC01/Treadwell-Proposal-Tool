@@ -248,6 +248,15 @@ const FN_NAMES = [
   // send and retry buttons word every answer through it, so leaving it out is a ReferenceError on
   // the press, which is the only place the delivery truth is said.
   "scopeSendOutcome",
+  // A SCOPE GROUP'S FOLLOW-UP (2026-10-25): one reminder for the whole project, and the "Decide the
+  // other scopes" card. THIRTEENTH addition: followupTaskHtml calls fuIsGroup, fuGroupHtml and
+  // followupDecisionHtml on every task card (which reach fuScopeNow, fuScopeOpen and fuScopeChip),
+  // and wireFollowup binds wireFuDecision, whose presses reach fuDecisionPicked, fuDecisionReady,
+  // fuScopeNames, fuTaskOf, fuDecide and its two fuDecision*Text sentences. Executed in full by
+  // group-followup-harness.js; lifted here so this harness's drawer stays runnable.
+  "fuIsGroup", "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames", "fuGroupHtml",
+  "followupDecisionHtml", "fuDecisionReady", "fuDecisionPicked", "fuTaskOf", "fuDecisionErrText",
+  "fuDecisionDoneText", "fuDecide", "wireFuDecision",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
