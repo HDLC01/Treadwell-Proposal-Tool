@@ -1,0 +1,28 @@
+# graphify-only exclusions (gitignore syntax). .gitignore stays honored on top of this.
+
+# Environment / dependency / tool noise.
+.venv/
+venv/
+env/
+site-packages/
+node_modules/
+__pycache__/
+.pytest_cache/
+.git/
+.claude/worktrees/
+.playwright-mcp/
+graphify-out/
+graphify-out*/
+
+# Out of scope for the semantic (LLM) pass.
+frontend/*.html
+frontend/img/
+*.xlsx
+requirements*.txt
+.github/
+docker-compose*.yml
+
+# Root-level customer/working files.
+/*.docx
+/*.pdf
+/*.xlsx
