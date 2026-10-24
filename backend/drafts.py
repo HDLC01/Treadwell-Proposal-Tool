@@ -20,9 +20,12 @@ company view), attributed by owner_email.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
+import re
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import cachetools
 
@@ -51,7 +54,30 @@ def init_db() -> None:
 #
 # Preserved here rather than at each call site: the generate path already remembered to merge
 # (main.py), the autosave path did not, and the next writer would have had to remember too.
-_SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator")
+#
+# `scope_group` joined on 2026-10-24 (RJ's projects with no single base bid, see the scope-group
+# block further down): it is the link that makes Breakroom, Lab 1 and Lab 2 one project with three
+# proposals. It is written only by create_sibling, rename_scope and split_draft, and a stale tab
+# that silently cleared it would detach a scope from the customer's combined email.
+_SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group")
+
+# Stamped on a draft the moment split_draft rewrites it, and carried by every copy of the draft that
+# was read AFTER the split. A browser save whose blob does not carry the stamp the row has was built
+# from the copy BEFORE the split, and storing it would put the three sheets back on the parent while
+# the children also hold them (save_draft refuses it, StaleSplitWrite).
+SPLIT_MARK = "split_at"
+
+# Server-owned keys a BROWSER'S save may not even seed on a row that has never had them (the rest of
+# _SERVER_OWNED_KEYS may: "the blob may still seed a key the row has never had", save_draft). A scope
+# group is joined only through create_sibling and split_draft. The beta's sandbox PUTs a copy of a real
+# bid under a NEW id (polish-sandbox.js), and a copy that carried the real bid's group would join the
+# customer's project: drawn beside its scopes, and holding the combined email back until the test copy
+# was published too (the portal's scopes_not_published).
+_NEVER_SEEDED_BY_A_BROWSER = ("scope_group",)
+
+
+class StaleSplitWrite(Exception):
+    """A browser save of a copy of the draft read before split_draft rewrote it."""
 
 
 def save_draft(draft_id: str, data: Dict[str, Any],
@@ -76,12 +102,22 @@ def save_draft(draft_id: str, data: Dict[str, Any],
         # `is_test` is a tri-state, so `False` is a real value and `in` is the right test — a
         # `.get()` truthiness check would treat "somebody said this IS a real bid" as unset.
         prior = existing.data[0].get("data") or {}
+        # A COPY FROM BEFORE A SPLIT IS NEVER STORED OVER ONE (see SPLIT_MARK). Only the browser's
+        # own save is asked (keep_server_owned): the server's writers read the row they write.
+        # Checked BEFORE the server-owned merge, which would otherwise hand the old copy the
+        # current stamp and wave it through.
+        if keep_server_owned and prior.get(SPLIT_MARK) and data.get(SPLIT_MARK) != prior.get(SPLIT_MARK):
+            raise StaleSplitWrite(draft_id)
         data = dict(data)
         for key in _SERVER_OWNED_KEYS:
             if key in prior and (keep_server_owned or key not in data):
                 data[key] = prior[key]
+            elif keep_server_owned and key in _NEVER_SEEDED_BY_A_BROWSER:
+                data.pop(key, None)
         sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
     else:
+        if keep_server_owned:
+            data = {k: v for k, v in data.items() if k not in _NEVER_SEEDED_BY_A_BROWSER}
         sb.table("drafts").insert({
             "id": draft_id, "data": data, "owner_email": owner_email,
             "created_at": now, "updated_at": now,
@@ -564,6 +600,377 @@ def set_handed_off(draft_id: str, handed_off: bool, actor_email: Optional[str] =
     return True
 
 
+# ── scope groups: one project, several separately approved proposals ──
+# RJ, 2026-10-24: a client gets a few separately priced scopes (Breakroom polish, Lab 1 epoxy, Lab 2
+# epoxy) under one project name and address, and each is its OWN proposal the customer approves on
+# its own. Each scope is an ordinary draft going through the ordinary single-proposal pipeline; what
+# makes them one project is `data.scope_group = {"id": <shared>, "label": <this scope's name>}`.
+#
+# THE SHAPE IS THE PORTAL'S CONTRACT (treadwell-portal backend/main.py `_scope_of`): the portal's
+# publish reads it straight out of this table, refuses a malformed one with invalid_scope_group, and
+# decides who is in the group for the ONE combined customer email by what each draft's own blob says.
+# So the id rule and the label cap below are the portal's, character for character.
+#
+# Written only by the three functions in this block (a new scope, a rename, a split), and owned by
+# the server for the reason the block above _SERVER_OWNED_KEYS gives.
+SCOPE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+SCOPE_LABEL_MAX = 80
+# The live estimate's own limit on copied sheets; a project split into more proposals than that is a
+# typing accident, not a bid.
+MAX_SCOPES = 12
+
+
+class ScopeError(Exception):
+    """A scope-group write refused, with the code the route answers and the sentence it says."""
+
+    def __init__(self, code: str, message: str, status: int = 400):
+        super().__init__(message)
+        self.code, self.message, self.status = code, message, status
+
+
+def scope_group_problem(raw: Any) -> Optional[str]:
+    """Why `raw` (a draft's `scope_group`) is not the portal's shape, or None when it is (or absent).
+
+    THE PORTAL'S RULE, so a malformed group is refused HERE with a sentence the estimator can act on,
+    rather than surfacing as the portal's bare 400 through the publish proxy."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        return "the scope group is not an object"
+    gid = raw.get("id")
+    if not isinstance(gid, str) or not SCOPE_ID_RE.match(gid):
+        return "the scope group's id is not 1-64 letters, digits, - or _"
+    label = raw.get("label")
+    if label is not None and (not isinstance(label, str) or len(label) > SCOPE_LABEL_MAX):
+        return "the scope's name is not text of %d characters or fewer" % SCOPE_LABEL_MAX
+    return None
+
+
+def _scope_of(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """(group id, label) of a draft blob, (None, None) for an ungrouped or malformed one."""
+    raw = (data or {}).get("scope_group")
+    if raw is None or scope_group_problem(raw):
+        return None, None
+    return raw["id"], (raw.get("label") or None)
+
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_scope_label(raw: Any) -> str:
+    """A scope's name as it is stored: text, control characters dropped, spaces squeezed. RAISES
+    ScopeError for an empty one or one over the portal's cap (refused rather than cut: a name cut
+    at 80 is a name nobody typed)."""
+    text = re.sub(r"\s+", " ", _CONTROL_CHARS.sub(" ", str(raw if raw is not None else ""))).strip()
+    if not text:
+        raise ScopeError("invalid_label", "Give the scope a name, like “Lab 1”.")
+    if len(text) > SCOPE_LABEL_MAX:
+        raise ScopeError("invalid_label",
+                         "A scope's name can have %d characters at most." % SCOPE_LABEL_MAX)
+    return text
+
+
+# WHAT A NEW SCOPE TAKES FROM THE PROJECT IT IS A SCOPE OF: the project's identity, its place and its
+# people, and NOTHING about what is being priced or proposed. An explicit allow-list rather than "the
+# parent minus a deny-list", because the blob grows a new key every few weeks and a deny-list would
+# copy every one nobody thought about (a cover letter, a revision's pins, a price override) onto a
+# proposal that never asked for it.
+#
+# `is_test` IS INHERITED, not re-derived: a scope of a test project is a test, and a scope of a real
+# bid is real, whatever its own name looks like. A parent that has never said (the key absent) gives
+# a child that has never said, so the name heuristic reads the same name the same way for both.
+SIBLING_INTAKE_KEYS = (
+    "project_name", "audience", "is_test", "assigned_estimator",
+    "bid_date", "deadline", "approx_start_date",
+    "address", "city", "state", "zip", "city_state",
+    "county", "county_tax_rate", "county_remodel_rate", "county_notes",
+    "architect", "drawings_dated", "addenda_count", "spec_section", "finish_tag", "plan_sheet",
+    "contact_name", "contact_email", "contact_phone", "source", "contact_notes",
+)
+# The JOB's conditions, as the workbook cells both intakes read back (the cell wins over the model:
+# js/work-types.js CONDITIONS, polish-estimate.js adopt). Local, prevailing wage, taxable, remodel tax
+# and new/renovation describe the job site, so every scope of it shares them. Dye, joint filler and
+# the bulk discount describe ONE floor and are left for each scope to answer.
+SIBLING_CONDITION_CELLS = (
+    "Epoxy!B4", "Polish!B4", 'Gyp (USG 1-8")!B5', "Gyp (FR)!B5", "Seal!B4",
+    "Epoxy!D5",
+    "Epoxy!B6", "Polish!B6", "Leveling!B6", 'Gyp (USG 1-8")!B8', "Gyp (FR)!B8",
+    "Epoxy!D6", "Polish!D6", 'Gyp (USG 1-8")!D8',
+    "Epoxy!B10", "Polish!B10", "Seal!B10",
+)
+# Inside a v2 estimate (polish_estimate, version 2) the job-level keys a scope shares: the driving
+# distance to the site (with the address it was measured for, so the new scope's page does not
+# measure again) and the prevailing-wage rates. NOT `travel`: Lodging and Per Diem quantities belong
+# to one crew, and a copy would bill the first scope's nights on every other.
+SIBLING_MODEL_KEYS = ("distance", "prevailing")
+
+
+def sibling_intake(parent: Dict[str, Any]) -> Dict[str, Any]:
+    """The blob a new scope of `parent` starts from (see the three allow-lists above). A NEW dict;
+    nothing of `parent` is shared with it."""
+    parent = parent or {}
+    out = {k: copy.deepcopy(parent[k]) for k in SIBLING_INTAKE_KEYS if k in parent}
+    cells = parent.get("cell_values")
+    if isinstance(cells, dict):
+        kept = {k: cells[k] for k in SIBLING_CONDITION_CELLS if k in cells}
+        if kept:
+            out["cell_values"] = kept
+    pe = parent.get("polish_estimate")
+    if isinstance(pe, dict) and pe.get("version") == 2:
+        # A v2 model that states no labor is a NEW bid to the estimate page (bid-model laborUnstated),
+        # so the scope opens seeded from the library like any new estimate, at the job's distance.
+        model: Dict[str, Any] = {"version": 2}
+        for k in SIBLING_MODEL_KEYS:
+            if k in pe:
+                model[k] = copy.deepcopy(pe[k])
+        out["polish_estimate"] = model
+    return out
+
+
+def default_scope_label(data: Dict[str, Any]) -> str:
+    """A name for a project's FIRST scope when it gets a sibling and nobody named it: its base sheet's
+    name on the estimate (what the Sheets strip calls it, "Breakroom"), else its work type, else
+    "Scope 1". Never raises; the result is not checked for clashes (the caller does)."""
+    data = data or {}
+    pe = data.get("polish_estimate")
+    if isinstance(pe, dict):
+        tabs = pe.get("tabs") if isinstance(pe.get("tabs"), dict) else {}
+        base = data.get("base_tab_id")
+        names: List[Any] = []
+        if isinstance(base, str) and isinstance(tabs.get(base), dict):
+            names.append(tabs[base].get("label") or tabs[base].get("sheet") or base)
+        if pe.get("kind") not in ("off", "option"):
+            names.append(pe.get("label") or "Polish")
+        names.extend((s.get("label") or s.get("sheet") or k) for k, s in tabs.items()
+                     if isinstance(s, dict) and s.get("kind") == "base")
+        for n in names:
+            try:
+                return clean_scope_label(n)
+            except ScopeError:
+                continue
+    wt = str(data.get("work_type") or "").strip()
+    return wt.capitalize() if wt else "Scope 1"
+
+
+def _group_rows(group_id: str) -> List[Dict[str, Any]]:
+    """Every live draft in a scope group, as {id, label, created_at}, oldest first.
+
+    ONE SMALL OBJECT PER DRAFT, never the blob: the projection names data->scope_group only, and the
+    group is found in Python (the ids are a few hundred rows, the objects a few dozen bytes each)."""
+    res = (get_client().table("drafts").select("id,created_at,scope_group:data->scope_group")
+           .is_("deleted_at", "null").execute())
+    out = []
+    for r in res.data or []:
+        sg = r["scope_group"] if "scope_group" in r else (r.get("data") or {}).get("scope_group")
+        if isinstance(sg, dict) and not scope_group_problem(sg) and sg.get("id") == group_id:
+            out.append({"id": r["id"], "label": sg.get("label") or "",
+                        "created_at": r.get("created_at") or ""})
+    out.sort(key=lambda m: (str(m["created_at"]), str(m["id"])))
+    return out
+
+
+def _free_label(want: str, taken: set) -> str:
+    """`want`, or `want 2`, `want 3`… — the first that no scope in `taken` (lower-cased) has."""
+    if want.lower() not in taken:
+        return want
+    for i in range(2, 100):
+        suffix = " %d" % i
+        cand = want[:SCOPE_LABEL_MAX - len(suffix)] + suffix
+        if cand.lower() not in taken:
+            return cand
+    return want
+
+
+def create_sibling(parent_id: str, label: Any, actor: Optional[str] = None) -> Dict[str, Any]:
+    """A NEW SCOPE OF A PROJECT (tier A0): a fresh draft that shares the project's intake and its
+    scope group, priced and sent through the ordinary single-proposal pipeline.
+
+    The parent joins a group when it is not in one (a new id is minted), and is named when it has no
+    name yet (default_scope_label). Neither write bumps the parent's `updated_at`: naming the project's
+    scopes is not work on its estimate, and a page that checked its copy before this still holds the
+    copy the document was built from. The child is inserted as its own row, owned by `actor`.
+
+    Returns {"id", "group_id", "label", "parent_label"}. RAISES ScopeError: not_found (404),
+    invalid_label (400), invalid_scope_group (400, the parent's own group is malformed), label_taken
+    and too_many_scopes (409)."""
+    sb = get_client()
+    cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+    if not cur.data:
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    parent = dict(cur.data[0].get("data") or {})
+    want = clean_scope_label(label)
+    existing = parent.get("scope_group")
+    if existing is not None and scope_group_problem(existing):
+        raise ScopeError("invalid_scope_group",
+                         "This project's scope group cannot be read (%s)." % scope_group_problem(existing))
+    gid = existing["id"] if isinstance(existing, dict) else uuid.uuid4().hex
+    members = [m for m in (_group_rows(gid) if existing else []) if m["id"] != parent_id]
+    if len(members) + 2 > MAX_SCOPES:
+        raise ScopeError("too_many_scopes",
+                         "A project can be split into %d proposals at most." % MAX_SCOPES, 409)
+    taken = {m["label"].lower() for m in members if m["label"]}
+    parent_label = (existing or {}).get("label") or _free_label(default_scope_label(parent),
+                                                                 taken | {want.lower()})
+    taken.add(parent_label.lower())
+    if want.lower() in taken:
+        raise ScopeError("label_taken",
+                         "“%s” is already the name of a scope of this project." % want, 409)
+
+    child_id = str(uuid.uuid4())
+    child = sibling_intake(parent)
+    child["scope_group"] = {"id": gid, "label": want}
+    now = _now_iso()
+    sb.table("drafts").insert({"id": child_id, "data": child, "owner_email": actor,
+                               "created_at": now, "updated_at": now}).execute()
+    log_event(child_id, actor, "created", _summary_detail(child))
+    log_event(child_id, actor, "scope_added", {"project_name": child.get("project_name"),
+                                               "id": child_id, "group": gid, "label": want,
+                                               "from": parent_id})
+    if not isinstance(existing, dict) or existing.get("label") != parent_label:
+        parent["scope_group"] = {"id": gid, "label": parent_label}
+        sb.table("drafts").update({"data": parent}).eq("id", parent_id).execute()
+        log_event(parent_id, actor, "scope_grouped", {"project_name": parent.get("project_name"),
+                                                      "id": parent_id, "group": gid,
+                                                      "label": parent_label})
+    _cache_clear()
+    return {"id": child_id, "group_id": gid, "label": want, "parent_label": parent_label}
+
+
+def rename_scope(draft_id: str, label: Any, actor: Optional[str] = None) -> Dict[str, Any]:
+    """Rename one scope of a project. Same posture as create_sibling: the group is the server's, and
+    `updated_at` is not bumped. Returns {"group_id", "label"}. RAISES ScopeError: not_found (404),
+    not_grouped and invalid_label (400), label_taken (409)."""
+    sb = get_client()
+    cur = sb.table("drafts").select("id,data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    data = dict(cur.data[0].get("data") or {})
+    gid, old = _scope_of(data)
+    if not gid:
+        raise ScopeError("not_grouped", "This project is not split into scopes, so it has no "
+                                        "scope name to change.")
+    want = clean_scope_label(label)
+    taken = {m["label"].lower() for m in _group_rows(gid) if m["id"] != draft_id and m["label"]}
+    if want.lower() in taken:
+        raise ScopeError("label_taken",
+                         "“%s” is already the name of a scope of this project." % want, 409)
+    if want != old:
+        data["scope_group"] = {"id": gid, "label": want}
+        sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+        log_event(draft_id, actor, "scope_renamed", {"project_name": data.get("project_name"),
+                                                     "id": draft_id, "group": gid,
+                                                     "from": old, "to": want})
+        _cache_clear()
+    return {"group_id": gid, "label": want}
+
+
+# WHAT A SPLIT TAKES OFF THE PARENT when it rewrites it as its first scope (tier A1). Every key here
+# describes the bid AS SEVERAL SHEETS WITH ONE BASE: the lump sum and its taxes, the priced tabs the
+# proposal lists, the per-sheet proposal settings and notes, the lines and words typed over the
+# proposal's figures, the document payload built from all of it, and the record of the files built
+# from that payload. Left behind, the parent's proposal would print the old base's lump sum beside
+# the old options while its estimate priced one sheet.
+#
+# `generate_result` GOES TOO, and it is the one with a trap: `has_files` reads it, and the board's
+# "Created but not sent" column is has_files. Here that is right rather than a bug: the files it
+# records were built for the combined bid and are no longer this proposal's, and the Files page
+# would rebuild them from a payload that is gone. The board keeps the scope visible anyway, as "files
+# not built yet" (main.py _not_sent_rows' `files_pending`).
+SPLIT_CLEARS = (
+    "rooms", "base_tab_id", "priced_tabs", "computed_bid",
+    "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
+    "proposal_remodel_on", "polish_sf", "polish_2_sf", "lump_sum_display", "sheet_area",
+    "cost_snapshot", "cove_height_v2", "phase_price",
+    "tab_opts", "tab_notes", "tab_labels", "tab_copies", "tab_order",
+    "price_lines", "price_overrides", "paragraph_overrides", "box_overrides", "system_overrides",
+    "proposal_payload", "generate_result", "generated_lump_sum",
+)
+# What the estimate page sends for each scope of a split: the one-sheet model (bid-model splitOut)
+# and the save the page's own buildSavePatch composes from it (the work type and base the template
+# and the Dropbox name follow, the priced snapshot the card's money reads). Nothing else from the
+# request reaches a draft.
+SPLIT_CHILD_KEYS = (
+    "polish_estimate", "work_type", "base_tab_id", "cell_values", "computed_bid", "priced_tabs",
+    "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
+    "proposal_remodel_on", "polish_sf", "polish_2_sf", "cove_height_v2", "sheet_area",
+    "cost_snapshot", "phase_price", "tab_opts",
+)
+
+
+def _split_fields(data: Any) -> Dict[str, Any]:
+    src = data if isinstance(data, dict) else {}
+    return {k: copy.deepcopy(src[k]) for k in SPLIT_CHILD_KEYS if k in src}
+
+
+def split_draft(parent_id: str, children: List[Dict[str, Any]],
+                actor: Optional[str] = None) -> Dict[str, Any]:
+    """SPLIT ONE ESTIMATE INTO SEPARATE PROPOSALS (tier A1): `children[0]` becomes the parent itself,
+    every other child a new draft in the parent's scope group (minted when it has none).
+
+    `children` is [{"label", "data"}] in the order the page lists them; `data` is filtered through
+    SPLIT_CHILD_KEYS. The parent loses SPLIT_CLEARS and is stamped SPLIT_MARK, which is what refuses a
+    stale copy of it afterwards (save_draft); its `updated_at` IS bumped, because this is an edit of
+    the estimate and every page that checked the old copy must be told so (_stored_since).
+
+    The children are written FIRST: a failure part way leaves the parent exactly as it was, with at
+    worst an extra draft beside it, and never a parent that lost a sheet no child holds.
+
+    Returns {"group_id", "parent": {"id", "label", "data", "updated_at"}, "children": [{"id",
+    "label"}]}. RAISES ScopeError (not_found, invalid_label, label_taken, too_many_scopes,
+    invalid_scope_group)."""
+    sb = get_client()
+    cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+    if not cur.data:
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    parent = dict(cur.data[0].get("data") or {})
+    existing = parent.get("scope_group")
+    if existing is not None and scope_group_problem(existing):
+        raise ScopeError("invalid_scope_group",
+                         "This project's scope group cannot be read (%s)." % scope_group_problem(existing))
+    gid = existing["id"] if isinstance(existing, dict) else uuid.uuid4().hex
+    others = [m for m in (_group_rows(gid) if existing else []) if m["id"] != parent_id]
+    if len(others) + len(children) > MAX_SCOPES:
+        raise ScopeError("too_many_scopes",
+                         "A project can be split into %d proposals at most." % MAX_SCOPES, 409)
+    labels = [clean_scope_label(c.get("label")) for c in children]
+    taken = {m["label"].lower() for m in others if m["label"]}
+    seen: set = set()
+    for lab in labels:
+        if lab.lower() in taken or lab.lower() in seen:
+            raise ScopeError("label_taken",
+                             "“%s” names two scopes of this project. Give each sheet its "
+                             "own name first." % lab, 409)
+        seen.add(lab.lower())
+
+    stamp = _now_iso()
+    intake = sibling_intake(parent)
+    made = []
+    for c, lab in zip(children[1:], labels[1:]):
+        cid = str(uuid.uuid4())
+        d = copy.deepcopy(intake)
+        d.update(_split_fields(c.get("data")))
+        d["scope_group"] = {"id": gid, "label": lab}
+        d["split_from"] = parent_id
+        sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,
+                                   "created_at": stamp, "updated_at": stamp}).execute()
+        log_event(cid, actor, "created", _summary_detail(d))
+        made.append({"id": cid, "label": lab})
+
+    rewritten = {k: v for k, v in parent.items() if k not in SPLIT_CLEARS}
+    rewritten.update(_split_fields(children[0].get("data")))
+    rewritten["scope_group"] = {"id": gid, "label": labels[0]}
+    rewritten[SPLIT_MARK] = stamp
+    sb.table("drafts").update({"data": rewritten, "updated_at": stamp}).eq("id", parent_id).execute()
+    log_event(parent_id, actor, "split_into_scopes",
+              {"project_name": parent.get("project_name"), "id": parent_id, "group": gid,
+               "scopes": [labels[0]] + [m["label"] for m in made],
+               "ids": [parent_id] + [m["id"] for m in made]})
+    _cache_clear()
+    return {"group_id": gid,
+            "parent": {"id": parent_id, "label": labels[0], "data": rewritten, "updated_at": stamp},
+            "children": made}
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -701,7 +1108,13 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # Handed to operations — see set_handed_off. Named for exactly the reason above,
                 # and it is the field the Handed Off TAB routes on, so an unnamed key here does not
                 # degrade the board, it empties a tab.
-                "handed_off_at:data->handed_off->>at")
+                "handed_off_at:data->handed_off->>at,"
+                # The scope group this project is one proposal of (RJ, 2026-10-24: Breakroom, Lab
+                # 1 and Lab 2 under one project name) and what this scope is called. Named for the
+                # reason `won_at` gives above: a key this projection does not name reaches no
+                # card, and the board would draw three unrelated projects with one name.
+                "scope_group_id:data->scope_group->>id,"
+                "scope_label:data->scope_group->>label")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -737,6 +1150,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "on_hold_note": r.get("on_hold_note") or None,
             "won_at": r.get("won_at") or None,
             "handed_off_at": r.get("handed_off_at") or None,
+            "scope_group_id": r.get("scope_group_id") or None,
+            "scope_label": r.get("scope_label") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -1085,6 +1500,9 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         # above, and with more at stake: this one decides which TAB the project appears on, so a
         # field on only one path would move a project between tabs depending on which query ran.
         "handed_off_at": ((data.get("handed_off") or {}).get("at") or None),
+        # The scope group — see the fast path's note. Both paths, for the reason the won mark gives.
+        "scope_group_id": (_scope_of(data)[0]),
+        "scope_label": (_scope_of(data)[1]),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

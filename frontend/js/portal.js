@@ -262,6 +262,11 @@
       // Deliberately not drawn on a lost row (this is inside the else): a dead deal's chip already
       // says the only thing that still matters about it, and "we can't tell if they opened it" is
       // noise on a bid nobody is working.
+      // A scope of a split project whose own files are not built yet (main.py _not_sent_rows'
+      // files_pending): on the board beside its siblings, and saying it has no paperwork yet.
+      if (p.files_pending) out.push('<span class="chip chip-unknown" title="This scope has no proposal yet: open its estimate and press Continue on the Proposal step">Files not built yet</span>');
+      // Published, and waiting for the project's ONE combined email, which is sent from the drawer.
+      if (p.scope_group && p.scope_send_pending) out.push('<span class="chip chip-pause" title="Published, but the customer has not been emailed yet: they get one email for every scope, sent from this project\'s drawer">Email not sent</span>');
       if (p.portal_unknown) out.push('<span class="chip chip-unknown" title="This was sent — but the customer portal isn\'t responding, so we can\'t tell whether the customer has opened it, approved it, or paid a deposit">Portal status unknown</span>');
       // WON. Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending
       // okay?" The Notification Sending page files these under a Won tab; same predicate, from
@@ -441,6 +446,12 @@
         <div class="deal" data-id="${esc(p.proposal_id)}">
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
+          ${p.scope_group && p.scope_count > 1
+            // One scope of a project split into several proposals: its place and its name, and its
+            // siblings' names on hover. Written out here rather than in a helper, because four
+            // harnesses lift this renderer and a new name in it is a ReferenceError in each.
+            ? `<div class="meta scope-line" title="${esc("Scopes of this project: " + (p.scope_members || []).map((m) => (m && m.label) || "Unnamed scope").join(", "))}">Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}${p.scope_label ? " · " + esc(p.scope_label) : ""}</div>`
+            : ""}
           <div class="meta">${esc(p.customer_email || "")}</div>
           ${recipientLine(p)}
           <div class="meta who"><span class="k">Estimator:</span> ${who}</div>
@@ -570,6 +581,7 @@
       const chips = chipsHtml(p);
       return `<tr class="trow" data-id="${esc(p.proposal_id)}" tabindex="0">
         <td class="t-name">${esc(p.project_name || "Proposal")}${
+          p.scope_group && p.scope_label && p.scope_count > 1 ? ` <span class="scope-tag" title="Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}">${esc(p.scope_label)}</span>` : ""}${
           p.unread ? ` <span class="unread-dot" title="${p.unread} unread customer message${p.unread === 1 ? "" : "s"}">${p.unread}</span>` : ""}</td>
         <td>${esc(p.customer_name || p.customer_email || "")}</td>
         <td>${esc(stageOf(p))}${chips ? `<div class="chips">${chips}</div>` : ""}</td>
@@ -1185,8 +1197,9 @@
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
         <div class="sec" id="dsec-ns-proposal">
           <div class="lbl">Not sent yet</div>
-          <p class="note">The estimate and the proposal are generated, and nobody has sent them to
-          the customer. Nothing reaches them until you do.</p>
+          <p class="note">${row.files_pending
+            ? "This scope's files are not built yet. Open the estimate, finish it, and press Continue on the Proposal step. Nothing reaches the customer until you send it."
+            : "The estimate and the proposal are generated, and nobody has sent them to the customer. Nothing reaches them until you do."}</p>
         </div>
         <div class="sec">
           <div class="facts">
@@ -1198,6 +1211,7 @@
             ${row.drafted_at ? fact("Created", esc(TW.fmtBizDate(row.drafted_at))) : ""}
           </div>
         </div>
+        ${scopeHtml(row, pid, false)}
         <!-- Assign it HERE, not only from the Projects tab. Hanz, 2026-08-13: "Allow to choose
              the estimator on the Created but not sent". The Estimator fact above is a GUESS until
              somebody picks — the draft's author, drawn with a "?" — and this drawer was the one
@@ -1368,6 +1382,7 @@
     wireNotSentAssign(pid, row);
     wireNotSentLost(pid, row);
     wireDeleteProject(pid, row);
+    wireScope(pid, row);
     // The row IS the board's own object (renderNotSent is only ever called with ALL.find(...)), so
     // patching it in place is what makes the mark survive the 12s poll that re-opens this drawer
     // before load() has returned — a copy would be repainted away by the next tick.
@@ -2040,8 +2055,10 @@
     // in, and the way to remove a project belongs after everything that describes it. dsec-files
     // sits ABOVE dsec-revisions for the same reason, since 2026-08-26 — Hanz: "Move 'Open Files'
     // above the revisions please" — and the panel markup in renderDetail carries the same order.
+    // dsec-scope (2026-10-24): the project's other scopes and the combined email, after the
+    // paperwork and its versions and before the delete, which stays last.
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
-               "dsec-files", "dsec-revisions", "dsec-delete"],
+               "dsec-files", "dsec-revisions", "dsec-scope", "dsec-delete"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -4761,6 +4778,123 @@
         </div>`;
   }
 
+  /** THE PROJECT'S SCOPES, in both drawers (RJ, 2026-10-24: Breakroom, Lab 1 and Lab 2 under one
+   *  project, each its own proposal, ONE combined email). `p` carries the board row's scope fields
+   *  (main.py _stamp_scopes: scope_group, scope_label, scope_index, scope_count, scope_members,
+   *  scope_send_pending), `pid` is this drawer's project and `sent` picks the card id: the sent
+   *  drawer's is in SEC_TABS like its siblings, the not-sent panel keeps its dsec-ns-* ids outside.
+   *
+   *  Every project gets the "New scope for this project" control, grouped or not: it is how a
+   *  project becomes several. A grouped one also lists its scopes (each opens its own drawer, or its
+   *  estimate when it is not on the board yet) and, once a scope has been published, the button for
+   *  the combined email, because a scope's own publish emails nobody.
+   *
+   *  THREE HARNESSES LIFT THE RENDERERS THAT CALL THIS (drawer-render, not-sent-assign,
+   *  not-sent-lost), so it reads nothing but `esc` and its arguments, and no dash in the copy: the
+   *  drawer's style has none and test_drawer_renders greps for it. */
+  function scopeHtml(p, pid, sent) {
+    const grouped = !!(p && p.scope_group);
+    const members = grouped && Array.isArray(p.scope_members) ? p.scope_members : [];
+    const list = members.map((m) => {
+      const name = esc((m && m.label) || "Unnamed scope");
+      if (m && m.id === pid) return `<li><strong>${name}</strong> <span class="note">(this one)</span></li>`;
+      return `<li><button type="button" class="btn-link" data-scope-open="${esc(m && m.id)}"`
+        + ` data-scope-board="${m && m.on_board ? "1" : ""}">${name}</button>`
+        + (m && m.on_board ? "" : ' <span class="note">(not on the board yet)</span>') + "</li>";
+    }).join("");
+    const where = grouped && p.scope_count > 1
+      ? `Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}${p.scope_label ? ": <strong>" + esc(p.scope_label) + "</strong>" : ""}. `
+        + "Each scope is its own proposal, approved on its own, and the customer gets one email with every link."
+      : "One project, several proposals: a new scope shares this project's name, address and contact, and is priced and sent as its own proposal.";
+    const send = grouped && sent
+      ? `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="${p.scope_send_pending ? "" : "1"}">${
+          p.scope_send_pending ? "Send every scope in one email" : "Email every scope again"}</button></div>`
+      : "";
+    return `
+        <div class="sec" id="${sent ? "dsec-scope" : "dsec-ns-scope"}">
+          <div class="lbl">Scopes of this project${grouped && p.scope_count > 1
+            ? '<span class="sec-ans">' + esc(p.scope_count) + " proposals</span>" : ""}</div>
+          <p class="note">${where}</p>
+          ${list ? `<ul class="scope-list">${list}</ul>` : ""}
+          ${send}
+          <div class="ns-assign">
+            <input type="text" id="scope-new-label" maxlength="80" autocomplete="off"
+                   placeholder="Name the new scope, like Lab 2" aria-label="Name of the new scope">
+            <button type="button" class="btn btn-s" id="scope-new-btn">New scope for this project</button>
+          </div>
+          <p class="note" id="scope-note" role="status"></p>
+        </div>`;
+  }
+
+  /** What the scope controls do (scopeHtml). Looked up through the drawer's own querySelector
+   *  rather than $(), because the send button only exists once a scope has been published and a
+   *  scope list only on a grouped project: a guarded lookup is how the drawer harness tells "not
+   *  rendered on this project" from "wired to nothing".
+   *
+   *  A refusal is said in the server's own sentence, after a word on what failed, the way the
+   *  delete control says its errors: a 409 for a copy saved again since this drawer read it reads
+   *  "Nothing changed. This project was saved again ...", which is the instruction to reload. */
+  function wireScope(pid, p) {
+    const d = $("drawer");
+    if (!d) return;
+    const note = d.querySelector("#scope-note");
+    const say = (msg) => { if (note) note.textContent = msg || ""; };
+    d.querySelectorAll("[data-scope-open]").forEach((b) => b.addEventListener("click", () => {
+      const id = b.dataset.scopeOpen;
+      if (!id) return;
+      if (b.dataset.scopeBoard) { openDetail(id); return; }
+      window.location.assign("/?d=" + encodeURIComponent(id) + "&edit=1");
+    }));
+    const btn = d.querySelector("#scope-new-btn");
+    const box = d.querySelector("#scope-new-label");
+    if (btn && box) btn.addEventListener("click", async () => {
+      const label = String(box.value || "").replace(/\s+/g, " ").trim();
+      if (!label) { say("Name the new scope first, like Lab 2."); return; }
+      btn.disabled = true;
+      say("Making the new scope...");
+      try {
+        const body = { label: label };
+        // The publish's stale-copy guard: an unsent row is dated by its draft's own save.
+        if (p && p.not_sent && p.drafted_at) body.draft_version = p.drafted_at;
+        const r = await api("/api/draft/" + encodeURIComponent(pid) + "/scope", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false || !j.id) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        window.location.assign("/?d=" + encodeURIComponent(j.id) + "&edit=1");
+      } catch (err) {
+        btn.disabled = false;
+        say("Couldn't make the new scope. " + (err.message || "Try again."));
+      }
+    });
+    const send = d.querySelector("#scope-send");
+    if (send && p && p.scope_group) send.addEventListener("click", async () => {
+      send.disabled = true;
+      say("Sending...");
+      try {
+        const r = await api("/api/portal/scope-group/" + encodeURIComponent(p.scope_group) + "/send", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resend: send.dataset.resend === "1" }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 409 && j.error === "scopes_not_published") {
+          const names = (j.missing || []).map((id) => {
+            const m = (p.scope_members || []).filter((x) => x && x.id === id)[0];
+            return (m && m.label) || "a scope";
+          });
+          throw new Error("Send every scope from its Files page first. Not sent yet: " + names.join(", ") + ".");
+        }
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        say(j.already_sent ? "The customer already has this email. Nothing was sent again."
+          : "Sent to " + ((j.emailed || []).length || "the") + " contact" + ((j.emailed || []).length === 1 ? "" : "s") + ", one email with every scope.");
+        load();
+      } catch (err) {
+        send.disabled = false;
+        say("Couldn't send it. " + (err.message || "Try again."));
+      }
+    });
+  }
+
   /** The button, its confirmation, and what it does. Called by BOTH renderers.
    *
    *  TW.confirmDanger, the same helper confirmBringBack is built on: it traps focus between its two
@@ -4904,6 +5038,13 @@
     if (row) {
       p.followup_task = row.followup_task || null;
       p.followup_plan = row.followup_plan || p.followup_plan || null;
+    }
+    // The project's scopes (scopeHtml), off the BOARD row for the reason the won mark gives: the
+    // drafts decide who is in a group (main.py _stamp_scopes), and the portal's detail payload only
+    // knows what its own row cached. ASSIGNED, so a scope taken out of its group clears here too.
+    if (row) {
+      ["scope_group", "scope_label", "scope_index", "scope_count", "scope_members",
+       "scope_send_pending"].forEach((k) => { p[k] = row[k] === undefined ? null : row[k]; });
     }
     // The view stamps, read the same way and for the same reason: the staff detail payload has
     // no viewed_at/last_viewed_at on `proposal` (checked against the portal's own handler), the
@@ -5095,6 +5236,7 @@
              delete. The dialog this button opens carries the heavier of the two bodies, because
              this one stops the follow-up emails.
              NB no em dash in this comment: test_drawer_renders.py greps the whole panel. -->
+        ${scopeHtml(p, pid, true)}
         ${delHtml}
        </div>
 
@@ -5175,6 +5317,8 @@
     setSecEligible("dsec-revisions", true);
     // Always: every project has files and an info sheet, sent or not, won or lost.
     setSecEligible("dsec-files", true);
+    // Always: every project can gain a scope, and scopeHtml always renders its card.
+    setSecEligible("dsec-scope", true);
     // Only when the markup exists. A non-admin renders nothing here, and an eligible id with no
     // element is exactly the mismatch test_drawer_renders.py asserts against.
     setSecEligible("dsec-delete", !!delHtml);
@@ -5193,6 +5337,7 @@
     $("go-info").addEventListener("click",
       () => window.location.assign("/info-sheet.html?d=" + encodeURIComponent(pid)));
     wireDeleteProject(pid, p);
+    wireScope(pid, p);
 
     // Reveal a deposit's bank numbers. Nothing here is cached beyond the open drawer: every
     // press calls POST /api/portal/deposit/{id}/reveal fresh (bank_crypto.py, portal repo,

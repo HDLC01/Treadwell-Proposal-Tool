@@ -1845,6 +1845,19 @@ def api_portal_publish(draft_id: str, request: Request,
     row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # A SCOPE OF A PROJECT IS SENT AS ONE (drafts' scope-group block). The portal reads
+    # `scope_group` straight out of this draft at publish and refuses a malformed one with a bare
+    # 400 invalid_scope_group, which the proxy would hand the Files page as "Portal error." with
+    # nothing to act on. Refused here instead, first and before anything is minted, in words. Flat
+    # body with `error` for the reason the stale-document refusal below gives.
+    _scope_problem = drafts.scope_group_problem((row.get("data") or {}).get("scope_group"))
+    if _scope_problem:
+        log.warning("publish refused for draft %s: %s", _log_safe(draft_id), _scope_problem)
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "invalid_scope_group",
+            "error": "Not sent — this proposal's link to the other scopes of its project is "
+                     "damaged (%s). Open the project from the board and rename the scope, then "
+                     "send." % _scope_problem})
     by = _user_email(request)
     body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
     # WHO BUILT THIS, which is not always who is sending it or who will chase it.
@@ -2076,6 +2089,12 @@ def api_portal_publish(draft_id: str, request: Request,
                         draft_id, exc)
     if isinstance(out, dict):
         out.setdefault("revision_no", rev_no)
+        # A scope's publish emails NOBODY (the portal holds it for the project's one combined email),
+        # so the Files page must not say "sent to the customer". It reads this to say what did happen.
+        _sg = drafts._scope_of(row.get("data") or {})
+        if _sg[0]:
+            out.setdefault("scope_group", _sg[0])
+            out.setdefault("scope_label", _sg[1])
         # What the customer will actually see, echoed back so the sending page can check it
         # against what IT is showing. The flush before publishing closes the same-tab race;
         # this catches every other source of staleness — a second tab, another device, an
@@ -2399,7 +2418,10 @@ def api_portal_pipeline() -> Dict[str, Any]:
         # Only with a cold cache. With a warm one the real rows are right there, and inventing
         # a second card for a project already on the board would double it.
         rows = rows + _sent_unknown_rows(summaries, rows)
-    data["proposals"] = rows + _not_sent_rows(summaries, rows)
+    groups = _scope_groups(summaries)
+    data["proposals"] = rows + _not_sent_rows(summaries, rows,
+                                              scope_pending=_scope_pending(groups, rows))
+    _stamp_scopes(data["proposals"], summaries, groups)
     # The board each card is on, in the server's own words — pipelines.pipeline_of over the audience
     # just stamped, for every row including the synthesised ones and the ones with no draft behind
     # them. portal.js derives the same answer from `audience` with crm-core's pipelineOf, the same
@@ -2416,8 +2438,73 @@ def api_portal_pipeline() -> Dict[str, Any]:
     return data
 
 
+def _scope_groups(summaries: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """{group id: the summaries of its scopes, oldest first}, from the drafts list alone.
+
+    THE DRAFTS DECIDE WHO IS IN A GROUP, as they do for the portal's combined email: a scope taken
+    out of its group keeps a stale scope_group on its portal row, and is an ordinary proposal again.
+    Archived drafts are left out, as they are off the board."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for s in summaries:
+        gid = s.get("scope_group_id")
+        if gid and not s.get("archived"):
+            out.setdefault(gid, []).append(s)
+    for members in out.values():
+        members.sort(key=lambda s: (str(s.get("created_at") or ""), str(s.get("id"))))
+    return out
+
+
+def _scope_pending(groups: Dict[str, List[Dict[str, Any]]],
+                   sent: List[Dict[str, Any]]) -> set:
+    """The scopes that belong on the board although nothing has built their files yet.
+
+    A project's scopes are one project, so once ANY of them is on the board (files built, or sent)
+    every other scope is drawn beside it, as "files not built yet", rather than vanishing because
+    its own Generate has not run. That is a freshly split scope's case by construction: the split
+    clears the old combined files (drafts.SPLIT_CLEARS). A group none of whose scopes has reached
+    the board stays off it, like any project nobody has generated."""
+    have = {r.get("proposal_id") for r in sent}
+    out: set = set()
+    for members in groups.values():
+        if any(s.get("has_files") or s["id"] in have for s in members):
+            out.update(s["id"] for s in members if not s.get("has_files") and s["id"] not in have)
+    return out
+
+
+def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
+                  groups: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Put each card's place in its project on the card: `scope_group`, `scope_label`,
+    `scope_index` (1-based, by when the scope was made), `scope_count` and `scope_members`
+    ([{id, label, on_board}], every scope of the group in that order). IN PLACE.
+
+    From the drafts, which decide membership (see _scope_groups). A sent row whose draft says it is in
+    no group has its portal copy's stale `scope_group` cleared; a row whose draft is unknown here is
+    left exactly as the portal sent it. An ungrouped project gains no key."""
+    on_board = {r.get("proposal_id") for r in rows}
+    by_id = {s["id"]: s for s in summaries}
+    for row in rows:
+        s = by_id.get(row.get("proposal_id"))
+        if s is None:
+            continue
+        gid = s.get("scope_group_id")
+        members = groups.get(gid) if gid else None
+        if not members:
+            if row.get("scope_group"):
+                row["scope_group"] = None
+                row["scope_label"] = None
+                row["scope_send_pending"] = False
+            continue
+        row["scope_group"] = gid
+        row["scope_label"] = s.get("scope_label")
+        row["scope_count"] = len(members)
+        row["scope_index"] = next((i + 1 for i, m in enumerate(members) if m["id"] == s["id"]), 0)
+        row["scope_members"] = [{"id": m["id"], "label": m.get("scope_label") or "",
+                                 "on_board": m["id"] in on_board} for m in members]
+
+
 def _not_sent_rows(summaries: List[Dict[str, Any]],
-                   sent: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                   sent: List[Dict[str, Any]],
+                   scope_pending: Optional[set] = None) -> List[Dict[str, Any]]:
     """Synthesise the board's first column: finished paperwork nobody has sent yet.
 
     Hanz, 2026-08-11: "Under the Active Proposals we need to create a new category before
@@ -2436,9 +2523,15 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
     real proposals by when someone last touched them rather than piling up dateless.
     """
     have = {r.get("proposal_id") for r in sent}
+    pending = scope_pending or set()
     out: List[Dict[str, Any]] = []
     for s in summaries:
-        if s["id"] in have or not s.get("has_files") or s.get("archived"):
+        if s["id"] in have or s.get("archived"):
+            continue
+        # A scope of a project already on the board is drawn even before its files are built
+        # (_scope_pending), and says so (`files_pending`) instead of claiming paperwork exists.
+        files_pending = not s.get("has_files") and s["id"] in pending
+        if not s.get("has_files") and not files_pending:
             continue
         out.append({
             "proposal_id": s["id"],
@@ -2470,6 +2563,8 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # operations without the customer ever being sent the paperwork.
             "handed_off_at": s.get("handed_off_at"),
         })
+        if files_pending:
+            out[-1]["files_pending"] = True
         # Dead before it was ever sent. Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in
         # the Created not sent category" — the commonest dead bid there is, priced and generated
         # and then the GC went elsewhere before we sent it.
@@ -7677,6 +7772,17 @@ def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[st
         return {"ok": True, **drafts.save_draft(draft_id, payload.data,
                                                 owner_email=_user_email(request),
                                                 keep_server_owned=True)}
+    except drafts.StaleSplitWrite:
+        # A copy of the project from BEFORE it was split into scopes (drafts.SPLIT_MARK): storing it
+        # would put every sheet back on the first scope while the other scopes hold them too. A 409,
+        # not the 200 {"ok": false} below, because nothing is wrong with the server: the page holds a
+        # copy that is out of date for good, and shared.js reads any non-2xx as "not saved".
+        log.warning("save refused for draft %s: the page's copy predates the split into scopes",
+                    _log_safe(draft_id))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "split_since",
+            "error": "Not saved — this project was split into separate proposals after this "
+                     "page opened it. Reload the page to work on the scope it is now."})
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": "Couldn't save the project. Please try again."}
@@ -7689,6 +7795,206 @@ def api_load_draft(draft_id: str) -> Dict[str, Any]:
     if row is None:
         raise HTTPException(404, "Draft not found")
     return {"ok": True, **row}
+
+
+# ─── Scope groups: one project, several separately approved proposals ──
+# RJ, 2026-10-24. The store's side is the scope-group block in drafts.py; the portal's is its
+# publish and POST /api/admin/scope-group/{id}/send (one combined email for every scope).
+class ScopeIn(BaseModel):
+    """POST /api/draft/{id}/scope. `label` is the NEW scope's name, or with `rename` this scope's
+    new name. `draft_version` is the stale-write guard the publish uses (PortalPublishIn's note):
+    the row's `updated_at` as the page read it, optional on the same contract."""
+    label: str = ""
+    rename: bool = False
+    draft_version: Optional[str] = None
+
+
+def _scope_refusal(exc: "drafts.ScopeError") -> JSONResponse:
+    return JSONResponse(status_code=exc.status,
+                        content={"ok": False, "code": exc.code, "error": exc.message})
+
+
+def _stale_draft_refusal(draft_id: str, checked: Optional[str], row: Dict[str, Any],
+                         what: str) -> Optional[JSONResponse]:
+    """The publish's stale-copy refusal (api_portal_publish, `_version`), for the scope routes: a
+    409 `document_changed` when the page checked a copy that has been stored again since."""
+    if not _stored_since(row, checked):
+        return None
+    log.warning("%s refused for draft %s: saved again after the page checked it "
+                "(checked %s, now %s)", what, _log_safe(draft_id), _log_safe(checked),
+                _log_safe(row.get("updated_at")))
+    return JSONResponse(status_code=409, content={
+        "ok": False, "code": "document_changed",
+        # No dash in this sentence: the CRM drawer prints it, and the drawer's copy style has none.
+        "error": "Nothing changed. This project was saved again after this page read it "
+                 "(from another page or computer). Reload, check it, then try again."})
+
+
+@app.post("/api/draft/{draft_id}/scope")
+def api_draft_scope(draft_id: str, payload: ScopeIn, request: Request) -> Any:
+    """A NEW SCOPE OF THIS PROJECT (tier A0), or with `rename` a new name for this scope.
+
+    New: 200 {ok, id, group_id, label, parent_label} — `id` is the new draft, which shares this
+    project's intake (drafts.sibling_intake) and goes through the ordinary pipeline on its own.
+    Rename: 200 {ok, group_id, label}. Refusals are flat {ok: false, code, error}: 404 not_found,
+    400 invalid_label / not_grouped / invalid_scope_group, 409 document_changed / label_taken /
+    too_many_scopes."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                      "error": "That project is not there any more."})
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row,
+                                 "scope rename" if payload.rename else "new scope")
+    if stale is not None:
+        return stale
+    actor = _user_email(request)
+    try:
+        if payload.rename:
+            return {"ok": True, **drafts.rename_scope(draft_id, payload.label, actor)}
+        return {"ok": True, **drafts.create_sibling(draft_id, payload.label, actor)}
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+
+
+class SplitChildIn(BaseModel):
+    tab_id: str = ""
+    label: str = ""
+    # The scope's one-sheet save (bid-model splitOut + buildSavePatch): filtered through
+    # drafts.SPLIT_CHILD_KEYS, so nothing else the request carries reaches a draft.
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SplitIn(BaseModel):
+    # REQUIRED, unlike the other routes' Optional guard: a split rewrites the whole estimate, and the
+    # page that asks has always just read the copy it split (it flushes and reads before it asks).
+    draft_version: str = ""
+    children: List[SplitChildIn] = Field(default_factory=list)
+
+
+_SPLIT_WORK_TYPES = ("polish", "epoxy", "gyp")
+
+
+def _draft_was_sent(draft_id: str) -> bool:
+    """Has the customer been sent this project? A revision is the local proof (create_revision runs
+    on every publish and is rolled back when it fails); the portal is asked too, because a row there
+    is what the customer has. 404 and 503 are "no row" (_portal_visibility's reading); anything else
+    RAISES, so a split is never let through on a portal that could not answer."""
+    if drafts.latest_revision_no(draft_id):
+        return True
+    try:
+        _portal("/api/admin/proposal/%s" % _safe_id(draft_id), "GET")
+        return True
+    except HTTPException as exc:
+        if exc.status_code in (404, 503):
+            return False
+        raise
+
+
+@app.post("/api/draft/{draft_id}/split")
+def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
+    """SPLIT AN ESTIMATE'S SHEETS INTO SEPARATE PROPOSALS (tier A1): Breakroom, Lab 1 and Lab 2 priced
+    as sheets of one estimate become three scopes of one project, each its own proposal.
+
+    Body {draft_version, children: [{tab_id, label, data}]}, children[0] being the sheet that stays on
+    THIS draft (the page sends the one that carried the job's travel first). 200 {ok, group_id,
+    parent: {id, label, data, updated_at}, children: [{id, label}]}: the page adopts `parent.data` as
+    its copy before anything else can save (polish-estimate.js), and the server refuses any older copy
+    of it from then on (drafts.SPLIT_MARK).
+
+    Refused, flat {ok: false, code, error}: 400 draft_version_required / too_few_scopes / not_v2 /
+    invalid_scope / invalid_label, 404 not_found, 409 document_changed (saved again since the page
+    read it) / already_sent (the customer has this project: a split only makes sense before the
+    first send) / label_taken / too_many_scopes, 502 portal_unreachable."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                      "error": "That project is not there any more."})
+    if not (payload.draft_version or "").strip():
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "draft_version_required",
+            "error": "Nothing was split — the page did not say which copy it split. Reload and "
+                     "try again."})
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row, "split")
+    if stale is not None:
+        return stale
+    data = row.get("data") or {}
+    if not (isinstance(data.get("polish_estimate"), dict) and data["polish_estimate"].get("version") == 2):
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "not_v2",
+            "error": "Only an Estimating Tool v2 estimate can be split into proposals."})
+    kids = payload.children
+    if len(kids) < 2:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "too_few_scopes",
+            "error": "A split needs two sheets or more, each its own proposal."})
+    tabs = [k.tab_id for k in kids]
+    for k in kids:
+        pe = k.data.get("polish_estimate")
+        if (not k.tab_id or not isinstance(pe, dict) or pe.get("version") != 2
+                or k.data.get("work_type") not in _SPLIT_WORK_TYPES):
+            return JSONResponse(status_code=400, content={
+                "ok": False, "code": "invalid_scope",
+                "error": "Nothing was split — a sheet's proposal could not be read. Reload and "
+                         "try again."})
+    if len(set(tabs)) != len(tabs):
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "invalid_scope",
+            "error": "Nothing was split — one sheet was sent twice. Reload and try again."})
+    try:
+        sent = _draft_was_sent(draft_id)
+    except HTTPException as exc:
+        log.warning("split refused for draft %s: the portal could not say whether it was sent (%s)",
+                    _log_safe(draft_id), exc.status_code)
+        return JSONResponse(status_code=502, content={
+            "ok": False, "code": "portal_unreachable",
+            "error": "Nothing was split — the customer portal is not answering, so the tool "
+                     "cannot tell whether this proposal was already sent. Try again in a minute."})
+    if sent:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "already_sent",
+            "error": "This proposal has already been sent to the customer, so its sheets cannot be "
+                     "split into separate proposals any more. Use “New scope for this "
+                     "project” on the board for another proposal instead."})
+    actor = _user_email(request)
+    try:
+        out = drafts.split_draft(draft_id, [{"label": k.label, "data": k.data} for k in kids], actor)
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+    for c, k in zip(out["children"], kids[1:]):
+        c["tab_id"] = k.tab_id
+    out["parent"]["tab_id"] = kids[0].tab_id
+    return {"ok": True, **out}
+
+
+class ScopeSendIn(BaseModel):
+    message: str = ""
+    resend: bool = False
+
+
+@app.post("/api/portal/scope-group/{group_id}/send")
+async def api_scope_group_send(group_id: str, request: Request,
+                               payload: Optional[ScopeSendIn] = None) -> Response:
+    """THE ONE COMBINED EMAIL for every scope of a project (RJ: three proposals, one email): a proxy
+    to the portal's POST /api/admin/scope-group/{id}/send, which owns the rules — every scope
+    published first (409 scopes_not_published with `missing`), once unless `resend`.
+
+    The portal's answer is handed back WHOLE, status and body, through _portal_raw: the drawer needs
+    the `missing` list of a 409 and the `already_sent` of a repeat, and `_portal` keeps only an
+    error string."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    body: Dict[str, Any] = {"by": _user_email(request) or ""}
+    if payload is not None:
+        msg = (payload.message or "").strip()
+        if msg:
+            body["message"] = msg[:2000]
+        if payload.resend:
+            body["resend"] = True
+    return await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
+                             json.dumps(body).encode("utf-8"), "application/json")
 
 
 @app.delete("/api/draft/{draft_id}")
@@ -8468,6 +8774,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             base_path=base_path,
             existing_folder_path=existing_path,
             known_paths=known_paths,
+            # One scope of a split project: its files carry its name, so the scopes share the
+            # project folder without one writing over another (dropbox_client._scoped_name).
+            scope_label=drafts._scope_of(data)[1],
         )
     except HTTPException:
         raise

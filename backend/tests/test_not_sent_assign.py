@@ -163,7 +163,7 @@ def test_the_refresh_only_touches_keys_the_SERVER_owns():
     m = re.search(r"const SERVER_OWNED_KEYS = \[([^\]]*)\]", SHARED_JS)
     assert m, "SERVER_OWNED_KEYS moved"
     keys = {k.strip().strip('"\'') for k in m.group(1).split(",") if k.strip()}
-    assert keys == {"assigned_estimator", "is_test", "archived"}, keys
+    assert keys == {"assigned_estimator", "is_test", "archived", "scope_group"}, keys
     backend = (pathlib.Path(__file__).resolve().parents[1] / "drafts.py").read_text(encoding="utf-8")
     b = re.search(r"_SERVER_OWNED_KEYS = \(([^)]*)\)", backend)
     assert b, "_SERVER_OWNED_KEYS moved in drafts.py"

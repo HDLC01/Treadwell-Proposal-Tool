@@ -361,7 +361,9 @@ DOORS = [
      "Continue on the live intake (the handler also refuses a v2 draft itself)"),
     ("js/index.js", 'q.has("edit")', 1, NOT_A_DOOR, "the load guard reads the parameter, it opens nothing"),
     ("js/leads.js", "&edit=1", 2, INTAKE, "Leads: open the project a lead became"),
-    ("js/portal.js", "&edit=1", 2, INTAKE, "the board's drawer: Open"),
+    # 4 since 2026-10-24: the drawer's scope list opens a sibling not on the board yet, and a new scope
+    # opens itself, both on the intake (index.js sends a v2 draft on to the v2 intake).
+    ("js/portal.js", "&edit=1", 4, INTAKE, "the board's drawer: Open, a scope not on the board, a new scope"),
     ("js/projects.js", "&edit=1", 1, INTAKE, "a Projects card (a v2 card goes to the v2 intake first)"),
     ("js/proposal-review.js", 'href="/?edit=1"', 1, INTAKE, "Go to Intake on the no-project card"),
     ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 2, SHEET,

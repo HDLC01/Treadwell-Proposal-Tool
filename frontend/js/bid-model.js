@@ -6323,6 +6323,100 @@
     return { model: out, patch: patch };
   }
 
+  // ══ SPLITTING A BID INTO SEPARATE PROPOSALS (scope groups, tier A1; RJ, 2026-10-24) ═══════════════════════════════════════════════════
+  //
+  // A client gets a few separately priced scopes under one project (Breakroom polish, Lab 1 epoxy, Lab 2 epoxy), each its OWN proposal the customer
+  // approves on its own. The estimator can build them as SHEETS of one estimate first, as today, and then split: each sheet becomes a one-sheet bid with
+  // itself as the base, and the server files each as a scope of one project (POST /api/draft/{id}/split, backend/drafts.py split_draft).
+  //
+  // WHAT A SHEET IS PRICED AT DOES NOT MOVE. A sheet that was the base keeps the job's Lodging and Per Diem as they stood, typed figures included: they
+  // are its crew's. A sheet that was an OPTION was charged its own crew's nights (optionTravelCosts, ownNights) and never the job's typed quantity, so as
+  // a bid of its own its two lines FOLLOW ITS OWN LABOR (qty_follow "labor": jobNights of a one-base bid is that sheet's own count), which is the same
+  // figure. That is the audit's hazard answered by CLEARING, not by refusing: copying the carrier's typed "10 nights" onto every scope would bill the
+  // Breakroom crew's hotel on Lab 1 and Lab 2 as well. And an option that held no Travel Labor row of its own is given none: pickBase hands a new base a
+  // copy of the old base's drive (moveTravelLabor), which here would put the Breakroom crew's typed trip on the Lab crew's proposal.
+  //
+  // NOTHING IS GUESSED. A bid whose base is Epoxy and Polish PRICED TOGETHER, a bid with an option that can never be a base (Seal, Leveling), a bid
+  // with no base, and a bid of one sheet are refused with the reason: each needs the estimator to decide something first.
+
+  /** Why this bid cannot be split into separate proposals, in the estimator's words, or null when it can. Reads only; never throws. */
+  function splitBlockers(model) {
+    var list = readableSections(model);
+    if (list === null) return "This bid's sheets cannot be read, so they cannot be split.";
+    var live = list.filter(function (e) { return e.kind !== "off"; });
+    if (live.length < 2) return "There is only one sheet on this bid, so there is nothing to split.";
+    var lone = live.filter(function (e) { return types.tab(types.tabOfSheet(e.sheet)).optionOnly; })[0];
+    if (lone) {
+      return "The " + lone.label + " sheet is an option on a bid and never a bid of its own, so it cannot become its own proposal. " +
+        "Delete it, or make it part of another sheet, before you split.";
+    }
+    var base = baseOf(model);
+    if (base.ids.length === 2) {
+      return "The base bid is an Epoxy and a Polish sheet priced together. Make one sheet the base before you split, so each sheet is priced on its own.";
+    }
+    if (base.ids.length !== 1) return "This bid has no base sheet. Make one sheet the base before you split.";
+    return null;
+  }
+
+  /** The sheets a split makes proposals of, in the bid's order: every sheet that is part of the bid. [] when it cannot be split (splitBlockers). */
+  function splitTabs(model) {
+    if (splitBlockers(model) !== null) return [];
+    return activeSections(model).map(function (e) { return e.tab; });
+  }
+
+  /** ONE SHEET OF A BID AS A BID OF ITS OWN (the block above). Answers `{ model, patch, label, carrier }`: a NEW model whose only base is `tabId`, with
+   *  every other sheet under `tabs` deleted (and the Polish root marked off when it is not the sheet), the draft's side of it (`patch`: pickBase's
+   *  `work_type` and `base_tab_id`, and what deleteSection forgets of each deleted sheet), the sheet's name, and whether this sheet carried the job's
+   *  travel before (`carrier`). `ctx.state` is the draft. THROWS with splitBlockers' words, for a sheet the bid does not have and for one that is off.
+   *  Pure: the model handed in is not touched. */
+  function splitOut(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("splitOut needs the model");
+    var blocked = splitBlockers(model);
+    if (blocked !== null) throw new Error(blocked);
+    var entry = sectionOf(model, tabId);
+    if (entry.kind === "off") throw new Error("The " + entry.label + " sheet is not part of this bid, so it cannot become a proposal.");
+    var carrierBefore = travelCarrier(model);
+    var heldDrive = travelRowsIn(entry.section).length > 0;
+    var draftNow = isObject(ctx) && isObject(ctx.state) ? ctx.state : {};
+    var made = pickBase(model, [tabId], { state: draftNow });
+    var out = made.model;
+    var patch = Object.assign({}, made.patch);
+    draftNow = Object.assign({}, draftNow, patch);
+    sectionsOf(out).forEach(function (e) {
+      if (e.root || e.tab === tabId) return;
+      var gone = deleteSection(out, e.tab, { state: draftNow });
+      out = gone.model;
+      patch = Object.assign(patch, gone.patch);
+      draftNow = Object.assign({}, draftNow, gone.patch);
+    });
+    if (tabId !== ROOT_TAB) {
+      out = withSectionKind(out, ROOT_TAB, "off");
+      // pickBase filed the old base as an option ON the proposal; the root is off now, so that entry says something about nothing.
+      if (isObject(patch.tab_opts) && has.call(patch.tab_opts, ROOT_TAB)) {
+        patch.tab_opts = Object.fromEntries(Object.keys(patch.tab_opts).filter(function (k) { return k !== ROOT_TAB; })
+          .map(function (k) { return [k, patch.tab_opts[k]]; }));
+      }
+    }
+    out = jsonCopy(out);
+    var mine = sectionOf(out, tabId).section;
+    // An option that had no drive of its own is given none (see the block above): pickBase's copy of the old base's row is the other crew's.
+    if (!heldDrive && mine.labor instanceof Array) mine.labor = mine.labor.filter(function (r) { return !isTravelRow(r); });
+    // A sheet that was not the carrier charges its own crew's nights, as it did as an option: never the job's typed quantity.
+    if (tabId !== carrierBefore && isObject(out.travel)) {
+      TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = out.travel[k];
+        if (!isObject(l)) return;
+        l.qty_auto = true;
+        l.qty_follow = "labor";
+        delete l.qty_typed;
+      });
+    }
+    syncAutoGuys(out);
+    patch.work_type = baseOf(out).jobType;
+    patch.base_tab_id = tabId;
+    return { model: out, patch: patch, label: entry.label, carrier: tabId === carrierBefore };
+  }
+
   /** A SINGLE-base job's Travel Labor row follows its one base (pickBase calls this only when the job has one base before and after the pick and the base moved; since
    *  round 7 every base drives its own crew and a pick that keeps or makes two bases moves nothing: Hanz's D1 of 2026-10-21). The row (labor id `travel`) is the job's
    *  drive, so when the base moves to another sheet the new base takes the job's row. THE OLD CARRIER THAT THE PICK DEMOTED KEEPS A ROW OF ITS OWN
@@ -7367,6 +7461,8 @@
     MAX_COPIES: MAX_COPIES, polishBid: polishBid, baseOf: baseOf, pickBase: pickBase, sheetsToAdd: sheetsToAdd,
     copySection: copySection, addSheet: addSheet, renameSection: renameSection, deleteSection: deleteSection,
     validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
+    // Splitting a bid's sheets into separate proposals (scope groups, tier A1): see the block above splitBlockers.
+    splitBlockers: splitBlockers, splitTabs: splitTabs, splitOut: splitOut,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, coveHeightOf: coveHeightOf, sectionSwitcherHtml: sectionSwitcherHtml,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).

@@ -393,7 +393,8 @@
 
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
   // Somebody else can change any of them from the CRM while this page holds an older copy.
-  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived"];
+  // `scope_group` (2026-10-24): which project this proposal is one scope of, and its name there.
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group"];
 
   /** Re-read the server-owned keys for this draft and merge them into local state.
    *
@@ -432,7 +433,8 @@
       // Kyle's $10,000 copy back over RJ's revision the moment the estimator picker re-read the
       // assignment, because the assignment had "moved".
       const cur = getState();
-      const moved = Object.keys(patch).filter((k) => cur[k] !== patch[k]);
+      // By value: `scope_group` is an object, and a reference test would call it moved on every load.
+      const moved = Object.keys(patch).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(patch[k]));
       if (moved.length) setLocalState(patch);
       return patch;
     } catch {

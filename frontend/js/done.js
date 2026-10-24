@@ -1741,12 +1741,23 @@
             TW.flushState();          // sent now, not 2.5 s later, while the check above still holds
           }
           if (portalRecip.setBusy) portalRecip.setBusy(false);
-          portalBtn.textContent = "\u2713 Sent to customer portal";
+          // ONE SCOPE OF A PROJECT SPLIT INTO SEVERAL PROPOSALS (2026-10-24) is published and emails NOBODY: the customer gets
+          // one email with every scope, sent from the project's drawer on the board (main.py adds scope_group to the answer).
+          const scoped = !!(j && j.scope_group);
+          portalBtn.textContent = scoped ? "\u2713 Published (not emailed yet)" : "\u2713 Sent to customer portal";
           mountRevisions();   // the send just created a new version \u2014 show it
           const r = document.getElementById("portal-result");
           if (r) {
             r.style.display = "";
             r.textContent = "";
+            if (scoped) {
+              const s = document.createElement("p");
+              s.className = "portal-scope";
+              s.textContent = "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                + "one scope of this project. The customer has not been emailed yet: they get one email with every "
+                + "scope, sent from the project's drawer on the board once every scope is published.";
+              r.appendChild(s);
+            }
             // NO LINK AND NO RECIPIENT LIST. Removed on Hanz's ask (2026-08-26). The URL is a
             // secret token that opens the customer's proposal, and there is no reason for it to
             // sit on screen after a send — the CRM drawer copies it on demand when somebody

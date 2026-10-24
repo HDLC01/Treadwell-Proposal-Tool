@@ -513,6 +513,17 @@
   .ns-assign select { flex:1 1 190px; min-width:0; min-height:38px; padding:7px 9px;
     border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font:inherit; }
   .ns-assign .btn { min-height:38px; }
+  /* The scope controls (scopeHtml) borrow the row above; the new scope's name takes the room the
+     estimator select does there. */
+  .ns-assign input[type="text"] { flex:1 1 190px; min-width:0; min-height:38px; padding:7px 9px;
+    border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font:inherit; }
+  .scope-list { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:4px; }
+  .btn-link { background:none; border:0; padding:0; font:inherit; color:var(--red-dark);
+    text-decoration:underline; cursor:pointer; }
+  .scope-line { font-weight:600; }
+  .scope-tag { font-size:12px; font-weight:600; padding:1px 6px; border-radius:6px;
+    border:1px solid var(--line); white-space:nowrap; }
+  #scope-note:empty { display:none; }
   .ns-assign-note:empty { display:none; }
   .ns-assign-note { margin:0; color:var(--red-dark); font-weight:600; }
   .btn { min-height:42px; padding:0 16px; border-radius:7px; border:1px solid transparent; font:inherit; font-weight:700;
