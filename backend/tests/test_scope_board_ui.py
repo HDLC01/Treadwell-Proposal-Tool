@@ -135,5 +135,6 @@ def test_the_combined_email_names_the_scopes_still_to_publish(drawer):
     n = drawer["scope"]["notPublished"]
     assert n["requests"] == [{"path": "/api/portal/scope-group/grp_x/send", "method": "POST",
                               "body": {"resend": False}}]
-    assert "Not sent yet: Breakroom, Lab <2>." in n["note"]
+    assert "Not published yet: Breakroom, Lab <2>." in n["note"]
+    assert n["note"].startswith("Nothing was sent.")
     assert drawer["scope"]["sentOk"]["note"] == "Sent to 2 contacts, one email with every scope."
