@@ -116,10 +116,11 @@ def test_a_later_scope_on_the_same_sheet_is_a_copy_and_the_sheet_comes_from_the_
 
 
 def test_mirror_formulas_follow_the_renamed_tabs(built):
-    # The Polish tab (Breakroom) and a tab no scope is on (Seal) read the project name off Epoxy,
-    # which is now "Lab 1".
-    assert built["Breakroom"]["B1"].value == "='Lab 1'!B1"
+    # A tab no scope is on (Seal) reads the project name off Epoxy, which is now "Lab 1"; the Polish
+    # tab (Breakroom) still reads its contact block off it. (Its job-info block is its OWN scope's
+    # literals now, finding 23: see test_a_polish_scopes_job_info_is_its_own.)
     assert built["Seal"]["B1"].value == "='Lab 1'!B1"
+    assert built["Breakroom"]["G2"].value == "='Lab 1'!G2"
     for name in ("Breakroom", "Lab 2", "Seal"):
         stale = [c.coordinate for c in built[name]._cells.values()
                  if isinstance(c.value, str) and c.value.startswith("=") and "Epoxy!" in c.value
@@ -140,6 +141,71 @@ def test_every_tab_shows_its_own_scopes_answers_not_tab_ones(built):
     assert two["B1"].value == "Acme HQ" and three["B1"].value == "Acme HQ"
     # Each scope's own cells land on its own tab: Lab 1's Polish!B4 is not the Breakroom's answer.
     assert built["Breakroom"]["B4"].value == "Yes"
+
+
+# ── a Polish (or Seal) scope's job info is its own (finding 23) ───────────────────────────────
+JOB = ("B1", "B2", "B3", "C3", "B4", "D5", "B6", "D6", "B7", "B8", "B9", "B10")
+
+
+def seal(label, **data):
+    d = {"project_name": "Acme HQ", "work_type": "seal", "base_tab_id": "Seal",
+         "polish_estimate": {"version": 2, "kind": "off", "tabs": {"Seal": _section("seal")}}}
+    d.update(data)
+    return {"id": "id-" + label, "label": label, "data": d}
+
+
+BREAKROOM = polish("Breakroom", bid_date="2026-10-01", architect="Arch B", drawings_dated="BR-dwg",
+                   cell_values={"Epoxy!D5": "No"})
+LAB_1 = epoxy("Lab 1", bid_date="2026-10-02", architect="Arch A", drawings_dated="Lab1-dwg",
+              address="1 Main St", cell_values={"Epoxy!D5": "Yes"})
+
+
+def _no_mirror_into_another_tab(ws):
+    return [(a, ws[a].value) for a in JOB
+            if isinstance(ws[a].value, str) and ws[a].value.startswith("=") and "!" in ws[a].value]
+
+
+@pytest.mark.parametrize("order", ["polish first", "polish second"])
+def test_a_polish_scopes_job_info_is_its_own(order):
+    """The review's own build: Breakroom (polish, bid 2026-10-01) beside Lab 1 (epoxy, 2026-10-02,
+    drawings 'Lab1-dwg') and Lab 2 (a split Epoxy scope on Copy1). Breakroom's tab used to read
+    B2 = ='Lab 1'!B2, and its own date appeared nowhere."""
+    lab2 = epoxy("Lab 2", base="Copy1", bid_date="2026-10-03")
+    members = ([BREAKROOM, LAB_1, lab2] if order == "polish first" else [LAB_1, BREAKROOM, lab2])
+    wb = _load(ew.fill_group_estimate(copy.deepcopy(members)))
+    br, one = wb["Breakroom"], wb["Lab 1"]
+    assert (br["B2"].value, br["B8"].value, br["B9"].value) == ("2026-10-01", "Arch B", "BR-dwg")
+    assert (one["B2"].value, one["B8"].value, one["B9"].value) == ("2026-10-02", "Arch A", "Lab1-dwg")
+    assert br["D5"].value == "No" and one["D5"].value == "Yes"
+    assert br["B1"].value == "Acme HQ"
+    # Lab 1's address is Lab 1's: Breakroom never answered one, so its cell is empty, not Lab 1's.
+    assert one["B3"].value == "1 Main St" and br["B3"].value is None
+    assert _no_mirror_into_another_tab(br) == [], "Breakroom still reads another scope's answers"
+    assert wb["Lab 2"]["B2"].value == "2026-10-03"
+
+
+def test_a_polish_tab_keeps_the_scopes_own_typed_flag_over_the_job_answer():
+    """The scope's own typed cell on its own sheet wins, as it always has (FLAG_BLOCK_CELLS)."""
+    br = polish("Breakroom", taxable="Yes", cell_values={"Polish!B6": "No", "Epoxy!D6": "Yes"})
+    wb = _load(ew.fill_group_estimate([copy.deepcopy(LAB_1), br]))
+    assert wb["Breakroom"]["B6"].value == "No" and wb["Breakroom"]["D6"].value == "Yes"
+    assert wb["Lab 1"]["D6"].value == _template()["Epoxy"]["D6"].value
+
+
+def test_a_seal_scopes_job_info_is_its_own_too():
+    """Seal mirrors Epoxy (and its B6 mirrors Polish, which mirrors Epoxy): followed to the end."""
+    sl = seal("Hallway", bid_date="2026-10-05", architect="Arch S", taxable="No")
+    wb = _load(ew.fill_group_estimate([copy.deepcopy(LAB_1), copy.deepcopy(BREAKROOM), sl]))
+    hw = wb["Hallway"]
+    assert (hw["B2"].value, hw["B8"].value, hw["B6"].value) == ("2026-10-05", "Arch S", "No")
+    assert hw["B9"].value is None and hw["D5"].value == _template()["Epoxy"]["D5"].value
+    assert _no_mirror_into_another_tab(hw) == []
+
+
+def test_the_plan_names_the_cells_it_empties():
+    plan = ew.plan_group_workbook([copy.deepcopy(LAB_1), copy.deepcopy(BREAKROOM)])
+    assert plan["cell_values"]["Polish!B2"] == "2026-10-01"
+    assert "B3" in plan["blank_cells"]["Polish"] and "Epoxy" not in plan["blank_cells"]
 
 
 def test_the_rate_locks_are_kept_on_every_scope_tab(built):
@@ -195,7 +261,11 @@ def test_a_sheet_no_scope_is_on_gets_the_first_scopes_answers_and_only_its():
     assert wb.sheetnames[:2] == ["Breakroom", "Lobby"]
     assert wb["Epoxy"]["B1"].value == "Acme HQ" and wb["Epoxy"]["D5"].value == "Yes"
     assert wb["Epoxy"]["D6"].value == tpl["D6"].value      # Lobby is not the first scope
-    assert wb["Lobby"]["B4"].value == "No" and wb["Lobby"]["B1"].value == "=Epoxy!B1"
+    assert wb["Lobby"]["B4"].value == "No" and wb["Lobby"]["G2"].value == "=Epoxy!G2"
+    # ...while each Polish tab's own job info is its own (finding 23): Lobby's remodel answer is not
+    # the Epoxy tab's, which is Breakroom's.
+    assert wb["Lobby"]["D6"].value == "Yes" and wb["Breakroom"]["D6"].value == tpl["D6"].value
+    assert wb["Breakroom"]["D5"].value == "Yes" and wb["Lobby"]["D5"].value == tpl["D5"].value
 
 
 # ── the ceiling and the names ────────────────────────────────────────────────────────────────
@@ -216,7 +286,7 @@ def test_colliding_scope_names_are_told_apart():
     cut = long_a[:31].strip()
     assert wb.sheetnames[:3] == [cut, cut[:29] + " 2", "Takeoff 2"]
     # ...and the formulas still name the tab that is there.
-    assert wb["Takeoff 2"]["B1"].value == "='%s'!B1" % cut
+    assert wb["Takeoff 2"]["G2"].value == "='%s'!G2" % cut
 
 
 # ── refusals ─────────────────────────────────────────────────────────────────────────────────

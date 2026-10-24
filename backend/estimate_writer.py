@@ -1294,6 +1294,79 @@ def _named_sheet_cells(sheet: str, values: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# THE JOB-INFO BLOCK OF A SCOPE'S TAB (finding 23). On the template, most sheets do not hold the job's
+# answers themselves: Polish!B2 is `=Epoxy!B2`, Seal!B9 `=Epoxy!B9`, 'Seal (+Jnts)'!B1 `=Seal!B1`, the
+# gyp variants read the gyp base, and every flag block reads Epoxy!D5/D6. In a project workbook the
+# Epoxy tab is another scope's (Lab 1), so a Polish scope's tab showed Lab 1's bid date, architect,
+# drawings date and prevailing-wage answer, and its own appeared nowhere. Each MIRROR cell of this
+# block on a scope's tab is therefore written as a literal: the value the scope's OWN single
+# workbook would show there (_own_mirror_value), or blank when it would show nothing. Cells of the
+# block that are literals on the template are left to the ordinary writes.
+_GROUP_JOB_INFO_ADDRS = ("B1", "B2", "B3", "C3", "B4", "D5", "B6", "D6", "B7", "B8", "B9", "B10")
+_GROUP_GYP_JOB_INFO_ADDRS = ("B2", "B3", "B4", "C4", "B5", "B6", "D7", "B8", "D8", "B9", "B10", "B11")
+# `=Epoxy!B2`, `='Gyp (USG 1-8")'!B2`, `=$B$2`-style absolutes included; nothing else (a formula that
+# computes is not a mirror and is never replaced).
+_MIRROR_RE = re.compile(r"^=(?:'((?:[^']|'')+)'|([^'!=(),:]+))!\$?([A-Z]{1,3})\$?([0-9]{1,7})$")
+_KEEP = object()
+
+
+def _mirror_target(v: Any) -> tuple[str, str] | None:
+    """(sheet, address) a template cell mirrors, or None when it is not a plain mirror formula."""
+    if not isinstance(v, str):
+        return None
+    m = _MIRROR_RE.match(v.strip())
+    if not m:
+        return None
+    sheet = m.group(1).replace("''", "'") if m.group(1) is not None else m.group(2).strip()
+    return sheet, m.group(3) + m.group(4)
+
+
+def _own_mirror_value(tpl, data: Mapping[str, Any], sheet: str, addr: str,
+                      own_ids: tuple, depth: int = 0) -> Any:
+    """What `sheet`!`addr` shows in this scope's OWN single-scope workbook: its typed cell there
+    (under any of `own_ids`, the section id and the sheet, on the first step), else its named field
+    there (_named_sheet_cells), else the template's cell, followed through a mirror to the sheet it
+    reads. _KEEP for a cell that is a real formula (never replaced)."""
+    own = data.get("cell_values") if isinstance(data.get("cell_values"), Mapping) else {}
+    for key in (own_ids or (sheet,)):
+        v = own.get("%s!%s" % (key, addr))
+        if v not in (None, ""):
+            return v
+    named = _named_sheet_cells(sheet, data)
+    if addr in named:
+        return named[addr]
+    if sheet not in tpl.sheetnames:
+        return _KEEP
+    tv = tpl[sheet][addr].value
+    target = _mirror_target(tv)
+    if target is not None:
+        return _own_mirror_value(tpl, data, target[0], target[1], (), depth + 1) if depth < 6 else _KEEP
+    if isinstance(tv, str) and tv.startswith("="):
+        return _KEEP
+    return tv
+
+
+def _own_job_info(data: Mapping[str, Any], sid: str, sheet: str) -> Dict[str, Any]:
+    """{address: the scope's own value, None for blank} for each MIRROR cell of the job-info block on
+    a scope's tab whose workbook sheet is `sheet` (see _GROUP_JOB_INFO_ADDRS). Empty for Epoxy, whose
+    block holds literals only."""
+    tpl = _load_template(data_only=False)
+    if sheet not in tpl.sheetnames:
+        return {}
+    addrs = _GROUP_GYP_JOB_INFO_ADDRS if sheet in GYP_SHEETS else _GROUP_JOB_INFO_ADDRS
+    out: Dict[str, Any] = {}
+    for addr in addrs:
+        target = _mirror_target(tpl[sheet][addr].value)
+        if target is None:
+            continue
+        # The scope's own typed cell on its own tab first (as the ordinary writes would land it).
+        v = _own_mirror_value(tpl, data, sheet, addr, (sid, sheet))
+        if v is _KEEP:
+            continue
+        out[addr] = None if v in (None, "") else v
+    return out
+
+
 def _group_note_span(ws) -> tuple[str, str] | None:
     """(first, last) of the row-1 span a tab's note goes in: D1:F1, or, where any of those cells is
     filled or part of a merged block (Specs+Dwgs+Addn merges A1:D1), the first three empty, unmerged
@@ -1383,7 +1456,15 @@ def plan_group_workbook(members: list[Mapping[str, Any]]) -> Dict[str, Any]:
         sheet_name = str(key).split("!", 1)[0] if "!" in str(key) else None
         if sheet_name and sheet_name not in occupied and sheet_name in FLAG_BLOCK_CELLS:
             cells[str(key)] = v
+    blanks: Dict[str, list] = {}
     for (m, data, name, sid, sheet), tab in zip(resolved, tabs):
+        # The job-info block's MIRRORS become this scope's own literals (finding 23), before its
+        # named fields and typed cells, which win where they say anything.
+        for addr, v in _own_job_info(data, sid, sheet).items():
+            if v is None:
+                blanks.setdefault(tab, []).append(addr)
+            else:
+                cells["%s!%s" % (tab, addr)] = v
         for addr, v in _named_sheet_cells(sheet, data).items():
             cells["%s!%s" % (tab, addr)] = v
         own = data.get("cell_values") if isinstance(data.get("cell_values"), Mapping) else {}
@@ -1403,6 +1484,9 @@ def plan_group_workbook(members: list[Mapping[str, Any]]) -> Dict[str, Any]:
         "tab_order": list(tabs),
         "tabs": [{"id": m.get("id"), "label": name, "tab": tab, "sheet": sheet}
                  for (m, _d, name, _s, sheet), tab in zip(resolved, tabs)],
+        # {tab: [address]}: job-info mirrors the scope has no answer for, emptied rather than left
+        # reading another scope's tab (fill_estimate never writes a blank, so _blank_mirrors does).
+        "blank_cells": blanks,
     }
 
 
@@ -1411,14 +1495,32 @@ def fill_group_estimate(members: list[Mapping[str, Any]]) -> bytes:
     single fill_estimate pass. `members` as plan_group_workbook takes them. RAISES
     GroupWorkbookError for a project it refuses."""
     plan = plan_group_workbook(members)
+    note = _note_every_tab()
+
+    def finish(wb) -> None:
+        _blank_mirrors(wb, plan["tab_order"], plan.get("blank_cells") or {})
+        note(wb)
     return fill_estimate(
         plan["values"],
         cell_values=plan["cell_values"],
         tab_copies=plan["tab_copies"],
         tab_labels=plan["tab_labels"],
         tab_order=plan["tab_order"],
-        _finish=_note_every_tab(),
+        _finish=finish,
     )
+
+
+def _blank_mirrors(wb, tab_order: list, blanks: Mapping[str, list]) -> None:
+    """Empty each scope tab's job-info mirrors its scope has no answer for (plan_group_workbook's
+    `blank_cells`). By POSITION: fill_estimate put the scope tabs first in `tab_order` and has
+    renamed them to the scopes' names by now; a workbook that does not have them all there is left
+    alone rather than emptied on the wrong tab."""
+    sheets = wb.worksheets
+    if len(sheets) < len(tab_order):
+        return
+    for i, tab in enumerate(tab_order):
+        for addr in blanks.get(tab) or ():
+            sheets[i][addr].value = None
 
 
 def _text_cell(v: Any) -> str:
