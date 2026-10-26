@@ -1098,6 +1098,7 @@
     const N = (v) => Number(v) || 0;
     const byId = (id) => all.find(t => t.id === id);
     let baseTab = state.base_tab_id ? byId(state.base_tab_id) : null;
+    const pickedBaseId = state.base_tab_id || null;
     // Refuse an option-only base before anything is priced off it. effectiveWorkType has no seal
     // branch by design, so honouring one would price the bid off a seal sheet and then print the
     // template the intake work type picked. Nulling it lets the migration below resolve a real base.
@@ -1118,6 +1119,10 @@
         state.base_tab_id = resolved.id;
       }
     }
+    // The ticked base sheets keep the base inside them, as Base Bid 1 (TWPrice.baseIds): a base nulled or resolved
+    // just above takes the place of the one it replaced. A draft that never ticked a second sheet has none to keep,
+    // and a base left as it was leaves them as they were.
+    if ((state.base_tab_id || null) !== pickedBaseId && Array.isArray(state.base_tab_ids)) state.base_tab_ids = TWPrice.moveBaseId(state, pickedBaseId, state.base_tab_id);
     let shownBase, salesTax, remodelTax;
     // The sheet's Taxable? / Remodel Tax? answers for a tab, as the Estimate step snapshotted them
     // (estimate-review.js snapshotLumpSumsToState). A snapshot from before they travelled has none,
@@ -1235,6 +1240,7 @@
     // lump sum from that element.
     const _pp = syncPayloadPricing();
     TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
+      ...(Array.isArray(state.base_tab_ids) ? { base_tab_ids: state.base_tab_ids } : {}),
       proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax,
       proposal_taxable: baseTaxable, proposal_remodel_on: baseRemodelOn,
       sheet_area: state.sheet_area, ...(_pp ? { proposal_payload: _pp } : {}) });
@@ -1884,6 +1890,20 @@
           // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
           const baseRO = v2Locked ? " disabled" : "";
+          // SEVERAL BASE BIDS (Create Multiple Proposals). On a spreadsheet draft each sheet's Base-bid control is a
+          // CHECKBOX: every ticked sheet is a base bid, tagged "Base Bid N", and becomes its own proposal; the pricing
+          // base (base_tab_id) is Base Bid 1 and this page prices off it alone (TWPrice.baseIds / toggleBaseId). A v2
+          // draft keeps its read-only radios: its base bids are picked on the v2 sheet strip.
+          //
+          // A CHILD (a proposal the server made from another draft's estimate, TWPrice.isProposalChild) shows its base
+          // ticked and every base control read-only: its estimate is the parent's, and base bids are picked on Base Bid
+          // 1's proposal, which the hint links to.
+          const childOf = TWPrice.isProposalChild(state) ? state.proposal_of : "";
+          const tickIds = v2Locked ? [] : TWPrice.baseIds(state);
+          const baseKind = v2Locked ? "radio" : "checkbox";
+          const baseAttrs = (v2Locked ? ' name="pr-base"' : "") + (baseRO || (childOf ? " disabled" : ""));
+          const childBase = childOf ? allTabs.find(t => t.id === baseId) : null;
+          const parentHref = childOf ? "/proposal-review.html?d=" + encodeURIComponent(childOf) : "";
           // The collapse button is redrawn with the header, so it reads the panel's state back off
           // the class TW.floatPanel toggles (guarded: a harness panel may carry no classList).
           const optsCollapsed = !!(optsPanel.classList && optsPanel.classList.contains("collapsed"));
@@ -1893,11 +1913,19 @@
             (v2Locked
               ? `<p class="op-hint pr-base-locked">Pick the base bid on the estimate. <a class="pr-est-link" href="${esc(estimateHref)}">Open the estimate</a></p>` +
                 `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
-              : `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>`) +
-            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}${baseRO}> Epoxy + Polish (combined)</label>` : "");
+              : childOf
+              ? `<p class="op-hint pr-base-locked">This proposal's base is ${esc(childBase ? childBase.name : (baseId || ""))}. Base bids are picked on Base Bid 1's tab. <a class="pr-parent-link" href="${esc(parentHref)}">Open Base Bid 1</a></p>` +
+                `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
+              : `<p class="op-hint">Tick the <strong>Base bid</strong> sheet. Tick more than one and each is its own proposal; mark the others as options (show + total / add/deduct).</p>`) +
+            (wt === "combo" ? `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = effectiveBaseId === t.id;
+            // A ticked sheet that is not the pricing base: Base Bid 2, 3... of this estimate, its own proposal.
+            const isOtherBase = !isBase && tickIds.indexOf(t.id) >= 0;
+            // No tag on a child: it is one proposal of its parent's list, and its place there is the parent's to number.
+            const bidTag = (isBase || isOtherBase) && !v2Locked && !childOf
+              ? ` <span class="pr-bidtag">${esc(TWPrice.baseLabelFor(state, t.id))}</span>` : "";
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
             const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
@@ -1908,10 +1936,12 @@
             const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${priceText}</span></span>`;
             r += isOptionOnlyTab(t)
               ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
-              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}${baseRO}> ` +
-                nameRow + `</label>`;
+              : `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value="${esc(t.id)}"${(isBase || isOtherBase) ? " checked" : ""}> ` +
+                nameRow + bidTag + `</label>`;
             if (isBase) {
-              r += `<div class="pr-optsub"><span class="op-hint">This sheet is the Base bid.</span></div>`;
+              r += `<div class="pr-optsub"><span class="op-hint pr-base-note">This sheet is the Base bid.</span></div>`;
+            } else if (isOtherBase) {
+              r += `<div class="pr-optsub"><span class="op-hint pr-base-note">This sheet is ${esc(TWPrice.baseLabelFor(state, t.id))}: it gets its own proposal.</span></div>`;
             } else if (isPartOfAutoBase(t)) {
               r += `<div class="pr-optsub"><span class="op-hint">Part of the combined base bid.</span></div>`;
             } else {
@@ -1969,10 +1999,23 @@
           // Base-bid radios — turning one on sets the base.
           // On a v2 draft the radios are drawn disabled and wired to nothing: a base is not picked on this page.
           if (!v2Locked) optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
-            if (!rb.checked) return;
+            // A child's boxes are drawn disabled; one that is fired at anyway changes nothing.
+            if (TWPrice.isProposalChild(state)) return;
             const priorBaseId = state.base_tab_id;
-            state.base_tab_id = rb.value || null;
-            if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
+            // A tick adds a base bid; unticking the base moves it to the next ticked sheet; the last one is refused.
+            const patch = TWPrice.toggleBaseId(state, rb.value, rb.checked);
+            if (!patch) {
+              if (!rb.checked) {
+                rb.checked = true;
+                const row = Array.from(optsPanel.querySelectorAll(".op-row")).filter(x => x.dataset.id === rb.value)[0];
+                const note = row ? row.querySelector(".pr-base-note") : null;
+                if (note) note.innerHTML = "A proposal needs a base bid. Tick another sheet first, then untick this one.";
+              }
+              return;
+            }
+            state.base_tab_id = patch.base_tab_id;
+            state.base_tab_ids = patch.base_tab_ids;
+            patch.base_tab_ids.forEach(id => { if (opts[id]) opts[id].is_option = false; });   // a base bid can't also be an option
             if (state.base_tab_id !== priorBaseId) {
               // THE SAME RULE as the Estimate step's bid strip (TWPrice.applyBasePick). Hanz,
               // 2026-09-26: keep the words. A base line he re-worded keeps his words; its amount,
@@ -1993,8 +2036,9 @@
                 TW.setState({ price_overrides: pov });
               }
             }
-            applyAndRefresh();
-            reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
+            const baseMoved = state.base_tab_id !== priorBaseId;
+            applyAndRefresh();     // saves base_tab_ids with the base (rebuildPricing), and redraws the tags
+            if (baseMoved) reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
           optsPanel.querySelectorAll(".op-row").forEach(row => {
             const id = row.dataset.id;
