@@ -702,6 +702,26 @@ def test_deleting_a_parent_off_the_board_takes_its_proposals_and_their_portal_ro
     assert sorted(portal.hidden) == sorted(["p1", kids[0]])
 
 
+def test_the_x_on_a_sent_childs_tab_hides_its_portal_row_and_a_silent_portal_stops_it(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch)
+    kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    portal = _Portal([kids[0], kids[1]])                    # Base Bid 2 and 3 were sent
+    monkeypatch.setattr(main, "_portal", portal)
+    r = client.delete("/api/draft/%s" % kids[0])            # the proposal page's tab x
+    assert r.status_code == 200 and r.json()["cascaded"] == []
+    assert portal.hidden == [kids[0]]
+    assert _row(store, kids[0]).get("deleted_at") and not _row(store, kids[1]).get("deleted_at")
+    portal.fail = main.HTTPException(502, "down")
+    assert client.delete("/api/draft/%s" % kids[1]).status_code == 502
+    assert not _row(store, kids[1]).get("deleted_at")
+    # the board's delete hides the child once, not twice
+    portal.fail, portal.hidden = None, []
+    import profiles
+    monkeypatch.setattr(profiles, "get_by_email", lambda e: {"id": "a1", "email": e, "role": "admin"})
+    assert client.post("/api/project/%s/delete" % kids[1]).status_code == 200
+    assert portal.hidden == [kids[1]]
+
+
 def test_trashing_a_parent_hides_a_sent_proposals_portal_row(fake_supabase, monkeypatch):
     store = _seed(fake_supabase, monkeypatch)
     kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]

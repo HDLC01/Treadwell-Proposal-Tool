@@ -8414,13 +8414,14 @@ def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -
         if existed:
             drafts.log_event(draft_id, actor, "purged_project", {"id": draft_id})
         return {"ok": True, "existed": existed, "permanent": True}
-    kids = _proposals_to_trash_with(draft_id, actor)
+    kids = _proposals_to_trash_with(draft_id, actor, hide_self=True)
     existed = drafts.trash_draft(draft_id, actor)
     cascaded = [k for k in kids if existed and drafts.trash_draft(k, actor)]
     return {"ok": True, "existed": existed, "trashed": True, "cascaded": cascaded}
 
 
-def _proposals_to_trash_with(draft_id: str, actor: Optional[str]) -> List[str]:
+def _proposals_to_trash_with(draft_id: str, actor: Optional[str],
+                             hide_self: bool = False) -> List[str]:
     """The proposals that go to the Trash with `draft_id` (Create Multiple Proposals), their portal
     rows already hidden. Both delete routes call it BEFORE the draft itself is trashed.
 
@@ -8431,7 +8432,12 @@ def _proposals_to_trash_with(draft_id: str, actor: Optional[str]) -> List[str]:
 
     EACH CHILD'S PORTAL ROW IS HIDDEN FIRST (_portal_visibility, why at api_delete_project): a sent
     child trashed in our store alone would keep its card on the board and its page in front of the
-    customer. A portal that fails raises here, before anything of ours has moved."""
+    customer. A portal that fails raises here, before anything of ours has moved.
+
+    `hide_self` (DELETE /api/draft, whose own body never touches the portal): a CHILD'S OWN portal
+    row is hidden too. The x on its proposal-page tab trashes it through that route, and a sent
+    Base Bid 2 left live would stay on the board, open, approvable and payable by the customer.
+    The board's delete hides draft_id itself, so it leaves this off."""
     try:
         row = drafts.load_draft(draft_id)
         data = (row or {}).get("data") or {}
@@ -8441,6 +8447,8 @@ def _proposals_to_trash_with(draft_id: str, actor: Optional[str]) -> List[str]:
         log.warning("delete of draft %s: its proposals could not be read (%s); only the draft "
                     "itself is trashed", _log_safe(draft_id), exc)
         return []
+    if hide_self and data.get("proposal_of"):
+        _portal_visibility(draft_id, "delete", actor)
     for k in kids:
         _portal_visibility(k, "delete", actor)
     return kids
