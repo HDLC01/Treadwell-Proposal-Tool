@@ -5044,10 +5044,13 @@
    *  scope_send_pending), `pid` is this drawer's project and `sent` picks the card id: the sent
    *  drawer's is in SEC_TABS like its siblings, the not-sent panel keeps its dsec-ns-* ids outside.
    *
-   *  Every project gets the "New scope for this project" control, grouped or not: it is how a
-   *  project becomes several. A grouped one also lists its scopes (each opens its own drawer, or its
-   *  estimate when it is not on the board yet) and, once a scope has been published, the button for
-   *  the combined email, because a scope's own publish emails nobody.
+   *  ONLY A PROJECT WITH TWO OR MORE PROPOSALS GETS THE CARD (Hanz, 2026-10-27): it lists them
+   *  (each opens its own drawer, or its estimate when it is not on the board yet) and, once one has
+   *  been published, holds the button for the combined email, because a proposal's own publish
+   *  emails nobody. A project with one proposal has nothing to list or send, so this returns "" and
+   *  the caller's eligibility reads that. The old "New scope for this project" box is gone: the
+   *  proposal page's Create Multiple Proposals is how a project becomes several. A member that is
+   *  not on the board yet still counts (scope_members lists every live member).
    *
    *  THREE HARNESSES LIFT THE RENDERERS THAT CALL THIS (drawer-render, not-sent-assign,
    *  not-sent-lost), so it reads nothing but `esc` and its arguments, and no dash in the copy: the
@@ -5055,6 +5058,7 @@
   function scopeHtml(p, pid, sent) {
     const grouped = !!(p && p.scope_group);
     const members = grouped && Array.isArray(p.scope_members) ? p.scope_members : [];
+    if (!(grouped && Math.max(members.length, Number(p.scope_count) || 0) > 1)) return "";
     const list = members.map((m) => {
       const name = esc((m && m.label) || "Unnamed scope");
       if (m && m.id === pid) return `<li><strong>${name}</strong> <span class="note">(this one)</span></li>`;
@@ -5064,10 +5068,9 @@
         + ` data-scope-board="${m && m.on_board ? "1" : ""}" data-scope-proposal="${m && m.proposal_of ? "1" : ""}">${name}</button>`
         + (m && m.on_board ? "" : ' <span class="note">(not on the board yet)</span>') + "</li>";
     }).join("");
-    const where = grouped && p.scope_count > 1
-      ? `Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}${p.scope_label ? ": <strong>" + esc(p.scope_label) + "</strong>" : ""}. `
-        + "Each scope is its own proposal, approved on its own, and the customer gets one email with every link."
-      : "One project, several proposals: a new scope shares this project's name, address and contact, and is priced and sent as its own proposal.";
+    const where = (p.scope_count > 1
+      ? `Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}${p.scope_label ? ": <strong>" + esc(p.scope_label) + "</strong>" : ""}. ` : "")
+        + "Each scope is its own proposal, approved on its own, and the customer gets one email with every link.";
     // THE PROJECT'S ONE EMAIL, as the portal reports it (main.py _scope_send_view, `scope_send`): the
     // button names what it will send ("Email again: 1 new, 1 revised"), and with nothing new to send
     // there is no button, only the reason. An older portal reports only scope_send_pending, and keeps
@@ -5144,17 +5147,12 @@
       : "";
     return `
         <div class="sec" id="${sent ? "dsec-scope" : "dsec-ns-scope"}">
-          <div class="lbl">Scopes of this project${grouped && p.scope_count > 1
+          <div class="lbl">Proposals of this project${grouped && p.scope_count > 1
             ? '<span class="sec-ans">' + esc(p.scope_count) + " proposals</span>" : ""}</div>
           <p class="note">${where}</p>
           ${list ? `<ul class="scope-list">${list}</ul>` : ""}
           ${send}
           ${book}
-          <div class="ns-assign">
-            <input type="text" id="scope-new-label" maxlength="80" autocomplete="off"
-                   placeholder="Name the new scope, like Lab 2" aria-label="Name of the new scope">
-            <button type="button" class="btn btn-s" id="scope-new-btn">New scope for this project</button>
-          </div>
           <p class="note" id="scope-note" role="status"></p>
         </div>`;
   }
@@ -5209,28 +5207,6 @@
         say("Couldn't build the project workbook. " + (err.message || "Try again."));
       }
       book.disabled = false;
-    });
-    const btn = d.querySelector("#scope-new-btn");
-    const box = d.querySelector("#scope-new-label");
-    if (btn && box) btn.addEventListener("click", async () => {
-      const label = String(box.value || "").replace(/\s+/g, " ").trim();
-      if (!label) { say("Name the new scope first, like Lab 2."); return; }
-      btn.disabled = true;
-      say("Making the new scope...");
-      try {
-        const body = { label: label };
-        // The publish's stale-copy guard: an unsent row is dated by its draft's own save.
-        if (p && p.not_sent && p.drafted_at) body.draft_version = p.drafted_at;
-        const r = await api("/api/draft/" + encodeURIComponent(pid) + "/scope", {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-        });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.ok === false || !j.id) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-        window.location.assign("/?d=" + encodeURIComponent(j.id) + "&edit=1");
-      } catch (err) {
-        btn.disabled = false;
-        say("Couldn't make the new scope. " + (err.message || "Try again."));
-      }
     });
     const send = d.querySelector("#scope-send");
     const retryLine = d.querySelector("#scope-retry-line");
@@ -5523,6 +5499,8 @@
       ["scope_group", "scope_label", "scope_index", "scope_count", "scope_members",
        "scope_send_pending", "scope_send"].forEach((k) => { p[k] = row[k] === undefined ? null : row[k]; });
     }
+    // Built once, like delHtml: "" on a project with one proposal, and eligibility reads this answer.
+    const scopeCard = scopeHtml(p, pid, true);
     // The view stamps, read the same way and for the same reason: the staff detail payload has
     // no viewed_at/last_viewed_at on `proposal` (checked against the portal's own handler), the
     // BOARD list endpoint serves both, and the thread's "they opened it" card below is rendered
@@ -5713,7 +5691,7 @@
              delete. The dialog this button opens carries the heavier of the two bodies, because
              this one stops the follow-up emails.
              NB no em dash in this comment: test_drawer_renders.py greps the whole panel. -->
-        ${scopeHtml(p, pid, true)}
+        ${scopeCard}
         ${delHtml}
        </div>
 
@@ -5794,8 +5772,8 @@
     setSecEligible("dsec-revisions", true);
     // Always: every project has files and an info sheet, sent or not, won or lost.
     setSecEligible("dsec-files", true);
-    // Always: every project can gain a scope, and scopeHtml always renders its card.
-    setSecEligible("dsec-scope", true);
+    // Only when the card renders: a project with two or more proposals (scopeHtml returns "" else).
+    setSecEligible("dsec-scope", !!scopeCard);
     // Only when the markup exists. A non-admin renders nothing here, and an eligible id with no
     // element is exactly the mismatch test_drawer_renders.py asserts against.
     setSecEligible("dsec-delete", !!delHtml);

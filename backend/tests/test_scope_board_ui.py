@@ -6,8 +6,9 @@ Two harnesses run the real portal.js:
     card's "Scope 1 of 2 · Breakroom" line, the table's tag and the two chips are read back out of
     the html it produced;
   * drawer-render-harness.js renders both drawers on those rows and PRESSES every scope control
-    through the real wireScope: the empty name, the new scope (the request and where it navigates),
-    the stale-copy 409, the siblings, and the combined email's 409 and 200.
+    through the real wireScope: the siblings and the combined email's 409 and 200. Since plan step 7
+    (2026-10-27) the card is "Proposals of this project", drawn only on a project with two or more
+    proposals, and no drawer offers a new scope (the proposal page's Create Multiple Proposals does).
 
 THE LIFT DISCIPLINE. scopeHtml and wireScope are new names called from renderNotSent and
 renderDetail, which three harnesses lift by name. If either is missing from a lift list, every
@@ -94,25 +95,60 @@ def test_the_unsent_scope_lists_its_siblings_escaped(drawer):
     assert 'id="scope-send"' not in html, "an unpublished scope offered the combined email"
 
 
-@needs_node
-def test_an_empty_name_asks_for_one_and_sends_nothing(drawer):
-    e = drawer["scope"]["emptyLabel"]
-    assert e["requests"] == 0 and "Name the new scope" in e["note"]
+NEW_SCOPE_MARKS = ('id="scope-new-btn"', 'id="scope-new-label"', "New scope for this project",
+                   "Name the new scope")
+
+
+def _no_new_scope_control(html):
+    return [m for m in NEW_SCOPE_MARKS if m in html]
 
 
 @needs_node
-def test_a_new_scope_is_made_with_the_drafts_version_and_opened(drawer):
-    m = drawer["scope"]["made"]
-    assert m["requests"] == [{"path": "/api/draft/scope-a/scope", "method": "POST",
-                              "body": {"label": "Lab 3", "draft_version": "2026-10-20T10:00:00Z"}}]
-    assert m["nav"] == ["/?d=scope-new&edit=1"]
+def test_a_grouped_drawer_titles_its_card_and_offers_no_new_scope(drawer):
+    """Plan step 7: Create Multiple Proposals replaced the drawer's New scope box, in both drawers."""
+    for key in ("notSent", "sent"):
+        html = drawer["scope"][key]["html"]
+        assert "Proposals of this project" in html, key
+        assert "Scopes of this project" not in html, key
+        assert _no_new_scope_control(html) == [], key
+        assert 'id="scope-note"' in html, key
+    assert '<ul class="scope-list">' in drawer["scope"]["sent"]["html"]
 
 
 @needs_node
-def test_a_stale_copy_is_said_in_the_servers_words_and_nothing_opens(drawer):
-    s = drawer["scope"]["stale"]
-    assert s["note"].startswith("Couldn't make the new scope. Nothing changed.")
-    assert s["disabled"] is False and s["nav"] == []
+def test_a_project_of_one_proposal_has_no_card_in_either_drawer(drawer):
+    one = drawer["one"]
+    for key in ("soloSent", "loneSent"):
+        assert 'id="dsec-scope"' not in one[key]["html"], key
+        assert "dsec-scope" not in one[key]["eligible"], key
+        assert _no_new_scope_control(one[key]["html"]) == [], key
+        assert "Proposals of this project" not in one[key]["html"], key
+    assert 'id="dsec-ns-scope"' not in one["soloNotSent"]["html"]
+    assert _no_new_scope_control(one["soloNotSent"]["html"]) == []
+
+
+@needs_node
+def test_a_sibling_not_on_the_board_yet_still_makes_two_proposals(drawer):
+    one = drawer["one"]
+    sent = one["offBoardSent"]["html"]
+    assert 'id="dsec-scope"' in sent and "dsec-scope" in one["offBoardSent"]["eligible"]
+    assert "(this one)" in sent and "(not on the board yet)" in sent
+    assert 'id="scope-send"' in sent
+    # pair-c was made by Create Multiple Proposals (proposal_of), so it opens on its proposal page.
+    assert one["offBoardNav"] == ["/proposal-review.html?d=pair-c"]
+    ns = one["offBoardNotSent"]["html"]
+    assert 'id="dsec-ns-scope"' in ns and "(not on the board yet)" in ns and "(this one)" in ns
+    assert _no_new_scope_control(sent + ns) == []
+
+
+@needs_node
+def test_a_project_that_gains_a_sibling_shows_the_card_on_the_next_paint(drawer):
+    one = drawer["one"]
+    assert 'id="dsec-scope"' not in one["growBefore"]["html"]
+    assert "dsec-scope" not in one["growBefore"]["eligible"]
+    assert 'id="dsec-scope"' in one["growAfter"]["html"]
+    assert "dsec-scope" in one["growAfter"]["eligible"]
+    assert one["growSendPresent"] is True
 
 
 @needs_node

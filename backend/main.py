@@ -8207,8 +8207,8 @@ def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
         return JSONResponse(status_code=409, content={
             "ok": False, "code": "already_sent",
             "error": "This proposal has already been sent to the customer, so its sheets cannot be "
-                     "split into separate proposals any more. Use “New scope for this "
-                     "project” on the board for another proposal instead."})
+                     "split into separate proposals any more. Use “Create Multiple "
+                     "Proposals” on the Proposal step instead."})
     actor = _user_email(request)
     try:
         out = drafts.split_draft(draft_id, [{"label": k.label, "data": k.data} for k in kids], actor)
