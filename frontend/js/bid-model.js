@@ -5997,6 +5997,10 @@
     ["tab_opts", "tab_notes"].forEach(function (key) {
       if (holds(st[key], byTab)) patch[key] = without(st[key], byTab);
     });
+    // Its "Its own proposal" tick (base_tab_ids), or the next sheet handed this id comes back a base bid of its own proposal.
+    if (Array.isArray(st.base_tab_ids) && st.base_tab_ids.indexOf(tab) >= 0) {
+      patch.base_tab_ids = st.base_tab_ids.filter(function (x) { return x !== tab; });
+    }
     var pov = st.price_overrides;
     if (isObject(pov)) {
       var changed = false;
