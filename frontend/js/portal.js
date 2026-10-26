@@ -5128,11 +5128,19 @@
     const homeId = (members.filter((m) => m && m.proposal_of && members.some((x) => x && x.id === m.proposal_of))[0] || {}).proposal_of
       || (members[0] && members[0].id) || "";
     const home = members.filter((x) => x && x.id === homeId)[0];
-    const book = grouped && p.scope_count > 1 && home
+    // A v1 home's .xlsx holds only the sheets of the proposals MADE FROM it. With none (a #711 group
+    // of scopes that each have their own estimate) there is no project workbook to open; when some
+    // other scope was not made from it, the button names whose workbook it is.
+    const others = home ? members.filter((m) => m && m.id !== homeId) : [];
+    const fanned = others.filter((m) => m.proposal_of === homeId).length;
+    const v1Whole = fanned > 0 && fanned === others.length;
+    const book = grouped && p.scope_count > 1 && home && (home.v2 || fanned > 0)
       ? `<div class="fu-line"><button type="button" class="btn btn-s" id="scope-workbook" data-files="${home.v2 ? "" : esc(homeId)}">${
-          home.v2 ? "Download the project workbook" : "Open the project workbook"}</button></div>`
+          home.v2 ? "Download the project workbook" : v1Whole ? "Open the project workbook"
+            : "Open " + esc(home.label || "the first scope") + "'s workbook"}</button></div>`
         + `<p class="note">${home.v2 ? "One workbook with a tab for each scope."
-          : "It is " + esc(home.label || "the first scope") + "'s estimate, on its Files page."}</p>`
+          : v1Whole ? "It is " + esc(home.label || "the first scope") + "'s estimate, on its Files page."
+            : "It has " + esc(home.label || "the first scope") + " and the proposals made from it. Each other scope's estimate is on its own Files page."}</p>`
       : "";
     return `
         <div class="sec" id="${sent ? "dsec-scope" : "dsec-ns-scope"}">

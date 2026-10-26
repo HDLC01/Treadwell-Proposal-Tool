@@ -126,7 +126,9 @@ context loaded.
   `/split` refuses a parent that has fanned out (`has_proposals`), and trashing the parent trashes
   its children. The drawer's project-workbook button opens the group HOME's Files page when the
   home (the member the others were made from, else the first scope) is a v1 estimate, since its
-  `.xlsx` already has every tab; a v2 group builds `/api/scope-group/{gid}/workbook` instead, which
+  `.xlsx` already has every tab. That holds only for the proposals made FROM the home: a v1 group of
+  independent #711 scopes (no `proposal_of`) gets no button, and a mixed one gets "Open <home>'s
+  workbook". A v2 group builds `/api/scope-group/{gid}/workbook` instead, which
   refuses v1 members. The board's `scope_members[]` carries `proposal_of` and `v2` for this. Plan:
   `~/.claude/plans/pasted-content-id-1027-okay-lets-steady-whale.md`; tests
   `test_multi_proposals.py`, `test_multi_proposals_ui.py`, `test_scope_board_ui.py`.

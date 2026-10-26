@@ -163,6 +163,25 @@ def test_a_v1_groups_workbook_button_opens_its_homes_files_page(drawer):
 
 
 @needs_node
+def test_a_v1_group_of_independent_scopes_offers_no_project_workbook(drawer):
+    """A #711 group (each scope its own intake and estimate, no proposal_of): the first scope's .xlsx
+    holds only its own sheets, so no button claims to be the project workbook."""
+    b = drawer["scope"]["v1Independent"]
+    assert b["present"] is False
+    assert "project workbook" not in b["html"]
+
+
+@needs_node
+def test_a_mixed_v1_groups_workbook_button_names_whose_workbook_it_is(drawer):
+    """scope-d was made from Lab 1, but Breakroom and Lab <2> have their own estimates: the button opens
+    Lab 1's Files page and says it is Lab 1's workbook, not the project's."""
+    b = drawer["scope"]["v1Mixed"]
+    assert b["present"] and b["files"] == "scope-b"
+    assert "Open Lab 1's workbook" in b["html"] and "Open the project workbook" not in b["html"]
+    assert "Each other scope's estimate is on its own Files page." in b["html"]
+
+
+@needs_node
 def test_a_v2_groups_workbook_button_builds_and_saves_the_group_workbook(drawer):
     b = drawer["scope"]["v2Book"]
     assert 'id="scope-workbook" data-files=""' in b["html"] and "Download the project workbook" in b["html"]

@@ -2635,8 +2635,24 @@ async function runScenario(name, s) {
       // THE PROJECT WORKBOOK (plan step 6): this group's home is scope-b, the member scope-d was made
       // from (NOT the first scope), and it is a v1 estimate, so the button opens scope-b's Files page
       // and builds nothing. Rendered on scope-d's own drawer, so "home" cannot be confused with "this
-      // drawer's project" or with "the oldest scope".
-      const fromB = members.concat([{ id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-b" }]);
+      // drawer's project" or with "the oldest scope". Every other scope was made from scope-b, so its
+      // .xlsx really is the whole project.
+      const childD = { id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-b" };
+      const fromB = members.map((m) => (m.id === "scope-b" ? m : Object.assign({}, m, { proposal_of: "scope-b" })))
+        .concat([childD]);
+      // A v1 group's workbook button for these members, rendered on scope-d's drawer.
+      const v1BookFor = (ms) => {
+        page.open("scope-d");
+        page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: ms,
+                                                                scope_count: ms.length, scope_index: ms.length }));
+        const b = q("#scope-workbook");
+        return { present: !!b, files: b ? b.dataset.files : null, html: dom.html };
+      };
+      // Mixed: scope-d was made from scope-b, but Breakroom and Lab <2> have their own estimates,
+      // which are not in scope-b's file.
+      out.scope.v1Mixed = v1BookFor(members.concat([childD]));
+      // A #711 group of independent v1 scopes (no proposal_of at all): no member's file is the project.
+      out.scope.v1Independent = v1BookFor(members);
       page.open("scope-d");
       page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: fromB,
                                                               scope_count: 4, scope_index: 4 }));
