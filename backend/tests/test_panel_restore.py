@@ -392,14 +392,19 @@ def test_a_dragged_panel_re_clamps_from_where_it_was_dropped(ran):
 
 def test_a_resize_leaves_an_unmoved_or_flowed_panel_to_the_css(ran):
     """Never moved: `right: 16px` keeps it on screen at any width, so the resize writes nothing.
-    In the flow (the cheat sheet below its breakpoint): left/top are inert, so it is not touched."""
+    In the flow (the cheat sheet below its breakpoint): left/top are inert, so it is not touched --
+    including a cheat sheet restored while floating that a narrowing then dropped into the flow,
+    where a clamp against the column's 1000px would have dragged it to left 96."""
     r = ran["resize"]
     assert r["neverMoved"] == {"left": "", "top": "", "right": "16px", "keys": []}
-    assert r["inFlow"] == {"left": "", "top": "", "right": "16px"}
+    assert r["inFlowAtOpen"] == {"left": "", "top": "", "right": "16px"}
+    assert r["inFlow"]["restored"] == {"left": 1265, "top": 264, "right": "auto"}
+    assert r["inFlow"]["after"] == r["inFlow"]["restored"], "a resize re-clamped a panel in the flow"
 
 
 def test_the_rail_collapses_to_its_header_and_remembers_it(ran):
     c = ran["collapse"]["rail"]
+    assert c["bound"] is True, "the rail's initialiser bound no collapse click (collapseKey not passed)"
     assert c["start"] is False, "a first visit must open the panel expanded"
     assert c["first"] == {"collapsed": True, "stored": "1", "aria": "false"}
     assert c["second"] == {"collapsed": False, "stored": "0", "aria": "true"}
