@@ -981,11 +981,15 @@
 
   /** The ticked sheets after the pricing base moved from `from` to `to` by some other road than a Base-bid box (the
    *  Estimate step's base radio, an option-only base the Proposal step refuses, the copy that was the base deleted):
-   *  `from` is replaced by `to`, which is Base Bid 1. `to` null (a combined base) leaves no ticked sheet. */
-  function moveBaseId(state, from, to, order) {
+   *  `from` is replaced by `to`, which is Base Bid 1. `to` null (a combined base) leaves no ticked sheet.
+   *  `keep` (the Estimate step's radio, a base the estimator picked): when `to` is already ticked, `from` stays
+   *  ticked in its place, so picking Base Bid 2 as the base swaps the two instead of dropping the old base. The
+   *  other roads leave it off: `from` was refused or deleted there, and is no base bid any more. */
+  function moveBaseId(state, from, to, order, keep) {
     if (!to) return [];
     var raw = state && Array.isArray(state.base_tab_ids) ? state.base_tab_ids : [];
-    var ids = raw.map(function (x) { return x === from ? to : x; });
+    var swap = !!(keep && typeof from === "string" && from && from !== to && raw.indexOf(to) >= 0);
+    var ids = raw.map(function (x) { return x === from ? to : (swap && x === to ? from : x); });
     return baseIds({ base_tab_id: to, base_tab_ids: ids }, order || orderOf(state));
   }
 

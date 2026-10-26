@@ -1152,9 +1152,10 @@ function wireBidBar() {
                                 // in the old shape is read as drawing it would read it.
                                 basePhrase: TWPrice.draftBasePhrase(state) });
         // The sheets ticked as base bids on the Proposal step keep the base in them, as Base Bid 1: the new base
-        // takes the old one's place (TWPrice.moveBaseId). A draft that never ticked a second sheet has none.
+        // takes the old one's place (TWPrice.moveBaseId); a new base that was already ticked swaps places with the
+        // old one, which stays ticked (`keep`). A draft that never ticked a second sheet has none.
         if (Array.isArray(state.base_tab_ids)) {
-          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id));
+          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id), true);
         }
       }
       renderBidOptions();
@@ -1444,8 +1445,8 @@ async function deleteTab(id) {
   // ...and the option's edited words and the lines typed around it and its own tax rows.
   reKeyPriceLineOverrides(k => (k === "option:" + id || k.startsWith("option:" + id + ":")) ? null : k);
   const wasBase = state.base_tab_id === id;
-  // A deleted sheet is no base bid of this estimate (its proposal, if one was made, is trashed with it by the
-  // server). When it was the pricing base and other sheets are ticked, the next one is the base, as unticking it
+  // A deleted sheet is no base bid of this estimate. (A proposal already made from it is not removed here: the
+  // server only skips it on Refresh, `sheet_gone`.) When it was the pricing base and other sheets are ticked, the next one is the base, as unticking it
   // on the Proposal step would make it; else the base falls back to the derived one, below.
   const leftBases = Array.isArray(state.base_tab_ids) ? state.base_tab_ids.filter(x => x !== id && x !== state.base_tab_id) : null;
   if (leftBases) state.base_tab_ids = state.base_tab_ids.filter(x => x !== id);

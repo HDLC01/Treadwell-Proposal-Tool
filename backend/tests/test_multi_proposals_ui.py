@@ -140,7 +140,9 @@ def test_the_twprice_helpers(out):
     assert t["dropBase"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Copy1"]}
     assert t["combinedOn"] == {"base_tab_id": None, "base_tab_ids": []}
     assert t["sheetOverCombined"] == {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1"]}
-    assert c["move"] == {"swap": ["Polish", "Copy1"], "toNull": [], "ordered": ["Copy2", "Polish"]}
+    assert c["move"] == {"swap": ["Polish", "Copy1"], "toNull": [], "ordered": ["Copy2", "Polish"],
+                         "keepTicked": ["Copy1", "Epoxy"], "keepImplicit": ["Copy1", "Epoxy"],
+                         "noKeepTicked": ["Copy1"], "keepUnticked": ["Polish", "Copy1"]}
     assert c["child"] == [True, False, False, False, False]
 
 
@@ -148,7 +150,8 @@ def test_the_twprice_helpers(out):
 def test_the_bid_bar_radio_puts_the_new_base_in_the_old_ones_place(out):
     b = out["bidBar"]
     assert b["swap"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Copy1"], "persisted": 1}
-    assert b["toTicked"] == {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1"], "persisted": 1}
+    assert b["toTicked"] == {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1", "Epoxy"], "persisted": 1}, \
+        "picking Base Bid 2 as the base swaps the two: the old base stays ticked"
     assert b["noList"] == {"base_tab_id": "Polish", "base_tab_ids": None, "persisted": 1}
 
 
@@ -221,9 +224,19 @@ BREAKS = {
         lambda r: r["child"]["after"] != {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1"]}),
     "the bid-bar radio leaves the old base ticked": (
         "js/estimate-review.js",
-        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id));",
+        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id), true);",
         "          void 0;",
         lambda r: r["bidBar"]["swap"]["base_tab_ids"] != ["Polish", "Copy1"]),
+    "the bid-bar radio drops the old base when the new one was already ticked": (
+        "js/estimate-review.js",
+        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id), true);",
+        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id));",
+        lambda r: r["bidBar"]["toTicked"]["base_tab_ids"] != ["Copy1", "Epoxy"]),
+    "moveBaseId never swaps": (
+        "js/price-lines-core.js",
+        "    var ids = raw.map(function (x) { return x === from ? to : (swap && x === to ? from : x); });",
+        "    var ids = raw.map(function (x) { return x === from ? to : x; });",
+        lambda r: r["core"]["move"]["keepTicked"] != ["Copy1", "Epoxy"]),
     "a deleted copy stays ticked": (
         "js/estimate-review.js", "  if (leftBases) state.base_tab_ids = state.base_tab_ids.filter(x => x !== id);", "  void 0;",
         lambda r: r["deleteTab"]["other"]["base_tab_ids"] != ["Epoxy"]),
