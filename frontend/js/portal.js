@@ -5120,6 +5120,20 @@
     // style, not the hidden attribute: .fu-line's own display rule would defeat `hidden`.
     send += '<div class="fu-line" id="scope-retry-line" style="display:none"><button type="button" class="btn btn-s" id="scope-retry">Try the contacts that did not get it again</button></div>';
     if (!(grouped && sent)) send = "";
+    // THE PROJECT WORKBOOK, one per project of several proposals. Its HOME is the member the
+    // others were made from (Create Multiple Proposals' `proposal_of`), else the first scope. A v1
+    // home's own .xlsx is already one workbook with a tab per sheet (main.py builds it from
+    // cell_values and tab_copies), so the button opens the home's Files page; a v2 home's group is
+    // built by /api/scope-group/{gid}/workbook, which refuses v1 members (member_not_v2).
+    const homeId = (members.filter((m) => m && m.proposal_of && members.some((x) => x && x.id === m.proposal_of))[0] || {}).proposal_of
+      || (members[0] && members[0].id) || "";
+    const home = members.filter((x) => x && x.id === homeId)[0];
+    const book = grouped && p.scope_count > 1 && home
+      ? `<div class="fu-line"><button type="button" class="btn btn-s" id="scope-workbook" data-files="${home.v2 ? "" : esc(homeId)}">${
+          home.v2 ? "Download the project workbook" : "Open the project workbook"}</button></div>`
+        + `<p class="note">${home.v2 ? "One workbook with a tab for each scope."
+          : "It is " + esc(home.label || "the first scope") + "'s estimate, on its Files page."}</p>`
+      : "";
     return `
         <div class="sec" id="${sent ? "dsec-scope" : "dsec-ns-scope"}">
           <div class="lbl">Scopes of this project${grouped && p.scope_count > 1
@@ -5127,6 +5141,7 @@
           <p class="note">${where}</p>
           ${list ? `<ul class="scope-list">${list}</ul>` : ""}
           ${send}
+          ${book}
           <div class="ns-assign">
             <input type="text" id="scope-new-label" maxlength="80" autocomplete="off"
                    placeholder="Name the new scope, like Lab 2" aria-label="Name of the new scope">
@@ -5157,6 +5172,36 @@
       if (b.dataset.scopeProposal) { window.location.assign("/proposal-review.html?d=" + encodeURIComponent(id)); return; }
       window.location.assign("/?d=" + encodeURIComponent(id) + "&edit=1");
     }));
+    // The project workbook (scopeHtml): a v1 home's Files page, or the v2 group's built workbook,
+    // fetched with the sign-in (/api/file is bearer-gated) and saved under the server's file name.
+    const book = d.querySelector("#scope-workbook");
+    if (book && p && p.scope_group) book.addEventListener("click", async () => {
+      if (book.dataset.files) {
+        window.location.assign("/done.html?d=" + encodeURIComponent(book.dataset.files) + "&files=1");
+        return;
+      }
+      book.disabled = true;
+      say("Building the project workbook...");
+      try {
+        const r = await api("/api/scope-group/" + encodeURIComponent(p.scope_group) + "/workbook");
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false || !j.xlsx_download_url) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        const f = await api(j.xlsx_download_url);
+        if (!f.ok) throw new Error("The download link has expired. Try again.");
+        const blobUrl = URL.createObjectURL(await f.blob());
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = j.filename || "project_estimate.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+        say("");
+      } catch (err) {
+        say("Couldn't build the project workbook. " + (err.message || "Try again."));
+      }
+      book.disabled = false;
+    });
     const btn = d.querySelector("#scope-new-btn");
     const box = d.querySelector("#scope-new-label");
     if (btn && box) btn.addEventListener("click", async () => {

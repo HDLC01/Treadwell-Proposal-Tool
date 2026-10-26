@@ -2601,6 +2601,11 @@ def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
                                  # A proposal made from another member's base bid (Create
                                  # Multiple Proposals): the drawer opens it on its proposal page.
                                  "proposal_of": m.get("proposal_of") or None,
+                                 # An Estimating Tool v2 estimate (polish_estimate.version 2): the
+                                 # drawer's project-workbook button builds a v2 group's workbook
+                                 # (/api/scope-group/{gid}/workbook), and sends a v1 group to its
+                                 # home's Files page, whose .xlsx already has every tab.
+                                 "v2": bool(m.get("polish_beta")),
                                  "on_board": m["id"] in on_board,
                                  "sent": m["id"] in portal_rows,
                                  "pending": m["id"] in pending} for m in members]

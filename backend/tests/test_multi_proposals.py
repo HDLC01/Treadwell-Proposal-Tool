@@ -574,6 +574,25 @@ def test_the_board_says_which_member_is_a_proposal_of_another(monkeypatch):
     assert [(m["id"], m["proposal_of"]) for m in rows["s1"]["scope_members"]] == [("s1", None), ("s2", "s1")]
 
 
+def test_the_board_says_which_member_is_a_v2_estimate(monkeypatch):
+    """Plan step 6: the drawer's project-workbook button reads the group home's `v2` (the summary's
+    polish_beta): a v1 home goes to its Files page, a v2 home builds /api/scope-group/{gid}/workbook."""
+    def s(i, label, beta, **kw):
+        out = {"id": "s%d" % i, "project_name": "Acme HQ", "has_files": True, "scope_group_id": "grp_a",
+               "scope_label": label, "created_at": "2026-10-0%d" % i, "updated_at": "2026-10-1%d" % i,
+               "total": None, "polish_beta": beta}
+        out.update(kw)
+        return out
+    monkeypatch.setattr(main, "_portal", lambda p, m="GET", b=None: {"ok": True, "proposals": []})
+    monkeypatch.setattr(main.drafts, "list_drafts",
+                        lambda *a, **k: [s(1, "Base Bid 1", True), s(2, "Base Bid 2", False, proposal_of="s1"),
+                                         s(3, "Lab 3", None)])
+    r = client.get("/api/portal/pipeline")
+    assert r.status_code == 200, r.text
+    rows = {p["proposal_id"]: p for p in r.json()["proposals"]}
+    assert [(m["id"], m["v2"]) for m in rows["s2"]["scope_members"]] == [("s1", True), ("s2", False), ("s3", False)]
+
+
 # ── G. v2 ───────────────────────────────────────────────────────────────────
 V2 = dict(PARENT, polish_estimate={
     "version": 2, "label": "Breakroom",

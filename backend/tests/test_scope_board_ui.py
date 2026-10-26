@@ -147,3 +147,40 @@ def test_the_combined_email_names_the_scopes_still_to_publish(drawer):
     assert "Not published yet: Breakroom, Lab <2>." in n["note"]
     assert n["note"].startswith("Nothing was sent.")
     assert drawer["scope"]["sentOk"]["note"] == "Sent to 2 contacts, one email with every scope."
+
+
+# ── the project workbook (plan step 6, 2026-10-27) ─────────────────────────
+@needs_node
+def test_a_v1_groups_workbook_button_opens_its_homes_files_page(drawer):
+    """A v1 home's own .xlsx is already one workbook with a tab per sheet, and the group route refuses
+    v1 members (member_not_v2), so the button goes to the HOME's Files page (the member the others
+    were made from), not this drawer's project, and builds nothing."""
+    b = drawer["scope"]["v1Book"]
+    assert b["present"] and b["label"] == "scope-b"
+    assert "Open the project workbook" in b["html"] and "Lab 1's estimate, on its Files page" in b["html"]
+    assert b["nav"] == ["/done.html?d=scope-b&files=1"]
+    assert not any("/workbook" in p for p in b["requests"]), b["requests"]
+
+
+@needs_node
+def test_a_v2_groups_workbook_button_builds_and_saves_the_group_workbook(drawer):
+    b = drawer["scope"]["v2Book"]
+    assert 'id="scope-workbook" data-files=""' in b["html"] and "Download the project workbook" in b["html"]
+    ok = b["ok"]
+    assert ok["requests"] == [["GET", "/api/scope-group/grp_x/workbook"], ["GET", "/api/file/tok-wb"]]
+    assert ok["saved"] == [{"download": "Acme_HQ_scopes_estimate.xlsx", "clicks": 1, "detached": True}]
+    assert ok["nav"] == [] and ok["note"] == "" and ok["disabled"] is False
+
+
+@needs_node
+def test_a_refused_v2_workbook_is_said_in_the_servers_words_and_nothing_is_saved(drawer):
+    r = drawer["scope"]["v2Book"]["refused"]
+    assert r["requests"] == ["/api/scope-group/grp_x/workbook"] and r["saved"] == 0
+    assert r["note"] == ("Couldn't build the project workbook. “Lab 1” is not priced on one sheet. "
+                         "Make one sheet its base first.")
+    assert r["disabled"] is False
+
+
+@needs_node
+def test_a_project_of_one_proposal_offers_no_project_workbook(drawer):
+    assert drawer["scope"]["loneBook"] is False

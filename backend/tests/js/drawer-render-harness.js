@@ -372,6 +372,10 @@ function makeDom() {
       children: [],
       removed: false,
       appendChild(n) { this.children.push(n); if (n) n.parent = this; return n; },
+      // The project workbook's download (wireScope, 2026-10-27): an <a download> appended to the
+      // body, clicked, and taken out again. Counted, so "the file was saved" is read, not assumed.
+      removeChild(n) { if (n) n.detached = true; return n; },
+      click() { this.clicks = (this.clicks || 0) + 1; },
       remove() { this.removed = true; },
       addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
       removeEventListener() {},
@@ -415,6 +419,7 @@ function makeDom() {
   // page holds, so what a test can honestly ask about it is where it was appended and what was
   // set on it — which is precisely the pair that regressed when the caption arrived.
   dom.made = [];
+  dom.body = makeEl("body");
   dom.create = (tag) => {
     const el = makeEl("made:" + tag + ":" + dom.made.length);
     el.tagName = String(tag).toUpperCase();
@@ -845,7 +850,7 @@ const injected = [
                  // markup ships without a src. A created node is NOT in dom.html (nothing parses
                  // it back into the bag of markup), so what it proves is where the node was put
                  // and what was set on it, which is exactly what regressed.
-                 createElement: (tag) => dom.create(tag) }],
+                 createElement: (tag) => dom.create(tag), body: dom.body }],
   // No createObjectURL in Node, and portal.js never calls `new URL(...)`, so a two-method stub is
   // the whole surface. Recorded, because "was an object URL minted for this id" is how the
   // per-id cache is checked without reaching into ATT_URLS.
@@ -2627,6 +2632,58 @@ async function runScenario(name, s) {
       for (const b of childOpens) await b.fire("click");
       out.scope.proposalChild = { marks: childOpens.map((b) => [b.dataset.scopeOpen, b.dataset.scopeProposal || ""]),
                                   nav: nav.slice() };
+      // THE PROJECT WORKBOOK (plan step 6): this group's home is scope-b, the member scope-d was made
+      // from (NOT the first scope), and it is a v1 estimate, so the button opens scope-b's Files page
+      // and builds nothing. Rendered on scope-d's own drawer, so "home" cannot be confused with "this
+      // drawer's project" or with "the oldest scope".
+      const fromB = members.concat([{ id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-b" }]);
+      page.open("scope-d");
+      page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: fromB,
+                                                              scope_count: 4, scope_index: 4 }));
+      net.requests.length = 0;
+      nav.length = 0;
+      const v1Book = q("#scope-workbook");
+      out.scope.v1Book = { present: !!v1Book, label: v1Book ? v1Book.dataset.files : null,
+                           html: dom.html };
+      if (v1Book) await v1Book.fire("click");
+      await tick();
+      out.scope.v1Book.nav = nav.slice();
+      out.scope.v1Book.requests = net.requests.map((r) => r.path);
+    }
+    // A v2 group (every member an Estimating Tool v2 estimate): the button BUILDS the group workbook
+    // through /api/scope-group/{gid}/workbook and saves the file under the server's name; a refusal is
+    // said in the server's sentence and nothing is saved.
+    {
+      const v2Members = members.map((m) => Object.assign({}, m, { v2: true }));
+      const v2Row = Object.assign({}, nsRow, { scope_members: v2Members });
+      page.open("scope-a");
+      page.renderNotSent("scope-a", v2Row);
+      out.scope.v2Book = { html: dom.html };
+      net.requests.length = 0;
+      nav.length = 0;
+      dom.body.children.length = 0;
+      fuNet.answers = [[/\/api\/scope-group\/grp_x\/workbook$/, { status: 200,
+        body: { ok: true, xlsx_download_url: "/api/file/tok-wb", filename: "Acme_HQ_scopes_estimate.xlsx", tabs: [] } }]];
+      await q("#scope-workbook").fire("click");
+      await tick();
+      const saved = dom.body.children.filter((n) => n && n.tagName === "A");
+      out.scope.v2Book.ok = { requests: net.requests.map((r) => [r.method, r.path]), nav: nav.slice(),
+                              saved: saved.map((a) => ({ download: a.download, clicks: a.clicks || 0, detached: !!a.detached })),
+                              note: q("#scope-note").textContent, disabled: q("#scope-workbook").disabled };
+      net.requests.length = 0;
+      dom.body.children.length = 0;
+      fuNet.answers = [[/\/api\/scope-group\/grp_x\/workbook$/, { status: 409,
+        body: { ok: false, code: "member_no_base", error: "“Lab 1” is not priced on one sheet. Make one sheet its base first." } }]];
+      await q("#scope-workbook").fire("click");
+      await tick();
+      out.scope.v2Book.refused = { requests: net.requests.map((r) => r.path), saved: dom.body.children.length,
+                                   note: q("#scope-note").textContent, disabled: q("#scope-workbook").disabled };
+      fuNet.answers = [];
+      // A project of ONE proposal (a group whose other scopes were deleted) has no project workbook
+      // to offer: its own Files page is the workbook.
+      page.open("scope-a");
+      page.renderNotSent("scope-a", Object.assign({}, nsRow, { scope_count: 1, scope_members: [members[0]] }));
+      out.scope.loneBook = /id="scope-workbook"/.test(dom.html);
     }
 
     // The sent drawer: the same card, in SEC_TABS, with the combined email's button.
