@@ -2630,7 +2630,11 @@ def _scope_send_view(members: List[Dict[str, Any]],
     findings 9 and 16): the emails may or may not have gone out. The portal never re-sends them on
     its own and never counts them as pending, so without this the drawer said "the customer has
     every scope" and nobody could send them again. `unknown_text` says so, and the drawer offers a
-    separate, explicit "send them again" (the send's `resend_unknown`)."""
+    separate, explicit "send them again" (the send's `resend_unknown`).
+
+    `inflight` are the members whose send is IN FLIGHT (the portal's `inflight_scope_ids`, round
+    3): claimed by a send whose result has not been recorded yet. Neither pending nor lost, so the
+    drawer says an email for them is on its way instead of "the customer has every scope"."""
     states = [portal_rows[m["id"]].get("scope_send_state") for m in members
               if m["id"] in portal_rows]
     states = [st for st in states if isinstance(st, dict)]
@@ -2640,12 +2644,14 @@ def _scope_send_view(members: List[Dict[str, Any]],
     want: set = set()
     left_out: set = set()
     lost: set = set()
+    flying: set = set()
     kinds: Dict[str, str] = {}
     told_kinds = False
     for st in states:
         want.update(x for x in (st.get("pending_scope_ids") or []) if isinstance(x, str))
         left_out.update(x for x in (st.get("not_included") or []) if isinstance(x, str))
         lost.update(x for x in (st.get("unknown_scope_ids") or []) if isinstance(x, str))
+        flying.update(x for x in (st.get("inflight_scope_ids") or []) if isinstance(x, str))
         if isinstance(st.get("kinds"), dict):
             told_kinds = True
             kinds.update({str(k): str(v) for k, v in st["kinds"].items()})
@@ -2663,6 +2669,7 @@ def _scope_send_view(members: List[Dict[str, Any]],
                      or any(v == "revised" for v in kinds.values()))
     pending = [i for i in ids if i in want]
     unknown = [i for i in ids if i in lost and i not in want]
+    inflight = [i for i in ids if i in flying and i not in want and i not in lost]
     revised = [i for i in pending if kinds.get(i) == "revised"]
     new = [i for i in pending if i not in revised]
     if not pending:
@@ -2680,6 +2687,7 @@ def _scope_send_view(members: List[Dict[str, Any]],
             "not_included": [i for i in ids if i in left_out], "label": label,
             "chip": (None if not pending else ("Email not sent" if not announced else label)),
             "unknown": unknown,
+            "inflight": inflight,
             "unknown_text": ("The result of the last send was lost. Check the thread, then send "
                              "again." if unknown else None)}
 

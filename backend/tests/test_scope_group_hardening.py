@@ -349,6 +349,20 @@ def test_an_ordinary_view_reports_no_lost_send(monkeypatch):
     state = {"announced": True, "pending_scope_ids": [], "not_included": []}
     ss = _board(monkeypatch, [_prow(1, state), _prow(2, state)], SUMS[:2])["s1"]["scope_send"]
     assert ss["unknown"] == [] and ss["unknown_text"] is None
+    assert ss["inflight"] == []
+
+
+def test_a_scope_whose_send_is_in_flight_is_reported_as_such(monkeypatch):
+    """Round 3: the portal's inflight_scope_ids reach the drawer as `inflight`, in group order, and
+    a scope that is pending or lost is never also called in flight."""
+    state = _real_states([], {}, first=False, inflight_scope_ids=["s3", "s2"])
+    rows = _board(monkeypatch, [_prow(i, state("s%d" % i)) for i in (1, 2, 3)], SUMS)
+    ss = rows["s1"]["scope_send"]
+    assert ss["inflight"] == ["s2", "s3"] and ss["label"] is None and ss["unknown"] == []
+    state = _real_states(["s2"], {"s2": "revised"}, first=False, inflight_scope_ids=["s2", "s3"],
+                         unknown_scope_ids=["s3"])
+    ss = _board(monkeypatch, [_prow(i, state("s%d" % i)) for i in (1, 2, 3)], SUMS)["s1"]["scope_send"]
+    assert ss["inflight"] == [] and ss["pending"] == ["s2"] and ss["unknown"] == ["s3"]
 
 
 def test_the_combined_send_forwards_resend_unknown_only_when_asked(monkeypatch):
@@ -951,9 +965,33 @@ def test_every_answer_about_a_lost_send_is_a_sentence(drawer):
                                         "it stopped before emailing anybody. Try again in a minute.")
     assert "send_not_recorded" not in h["notRecorded"]["note"]
     assert h["sentUnrecorded"]["note"].startswith("Sent to 1 contact,")
-    assert h["sentUnrecorded"]["note"].endswith(
-        "The portal could not record this send, so these scopes may show as not sent. Check the "
-        "thread before sending again.")
+    assert h["sentUnrecorded"]["note"].endswith(UNRECORDED)
+
+
+UNRECORDED = ('The portal could not record this send yet. If its result never arrives, these scopes '
+              'will show as "result lost" in a few minutes. Check the thread before sending again.')
+
+
+@needs_node
+def test_a_send_in_flight_is_said_not_called_delivered(drawer):
+    """Round 3, EXECUTED: a scope whose send is in flight (the portal's inflight_scope_ids) is named
+    as on its way; the drawer never says the customer has every scope and offers no send for it."""
+    h = drawer["honest"]
+    html = h["inflightHtml"]
+    assert ('<p class="note" id="scope-inflight">An email for Lab 1 is being sent, or its result has '
+            'not been recorded yet. Check back in a few minutes.</p>') in html
+    assert 'id="scope-all-sent"' not in html, "an email in flight was called delivered"
+    assert 'id="scope-send"' not in html and 'id="scope-resend-unknown"' not in html
+    assert 'id="scope-inflight"' not in h["allSentHtml"]
+
+
+@needs_node
+def test_an_unrecorded_send_keeps_its_sentence_through_the_poll(drawer):
+    """The recorded:false sentence is kept in SCOPE_SEND_NOTICE: the poll's repaint after the send
+    still says what the next minutes will show, and offers no retry (everybody got it)."""
+    p = drawer["honest"]["unrecordedPoll"]
+    assert p["note"].endswith(UNRECORDED), p
+    assert p["retryShown"] is False and p["allSentShown"] is False
 
 
 @needs_node

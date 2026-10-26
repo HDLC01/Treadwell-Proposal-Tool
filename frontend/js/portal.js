@@ -5075,17 +5075,23 @@
     // maybe emailed, maybe not. Never "the customer has every scope", and never re-sent by the
     // ordinary button: a separate, explicit one asks the portal to send them again.
     const lost = ss && Array.isArray(ss.unknown) ? ss.unknown : [];
+    // Scopes whose send is IN FLIGHT (the portal's inflight_scope_ids, round 3): claimed by a send
+    // whose result is not recorded yet. Not pending and not lost, and not "every scope" either.
+    const flying = ss && Array.isArray(ss.inflight) ? ss.inflight : [];
+    const namesOf = (ids) => ids.map((id) => {
+      const m = members.filter((x) => x && x.id === id)[0];
+      return esc((m && m.label) || "a scope");
+    }).join(", ");
     let send = "";
     if (grouped && sent && ss) {
       send = ss.label
         ? `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(ss.label)}</button></div>`
-        : (lost.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>');
+        : (lost.length || flying.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>');
+      if (flying.length) {
+        send += `<p class="note" id="scope-inflight">An email for ${namesOf(flying)} is being sent, or its result has not been recorded yet. Check back in a few minutes.</p>`;
+      }
       if (lost.length) {
-        const names = lost.map((id) => {
-          const m = members.filter((x) => x && x.id === id)[0];
-          return esc((m && m.label) || "a scope");
-        }).join(", ");
-        send += `<p class="note" id="scope-unknown">${esc(ss.unknown_text || "The result of the last send was lost. Check the thread, then send again.")} ${lost.length === 1 ? "Scope" : "Scopes"}: ${names}.</p>`
+        send += `<p class="note" id="scope-unknown">${esc(ss.unknown_text || "The result of the last send was lost. Check the thread, then send again.")} ${lost.length === 1 ? "Scope" : "Scopes"}: ${namesOf(lost)}.</p>`
           + `<div class="fu-line"><button type="button" class="btn btn-s" id="scope-resend-unknown">Send ${lost.length === 1 ? "it" : "them"} again</button></div>`;
       }
     } else if (grouped && sent) {
@@ -5173,7 +5179,9 @@
       }
       const out = scopeSendOutcome(r.status, j, p);
       // Somebody got it: remember who did NOT (or forget, when everybody did) before the reload.
-      if (out.sent && out.retry) SCOPE_SEND_NOTICE.set(p.scope_group, { text: out.text });
+      // An unrecorded send (recorded:false) is kept too: its sentence says what the next minutes
+      // will show, and the poll's repaint must not wipe it.
+      if (out.sent && (out.retry || out.unrecorded)) SCOPE_SEND_NOTICE.set(p.scope_group, { text: out.text, retry: !!out.retry });
       else if (out.sent) SCOPE_SEND_NOTICE.delete(p.scope_group);
       say(out.text);
       if (out.retry && retryLine) retryLine.style.display = "";
@@ -5195,7 +5203,7 @@
     const left = p && p.scope_group && retryLine ? SCOPE_SEND_NOTICE.get(p.scope_group) : null;
     if (left) {
       say(left.text);
-      retryLine.style.display = "";
+      if (left.retry) retryLine.style.display = "";
       const all = d.querySelector("#scope-all-sent");
       if (all) all.style.display = "none";
     }
@@ -5273,10 +5281,11 @@
     }
     const n = delivered.length;
     // recorded:false: the emails went out but the portal could not write down that they did. Its
-    // scopes then show as "result lost", and nobody should press send again before looking.
+    // scopes show as being sent for a few minutes, then as "result lost" if the result never
+    // arrives, and nobody should press send again before looking.
     const unrecorded = j.recorded === false
-      ? " The portal could not record this send, so these scopes may show as not sent. Check the thread before sending again." : "";
-    return { sent: true, retry: failed.length > 0,
+      ? " The portal could not record this send yet. If its result never arrives, these scopes will show as \"result lost\" in a few minutes. Check the thread before sending again." : "";
+    return { sent: true, retry: failed.length > 0, unrecorded: j.recorded === false,
       text: "Sent to " + n + " contact" + (n === 1 ? "" : "s") + ", one email with every scope."
         + (failed.length ? " It did NOT reach: " + failed.join(", ") + "." : "") + leftText + unrecorded };
   }

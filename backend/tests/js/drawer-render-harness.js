@@ -2737,6 +2737,14 @@ async function runScenario(name, s) {
       body: { ok: false, error: "send_not_recorded", emailed: [] } });
     out.honest.sentUnrecorded = await press("#scope-resend-unknown", { status: 200,
       body: { ok: true, recorded: false, results: [{ email: "a@x.test", delivered: true }] } });
+    // ROUND 3, A SEND IN FLIGHT: the portal now reports Lab 1 as in flight (inflight_scope_ids),
+    // neither pending nor lost. The poll rebuilds the drawer: it says an email is on its way, never
+    // "the customer has every scope", and the unrecorded send's sentence is still on screen
+    // (SCOPE_SEND_NOTICE) without offering a retry nobody needs.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: false, unknown: [], unknown_text: null, inflight: ["hs-b"] });
+    out.honest.unrecordedPoll = repaint();
+    out.honest.inflightHtml = dom.html;
   } catch (e) {
     out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   } finally {
