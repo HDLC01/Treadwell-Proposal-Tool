@@ -22,9 +22,10 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import cachetools
@@ -59,7 +60,14 @@ def init_db() -> None:
 # block further down): it is the link that makes Breakroom, Lab 1 and Lab 2 one project with three
 # proposals. It is written only by create_sibling, rename_scope and split_draft, and a stale tab
 # that silently cleared it would detach a scope from the customer's combined email.
-_SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group")
+#
+# `proposal_of`, `estimate_digest` and `estimate_synced_at` joined on 2026-10-27 ("Create Multiple
+# Proposals", the proposals block further down): a proposal made from another draft's base bid says
+# whose estimate it is a copy of, and which copy. Written only by fan_out_proposals and
+# refresh_proposals; a stale tab that cleared them would cut the proposal off its estimate, and one
+# that put an old digest back would hide an "Estimate changed" the estimator needs to see.
+_SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group",
+                      "proposal_of", "estimate_digest", "estimate_synced_at")
 
 # Stamped on a draft the moment split_draft rewrites it, and carried by every copy of the draft that
 # was read AFTER the split. A browser save whose blob does not carry the stamp the row has was built
@@ -72,8 +80,9 @@ SPLIT_MARK = "split_at"
 # group is joined only through create_sibling and split_draft. The beta's sandbox PUTs a copy of a real
 # bid under a NEW id (polish-sandbox.js), and a copy that carried the real bid's group would join the
 # customer's project: drawn beside its scopes, and holding the combined email back until the test copy
-# was published too (the portal's scopes_not_published).
-_NEVER_SEEDED_BY_A_BROWSER = ("scope_group",)
+# was published too (the portal's scopes_not_published). The three proposal keys likewise: a copy
+# that carried `proposal_of` would be drawn as one more proposal tab of the real bid.
+_NEVER_SEEDED_BY_A_BROWSER = ("scope_group", "proposal_of", "estimate_digest", "estimate_synced_at")
 
 
 class StaleSplitWrite(Exception):
@@ -819,7 +828,9 @@ def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
     found in Python (the ids are a few hundred rows, the objects a few dozen bytes each)."""
     res = (get_client().table("drafts")
            .select("id,created_at,scope_group:data->scope_group,archived:data->>archived,"
-                   "is_test:data->>is_test,project_name:data->>project_name")
+                   "is_test:data->>is_test,project_name:data->>project_name,"
+                   # Whose base bid this proposal was made from (fan_out_proposals), or None.
+                   "proposal_of:data->>proposal_of")
            .is_("deleted_at", "null").execute())
     out = []
     for r in res.data or []:
@@ -827,6 +838,8 @@ def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
         sg = r["scope_group"] if "scope_group" in r else blob.get("scope_group")
         if isinstance(sg, dict) and not scope_group_problem(sg) and sg.get("id") == group_id:
             out.append({"id": r["id"], "label": sg.get("label") or "",
+                        "proposal_of": (r["proposal_of"] if "proposal_of" in r
+                                        else blob.get("proposal_of")) or None,
                         "created_at": r.get("created_at") or "",
                         "archived": _truthy(r["archived"] if "archived" in r else blob.get("archived")),
                         "is_test": r["is_test"] if "is_test" in r else blob.get("is_test"),
@@ -1172,6 +1185,482 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
             "children": made}
 
 
+# ── one estimate, several proposals ("Create Multiple Proposals", 2026-10-27) ──
+# Hanz: the estimator fills ONE intake, prices the rooms as sheets of ONE estimate, ticks several
+# sheets as base bids ("Base Bid 1", "Base Bid 2"...) and presses Create Multiple Proposals on the
+# proposal page. The customer portal knows one proposal as one row of `drafts` (its own link,
+# approval, deposit and follow-ups), so every base bid after the first is backed by a draft row of
+# its own, made and kept up to date by the server from the parent: a CHILD. The parent is the one
+# working estimate and is also Base Bid 1's proposal.
+#
+# A child is an ordinary scope of the parent's scope group to the board and the portal, plus three
+# server-owned keys: `proposal_of` (the parent's id), `estimate_digest` (PROPOSAL_ESTIMATE_KEYS'
+# digest of the parent when the child was copied from it) and `estimate_synced_at`. Children are
+# found by their rows (proposal_children), never by a list on the parent.
+#
+# WHAT A CHILD COPIES FROM THE PARENT: the job and the whole estimate (every sheet, so its workbook
+# and its options are the parent's), and the money of ITS base sheet read off `priced_tabs` with the
+# Proposal step's rule (proposal-review.js rebuildPricing). WHAT IT OWNS: its words and its option
+# picks (PROPOSAL_NARRATIVE_KEYS), which start empty and survive every refresh.
+PROPOSAL_ESTIMATE_KEYS = SIBLING_INTAKE_KEYS + (
+    "cell_values", "tab_copies", "tab_labels", "tab_order", "tab_structs", "lock_overrides",
+    "extras", "priced_tabs", "polish_estimate", "hf_lump_sums", "tax_flags_per_sheet",
+    "cove_height_v2",
+)
+# Intake keys a REFRESH leaves as the child has them: both are server-owned on the child itself (a
+# person can file one proposal of the project, or hand it to another estimator, from the board).
+PROPOSAL_REFRESH_SKIPS = ("is_test", "assigned_estimator")
+# The base sheet's money, derived from priced_tabs[base] (_child_money).
+PROPOSAL_MONEY_KEYS = (
+    "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
+    "proposal_remodel_on", "sheet_area", "polish_sf", "phase_price", "cost_snapshot",
+)
+# What a child is as a proposal of ONE base sheet, set on every copy.
+PROPOSAL_BASE_KEYS = ("base_tab_id", "base_tab_ids", "work_type", "computed_bid", "rooms")
+# A child's OWN proposal: its words, its option picks and the files built from them. Never copied
+# from the parent (a new child starts with `tab_opts: {}` and none of the rest), and exactly what a
+# refresh keeps.
+PROPOSAL_NARRATIVE_KEYS = (
+    "tab_opts", "tab_notes", "price_lines", "price_overrides",
+    "paragraph_overrides", "paragraph_overrides_all", "paragraph_overrides_meta",
+    "box_overrides", "box_overrides_all", "box_overrides_meta", "system_overrides",
+    "notes", "notes_text", "notes_seed", "scope_notes", "schedule_notes", "exclusions",
+    "system_name", "system_name_manual", "system_name_polish", "system_name_epoxy", "texture",
+    "cover_letter_enabled", "cover_letter_writer", "cover_letter_template_version",
+    "cover_letter_paragraph_overrides", "cover_letter_paragraph_overrides_all",
+    "cover_letter_paragraph_overrides_meta",
+    "tax_layout", "tax_inclusion", "proposal_payload", "proposal_payload_key",
+    "generate_result", "generated_lump_sum", "lump_sum_display", "dropbox_result",
+)
+# The Proposal step never offers these as a base: v1 refuses Seal (proposal-review.js
+# OPTION_ONLY_ROLES), v2 refuses Seal and Leveling (work-types.js optionOnly, bid-model pickBase).
+_V1_OPTION_ONLY_ROLES = ("seal",)
+_V2_OPTION_ONLY_ROLES = ("seal", "leveling")
+_V2_ROOT_TAB = "Polish"                 # bid-model.js ROOT_TAB: the root section IS the model
+_V2_COPY_ID = re.compile(r"^Copy[1-9]\d*$")
+_V2_OPTION_ONLY_SHEETS = ("Seal", "Seal (+Jnts)", "Leveling")
+
+
+def _is_v2(data: Dict[str, Any]) -> bool:
+    pe = (data or {}).get("polish_estimate")
+    return isinstance(pe, dict) and pe.get("version") == 2
+
+
+def _priced_tabs(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{tab id: its priced_tabs entry}, in the estimate's order (dicts keep it)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for t in (data or {}).get("priced_tabs") or []:
+        if isinstance(t, dict) and isinstance(t.get("id"), str) and t["id"] not in out:
+            out[t["id"]] = t
+    return out
+
+
+def estimate_digest(data: Dict[str, Any]) -> str:
+    """sha256 of a draft's ESTIMATE (PROPOSAL_ESTIMATE_KEYS less PROPOSAL_REFRESH_SKIPS): what a
+    child copies on a refresh, so the digest moves exactly when a refresh would change something.
+
+    Not `updated_at`: every browser save bumps that, and the parent is also Base Bid 1's proposal,
+    so typing its wording would call every other proposal stale. Keys sorted, so a jsonb read-back
+    (which reorders keys) gives the same answer."""
+    src = data or {}
+    picked = {k: src[k] for k in PROPOSAL_ESTIMATE_KEYS
+              if k not in PROPOSAL_REFRESH_SKIPS and k in src}
+    blob = json.dumps(picked, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _num(v: Any) -> float:
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return n if n == n else 0.0                # NaN reads as 0, like the page's N()
+
+
+def _child_money(parent: Dict[str, Any], tab: str) -> Dict[str, Any]:
+    """The money of a proposal whose ONE base is `tab`, off the parent's priced_tabs: rebuildPricing's
+    rule for an explicit base (proposal-review.js), so the child's figure is the parent's figure for
+    that sheet. A v2 sheet the estimate could not price stays None (composePricingSnapshot's null);
+    a v1 one is 0 (the page's N()). `polish_sf`, `phase_price` and `cost_snapshot` come off the tab
+    when its snapshot carries them (sf.polish_sf, phase, costs and man_hours), else the parent's own
+    figure for the parent's own base, else nothing that would print another sheet's cost."""
+    t = _priced_tabs(parent).get(tab) or {}
+    v2 = _is_v2(parent)
+
+    def money(k: str) -> Any:
+        v = t.get(k)
+        if v is None and v2:
+            return None
+        return _num(v)
+
+    out: Dict[str, Any] = {
+        "proposal_lump_sum": money("total"),
+        "proposal_sales_tax": money("sales_tax"),
+        "proposal_remodel_tax": money("remodel"),
+        "proposal_taxable": t["taxable"] if isinstance(t.get("taxable"), bool) else None,
+        "proposal_remodel_on": t["remodel_on"] if isinstance(t.get("remodel_on"), bool) else None,
+    }
+    sf = t.get("sf") if isinstance(t.get("sf"), dict) else {}
+    out["sheet_area"] = {k: _num(v) for k, v in sf.items()}
+    if "polish_sf" in sf:
+        out["polish_sf"] = sf["polish_sf"]
+    elif "polish_sf" in parent:
+        out["polish_sf"] = copy.deepcopy(parent["polish_sf"])
+    own_base = parent.get("base_tab_id") == tab
+    if "phase" in t:
+        out["phase_price"] = _num(t.get("phase"))
+    elif own_base and "phase_price" in parent:
+        out["phase_price"] = copy.deepcopy(parent["phase_price"])
+    else:
+        out["phase_price"] = 0
+    if "costs" in t or "man_hours" in t:
+        out["cost_snapshot"] = {"costs": _num(t.get("costs")),
+                                "man_hours": int(round(_num(t.get("man_hours"))))}
+    elif own_base and isinstance(parent.get("cost_snapshot"), dict):
+        out["cost_snapshot"] = copy.deepcopy(parent["cost_snapshot"])
+    else:
+        out["cost_snapshot"] = {"costs": 0, "man_hours": 0}
+    return out
+
+
+def _v2_sections(pe: Dict[str, Any]) -> Dict[str, Tuple[str, str]]:
+    """{section id: (sheet, kind)} of a v2 model, the root first (estimate_writer.group_member_sheet's
+    reading: the root's kind is the model's own `kind`, a missing key being base)."""
+    out: Dict[str, Tuple[str, str]] = {
+        _V2_ROOT_TAB: (_V2_ROOT_TAB, pe.get("kind") if pe.get("kind") in ("off", "option") else "base")}
+    tabs = pe.get("tabs") if isinstance(pe.get("tabs"), dict) else {}
+    for sid, sec in tabs.items():
+        if not isinstance(sec, dict) or sid == _V2_ROOT_TAB:
+            continue
+        sheet = sec.get("sheet") if _V2_COPY_ID.match(str(sid)) else sid
+        out[str(sid)] = (str(sheet or ""), str(sec.get("kind") or ""))
+    return out
+
+
+def _v2_child_model(pe: Dict[str, Any], tab: str) -> Dict[str, Any]:
+    """The parent's v2 model with `tab` as its ONE base: a deep copy in which `tab` is made base and
+    every other base an option (bid-model.js withSectionKind, as pickBase applies it); options and
+    sheets that are off stay as they are. The parent's model is not touched.
+
+    RAISES ScopeError: no_such_sheet (the model has no such section, or it is off), option_only_base
+    (Seal or Leveling, never a base), combined_base (the parent's base is two sheets priced together)."""
+    if not (isinstance(pe, dict) and pe.get("version") == 2):
+        raise ScopeError("no_such_sheet", "This bid has no Estimating Tool v2 estimate to copy.")
+    sections = _v2_sections(pe)
+    if tab not in sections or sections[tab][1] == "off":
+        raise ScopeError("no_such_sheet", "The estimate has no sheet “%s” that is part of the bid."
+                         % tab)
+    if sections[tab][0] in _V2_OPTION_ONLY_SHEETS:
+        raise ScopeError("option_only_base", "%s is an option on a bid and never a base bid of its "
+                                             "own." % sections[tab][0])
+    if sum(1 for _s, kind in sections.values() if kind == "base") > 1:
+        raise ScopeError("combined_base", "The base bid is an Epoxy and a Polish sheet priced "
+                                          "together. Make one sheet the base first.")
+    out = copy.deepcopy(pe)
+    for sid, (_sheet, kind) in sections.items():
+        want = "base" if sid == tab else ("option" if kind == "base" else kind)
+        if want == kind:
+            continue
+        if sid == _V2_ROOT_TAB:
+            if want == "base":
+                out.pop("kind", None)
+            else:
+                out["kind"] = want
+        else:
+            out["tabs"][sid] = dict(out["tabs"][sid], kind=want)
+    return out
+
+
+def _proposal_copy(parent: Dict[str, Any], tab: str, refresh: bool) -> Dict[str, Any]:
+    """Everything a child of `parent` whose base is `tab` copies from it: the estimate
+    (PROPOSAL_ESTIMATE_KEYS, less PROPOSAL_REFRESH_SKIPS on a refresh), the base's money and what
+    makes it a one-base proposal (PROPOSAL_BASE_KEYS). A NEW object, sharing nothing with `parent`.
+    A v2 child's model and its priced_tabs' kinds are the kind-flipped copy (_v2_child_model)."""
+    skip = PROPOSAL_REFRESH_SKIPS if refresh else ()
+    out = {k: copy.deepcopy(parent[k]) for k in PROPOSAL_ESTIMATE_KEYS
+           if k in parent and k not in skip}
+    priced = _priced_tabs(parent)
+    role = str((priced.get(tab) or {}).get("role") or "").lower()
+    if _is_v2(parent):
+        out["polish_estimate"] = _v2_child_model(parent["polish_estimate"], tab)
+        flipped = _v2_sections(out["polish_estimate"])
+        if isinstance(out.get("priced_tabs"), list):
+            for t in out["priced_tabs"]:
+                if isinstance(t, dict) and t.get("id") in flipped:
+                    t["kind"] = flipped[t["id"]][1]
+    out.update(_child_money(parent, tab))
+    out["base_tab_id"] = tab
+    out["base_tab_ids"] = [tab]
+    out["work_type"] = role or str(parent.get("work_type") or "") or None
+    out["computed_bid"] = None
+    out["rooms"] = []
+    return out
+
+
+def proposal_children(parent_id: str, group_id: Optional[str]) -> List[Dict[str, Any]]:
+    """The LIVE members of `group_id` made from `parent_id`'s base bids (proposal_of), oldest first.
+    [] for a draft in no group."""
+    if not group_id:
+        return []
+    return [m for m in _group_rows(group_id)
+            if m.get("proposal_of") == parent_id and m["id"] != parent_id]
+
+
+def _proposal_rows(parent_id: str, group_id: Optional[str]) -> List[Dict[str, Any]]:
+    """proposal_children, each with its stored blob ({id, label, created_at, data}); a child deleted
+    or moved out between the two reads is left out."""
+    out = []
+    for m in proposal_children(parent_id, group_id):
+        row = load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        if not row or data.get("proposal_of") != parent_id:
+            continue
+        out.append({"id": m["id"], "label": m.get("label") or "", "created_at": m.get("created_at"),
+                    "data": data})
+    return out
+
+
+def _stamp_at(base: datetime, i: int) -> str:
+    """`base` + i microseconds, ISO: the children are made in Base Bid order and the board orders a
+    group by created_at, so each gets its own instant."""
+    return (base + timedelta(microseconds=i)).isoformat()
+
+
+def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] = None,
+                      sent: bool = False) -> Dict[str, Any]:
+    """CREATE MULTIPLE PROPOSALS: one child draft per base bid of `parent_id` after the first.
+
+    `base_ids` are the ticked base sheets in Base Bid order; `base_ids[0]` must be the parent's own
+    base (it stays Base Bid 1's proposal). IDEMPOTENT: a child already made for a sheet is kept as it
+    is (`created: false`), so pressing the button twice makes nothing twice. Children are written
+    FIRST and taken back when anything after fails (_undo_split_children); the parent last: it joins
+    a group (named "Base Bid 1" when unnamed), records `base_tab_ids`, and on a parent the customer
+    does not have yet its children's sheets stop being options of it (`tab_opts[id].is_option`
+    False). A `sent` parent's tab_opts are never edited. The parent's `updated_at` is NOT bumped.
+
+    Returns {"group_id", "parent": {"id", "label"}, "children": [{"id", "label", "base_tab_id",
+    "created"}]}. RAISES ScopeError: not_found (404); too_few_bases, no_such_sheet, option_only_base,
+    combined_base, base_order, not_fanned_from_child, invalid_scope_group (400); test_mix, label_taken,
+    too_many_scopes (409); split_failed (503)."""
+    sb = get_client()
+    cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+    if not cur.data:
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    parent = copy.deepcopy(cur.data[0].get("data") or {})
+    if parent.get("proposal_of"):
+        raise ScopeError("not_fanned_from_child",
+                         "This proposal was made from Base Bid 1's estimate. Base bids are picked "
+                         "on Base Bid 1's tab.")
+    existing = parent.get("scope_group")
+    if existing is not None and scope_group_problem(existing):
+        raise ScopeError("invalid_scope_group",
+                         "This project's scope group cannot be read (%s)." % scope_group_problem(existing))
+    ids = [str(x) for x in (base_ids or []) if isinstance(x, str) and x]
+    if len(ids) < 2 or len(set(ids)) != len(ids) or len(ids) != len(base_ids or []):
+        raise ScopeError("too_few_bases", "Tick two base bids or more, each its own sheet, to make "
+                                          "several proposals.")
+    priced = _priced_tabs(parent)
+    v2 = _is_v2(parent)
+    only = _V2_OPTION_ONLY_ROLES if v2 else _V1_OPTION_ONLY_ROLES
+    for tab in ids:
+        if tab not in priced:
+            raise ScopeError("no_such_sheet", "The estimate has no priced sheet “%s”. Reload the "
+                                              "page and try again." % tab)
+        if str(priced[tab].get("role") or "").lower() in only:
+            raise ScopeError("option_only_base", "“%s” is an option on a bid and never a base bid "
+                                                 "of its own." % (priced[tab].get("name") or tab))
+    base = parent.get("base_tab_id")
+    if not base:
+        if v2 or str(parent.get("work_type") or "").lower() == "combo":
+            raise ScopeError("combined_base", "The base bid is an Epoxy and a Polish sheet priced "
+                                              "together. Make one sheet the base first.")
+        raise ScopeError("base_order", "Base Bid 1 must be this proposal's own base sheet. Reload "
+                                       "the page and try again.")
+    if ids[0] != base:
+        raise ScopeError("base_order", "Base Bid 1 must be this proposal's own base sheet. Reload "
+                                       "the page and try again.")
+    copies = {tab: _proposal_copy(parent, tab, refresh=False) for tab in ids[1:]}
+
+    gid = existing["id"] if isinstance(existing, dict) else uuid.uuid4().hex
+    if isinstance(existing, dict):
+        mixed = scope_test_mix(parent_id, parent, gid)
+        if mixed:
+            raise ScopeError("test_mix", mixed, 409)
+    kept = {}
+    for c in _proposal_rows(parent_id, gid if isinstance(existing, dict) else None):
+        tab = c["data"].get("base_tab_id")
+        if isinstance(tab, str) and tab not in kept:
+            kept[tab] = c
+    members = [m for m in (_group_rows(gid) if isinstance(existing, dict) else [])
+               if m["id"] != parent_id]
+    new_tabs = [t for t in ids[1:] if t not in kept]
+    if len(members) + len(new_tabs) + 1 > MAX_SCOPES:
+        raise ScopeError("too_many_scopes",
+                         "A project can be split into %d proposals at most." % MAX_SCOPES, 409)
+    taken = {m["label"].lower() for m in members if m["label"]}
+    parent_label = (existing or {}).get("label") or _free_label("Base Bid 1", taken)
+    if parent_label.lower() in taken:
+        raise ScopeError("label_taken",
+                         "“%s” is already the name of a scope of this project." % parent_label, 409)
+    taken.add(parent_label.lower())
+    plan: List[Tuple[str, str]] = []
+    for pos, tab in enumerate(ids[1:], start=2):
+        if tab in kept:
+            continue
+        lab = _free_label("Base Bid %d" % pos, taken)
+        if lab.lower() in taken:
+            raise ScopeError("label_taken",
+                             "“%s” is already the name of a scope of this project." % lab, 409)
+        taken.add(lab.lower())
+        plan.append((tab, lab))
+
+    now = datetime.now(timezone.utc)
+    digest = estimate_digest(parent)
+    made: List[Dict[str, Any]] = []
+    in_flight: List[str] = []
+    try:
+        for i, (tab, lab) in enumerate(plan, start=1):
+            cid = str(uuid.uuid4())
+            d = copies[tab]
+            d["tab_opts"] = {}
+            d["scope_group"] = {"id": gid, "label": lab}
+            d["proposal_of"] = parent_id
+            d["estimate_digest"] = digest
+            d["estimate_synced_at"] = now.isoformat()
+            stamp = _stamp_at(now, i)
+            in_flight[:] = [cid]
+            sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,
+                                       "created_at": stamp, "updated_at": stamp}).execute()
+            in_flight[:] = []
+            log_event(cid, actor, "created", _summary_detail(d))
+            made.append({"id": cid, "label": lab, "base_tab_id": tab, "created": True})
+        rewritten = copy.deepcopy(parent)
+        rewritten["scope_group"] = {"id": gid, "label": parent_label}
+        rewritten["base_tab_ids"] = list(ids)
+        if not sent and isinstance(rewritten.get("tab_opts"), dict):
+            for tab in ids[1:]:
+                entry = rewritten["tab_opts"].get(tab)
+                if isinstance(entry, dict) and entry.get("is_option"):
+                    rewritten["tab_opts"][tab] = dict(entry, is_option=False)
+        sb.table("drafts").update({"data": rewritten}).eq("id", parent_id).execute()
+    except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal once cleaned up
+        _undo_split_children(sb, [m["id"] for m in made] + in_flight)
+        raise ScopeError("split_failed", "No proposals were made: the database did not take every "
+                                         "part of it, and the parts that were made have been "
+                                         "removed. Try again in a minute.", 503) from exc
+    log_event(parent_id, actor, "proposals_created",
+              {"project_name": parent.get("project_name"), "id": parent_id, "group": gid,
+               "base_tab_ids": list(ids), "ids": [m["id"] for m in made]})
+    _cache_clear()
+    by_tab = {m["base_tab_id"]: m for m in made}
+    children = []
+    for tab in ids[1:]:
+        if tab in kept:
+            children.append({"id": kept[tab]["id"], "label": kept[tab]["label"], "base_tab_id": tab,
+                             "created": False})
+        else:
+            children.append(by_tab[tab])
+    return {"group_id": gid, "parent": {"id": parent_id, "label": parent_label},
+            "children": children}
+
+
+def _resolve_parent(draft_id: str) -> Optional[Dict[str, Any]]:
+    """The stored row of the draft whose estimate `draft_id` is a proposal of: its parent for a
+    child (when the parent is still there), else the draft itself. None when `draft_id` is gone."""
+    row = load_draft(draft_id)
+    if not row:
+        return None
+    pid = (row.get("data") or {}).get("proposal_of")
+    if isinstance(pid, str) and pid and pid != draft_id and draft_is_active(pid):
+        parent = load_draft(pid)
+        if parent:
+            return parent
+    return row
+
+
+def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
+    """CATCH EVERY PROPOSAL UP WITH THE ESTIMATE ("Estimate changed" -> Refresh). `draft_id` is the
+    parent or any child of it.
+
+    Per child: its estimate and money (PROPOSAL_ESTIMATE_KEYS less PROPOSAL_REFRESH_SKIPS,
+    PROPOSAL_MONEY_KEYS, PROPOSAL_BASE_KEYS) are replaced by a fresh copy of the parent's, everything
+    else (its words and option picks, PROPOSAL_NARRATIVE_KEYS, its group, its server keys) is kept,
+    the digest and `estimate_synced_at` are stamped, and its `updated_at` IS bumped: its document
+    must be rebuilt, and a Files page that checked the old copy is refused (_stored_since). A child
+    whose base sheet is no longer priced is skipped (`sheet_gone`). The parent is not touched.
+
+    Returns {"parent_id", "estimate_digest", "refreshed": [ids], "skipped": [{"id", "label",
+    "code"}]}. RAISES ScopeError not_found (404)."""
+    prow = _resolve_parent(draft_id)
+    if prow is None:
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    parent_id, parent = prow["id"], prow.get("data") or {}
+    gid, _label = _scope_of(parent)
+    digest = estimate_digest(parent)
+    priced = _priced_tabs(parent)
+    replaced = (set(PROPOSAL_ESTIMATE_KEYS) - set(PROPOSAL_REFRESH_SKIPS)) \
+        | set(PROPOSAL_MONEY_KEYS) | set(PROPOSAL_BASE_KEYS)
+    sb = get_client()
+    refreshed: List[str] = []
+    skipped: List[Dict[str, Any]] = []
+    for c in _proposal_rows(parent_id, gid):
+        data = c["data"]
+        tab = data.get("base_tab_id")
+        if not isinstance(tab, str) or tab not in priced:
+            skipped.append({"id": c["id"], "label": c["label"], "code": "sheet_gone"})
+            continue
+        try:
+            fresh = _proposal_copy(parent, tab, refresh=True)
+        except ScopeError as exc:
+            skipped.append({"id": c["id"], "label": c["label"], "code": exc.code})
+            continue
+        out = {k: v for k, v in data.items() if k not in replaced}
+        out.update(fresh)
+        now = _now_iso()
+        out["estimate_digest"] = digest
+        out["estimate_synced_at"] = now
+        sb.table("drafts").update({"data": out, "updated_at": now}).eq("id", c["id"]).execute()
+        log_event(c["id"], actor, "proposal_refreshed",
+                  {"project_name": out.get("project_name"), "id": c["id"], "from": parent_id})
+        refreshed.append(c["id"])
+    _cache_clear()
+    return {"parent_id": parent_id, "estimate_digest": digest, "refreshed": refreshed,
+            "skipped": skipped}
+
+
+def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
+    """The proposal page's tab strip: the parent first, then its children in the parent's
+    `base_tab_ids` order, each {id, label, index, is_parent, base_tab_id, stale,
+    estimate_synced_at}; `stale` is a child whose digest is not the parent's current one. `draft_id`
+    is the parent or any child of it. None when it is gone.
+
+    Returns {"parent_id", "group_id", "estimate_digest", "members"}; a draft with no children answers
+    its own row alone."""
+    prow = _resolve_parent(draft_id)
+    if prow is None:
+        return None
+    parent_id, parent = prow["id"], prow.get("data") or {}
+    gid, plabel = _scope_of(parent)
+    digest = estimate_digest(parent)
+    order = [t for t in (parent.get("base_tab_ids") or []) if isinstance(t, str)]
+    kids = _proposal_rows(parent_id, gid) if not parent.get("proposal_of") else []
+
+    def rank(c: Dict[str, Any]) -> Tuple[int, str]:
+        tab = c["data"].get("base_tab_id")
+        return (order.index(tab) if tab in order else len(order), str(c.get("created_at") or ""))
+
+    kids.sort(key=rank)
+    members = [{"id": parent_id, "label": plabel or ("Base Bid 1" if kids else ""), "index": 1,
+                "is_parent": True, "base_tab_id": parent.get("base_tab_id"), "stale": False,
+                "estimate_synced_at": None}]
+    for i, c in enumerate(kids, start=2):
+        members.append({"id": c["id"], "label": c["label"], "index": i, "is_parent": False,
+                        "base_tab_id": c["data"].get("base_tab_id"),
+                        "stale": c["data"].get("estimate_digest") != digest,
+                        "estimate_synced_at": c["data"].get("estimate_synced_at")})
+    return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members}
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -1316,6 +1805,9 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # card, and the board would draw three unrelated projects with one name.
                 "scope_group_id:data->scope_group->>id,"
                 "scope_label:data->scope_group->>label,"
+                # Whose base bid this proposal was made from (fan_out_proposals). Named for the
+                # reason `won_at` gives: the board opens such a scope on its proposal page.
+                "proposal_of:data->>proposal_of,"
                 # A split cleared this project's files, which were on the board (SPLIT_HAD_FILES).
                 "split_had_files:data->>split_had_files")
         try:
@@ -1355,6 +1847,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "handed_off_at": r.get("handed_off_at") or None,
             "scope_group_id": r.get("scope_group_id") or None,
             "scope_label": r.get("scope_label") or None,
+            "proposal_of": r.get("proposal_of") or None,
             "split_had_files": _truthy(r.get("split_had_files")),
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
@@ -1707,6 +2200,7 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         # The scope group — see the fast path's note. Both paths, for the reason the won mark gives.
         "scope_group_id": (_scope_of(data)[0]),
         "scope_label": (_scope_of(data)[1]),
+        "proposal_of": data.get("proposal_of") or None,
         "split_had_files": _truthy(data.get(SPLIT_HAD_FILES)),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),

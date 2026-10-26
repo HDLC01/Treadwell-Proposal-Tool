@@ -394,7 +394,9 @@
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
   // Somebody else can change any of them from the CRM while this page holds an older copy.
   // `scope_group` (2026-10-24): which project this proposal is one scope of, and its name there.
-  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group"];
+  // `proposal_of`, `estimate_digest`, `estimate_synced_at` (2026-10-27): whose estimate a proposal made
+  // by Create Multiple Proposals is a copy of, and which copy (drafts.fan_out_proposals).
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group", "proposal_of", "estimate_digest", "estimate_synced_at"];
 
   /** Re-read the server-owned keys for this draft and merge them into local state.
    *
