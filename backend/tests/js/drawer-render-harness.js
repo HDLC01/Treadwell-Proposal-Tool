@@ -2616,6 +2616,18 @@ async function runScenario(name, s) {
     for (const b of opens) await b.fire("click");
     out.scope.siblingNav = nav.slice();
     out.scope.siblingButtons = opens.map((b) => b.dataset.scopeOpen);
+    // A proposal made from another scope's estimate ("Create Multiple Proposals": its board member carries
+    // proposal_of), not on the board yet: it is marked, and it opens on its own proposal page, not the intake.
+    {
+      const withChild = members.concat([{ id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-a" }]);
+      page.open("scope-a");
+      page.renderNotSent("scope-a", Object.assign({}, nsRow, { scope_members: withChild, scope_count: 4 }));
+      nav.length = 0;
+      const childOpens = dom.queryAll("[data-scope-open]");
+      for (const b of childOpens) await b.fire("click");
+      out.scope.proposalChild = { marks: childOpens.map((b) => [b.dataset.scopeOpen, b.dataset.scopeProposal || ""]),
+                                  nav: nav.slice() };
+    }
 
     // The sent drawer: the same card, in SEC_TABS, with the combined email's button.
     const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));

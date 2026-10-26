@@ -122,6 +122,15 @@ def test_a_sibling_opens_its_drawer_or_its_estimate(drawer):
 
 
 @needs_node
+def test_a_proposal_made_from_another_scopes_estimate_opens_on_its_proposal_page(drawer):
+    """Create Multiple Proposals (2026-10-27): a member with `proposal_of` has no intake of its own, so off the board it
+    opens /proposal-review.html, and only it is marked data-scope-proposal."""
+    c = drawer["scope"]["proposalChild"]
+    assert c["marks"] == [["scope-b", ""], ["scope-c", ""], ["scope-d", "1"]]
+    assert c["nav"] == ["/?d=scope-c&edit=1", "/proposal-review.html?d=scope-d"]
+
+
+@needs_node
 def test_the_sent_scope_card_is_registered_and_offers_the_combined_email(drawer):
     s = drawer["scope"]["sent"]
     assert 'id="dsec-scope"' in s["html"] and "dsec-scope" in s["eligible"]

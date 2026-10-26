@@ -403,12 +403,326 @@ out.snapshot = (() => {
                                                                    man_hours: t.man_hours === undefined ? null : t.man_hours }]));
 })();
 
+// ── plan step 4: the proposal page's tabs, its button, the Estimate-changed strip, the child guards ──────────────────
+// mountProposalTabs, run over a small DOM against a recording TW and fetch. The page's own repaintNote paints a
+// refusal, parentStepHref re-points a child's links, and shared.js's redirectProposalChild / readProposals run whole.
+const STRIP_UNITS = [fn("icon"), fn("repaintNote"), fn("parentStepHref"), fn("mountProposalTabs")].join(NL);
+const tick = () => new Promise((r) => setTimeout(r, 0));
+async function settle() { for (let i = 0; i < 6; i++) await tick(); }
+
+const PARENT_VIEW = { parent_id: "P1", group_id: "G1", estimate_digest: "D2", members: [
+  { id: "P1", label: "Base Bid 1", index: 1, is_parent: true, base_tab_id: "Epoxy", stale: false },
+  { id: "C2", label: "Room <2>", index: 2, is_parent: false, base_tab_id: "Copy1", stale: true },
+  { id: "C3", label: "", index: 3, is_parent: false, base_tab_id: "Polish", stale: false },
+] };
+
+/** One proposal page: `id` is the draft it is on, `st` its state, `view` what GET .../proposals answers, `answers`
+ *  [regex, method, {status, body}] for the rest. Everything the page asks of TW and fetch is logged in order. */
+async function proposalPage(o) {
+  const log = [];
+  const btn = (id) => ({ id, hidden: false, disabled: false, title: "", textContent: id === "multi-btn" ? "Create Multiple Proposals" : "Refresh",
+                         _l: {}, addEventListener(t, f) { (this._l[t] = this._l[t] || []).push(f); },
+                         async press() { if (this.disabled) return false; for (const f of this._l.click || []) await f({}); return true; } });
+  const els = {
+    "proposal-tabs": Object.assign(new El("div"), { hidden: true }),
+    "options-panel": new El("div"),
+    "multi-btn": btn("multi-btn"),
+    "proposals-refresh": btn("proposals-refresh"),
+    "proposals-note": { hidden: true },
+    "proposals-note-what": { textContent: "" },
+    "resync-note": { hidden: true, scrollIntoView() {} },
+    "resync-note-head": { textContent: "The PDF has the old numbers." },
+    "resync-note-what": { textContent: "x" },
+    "resync-note-do": { textContent: "Look over the document below." },
+  };
+  const document = { getElementById: (id) => els[id] || null };
+  const answers = o.answers || [];
+  const fetchStub = async (url, init) => {
+    const method = (init && init.method) || "GET";
+    log.push(["fetch", method, url, init && init.body ? JSON.parse(init.body) : null]);
+    const hit = answers.filter(([re, m]) => re.test(url) && m === method)[0];
+    const a = hit ? hit[2] : { status: 200, body: { ok: true } };
+    return { ok: a.status < 400, status: a.status, json: async () => a.body };
+  };
+  const TW = {
+    getDraftId: () => o.id, resolveApiBase: () => "", authHeaders: () => ({ "Content-Type": "application/json" }),
+    readForm: () => ({ texture: "Smooth" }),
+    setState: () => { log.push(["setState"]); },
+    flushState: async () => { log.push(["flush"]); return o.flush !== false; },
+    readServerRow: async () => { log.push(["readRow"]); return o.row === undefined ? { data: {}, version: "V-1" } : o.row; },
+    useServerCopy: async () => { log.push(["adopt"]); return o.adopt !== false; },
+    readProposals: async (pid) => { log.push(["readProposals", pid]); return o.view === undefined ? clone(PARENT_VIEW) : clone(o.view); },
+    setLocalState: (p, opt) => { log.push(["setLocalState", clone(p), clone(opt)]); },
+    confirmDanger: async (d) => { log.push(["confirm", d.title, d.name]); return o.confirm !== false; },
+  };
+  const win = { location: { assign: (h) => log.push(["assign", h]), reload: () => log.push(["reload"]) }, TWAuth: null };
+  const st = clone(o.st || { base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1", "Polish"],
+                             priced_tabs: [{ id: "Epoxy" }, { id: "Copy1" }, { id: "Polish" }] });
+  const mod = new Function("state", "document", "TW", "TWPrice", "window", "fetch", "form",
+    STRIP_UNITS + NL + "return { mountProposalTabs, parentStepHref };")(
+    st, document, TW, globalThis.TWPrice, win, fetchStub, {});
+  const api = await mod.mountProposalTabs();
+  await settle();
+  const strip = els["proposal-tabs"];
+  const look = () => ({
+    stripHidden: !!strip.hidden,
+    tabs: strip.querySelectorAll(".pt-tab").map((li) => {
+      const name = li.querySelector(".pt-name");
+      return { id: li.dataset.ptId, open: li.classList.contains("open"), stale: !!li.querySelector(".pt-stale"),
+               label: (li.querySelector(".pt-nm") || { textContent: null }).textContent,
+               selected: name ? name.attrs["aria-selected"] : null, x: !!li.querySelector(".pt-x"),
+               renaming: !!li.querySelector(".pt-ren-in") };
+    }),
+    msg: (strip.querySelector(".pt-msg") || { textContent: null }).textContent,
+    note: { hidden: !!els["proposals-note"].hidden, what: els["proposals-note-what"].textContent },
+    multi: { hidden: !!els["multi-btn"].hidden, disabled: !!els["multi-btn"].disabled, title: els["multi-btn"].title,
+             text: els["multi-btn"].textContent },
+    resync: { hidden: !!els["resync-note"].hidden, head: els["resync-note-head"].textContent,
+              doIt: els["resync-note-do"].textContent },
+  });
+  const press = async (cls, pid, type) => {
+    const b = strip.querySelectorAll(cls).filter((x) => (x.dataset.ptOpen || x.dataset.ptDel) === pid)[0];
+    if (!b) throw new Error("no " + cls + " for " + pid);
+    b.fire(type || "click");
+    await settle();
+  };
+  return { log, els, st, api, mod, look, press, strip };
+}
+const fetches = (p) => p.log.filter((x) => x[0] === "fetch").map((x) => x.slice(1));
+const steps = (p) => p.log.map((x) => (x[0] === "fetch" ? x[1] + " " + x[2] : x[0]));
+
+async function step4() {
+  const s = {};
+
+  // 14. THE STRIP on Base Bid 1's page: a tab per proposal, this one open, the x on the others only, the
+  //     stale one marked and named on the Estimate-changed strip; the button live for three ticked base bids.
+  {
+    const p = await proposalPage({ id: "P1" });
+    s.parent = Object.assign(p.look(), { asked: p.log.filter((x) => x[0] === "readProposals").map((x) => x[1]) });
+  }
+  // 15. A DRAFT ON ITS OWN: no strip, no note; one ticked base bid leaves the button off, with a title saying why.
+  {
+    const p = await proposalPage({ id: "S1", view: { parent_id: "S1", members: [{ id: "S1", label: "", index: 1, is_parent: true, stale: false }] },
+                                   st: { base_tab_id: "Epoxy", priced_tabs: [{ id: "Epoxy" }, { id: "Copy1" }] } });
+    const before = p.look();
+    // A tick in the Pricing options card (renderProposalExtras writes state.base_tab_ids) repaints the button.
+    p.st.base_tab_ids = ["Epoxy", "Copy1"];
+    p.els["options-panel"].fire("change");
+    s.alone = { before, afterTick: p.look().multi };
+    // Pressed while off: nothing is asked.
+    const q = await proposalPage({ id: "S1", view: null, st: { base_tab_id: "Epoxy", priced_tabs: [{ id: "Epoxy" }] } });
+    q.log.length = 0;
+    await q.api.create();
+    s.alone.pressedOff = { log: steps(q), unread: q.look().stripHidden };
+  }
+  // 16. A CHILD's page: the button is hidden, its own tab is the open one.
+  {
+    const p = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1", base_tab_ids: ["Copy1"],
+                                                   priced_tabs: [{ id: "Epoxy" }, { id: "Copy1" }] } });
+    s.child = p.look();
+  }
+  // 17. A CLICK ON ANOTHER TAB saves, then opens that proposal's page; a click on the open tab does nothing.
+  {
+    const p = await proposalPage({ id: "P1" });
+    p.log.length = 0;
+    await p.press(".pt-name", "P1");
+    const self = steps(p);
+    await p.press(".pt-name", "C3");
+    s.navigate = { self, other: steps(p).concat(p.log.filter((x) => x[0] === "assign").map((x) => x[1])) };
+  }
+  // 18. CREATE MULTIPLE PROPOSALS: saved, version read, asked of that version with the ticked base bids in order, the
+  //     server's copy adopted, the page reloaded.
+  {
+    const p = await proposalPage({ id: "P1", view: { parent_id: "P1", members: [{ id: "P1", index: 1, is_parent: true }] },
+                                   answers: [[/\/api\/draft\/P1\/proposals$/, "POST", { status: 200, body: { ok: true, children: [] } }]] });
+    p.log.length = 0;
+    const pressed = await p.els["multi-btn"].press();
+    await settle();
+    s.create = { pressed, steps: steps(p), body: fetches(p)[0] ? fetches(p)[0][2] : null, look: p.look() };
+  }
+  // 19. A REFUSED CREATE says the server's sentence on the warning strip and adopts nothing.
+  {
+    const p = await proposalPage({ id: "P1", answers: [[/\/api\/draft\/P1\/proposals$/, "POST", { status: 409,
+      body: { ok: false, code: "document_changed", error: "Nothing changed. This project was saved again after this page read it." } }]] });
+    p.log.length = 0;
+    await p.els["multi-btn"].press();
+    await settle();
+    s.refused = { steps: steps(p), look: p.look() };
+    const q = await proposalPage({ id: "P1", flush: false });
+    q.log.length = 0;
+    await q.els["multi-btn"].press();
+    await settle();
+    s.unsaved = { steps: steps(q), look: q.look() };
+  }
+  // 20. REFRESH: the same order, against .../proposals/refresh; a child's page refreshes through its own id.
+  {
+    const p = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1", base_tab_ids: ["Copy1"], priced_tabs: [{ id: "Copy1" }] },
+      answers: [[/\/proposals\/refresh$/, "POST", { status: 200, body: { ok: true, refreshed: ["C2", "C3"], skipped: [] } }]] });
+    p.log.length = 0;
+    await p.els["proposals-refresh"].press();
+    await settle();
+    s.refresh = { steps: steps(p), body: fetches(p)[0] ? fetches(p)[0][2] : null };
+    // A proposal whose sheet left the estimate is skipped; this page's own draft did not change, so it says so without a reload.
+    const q = await proposalPage({ id: "P1", answers: [[/\/proposals\/refresh$/, "POST", { status: 200, body: { ok: true,
+      refreshed: ["C3"], skipped: [{ id: "C2", label: "Room <2>", code: "sheet_gone" }],
+      proposals: { parent_id: "P1", members: [PARENT_VIEW.members[0], Object.assign({}, PARENT_VIEW.members[1], { stale: true }),
+                                              Object.assign({}, PARENT_VIEW.members[2], { stale: false })] } } }]] });
+    q.log.length = 0;
+    await q.els["proposals-refresh"].press();
+    await settle();
+    s.refreshSkipped = { steps: steps(q), look: q.look() };
+    const r = await proposalPage({ id: "P1", answers: [[/\/proposals\/refresh$/, "POST", { status: 409,
+      body: { ok: false, code: "document_changed", error: "Nothing changed." } }]] });
+    r.log.length = 0;
+    await r.els["proposals-refresh"].press();
+    await settle();
+    s.refreshRefused = { steps: steps(r), look: r.look() };
+  }
+  // 21. RENAME: a double-click on the open tab opens a box; Enter sends the cleaned name, the strip shows the
+  //     server's, and this browser remembers it as already on the server. A double-click on another tab does nothing.
+  {
+    const p = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1", priced_tabs: [{ id: "Copy1" }] },
+      answers: [[/\/api\/draft\/C2\/scope$/, "POST", { status: 200, body: { ok: true, group_id: "G1", label: "Lab 2" } }]] });
+    await p.press(".pt-name", "P1", "dblclick");
+    const other = p.look().tabs.map((t) => t.renaming);
+    await p.press(".pt-name", "C2", "dblclick");
+    const open = p.look().tabs.map((t) => t.renaming);
+    const box = p.strip.querySelector(".pt-ren-in");
+    box.value = "  Lab   2 ";
+    p.log.length = 0;
+    box.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    s.rename = { other, open, fetches: fetches(p), local: p.log.filter((x) => x[0] === "setLocalState").map((x) => x.slice(1)),
+                 labels: p.look().tabs.map((t) => t.label) };
+    // Escape puts the tab back with nothing sent.
+    await p.press(".pt-name", "C2", "dblclick");
+    p.log.length = 0;
+    p.strip.querySelector(".pt-ren-in").fire("keydown", { key: "Escape", preventDefault() {} });
+    await settle();
+    s.rename.escape = { fetches: fetches(p).length, renaming: p.look().tabs.some((t) => t.renaming) };
+  }
+  // 22. DELETE: the x asks first; a yes sends the child to the Trash and takes its tab off (Base Bid 1's page stays);
+  //     a no sends nothing; a child deleting itself goes to Base Bid 1.
+  {
+    const p = await proposalPage({ id: "P1" });
+    p.log.length = 0;
+    await p.press(".pt-x", "C3");
+    s.del = { steps: steps(p), tabs: p.look().tabs.map((t) => t.id) };
+    const q = await proposalPage({ id: "P1", confirm: false });
+    q.log.length = 0;
+    await q.press(".pt-x", "C3");
+    s.del.cancel = { steps: steps(q), tabs: q.look().tabs.map((t) => t.id) };
+    const r = await proposalPage({ id: "C3", st: { proposal_of: "P1", base_tab_id: "Polish", priced_tabs: [{ id: "Polish" }] } });
+    r.log.length = 0;
+    await r.press(".pt-x", "C3");
+    s.del.self = { steps: steps(r), went: r.log.filter((x) => x[0] === "assign").map((x) => x[1]) };
+  }
+  // 23. THE CHILD'S LINKS: Intake and Estimate open the parent's, Files stays its own; any other draft keeps its links.
+  {
+    const c = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1" } });
+    const n = await proposalPage({ id: "P1" });
+    const hrefs = ["/?edit=1", "/estimate-review.html", "/polish-estimate.html?d=C2", "/polish-intake.html?d=C2", "/done.html?d=C2", "/"];
+    s.links = { child: hrefs.map((h) => c.mod.parentStepHref(h)), parent: hrefs.map((h) => n.mod.parentStepHref(h)) };
+  }
+  return s;
+}
+
+// 24. shared.js, WHOLE: redirectProposalChild sends a child (this page's own blob) to its parent and nothing else;
+//     readProposals reads the list and answers null on a refusal.
+async function sharedJs() {
+  const SHARED = L.read(path.join(ROOT, "shared.js"));
+  const STAMP = /const STAMP\s*=\s*"([^"]+)"/.exec(SHARED)[1];
+  const STATE_KEY = /const STATE_KEY\s*=\s*"([^"]+)"/.exec(SHARED)[1];
+  async function load(blob, id, fetchAnswer) {
+    const m = new Map();
+    if (blob) m.set(STATE_KEY, JSON.stringify(blob));
+    const store = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+    const replaced = [];
+    const asked = [];
+    const loc = { href: "http://x/estimate-review.html?d=" + id, search: "?d=" + id, pathname: "/estimate-review.html",
+                  origin: "http://x", assign() {}, replace: (h) => replaced.push(h), reload() {} };
+    const win = { addEventListener() {}, removeEventListener() {}, location: loc, history: { replaceState() {} },
+                  setTimeout, clearTimeout };
+    const doc = { addEventListener() {}, removeEventListener() {}, readyState: "complete", querySelectorAll: () => [],
+                  querySelector: () => null, getElementById: () => null,
+                  createElement: () => ({ setAttribute() {}, appendChild() {}, style: {}, classList: { add() {}, remove() {} } }),
+                  head: { appendChild() {} }, body: { appendChild() {} }, cookie: "" };
+    const f = async (url, init) => {
+      asked.push(String(url));
+      if (/\/proposals$/.test(String(url)) && fetchAnswer) return fetchAnswer;
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: blob || {}, updated_at: "V" }) };
+    };
+    win.fetch = f;
+    new Function("window", "document", "localStorage", "sessionStorage", "fetch", "location", SHARED)(win, doc, store, store, f, loc);
+    return { TW: win.TW, replaced, asked };
+  }
+  const r = {};
+  {
+    const t = await load({ [STAMP]: "C2", project_name: "X", proposal_of: "P1" }, "C2");
+    r.child = { answer: t.TW.redirectProposalChild("/estimate-review.html"), replaced: t.replaced };
+    const u = await load({ [STAMP]: "C2", project_name: "X", proposal_of: "P1" }, "C2");
+    r.childQuery = { answer: u.TW.redirectProposalChild("/?edit=1"), replaced: u.replaced };
+  }
+  {
+    const t = await load({ [STAMP]: "P1", project_name: "X" }, "P1");
+    r.parent = { answer: t.TW.redirectProposalChild("/estimate-review.html"), replaced: t.replaced };
+  }
+  {
+    // Another project's blob in this browser while the page is on C2: not provably this page's, so nothing moves.
+    const t = await load({ [STAMP]: "OTHER", project_name: "X", proposal_of: "P1" }, "C2");
+    r.notThisDraft = { answer: t.TW.redirectProposalChild("/estimate-review.html"), replaced: t.replaced };
+  }
+  {
+    const t = await load({ [STAMP]: "P1" }, "P1", { ok: true, status: 200, json: async () => clone(PARENT_VIEW) });
+    const got = await t.TW.readProposals();
+    const other = await t.TW.readProposals("C2");
+    r.read = { members: got && got.members.map((m) => m.id), asked: t.asked.filter((u) => /\/proposals$/.test(u)),
+               other: !!other };
+    const q = await load({ [STAMP]: "P1" }, "P1", { ok: false, status: 404, json: async () => ({ ok: false, code: "not_found" }) });
+    r.read.missing = await q.TW.readProposals();
+  }
+  return r;
+}
+
+// 25. EACH INTAKE / ESTIMATE PAGE'S OWN GUARD STATEMENT, cut out of the page (the `if` that asks TW.redirectProposalChild)
+//     and run with a TW whose guard answers yes (a child) or no: does the page stop there, and at which path did it ask?
+function guards() {
+  const pages = ["js/estimate-review.js", "js/index.js", "js/polish-intake.js", "js/polish-estimate.js"];
+  const res = {};
+  for (const rel of pages) {
+    const src = L.read(path.join(ROOT, rel));
+    const at = src.indexOf("TW.redirectProposalChild(");
+    if (at < 0) { res[rel] = null; continue; }
+    const start = src.lastIndexOf("if (", src.lastIndexOf("typeof TW.redirectProposalChild", at));
+    const head = L.balanced(src, src.indexOf("(", start));
+    let rest = src.slice(head + 1).replace(/^\s+/, "");
+    const stmt = src.slice(start, head + 1) + " " + (rest[0] === "{" ? rest.slice(0, L.balanced(rest, 0) + 1) : rest.slice(0, rest.indexOf(";") + 1));
+    const run = (yes) => {
+      const asked = [];
+      const TW = { redirectProposalChild: (p) => { asked.push(p); return yes; } };
+      const q = { has: (k) => k === "d" };
+      // The statement is followed by the rest of the page: reaching "continued" is the page carrying on; a throw or
+      // a return before it is the page stopping there.
+      let how;
+      try {
+        how = new Function("TW", "q", "document", stmt + NL + "return 'continued';")(TW, q, {}) === "continued" ? "continued" : "stopped";
+      } catch (e) { how = "stopped"; }
+      return [how, asked];
+    };
+    res[rel] = { child: run(true), other: run(false) };
+  }
+  return res;
+}
+
 Promise.all([
   deleteCopy({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"], tab_copies: [{ id: "Copy1" }, { id: "Copy2" }] }, "Copy1"),
   deleteCopy({ base_tab_id: "Copy1", base_tab_ids: ["Copy1", "Copy2"], tab_copies: [{ id: "Copy1" }, { id: "Copy2" }] }, "Copy1"),
   deleteCopy({ base_tab_id: "Copy1", base_tab_ids: ["Copy1"], tab_copies: [{ id: "Copy1" }] }, "Copy1"),
   deleteCopy({ base_tab_id: "Epoxy", tab_copies: [{ id: "Copy1" }] }, "Copy1"),
-]).then(([other, base, lastBase, noList]) => {
+]).then(async ([other, base, lastBase, noList]) => {
   out.deleteTab = { other, base, lastBase, noList };
+  out.page = await step4();
+  out.shared = await sharedJs();
+  out.guards = guards();
   console.log(JSON.stringify(out));
 }).catch((e) => { console.error(e && e.stack || e); process.exit(1); });

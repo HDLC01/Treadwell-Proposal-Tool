@@ -359,7 +359,20 @@ DOORS = [
     ("js/estimate-review.js", 'TW.withDraft("/?edit=1")', 1, INTAKE, "Back to intake"),
     ("js/index.js", 'TW.withDraft("/estimate-review.html")', 1, SHEET,
      "Continue on the live intake (the handler also refuses a v2 draft itself)"),
-    ("js/index.js", 'q.has("edit")', 1, NOT_A_DOOR, "the load guard reads the parameter, it opens nothing"),
+    # 2 since 2026-10-27: the proposal-child load guard reads it too (TW.redirectProposalChild, below).
+    ("js/index.js", 'q.has("edit")', 2, NOT_A_DOOR, "the load guards read the parameter, they open nothing"),
+    # Create Multiple Proposals (2026-10-27): a proposal made from another draft's estimate is sent to its PARENT's
+    # intake or estimate, which then runs its own guard on the parent like any other load.
+    ("js/estimate-review.js", 'TW.redirectProposalChild("/estimate-review.html")', 1, SHEET,
+     "a proposal child opened on the estimate goes to its parent's"),
+    ("js/index.js", 'TW.redirectProposalChild("/?edit=1")', 1, INTAKE,
+     "a proposal child opened on the intake goes to its parent's"),
+    ("js/proposal-review.js", ': "/estimate-review.html");', 1, SHEET,
+     "Back from a proposal child goes to its parent's estimate (parentStepHref)"),
+    ("js/proposal-review.js", 'u.searchParams.has("edit")', 1, NOT_A_DOOR,
+     "parentStepHref reads the parameter to re-point a child's Intake pill, it opens nothing"),
+    ("js/proposal-review.js", '["/estimate-review.html", "/polish-estimate.html", "/polish-intake.html"]', 1, SHEET,
+     "parentStepHref re-points a child's Estimate link to its parent's estimate"),
     ("js/leads.js", "&edit=1", 2, INTAKE, "Leads: open the project a lead became"),
     # 4 since 2026-10-24: the drawer's scope list opens a sibling not on the board yet, and a new scope
     # opens itself, both on the intake (index.js sends a v2 draft on to the v2 intake).

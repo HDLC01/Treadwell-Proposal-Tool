@@ -123,7 +123,7 @@ async function tab(local, server, opts) {
       if (server.refuse) return json(409, server.refuse);
       // A colleague's save that lands while the publish is running.
       if (server.duringPublish) Object.assign(server.d1, server.duringPublish);
-      return json(200, { ok: true, revision_no: 1 });
+      return json(200, server.publishAnswer || { ok: true, revision_no: 1 });
     }
     if (method === "PUT" && url.includes("/api/draft/d1")) {
       const b = JSON.parse(opts.body);
@@ -133,6 +133,10 @@ async function tab(local, server, opts) {
       return json(200, { ok: true });
     }
     if (url.includes("/api/file/")) return json(200, {});
+    // The proposal page's list of proposals (GET /api/draft/{id}/proposals), when the scenario gives one.
+    if (method === "GET" && url.includes("/api/draft/d1/proposals")) {
+      return server.proposals ? json(200, server.proposals) : json(404, { ok: false, code: "not_found" });
+    }
     if (method === "GET" && url.includes("/api/draft/d1")) {
       if (server.failGet) return json(503, { detail: "down" });
       // `updated_at`, as api_load_draft answers it, when the scenario gives the row one.
@@ -163,7 +167,8 @@ async function tab(local, server, opts) {
                             classList: { add() {}, remove() {} } }),
     createTextNode: () => ({}), head: { appendChild() {} },
     body: { appendChild() {}, removeChild() {} },
-    getElementById: (id) => (id === "portal-message" ? msgEl : null),
+    getElementById: (id) => (id === "portal-message" ? msgEl
+      : (id === "portal-result" && opts && opts.result) ? opts.result : null),
   };
   vm.createContext(sandbox);
   vm.runInContext(SHARED, sandbox);
@@ -520,6 +525,27 @@ function current() {
     w.server.failGet = true;
     await t.send();
     out.serverUnreadable = { posted: t.rec.published.length, err: t.rec.err || null };
+  }
+
+  // N. ONE OF SEVERAL PROPOSALS MADE FROM ONE ESTIMATE ("Create Multiple Proposals"): the publish answers with its
+  //    scope group, and the line under the button says which proposal of how many (GET .../proposals). A scope made the
+  //    older way (a list of one) or a list that cannot be read keeps the scope sentence.
+  {
+    const said = async (proposals) => {
+      const w = current();
+      w.server.publishAnswer = { ok: true, revision_no: 1, scope_group: "G1", scope_label: "Base Bid 2" };
+      w.server.proposals = proposals;
+      const result = { style: {}, textContent: "", kids: [], appendChild(c) { this.kids.push(c); } };
+      const t = await tab(w.local, w.server, { result });
+      await t.send();
+      return { posted: t.rec.published.length, err: t.rec.err || null,
+               lines: result.kids.filter((k) => k.className === "portal-scope").map((k) => k.textContent) };
+    };
+    out.groupedPublish = {
+      three: await said({ ok: true, parent_id: "P1", members: [{ id: "P1" }, { id: "d1" }, { id: "C3" }] }),
+      one: await said({ ok: true, parent_id: "d1", members: [{ id: "d1" }] }),
+      unread: await said(null),
+    };
   }
 
   process.stdout.write(JSON.stringify(out));
