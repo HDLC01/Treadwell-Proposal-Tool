@@ -570,7 +570,20 @@ out.resize = {};
   global.window = env.window;
   runInit(fn(VERBAL, "initCheatDrag", "polish-verbal.js"), "initCheatDrag();", env);
   env.resize(900, 700);
-  out.resize.inFlow = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+  out.resize.inFlowAtOpen = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+}
+{
+  // the case that needs the gate: restored while FLOATING on a wide window (so there is a spot to
+  // re-clamp from), then the window narrows past the cheat sheet's breakpoint and the CSS puts it
+  // in the flow. Clamping now would measure the whole column (1000px) and drag left to 96.
+  const panel = makePanel("verbal-cheat", 250, 1000, "vc-drag");
+  const env = makeEnv(panel, "tw_vcheat_pos", { left: 1265, top: 264 }, WIN);
+  global.window = env.window;
+  runInit(fn(VERBAL, "initCheatDrag", "polish-verbal.js"), "initCheatDrag();", env);
+  const restored = panel.at();
+  panel.position = "static";
+  env.resize(1100, 900);
+  out.resize.inFlow = { restored, after: panel.at() };
 }
 
 // -- 10. COLLAPSE TO THE HEADER PILL --------------------------------------------------------------
@@ -584,6 +597,10 @@ out.collapse = {};
   const init = railInit();
   runInit(init.body, init.call, env);
   const start = panel.classList.contains("collapsed");
+  // Reported, not thrown: an initialiser that stops passing collapseKey binds no click, and the
+  // test should say so rather than the whole harness dying under every other test in the file.
+  const bound = "click" in panel.listeners;
+  if (!bound) panel.listeners.click = () => {};
   panel.fire("click", { target: panel.button });
   const first = { collapsed: panel.classList.contains("collapsed"), stored: env.store["tw_opts_collapsed"],
                   aria: panel.button.attrs["aria-expanded"] };
@@ -599,7 +616,7 @@ out.collapse = {};
   const classOnPress = panel.classList.contains("op-dragging");
   panel.fire("pointermove", { clientX: 1300, clientY: 500, target: panel.button });
   panel.fire("pointerup", { target: panel.button });
-  out.collapse.rail = { start, first, second, headerClick, classOnPress, afterPress: panel.at(),
+  out.collapse.rail = { bound, start, first, second, headerClick, classOnPress, afterPress: panel.at(),
                         posSaved: env.store["tw_opts_pos"] || null };
 }
 {
