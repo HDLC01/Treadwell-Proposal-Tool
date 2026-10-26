@@ -2602,7 +2602,8 @@ def _scope_send_view(members: List[Dict[str, Any]],
                      portal_rows: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """THE PROJECT'S ONE EMAIL, AS THE PORTAL REPORTS IT: what the card's chip and the drawer's button
     say. From the portal's `scope_send_state` on the members' rows ({announced, pending_scope_ids,
-    not_included}); None when no member row carries one, which is an older portal (the card and the
+    not_included, unknown_scope_ids, kinds, first, inflight_scope_ids}); `announced` in the answer
+    is the GROUP's "emailed before" (the portal's `first` is false); None when no member row carries one, which is an older portal (the card and the
     drawer then fall back to its `scope_send_pending`, and the send itself is refused as
     portal_not_ready).
 
@@ -2637,7 +2638,18 @@ def _scope_send_view(members: List[Dict[str, Any]],
         if isinstance(st.get("kinds"), dict):
             told_kinds = True
             kinds.update({str(k): str(v) for k, v in st["kinds"].items()})
-    announced = any(bool(st.get("announced")) for st in states)
+    # EMAILED BEFORE is a GROUP fact (round 3). The portal's `announced` is per row: whether THAT
+    # scope's current revision reached the customer, so every pending row says false, and a project
+    # whose every scope was revised looked never emailed ("Send every scope in one email"). The
+    # portal's `first` is the planner's own answer: true only while nothing of the project has ever
+    # been announced. An older portal without it: any announced row, or any scope it calls revised
+    # (a revision is only ever of something the customer already had).
+    firsts = [st["first"] for st in states if isinstance(st.get("first"), bool)]
+    if firsts:
+        announced = any(f is False for f in firsts)
+    else:
+        announced = (any(bool(st.get("announced")) for st in states)
+                     or any(v == "revised" for v in kinds.values()))
     pending = [i for i in ids if i in want]
     unknown = [i for i in ids if i in lost and i not in want]
     revised = [i for i in pending if kinds.get(i) == "revised"]

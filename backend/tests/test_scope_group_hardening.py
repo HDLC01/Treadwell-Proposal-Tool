@@ -186,15 +186,30 @@ def _prow(i, state, **kw):
 SUMS = [_summ(1, "Breakroom"), _summ(2, "Lab 1"), _summ(3, "Lab 2")]
 
 
+def _real_states(pending, kinds, first=None, **extra):
+    """scope_send_state AS THE PORTAL EMITS IT (main._apply_group_schedules): every group-level key
+    is the same on every row, and `announced` is PER ROW, whether that scope's current revision
+    reached the customer, so it is false on EVERY pending row. `first` is left out to stand for a
+    portal from before round 3."""
+    def state(pid):
+        st = {"announced": pid not in pending, "pending_scope_ids": list(pending),
+              "not_included": [], "unknown_scope_ids": [], "kinds": dict(kinds)}
+        if first is not None:
+            st["first"] = first
+        st.update(extra)
+        return st
+    return state
+
+
 def test_a_scope_added_and_one_revised_after_the_email_are_emailable_again(monkeypatch):
     """THE PORTAL'S REAL ROW SHAPE (/api/admin/pipeline, _apply_group_schedules): the board row has
-    `sent_at`, never `last_sent_at`, and which pending scope is new and which revised is the
-    portal's own `kinds` (finding 22). Lab 1 was emailed and then revised; Lab 2 was added since."""
-    state = {"announced": True, "pending_scope_ids": ["s2", "s3"], "not_included": [],
-             "unknown_scope_ids": [], "kinds": {"s2": "revised", "s3": "new"}}
-    rows = _board(monkeypatch, [_prow(1, state, sent_at="2026-10-02T15:00:00+00:00"),
-                                _prow(2, state, sent_at="2026-10-02T15:00:00+00:00"),
-                                _prow(3, state, sent_at="2026-10-21T15:00:00+00:00")],
+    `sent_at`, never `last_sent_at`, which pending scope is new and which revised is the portal's
+    own `kinds` (finding 22), and `announced` is false on each pending row. Lab 1 was emailed and
+    then revised; Lab 2 was added since."""
+    state = _real_states(["s2", "s3"], {"s2": "revised", "s3": "new"}, first=False)
+    rows = _board(monkeypatch, [_prow(1, state("s1"), sent_at="2026-10-02T15:00:00+00:00"),
+                                _prow(2, state("s2"), sent_at="2026-10-02T15:00:00+00:00"),
+                                _prow(3, state("s3"), sent_at="2026-10-21T15:00:00+00:00")],
                   SUMS)
     for pid in ("s1", "s2", "s3"):
         ss = rows[pid]["scope_send"]
@@ -206,16 +221,61 @@ def test_a_scope_added_and_one_revised_after_the_email_are_emailable_again(monke
 
 def test_new_and_revised_come_from_the_portals_kinds_not_from_a_send_stamp(monkeypatch):
     """A stray last_sent_at on a row says nothing: two revisions are two revisions."""
-    state = {"announced": True, "pending_scope_ids": ["s1", "s2"], "not_included": [],
-             "kinds": {"s1": "revised", "s2": "revised"}}
-    rows = _board(monkeypatch, [_prow(1, state), _prow(2, state, last_sent_at=None)], SUMS[:2])
+    state = _real_states(["s1", "s2"], {"s1": "revised", "s2": "revised"}, first=False)
+    rows = _board(monkeypatch, [_prow(1, state("s1")), _prow(2, state("s2"), last_sent_at=None)],
+                  SUMS[:2])
     assert rows["s1"]["scope_send"]["label"] == "Email again: 2 revised"
 
 
+# ── round 3: "emailed before" is the GROUP's, from the portal's `first` ──────
+# Each case on the portal's real rows (announced:false on every pending row), with `first` as the
+# portal now emits it AND without it (an older portal, where the tool falls back on any announced
+# row or any revised scope). The chip is the label once the project has been emailed.
+EMAILED_BEFORE = [
+    # all revised: every row pending, so no row is announced
+    ("all_revised", ["s1", "s2", "s3"], {"s1": "revised", "s2": "revised", "s3": "revised"},
+     False, "Email again: 3 revised"),
+    # revised plus new, nothing else announced
+    ("revised_and_new", ["s1", "s2", "s3"], {"s1": "revised", "s2": "new", "s3": "revised"},
+     False, "Email again: 1 new, 2 revised"),
+    # new only, after an announced scope
+    ("new_after_announced", ["s3"], {"s3": "new"}, False, "Email again: 1 new"),
+    # the first send of the project
+    ("first_send", ["s1", "s2", "s3"], {"s1": "new", "s2": "new", "s3": "new"}, True,
+     "Send every scope in one email"),
+]
+
+
+@pytest.mark.parametrize("with_first", [True, False], ids=["first_reported", "older_portal"])
+@pytest.mark.parametrize("name,pending,kinds,first,label", EMAILED_BEFORE,
+                         ids=[c[0] for c in EMAILED_BEFORE])
+def test_emailed_before_is_the_groups_answer(monkeypatch, name, pending, kinds, first, label,
+                                             with_first):
+    state = _real_states(pending, kinds, first=first if with_first else None)
+    rows = _board(monkeypatch, [_prow(i, state("s%d" % i)) for i in (1, 2, 3)], SUMS)
+    for pid in ("s1", "s2", "s3"):
+        ss = rows[pid]["scope_send"]
+        assert ss["label"] == label, (pid, ss)
+        assert ss["chip"] == ("Email not sent" if first else label), (pid, ss)
+        assert ss["announced"] is (not first)
+        assert ss["pending"] == pending
+
+
+def test_the_portals_first_wins_over_the_row_flags(monkeypatch):
+    """The only scope the customer ever had was taken out of the project; the one left is new, and
+    no row is announced or revised. The portal still says the project was emailed (first:false), so
+    it is "Email again", never a first send."""
+    state = _real_states(["s1"], {"s1": "new"}, first=False)
+    ss = _board(monkeypatch, [_prow(1, state("s1"))], SUMS[:1])["s1"]["scope_send"]
+    assert ss["label"] == "Email again: 1 new" and ss["chip"] == "Email again: 1 new"
+
+
 def test_a_portal_that_does_not_say_which_are_new_gets_a_count_not_a_guess(monkeypatch):
-    state = {"announced": True, "pending_scope_ids": ["s2", "s3"], "not_included": []}
-    rows = _board(monkeypatch, [_prow(1, state, last_sent_at="2026-10-02"),
-                                _prow(2, state, last_sent_at="2026-10-02"), _prow(3, state)], SUMS)
+    def state(pid):
+        return {"announced": pid == "s1", "pending_scope_ids": ["s2", "s3"], "not_included": []}
+    rows = _board(monkeypatch, [_prow(1, state("s1"), last_sent_at="2026-10-02"),
+                                _prow(2, state("s2"), last_sent_at="2026-10-02"),
+                                _prow(3, state("s3"))], SUMS)
     ss = rows["s2"]["scope_send"]
     assert ss["label"] == "Email again: 2 scopes" and ss["chip"] == "Email again: 2 scopes"
     assert ss["new"] is None and ss["revised"] is None
