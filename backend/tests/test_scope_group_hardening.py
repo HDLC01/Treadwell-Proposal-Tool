@@ -1013,6 +1013,27 @@ def test_a_scope_not_published_yet_is_named_with_what_to_do(drawer):
 
 
 @needs_node
+def test_a_sent_parent_not_adopted_yet_is_never_told_to_publish_again(drawer):
+    """TK2 review, EXECUTED: a project emailed as an ordinary proposal and then given "New scope"
+    keeps a portal row without the group until the combined send adopts it, so the portal lists it
+    in not_included. It is a SENT member: the drawer and the nothing_to_send answer never tell the
+    estimator to publish it again (a new revision, which can reopen an approval)."""
+    h = drawer["honest"]
+    html = h["sentApartHtml"]
+    assert ('<p class="note" id="scope-not-published">Not published yet: Lab 2. ' + PUBLISH_ONE
+            + '</p>') in html
+    assert ('<p class="note" id="scope-sent-apart">Already with the customer as its own proposal: '
+            "Breakroom. Do not publish it again; it joins this project's email on the next send.</p>") in html
+    assert "Not published yet: Breakroom" not in html
+    only = h["sentApartOnlyHtml"]
+    assert 'id="scope-not-published"' not in only and "Publish it" not in only
+    assert 'id="scope-sent-apart"' in only
+    assert 'id="scope-sent-apart"' not in h["unpublishedHtml"]
+    n = h["nothingSentApart"]["note"]
+    assert n == "Nothing was sent. Not published yet: Lab 2. " + PUBLISH_ONE, n
+
+
+@needs_node
 def test_an_unrecorded_send_keeps_its_sentence_through_the_poll(drawer):
     """The recorded:false sentence is kept in SCOPE_SEND_NOTICE: the poll's repaint after the send
     still says what the next minutes will show, and offers no retry (everybody got it)."""

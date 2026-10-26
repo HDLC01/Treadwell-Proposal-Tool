@@ -2754,10 +2754,23 @@ async function runScenario(name, s) {
     page.open("hs-b");
     page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
     out.honest.unpublishedHtml = dom.html;
+    // Two scopes the customer does not have (Breakroom here never sent): the plural.
     row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a", "hs-c"] });
+    row.scope_members = members.map((m) => (m.id === "hs-a" ? Object.assign({}, m, { sent: false }) : m));
     page.open("hs-b");
     page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
     out.honest.unpublishedTwoHtml = dom.html;
+    row.scope_members = members;
+    // A SENT PARENT NOT ADOPTED YET (TK2 review): Breakroom was emailed as an ordinary proposal
+    // before it gained scopes, so its portal row has no scope_group and the portal lists it in
+    // not_included. It is `sent`: never told to be published again.
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.sentApartHtml = dom.html;
+    row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.sentApartOnlyHtml = dom.html;
     row.scope_send = Object.assign({}, view, { not_included: ["hs-c"] });
     page.open("hs-b");
     page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
@@ -2766,6 +2779,8 @@ async function runScenario(name, s) {
       body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: [] } });
     out.honest.nothingUnpublishedLost = await press("#scope-send", { status: 409,
       body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: ["hs-b"] } });
+    out.honest.nothingSentApart = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-a", "hs-c"], unknown: [] } });
   } catch (e) {
     out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   } finally {
