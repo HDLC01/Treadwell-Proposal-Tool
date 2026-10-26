@@ -244,7 +244,9 @@ GROUP_TASK = {"id": "g1", "proposal_id": "home", "link_proposal_id": "s2",
               "scopes": [{"proposal_id": "home", "label": "Breakroom", "status": "sent"},
                          {"proposal_id": "s2", "label": "Lab 1", "status": "viewed"},
                          {"proposal_id": "s3", "label": "Lab 2", "status": "sent"}]}
-DECISION_TASK = {"id": "d1", "proposal_id": "s1", "link_proposal_id": "s1",
+# The portal's link_proposal_id for a decision task is FRESH (round 3): the first listed sibling
+# that is still open, here Lab 1.
+DECISION_TASK = {"id": "d1", "proposal_id": "s1", "link_proposal_id": "s2",
                  "project_name": "Acme Labs", "label": "Decide the other scopes",
                  "stage": "decision", "due_at": "2026-10-25T12:00:00Z", "scope_group": "grp-1",
                  "approved_scope": {"proposal_id": "s1", "label": "Breakroom"},
@@ -276,7 +278,7 @@ def test_the_bell_says_what_a_decision_task_is(monkeypatch):
 def test_a_decision_task_opens_a_sibling_not_the_approved_scope_chasing_its_deposit(monkeypatch):
     # The approved scope raised its own deposit task after the decision (a higher id, no
     # scope_group): the portal's row query shows that scope only its newest open task, so its
-    # drawer has no decision card. A sibling's drawer still has it, so the bell opens a sibling.
+    # drawer has no decision card. The portal names a still-open sibling for the decision.
     deposit = {"id": "d2", "proposal_id": "s1", "link_proposal_id": "s1",
                "project_name": "Acme Labs", "label": "Deposit reminder", "stage": "deposit",
                "due_at": "2026-10-25T13:00:00Z", "scope_group": None, "scopes": []}
@@ -287,8 +289,36 @@ def test_a_decision_task_opens_a_sibling_not_the_approved_scope_chasing_its_depo
     assert rows["fut:d2"]["link"] == "/portal.html?open=s1&sec=followup"
 
 
+def test_a_decision_task_opens_the_sibling_the_portal_names_now(monkeypatch):
+    """Round 3: Lab 1 was closed lost after the decision task was raised, so its detail.scopes still
+    lists it first. The portal's FRESH link_proposal_id names Lab 2, the first sibling still open,
+    and the bell opens that one rather than the closed scope listed first."""
+    row = _bell(monkeypatch, dict(DECISION_TASK, link_proposal_id="s3", scopes=[
+        {"proposal_id": "s2", "label": "Lab 1", "status": "sent"},
+        {"proposal_id": "s3", "label": "Lab 2", "status": "viewed"}]))["fut:d1"]
+    assert row["link"] == "/portal.html?open=s3&sec=followup"
+
+
+def test_a_decision_task_with_no_open_sibling_opens_the_approved_scope_the_portal_names(monkeypatch):
+    """Every listed sibling is closed: the portal falls back on the approved scope, and so does the
+    bell, instead of opening a closed scope."""
+    row = _bell(monkeypatch, dict(DECISION_TASK, link_proposal_id="s1"))["fut:d1"]
+    assert row["link"] == "/portal.html?open=s1&sec=followup"
+
+
+def test_an_older_portal_without_the_link_opens_the_first_listed_sibling(monkeypatch):
+    task = {k: v for k, v in DECISION_TASK.items() if k != "link_proposal_id"}
+    row = _bell(monkeypatch, dict(task, scopes=[
+        {"proposal_id": "s1", "label": "Breakroom", "status": "approved"},
+        {"proposal_id": "s2", "label": "Lab 1", "status": "sent"},
+        {"proposal_id": "s3", "label": "Lab 2", "status": "viewed"}]))["fut:d1"]
+    assert row["link"] == "/portal.html?open=s2&sec=followup"
+    row = _bell(monkeypatch, dict(task, scopes=[]))["fut:d1"]
+    assert row["link"] == "/portal.html?open=s1&sec=followup"
+
+
 def test_a_decision_task_with_no_sibling_listed_keeps_the_portals_link(monkeypatch):
-    row = _bell(monkeypatch, dict(DECISION_TASK, scopes=[]))["fut:d1"]
+    row = _bell(monkeypatch, dict(DECISION_TASK, link_proposal_id="s1", scopes=[]))["fut:d1"]
     assert row["link"] == "/portal.html?open=s1&sec=followup"
 
 
