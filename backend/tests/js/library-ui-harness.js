@@ -736,6 +736,17 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // tab list, and a test of "an added division reaches the filter chips" has to be able to do the
   // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
   return { setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
+           // THE PAGERS. The search, the sort and the open assembly are plain variables on the page
+           // and its listeners just assign them, so these setters are those assignments and nothing
+           // more; what the page does with the change is the real renderer's business.
+           turnPage, showItemPage, ASM_FILTERS_NOW: function () { return ASM_FILTERS; },
+           pagerNow: function () { return PAGER; },
+           setItemQuery: function (q) { itemQuery = q; },
+           setAsmQuery: function (q) { asmQuery = q; },
+           setAsmSort: function (k) { ASM_SORT = k; },
+           setOpenId: function (id) { openId = id; },
+           itemsNow: function () { return ITEMS; },
+           removeItem: function (id) { ITEMS = ITEMS.filter(function (x) { return x.id !== id; }); },
            numberHits, FILTERS,
            renderItems, datesHtml, byHtml, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, adoptSaved,
@@ -6490,6 +6501,212 @@ async function manualSaveChecks() {
     res.cssForTheTick = /\.rowsaved \{[^}]*color:var\(--ok\)/.test(html) && /\.ratesave \{[^}]*min-width/.test(html);
     out.adminMarkup = res;
   }
+}
+
+// ── THE PAGERS, EXECUTED (2026-10-27) ─────────────────────────────────────────────────────────
+// Hanz: 25 at a time on the Items table and on the Assemblies rail. Every rule here is about WHEN
+// the page moves, and renderItems/renderList run on a dozen events, so each scenario drives the
+// REAL renderer through the event's own effect on the model (a search assigned, a row unshifted, a
+// row filtered out, an assembly opened) and reads back which rows were drawn. Even-numbered rows
+// carry "Flake" so a search can narrow to a known 30.
+{
+  const pad = (n) => String(n).padStart(3, "0");
+  const mkItems = (n) => Array.from({ length: n }, (_, i) => ({
+    id: "p" + (i + 1), name: "Material " + pad(i + 1) + ((i + 1) % 2 ? "" : " Flake"),
+    category: "Epoxy", unit: "Gallon", buy_qty: 1, unit_cost: 10, coverage: 100, waste_pct: 0,
+    roundup: true, vendor: "Sika", notes: "", created_at: "2026-08-01T14:30:00Z",
+    cost_updated_at: null, updated_at: "t1" }));
+  const mkAsms = (n) => Array.from({ length: n }, (_, i) => ({
+    id: "q" + (i + 1), name: "Assembly " + pad(i + 1) + ((i + 1) % 2 ? "" : " Flake"),
+    unit: "SF", lines: [], created_at: "2026-08-01T14:30:00Z" }));
+  const all = (re, s) => { const o = []; let m; while ((m = re.exec(s))) o.push(m[1]); return o; };
+  const itemRows = (d) => all(/<tr data-item="([^"]+)"/g, d.nodes["items-body"].innerHTML);
+  const cardIds = (d) => all(/data-open="([^"]+)"/g, d.nodes["asm-list"].innerHTML);
+  const current = (d) => all(/data-open="([^"]+)" aria-current="true"/g, d.nodes["asm-list"].innerHTML);
+  const pagerOf = (d, id) => ({
+    hidden: d.nodes[id].hidden, page: d.nodes[id + "-page"].textContent,
+    range: d.nodes[id + "-range"] ? d.nodes[id + "-range"].textContent : null,
+    prevSpent: d.nodes[id + "-prev"].getAttribute("aria-disabled"),
+    nextSpent: d.nodes[id + "-next"].getAttribute("aria-disabled"),
+  });
+  const span = (ids) => (ids.length ? ids[0] + ".." + ids[ids.length - 1] + " (" + ids.length + ")" : "none");
+  const res = { items: {}, asm: {} };
+
+  // ── Items ──
+  {
+    const b = build({ ITEMS: mkItems(60), ADMIN: true });
+    const { api, dom: d } = b;
+    api.renderItems();
+    res.items.firstPage = span(itemRows(d));
+    res.items.firstPager = pagerOf(d, "items-pager");
+    res.items.topPager = pagerOf(d, "items-pager-top");
+    api.turnPage("items", 1);
+    res.items.afterNext = span(itemRows(d));
+    res.items.afterNextPager = pagerOf(d, "items-pager");
+    api.turnPage("items", 1);
+    res.items.lastPage = span(itemRows(d));
+    res.items.lastPager = pagerOf(d, "items-pager");
+    api.turnPage("items", 1);                       // a press on the spent Next
+    res.items.pastTheEnd = span(itemRows(d));
+    api.turnPage("items", -1);
+    res.items.afterPrevious = span(itemRows(d));
+    // Every repaint that is not a view change keeps the page: a save reply (adoptSaved, then the
+    // table repainted), More/Less, and paint() itself, which is what a tab switch and a delete run.
+    api.adoptSaved("items", { id: "p30", updated_at: "t2", cost_updated_at: "2026-10-27T15:00:00Z" });
+    api.renderItems();
+    res.items.afterSaveReply = span(itemRows(d));
+    api.toggleItemMore("p31");
+    res.items.afterMore = span(itemRows(d));
+    api.toggleItemMore("p31");
+    api.paint();
+    res.items.afterPaint = span(itemRows(d));
+    // A search goes back to page 1, and the pager and the hits count both count the FILTERED set.
+    api.setItemQuery("flake");
+    api.renderItems();
+    res.items.afterSearch = span(itemRows(d));
+    res.items.searchPager = pagerOf(d, "items-pager");
+    res.items.searchHits = d.nodes["item-hits"].textContent;
+    api.turnPage("items", 1);
+    res.items.searchPageTwo = span(itemRows(d));
+    // …and so does a facet, with the text box left alone.
+    res.items.beforeFacet = api.pagerNow().items.page;
+    api.FILTERS.vendor = "Sika";
+    api.renderItems();
+    res.items.afterFacet = span(itemRows(d));
+    api.FILTERS.vendor = "";
+    api.setItemQuery("");
+    api.renderItems();
+    // ADD MATERIAL / DUPLICATE: the page's listener unshifts the new row and paints. From page 3,
+    // the new row must be on screen afterwards, so the table moves to the page holding it.
+    api.turnPage("items", 1); api.turnPage("items", 1);
+    res.items.beforeAddOnPage = api.pagerNow().items.page;
+    api.itemsNow().unshift(Object.assign(mkItems(1)[0], { id: "pnew", name: "New material" }));
+    api.paint();
+    res.items.afterAdd = span(itemRows(d));
+    res.items.afterAddFirstRow = itemRows(d)[0];
+    // A copy that lands mid-list (any future insertion point) moves to ITS page, not to page 1.
+    api.itemsNow().splice(40, 0, Object.assign(mkItems(1)[0], { id: "pcopy", name: "Material 040 (2)" }));
+    api.renderItems();
+    res.items.copyOnItsPage = api.pagerNow().items.page;
+    res.items.copyDrawn = itemRows(d).indexOf("pcopy") !== -1;
+    // SEVERAL new ids at once is a reload bringing other people's rows, not a row just made: stay put.
+    api.turnPage("items", 1);
+    const stayOn = api.pagerNow().items.page;
+    api.itemsNow().unshift(Object.assign(mkItems(1)[0], { id: "pr1" }), Object.assign(mkItems(1)[0], { id: "pr2" }));
+    api.renderItems();
+    res.items.reloadDidNotMove = api.pagerNow().items.page === stayOn;
+    // focusItemRow (the Defaults tab's Edit on a material) reaches a row pages away.
+    api.turnPage("items", -1); api.turnPage("items", -1); api.turnPage("items", -1);
+    api.focusItemRow("p60");
+    res.items.focusMovedTo = api.pagerNow().items.page;
+    res.items.focusRowDrawn = itemRows(d).indexOf("p60") !== -1;
+  }
+  {
+    // DELETE THE LAST ROW OF THE LAST PAGE: 51 rows, page 3 holds one, it goes.
+    const { api, dom: d } = build({ ITEMS: mkItems(51) });
+    api.renderItems();
+    api.turnPage("items", 1); api.turnPage("items", 1);
+    res.items.lonePage = span(itemRows(d));
+    api.removeItem("p51");
+    api.paint();
+    res.items.afterDelete = span(itemRows(d));
+    res.items.afterDeletePager = pagerOf(d, "items-pager");
+    // The page it is ON is the clamped one, not just the page it draws: one Previous reaches page 1.
+    api.turnPage("items", -1);
+    res.items.previousAfterDelete = span(itemRows(d));
+  }
+  {
+    // 25 OR FEWER: no pager and every row, and the table markup is what it was before pagers.
+    const { api, dom: d } = build({ ITEMS: mkItems(25) });
+    api.renderItems();
+    res.items.twentyFive = span(itemRows(d));
+    res.items.twentyFivePager = pagerOf(d, "items-pager");
+    res.items.twentyFiveTop = pagerOf(d, "items-pager-top");
+    const { api: api26, dom: d26 } = build({ ITEMS: mkItems(26) });
+    api26.renderItems();
+    res.items.twentySixPager = pagerOf(d26, "items-pager");
+    // The first 25 rows of a 26-row table are drawn exactly as the 25-row table draws them: paging
+    // changes which rows, never how a row is drawn.
+    res.items.sameRowMarkup = d26.nodes["items-body"].innerHTML === d.nodes["items-body"].innerHTML;
+  }
+
+  // ── Assemblies ──
+  {
+    const { api, dom: d } = build({ ASMS: mkAsms(60), openId: "q1" });
+    api.renderList();
+    res.asm.firstPage = span(cardIds(d));
+    res.asm.firstPager = pagerOf(d, "asm-pager");
+    api.turnPage("asm", 1);
+    res.asm.afterNext = span(cardIds(d));
+    res.asm.afterNextPager = pagerOf(d, "asm-pager");
+    // Typing in the name box repaints the rail on every keystroke; the page stays.
+    api.renderList(); api.renderPanel(); api.paint();
+    res.asm.afterRepaints = span(cardIds(d));
+    // Search, facet, sort and area each go back to page 1.
+    api.setAsmQuery("flake"); api.renderList();
+    res.asm.afterSearch = span(cardIds(d));
+    res.asm.searchPager = pagerOf(d, "asm-pager");
+    res.asm.searchHits = d.nodes["asm-hits"].textContent;
+    api.setAsmQuery(""); api.renderList();
+    api.turnPage("asm", 1);
+    res.asm.beforeFacet = api.pagerNow().asm.page;
+    api.ASM_FILTERS_NOW().unit = "SF"; api.renderList();
+    res.asm.afterFacet = api.pagerNow().asm.page;
+    api.ASM_FILTERS_NOW().unit = ""; api.renderList();
+    api.turnPage("asm", 1);
+    res.asm.beforeSort = api.pagerNow().asm.page;
+    api.setAsmSort("new"); api.renderList();
+    res.asm.afterSort = api.pagerNow().asm.page;
+    api.setAsmSort("name"); api.renderList();
+    api.turnPage("asm", 1);
+    res.asm.beforeArea = api.pagerNow().asm.page;
+    d.el("area").value = "1000"; api.renderList();
+    res.asm.afterArea = api.pagerNow().asm.page;
+    // OPENED BY ID from elsewhere (the Defaults tab's Edit, a deep link): the rail moves to the
+    // card's page and the aria-current card is drawn.
+    api.setOpenId("q47"); api.paint();
+    res.asm.openedPage = api.pagerNow().asm.page;
+    res.asm.openedCurrent = current(d);
+    // …and then the user may page away from it: the next repaint does not drag them back.
+    api.turnPage("asm", 1);
+    api.renderList();
+    res.asm.pagedAwayFromOpen = api.pagerNow().asm.page;
+    // + NEW ASSEMBLY: placed at the front, opened; from page 3 the rail goes to page 1.
+    api.placeNewAssembly(api.ASMS, { id: "qnew", name: "New assembly", unit: "SF", lines: [] });
+    api.setOpenId("qnew"); api.paint();
+    res.asm.afterNew = span(cardIds(d));
+    res.asm.afterNewCurrent = current(d);
+    // Clamp: 61 cards now, page 3 holds q60 alone after the new one; take two off the end.
+    api.turnPage("asm", 1); api.turnPage("asm", 1);
+    res.asm.lastBeforeShrink = span(cardIds(d));
+    api.ASMS.splice(api.ASMS.length - 11, 11);
+    api.renderList();
+    res.asm.afterShrink = span(cardIds(d));
+    res.asm.afterShrinkPager = pagerOf(d, "asm-pager");
+    api.turnPage("asm", -1);
+    res.asm.previousAfterShrink = span(cardIds(d));
+  }
+  {
+    // THE FIRST RENDER with a deep-linked assembly on page 3 opens on page 3.
+    const { api, dom: d } = build({ ASMS: mkAsms(60), openId: "q55" });
+    api.renderList();
+    res.asm.deepLinkPage = api.pagerNow().asm.page;
+    res.asm.deepLinkCurrent = current(d);
+  }
+  {
+    const { api, dom: d } = build({ ASMS: mkAsms(25), openId: "q1" });
+    api.renderList();
+    res.asm.twentyFive = span(cardIds(d));
+    res.asm.twentyFivePager = pagerOf(d, "asm-pager");
+  }
+
+  // ── the static half: three nav landmarks, each named, each button wired to turnPage's kinds ──
+  {
+    const navs = all(/<nav class="pager[^"]*" id="([^"]+)" aria-label="[^"]+" hidden>/g, html);
+    const steps = all(/data-pager="([a-z]+)"\s+data-step="(?:-1|1)"/g, html);
+    res.markup = { navs, steps, spentAtRest: (html.match(/data-step="-1" aria-disabled="true"/g) || []).length };
+  }
+  out.pager = res;
 }
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
