@@ -518,7 +518,10 @@ def test_a_browser_save_can_neither_clear_nor_seed_the_proposal_keys(fake_supaba
     store = _seed(fake_supabase, monkeypatch)
     kid = _fan()["children"][0]["id"]
     held = {k: _row(store, kid)["data"][k] for k in ("proposal_of", "estimate_digest", "estimate_synced_at")}
-    stale = {k: v for k, v in _row(store, kid)["data"].items() if k not in held}
+    # A blob that dropped two of the keys, still carrying the refresh stamp it was read with (a
+    # blob without that stamp is refused outright: test_a_page_holding_a_copy_from_before_a_refresh...).
+    stale = {k: v for k, v in _row(store, kid)["data"].items()
+             if k not in held or k == "estimate_synced_at"}
     assert client.put("/api/draft/%s" % kid, json={"data": stale}).json()["ok"] is True
     assert {k: _row(store, kid)["data"][k] for k in held} == held
     forged = dict(stale, proposal_of="other", estimate_digest="x", estimate_synced_at="y")
@@ -619,3 +622,100 @@ def test_a_v2_sheet_the_estimate_could_not_price_has_no_price(fake_supabase, mon
     store = _seed(fake_supabase, monkeypatch, data)
     child = _row(store, drafts.fan_out_proposals("p1", ["Polish", "Copy1"])["children"][0]["id"])["data"]
     assert child["proposal_lump_sum"] is None
+
+
+# ── review fixes ────────────────────────────────────────────────────────────
+def test_a_page_holding_a_copy_from_before_a_refresh_cannot_save_it_back(fake_supabase, monkeypatch):
+    """A child's estimate keys are browser-written and its digest is server-owned: a stale page's
+    PUT would put the old price back under the new digest, and the banner would never return.
+    `estimate_synced_at` is the fence (drafts.StaleProposalWrite)."""
+    store, kid = _fan_then_edit_parent(fake_supabase, monkeypatch)
+    old_page = copy.deepcopy(_row(store, kid)["data"])          # read before the Refresh
+    drafts.refresh_proposals("p1")
+    after = copy.deepcopy(_row(store, kid))
+    assert after["data"]["proposal_lump_sum"] == 17000
+    r = client.put("/api/draft/%s" % kid, json={"data": old_page})
+    assert r.status_code == 409 and r.json()["code"] == "refreshed_since", r.text
+    assert _row(store, kid) == after, "the old copy was stored over the refresh"
+    # a page that read the refreshed copy saves as before, and the parent (no stamp) is untouched
+    fresh = dict(after["data"], scope_notes="New words")
+    assert client.put("/api/draft/%s" % kid, json={"data": fresh}).json()["ok"] is True
+    assert _row(store, kid)["data"]["scope_notes"] == "New words"
+    assert client.put("/api/draft/p1", json={"data": dict(PARENT)}).json()["ok"] is True
+
+
+def _cove(aid, lf=120, **kw):
+    return dict({"assembly_id": aid, "unit": "LF", "measurement": lf}, **kw)
+
+
+def test_a_v2_child_prints_its_own_bases_cove_height(fake_supabase, monkeypatch):
+    """bid-model composePricingSnapshot reads `cove_height_v2` off the BASE sections only, so the
+    parent's value is the parent base's cove. A child is never re-priced on the estimate page, so
+    the server reads its own base's."""
+    data = copy.deepcopy(V2)
+    pe = data["polish_estimate"]
+    pe["takeoff"] = [{"assembly_id": "a1", "measurement": 1500}, _cove("wb-epoxy-cove-flake-6in")]
+    pe["tabs"]["Copy1"]["takeoff"] = [_cove("wb-epoxy-cove-flake-8in", enabled=False),
+                                      _cove("wb-epoxy-cove-flake-5in", lf=0),
+                                      _cove("wb-epoxy-cove-flake-4in", lf="1,200")]
+    data["cove_height_v2"] = "6"
+    store = _seed(fake_supabase, monkeypatch, data)
+    out = drafts.fan_out_proposals("p1", ["Polish", "Copy1", "Epoxy"])
+    lab2, lab1 = (_row(store, c["id"])["data"] for c in out["children"])
+    assert lab2["cove_height_v2"] == "4"
+    assert lab1["cove_height_v2"] == "", "a base with no cove printed the parent's"
+    assert _row(store, "p1")["data"]["cove_height_v2"] == "6"
+    # and a refresh reads it again
+    _row(store, "p1")["data"]["polish_estimate"]["tabs"]["Copy1"]["takeoff"] = [
+        _cove("wb-epoxy-cove-wr-8in-plus-cap")]
+    drafts.refresh_proposals("p1")
+    assert _row(store, out["children"][0]["id"])["data"]["cove_height_v2"] == "8"
+
+
+class _Portal:
+    """Holds which proposal ids have a portal row, hides them on /delete; `fail` raises instead."""
+
+    def __init__(self, rows=()):
+        self.rows, self.hidden, self.fail = set(rows), [], None
+
+    def __call__(self, path, method="GET", body=None):
+        if self.fail is not None:
+            raise self.fail
+        pid = path.split("/")[4]
+        if path.endswith("/delete") and pid in self.rows:
+            self.hidden.append(pid)
+            return {"ok": True}
+        raise main.HTTPException(404, "not_found")
+
+
+def test_deleting_a_parent_off_the_board_takes_its_proposals_and_their_portal_rows(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch)
+    kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    portal = _Portal(["p1", kids[0]])                       # the parent and Base Bid 2 were sent
+    monkeypatch.setattr(main, "_portal", portal)
+    import profiles
+    monkeypatch.setattr(profiles, "get_by_email", lambda e: {"id": "a1", "email": e, "role": "admin"})
+    r = client.post("/api/project/p1/delete")
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["cascaded"]) == sorted(kids)
+    assert all(_row(store, k).get("deleted_at") for k in kids + ["p1"])
+    assert sorted(portal.hidden) == sorted(["p1", kids[0]])
+
+
+def test_trashing_a_parent_hides_a_sent_proposals_portal_row(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch)
+    kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    portal = _Portal([kids[1]])
+    monkeypatch.setattr(main, "_portal", portal)
+    r = client.delete("/api/draft/p1")
+    assert r.status_code == 200 and sorted(r.json()["cascaded"]) == sorted(kids)
+    assert portal.hidden == [kids[1]]
+    # a portal that cannot answer stops the delete before anything of ours moves
+    store2 = _seed(fake_supabase, monkeypatch)
+    kids2 = [c["id"] for c in _fan(("Epoxy", "Copy1"))["children"]]
+    portal.fail = main.HTTPException(502, "down")
+    for call in (lambda: client.delete("/api/draft/p1"), lambda: client.post("/api/project/p1/delete")):
+        import profiles
+        monkeypatch.setattr(profiles, "get_by_email", lambda e: {"id": "a1", "email": e, "role": "admin"})
+        assert call().status_code == 502
+        assert not any(_row(store2, k).get("deleted_at") for k in kids2 + ["p1"])

@@ -1430,6 +1430,20 @@ const mentionsY = (x) => /Other Project Y|Y texture|Y scope|Y note/.test(JSON.st
                           pickerReads: local(b).assigned_estimator };
   }
 
+  // S3b. The same re-read on a proposal child that a Refresh re-priced since this page read it. The
+  //      new `estimate_synced_at` is the server's fence against this page's old estimate
+  //      (drafts.StaleProposalWrite), so it is never merged onto it; the digest is.
+  {
+    const b = browser(draft());
+    await lastContinue(b);
+    const d = await openDone(b, "/done.html?d=d1");
+    b.server.d1 = Object.assign(copy(b.server.d1), { estimate_digest: "after-refresh",
+                                                     estimate_synced_at: "2026-10-27T12:00:00+00:00" });
+    const patch = await d.TW.refreshServerOwned();
+    out.syncStampRefresh = { patch, localStamp: local(b).estimate_synced_at === undefined
+      ? null : local(b).estimate_synced_at };
+  }
+
   // S4. Finding 2C. The server cannot be read as the Files page opens, and this browser's own copy
   //     is keyed. It used to carry on from that unchecked copy; it stops, like any other copy the
   //     server could not be asked about, and writes nothing.
