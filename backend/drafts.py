@@ -89,6 +89,15 @@ class StaleSplitWrite(Exception):
     """A browser save of a copy of the draft read before split_draft rewrote it."""
 
 
+class StaleProposalWrite(Exception):
+    """A browser save of a copy of a proposal child read before refresh_proposals re-priced it.
+
+    The child's estimate keys are browser-written, so a stale page's PUT would put the old price
+    back, while `estimate_digest` (server-owned) kept the new one and hid the "Estimate changed"
+    banner. `estimate_synced_at` is the fence, as SPLIT_MARK is for a split: a blob that does not
+    carry the stamp the row has was read before the last refresh."""
+
+
 def save_draft(draft_id: str, data: Dict[str, Any],
                owner_email: Optional[str] = None,
                keep_server_owned: bool = False) -> Dict[str, str]:
@@ -117,6 +126,9 @@ def save_draft(draft_id: str, data: Dict[str, Any],
         # current stamp and wave it through.
         if keep_server_owned and prior.get(SPLIT_MARK) and data.get(SPLIT_MARK) != prior.get(SPLIT_MARK):
             raise StaleSplitWrite(draft_id)
+        if (keep_server_owned and prior.get("estimate_synced_at")
+                and data.get("estimate_synced_at") != prior.get("estimate_synced_at")):
+            raise StaleProposalWrite(draft_id)
         data = dict(data)
         for key in _SERVER_OWNED_KEYS:
             if key in prior and (keep_server_owned or key not in data):
@@ -1371,6 +1383,38 @@ def _v2_child_model(pe: Dict[str, Any], tab: str) -> Dict[str, Any]:
     return out
 
 
+_V2_COVE_ID = re.compile(r"^wb-epoxy-cove-[a-z]+-(\d+)in(?:-|$)")
+_JS_NUM = re.compile(r"^-?\d*\.?\d+$")
+
+
+def _measured(raw: Any) -> float:
+    """excel-math.js num(), which bid-model reads a takeoff measurement with: "$1,200" and
+    " 12,500 " are numbers, a boolean or anything else is 0."""
+    if isinstance(raw, bool) or raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return _num(raw) if raw not in (float("inf"), float("-inf")) else 0.0
+    s = re.sub(r"[$,\s]", "", str(raw))
+    return float(s) if _JS_NUM.match(s) else 0.0
+
+
+def _v2_cove_height(pe: Dict[str, Any], tab: str) -> str:
+    """The cove height of section `tab` of a v2 model: bid-model.js coveHeightOf over that one
+    section (the first LF takeoff row that is on, measured above 0, whose assembly names a cove
+    system's height), "" for none. The parent's `cove_height_v2` is its OWN base's cove, so a
+    child whose base is another section reads its own."""
+    section = pe if tab == _V2_ROOT_TAB else ((pe.get("tabs") or {}).get(tab) or {})
+    rows = section.get("takeoff") if isinstance(section, dict) else None
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict) or r.get("unit") != "LF" or r.get("enabled") is False \
+                or not _measured(r.get("measurement")) > 0:
+            continue
+        m = _V2_COVE_ID.match(str(r.get("assembly_id") or ""))
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _proposal_copy(parent: Dict[str, Any], tab: str, refresh: bool) -> Dict[str, Any]:
     """Everything a child of `parent` whose base is `tab` copies from it: the estimate
     (PROPOSAL_ESTIMATE_KEYS, less PROPOSAL_REFRESH_SKIPS on a refresh), the base's money and what
@@ -1388,6 +1432,7 @@ def _proposal_copy(parent: Dict[str, Any], tab: str, refresh: bool) -> Dict[str,
             for t in out["priced_tabs"]:
                 if isinstance(t, dict) and t.get("id") in flipped:
                     t["kind"] = flipped[t["id"]][1]
+        out["cove_height_v2"] = _v2_cove_height(out["polish_estimate"], tab)
     out.update(_child_money(parent, tab))
     out["base_tab_id"] = tab
     out["base_tab_ids"] = [tab]
@@ -1617,6 +1662,10 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, A
         out = {k: v for k, v in data.items() if k not in replaced}
         out.update(fresh)
         now = _now_iso()
+        if now == data.get("estimate_synced_at"):
+            # The stamp is the fence against a page holding the copy before this one
+            # (StaleProposalWrite), so it must move even when the clock has not (a coarse tick).
+            now = _stamp_at(datetime.fromisoformat(now), 1)
         out["estimate_digest"] = digest
         out["estimate_synced_at"] = now
         sb.table("drafts").update({"data": out, "updated_at": now}).eq("id", c["id"]).execute()

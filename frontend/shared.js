@@ -423,8 +423,11 @@
       const body = await res.json();
       const data = (body && body.data) || {};
       const patch = {};
+      // NOT `estimate_synced_at`: it is the fence that tells the server this page's copy of a
+      // proposal predates a Refresh (drafts.StaleProposalWrite). Merged onto an old estimate it would
+      // wave the old price back in; only a whole fresh copy of the draft may carry the new stamp.
       SERVER_OWNED_KEYS.forEach((k) => {
-        if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
+        if (k !== "estimate_synced_at" && Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
       });
       // Compare before writing: an unconditional write would rewrite the blob on every page load.
       //

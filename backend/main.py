@@ -8013,6 +8013,15 @@ def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[st
             "ok": False, "code": "split_since",
             "error": "Not saved — this project was split into separate proposals after this "
                      "page opened it. Reload the page to work on the scope it is now."})
+    except drafts.StaleProposalWrite:
+        # A copy of a proposal from BEFORE Refresh re-priced it (drafts.StaleProposalWrite): storing
+        # it would put the old price back under the new digest, and nobody would be told.
+        log.warning("save refused for draft %s: the page's copy predates the last refresh",
+                    _log_safe(draft_id))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "refreshed_since",
+            "error": "Not saved — this proposal was refreshed from the estimate after this page "
+                     "opened it. Reload the page to work on the refreshed copy."})
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": "Couldn't save the project. Please try again."}
@@ -8405,10 +8414,24 @@ def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -
         if existed:
             drafts.log_event(draft_id, actor, "purged_project", {"id": draft_id})
         return {"ok": True, "existed": existed, "permanent": True}
-    # A PARENT'S PROPOSALS GO TO THE TRASH WITH IT (Create Multiple Proposals): they are copies of
-    # its estimate, and left behind they would be proposals of an estimate nobody can open. Read
-    # before the parent is trashed (the group's rows are the not-deleted ones). Restoring the parent
-    # brings back the parent only.
+    kids = _proposals_to_trash_with(draft_id, actor)
+    existed = drafts.trash_draft(draft_id, actor)
+    cascaded = [k for k in kids if existed and drafts.trash_draft(k, actor)]
+    return {"ok": True, "existed": existed, "trashed": True, "cascaded": cascaded}
+
+
+def _proposals_to_trash_with(draft_id: str, actor: Optional[str]) -> List[str]:
+    """The proposals that go to the Trash with `draft_id` (Create Multiple Proposals), their portal
+    rows already hidden. Both delete routes call it BEFORE the draft itself is trashed.
+
+    A PARENT'S PROPOSALS GO WITH IT: they are copies of its estimate, and left behind they would be
+    proposals of an estimate nobody can open. Read before the parent is trashed (the group's rows
+    are the not-deleted ones). A child's own delete takes nothing with it, and restoring the parent
+    brings back the parent only.
+
+    EACH CHILD'S PORTAL ROW IS HIDDEN FIRST (_portal_visibility, why at api_delete_project): a sent
+    child trashed in our store alone would keep its card on the board and its page in front of the
+    customer. A portal that fails raises here, before anything of ours has moved."""
     try:
         row = drafts.load_draft(draft_id)
         data = (row or {}).get("data") or {}
@@ -8417,10 +8440,10 @@ def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -
     except Exception as exc:  # noqa: BLE001 — the delete itself still runs, and says so in the log
         log.warning("delete of draft %s: its proposals could not be read (%s); only the draft "
                     "itself is trashed", _log_safe(draft_id), exc)
-        kids = []
-    existed = drafts.trash_draft(draft_id, actor)
-    cascaded = [k for k in kids if existed and drafts.trash_draft(k, actor)]
-    return {"ok": True, "existed": existed, "trashed": True, "cascaded": cascaded}
+        return []
+    for k in kids:
+        _portal_visibility(k, "delete", actor)
+    return kids
 
 
 @app.post("/api/draft/{draft_id}/restore")
@@ -8469,9 +8492,12 @@ def api_delete_project(draft_id: str, request: Request) -> Dict[str, Any]:
     ADMINS ONLY, at the endpoint and not merely in the drawer."""
     actor = _require_admin(request)
     who = actor.get("email")
+    kids = _proposals_to_trash_with(draft_id, who)
     hidden = _portal_visibility(draft_id, "delete", who)
     existed = drafts.trash_draft(draft_id, who)
-    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden}
+    cascaded = [k for k in kids if existed and drafts.trash_draft(k, who)]
+    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden,
+            "cascaded": cascaded}
 
 
 @app.post("/api/draft/{draft_id}/archive")
