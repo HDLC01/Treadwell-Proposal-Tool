@@ -5058,8 +5058,10 @@
     const list = members.map((m) => {
       const name = esc((m && m.label) || "Unnamed scope");
       if (m && m.id === pid) return `<li><strong>${name}</strong> <span class="note">(this one)</span></li>`;
+      // data-scope-proposal: a proposal made from another scope's estimate (main.py _stamp_scopes
+      // `proposal_of`). Off the board, it opens on its own proposal page: it has no intake of its own.
       return `<li><button type="button" class="btn-link" data-scope-open="${esc(m && m.id)}"`
-        + ` data-scope-board="${m && m.on_board ? "1" : ""}">${name}</button>`
+        + ` data-scope-board="${m && m.on_board ? "1" : ""}" data-scope-proposal="${m && m.proposal_of ? "1" : ""}">${name}</button>`
         + (m && m.on_board ? "" : ' <span class="note">(not on the board yet)</span>') + "</li>";
     }).join("");
     const where = grouped && p.scope_count > 1
@@ -5151,6 +5153,8 @@
       const id = b.dataset.scopeOpen;
       if (!id) return;
       if (b.dataset.scopeBoard) { openDetail(id); return; }
+      // A proposal made from another scope's estimate shares that estimate and intake: its own page is the proposal.
+      if (b.dataset.scopeProposal) { window.location.assign("/proposal-review.html?d=" + encodeURIComponent(id)); return; }
       window.location.assign("/?d=" + encodeURIComponent(id) + "&edit=1");
     }));
     const btn = d.querySelector("#scope-new-btn");
