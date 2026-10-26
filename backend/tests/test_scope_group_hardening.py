@@ -107,6 +107,55 @@ def test_a_portal_that_cannot_be_asked_is_refused_too(fake_supabase, monkeypatch
     assert cap["revisions"] == [] and "/api/admin/publish" not in cap["paths"]
 
 
+# Round 3: a portal is ready only with scope groups AND their per-project follow-ups. Each pair of
+# the two capabilities, through the real publish route and the real combined-send proxy.
+FOLLOWUPS_NOT_READY = "The portal's follow-up update has not been applied yet. Nothing was sent."
+CAP_PAIRS = [
+    ({"scope_groups": True, "group_followups": True, "version": 1}, None),
+    ({"scope_groups": True, "group_followups": False, "version": 1}, FOLLOWUPS_NOT_READY),
+    ({"scope_groups": True, "version": 1}, FOLLOWUPS_NOT_READY),
+    ({"scope_groups": False, "group_followups": True, "version": 1}, main._PORTAL_NOT_READY),
+    ({"scope_groups": False, "group_followups": False, "version": 1}, main._PORTAL_NOT_READY),
+    ({"group_followups": True}, main._PORTAL_NOT_READY),
+]
+CAP_IDS = ["both", "no_followups", "followups_unsaid", "no_groups", "neither", "groups_unsaid"]
+
+
+@pytest.mark.parametrize("caps,refusal", CAP_PAIRS, ids=CAP_IDS)
+def test_a_grouped_publish_needs_scope_groups_and_group_followups(fake_supabase, monkeypatch,
+                                                                  caps, refusal):
+    _store(fake_supabase, monkeypatch, _draft("s1", "Breakroom"), _draft("s2", "Lab 1"))
+    cap = _wire_publish(monkeypatch, caps)
+    r = _publish()
+    if refusal is None:
+        assert r.status_code == 200, r.text
+        assert cap["revisions"] == ["s1"] and "/api/admin/publish" in cap["paths"]
+        return
+    assert r.status_code == 409, r.text
+    assert r.json() == {"ok": False, "code": "portal_not_ready", "error": refusal}
+    assert cap["revisions"] == [], "a refused grouped publish minted a revision"
+    assert cap["paths"] == ["/api/admin/capabilities"], "the publish reached the portal anyway"
+
+
+@pytest.mark.parametrize("caps,refusal", CAP_PAIRS, ids=CAP_IDS)
+def test_the_combined_send_needs_scope_groups_and_group_followups(monkeypatch, caps, refusal):
+    forwarded = []
+
+    async def raw(path, method, blob, ctype):
+        forwarded.append(path)
+        return main.Response(content=b'{"ok": true}', status_code=200,
+                             headers={"content-type": "application/json"})
+    monkeypatch.setattr(main, "_portal_raw", raw)
+    monkeypatch.setattr(main, "_portal", lambda p, m="GET", b=None: caps)
+    r = client.post("/api/portal/scope-group/%s/send" % GID, json={})
+    if refusal is None:
+        assert r.status_code == 200 and forwarded == ["/api/admin/scope-group/%s/send" % GID]
+        return
+    assert r.status_code == 409, r.text
+    assert r.json() == {"ok": False, "code": "portal_not_ready", "error": refusal}
+    assert forwarded == [], "the send reached a portal that is not ready"
+
+
 def test_a_ready_portal_publishes_and_is_asked_once_a_minute(fake_supabase, monkeypatch):
     _store(fake_supabase, monkeypatch, _draft("s1", "Breakroom"), _draft("s2", "Lab 1"))
     cap = _wire_publish(monkeypatch, {"scope_groups": True, "group_followups": True, "version": 1})
@@ -151,7 +200,8 @@ def test_the_combined_send_forwards_a_retry_of_only_the_failed_contacts(monkeypa
         return main.Response(content=b'{"ok": true}', status_code=200,
                              headers={"content-type": "application/json"})
     monkeypatch.setattr(main, "_portal_raw", raw)
-    monkeypatch.setattr(main, "_portal_capabilities", lambda: {"scope_groups": True})
+    monkeypatch.setattr(main, "_portal_capabilities",
+                        lambda: {"scope_groups": True, "group_followups": True})
     assert client.post("/api/portal/scope-group/%s/send" % GID,
                        json={"retry_failed": True}).status_code == 200
     assert seen["body"]["retry_failed"] is True and "resend" not in seen["body"]
@@ -309,7 +359,8 @@ def test_the_combined_send_forwards_resend_unknown_only_when_asked(monkeypatch):
         return main.Response(content=b'{"ok": true}', status_code=200,
                              headers={"content-type": "application/json"})
     monkeypatch.setattr(main, "_portal_raw", raw)
-    monkeypatch.setattr(main, "_portal_capabilities", lambda: {"scope_groups": True})
+    monkeypatch.setattr(main, "_portal_capabilities",
+                        lambda: {"scope_groups": True, "group_followups": True})
     assert client.post("/api/portal/scope-group/%s/send" % GID,
                        json={"resend_unknown": True}).status_code == 200
     assert seen["body"]["resend_unknown"] is True and "retry_failed" not in seen["body"]

@@ -1606,6 +1606,8 @@ _CAPS_CACHE: Dict[str, Any] = {"caps": None, "at": 0.0}
 _PORTAL_NOT_READY = ("The customer portal has not been updated for projects with several proposals "
                      "yet, so nothing was sent and nothing was saved as sent. Ask Hanz to update "
                      "the portal, then send again.")
+_PORTAL_FOLLOWUPS_NOT_READY = ("The portal's follow-up update has not been applied yet. Nothing was "
+                               "sent.")
 
 
 def _portal_capabilities() -> Dict[str, Any]:
@@ -1628,9 +1630,11 @@ def _portal_capabilities() -> Dict[str, Any]:
 
 
 def _scope_groups_refusal() -> Optional[JSONResponse]:
-    """None when the portal handles scope groups, else the flat refusal a grouped publish or the
-    combined send answers: 409 portal_not_ready for a portal without them, 502 portal_unreachable for
-    one that could not be asked (nothing can be confirmed, so nothing is sent)."""
+    """None when the portal handles scope groups AND their per-project follow-ups (capabilities
+    `scope_groups` and `group_followups` both true), else the flat refusal a grouped publish or the
+    combined send answers: 409 portal_not_ready for a portal without them (its own sentence when
+    only the follow-up update is missing), 502 portal_unreachable for one that could not be asked
+    (nothing can be confirmed, so nothing is sent)."""
     try:
         caps = _portal_capabilities()
     except HTTPException as exc:
@@ -1640,8 +1644,15 @@ def _scope_groups_refusal() -> Optional[JSONResponse]:
             "ok": False, "code": "portal_unreachable",
             "error": "Nothing was sent. The customer portal is not answering, so the tool cannot "
                      "check it is ready for projects with several proposals. Try again in a minute."})
-    if caps.get("scope_groups") is True:
+    if caps.get("scope_groups") is True and caps.get("group_followups") is True:
         return None
+    if caps.get("scope_groups") is True:
+        # Scope groups without the per-project follow-ups (round 3): the portal would chase each
+        # scope of the project on its own, one reminder per scope, so it is not ready either.
+        log.warning("portal has scope groups but not group follow-ups (capabilities %r): a "
+                    "scope-group send is refused", caps)
+        return JSONResponse(status_code=409, content={"ok": False, "code": "portal_not_ready",
+                                                      "error": _PORTAL_FOLLOWUPS_NOT_READY})
     log.warning("portal has no scope groups (capabilities %r): a scope-group send is refused", caps)
     return JSONResponse(status_code=409, content={"ok": False, "code": "portal_not_ready",
                                                   "error": _PORTAL_NOT_READY})

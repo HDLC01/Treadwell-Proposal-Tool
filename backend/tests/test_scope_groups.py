@@ -536,7 +536,8 @@ def test_the_combined_send_is_proxied_whole(monkeypatch):
                              status_code=409, headers={"content-type": "application/json"})
     monkeypatch.setattr(main, "_portal_raw", raw)
     # a portal that handles scope groups (test_scope_group_hardening.py holds the one that does not)
-    monkeypatch.setattr(main, "_portal_capabilities", lambda: {"scope_groups": True})
+    monkeypatch.setattr(main, "_portal_capabilities",
+                        lambda: {"scope_groups": True, "group_followups": True})
     r = client.post("/api/portal/scope-group/%s/send" % GID, json={"message": "hi", "resend": True})
     assert r.status_code == 409 and r.json()["missing"] == ["s2"]
     assert seen["path"] == "/api/admin/scope-group/%s/send" % GID
