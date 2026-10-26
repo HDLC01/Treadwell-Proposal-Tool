@@ -5499,6 +5499,9 @@
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
     // and every decision below turns on that id.
     try { await TW.draftReady; } catch (e) {}
+    // A proposal made from another draft's estimate has no estimate of its own (the server copies the
+    // parent's): it opens the parent's, before anything here can save (TW.redirectProposalChild).
+    if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/polish-estimate.html")) return;
     adopt(TW.getState());
 
     // Before the library, before the form, before anything can be typed: whatever happens after

@@ -238,6 +238,12 @@ if (TW.isV2Draft(state) && TW.isThisDraft(state)) {
   window.location.replace(TW.withDraft("/polish-estimate.html"));
   throw new Error("estimate-review: a v2 draft has no spreadsheet, sent to polish-estimate.html");
 }
+// A PROPOSAL MADE FROM ANOTHER DRAFT'S ESTIMATE ("Create Multiple Proposals") has no estimate of its
+// own: the server copies its parent's. Opened here it goes to the parent's estimate, before anything
+// below can write a snapshot over the copy (TW.redirectProposalChild, the same rule as above).
+if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/estimate-review.html")) {
+  throw new Error("estimate-review: a proposal made from another estimate, sent to that estimate");
+}
 
 // ─── Project Info canonicalization ──────────────────────────────────
 // In the source xlsx, the Polish/Gyp/Seal/etc sheets reference Epoxy's

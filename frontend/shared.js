@@ -1998,6 +1998,37 @@
     return !!(blob && typeof blob === "object" && blob[STAMP] && id && blob[STAMP] === id);
   }
 
+  /** A PROPOSAL MADE FROM ANOTHER DRAFT'S ESTIMATE ("Create Multiple Proposals") has no intake or
+   *  estimate of its own: the server copies both from its parent (`proposal_of`), and Refresh copies
+   *  them again. So the intake and estimate pages send it to its parent, at `path` (with ?d=<parent>),
+   *  before anything on them can save, and answer true; the caller stops there. Any other draft, and a
+   *  blob that is not provably this page's (isThisDraft, the reason the v2 guards wait for it), answers
+   *  false and nothing happens. `replace`, so Back does not return to a page that would only bounce. */
+  function redirectProposalChild(path) {
+    const blob = getState();
+    const parent = blob && typeof blob.proposal_of === "string" ? blob.proposal_of : "";
+    if (!parent || !isThisDraft(blob)) return false;
+    window.location.replace(path + (path.indexOf("?") >= 0 ? "&" : "?") + "d=" + encodeURIComponent(parent));
+    return true;
+  }
+
+  /** The proposals of this draft's estimate (GET /api/draft/{id}/proposals: {parent_id, group_id,
+   *  estimate_digest, members}), or null when it cannot be read. `id` defaults to this page's draft;
+   *  a child's id answers its parent's list. Reads only. */
+  async function readProposals(id) {
+    const pid = id || getDraftId();
+    if (!pid) return null;
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(pid) + "/proposals",
+                              { headers: authHeaders() });
+      if (!res.ok) return null;
+      const body = await res.json();
+      return body && body.ok !== false && Array.isArray(body.members) ? body : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The keys the SPREADSHEET's Estimate step writes into a draft (estimate-review.js
    *  snapshotLumpSumsToState): the per-tab pricing snapshot, the base pick that names one of those
    *  tabs, and everything derived from them. A v2 draft prices itself and writes none of these, so
@@ -2251,6 +2282,8 @@
     documentHolds,
     isV2Draft,
     isThisDraft,
+    redirectProposalChild,
+    readProposals,
     v2PricingView,
     v2SheetKeysOut,
     draftDigest,
