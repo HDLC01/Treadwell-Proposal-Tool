@@ -630,6 +630,18 @@ def test_the_own_proposal_rule_is_pure_ordered_by_the_bid_and_refuses_what_canno
     assert p["idsNever"] == ["Polish"] and p["idsSeal"] == ["Polish", "Epoxy"], "a Seal sheet or a sheet gone is never a base bid"
 
 
+def test_deleting_a_ticked_sheet_forgets_its_tick_so_the_next_copy_of_that_id_is_no_base_bid(ran):
+    """A Copy<N> id is handed out again after a delete (nextCopyId), so a tick left in base_tab_ids would make the next copy a base bid
+    of its own proposal that nobody switched on. B.optionLeftoverPatch (deleteSection's patch, and a new copy's) forgets it."""
+    d = ran["ownProposal"]["deleted"]
+    assert d["afterDelete"] == {"ids": ["Polish"], "tabs": ["Epoxy", "Seal"]}, "the saved draft forgets the deleted sheet's tick"
+    r = d["recopied"]
+    assert r["tabs"] == ["Copy1", "Epoxy", "Seal"] and r["ids"] == ["Polish"], "the new copy is handed the same id, unticked"
+    assert r["own"] == "false" and r["tagged"] is False and "Create the proposals" not in r["scope"]
+    assert d["staleCopy"] == {"ids": ["Polish"], "tabs": ["Copy1", "Epoxy"]}, "a stale tick a saved draft still holds goes when the id is reused"
+    assert d["pure"] == {"base_tab_ids": ["Polish", "Epoxy"]} and d["pureNone"] == {}
+
+
 # ── 14. the sticky head: the top bar and the sheet bar, ONE block pinned to the top of the screen ─────────────────────────────────────
 # Hanz, 2026-10-20, with a screenshot: "The sheets should lie below the 4 tabs in the header nav bar ... that means its present in Material Labor
 # and review for easier navigation ... that header bar when estimating in v2 should be sticky". The bar left #main and went under the top bar, and
@@ -1185,6 +1197,9 @@ BREAKS = {
     "a Seal sheet is offered its own proposal": (
         "js/bid-model.js", "    return !!e && e.kind !== \"off\" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;", "    return !!e && e.kind !== \"off\";",
         lambda r: r["ownProposal"]["pure"]["seal"] is not None or r["ownProposal"]["pure"]["idsSeal"] != ["Polish", "Epoxy"]),
+    "a deleted sheet's own-proposal tick is kept": (
+        "js/bid-model.js", "    if (Array.isArray(st.base_tab_ids) && st.base_tab_ids.indexOf(tab) >= 0) {", "    if (false) {",
+        lambda r: r["ownProposal"]["deleted"]["afterDelete"]["ids"] != ["Polish"] or r["ownProposal"]["deleted"]["recopied"]["own"] != "false"),
 }
 
 

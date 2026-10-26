@@ -1032,6 +1032,30 @@ async function ownProposal() {
   clickIf(b, sel("own", "Copy1"));
   combined.pressed = { ids: idsOf(), notice: /data-sh-notice/.test(rowHtml(b, "Copy1")) };
 
+  // deleting a ticked sheet forgets its tick: a Copy<N> id is handed out again, and the next copy must not come back a base bid
+  const d = await open(draft(m, { base_tab_id: "Polish", base_tab_ids: ["Polish", "Copy1"],
+    tab_opts: Object.assign({ Epoxy: B.optionSettings(true) }, withCopy.patch.tab_opts) }));
+  const dIds = () => (d.store.blob.base_tab_ids === undefined ? "absent" : clone(d.store.blob.base_tab_ids));
+  openSheet(d, "Copy1");
+  clickIf(d, sel("delete", "Copy1")); clickIf(d, sel("delete", "Copy1"));
+  const afterDelete = { ids: dIds(), tabs: Object.keys(d.api.model().tabs || {}).sort() };
+  openSheet(d, "Polish");
+  clickIf(d, sel("copy", "Polish"));
+  openSheet(d, "Copy1");
+  const own = /data-sh-act="own" data-sh-tab="Copy1"/.test(rowHtml(d, "Copy1"))
+    ? (/aria-checked="(true|false)" data-sh-act="own" data-sh-tab="Copy1"/.exec(rowHtml(d, "Copy1")) || [null, null])[1] : null;
+  const recopied = { ids: dIds(), tabs: Object.keys(d.api.model().tabs || {}).sort(), own: own,
+                     tagged: /data-sh-bid=/.test(panel(d)), scope: stripTags(d.doc.getElementById("scope-bar").innerHTML || "") };
+  // a tick a saved draft still holds for a sheet it no longer has is forgotten when that id is handed out
+  const s = await open(draft(polishModel({ tabs: { Epoxy: epoxySection("option") } }),
+    { base_tab_id: "Polish", base_tab_ids: ["Polish", "Copy1"], tab_opts: { Epoxy: B.optionSettings(true) } }));
+  openSheet(s, "Polish");
+  clickIf(s, sel("copy", "Polish"));
+  const staleCopy = { ids: clone(s.store.blob.base_tab_ids), tabs: Object.keys(s.api.model().tabs || {}).sort() };
+  const deleted = { afterDelete: afterDelete, recopied: recopied, staleCopy: staleCopy,
+                    pure: B.optionLeftoverPatch({ base_tab_ids: ["Polish", "Copy1", "Epoxy"] }, "Copy1"),
+                    pureNone: B.optionLeftoverPatch({ base_tab_ids: ["Polish"] }, "Copy1") };
+
   // the rule itself, pure (B.proposalBasePatch over the model the page opened on)
   const st = { base_tab_id: "Polish", base_tab_ids: ["Polish"] };
   const pure = {
@@ -1048,7 +1072,8 @@ async function ownProposal() {
     idsNever: B.proposalBaseIds(m, {}),
     idsSeal: B.proposalBaseIds(m, { base_tab_ids: ["Seal", "Epoxy", "Gone"] }),
   };
-  return { start: start, one: one, two: two, offAgain: offAgain, swapped: swapped, combined: combined, pure: pure, lump0: lump0, kinds0: kinds0 };
+  return { start: start, one: one, two: two, offAgain: offAgain, swapped: swapped, combined: combined, pure: pure, lump0: lump0, kinds0: kinds0,
+           deleted: deleted };
 }
 
 main().then((out) => { process.stdout.write(JSON.stringify(out) + "\n"); }, (e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });
