@@ -41,7 +41,7 @@ PAGE_FILES = ["polish-estimate.html", "js/polish-estimate.js", "js/bid-model.js"
               "js/markup-core.js", "js/library-core.js", "js/library-picker.js", "js/work-types.js", "js/excel-math.js",
               "js/epoxy-takeoff.js", "js/gyp-takeoff.js", "js/seal-takeoff.js", "js/price-lines-core.js"]
 SECTIONS = ["list", "copy", "add", "seal", "baseSwitch", "combined", "renameByTab", "deleting", "renaming", "options", "reopen", "unreadable", "focus",
-            "markup", "floating", "gypPreset", "limit", "sealMode", "demote", "resets", "unstated", "hiddenOption", "stickyHead"]
+            "markup", "floating", "gypPreset", "limit", "sealMode", "demote", "resets", "unstated", "hiddenOption", "stickyHead", "ownProposal"]
 GYP1, GYP2 = 'Gyp (USG 1-8")', "Gyp (USG N12ULTRA)"
 LIMIT = "A bid can hold 12 copied sheets at most."
 EM_DASH, EN_DASH = chr(0x2014), chr(0x2013)
@@ -571,6 +571,63 @@ def test_the_switch_brings_back_an_option_the_proposal_step_had_hidden(ran):
 def test_the_caret_goes_to_the_name_box_when_a_name_is_refused_and_back_to_rename_when_it_is_saved(ran):
     f = ran["focus"]
     assert f["afterRefusedName"] == ["Copy2|name"] and f["afterSavedName"] == ["Copy2|rename"]
+
+
+# ── 24. ITS OWN PROPOSAL (Create Multiple Proposals, plan step 5): several base bids picked on the v2 strip ──────────────────────────
+# The v2 side of the Proposal step's Base Bid checkboxes. A switch on an option's bar ("Its own proposal") ticks the sheet in the draft's
+# base_tab_ids (B.proposalBasePatch, TWPrice.toggleBaseId's rule ordered by the bid's sections); the model is not touched, so nothing is
+# repriced. Once two sheets are base bids each tab says "Bid N" and the scope bar says the proposals are made on the Proposal step.
+_OWN_KINDS = [["Polish", "base"], ["Epoxy", "option"], ["Copy1", "option"], ["Seal", "option"]]
+
+
+def test_its_own_proposal_is_offered_on_an_option_that_can_be_a_base_and_never_on_the_base_or_a_seal_sheet(ran):
+    s = ran["ownProposal"]["start"]
+    assert s["offered"] == {"Polish": None, "Epoxy": "false", "Copy1": "false", "Seal": None}, (
+        "the base is Base Bid 1 already and a Seal sheet is never a base: neither has the switch")
+    assert s["bids"] == {}, "a bid of one proposal draws no Bid tag"
+    assert "Create the proposals" not in s["scope"] and s["blobIds"] == "absent", "opening the page ticks nothing"
+
+
+def test_switching_a_sheet_on_ticks_it_after_the_base_tags_bid_n_and_reprices_nothing(ran):
+    o = ran["ownProposal"]
+    one = o["one"]
+    assert one["ids"] == ["Polish", "Epoxy"] and one["base"] == "Polish", "the pricing base stays Base Bid 1"
+    assert one["checked"] == "true" and one["switchTag"] is True
+    assert one["bids"] == {"Polish": 1, "Epoxy": 2}
+    assert one["kinds"] == o["kinds0"] == _OWN_KINDS and one["lump"] == o["lump0"], "the switch changes no kind and no price"
+    assert one["scope"].endswith("2 base bids, each its own proposal: Base Bid 1 Polish , Base Bid 2 Epoxy . Create the proposals on the Proposal step.")
+
+
+def test_a_second_sheet_is_the_next_bid_and_switching_it_off_takes_only_it_out(ran):
+    o = ran["ownProposal"]
+    assert o["two"]["ids"] == ["Polish", "Epoxy", "Copy1"] and o["two"]["bids"] == {"Polish": 1, "Epoxy": 2, "Copy1": 3}
+    assert "3 base bids" in o["two"]["scope"]
+    assert o["offAgain"] == {"ids": ["Polish", "Epoxy"], "bids": {"Polish": 1, "Epoxy": 2}, "checked": "false"}
+
+
+def test_making_a_ticked_sheet_the_base_makes_it_base_bid_1_and_the_old_base_stays_its_own_proposal(ran):
+    w = ran["ownProposal"]["swapped"]
+    assert w["base"] == "Epoxy" and w["ids"] == ["Epoxy", "Polish", "Copy1"], "base_tab_id stays in base_tab_ids, first"
+    assert w["bids"] == {"Epoxy": 1, "Polish": 2, "Copy1": 3}
+
+
+def test_the_combined_pair_as_the_base_is_one_proposal_and_refuses_the_switch(ran):
+    c = ran["ownProposal"]["combined"]
+    assert c["base"] is None and c["ids"] == [] and c["bids"] == {}, "a combined base leaves no sheet ticked"
+    assert c["disabled"] is True, "the switch is drawn, refused, and says why"
+    assert c["pressed"] == {"ids": [], "notice": True}, "a press that got through anyway writes nothing and says why"
+    assert "Create the proposals" not in c["scope"]
+
+
+def test_the_own_proposal_rule_is_pure_ordered_by_the_bid_and_refuses_what_cannot_be_a_proposal(ran):
+    p = ran["ownProposal"]["pure"]
+    assert p["tick"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Copy1"]}
+    assert p["order"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Epoxy", "Copy1"]}, "Bid N follows the sheets' order"
+    assert p["untick"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Copy1"]}
+    assert p["again"] is None and p["base"] is None, "a press that changes nothing, and unticking the base, are refused"
+    assert p["seal"] is None and p["unknown"] is None and p["pair"] is None and p["off"] is None
+    assert p["stateUntouched"] is True
+    assert p["idsNever"] == ["Polish"] and p["idsSeal"] == ["Polish", "Epoxy"], "a Seal sheet or a sheet gone is never a base bid"
 
 
 # ── 14. the sticky head: the top bar and the sheet bar, ONE block pinned to the top of the screen ─────────────────────────────────────
@@ -1106,6 +1163,28 @@ BREAKS = {
         "js/bid-model.js", "      h += '<p class=\"sh-hint\">Copies print on the proposal. The Excel download does not include them.</p>';",
         "      h += '';",
         lambda r: r["list"]["copiesNote"] is not True),
+    # Its own proposal (Create Multiple Proposals, plan step 5)
+    "the own-proposal switch does nothing": (
+        "js/polish-estimate.js", '    if (act === "own") { toggleOwnProposal(tab); return; }', '    if (act === "own") { return; }',
+        lambda r: r["ownProposal"]["one"]["ids"] != ["Polish", "Epoxy"]),
+    "the page does not pass the ticked sheets to the panel": (
+        "js/polish-estimate.js", "      baseIds: st && Array.isArray(st.base_tab_ids) ? st.base_tab_ids : undefined,", "      baseIds: undefined,",
+        lambda r: r["ownProposal"]["one"]["bids"] != {"Polish": 1, "Epoxy": 2} or r["ownProposal"]["one"]["checked"] != "true"),
+    "no Bid tag on the strip": (
+        "js/bid-model.js", "          (r.bid ? '<span class=\"sh-bidtag\" data-sh-bid=\"'", "          (false ? '<span class=\"sh-bidtag\" data-sh-bid=\"'",
+        lambda r: r["ownProposal"]["one"]["bids"] != {"Polish": 1, "Epoxy": 2}),
+    "a base change drops the ticked sheets": (
+        "js/polish-estimate.js", "      patch.base_tab_ids = PR.moveBaseId(st, from, to, order, true);", "",
+        lambda r: r["ownProposal"]["swapped"]["ids"] != ["Epoxy", "Polish", "Copy1"]),
+    "the scope bar does not say where the proposals are made": (
+        "js/polish-estimate.js", "    if (bidIds.length >= 2) {", "    if (false) {",
+        lambda r: "Create the proposals on the Proposal step" not in r["ownProposal"]["one"]["scope"]),
+    "a combined base is given proposals": (
+        "js/bid-model.js", "    if (ps === null || ps.base === null || tab === ps.base) return null;", "    if (ps === null || tab === ps.base) return null;",
+        lambda r: r["ownProposal"]["pure"]["pair"] is not None),
+    "a Seal sheet is offered its own proposal": (
+        "js/bid-model.js", "    return !!e && e.kind !== \"off\" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;", "    return !!e && e.kind !== \"off\";",
+        lambda r: r["ownProposal"]["pure"]["seal"] is not None or r["ownProposal"]["pure"]["idsSeal"] != ["Polish", "Epoxy"]),
 }
 
 

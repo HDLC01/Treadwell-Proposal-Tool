@@ -153,7 +153,7 @@ async function main() {
     ["list", list], ["copy", copy], ["add", add], ["seal", seal], ["baseSwitch", baseSwitch], ["baseTravel", baseTravel], ["combined", combined], ["renameByTab", renameByTab], ["deleting", deleting],
     ["renaming", renaming], ["options", options], ["reopen", reopen], ["unreadable", unreadable], ["focus", focus], ["markup", markup], ["floating", floating],
     ["gypPreset", gypPreset], ["limit", limit], ["sealMode", sealMode], ["demote", demote], ["resets", resets], ["unstated", unstated], ["hiddenOption", hiddenOption],
-    ["stripKeeps", stripKeeps], ["stickyHead", stickyHead],
+    ["stripKeeps", stripKeeps], ["stickyHead", stickyHead], ["ownProposal", ownProposal],
   ];
   for (const [name, fn] of sections) {
     try { out[name] = await fn(); } catch (e) { out[name] = { error: String(e && e.stack || e) }; }
@@ -979,6 +979,76 @@ async function stickyHead() {
   try { plain.win.fire("resize"); } catch (e) { noRoot = false; }
   return { before: before, after: after, stayed: stayed, watched: watched, heights: { idle: idle, first: first, second: second, none: none },
            fallback: fallback, noRoot: noRoot };
+}
+
+// ── 24. ITS OWN PROPOSAL (Create Multiple Proposals, plan step 5): a sheet switched on is a base bid of its own proposal ─────────────
+// A Polish bid (the root, the base) with an Epoxy option, a copy of Polish and a Seal option. The switch on an option's bar ticks it in the
+// draft's base_tab_ids (B.proposalBasePatch) without repricing anything; the strip tags each base bid "Bid N" once there are two; the scope
+// bar says the proposals are made on the Proposal step; the base radio keeps the new base Base Bid 1; the combined pair leaves none ticked.
+async function ownProposal() {
+  const withCopy = B.copySection(polishModel({ tabs: { Epoxy: epoxySection("option") } }), "Polish", {});
+  const m = withCopy.model;
+  m.tabs.Seal = { layout: "seal", kind: "option", profile: "seal@1", takeoff: [], labor: [], contingency: 0, fees: 0, totals: {},
+    rates: { version: 1, profile: "seal@1", rates: {}, fees_default: null, notes: EPOXY_NOTES.slice() } };
+  const b = await open(draft(m, { base_tab_id: "Polish", tab_opts: Object.assign({ Epoxy: B.optionSettings(true) }, withCopy.patch.tab_opts) }));
+  const ownOf = (tab) => (new RegExp('<button type="button" class="mw-sw sh-own[^"]*" role="switch" aria-checked="(true|false)" data-sh-act="own" data-sh-tab="' + attr(tab) + '"[^>]*>').exec(rowHtml(b, tab)) || [null, null]);
+  const bidsOf = () => { const h = panel(b), out = {}; (h.match(/data-sh-row="[^"]*"[\s\S]*?<\/li>/g) || []).forEach((li) => {
+    const id = unattr(/data-sh-row="([^"]*)"/.exec(li)[1]); const t = /<span class="sh-bidtag" data-sh-bid="(\d+)"[^>]*>Bid (\d+)<\/span>/.exec(li);
+    if (t) out[id] = t[1] === t[2] ? Number(t[1]) : "mismatch " + t[1] + "/" + t[2]; }); return out; };
+  const scopeText = () => stripTags(b.doc.getElementById("scope-bar").innerHTML || "");
+  const kinds = () => B.sectionsOf(b.api.root()).map((e) => [e.tab, e.kind]);
+  const idsOf = () => (b.store.blob.base_tab_ids === undefined ? "absent" : clone(b.store.blob.base_tab_ids));
+  const lump0 = b.api.bid().total, kinds0 = kinds();
+  const offered = {};
+  for (const t of ["Polish", "Epoxy", "Copy1", "Seal"]) { openSheet(b, t); offered[t] = ownOf(t)[1]; }
+  const start = { offered: offered, bids: bidsOf(), scope: scopeText(), blobIds: idsOf() };
+
+  // switched on: Epoxy, then the copy (the pure `order` case below shows the Bid numbers follow the bid's order, not the order of the presses)
+  openSheet(b, "Epoxy");
+  clickIf(b, sel("own", "Epoxy"));
+  const one = { ids: idsOf(), base: b.store.blob.base_tab_id, checked: ownOf("Epoxy")[1], bids: bidsOf(), scope: scopeText(),
+                switchTag: /data-sh-act="own"[^>]*>[\s\S]*?Base Bid 2<\/span><\/button>/.test(rowHtml(b, "Epoxy")),
+                kinds: kinds(), lump: b.api.bid().total };
+  openSheet(b, "Copy1");
+  clickIf(b, sel("own", "Copy1"));
+  const two = { ids: idsOf(), bids: bidsOf(), scope: scopeText() };
+  // switched off again: the copy leaves, Epoxy stays Base Bid 2
+  clickIf(b, sel("own", "Copy1"));
+  const offAgain = { ids: idsOf(), bids: bidsOf(), checked: ownOf("Copy1")[1] };
+  clickIf(b, sel("own", "Copy1"));
+
+  // the base radio: Epoxy (ticked) made the base swaps with Polish, which stays its own proposal; the new base is Base Bid 1
+  pick(b, '[data-sh-base="Epoxy"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
+  const swapped = { ids: idsOf(), base: b.store.blob.base_tab_id, bids: bidsOf() };
+  // the combined pair as the base is one proposal: nothing stays ticked, and an option's switch is there but refused
+  openSheet(b, "Epoxy");
+  clickIf(b, '[data-sh-act="combine"]');
+  clickIf(b, '[data-sh-act="base-yes"]');
+  openSheet(b, "Copy1");
+  const copyRow = rowHtml(b, "Copy1");
+  const combined = { ids: idsOf(), base: b.store.blob.base_tab_id, bids: bidsOf(), scope: scopeText(),
+                     disabled: /data-sh-act="own" data-sh-tab="Copy1"[^>]*disabled title="Make one sheet the base first/.test(copyRow) };
+  clickIf(b, sel("own", "Copy1"));
+  combined.pressed = { ids: idsOf(), notice: /data-sh-notice/.test(rowHtml(b, "Copy1")) };
+
+  // the rule itself, pure (B.proposalBasePatch over the model the page opened on)
+  const st = { base_tab_id: "Polish", base_tab_ids: ["Polish"] };
+  const pure = {
+    tick: B.proposalBasePatch(st, "Copy1", true, m),
+    order: B.proposalBasePatch({ base_tab_id: "Polish", base_tab_ids: ["Polish", "Copy1"] }, "Epoxy", true, m),
+    again: B.proposalBasePatch({ base_tab_ids: ["Polish", "Epoxy"] }, "Epoxy", true, m),
+    untick: B.proposalBasePatch({ base_tab_ids: ["Polish", "Epoxy", "Copy1"] }, "Epoxy", false, m),
+    base: B.proposalBasePatch(st, "Polish", false, m),
+    seal: B.proposalBasePatch(st, "Seal", true, m),
+    unknown: B.proposalBasePatch(st, "Gyp", true, m),
+    stateUntouched: JSON.stringify(st) === JSON.stringify({ base_tab_id: "Polish", base_tab_ids: ["Polish"] }),
+    pair: B.proposalBasePatch({ base_tab_ids: [] }, "Copy1", true, B.pickBase(m, B.combinedPair(m), { state: {} }).model),
+    off: B.proposalBasePatch(st, "Epoxy", true, Object.assign(clone(m), { tabs: Object.assign(clone(m.tabs), { Epoxy: Object.assign(clone(m.tabs.Epoxy), { kind: "off" }) }) })),
+    idsNever: B.proposalBaseIds(m, {}),
+    idsSeal: B.proposalBaseIds(m, { base_tab_ids: ["Seal", "Epoxy", "Gone"] }),
+  };
+  return { start: start, one: one, two: two, offAgain: offAgain, swapped: swapped, combined: combined, pure: pure, lump0: lump0, kinds0: kinds0 };
 }
 
 main().then((out) => { process.stdout.write(JSON.stringify(out) + "\n"); }, (e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });
