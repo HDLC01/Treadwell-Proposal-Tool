@@ -366,6 +366,18 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // can be handed in (state.itemMoreOpen) so a scenario renders the panel without a click.
   var itemMoreOpen = state.itemMoreOpen || {};
   ${fn("itemMoreHtml")}
+  // THE PAGERS (2026-10-27), lifted BEFORE the two renderers that call them: renderItems asks
+  // itemsPage and paintPager, renderList asks asmPage and paintPager, focusItemRow asks
+  // showItemPage, and the Previous/Next press is turnPage. The declaration is the page's own, so
+  // a renamed field cannot pass as a working one. state.PAGER seeds a page the way state.itemQuery
+  // seeds a search.
+  ${grab(/^  var PAGER = \{.*\};$/m, "the PAGER declaration")}
+  if (state.PAGER) PAGER = state.PAGER;
+  ${fn("itemsPage")}
+  ${fn("asmPage")}
+  ${fn("paintPager")}
+  ${fn("turnPage")}
+  ${fn("showItemPage")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
