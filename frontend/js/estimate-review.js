@@ -1151,6 +1151,11 @@ function wireBidBar() {
                                 // The tax wording the base line prints before the pick, so a line
                                 // in the old shape is read as drawing it would read it.
                                 basePhrase: TWPrice.draftBasePhrase(state) });
+        // The sheets ticked as base bids on the Proposal step keep the base in them, as Base Bid 1: the new base
+        // takes the old one's place (TWPrice.moveBaseId). A draft that never ticked a second sheet has none.
+        if (Array.isArray(state.base_tab_ids)) {
+          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id));
+        }
       }
       renderBidOptions();
       // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
@@ -1439,7 +1444,12 @@ async function deleteTab(id) {
   // ...and the option's edited words and the lines typed around it and its own tax rows.
   reKeyPriceLineOverrides(k => (k === "option:" + id || k.startsWith("option:" + id + ":")) ? null : k);
   const wasBase = state.base_tab_id === id;
-  if (wasBase) state.base_tab_id = null;   // fall back to auto-derive
+  // A deleted sheet is no base bid of this estimate (its proposal, if one was made, is trashed with it by the
+  // server). When it was the pricing base and other sheets are ticked, the next one is the base, as unticking it
+  // on the Proposal step would make it; else the base falls back to the derived one, below.
+  const leftBases = Array.isArray(state.base_tab_ids) ? state.base_tab_ids.filter(x => x !== id && x !== state.base_tab_id) : null;
+  if (leftBases) state.base_tab_ids = state.base_tab_ids.filter(x => x !== id);
+  if (wasBase) state.base_tab_id = (leftBases && leftBases.length) ? leftBases[0] : null;   // else fall back to auto-derive
   buildTabs();
   // Deleting the BASE copy changes the base, to the one the sheet derives (renderBidOptions
   // persists it), so the copy's edited base lines follow it by THE SAME RULE both base pickers
@@ -1449,7 +1459,8 @@ async function deleteTab(id) {
   // takes the copy's figure off the draft. Without it the copy's figure printed under the derived
   // base's price, unasked. `roles`: the copy has left this page's tab list, not priced_tabs.
   if (wasBase) {
-    const next = (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
+    const next = state.base_tab_id ? resolveBaseTab()
+      : (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
     TWPrice.applyBasePick(state.price_overrides, id, next ? next.id : null, state.priced_tabs,
                           { workType: state.work_type,
                             roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
@@ -5206,6 +5217,8 @@ function snapshotLumpSumsToState() {
   // mirrors this). Every priced tab, not just the shown options. `sf`/`sys_names`
   // carry the tab's own Area inputs so the proposal's Area line can follow the
   // resolved BASE tab (see state.sheet_area below).
+  // A tab whose layout cannot be read has no phase cell (taxFlagsFor guards the same read), not a broken snapshot.
+  const tabPhase = (id) => { try { return phaseAt(id); } catch (e) { return 0; } };
   state.priced_tabs = pricedTabs().map(t => {
     const c = totalCellsFor(t.id);
     return Object.assign({
@@ -5217,6 +5230,9 @@ function snapshotLumpSumsToState() {
       // Where this tab's own Taxable? / Remodel Tax? live, so the intake's two switches can set
       // the BASE's answer on a split draft (index.js splitFlagCells).
       flag_cells: jobFlagCellsFor(t.id),
+      // The tab's own phase surcharge and cost side, so a proposal the server makes of THIS tab (Create Multiple
+      // Proposals: drafts._child_money) carries its phase_price and cost_snapshot, not the base's.
+      phase: tabPhase(t.id), costs: costAt(t.id).costs, man_hours: costAt(t.id).mh,
     }, taxFlagsFor(t.id));   // {taxable, remodel_on}: the Proposal step's rebuildPricing reads them
   });
   // Area (SF / cove LF) for the proposal, sourced from the BASE tab(s) ONLY —
