@@ -713,7 +713,69 @@
     return text;
   }
 
+  // ── pagination, 2026-10-27 ────────────────────────────────────────────────
+  // Hanz: the Items table and the Assemblies rail show 25 at a time. ONE page size for both, here,
+  // so the two tabs cannot drift apart. The page math lives in this file rather than library.js
+  // because it is pure and the harnesses load this file whole: nothing has to be lifted to test it.
+  var PAGE_SIZE = 25;
+
+  function pageSizeOf(size) {
+    var s = Math.floor(Number(size));
+    return s >= 1 ? s : PAGE_SIZE;
+  }
+
+  /** How many pages `total` rows fill. Never 0: an empty list is one empty page, so "Page 1 of 1"
+   *  is the floor and a clamp always has somewhere to land. */
+  function pageCount(total, size) {
+    var n = Math.floor(Number(total));
+    if (!(n > 0)) return 1;
+    return Math.ceil(n / pageSizeOf(size));
+  }
+
+  /** `page` pulled back inside 1..pageCount. A list that shrank under the page somebody was on
+   *  (the last row of the last page deleted) lands on the new last page, not on an empty one. */
+  function clampPage(page, total, size) {
+    var last = pageCount(total, size);
+    var p = Math.floor(Number(page));
+    if (!(p >= 1)) return 1;
+    return p > last ? last : p;
+  }
+
+  /** The page a row at `index` (0-based, in the shown order) sits on. A missing row (-1) is page 1. */
+  function pageOfIndex(index, size) {
+    var i = Math.floor(Number(index));
+    if (!(i >= 0)) return 1;
+    return Math.floor(i / pageSizeOf(size)) + 1;
+  }
+
+  /** The rows of one page. A NEW array: the caller's list (often the model itself) is untouched. */
+  function pageSlice(list, page, size) {
+    var rows = Array.isArray(list) ? list : [];
+    var s = pageSizeOf(size);
+    var p = clampPage(page, rows.length, s);
+    return rows.slice((p - 1) * s, p * s);
+  }
+
+  /** Everything the pager says, worked out once. `paged` is false for a list that fits on one
+   *  page, which is the pager's cue to stay hidden. `range` counts the FILTERED set it is given. */
+  function pageInfo(page, total, size) {
+    var s = pageSizeOf(size);
+    var n = Math.floor(Number(total));
+    if (!(n > 0)) n = 0;
+    var pages = pageCount(n, s);
+    var p = clampPage(page, n, s);
+    var from = n ? (p - 1) * s + 1 : 0;
+    var to = Math.min(n, p * s);
+    return {
+      page: p, pages: pages, from: from, to: to, total: n, paged: pages > 1,
+      label: "Page " + p + " of " + pages,
+      range: from + "–" + to + " of " + n,
+    };
+  }
+
   return {
+    PAGE_SIZE: PAGE_SIZE, pageCount: pageCount, clampPage: clampPage, pageOfIndex: pageOfIndex,
+    pageSlice: pageSlice, pageInfo: pageInfo,
     itemCopyBody: itemCopyBody,
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
     money: money, perUnit: perUnit, explain: explain,
