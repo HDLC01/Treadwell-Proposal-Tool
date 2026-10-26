@@ -927,8 +927,9 @@ def _page_style(selector):
 
 def _shared_style(selector):
     """Declarations of a rule in styles.css at ANY depth, @media blocks included. `_css_rule`
-    anchors at column 0 and cannot see the indented copy inside a media query, which is the copy
-    that decides how the options panel behaves below 1400px."""
+    anchors at column 0 and cannot see an indented copy inside a media query. (The options panel
+    had one until 2026-10-27, the copy that dropped it into the flow below 1400px; it floats at
+    every width now, and an indented copy coming back is exactly what this must still see.)"""
     found = [m.group(1) for m in
              re.finditer(r"(?m)^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", CSS)]
     assert found, "%s has no rule in styles.css" % selector
@@ -960,13 +961,15 @@ def test_the_canvas_is_the_scroller_so_the_ribbon_needs_no_sticky():
     assert "flex-direction: column" in app
     assert re.search(r"height\s*:\s*100(dvh|vh)", app), (
         "the flex column has no upper bound, so nothing keeps the ribbon on screen")
-    # The one normal-flow element between the ribbon and the canvas. Unbounded, a long options
-    # list grows the body past the viewport and the page scrolls — the same failure by a
-    # different route, and the reason `max-height: none` is not acceptable here.
+    # The options panel used to be the one normal-flow element between the ribbon and the canvas
+    # below 1400px. Unbounded there, a long options list grew the body past the viewport and the
+    # page scrolled -- the same failure by a different route. Since 2026-10-27 it floats at every
+    # width (test_panel_restore.py pins that), but its own scroll bound still matters: a fixed
+    # panel taller than the window would put its last rows out of reach.
     # The panel's rules moved from this page's <style> into styles.css (the v2 estimate's Sheets
-    # panel is `.options-panel` too), so they are read from there. `_shared_style` catches BOTH the
-    # floating base rule and the @media one that drops the panel inline below 1400px -- its
-    # leading-whitespace match reaches inside the media block.
+    # panel is `.options-panel` too), so they are read from there. `_shared_style`'s
+    # leading-whitespace match also reaches inside any @media block, so a narrow-screen copy that
+    # unbounded it again would be caught here.
     # Comments stripped first. That file explains its own rules in prose, and the phrase being
     # searched for ("max-height: none") is exactly what that prose has to quote to say why it is
     # wrong -- so a raw scan reads the explanation as the offence.
