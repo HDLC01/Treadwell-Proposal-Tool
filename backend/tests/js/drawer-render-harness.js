@@ -2593,23 +2593,6 @@ async function runScenario(name, s) {
     dom.paints = 0;
     page.renderNotSent("scope-a", nsRow);
     out.scope.notSent = { html: dom.html, missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
-    net.requests.length = 0;
-    await q("#scope-new-btn").fire("click");
-    out.scope.emptyLabel = { note: q("#scope-note").textContent, requests: net.requests.length };
-    q("#scope-new-label").value = "  Lab   3 ";
-    fuNet.answers = [[/\/api\/draft\/scope-a\/scope$/, { status: 200,
-      body: { ok: true, id: "scope-new", group_id: "grp_x", label: "Lab 3", parent_label: "Breakroom" } }]];
-    nav.length = 0;
-    await q("#scope-new-btn").fire("click");
-    await tick();
-    out.scope.made = { requests: net.requests.filter((r) => /\/scope$/.test(r.path)), nav: nav.slice() };
-    // A stale copy: the server's sentence, after a word on what failed, and the button usable again.
-    fuNet.answers = [[/\/api\/draft\/scope-a\/scope$/, { status: 409,
-      body: { ok: false, code: "document_changed", error: "Nothing changed. This project was saved again after this page read it." } }]];
-    nav.length = 0;
-    await q("#scope-new-btn").fire("click");
-    await tick();
-    out.scope.stale = { note: q("#scope-note").textContent, disabled: q("#scope-new-btn").disabled, nav: nav.slice() };
     // The siblings: one on the board opens its drawer, one that is not opens its estimate.
     nav.length = 0;
     const opens = dom.queryAll("[data-scope-open]");
@@ -2641,6 +2624,68 @@ async function runScenario(name, s) {
   } finally {
     fuNet.answers = [];
     for (const r of scopeAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+  }
+
+  // ── one proposal or several (2026-10-27, plan step 7) ───────────────────────
+  // The card shows ONLY on a project with two or more proposals, and nowhere offers a new scope.
+  // Rendered for real in both drawers: a project of one (no group, and a group left with one live
+  // member), a project whose only sibling is not on the board yet, and a project of one that gains a
+  // sibling and is painted again.
+  const oneAdded = [];
+  try {
+    out.one = {};
+    const q = (sel) => dom.query(sel);
+    const sentData = () => {
+      const d = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+      d.proposal.project_name = "Solo Co";
+      return d;
+    };
+    const card = () => ({ html: dom.html, eligible: page.eligible() });
+    const soloSent = { proposal_id: "solo-s", project_name: "Solo Co", proposal_status: "sent" };
+    const soloNs = { proposal_id: "solo-n", project_name: "Solo Co", not_sent: true,
+      drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com" };
+    // A group whose other member was archived: _stamp_scopes still says scope_count 1.
+    const lone = { proposal_id: "lone-s", project_name: "Solo Co", proposal_status: "sent",
+      scope_group: "grp_l", scope_label: "Base Bid 1", scope_index: 1, scope_count: 1,
+      scope_members: [{ id: "lone-s", label: "Base Bid 1", on_board: true, sent: true }] };
+    // Its only sibling is not on the board yet: still two proposals.
+    const offBoard = { proposal_id: "pair-s", project_name: "Solo Co", proposal_status: "sent",
+      scope_group: "grp_p", scope_label: "Base Bid 1", scope_index: 1, scope_count: 2, scope_send_pending: true,
+      scope_members: [{ id: "pair-s", label: "Base Bid 1", on_board: true, sent: true },
+                      { id: "pair-c", label: "Base Bid 2", on_board: false, sent: false, proposal_of: "pair-s" }] };
+    const offBoardNs = Object.assign({}, offBoard, { proposal_id: "pair-n", proposal_status: undefined,
+      not_sent: true, drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com",
+      scope_members: [{ id: "pair-n", label: "Base Bid 1", on_board: true },
+                      { id: "pair-c", label: "Base Bid 2", on_board: false }] });
+    const grows = { proposal_id: "grow-s", project_name: "Solo Co", proposal_status: "sent" };
+    BOARD_ROWS.push(soloSent, soloNs, lone, offBoard, offBoardNs, grows);
+    oneAdded.push(soloSent, soloNs, lone, offBoard, offBoardNs, grows);
+    page.setBoard(BOARD_ROWS);
+
+    page.open("solo-s"); page.renderDetail("solo-s", sentData()); out.one.soloSent = card();
+    page.open("solo-n"); page.renderNotSent("solo-n", soloNs); out.one.soloNotSent = card();
+    page.open("lone-s"); page.renderDetail("lone-s", sentData()); out.one.loneSent = card();
+    page.open("pair-s"); page.renderDetail("pair-s", sentData()); out.one.offBoardSent = card();
+    nav.length = 0;
+    const offOpen = dom.queryAll("[data-scope-open]");
+    for (const b of offOpen) await b.fire("click");
+    out.one.offBoardNav = nav.slice();
+    page.open("pair-n"); page.renderNotSent("pair-n", offBoardNs); out.one.offBoardNotSent = card();
+    // A project of one, then the server makes it a group of two and the poll paints again.
+    page.open("grow-s"); page.renderDetail("grow-s", sentData()); out.one.growBefore = card();
+    Object.assign(grows, { scope_group: "grp_g", scope_label: "Base Bid 1", scope_index: 1, scope_count: 2,
+      scope_send_pending: true,
+      scope_members: [{ id: "grow-s", label: "Base Bid 1", on_board: true, sent: true },
+                      { id: "grow-c", label: "Base Bid 2", on_board: true, sent: false, proposal_of: "grow-s" }] });
+    page.setBoard(BOARD_ROWS);
+    // No page.open: the poll's own repaint, past the drawer's signature guard.
+    page.renderDetail("grow-s", sentData()); out.one.growAfter = card();
+    out.one.growSendPresent = !!q("#scope-send");
+  } catch (e) {
+    out.errors.one = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    for (const r of oneAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+    page.setBoard(BOARD_ROWS);
   }
 
   // ── the project's one email, told honestly (2026-10-24 hardening) ─────────────

@@ -323,6 +323,11 @@ CONDITIONAL_IDS = {
     # Scope groups (2026-10-25): the "Decide the other scopes" card, rendered only for that task in
     # place of fu-task. Its own ids are pressed in test_group_followup_ui.py.
     "fu-decide": "only rendered while a scope group's decision task is waiting on a human",
+    # Plan step 7 (2026-10-27): "Proposals of this project" renders only on a project with two or
+    # more proposals, and applySecPanel's loop over ALL_SEC_CARDS skips a card it cannot find. NOT A
+    # RELAXATION: test_scope_board_ui.py pins it present AND eligible on every grouped drawer it
+    # paints, and absent AND ineligible on a project of one.
+    "dsec-scope": "only rendered on a project with two or more proposals",
 }
 
 # The NOT-SENT paint's own additions, kept out of the dict above on purpose. On a sent drawer
