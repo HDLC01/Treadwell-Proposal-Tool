@@ -2745,6 +2745,27 @@ async function runScenario(name, s) {
       mine: false, unknown: [], unknown_text: null, inflight: ["hs-b"] });
     out.honest.unrecordedPoll = repaint();
     out.honest.inflightHtml = dom.html;
+    // ROUND 3, NOT PUBLISHED YET: Lab 2 is in the project but not published (the portal's
+    // not_included). With nothing else to send the drawer says what to do, never "the customer has
+    // every scope"; with two of them it says so in the plural; and a send the portal answers
+    // nothing_to_send because of it says the same.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: false, unknown: [], unknown_text: null, inflight: [], not_included: ["hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedHtml = dom.html;
+    row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a", "hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedTwoHtml = dom.html;
+    row.scope_send = Object.assign({}, view, { not_included: ["hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedWithButtonHtml = dom.html;
+    out.honest.nothingUnpublished = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: [] } });
+    out.honest.nothingUnpublishedLost = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: ["hs-b"] } });
   } catch (e) {
     out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   } finally {

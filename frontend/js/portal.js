@@ -5078,6 +5078,9 @@
     // Scopes whose send is IN FLIGHT (the portal's inflight_scope_ids, round 3): claimed by a send
     // whose result is not recorded yet. Not pending and not lost, and not "every scope" either.
     const flying = ss && Array.isArray(ss.inflight) ? ss.inflight : [];
+    // Scopes not published yet (the portal's not_included): the email cannot carry them, so the
+    // customer does NOT have every scope; the drawer says what to do instead (round 3).
+    const unpublished = ss && Array.isArray(ss.not_included) ? ss.not_included : [];
     const namesOf = (ids) => ids.map((id) => {
       const m = members.filter((x) => x && x.id === id)[0];
       return esc((m && m.label) || "a scope");
@@ -5086,7 +5089,11 @@
     if (grouped && sent && ss) {
       send = ss.label
         ? `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(ss.label)}</button></div>`
-        : (lost.length || flying.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>');
+        : (lost.length || flying.length || unpublished.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>');
+      if (unpublished.length) {
+        send += `<p class="note" id="scope-not-published">Not published yet: ${namesOf(unpublished)}. ${unpublished.length === 1
+          ? "Publish it from its Files page, then email it from here." : "Publish them from their Files pages, then email them from here."}</p>`;
+      }
       if (flying.length) {
         send += `<p class="note" id="scope-inflight">An email for ${namesOf(flying)} is being sent, or its result has not been recorded yet. Check back in a few minutes.</p>`;
       }
@@ -5239,9 +5246,15 @@
     }
     if (status === 409 && code === "nothing_to_send") {
       const lostIds = Array.isArray(j.unknown) ? j.unknown : [];
+      // Scopes not published yet are why there is nothing to send, never "the customer already
+      // has every scope" (round 3).
+      const unpub = (Array.isArray(j.not_included) ? j.not_included : []).map(nameOf);
+      const unpubText = unpub.length ? " Not published yet: " + unpub.join(", ") + ". " + (unpub.length === 1
+        ? "Publish it from its Files page, then email it from here." : "Publish them from their Files pages, then email them from here.") : "";
       if (lostIds.length) {
-        return { sent: false, retry: false, text: "Nothing new was sent. The result of the last send was lost for: " + lostIds.map(nameOf).join(", ") + ". Check the thread, then send again." };
+        return { sent: false, retry: false, text: "Nothing new was sent. The result of the last send was lost for: " + lostIds.map(nameOf).join(", ") + ". Check the thread, then send again." + unpubText };
       }
+      if (unpub.length) return { sent: false, retry: false, text: "Nothing was sent." + unpubText };
       return { sent: false, retry: false, text: "Nothing was sent: the customer already has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here." };
     }
     if (code === "send_not_recorded") {

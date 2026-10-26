@@ -985,6 +985,33 @@ def test_a_send_in_flight_is_said_not_called_delivered(drawer):
     assert 'id="scope-inflight"' not in h["allSentHtml"]
 
 
+PUBLISH_ONE = "Publish it from its Files page, then email it from here."
+
+
+@needs_node
+def test_a_scope_not_published_yet_is_named_with_what_to_do(drawer):
+    """Round 3, EXECUTED: the portal's not_included is the reason, never "the customer already has
+    every scope": the drawer line, its plural, beside a send button, and the nothing_to_send
+    answer (alone and beside a lost send)."""
+    h = drawer["honest"]
+    html = h["unpublishedHtml"]
+    assert ('<p class="note" id="scope-not-published">Not published yet: Lab 2. ' + PUBLISH_ONE
+            + '</p>') in html
+    assert 'id="scope-all-sent"' not in html, "an unpublished scope was called emailed"
+    assert 'id="scope-send"' not in html
+    assert ('<p class="note" id="scope-not-published">Not published yet: Breakroom, Lab 2. Publish '
+            'them from their Files pages, then email them from here.</p>') in h["unpublishedTwoHtml"]
+    both = h["unpublishedWithButtonHtml"]
+    assert 'id="scope-send"' in both and "Not published yet: Lab 2. " + PUBLISH_ONE in both
+    assert 'id="scope-not-published"' not in h["allSentHtml"]
+    n = h["nothingUnpublished"]["note"]
+    assert n == "Nothing was sent. Not published yet: Lab 2. " + PUBLISH_ONE, n
+    assert "already has every scope" not in n
+    lost = h["nothingUnpublishedLost"]["note"]
+    assert lost == ("Nothing new was sent. The result of the last send was lost for: Lab 1. Check "
+                    "the thread, then send again. Not published yet: Lab 2. " + PUBLISH_ONE), lost
+
+
 @needs_node
 def test_an_unrecorded_send_keeps_its_sentence_through_the_poll(drawer):
     """The recorded:false sentence is kept in SCOPE_SEND_NOTICE: the poll's repaint after the send
