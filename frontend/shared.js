@@ -394,7 +394,9 @@
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
   // Somebody else can change any of them from the CRM while this page holds an older copy.
   // `scope_group` (2026-10-24): which project this proposal is one scope of, and its name there.
-  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group"];
+  // `proposal_of`, `estimate_digest`, `estimate_synced_at` (2026-10-27): whose estimate a proposal made
+  // by Create Multiple Proposals is a copy of, and which copy (drafts.fan_out_proposals).
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group", "proposal_of", "estimate_digest", "estimate_synced_at"];
 
   /** Re-read the server-owned keys for this draft and merge them into local state.
    *
@@ -421,8 +423,11 @@
       const body = await res.json();
       const data = (body && body.data) || {};
       const patch = {};
+      // NOT `estimate_synced_at`: it is the fence that tells the server this page's copy of a
+      // proposal predates a Refresh (drafts.StaleProposalWrite). Merged onto an old estimate it would
+      // wave the old price back in; only a whole fresh copy of the draft may carry the new stamp.
       SERVER_OWNED_KEYS.forEach((k) => {
-        if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
+        if (k !== "estimate_synced_at" && Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
       });
       // Compare before writing: an unconditional write would rewrite the blob on every page load.
       //

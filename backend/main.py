@@ -2598,6 +2598,9 @@ def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
         view = views.get(gid)
         pending = set(view["pending"]) if view else set()
         row["scope_members"] = [{"id": m["id"], "label": m.get("scope_label") or "",
+                                 # A proposal made from another member's base bid (Create
+                                 # Multiple Proposals): the drawer opens it on its proposal page.
+                                 "proposal_of": m.get("proposal_of") or None,
                                  "on_board": m["id"] in on_board,
                                  "sent": m["id"] in portal_rows,
                                  "pending": m["id"] in pending} for m in members]
@@ -8010,6 +8013,15 @@ def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[st
             "ok": False, "code": "split_since",
             "error": "Not saved — this project was split into separate proposals after this "
                      "page opened it. Reload the page to work on the scope it is now."})
+    except drafts.StaleProposalWrite:
+        # A copy of a proposal from BEFORE Refresh re-priced it (drafts.StaleProposalWrite): storing
+        # it would put the old price back under the new digest, and nobody would be told.
+        log.warning("save refused for draft %s: the page's copy predates the last refresh",
+                    _log_safe(draft_id))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "refreshed_since",
+            "error": "Not saved — this proposal was refreshed from the estimate after this page "
+                     "opened it. Reload the page to work on the refreshed copy."})
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": "Couldn't save the project. Please try again."}
@@ -8147,6 +8159,14 @@ def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
     if stale is not None:
         return stale
     data = row.get("data") or {}
+    # A PROJECT WHOSE BASE BIDS ARE ALREADY SEPARATE PROPOSALS (Create Multiple Proposals) is not
+    # split again: its children are copies of this estimate, and a split would rewrite the estimate
+    # they were copied from into one sheet. A child is one of those copies, never split either.
+    if data.get("proposal_of") or drafts.proposal_children(draft_id, drafts._scope_of(data)[0]):
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "has_proposals",
+            "error": "Nothing was split. This project's base bids are already separate proposals "
+                     "(Create Multiple Proposals on the proposal page). Change them there."})
     if not (isinstance(data.get("polish_estimate"), dict) and data["polish_estimate"].get("version") == 2):
         return JSONResponse(status_code=400, content={
             "ok": False, "code": "not_v2",
@@ -8193,6 +8213,98 @@ def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
         c["tab_id"] = k.tab_id
     out["parent"]["tab_id"] = kids[0].tab_id
     return {"ok": True, **out}
+
+
+# ─── One estimate, several proposals ("Create Multiple Proposals", 2026-10-27) ──
+# The store's side is the proposals block in drafts.py. Under /api/draft/*, which every role reaches
+# (nav_access.py: the wizard's routes are never gated by a tab), behind the sign-in gate.
+class ProposalsIn(BaseModel):
+    """POST /api/draft/{id}/proposals. `base_ids` are the ticked base sheets in Base Bid order, the
+    first being this draft's own base; `draft_version` is the scope routes' stale-copy guard."""
+    draft_version: Optional[str] = None
+    base_ids: List[str] = Field(default_factory=list)
+
+
+class ProposalsRefreshIn(BaseModel):
+    draft_version: Optional[str] = None
+
+
+def _no_draft() -> JSONResponse:
+    return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                  "error": "That project is not there any more."})
+
+
+@app.get("/api/draft/{draft_id}/proposals")
+def api_draft_proposals(draft_id: str) -> Any:
+    """The proposal page's tab strip (drafts.proposals_view): this draft's parent first, then every
+    proposal made from its base bids, each saying whether the estimate changed since it was copied.
+    A child's id answers its parent's strip. 404 not_found."""
+    draft_id = _safe_id(draft_id)
+    view = drafts.proposals_view(draft_id)
+    if view is None:
+        return _no_draft()
+    return {"ok": True, **view}
+
+
+@app.post("/api/draft/{draft_id}/proposals")
+def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Request) -> Any:
+    """CREATE MULTIPLE PROPOSALS (drafts.fan_out_proposals): one proposal per ticked base bid after
+    the first, each a draft of its own the server keeps copied from this estimate. Idempotent.
+
+    200 {ok, group_id, parent: {id, label}, children: [{id, label, base_tab_id, created}],
+    proposals: <the strip>}. Refused, flat {ok: false, code, error}: 404 not_found; 400
+    too_few_bases / no_such_sheet / combined_base / option_only_base / base_order /
+    not_fanned_from_child / invalid_scope_group; 409 document_changed / test_mix / label_taken /
+    too_many_scopes; 502 portal_unreachable (the portal could not say whether this was sent, which
+    decides whether its options may be edited); 503 split_failed."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return _no_draft()
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row, "create proposals")
+    if stale is not None:
+        return stale
+    if (row.get("data") or {}).get("proposal_of"):
+        return _scope_refusal(drafts.ScopeError(
+            "not_fanned_from_child", "This proposal was made from Base Bid 1's estimate. Base bids "
+                                     "are picked on Base Bid 1's tab."))
+    try:
+        sent = _draft_was_sent(draft_id)
+    except HTTPException as exc:
+        log.warning("create proposals refused for draft %s: the portal could not say whether it "
+                    "was sent (%s)", _log_safe(draft_id), exc.status_code)
+        return JSONResponse(status_code=502, content={
+            "ok": False, "code": "portal_unreachable",
+            "error": "No proposals were made. The customer portal is not answering, so the tool "
+                     "cannot tell whether this proposal was already sent. Try again in a minute."})
+    try:
+        out = drafts.fan_out_proposals(draft_id, payload.base_ids, _user_email(request), sent)
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+    return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
+
+
+@app.post("/api/draft/{draft_id}/proposals/refresh")
+def api_draft_proposals_refresh(draft_id: str, payload: ProposalsRefreshIn,
+                                request: Request) -> Any:
+    """"Estimate changed" -> Refresh (drafts.refresh_proposals): every proposal made from this
+    estimate re-copies it and keeps its own words. `draft_id` is the parent or any child; the stale
+    guard is this draft's own row (the page that pressed it flushed and read it).
+
+    200 {ok, parent_id, estimate_digest, refreshed: [ids], skipped: [{id, label, code}], proposals}.
+    404 not_found, 409 document_changed."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return _no_draft()
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row, "refresh proposals")
+    if stale is not None:
+        return stale
+    try:
+        out = drafts.refresh_proposals(draft_id, _user_email(request))
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+    return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
 
 
 class ScopeSendIn(BaseModel):
@@ -8302,8 +8414,36 @@ def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -
         if existed:
             drafts.log_event(draft_id, actor, "purged_project", {"id": draft_id})
         return {"ok": True, "existed": existed, "permanent": True}
+    kids = _proposals_to_trash_with(draft_id, actor)
     existed = drafts.trash_draft(draft_id, actor)
-    return {"ok": True, "existed": existed, "trashed": True}
+    cascaded = [k for k in kids if existed and drafts.trash_draft(k, actor)]
+    return {"ok": True, "existed": existed, "trashed": True, "cascaded": cascaded}
+
+
+def _proposals_to_trash_with(draft_id: str, actor: Optional[str]) -> List[str]:
+    """The proposals that go to the Trash with `draft_id` (Create Multiple Proposals), their portal
+    rows already hidden. Both delete routes call it BEFORE the draft itself is trashed.
+
+    A PARENT'S PROPOSALS GO WITH IT: they are copies of its estimate, and left behind they would be
+    proposals of an estimate nobody can open. Read before the parent is trashed (the group's rows
+    are the not-deleted ones). A child's own delete takes nothing with it, and restoring the parent
+    brings back the parent only.
+
+    EACH CHILD'S PORTAL ROW IS HIDDEN FIRST (_portal_visibility, why at api_delete_project): a sent
+    child trashed in our store alone would keep its card on the board and its page in front of the
+    customer. A portal that fails raises here, before anything of ours has moved."""
+    try:
+        row = drafts.load_draft(draft_id)
+        data = (row or {}).get("data") or {}
+        kids = [] if data.get("proposal_of") else \
+            [m["id"] for m in drafts.proposal_children(draft_id, drafts._scope_of(data)[0])]
+    except Exception as exc:  # noqa: BLE001 — the delete itself still runs, and says so in the log
+        log.warning("delete of draft %s: its proposals could not be read (%s); only the draft "
+                    "itself is trashed", _log_safe(draft_id), exc)
+        return []
+    for k in kids:
+        _portal_visibility(k, "delete", actor)
+    return kids
 
 
 @app.post("/api/draft/{draft_id}/restore")
@@ -8352,9 +8492,12 @@ def api_delete_project(draft_id: str, request: Request) -> Dict[str, Any]:
     ADMINS ONLY, at the endpoint and not merely in the drawer."""
     actor = _require_admin(request)
     who = actor.get("email")
+    kids = _proposals_to_trash_with(draft_id, who)
     hidden = _portal_visibility(draft_id, "delete", who)
     existed = drafts.trash_draft(draft_id, who)
-    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden}
+    cascaded = [k for k in kids if existed and drafts.trash_draft(k, who)]
+    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden,
+            "cascaded": cascaded}
 
 
 @app.post("/api/draft/{draft_id}/archive")

@@ -675,6 +675,18 @@ def test_the_estimator_picker_rereading_the_assignment_writes_nothing(ran):
     assert s["server"] == RJ_REVISION, s
 
 
+def test_the_reread_never_moves_a_proposals_refresh_stamp_onto_its_old_estimate(ran):
+    """A Refresh re-priced this proposal after the page read it. `estimate_synced_at` is the
+    server's fence against the page's old copy (drafts.StaleProposalWrite: a save that does not
+    carry the row's stamp is refused), so the re-read must not hand the old estimate the new stamp;
+    the digest it may.
+
+    Mutation: merge every SERVER_OWNED_KEYS key — the patch carries the new stamp."""
+    s = ran["syncStampRefresh"]
+    assert s["patch"] == {"estimate_digest": "after-refresh"}, s
+    assert s["localStamp"] is None, s
+
+
 def test_a_server_that_cannot_be_read_stops_the_files_page_even_on_a_keyed_copy(ran):
     """Finding 2C. With the server unreadable as the page opened and this browser's own copy
     keyed, the page carried on from a copy nobody had checked. It now stops on the same card as
