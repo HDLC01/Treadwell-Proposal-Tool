@@ -76,59 +76,85 @@ def test_the_polish_patch_line_is_the_renovation_rate_over_the_whole_floor(ran):
     assert ran["polish"]["patch"] == pytest.approx(0.15 * RECORDED["polish"]["in"]["sf"], abs=0.005)
 
 
-# ── the same job as a hard bid (Hanz, 2026-10-17: "lets make the hard bid have those rules but still overridable in the
-#    review tab") ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# ── the same job saved as a hard bid. The Hard bid switch (2026-10-17, #685) was REMOVED on 2026-10-27 (Hanz: "I told you
+#    to remove this hard bid discount"): the rule prices nothing now, and a bid saved with it on opens with the discount it
+#    gave typed in its Discount box (B.settleHardBid), so its price does not move. ───────────────────────────────────────
 def _rule(r, pct):
     """Kyle's D74 / D68: =ROUNDUP(SUM(sub_total, gp) * -pct, 0), rounded away from zero."""
     import math
     return -math.ceil(round((r["sub_total"] + r["gp"]) * pct, 6))
 
 
-def test_a_local_hard_bid_from_13000_takes_kyles_two_and_a_half_percent(ran):
-    r = ran["hardBid"]["epoxy"]
-    assert (r["sub_total"], r["gp"]) == (28064, 13736), "the job is not the recorded one"
-    assert r["hard_bid"] == _rule(r, 0.025) == -1045
+# WHAT EACH SAVED BID PRICED AT WHILE THE SWITCH PRICED ITS RULE: (discount line, total), recorded from the harness on
+# origin/staging 58cf4a5c, the last code that had the switch. Settling must land every one of them exactly.
+PRICED_WITH_THE_SWITCH = {
+    "epoxy": (-1045, 51426),          # local, sub-total 28,064: Kyle's 2.5%
+    "epoxyTyped": (-1254, 51165),     # his typed 3% won over the rule
+    "epoxyDollars": (-500, 52108),    # typed dollars won over the rule
+    "epoxyNotLocal": (0, 52733),      # not local and under $60,000: the rule gave nothing
+    "epoxyBadTyped": (-1045, 51426),  # a % box that is not a number was left out, and the rule priced
+    "epoxyBig": (-5242, 158913),      # sub-total over $60,000: 4%
+    "polish": (-639, 32046),          # polish-rev3, local: 2.5%
+    "polishRev2": (0, 31331),         # rev2 has no rule
+}
 
 
-def test_a_typed_discount_wins_over_the_rule(ran):
-    h = ran["hardBid"]
-    assert h["epoxyTyped"]["hard_bid"] == -1254 and h["epoxyTyped"]["total"] == RECORDED["epoxy"]["sheet"]["total"], (
-        "Kyle's typed 3% with Hard bid on is still his bid")
-    assert h["epoxyDollars"]["hard_bid"] == -500
+@pytest.mark.parametrize("name", sorted(PRICED_WITH_THE_SWITCH))
+def test_a_saved_hard_bid_keeps_its_price_once_settled(ran, name):
+    r = ran["hardBid"]["settled"][name]
+    assert (r["hard_bid"], r["total"]) == PRICED_WITH_THE_SWITCH[name]
+    assert r["input_kept"], "settling changed the model it was handed"
+    assert "hard_bid" not in (r["adjust"] or {}), "the switch survived the open"
 
 
-def test_under_60000_a_job_that_is_not_local_gets_nothing(ran):
-    r = ran["hardBid"]["epoxyNotLocal"]
-    assert r["sub_total"] < 60000 and r["hard_bid"] == 0
+def test_the_rules_percentage_becomes_a_typed_discount(ran):
+    s = ran["hardBid"]["settled"]
+    assert (s["epoxy"]["sub_total"], s["epoxy"]["gp"]) == (28064, 13736), "the job is not the recorded one"
+    assert s["epoxy"]["hard_bid"] == _rule(s["epoxy"], 0.025)
+    assert s["epoxy"]["adjust"] == {"discount_pct": "2.5", "ship_pct": "6", "supplier_pct": "20"}
+    assert s["epoxyBig"]["sub_total"] >= 60000 and s["epoxyBig"]["adjust"] == {"discount_pct": "4"}
+    assert s["epoxyBig"]["hard_bid"] == _rule(s["epoxyBig"], 0.04)
+    assert s["polish"]["adjust"] == {"discount_pct": "2.5"}
+    assert s["epoxyBadTyped"]["adjust"]["discount_pct"] == "2.5", "the rule priced over the unusable box"
 
 
-def test_from_60000_the_rule_is_four_percent(ran):
-    r, off = ran["hardBid"]["epoxyBig"], ran["hardBid"]["epoxyBigOff"]
-    assert r["sub_total"] >= 60000
-    assert r["hard_bid"] == _rule(r, 0.04) != 0
-    assert off["hard_bid"] == 0 and off["total"] > r["total"], "with the switch off the same job has no discount"
+def test_a_typed_figure_wins_and_the_switch_is_just_dropped(ran):
+    s = ran["hardBid"]["settled"]
+    assert s["epoxyTyped"]["adjust"] == {"discount_pct": "3", "ship_pct": "6", "supplier_pct": "20"}
+    assert s["epoxyTyped"]["total"] == RECORDED["epoxy"]["sheet"]["total"], "Kyle's typed 3% is still his bid"
+    assert s["epoxyDollars"]["adjust"] == {"ship_pct": "6", "supplier_pct": "20", "discount_amt": "500"}
+    # the rule gave nothing: no figure is invented, the key just goes (an adjust left empty goes with it)
+    assert s["epoxyNotLocal"]["adjust"] == {"ship_pct": "6", "supplier_pct": "20"}
+    assert s["polishRev2"]["adjust"] is None
 
 
-def test_a_new_polish_bid_has_the_rule_and_a_saved_rev2_one_does_not(ran):
-    h = ran["hardBid"]
-    assert h["polish"]["sub_total"] >= 13000 and h["polish"]["hard_bid"] == _rule(h["polish"], 0.025) != 0
-    assert h["polishRev2"]["hard_bid"] == 0, "a bid saved on rev2 keeps its total whatever it says"
+@pytest.mark.parametrize("name", ["epoxyNever", "epoxyNeverBare", "polishNever"])
+def test_a_bid_that_never_had_the_switch_is_handed_back_untouched(ran, name):
+    assert ran["hardBid"]["settled"][name]["untouched"], "the same object, byte for byte"
 
 
-def test_the_switch_is_shown_only_where_kyles_sheet_has_the_rule(ran):
-    assert ran["hardBid"]["ruleOn"] == {"rev3": True, "rev2": False, "epoxy": True, "gyp": False, "nothing": False}
+def test_the_switch_no_longer_prices_anything(ran):
+    raw = ran["hardBid"]["raw"]
+    assert raw["epoxy"]["hard_bid"] == 0 and raw["epoxy"]["total"] == raw["epoxyOff"]["total"]
+    assert raw["epoxyBig"]["hard_bid"] == 0
+    assert raw["polish"]["hard_bid"] == 0 and raw["polish"]["total"] == raw["polishOff"]["total"]
 
 
-def test_the_switch_is_kept_only_as_true_and_survives_the_boxes_being_set_aside(ran):
+def test_the_switch_is_read_only_to_be_settled(ran):
     k = ran["hardBid"]["kept"]
-    assert k["on"] == {"hard_bid": True} and k["notTrue"] is None
-    assert k["ruleKeepsIt"] == {"hard_bid": True}, "the Review step's grey Discount figure would not show the rule"
+    assert k["on"] == {"hard_bid": True}, "a saved switch must survive migrateModel until the page settles it"
+    assert k["ruleGone"] is None, "the Review step's grey figures are priced with no rule"
+    assert k["noSwitchApi"] == "undefined", "hardBidRuleOn is gone with the switch"
 
 
 MUTATIONS = {
-    "the hard bid switch does not reach the chain": (
-        "js/bid-model.js", "    return a && a.hard_bid ? Object.assign({}, conditions || {}, { hard_bid: true }) : conditions;",
-        "    return conditions;", ("hardBid.epoxy", "hard_bid")),
+    "settling does not write the rule's figure": (
+        "js/bid-model.js", "        if (pct !== null) next.discount_pct = pctTyped(pct);",
+        "        if (false) next.discount_pct = pctTyped(pct);", ("hardBid.settled.epoxy", "total", 51426)),
+    "a saved switch still prices the rule": (
+        "js/bid-model.js",
+        "    return ctx && ctx.hardBidRule === true ? Object.assign({}, conditions || {}, { hard_bid: true }) : conditions;",
+        "    return Object.assign({}, conditions || {}, { hard_bid: true });", ("hardBid.raw.epoxy", "hard_bid", 0)),
     "the supplier discount is not applied to the materials": (
         "js/library-core.js", "      if (offOf.has(vkey(it.vendor))) factor = (1 + esc - offOf.get(vkey(it.vendor))) / (1 + esc);",
         "      if (false) factor = 1;", ("epoxy", "material")),
@@ -149,11 +175,12 @@ MUTATIONS = {
 
 @pytest.mark.parametrize("name", sorted(MUTATIONS))
 def test_the_match_goes_red_when_the_code_changes(tmp_path, name):
-    rel, old, new, (tab, key) = MUTATIONS[name]
+    rel, old, new, (tab, key, *want) = MUTATIONS[name]
     frontend = break_source(tmp_path, rel, old.strip(), new.strip())
     copy_unmodified(frontend, SCRATCH_FRONTEND_FILES)
     got = _run(frontend, tmp_path)
-    if tab == "hardBid.epoxy":
-        assert got["hardBid"]["epoxy"][key] != -1045, "the match did not notice: " + name
+    if tab.startswith("hardBid."):
+        _, group, case = tab.split(".")
+        assert got["hardBid"][group][case][key] != want[0], "the match did not notice: " + name
         return
     assert got[tab][key] != pytest.approx(RECORDED[tab]["sheet"][key], abs=0.005), "the match did not notice: " + name
