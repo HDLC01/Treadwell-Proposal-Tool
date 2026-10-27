@@ -215,6 +215,8 @@ jobs:
     needs: shard
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Every chunk must have passed
         run: |
