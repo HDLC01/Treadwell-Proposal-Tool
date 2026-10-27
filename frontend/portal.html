@@ -961,6 +961,9 @@
   <!-- Board logic (stages, dates, ordering) — must load BEFORE portal.js, which
        reads window.TWCrm at module scope. -->
   <script src="/js/crm-core.js"></script>
+  <!-- Send all builds a proposal that was never built, through the Proposal step's own door
+       (send-all-chain.js, window.TWSendAll). Before the page's script, which reads it at a press. -->
+  <script src="/js/send-all-chain.js?v=20261028-1"></script>
   <script src="/js/portal.js"></script>
 </body>
 </html>

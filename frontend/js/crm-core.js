@@ -713,6 +713,21 @@
       return members.some(function (x) { return x && x.id === id && x.sent; });
     };
     var code = j.code || j.error;
+    // PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): the page builds them through their own
+    // Proposal step (send-all-chain.js) and presses again. `build` is the list to build; `text` is
+    // what the page says while it does, and `fallback` the server's own sentence for a page that
+    // cannot (it names the manual way).
+    if (status === 409 && j.code === "needs_build" && Array.isArray(j.build) && j.build.length) {
+      var names = j.build.map(function (b) { return (b && b.label) || "A proposal"; });
+      var named = names.length === 1 ? names[0]
+        : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+      return { sent: false, retry: false, build: j.build,
+               fallback: typeof j.error === "string" && j.error ? j.error : "Nothing was sent.",
+               text: "Building " + named + " first: " + (names.length === 1 ? "it has" : "they have")
+                 + " never been built, so " + (names.length === 1 ? "its" : "each one's")
+                 + " proposal is made from its default wording and its sheet's price, exactly as"
+                 + " Continue on its Proposal step would make it. Then every proposal goes in one email." };
+    }
     if (j.code && SEND_ALL_REFUSALS[j.code] && typeof j.error === "string" && j.error) {
       return { sent: false, retry: false, text: j.error };
     }

@@ -8574,8 +8574,10 @@ async def api_scope_group_send_all(group_id: str, request: Request,
 
     Refused before anything is published or sent, flat {ok: false, code, error}: 400
     invalid_scope_group / not_in_group, 404 group_not_found, 409 test_mix, the capability refusals
-    (_scope_groups_refusal), and 409 not_ready_to_send with `blocked` [{id, label, error}] when any
-    proposal cannot be published ("Room 2: build its files on its Files page first"). A publish the
+    (_scope_groups_refusal), 409 needs_build with `build` [{id, label}] when the only thing in the
+    way is proposals that were never built (the page builds them and presses again), and 409
+    not_ready_to_send with `blocked` [{id, label, code, error}] when any proposal cannot be
+    published ("Room 2: add a customer email on its Files page first"). A publish the
     portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
     Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
     label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
@@ -8667,11 +8669,16 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
             if settled:
                 blocked.append({"id": m["id"], "label": label, "error": settled})
                 continue
+        # NEVER BUILT IS NOT THE SAME AS NOT READY (Hanz, 2026-10-28: a third base bid made by
+        # Create Multiple Proposals refused the press five times with "build its files on its Files
+        # page first"). A proposal with no `proposal_payload` has never had its document composed,
+        # and only the Proposal step composes one, so the press answers `needs_build` and the page
+        # that pressed builds each such proposal through that step's own door
+        # (send-all-chain.js), then presses again. One WITH a document but no files yet needs no
+        # page at all: its files are the ones _prepare_publish renders below, recorded on the draft
+        # once it is published (_record_built_files), exactly as its Files page's Download would.
         pp = data.get("proposal_payload")
-        if not data.get("generate_result") or not (isinstance(pp, dict) and pp.get("values")):
-            blocked.append({"id": m["id"], "label": label,
-                            "error": "build its files on its Files page first"})
-            continue
+        built = isinstance(pp, dict) and bool(pp.get("values"))
         if m["id"] == page_id and page is not None:
             one = page
         else:
@@ -8693,22 +8700,46 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                 no_followups=list(page.no_followups) if page else [],
                 assigned_estimator=page_est or own or group_est,
                 require_deposit=dep,
-                has_cover_letter=bool(pp.get("cover_letter_enabled")))
+                has_cover_letter=bool(pp.get("cover_letter_enabled")) if built else None)
         if not one.emails and not str(data.get("contact_email") or "").strip():
-            blocked.append({"id": m["id"], "label": label,
+            blocked.append({"id": m["id"], "label": label, "code": "no_recipient",
                             "error": "add a customer email on its Files page first"})
+            continue
+        if not built:
+            # Asked here as well, because _prepare_publish (which asks it of a built one) cannot run
+            # on a proposal with no document: building it would only end in this refusal.
+            if not (one.assigned_estimator or "").strip():
+                blocked.append({"id": m["id"], "label": label, "code": "no_estimator",
+                                "error": "choose its assigned estimator on its Files page first"})
+            else:
+                blocked.append({"id": m["id"], "label": label, "code": "needs_build",
+                                "error": "it has never been built; Send all builds it for you "
+                                         "once the others can go"})
             continue
         try:
             prep = _prepare_publish(m["id"], request, one, row=row)
         except HTTPException as exc:
             prep = exc
         if isinstance(prep, (Response, HTTPException)):
-            blocked.append({"id": m["id"], "label": label, "error": _send_all_block_reason(prep)})
+            blocked.append({"id": m["id"], "label": label, "code": "refused",
+                            "error": _send_all_block_reason(prep)})
             continue
         prepared.append((m, prep))
     if blocked:
         log.warning("send-all refused for group %s: %s", _log_safe(group_id),
                     "; ".join("%s (%s)" % (b["id"], b["error"]) for b in blocked))
+        if all(b.get("code") == "needs_build" for b in blocked):
+            # NOTHING ELSE STANDS IN THE WAY: the page builds these, then presses again. Nothing was
+            # published, minted or written. `error` is for a page that cannot build them (an older
+            # page, or a browser that blocks the storage the build needs): the manual way, in words.
+            names = [b["label"] for b in blocked]
+            return JSONResponse(status_code=409, content={
+                "ok": False, "code": "needs_build",
+                "build": [{"id": b["id"], "label": b["label"]} for b in blocked],
+                "error": "Nothing was sent. %s %s never been built. Open %s Proposal step and "
+                         "press Continue to Done, then send again." % (
+                             _and_list(names), "has" if len(names) == 1 else "have",
+                             "its" if len(names) == 1 else "each one's")})
         return JSONResponse(status_code=409, content={
             "ok": False, "code": "not_ready_to_send", "blocked": blocked,
             "error": "Nothing was sent. " + " ".join(
@@ -8732,7 +8763,33 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                          + " Press the button again in a minute to finish."})
         published.append({"id": m["id"], "label": label,
                           "revision_no": out.get("revision_no") if isinstance(out, dict) else None})
+        if not (prep["row"].get("data") or {}).get("generate_result"):
+            _record_built_files(m["id"], (prep["row"].get("data") or {}).get("proposal_payload"),
+                                request)
     return published
+
+
+def _and_list(names: List[str]) -> str:
+    """"Room 2", "Room 2 and Room 3", "Room 2, Room 3 and Room 4"."""
+    names = [str(n) for n in names if n]
+    if len(names) <= 1:
+        return names[0] if names else "A proposal"
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _record_built_files(draft_id: str, pp: Any, request: Request) -> None:
+    """A proposal the send-all published with a document but no files yet: its files recorded on
+    the draft, as its Files page's Download records them (api_draft_documents, the same render and
+    the same one write), so the board's "has files" and its Files page agree with what was sent.
+    After the publish, and only logged when it fails: the proposal has already gone."""
+    if not (isinstance(pp, dict) and pp.get("values")):
+        return
+    try:
+        out = _documents_out(_render_documents(pp, request, want_estimate=True))
+        drafts.record_generate_result(draft_id, out.model_dump())
+    except Exception as exc:  # noqa: BLE001 — a board column must never undo a send
+        log.warning("send-all: could not record %s's files on the draft: %s",
+                    _log_safe(draft_id), exc)
 
 
 @app.get("/api/scope-group/{group_id}/workbook")

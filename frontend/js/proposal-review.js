@@ -10561,7 +10561,12 @@
     let _door = null;
     try { _door = new URLSearchParams(window.location.search); } catch {}
     const _viaDoor = !!_door && _door.get("compose") === "files";
-    const _files = TW.withDraft("/done.html?composed=1"
+    // SEND ALL'S WALK (send-all-chain.js, Hanz 2026-10-28): a door opened to build a proposal that
+    // was never built goes on to the next one, or back to the page that pressed Send all, instead
+    // of to this proposal's Files page. Everything above ran exactly as for any other Continue.
+    // window-qualified on purpose: harnesses lift this function by name.
+    const _walk = _viaDoor && window.TWSendAll ? window.TWSendAll.nextHop(_door) : null;
+    const _files = _walk || TW.withDraft("/done.html?composed=1"
       + (_viaDoor && _door.get("files") === "1" ? "&files=1" : ""));
     if (_viaDoor) window.location.replace(_files);
     else window.location.assign(_files);
@@ -10609,7 +10614,16 @@
     if (!q || q.get("compose") !== "files") return;
     const btn = document.getElementById("generate-btn");
     const label = btn ? btn.textContent : "";
-    if (btn) { btn.disabled = true; btn.textContent = "Updating the proposal…"; }
+    // Opened by Send all to build a proposal that was never built (send-all-chain.js): said on the
+    // button, the one line this page shows while it works.
+    const walk = window.TWSendAll ? window.TWSendAll.progress(q) : null;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = walk ? "Building " + walk.label + " for Send all (" + walk.i + " of " + walk.n + ")…"
+        : "Updating the proposal…";
+    }
+    // A STOP ENDS THE WALK, so nothing is ever sent after a build that did not happen.
+    const endWalk = () => (window.TWSendAll ? window.TWSendAll.abandon(q) : null);
     // ONLY FROM THE SERVER'S COPY, OR FROM THAT COPY PLUS CHANGES WHOSE SAVE NEVER LANDED. What
     // this page composes from is the blob it was loaded with (TW.bootDigest), and it saves the
     // whole of it: at Continue, and first as it loads (rebuildPricing's setState, 2.5 s later).
@@ -10640,6 +10654,7 @@
     const backToFiles = () => {
       if (leaving) return;
       leaving = true;
+      endWalk();
       TW.dropHeldChanges();
       window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
     };
@@ -10695,9 +10710,11 @@
     // saves as every page does. Could it not be asked, the hold stays, and the note says so.
     const handOver = async (freedHead, unfreedHead) => {
       stopped = true;
+      const ended = endWalk();
+      const lead = ended ? "Send all stopped while building " + ended.label + ", so nothing was sent to the customer. " : "";
       const freed = await TW.releaseHeldSaves();
       if (leaving) return;                                // the server held another copy: gone back
-      repaintNote(freed ? freedHead : unfreedHead,
+      repaintNote(lead + (freed ? freedHead : unfreedHead),
         freed ? "Check the document below, then press Continue to Done."
               : "Check your connection, then reload this page. Until then, nothing you change on this page is saved.");
     };
@@ -10714,7 +10731,7 @@
     // reason of its own (another tab has the keys) keeps continueToDone's note: nothing here can
     // save that page's copy.
     if (await continueToDone(null) || leaving) return;
-    if (TW.saveBlocked && TW.saveBlocked()) return;
+    if (TW.saveBlocked && TW.saveBlocked()) { endWalk(); return; }
     await handOver("Your changes are saved now, but the Files page could not be opened for you.",
                    "Your changes could not be saved, so the proposal was not rebuilt for you.");
   }
