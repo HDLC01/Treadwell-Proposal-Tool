@@ -316,8 +316,12 @@
      header) lives in styles.css now, shared with the v2 estimate's Sheets panel;
      only the canvas padding it reserves stays here, because .word-canvas is
      this page's. */
-  /* Keep the centered proposal page clear of the right rail when the rail is shown. */
-  body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 272px; }
+  /* Keep the centered proposal page clear of the right rail when the rail is shown -- only where
+     there is room for a lane. Below 1401px the rail still floats (it is never in the flow), but
+     reserving 272px there would squeeze the sheet, so it sits over the page and collapses instead. */
+  @media (min-width: 1401px) {
+    body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 272px; }
+  }
   /* The left "Proposal fields" rail is redundant — the document is fully
      click-to-edit inline, and its structured fields are set on Intake/Estimate.
      Hide the rail (the #proposal-form inside stays in the DOM as a hidden
@@ -370,13 +374,8 @@
     cursor: pointer; }
   .cl-warn-btn-quiet { background: transparent; color: #7a5c00; }
   .cl-warn-btn:hover { filter: brightness(1.08); }
-  /* The rest of the rail's rules (.options-panel h3, .op-row, the inline breakpoint) are in
-     styles.css. Below ~1400px the rail drops inline above the document, so the canvas stops
-     reserving its lane: */
-  @media (max-width: 1400px) {
-    body.word-app:has(#options-panel:not([hidden])) .word-canvas { padding-right: 0; }
-    .word-canvas { padding-left: 0; }
-  }
+  /* The rest of the rail's rules (.options-panel h3, .op-row, the collapsed pill) are in
+     styles.css. The rail floats at every width; its lane is reserved above 1400px only (above). */
 
   /* The old doc-style inputs (dotted underline, meant to look like inline
      document text) are reused inside #fields-panel for the structured

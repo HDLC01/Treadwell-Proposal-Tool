@@ -1884,7 +1884,12 @@
           // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
           const baseRO = v2Locked ? " disabled" : "";
-          let h = `<div class="op-drag" title="Drag to move">Pricing options</div>` +
+          // The collapse button is redrawn with the header, so it reads the panel's state back off
+          // the class TW.floatPanel toggles (guarded: a harness panel may carry no classList).
+          const optsCollapsed = !!(optsPanel.classList && optsPanel.classList.contains("collapsed"));
+          let h = `<div class="op-drag" title="Drag to move"><span class="op-title">Pricing options</span>` +
+            `<button type="button" class="op-collapse" aria-expanded="${optsCollapsed ? "false" : "true"}"` +
+            ` aria-label="Collapse or expand Pricing options" title="Collapse or expand"></button></div>` +
             (v2Locked
               ? `<p class="op-hint pr-base-locked">Pick the base bid on the estimate. <a class="pr-est-link" href="${esc(estimateHref)}">Open the estimate</a></p>` +
                 `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
@@ -6667,7 +6672,8 @@
   // rail is a margin on <body> that auth.js ANIMATES in when it draws the sidebar
   // (`body{transition:margin-left .2s ease}`), so a first fit inside those 200ms measured a canvas
   // up to 240px wider than it ends up; the 272px pricing-rail reservation is padding a :has() rule
-  // adds when #options-panel is shown; and below 1400px the panel moves inline. Measured on both
+  // adds when #options-panel is shown above 1400px (below it the panel floats over the page with
+  // no lane reserved). Measured on both
   // bad loads, the sheet was exactly 240px wider than the space it had (canvas clientWidth - 56
   // instead of - 296). The only listener that re-fitted was the window's `resize`, which none of
   // those fire. So the canvas's own box is observed, and any change to it -- every frame of that
@@ -9740,11 +9746,16 @@
   // The drag, the remembered position and the clamp that keeps a restored panel on screen now live
   // in TW.floatPanel (shared.js), which this rail, the polish-intake cheat sheet and the v2
   // estimate's Sheets panel all call. 240 is this panel's CSS width.
+  //
+  // It floats at EVERY width (2026-10-27). Below 1400px it used to drop into the page above the
+  // document, and since only .word-canvas scrolls it became permanent chrome pushing the proposal
+  // down. Floating there instead, it can be collapsed to its header (the − button, remembered
+  // under tw_opts_collapsed) when it sits over the page being read.
   (function initOptionsPanelDrag() {
     const panel = document.getElementById("options-panel");
     if (!panel) return;
     TW.floatPanel(panel, { handle: "op-drag", draggingClass: "op-dragging",
-      key: "tw_opts_pos", width: 240 });
+      key: "tw_opts_pos", width: 240, collapseKey: "tw_opts_collapsed" });
   })();
 
   // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the
