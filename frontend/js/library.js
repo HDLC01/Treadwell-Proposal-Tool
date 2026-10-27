@@ -1542,11 +1542,11 @@
     if (openId !== st.open) {
       st.open = openId;
       for (var i = 0; i < shown.length; i++) {
-        if (shown[i].id === openId) { st.page = L.pageOfIndex(i, L.PAGE_SIZE); break; }
+        if (shown[i].id === openId) { st.page = L.pageOfIndex(i, L.ASM_PAGE_SIZE); break; }
       }
     }
-    st.page = L.clampPage(st.page, shown.length, L.PAGE_SIZE);
-    return L.pageSlice(shown, st.page, L.PAGE_SIZE);
+    st.page = L.clampPage(st.page, shown.length, L.ASM_PAGE_SIZE);
+    return L.pageSlice(shown, st.page, L.ASM_PAGE_SIZE);
   }
 
   /** Write one pager: hidden when everything fits on one page, otherwise "Page 2 of 6",
@@ -1571,7 +1571,7 @@
     var st = PAGER[kind];
     if (!st) return;
     var total = kind === "items" ? visibleItems().length : visibleAssemblies($("area").value).length;
-    var to = L.clampPage(st.page + (Number(step) || 0), total, L.PAGE_SIZE);
+    var to = L.clampPage(st.page + (Number(step) || 0), total, kind === "items" ? L.PAGE_SIZE : L.ASM_PAGE_SIZE);
     if (to === st.page) return;
     st.page = to;
     if (kind === "items") renderItems(); else renderList();
@@ -2112,7 +2112,7 @@
       $("asm-hits").textContent = filtering
         ? shown.length + " of " + ASMS.length + " shown" : "";
     }
-    paintPager("asm-pager", L.pageInfo(PAGER.asm.page, shown.length, L.PAGE_SIZE));
+    paintPager("asm-pager", L.pageInfo(PAGER.asm.page, shown.length, L.ASM_PAGE_SIZE));
     renderAsmFilterBar();
   }
 

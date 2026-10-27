@@ -6741,10 +6741,11 @@ async function manualSaveChecks() {
     api.setOpenId("qnew"); api.paint();
     res.asm.afterNew = span(cardIds(d));
     res.asm.afterNewCurrent = current(d);
-    // Clamp: 61 cards now, page 3 holds q60 alone after the new one; take two off the end.
-    api.turnPage("asm", 1); api.turnPage("asm", 1);
+    // Clamp: 61 cards now, 8 a page, so the last page (8) holds the five cards q56..q60. Walk Next
+    // to the end (Next on the last page stays put), then take that whole page off the end.
+    for (let i = 0; i < 10; i++) api.turnPage("asm", 1);
     res.asm.lastBeforeShrink = span(cardIds(d));
-    api.ASMS.splice(api.ASMS.length - 11, 11);
+    api.ASMS.splice(api.ASMS.length - 5, 5);
     api.renderList();
     res.asm.afterShrink = span(cardIds(d));
     res.asm.afterShrinkPager = pagerOf(d, "asm-pager");
@@ -6759,10 +6760,17 @@ async function manualSaveChecks() {
     res.asm.deepLinkCurrent = current(d);
   }
   {
-    const { api, dom: d } = build({ ASMS: mkAsms(25), openId: "q1" });
+    // 8 OR FEWER cards: no pager. The ninth card is the one that brings it, on page 2.
+    const { api, dom: d } = build({ ASMS: mkAsms(8), openId: "q1" });
     api.renderList();
-    res.asm.twentyFive = span(cardIds(d));
-    res.asm.twentyFivePager = pagerOf(d, "asm-pager");
+    res.asm.eight = span(cardIds(d));
+    res.asm.eightPager = pagerOf(d, "asm-pager");
+    const { api: api9, dom: d9 } = build({ ASMS: mkAsms(9), openId: "q1" });
+    api9.renderList();
+    res.asm.nine = span(cardIds(d9));
+    res.asm.ninePager = pagerOf(d9, "asm-pager");
+    api9.turnPage("asm", 1);
+    res.asm.ninePageTwo = span(cardIds(d9));
   }
 
   // ── the static half: three nav landmarks, each named, each button wired to turnPage's kinds ──
