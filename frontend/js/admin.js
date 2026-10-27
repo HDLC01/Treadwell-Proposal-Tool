@@ -262,7 +262,7 @@
             somewhere an admin can find it: a denial nobody can see is a denial nobody can lift.${
             policyKnown?"":` Those cells read a question mark because the permissions did not load,
             not because the tab is switched off.`}</p>`:""}
-          <p><strong>A tab switched off is a real block, but the page is still served.</strong>
+          <p><strong>A tab switched off is hidden from the menu, and its page shows a "not available" card. Its data is not blocked.</strong>
             There is no session cookie in this app — the only credential is a header the browser
             attaches to API calls — so a page is still reachable by typing its URL, and what it
             paints for a blocked role is a refusal card instead of its own content. Every tab here
