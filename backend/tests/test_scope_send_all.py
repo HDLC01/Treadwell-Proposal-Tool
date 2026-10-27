@@ -510,3 +510,104 @@ def test_a_republished_neighbour_with_no_stored_choice_keeps_the_portals(fake_su
     assert r.status_code == 200, r.text
     by = {b["draft_id"]: b for b in w.publishes}
     assert "require_deposit" not in by["s1"]
+
+
+# ─── what the Proposal step's tab says is asked before the press builds a proposal unattended ──
+# Review of the build-what-was-never-built change: a proposal of Create Multiple Proposals whose tab
+# says "Estimate changed" or "same sheet as Base Bid 1" was built from its old copy and emailed,
+# because the walk opens its Proposal step with nobody looking. Real fan-out children, real
+# drafts.proposals_view.
+def _fanned(fake_supabase, monkeypatch, parent, bases):
+    """A World holding `parent` (built, with files) and the never-built children Create Multiple
+    Proposals makes for `bases`; returns (world, group id, child ids)."""
+    import test_multi_proposals as tmp
+    p = copy.deepcopy(parent)
+    p["is_test"] = False
+    w = World(fake_supabase, monkeypatch, [{"id": "p1", "data": p, "owner_email": EST,
+                                            "created_at": "2026-10-01", "updated_at": tmp.V,
+                                            "deleted_at": None}])
+    out = drafts.fan_out_proposals("p1", list(bases), "rj@x.test")
+    kids = [c["id"] for c in out["children"]]
+    for k in kids:
+        row = next(r for r in w.store["drafts"] if r["id"] == k)
+        assert not (row["data"].get("proposal_payload") or {}).get("values"), "a child came built"
+    return w, out["group_id"], kids
+
+
+def _press_group(gid, body=None):
+    return client.post("/api/portal/scope-group/%s/send-all" % gid, json=body or {})
+
+
+def test_a_fresh_never_built_child_still_asks_for_its_build(fake_supabase, monkeypatch):
+    """The control: a child whose tab warns about nothing is needs_build, as before."""
+    import test_multi_proposals as tmp
+    w, gid, kids = _fanned(fake_supabase, monkeypatch, tmp.PARENT, ("Epoxy", "Copy1"))
+    j = _press_group(gid).json()
+    assert j["code"] == "needs_build", j
+    assert [b["id"] for b in j["build"]] == kids
+    assert w.publishes == [] and w.sends == []
+
+
+def test_a_stale_never_built_child_is_not_built_and_starts_no_walk(fake_supabase, monkeypatch):
+    """The parent's estimate changed after Room 2 was copied: its tab says "Estimate changed". The
+    press must not build it from its old copy and email that price."""
+    import test_multi_proposals as tmp
+    w, gid, kids = _fanned(fake_supabase, monkeypatch, tmp.PARENT, ("Epoxy", "Copy1"))
+    parent = next(r for r in w.store["drafts"] if r["id"] == "p1")
+    parent["data"]["cell_values"]["Copy1!E20"] = 3100
+    assert [m["stale"] for m in drafts.proposals_view("p1")["members"]] == [False, True]
+    r = _press_group(gid)
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", "a stale proposal started an unattended build"
+    assert "build" not in j
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [(kids[0], "needs_refresh")]
+    assert ("Room 2: the estimate changed after it was copied; press Refresh on its Proposal step "
+            "first.") in j["error"], j["error"]
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+
+
+def test_a_same_as_base_never_built_child_is_not_built(fake_supabase, monkeypatch):
+    """A Base Bid 1 swap left the child on Base Bid 1's sheet: its tab says "same sheet as Base Bid
+    1: press Refresh". Built unattended it would be a second copy of the parent's price."""
+    import test_multi_proposals as tmp
+    w, gid, kids = _fanned(fake_supabase, monkeypatch, tmp.POLISH_FIRST, ("Polish", "Epoxy"))
+    parent = next(r for r in w.store["drafts"] if r["id"] == "p1")
+    parent["data"].update(base_tab_id="Epoxy", base_tab_ids=["Epoxy", "Polish"],
+                          proposal_lump_sum=20000)
+    assert [m["out_of_step"] for m in drafts.proposals_view("p1")["members"]] == [None,
+                                                                                  "same_as_base"]
+    r = _press_group(gid)
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", "an out-of-step proposal started an unattended build"
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [(kids[0], "needs_refresh")]
+    assert ("it prices no base bid of its own (same sheet as Base Bid 1); press Refresh on its "
+            "Proposal step first.") in j["error"], j["error"]
+    assert w.publishes == [] and w.sends == []
+
+
+@pytest.mark.parametrize("mark, code", [
+    ({"closed_lost": {"reason": "price", "by": EST, "at": "2026-10-20", "note": "went elsewhere"}},
+     "closed_lost"),
+    ({"on_hold": {"reason": "on_hold", "note": "owner paused", "by": EST, "at": "2026-10-20",
+                  "until": "2026-11-20"}}, "on_hold"),
+])
+@pytest.mark.parametrize("files", ["never_built", "built_no_files"])
+def test_a_proposal_closed_or_paused_on_the_board_is_never_built_or_sent(fake_supabase, monkeypatch,
+                                                                         mark, code, files):
+    """Before the press built proposals itself, one without files stopped it. A proposal closed lost
+    or on hold on the board must still stop it, not be built and emailed by its neighbours' press."""
+    rows = _three()
+    if files == "never_built":
+        rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    else:
+        del rows[1]["data"]["generate_result"]
+    rows[1]["data"].update(copy.deepcopy(mark))
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", j
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", code)]
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []

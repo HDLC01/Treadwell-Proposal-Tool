@@ -8542,6 +8542,54 @@ def _send_all_settled_reason(row: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _send_all_draft_closed(data: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """(code, words) when the board has closed this unsent proposal lost or put it on hold (the
+    draft-side marks, drafts.set_close_lost / set_on_hold), else None. Such a proposal is never
+    built or published by a neighbour's press: before the press built proposals itself, one with no
+    files stopped it, and a lost or paused bid must not reach the customer as a side effect."""
+    if data.get("closed_lost"):
+        return ("closed_lost", "it is closed as lost; bring it back from its card on the board "
+                               "first, or leave it out of this project")
+    if data.get("on_hold"):
+        return ("on_hold", "it is on hold; make it active again from its card on the board first")
+    return None
+
+
+# The Proposal step's own words for a tab that prices no base bid of its own (proposal-review.js
+# OUT_OF_STEP), so the press and the tab say the same thing.
+_SEND_ALL_OUT_OF_STEP = {"same_as_base": "same sheet as Base Bid 1",
+                         "duplicate": "same sheet as another proposal",
+                         "not_base": "its sheet is not a base bid any more",
+                         "sheet_gone": "its sheet is not on the estimate any more"}
+
+
+def _send_all_strip_warning(draft_id: str, data: Dict[str, Any],
+                            strips: Dict[str, Optional[Dict[str, Any]]]) -> Optional[str]:
+    """What the Proposal step's tab strip warns about this proposal of Create Multiple Proposals
+    (drafts.proposals_view: `stale`, its copy of the estimate is older than its parent's; or
+    `out_of_step`, it prices no base bid of its own), in the press's words, or None. A person
+    building it by hand opens that tab and reads the warning before pressing Continue; Send all's
+    walk builds it with nobody looking, so it is asked here and the press stops instead. `strips`
+    holds each parent's view, read once per press. Only a child of a parent can be either."""
+    parent_id = data.get("proposal_of")
+    if not isinstance(parent_id, str) or not parent_id or parent_id == draft_id:
+        return None
+    if parent_id not in strips:
+        strips[parent_id] = drafts.proposals_view(parent_id)
+    view = strips[parent_id] or {}
+    me = next((x for x in view.get("members") or [] if x.get("id") == draft_id), None)
+    if not me:
+        return None
+    if me.get("out_of_step"):
+        why = _SEND_ALL_OUT_OF_STEP.get(me["out_of_step"], "out of step")
+        return ("it prices no base bid of its own (%s); press Refresh on its Proposal step "
+                "first" % why)
+    if me.get("stale"):
+        return ("the estimate changed after it was copied; press Refresh on its Proposal step "
+                "first")
+    return None
+
+
 def _send_all_block_reason(refusal: Any) -> str:
     """What the estimator does about one proposal's refused publish, in a few words."""
     if isinstance(refusal, HTTPException):
@@ -8577,8 +8625,9 @@ async def api_scope_group_send_all(group_id: str, request: Request,
     (_scope_groups_refusal), 409 needs_build with `build` [{id, label}] when the only thing in the
     way is proposals that were never built (the page builds them and presses again), and 409
     not_ready_to_send with `blocked` [{id, label, code, error}] when any proposal cannot be
-    published ("Room 2: add a customer email on its Files page first"). A publish the
-    portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
+    published ("Room 2: add a customer email on its Files page first"; a never-built one its
+    Proposal step's tab warns about is `needs_refresh`, and one closed lost or on hold on the board
+    is `closed_lost` / `on_hold`, never `needs_build`). A publish the portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
     Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
     label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
     if not drafts.SCOPE_ID_RE.match(group_id or ""):
@@ -8649,6 +8698,8 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
     # nobody approved, so those proposals are blocked rather than guessed about.
     portal_rows: Optional[Dict[str, Dict[str, Any]]] = None
     portal_live = False
+    # Each parent's proposals_view, read once and only when a never-built proposal asks for it.
+    strips: Dict[str, Optional[Dict[str, Any]]] = {}
     for m in live:
         row = rows[m["id"]]
         data = row.get("data") or {}
@@ -8679,6 +8730,23 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
         # once it is published (_record_built_files), exactly as its Files page's Download would.
         pp = data.get("proposal_payload")
         built = isinstance(pp, dict) and bool(pp.get("values"))
+        # WHAT THE OLD REFUSAL USED TO CATCH (review of this change). Until 2026-10-28 any proposal
+        # without files stopped the press, and nobody saw what it would have sent. Now the press
+        # builds or publishes it unattended, so what a person sees before pressing Continue on the
+        # manual path is asked here: closed lost or on hold on the board, and the Proposal step's
+        # tab-strip warnings (_send_all_strip_warning).
+        if not built or not data.get("generate_result"):
+            closed = _send_all_draft_closed(data)
+            if closed:
+                blocked.append({"id": m["id"], "label": label, "code": closed[0],
+                                "error": closed[1]})
+                continue
+        if not built:
+            warn = _send_all_strip_warning(m["id"], data, strips)
+            if warn:
+                blocked.append({"id": m["id"], "label": label, "code": "needs_refresh",
+                                "error": warn})
+                continue
         if m["id"] == page_id and page is not None:
             one = page
         else:
