@@ -41,6 +41,9 @@
   var DIVISION_USE = {};
   var UNIT_USE = {};
   var ADMIN = false;               // may change administration lists; everyone may pick from them
+  // May edit an item's price breaks, bulk cost and coverage basis: an admin, or a member given the
+  // items_pricing special permission on the Admin page (/api/me's `grants`). The server agrees.
+  var ITEMS_PRICING = false;
   var openId = null;
   var view = "asm";
   /** Which line's item picker is showing its results, by index within the current assembly.
@@ -116,7 +119,8 @@
       if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
       var me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
       ADMIN = me.role === "admin" || me.role === "super_admin";
-    } catch (e) { ADMIN = false; }
+      ITEMS_PRICING = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("items_pricing") !== -1);
+    } catch (e) { ADMIN = false; ITEMS_PRICING = false; }
     try {
       var rs = await Promise.all([api("/api/library/items"), api("/api/library/assemblies"),
                                  api("/api/library/vendors"), api("/api/library/divisions"),
@@ -1617,8 +1621,9 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
-          // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin only.
-          (ADMIN ? '<button class="btn ghost sm" type="button" data-item-more-toggle="' + esc(it.id) +
+          // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin or a member
+          // granted items_pricing.
+          (ITEMS_PRICING ? '<button class="btn ghost sm" type="button" data-item-more-toggle="' + esc(it.id) +
             '" aria-expanded="' + (itemMoreOpen[it.id] ? "true" : "false") + '" aria-label="' +
             (itemMoreOpen[it.id] ? "Hide" : "Show") + " price breaks, bulk cost and coverage basis for " +
             esc(it.name) + '">' + (itemMoreOpen[it.id] ? "Less" : "More") + "</button>" : "") +
@@ -1629,7 +1634,7 @@
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button>") +
           "</td>" +
       "</tr>";
-      if (ADMIN && itemMoreOpen[it.id]) out += itemMoreHtml(it);
+      if (ITEMS_PRICING && itemMoreOpen[it.id]) out += itemMoreHtml(it);
     }
     $("items-body").innerHTML = out;
     // Three states, not two: nothing in the library, nothing matching the search, and rows. The

@@ -4424,6 +4424,8 @@ def test_the_more_panel_is_an_admins_and_draws_what_the_material_holds(ran):
     u = ran["priceBreaksUi"]
     assert u["closedAdminHasMore"] and u["closedAdminHasNoPanel"]
     assert u["nonAdminHasNoMore"] and u["nonAdminHasNoPanel"]
+    # A member granted items_pricing on the Admin page gets both, as the server now lets her save.
+    assert u["grantedHasMore"] and u["grantedHasPanel"]
     assert u["panelIsItsOwnRow"], "the panel is a second <tr> carrying data-item-more, not a cell of the row"
     assert u["bulkShown"] and u["basisShown"] and u["toggleSaysLess"]
     assert u["breakQtys"] == ["240", "480"] and u["breakCosts"] == ["90", "88"]
