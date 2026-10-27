@@ -258,6 +258,16 @@ def test_a_double_click_on_the_open_tab_renames_it(out):
     assert r["escape"] == {"fetches": 0, "renaming": False}
 
 
+def test_the_tabs_say_the_sheet_and_a_renamed_one_keeps_its_name(out):
+    """Hanz, 2026-10-27: the tabs say each proposal's sheet name, not "Base Bid N"; the server's display_label is it."""
+    s = out["page"]["sheetNames"]
+    assert s["labels"] == ["Breakroom", "Lab <2>", "Kitchen"]
+    assert s["note"].startswith("Lab <2> still has the figures from before.")
+    assert s["boxValue"] == "Lab <2>", "the rename box opens on what the tab says"
+    assert s["acceptFetches"] == [["POST", "/api/draft/C2/scope", {"label": "Lab <2>", "rename": True}]],         "accepting the shown sheet name on an old \"Base Bid 2\" saves it, so the board, portal and Dropbox agree"
+    assert s["unchangedFetches"] == 0, "leaving a stored name unchanged sends nothing"
+
+
 def test_the_x_asks_then_sends_a_child_to_the_trash(out):
     d = out["page"]["del"]
     assert d["steps"] == ["confirm", "DELETE /api/draft/C3"] and d["tabs"] == ["P1", "C2"]
@@ -381,6 +391,21 @@ BREAKS = {
     "Base Bid 1 gets an x": (
         "js/proposal-review.js", '(m.is_parent ? "" : `<button type="button" class="pt-x"', '(false ? "" : `<button type="button" class="pt-x"',
         lambda r: r["page"]["parent"]["tabs"][0]["x"] is True),
+    "the tab says the stored label, not the sheet": (
+        "js/proposal-review.js", '    const nameOf = (m) => (m && (m.display_label || m.label)) || ("Base Bid " + ((m && m.index) || ""));',
+        '    const nameOf = (m) => (m && m.label) || ("Base Bid " + ((m && m.index) || ""));',
+        lambda r: r["page"]["sheetNames"]["labels"] != ["Breakroom", "Lab <2>", "Kitchen"]),
+    "the rename box opens on the stored label": (
+        "js/proposal-review.js", 'aria-label="Name of this proposal" value="${escH(nameOf(m))}">', 'aria-label="Name of this proposal" value="${escH(m.label || "")}">',
+        lambda r: r["page"]["sheetNames"]["boxValue"] != "Lab <2>"),
+    "accepting the shown sheet name on an old default is not saved": (
+        "js/proposal-review.js", "if (!label || label === m.label) { paintStrip(); return; }",
+        "if (!label || label === m.label || label === nameOf(m)) { paintStrip(); return; }",
+        lambda r: r["page"]["sheetNames"]["acceptFetches"] == []),
+    "an unchanged stored name is sent as a rename": (
+        "js/proposal-review.js", "if (!label || label === m.label) { paintStrip(); return; }",
+        "if (!label) { paintStrip(); return; }",
+        lambda r: r["page"]["sheetNames"]["unchangedFetches"] != 0),
     "a stale proposal is not said": (
         "js/proposal-review.js", "      const stale = members().filter((m) => m.stale);", "      const stale = [];",
         lambda r: r["page"]["parent"]["note"]["hidden"] is True),

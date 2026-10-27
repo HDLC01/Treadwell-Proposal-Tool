@@ -1442,6 +1442,50 @@ def _proposal_copy(parent: Dict[str, Any], tab: str, refresh: bool) -> Dict[str,
     return out
 
 
+# The name fan-out gave a proposal before 2026-10-27 ("Base Bid 2"): a POSITION, not a name. A stored
+# label that is exactly this was never typed by a person, so the strip shows the sheet's name instead.
+_OLD_DEFAULT_LABEL = re.compile(r"^Base Bid \d+$")
+
+
+def proposal_sheet_label(data: Dict[str, Any], tab: Any) -> Optional[str]:
+    """The name the estimate gives sheet `tab` of `data`, as a scope's name (clean_scope_label, cut to
+    the portal's cap), or None when `tab` is not a sheet id. A v2 estimate names its sections in the
+    model (bid-model.js: the root's `label`, else "Polish"; a section's `label`, else its `sheet`),
+    the spreadsheet in `tab_labels` (estimate-review.js labelFor); either falls back to the name the
+    price snapshot recorded (priced_tabs[].name) and then to the id itself."""
+    if not isinstance(tab, str) or not tab:
+        return None
+    data = data or {}
+    names: List[Any] = []
+    pe = data.get("polish_estimate")
+    if _is_v2(data):
+        if tab == _V2_ROOT_TAB:
+            names.append(pe.get("label") or _V2_ROOT_TAB)
+        else:
+            sec = (pe.get("tabs") or {}).get(tab) if isinstance(pe.get("tabs"), dict) else None
+            if isinstance(sec, dict):
+                names.extend([sec.get("label"), sec.get("sheet")])
+    else:
+        labels = data.get("tab_labels")
+        if isinstance(labels, dict):
+            names.append(labels.get(tab))
+    names.extend([(_priced_tabs(data).get(tab) or {}).get("name"), tab])
+    for n in names:
+        if not isinstance(n, str) or not n.strip():
+            continue
+        text = re.sub(r"\s+", " ", _CONTROL_CHARS.sub(" ", n)).strip()
+        if text:
+            return text[:SCOPE_LABEL_MAX].rstrip()
+    return None
+
+
+def _money_or_none(v: Any) -> Optional[float]:
+    """A stored figure as a number, None for none (a missing, null, boolean or non-number value)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v if v == v and v not in (float("inf"), float("-inf")) else None
+
+
 def proposal_children(parent_id: str, group_id: Optional[str]) -> List[Dict[str, Any]]:
     """The LIVE members of `group_id` made from `parent_id`'s base bids (proposal_of), oldest first.
     [] for a draft in no group."""
@@ -1479,7 +1523,8 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
     base (it stays Base Bid 1's proposal). IDEMPOTENT: a child already made for a sheet is kept as it
     is (`created: false`), so pressing the button twice makes nothing twice. Children are written
     FIRST and taken back when anything after fails (_undo_split_children); the parent last: it joins
-    a group (named "Base Bid 1" when unnamed), records `base_tab_ids`, and on a parent the customer
+    a group (named after its base sheet when unnamed or still the old "Base Bid N" default; every
+    new child is named after ITS sheet, proposal_sheet_label), records `base_tab_ids`, and on a parent the customer
     does not have yet its children's sheets stop being options of it (`tab_opts[id].is_option`
     False). A `sent` parent's tab_opts are never edited. The parent's `updated_at` is NOT bumped.
 
@@ -1543,7 +1588,13 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
         raise ScopeError("too_many_scopes",
                          "A project can be split into %d proposals at most." % MAX_SCOPES, 409)
     taken = {m["label"].lower() for m in members if m["label"]}
-    parent_label = (existing or {}).get("label") or _free_label("Base Bid 1", taken)
+    # NAMED BY SHEET (Hanz, 2026-10-27): each proposal is called what its base sheet is called on the
+    # estimate, so the tabs, the board and the customer's portal say "Breakroom", not "Base Bid 2".
+    # A parent keeps a name a person gave it; an unset one, or the old "Base Bid N" default, becomes
+    # its sheet's. Two sheets of one name are told apart by _free_label ("Room", "Room 2").
+    parent_label = (existing or {}).get("label")
+    if not parent_label or _OLD_DEFAULT_LABEL.match(parent_label):
+        parent_label = _free_label(proposal_sheet_label(parent, base) or "Base Bid 1", taken)
     if parent_label.lower() in taken:
         raise ScopeError("label_taken",
                          "“%s” is already the name of a scope of this project." % parent_label, 409)
@@ -1552,7 +1603,7 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
     for pos, tab in enumerate(ids[1:], start=2):
         if tab in kept:
             continue
-        lab = _free_label("Base Bid %d" % pos, taken)
+        lab = _free_label(proposal_sheet_label(parent, tab) or "Base Bid %d" % pos, taken)
         if lab.lower() in taken:
             raise ScopeError("label_taken",
                              "“%s” is already the name of a scope of this project." % lab, 409)
@@ -1679,9 +1730,13 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, A
 
 def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     """The proposal page's tab strip: the parent first, then its children in the parent's
-    `base_tab_ids` order, each {id, label, index, is_parent, base_tab_id, stale,
-    estimate_synced_at}; `stale` is a child whose digest is not the parent's current one. `draft_id`
-    is the parent or any child of it. None when it is gone.
+    `base_tab_ids` order, each {id, label, display_label, sheet_label, lump_sum, index, is_parent,
+    base_tab_id, stale, estimate_synced_at}; `stale` is a child whose digest is not the parent's
+    current one. `label` is the stored scope name; `display_label` is what the strip shows: the
+    stored name, unless it is the old untouched "Base Bid N" default, which shows the base sheet's
+    name (`sheet_label`, off the parent's estimate). `lump_sum` is that proposal's own
+    proposal_lump_sum (a number, or None when it has none yet). `draft_id` is the parent or any child
+    of it. None when it is gone.
 
     Returns {"parent_id", "group_id", "estimate_digest", "members"}; a draft with no children answers
     its own row alone."""
@@ -1699,12 +1754,27 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
         return (order.index(tab) if tab in order else len(order), str(c.get("created_at") or ""))
 
     kids.sort(key=rank)
-    members = [{"id": parent_id, "label": plabel or ("Base Bid 1" if kids else ""), "index": 1,
+
+    def shown(stored: str, sheet: Optional[str]) -> str:
+        # A name a person typed is kept; the old "Base Bid N" default (or none) shows the sheet's.
+        if stored and not _OLD_DEFAULT_LABEL.match(stored):
+            return stored
+        return sheet or stored
+
+    psheet = proposal_sheet_label(parent, parent.get("base_tab_id"))
+    pstored = plabel or ("Base Bid 1" if kids else "")
+    members = [{"id": parent_id, "label": pstored, "index": 1,
+                "display_label": shown(pstored, psheet) if kids else pstored,
+                "sheet_label": psheet, "lump_sum": _money_or_none(parent.get("proposal_lump_sum")),
                 "is_parent": True, "base_tab_id": parent.get("base_tab_id"), "stale": False,
                 "estimate_synced_at": None}]
     for i, c in enumerate(kids, start=2):
-        members.append({"id": c["id"], "label": c["label"], "index": i, "is_parent": False,
-                        "base_tab_id": c["data"].get("base_tab_id"),
+        tab = c["data"].get("base_tab_id")
+        sheet = proposal_sheet_label(parent, tab)
+        members.append({"id": c["id"], "label": c["label"], "index": i,
+                        "display_label": shown(c["label"], sheet), "sheet_label": sheet,
+                        "lump_sum": _money_or_none(c["data"].get("proposal_lump_sum")),
+                        "is_parent": False, "base_tab_id": tab,
                         "stale": c["data"].get("estimate_digest") != digest,
                         "estimate_synced_at": c["data"].get("estimate_synced_at")})
     return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members}

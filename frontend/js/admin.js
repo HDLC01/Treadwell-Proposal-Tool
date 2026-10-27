@@ -180,7 +180,7 @@
         // member genuinely does not get that tab — the ROLE gate in the sidebar decides that, and
         // this policy is a separate thing that simply cannot reach either page.
         if (cap.locked) return `<span class="rv-lock" title="This policy cannot take this page away. It is where the setting is edited from, or where signing in lands — denying it would remove the way back.">not deniable</span>`;
-        if (!(cap.api||[]).length) return `<span class="rv-thin" title="Every API route this page reads is read by another page too, so refusing them would break a page nobody restricted. Switching this tab off hides it and blocks the page; the data stays reachable to somebody who knows the URL.">hides the tab only</span>`;
+        if (!(cap.api||[]).length) return `<span class="rv-thin" title="Switching this tab off hides it and blocks the page. The server does not refuse its data, so somebody who knows the route can still read it.">hides the tab only</span>`;
         return `<span class="rv-hard" title="${esc((cap.api||[]).join(", "))}">blocks its data</span>`;
       };
 
@@ -214,7 +214,7 @@
         else if (lockedRoles.indexOf(role) !== -1) why = "A super admin cannot be restricted. That role is set from the server's environment, so it is the account that always has a way in.";
         else if (role === mine && on) why = "You can't take a tab away from your own role. Ask another admin, or change it for a different role.";
         const scope = cap && !(cap.api||[]).length
-          ? "Switching this off hides the tab and blocks the page. Its data stays reachable to somebody who types the URL — every route its page reads is read by another page too."
+          ? "Switching this off hides the tab and blocks the page. Its data stays reachable to somebody who types the route."
           : (cap ? ("Switching this off also refuses " + (cap.api||[]).join(", ") + ", which only this tab uses.") : "");
         const title = why || ((on ? "Switch off for " : "Switch on for ") + roleLabelOf(role) + ". " + scope);
         return `<td class="rv-cell" data-role="${esc(role)}">` +
@@ -262,22 +262,20 @@
             somewhere an admin can find it: a denial nobody can see is a denial nobody can lift.${
             policyKnown?"":` Those cells read a question mark because the permissions did not load,
             not because the tab is switched off.`}</p>`:""}
-          <p><strong>A tab switched off is a real block, but the page is still served.</strong>
+          <p><strong>A tab switched off is hidden from the menu, and its page shows a "not available" card. Its data is not blocked.</strong>
             There is no session cookie in this app — the only credential is a header the browser
             attaches to API calls — so a page is still reachable by typing its URL, and what it
-            paints for a blocked role is a refusal card instead of its own content. What refuses the
-            DATA is the server, on the tabs marked <em>blocks its data</em> below. The sidebar on its
+            paints for a blocked role is a refusal card instead of its own content. Every tab here
+            <em>hides the tab only</em>: the server does not refuse a tab's data to a role it is
+            switched off for. The sidebar on its
             own is not a permission model, and never was: <code>_require_admin</code> guards every
             <code>/api/admin/*</code> route (this page's users and stats, admin project deletes, the
             digest run and preview), the Item Library's vendor / division / unit writes, and the
             notification-recipient writes, switches or no switches.</p>
           ${hideOnly.length?`<p><strong>${hideOnly.length} ${hideOnly.length===1?"tab":"tabs"} can
             only be hidden, not sealed:</strong> ${hideOnly.map(t=>`<strong>${esc(t.label)}</strong>`)
-              .join(", ")}. Every API route their pages read is read by another page too — the
-            Analytics payload is also the Bid Calendar's, the Item Library's assemblies also price
-            Estimating Tool v2, the pipeline feeds Direct Projects, GC Projects and Notification Sending — so
-            refusing those routes would break a page nobody restricted. Switching one off removes
-            the tab and blocks the page; somebody who knows the route can still read the data.</p>`:""}
+              .join(", ")}. Switching one off removes the tab and blocks the page; somebody who
+            knows the route can still read the data.</p>`:""}
           <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
             admin-gated: any signed-in member may rewrite the four recurring customer emails, and
             the save replaces the settings row with no history. The sidebar and the server agree
