@@ -9951,7 +9951,7 @@
       const n = TWPrice.baseIds(state).length;
       multi.disabled = child || busy || n < 2;
       multi.title = n < 2
-        ? "Tick two or more sheets as a Base bid in Pricing options first. Each one becomes its own proposal."
+        ? "Set two or more sheets to Base bid in Pricing options first. Each one becomes its own proposal."
         : "Make one proposal for each of the " + n + " ticked base bids. Each gets its own wording and its own options.";
     }
 
@@ -10035,7 +10035,7 @@
       const ok = await TW.confirmDanger({
         title: "Delete this proposal?", name: nameOf(m), before: "",
         after: " goes to the Trash. Base Bid 1 and the estimate stay as they are.",
-        detail: "Its sheet is still ticked as a Base bid, so Create Multiple Proposals would make it again: untick the sheet to stop that.",
+        detail: "Its sheet is still set to Base bid, so Create Multiple Proposals would make it again: set the sheet to Option or Off to stop that.",
         confirmText: "Delete proposal" });
       if (!ok) return;
       busy = true;
