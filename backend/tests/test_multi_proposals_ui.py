@@ -4,7 +4,7 @@ On a spreadsheet draft the Proposal step's Pricing options card draws a Base-bid
 base bid, tagged "Base Bid N", and becomes its own proposal. The pricing base (base_tab_id) stays the one the page prices off,
 is Base Bid 1, and is kept inside the ticked list (base_tab_ids). A tick adds a base bid; unticking the base moves it to the
 next ticked sheet; the last one cannot be unticked. A child (a proposal the server made from another draft's estimate) shows
-its base read-only and links to Base Bid 1's proposal. The Estimate step keeps the list consistent (its base radio, deleting a
+its base read-only and links to Base Bid 1's proposal. The Estimate step keeps the list consistent (its Base-bid boxes, deleting a
 copy) and its pricing snapshot carries each tab's phase, costs and man-hours, which the server copies into a child.
 
 Run, not read: js/multi-proposals-harness.js executes the pages' own code (renderProposalExtras, rebuildPricing, wireBidBar,
@@ -147,12 +147,13 @@ def test_the_twprice_helpers(out):
 
 
 # ── the Estimate step ────────────────────────────────────────────────────────────────────────────
-def test_the_bid_bar_radio_puts_the_new_base_in_the_old_ones_place(out):
+def test_the_bid_bar_boxes_follow_the_proposal_cards_rule(out):
+    """The Estimate step's bar ticks base bids as the Proposal card does (2026-10-27): every change saves."""
     b = out["bidBar"]
-    assert b["swap"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Copy1"], "persisted": 1}
-    assert b["toTicked"] == {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1", "Epoxy"], "persisted": 1}, \
-        "picking Base Bid 2 as the base swaps the two: the old base stays ticked"
-    assert b["noList"] == {"base_tab_id": "Polish", "base_tab_ids": None, "persisted": 1}
+    assert b["swap"] == {"base_tab_id": "Polish", "base_tab_ids": ["Polish", "Copy1"], "persisted": 2}
+    assert b["toTicked"] == {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1"], "persisted": 1}, \
+        "unticking the base hands it to the next ticked sheet"
+    assert b["noList"] == {"base_tab_id": "Epoxy", "base_tab_ids": ["Epoxy", "Polish"], "persisted": 1}
 
 
 def test_deleting_a_copy_takes_it_off_the_ticked_sheets(out):
@@ -354,16 +355,12 @@ BREAKS = {
     "a forced change on a child's box is honoured": (
         "js/proposal-review.js", "            if (TWPrice.isProposalChild(state)) return;", "            void 0;",
         lambda r: r["child"]["after"] != {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1"]}),
-    "the bid-bar radio leaves the old base ticked": (
-        "js/estimate-review.js",
-        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id), true);",
-        "          void 0;",
+    "the bid-bar boxes do not keep the ticked list": (
+        "js/estimate-review.js", "    state.base_tab_ids = patch.base_tab_ids;", "    void 0;",
         lambda r: r["bidBar"]["swap"]["base_tab_ids"] != ["Polish", "Copy1"]),
-    "the bid-bar radio drops the old base when the new one was already ticked": (
-        "js/estimate-review.js",
-        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id), true);",
-        "          state.base_tab_ids = TWPrice.moveBaseId(state, priorBaseId, state.base_tab_id, tabs.map(t => t.id));",
-        lambda r: r["bidBar"]["toTicked"]["base_tab_ids"] != ["Copy1", "Epoxy"]),
+    "the bid-bar boxes do not move the base on an untick": (
+        "js/estimate-review.js", "    state.base_tab_id = patch.base_tab_id;", "    void 0;",
+        lambda r: r["bidBar"]["toTicked"]["base_tab_id"] != "Copy1"),
     "moveBaseId never swaps": (
         "js/price-lines-core.js",
         "    var ids = raw.map(function (x) { return x === from ? to : (swap && x === to ? from : x); });",

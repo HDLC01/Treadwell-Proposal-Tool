@@ -5,7 +5,7 @@
  * is a base bid, tagged "Base Bid N", and becomes its own proposal. The pricing base (base_tab_id) is Base Bid 1 and is
  * kept inside the ticked list (base_tab_ids). Ticking adds; unticking the base moves it to the next ticked sheet; the last
  * one cannot be unticked. A CHILD (a proposal the server made from another draft's estimate) shows its base read-only and
- * says where base bids are picked. The Estimate step keeps the list consistent: its base radio, deleting a copy, and the
+ * says where base bids are picked. The Estimate step keeps the list consistent: its Base-bid boxes, deleting a copy, and the
  * per-tab phase / cost figures the server copies into a child.
  *
  * What runs here is the pages' own code, lifted by name (the same proposal-review.js units v2-options-panel-harness.js
@@ -334,8 +334,9 @@ out.core = (() => {
 // ── the Estimate step ────────────────────────────────────────────────────────────────────────────────────────────
 const est = (name, deps) => L.lift(EST, name, deps, { indent: "", where: "estimate-review.js" });
 
-// 11. THE BID-BAR BASE RADIO moves the base; the new base takes the old one's place among the ticked sheets.
-function bidBarPick(stateIn, pick) {
+// 11. THE BID-BAR BASE-BID BOXES (checkboxes since 2026-10-27, the Proposal card's rule): `steps` are [value, checked]
+//     changes delivered in order to the real handler.
+function bidBarPick(stateIn, steps) {
   const state = Object.assign({ work_type: "epoxy", tab_opts: {}, price_overrides: {} }, clone(stateIn));
   const listeners = {};
   const list = { addEventListener: (type, f) => { listeners[type] = f; } };
@@ -348,13 +349,18 @@ function bidBarPick(stateIn, pick) {
     persistTabState: () => { persisted++; }, HF: { ready: false }, updateTotalBarFromHF: () => {},
     ensureOpt: () => ({}), TW: { setState: () => {} },
   })();
-  listeners.change({ target: { checked: true, value: pick, classList: { contains: (c) => c === "bb-base" }, closest: () => null } });
+  for (const [value, checked] of steps) {
+    listeners.change({ target: { checked, value, classList: { contains: (c) => c === "bb-base" }, closest: () => null } });
+  }
   return { base_tab_id: state.base_tab_id, base_tab_ids: state.base_tab_ids === undefined ? null : state.base_tab_ids, persisted };
 }
 out.bidBar = {
-  swap: bidBarPick({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, "Polish"),
-  toTicked: bidBarPick({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, "Copy1"),
-  noList: bidBarPick({ base_tab_id: "Epoxy" }, "Polish"),
+  // Tick Polish, then untick the base: Polish is the base, Copy1 stays ticked.
+  swap: bidBarPick({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Polish", true], ["Epoxy", false]]),
+  // Untick the base while Base Bid 2 is ticked: Base Bid 2 becomes the base.
+  toTicked: bidBarPick({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Epoxy", false]]),
+  // A draft that never ticked a second sheet: a tick writes the list, the base stays.
+  noList: bidBarPick({ base_tab_id: "Epoxy" }, [["Polish", true]]),
 };
 
 // 12. DELETING A COPY takes it off the ticked sheets; deleting the BASE copy moves the base to the next ticked one.
