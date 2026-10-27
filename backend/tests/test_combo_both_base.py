@@ -137,12 +137,13 @@ def test_a_single_system_job_has_no_pair(strip):
 # ── nothing else moved ────────────────────────────────────────────────────────
 @pytest.mark.parametrize("wt", ["epoxy", "polish", "gyp"])
 def test_a_single_system_job_renders_exactly_as_before(strip, wt):
-    """One base bid, no combined chip, the base persisted into the draft, legend untouched."""
+    """One base bid, no combined chip, the base persisted into the draft, and the single-system legend
+    (the several-base-bids one, 2026-10-27), never the combo's."""
     j = strip["job_" + wt]
     assert j["combinedChip"] is False
     assert j["taggedCount"] == 1, j
     assert j["stateBase"], "a single-system job must persist its resolved base"
-    assert j["hintRewritten"] is False
+    assert "Create Multiple Proposals" in j["hint"] and "both</b> sheets" not in j["hint"], j["hint"]
 
 
 def test_one_predicate_serves_the_strip_and_the_rooms_snapshot():

@@ -594,6 +594,13 @@ PORTAL_GETS = {
     "/api/admin/notify-recipients": "service",
     "/api/admin/notify-overrides": "service",
     "/api/admin/proposal/{proposal_id}/notify-overrides": "service",
+    # Read 2026-10-25 from the portal's remind-only + scope-group code (47233c7): each one's first
+    # statement is `if not _admin_ok(request): return 401`, and none writes or mails on a GET except
+    # the draft route, which may store an AI draft on the task (behind the same token).
+    "/api/admin/capabilities": "service",
+    "/api/admin/followup-tasks": "service",
+    "/api/admin/followup-task/{task_id}": "service",
+    "/api/admin/followup-task/{task_id}/draft": "service",
 }
 
 

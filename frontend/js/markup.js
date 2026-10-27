@@ -2375,7 +2375,11 @@
     try {
       if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
       var me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
-      ADMIN = me.role === "admin" || me.role === "super_admin";
+      // Or a member given THIS TAB ("/markup.html") on the Admin page's Special permissions card:
+      // every write this page offers is PUT/DELETE /api/markup/rules, which the server opens to
+      // exactly that tab grant.
+      ADMIN = me.role === "admin" || me.role === "super_admin" ||
+        (Array.isArray(me.grants) && me.grants.indexOf("/markup.html") !== -1);
     } catch (e) { ADMIN = false; }
     paintNotes();
     await reload();

@@ -173,7 +173,10 @@ def test_the_info_sheet_kept_its_permission_when_it_left_the_menu():
     assert "/info-sheet.html" in nav_access.NO_SIDEBAR_TABS, (
         "the tab has no sidebar row and is not declared hidden, so nothing says the missing row "
         "was on purpose")
-    assert nav_access.TABS["/info-sheet.html"]["api"] == ("/api/info-sheet/",)
+    # () since 2026-10-27: Hanz chose "hides the tab only" for every tab, so the entry now refuses
+    # the page and no route. It still has to exist for the page refusal.
+    assert nav_access.TABS["/info-sheet.html"]["api"] == ()
+    assert nav_access.TABS["/info-sheet.html"]["pages"] == ("/info-sheet.html",)
 
 
 def test_the_follow_ups_board_GAINED_a_permission_when_it_came_back_to_the_menu():
@@ -189,7 +192,9 @@ def test_the_follow_ups_board_GAINED_a_permission_when_it_came_back_to_the_menu(
     assert "/followups.html" in nav_access.TABS, (
         "the Follow-ups board is in the sidebar with no capability entry, so no role can be denied "
         "it and /api/portal/followups is ungated")
-    assert nav_access.TABS["/followups.html"]["api"] == ("/api/portal/followups",)
+    # () since 2026-10-27 (every tab hide-only, Hanz's choice): the entry refuses the page only.
+    assert nav_access.TABS["/followups.html"]["api"] == ()
+    assert nav_access.TABS["/followups.html"]["pages"] == ("/followups.html",)
     assert "/followups.html" not in nav_access.NO_SIDEBAR_TABS, (
         "the board is drawn in the menu, so it is not one of the rowless tabs")
     assert "/followups.html" not in nav_access.ALWAYS_OPEN_PAGES, (

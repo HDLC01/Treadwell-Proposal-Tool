@@ -15,6 +15,7 @@ const fs = require("fs");
 const path = require("path");
 
 const SRC = fs.readFileSync(path.join(process.argv[2], "js", "estimate-review.js"), "utf8");
+const REAL_TWPRICE = require(path.resolve(process.argv[2], "js", "price-lines-core.js"));
 
 // ── the SHIPPED role vocabulary ──────────────────────────────────────────────
 // GYP_SHEETS / SEAL_SHEETS / BASE_ROLE / PRICED_ROLES / isPricedRole come out of the real file, so
@@ -155,11 +156,17 @@ function harness(stateIn) {
     // The base radio prices and saves through persistTabState, and applies the price rule's
     // base-pick half to the Proposal step's saved edits -- the real one, as the page loads it.
     persistTabState: () => setStateCalls.push({ persisted: true }),
-    TWPrice: require(path.join(process.argv[2], "js", "price-lines-core.js")),
+    // The real price-lines-core.js, with applyBasePick recorded (and still run) so a test can see the
+    // base-change path fire.
+    TWPrice: null,
     renderPricePreview: () => {},
     syncSingleBidDisplay: () => {},
     scheduleRecalcAll: () => {},
   };
+  const basePicks = [];
+  deps.TWPrice = Object.assign({}, REAL_TWPRICE, {
+    applyBasePick: (...a) => { basePicks.push([a[1], a[2]]); return REAL_TWPRICE.applyBasePick(...a); },
+  });
   // The real name derivation, plus the two things it reads. This is what the customer's proposal
   // says, so it must come out of the shipped source rather than be asserted from memory.
   // TOTAL_CELLS + roleFor + structOpsFor, so totalCellsFor resolves for real.
@@ -182,7 +189,7 @@ function harness(stateIn) {
   const renderBidOptions = lift("renderBidOptions", deps);
   deps.renderBidOptions = renderBidOptions;
   const wireBidBar = lift("wireBidBar", deps);
-  return { state, document, setStateCalls, renderBidOptions, wireBidBar,
+  return { state, document, setStateCalls, renderBidOptions, wireBidBar, basePicks,
            isInCombinedBase: deps.isInCombinedBase,
            // The real resolver and the real name derivation, so a test can ask them directly
            // rather than inferring from markup.
@@ -201,8 +208,9 @@ function chip(html, id) {
   const next = html.indexOf('<span class="bb-opt"', start);
   return html.slice(from, next < 0 ? html.length : next);
 }
+// "base bid" (a combo's combined pair) or "Base Bid N" (a ticked sheet, numbered as the Proposal card numbers it).
 const facts = (c) => c && ({
-  tagged: /bb-tag">base bid</.test(c),
+  tagged: /bb-tag">(base bid|Base Bid \d+)</.test(c),
   offersOption: /bb-isopt/.test(c),
   partOfBase: /Part of the combined base bid/.test(c),
   checked: /class="bb-base" value="[^"]*" checked/.test(c) ||
@@ -287,9 +295,10 @@ const out = {};
     const html = h.document.els["bid-options-list"].innerHTML;
     out["job_" + wt] = {
       combinedChip: html.indexOf("bb-combined") >= 0,
-      taggedCount: (html.match(/bb-tag">base bid</g) || []).length,
+      taggedCount: (html.match(/bb-tag">(base bid|Base Bid \d+)</g) || []).length,
       stateBase: h.state.base_tab_id,
       hintRewritten: h.document.els["bid-options-hint"].innerHTML !== "",
+      hint: h.document.els["bid-options-hint"].innerHTML,
     };
   }
 }
@@ -357,6 +366,143 @@ const out = {};
     warnsOnBudget: !!budgetSeal && /does not print options/.test(budgetSeal),
     quietOnGC: !!gcSeal && !/does not print options/.test(gcSeal),
     quietOnDirect: !!dirSeal && !/does not print options/.test(dirSeal),
+  };
+}
+
+// ── 7. SEVERAL BASE BIDS on the Estimate step's bar (Create Multiple Proposals) ───────────────
+// Hanz, 2026-10-27: "we must be able to set a base bid in the excel sheet tab options at the top
+// already". Each base-able chip has a Base-bid CHECKBOX, numbered "Base Bid N" exactly as the
+// Proposal card numbers it (TWPrice.baseLabelFor over priced_tabs, which the page writes in its
+// tab-strip order). Driven through the real renderBidOptions and the real #bid-bar handler.
+{
+  const ORDER = TABS.map((t) => t.id);
+  // priced_tabs as persistTabState writes it: the priced tabs, in strip order.
+  const PRICED = TABS.filter((t) => ROLE.isPricedRole(t.role)).map((t) => ({ id: t.id, role: t.role }));
+  const boxesOf = (html) => [...html.matchAll(/<input type="([a-z]+)" class="bb-base" value="([^"]*)"([^>]*)>/g)]
+    .map((m) => ({ id: m[2], type: m[1], checked: / checked/.test(m[3]), disabled: / disabled/.test(m[3]) }));
+  const tagOf = (html, id) => { const c = chip(html, id); return c ? ((/bb-tag">([^<]*)</.exec(c) || [])[1] || "") : null; };
+  const persisted = (h) => h.setStateCalls.filter((c) => c && c.persisted).length;
+  const event = (value, checked) => ({ classList: { contains: (c) => c === "bb-base" }, value, checked,
+                                       closest: () => null });
+  /** One page: render, wire, then deliver `steps` ([value, checked]) to the real change handler. */
+  function page(st, steps) {
+    const h = harness(Object.assign({ work_type: "epoxy", priced_tabs: PRICED }, st));
+    h.renderBidOptions();
+    h.wireBidBar();
+    const change = h.document.els["bid-options-list"].listeners.change[0];
+    const before = persisted(h);
+    const targets = (steps || []).map(([v, c]) => { const t = event(v, c); change({ target: t }); return t; });
+    const html = h.document.els["bid-options-list"].innerHTML;
+    return { h, html, targets, persistedBy: persisted(h) - before };
+  }
+  const summary = (p) => ({
+    base_tab_id: p.h.state.base_tab_id,
+    base_tab_ids: p.h.state.base_tab_ids === undefined ? null : p.h.state.base_tab_ids,
+    persisted: p.persistedBy, basePicks: p.h.basePicks,
+  });
+
+  // a. Two ticked sheets: a box per base-able chip, tagged as the Proposal card tags them.
+  const two = page({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] });
+  const twoState = { base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"], priced_tabs: PRICED };
+  out.multiBase = {
+    boxes: boxesOf(two.html),
+    tags: { Epoxy: tagOf(two.html, "Epoxy"), Polish: tagOf(two.html, "Polish"), Copy1: tagOf(two.html, "Copy1") },
+    // The Proposal card's own numbering (no order: priced_tabs) and the strip-order numbering.
+    proposalLabels: { Epoxy: REAL_TWPRICE.baseLabelFor(twoState, "Epoxy"), Polish: REAL_TWPRICE.baseLabelFor(twoState, "Polish"),
+                      Copy1: REAL_TWPRICE.baseLabelFor(twoState, "Copy1") },
+    stripLabels: { Epoxy: REAL_TWPRICE.baseLabelFor(twoState, "Epoxy", ORDER),
+                   Copy1: REAL_TWPRICE.baseLabelFor(twoState, "Copy1", ORDER) },
+    copyOffersOption: /bb-isopt/.test(chip(two.html, "Copy1") || ""),
+    polishOffersOption: /bb-isopt/.test(chip(two.html, "Polish") || ""),
+    sealHasBox: /class="bb-base"/.test(chip(two.html, "Seal") || ""),
+    hint: two.h.document.els["bid-options-hint"].innerHTML,
+  };
+
+  // b. Tick Polish (an option until now): a third base bid, the pricing base stays, Polish is no option.
+  const tick = page({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"],
+                      tab_opts: { Polish: { is_option: true, show: true, price_mode: "total" } } }, [["Polish", true]]);
+  out.multiTick = Object.assign(summary(tick), {
+    polishIsOption: tick.h.state.tab_opts.Polish.is_option,
+    tags: { Epoxy: tagOf(tick.html, "Epoxy"), Polish: tagOf(tick.html, "Polish"), Copy1: tagOf(tick.html, "Copy1") },
+  });
+  // A draft that never ticked a second sheet: the first tick writes the list.
+  out.multiTickFresh = summary(page({ base_tab_id: "Epoxy" }, [["Copy1", true]]));
+
+  // c. Untick the pricing base: it moves to the next ticked sheet, by the base-change path.
+  out.multiUntickBase = summary(page({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Polish", "Copy1"] },
+                                     [["Epoxy", false]]));
+  // Untick another base bid: only it goes.
+  out.multiUntickOther = summary(page({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Copy1", false]]));
+
+  // d. Untick the last one: refused, the box goes back on, the hint says why.
+  const last = page({ base_tab_id: "Epoxy" }, [["Epoxy", false]]);
+  out.multiLast = Object.assign(summary(last), {
+    boxChecked: last.targets[0].checked,
+    hint: last.h.document.els["bid-options-hint"].innerHTML,
+  });
+
+  // A copy made a moment ago is not in priced_tabs until persistTabState prices it: numbered by the strip, it is
+  // still Base Bid 2.
+  const fresh = page({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"],
+                       priced_tabs: PRICED.filter((t) => t.id !== "Copy1") });
+  out.multiFreshCopy = { copyTag: tagOf(fresh.html, "Copy1") };
+
+  // e. A ticked cross-type sheet (Gyp on an epoxy job) stays on the bar.
+  const gyp = page({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Gyp"] });
+  out.multiCrossType = { gypBox: boxesOf(gyp.html).filter((b) => b.id === "Gyp")[0] || null, gypTag: tagOf(gyp.html, "Gyp") };
+
+  // f. Combo: the combined chip is a box too, and one base on its own.
+  const combo = page({ work_type: "combo", base_tab_id: null });
+  const comboTick = page({ work_type: "combo", base_tab_id: null }, [["Epoxy", true]]);
+  const comboBack = page({ work_type: "combo", base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["", true]]);
+  const comboUntick = page({ work_type: "combo", base_tab_id: null }, [["", false]]);
+  out.multiCombo = {
+    combinedBox: boxesOf(combo.html).filter((b) => b.id === "")[0] || null,
+    epoxyBox: boxesOf(combo.html).filter((b) => b.id === "Epoxy")[0] || null,
+    tick: summary(comboTick),
+    back: summary(comboBack),
+    untick: Object.assign(summary(comboUntick), { boxChecked: comboUntick.targets[0].checked }),
+  };
+
+  // g. A child: every box disabled, a forced change changes nothing.
+  const child = page({ base_tab_id: "Copy1", base_tab_ids: ["Copy1"], proposal_of: "P1" }, [["Epoxy", true], ["Copy1", false]]);
+  out.multiChild = Object.assign(summary(child), { boxes: boxesOf(child.html) });
+
+  // h. THE ONE-CLICK BASE MOVE ("Make Base Bid 1"). A tick only adds a base bid, so the estimator who ticks Polish
+  // the way they clicked the old radio gets Base Bid 2 while Epoxy stays the price. A ticked sheet that is not the
+  // pricing base carries a button that makes it Base Bid 1 in one click, the old base staying ticked.
+  const mkBtns = (html) => [...html.matchAll(/<button type="button" class="bb-mkbase" data-id="([^"]*)"/g)].map((m) => m[1]);
+  const clickMk = (h, id) => h.document.els["bid-options-list"].listeners.click[0]({
+    target: { classList: { contains: (c) => c === "bb-mkbase" }, dataset: { id } } });
+  /** Render, wire, run the change `steps`, then click "Make Base Bid 1" on `mk`. */
+  function mkPage(st, steps, mk) {
+    const p = page(st, steps);
+    const before = persisted(p.h);
+    const htmlBefore = p.h.document.els["bid-options-list"].innerHTML;
+    const baseBefore = p.h.state.base_tab_id;
+    if (mk) clickMk(p.h, mk);
+    const html = p.h.document.els["bid-options-list"].innerHTML;
+    return { p, htmlBefore, baseBefore, html, persistedByClick: persisted(p.h) - before };
+  }
+  const shown = mkPage({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] });
+  // The finding's own walk: an Epoxy draft with Polish as an option; the estimator ticks Polish, then makes it the base.
+  const habit = mkPage({ base_tab_id: "Epoxy",
+                         tab_opts: { Polish: { is_option: true, show: true, price_mode: "total" } } },
+                       [["Polish", true]], "Polish");
+  const three = mkPage({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Polish", "Copy1"] }, [], "Copy1");
+  const childMk = mkPage({ base_tab_id: "Copy1", base_tab_ids: ["Copy1", "Epoxy"], proposal_of: "P1" }, [], "Epoxy");
+  const comboMk = mkPage({ work_type: "combo", base_tab_id: null });
+  out.makeBase = {
+    buttons: mkBtns(shown.html),
+    afterTick: { buttons: mkBtns(habit.htmlBefore), base_tab_id: habit.baseBefore },
+    habit: Object.assign(summary(habit.p), { persistedByClick: habit.persistedByClick,
+      polishIsOption: habit.p.h.state.tab_opts.Polish.is_option,
+      tags: { Epoxy: tagOf(habit.html, "Epoxy"), Polish: tagOf(habit.html, "Polish") },
+      buttons: mkBtns(habit.html) }),
+    three: Object.assign(summary(three.p), { persistedByClick: three.persistedByClick }),
+    child: Object.assign(summary(childMk.p), { persistedByClick: childMk.persistedByClick,
+      buttons: mkBtns(childMk.htmlBefore) }),
+    comboButtons: mkBtns(comboMk.html),
   };
 }
 

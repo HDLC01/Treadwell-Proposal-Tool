@@ -111,8 +111,9 @@
 
        Below 1400px it falls back to the block it is today, in the same place in the DOM, because a
        fixed 250px rail on a narrow screen is worse than a block -- it would sit on top of the
-       form. That is the same degradation .options-panel does, at the same 1400px -- matched on
-       purpose after the first attempt shipped at 1200 and overlapped the form by 21px. */
+       form. The 1400px was matched to the step-3 rail on purpose after the first attempt shipped
+       at 1200 and overlapped the form by 21px. (The step-3 rail itself no longer degrades: since
+       2026-10-27 it floats at every width and collapses to its header instead.) */
     .vcheat .vc-drag{display:none}
     @media (min-width:1400px){
       .vcheat{position:fixed;right:16px;top:104px;width:250px;z-index:40;margin:0;

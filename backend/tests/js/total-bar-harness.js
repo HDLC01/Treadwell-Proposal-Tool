@@ -121,9 +121,13 @@ function pickBase(opts) {
   deps.updateTotalBarFromHF();                       // the bar as the page painted it on load
   const before = nodes["tb-total"].textContent;
   lift("wireBidBar", deps)();
-  const radio = { checked: true, value: opts.pick, classList: { contains: (c) => c === "bb-base" },
-                  closest: () => null };
-  listeners.change({ target: radio });
+  // The Base-bid boxes are checkboxes (Create Multiple Proposals): the base moves by ticking the new sheet and
+  // unticking the old one, which hands the pricing base to the next ticked sheet.
+  const box = (value, checked) => ({ checked, value, classList: { contains: (c) => c === "bb-base" },
+                                     closest: () => null });
+  const prior = state.base_tab_id;
+  listeners.change({ target: box(opts.pick, true) });
+  if (prior && prior !== opts.pick) listeners.change({ target: box(prior, false) });
   return { before, after: nodes["tb-total"].textContent, base: state.base_tab_id };
 }
 

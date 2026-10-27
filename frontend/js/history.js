@@ -29,6 +29,9 @@
       // this is the press that takes it off. Spelled so the two never read as one thing that
       // happened twice — "handed off to operations", not "marked handed off".
       handed_off:"handed off to operations", not_handed_off:"brought back onto the board",
+      // Scope groups (2026-10-24): one project, several separately approved proposals.
+      scope_added:"added as a new scope of its project", scope_grouped:"named as one scope of its project",
+      scope_renamed:"renamed its scope", split_into_scopes:"split into separate proposals",
       // On hold is NOT a loss. Two of the eight answers on the close-out list pause a bid and
       // leave it on the Active board (2026-08-20), and a feed that called that "closed as lost"
       // would report a live bid dead. `brought_back` is the one undo that clears every mark at
@@ -50,7 +53,10 @@
       calendar_event_deleted:"deleted a calendar event",
       // Admin, about a PERSON rather than a project.
       role_changed:"changed the role on", nav_access_changed:"changed tab permissions",
+      special_permissions_changed:"changed special permissions",
       banned:"banned", unbanned:"unbanned", deleted_user:"deleted",
+      // Create Multiple Proposals (one estimate, a proposal per base bid).
+      proposals_created:"made several proposals from", proposal_refreshed:"refreshed the estimate of",
     };
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function money(n){ return (typeof n==="number") ? " — $"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : ""; }

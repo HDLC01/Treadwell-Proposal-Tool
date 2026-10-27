@@ -634,6 +634,17 @@ def test_a_non_admin_can_still_only_toggle_themselves(ran):
 
 
 @needs_node
+def test_a_member_given_the_notifications_tab_toggles_anyone_and_can_reset(ran):
+    """Special permissions: ticking Notification Sending for a member promises them every
+    admin-only edit on the tab, and the per-project chips (anyone, Reset to global) are two."""
+    by = {c["email"]: c["disabled"] for c in ran["grantedChips"]}
+    assert by["kyle.loseke@wetreadwell.com"] is False
+    assert by["hanz@wetreadwell.com"] is False, "a granted member could not toggle a colleague"
+    assert ran["grantedHasReset"] is True, "a granted member got no Reset to global"
+    assert ran["plainHasReset"] is False, "a plain member was offered Reset to global"
+
+
+@needs_node
 def test_every_rendered_row_carries_the_whole_roster(ran):
     """Two people on the roster, so a row is two chips. Catches a slice applied to the PEOPLE
     rather than to the projects."""

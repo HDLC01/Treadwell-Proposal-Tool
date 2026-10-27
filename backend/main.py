@@ -86,6 +86,7 @@ import nav_access
 import notifications
 import pdf_writer
 import pipelines
+import special_permissions
 import v2_pipeline
 import price_rules
 import pricing
@@ -364,7 +365,10 @@ async def _nav_gate(request: Request, call_next):
             return JSONResponse(status_code=403, content={
                 "ok": False, "account_paused": True,
                 "error": "Your account is paused. Ask an admin to turn it back on."})
-        denied = nav_access.is_api_denied(role, request.url.path)
+        # A tab given to this person on the Special permissions card is open to them whatever their
+        # role says, so the gate asks about THEIR policy (the role's, minus their granted tabs).
+        denied = nav_access.is_api_denied(role, request.url.path,
+                                          _nav_policy_for(role, prof.get("email") or _user_email(request)))
     except Exception as exc:  # noqa: BLE001
         # FAIL OPEN. This is an internal tool with three accounts where a lockout is an outage the
         # affected person cannot fix, and the data behind these routes is still behind the existing
@@ -1069,7 +1073,7 @@ def api_library_items() -> Dict[str, Any]:
 def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
     body = payload.model_dump(exclude_unset=True)
     if any(k in body for k in library.ITEM_ADMIN_ONLY):
-        _require_admin(request)
+        _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_item(body, _user_email(request))
     except library.ValidationError as exc:
@@ -1083,7 +1087,7 @@ def api_library_item_update(item_id: str, payload: LibraryItemIn,
     body = payload.model_dump(exclude_unset=True)
     # Price breaks, a bulk cost and a coverage basis are an admin's to set (Phase 11).
     if any(k in body for k in library.ITEM_ADMIN_ONLY):
-        _require_admin(request)
+        _require_grant(request, special_permissions.LIBRARY)
     try:
         # The caller's identity is the ONLY source of "who edited it" — the payload model has no
         # such field and validate_item would drop it, so a client cannot sign somebody else's name.
@@ -1178,7 +1182,7 @@ def api_library_vendors() -> Dict[str, Any]:
 
 @app.post("/api/library/vendors")
 def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_vendor(payload.model_dump(exclude_unset=True), _user_email(request))
     except library.ValidationError as exc:
@@ -1189,7 +1193,7 @@ def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dic
 @app.patch("/api/library/vendors/{vendor_id}")
 def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
                               request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_vendor(vendor_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1201,7 +1205,7 @@ def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
 
 @app.delete("/api/library/vendors/{vendor_id}")
 def api_library_vendor_delete(vendor_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_vendor(vendor_id):
         raise HTTPException(404, "That vendor is no longer on the list.")
     # Items naming it keep saying so — they store the name, and a delete here must not rewrite what
@@ -1227,7 +1231,7 @@ def api_library_divisions() -> Dict[str, Any]:
 
 @app.post("/api/library/divisions")
 def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_ref(library.DIVISION_REFS, payload.model_dump(exclude_unset=True),
                                  _user_email(request), label="division")
@@ -1239,7 +1243,7 @@ def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict
 @app.patch("/api/library/divisions/{division_id}")
 def api_library_division_update(division_id: str, payload: LibraryRefIn,
                                 request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_ref(library.DIVISION_REFS, division_id,
                                  payload.model_dump(exclude_unset=True), label="division")
@@ -1252,7 +1256,7 @@ def api_library_division_update(division_id: str, payload: LibraryRefIn,
 
 @app.delete("/api/library/divisions/{division_id}")
 def api_library_division_delete(division_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_ref(library.DIVISION_REFS, division_id):
         raise HTTPException(404, "That division is no longer on the list.")
     return {"ok": True, "deleted": division_id}
@@ -1265,7 +1269,7 @@ def api_library_units() -> Dict[str, Any]:
 
 @app.post("/api/library/units")
 def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_ref(library.UNIT_REFS, payload.model_dump(exclude_unset=True),
                                  _user_email(request), label="unit")
@@ -1277,7 +1281,7 @@ def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str
 @app.patch("/api/library/units/{unit_id}")
 def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
                             request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_ref(library.UNIT_REFS, unit_id,
                                  payload.model_dump(exclude_unset=True), label="unit")
@@ -1290,7 +1294,7 @@ def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
 
 @app.delete("/api/library/units/{unit_id}")
 def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_ref(library.UNIT_REFS, unit_id):
         raise HTTPException(404, "That unit is no longer on the list.")
     return {"ok": True, "deleted": unit_id}
@@ -1332,7 +1336,7 @@ def api_library_labor() -> Dict[str, Any]:
 
 @app.post("/api/library/labor")
 def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_labor(payload.model_dump(exclude_unset=True), _user_email(request))
     except library.ValidationError as exc:
@@ -1343,7 +1347,7 @@ def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[
 @app.patch("/api/library/labor/{labor_id}")
 def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
                              request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_labor(labor_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1357,7 +1361,7 @@ def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
 
 @app.delete("/api/library/labor/{labor_id}")
 def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     # 400, NOT 404: `travel` is very much still on the list, and 404 would read as "already gone"
     # to whatever called this — a caller that retried on a 404 would find nothing to retry against.
     # library.delete_labor raises before it even asks the store whether the row exists.
@@ -1394,7 +1398,7 @@ def api_library_labor_calc() -> Dict[str, Any]:
 @app.put("/api/library/labor-calc/{line_id}")
 def api_library_labor_calc_save(line_id: str, payload: LibraryLaborCalcIn,
                                 request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.save_labor_calc(line_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1451,7 +1455,7 @@ def api_markup_rules(layout: Optional[str] = None) -> Dict[str, Any]:
 
 @app.put("/api/markup/rules")
 def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.MARKUP)
     try:
         row = markup.upsert_rule(payload.model_dump(exclude_unset=True), _user_email(request))
     except markup.ValidationError as exc:
@@ -1461,7 +1465,7 @@ def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str,
 
 @app.delete("/api/markup/rules/{rule_id}")
 def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.MARKUP)
     if not markup.delete_rule(rule_id):
         # 404 rather than a cheerful 200: the rule may have gone in another tab, and reporting a
         # successful delete of nothing is how somebody believes a rate was removed when it wasn't.
@@ -1508,7 +1512,7 @@ def api_condition_defaults() -> Dict[str, Any]:
 @app.put("/api/condition-defaults/{condition_key}")
 def api_condition_default_set(condition_key: str, payload: ConditionDefaultIn,
                               request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = condition_defaults.set_default(condition_key,
                                              payload.model_dump(exclude_unset=True),
@@ -1589,6 +1593,73 @@ def _pipeline_snapshot() -> Tuple[List[Dict[str, Any]], str]:
             return _PIPELINE_CACHE["rows"], "stale"
         # Tier 2. Nothing cached — a fresh container that has never had a good answer.
         return [], "offline"
+
+
+# WHAT THE PORTAL ON THE OTHER END CAN DO, asked before anything that only a portal with scope groups
+# handles safely (review findings 0, 4, 9, 23, 31). The tool deploys itself on a push and the portal
+# ships by hand, so for a while either can be newer. A portal without scope groups publishes each
+# scope of a project as an ordinary proposal: it emails the customer once per scope and starts one
+# follow-up cadence per scope, while the tool's Files page says nobody was emailed. So a grouped
+# publish and the combined send ask first, and an old (or silent) portal is refused before a revision
+# or a portal row exists. Ungrouped publishes never ask.
+#
+# Remembered for a minute either way, so a burst of scope publishes asks once, and a portal deployed
+# a minute ago is believed a minute later. A portal that could not be reached is not remembered.
+_CAPS_TTL_S = 60.0
+_CAPS_CACHE: Dict[str, Any] = {"caps": None, "at": 0.0}
+_PORTAL_NOT_READY = ("The customer portal has not been updated for projects with several proposals "
+                     "yet, so nothing was sent and nothing was saved as sent. Ask Hanz to update "
+                     "the portal, then send again.")
+_PORTAL_FOLLOWUPS_NOT_READY = ("The portal's follow-up update has not been applied yet. Nothing was "
+                               "sent.")
+
+
+def _portal_capabilities() -> Dict[str, Any]:
+    """The portal's GET /api/admin/capabilities, {} for a portal that has no such route (an older
+    one answers 404). RAISES HTTPException (502/503) when the portal cannot be asked at all."""
+    now = time.time()
+    if _CAPS_CACHE["caps"] is not None and now - _CAPS_CACHE["at"] < _CAPS_TTL_S:
+        return _CAPS_CACHE["caps"]
+    try:
+        got = _portal("/api/admin/capabilities", "GET")
+        caps = got if isinstance(got, dict) else {}
+    except HTTPException as exc:
+        if exc.status_code not in (404, 405):
+            raise
+        caps = {}
+    except ValueError:          # a 200 that is not JSON (a page, not the route) is not a "yes"
+        caps = {}
+    _CAPS_CACHE.update(caps=caps, at=now)
+    return caps
+
+
+def _scope_groups_refusal() -> Optional[JSONResponse]:
+    """None when the portal handles scope groups AND their per-project follow-ups (capabilities
+    `scope_groups` and `group_followups` both true), else the flat refusal a grouped publish or the
+    combined send answers: 409 portal_not_ready for a portal without them (its own sentence when
+    only the follow-up update is missing), 502 portal_unreachable for one that could not be asked
+    (nothing can be confirmed, so nothing is sent)."""
+    try:
+        caps = _portal_capabilities()
+    except HTTPException as exc:
+        log.warning("portal capabilities unknown (%s): a scope-group send is refused",
+                    exc.status_code)
+        return JSONResponse(status_code=502, content={
+            "ok": False, "code": "portal_unreachable",
+            "error": "Nothing was sent. The customer portal is not answering, so the tool cannot "
+                     "check it is ready for projects with several proposals. Try again in a minute."})
+    if caps.get("scope_groups") is True and caps.get("group_followups") is True:
+        return None
+    if caps.get("scope_groups") is True:
+        # Scope groups without the per-project follow-ups (round 3): the portal would chase each
+        # scope of the project on its own, one reminder per scope, so it is not ready either.
+        log.warning("portal has scope groups but not group follow-ups (capabilities %r): a "
+                    "scope-group send is refused", caps)
+        return JSONResponse(status_code=409, content={"ok": False, "code": "portal_not_ready",
+                                                      "error": _PORTAL_FOLLOWUPS_NOT_READY})
+    log.warning("portal has no scope groups (capabilities %r): a scope-group send is refused", caps)
+    return JSONResponse(status_code=409, content={"ok": False, "code": "portal_not_ready",
+                                                  "error": _PORTAL_NOT_READY})
 
 
 async def _portal_raw(path: str, method: str, blob: bytes, ctype: str) -> Response:
@@ -1813,7 +1884,10 @@ def _guard_notify_picks(request: Request, prior: Any,
     than safe. Carrying an existing entry through is fine; dropping somebody else's is a change, or
     un-muting by omission would be a free bypass.
     """
-    if _caller_is_admin(request):
+    # An admin, or a member given the Direct Projects tab (the drawer's home): the Special
+    # permissions card promises that tab's every admin-only edit, and setting somebody else's
+    # notifications on a project is one.
+    if _may_set_others_notify(request, special_permissions.PROJECTS):
         return
     me = (_user_email(request) or "").strip().lower()
     picks = prior if isinstance(prior, dict) else {}
@@ -1840,11 +1914,56 @@ def api_portal_publish(draft_id: str, request: Request,
     modal sends `{emails: [...]}` (intake contact + extras); we validate + forward
     them so the portal emails/authorizes every recipient. Malformed JSON or a
     wrong-typed `emails` yields FastAPI's 422 — never a 500 — keeping the sync
-    handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop."""
+    handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop.
+
+    TWO HALVES (2026-10-27), so the project's "Send all proposals in one email" publishes each
+    proposal through exactly this code: _prepare_publish runs every check and builds the document
+    and writes NOTHING; _commit_publish mints the revision and posts it. The send-all prepares every
+    proposal before it commits any, so one that cannot go stops them all."""
+    prep = _prepare_publish(draft_id, request, payload)
+    if isinstance(prep, Response):
+        return prep
+    return _commit_publish(prep)
+
+
+def _prepare_publish(draft_id: str, request: Request, payload: Optional[PortalPublishIn],
+                     row: Optional[Dict[str, Any]] = None) -> Any:
+    """Every check of a publish, and the document it would freeze, with NOTHING written: a refusal
+    (a JSONResponse, or an HTTPException raised) or the prepared send _commit_publish completes.
+    `row` is the stored draft when the caller has just read it."""
     draft_id = _safe_id(draft_id)
-    row = drafts.load_draft(draft_id)
+    if row is None:
+        row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
+    # A SCOPE OF A PROJECT IS SENT AS ONE (drafts' scope-group block). The portal reads
+    # `scope_group` straight out of this draft at publish and refuses a malformed one with a bare
+    # 400 invalid_scope_group, which the proxy would hand the Files page as "Portal error." with
+    # nothing to act on. Refused here instead, first and before anything is minted, in words. Flat
+    # body with `error` for the reason the stale-document refusal below gives.
+    _scope_problem = drafts.scope_group_problem((row.get("data") or {}).get("scope_group"))
+    if _scope_problem:
+        log.warning("publish refused for draft %s: %s", _log_safe(draft_id), _scope_problem)
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "invalid_scope_group",
+            "error": "Not sent — this proposal's link to the other scopes of its project is "
+                     "damaged (%s). Open the project from the board and rename the scope, then "
+                     "send." % _scope_problem})
+    _gid = drafts._scope_of(row.get("data") or {})[0]
+    if _gid:
+        # A TEST PROJECT AND A REAL ONE ARE NEVER ONE PROJECT (finding 29), read off the STORED
+        # drafts: a test scope published into a real customer's group would ride their email.
+        _mixed = drafts.scope_test_mix(draft_id, row.get("data") or {}, _gid)
+        if _mixed:
+            log.warning("publish refused for draft %s: test and real scopes in one group",
+                        _log_safe(draft_id))
+            return JSONResponse(status_code=409, content={
+                "ok": False, "code": "test_mix", "error": "Not sent. " + _mixed})
+        # AND ONLY TO A PORTAL THAT KNOWS WHAT A SCOPE IS (_portal_capabilities), before anything is
+        # minted: an older portal would email this scope on its own.
+        _not_ready = _scope_groups_refusal()
+        if _not_ready is not None:
+            return _not_ready
     by = _user_email(request)
     body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
     # WHO BUILT THIS, which is not always who is sending it or who will chase it.
@@ -2001,7 +2120,16 @@ def api_portal_publish(draft_id: str, request: Request,
             "error": "Not sent — this proposal changed after you downloaded it (a change was "
                      "saved from another page or computer, or the tool was updated). Download it "
                      "again, check it, then send."})
+    return {"draft_id": draft_id, "row": row, "by": by, "body": body, "emails": emails,
+            "digest": digest, "sent_docs": sent_docs, "sent_pdf": sent_pdf}
 
+
+def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
+    """The writing half of a publish (_prepare_publish made every check): mint the revision, keep
+    its document, post it to the portal, and take both back when the portal refuses."""
+    draft_id, row, by, body = prep["draft_id"], prep["row"], prep["by"], prep["body"]
+    emails, digest = prep["emails"], prep["digest"]
+    sent_docs, sent_pdf = prep["sent_docs"], prep["sent_pdf"]
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
@@ -2076,6 +2204,12 @@ def api_portal_publish(draft_id: str, request: Request,
                         draft_id, exc)
     if isinstance(out, dict):
         out.setdefault("revision_no", rev_no)
+        # A scope's publish emails NOBODY (the portal holds it for the project's one combined email),
+        # so the Files page must not say "sent to the customer". It reads this to say what did happen.
+        _sg = drafts._scope_of(row.get("data") or {})
+        if _sg[0]:
+            out.setdefault("scope_group", _sg[0])
+            out.setdefault("scope_label", _sg[1])
         # What the customer will actually see, echoed back so the sending page can check it
         # against what IT is showing. The flush before publishing closes the same-tab race;
         # this catches every other source of staleness — a second tab, another device, an
@@ -2399,7 +2533,10 @@ def api_portal_pipeline() -> Dict[str, Any]:
         # Only with a cold cache. With a warm one the real rows are right there, and inventing
         # a second card for a project already on the board would double it.
         rows = rows + _sent_unknown_rows(summaries, rows)
-    data["proposals"] = rows + _not_sent_rows(summaries, rows)
+    groups = _scope_groups(summaries)
+    data["proposals"] = rows + _not_sent_rows(summaries, rows,
+                                              scope_pending=_scope_pending(groups, rows))
+    _stamp_scopes(data["proposals"], summaries, groups)
     # The board each card is on, in the server's own words — pipelines.pipeline_of over the audience
     # just stamped, for every row including the synthesised ones and the ones with no draft behind
     # them. portal.js derives the same answer from `audience` with crm-core's pipelineOf, the same
@@ -2416,8 +2553,189 @@ def api_portal_pipeline() -> Dict[str, Any]:
     return data
 
 
+def _scope_groups(summaries: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """{group id: the summaries of its scopes, oldest first}, from the drafts list alone.
+
+    THE DRAFTS DECIDE WHO IS IN A GROUP, as they do for the portal's combined email: a scope taken
+    out of its group keeps a stale scope_group on its portal row, and is an ordinary proposal again.
+    Who counts is drafts.live_scope_members, the ONE rule the label checks and the portal use too:
+    not archived, and never a Test scope in a real project (or the reverse)."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for s in summaries:
+        gid = s.get("scope_group_id")
+        if gid:
+            out.setdefault(gid, []).append(s)
+    live = {gid: drafts.live_scope_members(members) for gid, members in out.items()}
+    return {gid: members for gid, members in live.items() if members}
+
+
+def _scope_pending(groups: Dict[str, List[Dict[str, Any]]],
+                   sent: List[Dict[str, Any]]) -> set:
+    """The scopes that belong on the board although nothing has built their files yet.
+
+    A project's scopes are one project, so once ANY of them is on the board (files built, or sent)
+    every other scope is drawn beside it, as "files not built yet", rather than vanishing because
+    its own Generate has not run. That is a freshly split scope's case by construction: the split
+    clears the old combined files (drafts.SPLIT_CLEARS). A group none of whose scopes has reached
+    the board stays off it, like any project nobody has generated."""
+    have = {r.get("proposal_id") for r in sent}
+    out: set = set()
+    for members in groups.values():
+        # A split does not take a project off the board: a scope whose files the split cleared
+        # (`split_had_files`) still counts as on it, so a "Created but not sent" bid that is split
+        # stays in that column as its scopes, each "files not built yet", instead of vanishing until
+        # somebody re-generates one.
+        if any(s.get("has_files") or s.get("split_had_files") or s["id"] in have
+               for s in members):
+            out.update(s["id"] for s in members if not s.get("has_files") and s["id"] not in have)
+    return out
+
+
+def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
+                  groups: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Put each card's place in its project on the card: `scope_group`, `scope_label`,
+    `scope_index` (1-based, by when the scope was made), `scope_count` and `scope_members`
+    ([{id, label, on_board}], every scope of the group in that order). IN PLACE.
+
+    From the drafts, which decide membership (see _scope_groups). A sent row whose draft says it is in
+    no group has its portal copy's stale `scope_group` cleared; a row whose draft is unknown here is
+    left exactly as the portal sent it. An ungrouped project gains no key.
+
+    Each member also says whether the customer already has it (`sent`: a real portal row, so a
+    project sent BEFORE it gained scopes is a sent member, never "publish it first"), and each row
+    gets `scope_send` (_scope_send_view), the project's one email as the portal reports it."""
+    on_board = {r.get("proposal_id") for r in rows}
+    by_id = {s["id"]: s for s in summaries}
+    portal_rows = {r.get("proposal_id"): r for r in rows if not r.get("not_sent")}
+    views = {gid: _scope_send_view(members, portal_rows) for gid, members in groups.items()}
+    for row in rows:
+        s = by_id.get(row.get("proposal_id"))
+        if s is None:
+            continue
+        gid = s.get("scope_group_id")
+        members = groups.get(gid) if gid else None
+        # The live-member rule judges THIS row too: an archived scope, or a Test scope in a real
+        # project, is in no group, never "Scope 0 of N" beside the members that count.
+        if members and not any(m["id"] == s["id"] for m in members):
+            members = None
+        if not members:
+            if row.get("scope_group"):
+                row["scope_group"] = None
+                row["scope_label"] = None
+                row["scope_send_pending"] = False
+            continue
+        row["scope_group"] = gid
+        row["scope_label"] = s.get("scope_label")
+        row["scope_count"] = len(members)
+        row["scope_index"] = next((i + 1 for i, m in enumerate(members) if m["id"] == s["id"]), 0)
+        view = views.get(gid)
+        pending = set(view["pending"]) if view else set()
+        row["scope_members"] = [{"id": m["id"], "label": m.get("scope_label") or "",
+                                 # A proposal made from another member's base bid (Create
+                                 # Multiple Proposals): the drawer opens it on its proposal page.
+                                 "proposal_of": m.get("proposal_of") or None,
+                                 # An Estimating Tool v2 estimate (polish_estimate.version 2): the
+                                 # drawer's project-workbook button builds a v2 group's workbook
+                                 # (/api/scope-group/{gid}/workbook), and sends a v1 group to its
+                                 # home's Files page, whose .xlsx already has every tab.
+                                 "v2": bool(m.get("polish_beta")),
+                                 "on_board": m["id"] in on_board,
+                                 "sent": m["id"] in portal_rows,
+                                 "pending": m["id"] in pending} for m in members]
+        if view is not None:
+            # A scope whose last send lost its result carries its own chip: it is neither waiting
+            # for its first email nor known to have gone out (findings 9 and 16).
+            lost = s["id"] in (view.get("unknown") or [])
+            row["scope_send"] = dict(view, mine=s["id"] in pending or lost,
+                                     chip="Email result lost" if lost else view["chip"])
+
+
+def _scope_send_view(members: List[Dict[str, Any]],
+                     portal_rows: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """THE PROJECT'S ONE EMAIL, AS THE PORTAL REPORTS IT: what the card's chip and the drawer's button
+    say. From the portal's `scope_send_state` on the members' rows ({announced, pending_scope_ids,
+    not_included, unknown_scope_ids, kinds, first, inflight_scope_ids}); `announced` in the answer
+    is the GROUP's "emailed before" (the portal's `first` is false); None when no member row carries one, which is an older portal (the card and the
+    drawer then fall back to its `scope_send_pending`, and the send itself is refused as
+    portal_not_ready).
+
+    `pending` are the live members the portal has not emailed at their current version: a scope
+    added or revised after the first email is emailable again (findings 1-3, 7, 11, 14). Which of
+    them is NEW and which REVISED is the portal's own answer, `kinds` ({proposal_id: "new" |
+    "revised"}, finding 22): the board rows carry no last_sent_at to guess it from. A portal that
+    does not report `kinds` gets a button that counts the scopes without naming them ("Email again:
+    2 scopes"), never one that calls a revision new. `label` is the button's words, None when there
+    is nothing to email.
+
+    `unknown` are the members whose last send LOST ITS RESULT (the portal's `unknown_scope_ids`,
+    findings 9 and 16): the emails may or may not have gone out. The portal never re-sends them on
+    its own and never counts them as pending, so without this the drawer said "the customer has
+    every scope" and nobody could send them again. `unknown_text` says so, and the drawer offers a
+    separate, explicit "send them again" (the send's `resend_unknown`).
+
+    `inflight` are the members whose send is IN FLIGHT (the portal's `inflight_scope_ids`, round
+    3): claimed by a send whose result has not been recorded yet. Neither pending nor lost, so the
+    drawer says an email for them is on its way instead of "the customer has every scope"."""
+    states = [portal_rows[m["id"]].get("scope_send_state") for m in members
+              if m["id"] in portal_rows]
+    states = [st for st in states if isinstance(st, dict)]
+    if not states:
+        return None
+    ids = [m["id"] for m in members]
+    want: set = set()
+    left_out: set = set()
+    lost: set = set()
+    flying: set = set()
+    kinds: Dict[str, str] = {}
+    told_kinds = False
+    for st in states:
+        want.update(x for x in (st.get("pending_scope_ids") or []) if isinstance(x, str))
+        left_out.update(x for x in (st.get("not_included") or []) if isinstance(x, str))
+        lost.update(x for x in (st.get("unknown_scope_ids") or []) if isinstance(x, str))
+        flying.update(x for x in (st.get("inflight_scope_ids") or []) if isinstance(x, str))
+        if isinstance(st.get("kinds"), dict):
+            told_kinds = True
+            kinds.update({str(k): str(v) for k, v in st["kinds"].items()})
+    # EMAILED BEFORE is a GROUP fact (round 3). The portal's `announced` is per row: whether THAT
+    # scope's current revision reached the customer, so every pending row says false, and a project
+    # whose every scope was revised looked never emailed ("Send every scope in one email"). The
+    # portal's `first` is the planner's own answer: true only while nothing of the project has ever
+    # been announced. An older portal without it: any announced row, or any scope it calls revised
+    # (a revision is only ever of something the customer already had).
+    firsts = [st["first"] for st in states if isinstance(st.get("first"), bool)]
+    if firsts:
+        announced = any(f is False for f in firsts)
+    else:
+        announced = (any(bool(st.get("announced")) for st in states)
+                     or any(v == "revised" for v in kinds.values()))
+    pending = [i for i in ids if i in want]
+    unknown = [i for i in ids if i in lost and i not in want]
+    inflight = [i for i in ids if i in flying and i not in want and i not in lost]
+    revised = [i for i in pending if kinds.get(i) == "revised"]
+    new = [i for i in pending if i not in revised]
+    if not pending:
+        label = None
+    elif not announced:
+        label = "Send every scope in one email"
+    elif not told_kinds:
+        label = "Email again: %d scope%s" % (len(pending), "" if len(pending) == 1 else "s")
+    else:
+        parts = (["%d new" % len(new)] if new else []) + (["%d revised" % len(revised)] if revised else [])
+        label = "Email again: " + ", ".join(parts)
+    return {"announced": announced, "pending": pending,
+            "new": len(new) if told_kinds else None,
+            "revised": len(revised) if told_kinds else None,
+            "not_included": [i for i in ids if i in left_out], "label": label,
+            "chip": (None if not pending else ("Email not sent" if not announced else label)),
+            "unknown": unknown,
+            "inflight": inflight,
+            "unknown_text": ("The result of the last send was lost. Check the thread, then send "
+                             "again." if unknown else None)}
+
+
 def _not_sent_rows(summaries: List[Dict[str, Any]],
-                   sent: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                   sent: List[Dict[str, Any]],
+                   scope_pending: Optional[set] = None) -> List[Dict[str, Any]]:
     """Synthesise the board's first column: finished paperwork nobody has sent yet.
 
     Hanz, 2026-08-11: "Under the Active Proposals we need to create a new category before
@@ -2436,9 +2754,15 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
     real proposals by when someone last touched them rather than piling up dateless.
     """
     have = {r.get("proposal_id") for r in sent}
+    pending = scope_pending or set()
     out: List[Dict[str, Any]] = []
     for s in summaries:
-        if s["id"] in have or not s.get("has_files") or s.get("archived"):
+        if s["id"] in have or s.get("archived"):
+            continue
+        # A scope of a project already on the board is drawn even before its files are built
+        # (_scope_pending), and says so (`files_pending`) instead of claiming paperwork exists.
+        files_pending = not s.get("has_files") and s["id"] in pending
+        if not s.get("has_files") and not files_pending:
             continue
         out.append({
             "proposal_id": s["id"],
@@ -2470,6 +2794,8 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # operations without the customer ever being sent the paperwork.
             "handed_off_at": s.get("handed_off_at"),
         })
+        if files_pending:
+            out[-1]["files_pending"] = True
         # Dead before it was ever sent. Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in
         # the Created not sent category" — the commonest dead bid there is, priced and generated
         # and then the GC went elsewhere before we sent it.
@@ -2971,6 +3297,326 @@ def api_portal_set_status(proposal_id: str, request: Request,
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
 
 
+# ── follow-up TASKS: the reminder an estimator acts on (remind mode, v1) ──────────
+# The portal decides WHEN a follow-up is due and parks it as a task for the ASSIGNED ESTIMATOR (one
+# person, with the portal's own roster fallback when nobody is assigned). Nothing reaches the
+# customer until a human here presses Send. That estimator is NOT the "Tell the team" chips on the
+# Files page: those are a one-time send-confirmation list and have nothing to do with these.
+#
+# THESE PROXIES PASS THE PORTAL'S ANSWER THROUGH, status and body both. `_portal` raises on
+# anything over 400 and keeps only the `error` string, which is right for the controls that only
+# need "it failed", and wrong here: a 409 out_of_scope ("this proposal moved on, nothing was sent")
+# and a 502 send_failed ("nothing was sent, try again") are different sentences on screen, and the
+# drawer can only say the right one if it is handed the right status. Same transport as `_portal`
+# (service token header, 20s), so the two cannot disagree about how the portal is reached.
+def _portal_call(path: str, method: str = "GET",
+                 body: Optional[Dict[str, Any]] = None) -> Tuple[int, Dict[str, Any]]:
+    """The portal's status and JSON body, without raising on a 4xx.
+
+    A 5xx comes back as 502, exactly as `_portal` reports one. Unconfigured is still a 503 and
+    unreachable still a 502, raised, because there is no portal answer to pass through."""
+    import httpx
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        raise HTTPException(503, "Customer portal isn't configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).")
+    try:
+        with httpx.Client(timeout=20.0, headers={"X-Service-Token": token}) as c:
+            resp = c.request(method, base + path, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Could not reach the customer portal.") from exc
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        data = None
+    if not isinstance(data, dict):
+        data = {"error": "Portal error."} if resp.status_code >= 400 else {}
+    return (resp.status_code if resp.status_code < 500 else 502), data
+
+
+def _portal_answer(status: int, data: Dict[str, Any]) -> JSONResponse:
+    """A portal answer as this app's response. An error keeps every field the portal sent (error,
+    reason, status, message) and gains `ok: false` and a `detail`, which is the key every other
+    error in this app carries, so the browser's `j.error || j.detail` reads both kinds."""
+    out = dict(data)
+    if status >= 400:
+        out.setdefault("ok", False)
+        out.setdefault("detail", out.get("error") or "Portal error.")
+    return JSONResponse(status_code=status, content=jsonable_encoder(out))
+
+
+def _portal_pass(path: str, method: str = "GET",
+                 body: Optional[Dict[str, Any]] = None) -> JSONResponse:
+    return _portal_answer(*_portal_call(path, method, body))
+
+
+@app.get("/api/portal/followup-tasks")
+def api_portal_followup_tasks(estimator: str = "") -> JSONResponse:
+    """Every follow-up waiting on a human, oldest first. `?estimator=` narrows it to one person."""
+    path = "/api/admin/followup-tasks"
+    who = (estimator or "").strip().lower()
+    if who:
+        if not _PORTAL_EMAIL_RE.match(who) or len(who) > 254:
+            raise HTTPException(400, "That doesn't look like an email address.")
+        path += "?estimator=" + quote(who)
+    return _portal_pass(path)
+
+
+@app.get("/api/portal/followup-task/{task_id}")
+def api_portal_followup_task(task_id: str) -> JSONResponse:
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}")
+
+
+# An AI draft per TASK, for an hour. The CLI call is ~20s and paid, and the drawer asks once per
+# open per page load, so without this a task three people glance at costs three runs for the same
+# words. Only a draft the portal accepted as `ai` is kept: a fallback is cheap to ask for again and
+# caching one would pin the default wording for an hour after a passing CLI failure. Bounded,
+# because task ids never repeat and nothing else would ever evict them.
+_FU_AI_DRAFTS: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_FU_AI_TTL_S = 3600
+_FU_AI_MAX = 200
+
+
+def _fu_ai_cached(task_id: str) -> Optional[Dict[str, Any]]:
+    hit = _FU_AI_DRAFTS.get(task_id)
+    if hit and time.time() - hit[0] < _FU_AI_TTL_S:
+        return hit[1]
+    _FU_AI_DRAFTS.pop(task_id, None)
+    return None
+
+
+def _fu_ai_remember(task_id: str, answer: Dict[str, Any]) -> None:
+    if len(_FU_AI_DRAFTS) >= _FU_AI_MAX:
+        oldest = min(_FU_AI_DRAFTS, key=lambda k: _FU_AI_DRAFTS[k][0])
+        _FU_AI_DRAFTS.pop(oldest, None)
+    _FU_AI_DRAFTS[task_id] = (time.time(), answer)
+
+
+# THE COST CAP. The cache above only keeps a draft the portal accepted, so a task whose CLI run
+# keeps failing is re-run on every page load, by every estimator, and by anything that POSTs here
+# in a loop. Two budgets, both counted only when the CLI actually runs: per TASK (a failing task
+# stops costing money after a few tries) and per PERSON (one signed-in user cannot walk every task
+# on the board on repeat). Wider than autofill's 3 per 5 min because working the morning's
+# reminders is one draft per project, back to back; a cache hit costs nothing against either.
+# Over a cap the answer is the portal's default, as for any AI failure, never a 429: the compose
+# box always opens with something to send. Single uvicorn worker, so in-memory is shared; the lock
+# makes check-then-record one step under the threadpool that runs these sync routes.
+_FU_AI_RATE_WINDOW = 600      # seconds (10 minutes)
+_FU_AI_RATE_PER_TASK = 3
+_FU_AI_RATE_PER_USER = 10
+_FU_AI_HITS: Dict[str, List[float]] = {}
+_FU_AI_HITS_LOCK = threading.Lock()
+
+
+def _fu_ai_take_slot(task_id: str, email: Optional[str]) -> bool:
+    """Spend one CLI run against both budgets, or spend nothing and say no."""
+    now = time.time()
+    keys = ((f"task|{task_id}", _FU_AI_RATE_PER_TASK),
+            (f"user|{(email or 'anon').strip().lower()}", _FU_AI_RATE_PER_USER))
+    with _FU_AI_HITS_LOCK:
+        for key, _cap in keys:
+            hits = [t for t in _FU_AI_HITS.get(key, []) if now - t < _FU_AI_RATE_WINDOW]
+            if hits:
+                _FU_AI_HITS[key] = hits
+            else:
+                _FU_AI_HITS.pop(key, None)    # task ids never repeat; do not keep empty keys
+        if any(len(_FU_AI_HITS.get(key, [])) >= cap for key, cap in keys):
+            return False
+        for key, _cap in keys:
+            _FU_AI_HITS.setdefault(key, []).append(now)
+    return True
+
+
+@app.post("/api/portal/followup-task/{task_id}/ai-draft")
+def api_portal_followup_ai_draft(task_id: str, request: Request) -> Any:
+    """The compose box's first draft, in ONE call: ask the portal for its safe default and the
+    prompt that would do better, run that prompt through the CLI, and hand the model's answer back
+    to the portal to be checked. The portal cannot run the model (it has no CLI); this app cannot
+    be trusted to judge what is safe to put in front of a customer (the portal owns that rule:
+    plain text, one {link}, no URLs, known tokens only). So the work is split along those lines.
+
+    ALWAYS A DRAFT, NEVER A 500 FROM THE AI HALF. A CLI that is missing, slow, refuses, or answers
+    with something that is not `{title, body}` costs the estimator the better wording and nothing
+    else: the portal's own default comes back instead, flagged `fallback`. The only errors that
+    reach the browser are the portal's own (the task is gone, or the portal is down), passed
+    through with their status, because there is no draft to show for a task that does not exist.
+
+    The thread inside `ai_request.input` is customer-written text. It goes to the CLI on stdin as
+    DATA, never into the system prompt, and the CLI runs with no tools and no credentials (see
+    `_autofill_via_cli`). The system prompt is the portal's, which is the trusted half."""
+    tid = _safe_id(task_id)
+    cached = _fu_ai_cached(tid)
+    if cached is not None:
+        return cached
+    status, got = _portal_call(f"/api/admin/followup-task/{tid}/draft", "GET")
+    if status >= 400:
+        return _portal_answer(status, got)
+    default = got.get("draft") if isinstance(got.get("draft"), dict) else None
+    fallback: Dict[str, Any] = {"ok": True, "draft": default, "fallback": True, "ai": False}
+    # The portal already holds a checked AI draft for this task: nothing to improve on.
+    if default and default.get("source") == "ai":
+        answer = {"ok": True, "draft": default, "fallback": False, "ai": True}
+        _fu_ai_remember(tid, answer)
+        return answer
+    req = got.get("ai_request") if isinstance(got.get("ai_request"), dict) else {}
+    system, user_input = req.get("system"), req.get("input")
+    if not (isinstance(system, str) and system.strip()
+            and isinstance(user_input, str) and user_input.strip()):
+        return fallback
+    if not _fu_ai_take_slot(tid, _user_email(request)):
+        log.info("Follow-up draft for %s: AI budget spent; using the portal's default", _log_safe(tid))
+        return {**fallback, "rate_limited": True}
+    try:
+        ai = _autofill_via_cli(user_input, system)
+    except FileNotFoundError:
+        log.warning("Follow-up draft: the claude CLI is not on PATH; using the portal's default")
+        return fallback
+    except Exception as exc:  # noqa: BLE001 (an AI failure never reaches the estimator as an error)
+        log.warning("Follow-up draft AI failed: %s: %s", type(exc).__name__, exc)
+        return fallback
+    if not isinstance(ai, dict):
+        return fallback
+    # Strings only. Anything else the model sent is dropped here rather than str()'d into the body
+    # of a customer email; the portal then refuses the empty field and answers with its default.
+    output = {k: (ai.get(k) if isinstance(ai.get(k), str) else "") for k in ("title", "body")}
+    try:
+        st2, checked = _portal_call(f"/api/admin/followup-task/{tid}/draft", "POST",
+                                    {"model_output": output})
+    except HTTPException as exc:
+        log.warning("Follow-up draft: the portal could not check the AI draft: %s", exc.detail)
+        return fallback
+    draft = checked.get("draft") if isinstance(checked.get("draft"), dict) else None
+    if st2 >= 400 or not draft:
+        return fallback
+    answer = {"ok": True, "draft": draft, "fallback": bool(checked.get("fallback")),
+              "ai": draft.get("source") == "ai"}
+    if answer["ai"]:
+        _fu_ai_remember(tid, answer)
+    return answer
+
+
+class FollowupSendIn(BaseModel):
+    title: str = ""
+    body: str = ""
+    cta: Optional[str] = None
+
+
+class FollowupSkipIn(BaseModel):
+    note: str = ""
+
+
+class FollowupCalledIn(BaseModel):
+    kind: str = "call"
+    note: str = ""
+
+
+class FollowupSnoozeIn(BaseModel):
+    until: str = ""
+
+
+class FollowupPlanIn(BaseModel):
+    """Every field optional, and ABSENT is different from null: absent leaves that part of the
+    schedule alone, null puts it back on the global default. Forwarded with exclude_unset, so a
+    change to one field never resets the other two."""
+    interval_days: Optional[int] = None
+    stop_after: Optional[int] = None
+    next_at: Optional[str] = None
+
+
+@app.post("/api/portal/followup-task/{task_id}/send")
+def api_portal_followup_send(task_id: str, request: Request,
+                             payload: Optional[FollowupSendIn] = None) -> JSONResponse:
+    """Send the (possibly edited) email. The portal re-checks the draft and owns the send; `by` is
+    the signed-in user, never a name the browser supplies."""
+    p = payload or FollowupSendIn()
+    body: Dict[str, Any] = {"title": p.title, "body": p.body, "by": _user_email(request)}
+    if p.cta:
+        body["cta"] = p.cta
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/send", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/skip")
+def api_portal_followup_skip(task_id: str, request: Request,
+                             payload: Optional[FollowupSkipIn] = None) -> JSONResponse:
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
+    body: Dict[str, Any] = {"by": _user_email(request)}
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/skip", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/called")
+def api_portal_followup_called(task_id: str, request: Request,
+                               payload: Optional[FollowupCalledIn] = None) -> JSONResponse:
+    """The estimator reached them some other way. Same four kinds as Log a call, refused here
+    before a round trip, exactly as that route refuses them."""
+    kind = str((payload.kind if payload else "call") or "call").strip().lower()
+    if kind not in ("call", "email", "text", "note"):
+        raise HTTPException(400, "invalid_kind")
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
+    body: Dict[str, Any] = {"kind": kind, "by": _user_email(request)}
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/called", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/snooze")
+def api_portal_followup_snooze(task_id: str, request: Request,
+                               payload: Optional[FollowupSnoozeIn] = None) -> JSONResponse:
+    """Put it off to a date. The portal judges the date (past, too far, unreadable), so its own
+    400 is the one the estimator reads."""
+    until = str((payload.until if payload else "") or "").strip()[:64]
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/snooze", "POST",
+                        {"until": until, "by": _user_email(request)})
+
+
+class FollowupScopeDecisionIn(BaseModel):
+    """The answer to a "Decide the other scopes" task (a scope group's sibling was approved)."""
+    action: str = ""
+    scope_ids: List[str] = []
+    reason: Optional[str] = None
+    note: Optional[str] = None
+
+
+_SCOPE_DECISIONS = ("keep", "close", "leave")
+
+
+@app.post("/api/portal/followup-task/{task_id}/scope-decision")
+def api_portal_followup_scope_decision(task_id: str, request: Request,
+                                       payload: Optional[FollowupScopeDecisionIn] = None
+                                       ) -> JSONResponse:
+    """Close the ticked scopes as lost, leave them as they are, or keep chasing them.
+
+    `scope_ids` is ALWAYS forwarded as a list, empty when nothing was ticked: the portal reads a
+    MISSING list as "every scope the task names", and nothing may ever be closed that nobody ticked.
+    Reason and note are judged by the portal (its 400 invalid_reason / note_required and its 409
+    scope_not_open come back whole, so the drawer can say which). `by` is the signed-in user."""
+    tid = _safe_id(task_id)
+    p = payload or FollowupScopeDecisionIn()
+    action = str(p.action or "").strip().lower()
+    if action not in _SCOPE_DECISIONS:
+        raise HTTPException(400, "invalid_action")
+    ids = [_safe_id(str(x or "").strip()) for x in (p.scope_ids or [])][:50]
+    body: Dict[str, Any] = {"action": action, "scope_ids": ids, "by": _user_email(request)}
+    reason = str(p.reason or "").strip().lower()[:64]
+    note = str(p.note or "").strip()[:_NOTE_MAX]
+    if reason:
+        body["reason"] = reason
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{tid}/scope-decision", "POST", body)
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followup-plan")
+def api_portal_followup_plan(proposal_id: str, request: Request,
+                             payload: Optional[FollowupPlanIn] = None) -> JSONResponse:
+    """This proposal's reminder schedule: when the next one is due, how often after that, and when
+    to stop. Remind mode is the only mode in v1, so there is no mode field to forward."""
+    body: Dict[str, Any] = payload.model_dump(exclude_unset=True) if payload else {}
+    body["by"] = _user_email(request)
+    return _portal_pass(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-plan", "POST", body)
+
+
 @app.get("/api/admin/health")
 def api_admin_health(request: Request) -> Dict[str, Any]:
     """Are we currently skipping any upstream, and why.
@@ -3040,7 +3686,7 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
 # Access (Hanz: "admins edit, staff self-serve"): the GLOBAL roster (add / remove /
 # toggle) is ADMIN-only, enforced here server-side (not just hidden buttons); the
 # per-project overrides allow ANY signed-in staff to toggle THEMSELVES for a project,
-# and admins to toggle anyone. All routes are already bearer-gated by _auth_gate.
+# and admins (or a member given the tab on Special permissions) to toggle anyone. All routes are already bearer-gated by _auth_gate.
 def _caller_is_admin(request: Request) -> bool:
     # Through _require_admin, so it reads the same cached profile as every other role decision in
     # the app. A local profiles.get_by_email() here would be a third role reader and would miss both
@@ -3052,6 +3698,23 @@ def _caller_is_admin(request: Request) -> bool:
         return False
 
 
+def _may_set_others_notify(request: Request, tab: str) -> bool:
+    """May this caller change SOMEBODY ELSE's per-project notifications: an admin, or a member
+    given `tab` on the Admin page's Special permissions card. Through _caller_is_admin first, so
+    the tests that stub it keep meaning what they did; the grant half is _require_grant's own
+    lookup, never anything the browser sends. CLOSED on any failure to read the profile or the
+    grants: a grant widens access, so an unreadable store must not."""
+    if _caller_is_admin(request):
+        return True
+    if not (_user_email(request) or "").strip():
+        return False  # nobody signed in holds no grant, whatever the profile cache has under ""
+    try:
+        _require_grant(request, tab)
+        return True
+    except Exception:  # noqa: BLE001 - HTTPException (no grant) or an unreachable profile store
+        return False
+
+
 @app.get("/api/portal/notify-recipients")
 def api_portal_notify_list() -> Dict[str, Any]:
     return _portal("/api/admin/notify-recipients", "GET")
@@ -3059,7 +3722,7 @@ def api_portal_notify_list() -> Dict[str, Any]:
 
 @app.post("/api/portal/notify-recipients")
 async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3078,7 +3741,7 @@ async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
 
 @app.patch("/api/portal/notify-recipients/{rid}")
 async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3089,7 +3752,7 @@ async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]
 
 @app.delete("/api/portal/notify-recipients/{rid}")
 def api_portal_notify_delete(rid: int, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     # rid is int-typed, but route it through the same id guard as every other
     # proxied path segment so the outbound URL is provably constrained.
     return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
@@ -3113,7 +3776,7 @@ async def api_portal_notify_step(request: Request) -> Dict[str, Any]:
     serves it to this page through the roster GET, and validates it on the way back in — so the
     only thing checked here is the SHAPE, and a step this tool has never heard of still works the
     day the portal learns it."""
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3163,9 +3826,11 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
         raise HTTPException(400, "Enter a valid email address.")
     if mode not in ("add", "mute", "clear"):
         raise HTTPException(400, "Invalid mode.")
-    # Admin may toggle anyone; a non-admin may only toggle THEIR OWN address.
+    # An admin, or a member given the Notification Sending tab, may toggle anyone (the Special
+    # permissions card promises the tab's every admin-only edit, and this is one); anybody else may
+    # only toggle THEIR OWN address.
     me = (_user_email(request) or "").strip().lower()
-    if not _caller_is_admin(request) and email != me:
+    if email != me and not _may_set_others_notify(request, special_permissions.NOTIFICATIONS):
         raise HTTPException(403, "You can only change your own notifications for a project.")
     return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "PUT",
                    {"email": email, "mode": mode})
@@ -3714,6 +4379,10 @@ class DistanceIn(BaseModel):
     city: str = ""
     state: str = ""
     zip: str = ""
+    # The intake's county ("Sedgwick County, KS", or a tax-picker city row "Overland Park, KS"). Only
+    # /api/distance reads it, as the last way to place a job with no street (distance.approx_point);
+    # /api/county ignores it. Optional, so a body without it means what it always did.
+    county: str = ""
 
 
 @app.post("/api/distance")
@@ -3725,6 +4394,10 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     or down, address too thin, rate limit -- answers `{ok: false, miles: null,
     reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
 
+    NO STREET (Hanz, 2026-10-22): a zip, a city + state or a county is enough. The job is measured
+    to that one's centre (Census Gazetteer, bundled), still by road, and `precision` (street | zip |
+    city | county) and `measured_to` say so, so the page can call the figure approximate.
+
     PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
     nav_access.TABS on purpose: the estimate step that calls it is read by every estimator
     mid-bid, and a per-tab gate would silently blank the distance halfway through a bid (the same
@@ -3733,7 +4406,7 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     bucket = getattr(request.state, "user_email", None) or "anon"
     if distance.rate_limited(bucket):
         return {"ok": False, "miles": None, "reason": "busy", "office": distance.OFFICE_LABEL}
-    return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
+    return distance.lookup(payload.address, payload.city, payload.state, payload.zip, payload.county)
 
 
 @app.post("/api/county")
@@ -7386,6 +8059,26 @@ def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[st
         return {"ok": True, **drafts.save_draft(draft_id, payload.data,
                                                 owner_email=_user_email(request),
                                                 keep_server_owned=True)}
+    except drafts.StaleSplitWrite:
+        # A copy of the project from BEFORE it was split into scopes (drafts.SPLIT_MARK): storing it
+        # would put every sheet back on the first scope while the other scopes hold them too. A 409,
+        # not the 200 {"ok": false} below, because nothing is wrong with the server: the page holds a
+        # copy that is out of date for good, and shared.js reads any non-2xx as "not saved".
+        log.warning("save refused for draft %s: the page's copy predates the split into scopes",
+                    _log_safe(draft_id))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "split_since",
+            "error": "Not saved — this project was split into separate proposals after this "
+                     "page opened it. Reload the page to work on the scope it is now."})
+    except drafts.StaleProposalWrite:
+        # A copy of a proposal from BEFORE Refresh re-priced it (drafts.StaleProposalWrite): storing
+        # it would put the old price back under the new digest, and nobody would be told.
+        log.warning("save refused for draft %s: the page's copy predates the last refresh",
+                    _log_safe(draft_id))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "refreshed_since",
+            "error": "Not saved — this proposal was refreshed from the estimate after this page "
+                     "opened it. Reload the page to work on the refreshed copy."})
     except Exception as exc:  # noqa: BLE001
         log.warning("save_draft failed: %s", exc)
         return {"ok": False, "error": "Couldn't save the project. Please try again."}
@@ -7400,6 +8093,616 @@ def api_load_draft(draft_id: str) -> Dict[str, Any]:
     return {"ok": True, **row}
 
 
+# ─── Scope groups: one project, several separately approved proposals ──
+# RJ, 2026-10-24. The store's side is the scope-group block in drafts.py; the portal's is its
+# publish and POST /api/admin/scope-group/{id}/send (one combined email for every scope).
+class ScopeIn(BaseModel):
+    """POST /api/draft/{id}/scope. `label` is the NEW scope's name, or with `rename` this scope's
+    new name. `draft_version` is the stale-write guard the publish uses (PortalPublishIn's note):
+    the row's `updated_at` as the page read it, optional on the same contract."""
+    label: str = ""
+    rename: bool = False
+    draft_version: Optional[str] = None
+
+
+def _scope_refusal(exc: "drafts.ScopeError") -> JSONResponse:
+    return JSONResponse(status_code=exc.status,
+                        content={"ok": False, "code": exc.code, "error": exc.message})
+
+
+def _stale_draft_refusal(draft_id: str, checked: Optional[str], row: Dict[str, Any],
+                         what: str) -> Optional[JSONResponse]:
+    """The publish's stale-copy refusal (api_portal_publish, `_version`), for the scope routes: a
+    409 `document_changed` when the page checked a copy that has been stored again since."""
+    if not _stored_since(row, checked):
+        return None
+    log.warning("%s refused for draft %s: saved again after the page checked it "
+                "(checked %s, now %s)", what, _log_safe(draft_id), _log_safe(checked),
+                _log_safe(row.get("updated_at")))
+    return JSONResponse(status_code=409, content={
+        "ok": False, "code": "document_changed",
+        # No dash in this sentence: the CRM drawer prints it, and the drawer's copy style has none.
+        "error": "Nothing changed. This project was saved again after this page read it "
+                 "(from another page or computer). Reload, check it, then try again."})
+
+
+@app.post("/api/draft/{draft_id}/scope")
+def api_draft_scope(draft_id: str, payload: ScopeIn, request: Request) -> Any:
+    """A NEW SCOPE OF THIS PROJECT (tier A0), or with `rename` a new name for this scope.
+
+    New: 200 {ok, id, group_id, label, parent_label} — `id` is the new draft, which shares this
+    project's intake (drafts.sibling_intake) and goes through the ordinary pipeline on its own.
+    Rename: 200 {ok, group_id, label}. Refusals are flat {ok: false, code, error}: 404 not_found,
+    400 invalid_label / not_grouped / invalid_scope_group, 409 document_changed / label_taken /
+    too_many_scopes."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                      "error": "That project is not there any more."})
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row,
+                                 "scope rename" if payload.rename else "new scope")
+    if stale is not None:
+        return stale
+    actor = _user_email(request)
+    try:
+        if payload.rename:
+            return {"ok": True, **drafts.rename_scope(draft_id, payload.label, actor)}
+        return {"ok": True, **drafts.create_sibling(draft_id, payload.label, actor)}
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+
+
+class SplitChildIn(BaseModel):
+    tab_id: str = ""
+    label: str = ""
+    # The scope's one-sheet save (bid-model splitOut + buildSavePatch): filtered through
+    # drafts.SPLIT_CHILD_KEYS, so nothing else the request carries reaches a draft.
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SplitIn(BaseModel):
+    # REQUIRED, unlike the other routes' Optional guard: a split rewrites the whole estimate, and the
+    # page that asks has always just read the copy it split (it flushes and reads before it asks).
+    draft_version: str = ""
+    children: List[SplitChildIn] = Field(default_factory=list)
+
+
+_SPLIT_WORK_TYPES = ("polish", "epoxy", "gyp")
+
+
+def _draft_was_sent(draft_id: str) -> bool:
+    """Has the customer been sent this project? A revision is the local proof (create_revision runs
+    on every publish and is rolled back when it fails); the portal is asked too, because a row there
+    is what the customer has. 404 and 503 are "no row" (_portal_visibility's reading); anything else
+    RAISES, so a split is never let through on a portal that could not answer."""
+    if drafts.latest_revision_no(draft_id):
+        return True
+    try:
+        _portal("/api/admin/proposal/%s" % _safe_id(draft_id), "GET")
+        return True
+    except HTTPException as exc:
+        if exc.status_code in (404, 503):
+            return False
+        raise
+
+
+@app.post("/api/draft/{draft_id}/split")
+def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
+    """SPLIT AN ESTIMATE'S SHEETS INTO SEPARATE PROPOSALS (tier A1): Breakroom, Lab 1 and Lab 2 priced
+    as sheets of one estimate become three scopes of one project, each its own proposal.
+
+    Body {draft_version, children: [{tab_id, label, data}]}, children[0] being the sheet that stays on
+    THIS draft (the page sends the one that carried the job's travel first). 200 {ok, group_id,
+    parent: {id, label, data, updated_at}, children: [{id, label}]}: the page adopts `parent.data` as
+    its copy before anything else can save (polish-estimate.js), and the server refuses any older copy
+    of it from then on (drafts.SPLIT_MARK).
+
+    Refused, flat {ok: false, code, error}: 400 draft_version_required / too_few_scopes / not_v2 /
+    invalid_scope / invalid_label, 404 not_found, 409 document_changed (saved again since the page
+    read it) / already_sent (the customer has this project: a split only makes sense before the
+    first send) / label_taken / too_many_scopes, 502 portal_unreachable."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                      "error": "That project is not there any more."})
+    if not (payload.draft_version or "").strip():
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "draft_version_required",
+            "error": "Nothing was split — the page did not say which copy it split. Reload and "
+                     "try again."})
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row, "split")
+    if stale is not None:
+        return stale
+    data = row.get("data") or {}
+    # A PROJECT WHOSE BASE BIDS ARE ALREADY SEPARATE PROPOSALS (Create Multiple Proposals) is not
+    # split again: its children are copies of this estimate, and a split would rewrite the estimate
+    # they were copied from into one sheet. A child is one of those copies, never split either.
+    if data.get("proposal_of") or drafts.proposal_children(draft_id, drafts._scope_of(data)[0]):
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "has_proposals",
+            "error": "Nothing was split. This project's base bids are already separate proposals "
+                     "(Create Multiple Proposals on the proposal page). Change them there."})
+    if not (isinstance(data.get("polish_estimate"), dict) and data["polish_estimate"].get("version") == 2):
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "not_v2",
+            "error": "Only an Estimating Tool v2 estimate can be split into proposals."})
+    kids = payload.children
+    if len(kids) < 2:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "too_few_scopes",
+            "error": "A split needs two sheets or more, each its own proposal."})
+    tabs = [k.tab_id for k in kids]
+    for k in kids:
+        pe = k.data.get("polish_estimate")
+        if (not k.tab_id or not isinstance(pe, dict) or pe.get("version") != 2
+                or k.data.get("work_type") not in _SPLIT_WORK_TYPES):
+            return JSONResponse(status_code=400, content={
+                "ok": False, "code": "invalid_scope",
+                "error": "Nothing was split — a sheet's proposal could not be read. Reload and "
+                         "try again."})
+    if len(set(tabs)) != len(tabs):
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "invalid_scope",
+            "error": "Nothing was split — one sheet was sent twice. Reload and try again."})
+    try:
+        sent = _draft_was_sent(draft_id)
+    except HTTPException as exc:
+        log.warning("split refused for draft %s: the portal could not say whether it was sent (%s)",
+                    _log_safe(draft_id), exc.status_code)
+        return JSONResponse(status_code=502, content={
+            "ok": False, "code": "portal_unreachable",
+            "error": "Nothing was split — the customer portal is not answering, so the tool "
+                     "cannot tell whether this proposal was already sent. Try again in a minute."})
+    if sent:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "already_sent",
+            "error": "This proposal has already been sent to the customer, so its sheets cannot be "
+                     "split into separate proposals any more. Use “Create Multiple "
+                     "Proposals” on the Proposal step instead."})
+    actor = _user_email(request)
+    try:
+        out = drafts.split_draft(draft_id, [{"label": k.label, "data": k.data} for k in kids], actor)
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+    for c, k in zip(out["children"], kids[1:]):
+        c["tab_id"] = k.tab_id
+    out["parent"]["tab_id"] = kids[0].tab_id
+    return {"ok": True, **out}
+
+
+# ─── One estimate, several proposals ("Create Multiple Proposals", 2026-10-27) ──
+# The store's side is the proposals block in drafts.py. Under /api/draft/*, which every role reaches
+# (nav_access.py: the wizard's routes are never gated by a tab), behind the sign-in gate.
+class ProposalsIn(BaseModel):
+    """POST /api/draft/{id}/proposals. `base_ids` are the ticked base sheets in Base Bid order, the
+    first being this draft's own base; `draft_version` is the scope routes' stale-copy guard."""
+    draft_version: Optional[str] = None
+    base_ids: List[str] = Field(default_factory=list)
+
+
+class ProposalsRefreshIn(BaseModel):
+    draft_version: Optional[str] = None
+
+
+def _no_draft() -> JSONResponse:
+    return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                  "error": "That project is not there any more."})
+
+
+@app.get("/api/draft/{draft_id}/proposals")
+def api_draft_proposals(draft_id: str) -> Any:
+    """The proposal page's tab strip (drafts.proposals_view): this draft's parent first, then every
+    proposal made from its base bids, each saying whether the estimate changed since it was copied.
+    A child's id answers its parent's strip. 404 not_found."""
+    draft_id = _safe_id(draft_id)
+    view = drafts.proposals_view(draft_id)
+    if view is None:
+        return _no_draft()
+    return {"ok": True, **view}
+
+
+@app.post("/api/draft/{draft_id}/proposals")
+def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Request) -> Any:
+    """CREATE MULTIPLE PROPOSALS (drafts.fan_out_proposals): one proposal per ticked base bid after
+    the first, each a draft of its own the server keeps copied from this estimate. Idempotent.
+
+    200 {ok, group_id, parent: {id, label}, children: [{id, label, base_tab_id, created}],
+    proposals: <the strip>}. Refused, flat {ok: false, code, error}: 404 not_found; 400
+    too_few_bases / no_such_sheet / combined_base / option_only_base / base_order /
+    not_fanned_from_child / invalid_scope_group; 409 document_changed / test_mix / label_taken /
+    too_many_scopes; 502 portal_unreachable (the portal could not say whether this was sent, which
+    decides whether its options may be edited); 503 split_failed."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return _no_draft()
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row, "create proposals")
+    if stale is not None:
+        return stale
+    if (row.get("data") or {}).get("proposal_of"):
+        return _scope_refusal(drafts.ScopeError(
+            "not_fanned_from_child", "This proposal was made from Base Bid 1's estimate. Base bids "
+                                     "are picked on Base Bid 1's tab."))
+    try:
+        sent = _draft_was_sent(draft_id)
+    except HTTPException as exc:
+        log.warning("create proposals refused for draft %s: the portal could not say whether it "
+                    "was sent (%s)", _log_safe(draft_id), exc.status_code)
+        return JSONResponse(status_code=502, content={
+            "ok": False, "code": "portal_unreachable",
+            "error": "No proposals were made. The customer portal is not answering, so the tool "
+                     "cannot tell whether this proposal was already sent. Try again in a minute."})
+    try:
+        out = drafts.fan_out_proposals(draft_id, payload.base_ids, _user_email(request), sent)
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+    return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
+
+
+@app.post("/api/draft/{draft_id}/proposals/refresh")
+def api_draft_proposals_refresh(draft_id: str, payload: ProposalsRefreshIn,
+                                request: Request) -> Any:
+    """"Estimate changed" -> Refresh (drafts.refresh_proposals): every proposal made from this
+    estimate re-copies it and keeps its own words. `draft_id` is the parent or any child; the stale
+    guard is this draft's own row (the page that pressed it flushed and read it).
+
+    200 {ok, parent_id, estimate_digest, refreshed: [ids], skipped: [{id, label, code}], proposals}.
+    404 not_found, 409 document_changed."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        return _no_draft()
+    stale = _stale_draft_refusal(draft_id, payload.draft_version, row, "refresh proposals")
+    if stale is not None:
+        return stale
+    try:
+        out = drafts.refresh_proposals(draft_id, _user_email(request))
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
+    return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
+
+
+class ScopeSendIn(BaseModel):
+    message: str = ""
+    resend: bool = False
+    # Mail ONLY the contacts the last send failed to reach (the portal reads who from its own mark),
+    # never everybody again: the drawer's "try the failed contacts again".
+    retry_failed: bool = False
+    # A PERSON'S "send them again" for scopes whose last send lost its result (the portal's
+    # `unknown`, findings 9 and 16). Never assumed: the portal mails them only when asked.
+    resend_unknown: bool = False
+
+
+@app.post("/api/portal/scope-group/{group_id}/send")
+async def api_scope_group_send(group_id: str, request: Request,
+                               payload: Optional[ScopeSendIn] = None) -> Response:
+    """THE ONE COMBINED EMAIL for every scope of a project (RJ: three proposals, one email): a proxy
+    to the portal's POST /api/admin/scope-group/{id}/send, which owns the rules — every scope
+    published first (409 scopes_not_published with `missing`), once unless `resend`.
+
+    The portal's answer is handed back WHOLE, status and body, through _portal_raw: the drawer needs
+    the `missing` list of a 409 and the `already_sent` of a repeat, and `_portal` keeps only an
+    error string.
+
+    Asked of a portal that handles scope groups only (_scope_groups_refusal): 409 portal_not_ready
+    or 502 portal_unreachable otherwise, and nothing is forwarded. `retry_failed` mails only the
+    contacts the last send missed; `resend_unknown` is the drawer's explicit "send them again" for
+    scopes whose last send lost its result."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    # An older portal has no such route and would answer a bare "Not Found" (finding 31), having
+    # already emailed each scope on its own: said in words, and nothing is forwarded.
+    from starlette.concurrency import run_in_threadpool
+    _not_ready = await run_in_threadpool(_scope_groups_refusal)
+    if _not_ready is not None:
+        return _not_ready
+    body: Dict[str, Any] = {"by": _user_email(request) or ""}
+    if payload is not None:
+        msg = (payload.message or "").strip()
+        if msg:
+            body["message"] = msg[:2000]
+        if payload.resend:
+            body["resend"] = True
+        if payload.retry_failed:
+            body["retry_failed"] = True
+        if payload.resend_unknown:
+            body["resend_unknown"] = True
+    return await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
+                             json.dumps(body).encode("utf-8"), "application/json")
+
+
+# ─── "Send all proposals in one email" (Hanz, 2026-10-27) ──
+# "When I send the proposals out it should send out without publishing. That's the point. And it
+# must come in one email only." One press publishes every proposal of the project that the customer
+# does not have at its current document, then asks the portal for the project's ONE combined email.
+# Every proposal is checked (and its document built) before any is published, so a proposal that
+# cannot go stops the whole press and the customer is never half-sent. Never a per-proposal email:
+# a scope's publish emails nobody (the portal holds it for the combined send).
+class ScopeSendAllIn(BaseModel):
+    """POST /api/portal/scope-group/{gid}/send-all. `message` rides the one email. `draft_id` is the
+    proposal whose Files page pressed it and `publish` that page's publish body (PortalPublishIn:
+    recipients, estimator, deposit, attachments, notify picks, the stale-copy guards); its
+    recipients, follow-up opt-outs and estimator apply to every proposal published by the press. The
+    drawer sends neither, and each proposal then goes to its own customer contact and estimator."""
+    message: str = ""
+    resend: bool = False
+    draft_id: Optional[str] = None
+    publish: Optional[PortalPublishIn] = None
+
+
+def _send_all_needs_publish(draft_id: str, data: Dict[str, Any]) -> bool:
+    """Does this proposal have to be published before the project's email can carry it? Yes when it
+    was never published (no revision: create_revision runs on every publish and is taken back when
+    one fails), or when its document (the `proposal_payload` the customer's PDF is built from)
+    differs from the one its last revision froze. A proposal the customer already has, unchanged, is
+    never published again: a new revision can reopen an approval."""
+    rev_no = drafts.latest_revision_no(draft_id)
+    if not rev_no:
+        return True
+    before = ((drafts.get_revision(draft_id, rev_no) or {}).get("data") or {}).get("proposal_payload")
+    return _canonical_sha256(data.get("proposal_payload")) != _canonical_sha256(before)
+
+
+def _send_all_settled_reason(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a proposal the customer has already DECIDED on must not be republished by the press, or
+    None. A republish is a new revision on the portal: reset_for_revision cancels an approval ("this
+    revision needs a new approval") and reopen_if_closed puts a lost one back in play. That is a
+    choice made on the proposal's own Files page, never a side effect of sending its neighbours."""
+    if not isinstance(row, dict):
+        return None
+    status = str(row.get("proposal_status") or "")
+    deposit = str(row.get("deposit_status") or "")
+    if deposit in ("submitted", "received"):
+        return "the customer already paid its deposit; send its revision from its own Files page"
+    if status == "approved" or row.get("approved_at"):
+        return "the customer already approved it; send its revision from its own Files page"
+    if status == "closed_lost":
+        return "it is closed as lost; reopen it and send its revision from its own Files page"
+    return None
+
+
+def _send_all_block_reason(refusal: Any) -> str:
+    """What the estimator does about one proposal's refused publish, in a few words."""
+    if isinstance(refusal, HTTPException):
+        detail = str(refusal.detail or "")
+        if detail == "missing_estimator":
+            return "choose its assigned estimator on its Files page first"
+        if detail in ("invalid_estimator", "invalid_email", "too_many_emails"):
+            return "check its recipients and estimator on its Files page first"
+        return detail.rstrip(".") or "it could not be published"
+    try:
+        j = json.loads(bytes(refusal.body).decode("utf-8"))
+    except Exception:  # noqa: BLE001 — any refusal still blocks, in general words
+        j = {}
+    code = j.get("code")
+    if code == STALE_DOCUMENT_CODE:
+        return ("its document does not match its price. Open its Proposal step, press Continue, "
+                "then send again")
+    if code == "document_changed":
+        return "it changed after this page read it. Reload, check it, then send again"
+    return str(j.get("error") or "it could not be published").rstrip(".")
+
+
+@app.post("/api/portal/scope-group/{group_id}/send-all")
+async def api_scope_group_send_all(group_id: str, request: Request,
+                                   payload: Optional[ScopeSendAllIn] = None) -> Response:
+    """ONE PRESS, ONE EMAIL: publish every live proposal of the project the customer does not have at
+    its current document (_send_all_needs_publish, through the publish's own _prepare_publish and
+    _commit_publish), then the combined send exactly once (the same body api_scope_group_send
+    forwards). Never a per-proposal email.
+
+    Refused before anything is published or sent, flat {ok: false, code, error}: 400
+    invalid_scope_group / not_in_group, 404 group_not_found, 409 test_mix, the capability refusals
+    (_scope_groups_refusal), and 409 not_ready_to_send with `blocked` [{id, label, error}] when any
+    proposal cannot be published ("Room 2: build its files on its Files page first"). A publish the
+    portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
+    Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
+    label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    from starlette.concurrency import run_in_threadpool
+    payload = payload or ScopeSendAllIn()
+    planned = await run_in_threadpool(_send_all_publish, group_id, request, payload)
+    if isinstance(planned, Response):
+        return planned
+    body: Dict[str, Any] = {"by": _user_email(request) or ""}
+    msg = (payload.message or "").strip()
+    if msg:
+        body["message"] = msg[:2000]
+    if payload.resend:
+        body["resend"] = True
+    resp = await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
+                             json.dumps(body).encode("utf-8"), "application/json")
+    try:
+        j = json.loads(bytes(resp.body).decode("utf-8"))
+    except Exception:  # noqa: BLE001 — not JSON: handed back exactly as the portal wrote it
+        return resp
+    if not isinstance(j, dict):
+        return resp
+    j["published"] = planned
+    return JSONResponse(status_code=resp.status_code, content=j)
+
+
+def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) -> Any:
+    """The publishing half of the send-all: a refusal Response, or the list of what it published."""
+    members = drafts._group_rows(group_id)
+    if not members:
+        return JSONResponse(status_code=404, content={
+            "ok": False, "code": "group_not_found",
+            "error": "Nothing was sent. This project has no proposals any more. Reload the page."})
+    rows = {m["id"]: drafts.load_draft(m["id"]) for m in members}
+    live = [m for m in members if rows.get(m["id"])]
+    page_id = (payload.draft_id or "").strip() or None
+    if page_id:
+        page_id = _safe_id(page_id)
+    # A TEST PROJECT AND A REAL ONE ARE NEVER ONE PROJECT, asked before anything else: the live-member
+    # rule leaves the other kind out of `members`, so the stored drafts are asked directly.
+    probe = page_id or (live[0]["id"] if live else None)
+    probe_row = rows.get(probe) if probe in rows else (drafts.load_draft(probe) if probe else None)
+    if probe_row:
+        mixed = drafts.scope_test_mix(probe, probe_row.get("data") or {}, group_id)
+        if mixed:
+            return JSONResponse(status_code=409, content={"ok": False, "code": "test_mix",
+                                                          "error": "Nothing was sent. " + mixed})
+    if page_id and page_id not in {m["id"] for m in live}:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "not_in_group",
+            "error": "Nothing was sent. This proposal is not one of this project's proposals any "
+                     "more. Reload the page."})
+    not_ready = _scope_groups_refusal()
+    if not_ready is not None:
+        return not_ready
+    page = payload.publish
+    page_est = (page.assigned_estimator or "").strip() if page else ""
+    stored_ests = [str((rows[m["id"]].get("data") or {}).get("assigned_estimator") or "").strip()
+                   for m in live]
+    group_est = next((e for e in stored_ests if e), "")
+    prepared: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    blocked: List[Dict[str, Any]] = []
+    # THE CUSTOMER'S ANSWER, asked once and only when a proposal they already have would be
+    # published again by this press (not the page's own: its Files page is where a revision of a
+    # decided proposal is meant to be sent from). A portal that cannot answer live cannot confirm
+    # nobody approved, so those proposals are blocked rather than guessed about.
+    portal_rows: Optional[Dict[str, Dict[str, Any]]] = None
+    portal_live = False
+    for m in live:
+        row = rows[m["id"]]
+        data = row.get("data") or {}
+        label = m.get("label") or "A proposal"
+        if not _send_all_needs_publish(m["id"], data):
+            continue
+        if m["id"] != page_id and drafts.latest_revision_no(m["id"]):
+            if portal_rows is None:
+                snap, snap_status = _pipeline_snapshot()
+                portal_live = snap_status == "live"
+                portal_rows = {str(p.get("proposal_id")): p for p in snap if isinstance(p, dict)}
+            if not portal_live:
+                blocked.append({"id": m["id"], "label": label,
+                                "error": "the portal could not say whether the customer already "
+                                         "approved it; try again in a minute"})
+                continue
+            settled = _send_all_settled_reason(portal_rows.get(m["id"]))
+            if settled:
+                blocked.append({"id": m["id"], "label": label, "error": settled})
+                continue
+        pp = data.get("proposal_payload")
+        if not data.get("generate_result") or not (isinstance(pp, dict) and pp.get("values")):
+            blocked.append({"id": m["id"], "label": label,
+                            "error": "build its files on its Files page first"})
+            continue
+        if m["id"] == page_id and page is not None:
+            one = page
+        else:
+            own = str(data.get("assigned_estimator") or "").strip()
+            # ITS OWN DEPOSIT CHOICE, the way its Files page would tick the box (mountRequireDeposit):
+            # a choice it was sent with before wins, else on for Direct work and off for GC. Left
+            # out, a never-published proposal would get the portal's default, a 25% deposit even
+            # on a GC scope. One the customer already has, with no stored choice, keeps the portal's
+            # (None forwards nothing).
+            stored_dep = data.get("require_deposit")
+            if isinstance(stored_dep, bool):
+                dep: Optional[bool] = stored_dep
+            elif drafts.latest_revision_no(m["id"]):
+                dep = None
+            else:
+                dep = pipelines.pipeline_of(data.get("audience")) != pipelines.GC
+            one = PortalPublishIn(
+                emails=list(page.emails) if page else [],
+                no_followups=list(page.no_followups) if page else [],
+                assigned_estimator=page_est or own or group_est,
+                require_deposit=dep,
+                has_cover_letter=bool(pp.get("cover_letter_enabled")))
+        if not one.emails and not str(data.get("contact_email") or "").strip():
+            blocked.append({"id": m["id"], "label": label,
+                            "error": "add a customer email on its Files page first"})
+            continue
+        try:
+            prep = _prepare_publish(m["id"], request, one, row=row)
+        except HTTPException as exc:
+            prep = exc
+        if isinstance(prep, (Response, HTTPException)):
+            blocked.append({"id": m["id"], "label": label, "error": _send_all_block_reason(prep)})
+            continue
+        prepared.append((m, prep))
+    if blocked:
+        log.warning("send-all refused for group %s: %s", _log_safe(group_id),
+                    "; ".join("%s (%s)" % (b["id"], b["error"]) for b in blocked))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "not_ready_to_send", "blocked": blocked,
+            "error": "Nothing was sent. " + " ".join(
+                "%s: %s." % (b["label"], b["error"]) for b in blocked)})
+    published: List[Dict[str, Any]] = []
+    for m, prep in prepared:
+        label = m.get("label") or "A proposal"
+        try:
+            out = _commit_publish(prep)
+        except Exception as exc:  # noqa: BLE001 — said in words, and nothing is emailed
+            reason = exc.detail if isinstance(exc, HTTPException) else "the portal did not take it"
+            log.warning("send-all stopped for group %s: %s was not published (%s)",
+                        _log_safe(group_id), _log_safe(m["id"]), reason)
+            done = ", ".join(p["label"] for p in published)
+            return JSONResponse(status_code=502, content={
+                "ok": False, "code": "publish_failed", "published": published,
+                "failed": {"id": m["id"], "label": label},
+                "error": "Nothing was emailed. %s could not be published (%s)." % (label, reason)
+                         + (" %s %s published and will go in the email." % (
+                             done, "was" if len(published) == 1 else "were") if done else "")
+                         + " Press the button again in a minute to finish."})
+        published.append({"id": m["id"], "label": label,
+                          "revision_no": out.get("revision_no") if isinstance(out, dict) else None})
+    return published
+
+
+@app.get("/api/scope-group/{group_id}/workbook")
+def api_scope_group_workbook(group_id: str) -> Any:
+    """ONE WORKBOOK FOR A PROJECT OF SEVERAL SCOPES, one tab per scope (estimate_writer's
+    fill_group_estimate; RJ's picture). Staff only, like every /api route (the sign-in gate), and a
+    download only: nothing is filed to Dropbox and no draft is written.
+
+    The scopes are the project's LIVE members (drafts._group_rows: not deleted, not archived, never
+    a Test scope beside real ones), each read from its stored draft, in the group's order.
+    200 {ok, xlsx_download_url, filename, tabs: [{id, label, tab, sheet}]} — the link is the usual
+    one-hour /api/file token. Refusals are flat {ok: false, code, error}: 400 invalid_scope_group,
+    404 not_found (no live scope), 409 with the builder's code (a scope it cannot put on a tab of
+    its own, too many scopes), 500 build_failed."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    members: List[Dict[str, Any]] = []
+    for m in drafts._group_rows(group_id):
+        row = drafts.load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        sg = data.get("scope_group")
+        if not row or not isinstance(sg, dict) or sg.get("id") != group_id:
+            continue                       # deleted or moved out between the two reads
+        members.append({"id": m["id"], "data": data,
+                        "label": sg.get("label") or m.get("label") or ""})
+    if not members:
+        return JSONResponse(status_code=404, content={
+            "ok": False, "code": "not_found", "error": "That project has no scopes any more."})
+    try:
+        plan_tabs = estimate_writer.plan_group_workbook(members)["tabs"]
+        content = estimate_writer.fill_group_estimate(members)
+    except estimate_writer.GroupWorkbookError as exc:
+        return JSONResponse(status_code=409, content={"ok": False, "code": exc.code,
+                                                      "error": exc.message})
+    except Exception:  # noqa: BLE001 — logged; the page gets a sentence, never a stack
+        log.exception("project workbook failed for scope group %s", _log_safe(group_id))
+        return JSONResponse(status_code=500, content={
+            "ok": False, "code": "build_failed",
+            "error": "The project workbook could not be built. Try again."})
+    name = str(members[0]["data"].get("project_name") or "project").replace(" ", "_")[:80]
+    filename = f"{name}_scopes_estimate.xlsx"
+    token = _cache_file(content, filename,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return {"ok": True, "xlsx_download_url": f"/api/file/{token}", "filename": filename,
+            "tabs": plan_tabs}
+
+
 @app.delete("/api/draft/{draft_id}")
 def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -> Dict[str, Any]:
     """Delete a project. Default = soft-delete (moves it to Trash, restorable).
@@ -7411,8 +8714,44 @@ def api_delete_draft(draft_id: str, request: Request, permanent: bool = False) -
         if existed:
             drafts.log_event(draft_id, actor, "purged_project", {"id": draft_id})
         return {"ok": True, "existed": existed, "permanent": True}
+    kids = _proposals_to_trash_with(draft_id, actor, hide_self=True)
     existed = drafts.trash_draft(draft_id, actor)
-    return {"ok": True, "existed": existed, "trashed": True}
+    cascaded = [k for k in kids if existed and drafts.trash_draft(k, actor)]
+    return {"ok": True, "existed": existed, "trashed": True, "cascaded": cascaded}
+
+
+def _proposals_to_trash_with(draft_id: str, actor: Optional[str],
+                             hide_self: bool = False) -> List[str]:
+    """The proposals that go to the Trash with `draft_id` (Create Multiple Proposals), their portal
+    rows already hidden. Both delete routes call it BEFORE the draft itself is trashed.
+
+    A PARENT'S PROPOSALS GO WITH IT: they are copies of its estimate, and left behind they would be
+    proposals of an estimate nobody can open. Read before the parent is trashed (the group's rows
+    are the not-deleted ones). A child's own delete takes nothing with it, and restoring the parent
+    brings back the parent only.
+
+    EACH CHILD'S PORTAL ROW IS HIDDEN FIRST (_portal_visibility, why at api_delete_project): a sent
+    child trashed in our store alone would keep its card on the board and its page in front of the
+    customer. A portal that fails raises here, before anything of ours has moved.
+
+    `hide_self` (DELETE /api/draft, whose own body never touches the portal): a CHILD'S OWN portal
+    row is hidden too. The x on its proposal-page tab trashes it through that route, and a sent
+    Base Bid 2 left live would stay on the board, open, approvable and payable by the customer.
+    The board's delete hides draft_id itself, so it leaves this off."""
+    try:
+        row = drafts.load_draft(draft_id)
+        data = (row or {}).get("data") or {}
+        kids = [] if data.get("proposal_of") else \
+            [m["id"] for m in drafts.proposal_children(draft_id, drafts._scope_of(data)[0])]
+    except Exception as exc:  # noqa: BLE001 — the delete itself still runs, and says so in the log
+        log.warning("delete of draft %s: its proposals could not be read (%s); only the draft "
+                    "itself is trashed", _log_safe(draft_id), exc)
+        return []
+    if hide_self and data.get("proposal_of"):
+        _portal_visibility(draft_id, "delete", actor)
+    for k in kids:
+        _portal_visibility(k, "delete", actor)
+    return kids
 
 
 @app.post("/api/draft/{draft_id}/restore")
@@ -7459,11 +8798,14 @@ def api_delete_project(draft_id: str, request: Request) -> Dict[str, Any]:
     becoming a second word for one act.
 
     ADMINS ONLY, at the endpoint and not merely in the drawer."""
-    actor = _require_admin(request)
+    actor = _require_grant(request, special_permissions.PROJECTS)
     who = actor.get("email")
+    kids = _proposals_to_trash_with(draft_id, who)
     hidden = _portal_visibility(draft_id, "delete", who)
     existed = drafts.trash_draft(draft_id, who)
-    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden}
+    cascaded = [k for k in kids if existed and drafts.trash_draft(k, who)]
+    return {"ok": True, "existed": existed, "trashed": True, "portal_hidden": hidden,
+            "cascaded": cascaded}
 
 
 @app.post("/api/draft/{draft_id}/archive")
@@ -7495,6 +8837,10 @@ def api_test_flag_draft(draft_id: str, payload: TestFlagIn, request: Request) ->
     try:
         existed = drafts.set_test_flag(draft_id, payload.is_test, _user_email(request))
         return {"ok": True, "existed": existed, "is_test": payload.is_test}
+    except drafts.ScopeError as exc:
+        # A scope of a project would be filed apart from its others (test and real in one group):
+        # refused in words, which the Projects page shows as it is (projects.js toggleTest).
+        return _scope_refusal(exc)
     except Exception as exc:  # noqa: BLE001
         log.warning("set_test_flag failed: %s", exc)
         return {"ok": False, "error": "Couldn't file that project."}
@@ -8177,6 +9523,9 @@ def api_to_dropbox(payload: ToDropboxIn, request: Request) -> Dict[str, Any]:
             base_path=base_path,
             existing_folder_path=existing_path,
             known_paths=known_paths,
+            # One scope of a split project: its files carry its name, so the scopes share the
+            # project folder without one writing over another (dropbox_client._scoped_name).
+            scope_label=drafts._scope_of(data)[1],
         )
     except HTTPException:
         raise
@@ -8258,13 +9607,17 @@ def api_me(request: Request) -> Dict[str, Any]:
         role = prof.get("role", "user")
         return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
                 "role": role, "status": prof.get("status", "active"),
-                "nav_denied": _nav_denied_for(role),
-                "nav_denied_pages": _nav_denied_pages_for(role)}
+                "nav_denied": _nav_denied_for(role, prof.get("email") or email),
+                "nav_denied_pages": _nav_denied_pages_for(role, prof.get("email") or email),
+                "grants": _grants_for(role, prof.get("email") or email)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
+    # No profile row means _require_grant refuses this caller, so /api/me promises nothing either:
+    # showing a control the server would 403 is the lie this list exists to avoid.
     return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
             "nav_denied": _nav_denied_for(role),
-            "nav_denied_pages": _nav_denied_pages_for(role)}
+            "nav_denied_pages": _nav_denied_pages_for(role),
+            "grants": _grants_for(role, "") if role == "super_admin" else []}
 
 
 # ─── The caller's role, resolved in ONE place ─────────────────────────
@@ -8302,21 +9655,46 @@ def _caller_profile(request: Request) -> Optional[Dict[str, Any]]:
     return prof
 
 
-def _nav_denied_for(role: str) -> List[str]:
-    """The tab hrefs `role` may not reach, for /api/me.
+def _granted_tabs(email: Any) -> List[str]:
+    """The tabs this person was given on the Special permissions card. [] on any store trouble."""
+    try:
+        return special_permissions.grants_for(email)
+    except Exception as exc:  # noqa: BLE001 - a bad store grants nothing
+        log.warning("special permissions unreadable for the nav policy: %s", exc)
+        return []
+
+
+def _nav_policy_for(role: str, email: Any = "") -> Dict[str, Any]:
+    """The nav policy as it applies to ONE caller: their role's denied tabs minus the tabs they were
+    granted. Shaped like nav_access.get(), so every nav_access reader takes it as its `policy`.
+
+    Without a grant it IS nav_access.get(), so an ungranted member is judged exactly as before.
+    Raises whatever the policy read raises; callers keep their own fail-open handling.
+    """
+    policy = nav_access.get()
+    granted = _granted_tabs(email) if email else []
+    if not granted:
+        return policy
+    key = str(role or "").strip().lower()
+    return dict(policy, deny={key: [h for h in nav_access.denied_paths(role, policy)
+                                    if h not in granted]})
+
+
+def _nav_denied_for(role: str, email: Any = "") -> List[str]:
+    """The tab hrefs `role` (and this caller, after their granted tabs) may not reach, for /api/me.
 
     auth.js already awaits /api/me at boot before it draws the sidebar, so riding along on that
     response costs no round trip and means the menu and the gate read ONE source. Fails open: a
     policy blip costs a menu item, never the page.
     """
     try:
-        return nav_access.denied_paths(role)
+        return nav_access.denied_paths(role, _nav_policy_for(role, email))
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
 
 
-def _nav_denied_pages_for(role: str) -> Dict[str, str]:
+def _nav_denied_pages_for(role: str, email: Any = "") -> Dict[str, str]:
     """{page path: the denied tab href that owns it}, so auth.js can refuse the page it is ON.
 
     Expanded HERE rather than in the browser because one tab owns two pages — the Polish beta's step
@@ -8324,7 +9702,7 @@ def _nav_denied_pages_for(role: str) -> Dict[str, str]:
     auth.js is the copy that goes stale. Fails open for the same reason as _nav_denied_for.
     """
     try:
-        return nav_access.denied_page_map(role)
+        return nav_access.denied_page_map(role, _nav_policy_for(role, email))
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return {}
@@ -8336,6 +9714,35 @@ def _require_admin(request: Request) -> Dict[str, Any]:
     if not prof or prof.get("role") not in ("admin", "super_admin"):
         raise HTTPException(403, "Admin access required.")
     return prof
+
+
+def _require_grant(request: Request, key: str) -> Dict[str, Any]:
+    """_require_admin, OR a member who was given the TAB `key` (a nav_access.TABS href, one of
+    special_permissions.KEYS) on the Admin page's Special permissions card.
+
+    Same profile lookup and the same 403 sentence as _require_admin, so a member without the grant
+    sees exactly what they saw before this existed. The grant is read by the caller's email off the
+    profile (falling back to the signed-in email), never from anything the browser sends.
+    """
+    prof = _caller_profile(request)
+    if prof and prof.get("role") in ("admin", "super_admin"):
+        return prof
+    email = (prof or {}).get("email") or _user_email(request) or ""
+    if prof and special_permissions.has(email, key):
+        return prof
+    raise HTTPException(403, "Admin access required.")
+
+
+def _grants_for(role: str, email: str) -> List[str]:
+    """The granted tab hrefs for /api/me: every grantable tab for an admin, the stored grants for
+    anyone else."""
+    if role in ("admin", "super_admin"):
+        return list(special_permissions.KEYS)
+    try:
+        return special_permissions.grants_for(email)
+    except Exception as exc:  # noqa: BLE001 - a bad store grants nothing, and never breaks /api/me
+        log.warning("special permissions unreadable for /api/me: %s", exc)
+        return []
 
 
 class RoleIn(BaseModel):
@@ -8502,6 +9909,44 @@ def api_admin_set_nav_access(payload: NavAccessIn, request: Request) -> Dict[str
             "locked_pages": list(nav_access.LOCKED),
             "locked_roles": list(nav_access.LOCKED_ROLES),
             "tabs": nav_access.capability_table()}
+
+
+# ─── Special permissions: one tab for one named person ───────────────
+# Hanz, 2026-10-27: "a list of names and then the checkboxes", one box per tab (the tab, plus every
+# admin-only edit inside it). The grants themselves are NOT
+# grantable — both routes are _require_admin — or a member given one could give themselves the rest.
+class SpecialPermissionsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    grants: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+def _special_permissions_body(store: Dict[str, Any]) -> Dict[str, Any]:
+    return {"ok": True, "grants_catalog": special_permissions.catalog(),
+            "grants": store.get("grants") or {},
+            "updated_at": store.get("updated_at"), "updated_by": store.get("updated_by")}
+
+
+@app.get("/api/admin/special-permissions")
+def api_admin_special_permissions(request: Request) -> Dict[str, Any]:
+    """Who holds which grantable ability, plus the list of abilities the page draws as columns."""
+    _require_admin(request)
+    return _special_permissions_body(special_permissions.load())
+
+
+@app.put("/api/admin/special-permissions")
+def api_admin_set_special_permissions(payload: SpecialPermissionsIn,
+                                      request: Request) -> Dict[str, Any]:
+    """Replace the whole grants map. Unknown keys and blank emails are dropped, not refused."""
+    actor = _require_admin(request)
+    try:
+        store = special_permissions.save(payload.grants,
+                                         actor.get("email") or _user_email(request) or "")
+    except special_permissions.SpecialPermissionsWriteError as exc:
+        log.error("special permissions save failed: %s", exc)
+        raise HTTPException(500, "Couldn't save the special permissions") from exc
+    drafts.log_event(None, actor.get("email"), "special_permissions_changed",
+                     {"grants": store["grants"]})
+    return _special_permissions_body(store)
 
 
 # ─── Lead inbox (Basisboard messages + OUR state) ─────────────────────

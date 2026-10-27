@@ -458,6 +458,9 @@ function build(opts) {
     // shared.js's two-button question. Absent unless a scenario answers it, so no other build is ever asked anything.
     confirmDanger: opts.confirmDanger,
   };
+  // More of shared.js, for a scenario that needs it (the split into scopes reads the server's copy and adopts it): `opts.tw` lays
+  // its functions over the stub. Absent for every other build, so a page that reached for one where it had no business to throws.
+  if (opts.tw) Object.assign(TW, opts.tw(store, rec));
 
   const S = {
     enterSandbox: async function (adoptFn) {
@@ -481,7 +484,7 @@ function build(opts) {
     TWPrice: PRICE,
     TWAuth: { ready: Promise.resolve() },
     scrollTo: () => { log.push("scroll"); },
-    location: { href: "https://x/polish-estimate.html?d=proj-1" },
+    location: Object.assign({ href: "https://x/polish-estimate.html?d=proj-1" }, opts.location || {}),
     // The page registers its own `pagehide` flush directly on window (mirrors shared.js's own
     // net at shared.js:513) -- exposed so a test can fire it like a real tab close/switch.
     listeners: winListeners,
@@ -503,6 +506,11 @@ function build(opts) {
     // Every request WITH ITS METHOD, so "never writes to the library" can be asserted on verbs.
     (rec.calls = rec.calls || []).push({ url: String(url), method: ((init || {}).method || "GET").toUpperCase() });
     log.push("fetch:" + url);
+    // A scenario's own routes (`opts.fetchHook`, the split into scopes): asked first, and an answer of undefined falls through.
+    if (opts.fetchHook) {
+      const hit = await opts.fetchHook(String(url), init || {});
+      if (hit !== undefined) return hit;
+    }
     // POST /api/distance -- the server's driving miles from the office. `distance` is the JSON body
     // it answers with; `distanceGate` is a promise the answer waits on (a slow Google);
     // `distanceFails` is the network going away. Its own arm so every older scenario, which has no
@@ -1107,13 +1115,16 @@ const rendered = [];      // every string the page put on screen, for the Labour
     // to represent an untouched row to still dim, because touched-vs-untouched is the new half
     // of the rule. See `notDimmedWhenAlreadyManual` below for the guys_auto:false half.
     {
+      // A job MEASURED local (30 miles, typed): the card says it is local. With NO distance it says the distance is unknown instead, never
+      // "local" (Hanz, 2026-10-22: tests/test_polish_distance_approx.py).
       const loc = build({ blob: blob({ polish_estimate: {
         version: 2,
         takeoff: [{ assembly_id: "a1", assembly_name: "x", measurement: 100, unit: "SF" }],
         labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 2, rate: 33 },
                 { id: "travel", label: "Travel", guys: 6, days: "", rate: 33,
                   unit: "hours", guys_auto: true }],
-        conditions: { local: true }, contingency: 0
+        conditions: { local: true }, contingency: 0,
+        distance: { miles: 30, source: "typed", key: "" }
       } }) });
       await loc.api.init();
       loc.api.go(1);
@@ -3769,8 +3780,9 @@ const rendered = [];      // every string the page put on screen, for the Labour
     release(); await settle();
     const slowAfter = snap(slow);
 
-    // NO ADDRESS (or too thin to place): no request leaves, and the estimator is told.
-    const blank = build({ blob: (() => { const b = blob(); delete b.polish_estimate; return b; })(),
+    // NO ADDRESS (or too thin to place): no request leaves, and the estimator is told. (blob() holds a city and a state, which is enough to
+    // ask since 2026-10-22, so the blank one takes them away.)
+    const blank = build({ blob: (() => { const b = blob({ city: "", state: "" }); delete b.polish_estimate; return b; })(),
                           distance: { ok: true, miles: 99, reason: "" } });
     await blank.api.init(); blank.api.go(1); await settle();
     const blankSnap = snap(blank);
@@ -3778,8 +3790,8 @@ const rendered = [];      // every string the page put on screen, for the Labour
       delete b.polish_estimate; return b; })(), distance: { ok: true, miles: 99, reason: "" } });
     await thin.api.init(); await settle();
 
-    // A SAVED BID is not repriced behind anybody's back: no automatic request, the line stays as
-    // saved, and the button is how the estimator asks. Pressing it applies the answer.
+    // A SAVED BID WITH NO DISTANCE AT ALL (never measured, never typed) is measured on open since 2026-10-22 (Hanz), as a new bid is,
+    // and the button still asks again and applies the answer. (A saved bid WITH a distance never asks on open: O2 below.)
     const savedModel = { version: 2, takeoff: clone(MODEL.takeoff),
       labor: [{ id: "polishing", label: "Polishing", guys: 3, days: 5, rate: 33 },
               { id: "mockup", label: "Mock-up", guys: 3, days: 0.5, rate: 33 },

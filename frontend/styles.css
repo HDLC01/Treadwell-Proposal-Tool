@@ -1463,8 +1463,8 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .fields-panel .fp-check { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 6px; }
 .fields-panel .fp-check input { width: auto; }
 /* Below ~1400px there isn't room for BOTH side rails + an 8.5in page —
-   drop the fields panel inline above the document (matches the
-   pricing-options-panel breakpoint in proposal-review.html). */
+   drop the fields panel inline above the document. (The Pricing options
+   panel no longer does this: it floats at every width, see .options-panel.) */
 @media (max-width: 1400px) {
   .fields-panel {
     position: static; width: auto; max-height: none;
@@ -1738,6 +1738,14 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
   z-index: 40; font-size: 13px; color: #222;
 }
+/* ABOVE THE DOCKED SIDEBAR (Hanz, 2026-10-27: "the pricing option should overlap the side nav
+   bar, it starts behind it"). auth.js puts #tw-sidebar at z-index 9998, so at 40 a card dragged
+   left slid under the nav. From 768px up the open sidebar is docked (it pushes the page over), so
+   the card goes one above it, and still under the notifications pop-up (10000/10001). Below 768px
+   the sidebar is a drawer over a backdrop and the card stays under both. */
+@media (min-width: 768px) {
+  .options-panel { z-index: 9999; }
+}
 /* Draggable header — the panel is a FLOATING, MOVABLE widget. Starts below the
    top ribbon (top:150px) so it never covers the Back / TAX / Generate controls;
    the estimator can then drag it anywhere. Position persists in localStorage. */
@@ -1773,15 +1781,26 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .options-panel .pr-addsys-btn { margin-top: 10px; border: 1px dashed #c8102e; background: transparent;
   color: #c8102e; font: inherit; font-weight: 600; cursor: pointer; padding: 5px 9px; border-radius: 6px; width: 100%; }
 .options-panel .pr-addsys-btn:hover { background: rgba(200,16,46,.06); }
-/* Below ~1400px the page is too narrow for both floating rails — drop them
-   inline above the document (matches #fields-panel's own breakpoint). */
-@media (max-width: 1400px) {
-  .options-panel {
-    /* Bounded even when inline. `max-height: none` on a normal-flow panel between the ribbon
-       and the canvas is the one thing that can still outgrow the column: a long options list
-       made the body taller than the viewport, the page scrolled, and the ribbon went with it.
-       It scrolls itself now. */
-    position: static; width: auto; max-height: 40vh; overflow-y: auto;
-    margin: 12px 16px 0; box-shadow: none;
-  }
+/* ALWAYS FLOATING (2026-10-27). Below 1400px this panel used to drop into the flow above the
+   document with `position: static`, and because only .word-canvas scrolls on step 3 it became
+   permanent chrome at the top of the page, pushing the proposal down. It floats at every width
+   now; on a narrow screen it sits over the page instead, so it can be collapsed to its header pill
+   (the − button; TW.floatPanel toggles `.collapsed` and remembers it). TW.floatPanel also re-clamps
+   a moved panel when the window shrinks, so the header can never be left off screen. */
+.options-panel .op-title { flex: 1 1 auto; min-width: 0; }
+.options-panel .op-collapse {
+  margin-left: auto; flex: 0 0 auto; border: 0; background: transparent; color: #c8102e;
+  font: inherit; font-size: 15px; font-weight: 700; line-height: 1; padding: 0 2px; cursor: pointer;
+  border-radius: 4px;
+}
+.options-panel .op-collapse::before { content: "\2212"; }  /* − */
+.options-panel .op-collapse:hover { background: rgba(200,16,46,.08); }
+.options-panel .op-collapse:focus-visible { outline: 2px solid #c8102e; outline-offset: 1px; }
+.options-panel.collapsed .op-collapse::before { content: "+"; }
+.options-panel.collapsed {
+  width: auto; max-height: none; overflow: hidden; padding: 0; border-radius: 999px;
+}
+.options-panel.collapsed > :not(.op-drag) { display: none; }
+.options-panel.collapsed .op-drag {
+  margin: 0; border-bottom: 0; border-radius: 999px; position: static; gap: 10px;
 }

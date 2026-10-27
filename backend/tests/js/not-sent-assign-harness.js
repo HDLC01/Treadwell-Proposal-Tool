@@ -148,6 +148,11 @@ function liftPair(deps) {
     // The WIRING is recorded: the dialog and the request are not-sent-lost-harness.js's subject.
     "\n" + source("deleteProjectHtml") +
     "\nfunction wireDeleteProject(pid, row) { delCalls.push(pid); }" +
+    // The project's scopes (2026-10-24). Same division of labor as the delete control above: the
+    // MARKUP is lifted for real (renderNotSent embeds it), the WIRING is recorded, and both are
+    // drawer-render-harness.js's subject, which presses every one of its buttons.
+    "\n" + source("scopeHtml") +
+    "\nfunction wireScope() {}" +
     "\nreturn { renderNotSent, wireNotSentAssign, sig: () => DRAWER_SIG," +
     "         notifyCalls, panelCalls, lostCalls, wonCalls, delCalls };";
   return new Function(...keys, body)(...keys.map((k) => deps[k]));

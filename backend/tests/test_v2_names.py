@@ -237,7 +237,8 @@ def test_the_server_table_renames_the_two_tabs_and_moves_nothing_else():
     assert tabs[DATABASE_HREF]["label"] == DATABASE
     assert tuple(tabs[TOOL_HREF]["pages"]) == (TOOL_HREF, INTAKE_HREF, ESTIMATE_HREF)
     assert tuple(tabs[DATABASE_HREF]["pages"]) == (DATABASE_HREF,)
-    assert tuple(tabs[TOOL_HREF]["api"]) == ("/api/v2/pipeline",)
+    # () since 2026-10-27: Hanz chose "hides the tab only" for every tab.
+    assert tuple(tabs[TOOL_HREF]["api"]) == ()
     assert tuple(tabs[DATABASE_HREF]["api"]) == ()
     assert INTAKE_HREF not in tabs, "the intake is a page of the row now, not a row of its own"
     served = {t["href"]: t["label"] for t in nav_access.capability_table()}
@@ -252,13 +253,11 @@ def test_the_admin_matrix_draws_the_new_names_from_the_real_capability_table(ran
     assert labels[TOOL_HREF] == TOOL and labels[DATABASE_HREF] == DATABASE
     hidden_only = [n for n in ran["admin"]["notes"] if "can only be hidden" in n]
     assert len(hidden_only) == 1, ran["admin"]["notes"]
-    listed = hidden_only[0].split("not sealed:")[1].split(". Every API route")[0]
+    listed = hidden_only[0].split("not sealed:")[1].split(". Switching one off")[0]
     names = [n.strip() for n in listed.split(",")]
     assert DATABASE in names, names                        # the server's label, in the server's order
-    # Estimating Tool v2 owns its board's feed since 2026-10-15, so a switch there blocks its data and
-    # the row leaves the "can only be hidden" list
-    assert TOOL not in names, names
-    assert "the Item Library's assemblies also price %s," % TOOL in hidden_only[0], hidden_only[0]
+    # Every deniable tab is hide-only since 2026-10-27 (Hanz's choice), so the tool's row is listed too
+    assert TOOL in names, names
     assert "Polish" not in hidden_only[0]
 
 

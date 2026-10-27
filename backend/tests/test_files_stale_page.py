@@ -244,3 +244,19 @@ def test_a_save_landing_under_the_question_is_not_what_gets_built(ran):
     assert c["bodies"] == [{"draft_version": "2026-09-26T10:05:00+00:00"}], c
     assert c["rendered"] is None and c["checked"] == "", c
     assert c["error"], "the refused build was not reported"
+
+
+def test_one_of_several_proposals_says_its_place_among_them(ran):
+    """Create Multiple Proposals (2026-10-27): a publish of one proposal made from one estimate says which of how many
+    it is, counted off GET /api/draft/{id}/proposals. A list of one (a scope made the older way) or a list that cannot
+    be read keeps the scope sentence. Run through the real Send handler and shared.js's readProposals."""
+    g = ran["groupedPublish"]
+    assert all(g[k]["posted"] == 1 and g[k]["err"] is None for k in g), g
+    assert g["three"]["lines"] == [
+        "Published as “Base Bid 2”, one of 3 proposals of this project. The customer has not been emailed about it "
+        "yet: the project's one email, which names every new or revised proposal, is sent from the project's drawer on "
+        "the board."]
+    scope = ("Published as “Base Bid 2”, one scope of this project. The customer has not been emailed about it "
+             "yet: the project's one email, which names every new or revised scope, is sent from the project's drawer on "
+             "the board.")
+    assert g["one"]["lines"] == [scope] and g["unread"]["lines"] == [scope]

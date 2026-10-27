@@ -1011,6 +1011,55 @@
     return out;
   }
 
+  /** THE LUMP SUM ROW OF A PROJECT WITH SEVERAL PROPOSALS (Hanz, 2026-10-27: "in the ready to
+   *  generate"). `pv` is GET /api/draft/{id}/proposals (TW.readProposals), `currentId` this page's
+   *  draft, `currentFigure` the figure the row already shows for it (the saved document's total, as
+   *  above: not re-derived here). With two proposals or more, and this draft among them, #rv-lump
+   *  becomes one line per proposal: its name (the sheet's, unless a person renamed it) and its own
+   *  lump sum, this one marked "(this one)" and carrying `currentFigure`; one with no figure yet
+   *  says "not priced yet". NO TOTAL: they are separate proposals, each approved on its own, so a
+   *  sum would be a price nobody is offered. Anything else leaves the row exactly as it is.
+   *  Generate still builds only this proposal. */
+  function paintReadyProposals(pv, currentId, currentFigure) {
+    const el = document.getElementById("rv-lump");
+    const ms = pv && Array.isArray(pv.members) ? pv.members : [];
+    if (!el || ms.length < 2 || !ms.some((m) => m && m.id === currentId)) return false;
+    const usd = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const list = document.createElement("ul");
+    list.className = "rv-props";
+    ms.forEach((m) => {
+      const mine = m.id === currentId;
+      const name = m.display_label || m.sheet_label || m.label || ("Base Bid " + (m.index || ""));
+      const li = document.createElement("li");
+      li.className = "rv-prop" + (mine ? " current" : "");
+      const nm = document.createElement("span");
+      nm.className = "rv-prop-nm";
+      nm.textContent = name;
+      li.appendChild(nm);
+      const sum = document.createElement("span");
+      const n = typeof m.lump_sum === "number" && isFinite(m.lump_sum) ? m.lump_sum : null;
+      const fig = mine ? (currentFigure || (n == null ? "" : usd(n))) : (n == null ? "" : usd(n));
+      sum.className = fig && fig !== "—" ? "rv-prop-sum" : "rv-prop-sum none";
+      sum.textContent = fig && fig !== "—" ? fig : "not priced yet";
+      li.appendChild(sum);
+      if (mine) {
+        const tag = document.createElement("span");
+        tag.className = "rv-prop-this";
+        tag.textContent = "(this one)";
+        li.appendChild(tag);
+      }
+      list.appendChild(li);
+    });
+    const note = document.createElement("p");
+    note.className = "rv-props-note";
+    note.textContent = "Separate proposals, each approved on its own. Generate builds this one.";
+    el.textContent = "";
+    el.classList.remove("money");
+    el.appendChild(list);
+    el.appendChild(note);
+    return true;
+  }
+
   function showPreGenerate() {
     preEl.style.display = "";
     // Show the project deadline as a compact YY.MM.DD due date.
@@ -1029,6 +1078,15 @@
     const _rvTotal = _rvPp && _rvPp.values && typeof _rvPp.values.total_formatted === "string"
       && money(_rvPp.values.total_formatted) != null ? _rvPp.values.total_formatted : "";
     document.getElementById("rv-lump").textContent     = _rvTotal || state.lump_sum_display || "—";
+    // EVERY PROPOSAL OF THIS ESTIMATE, one line each (Create Multiple Proposals, 2026-10-27). The
+    // figure painted just above stays THIS proposal's line; the others are the server's. A draft
+    // with no proposals, or a list that cannot be read, keeps the single figure.
+    (async function readyProposals() {
+      let pv = null;
+      try { pv = TW.readProposals ? await TW.readProposals(TW.getDraftId()) : null; } catch { pv = null; }
+      const lumpEl = document.getElementById("rv-lump");
+      paintReadyProposals(pv, TW.getDraftId(), lumpEl ? lumpEl.textContent : "");
+    })();
     // PAGE 1, SAID OUT LOUD, BEFORE ANYTHING IS BUILT. Through `coverLetterCheck` so this row and
     // the post-generate banner cannot come to disagree — see that function for why the source is
     // `proposal_payload` and not the top-level flag. The row is hidden rather than showing "No",
@@ -1535,6 +1593,14 @@
       });
     }
     const portalBtn = document.getElementById("portal-btn");
+    // ONE OF SEVERAL PROPOSALS OF A PROJECT (a scope group, Hanz 2026-10-27: "when I send the
+    // proposals out it should send out without publishing ... And it must come in one email only"):
+    // the button is the project's one press, which publishes every proposal the customer does not
+    // have yet and sends them all in one email (main.py api_scope_group_send_all).
+    const _myGroup = (TW.getState() || {}).scope_group;
+    if (portalBtn && _myGroup && typeof _myGroup === "object" && _myGroup.id) {
+      portalBtn.textContent = "Send all proposals in one email";
+    }
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
         const requireDeposit = readRequireDeposit();
@@ -1690,8 +1756,7 @@
           const _pp = (_liveState.proposal_payload && typeof _liveState.proposal_payload === "object")
             ? _liveState.proposal_payload : {};
           const hasCoverLetter = !!_pp.cover_letter_enabled;
-          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
-                                      { emails, message, require_deposit: requireDeposit,
+          const _publishBody = { emails, message, require_deposit: requireDeposit,
                                         has_cover_letter: hasCoverLetter,
                                         // They travel in this body rather than being uploaded
                                         // first because on a FIRST send the portal proposal row
@@ -1715,8 +1780,43 @@
                                         document_render_id: checkedDocument.renderId || undefined,
                                         // When the server last stored the copy checked above.
                                         // The server refuses a draft stored again since.
-                                        draft_version: (_row && _row.version) || undefined });
-          if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+                                        draft_version: (_row && _row.version) || undefined };
+          // ONE PRESS, ONE EMAIL for a proposal of a project with several (the label set at mount):
+          // every proposal the customer does not have yet is published and the customer gets ONE
+          // email listing them all. Every check above has run on THIS proposal; the server runs the
+          // publish's own checks on every one and sends nothing when any cannot go. Its answer is
+          // said in the board drawer's own sentences (TWCrm.scopeSendOutcome, crm-core.js).
+          const _group = (_liveState.scope_group && typeof _liveState.scope_group === "object"
+            && _liveState.scope_group.id) || "";
+          let j = null;
+          let allOut = null;
+          if (_group) {
+            portalBtn.textContent = "Sending all proposals…";
+            let status = 200;
+            let ans = {};
+            try {
+              ans = await TW.postJSON("/api/portal/scope-group/" + encodeURIComponent(_group) + "/send-all",
+                                      { draft_id: draftId, message, publish: _publishBody }) || {};
+            } catch (e) {
+              // postJSON throws "POST <path> → <status>: <body>" on a refusal; the body is the answer.
+              const m = /→ (\d{3}): ([\s\S]*)$/.exec(String((e && e.message) || ""));
+              if (!m) throw e;
+              status = Number(m[1]);
+              try { ans = JSON.parse(m[2]) || {}; } catch { ans = { error: m[2] }; }
+            }
+            allOut = window.TWCrm.scopeSendOutcome(status, ans, null);
+            const mine = (Array.isArray(ans.published) ? ans.published : []).some((x) => x && x.id === draftId);
+            if (!allOut.sent && !mine) {
+              // NOTHING of this proposal went anywhere: the button comes back, the sentence says why.
+              portalBtn.disabled = false; portalBtn.textContent = orig;
+              if (portalRecip.setBusy) portalRecip.setBusy(false);
+              if (portalRecip.setErr) portalRecip.setErr(allOut.text);
+              return;
+            }
+          } else {
+            j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), _publishBody);
+            if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+          }
           // Only now. Clearing before the request would lose the files on a failed send and leave
           // the estimator re-picking them with no idea they had gone.
           sendAtts.clear();
@@ -1741,12 +1841,47 @@
             TW.flushState();          // sent now, not 2.5 s later, while the check above still holds
           }
           if (portalRecip.setBusy) portalRecip.setBusy(false);
-          portalBtn.textContent = "\u2713 Sent to customer portal";
+          if (allOut) {
+            // What the one press did, in the drawer's words: sent in one email, or (this proposal
+            // published, the email not sent) why not, and that pressing again finishes it.
+            portalBtn.textContent = allOut.sent ? "\u2713 Sent, one email with every proposal" : orig;
+            mountRevisions();
+            const res = document.getElementById("portal-result");
+            if (res) { res.style.display = ""; res.textContent = allOut.text; }
+            if (!allOut.sent && portalRecip.setErr) portalRecip.setErr(allOut.text);
+            if (allOut.sent) setTimeout(() => { portalBtn.textContent = orig; portalBtn.disabled = false; }, 2500);
+            else portalBtn.disabled = false;
+            return;
+          }
+          // ONE SCOPE OF A PROJECT SPLIT INTO SEVERAL PROPOSALS (2026-10-24) is published and emails NOBODY: the customer gets
+          // one email with every scope, sent from the project's drawer on the board (main.py adds scope_group to the answer).
+          const scoped = !!(j && j.scope_group);
+          portalBtn.textContent = scoped ? "\u2713 Published (not emailed yet)" : "\u2713 Sent to customer portal";
           mountRevisions();   // the send just created a new version \u2014 show it
           const r = document.getElementById("portal-result");
           if (r) {
             r.style.display = "";
             r.textContent = "";
+            if (scoped) {
+              // ONE OF SEVERAL PROPOSALS MADE FROM ONE ESTIMATE ("Create Multiple Proposals", 2026-10-27): said
+              // as a proposal of N (GET /api/draft/{id}/proposals, the proposal page's own tab list). A scope
+              // made the older way, or a list that cannot be read, keeps the scope wording.
+              let ofN = 0;
+              try {
+                const pv = TW.readProposals ? await TW.readProposals(draftId) : null;
+                ofN = pv && Array.isArray(pv.members) && pv.members.length >= 2 ? pv.members.length : 0;
+              } catch { ofN = 0; }
+              const s = document.createElement("p");
+              s.className = "portal-scope";
+              s.textContent = ofN
+                ? "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                  + "one of " + ofN + " proposals of this project. The customer has not been emailed about it yet: the project's "
+                  + "one email, which names every new or revised proposal, is sent from the project's drawer on the board."
+                : "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                  + "one scope of this project. The customer has not been emailed about it yet: the project's one email, "
+                  + "which names every new or revised scope, is sent from the project's drawer on the board.";
+              r.appendChild(s);
+            }
             // NO LINK AND NO RECIPIENT LIST. Removed on Hanz's ask (2026-08-26). The URL is a
             // secret token that opens the customer's proposal, and there is no reason for it to
             // sit on screen after a send — the CRM drawer copies it on demand when somebody

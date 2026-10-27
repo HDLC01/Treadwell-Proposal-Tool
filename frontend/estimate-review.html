@@ -272,6 +272,9 @@
   .bb-addsys-btn { border: none; background: transparent; color: var(--treadwell-red, #c0392b);
     font: inherit; font-weight: 600; cursor: pointer; padding: 3px 9px; }
   .bb-addsys-btn:hover { text-decoration: underline; }
+  /* "Make Base Bid 1" on a ticked sheet that is not the pricing base: the one-click base move. */
+  .bb-mkbase { border: none; background: transparent; color: var(--treadwell-red, #c0392b);
+    font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; padding: 0 2px; text-decoration: underline; }
   .bb-section-title { font-weight: 700; font-size: 12.5px; }
   .bid-bar .bb-head { justify-content: space-between; flex-wrap: nowrap; }
   .bid-bar .bb-head .bb-hint { flex: 1 1 auto; min-width: 0; }
@@ -810,7 +813,7 @@
   <div class="bid-bar" id="bid-bar">
     <div class="bb-row bb-head">
       <span class="bb-lbl">Base bid &amp; options</span>
-      <span class="bb-hint" id="bid-options-hint">Pick which sheet is the <b>Base&nbsp;bid</b> (round button). Tick another sheet to <b>add&nbsp;it&nbsp;as&nbsp;an&nbsp;option</b> — shown on the proposal as its own total, or as an add/deduct off the base.</span>
+      <span class="bb-hint" id="bid-options-hint">Tick a sheet's <b>Base&nbsp;bid</b> box to make it its own proposal (Base&nbsp;Bid&nbsp;1, 2, …). Tick <b>add&nbsp;as&nbsp;option</b> to add a sheet under the base. With two or more base bids ticked, press <b>Create Multiple Proposals</b> on the Proposal step.</span>
       <button type="button" id="bid-collapse" class="bb-collapse" title="Collapse this bar to give the worksheet more room"><svg class="tw-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg> Hide</button>
     </div>
     <div id="bid-bar-body">

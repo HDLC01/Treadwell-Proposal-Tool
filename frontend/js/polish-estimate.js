@@ -869,12 +869,18 @@
 
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
+  // Set the moment "Split into separate proposals" is pressed and never cleared on this page: see saveSoon and splitPress.
+  var splitting = false;
   // WHAT IS WRITTEN, AND WHY EACH KEY IS THERE, IS B.buildSavePatch'S BUSINESS (bid-model.js).
   // This page and its pagehide flush used to compose the blob by hand in two places, and the two
   // drifted: the flush skipped the condition cells and the measured-floor fallback. Both call it
   // now, so a key can only be added or fixed once. `bid` is the price this page computes (the
   // library lives here), `library` is what it priced Dye and Joint Filler with.
   function saveSoon() {
+    // A SPLIT IS IN FLIGHT OR DONE (splitPress): this page's model is the copy from before it, and a save of it would put every
+    // sheet back on the first scope (the server refuses it too: drafts.SPLIT_MARK). Nothing is queued until the page has reloaded
+    // onto the server's copy.
+    if (splitting) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       // DISARMED ONCE IT HAS RUN (2026-10-19, "When I go back from proposal to estimate it doesnt save my values"). The
@@ -1080,8 +1086,11 @@
     // A bid whose other sheets cannot be read still prices its first sheet (the panel says so and offers nothing else).
     var bids;
     try { bids = allBids(); } catch (err) { bids = Object.fromEntries([[B.ROOT_TAB, bid()]]); }
+    var st = multi ? TW.getState() : null;
     return {
-      open: activeTab, bids: bids, opts: multi ? TW.getState().tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      open: activeTab, bids: bids, opts: st ? st.tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      // The sheets switched to "Its own proposal" (base_tab_ids): the panel tags them Bid N and draws their switches on.
+      baseIds: st && Array.isArray(st.base_tab_ids) ? st.base_tab_ids : undefined,
       confirm: sheetsUi.confirm, armed: sheetsUi.armed, renaming: sheetsUi.renaming, draft: sheetsUi.draft,
       error: sheetsUi.error, notice: sheetsUi.notice, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf,
       reno: jobIsReno()
@@ -1198,6 +1207,8 @@
     if (openChanged) stripReveal(el.querySelector("[data-sh-strip]"), el.querySelector("[data-sh-cur]"));
     if (want) focusSheetsKey(want);
     if (!headObserver && (drew || shown)) syncHeadHeight();
+    // The scope bar reads the same sheets (whether the bid can be split into proposals), so it is drawn when they are.
+    paintScopeBar();
   }
 
   /** Scroll the strip, and only the strip, just far enough to show `tab` (inline: nearest, with no page jump: scrollIntoView
@@ -1440,6 +1451,14 @@
     var patch = Object.assign({}, made.patch);
     var from = before.ids.length === 1 ? before.ids[0] : null;
     var to = made.patch.base_tab_id === undefined ? null : made.patch.base_tab_id;
+    // THE NEW BASE IS BASE BID 1 (Create Multiple Proposals): a draft that ticked sheets as their own proposals keeps base_tab_id in
+    // base_tab_ids. Picking a ticked sheet swaps the two (the old base stays its own proposal), the way the Estimate step's radio does;
+    // the combined pair is one proposal, so it leaves none ticked.
+    if (PR && Array.isArray(st.base_tab_ids)) {
+      var order = [];
+      try { order = B.sectionsOf(B.withSectionOrder(made.model)).map(function (e) { return e.tab; }); } catch (err) { order = []; }
+      patch.base_tab_ids = PR.moveBaseId(st, from, to, order, true);
+    }
     if (PR && from !== to && st.price_overrides && typeof st.price_overrides === "object") {
       var pov = JSON.parse(JSON.stringify(st.price_overrides));
       var roles = {};
@@ -1472,6 +1491,24 @@
     paintSheets();
   }
 
+  /** The "Its own proposal" switch (Create Multiple Proposals): ticks or unticks the sheet in the draft's base_tab_ids by
+   *  B.proposalBasePatch's rule. Nothing about the bid is repriced: the sheet stays an option here, and becomes a proposal of its own
+   *  when Create Multiple Proposals is pressed on the Proposal step. A refused press (a Seal sheet, the combined pair as the base) says so
+   *  on the sheet's bar. */
+  function toggleOwnProposal(tab) {
+    var st = TW.getState();
+    var on = B.proposalBaseIds(ROOT, st).indexOf(tab) < 0;
+    var ticks = B.proposalBasePatch(st, tab, on, ROOT);
+    sheetsUi.focus = tab + "|own";
+    if (!ticks) {
+      sheetsUi.notice = { at: tab, text: "This sheet can't be a proposal of its own. Make one sheet the base bid first; Seal sheets are options only." };
+      paintSheets();
+      return;
+    }
+    TW.setState(ticks);
+    paintSheets();
+  }
+
   /** Total, or Add / Deduct. A Seal sheet is priced as a total only, so the page refuses the other even if it is asked. */
   function setPriceMode(tab, mode) {
     var e = null;
@@ -1489,6 +1526,7 @@
   /** What each button in the panel does. `tab` is the sheet it is on, `sheet` the type chosen in the Add menu. */
   function sheetsAct(act, tab, sheet) {
     if (act === "on") { toggleOnProposal(tab); return; }
+    if (act === "own") { toggleOwnProposal(tab); return; }
     if (act === "desc") {
       var wasOpen = sheetsUi.descOpen[tab] === true;
       sheetsUi.descOpen = Object.assign({}, sheetsUi.descOpen, Object.fromEntries([[tab, !wasOpen]]));
@@ -1524,6 +1562,185 @@
     if (act === "add-close") { sheetsUi.pick = false; sheetsUi.focus = "add|menu"; paintSheets(); return; }
     if (act === "add") { addSheetPress(sheet); return; }
   }
+
+  // ── scopes: one project, several separately approved proposals (RJ, 2026-10-24) ─────────────
+  // A client can get a few separately priced scopes under one project (Breakroom polish, Lab 1 epoxy, Lab 2 epoxy), each its own
+  // proposal. The bar under the alert says which scope of its project this draft is (and renames it), and offers to SPLIT a bid
+  // built as several sheets into one proposal per sheet (tier A1): B.splitOut makes each sheet a bid of its own, this page prices
+  // each the way it prices the sheet now (scopeSave), and POST /api/draft/{id}/split files them as scopes of one project.
+  var scopeUi = { renaming: false, draft: "", ask: false, busy: false, note: "", bad: false };
+
+  /** This draft's place in a project split into scopes ({ id, label }), or null. Server-owned (drafts._SERVER_OWNED_KEYS). */
+  function scopeOfDraft() {
+    var sg = TW.getState().scope_group;
+    return sg && typeof sg === "object" && typeof sg.id === "string" ? sg : null;
+  }
+
+  /** The sheets a split makes proposals of, the one that carries the job's travel FIRST: that one stays on this draft. [] when the
+   *  bid cannot be split (B.splitBlockers says why). */
+  function splitOrder() {
+    var tabs = [];
+    try { tabs = B.splitTabs(ROOT); } catch (err) { return []; }
+    if (tabs.length < 2) return [];
+    var carrier = B.travelCarrier(ROOT);
+    return [carrier].concat(tabs.filter(function (t) { return t !== carrier; }));
+  }
+
+  /** Draw the scope bar: the scope's name (and its rename box), the split button or the reason there is none, and the last thing
+   *  the bar has to say. Hidden when it has nothing to show. */
+  function paintScopeBar() {
+    var el = $("scope-bar");
+    if (!el) return;
+    var sg = scopeOfDraft();
+    var order = splitOrder();
+    var blocked = null, live = 0;
+    try { blocked = B.splitBlockers(ROOT); live = B.activeSections(ROOT).length; } catch (err) { blocked = null; live = 0; }
+    var names = order.map(function (t) { try { return B.sectionOf(ROOT, t).label; } catch (err) { return t; } });
+    var off = scopeUi.busy || splitting ? " disabled" : "";
+    var html = "";
+    if (sg) {
+      html += scopeUi.renaming
+        ? '<div class="scope-row"><label for="scope-label-box">This scope is called</label>' +
+          '<input type="text" id="scope-label-box" maxlength="80" value="' + esc(scopeUi.draft) + '">' +
+          '<button type="button" class="btn" data-scope-act="rename-save"' + off + '>Save name</button>' +
+          '<button type="button" class="btn ghost" data-scope-act="rename-cancel"' + off + '>Cancel</button></div>'
+        : '<div class="scope-row"><span>One scope of this project: <strong>' + esc(sg.label || "Unnamed scope") + '</strong></span>' +
+          '<button type="button" class="btn ghost" data-scope-act="rename"' + off + '>Rename</button></div>';
+    }
+    if (order.length >= 2) {
+      html += scopeUi.ask
+        ? '<div class="scope-row"><span>Split into ' + order.length + ' separate proposals: <strong>' + names.map(esc).join("</strong>, <strong>") +
+          '</strong>? Each is priced as it is now and sent on its own; ' + esc(names[0]) + ' stays on this page.</span>' +
+          '<button type="button" class="btn" data-scope-act="split-yes"' + off + '>Split them</button>' +
+          '<button type="button" class="btn ghost" data-scope-act="split-no"' + off + '>Keep one proposal</button></div>'
+        : '<div class="scope-row"><span>Each sheet a proposal of its own, approved on its own?</span>' +
+          '<button type="button" class="btn ghost" data-scope-act="split"' + off + '>Split into separate proposals</button></div>';
+    } else if (live >= 2 && blocked) {
+      html += '<p class="note">Splitting this bid into separate proposals: ' + esc(blocked) + '</p>';
+    }
+    // SEVERAL BASE BIDS (the sheets switched to "Its own proposal"): the proposals are made on the Proposal step, by its Create
+    // Multiple Proposals button, so the bar says where.
+    var bidIds = [];
+    try { bidIds = B.proposalBaseIds(ROOT, TW.getState()); } catch (err) { bidIds = []; }
+    if (bidIds.length >= 2) {
+      var bidNames = bidIds.map(function (t, i) { var n = t; try { n = B.sectionOf(ROOT, t).label; } catch (err) { n = t; } return "Base Bid " + (i + 1) + " " + n; });
+      html += '<p class="note" data-scope-bids="' + bidIds.length + '">' + bidIds.length + ' base bids, each its own proposal: <strong>' +
+        bidNames.map(esc).join("</strong>, <strong>") + '</strong>. Create the proposals on the Proposal step.</p>';
+    }
+    if (scopeUi.note) html += '<p class="note' + (scopeUi.bad ? " bad" : "") + '" role="status">' + esc(scopeUi.note) + '</p>';
+    if (el.innerHTML !== html) el.innerHTML = html;
+    el.hidden = !html;
+  }
+
+  /** ONE SCOPE'S SAVE, priced the way this page prices it: B.buildSavePatch over the scope's own model, with the page's pricing
+   *  pointed at that model while it runs. The page finds a takeoff's section, its pooling and its discounts BY IDENTITY in ROOT
+   *  (poolsList, sectionOfList, gypEntryOf), so pricing a copy while ROOT is the whole bid would price it as no section's. */
+  function scopeSave(model, draftState) {
+    var keepRoot = ROOT, keepM = M, keepTab = activeTab;
+    try {
+      ROOT = model; M = model; activeTab = B.ROOT_TAB;
+      return B.buildSavePatch(model, draftState, priceCtx());
+    } finally {
+      ROOT = keepRoot; M = keepM; activeTab = keepTab;
+    }
+  }
+
+  /** Rename this scope: through POST /api/draft/{id}/scope, because the group is the server's, then remembered in this browser only
+   *  (the server has it already). */
+  async function renameScopePress() {
+    var box = $("scope-label-box");
+    if (box) scopeUi.draft = box.value;            // what is in the box when Save is pressed, whatever events came before
+    var label = String(scopeUi.draft || "").replace(/\s+/g, " ").trim();
+    if (!label) { scopeUi.note = "Give the scope a name."; scopeUi.bad = true; paintScopeBar(); return; }
+    scopeUi.busy = true; scopeUi.note = ""; paintScopeBar();
+    try {
+      var r = await fetch(TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(TW.getDraftId()) + "/scope", {
+        method: "POST", headers: TW.authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ label: label, rename: true })
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+      if (TW.setLocalState) TW.setLocalState({ scope_group: { id: j.group_id, label: j.label } }, { alreadyOnServer: true });
+      scopeUi.renaming = false; scopeUi.note = "Renamed."; scopeUi.bad = false;
+    } catch (err) {
+      scopeUi.note = "The scope could not be renamed. " + ((err && err.message) || "Try again."); scopeUi.bad = true;
+    } finally {
+      scopeUi.busy = false;
+      paintScopeBar();
+    }
+  }
+
+  /** SPLIT INTO SEPARATE PROPOSALS. In this order, and the order is the fix for the audit's race:
+   *    1. `splitting` is set, so nothing this page does from here queues a save (saveSoon);
+   *    2. what was typed is saved and waited for (TW.flushState), and the server's copy is read for its version: the split is
+   *       asked of exactly that copy (a save landing since is a 409, and nothing is split);
+   *    3. each scope's model and save are composed (B.splitOut, scopeSave) and sent;
+   *    4. on success the SERVER'S copy replaces this browser's (TW.useServerCopy, which also drops any queued save) BEFORE the
+   *       page reloads onto it. A save of the old copy that still got out (another tab) is refused by the server
+   *       (drafts.SPLIT_MARK), so the split survives either way.
+   *  A refusal leaves the page exactly as it was, saving again. */
+  async function splitPress() {
+    if (splitting || scopeUi.busy) return;
+    var order = splitOrder();
+    if (order.length < 2) return;
+    splitting = true;
+    scopeUi.busy = true; scopeUi.ask = false; scopeUi.note = "Saving, then splitting..."; scopeUi.bad = false;
+    paintScopeBar();
+    var done = false;
+    try {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      var now = TW.getState();
+      TW.setState(Object.assign({}, now, savePatch(now)));
+      var saved = await TW.flushState();
+      if (saved === false) throw new Error("this page's changes did not reach the server, so nothing was split. Reload and try again.");
+      var row = TW.readServerRow ? await TW.readServerRow() : null;
+      if (!row || !row.version) throw new Error("the saved copy could not be read, so nothing was split. Try again.");
+      var draftState = TW.getState();
+      var children = order.map(function (tab) {
+        var k = B.splitOut(ROOT, tab, { state: draftState });
+        var st = Object.assign({}, draftState, k.patch);
+        return { tab_id: tab, label: k.label, data: Object.assign({}, k.patch, scopeSave(k.model, st)) };
+      });
+      var r = await fetch(TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(TW.getDraftId()) + "/split", {
+        method: "POST", headers: TW.authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ draft_version: row.version, children: children })
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+      done = true;
+      scopeUi.note = "Split into " + children.length + " proposals. Opening " + children[0].label + "...";
+      paintScopeBar();
+      var adopted = TW.useServerCopy ? await TW.useServerCopy() : false;
+      if (adopted) window.location.reload();
+      else window.location.assign("/polish-estimate.html?d=" + encodeURIComponent(TW.getDraftId()));
+    } catch (err) {
+      scopeUi.note = "Not split: " + ((err && err.message) || "try again."); scopeUi.bad = true;
+    } finally {
+      scopeUi.busy = false;
+      // A refusal gives the page back; a split keeps it shut until it has reloaded onto the server's copy.
+      if (!done) splitting = false;
+      paintScopeBar();
+    }
+  }
+
+  function scopeAct(act) {
+    if (act === "rename") { var sg = scopeOfDraft(); scopeUi.renaming = true; scopeUi.draft = (sg && sg.label) || ""; scopeUi.note = ""; paintScopeBar(); return; }
+    if (act === "rename-cancel") { scopeUi.renaming = false; scopeUi.note = ""; paintScopeBar(); return; }
+    if (act === "rename-save") { renameScopePress(); return; }
+    if (act === "split") { scopeUi.ask = true; scopeUi.note = ""; paintScopeBar(); return; }
+    if (act === "split-no") { scopeUi.ask = false; paintScopeBar(); return; }
+    if (act === "split-yes") { splitPress(); return; }
+  }
+
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var b = t && t.closest ? t.closest("[data-scope-act]") : null;
+    if (b) scopeAct(b.getAttribute("data-scope-act"));
+  });
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t && t.id === "scope-label-box") scopeUi.draft = t.value;
+  });
 
   /** Is the section on show edited on the page's own panels? Polish, Epoxy and Gyp are (their work types are `ready`
    *  in Estimating Tool v2). The others, until their phases, show the summary below, so nothing is hidden. */
@@ -2887,8 +3104,9 @@
         // Rendered unconditionally on hours rows -- CSS (`.lab:not(.inert) .inertline`) decides
         // whether it shows, so the card's class is the one source of truth for both the dimming
         // and the caption, and the two cannot drift apart on a live repaint.
-        '<p class="inertline">This job is marked local, so no travel is expected — type here ' +
-          'anyway if it needs drive time.</p>' +
+        // UNKNOWN IS NOT LOCAL (Hanz, 2026-10-22): with no distance on file the card says the distance is unknown and where to
+        // give it; only a job MEASURED under 70 miles is called local (B.travelInertWords). paintDistance repaints it in place.
+        '<p class="inertline" data-inertline>' + esc(B.travelInertWords(ROOT, carrierName())) + '</p>' +
           // A TRAVEL LABOR ROW ON A SECTION THAT IS OFF is a leftover of a restructure: the job's drives are charged on its bases, so this
           // card says so (typed figures were left as typed) instead of promising a fill it will not get. (Until round 7 a Combo's second
           // base drew this too; it drives its own crew now, Hanz's D1 of 2026-10-21.)
@@ -2972,8 +3190,15 @@
   // box to type the number in. Nothing is guessed. A typed figure always wins, and a Lodging /
   // Per Diem line the estimator flipped by hand is never moved by an answer (B.applyDistance).
   //
-  // ONLY A NEW BID LOOKS IT UP BY ITSELF. A saved bid opened later does not reprice behind
-  // anybody's back: it shows what it was saved with and offers the button.
+  // WHO LOOKS IT UP BY ITSELF, ON OPEN (B.distanceWantsLookup). A new bid; a saved bid that has NO distance at all, never
+  // measured and never typed (Hanz, 2026-10-22: a Wichita bid with no street sat at "local" for good), unless it already says
+  // FAR, a stated answer left for the button (B.openWantsDistance, the audit's finding 1); and a figure measured
+  // to a CENTRE (no street: the zip's, the city's or the county's) whose address has changed since, so a street added on the
+  // intake replaces the approximate figure with the exact one. A TYPED figure is never replaced without the button, and a
+  // STREET figure whose address changed shows what it was saved with, says so, and offers the button.
+  //
+  // NO STREET IS ENOUGH (2026-10-22): a city + state, a zip or the county places the job (B.distanceKey). The server measures
+  // it to that one's centre, by road, and says so (`precision`); the note words it as approximate.
   //
   // A FAR ANSWER ALSO FILLS TRAVEL LABOR, KYLE'S WAY (Hanz, 2026-10-20): its hours from the miles (one round trip), its
   // guys the crew's size, so each guy is charged one trip as on his own sheets. A figure the estimator typed in a box, or
@@ -2983,7 +3208,7 @@
   var distBusy = false;
   var distReason = "";
   var DIST_REASONS = {
-    incomplete: "Add the street, city and state on the intake step, or type the miles.",
+    incomplete: "Add the job's city and state, a zip or the county on the intake step, or type the miles.",
     no_key: "The distance service is not set up yet. Type the miles.",
     not_found: "That address could not be found. Check it on the intake step, or type the miles.",
     busy: "Too many lookups just now. Type the miles, or try again in a few minutes.",
@@ -2992,7 +3217,7 @@
 
   function addressKey() {
     var s = TW.getState() || {};
-    return B.distanceKey(s.address, s.city, s.state, s.zip);
+    return B.distanceKey(s.address, s.city, s.state, s.zip, s.county);
   }
 
   function distanceStatus() {
@@ -3001,6 +3226,11 @@
     if (d && d.source === "google" && addressKey() && d.key !== addressKey()) {
       return "The address changed since this was measured. Look it up again, or type the miles.";
     }
+    // MEASURED TO A CENTRE (2026-10-22): approximate, and the way to the exact figure is the street.
+    if (d && B.isApproxDistance(d)) return d.street_not_found
+      ? "The street was not found, so this is to the " + ({ zip: "zip code", city: "city", county: "county" })[d.precision] +
+        " center. Check the street on the intake step for the exact figure."
+      : "Add the street on the intake step for the exact figure.";
     if (!d && distReason) return DIST_REASONS[distReason] || DIST_REASONS.error;
     if (!d) return "Type the miles from the office, or look it up from the job address.";
     return "";
@@ -3027,6 +3257,10 @@
     if (how) how.textContent = B.travelHow(M, ROOT).text;
     var st = document.querySelector("[data-dist-status]");
     if (st) st.textContent = distanceStatus();
+    // A dimmed Travel Labor card's words follow the distance: unknown, or measured local (B.travelInertWords).
+    document.querySelectorAll("[data-inertline]").forEach(function (el) {
+      el.textContent = B.travelInertWords(ROOT, carrierName());
+    });
     var box = document.querySelector("[data-dist-miles]");
     if (box && document.activeElement !== box) {
       var v = M.distance && M.distance.miles != null ? String(M.distance.miles) : "";
@@ -3045,24 +3279,25 @@
    *  already measured for this exact address, is left alone. Never throws. */
   async function lookupDistance(force) {
     var s = TW.getState() || {};
-    var key = B.distanceKey(s.address, s.city, s.state, s.zip);
+    var key = B.distanceKey(s.address, s.city, s.state, s.zip, s.county);
     if (!key) { distReason = "incomplete"; paintDistance(); return; }
     if (!force && M.distance && (M.distance.source === "typed" || M.distance.key === key)) return;
     distBusy = true; distReason = "";
     paintDistance();
-    var miles = null, reason = "error";
+    var miles = null, reason = "error", answer = null;
     try {
       var res = await api("/api/distance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ address: s.address || "", city: s.city || "", state: s.state || "",
-                               zip: s.zip || "" }),
+                               zip: s.zip || "", county: s.county || "" }),
         signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
           ? AbortSignal.timeout(14000) : undefined
       });
       var j = await res.json();
       miles = B.milesOrNull(j && j.miles);
       reason = (j && j.reason) || "error";
+      answer = j;
     } catch (e) { miles = null; }
     distBusy = false;
     // The estimator can have typed miles while the answer was on its way. Theirs wins; this answer is dropped. NOTHING ELSE DROPS IT
@@ -3072,7 +3307,9 @@
     // under the page after init (the sandbox settles which draft this is before the lookup starts), so the model as it is NOW is the one.
     if (!force && ROOT.distance && ROOT.distance.source === "typed") { paintDistance(); return; }
     if (miles === null) { distReason = reason; paintDistance(); return; }
-    B.applyDistance(ROOT, { miles: miles, source: "google", key: key });
+    // What it was measured to rides along (B.normalizeDistance keeps only the shapes it knows): "street", or a centre.
+    B.applyDistance(ROOT, { miles: miles, source: "google", key: key, precision: answer && answer.precision,
+                            measured_to: answer && answer.measured_to, street_not_found: answer && answer.street_not_found });
     changed(false);
     paintDistance();
   }
@@ -5301,6 +5538,9 @@
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
     // and every decision below turns on that id.
     try { await TW.draftReady; } catch (e) {}
+    // A proposal made from another draft's estimate has no estimate of its own (the server copies the
+    // parent's): it opens the parent's, before anything here can save (TW.redirectProposalChild).
+    if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/polish-estimate.html")) return;
     adopt(TW.getState());
 
     // Before the library, before the form, before anything can be typed: whatever happens after
@@ -5508,9 +5748,11 @@
     renderPanel();
 
     // DISTANCE, AFTER THE PAINT AND NEVER AWAITED: a slow or dead map service costs the page
-    // nothing. Only a NEW bid asks by itself (the same gate as the defaults above); a saved bid
-    // keeps what it was saved with and offers the button. See lookupDistance.
-    if (newBid && laborDefaults && !M.distance) lookupDistance(false);
+    // nothing. A new bid asks once its labor defaults are in (the same gate as the defaults above);
+    // a saved bid asks when it has no distance at all, or a centre figure whose address has changed
+    // (B.distanceWantsLookup, Hanz 2026-10-22). A typed figure, and a street figure, stay as saved, and so does a saved bid with
+    // no distance whose conditions already say far: a stated answer, left for the button (B.openWantsDistance).
+    if ((!newBid || laborDefaults) && B.openWantsDistance(ROOT, addressKey(), newBid)) lookupDistance(false);
   }
 
   init();

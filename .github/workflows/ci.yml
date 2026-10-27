@@ -115,10 +115,20 @@ jobs:
             echo "no green run on this tree -- running the suite"
           fi
 
-  test:
+  # THE SUITE RUNS IN 4 CHUNKS AT ONCE (2026-10-27). One runner took ~40 minutes for ~13,900 tests,
+  # a third of it the polish-travel sequence walks. Each shard runs a disjoint quarter of the test
+  # FILES (.github/scripts/shard_tests.py; backend/tests/test_ci_shards.py proves they cover every
+  # file exactly once), so the whole suite still runs on every PR, just on four machines. This is
+  # parallelism, not selection: nothing is skipped because a change looks small.
+  shard:
     needs: fingerprint
-    # The job still EXISTS when skipped, so the required-check name stays satisfied and branch
-    # protection does not have to be edited. Only the expensive steps are gated.
+    name: tests (chunk ${{ matrix.shard }} of 4)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    # The job still EXISTS when skipped, so the check stays satisfied. Only the expensive steps
+    # are gated.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -197,7 +207,21 @@ jobs:
           # the job — which is the designed outcome, but the job is meant to be GREEN and
           # actually comparing, not red.
           TW_PORTAL_REPO: ${{ github.workspace }}/portal
-        run: python -m pytest tests/ -q -n auto --dist loadfile
+        run: python -m pytest $(python ../.github/scripts/shard_tests.py ${{ matrix.shard }} 4 tests) -q -n auto --dist loadfile
+
+  # THE REQUIRED CHECK. Branch protection requires a check named `test`; the four chunks above
+  # have their own names, so this job is the single name that is green only when every chunk is.
+  test:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Every chunk must have passed
+        run: |
+          echo "chunks: ${{ needs.shard.result }}"
+          test "${{ needs.shard.result }}" = "success"
 
   audit:
     # pip-audit scans the PRODUCTION dependencies for known CVEs.

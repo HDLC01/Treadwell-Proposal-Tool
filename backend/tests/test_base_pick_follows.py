@@ -188,7 +188,8 @@ def test_the_estimate_strip_applies_the_rule_and_prices_the_pick(ran, layout):
     snapshot, and the saved cell edit goes back to 2000)."""
     e = ran["basePick"][layout]["estimate1"]
     assert e["base"] == "Copy1"
-    assert e["snapshots"] == 1, "the pick was saved without re-pricing"
+    # Two changes since the Base-bid boxes became checkboxes (2026-10-27): tick Copy1, untick Epoxy. Each is priced.
+    assert e["snapshots"] == 2, "the pick was saved without re-pricing"
     assert e["cellValues"] == {"Epoxy!E20": 2400}, e["cellValues"]
     pov = e["pov"]
     assert list(pov["lines"]) == ["option:Copy1"], pov["lines"]
