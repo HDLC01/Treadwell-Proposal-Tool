@@ -606,6 +606,28 @@ def test_the_options_panel_rules_live_in_the_shared_stylesheet():
         assert re.search(r"(?m)^" + re.escape(sel) + r"\s*\{", css), f"{sel} is not in styles.css"
 
 
+def test_the_panel_sits_above_the_docked_sidebar_and_under_the_popups():
+    """Hanz, 2026-10-27: the card dragged left slid UNDER the side nav. From 768px up the open
+    sidebar is docked, so the card must out-rank it; it must stay under the notifications pop-up,
+    and below 768px (the sidebar is a drawer over a backdrop) under the drawer. The z-indexes are
+    read from auth.js's own sidebar CSS, so a renumbered nav is noticed here."""
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+
+    def z_of(sel):
+        m = re.search(r"(?m)^" + re.escape(sel) + r"\{[^}]*?z-index:(\d+)", auth)
+        assert m, f"auth.js no longer gives {sel} a z-index"
+        return int(m.group(1))
+
+    wide = re.search(r"@media \(min-width: 768px\) \{\s*\.options-panel \{ z-index: (\d+); \}", css)
+    assert wide, "the card has no z-index of its own beside the docked sidebar"
+    z = int(wide.group(1))
+    assert z > z_of("#tw-sidebar"), "the card still slides under the docked sidebar"
+    assert z < z_of("#tw-notif-backdrop"), "the card would cover the notifications pop-up"
+    narrow = int(re.search(r"(?m)^\.options-panel \{[^}]*z-index: (\d+)", css).group(1))
+    assert narrow < z_of("#tw-backdrop"), "on a phone the card would sit over the open drawer"
+
+
 def test_the_panel_is_floating_at_every_width():
     """THE OLD BREAKPOINT IS GONE (2026-10-27). Below 1400px the panel used to drop into the flow
     with `position: static`, and because only .word-canvas scrolls on step 3 it became permanent
