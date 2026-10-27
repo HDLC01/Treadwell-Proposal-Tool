@@ -10468,11 +10468,16 @@
     // as it is. Inline, not a helper: harnesses lift this function by name. So does a door on the
     // Generate Files step's walk (kind "generate", send-all-chain.js): it rebuilds a document a
     // person composed, after the estimate changed, exactly as the Files page's door does.
+    // A door that composes a proposal which NEVER HAD a document is "built by nobody" too, walk or
+    // not: the Files page's own door (View files on a never-opened child of Create Multiple
+    // Proposals) wrote Kyle's GC placeholders with nobody looking, and with no mark the next Send
+    // all published them (review, 2026-10-28). So a door that finds no document marks it.
     let _q0 = null;
     try { _q0 = new URLSearchParams(window.location.search); } catch {}
     const _doorOpened = !!_q0 && _q0.get("compose") === "files";
     const _walk0 = _doorOpened && window.TWSendAll ? window.TWSendAll.progress(_q0) : null;
-    const _sendAllBuild = !!_walk0 && _walk0.kind !== "generate";
+    const _hadDoc0 = !!((liveKey("proposal_payload") || {}).values);
+    const _sendAllBuild = (!!_walk0 && _walk0.kind !== "generate") || (_doorOpened && !_hadDoc0);
 
     const composed = {
       ...mergedValues,

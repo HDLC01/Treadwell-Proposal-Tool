@@ -357,6 +357,24 @@ function view(members) {
     out.held = { nav: g.nav, rows: rowsBrief(g), posted: g.posted.map((p) => p.id) };
   }
 
+  // ── THIS BROWSER'S COPY IS NOT THE SAVED ONE: NO WALK LEAVES IT BEHIND ─────────────────────
+  // Kyle's tab holds an edit whose save never landed, and a colleague has saved the project since
+  // ("kept"). A sibling's document no longer matches its draft, so it would need its door; walking
+  // there hands this browser's one copy slot to the sibling, and Kyle's edit is gone before the
+  // Files step's "choose which copy" card can offer it.
+  {
+    const b = await continued();
+    const mine = Object.assign(W.local(b), { notes_text: "Kyle's note, never saved" });
+    b.ls.setItem(STATE_KEY, JSON.stringify(mine));
+    b.server.d1 = Object.assign(copy(b.server.d1), { texture: "Saved by RJ" });
+    b.server.drafts = { c2: childDoc(14000, "Polish"), c4: await keyed(childDoc(6000, "Gyp")) };
+    b.server.view = view([{ id: "d1", sheet_label: "Epoxy" }, { id: "c2", sheet_label: "Polish" },
+                          { id: "c4", sheet_label: "Gyp" }]);
+    const g = await openGenerate(b, "/generate.html?d=d1");
+    out.kept = { nav: g.nav, rows: rowsBrief(g), posted: g.posted.map((p) => p.id),
+                 walk: b.ss.getItem(KEY), localNote: W.local(b).notes_text };
+  }
+
   // ── THE PILLS AND BACK ─────────────────────────────────────────────────────────────────────
   {
     const b = await continued();

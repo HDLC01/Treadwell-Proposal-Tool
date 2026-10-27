@@ -196,6 +196,25 @@ def test_a_stale_out_of_step_or_lost_child_is_not_built(ran):
 
 
 @needs_node
+def test_a_copy_that_is_not_the_saved_one_starts_no_walk(ran):
+    """Review, 2026-10-28. This browser's copy of the open proposal holds an unsaved edit and the
+    saved one has moved since ("kept"). A sibling whose document no longer matches would need its
+    door, and walking there hands the one copy slot to the sibling: the edit is gone before the
+    Files step's "choose which copy to keep" card could offer it. So nothing walks, the sibling
+    says why, a sibling that needs no door is still built, and the edit is still in this browser."""
+    k = ran["kept"]
+    assert k["nav"] == [], "a walk started and left this browser's unsaved copy behind"
+    assert k["walk"] is None
+    rows = k["rows"]
+    assert _row(rows, "d1")["status"] == "failed"
+    assert _row(rows, "c2")["status"] == "failed"
+    assert _row(rows, "c2")["message"] == ("Not rebuilt: first choose which copy of the proposal open "
+                                           "here to keep, on its Files step. Then come back.")
+    assert _row(rows, "c4")["status"] == "built" and k["posted"] == ["c4"]
+    assert k["localNote"] == "Kyle's note, never saved"
+
+
+@needs_node
 def test_back_and_the_pills_follow_the_draft(ran):
     """Back from step 3 goes to the estimate: the spreadsheet's, or the v2 page for a v2 draft."""
     v1, v2 = ran["pillsV1"], ran["pillsV2"]
@@ -236,9 +255,11 @@ MUTATIONS = [
      "    return TW.getDraftId();",
      lambda o: o["fromChild"]["back"] == "/estimate-review.html?d=c2"),
     ("no-auto-mark", "js/proposal-review.js",
-     '    const _sendAllBuild = !!_walk0 && _walk0.kind !== "generate";',
+     '    const _sendAllBuild = (!!_walk0 && _walk0.kind !== "generate") || (_doorOpened && !_hadDoc0);',
      "    const _sendAllBuild = !!_walk0;",
      lambda o: o["oneDraft"]["mark"] is True),
+    ("kept-no-walk", G, "    if (compose.length && unsure) {", "    if (false) {",
+     lambda o: o["kept"]["nav"] != []),
     ("take-kind", "js/send-all-chain.js", "    if (kindOf(r.kind) !== kindOf(kind)) return null;\n", "",
      lambda o: o["kinds"]["filesTook"] is not None),
 ]

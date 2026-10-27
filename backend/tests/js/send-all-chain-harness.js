@@ -193,6 +193,15 @@ async function door(b, href, opts) {
     out.mark = { afterWalk: afterWalk === undefined ? null : afterWalk, afterDoor, afterPerson: b.server.d1[MARK] === undefined ? null
                                                      : b.server.d1[MARK] };
   }
+  // ── THE FILES PAGE'S OWN DOOR, ON A PROPOSAL THAT NEVER HAD A DOCUMENT (no walk) ───────────
+  // View files on a never-opened GC child: done.js finds no document and sends the tab through the
+  // door, which composes Kyle's GC defaults with nobody looking. The saved draft is handed back
+  // whole, so the test can ask the server's own placeholder gate about it.
+  {
+    const b = W.browser(child({ audience: "GC" }));
+    await door(b, "/proposal-review.html?compose=files&d=d1");
+    out.filesDoorFromNothing = { draft: W.copy(b.server.d1) };
+  }
 
   // ── WHO SIGNS: a proposal of Create Multiple Proposals is signed as Base Bid 1 is ──────────────
   // drafts._parent_signer copies Base Bid 1's `estimator_name` and `estimator_signer` onto the child.

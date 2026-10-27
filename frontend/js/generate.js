@@ -308,6 +308,20 @@
       if (typeof r.plan === "object") { r.status = r.plan.status; r.message = r.plan.message; }
     });
     var compose = rows.filter(function (r) { return r.plan === "compose"; });
+    // A WALK LEAVES THIS PAGE'S COPY BEHIND. This browser's copy of the current proposal is not the
+    // saved one ("kept": both moved; "unknown": no record to tell), and the one copy slot is handed
+    // to each door's draft as the walk goes: shared.js only warns about a copy it cannot save, so
+    // the edit the Files step's "choose which copy to keep" card offers would be gone before anyone
+    // could choose it (review, 2026-10-28). So nothing walks; the rows that need no door still build.
+    var unsure = seen.status === "kept" || seen.status === "unknown";
+    if (compose.length && unsure) {
+      compose.forEach(function (r) {
+        r.status = "failed";
+        r.message = "Not rebuilt: first choose which copy of the proposal open here to keep, on its "
+          + "Files step. Then come back.";
+      });
+      compose = [];
+    }
     if (compose.length) {
       var started = false;
       if (!cameBack && window.TWSendAll) {

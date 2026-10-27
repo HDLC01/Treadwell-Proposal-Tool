@@ -67,11 +67,30 @@ def test_the_walks_document_is_the_manual_paths(ran, name):
 
 
 @pytest.mark.parametrize("name", FIXTURES)
-def test_only_the_walk_marks_its_document(ran, name):
-    """Hanz, 2026-10-28: a proposal built by Send all and never opened that still prints Kyle's
+def test_only_a_door_marks_a_document_it_built_from_nothing(ran, name):
+    """Hanz, 2026-10-28: a proposal built automatically and never opened that still prints Kyle's
     placeholders is held by the press (main._send_all_placeholders reads `proposal_auto_built`).
-    The walk's door sets the mark; the plain door and a person's Continue do not."""
-    assert ran["parity"][name]["marks"] == {"a": None, "b": True, "c": None}
+    A door that composes a proposal which never had a document sets the mark, on Send all's walk
+    or the Files page's own (review, 2026-10-28); a person's Continue does not."""
+    assert ran["parity"][name]["marks"] == {"a": True, "b": True, "c": None}
+
+
+def test_the_files_doors_document_from_nothing_is_held_by_send_all(ran):
+    """Review, 2026-10-28. View files on a never-opened GC child: the Files page's own door (no walk)
+    composes it with Kyle's GC defaults. Unmarked, the next Send all took it as a person's and put
+    '[ 1 mob/phase ]' and 'xx Architects' in the customer's email. The server's own gate holds it."""
+    import main
+    d = ran["filesDoorFromNothing"]["draft"]
+    assert d.get("proposal_auto_built") is True
+    assert main._send_all_placeholders(d, built=True), "the door's unattended document was not held"
+
+
+def test_mutation_the_files_door_leaves_a_new_document_unmarked(tmp_path):
+    import main
+    out = _run(_mutant(tmp_path, "js/proposal-review.js",
+                       " || (_doorOpened && !_hadDoc0);", ";"))
+    assert out["parity"]["epoxyDirect"]["marks"]["a"] is None
+    assert main._send_all_placeholders(out["filesDoorFromNothing"]["draft"], built=True) == []
 
 
 def test_the_mark_stays_through_the_files_door_and_a_persons_continue_clears_it(ran):
@@ -106,8 +125,11 @@ def test_mutation_the_files_door_clears_the_mark(tmp_path):
 def test_mutation_the_mark_is_a_compose_input(tmp_path):
     out = _run(_mutant(tmp_path, "shared.js", "\"proposal_payload_key\", \"proposal_auto_built\",",
                        "\"proposal_payload_key\","))
-    # The walk's document and the door's would carry different keys: its Files page would rebuild it.
-    assert out["parity"]["epoxyDirect"]["keyed"] is False
+    # The walk's (marked) document and a person's (unmarked) one would carry different keys: its
+    # Files page would rebuild it. (The Files page's own door marks a new document too, so the
+    # walk-versus-door pair no longer differs in the mark.)
+    d = out["parity"]["epoxyDirect"]["walkVsManual"]
+    assert d is not None and d["at"] == "proposal_payload_key", d
 
 
 def test_a_new_proposal_is_signed_as_base_bid_1_whoever_builds_it(ran):
