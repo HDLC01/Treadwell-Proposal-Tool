@@ -6797,11 +6797,17 @@
    *  the base has none (a Polish or Gyp base, an Epoxy sheet that is only an option, a model whose sections cannot be read). */
   function baseTextureOf(model) {
     var list;
-    try { list = sectionsOf(model); } catch (err) { return ""; }
+    // null = "cannot tell" (unreadable sections, or a model with no base in it, such as the backup save's root-only copy):
+    // textureFill then leaves the Proposal step's texture alone instead of clearing it. "" only when a base was found
+    // and it is not an Epoxy sheet.
+    try { list = sectionsOf(model); } catch (err) { return null; }
+    var sawBase = false;
     for (var i = 0; i < list.length; i++) {
-      if (list[i].role === "epoxy" && isBaseEntry(list[i])) return sectionTexture(list[i].section);
+      if (!isBaseEntry(list[i])) continue;
+      sawBase = true;
+      if (list[i].role === "epoxy") return sectionTexture(list[i].section);
     }
-    return "";
+    return sawBase ? "" : null;
   }
 
   /** What a save writes to the Proposal step's texture: { texture, texture_from_estimate } set to the base's texture while the
@@ -6814,6 +6820,7 @@
     var from = typeof st.texture_from_estimate === "string" ? st.texture_from_estimate : null;
     if (held === null || !(held === "" || (from !== null && held === from))) return {};
     var want = baseTextureOf(model);
+    if (want === null) return {};
     if (from === null && want === "") return {};
     if (held === want && from === want) return {};
     return { texture: want, texture_from_estimate: want };

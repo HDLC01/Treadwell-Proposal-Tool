@@ -152,11 +152,11 @@ BREAKS = {
                           "    if (held === null || !(held === \"\" || (from !== null && held === from))) return {};",
                           "    if (held === null) return {};",
                           lambda o: o["typed"]["proposal"]["texture"] != "Medium"),
-    "any base sheet": ("js/bid-model.js", "      if (list[i].role === \"epoxy\" && isBaseEntry(list[i])) return sectionTexture(list[i].section);",
-                       "      if (isBaseEntry(list[i])) return sectionTexture(list[i].section);",
+    "any base sheet": ("js/bid-model.js", "      if (list[i].role === \"epoxy\") return sectionTexture(list[i].section);",
+                       "      return sectionTexture(list[i].section);",
                        lambda o: o["combo"]["proposal"]["texture"] != "Light"),
-    "an option is the base": ("js/bid-model.js", "      if (list[i].role === \"epoxy\" && isBaseEntry(list[i])) return sectionTexture(list[i].section);",
-                              "      if (list[i].role === \"epoxy\") return sectionTexture(list[i].section);",
+    "an option is the base": ("js/bid-model.js", "      if (!isBaseEntry(list[i])) continue;",
+                              "      if (false) continue;",
                               lambda o: o["option"]["proposal"]["texture"] != "absent"),
 }
 
