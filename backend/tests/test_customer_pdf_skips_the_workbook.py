@@ -157,7 +157,8 @@ def test_only_the_customer_pdf_opts_out_of_the_workbook():
         "expected exactly two callers to skip the workbook, found %d"
         % src.count("want_estimate=False)"))
     import inspect
-    for name in ("api_admin_proposal_pdf", "api_portal_publish"):
+    # The publish builds its document in _prepare_publish since 2026-10-27 (the send-all shares it).
+    for name in ("api_admin_proposal_pdf", "_prepare_publish"):
         assert "want_estimate=False)" in inspect.getsource(getattr(main, name)), name
     for name in ("api_draft_revision_files", "api_to_dropbox", "api_draft_documents"):
         assert "want_estimate=False)" not in inspect.getsource(getattr(main, name)), (

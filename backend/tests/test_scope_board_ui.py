@@ -92,7 +92,10 @@ def test_the_unsent_scope_lists_its_siblings_escaped(drawer):
     assert 'data-scope-open="scope-b" data-scope-board="1"' in html
     assert "Lab &lt;2&gt;" in html and "Lab <2>" not in html
     assert "files are not built yet" in html, "a scope with no files claims its paperwork exists"
-    assert 'id="scope-send"' not in html, "an unpublished scope offered the combined email"
+    # The one press (Hanz, 2026-10-27): it publishes every proposal and sends the one email, so the
+    # drawer of a proposal not published yet offers it rather than sending anybody off to publish.
+    assert ('<button type="button" class="btn btn-p" id="scope-send" data-resend="">Send all '
+            'proposals in one email</button>') in html, "an unpublished scope had no one press"
 
 
 NEW_SCOPE_MARKS = ('id="scope-new-btn"', 'id="scope-new-label"', "New scope for this project",
@@ -178,7 +181,9 @@ def test_the_sent_scope_card_is_registered_and_offers_the_combined_email(drawer)
 @needs_node
 def test_the_combined_email_names_the_scopes_still_to_publish(drawer):
     n = drawer["scope"]["notPublished"]
-    assert n["requests"] == [{"path": "/api/portal/scope-group/grp_x/send", "method": "POST",
+    # The drawer's button is the project's ONE press (2026-10-27): the send-all, which publishes what
+    # the customer does not have yet before the one email (main.py api_scope_group_send_all).
+    assert n["requests"] == [{"path": "/api/portal/scope-group/grp_x/send-all", "method": "POST",
                               "body": {"resend": False}}]
     assert "Not published yet: Breakroom, Lab <2>." in n["note"]
     assert n["note"].startswith("Nothing was sent.")
