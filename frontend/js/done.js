@@ -1844,7 +1844,7 @@
           if (allOut) {
             // What the one press did, in the drawer's words: sent in one email, or (this proposal
             // published, the email not sent) why not, and that pressing again finishes it.
-            portalBtn.textContent = allOut.sent ? "✓ Sent, one email with every proposal" : orig;
+            portalBtn.textContent = allOut.sent ? "\u2713 Sent, one email with every proposal" : orig;
             mountRevisions();
             const res = document.getElementById("portal-result");
             if (res) { res.style.display = ""; res.textContent = allOut.text; }
