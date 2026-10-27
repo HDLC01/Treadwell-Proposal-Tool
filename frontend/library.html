@@ -273,6 +273,27 @@
       box-shadow:inset -1px 0 0 var(--line); }
     th.rowsave { position:sticky; left:0; z-index:2; }
     tbody tr:hover td.rowsave { background:var(--surf); }
+    /* THE ITEMS TABLE'S COLUMN HEADINGS STAY ON SCREEN. Hanz, 2026-10-27: "when we scroll down the
+       materials, divisions, order quantity etc. headers should be sticky."
+       WHERE IT STICKS: a sticky cell sticks inside its nearest scroll container, and that is .tw,
+       never the page: .tw scrolls sideways (the table is ~1,990px wide, and the Save column above
+       is pinned to its LEFT edge), and overflow-x:auto makes overflow-y auto too. So a top:0 cell
+       here would stick to a box that never scrolls down, and pinning it to the window instead would
+       mean taking away the sideways scroller the Save column needs. The box scrolls down instead:
+       it is held to the screen (less the 52px #tw-topbar, the add button and the two pagers) and
+       the headings stick to ITS top while the rows scroll under them. The .card around it clips
+       (overflow:hidden), which is harmless: it is outside the scroller and does not scroll.
+       Opaque fill (--surf-low, the heading row's own colour) and the heading row's own hairline,
+       so rows do not show through. z-index 3 is over every body cell (the pinned Save cell is 1);
+       the Save heading is pinned both ways and sits over the rest of the row at 4. The page sets
+       color-scheme: only light and has no dark theme; these are tokens, so one would carry over.
+       scroll-margin-top keeps a field the keyboard moves to from parking under the headings. */
+    #items-scroll { overflow:auto; max-height:max(320px, calc(100vh - 190px));
+      max-height:max(320px, calc(100dvh - 190px)); }
+    #items-scroll thead th { position:sticky; top:0; z-index:3; background:var(--surf-low);
+      border-bottom:1px solid var(--line); }
+    #items-scroll thead th.rowsave { left:0; z-index:4; }
+    #items-scroll tbody :is(input, select, textarea, button) { scroll-margin-top:40px; }
     /* THE SAME COLUMN ON THE LABOR AND ADMINISTRATION TABLES (Hanz, 2026-10-12: "apply that save
        button here", "same as here"), and the same two states of it: the Save button while the row has
        an unsaved change, and for about two seconds after the save lands, "Saved" in that same cell --
@@ -910,7 +931,8 @@
           <button class="btn ghost sm pager-next" type="button" id="items-pager-top-next"
                   data-pager="items" data-step="1">Next</button>
         </nav>
-        <div class="tw">
+        <!-- id="items-scroll": the box the headings stick inside. See the #items-scroll rule. -->
+        <div class="tw" id="items-scroll">
           <table class="items-table">
             <thead>
               <tr>
