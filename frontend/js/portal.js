@@ -1925,7 +1925,9 @@
     try {
       const who = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
       me = String(who.email || "").toLowerCase();
-      isAdmin = who.role === "admin" || who.role === "super_admin";
+      // A Direct Projects special permission opens other people's picks too (main.py _guard_notify_picks).
+      isAdmin = who.role === "admin" || who.role === "super_admin" ||
+        (Array.isArray(who.grants) && who.grants.indexOf("/portal.html") !== -1);
     } catch (e) { /* not signed in yet — read-only is the safe default */ }
     wrap.innerHTML = roster.map((p) => {
       const on = effective(p);
@@ -2438,7 +2440,10 @@
    *  as everything around them and there is nothing to see flashing. */
   function paintNtChips(pid, j, gen) {
     const me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
-    const isAdmin = me.role === "admin" || me.role === "super_admin";
+    // A Notification Sending special permission opens other people's overrides too
+    // (main.py api_portal_notify_overrides_set).
+    const isAdmin = me.role === "admin" || me.role === "super_admin" ||
+      (Array.isArray(me.grants) && me.grants.indexOf("/notifications.html") !== -1);
     const myEmail = (me.email || "").toLowerCase();
     // Re-read the node rather than trusting one captured before an await: a re-render mid-fetch
     // would otherwise leave us writing into a detached element.
