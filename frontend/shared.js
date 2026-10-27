@@ -1232,6 +1232,7 @@
   // ?d= draft doesn't own the local blob, hydrate it (fetch → clean-replace →
   // reload). This self-heals after corruption and covers cross-device opens.
   async function initDraftSync() {
+    if (_prefetchBoot) return confirmPrefetchedBoot(_prefetchBoot);   // this page ran on a kept read (bootFromPrefetch)
     // The pull below hits the auth-gated /api/draft/{id}. Wait for the Supabase
     // token (set by auth.js) so the GET isn't 401'd — otherwise a reopened link
     // would start empty instead of hydrating.
@@ -1338,6 +1339,176 @@
         adoptAndReload({});
       }
     }
+  }
+
+  // ─── A proposal tab's draft, read before it is opened ─────────────
+  // Hanz, 2026-10-27: "can we make the switching of the proposals tabs more efficient? like pre
+  // loading". A tab of the proposal strip opens another draft, and opening another draft was TWO
+  // page loads: the page ran on the old draft's blob, initDraftSync waited for the sign-in and the
+  // profile, read the new draft, wrote it and reloaded, and the page ran again. So the strip reads
+  // its other tabs' drafts ahead (prefetchDraft, at idle, on hover, and at the click), keeps each
+  // with the server's `updated_at` in sessionStorage (this tab only; a convenience, never the
+  // record), and the page that opens takes its draft from there in its FIRST run
+  // (bootFromPrefetch), before any page script reads the blob.
+  //
+  // IT IS A COPY THE SERVER HAS NOT CONFIRMED, so until it has, the draft is held exactly as a draft
+  // adopted blind is (markUnverified): every server save is refused, and a reload reads the server
+  // again. confirmPrefetchedBoot asks the server as soon as there is a token. The same `updated_at`
+  // means nobody has saved it since it was read: the refusal is lifted and what the page wrote
+  // meanwhile is saved. Anything else, and the server's copy replaces it and the page reloads, which
+  // is what every open of another draft did before, so a copy that went stale costs no more than
+  // the old way and is never saved over the newer one.
+  // Each read under its own key (PREFETCH_KEY + ":" + id), so a page reads only its own; the list
+  // under PREFETCH_KEY says what is kept, when, and how big.
+  const PREFETCH_KEY = "treadwell.proposal_tool.prefetched";
+  const PREFETCH_MAX_AGE_MS = 10 * 60 * 1000;
+  // sessionStorage also holds the UNVERIFIED marker, which must always fit: the kept reads stay
+  // well under the ~5M characters a browser allows it.
+  const PREFETCH_MAX_CHARS = 1500000;
+  const _prefetches = new Map();     // id -> its one read on this page
+  let _leaving = false;
+  window.addEventListener("pagehide", () => { _leaving = true; });
+
+  /** Keep `raw` (one draft's read) under `id`: what is kept goes oldest first, and anything over
+   *  ten minutes old, until it fits. Throws when storage refuses (the caller's catch). */
+  function keepPrefetched(id, raw) {
+    if (raw.length > PREFETCH_MAX_CHARS) return false;
+    let list = [];
+    try { list = JSON.parse(sessionStorage.getItem(PREFETCH_KEY) || "[]"); } catch { list = []; }
+    if (!Array.isArray(list)) list = [];
+    const now = Date.now();
+    const drop = (e) => { try { sessionStorage.removeItem(PREFETCH_KEY + ":" + e.id); } catch {} };
+    list = list.filter((e) => {
+      const keep = e && e.id !== id && now - e.at < PREFETCH_MAX_AGE_MS;
+      if (!keep && e && e.id !== id) drop(e);
+      return keep;
+    });
+    let total = raw.length;
+    list.forEach((e) => { total += e.n || 0; });
+    while (list.length && total > PREFETCH_MAX_CHARS) { const e = list.shift(); total -= e.n || 0; drop(e); }
+    sessionStorage.setItem(PREFETCH_KEY + ":" + id, raw);
+    list.push({ id, at: now, n: raw.length });
+    sessionStorage.setItem(PREFETCH_KEY, JSON.stringify(list));
+    return true;
+  }
+
+  /** The kept read of `id`, {version, at, data}, taken out of storage (it is used once), or null. */
+  function takePrefetched(id) {
+    let hit = null;
+    try {
+      const raw = sessionStorage.getItem(PREFETCH_KEY + ":" + id);
+      if (raw === null) return null;
+      sessionStorage.removeItem(PREFETCH_KEY + ":" + id);
+      hit = JSON.parse(raw);
+    } catch { return null; }
+    return (hit && typeof hit === "object" && !Array.isArray(hit)) ? hit : null;
+  }
+
+  /** Read draft `id` (another proposal of this estimate) and keep it for the page that opens it.
+   *  Once per draft per page: a second ask gets the first one's promise. Never this page's own
+   *  draft, and nothing from a page that is leaving or reloading. Resolves true when it is kept. */
+  function prefetchDraft(id) {
+    if (!id || typeof id !== "string") return Promise.resolve(false);
+    if (_prefetches.has(id)) return _prefetches.get(id);
+    if (id === getDraftId() || _reloadPending || _leaving) return Promise.resolve(false);
+    const p = (async () => {
+      try {
+        const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id),
+                                { headers: authHeaders() });
+        if (!res.ok) return false;
+        const body = await res.json();
+        const data = body && body.data;
+        const version = (body && typeof body.updated_at === "string") ? body.updated_at : "";
+        if (!version || !(data && typeof data === "object" && !Array.isArray(data))) return false;
+        if (_leaving || _reloadPending) return false;
+        return keepPrefetched(id, JSON.stringify({ version, at: Date.now(), data }));
+      } catch { return false; }
+    })();
+    _prefetches.set(id, p);
+    return p;
+  }
+
+  // Set by bootFromPrefetch when this page runs on a kept read: {id, version, digest}.
+  let _prefetchBoot = null;
+
+  /** THE FIRST RUN OF THE PAGE, ON A KEPT READ OF ITS DRAFT. Synchronous, before the page's own
+   *  scripts take their snapshot of the blob, so the page renders this draft and needs no reload.
+   *  The kept read is used once (removed whether it is used or not), and only when:
+   *    - it is this URL's draft, under ten minutes old, with a version;
+   *    - the blob is not already this draft's (that is the ordinary load);
+   *    - nothing in the blob is unsaved: it is empty, holds no work, or is the copy this browser
+   *      last saw the server hold (flushEvictedBlob's own tests). Otherwise the ordinary hydrate,
+   *      which flushes it first, decides;
+   *    - the refusal of server saves has been recorded, before the copy goes in. */
+  function bootFromPrefetch() {
+    let urlId = null;
+    try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
+    if (!urlId) return;
+    const hit = takePrefetched(urlId);
+    if (!hit) return;
+    const data = hit.data;
+    if (!(typeof hit.version === "string" && hit.version && data && typeof data === "object" && !Array.isArray(data))) return;
+    if (!(Date.now() - hit.at < PREFETCH_MAX_AGE_MS)) return;
+    const blob = getState();
+    const stamp = blob[STAMP] || null;
+    if (stamp === urlId || guardBlocks(urlId)) return;
+    if (Object.keys(blob).some((k) => k !== STAMP)) {
+      if (!stamp) return;
+      if (hasWork(blob) && syncedDigest(stamp) !== draftDigest(blob)) return;
+    }
+    markUnverified(urlId);
+    if (!isUnverified(urlId)) return;
+    const copy = Object.assign({}, data, { [STAMP]: urlId });
+    if (!writeBlob(copy)) { clearUnverified(); return; }
+    const digest = draftDigest(copy);
+    markSynced(urlId, digest);
+    setDraftId(urlId);
+    _prefetchBoot = { id: urlId, version: hit.version, digest };
+  }
+  try { bootFromPrefetch(); } catch {}
+
+  /** initDraftSync for a page that ran on a kept read: ask the server whether it is still its copy.
+   *  Only the token is waited for (not the profile), so the answer is usually in before the
+   *  document's own template, which waits for both. A server that cannot be read leaves the saves
+   *  refused, as a blind adopt does, and the next load reads it again. */
+  async function confirmPrefetchedBoot(boot) {
+    try {
+      const a = window.TWAuth;
+      const gate = a && (a.tokenReady || a.ready);
+      if (gate) await gate;
+    } catch {}
+    const read = async () => {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(boot.id),
+                              { headers: authHeaders() });
+      if (res.status === 404) return { data: {}, version: null };
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const body = await res.json();
+      const data = body && body.data;
+      if (!(data && typeof data === "object" && !Array.isArray(data))) throw new Error("no draft");
+      return { data, version: (typeof body.updated_at === "string") ? body.updated_at : "" };
+    };
+    let row = null;
+    try { row = await read(); }
+    catch { try { row = await read(); } catch { row = null; } }
+    if (!row) {
+      console.error("[TW] could not confirm draft", boot.id, "— editing locally, but saves are held back until it can be read");
+      return;
+    }
+    if (_reloadPending) return;
+    clearUnverified();
+    if (row.version === boot.version) {
+      const cur = getState();
+      if (cur[STAMP] === boot.id && draftDigest(cur) !== boot.digest) scheduleServerSave(cur);
+      return;
+    }
+    // Saved again since it was read ahead, or gone: the server's copy, as the ordinary hydrate takes it.
+    const data = Object.assign({}, row.data, { [STAMP]: boot.id });
+    writeBlob(data);
+    markSynced(boot.id, draftDigest(data));
+    setDraftId(boot.id);
+    setGuard(boot.id);
+    _reloadPending = true;
+    window.location.reload();
   }
 
   // The digest of the blob as this page FOUND it, taken before initDraftSync can touch it. Every
@@ -2284,6 +2455,7 @@
     isThisDraft,
     redirectProposalChild,
     readProposals,
+    prefetchDraft,
     v2PricingView,
     v2SheetKeysOut,
     draftDigest,
