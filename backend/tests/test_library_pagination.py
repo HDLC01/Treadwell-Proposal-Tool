@@ -1,4 +1,7 @@
-"""The Items table and the Assemblies rail, 25 at a time (Hanz, 2026-10-27).
+"""The Items table 25 at a time and the Assemblies rail 8 at a time (Hanz, 2026-10-27).
+
+"Assemblies should have a pagination of 8 only." The Items table stays at 25. Both sizes live in
+library-core.js (PAGE_SIZE and ASM_PAGE_SIZE); the page math is shared.
 
 Two halves, both executed under node:
 
@@ -56,8 +59,10 @@ def newest(harness):
 
 # ── the page math ─────────────────────────────────────────────────────────────
 
-def test_one_page_size_for_both_lists():
+def test_items_take_25_a_page_and_assemblies_8():
+    """Mutation: put ASM_PAGE_SIZE back to 25, or point the rail at PAGE_SIZE."""
     assert core("L.PAGE_SIZE") == 25
+    assert core("L.ASM_PAGE_SIZE") == 8
 
 
 def test_page_count_never_falls_below_one():
@@ -175,23 +180,25 @@ def test_twenty_five_materials_get_no_pager_and_unchanged_rows(pager):
 
 # ── the Assemblies rail ───────────────────────────────────────────────────────
 
-def test_sixty_assemblies_draw_twenty_five_cards(pager):
+def test_sixty_assemblies_draw_eight_cards(pager):
+    """Sixty cards are eight pages; the ninth card opens page 2."""
     a = pager["asm"]
-    assert a["firstPage"] == "q1..q25 (25)"
-    assert a["firstPager"]["page"] == "Page 1 of 3"
-    assert a["firstPager"]["range"] == "1" + DASH + "25 of 60"
-    assert a["afterNext"] == "q26..q50 (25)"
-    assert a["afterNextPager"]["page"] == "Page 2 of 3"
+    assert a["firstPage"] == "q1..q8 (8)"
+    assert a["firstPager"]["page"] == "Page 1 of 8"
+    assert a["firstPager"]["range"] == "1" + DASH + "8 of 60"
+    assert a["afterNext"] == "q9..q16 (8)"
+    assert a["afterNextPager"]["page"] == "Page 2 of 8"
 
 
 def test_rail_repaints_keep_the_page(pager):
-    assert pager["asm"]["afterRepaints"] == "q26..q50 (25)"
+    assert pager["asm"]["afterRepaints"] == "q9..q16 (8)"
 
 
 def test_rail_search_facet_sort_and_area_go_back_to_page_one(pager):
     a = pager["asm"]
-    assert a["afterSearch"] == "q2..q50 (25)"
-    assert a["searchPager"]["range"] == "1" + DASH + "25 of 30"
+    assert a["afterSearch"] == "q2..q16 (8)"
+    assert a["searchPager"]["page"] == "Page 1 of 4"
+    assert a["searchPager"]["range"] == "1" + DASH + "8 of 30"
     assert a["searchHits"] == "30 of 60 shown"
     assert (a["beforeFacet"], a["afterFacet"]) == (2, 1)
     assert (a["beforeSort"], a["afterSort"]) == (2, 1)
@@ -199,31 +206,40 @@ def test_rail_search_facet_sort_and_area_go_back_to_page_one(pager):
 
 
 def test_opening_an_assembly_by_id_shows_its_card(pager):
+    """q47 is card 47: page 6 at 8 a page (cards 41-48). q55 is on page 7 (49-56)."""
     a = pager["asm"]
-    assert a["openedPage"] == 2 and a["openedCurrent"] == ["q47"]
-    assert a["deepLinkPage"] == 3 and a["deepLinkCurrent"] == ["q55"]
+    assert a["openedPage"] == 6 and a["openedCurrent"] == ["q47"]
+    assert a["deepLinkPage"] == 7 and a["deepLinkCurrent"] == ["q55"]
     # Opening moves the rail once; paging away afterwards is not undone by the next repaint.
-    assert a["pagedAwayFromOpen"] == 3
+    assert a["pagedAwayFromOpen"] == 7
 
 
 def test_a_new_assembly_is_on_screen_and_current(pager):
     a = pager["asm"]
-    assert a["afterNew"] == "qnew..q24 (25)"
+    assert a["afterNew"] == "qnew..q7 (8)"
     assert a["afterNewCurrent"] == ["qnew"]
 
 
 def test_a_shrinking_rail_clamps_to_its_new_last_page(pager):
+    """61 cards (qnew + q1..q60): page 8 holds q56..q60. Take those five off and page 8 is gone,
+    so the rail lands on the new last page, 7, and one Previous reaches page 6."""
     a = pager["asm"]
-    assert a["lastBeforeShrink"] == "q50..q60 (11)"
-    assert a["afterShrink"] == "q25..q49 (25)"
-    assert a["afterShrinkPager"]["page"] == "Page 2 of 2"
-    assert a["previousAfterShrink"] == "qnew..q24 (25)"
+    assert a["lastBeforeShrink"] == "q56..q60 (5)"
+    assert a["afterShrink"] == "q48..q55 (8)"
+    assert a["afterShrinkPager"]["page"] == "Page 7 of 7"
+    assert a["afterShrinkPager"]["range"] == "49" + DASH + "56 of 56"
+    assert a["previousAfterShrink"] == "q40..q47 (8)"
 
 
-def test_twenty_five_assemblies_get_no_pager(pager):
+def test_eight_assemblies_get_no_pager_and_nine_do(pager):
     a = pager["asm"]
-    assert a["twentyFive"] == "q1..q25 (25)"
-    assert a["twentyFivePager"]["hidden"] is True and a["twentyFivePager"]["range"] == ""
+    assert a["eight"] == "q1..q8 (8)"
+    assert a["eightPager"]["hidden"] is True and a["eightPager"]["range"] == ""
+    assert a["nine"] == "q1..q8 (8)"
+    assert a["ninePager"]["hidden"] is False
+    assert a["ninePager"]["page"] == "Page 1 of 2"
+    assert a["ninePager"]["range"] == "1" + DASH + "8 of 9"
+    assert a["ninePageTwo"] == "q9..q9 (1)"
 
 
 def test_the_pagers_are_named_landmarks_that_start_hidden(pager):
@@ -346,10 +362,10 @@ def test_picking_a_sort_remembers_it_and_moves_nothing_else(newest):
 
 def test_the_assemblies_rail_opens_newest_first(newest):
     """Same instruction, the other list: sixty assemblies, each a minute newer, page 1 is the
-    latest twenty-five and the Sort select says so.
+    latest eight and the Sort select says so.
 
     Mutation: put the ASM_SORT default back to "name"."""
-    assert newest["railFirstPage"] == "q60..q36 (25)", newest["railFirstPage"]
+    assert newest["railFirstPage"] == "q60..q53 (8)", newest["railFirstPage"]
     assert newest["railSelect"] == "new"
 
 
