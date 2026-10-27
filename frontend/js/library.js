@@ -212,7 +212,7 @@
           COND_DEFAULTS = cj.conditions || [];
         }
       } catch (e) { COND_DEFAULTS = []; }
-      if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
+      if (!openId || !current()) openId = firstAssemblyId();
       say("");
       paint();
     } catch (err) {
@@ -1505,14 +1505,16 @@
   /** The 25 materials the table draws, out of the `shown` (searched and filtered) list.
    *
    *  renderItems runs on a dozen events, so the page is decided HERE from state, never by the
-   *  caller: a changed search or facet goes back to page 1, exactly ONE material id the last
+   *  caller: a changed search, facet or sort goes back to page 1, exactly ONE material id the last
    *  render had not seen (Add material, Duplicate) moves to the page that holds it, and a list
    *  that shrank under the page (a delete) is clamped onto its new last page. Every other repaint
    *  (a save reply, More/Less, a price break) keeps the page it found. A reload that brings several
-   *  new ids at once moves nothing: that is other people's work arriving, not a row just made. */
+   *  new ids at once moves nothing: that is other people's work arriving, not a row just made.
+   *  Under Newest first a just-made row is always row 1 of page 1; under Name A-Z it is wherever
+   *  the list puts it, and the move to its page is what keeps it on screen. */
   function itemsPage(shown) {
     var st = PAGER.items;
-    var view = String(itemQuery) + "\n" + JSON.stringify(FILTERS);
+    var view = String(itemQuery) + "\n" + JSON.stringify(FILTERS) + "\n" + ITEM_SORT;
     if (st.view !== null && st.view !== view) st.page = 1;
     st.view = view;
     if (st.known) {
@@ -2144,6 +2146,29 @@
   var asmQuery = "";
   var ASM_FILTERS = { unit: "", condition: "" };
 
+  /** The keys each Sort select offers, so a value read back out of storage is one of them. Above
+   *  ASM_SORT and ITEM_SORT because their declarations read it as they run. */
+  var SORT_KEYS = { items: ["new", "name"], asm: ["new", "name", "scope", "unit", "vendor", "owner"] };
+
+  /** The Sort this viewer last left list `kind` on, or `fallback`.
+   *
+   *  localStorage, and only as a per-viewer convenience: an ordering is a view, so it must never
+   *  reach a record or the server (the ASM_SORT rule). Storage can be missing or THROW (a private
+   *  window, blocked site data), and a value from an older page may name a key that no longer
+   *  exists; both open the list on its default. */
+  function savedSort(kind, fallback) {
+    try {
+      var v = window.localStorage.getItem("tw_library_sort_" + kind);
+      return SORT_KEYS[kind].indexOf(v) !== -1 ? v : fallback;
+    } catch (e) { return fallback; }
+  }
+
+  /** Keep the Sort just picked for the next visit. Silent when storage refuses: the list is
+   *  already in the order asked for, and only the memory of it is lost. */
+  function rememberSort(kind, key) {
+    try { window.localStorage.setItem("tw_library_sort_" + kind, key); } catch (e) { /* convenience only */ }
+  }
+
   /** HOW THE RAIL IS ORDERED. Hanz, 2026-09-04: "in the assemblies we must be able to sort by
    *  vendor, scope or worktype, unit, who created it."
    *
@@ -2155,8 +2180,17 @@
    *
    *  NOT a filter, and deliberately outside anyAsmFilterActive(): a sort narrows nothing, so it
    *  must not light up the hits count, must not raise the no-match panel, and must not be reset
-   *  by Clear filters. One line, so library-ui-harness.js can lift the default verbatim. */
-  var ASM_SORT = "name";
+   *  by Clear filters. One line, so library-ui-harness.js can lift the default verbatim.
+   *
+   *  NEWEST FIRST BY DEFAULT since 2026-10-27. Hanz: "The newest added item should be put on the
+   *  first page", for both lists, every time and after a reload. Whatever this viewer last picked
+   *  wins (savedSort), so somebody who wants Name A-Z picks it once. */
+  var ASM_SORT = savedSort("asm", "new");
+
+  /** HOW THE ITEMS TABLE IS ORDERED, the same rule as ASM_SORT: a plain variable, never on a
+   *  record, outside anyFilterActive(). "new" (Newest first, the default) or "name" (Name A-Z, the
+   *  server's own order). One line, so library-ui-harness.js can lift it verbatim. */
+  var ITEM_SORT = savedSort("items", "new");
 
   /** WHICH PAGE EACH LIST IS ON (Hanz, 2026-10-27: 25 at a time on Items and on Assemblies).
    *
@@ -2332,15 +2366,44 @@
     return bits.join(", ");
   }
 
-  /** The materials the query and the facets leave, in the order they already had.
+  /** The materials the query and the facets leave, in the order the Sort asks for. FILTER FIRST,
+   *  THEN SORT, then itemsPage cuts the page: the same order visibleAssemblies takes.
    *
    *  Reuses itemMatches, the same matcher the assembly picker searches with, so the two boxes on
    *  this page cannot disagree about what "Sika primer" finds. The FACETS are this tab's alone: a
    *  line picker silently narrowed by a bar on another tab would be a trap. */
   function visibleItems() {
-    if (!anyFilterActive()) return ITEMS;
-    return ITEMS.filter(function (it) {
+    var shown = !anyFilterActive() ? ITEMS : ITEMS.filter(function (it) {
       return matchesFilters(it) && itemMatches(it, itemQuery);
+    });
+    return sortItems(shown, ITEM_SORT);
+  }
+
+  /** Order the Items table. Hanz, 2026-10-27: "The newest added item should be put on the first
+   *  page."
+   *
+   *  "new" is created_at, newest first, ties by name, and a material with no created_at LAST (the
+   *  sortAssemblies rule: a blank at the top of a sort loses the reader's trust). The stamps are
+   *  timestamptz and always carry their offset, so they are compared as instants: Date.parse of a
+   *  string with an offset is the same number in any time zone, and an instant does not care
+   *  whether the server wrote "+00:00" or another zone.
+   *
+   *  "name" is a PASS-THROUGH of the server's order (list_items() does `.order("name")`), for the
+   *  sortAssemblies reasons: Add material and Duplicate unshift the new row to the top for this
+   *  session, and a client-side name sort would also move a row while its name is being typed.
+   *
+   *  A NEW ARRAY, never a sort in place: unfiltered, visibleItems hands in ITEMS itself, the model
+   *  every other function reads. */
+  function sortItems(list, key) {
+    if (key !== "new") return list;
+    var at = function (it) {
+      var t = Date.parse((it || {}).created_at || "");
+      return isNaN(t) ? null : t;
+    };
+    return list.slice().sort(function (x, y) {
+      var tx = at(x), ty = at(y);
+      if ((tx === null) !== (ty === null)) return tx === null ? 1 : -1;
+      return (ty - tx) || String((x || {}).name || "").localeCompare(String((y || {}).name || ""));
     });
   }
 
@@ -2515,13 +2578,12 @@
    *  every other function reads (`current()`, the delete's fallback openId, load()'s first pick).
    *
    *  "name" IS A PASS-THROUGH, AND THAT IS THE DECISION HERE, not an oversight. list_assemblies()
-   *  on the server already does `.order("name")`, so the order it hands us IS name A–Z and the
-   *  default view is byte-for-byte what this tab showed before this control existed. Re-sorting it
-   *  client-side would cost nothing visible on a loaded page and would break the one thing Hanz
+   *  on the server already does `.order("name")`, so the order it hands us IS name A–Z. Re-sorting
+   *  it client-side would cost nothing visible on a loaded page and would break the one thing Hanz
    *  asked for in the same breath: a just-created assembly is unshifted to the FRONT of the rail,
-   *  and an active name sort would drop it straight back under N for "New assembly". So the
-   *  default respects the server's order including this session's prepend, and "Newest first" is
-   *  the option that makes new-work-on-top survive a reload. */
+   *  and an active name sort would drop it straight back under N for "New assembly". So Name A–Z
+   *  respects the server's order including this session's prepend. "Newest first" (the DEFAULT
+   *  since 2026-10-27, see ASM_SORT) puts new work on top for real and survives a reload. */
   function sortAssemblies(list, key, items) {
     if (!key || key === "name") return list;
     var desc = key === "new";
@@ -2555,6 +2617,15 @@
   function placeNewAssembly(list, asm) {
     list.unshift(asm);
     return list;
+  }
+
+  /** WHICH ASSEMBLY OPENS WHEN NOTHING IS: the top card of the rail as it is SORTED, not ASMS[0].
+   *  ASMS keeps the server's name order, so under Newest first ASMS[0] is the oldest-by-name card
+   *  and asmPage would jump the rail to whatever page holds it -- page 3 of 60, not the latest
+   *  work Hanz asked to see "every time and after a reload". load() and the delete path both ask
+   *  this. Filters are ignored on purpose, as the ASMS[0] pick did: none are active on a load. */
+  function firstAssemblyId() {
+    return (sortAssemblies(ASMS, ASM_SORT, ITEMS)[0] || {}).id || null;
   }
 
   /** What the row SAYS about the key it is being ordered on, so an order is never a mystery.
@@ -2713,6 +2784,8 @@
     // holds is a no-op, where re-writing its markup would not be.
     $("f-vendor").value = FILTERS.vendor;
     $("f-condition").value = FILTERS.condition;
+    // The Sort is static markup like #fa-sort, so only its value is written back, never cleared.
+    if ($("f-sort")) $("f-sort").value = ITEM_SORT;
     $("f-clear").hidden = !anyFilterActive();
   }
 
@@ -5043,6 +5116,16 @@
       renderFilterBar();
     });
   }
+  // The Items Sort, wired like #fa-sort below and for its reasons: static markup, renderItems()
+  // only (itemsPage sees the new key and goes back to page 1), no clearFilters and no focus call,
+  // so somebody tabbing through the bar is still in the select they just changed.
+  if ($("f-sort")) {
+    $("f-sort").addEventListener("change", function (e) {
+      ITEM_SORT = e.target.value;
+      rememberSort("items", ITEM_SORT);
+      renderItems();
+    });
+  }
 
   /** Put the tab back to showing everything.
    *
@@ -5114,6 +5197,7 @@
   if ($("fa-sort")) {
     $("fa-sort").addEventListener("change", function (e) {
       ASM_SORT = e.target.value;
+      rememberSort("asm", ASM_SORT);
       renderList();
     });
   }
@@ -5638,14 +5722,12 @@
         // appears directly under the control that produced it. Through placeNewAssembly rather
         // than an inline unshift because nothing in this listener is reachable from the harness.
         //
-        // SAY PLAINLY HOW LONG THIS LASTS, because it is not permanent and that is not a bug.
-        // list_assemblies() on the server does `.order("name")`, so on the next page load "New
-        // assembly" comes back under N and the rail is name A–Z again. That is why the default
-        // sort is a pass-through of the server's order rather than a client-side name sort (which
-        // would undo this on the very next render — see sortAssemblies): the front placement is
-        // for THIS SESSION, for the minute between creating a system and naming it. The estimator
-        // who wants new work at the top permanently picks "Newest first" in the Sort control,
-        // which orders on created_at and survives a reload.
+        // UNDER THE DEFAULT SORT (Newest first, since 2026-10-27) the sort itself puts it first,
+        // because the server stamps created_at on create, and it stays first after a reload.
+        // Under Name A–Z the prepend is what keeps it at the top, for THIS SESSION only:
+        // list_assemblies() does `.order("name")`, so the next load files it under N. That is why
+        // Name A–Z is a pass-through of the server's order rather than a client-side name sort
+        // (which would undo this on the very next render — see sortAssemblies).
         //
         // It is on screen either way: openId is set to it and its name field is focused and
         // selected two lines down, ready to be typed over.
@@ -5784,7 +5866,7 @@
       try {
         await del("assemblies", cur.id);
         ASMS = ASMS.filter(function (x) { return x.id !== cur.id; });
-        openId = ASMS.length ? ASMS[0].id : null;
+        openId = firstAssemblyId();
         paint();
       } catch (err) { say("Couldn't delete that assembly. " + err.message); }
       return;
