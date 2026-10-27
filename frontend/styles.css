@@ -1738,6 +1738,14 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
   padding: 12px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
   z-index: 40; font-size: 13px; color: #222;
 }
+/* ABOVE THE DOCKED SIDEBAR (Hanz, 2026-10-27: "the pricing option should overlap the side nav
+   bar, it starts behind it"). auth.js puts #tw-sidebar at z-index 9998, so at 40 a card dragged
+   left slid under the nav. From 768px up the open sidebar is docked (it pushes the page over), so
+   the card goes one above it, and still under the notifications pop-up (10000/10001). Below 768px
+   the sidebar is a drawer over a backdrop and the card stays under both. */
+@media (min-width: 768px) {
+  .options-panel { z-index: 9999; }
+}
 /* Draggable header — the panel is a FLOATING, MOVABLE widget. Starts below the
    top ribbon (top:150px) so it never covers the Back / TAX / Generate controls;
    the estimator can then drag it anywhere. Position persists in localStorage. */
