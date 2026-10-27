@@ -9972,6 +9972,10 @@
       }).join("") + `<li class="pt-msg" role="status">${escH(msg)}</li></ul>`;
       strip.hidden = false;
       Array.from(strip.querySelectorAll(".pt-name")).forEach((b) => {
+        // A pointer on a tab, or the keyboard on it, is the moment before a click: read its draft now.
+        const ahead = () => { if (b.dataset.ptOpen !== id && TW.prefetchDraft) TW.prefetchDraft(b.dataset.ptOpen); };
+        b.addEventListener("pointerenter", ahead);
+        b.addEventListener("focus", ahead);
         b.addEventListener("click", () => openTab(b.dataset.ptOpen));
         b.addEventListener("dblclick", () => { if (b.dataset.ptOpen === id) startRename(b.dataset.ptOpen); });
       });
@@ -9989,10 +9993,27 @@
       note.hidden = false;
     }
 
+    // A TAB OPENS ON ITS DRAFT READ AHEAD (TW.prefetchDraft, shared.js): the page that opens then runs
+    // once on it instead of loading, reading it and reloading. The read goes while this page saves, and
+    // is waited for a little at most; one that is late leaves the next page to read the draft itself.
     async function openTab(pid) {
       if (!pid || pid === id || busy) return;
+      const ahead = TW.prefetchDraft
+        ? Promise.race([TW.prefetchDraft(pid), new Promise((r) => setTimeout(r, 1200))]) : null;
       try { await TW.flushState(); } catch {}
+      try { await ahead; } catch {}
       window.location.assign(pageOf(pid));
+    }
+
+    /** Once the strip is drawn, read the other tabs' drafts when the page is idle: only the tabs
+     *  shown, never this one. */
+    function readAhead() {
+      const ms = members();
+      if (!TW.prefetchDraft || ms.length < 2) return;
+      const others = ms.map((m) => m.id).filter((x) => x && x !== id);
+      const go = () => others.forEach((x) => TW.prefetchDraft(x));
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(go, { timeout: 2000 });
+      else setTimeout(go, 300);
     }
 
     function startRename(pid) {
@@ -10109,6 +10130,7 @@
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
     view = TW.readProposals ? await TW.readProposals(id) : null;
     paintStrip(); paintNote(); paintMulti();
+    readAhead();
     return api;
   }
   mountProposalTabs().catch(() => {});
