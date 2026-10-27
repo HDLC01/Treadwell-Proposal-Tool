@@ -57,6 +57,7 @@
       banned:"banned", unbanned:"unbanned", deleted_user:"deleted",
       // Create Multiple Proposals (one estimate, a proposal per base bid).
       proposals_created:"made several proposals from", proposal_refreshed:"refreshed the estimate of",
+      proposal_moved:"moved a proposal to another sheet on",
     };
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function money(n){ return (typeof n==="number") ? " — $"+n.toLocaleString(undefined,{maximumFractionDigits:0}) : ""; }
