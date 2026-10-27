@@ -178,7 +178,9 @@ def test_the_sent_scope_card_is_registered_and_offers_the_combined_email(drawer)
 @needs_node
 def test_the_combined_email_names_the_scopes_still_to_publish(drawer):
     n = drawer["scope"]["notPublished"]
-    assert n["requests"] == [{"path": "/api/portal/scope-group/grp_x/send", "method": "POST",
+    # The drawer's button is the project's ONE press (2026-10-27): the send-all, which publishes what
+    # the customer does not have yet before the one email (main.py api_scope_group_send_all).
+    assert n["requests"] == [{"path": "/api/portal/scope-group/grp_x/send-all", "method": "POST",
                               "body": {"resend": False}}]
     assert "Not published yet: Breakroom, Lab <2>." in n["note"]
     assert n["note"].startswith("Nothing was sent.")

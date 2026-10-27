@@ -54,6 +54,9 @@
   const { STAGES, STAGE_SUBMITTED, STAGE_CREATED, NATURAL_DIR, SORT_FIELDS } = C;
   const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
           isLost, isTest, lostReason, followupOff, nameOf, cardTotal } = C;
+  // What the project's one email did, in words: shared with the Files page's "Send all proposals
+  // in one email" (done.js), so the board and the Files page say it the same way (crm-core.js).
+  const { scopeSendOutcome } = C;
   const fu = C.followup;
   const avatar = C.avatarHtml;
   /** The same chip with the identity colour taken OUT — for the drawer's notification
@@ -5211,14 +5214,18 @@
     const send = d.querySelector("#scope-send");
     const retryLine = d.querySelector("#scope-retry-line");
     const retry = d.querySelector("#scope-retry");
-    const post = async (btn, body) => {
+    // `route` "/send-all" is the project's ONE press (Hanz, 2026-10-27): it publishes every proposal
+    // the customer does not have yet, then sends the one email (main.py api_scope_group_send_all),
+    // the same action as the Files page's "Send all proposals in one email". The retry of the
+    // contacts it missed and the "send them again" for a lost result stay on the plain "/send".
+    const post = async (btn, body, route) => {
       btn.disabled = true;
       if (retryLine) retryLine.style.display = "none";
       say("Sending...");
       let r = null;
       let j = {};
       try {
-        r = await api("/api/portal/scope-group/" + encodeURIComponent(p.scope_group) + "/send", {
+        r = await api("/api/portal/scope-group/" + encodeURIComponent(p.scope_group) + (route || "/send"), {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
         j = await r.json().catch(() => ({}));
@@ -5241,7 +5248,7 @@
     if (send && p && p.scope_group) send.addEventListener("click", () => post(send,
       // A portal that reports the email's state (scope_send) works out what is new itself; the old
       // one is asked to send once, or again on purpose.
-      p.scope_send ? {} : { resend: send.dataset.resend === "1" }));
+      p.scope_send ? {} : { resend: send.dataset.resend === "1" }, "/send-all"));
     if (retry && p && p.scope_group) retry.addEventListener("click", () => post(retry, { retry_failed: true }));
     // The explicit answer to "the last send's result was lost": only this button sends resend_unknown.
     const again = d.querySelector("#scope-resend-unknown");
@@ -5259,94 +5266,8 @@
     }
   }
 
-  /** WHAT THE COMBINED SEND DID, IN WORDS (review findings 12, 15, 51): "Sent" only when the portal
-   *  says at least one contact got the email, every contact it did NOT reach named, the scopes it
-   *  left out named, and every refusal a sentence rather than a code ("Not Found" from a portal that
-   *  has no such route included). Returns {text, sent, retry}: `sent` when somebody got it (the
-   *  board reloads), `retry` when some contacts did not (the drawer offers to try only those).
-   *
-   *  Reads the delivery list the portal sends, [{email, delivered}] (under `results`, `deliveries`
-   *  or `recipients`), and falls back to an older portal's `emailed` / `recipients` address lists. */
-  function scopeSendOutcome(status, j, p) {
-    j = j || {};
-    const members = (p && p.scope_members) || [];
-    const nameOf = (id) => {
-      if (id && typeof id === "object") return id.label || nameOf(id.proposal_id || id.id);
-      const m = members.filter((x) => x && x.id === id)[0];
-      return (m && m.label) || "a scope";
-    };
-    const code = j.code || j.error;
-    if (status === 409 && code === "scopes_not_published") {
-      const missing = (j.missing || []).map((id) => members.filter((x) => x && x.id === id)[0] || { id: id });
-      const sentAlready = missing.filter((m) => m.sent).map((m) => m.label || "a scope");
-      const unsent = missing.filter((m) => !m.sent).map((m) => m.label || "a scope");
-      // A scope the customer ALREADY HAS (a project sent before it gained scopes) is never told to be
-      // published again: that would be a new revision, which reopens an approval (finding 1).
-      return { sent: false, retry: false, text: ["Nothing was sent.",
-        unsent.length ? "Publish every scope from its Files page first. Not published yet: " + unsent.join(", ") + "." : "",
-        sentAlready.length ? "Already with the customer as its own proposal, and not yet part of this project's email on the portal: " + sentAlready.join(", ") + ". Do not send it again; ask Hanz." : "",
-      ].filter(Boolean).join(" ") };
-    }
-    if (status === 409 && code === "nothing_to_send") {
-      const lostIds = Array.isArray(j.unknown) ? j.unknown : [];
-      // Scopes not published yet are why there is nothing to send, never "the customer already
-      // has every scope" (round 3).
-      // A member the customer already has (`sent`) is never told to be published again (finding 1).
-      const unpub = (Array.isArray(j.not_included) ? j.not_included : [])
-        .filter((id) => !members.some((x) => x && x.id === id && x.sent)).map(nameOf);
-      const unpubText = unpub.length ? " Not published yet: " + unpub.join(", ") + ". " + (unpub.length === 1
-        ? "Publish it from its Files page, then email it from here." : "Publish them from their Files pages, then email them from here.") : "";
-      if (lostIds.length) {
-        return { sent: false, retry: false, text: "Nothing new was sent. The result of the last send was lost for: " + lostIds.map(nameOf).join(", ") + ". Check the thread, then send again." + unpubText };
-      }
-      if (unpub.length) return { sent: false, retry: false, text: "Nothing was sent." + unpubText };
-      return { sent: false, retry: false, text: "Nothing was sent: the customer already has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here." };
-    }
-    if (code === "send_not_recorded") {
-      // The portal could not stamp the send before the first email, so it stopped: nobody was mailed.
-      return { sent: false, retry: false, text: "Nothing was sent: the portal could not record the send, so it stopped before emailing anybody. Try again in a minute." };
-    }
-    if (status === 502 && code === "delivery_failed") {
-      const who = (j.results || j.deliveries || j.recipients || []).map((x) => (x && x.email) || x).filter((x) => typeof x === "string");
-      return { sent: false, retry: false, text: "Nobody got the email" + (who.length ? " (" + who.join(", ") + ")" : "") + ". Nothing was marked as sent. Check the addresses, then try again." };
-    }
-    if (status === 404 && (!code || j.detail === "Not Found")) {
-      return { sent: false, retry: false, text: "Nothing was sent. The customer portal does not have the project email yet: it needs an update. Ask Hanz." };
-    }
-    if (!(status >= 200 && status < 300) || j.ok === false) {
-      // The tool's own refusals carry a code AND a sentence (`error`); the portal's carry a code.
-      const words = { no_contact_email: "None of these scopes has a customer email. Add a contact first.",
-                      group_not_found: "The portal has no scope of this project yet. Publish one first." };
-      if (!j.code && words[j.error]) return { sent: false, retry: false, text: "Nothing was sent. " + words[j.error] };
-      return { sent: false, retry: false, text: "Couldn't send it. " + (j.error || j.detail || ("HTTP " + status)) };
-    }
-    if (j.already_sent) return { sent: false, retry: false, text: "The customer already has this email. Nothing was sent again." };
-    // Who got it and who did not.
-    let delivered = [];
-    let failed = [];
-    const list = [j.results, j.deliveries, j.recipients].filter((x) => Array.isArray(x) && x.some((y) => y && typeof y === "object"))[0];
-    if (list) {
-      list.forEach((x) => { if (x && x.email) (x.delivered ? delivered : failed).push(String(x.email)); });
-    } else {
-      delivered = (j.emailed || []).map(String);
-      const got = delivered.map((e) => e.toLowerCase());
-      failed = (j.recipients || []).map(String).filter((e) => got.indexOf(e.toLowerCase()) < 0);
-    }
-    const left = (j.not_included || []).map(nameOf);
-    const leftText = left.length ? " Not in this email (publish it first): " + left.join(", ") + "." : "";
-    if (!delivered.length) {
-      return { sent: false, retry: false, text: "Nobody got the email" + (failed.length ? " (" + failed.join(", ") + ")" : "") + ". Nothing was marked as sent. Check the addresses, then try again." + leftText };
-    }
-    const n = delivered.length;
-    // recorded:false: the emails went out but the portal could not write down that they did. Its
-    // scopes show as being sent for a few minutes, then as "result lost" if the result never
-    // arrives, and nobody should press send again before looking.
-    const unrecorded = j.recorded === false
-      ? " The portal could not record this send yet. If its result never arrives, these scopes will show as \"result lost\" in a few minutes. Check the thread before sending again." : "";
-    return { sent: true, retry: failed.length > 0, unrecorded: j.recorded === false,
-      text: "Sent to " + n + " contact" + (n === 1 ? "" : "s") + ", one email with every scope."
-        + (failed.length ? " It did NOT reach: " + failed.join(", ") + "." : "") + leftText + unrecorded };
-  }
+  // scopeSendOutcome lives in crm-core.js since 2026-10-27 (destructured above): the Files page's
+  // "Send all proposals in one email" words its answers through the same function.
 
   /** The button, its confirmation, and what it does. Called by BOTH renderers.
    *

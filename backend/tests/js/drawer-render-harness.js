@@ -244,10 +244,9 @@ const FN_NAMES = [
   // BOTH renderers embed scopeHtml in their Proposal panel and BOTH call wireScope at the end, so
   // leaving either out is a ReferenceError on every drawer, sent and unsent at once.
   "scopeHtml", "wireScope",
-  // WHAT THE COMBINED SEND DID, IN WORDS (2026-10-24 hardening). TWELFTH addition: wireScope's
-  // send and retry buttons word every answer through it, so leaving it out is a ReferenceError on
-  // the press, which is the only place the delivery truth is said.
-  "scopeSendOutcome",
+  // scopeSendOutcome (the TWELFTH addition, 2026-10-24) MOVED to crm-core.js on 2026-10-27, so the
+  // Files page words its "Send all proposals in one email" the same way: it is bound now through
+  // portal.js's own `const { scopeSendOutcome } = C;` line, read above with the other imports.
   // A SCOPE GROUP'S FOLLOW-UP (2026-10-25): one reminder for the whole project, and the "Decide the
   // other scopes" card. THIRTEENTH addition: followupTaskHtml calls fuIsGroup, fuGroupHtml and
   // followupDecisionHtml on every task card (which reach fuScopeNow, fuScopeOpen and fuScopeChip),
@@ -2693,13 +2692,13 @@ async function runScenario(name, s) {
     out.scope.sent = { html: dom.html, eligible: page.eligible(),
                        missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
     net.requests.length = 0;
-    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send$/, { status: 409,
+    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send(-all)?$/, { status: 409,
       body: { ok: false, error: "scopes_not_published", missing: ["scope-a", "scope-c"] } }]];
     await q("#scope-send").fire("click");
     await tick();
     out.scope.notPublished = { note: q("#scope-note").textContent,
                                requests: net.requests.filter((r) => /scope-group/.test(r.path)) };
-    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send$/, { status: 200,
+    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send(-all)?$/, { status: 200,
       body: { ok: true, already_sent: false, emailed: ["a@x.test", "b@x.test"] } }]];
     await q("#scope-send").fire("click");
     await tick();
@@ -2798,7 +2797,7 @@ async function runScenario(name, s) {
     sentData.proposal.project_name = "Acme HQ";
     const press = async (sel, answer) => {
       net.requests.length = 0;
-      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send$/, answer]];
+      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send(-all)?$/, answer]];
       await q(sel).fire("click");
       await tick();
       return { note: q("#scope-note").textContent,
@@ -2846,6 +2845,15 @@ async function runScenario(name, s) {
       body: { ok: false, code: "portal_not_ready", error: "The customer portal has not been updated for projects with several proposals yet." } });
     out.honest.sentMissing = await press("#scope-send", { status: 409,
       body: { ok: false, error: "scopes_not_published", missing: ["hs-a", "hs-c"] } });
+    // THE SEND-ALL'S OWN REFUSALS (2026-10-27): the press published nothing, or stopped midway, and
+    // emailed nobody. The server's sentence names each proposal; the drawer says it as it is.
+    out.honest.sendAllBlocked = await press("#scope-send", { status: 409,
+      body: { ok: false, code: "not_ready_to_send", blocked: [{ id: "hs-c", label: "Lab 2", error: "x" }],
+              error: "Nothing was sent. Lab 2: build its files on its Files page first." } });
+    out.honest.sendAllPublishFailed = await press("#scope-send", { status: 502,
+      body: { ok: false, code: "publish_failed", published: [{ id: "hs-b", label: "Lab 1", revision_no: 2 }],
+              failed: { id: "hs-c", label: "Lab 2" },
+              error: "Nothing was emailed. Lab 2 could not be published (Portal error.). Lab 1 was published and will go in the email. Press the button again in a minute to finish." } });
     // Nothing new to email: no button, the reason instead.
     row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
     page.renderDetail("hs-b", sentData);

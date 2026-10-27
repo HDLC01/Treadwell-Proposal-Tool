@@ -1907,9 +1907,26 @@ def api_portal_publish(draft_id: str, request: Request,
     modal sends `{emails: [...]}` (intake contact + extras); we validate + forward
     them so the portal emails/authorizes every recipient. Malformed JSON or a
     wrong-typed `emails` yields FastAPI's 422 — never a 500 — keeping the sync
-    handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop."""
+    handler (threadpool) so the proxy's blocking httpx call doesn't stall the loop.
+
+    TWO HALVES (2026-10-27), so the project's "Send all proposals in one email" publishes each
+    proposal through exactly this code: _prepare_publish runs every check and builds the document
+    and writes NOTHING; _commit_publish mints the revision and posts it. The send-all prepares every
+    proposal before it commits any, so one that cannot go stops them all."""
+    prep = _prepare_publish(draft_id, request, payload)
+    if isinstance(prep, Response):
+        return prep
+    return _commit_publish(prep)
+
+
+def _prepare_publish(draft_id: str, request: Request, payload: Optional[PortalPublishIn],
+                     row: Optional[Dict[str, Any]] = None) -> Any:
+    """Every check of a publish, and the document it would freeze, with NOTHING written: a refusal
+    (a JSONResponse, or an HTTPException raised) or the prepared send _commit_publish completes.
+    `row` is the stored draft when the caller has just read it."""
     draft_id = _safe_id(draft_id)
-    row = drafts.load_draft(draft_id)
+    if row is None:
+        row = drafts.load_draft(draft_id)
     if not row:
         raise HTTPException(404, "Draft not found")
     # A SCOPE OF A PROJECT IS SENT AS ONE (drafts' scope-group block). The portal reads
@@ -2096,7 +2113,16 @@ def api_portal_publish(draft_id: str, request: Request,
             "error": "Not sent — this proposal changed after you downloaded it (a change was "
                      "saved from another page or computer, or the tool was updated). Download it "
                      "again, check it, then send."})
+    return {"draft_id": draft_id, "row": row, "by": by, "body": body, "emails": emails,
+            "digest": digest, "sent_docs": sent_docs, "sent_pdf": sent_pdf}
 
+
+def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
+    """The writing half of a publish (_prepare_publish made every check): mint the revision, keep
+    its document, post it to the portal, and take both back when the portal refuses."""
+    draft_id, row, by, body = prep["draft_id"], prep["row"], prep["by"], prep["body"]
+    emails, digest = prep["emails"], prep["digest"]
+    sent_docs, sent_pdf = prep["sent_docs"], prep["sent_pdf"]
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
@@ -8360,6 +8386,198 @@ async def api_scope_group_send(group_id: str, request: Request,
             body["resend_unknown"] = True
     return await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
                              json.dumps(body).encode("utf-8"), "application/json")
+
+
+# ─── "Send all proposals in one email" (Hanz, 2026-10-27) ──
+# "When I send the proposals out it should send out without publishing. That's the point. And it
+# must come in one email only." One press publishes every proposal of the project that the customer
+# does not have at its current document, then asks the portal for the project's ONE combined email.
+# Every proposal is checked (and its document built) before any is published, so a proposal that
+# cannot go stops the whole press and the customer is never half-sent. Never a per-proposal email:
+# a scope's publish emails nobody (the portal holds it for the combined send).
+class ScopeSendAllIn(BaseModel):
+    """POST /api/portal/scope-group/{gid}/send-all. `message` rides the one email. `draft_id` is the
+    proposal whose Files page pressed it and `publish` that page's publish body (PortalPublishIn:
+    recipients, estimator, deposit, attachments, notify picks, the stale-copy guards); its
+    recipients, follow-up opt-outs and estimator apply to every proposal published by the press. The
+    drawer sends neither, and each proposal then goes to its own customer contact and estimator."""
+    message: str = ""
+    resend: bool = False
+    draft_id: Optional[str] = None
+    publish: Optional[PortalPublishIn] = None
+
+
+def _send_all_needs_publish(draft_id: str, data: Dict[str, Any]) -> bool:
+    """Does this proposal have to be published before the project's email can carry it? Yes when it
+    was never published (no revision: create_revision runs on every publish and is taken back when
+    one fails), or when its document (the `proposal_payload` the customer's PDF is built from)
+    differs from the one its last revision froze. A proposal the customer already has, unchanged, is
+    never published again: a new revision can reopen an approval."""
+    rev_no = drafts.latest_revision_no(draft_id)
+    if not rev_no:
+        return True
+    before = ((drafts.get_revision(draft_id, rev_no) or {}).get("data") or {}).get("proposal_payload")
+    return _canonical_sha256(data.get("proposal_payload")) != _canonical_sha256(before)
+
+
+def _send_all_block_reason(refusal: Any) -> str:
+    """What the estimator does about one proposal's refused publish, in a few words."""
+    if isinstance(refusal, HTTPException):
+        detail = str(refusal.detail or "")
+        if detail == "missing_estimator":
+            return "choose its assigned estimator on its Files page first"
+        if detail in ("invalid_estimator", "invalid_email", "too_many_emails"):
+            return "check its recipients and estimator on its Files page first"
+        return detail.rstrip(".") or "it could not be published"
+    try:
+        j = json.loads(bytes(refusal.body).decode("utf-8"))
+    except Exception:  # noqa: BLE001 — any refusal still blocks, in general words
+        j = {}
+    code = j.get("code")
+    if code == STALE_DOCUMENT_CODE:
+        return ("its document does not match its price. Open its Proposal step, press Continue, "
+                "then send again")
+    if code == "document_changed":
+        return "it changed after this page read it. Reload, check it, then send again"
+    return str(j.get("error") or "it could not be published").rstrip(".")
+
+
+@app.post("/api/portal/scope-group/{group_id}/send-all")
+async def api_scope_group_send_all(group_id: str, request: Request,
+                                   payload: Optional[ScopeSendAllIn] = None) -> Response:
+    """ONE PRESS, ONE EMAIL: publish every live proposal of the project the customer does not have at
+    its current document (_send_all_needs_publish, through the publish's own _prepare_publish and
+    _commit_publish), then the combined send exactly once (the same body api_scope_group_send
+    forwards). Never a per-proposal email.
+
+    Refused before anything is published or sent, flat {ok: false, code, error}: 400
+    invalid_scope_group / not_in_group, 404 group_not_found, 409 test_mix, the capability refusals
+    (_scope_groups_refusal), and 409 not_ready_to_send with `blocked` [{id, label, error}] when any
+    proposal cannot be published ("Room 2: build its files on its Files page first"). A publish the
+    portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
+    Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
+    label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    from starlette.concurrency import run_in_threadpool
+    payload = payload or ScopeSendAllIn()
+    planned = await run_in_threadpool(_send_all_publish, group_id, request, payload)
+    if isinstance(planned, Response):
+        return planned
+    body: Dict[str, Any] = {"by": _user_email(request) or ""}
+    msg = (payload.message or "").strip()
+    if msg:
+        body["message"] = msg[:2000]
+    if payload.resend:
+        body["resend"] = True
+    resp = await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
+                             json.dumps(body).encode("utf-8"), "application/json")
+    try:
+        j = json.loads(bytes(resp.body).decode("utf-8"))
+    except Exception:  # noqa: BLE001 — not JSON: handed back exactly as the portal wrote it
+        return resp
+    if not isinstance(j, dict):
+        return resp
+    j["published"] = planned
+    return JSONResponse(status_code=resp.status_code, content=j)
+
+
+def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) -> Any:
+    """The publishing half of the send-all: a refusal Response, or the list of what it published."""
+    members = drafts._group_rows(group_id)
+    if not members:
+        return JSONResponse(status_code=404, content={
+            "ok": False, "code": "group_not_found",
+            "error": "Nothing was sent. This project has no proposals any more. Reload the page."})
+    rows = {m["id"]: drafts.load_draft(m["id"]) for m in members}
+    live = [m for m in members if rows.get(m["id"])]
+    page_id = (payload.draft_id or "").strip() or None
+    if page_id:
+        page_id = _safe_id(page_id)
+    # A TEST PROJECT AND A REAL ONE ARE NEVER ONE PROJECT, asked before anything else: the live-member
+    # rule leaves the other kind out of `members`, so the stored drafts are asked directly.
+    probe = page_id or (live[0]["id"] if live else None)
+    probe_row = rows.get(probe) if probe in rows else (drafts.load_draft(probe) if probe else None)
+    if probe_row:
+        mixed = drafts.scope_test_mix(probe, probe_row.get("data") or {}, group_id)
+        if mixed:
+            return JSONResponse(status_code=409, content={"ok": False, "code": "test_mix",
+                                                          "error": "Nothing was sent. " + mixed})
+    if page_id and page_id not in {m["id"] for m in live}:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "code": "not_in_group",
+            "error": "Nothing was sent. This proposal is not one of this project's proposals any "
+                     "more. Reload the page."})
+    not_ready = _scope_groups_refusal()
+    if not_ready is not None:
+        return not_ready
+    page = payload.publish
+    page_est = (page.assigned_estimator or "").strip() if page else ""
+    stored_ests = [str((rows[m["id"]].get("data") or {}).get("assigned_estimator") or "").strip()
+                   for m in live]
+    group_est = next((e for e in stored_ests if e), "")
+    prepared: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    blocked: List[Dict[str, Any]] = []
+    for m in live:
+        row = rows[m["id"]]
+        data = row.get("data") or {}
+        label = m.get("label") or "A proposal"
+        if not _send_all_needs_publish(m["id"], data):
+            continue
+        pp = data.get("proposal_payload")
+        if not data.get("generate_result") or not (isinstance(pp, dict) and pp.get("values")):
+            blocked.append({"id": m["id"], "label": label,
+                            "error": "build its files on its Files page first"})
+            continue
+        if m["id"] == page_id and page is not None:
+            one = page
+        else:
+            own = str(data.get("assigned_estimator") or "").strip()
+            one = PortalPublishIn(
+                emails=list(page.emails) if page else [],
+                no_followups=list(page.no_followups) if page else [],
+                assigned_estimator=page_est or own or group_est,
+                has_cover_letter=bool(pp.get("cover_letter_enabled")))
+        if not one.emails and not str(data.get("contact_email") or "").strip():
+            blocked.append({"id": m["id"], "label": label,
+                            "error": "add a customer email on its Files page first"})
+            continue
+        try:
+            prep = _prepare_publish(m["id"], request, one, row=row)
+        except HTTPException as exc:
+            prep = exc
+        if isinstance(prep, (Response, HTTPException)):
+            blocked.append({"id": m["id"], "label": label, "error": _send_all_block_reason(prep)})
+            continue
+        prepared.append((m, prep))
+    if blocked:
+        log.warning("send-all refused for group %s: %s", _log_safe(group_id),
+                    "; ".join("%s (%s)" % (b["id"], b["error"]) for b in blocked))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "not_ready_to_send", "blocked": blocked,
+            "error": "Nothing was sent. " + " ".join(
+                "%s: %s." % (b["label"], b["error"]) for b in blocked)})
+    published: List[Dict[str, Any]] = []
+    for m, prep in prepared:
+        label = m.get("label") or "A proposal"
+        try:
+            out = _commit_publish(prep)
+        except Exception as exc:  # noqa: BLE001 — said in words, and nothing is emailed
+            reason = exc.detail if isinstance(exc, HTTPException) else "the portal did not take it"
+            log.warning("send-all stopped for group %s: %s was not published (%s)",
+                        _log_safe(group_id), _log_safe(m["id"]), reason)
+            done = ", ".join(p["label"] for p in published)
+            return JSONResponse(status_code=502, content={
+                "ok": False, "code": "publish_failed", "published": published,
+                "failed": {"id": m["id"], "label": label},
+                "error": "Nothing was emailed. %s could not be published (%s)." % (label, reason)
+                         + (" %s %s published and will go in the email." % (
+                             done, "was" if len(published) == 1 else "were") if done else "")
+                         + " Press the button again in a minute to finish."})
+        published.append({"id": m["id"], "label": label,
+                          "revision_no": out.get("revision_no") if isinstance(out, dict) else None})
+    return published
 
 
 @app.get("/api/scope-group/{group_id}/workbook")

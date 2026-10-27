@@ -355,7 +355,8 @@ def test_every_replay_caller_opts_out_of_persisting(caller):
 
 
 @pytest.mark.parametrize("caller", ["api_admin_proposal_pdf", "api_draft_revision_files",
-                                    "api_portal_publish", "api_draft_documents"])
+                                    # The publish renders in its checking half since 2026-10-27.
+                                    "_prepare_publish", "api_draft_documents"])
 def test_the_saved_payload_readers_all_go_through_the_one_render(caller):
     """Since 2026-09-25 the customer PDF, a revision's files, Send and the Files page's downloads
     render through `_render_documents`, which is the persist=False replay the guard above pins.
