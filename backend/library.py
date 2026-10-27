@@ -730,12 +730,25 @@ def _as_float(v: Any) -> Optional[float]:
 
 
 def list_items() -> List[Dict[str, Any]]:
+    return list_items_and_category_column()[0]
+
+
+def list_items_and_category_column() -> "tuple[List[Dict[str, Any]], bool]":
+    """The materials, and whether this database has the `material_categories` column yet.
+
+    select("*") names every column a row has, so a row WITHOUT the key is a database that has not
+    had backend/ops/item_categories.sql applied. The Items tab reads the answer before it offers a
+    Category select: a pick on such a database fails, and a failed save stays queued with every
+    later edit of that row folded into it, so one pick would make the material unsaveable. An empty
+    library cannot tell, and answers True: it has no row to pick a category on."""
     sb = get_client()
     res = (sb.table(ITEMS).select("*")
            .is_("deleted_at", "null")
            .order("name")
            .limit(2000).execute())
-    return [_shape_item(r) for r in (res.data or [])]
+    rows = res.data or []
+    has_column = not rows or any("material_categories" in r for r in rows)
+    return [_shape_item(r) for r in rows], has_column
 
 
 def get_item(item_id: str) -> Optional[Dict[str, Any]]:

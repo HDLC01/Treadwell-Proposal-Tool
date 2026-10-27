@@ -620,6 +620,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // lifted here. CATS is the store the page reads off GET /api/library/items; a scenario hands it in.
   var categoryBarSig = "";
   var CATS = state.CATS || null;
+  var CATS_WRITABLE = state.CATS_WRITABLE === undefined ? true : state.CATS_WRITABLE;
   ${grab(/^  var CATEGORY_NONE = .*;$/m, "the CATEGORY_NONE declaration")}
   ${grab(/^  var DIVISION_WORK_TYPE = \{.*\};$/m, "the DIVISION_WORK_TYPE declaration")}
   ${fn("categoryWorkTypes")}
@@ -716,6 +717,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("patchSoon").replace("function patchSoon(", "function realPatchSoon(")}
   ${fn("arm")}
   ${fn("requeueFailed")}
+  ${fn("dropRefusedCategory")}
   ${fn("flush")}
   ${fn("saveNow")}
   ${fn("flushAllPending")}
@@ -1695,7 +1697,10 @@ async function conflictChecks() {
     ${fn("adoptSaved")}
     ${fn("adoptConflict")}
     ${fn("arm")}
+    // flush calls it on a refused save: a category pick the database has no column for.
+    var CATS_WRITABLE = true;
     ${fn("requeueFailed")}
+    ${fn("dropRefusedCategory")}
     ${fn("flush")}
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
@@ -1726,7 +1731,8 @@ async function conflictChecks() {
              // exists for. adoptConflict no longer produces it — that is the point of the fix —
              // so the guard is defence for the next code path that empties this buffer, and a
              // test of it has to construct the state deliberately rather than pretend otherwise.
-             dropBuffer: function () { pendingPatch = {}; } };
+             dropBuffer: function () { pendingPatch = {}; },
+             catsWritable: function () { return CATS_WRITABLE; } };
   `);
 
   /** Just enough DOM for the row-leave rules: one item row per id, one focusable control per
@@ -2088,6 +2094,55 @@ async function conflictChecks() {
       cancelledSavedRowClean,
       noErrors: [a, f, r, w, d, l, n].every((x) => x.hooks.errors.length === 0),
     };
+  }
+
+  // ── EXECUTED: a category pick on a database WITHOUT the column (item_categories.sql not run) ──
+  // The real patchSoon / saveNow / flush, with the server answering update_item's 400. The pick must be
+  // taken back out of the failed save, not requeued: requeued, every later edit of the row is folded into
+  // the same payload and fails with it, so the material cannot be saved again until a reload.
+  {
+    const MISSING = "Categories can't be saved on this database yet: it needs the material_categories " +
+      "column (backend/ops/item_categories.sql).";
+    const refused = { status: 400, ok: false, json: async () => ({ detail: MISSING }) };
+    const okItem = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    const pick = (x, id) => {
+      x.state.ITEMS.filter((it) => it.id === id)[0].material_categories = { epoxy: "epoxy-patch" };
+      x.s.patchSoon("items", id, { material_categories: { epoxy: "epoxy-patch" } });
+    };
+    // 1. The pick alone: refused, dropped, the row clean again, the selects withdrawn.
+    const a = run409();
+    a.hooks.autoReply = refused;
+    pick(a, "i1");
+    const aStill = await a.s.saveNow("items", "i1");
+    const alone = { stillUnsaved: aStill, pending: a.s.pending(), marked: !!a.s.fresh().items.i1,
+      writable: a.s.catsWritable(), model: a.state.ITEMS[0].material_categories, said: a.hooks.said.slice(-1)[0] };
+    // ...and the NEXT edit of that material (a cost) saves, with no category riding on it.
+    a.hooks.autoReply = okItem;
+    a.type("i1", "unit_cost", "50");
+    const nextStill = await a.s.saveNow("items", "i1");
+    alone.nextSaved = nextStill === false && !a.s.fresh().items.i1;
+    alone.nextBody = a.hooks.bodies.slice(-1)[0] || "";
+    // 2. The pick folded into a cost edit: the cost is kept for the next press, the pick is not.
+    const b = run409();
+    b.hooks.autoReply = refused;
+    pick(b, "i1");
+    b.type("i1", "unit_cost", "61");
+    await b.s.saveNow("items", "i1");
+    const mixed = { pending: b.s.pending(), marked: !!b.s.fresh().items.i1 };
+    b.hooks.autoReply = okItem;
+    await b.s.saveNow("items", "i1");
+    mixed.resentBody = b.hooks.bodies.slice(-1)[0] || "";
+    mixed.thenClean = b.s.pending() === 0 && !b.s.fresh().items.i1;
+    // 3. Any OTHER refusal of a category save is still requeued, as every failed save is.
+    const c = run409();
+    c.hooks.autoReply = { status: 500, ok: false, json: async () => ({ detail: "nope" }) };
+    pick(c, "i1");
+    await c.s.saveNow("items", "i1");
+    const other = { pending: c.s.pending(), writable: c.s.catsWritable(),
+      model: c.state.ITEMS[0].material_categories };
+    out.categoryRefused = { alone, mixed, other,
+      noErrors: [a, b, c].every((x) => x.hooks.errors.length === 0) };
   }
 
   // ── EXECUTED: a second save cannot go out while the first is on the wire ────
@@ -7035,6 +7090,11 @@ async function manualSaveChecks() {
   const bare = build({ ITEMS: JSON.parse(JSON.stringify(MATS)) });
   bare.api.renderItems();
   const bareCell = cellOf(rowOf(bare.dom.nodes["items-body"].innerHTML, "c1"));
+  // A database without the material_categories column (GET /api/library/items' categories_writable false):
+  // no select to pick from, because a pick there cannot be saved.
+  const noCol = build({ ITEMS: JSON.parse(JSON.stringify(MATS)), CATS: CATS, CATS_WRITABLE: false });
+  noCol.api.renderItems();
+  const noColCell = cellOf(rowOf(noCol.dom.nodes["items-body"].innerHTML, "c1"));
 
   // THE EDITOR: the real onItemEdit on a category select, through the scope's queue.
   const target = (id, wt, value) => ({
@@ -7065,6 +7125,7 @@ async function manualSaveChecks() {
   out.categoryColumn = {
     cells, epoxyOptions,
     bare: { selects: selects(bareCell), noneSetUp: /None set up/.test(bareCell) },
+    noColumn: { selects: selects(noColCell), says: /Not on this database yet/.test(noColCell) },
     edit: { afterAdd, modelAfterAdd, afterClear, snapshotUntouched: JSON.stringify(beforeMap) === '{"epoxy":"epoxy-patch"}' },
     patch: facet("Patch"), floor: facet("floor"), none: facet(NONE), off: facet(""),
     barOptions: (facet("").bar.match(/<option value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]),

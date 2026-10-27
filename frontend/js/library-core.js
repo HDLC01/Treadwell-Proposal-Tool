@@ -803,22 +803,36 @@
     return null;
   }
 
-  /** An assembly has no category of its own in the Admin list; its free-text `category` names one
-   *  when it matches a heading of the work type (case and spacing ignored). Otherwise null. */
-  function assemblyCategory(asm, store, wt) {
+  /** An assembly has no category of its own in the Admin list. Its free-text `category` (the rail's
+   *  Scope) names one when it matches a heading of the work type (case and spacing ignored). Failing
+   *  that, which is every seeded assembly (their Scope is the division: "Epoxy", "Polished Concrete"),
+   *  it sits under the heading ITS MATERIALS agree on: every line whose material (looked up in `items`)
+   *  is filed under a heading of this work type names the same one. Lines whose material is filed
+   *  nowhere do not vote; two headings between them is no heading. Otherwise null. */
+  function assemblyCategory(asm, store, wt, items) {
     var want = String((asm && asm.category) || "").replace(/\s+/g, " ").trim().toLowerCase();
-    if (!want) return null;
     var list = categoriesFor(store, wt);
-    for (var i = 0; i < list.length; i++) {
+    for (var i = 0; want && i < list.length; i++) {
       if (list[i].name.replace(/\s+/g, " ").trim().toLowerCase() === want) return list[i];
     }
-    return null;
+    var lines = asm && asm.lines instanceof Array ? asm.lines : [];
+    var agreed = null;
+    for (var j = 0; j < lines.length; j++) {
+      var id = lines[j] && lines[j].item_id;
+      var c = id ? itemCategory(findItem(items || [], id), store, wt) : null;
+      if (!c) continue;
+      if (agreed && agreed.id !== c.id) return null;
+      agreed = c;
+    }
+    return agreed;
   }
 
   /** Group `keys` under the work type's headings, in the Admin order, with OTHER LAST. `catOf(key)`
    *  is each key's {id, name} or null. A heading nothing sits under is left out; keys keep the order
    *  they were given within their group. Returns [{id, name, other, keys}], and [] when the work type
-   *  has no headings at all, which is the caller's cue to draw its list ungrouped as it always was. */
+   *  has no headings at all, which is the caller's cue to draw its list ungrouped as it always was.
+   *  [] too when nothing is filed under any heading: a lone "Other" over the whole list, its subtotal
+   *  the whole takeoff, separates nothing. */
   function groupByCategory(keys, store, wt, catOf) {
     var list = categoriesFor(store, wt);
     if (!list.length) return [];
@@ -830,7 +844,8 @@
       for (var i = 0; c && i < groups.length; i++) if (groups[i].id === c.id) g = groups[i];
       (g || other).keys.push(k);
     });
-    return groups.concat([other]).filter(function (g) { return g.keys.length > 0; });
+    var drawn = groups.concat([other]).filter(function (g) { return g.keys.length > 0; });
+    return drawn.length === 1 && drawn[0].other ? [] : drawn;
   }
 
   return {

@@ -76,6 +76,7 @@ const out = {};
     addBoxes: (html.match(/data-ic-new="/g) || []).length,
     saysUncategorized: /Removing a category leaves its materials\s+uncategorized/.test(html),
     saysSeeded: /headings on Kyle's sheet/.test(html),
+    saysFixedLines: /Epoxy's patch is a flat\s+charge on the whole area/.test(html) && /Joint Filler and Dye cards sit under/.test(html),
     status: /id="ic-status"[^>]*>Saved\.</.test(html),
     emptyWtSays: /None yet/.test(html),
     escapes: admin.panel(Object.assign(clone(STORE), { work_types: Object.assign(clone(STORE.work_types),
@@ -130,12 +131,17 @@ function groupsOn(html) {
   const cards = [];
   const cre = /data-row-card="(\d+)"/g;
   while ((m = cre.exec(html))) cards.push({ i: Number(m[1]), at: m.index });
+  // ...and the condition cards (Joint Filler, Dye: their .sub line; Remove Existing: its switch), by key.
+  const conds = [];
+  const kre = /data-condfig="([a-z_]+)\.sub"|<div class="tk cond[^"]*">[\s\S]*?data-cond="([a-z_]+)"/g;
+  while ((m = kre.exec(html))) conds.push({ key: m[1] || m[2], at: m.index });
   out.forEach((g, k) => {
     const end = k + 1 < out.length ? out[k + 1].at : Infinity;
     g.cards = cards.filter((c) => c.at > g.at && c.at < end).map((c) => c.i);
+    g.conds = conds.filter((c) => c.at > g.at && c.at < end).map((c) => c.key);
     delete g.at;
   });
-  return { groups: out, cards: cards.map((c) => c.i) };
+  return { groups: out, cards: cards.map((c) => c.i), conds: conds.map((c) => c.key) };
 }
 const money = (t) => Number(String(t).replace(/[^0-9.\-]/g, ""));
 
@@ -185,10 +191,10 @@ async function main() {
   };
   const shownCost = (b, i) => money(b.doc.querySelector('[data-cost-for="' + i + '"]').textContent);
   out.grouped = {
-    groups: drawn.groups.map((x) => ({ id: x.id, name: x.name, keys: x.keys, cards: x.cards,
+    groups: drawn.groups.map((x) => ({ id: x.id, name: x.name, keys: x.keys, cards: x.cards, conds: x.conds,
       shown: money(x.shown), byCards: x.cards.reduce((s, i) => s + shownCost(g, i), 0),
       byHand: x.cards.reduce((s, i) => s + rowTotal(i), 0) })),
-    cards: drawn.cards, rows: g.api.model().takeoff.length,
+    cards: drawn.cards, conds: drawn.conds, rows: g.api.model().takeoff.length,
     moneyAutoOf: drawn.groups.map((x) => g.api.moneyAuto(x.cards.reduce((s, i) => s + rowTotal(i), 0))),
     shownText: drawn.groups.map((x) => x.shown),
     matTotalStill: /data-mat-total/.test(panel(g)),
@@ -227,6 +233,50 @@ async function main() {
   const rl = await boot({ blob: polishBlob(), reloaded: true, fetchHook: itemsHook(ITEMS, STORE) });
   out.reloaded = groupsOn(panel(rl)).groups.map((x) => [x.name, x.cards]);
 
+  // ── THE CONDITION CARDS, on and priced: each under its heading, its cost in that heading's subtotal ──
+  {
+    const on = (b) => { const m = b.api.model(); m.conditions.joint_filler = true; m.conditions.dye = true;
+                         b.api.renderPanel(); };
+    const read = (b) => {
+      const d = groupsOn(panel(b));
+      const cost = (key) => money(b.doc.querySelector('[data-condfig="' + key + '.cost"]').textContent);
+      return { groups: d.groups.map((x) => ({ name: x.name, cards: x.cards, conds: x.conds, shown: money(x.shown),
+        byCards: x.cards.reduce((sum, i) => sum + money(b.doc.querySelector('[data-cost-for="' + i + '"]').textContent), 0) +
+          x.conds.filter((k) => k !== "remove_existing_jf").reduce((sum, k) => sum + cost(k), 0) })),
+        jf: cost("joint_filler"), dye: cost("dye"), conds: d.conds };
+    };
+    const c = await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, STORE) });
+    on(c);
+    out.condCards = read(c);
+    // A typed measurement moves the condition card's subtotal in place, as it moves the card.
+    const before = c.dom.get("panels").htmlWrites;
+    P.typeInto(c, '[data-tk="0"][data-k="measurement"]', "20000");
+    const jfSub = c.doc.querySelector('[data-cat-sub="c:joint_filler,c:remove_existing_jf"]');
+    out.condCards.repaint = { rebuilt: c.dom.get("panels").htmlWrites !== before, shown: jfSub ? jfSub.textContent : null,
+      card: c.doc.querySelector('[data-condfig="joint_filler.cost"]').textContent };
+    // The reserved Dye material filed under Patch on the Items tab: the Dye card goes with it.
+    const filedItems = ITEMS.concat([{ id: "dye", name: "Dye", unit: "SF", buy_qty: 1, unit_cost: 0.14, coverage: 1,
+      material_categories: { polish: "polish-patch" } }]);
+    const f = await boot({ blob: polishBlob(), items: filedItems, fetchHook: itemsHook(filedItems, STORE) });
+    on(f);
+    out.condCards.dyeFiled = read(f);
+    // Off the root (an Epoxy section) the cards are not drawn at all, so nothing is added there.
+  }
+
+  // ── ASSEMBLIES WITH NO SCOPE HEADING: the heading their materials agree on ──
+  {
+    const raw = clone(P.ASMS);   // no Scope that names a heading, as the seeded library has
+    const filed = (map) => clone(P.ITEMS).map((it) => map[it.id] ? Object.assign(it, { material_categories: { polish: map[it.id] } }) : it);
+    const agree = filed({ i1: "polish-floor", i3: "polish-floor", i4: "polish-patch" });
+    const a = await boot({ blob: polishBlob(), asms: raw, items: agree, fetchHook: itemsHook(agree, STORE) });
+    // a1 (i1, i3) both Floor; a5 (i4) and the Densifier row Patch; a2 (i2, filed nowhere) Other.
+    out.derived = groupsOn(panel(a)).groups.filter((x) => x.cards.length).map((x) => [x.name, x.cards]);
+    const split = filed({ i1: "polish-floor", i3: "polish-patch", i4: "polish-patch" });
+    const b = await boot({ blob: polishBlob(), asms: raw, items: split, fetchHook: itemsHook(split, STORE) });
+    // a1's two materials disagree: no heading, so Other.
+    out.derivedSplit = groupsOn(panel(b)).groups.filter((x) => x.cards.length).map((x) => [x.name, x.cards]);
+  }
+
   // ── 3. nothing moves: the same edit, with and without the headings ──
   const withCats = await priceOf(await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, STORE) }));
   const withoutCats = await priceOf(await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, undefined) }));
@@ -238,21 +288,28 @@ async function main() {
 
 /** The Epoxy job of epoxy-page-harness.js, on the library the seed plans, with and without the headings. */
 async function epoxyTotals() {
-  const asms = clone(PLAN.assemblies).map((a) => /^Cove/.test(a.name) ? Object.assign(a, { category: "Cove" }) : a);
-  const items = clone(PLAN.items).map((it, k) => k % 3 === 0
-    ? Object.assign(it, { material_categories: { epoxy: "epoxy-liquids" } }) : it);
+  // THE SEEDED ASSEMBLIES, UNTOUCHED: their Scope is the division ("Epoxy"), which names no heading, so a
+  // heading can only come from their materials. Each one's materials are filed on the Items tab instead.
+  const asms = clone(PLAN.assemblies);
   const norm = (t) => String(t).replace(/\s+/g, " ").trim();
   const flake = asms.find((a) => norm(a.name) === "MACRO Flake Single Broadcast");
   const cove = asms.find((a) => norm(a.name) === norm('Cove: Epoxy 4"'));
+  const fileLines = (asm, id) => (it) => asm.lines.some((l) => l.item_id === it.id)
+    ? Object.assign(it, { material_categories: { epoxy: id } }) : it;
+  const items = clone(PLAN.items).map(fileLines(flake, "epoxy-liquids")).map(fileLines(cove, "epoxy-cove"));
+  // The flake with ONE of its materials filed elsewhere: its materials disagree, so it has no heading.
+  const odd = flake.lines[flake.lines.length - 1].item_id;
+  const split = clone(items).map((it) => it.id === odd ? Object.assign(it, { material_categories: { epoxy: "epoxy-extras" } }) : it);
   const TRAVEL = { id: "travel", name: "Travel", rate: 33, unit: "hours", guys_auto: true, sort: -1, favorite: true,
                    default_work_types: [], default_on: true };
   const labor = [TRAVEL].concat(PLAN.labor.map((r) => Object.assign({}, r, { default_on: true })));
   const calc = PLAN.labor_calc.map((r) => Object.assign({}, r, { days: null, rate: null, sf_per_day: null, crew: null }));
   const draft = () => P.blob({ work_type: "epoxy", system_1_sf: 6000, system_2_sf: "", cove_1_lf: 300, cove_2_lf: "",
     polish_estimate: { version: 2, conditions: { taxable: true, prevailing_wage: false, remodel_tax: false } } });
-  async function run(cats) {
-    const b = P.build({ blob: draft(), asms: asms, items: items, labor: labor, laborCalc: calc,
-                        fetchHook: itemsHook(items, cats) });
+  async function run(cats, lib) {
+    lib = lib || items;
+    const b = P.build({ blob: draft(), asms: asms, items: lib, labor: labor, laborCalc: calc,
+                        fetchHook: itemsHook(lib, cats) });
     await b.api.init();
     await flush();
     b.api.setAssembly(0, flake.name);
@@ -265,7 +322,11 @@ async function epoxyTotals() {
              lump: saved.proposal_lump_sum, computed: saved.computed_bid && saved.computed_bid.lump_sum,
              saves: JSON.stringify(b.rec.saves) };
   }
-  return { withCats: await run(STORE), withoutCats: await run(undefined) };
+  return { withCats: await run(STORE), withoutCats: await run(undefined),
+           split: (await run(STORE, split)).groups,
+           // Nothing filed anywhere: a lone Other over the whole takeoff separates nothing, so it is drawn flat.
+           noneFiled: (await run(STORE, clone(PLAN.items))).groups,
+           scopes: [flake.category, cove.category] };
 }
 
 main().catch((err) => { console.error(err && err.stack || err); process.exit(1); });

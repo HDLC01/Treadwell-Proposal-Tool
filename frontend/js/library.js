@@ -38,6 +38,9 @@
   // The Admin page's Item categories (GET /api/library/items' `item_categories`): an ordered list of
   // headings per work type. Null when the store did not come, which leaves every Category cell empty.
   var CATS = null;
+  // False on a database without the material_categories column (backend/ops/item_categories.sql not
+  // run yet), read off GET /api/library/items' `categories_writable`: no Category select is offered.
+  var CATS_WRITABLE = true;
   var DIVISION_REFS = [];
   var UNIT_REFS = [];
   var VENDOR_USE = {};             // casefolded vendor name → how many materials name it
@@ -140,6 +143,7 @@
       var items = await rs[0].json(), asms = await rs[1].json();
       ITEMS = items.items || [];
       CATS = items.item_categories || null;
+      CATS_WRITABLE = items.categories_writable !== false;
       ASMS = asms.assemblies || [];
       // The vendor list failing must not take the materials down with it — an item's vendor is a
       // string it already holds, so the worst case is a dropdown with only the current value in it.
@@ -734,7 +738,7 @@
         // they are looking at it loses their work and hides the reason.
         say(j.detail || j.error || "That change didn't save.");
         saving("Not saved");
-        requeueFailed(key, payload);
+        if (!dropRefusedCategory(kind, id, payload, j.detail || j.error)) requeueFailed(key, payload);
         return;
       }
       // Adopt the new version stamp, or the NEXT save conflicts with our own write.
@@ -781,6 +785,26 @@
     // Keeps the SAME object (newer keystrokes folded in): saveNow reads identity to tell "my flush
     // failed and handed the edit back" from "a newer edit arrived", and stops after one attempt.
     pendingPatch[key] = Object.assign(payload, pendingPatch[key] || {});
+  }
+
+  /** A CATEGORY PICK THE DATABASE CANNOT HOLD (no material_categories column yet) is taken back out
+   *  of a failed save, rather than requeued. Requeued, it would ride every later edit of the row and
+   *  fail each one, None included ({} is stored as NULL, which still names the column), so the
+   *  material could not be saved again until a reload. The pick goes back to what the server holds
+   *  (nothing: there is no column) and the Category selects stop being offered. True when nothing
+   *  is left to send; anything else in the payload is still requeued by the caller. */
+  function dropRefusedCategory(kind, id, payload, detail) {
+    if (kind !== "items" || !payload || !("material_categories" in payload) ||
+        !/material_categories/.test(String(detail || ""))) return false;
+    delete payload.material_categories;
+    CATS_WRITABLE = false;
+    var it = itemOf(id);
+    if (it) it.material_categories = {};
+    renderItems();
+    var left = Object.keys(payload).filter(function (f) { return f !== "expected_updated_at"; });
+    if (left.length) return false;
+    if (FRESH.items[id] !== "new") { delete FRESH.items[id]; if (typeof hideUnsaved === "function") hideUnsaved(kind, id); }
+    return true;
   }
 
   /** Drop everything this page is still holding for an item that no longer exists.
@@ -1251,6 +1275,7 @@
   /** The Category cell: one select per work type (categoryWorkTypes), each offering that work type's
    *  headings in the Admin order and None. A heading that has been removed reads as None. */
   function categoryCell(it) {
+    if (!CATS_WRITABLE) return '<span class="builtin" title="The database needs backend/ops/item_categories.sql first">Not on this database yet</span>';
     var wts = categoryWorkTypes(it);
     if (!wts.length) return '<span class="builtin" title="Set them up on the Admin page, under Item categories">None set up</span>';
     return wts.map(function (wt) {

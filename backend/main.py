@@ -1078,7 +1078,9 @@ def api_library_items() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("item categories unreadable for /api/library/items: %s", exc)
         cats = None
-    return {"ok": True, "items": library.list_items(), "item_categories": cats}
+    items, has_column = library.list_items_and_category_column()
+    # False until backend/ops/item_categories.sql has run: the Items tab then offers no Category select.
+    return {"ok": True, "items": items, "item_categories": cats, "categories_writable": has_column}
 
 
 # ─── Item categories: the Material step's headings, per work type ─────

@@ -477,7 +477,11 @@
         <div class="ic-grid">${blocks}</div>
         <div class="rv-note"><p>Each material picks its category on the Items and Assemblies tab. Renaming a
           category renames it for every material in it. <strong>Removing a category leaves its materials
-          uncategorized</strong>: the estimate lists them under Other until they are given a new one.${
+          uncategorized</strong>: the estimate lists them under Other until they are given a new one. An
+          assembly sits under the category its materials share. Polish's Joint Filler and Dye cards sit under
+          their own material's category, and under Joint Filler and Dye until it has one. Epoxy's patch is a flat
+          charge on the whole area, shown under the Material total, not a row, so Patch lists only materials
+          put there.${
           store.updated_at?` Last changed ${e(new Date(store.updated_at).toLocaleDateString())}${store.updated_by?" by "+e(store.updated_by):""}.`
             :(store.seeded?" These are the headings on Kyle's sheet; nobody has changed them yet.":"")}</p></div></div>`;
     }

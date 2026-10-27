@@ -46,9 +46,14 @@ def ran(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def lib():
+def lib_out():
     require_node()
-    return _run(harness=LIBRARY_HARNESS)["categoryColumn"]
+    return _run(harness=LIBRARY_HARNESS)
+
+
+@pytest.fixture(scope="module")
+def lib(lib_out):
+    return lib_out["categoryColumn"]
 
 
 # ── the Admin card ───────────────────────────────────────────────────────────
@@ -65,6 +70,11 @@ def test_the_card_draws_every_work_type_in_hanzs_order_with_the_sheets_headings(
 
 def test_the_card_says_removing_a_category_leaves_its_materials_uncategorized(ran):
     assert ran["admin"]["saysUncategorized"]
+
+
+def test_the_card_says_which_headings_are_fed_by_fixed_lines_rather_than_rows(ran):
+    """Epoxy's patch is a flat charge in the caption, and Polish's Joint Filler and Dye are condition cards."""
+    assert ran["admin"]["saysFixedLines"]
 
 
 def test_a_card_whose_store_did_not_load_says_so(ran):
@@ -108,6 +118,31 @@ def test_with_no_categories_loaded_the_cell_says_so_and_offers_nothing(lib):
     assert lib["bare"] == {"selects": [], "noneSetUp": True}
 
 
+def test_a_database_without_the_column_offers_no_select(lib):
+    """GET /api/library/items' categories_writable false: a pick there could not be saved."""
+    assert lib["noColumn"] == {"selects": [], "says": True}
+
+
+def test_a_pick_the_database_refuses_is_dropped_so_the_material_still_saves(lib_out):
+    """update_item's 400 for a missing column. Requeued, the pick rode every later edit of the row and failed
+    each one (None too: {} is stored as NULL, which still names the column) until a reload."""
+    r = lib_out["categoryRefused"]
+    a = r["alone"]
+    assert a["pending"] == 0 and a["marked"] is False and a["stillUnsaved"] is False, (
+        "the refused pick was requeued, so the row stays unsaved")
+    assert a["writable"] is False and a["model"] == {}, "the selects stay on offer, or the pick still shows"
+    assert "item_categories.sql" in a["said"], "the estimator is told why"
+    assert a["nextSaved"] and "material_categories" not in a["nextBody"], "the next edit carried the pick again"
+    m = r["mixed"]
+    assert m["pending"] == 1 and m["marked"], "the cost typed with it was lost"
+    assert '"unit_cost"' in m["resentBody"] and "material_categories" not in m["resentBody"]
+    assert m["thenClean"]
+    o = r["other"]
+    assert o["pending"] == 1 and o["writable"] is True and o["model"] == {"epoxy": "epoxy-patch"}, (
+        "any other failure is requeued as before")
+    assert r["noErrors"]
+
+
 def test_choosing_a_category_queues_the_whole_map_as_a_new_object(lib):
     e = lib["edit"]
     assert e["afterAdd"] == {"kind": "items", "id": "c1",
@@ -131,11 +166,44 @@ def test_the_category_facet_filters_like_the_others(lib):
 # ── the Material step ────────────────────────────────────────────────────────
 def test_the_rows_are_grouped_under_the_headings_in_the_admin_order_with_other_last(ran):
     g = ran["grouped"]
-    assert [(x["name"], x["cards"]) for x in g["groups"]] == [("Patch", [3]), ("Floor", [0, 2]), ("Other", [1])], (
+    assert [(x["name"], x["cards"]) for x in g["groups"]] == [
+        ("Patch", [3]), ("Floor", [0, 2]), ("Dye", []), ("Joint Filler", []), ("Other", [1])], (
         "a material under its own heading, two assemblies whose category names a heading (case and spacing "
-        "ignored), and an assembly whose category is another work type's under Other")
+        "ignored), the Dye and Joint Filler cards under theirs, and an assembly whose category is another work "
+        "type's under Other")
+    assert [x["conds"] for x in g["groups"]] == [[], [], ["dye"], ["joint_filler", "remove_existing_jf"], []]
     assert sorted(g["cards"]) == list(range(g["rows"])), "every row is drawn exactly once"
+    assert sorted(g["conds"]) == ["dye", "joint_filler", "remove_existing_jf"], "every condition card drawn once"
     assert g["matTotalStill"], "the Material total line is still there"
+
+
+def test_the_condition_cards_sit_under_their_heading_and_count_in_its_subtotal(ran):
+    """Drawn after the groups, Joint Filler and Dye sat under the last heading (Other) with no heading of their
+    own and outside its subtotal, and Polish's seeded Dye and Joint Filler headings never appeared."""
+    c = ran["condCards"]
+    by = {x["name"]: x for x in c["groups"]}
+    assert [x["name"] for x in c["groups"]] == ["Patch", "Floor", "Dye", "Joint Filler", "Other"]
+    assert by["Dye"]["conds"] == ["dye"] and by["Dye"]["shown"] == c["dye"] > 0
+    assert by["Joint Filler"]["conds"] == ["joint_filler", "remove_existing_jf"], "Remove Existing follows Joint Filler"
+    assert by["Joint Filler"]["shown"] == c["jf"] > 0
+    assert by["Other"]["conds"] == [] and by["Other"]["shown"] == pytest.approx(398.79), "Other holds only its row"
+    for x in c["groups"]:
+        assert x["shown"] == pytest.approx(x["byCards"], abs=0.011), "a heading's subtotal is what is drawn under it"
+    assert c["repaint"]["rebuilt"] is False and c["repaint"]["shown"] == c["repaint"]["card"], (
+        "a typed measurement moves the condition card and its heading together, in place")
+
+
+def test_a_reserved_material_filed_on_the_items_tab_takes_its_card_with_it(ran):
+    d = ran["condCards"]["dyeFiled"]
+    by = {x["name"]: x for x in d["groups"]}
+    assert "Dye" not in by and by["Patch"]["conds"] == ["dye"]
+    assert by["Patch"]["shown"] == pytest.approx(400 + d["dye"], abs=0.011)
+
+
+def test_an_assembly_with_no_scope_heading_sits_under_the_one_its_materials_agree_on(ran):
+    """The seeded library's Scope is the division ("Epoxy", "Polished Concrete"), which names no heading."""
+    assert ran["derived"] == [["Patch", [2, 3]], ["Floor", [0]], ["Other", [1]]]
+    assert ran["derivedSplit"] == [["Patch", [2, 3]], ["Other", [0, 1]]], "two headings between them is none"
 
 
 def test_each_heading_shows_the_subtotal_of_the_rows_under_it(ran):
@@ -158,8 +226,8 @@ def test_a_work_type_with_no_headings_draws_one_list_as_before(ran):
 
 def test_rename_remove_and_reorder_reach_the_estimate_with_no_write_to_a_material(ran):
     assert ran["renamedHeading"][0] == ["Patch and Prep", [3]]
-    assert ran["removedHeading"] == [["Floor", [0, 2]], ["Other", [1, 3]]]
-    assert ran["reorderedHeading"] == ["Floor", "Patch", "Other"]
+    assert ran["removedHeading"] == [["Floor", [0, 2]], ["Dye", []], ["Joint Filler", []], ["Other", [1, 3]]]
+    assert ran["reorderedHeading"] == ["Joint Filler", "Dye", "Floor", "Patch", "Other"]
 
 
 def test_a_saved_bid_reloaded_from_jsonb_groups_the_same(ran):
@@ -177,8 +245,11 @@ def test_grouping_is_display_only_on_the_polish_job(ran):
 
 def test_grouping_is_display_only_on_the_epoxy_golden_job(ran):
     e = ran["epoxyTotals"]
-    assert [n for n, _ in e["withCats"]["groups"]] == ["Cove", "Other"], (
-        "not vacuous: the Epoxy section really was grouped (its cove under Cove, the flake under Other)")
+    assert e["scopes"] == ["Epoxy", "Epoxy"], "the seeded assemblies, their Scope the division and no heading"
+    assert e["withCats"]["groups"] == [["Epoxy Liquids", [0]], ["Cove", [1]]], (
+        "not vacuous: the seeded flake and cove assemblies grouped by the headings their materials are filed under")
+    assert e["split"] == [["Cove", [1]], ["Other", [0]]], "the flake's materials disagree, so it has no heading"
+    assert e["noneFiled"] == [], "nothing filed anywhere: no lone Other heading over the whole takeoff"
     assert e["withoutCats"]["groups"] == []
     assert e["withCats"]["total"] == e["withoutCats"]["total"] > 0
     assert e["withCats"]["lump"] == e["withoutCats"]["lump"] == e["withCats"]["computed"] == e["withCats"]["total"]
@@ -200,18 +271,39 @@ def _scratch(tmp_path, rel, old, new):
 
 MUTATIONS = {
     "the takeoff drawn ungrouped": (
-        "js/polish-estimate.js", "    html += takeoffRowsHtml();",
-        '    html += M.takeoff.map(takeoffRowCard).join("");',
-        lambda r: [x["name"] for x in r["grouped"]["groups"]] == ["Patch", "Floor", "Other"]),
+        "js/polish-estimate.js", "    html += takeoffRowsHtml(conds);",
+        '    html += M.takeoff.map(takeoffRowCard).join("") + conds.map(function (c) { return c.cost ? condMaterialCard(c) : condSwitchCard(c); }).join("");',
+        lambda r: [x["name"] for x in r["grouped"]["groups"]] == ["Patch", "Floor", "Dye", "Joint Filler", "Other"]),
     "every row under Other": (
         "js/library-core.js", "      (g || other).keys.push(k);", "      other.keys.push(k);",
-        lambda r: [x["name"] for x in r["grouped"]["groups"]] == ["Patch", "Floor", "Other"]),
+        lambda r: [x["name"] for x in r["grouped"]["groups"]] == ["Patch", "Floor", "Dye", "Joint Filler", "Other"]),
+    "the condition cards drawn after the groups": (
+        "js/polish-estimate.js", '      .concat(conds.map(function (c) { return "c:" + c.key; }));',
+        "      .concat([]);",
+        lambda r: r["condCards"]["groups"][2]["conds"] == ["dye"]),
+    "a condition card's cost left out of its subtotal": (
+        "js/polish-estimate.js",
+        '      if (typeof i === "string" && i.indexOf("c:") === 0) return sum + condSubtotal(i.slice(2));',
+        '      if (typeof i === "string" && i.indexOf("c:") === 0) return sum;',
+        lambda r: r["condCards"]["groups"][2]["shown"] == r["condCards"]["dye"]),
+    "a condition card ignores its material's heading": (
+        "js/polish-estimate.js", "    if (own) return own;", "    void own;",
+        lambda r: r["condCards"]["dyeFiled"]["groups"][0]["conds"] == ["dye"]),
+    "an assembly ignores what its materials agree on": (
+        "js/library-core.js", "      agreed = c;", "      void c;",
+        lambda r: r["derived"] == [["Patch", [2, 3]], ["Floor", [0]], ["Other", [1]]]),
+    "an assembly whose materials disagree takes one of them": (
+        "js/library-core.js", "      if (agreed && agreed.id !== c.id) return null;", "",
+        lambda r: r["derivedSplit"] == [["Patch", [2, 3]], ["Other", [0, 1]]]),
+    "a lone Other heading drawn": (
+        "js/library-core.js", "    return drawn.length === 1 && drawn[0].other ? [] : drawn;", "    return drawn;",
+        lambda r: r["epoxyTotals"]["noneFiled"] == []),
     "the subtotal not repainted": (
         "js/polish-estimate.js", "      el.textContent = moneyAuto(categorySubtotal(keys));", "      void keys;",
         lambda r: r["grouped"]["repaint"]["shown"] == r["grouped"]["repaint"]["expected"]),
     "an assembly's category ignored": (
         "js/polish-estimate.js",
-        '    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt);',
+        '    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt, ITEMS);',
         "    if (k === \"asm\") return null;",
         lambda r: [x["cards"] for x in r["grouped"]["groups"]][:2] == [[3], [0, 2]]),
     "the Admin add lets a duplicate through": (
@@ -242,6 +334,9 @@ LIBRARY_MUTATIONS = {
         "js/library.js", "    if (id) out[wt] = id; else delete out[wt];",
         "    if (id) map[wt] = id; else delete map[wt]; out = map;",
         lambda c: c["edit"]["snapshotUntouched"]),
+    "the selects offered on a database without the column": (
+        "js/library.js", "    if (!CATS_WRITABLE) return '<span", "    if (false) return '<span",
+        lambda c: c["noColumn"]["selects"] == []),
     "every work type offered to every material": (
         "js/library.js", "    return own.length ? own : withCats;", "    return withCats;",
         lambda c: c["cells"]["c1"]["selects"] == ["epoxy"]),
@@ -256,3 +351,29 @@ def test_library_mutation_goes_red(name, tmp_path):
     if proc.returncode != 0:
         return
     assert not check(last_json_line(proc.stdout)["categoryColumn"]), name + " left its check green"
+
+
+LIBRARY_SAVE_MUTATIONS = {
+    "a refused category pick requeued": (
+        "js/library.js",
+        "        if (!dropRefusedCategory(kind, id, payload, j.detail || j.error)) requeueFailed(key, payload);",
+        "        requeueFailed(key, payload);",
+        lambda r: r["alone"]["pending"] == 0 and "material_categories" not in r["alone"]["nextBody"]),
+    "every refused save treated as the missing column": (
+        "js/library.js", "        !/material_categories/.test(String(detail || \"\"))) return false;",
+        "        false) return false;",
+        lambda r: r["other"]["pending"] == 1 and r["other"]["writable"] is True),
+    "the rest of a refused payload dropped with the pick": (
+        "js/library.js", "    if (left.length) return false;", "    void left;",
+        lambda r: r["mixed"]["pending"] == 1 and '"unit_cost"' in r["mixed"]["resentBody"]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(LIBRARY_SAVE_MUTATIONS))
+def test_library_save_mutation_goes_red(name, tmp_path):
+    rel, old, new, check = LIBRARY_SAVE_MUTATIONS[name]
+    frontend = _scratch(tmp_path, rel, old, new)
+    proc = run_node(LIBRARY_HARNESS, frontend)
+    if proc.returncode != 0:
+        return
+    assert not check(last_json_line(proc.stdout)["categoryRefused"]), name + " left its check green"

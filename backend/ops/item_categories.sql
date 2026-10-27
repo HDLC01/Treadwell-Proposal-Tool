@@ -12,8 +12,11 @@
 -- NULLABLE WITH NO DEFAULT, so no existing row changes. NULL reads as "uncategorised everywhere", which is
 -- what every material is today, and the estimate files such a row under "Other". The code reads an absent
 -- column the same way, and writes it ONLY when the Items tab sends a category (library.validate_item), so
--- the code can ship before this file runs: until then, choosing a category answers a plain message saying
--- this column is missing, and nothing else is affected. Grouping is display only; no price moves.
+-- the code can ship before this file runs. Until then GET /api/library/items answers categories_writable
+-- false (its rows carry no material_categories key) and the Items tab offers no Category select, only
+-- "Not on this database yet". A pick that still reaches the server (a tab opened on an empty library)
+-- answers a plain 400, and the Items tab takes the pick back out of the failed save rather than requeue it,
+-- so the material's other edits still save. Grouping is display only; no price moves.
 --
 -- NOT APPLIED ANYWHERE. Safe to re-run (ADD COLUMN IF NOT EXISTS). No backfill, no data change.
 -- Prod (Supabase SQL editor) and staging (psql -d treadwell) are separate databases: run it on BOTH, and

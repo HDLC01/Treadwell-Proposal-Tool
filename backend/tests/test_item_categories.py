@@ -273,3 +273,17 @@ def test_a_database_without_the_column_answers_a_readable_400(store, monkeypatch
     # ...and every other edit on that database still saves.
     assert _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"],
                                           json={"unit_cost": 90}).status_code == 200
+
+
+def test_the_items_read_says_whether_the_database_has_the_column(store, monkeypatch):
+    """The Items tab offers a Category select only when a pick can be saved. select("*") names every column,
+    so a row WITHOUT the key is a database that has not had backend/ops/item_categories.sql applied."""
+    c = _as(monkeypatch, "user")
+    assert c.get("/api/library/items").json()["categories_writable"] is True, "an empty library has nothing to pick on"
+    _mk()                                   # the fake store, like a database without the column, has no key
+    assert "material_categories" not in store["library_items"][0]
+    assert c.get("/api/library/items").json()["categories_writable"] is False
+    # The column applied: every row carries it, NULL included.
+    store["library_items"][0]["material_categories"] = None
+    body = c.get("/api/library/items").json()
+    assert body["categories_writable"] is True and body["items"][0]["material_categories"] == {}
