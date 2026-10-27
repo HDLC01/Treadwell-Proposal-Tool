@@ -123,8 +123,8 @@ BREAKS = {
         "js/polish-estimate.js", "    if (renoSw) { setReno(!jobIsReno()); return; }", "    if (false) { setReno(!jobIsReno()); return; }",
         lambda r: r["jayhawk"]["on"]["total"] != 32864),
     "Space does not press it": (
-        "js/polish-estimate.js", '      t.closest("[data-cond]") || t.closest("[data-adj-hb]") || t.closest("[data-reno-sw]");',
-        '      t.closest("[data-cond]") || t.closest("[data-adj-hb]");',
+        "js/polish-estimate.js", '      t.closest("[data-cond]") || t.closest("[data-reno-sw]");',
+        '      t.closest("[data-cond]");',
         lambda r: r["jayhawk"]["back"]["total"] != 31840 or r["jayhawk"]["back"]["prevented"] is not True),
     "the caret is not put back": (
         "js/polish-estimate.js", '    refocus("[data-reno-sw]");', "    void 0;",
