@@ -6829,7 +6829,7 @@ async function manualSaveChecks() {
     api.renderItems();
     api.renderFilterBar();
     res.nameOrder = itemRows(d);
-    res.selectSyncedToName = d.nodes["f-sort"].value;
+    res.selectSyncedToName = d.nodes["f-sort"] ? d.nodes["f-sort"].value : null;
   }
   // ── a search narrows, THEN the sort orders what is left ──
   {
@@ -6877,8 +6877,12 @@ async function manualSaveChecks() {
                                                          tw_library_sort_asm: "" }) } });
     res.unknownSavedKey = [junk.api.itemSortNow(), junk.api.asmSortNow()];
     const refusing = { get localStorage() { throw new Error("SecurityError: storage is blocked"); } };
-    const blocked = build({ window: refusing });
-    res.blockedStorage = [blocked.api.itemSortNow(), blocked.api.asmSortNow()];
+    // Caught HERE so a savedSort without its try/catch reports as this assertion, not as the
+    // whole harness dying - which is what the page script itself would do on load.
+    try {
+      const blocked = build({ window: refusing });
+      res.blockedStorage = [blocked.api.itemSortNow(), blocked.api.asmSortNow()];
+    } catch (e) { res.blockedStorage = "the page threw on load: " + e.message; }
     // The write: what a pick stores, and a refusing store does not throw out of the listener.
     const w = store();
     const writer = build({ window: { localStorage: w } });
@@ -6902,7 +6906,7 @@ async function manualSaveChecks() {
     const { api, dom: d } = build({ ASMS: asms });
     api.renderList();
     res.railFirstPage = span(cardIds(d));
-    res.railSelect = d.nodes["fa-sort"].value;
+    res.railSelect = d.nodes["fa-sort"] ? d.nodes["fa-sort"].value : null;
   }
   // ── the markup: one Sort control over the Items table, the rail's shape ──
   {
