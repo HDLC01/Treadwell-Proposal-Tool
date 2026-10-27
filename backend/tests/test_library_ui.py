@@ -3208,10 +3208,9 @@ def test_sorting_never_reorders_the_model_itself(ran):
     is the common case and copying the array on every keystroke would be waste - so a sort in place
     would silently reorder the array the rest of the page reads.
 
-    WHAT WOULD BREAK, none of it visibly: `current()` walks ASMS for openId; `load()` picks
-    ASMS[0].id when nothing is open; deleting the open assembly falls back to ASMS[0].id. All three
-    would start answering off whatever the estimator last sorted by, and the last of them is a
-    delete.
+    WHAT WOULD BREAK, none of it visibly: `current()` walks ASMS for openId, and firstAssemblyId
+    (what `load()` and the delete path open when nothing is) sorts a copy of ASMS. Both would start
+    answering off whatever the estimator last sorted by, and one of them is a delete.
 
     Mutation: `return list.sort(...)` instead of `list.slice().sort(...)`."""
     g = ran["asmSort"]

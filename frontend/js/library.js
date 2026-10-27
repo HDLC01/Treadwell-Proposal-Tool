@@ -212,7 +212,7 @@
           COND_DEFAULTS = cj.conditions || [];
         }
       } catch (e) { COND_DEFAULTS = []; }
-      if (!openId || !current()) openId = ASMS.length ? ASMS[0].id : null;
+      if (!openId || !current()) openId = firstAssemblyId();
       say("");
       paint();
     } catch (err) {
@@ -2617,6 +2617,15 @@
   function placeNewAssembly(list, asm) {
     list.unshift(asm);
     return list;
+  }
+
+  /** WHICH ASSEMBLY OPENS WHEN NOTHING IS: the top card of the rail as it is SORTED, not ASMS[0].
+   *  ASMS keeps the server's name order, so under Newest first ASMS[0] is the oldest-by-name card
+   *  and asmPage would jump the rail to whatever page holds it -- page 3 of 60, not the latest
+   *  work Hanz asked to see "every time and after a reload". load() and the delete path both ask
+   *  this. Filters are ignored on purpose, as the ASMS[0] pick did: none are active on a load. */
+  function firstAssemblyId() {
+    return (sortAssemblies(ASMS, ASM_SORT, ITEMS)[0] || {}).id || null;
   }
 
   /** What the row SAYS about the key it is being ordered on, so an order is never a mystery.
@@ -5857,7 +5866,7 @@
       try {
         await del("assemblies", cur.id);
         ASMS = ASMS.filter(function (x) { return x.id !== cur.id; });
-        openId = ASMS.length ? ASMS[0].id : null;
+        openId = firstAssemblyId();
         paint();
       } catch (err) { say("Couldn't delete that assembly. " + err.message); }
       return;

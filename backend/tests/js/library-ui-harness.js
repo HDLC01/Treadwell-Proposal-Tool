@@ -662,6 +662,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // Not reached from a renderer — it is the create path's one decision, pulled out of the page's
   // anonymous click listener precisely so it CAN be reached from here.
   ${fn("placeNewAssembly")}
+  // The same again for load() and the delete path: what they open when nothing is open.
+  ${fn("firstAssemblyId")}
   ${fn("asmSortLabel")}
   ${fn("visibleAssemblies")}
   ${fn("renderAsmFilterBar")}
@@ -778,7 +780,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
            asmConditionHits, asmTermHits, asmFilterSummary, visibleAssemblies,
            renderAsmFilterBar,
            ASM_SORT, asmVendorTally, asmVendorLabel, asmOwnerName, asmSortValue,
-           sortAssemblies, asmSortLabel, placeNewAssembly,
+           sortAssemblies, asmSortLabel, placeNewAssembly, firstAssemblyId,
            // THE ARRAY ITSELF, not a copy, so a test can put a row into the model the renderer
            // reads and then render — which is the only way to prove the prepend and the
            // pass-through default work together rather than each in isolation.
@@ -6907,6 +6909,31 @@ async function manualSaveChecks() {
     api.renderList();
     res.railFirstPage = span(cardIds(d));
     res.railSelect = d.nodes["fa-sort"] ? d.nodes["fa-sort"].value : null;
+  }
+  // ── the rail AS load() OPENS IT: nothing saved, nothing open, load() picks one ──
+  // The scenario above leaves openId unset, which the page never does: load() opens an assembly
+  // and asmPage moves the rail to that card's page. So open what load() opens, then paint.
+  {
+    const asms = () => Array.from({ length: 60 }, (_, i) => ({ id: "q" + (i + 1),
+      name: "Assembly " + pad(i + 1), unit: "SF", lines: [],
+      created_at: new Date(Date.UTC(2026, 7, 1, 12, i)).toISOString() }));
+    const cur = (d) => all(/data-open="([^"]+)" aria-current="true"/g, d.nodes["asm-list"].innerHTML);
+    const r = {};
+    try {
+      const { api, dom: d } = build({ ASMS: asms() });
+      api.setOpenId(api.firstAssemblyId()); api.paint();
+      r.page = api.pagerNow().asm.page;
+      r.firstCard = cardIds(d)[0];
+      r.open = cur(d);
+      // Name A-Z keeps opening the first by name, page 1.
+      const byName = build({ ASMS: asms(), ASM_SORT: "name" });
+      byName.api.setOpenId(byName.api.firstAssemblyId()); byName.api.paint();
+      r.namePage = byName.api.pagerNow().asm.page;
+      r.nameOpen = cur(byName.dom);
+      // An empty library opens nothing.
+      r.empty = build({ ASMS: [] }).api.firstAssemblyId();
+    } catch (e) { r.error = String(e && e.message || e); }
+    res.railOnLoad = r;
   }
   // ── the markup: one Sort control over the Items table, the rail's shape ──
   {

@@ -353,6 +353,24 @@ def test_the_assemblies_rail_opens_newest_first(newest):
     assert newest["railSelect"] == "new"
 
 
+def test_the_assemblies_rail_opens_on_page_1_after_a_reload(newest):
+    """The rail as the page actually loads: load() opens an assembly when nothing is open, and
+    asmPage moves the rail to the page holding the open card. Under Newest first that pick has to
+    be the TOP card of the sorted rail. ASMS[0] is the first by NAME (the server's order), which
+    with sixty dated assemblies is q1, the oldest, on page 3 -- so the rail would reopen on the
+    oldest work every time. The delete path asks the same function.
+
+    Mutation: return ASMS[0].id from firstAssemblyId (or put `ASMS[0].id` back in load())."""
+    r = newest["railOnLoad"]
+    assert "error" not in r, r
+    assert r["page"] == 1, r
+    assert r["firstCard"] == "q60", r
+    assert r["open"] == ["q60"], r
+    assert r["namePage"] == 1, r
+    assert r["nameOpen"] == ["q1"], r
+    assert r["empty"] is None, r
+
+
 def test_the_items_sort_control_is_two_choices_in_the_items_filter_bar(newest):
     """The Assemblies rail's control in the same shape (.facet + .flabel), over the Items table,
     with exactly the two orders Hanz asked for, the default first. The rail's select lists its
