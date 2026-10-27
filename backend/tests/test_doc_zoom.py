@@ -10,8 +10,9 @@ applyZoom read the canvas once per call and only the WINDOW's resize event calle
 space the sheet may take changes without one: auth.js ANIMATES <body>'s margin-left from 0 to the
 rail's 240px when it draws the sidebar (`body{transition:margin-left .2s ease}`), so a first fit
 inside those 200ms measured a canvas up to 240px too wide -- exactly the audited error; the 272px
-reservation is padding a :has() rule adds when #options-panel is shown; and below 1400px the panel
-moves inline. The fix observes the canvas's own box and fits again when it changes.
+reservation is padding a :has() rule adds when #options-panel is shown above 1400px (below it the
+panel floats over the page with no lane). The fix observes the canvas's own box and fits again when
+it changes.
 
 RUN, NOT READ. `js/doc-zoom-harness.js` lifts the shipped functions and runs them over a canvas whose
 width follows the body margin, whose padding follows the rail and whose scrollbar follows how tall the
@@ -97,9 +98,25 @@ def test_the_scrollbar_cannot_start_a_refit_loop(ran):
 def test_the_clamp_and_the_narrow_layouts_are_unchanged(ran):
     got = ran["clamp"]
     assert got["huge"]["k"] == pytest.approx(1.7), "the 170% cap moved"
-    # Below 1400px the panel is inline and the 272px reservation is dropped.
+    # Below 1401px the panel floats over the page (it never enters the flow) and no 272px lane is
+    # reserved, so the sheet takes the whole canvas.
     assert got["inlineRail1300"]["k"] == pytest.approx((1300 - 240 - 17 - 24) / 816, abs=0.001)
     assert got["phone380"]["k"] == pytest.approx(0.45), "the 45% floor moved"
+
+
+def test_the_harness_lane_boundary_is_the_pages():
+    """The harness reserves 272px only while innerWidth > 1400. That is a model of the page's CSS,
+    so it is pinned to it: the lane rule must live inside `@media (min-width: 1401px)` and nowhere
+    unconditional, or the fits above are measured against a layout the page does not have."""
+    page = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
+    harness = HARNESS.read_text(encoding="utf-8")
+    assert "o.innerWidth > 1400 ? RAIL_PAD : 0" in harness, "the harness's lane model changed"
+    lane = re.search(r"@media \(min-width:\s*(\d+)px\)\s*\{\s*body\.word-app:has\(#options-panel:not\("
+                     r"\[hidden\]\)\) \.word-canvas \{\s*padding-right: (\d+)px", page)
+    assert lane, "the page's lane is not media-gated the way the harness models it"
+    assert int(lane.group(1)) == 1401 and int(lane.group(2)) == 272
+    assert len(re.findall(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right",
+                          page)) == 1, "a second lane rule the harness does not model"
 
 
 def test_a_steady_page_is_not_refitted(ran):

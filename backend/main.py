@@ -86,6 +86,7 @@ import nav_access
 import notifications
 import pdf_writer
 import pipelines
+import special_permissions
 import v2_pipeline
 import price_rules
 import pricing
@@ -364,7 +365,10 @@ async def _nav_gate(request: Request, call_next):
             return JSONResponse(status_code=403, content={
                 "ok": False, "account_paused": True,
                 "error": "Your account is paused. Ask an admin to turn it back on."})
-        denied = nav_access.is_api_denied(role, request.url.path)
+        # A tab given to this person on the Special permissions card is open to them whatever their
+        # role says, so the gate asks about THEIR policy (the role's, minus their granted tabs).
+        denied = nav_access.is_api_denied(role, request.url.path,
+                                          _nav_policy_for(role, prof.get("email") or _user_email(request)))
     except Exception as exc:  # noqa: BLE001
         # FAIL OPEN. This is an internal tool with three accounts where a lockout is an outage the
         # affected person cannot fix, and the data behind these routes is still behind the existing
@@ -1069,7 +1073,7 @@ def api_library_items() -> Dict[str, Any]:
 def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
     body = payload.model_dump(exclude_unset=True)
     if any(k in body for k in library.ITEM_ADMIN_ONLY):
-        _require_admin(request)
+        _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_item(body, _user_email(request))
     except library.ValidationError as exc:
@@ -1083,7 +1087,7 @@ def api_library_item_update(item_id: str, payload: LibraryItemIn,
     body = payload.model_dump(exclude_unset=True)
     # Price breaks, a bulk cost and a coverage basis are an admin's to set (Phase 11).
     if any(k in body for k in library.ITEM_ADMIN_ONLY):
-        _require_admin(request)
+        _require_grant(request, special_permissions.LIBRARY)
     try:
         # The caller's identity is the ONLY source of "who edited it" — the payload model has no
         # such field and validate_item would drop it, so a client cannot sign somebody else's name.
@@ -1178,7 +1182,7 @@ def api_library_vendors() -> Dict[str, Any]:
 
 @app.post("/api/library/vendors")
 def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_vendor(payload.model_dump(exclude_unset=True), _user_email(request))
     except library.ValidationError as exc:
@@ -1189,7 +1193,7 @@ def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dic
 @app.patch("/api/library/vendors/{vendor_id}")
 def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
                               request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_vendor(vendor_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1201,7 +1205,7 @@ def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
 
 @app.delete("/api/library/vendors/{vendor_id}")
 def api_library_vendor_delete(vendor_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_vendor(vendor_id):
         raise HTTPException(404, "That vendor is no longer on the list.")
     # Items naming it keep saying so — they store the name, and a delete here must not rewrite what
@@ -1227,7 +1231,7 @@ def api_library_divisions() -> Dict[str, Any]:
 
 @app.post("/api/library/divisions")
 def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_ref(library.DIVISION_REFS, payload.model_dump(exclude_unset=True),
                                  _user_email(request), label="division")
@@ -1239,7 +1243,7 @@ def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict
 @app.patch("/api/library/divisions/{division_id}")
 def api_library_division_update(division_id: str, payload: LibraryRefIn,
                                 request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_ref(library.DIVISION_REFS, division_id,
                                  payload.model_dump(exclude_unset=True), label="division")
@@ -1252,7 +1256,7 @@ def api_library_division_update(division_id: str, payload: LibraryRefIn,
 
 @app.delete("/api/library/divisions/{division_id}")
 def api_library_division_delete(division_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_ref(library.DIVISION_REFS, division_id):
         raise HTTPException(404, "That division is no longer on the list.")
     return {"ok": True, "deleted": division_id}
@@ -1265,7 +1269,7 @@ def api_library_units() -> Dict[str, Any]:
 
 @app.post("/api/library/units")
 def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_ref(library.UNIT_REFS, payload.model_dump(exclude_unset=True),
                                  _user_email(request), label="unit")
@@ -1277,7 +1281,7 @@ def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str
 @app.patch("/api/library/units/{unit_id}")
 def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
                             request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_ref(library.UNIT_REFS, unit_id,
                                  payload.model_dump(exclude_unset=True), label="unit")
@@ -1290,7 +1294,7 @@ def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
 
 @app.delete("/api/library/units/{unit_id}")
 def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_ref(library.UNIT_REFS, unit_id):
         raise HTTPException(404, "That unit is no longer on the list.")
     return {"ok": True, "deleted": unit_id}
@@ -1332,7 +1336,7 @@ def api_library_labor() -> Dict[str, Any]:
 
 @app.post("/api/library/labor")
 def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_labor(payload.model_dump(exclude_unset=True), _user_email(request))
     except library.ValidationError as exc:
@@ -1343,7 +1347,7 @@ def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[
 @app.patch("/api/library/labor/{labor_id}")
 def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
                              request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_labor(labor_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1357,7 +1361,7 @@ def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
 
 @app.delete("/api/library/labor/{labor_id}")
 def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     # 400, NOT 404: `travel` is very much still on the list, and 404 would read as "already gone"
     # to whatever called this — a caller that retried on a 404 would find nothing to retry against.
     # library.delete_labor raises before it even asks the store whether the row exists.
@@ -1394,7 +1398,7 @@ def api_library_labor_calc() -> Dict[str, Any]:
 @app.put("/api/library/labor-calc/{line_id}")
 def api_library_labor_calc_save(line_id: str, payload: LibraryLaborCalcIn,
                                 request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.save_labor_calc(line_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1451,7 +1455,7 @@ def api_markup_rules(layout: Optional[str] = None) -> Dict[str, Any]:
 
 @app.put("/api/markup/rules")
 def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.MARKUP)
     try:
         row = markup.upsert_rule(payload.model_dump(exclude_unset=True), _user_email(request))
     except markup.ValidationError as exc:
@@ -1461,7 +1465,7 @@ def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str,
 
 @app.delete("/api/markup/rules/{rule_id}")
 def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.MARKUP)
     if not markup.delete_rule(rule_id):
         # 404 rather than a cheerful 200: the rule may have gone in another tab, and reporting a
         # successful delete of nothing is how somebody believes a rate was removed when it wasn't.
@@ -1508,7 +1512,7 @@ def api_condition_defaults() -> Dict[str, Any]:
 @app.put("/api/condition-defaults/{condition_key}")
 def api_condition_default_set(condition_key: str, payload: ConditionDefaultIn,
                               request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = condition_defaults.set_default(condition_key,
                                              payload.model_dump(exclude_unset=True),
@@ -1813,7 +1817,10 @@ def _guard_notify_picks(request: Request, prior: Any,
     than safe. Carrying an existing entry through is fine; dropping somebody else's is a change, or
     un-muting by omission would be a free bypass.
     """
-    if _caller_is_admin(request):
+    # An admin, or a member given the Direct Projects tab (the drawer's home): the Special
+    # permissions card promises that tab's every admin-only edit, and setting somebody else's
+    # notifications on a project is one.
+    if _may_set_others_notify(request, special_permissions.PROJECTS):
         return
     me = (_user_email(request) or "").strip().lower()
     picks = prior if isinstance(prior, dict) else {}
@@ -2971,6 +2978,289 @@ def api_portal_set_status(proposal_id: str, request: Request,
     return _portal(f"/api/admin/proposal/{_safe_id(proposal_id)}/status", "POST", body)
 
 
+# ── follow-up TASKS: the reminder an estimator acts on (remind mode, v1) ──────────
+# The portal decides WHEN a follow-up is due and parks it as a task for the ASSIGNED ESTIMATOR (one
+# person, with the portal's own roster fallback when nobody is assigned). Nothing reaches the
+# customer until a human here presses Send. That estimator is NOT the "Tell the team" chips on the
+# Files page: those are a one-time send-confirmation list and have nothing to do with these.
+#
+# THESE PROXIES PASS THE PORTAL'S ANSWER THROUGH, status and body both. `_portal` raises on
+# anything over 400 and keeps only the `error` string, which is right for the controls that only
+# need "it failed", and wrong here: a 409 out_of_scope ("this proposal moved on, nothing was sent")
+# and a 502 send_failed ("nothing was sent, try again") are different sentences on screen, and the
+# drawer can only say the right one if it is handed the right status. Same transport as `_portal`
+# (service token header, 20s), so the two cannot disagree about how the portal is reached.
+def _portal_call(path: str, method: str = "GET",
+                 body: Optional[Dict[str, Any]] = None) -> Tuple[int, Dict[str, Any]]:
+    """The portal's status and JSON body, without raising on a 4xx.
+
+    A 5xx comes back as 502, exactly as `_portal` reports one. Unconfigured is still a 503 and
+    unreachable still a 502, raised, because there is no portal answer to pass through."""
+    import httpx
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        raise HTTPException(503, "Customer portal isn't configured (PORTAL_ADMIN_URL / SERVICE_TOKEN).")
+    try:
+        with httpx.Client(timeout=20.0, headers={"X-Service-Token": token}) as c:
+            resp = c.request(method, base + path, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Could not reach the customer portal.") from exc
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        data = None
+    if not isinstance(data, dict):
+        data = {"error": "Portal error."} if resp.status_code >= 400 else {}
+    return (resp.status_code if resp.status_code < 500 else 502), data
+
+
+def _portal_answer(status: int, data: Dict[str, Any]) -> JSONResponse:
+    """A portal answer as this app's response. An error keeps every field the portal sent (error,
+    reason, status, message) and gains `ok: false` and a `detail`, which is the key every other
+    error in this app carries, so the browser's `j.error || j.detail` reads both kinds."""
+    out = dict(data)
+    if status >= 400:
+        out.setdefault("ok", False)
+        out.setdefault("detail", out.get("error") or "Portal error.")
+    return JSONResponse(status_code=status, content=jsonable_encoder(out))
+
+
+def _portal_pass(path: str, method: str = "GET",
+                 body: Optional[Dict[str, Any]] = None) -> JSONResponse:
+    return _portal_answer(*_portal_call(path, method, body))
+
+
+@app.get("/api/portal/followup-tasks")
+def api_portal_followup_tasks(estimator: str = "") -> JSONResponse:
+    """Every follow-up waiting on a human, oldest first. `?estimator=` narrows it to one person."""
+    path = "/api/admin/followup-tasks"
+    who = (estimator or "").strip().lower()
+    if who:
+        if not _PORTAL_EMAIL_RE.match(who) or len(who) > 254:
+            raise HTTPException(400, "That doesn't look like an email address.")
+        path += "?estimator=" + quote(who)
+    return _portal_pass(path)
+
+
+@app.get("/api/portal/followup-task/{task_id}")
+def api_portal_followup_task(task_id: str) -> JSONResponse:
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}")
+
+
+# An AI draft per TASK, for an hour. The CLI call is ~20s and paid, and the drawer asks once per
+# open per page load, so without this a task three people glance at costs three runs for the same
+# words. Only a draft the portal accepted as `ai` is kept: a fallback is cheap to ask for again and
+# caching one would pin the default wording for an hour after a passing CLI failure. Bounded,
+# because task ids never repeat and nothing else would ever evict them.
+_FU_AI_DRAFTS: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_FU_AI_TTL_S = 3600
+_FU_AI_MAX = 200
+
+
+def _fu_ai_cached(task_id: str) -> Optional[Dict[str, Any]]:
+    hit = _FU_AI_DRAFTS.get(task_id)
+    if hit and time.time() - hit[0] < _FU_AI_TTL_S:
+        return hit[1]
+    _FU_AI_DRAFTS.pop(task_id, None)
+    return None
+
+
+def _fu_ai_remember(task_id: str, answer: Dict[str, Any]) -> None:
+    if len(_FU_AI_DRAFTS) >= _FU_AI_MAX:
+        oldest = min(_FU_AI_DRAFTS, key=lambda k: _FU_AI_DRAFTS[k][0])
+        _FU_AI_DRAFTS.pop(oldest, None)
+    _FU_AI_DRAFTS[task_id] = (time.time(), answer)
+
+
+# THE COST CAP. The cache above only keeps a draft the portal accepted, so a task whose CLI run
+# keeps failing is re-run on every page load, by every estimator, and by anything that POSTs here
+# in a loop. Two budgets, both counted only when the CLI actually runs: per TASK (a failing task
+# stops costing money after a few tries) and per PERSON (one signed-in user cannot walk every task
+# on the board on repeat). Wider than autofill's 3 per 5 min because working the morning's
+# reminders is one draft per project, back to back; a cache hit costs nothing against either.
+# Over a cap the answer is the portal's default, as for any AI failure, never a 429: the compose
+# box always opens with something to send. Single uvicorn worker, so in-memory is shared; the lock
+# makes check-then-record one step under the threadpool that runs these sync routes.
+_FU_AI_RATE_WINDOW = 600      # seconds (10 minutes)
+_FU_AI_RATE_PER_TASK = 3
+_FU_AI_RATE_PER_USER = 10
+_FU_AI_HITS: Dict[str, List[float]] = {}
+_FU_AI_HITS_LOCK = threading.Lock()
+
+
+def _fu_ai_take_slot(task_id: str, email: Optional[str]) -> bool:
+    """Spend one CLI run against both budgets, or spend nothing and say no."""
+    now = time.time()
+    keys = ((f"task|{task_id}", _FU_AI_RATE_PER_TASK),
+            (f"user|{(email or 'anon').strip().lower()}", _FU_AI_RATE_PER_USER))
+    with _FU_AI_HITS_LOCK:
+        for key, _cap in keys:
+            hits = [t for t in _FU_AI_HITS.get(key, []) if now - t < _FU_AI_RATE_WINDOW]
+            if hits:
+                _FU_AI_HITS[key] = hits
+            else:
+                _FU_AI_HITS.pop(key, None)    # task ids never repeat; do not keep empty keys
+        if any(len(_FU_AI_HITS.get(key, [])) >= cap for key, cap in keys):
+            return False
+        for key, _cap in keys:
+            _FU_AI_HITS.setdefault(key, []).append(now)
+    return True
+
+
+@app.post("/api/portal/followup-task/{task_id}/ai-draft")
+def api_portal_followup_ai_draft(task_id: str, request: Request) -> Any:
+    """The compose box's first draft, in ONE call: ask the portal for its safe default and the
+    prompt that would do better, run that prompt through the CLI, and hand the model's answer back
+    to the portal to be checked. The portal cannot run the model (it has no CLI); this app cannot
+    be trusted to judge what is safe to put in front of a customer (the portal owns that rule:
+    plain text, one {link}, no URLs, known tokens only). So the work is split along those lines.
+
+    ALWAYS A DRAFT, NEVER A 500 FROM THE AI HALF. A CLI that is missing, slow, refuses, or answers
+    with something that is not `{title, body}` costs the estimator the better wording and nothing
+    else: the portal's own default comes back instead, flagged `fallback`. The only errors that
+    reach the browser are the portal's own (the task is gone, or the portal is down), passed
+    through with their status, because there is no draft to show for a task that does not exist.
+
+    The thread inside `ai_request.input` is customer-written text. It goes to the CLI on stdin as
+    DATA, never into the system prompt, and the CLI runs with no tools and no credentials (see
+    `_autofill_via_cli`). The system prompt is the portal's, which is the trusted half."""
+    tid = _safe_id(task_id)
+    cached = _fu_ai_cached(tid)
+    if cached is not None:
+        return cached
+    status, got = _portal_call(f"/api/admin/followup-task/{tid}/draft", "GET")
+    if status >= 400:
+        return _portal_answer(status, got)
+    default = got.get("draft") if isinstance(got.get("draft"), dict) else None
+    fallback: Dict[str, Any] = {"ok": True, "draft": default, "fallback": True, "ai": False}
+    # The portal already holds a checked AI draft for this task: nothing to improve on.
+    if default and default.get("source") == "ai":
+        answer = {"ok": True, "draft": default, "fallback": False, "ai": True}
+        _fu_ai_remember(tid, answer)
+        return answer
+    req = got.get("ai_request") if isinstance(got.get("ai_request"), dict) else {}
+    system, user_input = req.get("system"), req.get("input")
+    if not (isinstance(system, str) and system.strip()
+            and isinstance(user_input, str) and user_input.strip()):
+        return fallback
+    if not _fu_ai_take_slot(tid, _user_email(request)):
+        log.info("Follow-up draft for %s: AI budget spent; using the portal's default", _log_safe(tid))
+        return {**fallback, "rate_limited": True}
+    try:
+        ai = _autofill_via_cli(user_input, system)
+    except FileNotFoundError:
+        log.warning("Follow-up draft: the claude CLI is not on PATH; using the portal's default")
+        return fallback
+    except Exception as exc:  # noqa: BLE001 (an AI failure never reaches the estimator as an error)
+        log.warning("Follow-up draft AI failed: %s: %s", type(exc).__name__, exc)
+        return fallback
+    if not isinstance(ai, dict):
+        return fallback
+    # Strings only. Anything else the model sent is dropped here rather than str()'d into the body
+    # of a customer email; the portal then refuses the empty field and answers with its default.
+    output = {k: (ai.get(k) if isinstance(ai.get(k), str) else "") for k in ("title", "body")}
+    try:
+        st2, checked = _portal_call(f"/api/admin/followup-task/{tid}/draft", "POST",
+                                    {"model_output": output})
+    except HTTPException as exc:
+        log.warning("Follow-up draft: the portal could not check the AI draft: %s", exc.detail)
+        return fallback
+    draft = checked.get("draft") if isinstance(checked.get("draft"), dict) else None
+    if st2 >= 400 or not draft:
+        return fallback
+    answer = {"ok": True, "draft": draft, "fallback": bool(checked.get("fallback")),
+              "ai": draft.get("source") == "ai"}
+    if answer["ai"]:
+        _fu_ai_remember(tid, answer)
+    return answer
+
+
+class FollowupSendIn(BaseModel):
+    title: str = ""
+    body: str = ""
+    cta: Optional[str] = None
+
+
+class FollowupSkipIn(BaseModel):
+    note: str = ""
+
+
+class FollowupCalledIn(BaseModel):
+    kind: str = "call"
+    note: str = ""
+
+
+class FollowupSnoozeIn(BaseModel):
+    until: str = ""
+
+
+class FollowupPlanIn(BaseModel):
+    """Every field optional, and ABSENT is different from null: absent leaves that part of the
+    schedule alone, null puts it back on the global default. Forwarded with exclude_unset, so a
+    change to one field never resets the other two."""
+    interval_days: Optional[int] = None
+    stop_after: Optional[int] = None
+    next_at: Optional[str] = None
+
+
+@app.post("/api/portal/followup-task/{task_id}/send")
+def api_portal_followup_send(task_id: str, request: Request,
+                             payload: Optional[FollowupSendIn] = None) -> JSONResponse:
+    """Send the (possibly edited) email. The portal re-checks the draft and owns the send; `by` is
+    the signed-in user, never a name the browser supplies."""
+    p = payload or FollowupSendIn()
+    body: Dict[str, Any] = {"title": p.title, "body": p.body, "by": _user_email(request)}
+    if p.cta:
+        body["cta"] = p.cta
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/send", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/skip")
+def api_portal_followup_skip(task_id: str, request: Request,
+                             payload: Optional[FollowupSkipIn] = None) -> JSONResponse:
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
+    body: Dict[str, Any] = {"by": _user_email(request)}
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/skip", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/called")
+def api_portal_followup_called(task_id: str, request: Request,
+                               payload: Optional[FollowupCalledIn] = None) -> JSONResponse:
+    """The estimator reached them some other way. Same four kinds as Log a call, refused here
+    before a round trip, exactly as that route refuses them."""
+    kind = str((payload.kind if payload else "call") or "call").strip().lower()
+    if kind not in ("call", "email", "text", "note"):
+        raise HTTPException(400, "invalid_kind")
+    note = str((payload.note if payload else "") or "").strip()[:_NOTE_MAX]
+    body: Dict[str, Any] = {"kind": kind, "by": _user_email(request)}
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/called", "POST", body)
+
+
+@app.post("/api/portal/followup-task/{task_id}/snooze")
+def api_portal_followup_snooze(task_id: str, request: Request,
+                               payload: Optional[FollowupSnoozeIn] = None) -> JSONResponse:
+    """Put it off to a date. The portal judges the date (past, too far, unreadable), so its own
+    400 is the one the estimator reads."""
+    until = str((payload.until if payload else "") or "").strip()[:64]
+    return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/snooze", "POST",
+                        {"until": until, "by": _user_email(request)})
+
+
+@app.post("/api/portal/proposal/{proposal_id}/followup-plan")
+def api_portal_followup_plan(proposal_id: str, request: Request,
+                             payload: Optional[FollowupPlanIn] = None) -> JSONResponse:
+    """This proposal's reminder schedule: when the next one is due, how often after that, and when
+    to stop. Remind mode is the only mode in v1, so there is no mode field to forward."""
+    body: Dict[str, Any] = payload.model_dump(exclude_unset=True) if payload else {}
+    body["by"] = _user_email(request)
+    return _portal_pass(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-plan", "POST", body)
+
+
 @app.get("/api/admin/health")
 def api_admin_health(request: Request) -> Dict[str, Any]:
     """Are we currently skipping any upstream, and why.
@@ -3040,7 +3330,7 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
 # Access (Hanz: "admins edit, staff self-serve"): the GLOBAL roster (add / remove /
 # toggle) is ADMIN-only, enforced here server-side (not just hidden buttons); the
 # per-project overrides allow ANY signed-in staff to toggle THEMSELVES for a project,
-# and admins to toggle anyone. All routes are already bearer-gated by _auth_gate.
+# and admins (or a member given the tab on Special permissions) to toggle anyone. All routes are already bearer-gated by _auth_gate.
 def _caller_is_admin(request: Request) -> bool:
     # Through _require_admin, so it reads the same cached profile as every other role decision in
     # the app. A local profiles.get_by_email() here would be a third role reader and would miss both
@@ -3052,6 +3342,23 @@ def _caller_is_admin(request: Request) -> bool:
         return False
 
 
+def _may_set_others_notify(request: Request, tab: str) -> bool:
+    """May this caller change SOMEBODY ELSE's per-project notifications: an admin, or a member
+    given `tab` on the Admin page's Special permissions card. Through _caller_is_admin first, so
+    the tests that stub it keep meaning what they did; the grant half is _require_grant's own
+    lookup, never anything the browser sends. CLOSED on any failure to read the profile or the
+    grants: a grant widens access, so an unreadable store must not."""
+    if _caller_is_admin(request):
+        return True
+    if not (_user_email(request) or "").strip():
+        return False  # nobody signed in holds no grant, whatever the profile cache has under ""
+    try:
+        _require_grant(request, tab)
+        return True
+    except Exception:  # noqa: BLE001 - HTTPException (no grant) or an unreachable profile store
+        return False
+
+
 @app.get("/api/portal/notify-recipients")
 def api_portal_notify_list() -> Dict[str, Any]:
     return _portal("/api/admin/notify-recipients", "GET")
@@ -3059,7 +3366,7 @@ def api_portal_notify_list() -> Dict[str, Any]:
 
 @app.post("/api/portal/notify-recipients")
 async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3078,7 +3385,7 @@ async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
 
 @app.patch("/api/portal/notify-recipients/{rid}")
 async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3089,7 +3396,7 @@ async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]
 
 @app.delete("/api/portal/notify-recipients/{rid}")
 def api_portal_notify_delete(rid: int, request: Request) -> Dict[str, Any]:
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     # rid is int-typed, but route it through the same id guard as every other
     # proxied path segment so the outbound URL is provably constrained.
     return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
@@ -3113,7 +3420,7 @@ async def api_portal_notify_step(request: Request) -> Dict[str, Any]:
     serves it to this page through the roster GET, and validates it on the way back in — so the
     only thing checked here is the SHAPE, and a step this tool has never heard of still works the
     day the portal learns it."""
-    _require_admin(request)
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3163,9 +3470,11 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
         raise HTTPException(400, "Enter a valid email address.")
     if mode not in ("add", "mute", "clear"):
         raise HTTPException(400, "Invalid mode.")
-    # Admin may toggle anyone; a non-admin may only toggle THEIR OWN address.
+    # An admin, or a member given the Notification Sending tab, may toggle anyone (the Special
+    # permissions card promises the tab's every admin-only edit, and this is one); anybody else may
+    # only toggle THEIR OWN address.
     me = (_user_email(request) or "").strip().lower()
-    if not _caller_is_admin(request) and email != me:
+    if email != me and not _may_set_others_notify(request, special_permissions.NOTIFICATIONS):
         raise HTTPException(403, "You can only change your own notifications for a project.")
     return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "PUT",
                    {"email": email, "mode": mode})
@@ -3714,6 +4023,10 @@ class DistanceIn(BaseModel):
     city: str = ""
     state: str = ""
     zip: str = ""
+    # The intake's county ("Sedgwick County, KS", or a tax-picker city row "Overland Park, KS"). Only
+    # /api/distance reads it, as the last way to place a job with no street (distance.approx_point);
+    # /api/county ignores it. Optional, so a body without it means what it always did.
+    county: str = ""
 
 
 @app.post("/api/distance")
@@ -3725,6 +4038,10 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     or down, address too thin, rate limit -- answers `{ok: false, miles: null,
     reason}` and the Labor step asks the estimator to type the miles. Nothing here is a guess.
 
+    NO STREET (Hanz, 2026-10-22): a zip, a city + state or a county is enough. The job is measured
+    to that one's centre (Census Gazetteer, bundled), still by road, and `precision` (street | zip |
+    city | county) and `measured_to` say so, so the page can call the figure approximate.
+
     PERMISSION. Any signed-in user (the auth gate above); no tab owns this route and it is NOT in
     nav_access.TABS on purpose: the estimate step that calls it is read by every estimator
     mid-bid, and a per-tab gate would silently blank the distance halfway through a bid (the same
@@ -3733,7 +4050,7 @@ def api_distance(payload: DistanceIn, request: Request) -> Dict[str, Any]:
     bucket = getattr(request.state, "user_email", None) or "anon"
     if distance.rate_limited(bucket):
         return {"ok": False, "miles": None, "reason": "busy", "office": distance.OFFICE_LABEL}
-    return distance.lookup(payload.address, payload.city, payload.state, payload.zip)
+    return distance.lookup(payload.address, payload.city, payload.state, payload.zip, payload.county)
 
 
 @app.post("/api/county")
@@ -7459,7 +7776,7 @@ def api_delete_project(draft_id: str, request: Request) -> Dict[str, Any]:
     becoming a second word for one act.
 
     ADMINS ONLY, at the endpoint and not merely in the drawer."""
-    actor = _require_admin(request)
+    actor = _require_grant(request, special_permissions.PROJECTS)
     who = actor.get("email")
     hidden = _portal_visibility(draft_id, "delete", who)
     existed = drafts.trash_draft(draft_id, who)
@@ -8258,13 +8575,17 @@ def api_me(request: Request) -> Dict[str, Any]:
         role = prof.get("role", "user")
         return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
                 "role": role, "status": prof.get("status", "active"),
-                "nav_denied": _nav_denied_for(role),
-                "nav_denied_pages": _nav_denied_pages_for(role)}
+                "nav_denied": _nav_denied_for(role, prof.get("email") or email),
+                "nav_denied_pages": _nav_denied_pages_for(role, prof.get("email") or email),
+                "grants": _grants_for(role, prof.get("email") or email)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
+    # No profile row means _require_grant refuses this caller, so /api/me promises nothing either:
+    # showing a control the server would 403 is the lie this list exists to avoid.
     return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
             "nav_denied": _nav_denied_for(role),
-            "nav_denied_pages": _nav_denied_pages_for(role)}
+            "nav_denied_pages": _nav_denied_pages_for(role),
+            "grants": _grants_for(role, "") if role == "super_admin" else []}
 
 
 # ─── The caller's role, resolved in ONE place ─────────────────────────
@@ -8302,21 +8623,46 @@ def _caller_profile(request: Request) -> Optional[Dict[str, Any]]:
     return prof
 
 
-def _nav_denied_for(role: str) -> List[str]:
-    """The tab hrefs `role` may not reach, for /api/me.
+def _granted_tabs(email: Any) -> List[str]:
+    """The tabs this person was given on the Special permissions card. [] on any store trouble."""
+    try:
+        return special_permissions.grants_for(email)
+    except Exception as exc:  # noqa: BLE001 - a bad store grants nothing
+        log.warning("special permissions unreadable for the nav policy: %s", exc)
+        return []
+
+
+def _nav_policy_for(role: str, email: Any = "") -> Dict[str, Any]:
+    """The nav policy as it applies to ONE caller: their role's denied tabs minus the tabs they were
+    granted. Shaped like nav_access.get(), so every nav_access reader takes it as its `policy`.
+
+    Without a grant it IS nav_access.get(), so an ungranted member is judged exactly as before.
+    Raises whatever the policy read raises; callers keep their own fail-open handling.
+    """
+    policy = nav_access.get()
+    granted = _granted_tabs(email) if email else []
+    if not granted:
+        return policy
+    key = str(role or "").strip().lower()
+    return dict(policy, deny={key: [h for h in nav_access.denied_paths(role, policy)
+                                    if h not in granted]})
+
+
+def _nav_denied_for(role: str, email: Any = "") -> List[str]:
+    """The tab hrefs `role` (and this caller, after their granted tabs) may not reach, for /api/me.
 
     auth.js already awaits /api/me at boot before it draws the sidebar, so riding along on that
     response costs no round trip and means the menu and the gate read ONE source. Fails open: a
     policy blip costs a menu item, never the page.
     """
     try:
-        return nav_access.denied_paths(role)
+        return nav_access.denied_paths(role, _nav_policy_for(role, email))
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
 
 
-def _nav_denied_pages_for(role: str) -> Dict[str, str]:
+def _nav_denied_pages_for(role: str, email: Any = "") -> Dict[str, str]:
     """{page path: the denied tab href that owns it}, so auth.js can refuse the page it is ON.
 
     Expanded HERE rather than in the browser because one tab owns two pages — the Polish beta's step
@@ -8324,7 +8670,7 @@ def _nav_denied_pages_for(role: str) -> Dict[str, str]:
     auth.js is the copy that goes stale. Fails open for the same reason as _nav_denied_for.
     """
     try:
-        return nav_access.denied_page_map(role)
+        return nav_access.denied_page_map(role, _nav_policy_for(role, email))
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return {}
@@ -8336,6 +8682,35 @@ def _require_admin(request: Request) -> Dict[str, Any]:
     if not prof or prof.get("role") not in ("admin", "super_admin"):
         raise HTTPException(403, "Admin access required.")
     return prof
+
+
+def _require_grant(request: Request, key: str) -> Dict[str, Any]:
+    """_require_admin, OR a member who was given the TAB `key` (a nav_access.TABS href, one of
+    special_permissions.KEYS) on the Admin page's Special permissions card.
+
+    Same profile lookup and the same 403 sentence as _require_admin, so a member without the grant
+    sees exactly what they saw before this existed. The grant is read by the caller's email off the
+    profile (falling back to the signed-in email), never from anything the browser sends.
+    """
+    prof = _caller_profile(request)
+    if prof and prof.get("role") in ("admin", "super_admin"):
+        return prof
+    email = (prof or {}).get("email") or _user_email(request) or ""
+    if prof and special_permissions.has(email, key):
+        return prof
+    raise HTTPException(403, "Admin access required.")
+
+
+def _grants_for(role: str, email: str) -> List[str]:
+    """The granted tab hrefs for /api/me: every grantable tab for an admin, the stored grants for
+    anyone else."""
+    if role in ("admin", "super_admin"):
+        return list(special_permissions.KEYS)
+    try:
+        return special_permissions.grants_for(email)
+    except Exception as exc:  # noqa: BLE001 - a bad store grants nothing, and never breaks /api/me
+        log.warning("special permissions unreadable for /api/me: %s", exc)
+        return []
 
 
 class RoleIn(BaseModel):
@@ -8502,6 +8877,44 @@ def api_admin_set_nav_access(payload: NavAccessIn, request: Request) -> Dict[str
             "locked_pages": list(nav_access.LOCKED),
             "locked_roles": list(nav_access.LOCKED_ROLES),
             "tabs": nav_access.capability_table()}
+
+
+# ─── Special permissions: one tab for one named person ───────────────
+# Hanz, 2026-10-27: "a list of names and then the checkboxes", one box per tab (the tab, plus every
+# admin-only edit inside it). The grants themselves are NOT
+# grantable — both routes are _require_admin — or a member given one could give themselves the rest.
+class SpecialPermissionsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    grants: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+def _special_permissions_body(store: Dict[str, Any]) -> Dict[str, Any]:
+    return {"ok": True, "grants_catalog": special_permissions.catalog(),
+            "grants": store.get("grants") or {},
+            "updated_at": store.get("updated_at"), "updated_by": store.get("updated_by")}
+
+
+@app.get("/api/admin/special-permissions")
+def api_admin_special_permissions(request: Request) -> Dict[str, Any]:
+    """Who holds which grantable ability, plus the list of abilities the page draws as columns."""
+    _require_admin(request)
+    return _special_permissions_body(special_permissions.load())
+
+
+@app.put("/api/admin/special-permissions")
+def api_admin_set_special_permissions(payload: SpecialPermissionsIn,
+                                      request: Request) -> Dict[str, Any]:
+    """Replace the whole grants map. Unknown keys and blank emails are dropped, not refused."""
+    actor = _require_admin(request)
+    try:
+        store = special_permissions.save(payload.grants,
+                                         actor.get("email") or _user_email(request) or "")
+    except special_permissions.SpecialPermissionsWriteError as exc:
+        log.error("special permissions save failed: %s", exc)
+        raise HTTPException(500, "Couldn't save the special permissions") from exc
+    drafts.log_event(None, actor.get("email"), "special_permissions_changed",
+                     {"grants": store["grants"]})
+    return _special_permissions_body(store)
 
 
 # ─── Lead inbox (Basisboard messages + OUR state) ─────────────────────

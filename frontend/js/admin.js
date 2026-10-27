@@ -4,6 +4,10 @@
     // null until boot() fetches it, and null again if that fetch fails — in which case the matrix
     // renders READ-ONLY and says so, rather than drawing switches that would save nothing.
     let NAV_POLICY = null;
+    // The Special permissions store: { grants_catalog, grants:{email:[keys]}, updated_at, updated_by }.
+    // null until loaded, and null if that fetch failed — the card then says so instead of drawing
+    // boxes that would save nothing.
+    let GRANTS = null;
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
     // One drawn glyph out of js/icons.js, which loads before this file. Never a typed character:
@@ -39,7 +43,13 @@
       await loadNavPolicy();
       shell();
       wireRoleMatrix();
+      await loadGrants();
       await refresh();
+    }
+
+    async function loadGrants(){
+      const res = await apiFull("/api/admin/special-permissions");
+      GRANTS = res.ok && res.body && res.body.grants_catalog ? res.body : null;
     }
 
     async function loadNavPolicy(){
@@ -67,6 +77,7 @@
           </tr></thead><tbody id="tbody"></tbody></table></div>
         </div>
         ${roleMatrixHtml()}
+        <div id="sp-panel"></div>
         <div class="panel" style="margin-top:18px;">
           <div class="ph"><strong>Projects</strong><span id="pcount" style="color:var(--ink-v)"></span>
             <span class="grow"></span>
@@ -169,7 +180,7 @@
         // member genuinely does not get that tab — the ROLE gate in the sidebar decides that, and
         // this policy is a separate thing that simply cannot reach either page.
         if (cap.locked) return `<span class="rv-lock" title="This policy cannot take this page away. It is where the setting is edited from, or where signing in lands — denying it would remove the way back.">not deniable</span>`;
-        if (!(cap.api||[]).length) return `<span class="rv-thin" title="Every API route this page reads is read by another page too, so refusing them would break a page nobody restricted. Switching this tab off hides it and blocks the page; the data stays reachable to somebody who knows the URL.">hides the tab only</span>`;
+        if (!(cap.api||[]).length) return `<span class="rv-thin" title="Switching this tab off hides it and blocks the page. The server does not refuse its data, so somebody who knows the route can still read it.">hides the tab only</span>`;
         return `<span class="rv-hard" title="${esc((cap.api||[]).join(", "))}">blocks its data</span>`;
       };
 
@@ -203,7 +214,7 @@
         else if (lockedRoles.indexOf(role) !== -1) why = "A super admin cannot be restricted. That role is set from the server's environment, so it is the account that always has a way in.";
         else if (role === mine && on) why = "You can't take a tab away from your own role. Ask another admin, or change it for a different role.";
         const scope = cap && !(cap.api||[]).length
-          ? "Switching this off hides the tab and blocks the page. Its data stays reachable to somebody who types the URL — every route its page reads is read by another page too."
+          ? "Switching this off hides the tab and blocks the page. Its data stays reachable to somebody who types the route."
           : (cap ? ("Switching this off also refuses " + (cap.api||[]).join(", ") + ", which only this tab uses.") : "");
         const title = why || ((on ? "Switch off for " : "Switch on for ") + roleLabelOf(role) + ". " + scope);
         return `<td class="rv-cell" data-role="${esc(role)}">` +
@@ -251,22 +262,20 @@
             somewhere an admin can find it: a denial nobody can see is a denial nobody can lift.${
             policyKnown?"":` Those cells read a question mark because the permissions did not load,
             not because the tab is switched off.`}</p>`:""}
-          <p><strong>A tab switched off is a real block, but the page is still served.</strong>
+          <p><strong>A tab switched off is hidden from the menu, and its page shows a "not available" card. Its data is not blocked.</strong>
             There is no session cookie in this app — the only credential is a header the browser
             attaches to API calls — so a page is still reachable by typing its URL, and what it
-            paints for a blocked role is a refusal card instead of its own content. What refuses the
-            DATA is the server, on the tabs marked <em>blocks its data</em> below. The sidebar on its
+            paints for a blocked role is a refusal card instead of its own content. Every tab here
+            <em>hides the tab only</em>: the server does not refuse a tab's data to a role it is
+            switched off for. The sidebar on its
             own is not a permission model, and never was: <code>_require_admin</code> guards every
             <code>/api/admin/*</code> route (this page's users and stats, admin project deletes, the
             digest run and preview), the Item Library's vendor / division / unit writes, and the
             notification-recipient writes, switches or no switches.</p>
           ${hideOnly.length?`<p><strong>${hideOnly.length} ${hideOnly.length===1?"tab":"tabs"} can
             only be hidden, not sealed:</strong> ${hideOnly.map(t=>`<strong>${esc(t.label)}</strong>`)
-              .join(", ")}. Every API route their pages read is read by another page too — the
-            Analytics payload is also the Bid Calendar's, the Item Library's assemblies also price
-            Estimating Tool v2, the pipeline feeds Direct Projects, GC Projects and Notification Sending — so
-            refusing those routes would break a page nobody restricted. Switching one off removes
-            the tab and blocks the page; somebody who knows the route can still read the data.</p>`:""}
+              .join(", ")}. Switching one off removes the tab and blocks the page; somebody who
+            knows the route can still read the data.</p>`:""}
           <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
             admin-gated: any signed-in member may rewrite the four recurring customer emails, and
             the save replaces the settings row with no history. The sidebar and the server agree
@@ -344,6 +353,78 @@
       return parts.join(" ");
     }
 
+    // ── Special permissions ──
+    // Hanz, 2026-10-27: a member sometimes needs something only admins can do — "a list of names and
+    // then the checkboxes" — and then "It should be for the whole tab as well". One row per person,
+    // one column per TAB (every tab in the matrix above except Admin itself, in its order and with
+    // its labels). Ticking one gives that person the tab, even if their role is unticked for it, and
+    // every admin-only edit inside it. An admin's row is all ticked and disabled, because the server
+    // already lets an admin do every one of them.
+    //
+    // PURE (its inputs are its arguments, and esc is local) so backend/tests/js/special-permissions-
+    // harness.js can lift it out and render it on its own.
+    function grantsPanelHtml(users, store, status){
+      const e = (s) => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+      const head = `<div class="ph"><strong>Special permissions</strong>
+          <span style="color:var(--ink-v)">Give one person a tab without making them an admin.</span>
+          <span class="grow"></span>
+          <span class="rv-you" id="sp-status" role="status">${e(status||"")}</span></div>`;
+      if (!store || !Array.isArray(store.grants_catalog)) {
+        return `<div class="panel" id="sp-panel" style="margin-top:18px;">${head}
+          <p class="rv-note">The special permissions didn't load, so there is nothing to change here. Reload the page.</p></div>`;
+      }
+      const cat = store.grants_catalog, held = store.grants || {};
+      const cols = cat.map(g => `<th class="rv-h" title="${e(g.href||g.key)}">${e(g.label)}</th>`).join("");
+      const rows = (users || []).filter(u => u && u.email).map(u => {
+        const email = String(u.email).toLowerCase();
+        const admin = u.role === "admin" || u.role === "super_admin";
+        const mine = held[email] || [];
+        const cells = cat.map(g => {
+          const on = admin || mine.indexOf(g.key) !== -1;
+          const title = admin ? "Admins have all of these" : ((on ? "Take away " : "Give ") + g.label);
+          return `<td class="rv-cell"><input type="checkbox" data-act="grant" data-email="${e(email)}"` +
+            ` data-key="${e(g.key)}"${on?" checked":""}${admin?" disabled":""} aria-label="${e(g.label)} for ${e(u.full_name||email)}" title="${e(title)}"></td>`;
+        }).join("");
+        return `<tr data-email="${e(email)}"${admin?' data-admin="1"':""}><td>${e(u.full_name||email)}${
+          admin?' <span class="rv-lock">Admins have all of these</span>':""}<span class="rv-href">${e(email)}</span></td>${cells}</tr>`;
+      }).join("") || `<tr><td colspan="${cat.length+1}" style="padding:24px">No users.</td></tr>`;
+      return `<div class="panel" id="sp-panel" style="margin-top:18px;">${head}
+        <p class="rv-note" id="sp-note" style="margin:0;padding:8px 16px 0">Ticking a tab gives that person the tab and every admin-only edit in it, even if their role is unticked above.</p>
+        <div style="overflow-x:auto;max-width:100%"><table style="white-space:nowrap">
+          <thead><tr><th>Person</th>${cols}</tr></thead><tbody>${rows}</tbody>
+        </table></div>
+        <div class="rv-note"><p>Ticking a box saves it. The server checks these on every request, so a
+          ticked box is a real permission and not just a visible button. The Admin page, users, roles,
+          bans, tab permissions and this list stay admin-only.${store.updated_at?` Last changed ${e(new Date(store.updated_at).toLocaleDateString())}${store.updated_by?" by "+e(store.updated_by):""}.`:""}</p></div></div>`;
+    }
+
+    function renderGrants(status){
+      const el = document.getElementById("sp-panel");
+      if (!el) return;
+      el.outerHTML = grantsPanelHtml(USERS, GRANTS, status);
+      document.querySelectorAll('#sp-panel [data-act="grant"]').forEach(box =>
+        box.addEventListener("change", () => toggleGrant(box.dataset.email, box.dataset.key, box.checked)));
+    }
+
+    /** Flip one tab for one person and save the WHOLE map, which is what the route takes. */
+    async function toggleGrant(email, key, on){
+      const next = {};
+      Object.keys((GRANTS && GRANTS.grants) || {}).forEach(k => { next[k] = GRANTS.grants[k].slice(); });
+      const list = next[email] || (next[email] = []);
+      const at = list.indexOf(key);
+      if (on && at === -1) list.push(key);
+      if (!on && at !== -1) list.splice(at, 1);
+      renderGrants("Saving…");
+      // Every save sends the WHOLE map built from the last saved copy, so a second tick sent while
+      // this one is in flight would leave this one out. The boxes stay off until the answer redraws them.
+      document.querySelectorAll('#sp-panel [data-act="grant"]').forEach(box => { box.disabled = true; });
+      const res = await apiFull("/api/admin/special-permissions",
+        { method:"PUT", body: JSON.stringify({ grants: next }) });
+      if (!res.ok || !res.body.grants_catalog) { renderGrants("Not saved: " + errText(res)); return; }
+      GRANTS = res.body;
+      renderGrants("Saved.");
+    }
+
     async function refresh(){
       const role = document.getElementById("rolefilter").value;
       const s = await api("/api/admin/stats");
@@ -356,6 +437,7 @@
       USERS = (u && u.users) || [];
       document.getElementById("ucount").textContent = `${USERS.length} loaded`;
       renderRows();
+      renderGrants();
       loadProjects();
     }
     function card(k,v){ return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${v==null?"—":v}</div></div>`; }

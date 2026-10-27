@@ -207,6 +207,13 @@ const GYP_TAB = 'Gyp (USG 1-8")';
 
 const ADDR = { address: "100 Main St", city: "Wichita", state: "KS", zip: "67202" };
 const DISTANCES = { far: { ok: true, miles: 190, reason: "" }, local: { ok: true, miles: 40, reason: "" }, unknown: { ok: false, miles: null, reason: "not_found" } };
+/** THE ONE LOOKUP A SAVED BID IS OWED ON OPEN (Hanz, 2026-10-22): a saved draft with NO distance on file (never measured, never typed) and an address the page can
+ *  place asks once, as a new bid does; one with a distance never asks. 1 or 0. In these walks that lookup finds nothing (reopen), so it moves nothing. */
+function owedLookups(blob) {
+  const s = blob || {};
+  const has = !!(s.polish_estimate && s.polish_estimate.distance);
+  return !has && B.distanceKey(s.address, s.city, s.state, s.zip, s.county) ? 1 : 0;
+}
 const CONDITIONS = { taxable: true, prevailing_wage: false, remodel_tax: false };
 const draftOf = (workType, extra) => P.blob(Object.assign({ work_type: workType, polish_estimate: { version: 2, conditions: CONDITIONS } }, ADDR, extra || {}));
 const DRAFTS = {
@@ -262,7 +269,12 @@ function reopen(saved, extra) {
   const tabsOf = (blob) => Object.keys(((blob && blob.polish_estimate) || {}).tabs || {}).join("|");
   report.reloads = (report.reloads || 0) + 1;
   if (tabsOf(saved) !== tabsOf(J.reloaded(saved))) report.reordered = (report.reordered || 0) + 1;
-  return open(saved, Object.assign({ reloaded: true }, extra || {}));
+  // A saved draft with NO distance asks on open since 2026-10-22 (owedLookups). In these walks such a draft is one whose address the server could
+  // not place (an "unknown" walk, or a {cleared} box, whose own re-ask found nothing), so that is what it is told again; the figure a reopen is
+  // otherwise offered is the lure a bid WITH a distance must never ask for.
+  const opts = Object.assign({ reloaded: true }, extra || {});
+  if (owedLookups(saved)) opts.distance = DISTANCES.unknown;
+  return open(saved, opts);
 }
 
 const secOf = (m, tab) => (tab === B.ROOT_TAB ? m : (m.tabs || {})[tab]);
@@ -717,7 +729,8 @@ async function take(saved, step, distanceAnswer) {
     b.api.go(1);
     await settle();
     const plain = step.job === here && !step.crew;
-    const quiet = { armed: b.clock.armed(), saves: b.rec.saves.length, asked: (b.rec.distanceBodies || []).length };
+    // `asked`: lookups BEYOND the one a saved bid with no distance is owed (owedLookups).
+    const quiet = { armed: b.clock.armed(), saves: b.rec.saves.length, asked: (b.rec.distanceBodies || []).length - owedLookups(saved) };
     if (step.crew) { const c = STEP_CREW[step.job]; typeCrew(b, c[0], c[1], c[2], c[3]); }
     const was = plain ? shape(b) : null;
     if (!plain) b.clock.fire();

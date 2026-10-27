@@ -2099,11 +2099,23 @@
    *                     offsetWidth 0, on the restore and on the drag alike (the rail is hidden at
    *                     init, so its restore is exactly where this matters). The panel's CSS width;
    *                     defaults to clampPanelPos's own 250.
+   *  opts.collapseKey   localStorage key the collapsed state is saved under. With it, a press on the
+   *                     header's collapse button (opts.collapseButton, default "op-collapse";
+   *                     delegated like the handle, because the header is rebuilt on every render)
+   *                     toggles the panel's `collapsed` class, which the CSS draws as the header
+   *                     pill alone, and the page opens collapsed next time. No key, no collapse.
    *
-   *  The restore only runs while the panel really is `position: fixed`. Below the breakpoint the
-   *  CSS puts it back in the flow, where left/top are inert and offsetWidth is the whole column;
-   *  clamping against that would compute a lane for a panel four times too wide. Nothing here
-   *  throws on a wiped, corrupt or blocked localStorage: the panel just opens where the CSS put it. */
+   *  The restore only runs while the panel really is `position: fixed`. The step-3 rail always is
+   *  now; the cheat sheet still drops back into the flow below its breakpoint, where left/top are
+   *  inert and offsetWidth is the whole column, and clamping against that would compute a lane for
+   *  a panel four times too wide.
+   *
+   *  A WINDOW RESIZE RE-CLAMPS. The rail floats at every width since 2026-10-27 (it used to drop
+   *  inline below 1400px), so a window narrowed after the page opened can leave a moved panel with
+   *  its header past the edge. The re-clamp starts from where the estimator PUT the panel, not from
+   *  where the last resize left it, so narrowing and widening again brings it back to their spot.
+   *  It is never saved: a resize is not the estimator choosing a position. Nothing here throws on a
+   *  wiped, corrupt or blocked localStorage: the panel just opens where the CSS put it. */
   function floatPanel(panel, opts) {
     if (!panel) return;
     opts = opts || {};
@@ -2111,6 +2123,15 @@
     const draggingClass = opts.draggingClass || "op-dragging";
     const key = opts.key || "";
     const fallbackWidth = opts.width || 250;
+    const collapseKey = opts.collapseKey || "";
+    const collapseSel = "." + (opts.collapseButton || "op-collapse");
+    let wanted = null;          // where the estimator put it (restored or dragged), unclamped
+    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    const place = (pos) => {
+      const at = clampPanelPos(pos.left, pos.top, panel.offsetWidth || fallbackWidth);
+      panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
+      panel.style.right = "auto";
+    };
     if (key) {
       try {
         const p = JSON.parse(localStorage.getItem(key) || "null");
@@ -2119,14 +2140,33 @@
             && getComputedStyle(panel).position === "fixed") {
           // Against the same width the drag uses. A panel hidden at init (the rail) has no layout
           // yet, and without the declared width this clamped it against clampPanelPos's own 250.
-          const at = clampPanelPos(p.left, p.top, panel.offsetWidth || fallbackWidth);
-          panel.style.left = at.left + "px"; panel.style.top = at.top + "px";
-          panel.style.right = "auto";
+          wanted = { left: p.left, top: p.top };
+          place(wanted);
         }
       } catch {}
     }
-    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    if (collapseKey) {
+      try { if (localStorage.getItem(collapseKey) === "1") panel.classList.add("collapsed"); } catch {}
+      panel.addEventListener("click", (e) => {
+        const b = e.target.closest && e.target.closest(collapseSel);
+        if (!b || !panel.contains(b)) return;
+        const collapse = !panel.classList.contains("collapsed");
+        if (collapse) panel.classList.add("collapsed"); else panel.classList.remove("collapsed");
+        try { b.setAttribute("aria-expanded", collapse ? "false" : "true"); } catch {}
+        try { localStorage.setItem(collapseKey, collapse ? "1" : "0"); } catch {}
+        e.preventDefault();
+      });
+    }
+    try {
+      window.addEventListener("resize", () => {
+        if (!wanted || dragging || getComputedStyle(panel).position !== "fixed") return;
+        place(wanted);
+      });
+    } catch {}
     panel.addEventListener("pointerdown", (e) => {
+      // The collapse button sits inside the header. A press on it is a click, not a drag: the
+      // pointer capture below would otherwise take the release away from the button.
+      if (e.target.closest && e.target.closest(collapseSel)) return;
       const h = e.target.closest && e.target.closest(handleSel);
       if (!h || !panel.contains(h)) return;
       const r = panel.getBoundingClientRect();
@@ -2147,6 +2187,7 @@
     const end = () => {
       if (!dragging) return;
       dragging = false; panel.classList.remove(draggingClass);
+      wanted = { left: parseFloat(panel.style.left) || 0, top: parseFloat(panel.style.top) || 0 };
       if (!key) return;
       try {
         localStorage.setItem(key, JSON.stringify({

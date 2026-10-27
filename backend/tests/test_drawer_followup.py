@@ -44,7 +44,13 @@ def _block(name: str) -> str:
 # choose who gets chased). Reading only the first one made the id check below fail on ids that
 # ARE rendered — the invariant it protects is "no handler reaches for something nobody renders",
 # and where in the panel the markup comes from is not part of that claim.
-PANEL = _block("followupPanelHtml") + _block("followupContactsHtml")
+#
+# THREE MORE since 2026-10-23 (remind mode), for the same reason: followupPanelHtml interpolates the
+# reminder schedule and the pending-task card, and the task card interpolates the compose box, so
+# their ids are part of "the panel" for this check exactly as the contact list's are.
+PANEL = (_block("followupPanelHtml") + _block("followupContactsHtml")
+         + _block("followupScheduleHtml") + _block("followupTaskHtml")
+         + _block("followupComposeHtml"))
 WIRE = _block("wireFollowup")
 
 

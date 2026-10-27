@@ -41,6 +41,14 @@
   var DIVISION_USE = {};
   var UNIT_USE = {};
   var ADMIN = false;               // may change administration lists; everyone may pick from them
+  // May edit an item's price breaks, bulk cost and coverage basis: an admin, or a member given THIS
+  // TAB ("/library.html") on the Admin page's Special permissions card (/api/me's `grants` are tab
+  // hrefs). The server agrees: every admin-only edit on this page opens to that one tab grant.
+  var ITEMS_PRICING = false;
+  // The same rule, the same tab: vendors / divisions / units / labor lines and the labor
+  // calculator, and the Defaults tab's condition sliders.
+  var LISTS_EDIT = false;
+  var DEFAULTS_EDIT = false;
   var openId = null;
   var view = "asm";
   /** Which line's item picker is showing its results, by index within the current assembly.
@@ -116,7 +124,11 @@
       if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
       var me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
       ADMIN = me.role === "admin" || me.role === "super_admin";
-    } catch (e) { ADMIN = false; }
+      var tabGranted = Array.isArray(me.grants) && me.grants.indexOf("/library.html") !== -1;
+      ITEMS_PRICING = ADMIN || tabGranted;
+      LISTS_EDIT = ADMIN || tabGranted;
+      DEFAULTS_EDIT = ADMIN || tabGranted;
+    } catch (e) { ADMIN = false; ITEMS_PRICING = false; LISTS_EDIT = false; DEFAULTS_EDIT = false; }
     try {
       var rs = await Promise.all([api("/api/library/items"), api("/api/library/assemblies"),
                                  api("/api/library/vendors"), api("/api/library/divisions"),
@@ -1490,11 +1502,98 @@
     patchSoon("items", it.id, { price_breaks: breaksForSave(it.price_breaks) });
   }
 
+  /** The 25 materials the table draws, out of the `shown` (searched and filtered) list.
+   *
+   *  renderItems runs on a dozen events, so the page is decided HERE from state, never by the
+   *  caller: a changed search or facet goes back to page 1, exactly ONE material id the last
+   *  render had not seen (Add material, Duplicate) moves to the page that holds it, and a list
+   *  that shrank under the page (a delete) is clamped onto its new last page. Every other repaint
+   *  (a save reply, More/Less, a price break) keeps the page it found. A reload that brings several
+   *  new ids at once moves nothing: that is other people's work arriving, not a row just made. */
+  function itemsPage(shown) {
+    var st = PAGER.items;
+    var view = String(itemQuery) + "\n" + JSON.stringify(FILTERS);
+    if (st.view !== null && st.view !== view) st.page = 1;
+    st.view = view;
+    if (st.known) {
+      var fresh = [];
+      for (var i = 0; i < shown.length; i++) if (!st.known[shown[i].id]) fresh.push(i);
+      if (fresh.length === 1) st.page = L.pageOfIndex(fresh[0], L.PAGE_SIZE);
+    }
+    var known = {};
+    for (var k = 0; k < ITEMS.length; k++) known[ITEMS[k].id] = true;
+    st.known = known;
+    st.page = L.clampPage(st.page, shown.length, L.PAGE_SIZE);
+    return L.pageSlice(shown, st.page, L.PAGE_SIZE);
+  }
+
+  /** The rail's 25 cards, out of `shown`. Same rules as itemsPage for the view and the clamp; the
+   *  difference is what counts as "just made": an assembly OPENED since the last render (+ New
+   *  assembly, a deep link, the Defaults tab's Edit, the first load) moves the rail to the page
+   *  holding it, so the aria-current card is on screen whenever an assembly is opened. A click on a
+   *  card is already on this page and moves nothing. */
+  function asmPage(shown, area) {
+    var st = PAGER.asm;
+    var view = String(asmQuery) + "\n" + JSON.stringify(ASM_FILTERS) + "\n" + ASM_SORT + "\n" + area;
+    if (st.view !== null && st.view !== view) st.page = 1;
+    st.view = view;
+    if (openId !== st.open) {
+      st.open = openId;
+      for (var i = 0; i < shown.length; i++) {
+        if (shown[i].id === openId) { st.page = L.pageOfIndex(i, L.PAGE_SIZE); break; }
+      }
+    }
+    st.page = L.clampPage(st.page, shown.length, L.PAGE_SIZE);
+    return L.pageSlice(shown, st.page, L.PAGE_SIZE);
+  }
+
+  /** Write one pager: hidden when everything fits on one page, otherwise "Page 2 of 6",
+   *  "26–50 of 140" and the two edge buttons. The buttons are STATIC markup in library.html and
+   *  only their state changes here, so the one a keyboard user just pressed keeps the focus. They
+   *  say they are spent with aria-disabled rather than `disabled`, which would drop that focus on
+   *  the floor the moment Next reached the last page. */
+  function paintPager(id, info) {
+    var nav = $(id);
+    if (!nav) return;
+    nav.hidden = !info.paged;
+    var prev = $(id + "-prev"), next = $(id + "-next");
+    if (prev) prev.setAttribute("aria-disabled", info.page <= 1 ? "true" : "false");
+    if (next) next.setAttribute("aria-disabled", info.page >= info.pages ? "true" : "false");
+    if ($(id + "-page")) $(id + "-page").textContent = info.paged ? info.label : "";
+    if ($(id + "-range")) $(id + "-range").textContent = info.paged ? info.range : "";
+  }
+
+  /** Previous / Next. `kind` is "items" or "asm", `step` -1 or 1. Past either end it does nothing,
+   *  which is what a press on a spent button reaches. */
+  function turnPage(kind, step) {
+    var st = PAGER[kind];
+    if (!st) return;
+    var total = kind === "items" ? visibleItems().length : visibleAssemblies($("area").value).length;
+    var to = L.clampPage(st.page + (Number(step) || 0), total, L.PAGE_SIZE);
+    if (to === st.page) return;
+    st.page = to;
+    if (kind === "items") renderItems(); else renderList();
+  }
+
+  /** Move the Items table to the page holding material `id`, if the current search shows it at
+   *  all. For focusItemRow, which is sent a row from another tab that may be pages away. */
+  function showItemPage(id) {
+    var shown = visibleItems();
+    for (var i = 0; i < shown.length; i++) {
+      if (shown[i].id !== id) continue;
+      var to = L.pageOfIndex(i, L.PAGE_SIZE);
+      if (to !== PAGER.items.page) { PAGER.items.page = to; renderItems(); }
+      return true;
+    }
+    return false;
+  }
+
   function renderItems() {
     var out = "";
     var shown = visibleItems();
-    for (var i = 0; i < shown.length; i++) {
-      var it = shown[i];
+    var rows = itemsPage(shown);
+    for (var i = 0; i < rows.length; i++) {
+      var it = rows[i];
       out += '<tr data-item="' + esc(it.id) + '">' +
         // THE SAVE BUTTON'S OWN CELL, the FIRST cell, so Save sits left of the name (Hanz,
         // 2026-10-12) and is the first stop in the keyboard order. library.html pins it to the
@@ -1530,8 +1629,9 @@
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
-          // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin only.
-          (ADMIN ? '<button class="btn ghost sm" type="button" data-item-more-toggle="' + esc(it.id) +
+          // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin or a member
+          // granted this tab on the Special permissions card.
+          (ITEMS_PRICING ? '<button class="btn ghost sm" type="button" data-item-more-toggle="' + esc(it.id) +
             '" aria-expanded="' + (itemMoreOpen[it.id] ? "true" : "false") + '" aria-label="' +
             (itemMoreOpen[it.id] ? "Hide" : "Show") + " price breaks, bulk cost and coverage basis for " +
             esc(it.name) + '">' + (itemMoreOpen[it.id] ? "Less" : "More") + "</button>" : "") +
@@ -1542,7 +1642,7 @@
           '<button class="icon danger" type="button" data-del-item="' + esc(it.id) + '" title="Remove this material" aria-label="Remove ' + esc(it.name) + '">' + icon("trash") + "</button>") +
           "</td>" +
       "</tr>";
-      if (ADMIN && itemMoreOpen[it.id]) out += itemMoreHtml(it);
+      if (ITEMS_PRICING && itemMoreOpen[it.id]) out += itemMoreHtml(it);
     }
     $("items-body").innerHTML = out;
     // Three states, not two: nothing in the library, nothing matching the search, and rows. The
@@ -1574,6 +1674,10 @@
       $("item-hits").textContent = filtering
         ? shown.length + " of " + ITEMS.length + " shown" : "";
     }
+    // Under the table, and a compact copy over it: 25 rows is a long scroll to reach the bottom one.
+    var pg = L.pageInfo(PAGER.items.page, shown.length, L.PAGE_SIZE);
+    paintPager("items-pager", pg);
+    paintPager("items-pager-top", pg);
     // The tab badge stays the TOTAL. It is how many materials Treadwell has, not how many are on
     // screen right now, and a badge that moved as somebody typed would read as rows disappearing.
     $("n-items").textContent = ITEMS.length;
@@ -1686,7 +1790,9 @@
         '[data-item="' + id + '"] input[data-f="name"]');
     };
     var el = find();
-    if (!el && anyFilterActive()) { clearFilters(); el = find(); }
+    // ON ANOTHER PAGE of the table: move to the page that holds it, then look again.
+    if (!el) { showItemPage(id); el = find(); }
+    if (!el && anyFilterActive()) { clearFilters(); showItemPage(id); el = find(); }
     if (el && el.focus) el.focus();
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
   }
@@ -1744,7 +1850,7 @@
       // and the estimate use (B.travelLabel): the stored name is left alone, only what is drawn.
       var shownName = (travel && window.TWBidModel && window.TWBidModel.travelLabel)
         ? window.TWBidModel.travelLabel(r.name) : r.name;
-      if (!ADMIN) {
+      if (!LISTS_EDIT) {
         out += '<tr data-labor="' + esc(r.id) + '">' +
           // The Save column, empty for somebody who cannot save, so the cells line up under the head.
           '<td class="rowsave"></td>' +
@@ -1807,11 +1913,11 @@
     // somebody actually bills), so there is no "nothing matches" state to hold apart from it.
     $("labor-empty").hidden = LABOR.length > 0;
     // Both Add controls are writes, so both follow ADMIN the way renderRefSection's do.
-    $("labor-addrow").hidden = !ADMIN || LABOR.length === 0;
+    $("labor-addrow").hidden = !LISTS_EDIT || LABOR.length === 0;
     var first = $("labor-empty").querySelector
       ? $("labor-empty").querySelector("[data-add-labor]") : null;
-    if (first) first.hidden = !ADMIN;
-    if ($("labor-ro")) $("labor-ro").hidden = ADMIN;
+    if (first) first.hidden = !LISTS_EDIT;
+    if ($("labor-ro")) $("labor-ro").hidden = LISTS_EDIT;
     // The badge is the TOTAL, matching #n-items and #n-asm: how many labor lines the catalog
     // holds, not how many are favorited -- that count belongs to the Defaults tab, not this one.
     $("n-labor").textContent = LABOR.length;
@@ -1887,16 +1993,16 @@
         // THE SAVE BUTTON'S OWN CELL, FIRST, left of the name (Hanz, 2026-10-12: "same as here").
         // Empty until the value has an unsaved edit; a repaint draws it again for one that has.
         '<td class="rowsave">' +
-          (ADMIN && FRESH[kind] && FRESH[kind][v.id] ? rowSaveButtonHtml(kind, v.id, v.name) : "") +
+          (LISTS_EDIT && FRESH[kind] && FRESH[kind][v.id] ? rowSaveButtonHtml(kind, v.id, v.name) : "") +
           "</td>" +
-        "<td>" + (ADMIN
+        "<td>" + (LISTS_EDIT
           ? '<input data-rf="name" class="cell-ref" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200">'
           : "<b>" + esc(v.name) + "</b>") + "</td>" +
-        "<td>" + (ADMIN
+        "<td>" + (LISTS_EDIT
           ? '<input data-rf="notes" class="cell-note" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000">'
           : esc(v.notes)) + "</td>" +
         '<td class="n">' + used + "</td>" +
-        '<td class="rowact">' + (ADMIN
+        '<td class="rowact">' + (LISTS_EDIT
           ? '<button class="icon danger" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">' + icon("trash") + "</button>"
           : "") + "</td>" +
       "</tr>";
@@ -1904,10 +2010,10 @@
     $(kind + "-body").innerHTML = out;
     $(kind + "-empty").hidden = list.length > 0;
     var addrow = document.querySelector('[data-addrow-ref="' + kind + '"]');
-    if (addrow) addrow.hidden = !ADMIN;
+    if (addrow) addrow.hidden = !LISTS_EDIT;
     var first = $(kind + "-empty").querySelector
       ? $(kind + "-empty").querySelector("[data-add-ref]") : null;
-    if (first) first.hidden = !ADMIN;
+    if (first) first.hidden = !LISTS_EDIT;
   }
 
   /** "Add division", "Add unit", "Add vendor": a new row, NAMED so a test can press it (the click
@@ -1940,15 +2046,16 @@
     renderRefSection("divisions");
     renderRefSection("units");
     renderRefSection("vendors");
-    $("vendors-ro").hidden = ADMIN;
+    $("vendors-ro").hidden = LISTS_EDIT;
   }
 
   // ── assemblies ─────────────────────────────────────────────────────────────
   function renderList() {
     var area = $("area").value, out = "";
     var shown = visibleAssemblies(area);
-    for (var i = 0; i < shown.length; i++) {
-      var a = shown[i], p = L.priceAssembly(a, ITEMS, area);
+    var cards = asmPage(shown, area);
+    for (var i = 0; i < cards.length; i++) {
+      var a = cards[i], p = L.priceAssembly(a, ITEMS, area);
       var per = p.per_unit == null ? "not priced" : L.perUnit(p.per_unit) + "/" + esc(a.unit);
       // The value the rail is ORDERED on. A sort whose result cannot be read off the rows is a
       // list that just reshuffled itself; see asmSortLabel for which keys say something and which
@@ -2003,6 +2110,7 @@
       $("asm-hits").textContent = filtering
         ? shown.length + " of " + ASMS.length + " shown" : "";
     }
+    paintPager("asm-pager", L.pageInfo(PAGER.asm.page, shown.length, L.PAGE_SIZE));
     renderAsmFilterBar();
   }
 
@@ -2049,6 +2157,16 @@
    *  must not light up the hits count, must not raise the no-match panel, and must not be reset
    *  by Clear filters. One line, so library-ui-harness.js can lift the default verbatim. */
   var ASM_SORT = "name";
+
+  /** WHICH PAGE EACH LIST IS ON (Hanz, 2026-10-27: 25 at a time on Items and on Assemblies).
+   *
+   *  A PLAIN VARIABLE, the fourth view state on this page held to the itemQuery rule: never saved,
+   *  never on a record. Per tab, so leaving Items for Assemblies and coming back finds the same page.
+   *  `view` is the last search/facet/sort the page was worked out under (a change sends it back to
+   *  page 1); `known` is the material ids the last render saw (one new id is a row somebody just
+   *  added or copied, and the table moves to its page); `open` is the assembly whose page the rail
+   *  last moved to. One line, so library-ui-harness.js can lift the declaration verbatim. */
+  var PAGER = { items: { page: 1, view: null, known: null }, asm: { page: 1, view: null, open: undefined } };
 
   /** Is the tab showing a subset? Text, facets, or both.
    *
@@ -3241,8 +3359,8 @@
     var row = materialDefaultRow(c.item_id, c.name, c.priced);
     // THE SLIDER IS THE CONDITION'S STARTING ANSWER (condition_defaults.on_by_default). An admin's:
     // the PUT behind it refuses anybody else, so everyone else reads the state as words.
-    row.slider = defaultSlider("items", c.item_id, c.name, !!c.on, ADMIN);
-    if (!ADMIN) {
+    row.slider = defaultSlider("items", c.item_id, c.name, !!c.on, DEFAULTS_EDIT);
+    if (!DEFAULTS_EDIT) {
       row.actions = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
         esc(c.item_id) + '">Edit</button>';
     }
@@ -3315,7 +3433,7 @@
     //
     // MATCHED ON THE ROW'S NAME AND THE CONDITION'S LABEL, so "joint" finds the kit whatever an
     // admin has renamed it to.
-    if (ADMIN && DEFAULT_WT === "polish") {
+    if (DEFAULTS_EDIT && DEFAULT_WT === "polish") {
       var condHits = [];
       takeoffConditionDefaults().forEach(function (c) {
         if (c.listed) return;
@@ -3336,7 +3454,7 @@
     LABOR.forEach(function (l) {
       // Travel's absent/null favorite reads as ON (the server shapes it so; this keeps a stale
       // read honest too) -- only an explicit false makes it a candidate.
-      if (ADMIN && (l.id === "travel" ? l.favorite === false : !l.favorite) &&
+      if (LISTS_EDIT && (l.id === "travel" ? l.favorite === false : !l.favorite) &&
           (!q || String(l.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "labor", id: l.id, name: l.name, what: "Labor" });
       }
@@ -3726,7 +3844,7 @@
    *      do nothing. Name, rate and unit are compared because those are the three the Labor tab's
    *      own row can edit; a renamed Travel with the shipped rate still has a way back. */
   function laborRowActions(travel) {
-    if (!ADMIN) return "";
+    if (!LISTS_EDIT) return "";
     var B = window.TWBidModel;
     var shipped = B && B.travelSeed ? B.travelSeed() : null;
     if (!shipped || !travel) return "";
@@ -3819,7 +3937,7 @@
           "figures until one of those. A Gyp bid is typed.</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
-          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN && !travelRo)
+          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, LISTS_EDIT && !travelRo)
           : "") + "</td>" +
         '<td class="rowact">' + (travelRo ? globalNote : laborRowActions(storedTravel)) + "</td>" +
         "</tr>";
@@ -3846,12 +3964,12 @@
         "<td>" + (c.guys_auto
           ? "Typed on the estimate. Older saved estimates take the crew man-days."
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN && !cro) +
+        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, LISTS_EDIT && !cro) +
           "</td>" +
         // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
         // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
         // Remove that 403s -- the rule laborRowActions already follows for Travel.
-        '<td class="rowact">' + (cro ? globalNote : ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
+        '<td class="rowact">' + (cro ? globalNote : LISTS_EDIT ? defaultRowActions("labor", c.id, c.name) : "") +
         "</td></tr>";
       if (cro) globOut += crow; else out += crow;
     }
@@ -3868,7 +3986,7 @@
     // else, and defaultCandidates leaves labor out for a non-admin. A "labor default" button that
     // opened onto materials alone would be the dead control this tab has already shipped once.
     var addrow = $("default-labor-addrow");
-    if (addrow) addrow.hidden = !ADMIN;
+    if (addrow) addrow.hidden = !LISTS_EDIT;
   }
 
   // ── the Labor Calculator tab (Hanz, 2026-10-05) ────────────────────────────
@@ -3965,7 +4083,7 @@
     html += '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th class="n">Rate</th>' +
       '<th>Unit</th><th>How it is worked out</th><th class="w-act"></th></tr></thead><tbody>';
     html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n' +
-      (ADMIN ? ' lc-fixed' : '') + '">' + esc(L.money(tl.rate)) + '</td><td>per ' +
+      (LISTS_EDIT ? ' lc-fixed' : '') + '">' + esc(L.money(tl.rate)) + '</td><td>per ' +
       (tl.unit === "days" ? "day" : "hour") + '</td><td class="lc-how">' +
       'Guys times the round trip drive hours, one trip for each guy. On a job 70 miles or ' +
       'more from the office (any sheet but a Gyp bid) the estimate fills the hours in from the miles (60 mph, to the half hour) and ' +
@@ -3973,7 +4091,7 @@
       'sheet moves the job\'s travel to another sheet; an estimate saved earlier keeps its figures until one of those. Under 70 ' +
       'miles, and on a Gyp bid, the estimator types them. ' +
       'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
-      (ADMIN ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
+      (LISTS_EDIT ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
       '</td></tr>';
     html += '</tbody></table></div></div></div>';
     html += calcSectionHtml();
@@ -4259,7 +4377,7 @@
       var c = CALC[l.id] || { mode: "" };
       // Sized by .qtycell (the Items tab's quantity row), not by a style attribute per box.
       var inp = function (f, label) {
-        return ADMIN
+        return LISTS_EDIT
           ? '<input class="num" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
             '" data-f="' + f + '" value="' + esc(c[f] == null ? "" : c[f]) + '" aria-label="' +
             esc(l.name + " " + label) + '" />'
@@ -4272,7 +4390,7 @@
           ? '<div class="qtycell">' + inp("guys", "guys") + ' guys for ' + inp("days", "days") +
             ' days</div>'
           : "";
-      var modeCell = ADMIN
+      var modeCell = LISTS_EDIT
         ? '<select data-lcalc-mode="' + esc(l.id) + '" aria-label="' + esc(l.name) + ' mode">' +
           CALC_MODES.map(function (m) {
             return '<option value="' + m[0] + '"' + ((c.mode || "") === m[0] ? " selected" : "") + '>' +
@@ -4280,12 +4398,12 @@
           }).join("") + '</select>'
         : esc((CALC_MODES.filter(function (m) { return m[0] === (c.mode || ""); })[0] || [])[1] || "");
       var hpd = Number(c.hours_per_day) === 10 ? 10 : 8;
-      var hoursCell = !c.mode ? "" : ADMIN
+      var hoursCell = !c.mode ? "" : LISTS_EDIT
         ? '<select data-lcalc="' + esc(l.id) + '" data-f="hours_per_day" aria-label="' + esc(l.name) +
           ' hours a day"><option value="8"' + (hpd === 8 ? " selected" : "") + '>8</option>' +
           '<option value="10"' + (hpd === 10 ? " selected" : "") + '>10</option></select>'
         : String(hpd);
-      var rateCell = !c.mode ? "" : ADMIN
+      var rateCell = !c.mode ? "" : LISTS_EDIT
         ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
           'inputmode="decimal" data-lcalc="' + esc(l.id) +
           '" data-f="rate" value="' + esc(c.rate == null ? "" : c.rate) + '" placeholder="' +
@@ -5271,6 +5389,16 @@
     // Both the bar's button and the empty state's, one handler.
     if (t.closest && t.closest("[data-clear-filters]")) { clearFilters(); return; }
     if (t.closest && t.closest("[data-clear-asm-filters]")) { clearAsmFilters(); return; }
+
+    // Previous / Next under the Items table and the Assemblies rail. A spent button says so with
+    // aria-disabled (it keeps the focus that way, see paintPager) and does nothing.
+    var pager = t.closest && t.closest("[data-pager]");
+    if (pager) {
+      if (pager.getAttribute("aria-disabled") !== "true") {
+        turnPage(pager.getAttribute("data-pager"), Number(pager.getAttribute("data-step")));
+      }
+      return;
+    }
 
     var open = t.closest && t.closest("[data-open]");
     if (open) { openId = open.getAttribute("data-open"); paint(); return; }

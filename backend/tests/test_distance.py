@@ -27,6 +27,11 @@ import nav_access
 
 ADDR = {"address": "100 Main St", "city": "Wichita", "state": "ks", "zip": "67202"}
 KW = {"address": "100 Main St", "city": "Wichita", "state": "ks", "zip_code": "67202"}
+# A street with NOTHING to fall back to (no zip, a town the Census has no centre for). Since 2026-10-22 a
+# street the geocoder cannot find falls back to the centre of its zip, city or county (test_distance_approx.py),
+# so the tests below that are about the street geocoder's OWN answers use this one, where no fallback exists.
+KW_LONE = {"address": "100 Main St", "city": "Nowhereville", "state": "ks", "zip_code": ""}
+ADDR_LONE = {"address": "100 Main St", "city": "Nowhereville", "state": "ks", "zip": ""}
 
 GOOGLE_HOST = "routes.googleapis.com"
 CENSUS_HOST = "geocoding.geo.census.gov"
@@ -124,14 +129,14 @@ def test_free_answer_is_driving_miles_to_one_decimal_with_one_call_each(monkeypa
 
 def test_geocoder_no_match_is_not_found_and_osrm_is_never_asked(monkeypatch):
     calls = _mock(monkeypatch, census=_c_none, osrm=_o_ok(1000))
-    out = distance.lookup(**KW)
+    out = distance.lookup(**KW_LONE)
     assert out["miles"] is None and out["ok"] is False and out["reason"] == "not_found"
     assert _hosts(calls) == [CENSUS_HOST]
 
 
 def test_a_match_in_another_state_than_typed_is_not_found(monkeypatch):
     calls = _mock(monkeypatch, census=_c_match(state="MO"), osrm=_o_ok(1000))
-    out = distance.lookup(**KW)
+    out = distance.lookup(**KW_LONE)
     assert out["miles"] is None and out["reason"] == "not_found"
     assert _hosts(calls) == [CENSUS_HOST]
 
@@ -200,7 +205,7 @@ def test_an_odd_census_match_is_not_an_exception(monkeypatch, comps):
                                   {"result": {"addressMatches": ["x"]}}])
 def test_an_odd_census_200_is_not_an_exception(monkeypatch, body):
     _mock(monkeypatch, census=lambda r: httpx.Response(200, json=body), osrm=_o_ok(1000))
-    out = distance.lookup(**KW)
+    out = distance.lookup(**KW_LONE)
     assert out["ok"] is False and out["miles"] is None and out["reason"] in ("error", "not_found")
 
 
@@ -269,7 +274,8 @@ def test_the_page_waits_longer_than_the_server_ever_can():
 
 
 @pytest.mark.parametrize("addr,city,state,zip_code", [
-    ("", "Wichita", "KS", "67202"),            # no street
+    # ("", "Wichita", "KS", "67202") -- no street -- was here until 2026-10-22: a zip or a city + state is
+    # enough now, measured to its centre (test_distance_approx.py).
     ("100 Main St", "", "", ""),               # a street with nothing to place it by
     ("100 Main St", "Wichita", "", ""),        # city without a state
     ("   ", "  ", "", ""),
@@ -298,8 +304,8 @@ def test_a_repeat_address_costs_nothing_and_errors_are_never_kept(monkeypatch):
 
 def test_not_found_is_remembered_briefly_so_a_typo_is_not_re_asked(monkeypatch):
     calls = _mock(monkeypatch, census=_c_none)
-    assert distance.lookup(**KW)["reason"] == "not_found"
-    assert distance.lookup(**KW)["reason"] == "not_found"
+    assert distance.lookup(**KW_LONE)["reason"] == "not_found"
+    assert distance.lookup(**KW_LONE)["reason"] == "not_found"
     assert len(calls) == 1
 
 
@@ -348,7 +354,7 @@ def test_when_google_fails_the_free_pair_answers(monkeypatch, google):
 def test_when_both_fail_the_answer_is_unknown(monkeypatch):
     monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-key-not-real")
     _mock(monkeypatch, google=lambda r: httpx.Response(500), census=_c_none)
-    out = distance.lookup(**KW)
+    out = distance.lookup(**KW_LONE)
     assert out["ok"] is False and out["miles"] is None and out["reason"] == "not_found"
 
 
@@ -412,7 +418,7 @@ def test_the_route_answers_200_with_miles(monkeypatch):
 
 def test_the_route_is_200_even_when_unknown(monkeypatch):
     _mock(monkeypatch, census=_c_none)
-    r = TestClient(main.app).post("/api/distance", json=ADDR)
+    r = TestClient(main.app).post("/api/distance", json=ADDR_LONE)
     assert r.status_code == 200
     j = r.json()
     assert j["ok"] is False and j["miles"] is None and j["reason"] == "not_found"

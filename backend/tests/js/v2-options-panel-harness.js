@@ -141,9 +141,11 @@ const UNITS = [
 ].join(NL);
 
 /** One page on one draft. `st` is the draft (the page mutates it in place, as the real one does its `state`). */
-function open(st) {
+function open(st, pre) {
   const panel = new El("div");
   panel.hidden = true;
+  // TW.floatPanel adds `collapsed` at init when the estimator left the panel collapsed, BEFORE the first render.
+  if (pre && pre.collapsed) panel.classList.add("collapsed");
   const rows = {};
   for (const id of ["base-bid-heading", "combo-price-block", "base-bid-row", "sales-tax-row", "remodel-tax-row", "total-row",
                     "options-heading", "rooms-block", "price-lines-block", "alternate-block"]) rows[id] = rowEl(id);
@@ -364,6 +366,24 @@ out.unpriced = (() => {
     },
   };
   return res;
+})();
+
+// THE HEADER CARRIES THE COLLAPSE BUTTON (2026-10-27: the panel floats at every width, so on a narrow screen it sits over
+// the page and must fold to its header). The header is rebuilt on every render, so the button is drawn by the render and
+// its aria-expanded is read back off the class TW.floatPanel toggles -- open and collapsed alike.
+out.header = (() => {
+  const look = (pre) => {
+    const p = open(draft("polish"), pre);
+    const drag = p.panel.querySelector(".op-drag");
+    const btn = drag ? drag.querySelector(".op-collapse") : null;
+    return {
+      dragFirst: p.panel.children[0] === drag,
+      title: drag ? (drag.querySelector(".op-title") || { textContent: null }).textContent : null,
+      button: !!btn, tag: btn ? btn.tagName : null, type: btn ? btn.attrs.type : null,
+      expanded: btn ? btn.attrs["aria-expanded"] : null, label: btn ? btn.attrs["aria-label"] : null,
+    };
+  };
+  return { open: look(), collapsed: look({ collapsed: true }) };
 })();
 
 console.log(JSON.stringify(out));

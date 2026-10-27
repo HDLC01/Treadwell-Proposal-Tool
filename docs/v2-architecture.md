@@ -890,6 +890,25 @@ part 4 opens with every base's drive and saves it once when that drive prices so
 it FILLS on the crew's size, the older man-days auto row included (leaving it on the man-days charged 49.5 man-days x 6.5 x $33
 = $10,617.75 for an Epoxy job switched to Polish, where Kyle types $858).
 
+**A job with no street is still measured (Hanz, 2026-10-22).** A bid with City "Wichita", State "KS", County "Sedgwick County, KS"
+and no street was called local and filled no travel, because the free street geocoder needs a street. Now a city + state, a zip or
+the county is enough to ask (`distanceKey` in `js/bid-model.js` and `distance.can_place`, held to one rule by
+`tests/test_distance_key_parity.py`). Without a street, `/api/distance` places the job at the Census Gazetteer's centre of its ZIP
+(the tightest, unless its centre is more than 40 straight-line miles from the typed city's, or 150 from the county's, when it is
+taken as a typo), else its CITY in the typed state (the Census name with its "city"/"town"/"CDP" suffix taken off, a real town before a
+CDP, "St."/"Saint", "Mt."/"Mount", "Ft."/"Fort", case, spacing and a trailing ", KS" tolerated and nothing else guessed), else its COUNTY (the picker's
+"Sedgwick County, KS", with or without "County"; a picker city row such as "Overland Park, KS" is that city). A street the geocoder
+answers "no match" for falls back the same way, inside the one time budget; an outage does not. The centre is routed by the same OSRM call from the office, so the
+figure is driving miles, and the answer says `precision` (street | zip | city | county) and `measured_to`. The tables are bundled in
+`backend/geodata/` (not `backend/data/`, which a compose volume hides) and rebuilt by `backend/tools/build_gazetteer.py`. The page
+keeps the precision on the saved distance and words a centre figure as one ("About 190 miles to Wichita, KS (city center). Add the
+street ..."). It measures on open a new bid, a saved bid with NO distance at all (never measured, never typed)
+unless it already says far (`conditions.local === false`, a stated answer left for the button: `B.openWantsDistance`), and a centre figure
+whose address has changed since (a street added); a typed figure is never replaced without the button, and a street figure keeps "the
+address changed since this was measured". An unknown distance is never worded local ("Distance unknown. Add the job's city and state
+on the intake step, or type the miles on the Polish sheet."); its price is unchanged, no travel until miles arrive. Held by
+`tests/test_distance_approx.py` and `tests/test_polish_distance_approx.py` (`tests/js/distance-approx-harness.js`).
+
 **Until round 7 (below), the job's drive was one trip,** so ONE Travel Labor row was priced for it, on the section that carries the job's travel. EVERY time the
 job restructures (the job type is switched in the session, or the Sheets panel makes another sheet the base) the page calls
 `followDistance(model, fromTab)` (it names the old carrier in `fromTab`; left out, the stranded row is looked for), whether or not

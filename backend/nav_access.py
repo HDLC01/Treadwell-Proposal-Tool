@@ -66,6 +66,16 @@ _VERSION = 1
 
 
 # ─── What each sidebar tab owns ────────────────────────────────────────────────
+# EVERY `api` TUPLE IS EMPTY SINCE 2026-10-27: EVERY DENIABLE TAB HIDES THE TAB ONLY. Hanz chose it
+# for all tabs, asked outright and told that a member could then still reach the data by typing the
+# route. So the nav gate (main.py's _nav_gate via is_api_denied) refuses no API route for any role;
+# unticking a role removes the tab from the menu and the page paints its refusal card (`pages`,
+# page_denied — unchanged). Admin-only WRITES are still refused by _require_admin / _require_grant,
+# a separate mechanism this table never touched. is_api_denied / denied_api_prefixes stay in place
+# and return nothing. The per-entry notes below that name a route a tab "owns" record the
+# single-caller measurement, i.e. what to put back if a tab is ever sealed again; none is enforced.
+#
+# THE ORIGINAL RULE, kept because it is still what decides a route if gating returns:
 # `pages` — the .html shells whose own JS should refuse to paint for a denied role.
 # `api`   — the API prefixes that belong to THIS TAB AND NO OTHER. An entry ending in "/" matches
 #           children only; anything else is an exact path match.
@@ -116,7 +126,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # gets, not this table. The entry is left here as correct, inert data: if /portal.html is
         # ever taken out of LOCKED, this starts being enforced with no further edit, and the single-
         # caller measurement above stays true either way.
-        "api": ("/api/portal/deposit/",),
+        "api": (),
     },
     "/gc-projects.html": {
         "label": "GC Projects",
@@ -139,20 +149,20 @@ TABS: Dict[str, Dict[str, Any]] = {
         # Both forms: the bare route is the inbox list, and the children are one message's body,
         # status, prequalify and create-estimate. An exact-only entry would leave the children open.
         "pages": ("/leads.html",),
-        "api": ("/api/leads", "/api/leads/"),
+        "api": (),
     },
     "/crm.html": {
         "label": "Bid Pipeline",
         # Children only — there is no bare /api/basisboard route. status + projects, crm.js alone.
         "pages": ("/crm.html",),
-        "api": ("/api/basisboard/",),
+        "api": (),
     },
     "/calendar.html": {
         "label": "Bid Calendar",
         # The calendar's OWN events, which only it reads or writes. It also reads bare
         # /api/analytics for the BasisBoard deadlines, and that stays open — see the note above.
         "pages": ("/calendar.html",),
-        "api": ("/api/calendar/events", "/api/calendar/events/"),
+        "api": (),
     },
     "/info-sheet.html": {
         "label": "Info Sheet",
@@ -162,7 +172,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # deniable, and this table is what gates the page and the routes below.
         # Children only: /{draft_id} and /generate. No bare route exists.
         "pages": ("/info-sheet.html",),
-        "api": ("/api/info-sheet/",),
+        "api": (),
     },
     "/followups.html": {
         "label": "Follow-ups",
@@ -183,7 +193,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # is notifications.js's. Claiming them would 403 the drawer on a page nobody restricted,
         # which is the single-caller rule this table is built on.
         "pages": ("/followups.html",),
-        "api": ("/api/portal/followups",),
+        "api": (),
     },
     "/v2-board.html": {
         # ESTIMATING TOOL v2. Its href was /polish-intake.html until 2026-10-15, when Hanz asked for
@@ -199,7 +209,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # passes the single-caller rule this table is built on. Exact match, no trailing slash: the
         # route has no children, and a slashless prefix keeps this from reaching anything else under
         # /api/v2/ if one is ever added.
-        "api": ("/api/v2/pipeline",),
+        "api": (),
     },
     "/polish-estimates.html": {
         # WAS "Polish Estimate Database" until 2026-10-07. Same href.
@@ -222,7 +232,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # /api/analytics/pull-window are analytics.js's alone, while the BARE /api/analytics is
         # also the Bid Calendar's data source and must keep answering.
         "pages": ("/analytics.html",),
-        "api": ("/api/analytics/",),
+        "api": (),
     },
     "/projects.html": {
         "label": "Proposals Database",
@@ -247,14 +257,14 @@ TABS: Dict[str, Dict[str, Any]] = {
     "/history.html": {
         "label": "History",
         "pages": ("/history.html",),
-        "api": ("/api/history",),
+        "api": (),
     },
     "/trash.html": {
         "label": "Trash",
         # /api/trash is the listing and nothing else; the restore / permanent-delete calls go to
         # /api/draft/* which the wizard and the Database also use, so they stay open.
         "pages": ("/trash.html",),
-        "api": ("/api/trash",),
+        "api": (),
     },
     "/notifications.html": {
         "label": "Notification Sending",
@@ -267,7 +277,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # is not admin-gated and rewrites four emails that go to customers with no history, so this
         # is the tab where a real block is worth the most.
         "pages": ("/followup-settings.html",),
-        "api": ("/api/followup-settings", "/api/followup-settings/"),
+        "api": (),
     },
     "/admin.html": {
         "label": "Admin",
@@ -465,7 +475,7 @@ def denied_pages(role: str, policy: Optional[Dict[str, Any]] = None) -> List[str
 
 
 def denied_api_prefixes(role: str, policy: Optional[Dict[str, Any]] = None) -> List[str]:
-    """The API prefixes `role` may not call. Only single-caller prefixes are ever in here."""
+    """The API prefixes `role` may not call. Always [] since 2026-10-27: every tab is hide-only."""
     out: List[str] = []
     for href in denied_paths(role, policy):
         for prefix in TABS.get(href, {}).get("api", ()):
@@ -558,8 +568,9 @@ def locked_requested(deny: Any) -> Dict[str, List[str]]:
 def capability_table() -> List[Dict[str, Any]]:
     """The table above, as JSON for the Admin page: which pages and API prefixes each tab owns.
 
-    The Admin page needs `api` to tell the truth on screen about the five tabs that own none —
-    switching those off hides the tab and blocks the page, and leaves their data reachable.
+    The Admin page needs `api` to tell the truth on screen: a tab that owns none (every tab, since
+    2026-10-27) is marked "hides the tab only" — switching it off hides the tab and blocks the page,
+    and leaves its data reachable.
 
     `no_sidebar` says the tab has no menu row at all (NO_SIDEBAR_TABS): its switch is real and its
     routes are refused, but "hide the tab" is not part of what it does, because there is nothing to
