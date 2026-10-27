@@ -1870,7 +1870,9 @@
           // "+ Add another system" toggle (state.reveal_systems, shared with the
           // estimate bid bar) reveals the cross-type rows for a multi-system bid.
           // "Engaged" = the estimator explicitly made it the base or an option.
-          const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option);
+          // A base bid of another system (a Gyp sheet that is Base Bid 3 on an epoxy job) is engaged too, as on the Estimate bar.
+          const engaged = (t) => t.id === baseId || (opts[t.id] && opts[t.id].is_option)
+            || (!TWPrice.allV2(allTabs) && TWPrice.baseIds(state).indexOf(t.id) >= 0);
           const defaultVis = (t) => (wt === "gyp") ? (t.role === "gyp" || engaged(t))
                                                     : (t.role !== "gyp" || engaged(t));
           // A v2 estimate wrote this snapshot (every tab marked v2): the BASE is picked on the estimate and only read here.
@@ -1926,7 +1928,8 @@
               : childOf
               ? `<p class="op-hint pr-base-locked">This proposal's base is ${esc(childBase ? childBase.name : (baseId || ""))}. Base bids are picked on Base Bid 1's tab. <a class="pr-parent-link" href="${esc(parentHref)}">Open Base Bid 1</a></p>` +
                 `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
-              : `<p class="op-hint">Tick the <strong>Base bid</strong> sheet. Tick more than one and each is its own proposal; mark the others as options (show + total / add/deduct).</p>`) +
+              // The same words as the Estimate step's bar (estimate-review.js renderBidOptions).
+              : `<p class="op-hint"><strong>Base bid</strong> = its own proposal. <strong>Option</strong> = listed inside the proposal under the base. <strong>Off</strong> = not on the proposal. With two or more base bids, press <strong>Create Multiple Proposals</strong> on the Proposal step.</p>`) +
             (wt === "combo" ? `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
@@ -1944,10 +1947,30 @@
             // A sheet the estimate could not price has no figure (total: null), and is not listed as $0.
             const priceText = (typeof t.unpriceable === "string" && t.unpriceable) ? "no price" : fmtUSDdoc(N(t.total));
             const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${priceText}</span></span>`;
-            r += isOptionOnlyTab(t)
-              ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
-              : `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value="${esc(t.id)}"${(isBase || isOtherBase) ? " checked" : ""}> ` +
-                nameRow + bidTag + `</label>`;
+            if (v2Locked) {
+              r += isOptionOnlyTab(t)
+                ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
+                : `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value="${esc(t.id)}"${(isBase || isOtherBase) ? " checked" : ""}> ` +
+                  nameRow + bidTag + `</label>`;
+            } else {
+              // ONE CHOICE PER SHEET, the Estimate bar's switch (Hanz, 2026-10-27: "There should be an option to make
+              // multiple base bids and there should be an option to make it an option in one proposal"): Base bid |
+              // Option | Off. Seal: Option | Off. A sheet inside a combo's combined base: Base bid only. On a child the
+              // Base segment is read-only, and a base bid's whole switch is; its other sheets' Option / Off stay its own.
+              // The Base segment keeps the box's class (pr-base) and its change handler below.
+              const segBase = isBase || isOtherBase;
+              const inCombined = !segBase && isPartOfAutoBase(t);
+              const role = inCombined ? "" : (segBase ? "base" : (isOpt ? "option" : "off"));
+              const segs = inCombined ? ["base"] : (isOptionOnlyTab(t) ? ["option", "off"] : ["base", "option", "off"]);
+              const lock = childOf ? (segBase ? ["base", "option", "off"] : ["base"]) : [];
+              const nm = esc("pr-role-" + t.id);
+              const seg = (key, cls, label) => segs.indexOf(key) < 0 ? "" :
+                `<label class="pr-seg-btn${role === key ? " on" : ""}"><input type="radio" class="${cls}" value="${esc(t.id)}" name="${nm}"` +
+                `${role === key ? " checked" : ""}${lock.indexOf(key) >= 0 ? " disabled" : ""}> ${label}</label>`;
+              r += `<div class="pr-baserow"${isOptionOnlyTab(t) ? ' title="Priced as an option only, never as the base bid"' : ""}>${nameRow}${bidTag}</div>` +
+                `<div class="pr-seg" role="radiogroup" aria-label="${esc(t.name)}: base bid, option or off">` +
+                seg("base", "pr-base", "Base bid") + seg("option", "pr-isopt", "Option") + seg("off", "pr-off", "Off") + `</div>`;
+            }
             if (isBase) {
               r += `<div class="pr-optsub"><span class="op-hint pr-base-note">This sheet is the Base bid.</span></div>`;
             } else if (isOtherBase) {
@@ -1955,7 +1978,8 @@
             } else if (isPartOfAutoBase(t)) {
               r += `<div class="pr-optsub"><span class="op-hint">Part of the combined base bid.</span></div>`;
             } else {
-              r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
+              // (A v2 card keeps its box; a spreadsheet card's Option is the switch above.)
+              if (v2Locked) r += `<label><input type="checkbox" class="pr-isopt" ${isOpt ? "checked" : ""}> Show as a proposal option</label>`;
               r += `<div class="pr-optsub"${isOpt ? "" : ' style="display:none"'}>`;
               r += `<label><input type="checkbox" class="pr-show" ${show ? "checked" : ""}> Show in proposal</label>`;
               // An option marked as an option but not shown is configured into thin air:
@@ -1992,8 +2016,16 @@
           }).join("");
           // "+ Add another system" — reveals cross-work-type rows (mirrors the
           // estimate bid bar) so a multi-system bid can be built here too.
+          // Named for what it reveals, as on the Estimate bar: a third base bid is often another system's sheet.
           if (hasHiddenSystems) {
-            const lbl = revealSystems ? "− Fewer systems" : "+ Add another system";
+            const kinds = [];
+            allTabs.filter(t => !defaultVis(t)).forEach(t => {
+              const r = String(t.role || "").toLowerCase();
+              const n = r ? r.charAt(0).toUpperCase() + r.slice(1) : "";
+              if (n && kinds.indexOf(n) < 0) kinds.push(n);
+            });
+            const lbl = revealSystems ? "− Fewer sheets"
+              : "+ Show other sheets (" + kinds.slice(0, 3).join(", ") + (kinds.length > 3 ? "…" : "") + ")";
             h += `<button type="button" class="pr-addsys-btn">${esc(lbl)}</button>`;
           }
           optsPanel.innerHTML = h;
@@ -2050,11 +2082,41 @@
             applyAndRefresh();     // saves base_tab_ids with the base (rebuildPricing), and redraws the tags
             if (baseMoved) reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
+          // A BASE BID switched to Option or Off on its row's switch leaves the base bids first, by the Base-bid control's
+          // own handler above (TWPrice.toggleBaseId: the pricing base hands Base Bid 1 to the next one, the base-change
+          // path runs and saves), with the sheet's option state set before it saves. The last base bid is refused, and a
+          // child's base bids are its parent's. Answers false for a sheet that is no base bid (the caller goes on).
+          const leaveBaseBids = (row, id, toOpt) => {
+            if (v2Locked || TWPrice.baseIds(state).indexOf(id) < 0) return false;
+            if (TWPrice.isProposalChild(state)) { renderProposalExtras(); return true; }
+            if (!TWPrice.toggleBaseId(state, id, false)) {
+              renderProposalExtras();   // the switch goes back to Base bid
+              const again = Array.from(optsPanel.querySelectorAll(".op-row")).filter(x => x.dataset.id === id)[0];
+              const note = again ? again.querySelector(".pr-base-note") : null;
+              if (note) note.innerHTML = "A proposal needs a base bid. Make another sheet a Base bid first, then switch this one.";
+              return true;
+            }
+            const o = ensureOpt(id);
+            o.is_option = !!toOpt;
+            if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+            const b = row.querySelector("input.pr-base");
+            if (b) { b.checked = false; b.dispatchEvent(new Event("change")); }
+            renderProposalExtras();
+            return true;
+          };
           optsPanel.querySelectorAll(".op-row").forEach(row => {
             const id = row.dataset.id;
+            const off = row.querySelector(".pr-off");
+            if (off) off.addEventListener("change", () => {
+              if (leaveBaseBids(row, id, false)) return;   // a base bid switched Off
+              ensureOpt(id).is_option = false;
+              applyAndRefresh();
+              renderProposalExtras();
+            });
             const sub = row.querySelector(".pr-optsub");
             const iso = row.querySelector(".pr-isopt");
             if (iso) iso.addEventListener("change", () => {
+              if (iso.checked && leaveBaseBids(row, id, true)) return;   // a base bid switched to Option
               const o = ensureOpt(id); o.is_option = iso.checked;
               // Turning an option ON resets `show` to true — it used to only default an
               // UNDEFINED show, so an option un-shown earlier stayed un-shown when it was

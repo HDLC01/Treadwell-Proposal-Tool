@@ -412,7 +412,8 @@ const out = {};
                       Copy1: REAL_TWPRICE.baseLabelFor(twoState, "Copy1") },
     stripLabels: { Epoxy: REAL_TWPRICE.baseLabelFor(twoState, "Epoxy", ORDER),
                    Copy1: REAL_TWPRICE.baseLabelFor(twoState, "Copy1", ORDER) },
-    copyOffersOption: /bb-isopt/.test(chip(two.html, "Copy1") || ""),
+    // A base bid's option controls (show in proposal, price as) stay closed; every sheet's switch has an Option segment.
+    copyOffersOption: /class="bb-show"/.test(chip(two.html, "Copy1") || ""),
     polishOffersOption: /bb-isopt/.test(chip(two.html, "Polish") || ""),
     sealHasBox: /class="bb-base"/.test(chip(two.html, "Seal") || ""),
     hint: two.h.document.els["bid-options-hint"].innerHTML,
@@ -504,6 +505,77 @@ const out = {};
       buttons: mkBtns(childMk.htmlBefore) }),
     comboButtons: mkBtns(comboMk.html),
   };
+
+  // i. ONE SWITCH PER SHEET: Base bid | Option | Off. Hanz, 2026-10-27: "There should be an option to make multiple base
+  // bids and there should be an option to make it an option in one proposal". Each step is one segment picked on one
+  // sheet ([id, "bb-base" | "bb-isopt" | "bb-off"]), or "reveal" ("+ Show other sheets"), through the real handlers.
+  const segsOf = (html, id) => [...(chip(html, id) || "").matchAll(
+    /<input type="radio" class="(bb-base|bb-isopt|bb-off)" value="[^"]*" name="[^"]*"([^>]*)>/g)]
+    .map((m) => m[1] + (/ disabled/.test(m[2]) ? ":disabled" : ""));
+  const roleIn = (html, id) => ([...(chip(html, id) || "").matchAll(
+    /<input type="radio" class="(bb-base|bb-isopt|bb-off)" value="[^"]*" name="[^"]*"([^>]*)>/g)]
+    .filter((m) => / checked/.test(m[2]))[0] || [])[1] || null;
+  function sw(st, steps) {
+    const h = harness(Object.assign({ work_type: "epoxy", priced_tabs: PRICED }, st));
+    h.renderBidOptions();
+    h.wireBidBar();
+    const list = h.document.els["bid-options-list"];
+    const htmlBefore = list.innerHTML;
+    const before = persisted(h);
+    for (const [id, seg] of steps) {
+      if (seg === "reveal") { list.listeners.click[0]({ target: { classList: { contains: (c) => c === "bb-addsys-btn" } } }); continue; }
+      list.listeners.change[0]({ target: { classList: { contains: (c) => c === seg }, value: id, checked: true,
+                                           closest: () => ({ dataset: { id } }) } });
+    }
+    return { h, html: list.innerHTML, htmlBefore, persistedBy: persisted(h) - before };
+  }
+  const isOpt = (p, id) => !!(p.h.state.tab_opts[id] && p.h.state.tab_opts[id].is_option);
+  const r = {};
+  const plain = sw({ base_tab_id: "Epoxy" }, []);
+  r.segs = { Epoxy: segsOf(plain.html, "Epoxy"), Polish: segsOf(plain.html, "Polish"), Seal: segsOf(plain.html, "Seal") };
+  r.roles = { Epoxy: roleIn(plain.html, "Epoxy"), Polish: roleIn(plain.html, "Polish") };
+  // Epoxy the base, Polish an Option: one proposal carrying Polish as its option.
+  const optionIn = sw({ base_tab_id: "Epoxy" }, [["Polish", "bb-isopt"]]);
+  r.optionIn = Object.assign(summary(optionIn), { ids: REAL_TWPRICE.baseIds(optionIn.h.state, ORDER),
+    polish: isOpt(optionIn, "Polish"), role: roleIn(optionIn.html, "Polish"),
+    controls: /class="bb-show"/.test(chip(optionIn.html, "Polish") || "") });
+  // Option -> Base bid clears is_option.
+  const optToBase = sw({ base_tab_id: "Epoxy", tab_opts: { Polish: { is_option: true, show: true, price_mode: "total" } } },
+                       [["Polish", "bb-base"]]);
+  r.optToBase = Object.assign(summary(optToBase), { polish: isOpt(optToBase, "Polish"), role: roleIn(optToBase.html, "Polish"),
+                                                    tag: tagOf(optToBase.html, "Polish") });
+  // Three base bids, the third a Gyp sheet behind "+ Show other sheets".
+  const three3 = sw({ base_tab_id: "Epoxy" }, [["", "reveal"], ["Polish", "bb-base"], ["Gyp", "bb-base"]]);
+  r.three = Object.assign(summary(three3), {
+    tags: { Epoxy: tagOf(three3.html, "Epoxy"), Polish: tagOf(three3.html, "Polish"), Gyp: tagOf(three3.html, "Gyp") },
+    showLabel: (/class="bb-addsys-btn">([^<]*)</.exec(three3.htmlBefore) || [])[1] || null,
+    gypBefore: chip(three3.htmlBefore, "Gyp") !== null });
+  // A base bid that is not the pricing base, to Option: it leaves the list and is an option.
+  const baseToOpt = sw({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Copy1", "bb-isopt"]]);
+  r.baseToOption = Object.assign(summary(baseToOpt), { copy: isOpt(baseToOpt, "Copy1"), role: roleIn(baseToOpt.html, "Copy1") });
+  // The pricing base to Option / Off: Base Bid 1 goes to the next base bid by the base-change path.
+  const pToOpt = sw({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Epoxy", "bb-isopt"]]);
+  r.pricingToOption = Object.assign(summary(pToOpt), { epoxy: isOpt(pToOpt, "Epoxy"), role: roleIn(pToOpt.html, "Epoxy") });
+  const pToOff = sw({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Epoxy", "bb-off"]]);
+  r.pricingToOff = Object.assign(summary(pToOff), { epoxy: isOpt(pToOff, "Epoxy"), role: roleIn(pToOff.html, "Epoxy") });
+  // An Option switched Off.
+  const optOff = sw({ base_tab_id: "Epoxy", tab_opts: { Polish: { is_option: true, show: true, price_mode: "total" } } },
+                    [["Polish", "bb-off"]]);
+  r.optionOff = Object.assign(summary(optOff), { polish: isOpt(optOff, "Polish"), role: roleIn(optOff.html, "Polish") });
+  // The last base bid: refused either way, the switch stays on Base bid, the legend says why.
+  const lastOff = sw({ base_tab_id: "Epoxy" }, [["Epoxy", "bb-off"]]);
+  const lastOpt = sw({ base_tab_id: "Epoxy" }, [["Epoxy", "bb-isopt"]]);
+  r.last = { off: Object.assign(summary(lastOff), { epoxy: isOpt(lastOff, "Epoxy"), role: roleIn(lastOff.html, "Epoxy"),
+                                                    hint: lastOff.h.document.els["bid-options-hint"].innerHTML }),
+             option: Object.assign(summary(lastOpt), { epoxy: isOpt(lastOpt, "Epoxy"), role: roleIn(lastOpt.html, "Epoxy") }) };
+  // A child: its Base segments are read-only and so is its base bid's switch; its other sheets' Option / Off are its own.
+  const child3 = sw({ base_tab_id: "Copy1", base_tab_ids: ["Copy1"], proposal_of: "P1" }, [["Epoxy", "bb-isopt"], ["Copy1", "bb-isopt"]]);
+  r.child = Object.assign(summary(child3), { segsEpoxy: segsOf(child3.htmlBefore, "Epoxy"), segsCopy: segsOf(child3.htmlBefore, "Copy1"),
+                                            epoxy: isOpt(child3, "Epoxy"), copy: isOpt(child3, "Copy1") });
+  // ... and a child with two base bids: Option forced at its second one (not the last, so nothing else refuses it).
+  const child4 = sw({ base_tab_id: "Copy1", base_tab_ids: ["Copy1", "Polish"], proposal_of: "P1" }, [["Polish", "bb-isopt"]]);
+  r.childTwo = Object.assign(summary(child4), { polish: isOpt(child4, "Polish") });
+  out.sw = r;
 }
 
 console.log(JSON.stringify(out));
