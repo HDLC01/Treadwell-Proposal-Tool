@@ -351,17 +351,16 @@ def _signed_in_as(monkeypatch, role, email="staffer@wetreadwell.com"):
     return TestClient(main.app)
 
 
-def test_a_member_without_the_v2_page_gets_403_from_its_feed_and_one_with_it_gets_the_data(
+def test_a_member_without_the_v2_page_still_gets_its_feed_because_the_tab_only_hides(
         monkeypatch, policy):
+    """Until 2026-10-27 a member denied the row got a nav 403 here. Hanz then chose "hides the tab
+    only" for every tab, warned the data stays reachable by URL: the page is refused, the feed is not."""
     _up(monkeypatch)
     policy.save({"user": ["/v2-board.html"]}, "k@x.com")
-    # denied the page: the route refuses with the gate's own body, and no draft is read at all
-    reads = []
-    monkeypatch.setattr(main.drafts, "list_drafts", lambda *a, **k: reads.append(1) or DRAFTS)
-    refused = _signed_in_as(monkeypatch, "user").get("/api/v2/pipeline")
-    assert refused.status_code == 403
-    assert refused.json()["nav_denied"] is True and "proposals" not in refused.json()
-    assert reads == [], "a denied member's request reached the drafts list"
+    assert policy.page_denied("user", "/v2-board.html") == "/v2-board.html"
+    passed = _signed_in_as(monkeypatch, "user").get("/api/v2/pipeline")
+    assert passed.status_code == 200, passed.text
+    assert not passed.json().get("nav_denied")
     # not denied (a role the policy does not name): the same route answers with the bids
     _up(monkeypatch)
     allowed = _signed_in_as(monkeypatch, "admin").get("/api/v2/pipeline")

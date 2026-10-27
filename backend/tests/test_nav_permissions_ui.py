@@ -217,8 +217,9 @@ def test_the_hidden_rows_appear_only_when_the_matrix_is_asked_about_a_POLICY(ran
 
 @needs_node
 def test_the_hidden_tabs_switch_is_real_and_sits_in_its_own_section(ran):
-    """Not a decorative row: the same switch every other tab gets, saying it blocks its data,
-    because /api/info-sheet/* is refused to a denied role exactly as before the row went away.
+    """Not a decorative row: the same switch every other tab gets. Since 2026-10-27 (Hanz chose
+    "hides the tab only" for every tab) it says so like every other row: the page is refused and
+    /api/info-sheet/* is not.
 
     The placement is asserted because the panel prints each section heading once per RUN of rows —
     a row dropped at the end of the table would print "Proposals" a second time at the bottom."""
@@ -226,9 +227,9 @@ def test_the_hidden_tabs_switch_is_real_and_sits_in_its_own_section(ran):
     at = [i for i, r in enumerate(rows) if r["href"] == "/info-sheet.html"]
     assert at, "the rendered Admin panel has no Info Sheet row"
     row = rows[at[0]]
-    assert row["chip"] == "hard", (
-        "the switch does not say it blocks data; /api/info-sheet/* is still gated")
-    assert "/api/info-sheet/" in row["switches"]["user"]["title"], row["switches"]["user"]["title"]
+    assert row["chip"] == "thin", "the switch does not say it only hides the tab"
+    assert "hides the tab and blocks the page" in row["switches"]["user"]["title"], (
+        row["switches"]["user"]["title"])
     assert row["switches"]["user"]["disabled"] is False, "the switch cannot be clicked"
     assert row["switches"]["user"]["on"] is True
     # Its section is one contiguous run, so the heading is printed once.
@@ -486,15 +487,17 @@ def test_the_five_tabs_with_no_private_endpoint_say_so_on_screen(ran):
     rows = {r["href"]: r for r in ran["panel"]["admin"]}
     thin = [h for h, c in caps.items() if not c["api"] and not c["locked"]]
     # A locked tab's chip is "not deniable" regardless of api -- admin.js checks cap.locked before
-    # cap.api.length (see the switchCell renderer), so /portal.html (locked, and since 2026-09-29
-    # carrying /api/portal/deposit/) must not be expected to say "blocks its data" here.
+    # cap.api.length (see the switchCell renderer).
     hard = [h for h, c in caps.items() if c["api"] and not c["locked"]]
-    assert thin, "no tab owns zero private endpoints any more; the wording below should go"
+    # 2026-10-27: Hanz chose "hides the tab only" for EVERY deniable tab, so there is no "blocks its
+    # data" row left and every unlocked tab is thin.
+    assert hard == [], hard
+    assert thin == [h for h, c in caps.items() if not c["locked"]], thin
     for href in thin:
         assert rows[href]["chip"] == "thin", "%s does not say a switch there only hides it" % href
         title = rows[href]["switches"]["user"]["title"]
         assert "hides the tab and blocks the page" in title, title
-        assert "reachable to somebody who types the URL" in title, title
+        assert "reachable to somebody who types the route" in title, title
     for href in hard:
         assert rows[href]["chip"] == "hard", "%s does not say a switch there blocks its data" % href
         assert caps[href]["api"][0] in rows[href]["switches"]["user"]["title"], (

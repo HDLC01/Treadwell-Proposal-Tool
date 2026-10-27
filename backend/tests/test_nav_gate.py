@@ -45,6 +45,41 @@ def _as(monkeypatch, role, email="staffer@wetreadwell.com"):
     return TestClient(main.app)
 
 
+# HIDE-ONLY SINCE 2026-10-27. Hanz chose "hides the tab only" for EVERY deniable tab, told that a
+# member could then still reach the data by typing the route, so every TABS "api" tuple is empty and
+# the real gate refuses nothing. The middleware itself is unchanged and still the mechanism if a tab
+# is ever sealed again, so the tests of HOW it refuses (role from the profile, fail open, every
+# method, children-only) run against `sealed`: the prefixes the tabs owned until that day, put back
+# for the length of one test. Admin-only WRITES are a separate gate (_require_admin /
+# _require_grant) and are not affected; the hide-only section below says so.
+FORMERLY_GATED = {
+    "/portal.html": ("/api/portal/deposit/",),
+    "/leads.html": ("/api/leads", "/api/leads/"),
+    "/crm.html": ("/api/basisboard/",),
+    "/calendar.html": ("/api/calendar/events", "/api/calendar/events/"),
+    "/info-sheet.html": ("/api/info-sheet/",),
+    "/followups.html": ("/api/portal/followups",),
+    "/v2-board.html": ("/api/v2/pipeline",),
+    "/analytics.html": ("/api/analytics/",),
+    "/history.html": ("/api/history",),
+    "/trash.html": ("/api/trash",),
+    "/followup-settings.html": ("/api/followup-settings", "/api/followup-settings/"),
+}
+
+
+def _probes(prefix):
+    """A bare path and a child path for one prefix, the same pair the no-op test always used."""
+    return ({prefix.rstrip("/"), prefix + "probe"} if prefix.endswith("/")
+            else {prefix, prefix + "/probe"})
+
+
+@pytest.fixture
+def sealed(monkeypatch):
+    """The pre-2026-10-27 table, for the tests of the middleware's own mechanics."""
+    for href, prefixes in FORMERLY_GATED.items():
+        monkeypatch.setitem(nav_access.TABS, href, {**nav_access.TABS[href], "api": prefixes})
+
+
 def _refused(call):
     """Did OUR nav gate refuse this, as opposed to whatever the handler would have said anyway?
 
@@ -67,18 +102,17 @@ def _refused(call):
 
 # ── the no-op promise ─────────────────────────────────────────────────────────
 def test_with_no_policy_file_every_gateable_route_answers_as_it_did(monkeypatch):
-    """A member calling every route any tab could ever own, with nothing denied anywhere."""
+    """A member calling every route a tab ever owned, with nothing denied anywhere."""
     assert not nav_access._FILE.exists()
     client = _as(monkeypatch, "user")
     checked = 0
-    for tab in nav_access.TABS.values():
-        for prefix in tab["api"]:
-            for path in ({prefix.rstrip("/"), prefix + "probe"} if prefix.endswith("/")
-                         else {prefix, prefix + "/probe"}):
+    for prefixes in FORMERLY_GATED.values():
+        for prefix in prefixes:
+            for path in _probes(prefix):
                 assert not _refused(lambda: client.get(path)), path
                 assert not _refused(lambda: client.post(path, json={})), path
                 checked += 1
-    assert checked >= 16, "only %d paths exercised — the capability table has emptied" % checked
+    assert checked >= 16, "only %d paths exercised" % checked
 
 
 def test_with_no_policy_file_api_me_reports_nothing_denied(monkeypatch):
@@ -87,7 +121,7 @@ def test_with_no_policy_file_api_me_reports_nothing_denied(monkeypatch):
 
 
 # ── the middleware ────────────────────────────────────────────────────────────
-def test_an_owned_prefix_403s_a_denied_role(monkeypatch):
+def test_an_owned_prefix_403s_a_denied_role(monkeypatch, sealed):
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
     r = _as(monkeypatch, "user").get("/api/history")
     assert r.status_code == 403
@@ -96,12 +130,12 @@ def test_an_owned_prefix_403s_a_denied_role(monkeypatch):
     assert "Admin page" in body["error"], "the refusal does not say who can turn it back on"
 
 
-def test_the_same_prefix_passes_an_admin_who_is_not_denied(monkeypatch):
+def test_the_same_prefix_passes_an_admin_who_is_not_denied(monkeypatch, sealed):
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
     assert not _refused(lambda: _as(monkeypatch, "admin").get("/api/history"))
 
 
-def test_a_route_that_takes_no_request_parameter_is_still_gated(monkeypatch):
+def test_a_route_that_takes_no_request_parameter_is_still_gated(monkeypatch, sealed):
     """Why this is middleware. api_history, api_list_trash and api_followup_settings have no
     `request` in their signatures, so a decorator would have had to change each one."""
     import inspect
@@ -115,7 +149,7 @@ def test_a_route_that_takes_no_request_parameter_is_still_gated(monkeypatch):
         assert _refused(lambda: client.get(path)), path
 
 
-def test_the_gate_reads_the_role_from_the_profile_not_from_the_caller(monkeypatch):
+def test_the_gate_reads_the_role_from_the_profile_not_from_the_caller(monkeypatch, sealed):
     """A request that claims to be an admin in a header or a query string is still a member."""
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
     client = _as(monkeypatch, "user")
@@ -135,7 +169,7 @@ def test_a_shared_prefix_is_never_gated_even_with_every_tab_denied(monkeypatch):
         assert not _refused(lambda: client.get(path)), path
 
 
-def test_a_child_is_gated_and_the_bare_route_is_not(monkeypatch):
+def test_a_child_is_gated_and_the_bare_route_is_not(monkeypatch, sealed):
     """/api/analytics/ is children only. The bare route is also the Bid Calendar's data source, so
     gating it would blank a page nobody restricted."""
     nav_access.save({"user": ["/analytics.html"]}, "k@x.com")
@@ -145,7 +179,7 @@ def test_a_child_is_gated_and_the_bare_route_is_not(monkeypatch):
     assert not _refused(lambda: client.get("/api/analytics"))
 
 
-def test_denying_the_lead_inbox_covers_the_bare_route_and_its_children(monkeypatch):
+def test_denying_the_lead_inbox_covers_the_bare_route_and_its_children(monkeypatch, sealed):
     nav_access.save({"user": ["/leads.html"]}, "k@x.com")
     client = _as(monkeypatch, "user")
     assert _refused(lambda: client.get("/api/leads"))
@@ -153,7 +187,7 @@ def test_denying_the_lead_inbox_covers_the_bare_route_and_its_children(monkeypat
     assert _refused(lambda: client.post("/api/leads/m1/create-estimate", json={}))
 
 
-def test_every_method_on_an_owned_prefix_is_refused(monkeypatch):
+def test_every_method_on_an_owned_prefix_is_refused(monkeypatch, sealed):
     """A gate on GET only would leave the writes open, which is the half that matters on the Auto
     Followups tab: its PUT rewrites four customer emails with no history."""
     nav_access.save({"user": ["/followup-settings.html"]}, "k@x.com")
@@ -163,7 +197,7 @@ def test_every_method_on_an_owned_prefix_is_refused(monkeypatch):
     assert _refused(lambda: client.post("/api/followup-settings/preview", json={}))
 
 
-def test_the_gate_fails_open_when_the_policy_cannot_be_read(monkeypatch):
+def test_the_gate_fails_open_when_the_policy_cannot_be_read(monkeypatch, sealed):
     """A bad byte on the volume must not become an outage: the data is still behind the gates it was
     always behind."""
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
@@ -174,7 +208,7 @@ def test_the_gate_fails_open_when_the_policy_cannot_be_read(monkeypatch):
     assert not _refused(lambda: client.get("/api/history"))
 
 
-def test_the_gate_fails_open_when_the_ROLE_cannot_be_resolved(monkeypatch):
+def test_the_gate_fails_open_when_the_ROLE_cannot_be_resolved(monkeypatch, sealed):
     """The other half: PostgREST down means nobody's role is known, so everybody gets everything."""
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
     monkeypatch.setattr(main, "_user_email", lambda request: "staffer@wetreadwell.com")
@@ -184,7 +218,7 @@ def test_the_gate_fails_open_when_the_ROLE_cannot_be_resolved(monkeypatch):
     assert not _refused(lambda: TestClient(main.app).get("/api/history"))
 
 
-def test_a_role_the_policy_does_not_mention_keeps_everything(monkeypatch):
+def test_a_role_the_policy_does_not_mention_keeps_everything(monkeypatch, sealed):
     """A profile row carrying something profiles.py cannot store must not be read as "deny all"."""
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
     assert not _refused(lambda: _as(monkeypatch, "estimator").get("/api/history"))
@@ -219,6 +253,61 @@ def test_the_static_page_still_serves_and_that_is_the_design(monkeypatch):
     nav_access.save({"user": ["/history.html"]}, "k@x.com")
     r = _as(monkeypatch, "user").get("/history.html")
     assert r.status_code == 200
+
+
+# ── hide-only, the 2026-10-27 decision ────────────────────────────────────────
+def _through_gate(path, method="GET"):
+    """One request through main._nav_gate with a handler that always answers 200.
+
+    The real handlers behind these routes read BasisBoard, Supabase and the data volume, so through
+    TestClient a pass would look like whatever the handler raised. A stub handler makes a pass a real
+    200 and keeps this off the network; what is under test is the gate's answer, not the handler's."""
+    import asyncio
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+
+    scope = {"type": "http", "method": method, "path": path, "raw_path": path.encode(),
+             "headers": [], "query_string": b"", "root_path": "", "scheme": "http",
+             "server": ("testserver", 80), "client": ("testclient", 1)}
+
+    async def handler(_request):
+        return PlainTextResponse("handler ran", status_code=200)
+
+    return asyncio.run(main._nav_gate(Request(scope), handler))
+
+
+def test_a_member_denied_every_tab_still_reaches_every_formerly_gated_route(monkeypatch):
+    """Hanz, 2026-10-27, asked outright and warned that a member could still reach the data by typing
+    the address: every deniable tab HIDES THE TAB ONLY. A member denied every tab gets 200 from every
+    route a tab ever owned, every method, while every one of those tabs' pages is refused and
+    admin-only writes still 403. Fails on the pre-2026-10-27 TABS: each prefix there was a nav 403."""
+    nav_access.save({"user": list(nav_access.TABS)}, "k@x.com")
+    deniable = [h for h in nav_access.TABS if h not in nav_access.LOCKED]
+    assert sorted(nav_access.denied_paths("user")) == sorted(deniable), "the policy did not take"
+    _as(monkeypatch, "user")
+    checked = 0
+    for prefixes in FORMERLY_GATED.values():
+        for prefix in prefixes:
+            for path in _probes(prefix):
+                for method in ("GET", "POST", "PUT", "DELETE"):
+                    r = _through_gate(path, method)
+                    assert r.status_code == 200, (method, path, r.status_code, r.body)
+                    checked += 1
+    assert checked >= 64, checked
+    # The pages are still refused: the menu drops them and each page paints its refusal card.
+    client = _as(monkeypatch, "user")
+    me = client.get("/api/me").json()
+    assert sorted(me["nav_denied"]) == sorted(deniable)
+    for href in deniable:
+        for page in nav_access.TABS[href]["pages"]:
+            assert me["nav_denied_pages"].get(page) == href, page
+            assert nav_access.page_denied("user", page) == href, page
+    # Admin-only writes are a separate gate and are untouched: still a plain 403, not a nav one.
+    for method, path, body in (("put", "/api/admin/nav-access", {"deny": {}}),
+                               ("patch", "/api/admin/users/u9/role", {"role": "admin"})):
+        r = getattr(client, method)(path, json=body)
+        assert r.status_code == 403, (path, r.status_code)
+        assert not r.json().get("nav_denied"), path
 
 
 # ── /api/me ───────────────────────────────────────────────────────────────────
@@ -266,12 +355,13 @@ def test_reading_the_policy_needs_admin(monkeypatch):
 
 
 def test_the_capability_table_tells_the_page_which_tabs_only_hide(monkeypatch):
-    """The Admin page has to say on screen that switching those five off leaves their data reachable,
-    and it needs `api` per tab to know which they are rather than a hardcoded list."""
+    """The Admin page draws "hides the tab only" from `api` per tab rather than a hardcoded list.
+    Since 2026-10-27 that is every tab, so every row serves an empty list."""
     tabs = {t["href"]: t for t in
             _as(monkeypatch, "admin").get("/api/admin/nav-access").json()["tabs"]}
+    assert {h: t["api"] for h, t in tabs.items() if t["api"]} == {}
     assert tabs["/notifications.html"]["api"] == []
-    assert tabs["/history.html"]["api"] == ["/api/history"]
+    assert tabs["/history.html"]["api"] == []
     # Estimating Tool v2 opens on its board since 2026-10-15; its two steps are still its pages
     assert tabs["/v2-board.html"]["pages"] == ["/v2-board.html", "/polish-intake.html",
                                                "/polish-estimate.html"]
@@ -284,7 +374,7 @@ def test_writing_the_policy_needs_admin(monkeypatch):
     assert nav_access.denied_paths("user") == [], "a member edited the policy"
 
 
-def test_an_admin_saves_and_it_takes_effect_on_the_next_request(monkeypatch):
+def test_an_admin_saves_and_it_takes_effect_on_the_next_request(monkeypatch, sealed):
     client = _as(monkeypatch, "admin")
     r = client.put("/api/admin/nav-access", json={"deny": {"user": ["/history.html"]}})
     assert r.status_code == 200, r.text
@@ -377,7 +467,7 @@ def test_a_typo_in_a_key_is_a_422_not_a_silent_no_op(monkeypatch):
     assert nav_access.denied_paths("user") == ["/leads.html"]
 
 
-def test_saving_an_empty_deny_map_is_the_way_back(monkeypatch):
+def test_saving_an_empty_deny_map_is_the_way_back(monkeypatch, sealed):
     nav_access.save({"user": ["/leads.html"]}, "k@x.com")
     r = _as(monkeypatch, "admin").put("/api/admin/nav-access", json={"deny": {}})
     assert r.status_code == 200
