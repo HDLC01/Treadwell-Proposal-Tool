@@ -92,6 +92,9 @@
   // with the same assembly priced on the library page.
   var ASMS = [];
   var ITEMS = [];
+  // The Admin page's headings per work type (GET /api/library/items' `item_categories`): the Material
+  // step draws its rows under them. Null when the store did not come, and the rows are drawn ungrouped.
+  var CATS = null;
 
   var at = 0;
   // The section on show (a workbook tab id). The root, Polish, unless the bid has more than one section and
@@ -2509,6 +2512,47 @@
       rowCardInner(r, i) + '</div>';
   }
 
+  /** THE TAKEOFF ROWS UNDER THE ADMIN PAGE'S HEADINGS (Hanz, 2026-10-27: "we also need to separate these
+   *  categories in the Estimates"), Kyle's "MATERIAL - Patch", "MATERIAL - Epoxy Liquids" and the rest, in
+   *  the Admin order, each with its subtotal, and "Other" last for a row with no heading. A material's
+   *  heading is its own for this section's work type; an assembly's is its category when that names one.
+   *
+   *  DISPLAY ONLY. M.takeoff keeps its order and every card keeps its real index, so nothing that prices,
+   *  saves or addresses a row by `data-row-card` moves. A work type with no headings draws the rows as one
+   *  list, exactly as before. A row whose pick changes stays where it is drawn until the panel is next
+   *  built (the card is repainted in place, never moved, so the caret is never taken out of it). */
+  function takeoffRowsHtml() {
+    var e = openEntry();
+    var wt = e ? e.layout : "polish";
+    var idx = M.takeoff.map(function (r, i) { return i; });
+    var groups = L.groupByCategory(idx, CATS, wt, function (i) { return rowCategory(M.takeoff[i], wt); });
+    if (!groups.length) return M.takeoff.map(takeoffRowCard).join("");
+    return groups.map(function (g) {
+      return '<div class="tk-cat" data-cat-group="' + esc(g.id || "other") + '">' +
+        '<h3 class="tk-cat-h">' + esc(g.name) + '</h3>' +
+        '<span class="tk-cat-sub">Subtotal <b data-cat-sub="' + g.keys.join(",") + '">' +
+        esc(moneyAuto(categorySubtotal(g.keys))) + '</b></span></div>' +
+        g.keys.map(function (i) { return takeoffRowCard(M.takeoff[i], i); }).join("");
+    }).join("");
+  }
+
+  /** The heading a takeoff row sits under in work type `wt`, {id, name}, or null (Other). */
+  function rowCategory(r, wt) {
+    var k = rowKind(r);
+    if (k === "item") return L.itemCategory(itemById(r.item_id), CATS, wt);
+    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt);
+    return null;
+  }
+
+  /** What the rows at these indexes come to: the sum of the Total cost each card shows. */
+  function categorySubtotal(indexes) {
+    return indexes.reduce(function (sum, i) {
+      if (!M.takeoff[i]) return sum;
+      var rc = rowCost(M.takeoff[i]);
+      return sum + (rc.empty || !rc.price ? 0 : B.num(rc.price.total));
+    }, 0);
+  }
+
   function rowCardClass(r) {
     return "tk" + (rowKind(r) === "item" ? " mat" : "") + (B.rowOn(r) ? "" : " inert");
   }
@@ -2760,7 +2804,7 @@
     var html = textureCard() + (gypSec ? gypCard(gypSec) : "");
     html += '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
       ' Add assembly or material</button>';
-    html += M.takeoff.map(takeoffRowCard).join("");
+    html += takeoffRowsHtml();
 
     // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
     // They are questions about the WORK, and the work is described here. On intake they sat among
@@ -4158,6 +4202,12 @@
       var rc = rowCost(M.takeoff[parseInt(el.getAttribute("data-cost-for"), 10)]);
       el.textContent = rc.text;
       el.className = "costbox" + (rc.empty ? " empty" : "");
+    });
+    // Each heading's subtotal, over the rows drawn under it.
+    document.querySelectorAll("[data-cat-sub]").forEach(function (el) {
+      var keys = String(el.getAttribute("data-cat-sub") || "").split(",").filter(function (s) { return s !== ""; })
+        .map(function (s) { return parseInt(s, 10); });
+      el.textContent = moneyAuto(categorySubtotal(keys));
     });
     document.querySelectorAll("[data-perunit-for]").forEach(function (el) {
       var i = parseInt(el.getAttribute("data-perunit-for"), 10);
@@ -5605,6 +5655,7 @@
       var ij = await res[1].json();
       ASMS = (aj && aj.assemblies) || [];
       ITEMS = (ij && ij.items) || [];
+      CATS = (ij && ij.item_categories) || null;
     } catch (err) {
       $("loading").textContent = "Couldn't load the item library, so there is nothing to price " +
         "against. " + (err.message || "") + " Reload to try again.";

@@ -2439,7 +2439,7 @@ def test_the_filter_survives_the_things_that_re_render_the_list(ran):
     assert s["vendorHeld"] == "Sika" and s["conditionHeld"] == "no_cost"
     assert s["clearOffered"], "Clear filters is hidden while three facets are on"
     assert s["modelHeld"] == (
-        '{"divisions":["Epoxy"],"vendor":"Sika","condition":"no_cost"}'), s["modelHeld"]
+        '{"divisions":["Epoxy"],"vendor":"Sika","condition":"no_cost","category":""}'), s["modelHeld"]
 
 
 @needs_node
@@ -3255,7 +3255,7 @@ def test_the_bulk_pickers_facets_are_its_own_and_do_not_move_the_items_tab(ran):
     Mutation: have bulkCandidates read the module-level FILTERS."""
     b = ran["bulkAdd"]
     assert b["ownFacetNarrows"] == ["i1"], "the modal's own division facet did not narrow the list"
-    assert b["itemsTabFiltersUnmoved"] == '{"divisions":[],"vendor":"","condition":""}', (
+    assert b["itemsTabFiltersUnmoved"] == '{"divisions":[],"vendor":"","condition":"","category":""}', (
         "the modal moved the Items tab's filter state")
 
 

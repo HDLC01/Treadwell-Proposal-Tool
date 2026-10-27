@@ -8,6 +8,9 @@
     // null until loaded, and null if that fetch failed — the card then says so instead of drawing
     // boxes that would save nothing.
     let GRANTS = null;
+    // The Item categories store: { order, labels, work_types:{wt:[{id,name}]}, seeded, updated_at, updated_by }.
+    // null until loaded, and null if that fetch failed — the card then says so.
+    let ITEM_CATS = null;
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
     function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); return isNaN(d)?"—":d.toLocaleDateString(); }
     // One drawn glyph out of js/icons.js, which loads before this file. Never a typed character:
@@ -44,6 +47,8 @@
       shell();
       wireRoleMatrix();
       await loadGrants();
+      await loadItemCategories();
+      renderItemCategories();
       await refresh();
     }
 
@@ -78,6 +83,7 @@
         </div>
         ${roleMatrixHtml()}
         <div id="sp-panel"></div>
+        <div id="ic-panel"></div>
         <div class="panel" style="margin-top:18px;">
           <div class="ph"><strong>Projects</strong><span id="pcount" style="color:var(--ink-v)"></span>
             <span class="grow"></span>
@@ -423,6 +429,148 @@
       if (!res.ok || !res.body.grants_catalog) { renderGrants("Not saved: " + errText(res)); return; }
       GRANTS = res.body;
       renderGrants("Saved.");
+    }
+
+    // ── Item categories ──
+    // Hanz, 2026-10-27: "The Categories will be set in the Administration tab, so for example for epoxy
+    // we have Patch, Epoxy Liquids, Extras, Cove, just like the sheet." One ordered list per work type;
+    // the v2 estimate's Material step draws its rows under these headings in this order. A heading keeps
+    // its id when it is renamed, which is how every material filed under it follows the new name; one
+    // that is removed leaves its materials uncategorised (the estimate files them under Other).
+    //
+    // PURE (its inputs are its arguments, and esc is local) so backend/tests/js/item-categories-
+    // harness.js can lift it out and render it on its own.
+    function itemCategoriesPanelHtml(store, status){
+      const e = (s) => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+      const ico = (n) => (typeof TWIcon === "function" ? TWIcon(n, 13) : "");
+      const head = `<div class="ph"><strong>Item categories</strong>
+          <span style="color:var(--ink-v)">The headings materials are grouped under on an estimate's Material step.</span>
+          <span class="grow"></span>
+          <span class="rv-you" id="ic-status" role="status">${e(status||"")}</span></div>`;
+      if (!store || !store.work_types || !Array.isArray(store.order)) {
+        return `<div class="panel" id="ic-panel" style="margin-top:18px;">${head}
+          <p class="rv-note">The item categories didn't load, so there is nothing to change here. Reload the page.</p></div>`;
+      }
+      const labels = store.labels || {};
+      const blocks = store.order.map(wt => {
+        const list = store.work_types[wt] || [];
+        const rows = list.map((c, i) => `<li class="ic-row" data-ic-wt="${e(wt)}" data-ic-id="${e(c.id)}">
+            <input class="ic-name" data-ic-act="rename" data-ic-wt="${e(wt)}" data-ic-id="${e(c.id)}" value="${e(c.name)}"
+              maxlength="60" aria-label="${e((labels[wt]||wt) + " category " + (i+1))}">
+            <button class="act" type="button" data-ic-act="up" data-ic-wt="${e(wt)}" data-ic-id="${e(c.id)}"${i===0?" disabled":""}
+              aria-label="Move ${e(c.name)} up" title="Move up">${ico("arrow-up") || "Up"}</button>
+            <button class="act" type="button" data-ic-act="down" data-ic-wt="${e(wt)}" data-ic-id="${e(c.id)}"${i===list.length-1?" disabled":""}
+              aria-label="Move ${e(c.name)} down" title="Move down">${ico("arrow-down") || "Down"}</button>
+            <button class="act danger" type="button" data-ic-act="remove" data-ic-wt="${e(wt)}" data-ic-id="${e(c.id)}"
+              aria-label="Remove ${e(c.name)}" title="Remove. Its materials become uncategorized.">Remove</button>
+          </li>`).join("");
+        return `<div class="ic-wt" data-ic-block="${e(wt)}">
+          <div class="ic-wt-h"><strong>${e(labels[wt]||wt)}</strong>
+            <span class="rv-you">${list.length ? list.length + (list.length===1?" category":" categories") : "None yet. Its materials are drawn as one list."}</span></div>
+          <ol class="ic-list">${rows}</ol>
+          <div class="ic-add"><input class="ic-name" data-ic-new="${e(wt)}" maxlength="60" placeholder="New ${e(labels[wt]||wt)} category"
+              aria-label="New ${e(labels[wt]||wt)} category">
+            <button class="act" type="button" data-ic-act="add" data-ic-wt="${e(wt)}">Add</button></div>
+        </div>`;
+      }).join("");
+      return `<div class="panel" id="ic-panel" style="margin-top:18px;">${head}
+        <div class="ic-grid">${blocks}</div>
+        <div class="rv-note"><p>Each material picks its category on the Items and Assemblies tab. Renaming a
+          category renames it for every material in it. <strong>Removing a category leaves its materials
+          uncategorized</strong>: the estimate lists them under Other until they are given a new one.${
+          store.updated_at?` Last changed ${e(new Date(store.updated_at).toLocaleDateString())}${store.updated_by?" by "+e(store.updated_by):""}.`
+            :(store.seeded?" These are the headings on Kyle's sheet; nobody has changed them yet.":"")}</p></div></div>`;
+    }
+
+    /** The lists after one edit, as the PUT takes them. PURE: `store` is never changed. Returns null when
+     *  the edit changes nothing (a blank or duplicate name, a move past either end, an unknown id). */
+    function itemCategoriesAfter(store, act, wt, id, name){
+      const map = {};
+      Object.keys((store && store.work_types) || {}).forEach(k => {
+        map[k] = (store.work_types[k] || []).map(c => ({ id: c.id, name: c.name }));
+      });
+      const list = map[wt];
+      if (!list) return null;
+      const clean = String(name==null?"":name).replace(/\s+/g, " ").trim();
+      const at = list.findIndex(c => c.id === id);
+      const taken = (n, except) => list.some(c => c.id !== except && c.name.toLowerCase() === n.toLowerCase());
+      if (act === "add") {
+        if (!clean || taken(clean)) return null;
+        list.push({ name: clean });                       // no id: the server mints one
+      } else if (at === -1) {
+        return null;
+      } else if (act === "rename") {
+        if (!clean || clean === list[at].name || taken(clean, id)) return null;
+        list[at].name = clean;
+      } else if (act === "remove") {
+        list.splice(at, 1);
+      } else if (act === "up" || act === "down") {
+        const to = act === "up" ? at - 1 : at + 1;
+        if (to < 0 || to >= list.length) return null;
+        const moved = list.splice(at, 1)[0];
+        list.splice(to, 0, moved);
+      } else {
+        return null;
+      }
+      return map;
+    }
+
+    async function loadItemCategories(){
+      const res = await apiFull("/api/item-categories");
+      ITEM_CATS = res.ok && res.body && res.body.work_types ? res.body : null;
+    }
+
+    function renderItemCategories(status){
+      const el = document.getElementById("ic-panel");
+      if (!el) return;
+      el.outerHTML = itemCategoriesPanelHtml(ITEM_CATS, status);
+      const panel = document.getElementById("ic-panel");
+      if (!panel) return;
+      panel.addEventListener("click", (ev) => {
+        const btn = ev.target.closest && ev.target.closest("button[data-ic-act]");
+        if (!btn || btn.disabled) return;
+        const act = btn.dataset.icAct, wt = btn.dataset.icWt;
+        if (act === "add") {
+          const box = panel.querySelector(`[data-ic-new="${wt}"]`);
+          editItemCategory("add", wt, "", box ? box.value : "");
+        } else if (act === "remove") {
+          removeItemCategory(wt, btn.dataset.icId);
+        } else {
+          editItemCategory(act, wt, btn.dataset.icId, "");
+        }
+      });
+      panel.addEventListener("change", (ev) => {
+        const box = ev.target;
+        if (box && box.dataset && box.dataset.icAct === "rename") editItemCategory("rename", box.dataset.icWt, box.dataset.icId, box.value);
+      });
+      panel.addEventListener("keydown", (ev) => {
+        const box = ev.target;
+        if (ev.key === "Enter" && box && box.dataset && box.dataset.icNew) {
+          ev.preventDefault();
+          editItemCategory("add", box.dataset.icNew, "", box.value);
+        }
+      });
+    }
+
+    async function removeItemCategory(wt, id){
+      const c = ((ITEM_CATS && ITEM_CATS.work_types[wt]) || []).find(x => x.id === id);
+      if (!c) return;
+      const ok = await TW.confirmDanger({ title:"Remove this category?", before:"Remove ", name:c.name, after:"?",
+        detail:"Materials in it become uncategorized. The estimate lists them under Other until they are given a new category. No price changes.",
+        confirmText:"Remove", tone:"warn" });
+      if (ok) editItemCategory("remove", wt, id, "");
+    }
+
+    /** Apply one edit and save the WHOLE set of lists, which is what the route takes. */
+    async function editItemCategory(act, wt, id, name){
+      const next = itemCategoriesAfter(ITEM_CATS, act, wt, id, name);
+      if (!next) { renderItemCategories(act === "add" || act === "rename" ? "Nothing to save: that name is blank or already in the list." : ""); return; }
+      renderItemCategories("Saving…");
+      document.querySelectorAll("#ic-panel button, #ic-panel input").forEach(x => { x.disabled = true; });
+      const res = await apiFull("/api/item-categories", { method:"PUT", body: JSON.stringify({ work_types: next }) });
+      if (!res.ok || !res.body.work_types) { renderItemCategories("Not saved: " + errText(res)); return; }
+      ITEM_CATS = res.body;
+      renderItemCategories("Saved.");
     }
 
     async function refresh(){

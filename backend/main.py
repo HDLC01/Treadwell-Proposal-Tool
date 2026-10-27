@@ -81,6 +81,7 @@ import invoice_writer
 import leads
 import leads_worker
 import library
+import item_categories
 import markup
 import nav_access
 import notifications
@@ -1031,6 +1032,9 @@ class LibraryItemIn(BaseModel):
     price_breaks: Optional[Any] = None
     bulk_cost: Optional[Any] = None
     coverage_basis: Optional[Any] = None
+    # The Material step's heading per work type ({"epoxy": "epoxy-patch"}, ids from
+    # item_categories.py). Declared or Pydantic drops it in silence, as the note below explains.
+    material_categories: Optional[Any] = None
     # WHICH WORK TYPES THIS DEFAULT IS OFFERED FOR. `Any`, like the fields above, because
     # library._coerce_work_types accepts a list, a JSON string or a bare name and is the
     # single authority on the answer.
@@ -1066,7 +1070,55 @@ class LibraryAssemblyIn(BaseModel):
 
 @app.get("/api/library/items")
 def api_library_items() -> Dict[str, Any]:
-    return {"ok": True, "items": library.list_items()}
+    # The category lists ride along: both pages that read the items (Items and Assemblies, and the
+    # v2 estimate's Material step) need them to name an item's category, and this saves each a
+    # second request. A store that cannot be read never costs the page its materials.
+    try:
+        cats = _item_categories_body(item_categories.load())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("item categories unreadable for /api/library/items: %s", exc)
+        cats = None
+    return {"ok": True, "items": library.list_items(), "item_categories": cats}
+
+
+# ─── Item categories: the Material step's headings, per work type ─────
+# Hanz, 2026-10-27. Edited on the Admin page; read by every signed-in page that shows materials.
+# WRITES are the Items and Assemblies tab's admin-only edits (the same gate as its vendor, division
+# and unit lists), READS are open to anyone signed in.
+class ItemCategoriesIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    work_types: Dict[str, List[Any]] = Field(default_factory=dict)
+
+
+def _item_categories_body(store: Dict[str, Any]) -> Dict[str, Any]:
+    return {"ok": True,
+            "order": list(item_categories.WORK_TYPES),
+            "labels": dict(item_categories.LABELS),
+            "work_types": store.get("work_types") or {},
+            "seeded": bool(store.get("seeded")),
+            "updated_at": store.get("updated_at"), "updated_by": store.get("updated_by")}
+
+
+@app.get("/api/item-categories")
+def api_item_categories() -> Dict[str, Any]:
+    return _item_categories_body(item_categories.load())
+
+
+@app.put("/api/item-categories")
+def api_set_item_categories(payload: ItemCategoriesIn, request: Request) -> Dict[str, Any]:
+    """Replace the whole set of lists. An entry keeps its id across a rename, which is how every
+    material filed under it follows the new name; an entry left out is removed, and its materials
+    read as uncategorised from then on."""
+    actor = _require_grant(request, special_permissions.LIBRARY)
+    try:
+        store = item_categories.save(payload.work_types,
+                                     actor.get("email") or _user_email(request) or "")
+    except item_categories.ItemCategoriesWriteError as exc:
+        log.error("item categories save failed: %s", exc)
+        raise HTTPException(500, "Couldn't save the item categories") from exc
+    drafts.log_event(None, actor.get("email"), "item_categories_changed",
+                     {"work_types": store["work_types"]})
+    return _item_categories_body(store)
 
 
 @app.post("/api/library/items")

@@ -83,6 +83,14 @@
     .rv-note { padding:12px 16px 14px; border-top:1px solid rgba(27,28,28,.08); color:var(--ink-v); max-width:78ch; }
     .rv-note p { margin:0 0 8px; } .rv-note p:last-child { margin-bottom:0; }
     .rv-note code { background:#f4f4f5; border-radius:4px; padding:1px 4px; font-size:12px; }
+    /* Item categories: one column per work type, each an ordered list of headings. */
+    .ic-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; padding:14px 16px; }
+    .ic-wt { border:1px solid rgba(27,28,28,.08); border-radius:10px; padding:10px 12px; }
+    .ic-wt-h { display:flex; align-items:baseline; gap:8px; margin-bottom:6px; }
+    .ic-list { list-style:none; margin:0; padding:0; }
+    .ic-row, .ic-add { display:flex; align-items:center; gap:4px; margin:4px 0; }
+    .ic-row .act, .ic-add .act { margin-left:0; }
+    .ic-name { flex:1; min-width:0; background:#fff; color:var(--ink); border:1px solid rgba(27,28,28,.18); border-radius:7px; padding:5px 8px; font:inherit; }
     .act:hover { background:#f4f4f5; }
     .act:disabled { opacity:.4; cursor:default; }
     .act.danger { color:#c8102e; border-color:rgba(200,16,46,.4); }

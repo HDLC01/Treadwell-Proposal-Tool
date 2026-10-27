@@ -615,6 +615,19 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("matchesFilters")}
   ${fn("filterSummary")}
   ${fn("renderFilterBar")}
+  // THE ITEM CATEGORIES (Admin > Item categories, 2026-10-27). renderItems draws the Category cell through
+  // categoryCell, matchesFilters asks categoryHits and renderFilterBar fills #f-category, so every helper is
+  // lifted here. CATS is the store the page reads off GET /api/library/items; a scenario hands it in.
+  var categoryBarSig = "";
+  var CATS = state.CATS || null;
+  ${grab(/^  var CATEGORY_NONE = .*;$/m, "the CATEGORY_NONE declaration")}
+  ${grab(/^  var DIVISION_WORK_TYPE = \{.*\};$/m, "the DIVISION_WORK_TYPE declaration")}
+  ${fn("categoryWorkTypes")}
+  ${fn("categoryCell")}
+  ${fn("withCategory")}
+  ${fn("itemCategoryNames")}
+  ${fn("categoryFilterNames")}
+  ${fn("categoryHits")}
   ${fn("visibleItems")}
   ${fn("sortItems")}
   ${fn("nameKey")}
@@ -754,6 +767,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // tab list, and a test of "an added division reaches the filter chips" has to be able to do the
   // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
   return { setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
+           categoryCell, categoryHits, categoryFilterNames, categoryWorkTypes, CATEGORY_NONE,
+           setCats: function (c) { CATS = c; },
            // THE PAGERS. The search, the sort and the open assembly are plain variables on the page
            // and its listeners just assign them, so these setters are those assignments and nothing
            // more; what the page does with the change is the real renderer's business.
@@ -6956,6 +6971,105 @@ async function manualSaveChecks() {
     res.asmFirstOption = (/value="([^"]*)"/.exec(html.slice(j)) || [])[1];
   }
   out.newestFirst = res;
+}
+
+// ── THE CATEGORY COLUMN (Admin > Item categories, 2026-10-27) ────────────────────────────────────────
+// Rendered by the real renderItems and edited through the real onItemEdit, on the store GET /api/library/items
+// carries. One material per case: one work type, two work types, a heading that was removed, no work type at all.
+{
+  const CATS = {
+    order: ["epoxy", "polish", "gyp", "seal", "leveling"],
+    labels: { epoxy: "Epoxy", polish: "Polish", gyp: "Gyp", seal: "Seal", leveling: "Leveling" },
+    work_types: {
+      epoxy: [{ id: "epoxy-patch", name: "Patch" }, { id: "epoxy-liquids", name: "Epoxy Liquids" },
+              { id: "epoxy-extras", name: "Extras" }, { id: "epoxy-cove", name: "Cove" }],
+      polish: [{ id: "polish-patch", name: "Patch" }, { id: "polish-floor", name: "Floor" },
+               { id: "polish-dye", name: "Dye" }, { id: "polish-joint-filler", name: "Joint Filler" }],
+      gyp: [], seal: [], leveling: [],
+    },
+  };
+  const mat = (id, divisions, cats, extra) => Object.assign({ id: id, name: "Mat " + id, unit: "Gallon", buy_qty: 1,
+    unit_cost: 10, coverage: 100, vendor: "", divisions: divisions, category: divisions[0] || "",
+    material_categories: cats, default_work_types: [] }, extra || {});
+  const MATS = [
+    mat("c1", ["Epoxy"], { epoxy: "epoxy-patch" }),
+    mat("c2", ["Polished Concrete"], {}),
+    mat("c3", ["Epoxy", "Polished Concrete"], { epoxy: "epoxy-extras", polish: "polish-floor" }),
+    mat("c4", ["Epoxy"], { epoxy: "epoxy-removed" }),
+    mat("c5", [], {}),
+    mat("c6", [], {}, { default_work_types: ["polish"] }),
+  ];
+  const rowOf = (html, id) => {
+    const at = html.indexOf('<tr data-item="' + id + '"');
+    return html.slice(at, html.indexOf("</tr>", at));
+  };
+  const cellOf = (row) => {
+    const at = row.indexOf('<td class="cell-cat">');
+    return at < 0 ? null : row.slice(at, row.indexOf("</td>", at));
+  };
+  const selects = (cell) => (cell.match(/<select data-f="material_category" data-wt="([^"]*)"/g) || [])
+    .map((x) => /data-wt="([^"]*)"/.exec(x)[1]);
+  const selectedIn = (cell, wt) => {
+    const at = cell.indexOf('data-wt="' + wt + '"');
+    if (at < 0) return undefined;
+    const chunk = cell.slice(at, cell.indexOf("</select>", at));
+    const m = /<option value="([^"]*)" selected>/.exec(chunk);
+    return m ? m[1] : "";
+  };
+  const optionsIn = (cell, wt) => {
+    const at = cell.indexOf('data-wt="' + wt + '"');
+    const chunk = cell.slice(at, cell.indexOf("</select>", at));
+    return (chunk.match(/<option value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]);
+  };
+  const b = build({ ITEMS: JSON.parse(JSON.stringify(MATS)), CATS: CATS });
+  b.api.renderItems();
+  const html = b.dom.nodes["items-body"].innerHTML;
+  const cells = {};
+  MATS.forEach((m) => {
+    const cell = cellOf(rowOf(html, m.id));
+    cells[m.id] = { selects: selects(cell), epoxy: selectedIn(cell, "epoxy"), polish: selectedIn(cell, "polish"),
+                    labelled: /class="catwt"/.test(cell), noneSetUp: /None set up/.test(cell) };
+  });
+  const epoxyOptions = optionsIn(cellOf(rowOf(html, "c1")), "epoxy");
+  // No store: no select, a sentence instead.
+  const bare = build({ ITEMS: JSON.parse(JSON.stringify(MATS)) });
+  bare.api.renderItems();
+  const bareCell = cellOf(rowOf(bare.dom.nodes["items-body"].innerHTML, "c1"));
+
+  // THE EDITOR: the real onItemEdit on a category select, through the scope's queue.
+  const target = (id, wt, value) => ({
+    value: value,
+    getAttribute: (k) => (k === "data-f" ? "material_category" : (k === "data-wt" ? wt : null)),
+    closest: (sel) => (sel === "[data-item]" ? { getAttribute: () => id } : null),
+  });
+  const e = build({ ITEMS: JSON.parse(JSON.stringify(MATS)), CATS: CATS });
+  e.api.renderItems();
+  const c1 = e.api.itemsNow().filter((x) => x.id === "c1")[0];
+  const beforeMap = c1.material_categories;
+  e.api.onItemEdit({ target: target("c1", "polish", "polish-dye") });
+  const afterAdd = JSON.parse(JSON.stringify(e.api.QUEUED[e.api.QUEUED.length - 1]));
+  const modelAfterAdd = JSON.parse(JSON.stringify(e.api.itemsNow().filter((x) => x.id === "c1")[0].material_categories));
+  e.api.onItemEdit({ target: target("c1", "epoxy", "") });
+  const afterClear = JSON.parse(JSON.stringify(e.api.QUEUED[e.api.QUEUED.length - 1]));
+
+  // THE FACET: the real visibleItems / matchesFilters / filterSummary / renderFilterBar.
+  const facet = (category) => {
+    const f = build({ ITEMS: JSON.parse(JSON.stringify(MATS)), CATS: CATS, FILTERS: { category: category } });
+    f.api.renderItems();
+    f.api.renderFilterBar();
+    return { shown: f.api.visibleItems().map((x) => x.id), active: f.api.anyFilterActive(),
+             summary: f.api.filterSummary(), bar: f.dom.nodes["f-category"].innerHTML,
+             barValue: f.dom.nodes["f-category"].value };
+  };
+  const NONE = b.api.CATEGORY_NONE;
+  out.categoryColumn = {
+    cells, epoxyOptions,
+    bare: { selects: selects(bareCell), noneSetUp: /None set up/.test(bareCell) },
+    edit: { afterAdd, modelAfterAdd, afterClear, snapshotUntouched: JSON.stringify(beforeMap) === '{"epoxy":"epoxy-patch"}' },
+    patch: facet("Patch"), floor: facet("floor"), none: facet(NONE), off: facet(""),
+    barOptions: (facet("").bar.match(/<option value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]),
+    NONE,
+  };
 }
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),
