@@ -374,9 +374,10 @@ DOORS = [
     ("js/proposal-review.js", '["/estimate-review.html", "/polish-estimate.html", "/polish-intake.html"]', 1, SHEET,
      "parentStepHref re-points a child's Estimate link to its parent's estimate"),
     ("js/leads.js", "&edit=1", 2, INTAKE, "Leads: open the project a lead became"),
-    # 4 since 2026-10-24: the drawer's scope list opens a sibling not on the board yet, and a new scope
-    # opens itself, both on the intake (index.js sends a v2 draft on to the v2 intake).
-    ("js/portal.js", "&edit=1", 4, INTAKE, "the board's drawer: Open, a scope not on the board, a new scope"),
+    # 3 since 2026-10-27: the drawer's scope list opens a sibling not on the board yet on the intake
+    # (index.js sends a v2 draft on to the v2 intake). The "New scope for this project" button that made
+    # the 4th door is gone: Create Multiple Proposals on the Proposal step replaced it.
+    ("js/portal.js", "&edit=1", 3, INTAKE, "the board's drawer: Open, a scope not on the board"),
     ("js/projects.js", "&edit=1", 1, INTAKE, "a Projects card (a v2 card goes to the v2 intake first)"),
     ("js/proposal-review.js", 'href="/?edit=1"', 1, INTAKE, "Go to Intake on the no-project card"),
     ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 2, SHEET,
