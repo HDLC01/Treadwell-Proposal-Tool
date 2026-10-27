@@ -8420,6 +8420,24 @@ def _send_all_needs_publish(draft_id: str, data: Dict[str, Any]) -> bool:
     return _canonical_sha256(data.get("proposal_payload")) != _canonical_sha256(before)
 
 
+def _send_all_settled_reason(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a proposal the customer has already DECIDED on must not be republished by the press, or
+    None. A republish is a new revision on the portal: reset_for_revision cancels an approval ("this
+    revision needs a new approval") and reopen_if_closed puts a lost one back in play. That is a
+    choice made on the proposal's own Files page, never a side effect of sending its neighbours."""
+    if not isinstance(row, dict):
+        return None
+    status = str(row.get("proposal_status") or "")
+    deposit = str(row.get("deposit_status") or "")
+    if deposit in ("submitted", "received"):
+        return "the customer already paid its deposit; send its revision from its own Files page"
+    if status == "approved" or row.get("approved_at"):
+        return "the customer already approved it; send its revision from its own Files page"
+    if status == "closed_lost":
+        return "it is closed as lost; reopen it and send its revision from its own Files page"
+    return None
+
+
 def _send_all_block_reason(refusal: Any) -> str:
     """What the estimator does about one proposal's refused publish, in a few words."""
     if isinstance(refusal, HTTPException):
@@ -8519,12 +8537,32 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
     group_est = next((e for e in stored_ests if e), "")
     prepared: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     blocked: List[Dict[str, Any]] = []
+    # THE CUSTOMER'S ANSWER, asked once and only when a proposal they already have would be
+    # published again by this press (not the page's own: its Files page is where a revision of a
+    # decided proposal is meant to be sent from). A portal that cannot answer live cannot confirm
+    # nobody approved, so those proposals are blocked rather than guessed about.
+    portal_rows: Optional[Dict[str, Dict[str, Any]]] = None
+    portal_live = False
     for m in live:
         row = rows[m["id"]]
         data = row.get("data") or {}
         label = m.get("label") or "A proposal"
         if not _send_all_needs_publish(m["id"], data):
             continue
+        if m["id"] != page_id and drafts.latest_revision_no(m["id"]):
+            if portal_rows is None:
+                snap, snap_status = _pipeline_snapshot()
+                portal_live = snap_status == "live"
+                portal_rows = {str(p.get("proposal_id")): p for p in snap if isinstance(p, dict)}
+            if not portal_live:
+                blocked.append({"id": m["id"], "label": label,
+                                "error": "the portal could not say whether the customer already "
+                                         "approved it; try again in a minute"})
+                continue
+            settled = _send_all_settled_reason(portal_rows.get(m["id"]))
+            if settled:
+                blocked.append({"id": m["id"], "label": label, "error": settled})
+                continue
         pp = data.get("proposal_payload")
         if not data.get("generate_result") or not (isinstance(pp, dict) and pp.get("values")):
             blocked.append({"id": m["id"], "label": label,
@@ -8534,10 +8572,23 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
             one = page
         else:
             own = str(data.get("assigned_estimator") or "").strip()
+            # ITS OWN DEPOSIT CHOICE, the way its Files page would tick the box (mountRequireDeposit):
+            # a choice it was sent with before wins, else on for Direct work and off for GC. Left
+            # out, a never-published proposal would get the portal's default, a 25% deposit even
+            # on a GC scope. One the customer already has, with no stored choice, keeps the portal's
+            # (None forwards nothing).
+            stored_dep = data.get("require_deposit")
+            if isinstance(stored_dep, bool):
+                dep: Optional[bool] = stored_dep
+            elif drafts.latest_revision_no(m["id"]):
+                dep = None
+            else:
+                dep = pipelines.pipeline_of(data.get("audience")) != pipelines.GC
             one = PortalPublishIn(
                 emails=list(page.emails) if page else [],
                 no_followups=list(page.no_followups) if page else [],
                 assigned_estimator=page_est or own or group_est,
+                require_deposit=dep,
                 has_cover_letter=bool(pp.get("cover_letter_enabled")))
         if not one.emails and not str(data.get("contact_email") or "").strip():
             blocked.append({"id": m["id"], "label": label,

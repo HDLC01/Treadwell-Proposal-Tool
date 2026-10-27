@@ -725,7 +725,8 @@
       // A scope the customer ALREADY HAS (a project sent before it gained scopes) is never told to be
       // published again: that would be a new revision, which reopens an approval (finding 1).
       return { sent: false, retry: false, text: ["Nothing was sent.",
-        unsent.length ? "Publish every scope from its Files page first. Not published yet: " + unsent.join(", ") + "." : "",
+        unsent.length ? "Not published yet: " + unsent.join(", ") + ". " + (unsent.length === 1
+          ? "Send all proposals in one email publishes it and emails it with the others." : "Send all proposals in one email publishes them and emails them with the others.") : "",
         sentAlready.length ? "Already with the customer as its own proposal, and not yet part of this project's email on the portal: " + sentAlready.join(", ") + ". Do not send it again; ask Hanz." : "",
       ].filter(Boolean).join(" ") };
     }
@@ -737,12 +738,12 @@
       var unpub = (Array.isArray(j.not_included) ? j.not_included : [])
         .filter(function (id) { return !isSent(id); }).map(nameOf);
       var unpubText = unpub.length ? " Not published yet: " + unpub.join(", ") + ". " + (unpub.length === 1
-        ? "Publish it from its Files page, then email it from here." : "Publish them from their Files pages, then email them from here.") : "";
+        ? "Send all proposals in one email publishes it and emails it with the others." : "Send all proposals in one email publishes them and emails them with the others.") : "";
       if (lostIds.length) {
         return { sent: false, retry: false, text: "Nothing new was sent. The result of the last send was lost for: " + lostIds.map(nameOf).join(", ") + ". Check the thread, then send again." + unpubText };
       }
       if (unpub.length) return { sent: false, retry: false, text: "Nothing was sent." + unpubText };
-      return { sent: false, retry: false, text: "Nothing was sent: the customer already has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here." };
+      return { sent: false, retry: false, text: "Nothing was sent: the customer already has every scope of this project in their email. A revision goes out with Send all proposals in one email on its Files page." };
     }
     if (code === "send_not_recorded") {
       // The portal could not stamp the send before the first email, so it stopped: nobody was mailed.
@@ -781,7 +782,7 @@
       failed = (j.recipients || []).map(String).filter(function (e) { return got.indexOf(e.toLowerCase()) < 0; });
     }
     var left = (j.not_included || []).map(nameOf);
-    var leftText = left.length ? " Not in this email (publish it first): " + left.join(", ") + "." : "";
+    var leftText = left.length ? " Not in this email (not published yet): " + left.join(", ") + "." : "";
     if (!delivered.length) {
       return { sent: false, retry: false, text: "Nobody got the email" + (failed.length ? " (" + failed.join(", ") + ")" : "") + ". Nothing was marked as sent. Check the addresses, then try again." + leftText };
     }

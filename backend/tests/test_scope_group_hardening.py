@@ -904,7 +904,7 @@ def test_a_partial_send_names_who_it_missed_and_retries_only_them(drawer):
     h = drawer["honest"]
     assert h["partial"]["note"].startswith("Sent to 1 contact,")
     assert "It did NOT reach: b@x.test." in h["partial"]["note"]
-    assert "Not in this email (publish it first): Lab 2." in h["partial"]["note"]
+    assert "Not in this email (not published yet): Lab 2." in h["partial"]["note"]
     assert h["partial"]["retryShown"] is True
     assert h["retry"]["requests"] == [{"path": "/api/portal/scope-group/grp_h/send", "method": "POST",
                                        "body": {"retry_failed": True}}]
@@ -985,22 +985,27 @@ def test_a_send_in_flight_is_said_not_called_delivered(drawer):
     assert 'id="scope-inflight"' not in h["allSentHtml"]
 
 
-PUBLISH_ONE = "Publish it from its Files page, then email it from here."
+PUBLISH_ONE = "Send all proposals in one email publishes it and emails it with the others."
 
 
 @needs_node
 def test_a_scope_not_published_yet_is_named_with_what_to_do(drawer):
     """Round 3, EXECUTED: the portal's not_included is the reason, never "the customer already has
     every scope": the drawer line, its plural, beside a send button, and the nothing_to_send
-    answer (alone and beside a lost send)."""
+    answer (alone and beside a lost send). And a proposal not published yet DRAWS the one press
+    (Hanz, 2026-10-27): it publishes it and sends the one email, so the drawer never sends the
+    estimator off to publish it first."""
     h = drawer["honest"]
     html = h["unpublishedHtml"]
     assert ('<p class="note" id="scope-not-published">Not published yet: Lab 2. ' + PUBLISH_ONE
             + '</p>') in html
     assert 'id="scope-all-sent"' not in html, "an unpublished scope was called emailed"
-    assert 'id="scope-send"' not in html
-    assert ('<p class="note" id="scope-not-published">Not published yet: Breakroom, Lab 2. Publish '
-            'them from their Files pages, then email them from here.</p>') in h["unpublishedTwoHtml"]
+    assert ('<button type="button" class="btn btn-p" id="scope-send" data-resend="">Send all '
+            'proposals in one email</button>') in html, "an unpublished scope gave no one press"
+    assert "Files page" not in html.split('id="scope-not-published"')[1].split("</p>")[0]
+    assert ('<p class="note" id="scope-not-published">Not published yet: Breakroom, Lab 2. Send '
+            'all proposals in one email publishes them and emails them with the others.</p>') \
+        in h["unpublishedTwoHtml"]
     both = h["unpublishedWithButtonHtml"]
     assert 'id="scope-send"' in both and "Not published yet: Lab 2. " + PUBLISH_ONE in both
     assert 'id="scope-not-published"' not in h["allSentHtml"]

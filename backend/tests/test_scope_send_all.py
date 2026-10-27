@@ -47,7 +47,13 @@ def _three(**over):
 class World:
     """The fake store and the fake portal, and everything the press asked of them."""
 
-    def __init__(self, fake_supabase, monkeypatch, rows, *, fail_publish=None, send_answers=None):
+    def __init__(self, fake_supabase, monkeypatch, rows, *, fail_publish=None, send_answers=None,
+                 pipeline=None):
+        self.pipeline = pipeline          # the portal's rows, or an exception to raise
+        self.pipeline_asked = 0
+        # The pipeline cache is module state: restored after the test so no other test inherits it.
+        monkeypatch.setitem(main._PIPELINE_CACHE, "rows", None)
+        monkeypatch.setitem(main._PIPELINE_CACHE, "fetched_at", None)
         self.store = {"drafts": [copy.deepcopy(r) for r in rows], "events": [],
                       "draft_revisions": [], "draft_revision_documents": []}
         self.publishes = []       # the bodies /api/admin/publish was sent, in order
@@ -67,6 +73,11 @@ class World:
             if path == "/api/admin/capabilities":
                 self.caps_asked += 1
                 return CAPS
+            if path == "/api/admin/pipeline":
+                self.pipeline_asked += 1
+                if isinstance(self.pipeline, Exception):
+                    raise self.pipeline
+                return {"proposals": list(self.pipeline or [])}
             if path == "/api/admin/publish":
                 if body["draft_id"] in self.fail_publish:
                     raise main.HTTPException(502, "Portal error.")
@@ -253,9 +264,10 @@ def test_the_files_page_choices_ride_every_proposal_it_publishes(fake_supabase, 
         assert b["emails"] == ["buyer@acme.test", "pm@acme.test"]
         assert b["assigned_estimator"] == "rj@wetreadwell.com"
         assert b["no_followups"] == ["pm@acme.test"]
-    # The page's own deposit choice is its proposal's; the others keep the portal's default.
+    # The page's own deposit choice is its proposal's; each other one gets what its own Files page
+    # would tick: on for Direct work that never chose.
     assert by["s2"]["require_deposit"] is False
-    assert "require_deposit" not in by["s1"] and "require_deposit" not in by["s3"]
+    assert by["s1"]["require_deposit"] is True and by["s3"]["require_deposit"] is True
     assert w.sends == [{"by": w.sends[0]["by"], "message": "hi"}]
 
 
@@ -309,3 +321,91 @@ def test_an_ungrouped_publish_is_unchanged(fake_supabase, monkeypatch):
                  "assigned_estimator": EST, "revision_no": 1}
     assert r.json()["revision_no"] == 1 and "scope_group" not in r.json()
     assert len(w.revisions("solo")) == 1
+
+
+# ─── a proposal the customer already decided on is never republished by a neighbour's press ──
+def _sent_before_and_changed(w, rid):
+    """`rid` went out as revision 1, and its document has changed since."""
+    row = next(r for r in w.store["drafts"] if r["id"] == rid)
+    old = copy.deepcopy(row["data"])
+    old["proposal_payload"]["values"]["total_formatted"] = "$900"
+    w.store["draft_revisions"].append({"project_id": rid, "revision_no": 1, "data": old})
+
+
+@pytest.mark.parametrize("portal_row, words", [
+    ({"proposal_status": "approved", "approved_at": "2026-10-20T10:00:00Z"},
+     "Room 1: the customer already approved it; send its revision from its own Files page."),
+    ({"proposal_status": "approved", "deposit_status": "received"},
+     "Room 1: the customer already paid its deposit; send its revision from its own Files page."),
+    ({"proposal_status": "closed_lost"},
+     "Room 1: it is closed as lost; reopen it and send its revision from its own Files page."),
+])
+def test_a_decided_proposal_whose_document_changed_blocks_the_press(fake_supabase, monkeypatch,
+                                                                     portal_row, words):
+    w = World(fake_supabase, monkeypatch, _three(),
+              pipeline=[dict(portal_row, proposal_id="s1")])
+    _sent_before_and_changed(w, "s1")
+    r = _press({"draft_id": "s2", "publish": {"assigned_estimator": EST}})
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send"
+    assert words in j["error"], j["error"]
+    assert [b["id"] for b in j["blocked"]] == ["s1"]
+    assert w.publishes == [], "a decided proposal's neighbours were published anyway"
+    assert w.sends == [], "the customer was emailed a cancelled approval"
+    assert len(w.revisions("s1")) == 1, "the approved proposal got a new revision"
+
+
+def test_the_pages_own_decided_proposal_goes_through(fake_supabase, monkeypatch):
+    """Its own Files page is where a revision of an approved proposal is sent from."""
+    w = World(fake_supabase, monkeypatch, _three(),
+              pipeline=[{"proposal_id": "s1", "proposal_status": "approved"}])
+    _sent_before_and_changed(w, "s1")
+    r = _press({"draft_id": "s1", "publish": {"assigned_estimator": EST}})
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"]
+    assert w.pipeline_asked == 0, "nothing else needed republishing, so the portal was not asked"
+
+
+def test_a_sent_undecided_proposal_whose_document_changed_is_republished(fake_supabase,
+                                                                          monkeypatch):
+    w = World(fake_supabase, monkeypatch, _three(),
+              pipeline=[{"proposal_id": "s1", "proposal_status": "viewed"}])
+    _sent_before_and_changed(w, "s1")
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"] and w.pipeline_asked == 1
+    assert len(w.sends) == 1
+
+
+def test_a_portal_that_cannot_say_who_approved_blocks_a_republish(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _three(),
+              pipeline=main.HTTPException(502, "Portal error."))
+    _sent_before_and_changed(w, "s1")
+    r = _press()
+    assert r.status_code == 409, r.text
+    assert "Room 1: the portal could not say whether the customer already approved it"         in r.json()["error"]
+    assert w.publishes == [] and w.sends == []
+
+
+# ─── each other proposal gets its own deposit choice ──
+def test_a_gc_proposal_published_by_a_neighbour_asks_no_deposit(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _three(s1={"audience": "GC"}, s3={"audience": "GC",
+                                                                             "require_deposit": True}))
+    r = _press({"draft_id": "s2", "publish": {"assigned_estimator": EST, "require_deposit": False}})
+    assert r.status_code == 200, r.text
+    by = {b["draft_id"]: b for b in w.publishes}
+    assert by["s1"]["require_deposit"] is False, "a GC scope was asked for a 25% deposit"
+    assert by["s3"]["require_deposit"] is True, "its own stored choice was overridden"
+    assert by["s2"]["require_deposit"] is False
+
+
+def test_a_republished_neighbour_with_no_stored_choice_keeps_the_portals(fake_supabase,
+                                                                          monkeypatch):
+    w = World(fake_supabase, monkeypatch, _three(s1={"audience": "GC"}),
+              pipeline=[{"proposal_id": "s1", "proposal_status": "sent"}])
+    _sent_before_and_changed(w, "s1")
+    r = _press({"draft_id": "s2", "publish": {"assigned_estimator": EST}})
+    assert r.status_code == 200, r.text
+    by = {b["draft_id"]: b for b in w.publishes}
+    assert "require_deposit" not in by["s1"]

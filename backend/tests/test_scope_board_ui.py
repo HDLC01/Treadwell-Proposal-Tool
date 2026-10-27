@@ -92,7 +92,10 @@ def test_the_unsent_scope_lists_its_siblings_escaped(drawer):
     assert 'data-scope-open="scope-b" data-scope-board="1"' in html
     assert "Lab &lt;2&gt;" in html and "Lab <2>" not in html
     assert "files are not built yet" in html, "a scope with no files claims its paperwork exists"
-    assert 'id="scope-send"' not in html, "an unpublished scope offered the combined email"
+    # The one press (Hanz, 2026-10-27): it publishes every proposal and sends the one email, so the
+    # drawer of a proposal not published yet offers it rather than sending anybody off to publish.
+    assert ('<button type="button" class="btn btn-p" id="scope-send" data-resend="">Send all '
+            'proposals in one email</button>') in html, "an unpublished scope had no one press"
 
 
 NEW_SCOPE_MARKS = ('id="scope-new-btn"', 'id="scope-new-label"', "New scope for this project",

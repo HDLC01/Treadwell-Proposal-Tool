@@ -5048,9 +5048,9 @@
    *  drawer's is in SEC_TABS like its siblings, the not-sent panel keeps its dsec-ns-* ids outside.
    *
    *  ONLY A PROJECT WITH TWO OR MORE PROPOSALS GETS THE CARD (Hanz, 2026-10-27): it lists them
-   *  (each opens its own drawer, or its estimate when it is not on the board yet) and, once one has
-   *  been published, holds the button for the combined email, because a proposal's own publish
-   *  emails nobody. A project with one proposal has nothing to list or send, so this returns "" and
+   *  (each opens its own drawer, or its estimate when it is not on the board yet) and holds "Send
+   *  all proposals in one email", which publishes whichever the customer does not have yet and
+   *  sends the combined email (a proposal's own publish emails nobody). A project with one proposal has nothing to list or send, so this returns "" and
    *  the caller's eligibility reads that. The old "New scope for this project" box is gone: the
    *  proposal page's Create Multiple Proposals is how a project becomes several. A member that is
    *  not on the board yet still counts (scope_members lists every live member).
@@ -5099,14 +5099,22 @@
       const m = members.filter((x) => x && x.id === id)[0];
       return esc((m && m.label) || "a scope");
     }).join(", ");
+    // ONE PRESS (Hanz, 2026-10-27: "it must come in one email only"): the button publishes every
+    // proposal the customer does not have yet and sends the one email (main.py send-all), so a
+    // proposal not published yet is a reason to DRAW it, never a reason to send the estimator off
+    // to publish it first. Both drawers draw it: the not-sent one too, so the first email of a
+    // project nobody has published yet can go from the board.
+    const SEND_ALL = "Send all proposals in one email";
+    const sendBtn = (label) => `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(label)}</button></div>`;
     let send = "";
-    if (grouped && sent && ss) {
-      send = ss.label
-        ? `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(ss.label)}</button></div>`
-        : (lost.length || flying.length || unpublished.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A new scope or a revision, once published, can be emailed from here.</p>');
+    if (grouped && ss) {
+      const label = ss.label || (unpublished.length ? SEND_ALL : "");
+      send = label
+        ? sendBtn(label)
+        : (!sent || lost.length || flying.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A revision goes out with Send all proposals in one email on its Files page.</p>');
       if (unpublished.length) {
         send += `<p class="note" id="scope-not-published">Not published yet: ${namesOf(unpublished)}. ${unpublished.length === 1
-          ? "Publish it from its Files page, then email it from here." : "Publish them from their Files pages, then email them from here."}</p>`;
+          ? "Send all proposals in one email publishes it and emails it with the others." : "Send all proposals in one email publishes them and emails them with the others."}</p>`;
       }
       if (apart.length) {
         send += `<p class="note" id="scope-sent-apart">Already with the customer as its own proposal: ${namesOf(apart)}. ${apart.length === 1
@@ -5122,10 +5130,14 @@
     } else if (grouped && sent) {
       send = `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="${p.scope_send_pending ? "" : "1"}">${
           p.scope_send_pending ? "Send every scope in one email" : "Email every scope again"}</button></div>`;
+    } else if (grouped) {
+      // A proposal not published yet, and no email state from the portal (nothing of the project
+      // has been published, or an older portal, which the send refuses in words).
+      send = sendBtn(SEND_ALL);
     }
     // style, not the hidden attribute: .fu-line's own display rule would defeat `hidden`.
     send += '<div class="fu-line" id="scope-retry-line" style="display:none"><button type="button" class="btn btn-s" id="scope-retry">Try the contacts that did not get it again</button></div>';
-    if (!(grouped && sent)) send = "";
+    if (!grouped) send = "";
     // THE PROJECT WORKBOOK, one per project of several proposals. Its HOME is the member the
     // others were made from (Create Multiple Proposals' `proposal_of`), else the first scope. A v1
     // home's own .xlsx is already one workbook with a tab per sheet (main.py builds it from

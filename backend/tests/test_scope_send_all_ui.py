@@ -85,7 +85,7 @@ def test_the_files_page_says_the_answer_in_the_drawers_words(files):
 @pytest.mark.parametrize("case,words", [
     ("blocked", "Nothing was sent. Room 3: build its files on its Files page first."),
     ("nothing", "Nothing was sent: the customer already has every scope of this project in their "
-                "email. A new scope or a revision, once published, can be emailed from here."),
+                "email. A revision goes out with Send all proposals in one email on its Files page."),
     ("halfway", "Nothing was emailed. Room 3 could not be published (Portal error.). Room 2 was "
                 "published and will go in the email. Press the button again in a minute to finish."),
 ])
