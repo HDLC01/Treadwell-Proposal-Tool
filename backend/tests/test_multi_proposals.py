@@ -165,13 +165,14 @@ def test_the_parents_own_base_money_is_used_when_the_tab_carries_none(fake_supab
 
 
 # ── B. labels, idempotency, the parent, refusals ───────────────────────────
-def test_labels_are_base_bid_n_and_the_parent_is_named_when_unnamed(fake_supabase, monkeypatch):
+def test_labels_are_the_sheet_names_and_the_parent_is_named_when_unnamed(fake_supabase, monkeypatch):
+    """Hanz, 2026-10-27: "instead of Base Bid 1 and 2 in the Tabs ... it should be their sheet name"."""
     store = _seed(fake_supabase, monkeypatch)
     out = _fan(("Epoxy", "Copy1", "Polish"))
-    assert out["parent"]["label"] == "Base Bid 1"
-    assert [c["label"] for c in out["children"]] == ["Base Bid 2", "Base Bid 3"]
+    assert out["parent"]["label"] == "Epoxy"
+    assert [c["label"] for c in out["children"]] == ["Room 2", "Polish"], "tab_labels names a copy"
     parent = _row(store, "p1")["data"]
-    assert parent["scope_group"] == {"id": out["group_id"], "label": "Base Bid 1"}
+    assert parent["scope_group"] == {"id": out["group_id"], "label": "Epoxy"}
     for c in out["children"]:
         assert _row(store, c["id"])["data"]["scope_group"]["id"] == out["group_id"]
         assert drafts.scope_group_problem(_row(store, c["id"])["data"]["scope_group"]) is None
@@ -180,12 +181,12 @@ def test_labels_are_base_bid_n_and_the_parent_is_named_when_unnamed(fake_supabas
 def test_a_named_parent_keeps_its_name_and_a_clash_is_numbered(fake_supabase, monkeypatch):
     data = dict(PARENT, scope_group={"id": "grp_a", "label": "Breakroom"})
     other = {"id": "s9", "data": {"project_name": "Acme HQ", "is_test": True,
-                                  "scope_group": {"id": "grp_a", "label": "Base Bid 2"}},
+                                  "scope_group": {"id": "grp_a", "label": "Room 2"}},
              "owner_email": "k", "created_at": "2026-10-02", "updated_at": V, "deleted_at": None}
     _seed(fake_supabase, monkeypatch, data, extra=[other])
     out = _fan()
     assert out["parent"]["label"] == "Breakroom"
-    assert out["children"][0]["label"] == "Base Bid 2 2"
+    assert out["children"][0]["label"] == "Room 2 2"
 
 
 def test_fanning_out_twice_makes_nothing_twice(fake_supabase, monkeypatch):
@@ -198,7 +199,7 @@ def test_fanning_out_twice_makes_nothing_twice(fake_supabase, monkeypatch):
     more = _fan(("Epoxy", "Copy1", "Polish"))
     assert [c["created"] for c in more["children"]] == [False, True]
     assert len(_kids(store)) == 2
-    assert more["children"][1]["label"] == "Base Bid 3"
+    assert more["children"][1]["label"] == "Polish"
 
 
 def test_the_parent_records_its_bases_and_stops_offering_them_as_options(fake_supabase, monkeypatch):
@@ -273,6 +274,78 @@ def test_max_scopes_counts_the_group_and_the_new_children(fake_supabase, monkeyp
     assert len(_fan()["children"]) == 1          # exactly at the limit
 
 
+# ── B2. tabs named by sheet (2026-10-27) ───────────────────────────────────
+def test_two_sheets_of_one_name_get_distinct_labels(fake_supabase, monkeypatch):
+    data = copy.deepcopy(PARENT)
+    data["tab_labels"] = {"Epoxy": "Lab", "Copy1": "Lab", "Polish": " Lab  "}
+    _seed(fake_supabase, monkeypatch, data)
+    out = _fan(("Epoxy", "Copy1", "Polish"))
+    assert out["parent"]["label"] == "Lab"
+    assert [c["label"] for c in out["children"]] == ["Lab 2", "Lab 3"]
+
+
+def test_an_old_default_parent_label_becomes_its_sheet_and_a_typed_one_stays(fake_supabase, monkeypatch):
+    _seed(fake_supabase, monkeypatch, dict(PARENT, scope_group={"id": "grp_a", "label": "Base Bid 1"}))
+    assert _fan()["parent"]["label"] == "Epoxy"
+    _seed(fake_supabase, monkeypatch, dict(PARENT, scope_group={"id": "grp_a", "label": "Base Bid 1 East"}))
+    assert _fan()["parent"]["label"] == "Base Bid 1 East", "a name a person typed is not a default"
+
+
+def test_a_v2_sheet_is_named_by_its_section(fake_supabase, monkeypatch):
+    _seed(fake_supabase, monkeypatch, V2)
+    out = drafts.fan_out_proposals("p1", ["Polish", "Copy1", "Epoxy"])
+    assert out["parent"]["label"] == "Breakroom"
+    assert [c["label"] for c in out["children"]] == ["Lab 2", "Lab 1"]
+
+
+def test_the_sheet_label_helper():
+    assert drafts.proposal_sheet_label(PARENT, "Copy1") == "Room 2"
+    assert drafts.proposal_sheet_label(PARENT, "Polish") == "Polish"
+    assert drafts.proposal_sheet_label(dict(PARENT, tab_labels={"Epoxy": "x" * 100}), "Epoxy") == "x" * 80
+    assert drafts.proposal_sheet_label(dict(PARENT, tab_labels={"Epoxy": "   "}), "Epoxy") == "Epoxy"
+    assert drafts.proposal_sheet_label(PARENT, None) is None
+    assert drafts.proposal_sheet_label(V2, "Copy2") == "Old"
+    assert drafts.proposal_sheet_label(V2, "Polish") == "Breakroom"
+
+
+def _old_style(store, kids, labels):
+    """What fan-out stored before 2026-10-27: "Base Bid N" on the parent and every child."""
+    _row(store, "p1")["data"]["scope_group"]["label"] = labels[0]
+    for kid, lab in zip(kids, labels[1:]):
+        _row(store, kid)["data"]["scope_group"]["label"] = lab
+
+
+def test_old_base_bid_labels_display_as_the_sheet_and_a_renamed_one_is_kept(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch)
+    kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    _old_style(store, kids, ["Base Bid 1", "Base Bid 2", "Kitchen"])
+    v = drafts.proposals_view("p1")
+    ms = v["members"]
+    assert [m["label"] for m in ms] == ["Base Bid 1", "Base Bid 2", "Kitchen"], "the stored name is not rewritten"
+    assert [m["display_label"] for m in ms] == ["Epoxy", "Room 2", "Kitchen"]
+    assert [m["sheet_label"] for m in ms] == ["Epoxy", "Room 2", "Polish"]
+    # only the exact untouched default: "Base Bid 2 East" is a name somebody typed
+    _old_style(store, kids, ["Base Bid 1 East", "base bid 2", "Base Bid"])
+    assert [m["display_label"] for m in drafts.proposals_view("p1")["members"]] ==         ["Base Bid 1 East", "base bid 2", "Base Bid"]
+
+
+def test_the_view_carries_each_proposals_lump_sum(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch)
+    kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    assert [m["lump_sum"] for m in drafts.proposals_view(kids[0])["members"]] == [20000, 15000, 9000]
+    _row(store, kids[1])["data"]["proposal_lump_sum"] = None
+    _row(store, kids[0])["data"]["proposal_lump_sum"] = "15000"
+    _row(store, "p1")["data"]["proposal_lump_sum"] = True
+    assert [m["lump_sum"] for m in drafts.proposals_view("p1")["members"]] == [None, None, None]
+
+
+def test_a_draft_with_no_proposals_answers_its_own_row_unnamed(fake_supabase, monkeypatch):
+    _seed(fake_supabase, monkeypatch)
+    ms = drafts.proposals_view("p1")["members"]
+    assert len(ms) == 1 and ms[0]["label"] == "" and ms[0]["display_label"] == ""
+    assert ms[0]["sheet_label"] == "Epoxy" and ms[0]["lump_sum"] == 20000
+
+
 # ── C. the digest and the refresh ───────────────────────────────────────────
 def test_the_digest_moves_on_every_estimate_key_and_on_nothing_else():
     base = drafts.estimate_digest(PARENT)
@@ -324,7 +397,7 @@ def test_refresh_replaces_every_estimate_key_and_keeps_every_word(fake_supabase,
     assert child["data"]["proposal_lump_sum"] == 17000
     assert (child["data"]["is_test"], child["data"]["assigned_estimator"]) == (True, "troy@x.test")
     assert child["data"]["notify_picks"] == {"add": ["c"]}
-    assert child["data"]["proposal_of"] == "p1" and child["data"]["scope_group"]["label"] == "Base Bid 2"
+    assert child["data"]["proposal_of"] == "p1" and child["data"]["scope_group"]["label"] == "Room 2"
     assert child["data"]["estimate_digest"] == drafts.estimate_digest(parent_before["data"])
     assert child["updated_at"] != "2026-10-21T00:00:00+00:00", "the child's document must be rebuilt"
     assert _row(store, "p1") == parent_before, "refresh touched the parent"
@@ -342,7 +415,7 @@ def test_a_child_whose_sheet_is_gone_is_skipped(fake_supabase, monkeypatch):
     before = copy.deepcopy(_row(store, kid))
     _row(store, "p1")["data"]["priced_tabs"] = [t for t in PARENT["priced_tabs"] if t["id"] != "Copy1"]
     out = drafts.refresh_proposals("p1")
-    assert out["refreshed"] == [] and out["skipped"] == [{"id": kid, "label": "Base Bid 2",
+    assert out["refreshed"] == [] and out["skipped"] == [{"id": kid, "label": "Room 2",
                                                           "code": "sheet_gone"}]
     assert _row(store, kid) == before
 
@@ -391,7 +464,9 @@ def test_the_route_makes_the_proposals_and_answers_the_strip(fake_supabase, monk
     j = r.json()
     kids = [c["id"] for c in j["children"]]
     assert [m["id"] for m in j["proposals"]["members"]] == ["p1"] + kids
-    assert [m["label"] for m in j["proposals"]["members"]] == ["Base Bid 1", "Base Bid 2", "Base Bid 3"]
+    assert [m["label"] for m in j["proposals"]["members"]] == ["Epoxy", "Room 2", "Polish"]
+    assert [m["display_label"] for m in j["proposals"]["members"]] == ["Epoxy", "Room 2", "Polish"]
+    assert [m["lump_sum"] for m in j["proposals"]["members"]] == [20000, 15000, 9000]
     assert [m["index"] for m in j["proposals"]["members"]] == [1, 2, 3]
     assert [m["is_parent"] for m in j["proposals"]["members"]] == [True, False, False]
     assert [m["base_tab_id"] for m in j["proposals"]["members"]] == ["Epoxy", "Copy1", "Polish"]
