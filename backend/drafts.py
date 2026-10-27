@@ -1415,6 +1415,35 @@ def _v2_cove_height(pe: Dict[str, Any], tab: str) -> str:
     return ""
 
 
+def _v2_texture(parent: Dict[str, Any], tab: str) -> str:
+    """The texture the estimate gives section `tab` of a v2 parent (bid-model.js sectionTexture: the
+    section's own `texture`, trimmed), "" for none, for the root (a Polish sheet has no texture) and
+    for a v1 draft. What a child whose base is `tab` starts its Proposal step's texture from."""
+    if not _is_v2(parent) or tab == _V2_ROOT_TAB:
+        return ""
+    tabs = parent["polish_estimate"].get("tabs")
+    sec = tabs.get(tab) if isinstance(tabs, dict) else None
+    tex = sec.get("texture") if isinstance(sec, dict) else None
+    return tex.strip() if isinstance(tex, str) else ""
+
+
+def _seed_texture(child: Dict[str, Any], texture: str) -> None:
+    """Give `child` its base sheet's texture (in place), bid-model.js textureFill's rule: only while
+    its own `texture` is empty or still the one last seeded (`texture_from_estimate`), so a texture
+    picked on the child's Proposal step is never overwritten. Nothing is written when nothing would
+    change."""
+    held = child.get("texture")
+    held = held.strip() if isinstance(held, str) else ("" if held is None else None)
+    seeded = child.get("texture_from_estimate")
+    seeded = seeded if isinstance(seeded, str) else None
+    if held is None or not (held == "" or (seeded is not None and held == seeded)):
+        return
+    if seeded is None and texture == "":
+        return
+    child["texture"] = texture
+    child["texture_from_estimate"] = texture
+
+
 def _proposal_copy(parent: Dict[str, Any], tab: str, refresh: bool) -> Dict[str, Any]:
     """Everything a child of `parent` whose base is `tab` copies from it: the estimate
     (PROPOSAL_ESTIMATE_KEYS, less PROPOSAL_REFRESH_SKIPS on a refresh), the base's money and what
@@ -1623,6 +1652,8 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
             d["proposal_of"] = parent_id
             d["estimate_digest"] = digest
             d["estimate_synced_at"] = now.isoformat()
+            # Its own words start empty (PROPOSAL_NARRATIVE_KEYS), but its texture starts as ITS sheet's.
+            _seed_texture(d, _v2_texture(parent, tab))
             stamp = _stamp_at(now, i)
             in_flight[:] = [cid]
             sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,
@@ -1712,6 +1743,8 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, A
             continue
         out = {k: v for k, v in data.items() if k not in replaced}
         out.update(fresh)
+        # The sheet's texture follows the estimate until one is picked on this proposal's own step.
+        _seed_texture(out, _v2_texture(parent, tab))
         now = _now_iso()
         if now == data.get("estimate_synced_at"):
             # The stamp is the fence against a page holding the copy before this one

@@ -593,6 +593,15 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // facet added there without a default here cannot pass as an empty object.
   ${grab(/^  var FILTERS = \{[^}]*\};$/m, "the FILTERS declaration")}
   if (state.FILTERS) FILTERS = Object.assign(FILTERS, state.FILTERS);
+  // THE TWO SORTS AND THEIR MEMORY (2026-10-27). The keys and the remembered-sort reader are
+  // lifted BEFORE the two declarations, which CALL savedSort as they run - so the default each list
+  // opens on, and the restore from a saved choice, are the page's own lines executing against
+  // state.window.localStorage (absent in most scenarios, which is the "nothing saved" case).
+  ${grab(/^  var SORT_KEYS = \{.*\};$/m, "the SORT_KEYS declaration")}
+  ${fn("savedSort")}
+  ${fn("rememberSort")}
+  ${grab(/^  var ITEM_SORT = savedSort\("items", "[a-z]+"\);$/m, "the ITEM_SORT declaration")}
+  if (state.ITEM_SORT) ITEM_SORT = state.ITEM_SORT;
   var filterBarSig = "";
   // EVERY ONE OF THESE IS CALLED BY SOMETHING ALREADY LIFTED. renderItems asks anyFilterActive
   // and filterSummary; visibleItems asks matchesFilters; itemMatches asks parseQuery and
@@ -607,6 +616,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("filterSummary")}
   ${fn("renderFilterBar")}
   ${fn("visibleItems")}
+  ${fn("sortItems")}
   ${fn("nameKey")}
   ${fn("duplicateName")}
   // The name a BRAND NEW row is created under. Separate from duplicateName because the first
@@ -628,10 +638,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   var asmQuery = state.asmQuery === undefined ? "" : state.asmQuery;
   ${grab(/^  var ASM_FILTERS = \{[^}]*\};$/m, "the ASM_FILTERS declaration")}
   if (state.ASM_FILTERS) ASM_FILTERS = Object.assign(ASM_FILTERS, state.ASM_FILTERS);
-  // THE DEFAULT IS LIFTED, not restated. "name" being the default is the decision that keeps the
-  // rail looking exactly as it did before this control existed, and a harness that hardcoded
-  // "name" here would pass just as happily against a page that shipped with "new".
-  ${grab(/^  var ASM_SORT = "[a-z]+";$/m, "the ASM_SORT declaration")}
+  // THE DEFAULT IS LIFTED, not restated. "new" being the default is Hanz's 2026-10-27 decision
+  // (newest work on page 1), and a harness that hardcoded "new" here would pass just as happily
+  // against a page that shipped with "name".
+  ${grab(/^  var ASM_SORT = savedSort\("asm", "[a-z]+"\);$/m, "the ASM_SORT declaration")}
   if (state.ASM_SORT) ASM_SORT = state.ASM_SORT;
   ${fn("anyAsmFilterActive")}
   ${fn("asmConditionHits")}
@@ -652,6 +662,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // Not reached from a renderer — it is the create path's one decision, pulled out of the page's
   // anonymous click listener precisely so it CAN be reached from here.
   ${fn("placeNewAssembly")}
+  // The same again for load() and the delete path: what they open when nothing is open.
+  ${fn("firstAssemblyId")}
   ${fn("asmSortLabel")}
   ${fn("visibleAssemblies")}
   ${fn("renderAsmFilterBar")}
@@ -750,6 +762,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
            setItemQuery: function (q) { itemQuery = q; },
            setAsmQuery: function (q) { asmQuery = q; },
            setAsmSort: function (k) { ASM_SORT = k; },
+           setItemSort: function (k) { ITEM_SORT = k; },
+           itemSortNow: function () { return ITEM_SORT; },
+           asmSortNow: function () { return ASM_SORT; },
+           sortItems, savedSort, rememberSort,
            setOpenId: function (id) { openId = id; },
            itemsNow: function () { return ITEMS; },
            removeItem: function (id) { ITEMS = ITEMS.filter(function (x) { return x.id !== id; }); },
@@ -764,7 +780,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
            asmConditionHits, asmTermHits, asmFilterSummary, visibleAssemblies,
            renderAsmFilterBar,
            ASM_SORT, asmVendorTally, asmVendorLabel, asmOwnerName, asmSortValue,
-           sortAssemblies, asmSortLabel, placeNewAssembly,
+           sortAssemblies, asmSortLabel, placeNewAssembly, firstAssemblyId,
            // THE ARRAY ITSELF, not a copy, so a test can put a row into the model the renderer
            // reads and then render — which is the only way to prove the prepend and the
            // pass-through default work together rather than each in isolation.
@@ -849,13 +865,17 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
 // carry deliberately WRONG, disagreeing values: if priceLine ever reads a line's own numbers
 // instead of the material's, the two quantity labels these fixtures drive flip to the other
 // line's shape rather than quietly matching by coincidence.
+//
+// i1 IS THE NEWER OF THE TWO, so the Items table's default (Newest first, 2026-10-27) draws them
+// in the order written, and the many scenarios below that read "the first row" still read i1.
+// The array is also name order, which is what Name A-Z passes through.
 const ITEMS = [
   { id: "i1", name: "OPF", category: "Epoxy", unit: "Gal", buy_qty: 1, unit_cost: 85.3827,
     coverage: 275, waste_pct: 5, roundup: true, vendor: "Sherwin-Williams", notes: "",
-    created_at: "2026-08-01T14:30:00Z", cost_updated_at: null },
+    created_at: "2026-08-02T09:00:00Z", cost_updated_at: null },
   { id: "i2", name: "OPF Primer", category: "Polished Concrete", unit: "Gallon", buy_qty: 5,
     unit_cost: 426.91, coverage: 275, waste_pct: 0, roundup: false, vendor: "Gone Supply Co",
-    notes: "", created_at: "2026-08-02T09:00:00Z", cost_updated_at: "2026-08-14T21:15:00Z" },
+    notes: "", created_at: "2026-08-01T14:30:00Z", cost_updated_at: "2026-08-14T21:15:00Z" },
 ];
 const ASMS = [{
   id: "a1", name: "MACRO Flake", unit: "SF",
@@ -2583,10 +2603,14 @@ async function conflictChecks() {
       { role: "", item_id: "i3", coverage: null, waste_pct: 0, roundup: true, note: "" }] },
     { id: "a4", name: "Densify Only", unit: "SF", lines: [] },
   ];
+  // Name A-Z, the server's order passed through, so the expected ids below read in the order the
+  // fixture is written: this block is about WHICH rows a search or facet leaves, and the order is
+  // out.asmSort's business. (None of these carries a created_at, so the default would sort them.)
   const four = (over) => {
     const b = build(Object.assign({
       ITEMS: JSON.parse(JSON.stringify(ITEMS4)),
       ASMS: JSON.parse(JSON.stringify(ASMS4)),
+      ASM_SORT: "name",
     }, over || {}));
     b.api.renderList();
     return b;
@@ -2764,7 +2788,9 @@ async function conflictChecks() {
     return outp;
   };
 
-  const byName = six();
+  // THE DEFAULT, with nothing saved: whatever the page's own ASM_SORT line opens on.
+  const byDefault = six();
+  const byName = six({ ASM_SORT: "name" });
   const byNew = six({ ASM_SORT: "new" });
   const byScope = six({ ASM_SORT: "scope" });
   const byUnit = six({ ASM_SORT: "unit" });
@@ -2781,13 +2807,14 @@ async function conflictChecks() {
   const reordered = probe.api.sortAssemblies(arr, "new", []);
 
   out.asmSort = {
-    // ── the default is the SERVER's order, passed through ────────────────────
-    // list_assemblies() does `.order("name")`, so this IS name A-Z on a loaded page and the tab
-    // looks exactly as it did before the control existed. It also has to be a pass-through rather
-    // than a client-side name sort, or the unshift that puts a brand-new assembly at the top of
-    // the rail is undone by the very next render.
-    defaultKey: byName.api.ASM_SORT,
-    defaultIsTheArrayOrder: idsIn(byName.dom),
+    // ── the default is NEWEST FIRST (Hanz, 2026-10-27) ───────────────────────
+    defaultKey: byDefault.api.ASM_SORT,
+    defaultOrder: idsIn(byDefault.dom),
+    // ── Name A-Z is the SERVER's order, passed through ─────────────────────
+    // list_assemblies() does `.order("name")`, so this IS name A-Z on a loaded page. It has to be
+    // a pass-through rather than a client-side name sort, or the unshift that puts a brand-new
+    // assembly at the top of the rail is undone by the very next render.
+    nameIsTheArrayOrder: idsIn(byName.dom),
     namePassesTheArrayThrough: probe.api.sortAssemblies(arr, "name", []) === arr,
 
     // ── the five orderings ──────────────────────────────────────────────────
@@ -2832,7 +2859,7 @@ async function conflictChecks() {
 
     // ── the control comes back showing the key it is on ─────────────────────
     sortSelectSynced: val(byVendor.dom, "fa-sort"),
-    sortSelectSyncedToDefault: val(byName.dom, "fa-sort"),
+    sortSelectSyncedToDefault: val(byDefault.dom, "fa-sort"),
 
     // ── the keyboard ────────────────────────────────────────────────────────
     // NOTHING is focused by a render. An estimator tabbing Unit -> Condition -> Sort and picking
@@ -2861,8 +2888,8 @@ async function conflictChecks() {
 
     // ── a brand-new assembly lands at the FRONT, and shows there ────────────
     // Both halves in one scenario, against the real model: placeNewAssembly puts it into the ASMS
-    // the renderer reads, and then renderList draws the rail. Under the DEFAULT sort, which is
-    // where an estimator who just pressed the button actually is.
+    // the renderer reads, and then renderList draws the rail. Under the DEFAULT sort (Newest
+    // first), which is where an estimator who just pressed the button actually is.
     newAssemblyIsFirst: (() => {
       const b = six();
       b.api.placeNewAssembly(b.api.ASMS, {
@@ -2874,9 +2901,9 @@ async function conflictChecks() {
       b.api.renderList();
       return idsIn(b.dom);
     })(),
-    // …and it stays first when the estimator has chosen the sort that makes it permanent.
-    newAssemblyIsFirstUnderNewest: (() => {
-      const b = six({ ASM_SORT: "new" });
+    // …and under Name A-Z, where the PREPEND is what holds it at the top for this session.
+    newAssemblyIsFirstUnderName: (() => {
+      const b = six({ ASM_SORT: "name" });
       b.api.placeNewAssembly(b.api.ASMS, {
         id: "new1", name: "New assembly", unit: "SF", category: "",
         created_at: "2026-09-04T15:00:00Z", owner_email: "kyle.loseke@wetreadwell.com",
@@ -3772,15 +3799,17 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
       unit_cost: 30, coverage: 100, vendor: "Sherwin-Williams", created_at: null,
       cost_updated_at: "2026-08-01T00:00:00Z" },
   ];
+  // Name A-Z, the fixture's own order passed through: this block is about WHICH materials a facet
+  // leaves, and the order is out.itemSort's business. (No fixture carries a created_at.)
   const shown = (filters, q) => {
-    const b = build(Object.assign({ ITEMS: JSON.parse(JSON.stringify(FIXTURES)) },
+    const b = build(Object.assign({ ITEMS: JSON.parse(JSON.stringify(FIXTURES)), ITEM_SORT: "name" },
       { FILTERS: Object.assign({ divisions: [], vendor: "", condition: "" }, filters || {}) },
       q === undefined ? {} : { itemQuery: q }));
     return b.api.visibleItems().map((x) => x.name);
   };
 
   out.facets = {
-    // No facet, no query: the list is handed back untouched, not a copy through the filter.
+    // No facet, no query: every material.
     nothingOnShowsEverything: shown({}).length,
 
     // DIVISION: ORs within itself, because "epoxy or gypsum" is the question actually asked.
@@ -3822,6 +3851,7 @@ out.serverOwnedItemFields = build().api.SERVER_OWNED_ITEM_FIELDS;
   const filtered = build({
     ITEMS: JSON.parse(JSON.stringify(FIXTURES)),
     FILTERS: { divisions: ["Epoxy"], vendor: "", condition: "" },
+    ITEM_SORT: "name",
   });
   out.facets.pickerIgnoresTheFacets =
     /data-pick-item="p4"/.test(filtered.api.itemResultsHtml({ _item_search: "gyp" }));
@@ -6606,14 +6636,18 @@ async function manualSaveChecks() {
     api.setItemQuery("");
     api.renderItems();
     // ADD MATERIAL / DUPLICATE: the page's listener unshifts the new row and paints. From page 3,
-    // the new row must be on screen afterwards, so the table moves to the page holding it.
+    // the new row must be on screen afterwards, so the table moves to the page holding it. Stamped
+    // now, the way create_item stamps it, so the default Newest first puts it first too.
     api.turnPage("items", 1); api.turnPage("items", 1);
     res.items.beforeAddOnPage = api.pagerNow().items.page;
-    api.itemsNow().unshift(Object.assign(mkItems(1)[0], { id: "pnew", name: "New material" }));
+    api.itemsNow().unshift(Object.assign(mkItems(1)[0],
+      { id: "pnew", name: "New material", created_at: "2026-10-27T15:00:00Z" }));
     api.paint();
     res.items.afterAdd = span(itemRows(d));
     res.items.afterAddFirstRow = itemRows(d)[0];
-    // A copy that lands mid-list (any future insertion point) moves to ITS page, not to page 1.
+    // UNDER NAME A-Z a copy that lands mid-list (any future insertion point) moves to ITS page, not
+    // to page 1: the jump-to-its-page rule, kept for the sort where a new row is not always first.
+    api.setItemSort("name");
     api.itemsNow().splice(40, 0, Object.assign(mkItems(1)[0], { id: "pcopy", name: "Material 040 (2)" }));
     api.renderItems();
     res.items.copyOnItsPage = api.pagerNow().items.page;
@@ -6684,9 +6718,9 @@ async function manualSaveChecks() {
     api.ASM_FILTERS_NOW().unit = ""; api.renderList();
     api.turnPage("asm", 1);
     res.asm.beforeSort = api.pagerNow().asm.page;
-    api.setAsmSort("new"); api.renderList();
-    res.asm.afterSort = api.pagerNow().asm.page;
     api.setAsmSort("name"); api.renderList();
+    res.asm.afterSort = api.pagerNow().asm.page;
+    api.setAsmSort("new"); api.renderList();
     api.turnPage("asm", 1);
     res.asm.beforeArea = api.pagerNow().asm.page;
     d.el("area").value = "1000"; api.renderList();
@@ -6700,15 +6734,18 @@ async function manualSaveChecks() {
     api.turnPage("asm", 1);
     api.renderList();
     res.asm.pagedAwayFromOpen = api.pagerNow().asm.page;
-    // + NEW ASSEMBLY: placed at the front, opened; from page 3 the rail goes to page 1.
-    api.placeNewAssembly(api.ASMS, { id: "qnew", name: "New assembly", unit: "SF", lines: [] });
+    // + NEW ASSEMBLY: placed at the front, opened; from page 3 the rail goes to page 1. Stamped
+    // now, the way create_assembly stamps it, which is what the default Newest first orders on.
+    api.placeNewAssembly(api.ASMS, { id: "qnew", name: "New assembly", unit: "SF", lines: [],
+                                     created_at: "2026-10-27T15:00:00Z" });
     api.setOpenId("qnew"); api.paint();
     res.asm.afterNew = span(cardIds(d));
     res.asm.afterNewCurrent = current(d);
-    // Clamp: 61 cards now, page 3 holds q60 alone after the new one; take two off the end.
-    api.turnPage("asm", 1); api.turnPage("asm", 1);
+    // Clamp: 61 cards now, 8 a page, so the last page (8) holds the five cards q56..q60. Walk Next
+    // to the end (Next on the last page stays put), then take that whole page off the end.
+    for (let i = 0; i < 10; i++) api.turnPage("asm", 1);
     res.asm.lastBeforeShrink = span(cardIds(d));
-    api.ASMS.splice(api.ASMS.length - 11, 11);
+    api.ASMS.splice(api.ASMS.length - 5, 5);
     api.renderList();
     res.asm.afterShrink = span(cardIds(d));
     res.asm.afterShrinkPager = pagerOf(d, "asm-pager");
@@ -6723,10 +6760,17 @@ async function manualSaveChecks() {
     res.asm.deepLinkCurrent = current(d);
   }
   {
-    const { api, dom: d } = build({ ASMS: mkAsms(25), openId: "q1" });
+    // 8 OR FEWER cards: no pager. The ninth card is the one that brings it, on page 2.
+    const { api, dom: d } = build({ ASMS: mkAsms(8), openId: "q1" });
     api.renderList();
-    res.asm.twentyFive = span(cardIds(d));
-    res.asm.twentyFivePager = pagerOf(d, "asm-pager");
+    res.asm.eight = span(cardIds(d));
+    res.asm.eightPager = pagerOf(d, "asm-pager");
+    const { api: api9, dom: d9 } = build({ ASMS: mkAsms(9), openId: "q1" });
+    api9.renderList();
+    res.asm.nine = span(cardIds(d9));
+    res.asm.ninePager = pagerOf(d9, "asm-pager");
+    api9.turnPage("asm", 1);
+    res.asm.ninePageTwo = span(cardIds(d9));
   }
 
   // ── the static half: three nav landmarks, each named, each button wired to turnPage's kinds ──
@@ -6736,6 +6780,182 @@ async function manualSaveChecks() {
     res.markup = { navs, steps, spentAtRest: (html.match(/data-step="-1" aria-disabled="true"/g) || []).length };
   }
   out.pager = res;
+}
+
+// ── NEWEST FIRST ON BOTH LISTS (Hanz, 2026-10-27) ───────────────────────────
+// "The newest added item should be put on the first page." He chose: always newest first, both
+// lists, every time and after a reload, with Name A-Z one click away and remembered per viewer.
+//
+// EXECUTED through the real renderItems / renderList and the page's own ITEM_SORT / ASM_SORT
+// declaration lines, which call savedSort as they run, so a restored choice is the shipped code
+// reading a stub localStorage rather than a setter in this file.
+{
+  const all = (re, s) => { const o = []; let m; while ((m = re.exec(s))) o.push(m[1]); return o; };
+  const itemRows = (d) => all(/<tr data-item="([^"]+)"/g, d.nodes["items-body"].innerHTML);
+  const cardIds = (d) => all(/data-open="([^"]+)"/g, d.nodes["asm-list"].innerHTML);
+  const span = (ids) => (ids.length ? ids[0] + ".." + ids[ids.length - 1] + " (" + ids.length + ")" : "none");
+  const mat = (id, name, created_at) => ({ id, name, created_at, category: "Epoxy", unit: "Gallon",
+    buy_qty: 1, unit_cost: 10, coverage: 100, waste_pct: 0, roundup: true, vendor: "", notes: "",
+    cost_updated_at: null, updated_at: "t1" });
+  // THE SERVER'S ORDER (name A-Z), stamped out of that order. m5 is the newest and LAST by name;
+  // m1 has no created_at; m2 and m4 are the SAME instant written two ways ("+00:00" and "Z"), so
+  // they tie and fall to the name. Compared as text, "Z" would beat "+" and put m4 first.
+  const FIVE = () => [
+    mat("m1", "Acid Stain", null),
+    mat("m2", "Bond Coat", "2026-09-01T10:00:00+00:00"),
+    mat("m3", "Cove Mix", "2026-10-01T10:00:00.5+00:00"),
+    mat("m4", "Deep Fill", "2026-09-01T10:00:00Z"),
+    mat("m5", "Zinc Primer", "2026-10-20T08:00:00.123456+00:00"),
+  ];
+  // Sixty in name order, each a minute newer than the one before: the newest (p60) sorts onto
+  // page 3 by name, so "page 1 shows the latest" and "page 1 shows A" are different pages.
+  const pad = (n) => String(n).padStart(3, "0");
+  const SIXTY = () => Array.from({ length: 60 }, (_, i) => mat("p" + (i + 1), "Material " + pad(i + 1),
+    new Date(Date.UTC(2026, 7, 1, 12, i)).toISOString()));
+  const store = (init) => {
+    const data = Object.assign({}, init || {});
+    return { data, getItem: (k) => (Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null),
+             setItem: (k, v) => { data[k] = String(v); } };
+  };
+  const res = {};
+
+  // ── the default, with nothing saved ──
+  {
+    const { api, dom: d } = build({ ITEMS: FIVE() });
+    api.renderItems();
+    api.renderFilterBar();
+    res.defaultKey = api.itemSortNow();
+    res.defaultOrder = itemRows(d);
+    res.selectSyncedToDefault = d.nodes["f-sort"] ? d.nodes["f-sort"].value : null;
+    // The model the rest of the page reads keeps the server's order.
+    res.modelUntouched = api.itemsNow().map((x) => x.id);
+    const arr = FIVE();
+    res.newIsACopy = api.sortItems(arr, "new") !== arr;
+    res.namePassesThrough = api.sortItems(arr, "name") === arr;
+  }
+  // ── Name A-Z ──
+  {
+    const { api, dom: d } = build({ ITEMS: FIVE(), ITEM_SORT: "name" });
+    api.renderItems();
+    api.renderFilterBar();
+    res.nameOrder = itemRows(d);
+    res.selectSyncedToName = d.nodes["f-sort"] ? d.nodes["f-sort"].value : null;
+  }
+  // ── a search narrows, THEN the sort orders what is left ──
+  {
+    const newest = build({ ITEMS: FIVE(), itemQuery: "co" });
+    newest.api.renderItems();
+    const byName = build({ ITEMS: FIVE(), itemQuery: "co", ITEM_SORT: "name" });
+    byName.api.renderItems();
+    res.searchedNewest = itemRows(newest.dom);
+    res.searchedByName = itemRows(byName.dom);
+  }
+  // ── page 1 is the latest sixty-odd, after a reload and after an add ──
+  {
+    const { api, dom: d } = build({ ITEMS: SIXTY() });
+    api.renderItems();
+    res.reloadFirstPage = span(itemRows(d));
+    // From page 3, a material that arrives at the END of the array (the order the server would
+    // file "Zz Sealer" in) is still row 1 of page 1, because it is the newest.
+    api.turnPage("items", 1); api.turnPage("items", 1);
+    res.beforeAddPage = api.pagerNow().items.page;
+    api.itemsNow().push(mat("pnew", "Zz Sealer", "2026-10-27T15:00:00Z"));
+    api.renderItems();
+    res.afterAddPage = api.pagerNow().items.page;
+    res.afterAddFirstRow = itemRows(d)[0];
+    // CHANGING THE SORT GOES TO PAGE 1, both ways.
+    api.turnPage("items", 1);
+    res.beforeSortChangePage = api.pagerNow().items.page;
+    api.setItemSort("name"); api.renderItems();
+    res.afterSortChangePage = api.pagerNow().items.page;
+    res.afterSortChangeRows = span(itemRows(d));
+    api.turnPage("items", 1);
+    res.beforeSortBackPage = api.pagerNow().items.page;
+    api.setItemSort("new"); api.renderItems();
+    res.afterSortBackPage = api.pagerNow().items.page;
+    res.afterSortBackFirstRow = itemRows(d)[0];
+  }
+  // ── the choice is remembered per viewer, and storage that misbehaves costs nothing ──
+  {
+    const saved = store({ tw_library_sort_items: "name", tw_library_sort_asm: "owner" });
+    const b = build({ ITEMS: FIVE(), window: { localStorage: saved } });
+    b.api.renderItems();
+    res.restoredItemSort = b.api.itemSortNow();
+    res.restoredAsmSort = b.api.asmSortNow();
+    res.restoredOrder = itemRows(b.dom);
+    const junk = build({ window: { localStorage: store({ tw_library_sort_items: "price",
+                                                         tw_library_sort_asm: "" }) } });
+    res.unknownSavedKey = [junk.api.itemSortNow(), junk.api.asmSortNow()];
+    const refusing = { get localStorage() { throw new Error("SecurityError: storage is blocked"); } };
+    // Caught HERE so a savedSort without its try/catch reports as this assertion, not as the
+    // whole harness dying - which is what the page script itself would do on load.
+    try {
+      const blocked = build({ window: refusing });
+      res.blockedStorage = [blocked.api.itemSortNow(), blocked.api.asmSortNow()];
+    } catch (e) { res.blockedStorage = "the page threw on load: " + e.message; }
+    // The write: what a pick stores, and a refusing store does not throw out of the listener.
+    const w = store();
+    const writer = build({ window: { localStorage: w } });
+    writer.api.rememberSort("items", "name");
+    writer.api.rememberSort("asm", "vendor");
+    res.written = w.data;
+    let threw = false;
+    try { build({ window: refusing }).api.rememberSort("items", "name"); } catch (e) { threw = true; }
+    res.refusedWriteThrew = threw;
+    // THE LISTENERS, read from source (top-level wiring this harness cannot run - see
+    // listenerBody): each pick is remembered, repaints only its own list, and moves no focus.
+    res.itemListener = listenerBody("f-sort", "change");
+    res.asmListener = listenerBody("fa-sort", "change");
+  }
+  // ── the Assemblies rail: newest first by default, a just-made one on page 1 ──
+  {
+    const asms = Array.from({ length: 60 }, (_, i) => ({ id: "q" + (i + 1),
+      name: "Assembly " + pad(i + 1), unit: "SF", lines: [],
+      created_at: new Date(Date.UTC(2026, 7, 1, 12, i)).toISOString() }));
+    // Nothing open that is in this list, so the rail shows page 1 and only the sort decides it.
+    const { api, dom: d } = build({ ASMS: asms });
+    api.renderList();
+    res.railFirstPage = span(cardIds(d));
+    res.railSelect = d.nodes["fa-sort"] ? d.nodes["fa-sort"].value : null;
+  }
+  // ── the rail AS load() OPENS IT: nothing saved, nothing open, load() picks one ──
+  // The scenario above leaves openId unset, which the page never does: load() opens an assembly
+  // and asmPage moves the rail to that card's page. So open what load() opens, then paint.
+  {
+    const asms = () => Array.from({ length: 60 }, (_, i) => ({ id: "q" + (i + 1),
+      name: "Assembly " + pad(i + 1), unit: "SF", lines: [],
+      created_at: new Date(Date.UTC(2026, 7, 1, 12, i)).toISOString() }));
+    const cur = (d) => all(/data-open="([^"]+)" aria-current="true"/g, d.nodes["asm-list"].innerHTML);
+    const r = {};
+    try {
+      const { api, dom: d } = build({ ASMS: asms() });
+      api.setOpenId(api.firstAssemblyId()); api.paint();
+      r.page = api.pagerNow().asm.page;
+      r.firstCard = cardIds(d)[0];
+      r.open = cur(d);
+      // Name A-Z keeps opening the first by name, page 1.
+      const byName = build({ ASMS: asms(), ASM_SORT: "name" });
+      byName.api.setOpenId(byName.api.firstAssemblyId()); byName.api.paint();
+      r.namePage = byName.api.pagerNow().asm.page;
+      r.nameOpen = cur(byName.dom);
+      // An empty library opens nothing.
+      r.empty = build({ ASMS: [] }).api.firstAssemblyId();
+    } catch (e) { r.error = String(e && e.message || e); }
+    res.railOnLoad = r;
+  }
+  // ── the markup: one Sort control over the Items table, the rail's shape ──
+  {
+    const i = html.indexOf('id="f-sort"');
+    const sel = i === -1 ? "" : html.slice(i, html.indexOf("</select>", i));
+    res.itemOptionValues = all(/value="([^"]*)"/g, sel);
+    res.itemOptionLabels = all(/>([^<>]+)<\/option>/g, sel);
+    res.labelled = /<span class="facet">\s*<label class="flabel" for="f-sort">Sort<\/label>\s*<select id="f-sort">/.test(html);
+    // In the Items filter bar: after the search box, before the table's card.
+    res.inTheItemsBar = i > html.indexOf('id="item-q"') && i < html.indexOf('id="items-addrow"');
+    const j = html.indexOf('id="fa-sort"');
+    res.asmFirstOption = (/value="([^"]*)"/.exec(html.slice(j)) || [])[1];
+  }
+  out.newestFirst = res;
 }
 
 Promise.all([conflictChecks(), dialogChecks(), laborChecks(), laborTabChecks(),

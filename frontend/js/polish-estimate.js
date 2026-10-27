@@ -2757,7 +2757,7 @@
     // built in and ROW n keeps meaning what it says. The caret goes with it -- see the handler --
     // which is what makes a button at the top and a row at the bottom read as one action.
     var gypSec = gypOpen();
-    var html = gypSec ? gypCard(gypSec) : "";
+    var html = textureCard() + (gypSec ? gypCard(gypSec) : "");
     html += '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
       ' Add assembly or material</button>';
     html += M.takeoff.map(takeoffRowCard).join("");
@@ -2811,6 +2811,32 @@
 
     return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
+  }
+
+  /** THE EPOXY SHEET'S TEXTURE (Hanz, 2026-10-27: "please put a texture setting in this"), at the top of its Material step: the
+   *  Proposal step's own choices (B.textureChoices, an off-list value kept as its own option, every value escaped). It is the
+   *  sheet's own (`section.texture`), and the base's reaches the Proposal step on the next save (B.textureFill). "" on any sheet
+   *  that is not an Epoxy sheet. The select is handled in the delegated `change` listener, which repaints in place, so it keeps focus. */
+  function textureCard() {
+    var e = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (!e || e.role !== "epoxy") return "";
+    var cur = B.sectionTexture(e.section);
+    var opts = B.textureChoices(cur).map(function (o) {
+      return '<option value="' + esc(o.value) + '"' + (o.value === cur ? " selected" : "") + '>' + esc(o.label) + '</option>';
+    }).join("");
+    return '<div class="tk floor" data-texture-card="1">' +
+      '<div class="tk-h"><span class="tag">Texture</span><span class="tk-sub">Prints on the proposal</span></div>' +
+      '<div class="f"><select data-texture="1" aria-label="Texture">' + opts + '</select>' +
+      '<p class="hint">The finish of this epoxy floor. The base bid\'s texture fills the Proposal step\'s Texture until one is picked there.</p></div>' +
+      '</div>';
+  }
+
+  /** Keep `value` as the texture of the Epoxy sheet on show; blank takes the key off. */
+  function setTexture(value) {
+    var e = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (!e || e.role !== "epoxy") return;
+    var v = String(value == null ? "" : value).trim();
+    if (v) e.section.texture = v; else delete e.section.texture;
   }
 
   /** What an Epoxy section charges that is not one of its rows, in words: the patch (a flat price on the whole
@@ -5278,6 +5304,12 @@
     if (shMode !== null) { setPriceMode(shMode, el.value); return; }
     // The Gyp card's three selects (sheet, mix, sound mat). The sheet moves the section to another workbook tab, so
     // the whole page is repainted; the other two reprice and repaint the panel.
+    // THE EPOXY SHEET'S TEXTURE: nothing on the panel moves with it, so it repaints in place and the select keeps the focus.
+    if (el.getAttribute("data-texture") !== null) {
+      setTexture(el.value);
+      changed(false);
+      return;
+    }
     var gypSel = el.getAttribute("data-gyp");
     if (gypSel === "preset" || gypSel === "mix" || gypSel === "sound_mat") {
       setGyp(gypSel, el.value);

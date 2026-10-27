@@ -273,6 +273,33 @@
       box-shadow:inset -1px 0 0 var(--line); }
     th.rowsave { position:sticky; left:0; z-index:2; }
     tbody tr:hover td.rowsave { background:var(--surf); }
+    /* THE ITEMS TABLE'S COLUMN HEADINGS STAY ON SCREEN. Hanz, 2026-10-27: "when we scroll down the
+       materials, divisions, order quantity etc. headers should be sticky."
+       WHERE IT STICKS: a sticky cell sticks inside its nearest scroll container, and that is .tw,
+       never the page: .tw scrolls sideways (the table is ~1,990px wide, and the Save column above
+       is pinned to its LEFT edge), and overflow-x:auto makes overflow-y auto too. So a top:0 cell
+       here would stick to a box that never scrolls down, and pinning it to the window instead would
+       mean taking away the sideways scroller the Save column needs. The box scrolls down instead:
+       it is held to the screen (less the 52px #tw-topbar and what sits under it, see below) and
+       the headings stick to ITS top while the rows scroll under them. The .card around it clips
+       (overflow:hidden), which is harmless: it is outside the scroller and does not scroll.
+       Opaque fill (--surf-low, the heading row's own colour) and the heading row's own hairline,
+       so rows do not show through. z-index 3 is over every body cell (the pinned Save cell is 1);
+       the Save heading is pinned both ways and sits over the rest of the row at 4. The page sets
+       color-scheme: only light and has no dark theme; these are tokens, so one would carry over.
+       scroll-margin-top keeps a field the keyboard moves to from parking under the headings.
+       THE 310px BUDGET is what has to stay on screen when the PAGE is scrolled to its end (the
+       wheel scrolls this box first, then carries on into the page): the 52px #tw-topbar above
+       the box, and under it the bottom pager (48), the card border, the .foot note (20px margin,
+       three to four 12px lines, its 12px bottom margin) and the body's 90px bottom padding --
+       measured 226px at 1366 wide and 245px at 390. With 190 the box's top, and the headings on
+       it, slid 36-55px up under the topbar. The 320px floor still wins on a very short screen. */
+    #items-scroll { overflow:auto; max-height:max(320px, calc(100vh - 310px));
+      max-height:max(320px, calc(100dvh - 310px)); }
+    #items-scroll thead th { position:sticky; top:0; z-index:3; background:var(--surf-low);
+      border-bottom:1px solid var(--line); }
+    #items-scroll thead th.rowsave { left:0; z-index:4; }
+    #items-scroll tbody :is(input, select, textarea, button) { scroll-margin-top:40px; }
     /* THE SAME COLUMN ON THE LABOR AND ADMINISTRATION TABLES (Hanz, 2026-10-12: "apply that save
        button here", "same as here"), and the same two states of it: the Save button while the row has
        an unsaved change, and for about two seconds after the save lands, "Saved" in that same cell --
@@ -875,6 +902,17 @@
           </span>
           <button class="btn ghost sm" type="button" id="f-clear" data-clear-filters hidden>
             Clear filters</button>
+          <!-- SORT, the Assemblies rail's control in the same place and shape (after Clear, which
+               leaves it alone). Hanz, 2026-10-27: "The newest added item should be put on the
+               first page." Newest first is the default; Name A-Z is the server's order. The
+               choice is ITEM_SORT in library.js, remembered per viewer in this browser only. -->
+          <span class="facet">
+            <label class="flabel" for="f-sort">Sort</label>
+            <select id="f-sort">
+              <option value="new">Newest first</option>
+              <option value="name">Name A–Z</option>
+            </select>
+          </span>
         </div>
       </div>
       <div class="card">
@@ -899,7 +937,8 @@
           <button class="btn ghost sm pager-next" type="button" id="items-pager-top-next"
                   data-pager="items" data-step="1">Next</button>
         </nav>
-        <div class="tw">
+        <!-- id="items-scroll": the box the headings stick inside. See the #items-scroll rule. -->
+        <div class="tw" id="items-scroll">
           <table class="items-table">
             <thead>
               <tr>
@@ -1391,12 +1430,15 @@
                estimator's view to the server.
 
                Two of these six are DERIVED rather than read off a column — see asmVendorTally
-               and asmOwnerName in library.js. An assembly has no vendor field at all. -->
+               and asmOwnerName in library.js. An assembly has no vendor field at all.
+
+               Newest first is FIRST because it is the default (Hanz, 2026-10-27), so the select
+               reads right before library.js has written its value back. -->
           <span class="facet">
             <label class="flabel" for="fa-sort">Sort</label>
             <select id="fa-sort">
-              <option value="name">Name A–Z</option>
               <option value="new">Newest first</option>
+              <option value="name">Name A–Z</option>
               <option value="scope">Scope or work type</option>
               <option value="unit">Unit</option>
               <option value="vendor">Vendor</option>
