@@ -53,6 +53,7 @@
       calendar_event_deleted:"deleted a calendar event",
       // Admin, about a PERSON rather than a project.
       role_changed:"changed the role on", nav_access_changed:"changed tab permissions",
+      special_permissions_changed:"changed special permissions",
       banned:"banned", unbanned:"unbanned", deleted_user:"deleted",
       // Create Multiple Proposals (one estimate, a proposal per base bid).
       proposals_created:"made several proposals from", proposal_refreshed:"refreshed the estimate of",
