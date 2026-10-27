@@ -462,8 +462,8 @@ def test_a_member_with_the_notification_sending_tab_gets_the_roster_controls(ran
     assert g["chipsHaveRemove"]
     assert not any(g["cellsDisabled"])
     assert g["fired"] is not False and g["puts"] == 1
-    # The per-project chips are still self-only for her: that route has no grant.
-    assert g["perProjectSaysSelfOnly"]
+    # The per-project chips follow the same grant: the card promises the tab's every admin-only edit.
+    assert not g["perProjectSaysSelfOnly"]
 
 
 @needs_node

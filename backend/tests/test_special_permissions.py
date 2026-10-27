@@ -229,6 +229,62 @@ def test_item_edit_without_admin_fields_needs_no_grant(monkeypatch):
         _as(monkeypatch, "user").patch("/api/library/items/i1", json={"name": "Primer"})
 
 
+# ── somebody ELSE's per-project notifications: the two doors that were admin-only ──
+# The card promises "the tab and every admin-only edit in it". Setting a colleague's notifications
+# on one project is an admin-only edit on Notification Sending (its per-project card) and on Direct
+# Projects (the drawer's picks), so each tab's grant must open its own door and no other.
+SELF_ONLY = "You can only change your own notifications for a project."
+
+
+def _override_other(client):
+    try:
+        r = client.put("/api/portal/proposal/p1/notify-overrides",
+                       json={"email": KYLE, "mode": "mute"})
+    except _Ran:
+        return True
+    assert r.status_code == 403 and r.json().get("detail") == SELF_ONLY, r.text
+    return False
+
+
+@pytest.mark.parametrize("held, opens", [
+    (["/notifications.html"], True),
+    ([k for k in sp.KEYS if k != "/notifications.html"], False),
+    ([], False),
+])
+def test_a_project_override_for_somebody_else_follows_the_notifications_tab(monkeypatch, held, opens):
+    _stub_downstream(monkeypatch)
+    sp.save({MARISOL: held} if held else {}, "h")
+    assert _override_other(_as(monkeypatch, "user")) is opens
+
+
+def test_a_project_override_for_yourself_needs_no_grant(monkeypatch):
+    _stub_downstream(monkeypatch)
+    with pytest.raises(_Ran):
+        _as(monkeypatch, "user").put("/api/portal/proposal/p1/notify-overrides",
+                                     json={"email": MARISOL, "mode": "mute"})
+
+
+@pytest.mark.parametrize("held, opens", [
+    (["/portal.html"], True),
+    ([k for k in sp.KEYS if k != "/portal.html"], False),
+    ([], False),
+])
+def test_the_drawers_picks_for_somebody_else_follow_the_direct_projects_tab(monkeypatch, held, opens):
+    written = []
+    monkeypatch.setattr(main.drafts, "get_notify_picks", lambda pid: {"add": [], "mute": []})
+    monkeypatch.setattr(main.drafts, "set_notify_picks",
+                        lambda pid, add, mute, actor: (written.append((add, mute)), True)[1])
+    monkeypatch.setattr(main.drafts, "latest_revision_no", lambda pid: 0)
+    sp.save({MARISOL: held} if held else {}, "h")
+    r = _as(monkeypatch, "user").post("/api/draft/d1/notify", json={"add": [KYLE], "mute": []})
+    if opens:
+        assert r.status_code == 200, r.text
+        assert written == [([KYLE], [])]
+    else:
+        assert r.status_code == 403 and r.json().get("detail") == SELF_ONLY, r.text
+        assert written == []
+
+
 # ── the tab itself: the grant overrides the role's deny for that one person ──
 def test_me_nav_lists_drop_a_granted_tab_for_that_person_only(monkeypatch):
     nav_access.save({"user": ["/library.html", "/leads.html", "/history.html"]}, "h")

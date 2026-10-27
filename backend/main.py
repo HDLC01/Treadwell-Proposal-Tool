@@ -1884,7 +1884,10 @@ def _guard_notify_picks(request: Request, prior: Any,
     than safe. Carrying an existing entry through is fine; dropping somebody else's is a change, or
     un-muting by omission would be a free bypass.
     """
-    if _caller_is_admin(request):
+    # An admin, or a member given the Direct Projects tab (the drawer's home): the Special
+    # permissions card promises that tab's every admin-only edit, and setting somebody else's
+    # notifications on a project is one.
+    if _may_set_others_notify(request, special_permissions.PROJECTS):
         return
     me = (_user_email(request) or "").strip().lower()
     picks = prior if isinstance(prior, dict) else {}
@@ -3657,7 +3660,7 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
 # Access (Hanz: "admins edit, staff self-serve"): the GLOBAL roster (add / remove /
 # toggle) is ADMIN-only, enforced here server-side (not just hidden buttons); the
 # per-project overrides allow ANY signed-in staff to toggle THEMSELVES for a project,
-# and admins to toggle anyone. All routes are already bearer-gated by _auth_gate.
+# and admins (or a member given the tab on Special permissions) to toggle anyone. All routes are already bearer-gated by _auth_gate.
 def _caller_is_admin(request: Request) -> bool:
     # Through _require_admin, so it reads the same cached profile as every other role decision in
     # the app. A local profiles.get_by_email() here would be a third role reader and would miss both
@@ -3666,6 +3669,23 @@ def _caller_is_admin(request: Request) -> bool:
         _require_admin(request)
         return True
     except HTTPException:
+        return False
+
+
+def _may_set_others_notify(request: Request, tab: str) -> bool:
+    """May this caller change SOMEBODY ELSE's per-project notifications: an admin, or a member
+    given `tab` on the Admin page's Special permissions card. Through _caller_is_admin first, so
+    the tests that stub it keep meaning what they did; the grant half is _require_grant's own
+    lookup, never anything the browser sends. CLOSED on any failure to read the profile or the
+    grants: a grant widens access, so an unreadable store must not."""
+    if _caller_is_admin(request):
+        return True
+    if not (_user_email(request) or "").strip():
+        return False  # nobody signed in holds no grant, whatever the profile cache has under ""
+    try:
+        _require_grant(request, tab)
+        return True
+    except Exception:  # noqa: BLE001 - HTTPException (no grant) or an unreachable profile store
         return False
 
 
@@ -3780,9 +3800,11 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
         raise HTTPException(400, "Enter a valid email address.")
     if mode not in ("add", "mute", "clear"):
         raise HTTPException(400, "Invalid mode.")
-    # Admin may toggle anyone; a non-admin may only toggle THEIR OWN address.
+    # An admin, or a member given the Notification Sending tab, may toggle anyone (the Special
+    # permissions card promises the tab's every admin-only edit, and this is one); anybody else may
+    # only toggle THEIR OWN address.
     me = (_user_email(request) or "").strip().lower()
-    if not _caller_is_admin(request) and email != me:
+    if email != me and not _may_set_others_notify(request, special_permissions.NOTIFICATIONS):
         raise HTTPException(403, "You can only change your own notifications for a project.")
     return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "PUT",
                    {"email": email, "mode": mode})

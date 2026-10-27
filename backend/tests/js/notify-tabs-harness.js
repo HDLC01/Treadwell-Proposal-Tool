@@ -212,7 +212,7 @@ function build(opts) {
   ].join("\n");
 
   const scope = new Function(
-    "$", "esc", "nameOf", "plainAvatar", "C", "sessionStorage", "api", "ADMIN", "MY_EMAIL",
+    "$", "esc", "nameOf", "plainAvatar", "C", "sessionStorage", "api", "ROSTER_EDIT", "MY_EMAIL",
     "ROSTER", "PROJECTS", "OVERRIDES", "ppAlert", "puts",
     '"use strict";\n' + source + "\n" +
     "return { renderProjects, ppCategory, ppCounts, ppPageCount, ppSlice, ppMatches, isHandedOff,\n" +
@@ -235,7 +235,9 @@ function build(opts) {
     C,
     sessionStorage,
     api,
-    o.admin !== false,
+    // ROSTER_EDIT: an admin, or a member given the Notification Sending tab. Defaults to the admin
+    // flag so every scenario written before the grant reads exactly as it did.
+    o.rosterEdit === undefined ? o.admin !== false : o.rosterEdit,
     (o.me || "hanz@wetreadwell.com").toLowerCase(),
     o.roster || [{ email: "hanz@wetreadwell.com", enabled: true },
                  { email: "kyle.loseke@wetreadwell.com", enabled: false }],
@@ -620,6 +622,19 @@ const chipAt = (s, i) => s.chips()[i] ||
   const n = build({ projects: manyActive(1), admin: false, me: "kyle.loseke@wetreadwell.com" });
   n.renderProjects();
   out.nonAdminChips = n.chips().map((c) => ({ email: c.dataset.email, disabled: c.disabled }));
+
+  // A member given the Notification Sending tab toggles anyone and gets Reset to global, the same
+  // as an admin: the server's _may_set_others_notify opens the route to that grant.
+  const g = build({ projects: manyActive(1), admin: false, rosterEdit: true,
+                    me: "kyle.loseke@wetreadwell.com",
+                    overrides: { "p1": { "hanz@wetreadwell.com": "mute" } } });
+  g.renderProjects();
+  out.grantedChips = g.chips().map((c) => ({ email: c.dataset.email, disabled: c.disabled }));
+  out.grantedHasReset = g.html().indexOf('class="pp-reset"') !== -1;
+  const plain = build({ projects: manyActive(1), admin: false, me: "kyle.loseke@wetreadwell.com",
+                        overrides: { "p1": { "hanz@wetreadwell.com": "mute" } } });
+  plain.renderProjects();
+  out.plainHasReset = plain.html().indexOf('class="pp-reset"') !== -1;
 
   console.log(JSON.stringify(out));
 })();

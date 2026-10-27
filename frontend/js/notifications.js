@@ -50,7 +50,7 @@
   // "test", "lost" and "deposit settled" cannot mean one thing there and another here.
   const C = window.TWCrm;
 
-  let ADMIN = false, ROSTER_EDIT = false, MY_EMAIL = "";
+  let ROSTER_EDIT = false, MY_EMAIL = "";
   let ROSTER = [];                 // [{email, enabled}]: the GENERAL rows, the floor
   let STEPS = [];                  // [{id, label, hint}], served by the portal, never hardcoded
   let CELLS = {};                  // { emailLower: { stepId: true|false } }: the EXPLICIT rows
@@ -223,7 +223,8 @@
   /** May change the team roster and the per-step grid: an admin, or a member given the
    *  Notification Sending tab ("/notifications.html") on the Admin page's Special permissions card
    *  (/api/me's `grants` are tab hrefs). The server's
-   *  _require_grant agrees. The per-project chips stay on ADMIN: that route has no grant. */
+   *  _require_grant agrees. The per-project chips (toggle anyone, Reset to global) follow it too:
+   *  the server's _may_set_others_notify opens that route to the same tab grant. */
   function rosterEditFor(me) {
     const m = me || {};
     return m.role === "admin" || m.role === "super_admin"
@@ -233,7 +234,6 @@
   async function boot() {
     try { await window.TWAuth.ready; } catch (e) { /* auth.js handles redirect */ }
     const me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
-    ADMIN = me.role === "admin" || me.role === "super_admin";
     ROSTER_EDIT = rosterEditFor(me);
     MY_EMAIL = (me.email || "").toLowerCase();
     render();
@@ -273,7 +273,7 @@
       '<div class="card">' +
         '<div class="lbl">Per-project — assign specific people</div>' +
         '<p class="note" style="margin:0 0 8px">Green = receives THIS project’s emails. Overrides the team list above for that project only. ' +
-        (ADMIN ? "Toggle anyone." : "You can toggle only yourself.") + '</p>' +
+        (ROSTER_EDIT ? "Toggle anyone." : "You can toggle only yourself.") + '</p>' +
         // The decision, on screen, so nobody has to read peopleFor() to find out.
         '<p class="note" style="margin:0 0 8px">Only the team list is shown here. Somebody who is ' +
         'set for one step only (say the deposit) is not, because a per-project toggle covers ' +
@@ -798,7 +798,7 @@
       const e = person.email.toLowerCase();
       const mode = ov[e];
       const eff = mode === "add" ? true : mode === "mute" ? false : person.base;
-      const canEdit = ADMIN || e === MY_EMAIL;
+      const canEdit = ROSTER_EDIT || e === MY_EMAIL;
       return '<button class="nt-chip ' + (eff ? "on" : "") + '" data-pid="' + esc(pid) + '" data-email="' + esc(person.email) + '"'
            + ' data-base="' + (person.base ? 1 : 0) + '" data-eff="' + (eff ? 1 : 0) + '"'
            + (canEdit ? "" : " disabled") + ' title="' + esc(person.email) + '">'
@@ -808,7 +808,7 @@
       '<div class="pp-head"><span class="pp-name">' + esc(p.project_name || "Proposal") + '</span>' +
       '<span class="pp-cust">' + esc(p.customer_email || "") + '</span>' + tag +
       (custom ? '<span class="pp-badge">' + custom + ' custom</span>' : "") +
-      (ADMIN && custom ? '<button class="pp-reset" data-pid="' + esc(pid) + '" type="button">Reset to global</button>' : "") +
+      (ROSTER_EDIT && custom ? '<button class="pp-reset" data-pid="' + esc(pid) + '" type="button">Reset to global</button>' : "") +
       '</div><div class="nt-chips">' + chips + '</div></div>';
   }
 

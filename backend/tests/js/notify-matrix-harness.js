@@ -726,7 +726,7 @@ const out = {};
       cellsDisabled: s.cellNodes().map((c) => c.disabled),
       fired: fired,
       puts: s.calls.filter((c) => c.method === "PUT").length,
-      // The per-project card stays on ADMIN: its route has no grant.
+      // The per-project card follows the grant too (toggle anyone).
       perProjectSaysSelfOnly: html.indexOf("You can toggle only yourself.") !== -1,
     };
   }
