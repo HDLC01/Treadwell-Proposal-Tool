@@ -248,6 +248,9 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // The More panel follows ITEMS_PRICING (admin, or the items_pricing grant). Defaults to ADMIN so
   // every scenario written before the grant existed reads exactly as it did.
   var ITEMS_PRICING = state.ITEMS_PRICING === undefined ? state.ADMIN : state.ITEMS_PRICING;
+  // The same for library_lists (vendors/divisions/units/labor) and condition_defaults.
+  var LISTS_EDIT = state.LISTS_EDIT === undefined ? state.ADMIN : state.LISTS_EDIT;
+  var DEFAULTS_EDIT = state.DEFAULTS_EDIT === undefined ? state.ADMIN : state.DEFAULTS_EDIT;
   // The Markup page's Global lines. Declared here rather than lifted because the page fills it
   // from its own fetch inside load(), which this sandbox does not run -- a test hands it in.
   var GLOBAL_MARKUP = state.GLOBAL_MARKUP || [];
@@ -1328,7 +1331,15 @@ const out = {};
   admin.api.renderVendors();
   const asAdmin = admin.dom.nodes["divisions-body"].innerHTML +
     admin.dom.nodes["units-body"].innerHTML + admin.dom.nodes["vendors-body"].innerHTML;
+  // A MEMBER given library_lists: not an admin, but the lists are hers to edit.
+  const granted = build({ ADMIN: false, LISTS_EDIT: true });
+  granted.api.renderVendors();
+  const asGranted = granted.dom.nodes["divisions-body"].innerHTML +
+    granted.dom.nodes["units-body"].innerHTML + granted.dom.nodes["vendors-body"].innerHTML;
   out.vendors = {
+    grantedGetsInputsAndDelete: /<input data-rf="name"/.test(asGranted) &&
+      /data-del-ref="vendors"/.test(asGranted) && /data-del-ref="units"/.test(asGranted),
+    grantedNotShownTheReadOnlyNote: granted.dom.nodes["vendors-ro"].hidden === true,
     userGetsNoInputs: !/<input/.test(asUser),
     userGetsNoDeleteButton: !/data-del-ref/.test(asUser),
     userStillSeesTheNames: /Polished Concrete/.test(asUser) && /Gallon/.test(asUser) &&
@@ -5353,6 +5364,12 @@ async function conditionChecks() {
   const viewerHtml = viewer.dom.nodes["default-takeoff-body"].innerHTML;
   viewer.api.openDefaultBrowse();
   const viewerBrowse = viewer.dom.nodes["default-hits"].innerHTML;
+  // 9b. A MEMBER given condition_defaults: not an admin, but the slider, Remove and Add are hers.
+  const grantedDef = build(seed({ ADMIN: false, DEFAULTS_EDIT: true, COND_DEFAULTS: [OFF_THE_LIST("dye")] }));
+  grantedDef.api.renderDefaultTakeoff();
+  const grantedDefHtml = grantedDef.dom.nodes["default-takeoff-body"].innerHTML;
+  grantedDef.api.openDefaultBrowse();
+  const grantedDefBrowse = grantedDef.dom.nodes["default-hits"].innerHTML;
 
   // 10. TYPED TEXT ON THE ROW IS ESCAPED: an admin's name and unit for the kit.
   const hostile = build(seed({ ITEMS: [
@@ -5425,6 +5442,9 @@ async function conditionChecks() {
       !/data-def-add="conditions"/.test(sealBrowse),
     viewerGetsEditOnly: listedForViewer(viewerHtml) && !/data-def-off="items" data-def-id="(joint-filler-kit|remove-existing-jf|dye)"/.test(viewerHtml) &&
       !/data-def-add="conditions"/.test(viewerBrowse),
+    grantedGetsSliderAndRemove: /data-def-on="items" data-def-on-id="(joint-filler-kit|remove-existing-jf)"/.test(grantedDefHtml) &&
+      /data-def-off="items" data-def-id="(joint-filler-kit|remove-existing-jf)"/.test(grantedDefHtml),
+    grantedOfferedTheAdd: /data-def-add="conditions"/.test(grantedDefBrowse),
     offRowEscapesTypedText: !/<img src=x>/.test(hostileHtml) && !/<b>Kit<\/b>/.test(hostileHtml) &&
       /&lt;img src=x&gt;/.test(hostileHtml) && listed(hostileHtml, "joint_filler"),
 

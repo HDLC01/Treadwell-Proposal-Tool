@@ -44,6 +44,10 @@
   // May edit an item's price breaks, bulk cost and coverage basis: an admin, or a member given the
   // items_pricing special permission on the Admin page (/api/me's `grants`). The server agrees.
   var ITEMS_PRICING = false;
+  // The same rule for two more grants: vendors / divisions / units / labor lines and the labor
+  // calculator (library_lists), and the Defaults tab's condition sliders (condition_defaults).
+  var LISTS_EDIT = false;
+  var DEFAULTS_EDIT = false;
   var openId = null;
   var view = "asm";
   /** Which line's item picker is showing its results, by index within the current assembly.
@@ -120,7 +124,9 @@
       var me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
       ADMIN = me.role === "admin" || me.role === "super_admin";
       ITEMS_PRICING = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("items_pricing") !== -1);
-    } catch (e) { ADMIN = false; ITEMS_PRICING = false; }
+      LISTS_EDIT = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("library_lists") !== -1);
+      DEFAULTS_EDIT = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("condition_defaults") !== -1);
+    } catch (e) { ADMIN = false; ITEMS_PRICING = false; LISTS_EDIT = false; DEFAULTS_EDIT = false; }
     try {
       var rs = await Promise.all([api("/api/library/items"), api("/api/library/assemblies"),
                                  api("/api/library/vendors"), api("/api/library/divisions"),
@@ -1842,7 +1848,7 @@
       // and the estimate use (B.travelLabel): the stored name is left alone, only what is drawn.
       var shownName = (travel && window.TWBidModel && window.TWBidModel.travelLabel)
         ? window.TWBidModel.travelLabel(r.name) : r.name;
-      if (!ADMIN) {
+      if (!LISTS_EDIT) {
         out += '<tr data-labor="' + esc(r.id) + '">' +
           // The Save column, empty for somebody who cannot save, so the cells line up under the head.
           '<td class="rowsave"></td>' +
@@ -1905,11 +1911,11 @@
     // somebody actually bills), so there is no "nothing matches" state to hold apart from it.
     $("labor-empty").hidden = LABOR.length > 0;
     // Both Add controls are writes, so both follow ADMIN the way renderRefSection's do.
-    $("labor-addrow").hidden = !ADMIN || LABOR.length === 0;
+    $("labor-addrow").hidden = !LISTS_EDIT || LABOR.length === 0;
     var first = $("labor-empty").querySelector
       ? $("labor-empty").querySelector("[data-add-labor]") : null;
-    if (first) first.hidden = !ADMIN;
-    if ($("labor-ro")) $("labor-ro").hidden = ADMIN;
+    if (first) first.hidden = !LISTS_EDIT;
+    if ($("labor-ro")) $("labor-ro").hidden = LISTS_EDIT;
     // The badge is the TOTAL, matching #n-items and #n-asm: how many labor lines the catalog
     // holds, not how many are favorited -- that count belongs to the Defaults tab, not this one.
     $("n-labor").textContent = LABOR.length;
@@ -1985,16 +1991,16 @@
         // THE SAVE BUTTON'S OWN CELL, FIRST, left of the name (Hanz, 2026-10-12: "same as here").
         // Empty until the value has an unsaved edit; a repaint draws it again for one that has.
         '<td class="rowsave">' +
-          (ADMIN && FRESH[kind] && FRESH[kind][v.id] ? rowSaveButtonHtml(kind, v.id, v.name) : "") +
+          (LISTS_EDIT && FRESH[kind] && FRESH[kind][v.id] ? rowSaveButtonHtml(kind, v.id, v.name) : "") +
           "</td>" +
-        "<td>" + (ADMIN
+        "<td>" + (LISTS_EDIT
           ? '<input data-rf="name" class="cell-ref" value="' + esc(v.name) + '" aria-label="' + one + ' name" maxlength="200">'
           : "<b>" + esc(v.name) + "</b>") + "</td>" +
-        "<td>" + (ADMIN
+        "<td>" + (LISTS_EDIT
           ? '<input data-rf="notes" class="cell-note" value="' + esc(v.notes) + '" aria-label="Notes" maxlength="4000">'
           : esc(v.notes)) + "</td>" +
         '<td class="n">' + used + "</td>" +
-        '<td class="rowact">' + (ADMIN
+        '<td class="rowact">' + (LISTS_EDIT
           ? '<button class="icon danger" type="button" data-del-ref="' + kind + '" data-ref-id="' + esc(v.id) + '" title="Remove this ' + one + '" aria-label="Remove ' + esc(v.name) + '">' + icon("trash") + "</button>"
           : "") + "</td>" +
       "</tr>";
@@ -2002,10 +2008,10 @@
     $(kind + "-body").innerHTML = out;
     $(kind + "-empty").hidden = list.length > 0;
     var addrow = document.querySelector('[data-addrow-ref="' + kind + '"]');
-    if (addrow) addrow.hidden = !ADMIN;
+    if (addrow) addrow.hidden = !LISTS_EDIT;
     var first = $(kind + "-empty").querySelector
       ? $(kind + "-empty").querySelector("[data-add-ref]") : null;
-    if (first) first.hidden = !ADMIN;
+    if (first) first.hidden = !LISTS_EDIT;
   }
 
   /** "Add division", "Add unit", "Add vendor": a new row, NAMED so a test can press it (the click
@@ -2038,7 +2044,7 @@
     renderRefSection("divisions");
     renderRefSection("units");
     renderRefSection("vendors");
-    $("vendors-ro").hidden = ADMIN;
+    $("vendors-ro").hidden = LISTS_EDIT;
   }
 
   // ── assemblies ─────────────────────────────────────────────────────────────
@@ -3351,8 +3357,8 @@
     var row = materialDefaultRow(c.item_id, c.name, c.priced);
     // THE SLIDER IS THE CONDITION'S STARTING ANSWER (condition_defaults.on_by_default). An admin's:
     // the PUT behind it refuses anybody else, so everyone else reads the state as words.
-    row.slider = defaultSlider("items", c.item_id, c.name, !!c.on, ADMIN);
-    if (!ADMIN) {
+    row.slider = defaultSlider("items", c.item_id, c.name, !!c.on, DEFAULTS_EDIT);
+    if (!DEFAULTS_EDIT) {
       row.actions = '<button class="btn ghost sm" type="button" data-def-edit="items" data-def-id="' +
         esc(c.item_id) + '">Edit</button>';
     }
@@ -3425,7 +3431,7 @@
     //
     // MATCHED ON THE ROW'S NAME AND THE CONDITION'S LABEL, so "joint" finds the kit whatever an
     // admin has renamed it to.
-    if (ADMIN && DEFAULT_WT === "polish") {
+    if (DEFAULTS_EDIT && DEFAULT_WT === "polish") {
       var condHits = [];
       takeoffConditionDefaults().forEach(function (c) {
         if (c.listed) return;
@@ -3446,7 +3452,7 @@
     LABOR.forEach(function (l) {
       // Travel's absent/null favorite reads as ON (the server shapes it so; this keeps a stale
       // read honest too) -- only an explicit false makes it a candidate.
-      if (ADMIN && (l.id === "travel" ? l.favorite === false : !l.favorite) &&
+      if (LISTS_EDIT && (l.id === "travel" ? l.favorite === false : !l.favorite) &&
           (!q || String(l.name || "").toLowerCase().indexOf(q) !== -1)) {
         hits.push({ kind: "labor", id: l.id, name: l.name, what: "Labor" });
       }
@@ -3836,7 +3842,7 @@
    *      do nothing. Name, rate and unit are compared because those are the three the Labor tab's
    *      own row can edit; a renamed Travel with the shipped rate still has a way back. */
   function laborRowActions(travel) {
-    if (!ADMIN) return "";
+    if (!LISTS_EDIT) return "";
     var B = window.TWBidModel;
     var shipped = B && B.travelSeed ? B.travelSeed() : null;
     if (!shipped || !travel) return "";
@@ -3929,7 +3935,7 @@
           "figures until one of those. A Gyp bid is typed.</td>" +
         // Travel's slider needs the stored row to PATCH; with none there is nothing to switch.
         '<td class="rowon">' + (storedTravel
-          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, ADMIN && !travelRo)
+          ? defaultSlider("labor", storedTravel.id, r.label, storedTravel.default_on !== false, LISTS_EDIT && !travelRo)
           : "") + "</td>" +
         '<td class="rowact">' + (travelRo ? globalNote : laborRowActions(storedTravel)) + "</td>" +
         "</tr>";
@@ -3956,12 +3962,12 @@
         "<td>" + (c.guys_auto
           ? "Typed on the estimate. Older saved estimates take the crew man-days."
           : "Typed on the estimate") + "</td>" +
-        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, ADMIN && !cro) +
+        '<td class="rowon">' + defaultSlider("labor", c.id, c.name, c.default_on !== false, LISTS_EDIT && !cro) +
           "</td>" +
         // ADMIN ONLY, unlike an item's or an assembly's pair: `favorite` on a labor line is a
         // PATCH to /api/library/labor, which is `_require_admin`, so a non-admin is not handed a
         // Remove that 403s -- the rule laborRowActions already follows for Travel.
-        '<td class="rowact">' + (cro ? globalNote : ADMIN ? defaultRowActions("labor", c.id, c.name) : "") +
+        '<td class="rowact">' + (cro ? globalNote : LISTS_EDIT ? defaultRowActions("labor", c.id, c.name) : "") +
         "</td></tr>";
       if (cro) globOut += crow; else out += crow;
     }
@@ -3978,7 +3984,7 @@
     // else, and defaultCandidates leaves labor out for a non-admin. A "labor default" button that
     // opened onto materials alone would be the dead control this tab has already shipped once.
     var addrow = $("default-labor-addrow");
-    if (addrow) addrow.hidden = !ADMIN;
+    if (addrow) addrow.hidden = !LISTS_EDIT;
   }
 
   // ── the Labor Calculator tab (Hanz, 2026-10-05) ────────────────────────────
@@ -4075,7 +4081,7 @@
     html += '<div class="card"><div class="tw"><table><thead><tr><th>Line</th><th class="n">Rate</th>' +
       '<th>Unit</th><th>How it is worked out</th><th class="w-act"></th></tr></thead><tbody>';
     html += '<tr data-labcalc-row="travel"><td>' + esc(tl.label) + '</td><td class="n' +
-      (ADMIN ? ' lc-fixed' : '') + '">' + esc(L.money(tl.rate)) + '</td><td>per ' +
+      (LISTS_EDIT ? ' lc-fixed' : '') + '">' + esc(L.money(tl.rate)) + '</td><td>per ' +
       (tl.unit === "days" ? "day" : "hour") + '</td><td class="lc-how">' +
       'Guys times the round trip drive hours, one trip for each guy. On a job 70 miles or ' +
       'more from the office (any sheet but a Gyp bid) the estimate fills the hours in from the miles (60 mph, to the half hour) and ' +
@@ -4083,7 +4089,7 @@
       'sheet moves the job\'s travel to another sheet; an estimate saved earlier keeps its figures until one of those. Under 70 ' +
       'miles, and on a Gyp bid, the estimator types them. ' +
       'The rate is the Travel line on the Labor tab.</td><td class="rowact">' +
-      (ADMIN ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
+      (LISTS_EDIT ? '<button class="btn ghost sm" type="button" data-labcalc-goto-labor>Edit rate</button>' : "") +
       '</td></tr>';
     html += '</tbody></table></div></div></div>';
     html += calcSectionHtml();
@@ -4369,7 +4375,7 @@
       var c = CALC[l.id] || { mode: "" };
       // Sized by .qtycell (the Items tab's quantity row), not by a style attribute per box.
       var inp = function (f, label) {
-        return ADMIN
+        return LISTS_EDIT
           ? '<input class="num" type="text" inputmode="decimal" data-lcalc="' + esc(l.id) +
             '" data-f="' + f + '" value="' + esc(c[f] == null ? "" : c[f]) + '" aria-label="' +
             esc(l.name + " " + label) + '" />'
@@ -4382,7 +4388,7 @@
           ? '<div class="qtycell">' + inp("guys", "guys") + ' guys for ' + inp("days", "days") +
             ' days</div>'
           : "";
-      var modeCell = ADMIN
+      var modeCell = LISTS_EDIT
         ? '<select data-lcalc-mode="' + esc(l.id) + '" aria-label="' + esc(l.name) + ' mode">' +
           CALC_MODES.map(function (m) {
             return '<option value="' + m[0] + '"' + ((c.mode || "") === m[0] ? " selected" : "") + '>' +
@@ -4390,12 +4396,12 @@
           }).join("") + '</select>'
         : esc((CALC_MODES.filter(function (m) { return m[0] === (c.mode || ""); })[0] || [])[1] || "");
       var hpd = Number(c.hours_per_day) === 10 ? 10 : 8;
-      var hoursCell = !c.mode ? "" : ADMIN
+      var hoursCell = !c.mode ? "" : LISTS_EDIT
         ? '<select data-lcalc="' + esc(l.id) + '" data-f="hours_per_day" aria-label="' + esc(l.name) +
           ' hours a day"><option value="8"' + (hpd === 8 ? " selected" : "") + '>8</option>' +
           '<option value="10"' + (hpd === 10 ? " selected" : "") + '>10</option></select>'
         : String(hpd);
-      var rateCell = !c.mode ? "" : ADMIN
+      var rateCell = !c.mode ? "" : LISTS_EDIT
         ? '<span class="money"><span>$</span><input class="num cell-cost" type="text" ' +
           'inputmode="decimal" data-lcalc="' + esc(l.id) +
           '" data-f="rate" value="' + esc(c.rate == null ? "" : c.rate) + '" placeholder="' +

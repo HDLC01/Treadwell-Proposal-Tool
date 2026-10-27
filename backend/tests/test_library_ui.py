@@ -1295,6 +1295,16 @@ def test_a_regular_user_can_read_the_vendor_list_but_not_edit_it(ran):
 
 
 @needs_node
+def test_a_member_with_the_library_lists_grant_gets_the_editable_list(ran):
+    """Special permissions: the server lets a member with library_lists write vendors, divisions,
+    units and labor, so the page must draw the fields for her.
+    Mutation: read ADMIN instead of LISTS_EDIT in renderRefSection or renderVendors."""
+    v = ran["vendors"]
+    assert v["grantedGetsInputsAndDelete"], "a library_lists member got the read-only list"
+    assert v["grantedNotShownTheReadOnlyNote"]
+
+
+@needs_node
 def test_an_admin_gets_the_editable_list(ran):
     v = ran["vendors"]
     assert v["adminGetsInputs"] and v["adminGetsDelete"] and v["adminOfferedAdd"]
@@ -3622,6 +3632,9 @@ def test_changing_a_condition_default_saves_it_and_a_refusal_puts_it_back(ran):
         "a condition is listed or offered on the Seal tab; all three write Polish-sheet cells")
     assert c["viewerGetsEditOnly"], (
         "a non-admin is offered Remove or Add on a condition; the server refuses their write")
+    # Special permissions: a member with condition_defaults may PUT, so the controls are hers.
+    assert c["grantedGetsSliderAndRemove"], "a condition_defaults member got the read-only row"
+    assert c["grantedOfferedTheAdd"], "a condition_defaults member was offered no Add"
     assert c["offRowEscapesTypedText"], "a condition row printed an admin's typed text as HTML"
     assert c["refusedSavePutsItBack"], "a refused save left the new state on screen"
     assert c["refusedSaveSaysSo"], "a refused save said nothing"
