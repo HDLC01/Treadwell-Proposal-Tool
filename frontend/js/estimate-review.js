@@ -1059,6 +1059,20 @@ function renderBidOptions() {
     .reduce((s, t) => s + (HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0), 0);
   const baseBox = (val, checked, label) =>
     `<label class="bb-baselbl" title="Base bid: tick to give this its own proposal"><input type="checkbox" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}${childLocked ? " disabled" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
+  // ONE CHOICE PER SHEET. Hanz, 2026-10-27: "There should be an option to make multiple base bids and there should be
+  // an option to make it an option in one proposal". The base-bid box hid a sheet's option controls the moment it was
+  // ticked and showed them only unticked, so the two choices never stood side by side and the option road was not
+  // found. Each sheet now has one three-way switch: Base bid (its own proposal) | Option (inside the proposal, under
+  // the base) | Off. `segs` names the segments drawn ("base", "option", "off"); `role` the one that is on; `lock` the
+  // ones drawn disabled. The Base segment keeps the box's class (bb-base), so it takes the box's road in wireBidBar.
+  const roleSwitch = (t, role, segs, lock) => {
+    const v = _escBB(t.id), nm = _escBB("bb-role-" + t.id);
+    const one = (seg, cls, label) => segs.indexOf(seg) < 0 ? "" :
+      `<label class="bb-seg-btn${role === seg ? " on" : ""}"><input type="radio" class="${cls}" value="${v}" name="${nm}"` +
+      `${role === seg ? " checked" : ""}${lock.indexOf(seg) >= 0 ? " disabled" : ""}> ${label}</label>`;
+    return `<span class="bb-seg" role="radiogroup" aria-label="${_escBB(labelFor(t.id))}: base bid, option or off">` +
+      one("base", "bb-base", "Base bid") + one("option", "bb-isopt", "Option") + one("off", "bb-off", "Off") + `</span>`;
+  };
   let html = "";
   // Combo's combined base, as a real named chip and — the part this screen never had — the way
   // BACK from a single-sheet pick. Narrowing a combo to one sheet was one click and permanent
@@ -1083,11 +1097,20 @@ function renderBidOptions() {
     // one, so the moment Seal became visible the base bid was one click from a document the tool
     // cannot produce: role "seal" has no template, so effectiveWorkType falls back to the intake
     // type and the customer receives the Epoxy proposal carrying the seal's price.
-    const nameCell = isOptionOnlyRole(t.role)
+    const optOnly = isOptionOnlyRole(t.role);
+    const nameCell = optOnly
       ? `<span class="bb-name" title="Priced as an option only, never as the base bid">${_escBB(labelFor(t.id))}</span>`
-      : baseBox(t.id, isBase, labelFor(t.id));
+      : `<span class="bb-name">${_escBB(labelFor(t.id))}</span>`;
+    // The switch. A sheet inside a combo's combined base offers only Base bid (to bid it on its own): it cannot be an
+    // option against a base it is part of. A child's base bids are its parent's, so on a child the Base segment is
+    // read-only everywhere and a base bid's whole switch is; its other sheets' Option / Off stay its own.
+    const inCombined = !isBase && isPartOfAutoBase(t);
+    const role = isBase ? "base" : (isOpt ? "option" : "off");
+    const segs = inCombined ? ["base"] : (optOnly ? ["option", "off"] : ["base", "option", "off"]);
+    const lock = childLocked ? (isBase ? ["base", "option", "off"] : ["base"]) : [];
     let inner = nameCell +
-                `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
+                `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>` +
+                roleSwitch(t, inCombined ? "" : role, segs, lock);
     if (isBase) {
       // "Base Bid N", the label the Proposal card prints for the same sheet (TWPrice.baseLabelFor).
       inner += `<span class="bb-tag">${_escBB(TWPrice.baseLabelFor(state, t.id, tabOrder) || "base bid")}</span>`;
@@ -1104,11 +1127,11 @@ function renderBidOptions() {
       // double-count the rooms snapshot used to build.
       inner += `<span class="bb-tag">base bid</span>` +
         `<span class="bb-sub"><span class="bb-hint">Part of the combined base bid — ` +
-        `tick this sheet to bid it on its own.</span></span>`;
-    } else {
+        `choose Base bid to bid this sheet on its own.</span></span>`;
+    } else if (isOpt) {
+      // An Option's own controls, under the switch, exactly as the "add as option" box opened them.
       inner += `<span class="bb-sub">` +
-        `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
-        `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
+        `<span class="bb-optsub">` +
         `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
         // Marked an option but not shown = configured into thin air: the rooms snapshot drops
         // `show === false` rows, so it reaches neither the PDF nor the customer portal. That
@@ -1131,8 +1154,18 @@ function renderBidOptions() {
   // "+ Add another system" — reveals the cross-work-type chips (e.g. Epoxy/Polish
   // on a gyp job) so the estimator can mark them as options for a multi-system
   // bid. Only shown when there ARE hidden systems to reveal.
+  // Hanz, 2026-10-27: "I couldn't add more base bids". A third base bid is often a sheet of another system (the Gyp
+  // sheets on an epoxy job), and "+ Add another system" did not say that is where they were. The button names them.
   if (hasHiddenSystems) {
-    const lbl = revealSystems ? "− Fewer systems" : "+ Add another system";
+    // "Gyp, Leveling…": the systems behind the button, by role, in sheet order, three at most.
+    const kinds = [];
+    priced.filter(t => !defaultChipVisible(t)).forEach(t => {
+      const r = String(t.role || "").toLowerCase();
+      const n = r ? r.charAt(0).toUpperCase() + r.slice(1) : "";
+      if (n && kinds.indexOf(n) < 0) kinds.push(n);
+    });
+    const lbl = revealSystems ? "− Fewer sheets"
+      : "+ Show other sheets (" + kinds.slice(0, 3).join(", ") + (kinds.length > 3 ? "…" : "") + ")";
     html += `<span class="bb-opt bb-addsys"><button type="button" class="bb-addsys-btn">${_escBB(lbl)}</button></span>`;
   }
   list.innerHTML = html;
@@ -1146,10 +1179,9 @@ function renderBidOptions() {
       "<b>base&nbsp;bid</b> and the proposal prices them as Option&nbsp;1 and Option&nbsp;2. " +
       "Pick a single sheet only to bid that system <b>on its own</b>.";
   } else if (hint) {
-    // The same words estimate-review.html ships.
-    hint.innerHTML = "Tick a sheet's <b>Base&nbsp;bid</b> box to make it its own proposal " +
-      "(Base&nbsp;Bid&nbsp;1, 2, …). Tick <b>add&nbsp;as&nbsp;option</b> to add a sheet under the base. " +
-      "With two or more base bids ticked, press <b>Create Multiple Proposals</b> on the Proposal step.";
+    // The same words estimate-review.html ships, and the Proposal step's Pricing options card prints.
+    hint.innerHTML = "<b>Base&nbsp;bid</b> = its own proposal. <b>Option</b> = listed inside the proposal under the base. " +
+      "<b>Off</b> = not on the proposal. With two or more base bids, press <b>Create Multiple Proposals</b> on the Proposal step.";
   }
 }
 
@@ -1235,13 +1267,46 @@ function wireBidBar() {
     }
     const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;
     const o = ensureOpt(wrap.dataset.id);
-    if (el.classList.contains("bb-isopt")) {
-      o.is_option = el.checked;
-      // Reset `show`, don't merely default it: an option un-shown earlier stayed un-shown when
-      // re-enabled, so ticking "add as option" did nothing anywhere. Same fix as the Proposal
-      // screen's pr-isopt handler — the two strips write the same state and must agree.
-      if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
-      const sub = wrap.querySelector(".bb-optsub"); if (sub) sub.style.display = el.checked ? "" : "none";
+    if (el.classList.contains("bb-isopt") || el.classList.contains("bb-off")) {   // the switch's Option or Off
+      // A BASE BID switched to Option or Off leaves the base bids first, by the box's own rule (TWPrice.toggleBaseId):
+      // the pricing base hands Base Bid 1 to the next base bid, the last one is refused. A child's base bids are its
+      // parent's: its switch on a base bid is drawn disabled, and one fired at anyway changes nothing.
+      const order = tabs.map(t => t.id);
+      const priorBaseId = state.base_tab_id;
+      let patch = null;
+      if (TWPrice.baseIds(state, order).indexOf(wrap.dataset.id) >= 0) {
+        patch = TWPrice.isProposalChild(state) ? null : TWPrice.toggleBaseId(state, wrap.dataset.id, false, order);
+        if (!patch) {
+          renderBidOptions();   // the switch goes back to Base bid
+          const hint = document.getElementById("bid-options-hint");
+          if (hint && !TWPrice.isProposalChild(state)) {
+            hint.innerHTML = "A proposal needs a base bid. Make another sheet a Base bid first, then switch this one.";
+          }
+          return;
+        }
+      }
+      if (el.classList.contains("bb-isopt")) {
+        o.is_option = el.checked;
+        // Reset `show`, don't merely default it: an option un-shown earlier stayed un-shown when
+        // re-enabled, so ticking "add as option" did nothing anywhere. Same fix as the Proposal
+        // screen's pr-isopt handler — the two strips write the same state and must agree.
+        if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+      } else {
+        o.is_option = false;
+      }
+      if (patch) {
+        applyBasePatch(patch, priorBaseId);   // redraws, prices and saves (is_option with it)
+      } else {
+        renderBidOptions();   // the Option controls open or close under the switch
+        persistBidOptions();
+      }
+      // The redraw replaced the switch: keep the keyboard on it (arrow keys walk a radio group).
+      try {
+        const again = Array.from(list.querySelectorAll("input." + (el.classList.contains("bb-off") ? "bb-off" : "bb-isopt")))
+          .filter(x => x.value === wrap.dataset.id)[0];
+        if (again) again.focus();
+      } catch {}
+      return;
     } else if (el.classList.contains("bb-show")) {
       o.show = el.checked;
     } else if (el.classList.contains("bb-mode")) {

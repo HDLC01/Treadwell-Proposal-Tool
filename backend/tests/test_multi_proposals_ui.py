@@ -1,7 +1,8 @@
 """Several base bids on one estimate ("Create Multiple Proposals"), plan step 3: the v1 base picks.
 
-On a spreadsheet draft the Proposal step's Pricing options card draws a Base-bid CHECKBOX per sheet: every ticked sheet is a
-base bid, tagged "Base Bid N", and becomes its own proposal. The pricing base (base_tab_id) stays the one the page prices off,
+On a spreadsheet draft the Proposal step's Pricing options card draws one Base bid | Option | Off switch per sheet (Seal:
+Option | Off). Base bid = its own proposal, Option = listed inside the proposal under the base, Off = not on it. Every base
+bid is tagged "Base Bid N", and becomes its own proposal. The pricing base (base_tab_id) stays the one the page prices off,
 is Base Bid 1, and is kept inside the ticked list (base_tab_ids). A tick adds a base bid; unticking the base moves it to the
 next ticked sheet; the last one cannot be unticked. A child (a proposal the server made from another draft's estimate) shows
 its base read-only and links to Base Bid 1's proposal. The Estimate step keeps the list consistent (its Base-bid boxes, deleting a
@@ -46,7 +47,8 @@ def _checked(look):
 def test_a_spreadsheet_draft_draws_a_base_bid_checkbox_per_sheet(out):
     r = out["rows"]
     assert [b["value"] for b in r["boxes"]] == ["Polish", "Copy1", "Epoxy"], "no box on Seal, one on every other sheet"
-    assert all(b["type"] == "checkbox" and b["name"] is None and not b["disabled"] for b in r["boxes"])
+    # The Base segment of each sheet's Base bid | Option | Off switch: one radio group per sheet.
+    assert all(b["type"] == "radio" and b["name"] == "pr-role-" + b["value"] and not b["disabled"] for b in r["boxes"])
     assert _checked(r) == ["Epoxy"]
     assert r["tags"] == {"Polish": None, "Copy1": None, "Epoxy": "Base Bid 1", "Seal": None}
     assert r["base_tab_ids"] is None and r["anyBaseIdsSaved"] is False, "opening a draft writes no list it never had"
@@ -60,7 +62,8 @@ def test_a_tick_adds_a_base_bid_and_leaves_the_base_and_price_where_they_were(ou
     assert one["tags"]["Copy1"] == "Base Bid 2" and one["tags"]["Epoxy"] == "Base Bid 1"
     assert one["notes"]["Copy1"] == "This sheet is Base Bid 2: it gets its own proposal."
     assert one["copyIsOption"] is False and "Copy1" not in one["roomIds"], "a base bid is not also an option"
-    assert one["isopt"]["Copy1"] is False, "a ticked sheet offers no option controls"
+    assert one["role"]["Copy1"] == "pr-base" and one["optsub"]["Copy1"] is False, \
+        "a base bid's switch is on Base bid, its option controls closed"
     assert one["reloads"] == 0, "the base did not move, so the template is not reloaded"
     # the next tick numbers by the sheets' own order (priced_tabs: Polish before Copy1), the base staying Base Bid 1
     assert two["base_tab_ids"] == ["Epoxy", "Polish", "Copy1"] and two["saved"] == ["Epoxy", "Polish", "Copy1"]
@@ -100,6 +103,68 @@ def test_a_child_shows_its_base_read_only_and_links_to_base_bid_1(out):
         "a change forced at a child's box changes nothing"
     assert all(v is None for v in c["tags"].values()), "a child does not number itself"
     assert c["isopt"]["Epoxy"] is True and c["isopt"]["Polish"] is True, "the child's options stay its own to pick"
+
+
+# ── one switch per sheet: Base bid | Option | Off ───────────────────────────────────────────────────
+# Hanz, 2026-10-27: "you removed the functionality of a sheet to be an option in one proposal" ... "There should be an
+# option to make multiple base bids and there should be an option to make it an option in one proposal, get it?"
+SWITCH_REFUSED = "A proposal needs a base bid. Make another sheet a Base bid first, then switch this one."
+
+
+def test_every_sheet_has_the_three_way_switch_and_seal_has_no_base_bid(out):
+    s = out["sw"]
+    assert s["segsEpoxy"] == ["pr-base", "pr-isopt", "pr-off"]
+    assert s["segsSeal"] == ["pr-isopt", "pr-off"], "an option-only sheet is never a base bid"
+
+
+def test_base_plus_option_is_one_proposal_with_the_option_in_it(out):
+    o = out["sw"]["optionIn"]
+    assert o["ids"] == ["Epoxy"], "an Option is no second proposal"
+    assert o["polish"] is True and "Polish" in o["rooms"] and o["saved"] is True
+    assert o["role"]["Polish"] == "pr-isopt" and o["role"]["Epoxy"] == "pr-base"
+    assert o["optsub"] is True, "Option opens the show-in-proposal / price-as controls"
+
+
+def test_option_to_base_bid_clears_the_option_and_numbers_it(out):
+    o = out["sw"]["optToBase"]
+    assert o["ids"] == ["Epoxy", "Polish"] and o["polish"] is False and o["role"] == "pr-base"
+    assert o["tags"]["Polish"] == "Base Bid 2" and o["tags"]["Epoxy"] == "Base Bid 1"
+    assert out["sw"]["three"]["ids"] == ["Epoxy", "Polish", "Copy1"]
+    assert out["sw"]["three"]["tags"] == {"Polish": "Base Bid 2", "Copy1": "Base Bid 3", "Epoxy": "Base Bid 1", "Seal": None}
+
+
+def test_a_base_bid_switched_to_option_leaves_the_base_bids(out):
+    b = out["sw"]["baseToOption"]
+    assert b["base"] == "Epoxy" and b["ids"] == ["Epoxy"] and b["saved"] == ["Epoxy"]
+    assert b["copy"] is True and "Copy1" in b["rooms"] and b["role"] == "pr-isopt"
+    assert b["reloads"] == 0, "the pricing base did not move"
+
+
+def test_the_pricing_base_switched_away_hands_base_bid_1_on(out):
+    p = out["sw"]["pricingToOption"]
+    assert p["base"] == "Copy1" and p["ids"] == ["Copy1"] and p["epoxy"] is True and p["role"] == "pr-isopt"
+    assert p["tags"]["Copy1"] == "Base Bid 1" and p["reloads"] == 1
+    f = out["sw"]["pricingToOff"]
+    assert f == {"base": "Copy1", "ids": ["Copy1"], "epoxy": False, "role": "pr-off"}
+
+
+def test_an_option_switched_off_leaves_the_proposal(out):
+    assert out["sw"]["optionOff"]["polish"] is False and out["sw"]["optionOff"]["role"] == "pr-off"
+    assert "Polish" not in out["sw"]["optionOff"]["rooms"]
+
+
+def test_the_last_base_bid_cannot_be_switched_off_or_to_option(out):
+    last = out["sw"]["last"]
+    assert last["off"] == {"base": "Epoxy", "ids": None, "epoxy": False, "role": "pr-base", "note": SWITCH_REFUSED, "saves": 0}
+    assert last["option"] == {"base": "Epoxy", "epoxy": False, "role": "pr-base"}
+
+
+def test_a_childs_base_segments_are_read_only_and_its_options_are_its_own(out):
+    c = out["sw"]["child"]
+    assert c["segs"]["Copy1"] == ["pr-base:disabled", "pr-isopt:disabled", "pr-off:disabled"], "its base bid is its parent's"
+    assert c["segs"]["Epoxy"] == ["pr-base:disabled", "pr-isopt", "pr-off"]
+    assert c["copyFired"] is False and c["epoxyFired"] is True and c["epoxy"] is True
+    assert c["base"] == "Copy1" and c["ids"] == ["Copy1"]
 
 
 def test_a_v2_draft_keeps_its_read_only_radios(out):
@@ -200,7 +265,7 @@ def test_a_draft_on_its_own_has_no_strip_and_an_off_button_that_says_why(out):
     a = out["page"]["alone"]
     assert a["before"]["stripHidden"] is True and a["before"]["tabs"] == [] and a["before"]["note"]["hidden"] is True
     assert a["before"]["multi"]["disabled"] is True and a["before"]["multi"]["hidden"] is False
-    assert a["before"]["multi"]["title"].startswith("Tick two or more sheets as a Base bid")
+    assert a["before"]["multi"]["title"].startswith("Set two or more sheets to Base bid")
     assert a["afterTick"]["disabled"] is False, "a second tick in the Pricing options card turns the button on"
     assert a["pressedOff"]["log"] == [], "an off button asks nothing"
 
@@ -309,9 +374,46 @@ def test_every_intake_and_estimate_page_stops_on_a_child(out):
 
 # ── the checks go red when the code changes ──────────────────────────────────────────────────────
 BREAKS = {
-    "the base control is still a radio": (
-        "js/proposal-review.js", '          const baseKind = v2Locked ? "radio" : "checkbox";', '          const baseKind = "radio";',
-        lambda r: any(b["type"] != "checkbox" for b in r["rows"]["boxes"])),
+    "the switch has no Option segment": (
+        "js/proposal-review.js",
+        '                seg("base", "pr-base", "Base bid") + seg("option", "pr-isopt", "Option") + seg("off", "pr-off", "Off") + `</div>`;',
+        '                seg("base", "pr-base", "Base bid") + seg("off", "pr-off", "Off") + `</div>`;',
+        lambda r: r["sw"]["segsEpoxy"] != ["pr-base", "pr-isopt", "pr-off"]),
+    "Seal gets a Base segment": (
+        "js/proposal-review.js",
+        '              const segs = inCombined ? ["base"] : (isOptionOnlyTab(t) ? ["option", "off"] : ["base", "option", "off"]);',
+        '              const segs = inCombined ? ["base"] : ["base", "option", "off"];',
+        lambda r: r["sw"]["segsSeal"] != ["pr-isopt", "pr-off"]),
+    "a base bid switched to Option stays a base bid": (
+        "js/proposal-review.js", "              if (iso.checked && leaveBaseBids(row, id, true)) return;   // a base bid switched to Option",
+        "              void 0;",
+        lambda r: r["sw"]["baseToOption"]["ids"] != ["Epoxy"] or r["sw"]["pricingToOption"]["base"] != "Copy1"),
+    "a base bid switched Off stays a base bid": (
+        "js/proposal-review.js", "              if (leaveBaseBids(row, id, false)) return;   // a base bid switched Off",
+        "              void 0;",
+        lambda r: r["sw"]["pricingToOff"]["base"] != "Copy1"),
+    "Off does not clear the option": (
+        "js/proposal-review.js", "              ensureOpt(id).is_option = false;", "              void 0;",
+        lambda r: r["sw"]["optionOff"]["polish"] is not False),
+    "leaving the base bids skips the base-change path": (
+        "js/proposal-review.js", '            if (b) { b.checked = false; b.dispatchEvent(new Event("change")); }', "            void 0;",
+        lambda r: r["sw"]["baseToOption"]["ids"] != ["Epoxy"] or r["sw"]["pricingToOption"]["reloads"] != 1),
+    "a base bid switched to Option is not an option": (
+        "js/proposal-review.js", "            o.is_option = !!toOpt;", "            o.is_option = false;",
+        lambda r: r["sw"]["baseToOption"]["copy"] is not True),
+    "the last base bid can be switched off": (
+        "js/proposal-review.js", "            if (!TWPrice.toggleBaseId(state, id, false)) {", "            if (false) {",
+        lambda r: r["sw"]["last"]["off"]["role"] != "pr-base" or r["sw"]["last"]["off"]["note"] != SWITCH_REFUSED),
+    "a child's base bid switch is live": (
+        "js/proposal-review.js",
+        '              const lock = childOf ? (segBase ? ["base", "option", "off"] : ["base"]) : [];',
+        '              const lock = childOf ? ["base"] : [];',
+        lambda r: r["sw"]["child"]["segs"]["Copy1"] != ["pr-base:disabled", "pr-isopt:disabled", "pr-off:disabled"]),
+    "a child's options are locked too": (
+        "js/proposal-review.js",
+        '              const lock = childOf ? (segBase ? ["base", "option", "off"] : ["base"]) : [];',
+        '              const lock = childOf ? ["base", "option", "off"] : [];',
+        lambda r: r["sw"]["child"]["epoxy"] is not True),
     "a ticked second sheet is not drawn ticked": (
         "js/proposal-review.js", "            const isOtherBase = !isBase && tickIds.indexOf(t.id) >= 0;",
         "            const isOtherBase = false;",

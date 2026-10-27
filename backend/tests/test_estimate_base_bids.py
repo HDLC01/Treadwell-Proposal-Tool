@@ -41,12 +41,13 @@ def out():
     return run()
 
 
-def test_every_base_able_sheet_has_a_base_bid_checkbox(out):
+def test_every_base_able_sheet_has_a_base_bid_segment(out):
+    # The Base segment of each sheet's Base bid | Option | Off switch (one radio group per sheet).
     m = out["multiBase"]
     assert m["boxes"] == [
-        {"id": "Epoxy", "type": "checkbox", "checked": True, "disabled": False},
-        {"id": "Polish", "type": "checkbox", "checked": False, "disabled": False},
-        {"id": "Copy1", "type": "checkbox", "checked": True, "disabled": False},
+        {"id": "Epoxy", "type": "radio", "checked": True, "disabled": False},
+        {"id": "Polish", "type": "radio", "checked": False, "disabled": False},
+        {"id": "Copy1", "type": "radio", "checked": True, "disabled": False},
     ]
 
 
@@ -58,7 +59,7 @@ def test_the_tags_read_as_the_proposal_card_reads_them(out):
     assert out["multiFreshCopy"]["copyTag"] == "Base Bid 2", "a copy not priced yet lost its number"
 
 
-def test_a_ticked_sheet_shows_no_option_controls(out):
+def test_a_base_bid_shows_no_option_controls(out):
     assert out["multiBase"]["copyOffersOption"] is False
     assert out["multiBase"]["polishOffersOption"] is True
 
@@ -69,7 +70,81 @@ def test_seal_has_no_base_bid_box(out):
 
 def test_the_legend_explains_several_base_bids(out):
     assert HINT in out["multiBase"]["hint"]
-    assert "add&nbsp;as&nbsp;option" in out["multiBase"]["hint"]
+    assert "<b>Option</b> = listed inside the proposal under the base" in out["multiBase"]["hint"]
+    assert "<b>Off</b> = not on the proposal" in out["multiBase"]["hint"]
+
+
+# ── one switch per sheet: Base bid | Option | Off ───────────────────────────────────────────────────
+# Hanz, 2026-10-27: "you removed the functionality of a sheet to be an option in one proposal" ... "I couldn't add more
+# base bids as well to create 3 or more proposals" ... "There should be an option to make multiple base bids and there
+# should be an option to make it an option in one proposal, get it?"
+SWITCH_REFUSED = "A proposal needs a base bid. Make another sheet a Base bid first, then switch this one."
+
+
+def test_every_sheet_has_the_three_way_switch_and_seal_has_no_base_bid(out):
+    s = out["sw"]
+    assert s["segs"] == {"Epoxy": ["bb-base", "bb-isopt", "bb-off"], "Polish": ["bb-base", "bb-isopt", "bb-off"],
+                         "Seal": ["bb-isopt", "bb-off"]}
+    assert s["roles"] == {"Epoxy": "bb-base", "Polish": "bb-off"}
+
+
+def test_base_plus_option_is_one_proposal_with_the_option_in_it(out):
+    o = out["sw"]["optionIn"]
+    assert o["base_tab_id"] == "Epoxy" and o["ids"] == ["Epoxy"] and o["base_tab_ids"] is None, o
+    assert o["polish"] is True and o["role"] == "bb-isopt" and o["controls"] is True and o["persisted"] == 1
+    assert o["basePicks"] == []
+
+
+def test_option_to_base_bid_clears_the_option(out):
+    o = out["sw"]["optToBase"]
+    assert o["base_tab_ids"] == ["Epoxy", "Polish"] and o["polish"] is False and o["role"] == "bb-base"
+    assert o["tag"] == "Base Bid 2" and o["persisted"] == 1
+
+
+def test_three_base_bids_with_a_sheet_from_behind_show_other_sheets(out):
+    t = out["sw"]["three"]
+    assert t["showLabel"] == "+ Show other sheets (Gyp)" and t["gypBefore"] is False
+    assert t["base_tab_ids"] == ["Epoxy", "Polish", "Gyp"]
+    assert t["tags"] == {"Epoxy": "Base Bid 1", "Polish": "Base Bid 2", "Gyp": "Base Bid 3"}
+
+
+def test_a_base_bid_switched_to_option_leaves_the_base_bids(out):
+    b = out["sw"]["baseToOption"]
+    assert b["base_tab_id"] == "Epoxy" and b["base_tab_ids"] == ["Epoxy"] and b["copy"] is True
+    assert b["role"] == "bb-isopt" and b["persisted"] == 1 and b["basePicks"] == []
+
+
+def test_the_pricing_base_switched_away_hands_base_bid_1_on(out):
+    p = out["sw"]["pricingToOption"]
+    assert p["base_tab_id"] == "Copy1" and p["base_tab_ids"] == ["Copy1"] and p["epoxy"] is True
+    assert p["basePicks"] == [["Epoxy", "Copy1"]] and p["persisted"] == 1 and p["role"] == "bb-isopt"
+    f = out["sw"]["pricingToOff"]
+    assert f["base_tab_id"] == "Copy1" and f["epoxy"] is False and f["role"] == "bb-off"
+    assert f["basePicks"] == [["Epoxy", "Copy1"]]
+
+
+def test_an_option_switched_off(out):
+    o = out["sw"]["optionOff"]
+    assert o["polish"] is False and o["role"] == "bb-off" and o["persisted"] == 1
+
+
+def test_the_last_base_bid_cannot_be_switched_off_or_to_option(out):
+    last = out["sw"]["last"]
+    for k in ("off", "option"):
+        assert last[k]["base_tab_id"] == "Epoxy" and last[k]["persisted"] == 0, last[k]
+        assert last[k]["epoxy"] is False and last[k]["role"] == "bb-base", last[k]
+    assert last["off"]["hint"] == SWITCH_REFUSED
+
+
+def test_a_childs_base_segments_are_read_only_and_its_options_are_its_own(out):
+    c = out["sw"]["child"]
+    assert c["segsCopy"] == ["bb-base:disabled", "bb-isopt:disabled", "bb-off:disabled"]
+    assert c["segsEpoxy"] == ["bb-base:disabled", "bb-isopt", "bb-off"]
+    assert c["epoxy"] is True and c["copy"] is False
+    assert c["base_tab_id"] == "Copy1" and c["base_tab_ids"] == ["Copy1"] and c["basePicks"] == []
+    t = out["sw"]["childTwo"]
+    assert t["base_tab_ids"] == ["Copy1", "Polish"] and t["polish"] is False and t["persisted"] == 0, \
+        "a child's base bids are its parent's: Option forced at one changes nothing"
 
 
 def test_a_tick_adds_a_base_bid_and_takes_it_off_the_options(out):
@@ -100,7 +175,7 @@ def test_the_last_base_bid_cannot_be_unticked(out):
 
 def test_a_ticked_cross_type_sheet_stays_on_the_bar(out):
     c = out["multiCrossType"]
-    assert c["gypBox"] == {"id": "Gyp", "type": "checkbox", "checked": True, "disabled": False}
+    assert c["gypBox"] == {"id": "Gyp", "type": "radio", "checked": True, "disabled": False}
     assert c["gypTag"] == "Base Bid 2"
 
 
@@ -154,10 +229,49 @@ def test_a_child_has_no_make_base_bid_1(out):
 
 ER = "js/estimate-review.js"
 BREAKS = {
-    "the box is a radio again": (
+    "the combined chip's box is a radio again": (
         ER, '    `<label class="bb-baselbl" title="Base bid: tick to give this its own proposal"><input type="checkbox" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}${childLocked ? " disabled" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;',
         '    `<label class="bb-baselbl"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}${childLocked ? " disabled" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;',
-        lambda r: [b["type"] for b in r["multiBase"]["boxes"]] != ["checkbox"] * 3),
+        lambda r: (r["multiCombo"]["combinedBox"] or {}).get("type") != "checkbox"),
+    "the switch has no Option segment": (
+        ER, '      one("base", "bb-base", "Base bid") + one("option", "bb-isopt", "Option") + one("off", "bb-off", "Off") + `</span>`;',
+        '      one("base", "bb-base", "Base bid") + one("off", "bb-off", "Off") + `</span>`;',
+        lambda r: r["sw"]["segs"]["Epoxy"] != ["bb-base", "bb-isopt", "bb-off"]),
+    "Seal gets a Base segment": (
+        ER, '    const segs = inCombined ? ["base"] : (optOnly ? ["option", "off"] : ["base", "option", "off"]);',
+        '    const segs = inCombined ? ["base"] : ["base", "option", "off"];',
+        lambda r: r["sw"]["segs"]["Seal"] != ["bb-isopt", "bb-off"]),
+    "an Option opens no controls": (
+        ER, "    } else if (isOpt) {", "    } else if (false) {",
+        lambda r: r["sw"]["optionIn"]["controls"] is not True),
+    "a base bid switched to Option stays a base bid": (
+        ER, "      if (TWPrice.baseIds(state, order).indexOf(wrap.dataset.id) >= 0) {", "      if (false) {",
+        lambda r: r["sw"]["baseToOption"]["base_tab_ids"] != ["Epoxy"] or r["sw"]["pricingToOption"]["base_tab_id"] != "Copy1"),
+    "leaving the base bids skips the base-change path": (
+        ER, "        applyBasePatch(patch, priorBaseId);   // redraws, prices and saves (is_option with it)", "        void 0;",
+        lambda r: r["sw"]["pricingToOption"]["base_tab_id"] != "Copy1" or r["sw"]["pricingToOption"]["basePicks"] != [["Epoxy", "Copy1"]]),
+    "Off does not clear the option": (
+        ER, "        o.is_option = false;", "        void 0;",
+        lambda r: r["sw"]["optionOff"]["polish"] is not False),
+    "the last base bid can be switched off": (
+        ER, "        if (!patch) {", "        if (false) {",
+        lambda r: r["sw"]["last"]["off"]["role"] != "bb-base" or r["sw"]["last"]["off"]["persisted"] != 0),
+    "a refused switch says nothing": (
+        ER, '            hint.innerHTML = "A proposal needs a base bid. Make another sheet a Base bid first, then switch this one.";',
+        "            void 0;",
+        lambda r: r["sw"]["last"]["off"]["hint"] != SWITCH_REFUSED),
+    "a child's base bid switch is live": (
+        ER, '    const lock = childLocked ? (isBase ? ["base", "option", "off"] : ["base"]) : [];',
+        '    const lock = childLocked ? ["base"] : [];',
+        lambda r: r["sw"]["child"]["segsCopy"] != ["bb-base:disabled", "bb-isopt:disabled", "bb-off:disabled"]),
+    "a forced Option on a child's base bid is honoured": (
+        ER, "        patch = TWPrice.isProposalChild(state) ? null : TWPrice.toggleBaseId(state, wrap.dataset.id, false, order);",
+        "        patch = TWPrice.toggleBaseId(state, wrap.dataset.id, false, order);",
+        lambda r: r["sw"]["childTwo"]["base_tab_ids"] != ["Copy1", "Polish"] or r["sw"]["childTwo"]["polish"] is not False),
+    "the other sheets stay hidden behind an unnamed button": (
+        ER, '      : "+ Show other sheets (" + kinds.slice(0, 3).join(", ") + (kinds.length > 3 ? "…" : "") + ")";',
+        '      : "+ Add another system";',
+        lambda r: r["sw"]["three"]["showLabel"] != "+ Show other sheets (Gyp)"),
     "a ticked sheet is not drawn ticked": (
         ER, "      && (baseId === t.id || soloBase === t.id || tickIds.indexOf(t.id) >= 0);",
         "      && (baseId === t.id || soloBase === t.id);",

@@ -101,6 +101,8 @@ class El {
   }
   addEventListener(type, f) { this._listeners.set(type, (this._listeners.get(type) || []).concat([f])); }
   handlers(type) { return this._listeners.get(type) || []; }
+  /** The page's own re-dispatch (a base bid switched to Option or Off re-fires its Base-bid control's change). */
+  dispatchEvent(e) { return this.fire(e.type); }
   /** What a browser does with a change on a control: a DISABLED control takes no event at all. */
   fire(type, props) {
     if ("disabled" in this.attrs) return false;
@@ -160,6 +162,7 @@ function open(st) {
   return { st, api, panel, sets, reloads };
 }
 
+const SEGS = ["pr-base", "pr-isopt", "pr-off"];
 const boxes = (p) => p.panel.querySelectorAll("input.pr-base");
 const boxOf = (p, id) => boxes(p).filter((b) => b.attrs.value === id)[0] || null;
 const rowOf = (p, id) => p.panel.querySelectorAll(".op-row").filter((r) => r.dataset.id === id)[0] || null;
@@ -182,7 +185,24 @@ function look(p) {
       const n = r.querySelector(".pr-base-note");
       return [r.dataset.id, n ? n.textContent : null];
     })),
-    isopt: Object.fromEntries(p.panel.querySelectorAll(".op-row").map((r) => [r.dataset.id, !!r.querySelector(".pr-isopt")])),
+    // An Option control the estimator can use (the switch's Option segment, or a v2 card's box), not drawn disabled.
+    isopt: Object.fromEntries(p.panel.querySelectorAll(".op-row").map((r) => {
+      const i = r.querySelector(".pr-isopt");
+      return [r.dataset.id, !!i && !("disabled" in i.attrs)];
+    })),
+    // The switch: which segment is on, and the segments drawn (":disabled" on a read-only one).
+    role: Object.fromEntries(p.panel.querySelectorAll(".op-row").map((r) => {
+      const on = SEGS.filter((c) => { const i = r.querySelector("input." + c); return i && i.checked; })[0];
+      return [r.dataset.id, on || null];
+    })),
+    segs: Object.fromEntries(p.panel.querySelectorAll(".op-row").map((r) => [r.dataset.id, SEGS
+      .filter((c) => r.querySelector("input." + c))
+      .map((c) => c + ("disabled" in r.querySelector("input." + c).attrs ? ":disabled" : ""))])),
+    // The option's own controls (show in proposal, price as) open under the switch.
+    optsub: Object.fromEntries(p.panel.querySelectorAll(".op-row").map((r) => {
+      const s = r.querySelector(".pr-optsub");
+      return [r.dataset.id, !!s && !!r.querySelector(".pr-show") && !/display:\s*none/.test(s.style.raw || "")];
+    })),
     locked: (() => { const h = p.panel.querySelector(".pr-base-locked"); return h ? h.textContent : null; })(),
     parentLink: (() => { const a = p.panel.querySelector(".pr-parent-link"); return a ? a.attrs.href : null; })(),
     base_tab_id: p.st.base_tab_id === undefined ? null : p.st.base_tab_id,
@@ -329,6 +349,73 @@ out.core = (() => {
     child: [T.isProposalChild({ proposal_of: "P-1" }), T.isProposalChild({ proposal_of: "" }), T.isProposalChild({}),
             T.isProposalChild(null), T.isProposalChild({ proposal_of: 5 })],
   };
+})();
+
+// 10b. ONE SWITCH PER SHEET (Base bid | Option | Off). Hanz, 2026-10-27: "There should be an option to make multiple base
+//      bids and there should be an option to make it an option in one proposal". Each step picks one segment of one
+//      sheet's switch, as a person does (a disabled segment takes no event).
+function choose(p, id, cls) {
+  const r = rowOf(p, id);
+  const b = r ? r.querySelector("input." + cls) : null;
+  if (!b) throw new Error("no " + cls + " segment for " + JSON.stringify(id));
+  b.checked = true;
+  return b.fire("change");
+}
+const opt = (p, id) => (p.st.tab_opts[id] || {}).is_option === true;
+out.sw = (() => {
+  const T = globalThis.TWPrice;
+  const r = {};
+  // Epoxy the base, Polish an Option: ONE proposal carrying Polish as its option.
+  let p = open(sheet("epoxy"));
+  r.segsSeal = look(p).segs.Seal;
+  r.segsEpoxy = look(p).segs.Epoxy;
+  choose(p, "Polish", "pr-isopt");
+  r.optionIn = { ids: T.baseIds(p.st), polish: opt(p, "Polish"), rooms: (p.st.rooms || []).map((x) => x.id),
+                 role: look(p).role, optsub: look(p).optsub.Polish, saved: !!(merged(p).tab_opts || {}).Polish };
+  // Option -> Base bid: no longer an option, Base Bid 2.
+  choose(p, "Polish", "pr-base");
+  r.optToBase = { ids: clone(p.st.base_tab_ids), polish: opt(p, "Polish"), tags: look(p).tags, role: look(p).role.Polish };
+  // Three base bids.
+  choose(p, "Copy1", "pr-base");
+  r.three = { ids: clone(p.st.base_tab_ids), tags: look(p).tags };
+  // Base bid -> Option on a base bid that is not the pricing base: it leaves the list, and is an option.
+  p = open(sheet("epoxy"));
+  choose(p, "Copy1", "pr-base");
+  choose(p, "Copy1", "pr-isopt");
+  r.baseToOption = { base: p.st.base_tab_id, ids: clone(p.st.base_tab_ids), copy: opt(p, "Copy1"), reloads: p.reloads.length,
+                     saved: clone(merged(p).base_tab_ids), rooms: (p.st.rooms || []).map((x) => x.id), role: look(p).role.Copy1 };
+  // The pricing base -> Option: Base Bid 1 goes to the next base bid, the page re-prices and reloads.
+  p = open(sheet("epoxy"));
+  choose(p, "Copy1", "pr-base");
+  choose(p, "Epoxy", "pr-isopt");
+  r.pricingToOption = { base: p.st.base_tab_id, ids: clone(p.st.base_tab_ids), epoxy: opt(p, "Epoxy"), reloads: p.reloads.length,
+                        tags: look(p).tags, role: look(p).role.Epoxy };
+  // The pricing base -> Off.
+  p = open(sheet("epoxy"));
+  choose(p, "Copy1", "pr-base");
+  choose(p, "Epoxy", "pr-off");
+  r.pricingToOff = { base: p.st.base_tab_id, ids: clone(p.st.base_tab_ids), epoxy: opt(p, "Epoxy"), role: look(p).role.Epoxy };
+  // An Option switched Off.
+  p = open(sheet("epoxy"));
+  choose(p, "Polish", "pr-isopt");
+  choose(p, "Polish", "pr-off");
+  r.optionOff = { polish: opt(p, "Polish"), role: look(p).role.Polish, rooms: (p.st.rooms || []).map((x) => x.id) };
+  // The last base bid: refused, the switch stays on Base bid, the row says why.
+  p = open(sheet("epoxy"));
+  const setsBefore = p.sets.length;
+  choose(p, "Epoxy", "pr-off");
+  const offTry = { base: p.st.base_tab_id, ids: p.st.base_tab_ids === undefined ? null : p.st.base_tab_ids,
+                   epoxy: opt(p, "Epoxy"), role: look(p).role.Epoxy, note: look(p).notes.Epoxy, saves: p.sets.length - setsBefore };
+  choose(p, "Epoxy", "pr-isopt");
+  r.last = { off: offTry, option: { base: p.st.base_tab_id, epoxy: opt(p, "Epoxy"), role: look(p).role.Epoxy } };
+  // A child: the Base segments and its base bid's switch are read-only; its other sheets' Option / Off are its own.
+  p = open(sheet("epoxy", (s) => { s.proposal_of = "PARENT-1"; s.base_tab_id = "Copy1"; s.base_tab_ids = ["Copy1"]; }));
+  r.child = { segs: look(p).segs };
+  const copyFired = choose(p, "Copy1", "pr-isopt");
+  const epoxyFired = choose(p, "Epoxy", "pr-isopt");
+  Object.assign(r.child, { copyFired, epoxyFired, epoxy: opt(p, "Epoxy"), copy: opt(p, "Copy1"),
+                           base: p.st.base_tab_id, ids: clone(p.st.base_tab_ids) });
+  return r;
 })();
 
 // ── the Estimate step ────────────────────────────────────────────────────────────────────────────────────────────

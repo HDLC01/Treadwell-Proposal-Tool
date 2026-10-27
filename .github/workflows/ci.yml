@@ -115,18 +115,26 @@ jobs:
             echo "no green run on this tree -- running the suite"
           fi
 
-  # THE SUITE RUNS IN 4 CHUNKS AT ONCE (2026-10-27). One runner took ~40 minutes for ~13,900 tests,
-  # a third of it the polish-travel sequence walks. Each shard runs a disjoint quarter of the test
-  # FILES (.github/scripts/shard_tests.py; backend/tests/test_ci_shards.py proves they cover every
-  # file exactly once), so the whole suite still runs on every PR, just on four machines. This is
-  # parallelism, not selection: nothing is skipped because a change looks small.
+  # THE SUITE RUNS IN 7 SHARDS AT ONCE (2026-10-27). One runner took ~40 minutes for ~13,900 tests,
+  # a third of it the polish-travel sequence walks. Every test FILE lands in exactly one shard
+  # (.github/scripts/shard_tests.py; backend/tests/test_ci_shards.py proves it), so the whole suite
+  # still runs on every PR. This is parallelism, not selection: nothing is skipped because a change
+  # looks small. The 4-shard version took 5-20 minutes because one heavy file (~11 min) sat on one
+  # core under --dist loadfile; the heavy files now have 2 shards of their own run --dist load.
   shard:
     needs: fingerprint
-    name: tests (chunk ${{ matrix.shard }} of 4)
+    name: tests (${{ matrix.group }} shard ${{ matrix.shard }} of ${{ matrix.total }})
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        include:
+          - { group: heavy, shard: 1, total: 2, dist: load }
+          - { group: heavy, shard: 2, total: 2, dist: load }
+          - { group: rest, shard: 1, total: 5, dist: loadfile }
+          - { group: rest, shard: 2, total: 5, dist: loadfile }
+          - { group: rest, shard: 3, total: 5, dist: loadfile }
+          - { group: rest, shard: 4, total: 5, dist: loadfile }
+          - { group: rest, shard: 5, total: 5, dist: loadfile }
     # The job still EXISTS when skipped, so the check stays satisfied. Only the expensive steps
     # are gated.
     runs-on: ubuntu-latest
@@ -196,7 +204,9 @@ jobs:
       # whichever worker is free, which re-runs every module-scoped fixture once per worker per
       # file — this suite has ~35 node-harness fixtures written to run exactly once — and it
       # discards the intra-file ordering that tests/test_leads.py documents. loadfile keeps each
-      # file whole on one worker, so both stay true.
+      # file whole on one worker, so both stay true. The ONE exception is the heavy group (the
+      # polish-travel sequence walks, which share no module state: each test spawns its own node
+      # process), run --dist load so its slow single tests spread over every core.
       #
       # --durations comes from backend/pytest.ini, so every run names its own slowest tests.
       - name: Run tests
@@ -207,10 +217,10 @@ jobs:
           # the job — which is the designed outcome, but the job is meant to be GREEN and
           # actually comparing, not red.
           TW_PORTAL_REPO: ${{ github.workspace }}/portal
-        run: python -m pytest $(python ../.github/scripts/shard_tests.py ${{ matrix.shard }} 4 tests) -q -n auto --dist loadfile
+        run: python -m pytest $(python ../.github/scripts/shard_tests.py ${{ matrix.group }} ${{ matrix.shard }} ${{ matrix.total }} tests) -q -n auto --dist ${{ matrix.dist }}
 
-  # THE REQUIRED CHECK. Branch protection requires a check named `test`; the four chunks above
-  # have their own names, so this job is the single name that is green only when every chunk is.
+  # THE REQUIRED CHECK. Branch protection requires a check named `test`; the shards above have
+  # their own names, so this job is the single name that is green only when every shard is.
   test:
     needs: shard
     if: always()
@@ -218,9 +228,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Every chunk must have passed
+      - name: Every shard must have passed
         run: |
-          echo "chunks: ${{ needs.shard.result }}"
+          echo "shards: ${{ needs.shard.result }}"
           test "${{ needs.shard.result }}" = "success"
 
   audit:
