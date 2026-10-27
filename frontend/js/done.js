@@ -1751,11 +1751,23 @@
             r.style.display = "";
             r.textContent = "";
             if (scoped) {
+              // ONE OF SEVERAL PROPOSALS MADE FROM ONE ESTIMATE ("Create Multiple Proposals", 2026-10-27): said
+              // as a proposal of N (GET /api/draft/{id}/proposals, the proposal page's own tab list). A scope
+              // made the older way, or a list that cannot be read, keeps the scope wording.
+              let ofN = 0;
+              try {
+                const pv = TW.readProposals ? await TW.readProposals(draftId) : null;
+                ofN = pv && Array.isArray(pv.members) && pv.members.length >= 2 ? pv.members.length : 0;
+              } catch { ofN = 0; }
               const s = document.createElement("p");
               s.className = "portal-scope";
-              s.textContent = "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
-                + "one scope of this project. The customer has not been emailed about it yet: the project's one email, "
-                + "which names every new or revised scope, is sent from the project's drawer on the board.";
+              s.textContent = ofN
+                ? "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                  + "one of " + ofN + " proposals of this project. The customer has not been emailed about it yet: the project's "
+                  + "one email, which names every new or revised proposal, is sent from the project's drawer on the board."
+                : "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                  + "one scope of this project. The customer has not been emailed about it yet: the project's one email, "
+                  + "which names every new or revised scope, is sent from the project's drawer on the board.";
               r.appendChild(s);
             }
             // NO LINK AND NO RECIPIENT LIST. Removed on Hanz's ask (2026-08-26). The URL is a

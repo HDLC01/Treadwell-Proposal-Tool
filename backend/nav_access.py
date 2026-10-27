@@ -85,7 +85,10 @@ _VERSION = 1
 #   * /api/draft/*, /api/drafts,
 #     /api/estimators,
 #     /api/generate, /api/file/* — the wizard, which has no sidebar row of its own. Gating any of
-#                                 them stops the tool making proposals.
+#                                 them stops the tool making proposals. That includes the scope
+#                                 routes (/scope, /split) and, since 2026-10-27, Create Multiple
+#                                 Proposals' /proposals and /proposals/refresh, which the proposal
+#                                 step calls: claimed here, under /api/draft/*, on purpose.
 #
 # So those five tabs are PAGE-REFUSAL ONLY: the tab leaves the menu and the page paints a refusal
 # card, but their data stays reachable to somebody who types the URL and knows the route. The Admin

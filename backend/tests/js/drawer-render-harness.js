@@ -372,6 +372,10 @@ function makeDom() {
       children: [],
       removed: false,
       appendChild(n) { this.children.push(n); if (n) n.parent = this; return n; },
+      // The project workbook's download (wireScope, 2026-10-27): an <a download> appended to the
+      // body, clicked, and taken out again. Counted, so "the file was saved" is read, not assumed.
+      removeChild(n) { if (n) n.detached = true; return n; },
+      click() { this.clicks = (this.clicks || 0) + 1; },
       remove() { this.removed = true; },
       addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
       removeEventListener() {},
@@ -415,6 +419,7 @@ function makeDom() {
   // page holds, so what a test can honestly ask about it is where it was appended and what was
   // set on it — which is precisely the pair that regressed when the caption arrived.
   dom.made = [];
+  dom.body = makeEl("body");
   dom.create = (tag) => {
     const el = makeEl("made:" + tag + ":" + dom.made.length);
     el.tagName = String(tag).toUpperCase();
@@ -845,7 +850,7 @@ const injected = [
                  // markup ships without a src. A created node is NOT in dom.html (nothing parses
                  // it back into the bag of markup), so what it proves is where the node was put
                  // and what was set on it, which is exactly what regressed.
-                 createElement: (tag) => dom.create(tag) }],
+                 createElement: (tag) => dom.create(tag), body: dom.body }],
   // No createObjectURL in Node, and portal.js never calls `new URL(...)`, so a two-method stub is
   // the whole surface. Recorded, because "was an object URL minted for this id" is how the
   // per-id cache is checked without reaching into ATT_URLS.
@@ -2593,29 +2598,92 @@ async function runScenario(name, s) {
     dom.paints = 0;
     page.renderNotSent("scope-a", nsRow);
     out.scope.notSent = { html: dom.html, missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
-    net.requests.length = 0;
-    await q("#scope-new-btn").fire("click");
-    out.scope.emptyLabel = { note: q("#scope-note").textContent, requests: net.requests.length };
-    q("#scope-new-label").value = "  Lab   3 ";
-    fuNet.answers = [[/\/api\/draft\/scope-a\/scope$/, { status: 200,
-      body: { ok: true, id: "scope-new", group_id: "grp_x", label: "Lab 3", parent_label: "Breakroom" } }]];
-    nav.length = 0;
-    await q("#scope-new-btn").fire("click");
-    await tick();
-    out.scope.made = { requests: net.requests.filter((r) => /\/scope$/.test(r.path)), nav: nav.slice() };
-    // A stale copy: the server's sentence, after a word on what failed, and the button usable again.
-    fuNet.answers = [[/\/api\/draft\/scope-a\/scope$/, { status: 409,
-      body: { ok: false, code: "document_changed", error: "Nothing changed. This project was saved again after this page read it." } }]];
-    nav.length = 0;
-    await q("#scope-new-btn").fire("click");
-    await tick();
-    out.scope.stale = { note: q("#scope-note").textContent, disabled: q("#scope-new-btn").disabled, nav: nav.slice() };
     // The siblings: one on the board opens its drawer, one that is not opens its estimate.
     nav.length = 0;
     const opens = dom.queryAll("[data-scope-open]");
     for (const b of opens) await b.fire("click");
     out.scope.siblingNav = nav.slice();
     out.scope.siblingButtons = opens.map((b) => b.dataset.scopeOpen);
+    // A proposal made from another scope's estimate ("Create Multiple Proposals": its board member carries
+    // proposal_of), not on the board yet: it is marked, and it opens on its own proposal page, not the intake.
+    {
+      const withChild = members.concat([{ id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-a" }]);
+      page.open("scope-a");
+      page.renderNotSent("scope-a", Object.assign({}, nsRow, { scope_members: withChild, scope_count: 4 }));
+      nav.length = 0;
+      const childOpens = dom.queryAll("[data-scope-open]");
+      for (const b of childOpens) await b.fire("click");
+      out.scope.proposalChild = { marks: childOpens.map((b) => [b.dataset.scopeOpen, b.dataset.scopeProposal || ""]),
+                                  nav: nav.slice() };
+      // THE PROJECT WORKBOOK (plan step 6): this group's home is scope-b, the member scope-d was made
+      // from (NOT the first scope), and it is a v1 estimate, so the button opens scope-b's Files page
+      // and builds nothing. Rendered on scope-d's own drawer, so "home" cannot be confused with "this
+      // drawer's project" or with "the oldest scope". Every other scope was made from scope-b, so its
+      // .xlsx really is the whole project.
+      const childD = { id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-b" };
+      const fromB = members.map((m) => (m.id === "scope-b" ? m : Object.assign({}, m, { proposal_of: "scope-b" })))
+        .concat([childD]);
+      // A v1 group's workbook button for these members, rendered on scope-d's drawer.
+      const v1BookFor = (ms) => {
+        page.open("scope-d");
+        page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: ms,
+                                                                scope_count: ms.length, scope_index: ms.length }));
+        const b = q("#scope-workbook");
+        return { present: !!b, files: b ? b.dataset.files : null, html: dom.html };
+      };
+      // Mixed: scope-d was made from scope-b, but Breakroom and Lab <2> have their own estimates,
+      // which are not in scope-b's file.
+      out.scope.v1Mixed = v1BookFor(members.concat([childD]));
+      // A #711 group of independent v1 scopes (no proposal_of at all): no member's file is the project.
+      out.scope.v1Independent = v1BookFor(members);
+      page.open("scope-d");
+      page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: fromB,
+                                                              scope_count: 4, scope_index: 4 }));
+      net.requests.length = 0;
+      nav.length = 0;
+      const v1Book = q("#scope-workbook");
+      out.scope.v1Book = { present: !!v1Book, label: v1Book ? v1Book.dataset.files : null,
+                           html: dom.html };
+      if (v1Book) await v1Book.fire("click");
+      await tick();
+      out.scope.v1Book.nav = nav.slice();
+      out.scope.v1Book.requests = net.requests.map((r) => r.path);
+    }
+    // A v2 group (every member an Estimating Tool v2 estimate): the button BUILDS the group workbook
+    // through /api/scope-group/{gid}/workbook and saves the file under the server's name; a refusal is
+    // said in the server's sentence and nothing is saved.
+    {
+      const v2Members = members.map((m) => Object.assign({}, m, { v2: true }));
+      const v2Row = Object.assign({}, nsRow, { scope_members: v2Members });
+      page.open("scope-a");
+      page.renderNotSent("scope-a", v2Row);
+      out.scope.v2Book = { html: dom.html };
+      net.requests.length = 0;
+      nav.length = 0;
+      dom.body.children.length = 0;
+      fuNet.answers = [[/\/api\/scope-group\/grp_x\/workbook$/, { status: 200,
+        body: { ok: true, xlsx_download_url: "/api/file/tok-wb", filename: "Acme_HQ_scopes_estimate.xlsx", tabs: [] } }]];
+      await q("#scope-workbook").fire("click");
+      await tick();
+      const saved = dom.body.children.filter((n) => n && n.tagName === "A");
+      out.scope.v2Book.ok = { requests: net.requests.map((r) => [r.method, r.path]), nav: nav.slice(),
+                              saved: saved.map((a) => ({ download: a.download, clicks: a.clicks || 0, detached: !!a.detached })),
+                              note: q("#scope-note").textContent, disabled: q("#scope-workbook").disabled };
+      net.requests.length = 0;
+      dom.body.children.length = 0;
+      fuNet.answers = [[/\/api\/scope-group\/grp_x\/workbook$/, { status: 409,
+        body: { ok: false, code: "member_no_base", error: "“Lab 1” is not priced on one sheet. Make one sheet its base first." } }]];
+      await q("#scope-workbook").fire("click");
+      await tick();
+      out.scope.v2Book.refused = { requests: net.requests.map((r) => r.path), saved: dom.body.children.length,
+                                   note: q("#scope-note").textContent, disabled: q("#scope-workbook").disabled };
+      fuNet.answers = [];
+      // A project of ONE proposal (a group whose other scopes were deleted) has no project workbook
+      // to offer: its own Files page is the workbook.
+      page.open("scope-a");
+      page.renderNotSent("scope-a", Object.assign({}, nsRow, { scope_count: 1, scope_members: [members[0]] }));
+      out.scope.loneBook = /id="scope-workbook"/.test(dom.html);
+    }
 
     // The sent drawer: the same card, in SEC_TABS, with the combined email's button.
     const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
@@ -2641,6 +2709,68 @@ async function runScenario(name, s) {
   } finally {
     fuNet.answers = [];
     for (const r of scopeAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+  }
+
+  // ── one proposal or several (2026-10-27, plan step 7) ───────────────────────
+  // The card shows ONLY on a project with two or more proposals, and nowhere offers a new scope.
+  // Rendered for real in both drawers: a project of one (no group, and a group left with one live
+  // member), a project whose only sibling is not on the board yet, and a project of one that gains a
+  // sibling and is painted again.
+  const oneAdded = [];
+  try {
+    out.one = {};
+    const q = (sel) => dom.query(sel);
+    const sentData = () => {
+      const d = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+      d.proposal.project_name = "Solo Co";
+      return d;
+    };
+    const card = () => ({ html: dom.html, eligible: page.eligible() });
+    const soloSent = { proposal_id: "solo-s", project_name: "Solo Co", proposal_status: "sent" };
+    const soloNs = { proposal_id: "solo-n", project_name: "Solo Co", not_sent: true,
+      drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com" };
+    // A group whose other member was archived: _stamp_scopes still says scope_count 1.
+    const lone = { proposal_id: "lone-s", project_name: "Solo Co", proposal_status: "sent",
+      scope_group: "grp_l", scope_label: "Base Bid 1", scope_index: 1, scope_count: 1,
+      scope_members: [{ id: "lone-s", label: "Base Bid 1", on_board: true, sent: true }] };
+    // Its only sibling is not on the board yet: still two proposals.
+    const offBoard = { proposal_id: "pair-s", project_name: "Solo Co", proposal_status: "sent",
+      scope_group: "grp_p", scope_label: "Base Bid 1", scope_index: 1, scope_count: 2, scope_send_pending: true,
+      scope_members: [{ id: "pair-s", label: "Base Bid 1", on_board: true, sent: true },
+                      { id: "pair-c", label: "Base Bid 2", on_board: false, sent: false, proposal_of: "pair-s" }] };
+    const offBoardNs = Object.assign({}, offBoard, { proposal_id: "pair-n", proposal_status: undefined,
+      not_sent: true, drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com",
+      scope_members: [{ id: "pair-n", label: "Base Bid 1", on_board: true },
+                      { id: "pair-c", label: "Base Bid 2", on_board: false }] });
+    const grows = { proposal_id: "grow-s", project_name: "Solo Co", proposal_status: "sent" };
+    BOARD_ROWS.push(soloSent, soloNs, lone, offBoard, offBoardNs, grows);
+    oneAdded.push(soloSent, soloNs, lone, offBoard, offBoardNs, grows);
+    page.setBoard(BOARD_ROWS);
+
+    page.open("solo-s"); page.renderDetail("solo-s", sentData()); out.one.soloSent = card();
+    page.open("solo-n"); page.renderNotSent("solo-n", soloNs); out.one.soloNotSent = card();
+    page.open("lone-s"); page.renderDetail("lone-s", sentData()); out.one.loneSent = card();
+    page.open("pair-s"); page.renderDetail("pair-s", sentData()); out.one.offBoardSent = card();
+    nav.length = 0;
+    const offOpen = dom.queryAll("[data-scope-open]");
+    for (const b of offOpen) await b.fire("click");
+    out.one.offBoardNav = nav.slice();
+    page.open("pair-n"); page.renderNotSent("pair-n", offBoardNs); out.one.offBoardNotSent = card();
+    // A project of one, then the server makes it a group of two and the poll paints again.
+    page.open("grow-s"); page.renderDetail("grow-s", sentData()); out.one.growBefore = card();
+    Object.assign(grows, { scope_group: "grp_g", scope_label: "Base Bid 1", scope_index: 1, scope_count: 2,
+      scope_send_pending: true,
+      scope_members: [{ id: "grow-s", label: "Base Bid 1", on_board: true, sent: true },
+                      { id: "grow-c", label: "Base Bid 2", on_board: true, sent: false, proposal_of: "grow-s" }] });
+    page.setBoard(BOARD_ROWS);
+    // No page.open: the poll's own repaint, past the drawer's signature guard.
+    page.renderDetail("grow-s", sentData()); out.one.growAfter = card();
+    out.one.growSendPresent = !!q("#scope-send");
+  } catch (e) {
+    out.errors.one = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    for (const r of oneAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+    page.setBoard(BOARD_ROWS);
   }
 
   // ── the project's one email, told honestly (2026-10-24 hardening) ─────────────
