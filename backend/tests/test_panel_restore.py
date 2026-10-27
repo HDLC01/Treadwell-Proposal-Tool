@@ -211,17 +211,29 @@ def test_the_column_sits_in_the_middle_of_what_is_left_not_jammed_against_the_ra
                 f"x={pinned} margin-left:auto already gave it")
 
 
-def test_the_step_three_rail_keeps_the_lane_it_always_kept():
+def _media_blocks(text, query):
+    """The bodies of every `@media (<query>) {` block in `text`."""
+    return [_block_at(text, m.end() - 1)
+            for m in re.finditer(r"@media \(" + query + r"\)\s*\{", text)]
+
+
+def test_the_step_three_rail_keeps_its_lane_only_where_there_is_room_for_one():
     """The reference, asserted so "match the step-3 widget" stays a fact and not a memory.
 
-    Its reservation is on `:has(#options-panel:not([hidden]))` at every width above its breakpoint,
-    and its breakpoint is 1400 — which is where the 1400 above comes from.
+    Since 2026-10-27 the rail floats at EVERY width (it used to drop into the flow below 1400px and
+    become permanent chrome above the document, because only .word-canvas scrolls). Its 272px lane
+    on `:has(#options-panel:not([hidden]))` is reserved from 1401px up and nowhere else: below that
+    the rail sits over the page and collapses instead. 1400 is still the cheat sheet's breakpoint
+    above because it is where the rail's lane ends.
     """
     css = (FRONTEND / "proposal-review.html").read_text(encoding="utf-8")
-    assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 272px",
-                     css), "the step-3 rail stopped reserving its lane"
-    assert re.search(r"@media \(max-width:\s*1400px\)", css), (
-        "the step-3 rail's breakpoint moved — the 1400 asserted above came from matching it")
+    lane = r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 272px"
+    wide = _media_blocks(css, r"min-width:\s*1401px")
+    assert len(wide) == 1 and re.search(lane, wide[0]), (
+        "the step-3 rail must reserve its 272px lane inside one @media (min-width: 1401px) block")
+    assert len(re.findall(lane, css)) == 1, "a second, unconditional copy of the lane came back"
+    assert not re.search(r"@media \(max-width:\s*1400px\)", css), (
+        "the page grew a narrow-screen block again; the rail no longer changes shape below 1400px")
 
 
 # ══ TW.floatPanel: the one copy of the drag / remember / restore logic ══════════
@@ -352,6 +364,67 @@ def test_each_callers_restore_uses_its_own_declared_width_before_layout(ran):
     u = ran["unlaidOutRestore"]
     assert u["rail"] == WIN_W - OPTS_W - 4
     assert u["cheat"] == WIN_W - CHEAT_W - 4
+
+
+# ══ ALWAYS FLOATING: resize re-clamp and collapse (2026-10-27) ══════════════════
+# The rail no longer drops into the flow below 1400px, so two things a flowed panel never needed:
+# a window narrowed after the page opened must not strand its header off screen, and on a narrow
+# screen, where it sits over the page, it must fold to its header.
+def test_narrowing_the_window_pulls_a_moved_rail_back_and_widening_returns_it(ran):
+    """Through the rail's own initialiser: restored at (1400, 900) on 1750x1125, narrowed to
+    1100x700, widened back. The re-clamp starts from where the estimator PUT it, so the second
+    resize gives their spot back, and a resize is never saved as a new position."""
+    r = ran["resize"]["rail"]
+    assert r["listeners"] == 1, "the rail's initialiser bound no resize listener"
+    assert r["restored"] == {"left": 1400, "top": 900, "right": "auto"}
+    assert r["narrowed"] == {"left": 1100 - OPTS_W - 4, "top": 700 - 40, "right": "auto"}
+    assert r["widened"] == {"left": 1400, "top": 900, "right": "auto"}
+    assert r["saved"] == {"left": 1400, "top": 900}, "a resize overwrote the remembered position"
+
+
+def test_a_dragged_panel_re_clamps_from_where_it_was_dropped(ran):
+    d = ran["resize"]["dragged"]
+    assert d["dropped"] == {"left": 1400, "top": 600, "right": "auto"}
+    assert d["narrowed"] == {"left": 1000 - SHEETS_W - 4, "top": 500 - 40, "right": "auto"}
+    assert d["widened"] == {"left": 1400, "top": 600, "right": "auto"}
+    assert d["saved"] == {"left": 1400, "top": 600}
+
+
+def test_a_resize_leaves_an_unmoved_or_flowed_panel_to_the_css(ran):
+    """Never moved: `right: 16px` keeps it on screen at any width, so the resize writes nothing.
+    In the flow (the cheat sheet below its breakpoint): left/top are inert, so it is not touched --
+    including a cheat sheet restored while floating that a narrowing then dropped into the flow,
+    where a clamp against the column's 1000px would have dragged it to left 96."""
+    r = ran["resize"]
+    assert r["neverMoved"] == {"left": "", "top": "", "right": "16px", "keys": []}
+    assert r["inFlowAtOpen"] == {"left": "", "top": "", "right": "16px"}
+    assert r["inFlow"]["restored"] == {"left": 1265, "top": 264, "right": "auto"}
+    assert r["inFlow"]["after"] == r["inFlow"]["restored"], "a resize re-clamped a panel in the flow"
+
+
+def test_the_rail_collapses_to_its_header_and_remembers_it(ran):
+    c = ran["collapse"]["rail"]
+    assert c["bound"] is True, "the rail's initialiser bound no collapse click (collapseKey not passed)"
+    assert c["start"] is False, "a first visit must open the panel expanded"
+    assert c["first"] == {"collapsed": True, "stored": "1", "aria": "false"}
+    assert c["second"] == {"collapsed": False, "stored": "0", "aria": "true"}
+    assert c["headerClick"] is False, "a click on the header (not the button) must not fold it"
+    assert ran["collapse"]["reopened"] is True, "left collapsed, the page must open it collapsed"
+
+
+def test_a_press_on_the_collapse_button_is_not_a_drag(ran):
+    """The button sits inside the drag header. Started as a drag, the pointer capture would take the
+    release away from the button and the panel would jump with the cursor."""
+    c = ran["collapse"]["rail"]
+    assert c["classOnPress"] is False
+    assert c["afterPress"] == {"left": 1000, "top": 200, "right": "16px"}
+    assert c["posSaved"] is None
+
+
+def test_collapse_is_opt_in_and_survives_a_blocked_store(ran):
+    c = ran["collapse"]
+    assert c["noKey"] == {"boundClick": False}, "a panel with no collapseKey grew a collapse"
+    assert c["blocked"] == {"threw": False, "collapsed": True}
 
 
 # ── the rail's CSS moved into the shared stylesheet, rule for rule ────────────────
@@ -533,19 +606,52 @@ def test_the_options_panel_rules_live_in_the_shared_stylesheet():
         assert re.search(r"(?m)^" + re.escape(sel) + r"\s*\{", css), f"{sel} is not in styles.css"
 
 
-def test_the_inline_breakpoint_for_the_panel_is_in_the_shared_stylesheet():
-    """Below 1400px the panel drops into the flow, bounded so a long list cannot push the ribbon off
-    screen. Found by block, not by line: the fields panel has its own 1400px media block in the
-    same file, and the one under test is the one holding `.options-panel`."""
+def test_the_panel_is_floating_at_every_width():
+    """THE OLD BREAKPOINT IS GONE (2026-10-27). Below 1400px the panel used to drop into the flow
+    with `position: static`, and because only .word-canvas scrolls on step 3 it became permanent
+    chrome at the top of the page, pushing the proposal down. No rule about the panel, at any
+    @media depth, may take it out of `position: fixed` again. The fields panel keeps its own 1400px
+    block in the same file, which is why this reads every selector rather than one block."""
+    css = _drop_css_comments((FRONTEND / "styles.css").read_text(encoding="utf-8"))
+
+    def styles_the_panel_itself(selector):
+        # The SUBJECT of the selector (its last compound) is the panel: `.options-panel.collapsed`
+        # is, `.options-panel .op-drag` (the sticky header) is not.
+        bare = re.sub(r":not\([^)]*\)", "", _without_has(selector)).strip()
+        return _mentions(re.split(r"[\s>+~]+", bare)[-1], "options-panel")
+
+    seen = 0
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        selectors, decls = m.group(1).strip(), _norm(m.group(2))
+        if not any(styles_the_panel_itself(s) for s in _split_top_level_commas(selectors)):
+            continue
+        pos = re.search(r"(?<![-\w])position:\s*([\w-]+)", decls)
+        if pos:
+            seen += 1
+            assert pos.group(1) == "fixed", (
+                f"`{selectors}` sets position: {pos.group(1)} on the panel; it must float")
+    assert seen >= 1, "found no rule positioning the panel at all -- the scan is reading nothing"
+    for block in _media_blocks(css, r"max-width:\s*\d+px"):
+        assert not re.search(r"(?m)^\s*\.options-panel\s*\{", block), (
+            "a narrow-screen block restyles .options-panel again; the panel no longer changes shape")
+
+
+def test_the_collapsed_panel_is_its_header_pill_alone():
+    """On a narrow screen the floating rail sits over the page, so it folds to its header. The CSS
+    half of that (TW.floatPanel toggles the class, run in the harness): the button is styled in the
+    shared sheet, and `.collapsed` hides every child but the header and drops the scroll bound."""
     css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
-    blocks = [_block_at(css, m.end() - 1)
-              for m in re.finditer(r"@media \(max-width: 1400px\) \{", css)]
-    mine = [b for b in blocks if re.search(r"(?m)^\s*\.options-panel \{", b)]
-    assert len(mine) == 1, "expected exactly one 1400px media block holding .options-panel"
-    rule = re.search(r"(?m)^\s*\.options-panel \{([^}]*)\}", mine[0]).group(1)
-    for decl in ("position: static", "width: auto", "max-height: 40vh", "overflow-y: auto",
-                 "box-shadow: none"):
-        assert decl in _norm(rule), f"the inline panel lost `{decl}`"
+    assert re.search(r"(?m)^\.options-panel \.op-collapse \{", css), "the collapse button has no rule"
+    hide = re.search(r"(?m)^\.options-panel\.collapsed > :not\(\.op-drag\) \{([^}]*)\}", css)
+    assert hide and "display: none" in _norm(hide.group(1)), (
+        "a collapsed panel must hide everything but its header")
+    pill = re.search(r"(?m)^\.options-panel\.collapsed \{([^}]*)\}", css)
+    assert pill, "the collapsed panel has no rule"
+    for decl in ("width: auto", "max-height: none", "padding: 0"):
+        assert decl in _norm(pill.group(1)), f"the collapsed pill lost `{decl}`"
+    # the glyph flips, so the button says which way it will go
+    assert re.search(r"(?m)^\.options-panel \.op-collapse::before \{", css)
+    assert re.search(r"(?m)^\.options-panel\.collapsed \.op-collapse::before \{", css)
 
 
 def test_the_proposal_page_no_longer_carries_a_second_copy_of_the_panel_rules():
@@ -558,11 +664,13 @@ def test_the_proposal_page_no_longer_carries_a_second_copy_of_the_panel_rules():
         "proposal-review.html's own <style> still has rules about the floating panel; they belong "
         f"in styles.css: {forks}")
     # What stays is the part that is the page's own: the canvas padding that keeps the document
-    # clear of the rail, because .word-canvas is this page's.
+    # clear of the rail, because .word-canvas is this page's. Reserved from 1401px up only (see
+    # test_the_step_three_rail_keeps_its_lane_only_where_there_is_room_for_one), so no
+    # `padding-right: 0` undo rule is needed any more and none should come back.
     assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 272px",
                      page)
-    assert re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 0",
-                     page), "below 1400px the canvas must stop reserving a lane the rail left"
+    assert not re.search(r"#options-panel:not\(\[hidden\]\)\) \.word-canvas \{\s*padding-right: 0",
+                         page), "an undo rule for the lane came back; the lane is media-gated now"
 
 
 # A guard that finds nothing proves nothing until something it must catch has been put in front of

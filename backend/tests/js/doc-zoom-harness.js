@@ -10,7 +10,7 @@
  * applyZoom read the canvas once per call, and the only thing that called it again later was the
  * WINDOW's resize event. The space the sheet may take changes without one: the nav rail is a body
  * margin added when the sidebar is drawn, the pricing rail's 272px is padding a :has() rule adds
- * when #options-panel is shown, and below 1400px that panel moves inline.
+ * when #options-panel is shown above 1400px (below that the panel floats over the page, no lane).
  *
  * This lifts the SHIPPED syncZoomOuter / zoomFitKey / refitZoomToCanvas / applyZoom out of
  * proposal-review.js and runs them over the smallest layout model that can show the bad state: a
@@ -55,7 +55,8 @@ function makeWorld(opts) {
   // `navAt` is the margin mid-transition (auth.js: body{transition:margin-left .2s ease}); when it
   // is not set the margin is wherever the open state says it ends up.
   const navMargin = () => (o.navAt != null ? o.navAt : (o.navOpen && o.innerWidth >= 768 ? NAV_W : 0));
-  // Below 1400px the panel is static, above the canvas, and the reservation is dropped.
+  // The 272px reservation sits inside proposal-review.html's @media (min-width: 1401px). Below it the
+  // panel still floats (since 2026-10-27 it never enters the flow), over the page, with no lane.
   const padRight = () => (o.railShown && o.innerWidth > 1400 ? RAIL_PAD : 0);
 
   const docZoom = { style: {}, getBoundingClientRect() {
