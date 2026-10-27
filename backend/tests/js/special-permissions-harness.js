@@ -38,8 +38,23 @@ const heads = [...html.matchAll(/<th class="rv-h" title="([^"]*)">([^<]*)<\/th>/
   .map((m) => ({ title: m[1], label: m[2] }));
 const failed = grantsPanelHtml(users, null, "");
 
+// A tick while a save is in flight: renderGrants + toggleGrant run against a stub page whose PUT
+// never answers, so what the boxes look like DURING the save is what a second click would meet.
+const wStart = src.indexOf("    function renderGrants(");
+const wEnd = src.indexOf("    async function refresh(");
+if (wStart < 0 || wEnd < wStart) throw new Error("renderGrants/toggleGrant not found in admin.js");
+const liveBoxes = [{ disabled: false, addEventListener() {}, dataset: {} },
+                   { disabled: false, addEventListener() {}, dataset: {} }];
+const page = { getElementById: () => ({ set outerHTML(v) {} }), querySelectorAll: () => liveBoxes };
+const puts = [];
+const wiring = new Function("document", "grantsPanelHtml", "USERS", "GRANTS", "apiFull", "errText",
+  src.slice(wStart, wEnd) + "\nreturn { toggleGrant };")(
+  page, grantsPanelHtml, users, store, (url, opts) => { puts.push(opts); return new Promise(() => {}); }, () => "");
+wiring.toggleGrant("kyle@wetreadwell.com", "markup", true);
+const inFlight = { puts: puts.length, allDisabled: liveBoxes.every((b) => b.disabled) };
+
 process.stdout.write(JSON.stringify({
-  rows, heads, boxes,
+  rows, heads, boxes, inFlight,
   status: /id="sp-status"[^>]*>Saved\.</.test(html),
   adminNote: (html.match(/Admins have all of these<\/span>/g) || []).length,
   failedSaysSo: /didn't load/.test(failed) && !/type="checkbox"/.test(failed),

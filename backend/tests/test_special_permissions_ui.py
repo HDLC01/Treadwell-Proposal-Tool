@@ -47,3 +47,10 @@ def test_admin_rows_are_all_ticked_and_disabled(ran):
 def test_status_line_and_failed_load(ran):
     assert ran["status"]
     assert ran["failedSaysSo"]
+
+
+def test_a_second_tick_cannot_land_while_a_save_is_in_flight(ran):
+    # Each save PUTs the whole map from the last saved copy: a second tick sent mid-save would
+    # leave the first one out, so every box stays disabled until the answer redraws the card.
+    assert ran["inFlight"]["puts"] == 1
+    assert ran["inFlight"]["allDisabled"]

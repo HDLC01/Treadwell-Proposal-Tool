@@ -413,6 +413,9 @@
       if (on && at === -1) list.push(key);
       if (!on && at !== -1) list.splice(at, 1);
       renderGrants("Saving…");
+      // Every save sends the WHOLE map built from the last saved copy, so a second tick sent while
+      // this one is in flight would leave this one out. The boxes stay off until the answer redraws them.
+      document.querySelectorAll('#sp-panel [data-act="grant"]').forEach(box => { box.disabled = true; });
       const res = await apiFull("/api/admin/special-permissions",
         { method:"PUT", body: JSON.stringify({ grants: next }) });
       if (!res.ok || !res.body.grants_catalog) { renderGrants("Not saved: " + errText(res)); return; }
