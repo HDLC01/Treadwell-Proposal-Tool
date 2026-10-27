@@ -607,6 +607,37 @@ async function step4() {
     await settle();
     s.rename.escape = { fetches: fetches(p).length, renaming: p.look().tabs.some((t) => t.renaming) };
   }
+  // 21b. TABS NAMED BY SHEET (2026-10-27): the tab says the server's display_label (the sheet's name; an old untouched
+  //      "Base Bid N" shows its sheet), a renamed one keeps its own; the rename box opens on what the tab says.
+  //      Accepting the shown sheet name on an old default SAVES it (the stored label is still "Base Bid 2");
+  //      leaving a stored name unchanged sends nothing.
+  {
+    const view = { parent_id: "P1", group_id: "G1", members: [
+      { id: "P1", label: "Base Bid 1", display_label: "Breakroom", sheet_label: "Breakroom", index: 1, is_parent: true, stale: false },
+      { id: "C2", label: "Base Bid 2", display_label: "Lab <2>", sheet_label: "Lab <2>", index: 2, is_parent: false, stale: true },
+      { id: "C3", label: "Kitchen", display_label: "Kitchen", sheet_label: "Polish", index: 3, is_parent: false, stale: false },
+    ] };
+    const p = await proposalPage({ id: "C2", view, st: { proposal_of: "P1", base_tab_id: "Copy1", priced_tabs: [{ id: "Copy1" }] },
+      answers: [[/\/api\/draft\/C2\/scope$/, "POST", { status: 200, body: { ok: true, group_id: "G1", label: "Lab <2>" } }]] });
+    const labels = p.look().tabs.map((t) => t.label);
+    const note = p.look().note.what;
+    await p.press(".pt-name", "C2", "dblclick");
+    const box = p.strip.querySelector(".pt-ren-in");
+    const boxValue = box ? box.value : null;
+    p.log.length = 0;
+    if (box) box.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    const acceptFetches = fetches(p);
+    // C3's stored label already is what its tab says: Enter on it unchanged sends nothing.
+    const q = await proposalPage({ id: "C3", view: JSON.parse(JSON.stringify(view)),
+      st: { proposal_of: "P1", base_tab_id: "Copy1", priced_tabs: [{ id: "Copy1" }] } });
+    await q.press(".pt-name", "C3", "dblclick");
+    const qbox = q.strip.querySelector(".pt-ren-in");
+    q.log.length = 0;
+    if (qbox) qbox.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    s.sheetNames = { labels, note, boxValue, acceptFetches, unchangedFetches: fetches(q).length };
+  }
   // 22. DELETE: the x asks first; a yes sends the child to the Trash and takes its tab off (Base Bid 1's page stays);
   //     a no sends nothing; a child deleting itself goes to Base Bid 1.
   {
