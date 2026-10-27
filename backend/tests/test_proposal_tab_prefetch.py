@@ -124,12 +124,14 @@ def test_a_server_that_cannot_confirm_leaves_the_saves_refused(boot):
     assert u["blocked"] == "unverified" and u["puts"] == 0
 
 
-def test_a_tab_switch_is_one_page_load_and_four_round_trips_shorter(boot):
+def test_a_tab_switch_is_one_page_load_and_three_round_trips_shorter(boot):
     t = boot["timing"]
     assert t["before"]["loads"] == 2 and t["after"]["loads"] == 1
     assert t["before"]["on"] == t["after"]["on"] == "B's words"
-    # Before: token, profile, the read, the reload, token, profile. After: token, then the profile and the confirmation together.
-    assert t["before"]["rts"] >= 6 and t["after"]["rts"] <= 3, t
+    # Before: token, profile, the read, the reload, token, profile (5 or 6 counted: on a fast runner the cached
+    # public-config answers inside the same tick). After: token, then the profile and the confirmation together.
+    # The claim is the DIFFERENCE, so the test pins that rather than the old path's exact count.
+    assert t["after"]["rts"] <= 3 and t["before"]["rts"] - t["after"]["rts"] >= 3, t
 
 
 # ── the strip ───────────────────────────────────────────────────────────────────────────────────
