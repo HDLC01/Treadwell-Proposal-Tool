@@ -23,6 +23,7 @@ import base64
 import copy
 import hashlib
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cachetools
 
+import price_rules
 from supabase_client import get_client
 
 
@@ -66,8 +68,13 @@ def init_db() -> None:
 # whose estimate it is a copy of, and which copy. Written only by fan_out_proposals and
 # refresh_proposals; a stale tab that cleared them would cut the proposal off its estimate, and one
 # that put an old digest back would hide an "Estimate changed" the estimator needs to see.
+#
+# `proposals_base_tab_id` joined on 2026-10-28 (PROPOSALS_BASE): the parent's base the proposals were
+# last matched against, so the proposal a base swap leaves on Base Bid 1's sheet can take the sheet
+# the parent gave up. Written only by fan_out_proposals and refresh_proposals; a stale tab that put
+# an old one back would send that proposal to the wrong sheet.
 _SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group",
-                      "proposal_of", "estimate_digest", "estimate_synced_at")
+                      "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id")
 
 # Stamped on a draft the moment split_draft rewrites it, and carried by every copy of the draft that
 # was read AFTER the split. A browser save whose blob does not carry the stamp the row has was built
@@ -80,9 +87,10 @@ SPLIT_MARK = "split_at"
 # group is joined only through create_sibling and split_draft. The beta's sandbox PUTs a copy of a real
 # bid under a NEW id (polish-sandbox.js), and a copy that carried the real bid's group would join the
 # customer's project: drawn beside its scopes, and holding the combined email back until the test copy
-# was published too (the portal's scopes_not_published). The three proposal keys likewise: a copy
-# that carried `proposal_of` would be drawn as one more proposal tab of the real bid.
-_NEVER_SEEDED_BY_A_BROWSER = ("scope_group", "proposal_of", "estimate_digest", "estimate_synced_at")
+# was published too (the portal's scopes_not_published). The proposal keys likewise: a copy that
+# carried `proposal_of` would be drawn as one more proposal tab of the real bid.
+_NEVER_SEEDED_BY_A_BROWSER = ("scope_group", "proposal_of", "estimate_digest", "estimate_synced_at",
+                              "proposals_base_tab_id")
 
 
 class StaleSplitWrite(Exception):
@@ -1526,6 +1534,212 @@ def _stamp_at(base: datetime, i: int) -> str:
 # that has no child (_plan_reconcile), keeping its wording, its link and its portal identity. One
 # that cannot move is reported and left as it is, never deleted.
 
+# THE OLD BASE (review of this fix, finding 2). The child a swap leaves on Base Bid 1's sheet belongs
+# on the sheet the parent gave up, and the parent's list cannot say which that was: TWPrice.moveBaseId
+# with `keep` sorts every sheet after Base Bid 1 into tab-strip order, so with tabs Epoxy, Room 2,
+# Polish and Polish swapped for Epoxy the list reads [Epoxy, Copy1, Polish] and the first free sheet
+# is Room 2. So the parent records, server-owned, the base its proposals were last matched against
+# (_matched_base), and _plan_reconcile gives the swap's partner that sheet while it is free.
+PROPOSALS_BASE = "proposals_base_tab_id"
+
+
+def _matched_base(parent: Dict[str, Any], kids: List[Dict[str, Any]], left: set) -> Optional[str]:
+    """What the parent's PROPOSALS_BASE says after a press: its base, now that the proposals are
+    matched against it, unless a child is still out of step on that very sheet (`left`: the ids a
+    press did not move, a sent one or a failed write), whose partner is still the sheet the old
+    record names. None when there is nothing to record."""
+    base = parent.get("base_tab_id")
+    if any(c["id"] in left and c["data"].get("base_tab_id") == base for c in kids):
+        return parent.get(PROPOSALS_BASE)
+    return base if isinstance(base, str) and base else parent.get(PROPOSALS_BASE)
+
+
+# THE BASE-PICK RULE ON A MOVED PROPOSAL (review of this fix, finding 1). A move is a base change, and
+# every base change in the browser runs TWPrice.applyBasePick over the draft's price_overrides: the
+# oldest editor's per-field buckets reset (the document prints single_bid.amount as the base bid
+# outright, main.py's base_bid_formatted), and the lines that print the base bid follow the new
+# base. Kept as they were, the Polish proposal printed the Epoxy sheet's typed $20,000 while the card
+# and the portal booked $9,000. _rebase_price_overrides is applyBasePick as a caller that names no
+# base phrase runs it (no `opts.basePhrase`, no `opts.roles`); test_multi_proposals.py runs both
+# over one matrix.
+_BASE_ROW_WORDS = {"sales_tax": "Material Sales Tax", "remodel": "Remodel Tax", "total": "Total"}
+
+
+def _base_desc(work_type: Any, role: Any) -> str:
+    """TWPrice.baseDesc: the base line's words for the system it prices."""
+    wt = str(work_type or "epoxy").lower()
+    r = str(role or "").lower()
+    eff = "combo" if wt == "combo" else (r if r in ("epoxy", "polish", "gyp") else wt)
+    noun = {"polish": "Polished Concrete Flooring", "combo": "Epoxy & Polished Concrete flooring",
+            "sealer": "Sealed Concrete", "gyp": "Gypsum Underlayment System"}.get(eff, "Epoxy flooring")
+    return noun + " as described above"
+
+
+def _js_cents(v: Any) -> int:
+    """TWPrice.cents (Number(), Math.round) of a tab figure or a money string."""
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)):
+        n = float(v)
+        return int(math.floor(n * 100 + 0.5)) if math.isfinite(n) else 0
+    return price_rules._js_cents(v)
+
+
+def _usd(c: int) -> str:
+    """TWPrice.usd: cents in the documents' money style ("$7,447", "$1,870.50")."""
+    neg = c < 0
+    c = -c if neg else c
+    frac = c % 100
+    return ("-" if neg else "") + "$" + "{:,}".format(c // 100) + ("." + "%02d" % frac if frac else "")
+
+
+def _tab_figures(tabs: List[Any], key: str) -> List[str]:
+    """TWPrice.tabFigures for a base key: every figure a tab prices that line at."""
+    seen: set = set()
+    out: List[str] = []
+
+    def add(c: int) -> None:
+        if c > 0 and c not in seen:
+            seen.add(c)
+            out.append(_usd(c))
+    for t in tabs:
+        if not isinstance(t, dict):
+            continue
+        tot, s, r = _js_cents(t.get("total")), _js_cents(t.get("sales_tax")), _js_cents(t.get("remodel"))
+        if key == "sales_tax":
+            add(s)
+        elif key == "remodel":
+            add(r)
+        elif key == "total":
+            add(tot)
+        else:
+            add(tot)
+            add(tot - s)
+            add(tot - r)
+            add(tot - s - r)
+    return out
+
+
+def _amount_at(s: str) -> Optional[Tuple[int, str]]:
+    """TWPrice.amountAt: the line's first plain dollar figure, (at, text), or None."""
+    return next(price_rules._money_hits(s), None)
+
+
+def _amount_is_one_of(s: str, figures: List[str]) -> bool:
+    a = _amount_at(s)
+    if a is None:
+        return False
+    c = price_rules._js_cents(a[1])
+    return any(re.fullmatch(r"\$[0-9,]+(?:\.[0-9]+)?", f) and price_rules._js_cents(f) == c
+               for f in figures)
+
+
+def _mark_amount(s: str) -> str:
+    at, text = _amount_at(s)
+    return s[:at] + price_rules.AMOUNT_MARK + s[at + len(text):]
+
+
+def _migrate_base_line(legacy: str, figs: List[str], slot: bool) -> Tuple[Optional[str], list, list]:
+    """TWPrice.migrateLine with only `others` (and `slot`) given: (main, before, after), main None
+    when the line is dropped."""
+    lines = re.sub(r"\r\n?", "\n", legacy).split("\n")
+
+    def shaped(line: str) -> bool:
+        return bool(price_rules._PRICE_SHAPE_RE.search(line)) or any(
+            p in line for p in price_rules.KNOWN_PHRASES)
+    steps = (lambda l: shaped(l) and _amount_is_one_of(l, figs), shaped,
+             lambda l: bool(price_rules._MONEY_AT_RE.search(l)),
+             lambda l: bool(price_rules._JS_TRIM_RE.sub("", l)))
+    mi = next((i for step in steps for i, line in enumerate(lines) if step(line)), -1)
+    if mi < 0:
+        return None, [], []
+    main = lines[mi]
+    if price_rules.AMOUNT_MARK not in main and _amount_is_one_of(main, figs):
+        main = _mark_amount(main)
+    if slot:
+        for p in price_rules.KNOWN_PHRASES:
+            j = main.find(p)
+            if j >= 0:
+                main = main[:j] + price_rules.TAX_MARK + main[j + len(p):]
+                break
+    return main, lines[:mi], lines[mi + 1:]
+
+
+def _rebase_price_overrides(pov: Any, frm: Optional[str], to: Optional[str], tabs: List[Any],
+                            work_type: Any) -> bool:
+    """TWPrice.applyBasePick(pov, frm, to, tabs, {workType}) in place: single_bid, rows and combo
+    reset; each line that prints the base bid (base, sales_tax, remodel, total) keeps his words, a
+    figure a tab prices it at becomes the live amount, the old base's system words become the new
+    base's, an old-shape line is migrated, and one that reads exactly as the tool prints it goes.
+    Nothing else is touched. Returns whether anything changed."""
+    if not isinstance(pov, dict):
+        return False
+    changed = False
+    for b in ("single_bid", "rows", "combo"):
+        m = pov.get(b)
+        if isinstance(m, (dict, list)) and len(m):
+            changed = True
+        pov[b] = {}
+
+    def role_of(tid: Optional[str]) -> str:
+        if tid is None or tid == "":
+            return ""
+        t = next((t for t in tabs if isinstance(t, dict) and t.get("id") == tid), None)
+        return (t.get("role") or "") if t else ""
+    desc_from, desc_to = _base_desc(work_type, role_of(frm)), _base_desc(work_type, role_of(to))
+    legacy = pov.get("lines") if isinstance(pov.get("lines"), dict) else None
+    live = pov.get("lines2") if isinstance(pov.get("lines2"), dict) else None
+    amount, tax = price_rules.AMOUNT_MARK, price_rules.TAX_MARK
+    for k in ("base", "sales_tax", "remodel", "total"):
+        figs = _tab_figures(tabs, k)
+        has_live = (live is not None and isinstance(live.get(k), str)
+                    and bool(price_rules._JS_TRIM_RE.sub("", live[k])))
+        text = live[k] if has_live else None
+        if legacy is not None and isinstance(legacy.get(k), str):
+            if not has_live:
+                main, before, after = _migrate_base_line(legacy[k], figs, k == "base")
+                for side, rows in (("before", before), ("after", after)):
+                    if not rows:
+                        continue
+                    bucket = pov.get(side)
+                    if not isinstance(bucket, dict):
+                        bucket = pov[side] = {}
+                    if not isinstance(bucket.get(k), list) or not bucket[k]:
+                        bucket[k] = list(rows)
+                        props = pov.get(side + "_props")
+                        if isinstance(props, dict) and k in props:
+                            del props[k]
+                            changed = True
+                if main is not None and not price_rules._JS_TRIM_RE.sub("", main):
+                    main = None
+                at = _amount_at(main) if main is not None and k != "base" else None
+                if at is not None and price_rules._js_cents(at[1]) == 0:
+                    main = None                                  # the old sweep's "$0 – Total"
+                text = main
+            del legacy[k]
+            changed = True
+        if text is None:
+            continue
+        nxt = text
+        if amount not in nxt and _amount_is_one_of(nxt, figs):
+            nxt = _mark_amount(nxt)
+        if k == "base" and desc_from != desc_to and desc_from in nxt:
+            nxt = nxt.replace(desc_from, desc_to)
+        canon = (amount + " – " + desc_to + " " + tax if k == "base"
+                 else amount + " – " + _BASE_ROW_WORDS[k])
+        if nxt == canon:
+            if has_live:
+                del live[k]
+                changed = True
+            continue
+        if not has_live or live[k] != nxt:
+            if live is None:
+                live = pov["lines2"] = {}
+            live[k] = nxt
+            changed = True
+    return changed
+
+
 # Why a child is out of step, as the strip and the sentences say it.
 _OUT_OF_STEP_WHY = {
     "same_as_base": "now prices the same sheet as Base Bid 1",
@@ -1612,16 +1826,20 @@ def _plan_reconcile(parent: Dict[str, Any], kids: List[Dict[str, Any]], wanted: 
 
     An out-of-step child (_out_of_step) the customer does not have (`is_sent` false) takes a free
     wanted sheet, pairing deterministically: the child on Base Bid 1's own sheet first (a swap's
-    partner: the old base is the sheet left free), then the others oldest first, each to the next
-    free sheet in Base Bid order. A SENT one never moves (code `sent`); one with no free sheet left
-    stays (its why). `is_sent` is asked of out-of-step children only, and before anything is written,
-    so a portal that cannot answer stops the whole press. It may raise; this does not catch it."""
+    partner), to the OLD BASE (the parent's PROPOSALS_BASE, the base the proposals were last matched
+    against) when that sheet is free; then the others oldest first, each to the next free sheet in
+    Base Bid order (the swap's partner too when no old base is recorded or it is not free). Base Bid
+    order alone is not the old base: TWPrice.moveBaseId puts every sheet after Base Bid 1 in tab-strip
+    order. A SENT one never moves (code `sent`); one with no free sheet left stays (its why). `is_sent`
+    is asked of out-of-step children only, and before anything is written, so a portal that cannot
+    answer stops the whole press. It may raise; this does not catch it."""
     why = _out_of_step(parent, kids, wanted)
     keep = [c for c in kids if c["id"] not in why]
     claimed = {c["data"].get("base_tab_id") for c in keep}
     free = [t for t in (wanted or []) if t not in claimed]
     late = sorted((c for c in kids if c["id"] in why),
                   key=lambda c: 0 if why[c["id"]] == "same_as_base" else 1)
+    old_base = parent.get(PROPOSALS_BASE)
     moves: List[Tuple[Dict[str, Any], str]] = []
     stuck: List[Dict[str, Any]] = []
     for c in late:
@@ -1632,7 +1850,10 @@ def _plan_reconcile(parent: Dict[str, Any], kids: List[Dict[str, Any]], wanted: 
                           "message": "%s (the copy the customer has) %s. Close it or keep it; "
                                      "nothing was changed." % (name, what)})
         elif free:
-            moves.append((c, free.pop(0)))
+            # Once taken the old base is not free any more, so only the first partner gets it.
+            to = old_base if why[c["id"]] == "same_as_base" and old_base in free else free[0]
+            free.remove(to)
+            moves.append((c, to))
         elif why[c["id"]] == "sheet_gone":
             stuck.append({"id": c["id"], "label": c["label"], "code": "sheet_gone"})
         else:
@@ -1689,7 +1910,8 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
     it joins a group (named after its base sheet when unnamed, still the old "Base Bid N" default, or,
     on a parent the customer does not have, the name of a sheet that is no longer its base; every new
     or moved child is named after ITS sheet, proposal_sheet_label, unless a person named it), records
-    `base_tab_ids`, and on a parent the customer does not have yet its children's sheets stop being
+    `base_tab_ids` and the base the children are matched against (PROPOSALS_BASE, _matched_base),
+    and on a parent the customer does not have yet its children's sheets stop being
     options of it (`tab_opts[id].is_option` False). A `sent` parent's tab_opts and name are never
     edited. The parent's `updated_at` is NOT bumped.
 
@@ -1815,6 +2037,9 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
         rewritten = copy.deepcopy(parent)
         rewritten["scope_group"] = {"id": gid, "label": parent_label}
         rewritten["base_tab_ids"] = list(ids)
+        matched = _matched_base(parent, kids, {s["id"] for s in rec["stuck"]})
+        if matched is not None:
+            rewritten[PROPOSALS_BASE] = matched
         if not sent and isinstance(rewritten.get("tab_opts"), dict):
             for tab in ids[1:]:
                 entry = rewritten["tab_opts"].get(tab)
@@ -1853,9 +2078,21 @@ def _move_child(sb: Any, parent: Dict[str, Any], c: Dict[str, Any], tab: str, la
                 digest: str, actor: Optional[str], parent_id: str) -> Dict[str, Any]:
     """Write child `c` (a _proposal_rows entry) as the proposal of sheet `tab` (_recopied), named
     `label`: its wording, link and portal identity stay, its `updated_at` is bumped (its document
-    must be rebuilt), and its new base is never one of its own options. Returns the stored blob.
-    RAISES what _recopied and the write raise."""
+    must be rebuilt), and its new base is never one of its own options. Its price lines follow the
+    new base as a base pick's do (_rebase_price_overrides, on a copy: `c["data"]` is what a failed
+    press puts back), read against the figures of the sheets it was priced from and of the estimate
+    now. Returns the stored blob. RAISES what _recopied and the write raise."""
     out = _recopied(parent, c["data"], tab, digest)
+    pov = out.get("price_overrides")
+    if isinstance(pov, dict):
+        pov = copy.deepcopy(pov)
+        tabs: List[Any] = []
+        for src in (c["data"], parent):
+            if isinstance(src.get("priced_tabs"), list):
+                tabs.extend(src["priced_tabs"])
+        if _rebase_price_overrides(pov, c["data"].get("base_tab_id"), tab, tabs,
+                                   c["data"].get("work_type")):
+            out["price_overrides"] = pov
     opts = out.get("tab_opts")
     if isinstance(opts, dict) and isinstance(opts.get(tab), dict) and opts[tab].get("is_option"):
         out["tab_opts"] = dict(opts, **{tab: dict(opts[tab], is_option=False)})
@@ -1913,9 +2150,11 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None,
     is MOVED to a base bid with no proposal, copied afresh as that sheet's and, unless a person named
     it, named after it (`moved`). One the customer has is never moved (`skipped`, code `sent`, with
     the sentence saying so); one with no free base bid is left as it is (`out_of_step`), never
-    deleted. When a child moved, a parent the customer does not have whose name is still another
-    sheet's takes its own sheet's name (its `updated_at` is not bumped); otherwise the parent is not
-    touched.
+    deleted. A moved child's price lines follow its new base (_move_child). When a child moved, a
+    parent the customer does not have whose name is still another sheet's takes its own sheet's
+    name, and the parent records the base its proposals are matched against now when that changed
+    (PROPOSALS_BASE, _matched_base: the old one stays while a child is still out of step on Base Bid
+    1's sheet); its `updated_at` is never bumped, and nothing else of it is touched.
 
     Returns {"parent_id", "estimate_digest", "refreshed": [ids], "skipped": [{"id", "label", "code"
     [, "message"]}], "moved": [{"id", "label", "from", "to"}]}. RAISES ScopeError not_found (404);
@@ -1953,18 +2192,27 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None,
                 lab = _free_label(proposal_sheet_label(parent, tab) or lab or tab, taken)
             taken.add(lab.lower())
             moves.append((c, tab, lab))
+    left = {s["id"] for s in rec["stuck"]}
     for c, tab, lab in moves:
         try:
             _move_child(sb, parent, c, tab, lab, digest, actor, parent_id)
         except ScopeError as exc:
             skipped.append({"id": c["id"], "label": c["label"], "code": exc.code})
+            left.add(c["id"])
             continue
         refreshed.append(c["id"])
         moved_out.append({"id": c["id"], "label": lab, "from": c["data"].get("base_tab_id"),
                           "to": tab})
+    # The parent's own keys this press settles: its sheet's name (only when a child moved) and the
+    # base its proposals are matched against now (PROPOSALS_BASE, only when it changed).
+    pkeys: Dict[str, Any] = {}
     if new_plabel and moved_out:
-        pdata = dict(parent, scope_group=dict(parent["scope_group"], label=new_plabel))
-        sb.table("drafts").update({"data": pdata}).eq("id", parent_id).execute()
+        pkeys["scope_group"] = dict(parent["scope_group"], label=new_plabel)
+    matched = _matched_base(parent, kids, left) if kids else None
+    if matched is not None and matched != parent.get(PROPOSALS_BASE):
+        pkeys[PROPOSALS_BASE] = matched
+    if pkeys:
+        sb.table("drafts").update({"data": dict(parent, **pkeys)}).eq("id", parent_id).execute()
     skipped.extend(rec["stuck"])
     for c in rec["keep"]:
         data = c["data"]

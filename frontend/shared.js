@@ -396,7 +396,8 @@
   // `scope_group` (2026-10-24): which project this proposal is one scope of, and its name there.
   // `proposal_of`, `estimate_digest`, `estimate_synced_at` (2026-10-27): whose estimate a proposal made
   // by Create Multiple Proposals is a copy of, and which copy (drafts.fan_out_proposals).
-  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group", "proposal_of", "estimate_digest", "estimate_synced_at"];
+  // `proposals_base_tab_id` (2026-10-28): the base those proposals were last matched against.
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group", "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id"];
 
   /** Re-read the server-owned keys for this draft and merge them into local state.
    *
