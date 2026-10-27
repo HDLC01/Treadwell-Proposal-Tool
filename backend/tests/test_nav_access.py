@@ -204,34 +204,42 @@ def test_a_slashless_prefix_is_an_exact_match_only():
     assert nav_access.prefix_matches("/api/historyx", "/api/history") is False
 
 
-def test_the_lead_inbox_owns_the_bare_route_and_its_children():
+# HIDE-ONLY SINCE 2026-10-27. Hanz chose "hides the tab only" for every deniable tab, warned that a
+# member could then still reach the data by typing the route. So every TABS "api" tuple is empty and
+# the tests below that used to prove a tab's route was refused now prove it is NOT, while the page
+# still is. Admin-only writes are a separate gate (_require_admin / _require_grant) and unchanged.
+HIDE_ONLY_SINCE = "2026-10-27"
+
+
+def test_every_tab_owns_no_api_route_now():
+    """THE 2026-10-27 decision, pinned on the table itself."""
+    assert {h: t["api"] for h, t in nav_access.TABS.items() if t["api"]} == {}
+
+
+def test_the_lead_inbox_is_page_refusal_only():
     nav_access.save({"user": ["/leads.html"]}, "k@x.com")
     for path in ("/api/leads", "/api/leads/abc/body", "/api/leads/abc/status"):
-        assert nav_access.is_api_denied("user", path) is True, path
-    assert nav_access.is_api_denied("user", "/api/leadsomething") is False
+        assert nav_access.is_api_denied("user", path) is False, path
+    assert nav_access.page_denied("user", "/leads.html") == "/leads.html"
 
 
-def test_denying_the_bid_calendar_leaves_the_analytics_payload_alone():
+def test_denying_the_bid_calendar_refuses_the_page_and_leaves_every_route_open():
     nav_access.save({"user": ["/calendar.html"]}, "k@x.com")
-    assert nav_access.is_api_denied("user", "/api/calendar/events") is True
-    assert nav_access.is_api_denied("user", "/api/calendar/events/e1") is True
+    assert nav_access.is_api_denied("user", "/api/calendar/events") is False
+    assert nav_access.is_api_denied("user", "/api/calendar/events/e1") is False
     assert nav_access.is_api_denied("user", "/api/analytics") is False, (
         "the calendar and the Analytics page read the same payload")
+    assert nav_access.page_denied("user", "/calendar.html") == "/calendar.html"
 
 
-def test_denying_the_follow_ups_board_takes_its_feed_and_leaves_the_drawer_alone():
+def test_denying_the_follow_ups_board_refuses_the_page_and_leaves_the_drawer_alone():
     """The tab that came BACK into the sidebar on 2026-08-24 (Hanz reversed his 2026-08-10 removal).
 
-    /api/portal/followups is the whole feed and followups.js is its only caller, so the tab owns it.
-    Everything the page's buttons post to is shared with the CRM drawer in portal.js, and one route
-    with notifications.js as well, so denying this tab must not touch them: a member denied the
-    board would otherwise lose Send, Log a call and the drawer's automation toggle on Active
-    Projects, which nobody restricted.
-
-    The exact-match half is not cosmetic. A trailing slash here would swallow nothing today, but a
-    startswith on "/api/portal/" style thinking is what would reach the proposal routes below."""
+    Until 2026-10-27 the tab owned its feed, /api/portal/followups. Since then it is hide-only like
+    every tab (HIDE_ONLY_SINCE above): the page is refused and the feed answers. The routes its
+    buttons post to are shared with the CRM drawer and were never claimed."""
     nav_access.save({"user": ["/followups.html"]}, "k@x.com")
-    assert nav_access.is_api_denied("user", "/api/portal/followups") is True
+    assert nav_access.is_api_denied("user", "/api/portal/followups") is False
     assert nav_access.page_denied("user", "/followups.html") == "/followups.html"
     for shared in ("/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",
                    "/api/portal/proposal/p1/followups", "/api/portal/proposal/p1/status",
@@ -250,28 +258,19 @@ def test_the_follow_ups_feed_really_is_a_single_caller_route():
         "%s also read /api/portal/followups, so the Follow-ups tab may no longer own it" % js)
 
 
-def test_denying_estimating_tool_v2_takes_its_board_feed_and_leaves_the_shared_routes_open():
-    """The v2 board (BETA) reads /api/v2/pipeline, so the row whose page it is owns it: v2 Estimates
-    from 2026-10-13, and Estimating Tool v2 since 2026-10-15, when the board became that row's front
-    door. Denying the row refuses the page AND the data: a member who was kept off the tool cannot
-    read every v2 bid and its price by typing the URL. Everything the wider tool shares stays open."""
-    assert nav_access.TABS["/v2-board.html"]["api"] == ("/api/v2/pipeline",)
+def test_denying_estimating_tool_v2_refuses_its_pages_and_leaves_its_board_feed_open():
+    """The v2 board (BETA) reads /api/v2/pipeline. The Estimating Tool v2 row owned it from
+    2026-10-15 to 2026-10-27; since then the row is hide-only like every tab (HIDE_ONLY_SINCE above),
+    so denying it refuses the page and the feed still answers to somebody who types the route."""
+    assert nav_access.TABS["/v2-board.html"]["api"] == ()
     assert nav_access.TABS["/polish-estimates.html"]["api"] == ()
     nav_access.save({"user": ["/v2-board.html"]}, "k@x.com")
-    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is True
+    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is False
     assert nav_access.page_denied("user", "/v2-board.html") == "/v2-board.html"
     # the v2 Estimates list is its own row, and reads only the shared /api/drafts
     assert nav_access.page_denied("user", "/polish-estimates.html") is None
-    # exact match: it claims this route and nothing near it
-    assert nav_access.is_api_denied("user", "/api/v2/pipeline/x") is False
-    assert nav_access.is_api_denied("user", "/api/v2/pipelines") is False
-    # a role the policy does not name keeps it, and so do the routes every other page shares
-    assert nav_access.is_api_denied("admin", "/api/v2/pipeline") is False
     for shared in ("/api/drafts", "/api/portal/pipeline", "/api/library/items", "/api/estimators"):
         assert nav_access.is_api_denied("user", shared) is False, shared
-    # and with the row left on, the feed answers
-    nav_access.save({"user": []}, "k@x.com")
-    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is False
 
 
 def test_the_v2_estimates_feed_really_is_a_single_caller_route():
@@ -339,10 +338,10 @@ def test_the_page_refusal_only_tabs_own_no_api():
     /portal.html LEFT THE LIST on 2026-09-29: it now owns /api/portal/deposit/ (the bank-detail
     reveal), so denying the board is a real data refusal again, not just a page refusal. The Admin
     page's wording for this row changes accordingly — see test_denying_the_board_takes_the_deposit_
-    reveal_and_nothing_shared below for the data half of that claim."""
-    assert [h for h, t in nav_access.TABS.items() if not t["api"]] == [
-        "/gc-projects.html", "/polish-estimates.html", "/projects.html",
-        "/library.html", "/markup.html", "/notifications.html", "/admin.html"], (
+    reveal_and_nothing_shared below for the data half of that claim.
+
+    2026-10-27: EVERY tab joined the list (HIDE_ONLY_SINCE above), so this is now all of TABS."""
+    assert [h for h, t in nav_access.TABS.items() if not t["api"]] == list(nav_access.TABS), (
         "the set of tabs that own no private endpoint has changed; the Admin page's on-screen "
         "wording about them is derived from this and needs re-reading")
 
@@ -358,16 +357,13 @@ def test_portal_html_can_never_actually_be_denied():
     assert nav_access.page_denied("user", "/portal.html") is None
 
 
-def test_the_deposit_reveal_prefix_would_be_denied_if_the_board_ever_could_be():
-    """/api/portal/deposit/ is the reveal button's route and it is claimed by /portal.html's `api`
-    tuple in TABS — but /portal.html can never be denied for real (previous test), so this can't be
-    driven through save() the way test_denying_the_follow_ups_board_... is for a normal tab. It
-    passes a POLICY DICT DIRECTLY (is_api_denied's second, unvalidated arg) to prove the TABS wiring
-    itself is correct and ready, in case /portal.html is ever taken out of LOCKED. Until then, the
-    real protection on this route is sign-in alone (main.py's _auth_gate) — see nav_access.py's
-    comment on the TABS entry for why that is not a regression."""
+def test_the_deposit_reveal_prefix_is_not_denied_even_by_a_synthetic_board_denial():
+    """/api/portal/deposit/ was claimed by /portal.html's `api` tuple, inert because /portal.html is
+    LOCKED. Since 2026-10-27 the tuple is empty (HIDE_ONLY_SINCE above), so even a POLICY DICT passed
+    directly (is_api_denied's second, unvalidated arg) refuses nothing. The real protection on this
+    route is sign-in (main.py's _auth_gate), as it always was."""
     policy = {"deny": {"user": ["/portal.html"]}}
-    assert nav_access.is_api_denied("user", "/api/portal/deposit/dep-1/reveal", policy) is True
+    assert nav_access.is_api_denied("user", "/api/portal/deposit/dep-1/reveal", policy) is False
     for shared in ("/api/portal/pipeline", "/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",
                    "/api/portal/followups", "/api/notifications"):
         assert nav_access.is_api_denied("user", shared, policy) is False, shared
@@ -411,7 +407,8 @@ def test_a_policy_saved_under_the_tools_old_href_still_keeps_that_role_off_it():
     assert nav_access.get()["deny"] == {"user": ["/v2-board.html"]}
     assert nav_access.page_denied("user", "/v2-board.html") == "/v2-board.html"
     assert nav_access.page_denied("user", "/polish-intake.html") == "/v2-board.html"
-    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is True
+    # hide-only since 2026-10-27 (HIDE_ONLY_SINCE above): the feed answers, the pages do not
+    assert nav_access.is_api_denied("user", "/api/v2/pipeline") is False
     assert nav_access.page_denied("admin", "/v2-board.html") is None
 
 
@@ -514,17 +511,17 @@ def test_the_hidden_set_is_the_same_list_auth_js_keeps():
         "this module has %s" % (block, sorted(nav_access.NO_SIDEBAR_TABS)))
 
 
-def test_a_hidden_tab_STILL_GATES_ITS_API_which_is_why_its_entry_survived_the_move():
+def test_a_hidden_tab_STILL_REFUSES_ITS_PAGE_which_is_why_its_entry_survived_the_move():
     """THE test for NO_SIDEBAR_TABS, and the loudest claim in this file after the no-op promise.
 
     Info Sheet left the sidebar on 2026-08-20 for the project drawer's Proposal tab. Its capability
-    entry did NOT leave with it, and this is what that buys: a role denied the Info Sheet tab is
-    still refused /api/info-sheet/* by the middleware and still gets a refusal card instead of the
-    page — even though there is no menu row anywhere to hide.
+    entry did NOT leave with it, and this is what that buys: a role denied the Info Sheet tab still
+    gets a refusal card instead of the page — even though there is no menu row anywhere to hide.
+    Its routes (/api/info-sheet/*) were refused too until 2026-10-27, when every tab became hide-only
+    (HIDE_ONLY_SINCE above); they now answer.
 
     The reversal to watch fail: dropping "/info-sheet.html" from TABS. It keeps the sidebar/table
-    comparison above green and turns every assertion here into "nothing is denied", which is a page
-    with no permission at all and an API anybody can read by URL."""
+    comparison above green and turns every page assertion here into "nothing is denied"."""
     hidden = "/info-sheet.html"
     assert hidden in nav_access.NO_SIDEBAR_TABS
     assert hidden not in _sidebar_hrefs(), "this test is about a tab with NO sidebar row"
@@ -533,11 +530,10 @@ def test_a_hidden_tab_STILL_GATES_ITS_API_which_is_why_its_entry_survived_the_mo
     nav_access.save({"user": [hidden]}, "kyle@wetreadwell.com")
     assert nav_access.denied_paths("user") == [hidden], (
         "a tab with no sidebar row could not even be stored as denied")
-    # The API. Both children the page calls, and the bare prefix's neighbours left alone.
-    for path in ("/api/info-sheet/d1", "/api/info-sheet/generate",
-                 "/api/info-sheet/" + "x" * 40):
-        assert nav_access.is_api_denied("user", path) is True, path
-    assert nav_access.denied_api_prefixes("user") == ["/api/info-sheet/"]
+    # The API answers: hide-only since 2026-10-27.
+    for path in ("/api/info-sheet/d1", "/api/info-sheet/generate"):
+        assert nav_access.is_api_denied("user", path) is False, path
+    assert nav_access.denied_api_prefixes("user") == []
     # The page itself, and the tab named back so the refusal card can say which one.
     assert nav_access.page_denied("user", hidden) == hidden
     assert nav_access.denied_page_map("user") == {hidden: hidden}
@@ -556,9 +552,9 @@ def test_a_hidden_tab_still_has_a_row_in_the_capability_table_flagged_as_hidden(
         assert href in table, "%s has no row for the Admin page to draw" % href
         assert table[href]["no_sidebar"] is True
         assert table[href]["locked"] is False
-        assert table[href]["api"], (
-            "%s owns no private route, so hiding the tab is now all a switch there does — the "
-            "Admin page's wording is derived from `api` and needs re-reading" % href)
+        # Empty since 2026-10-27 (HIDE_ONLY_SINCE above): the Admin page reads this and says
+        # "hides the tab only".
+        assert table[href]["api"] == [], href
     assert table["/leads.html"]["no_sidebar"] is False, "a drawn tab is not flagged hidden"
 
 
