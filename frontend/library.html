@@ -758,6 +758,24 @@
        nothing. */
     .empty p:empty { display:none; }
     .foot { color:var(--ink-v); font-size:12px; margin-top:20px; max-width:76ch; }
+    /* THE PAGERS (2026-10-27): 25 materials, or 25 assembly cards, at a time. Hidden by the
+       [hidden] rule just below whenever everything fits on one page, which is why that rule keeps
+       its !important: this display:flex would otherwise beat the attribute. Spent edge buttons
+       carry aria-disabled, not `disabled` (see paintPager), so they are dimmed here and their
+       hover is put back to rest. */
+    .pager { display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px; padding:10px 11px;
+      border-top:1px solid var(--line-soft); font-size:12px; color:var(--ink-v);
+      font-variant-numeric:tabular-nums; }
+    .pager .pager-page { color:var(--ink); font-weight:600; }
+    .pager .pager-next { margin-left:auto; }
+    .pager .btn[aria-disabled="true"] { opacity:.45; cursor:default; }
+    .pager .btn.ghost[aria-disabled="true"]:hover { color:var(--ink-v); border-color:var(--line);
+      background:transparent; }
+    #items-pager-top { border-top:0; padding:2px 11px 6px; justify-content:flex-end; }
+    #items-pager-top .pager-next { margin-left:0; }
+    /* The rail is 272px: the two lines of text sit between the buttons, one above the other. */
+    .pager.rail { padding:8px; gap:8px; flex-wrap:nowrap; }
+    .pager.rail .pager-text { display:grid; gap:1px; text-align:center; flex:1; min-width:0; }
     [hidden] { display:none !important; }
     .saving { color:var(--ink-v); font-size:11.5px; }
 
@@ -872,6 +890,15 @@
                  focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
             Add material</button>
         </div>
+        <!-- The compact pager over the table: Previous, the page, Next. The full one, with the
+             "26–50 of 140" count, is under it. Both hidden until there is a second page. -->
+        <nav class="pager" id="items-pager-top" aria-label="Material pages, above the table" hidden>
+          <button class="btn ghost sm" type="button" id="items-pager-top-prev" data-pager="items"
+                  data-step="-1" aria-disabled="true">Previous</button>
+          <span class="pager-page" id="items-pager-top-page"></span>
+          <button class="btn ghost sm pager-next" type="button" id="items-pager-top-next"
+                  data-pager="items" data-step="1">Next</button>
+        </nav>
         <div class="tw">
           <table class="items-table">
             <thead>
@@ -912,6 +939,14 @@
             <tbody id="items-body"></tbody>
           </table>
         </div>
+        <nav class="pager" id="items-pager" aria-label="Material pages" hidden>
+          <button class="btn ghost sm" type="button" id="items-pager-prev" data-pager="items"
+                  data-step="-1" aria-disabled="true">Previous</button>
+          <span class="pager-page" id="items-pager-page" aria-live="polite"></span>
+          <span class="pager-range" id="items-pager-range"></span>
+          <button class="btn ghost sm pager-next" type="button" id="items-pager-next"
+                  data-pager="items" data-step="1">Next</button>
+        </nav>
         <div id="items-nomatch" class="empty" hidden>
           <h3>Nothing matches that</h3>
           <p id="items-nomatch-why"></p>
@@ -1392,6 +1427,16 @@
               New assembly</button>
           </div>
           <div class="alist" id="asm-list"></div>
+          <nav class="pager rail" id="asm-pager" aria-label="Assembly pages" hidden>
+            <button class="btn ghost sm" type="button" id="asm-pager-prev" data-pager="asm"
+                    data-step="-1" aria-disabled="true">Previous</button>
+            <span class="pager-text">
+              <span class="pager-page" id="asm-pager-page" aria-live="polite"></span>
+              <span class="pager-range" id="asm-pager-range"></span>
+            </span>
+            <button class="btn ghost sm" type="button" id="asm-pager-next" data-pager="asm"
+                    data-step="1">Next</button>
+          </nav>
           <!-- In the rail, not a panel of its own. `#asm-empty` below is the LIBRARY being empty
                and renderPanel owns it; this is a filter that matched nothing, and renderList owns
                it. Two functions fighting over one node is how a caption ends up wrong, and the two
