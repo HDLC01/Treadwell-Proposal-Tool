@@ -64,7 +64,10 @@ class World:
         monkeypatch.setattr(drafts, "get_client", lambda: fake_supabase(self.store))
         monkeypatch.setattr(main.drafts, "set_assigned_estimator", lambda *a, **k: True)
         monkeypatch.setattr(main, "_render_documents", lambda pp, req, want_estimate: {
-            "docx": {"content": b"docx"}, "payload_sha256": main._canonical_sha256(pp),
+            "docx": {"content": b"docx:" + main._canonical_sha256(pp).encode()},
+            "xlsx": {"content": b"xlsx"} if want_estimate else None,
+            "work_type": "epoxy", "audience": "Direct", "totals": {},
+            "payload_sha256": main._canonical_sha256(pp),
             "render_id": "r-" + main._canonical_sha256(pp)[:8]})
         monkeypatch.setattr(main, "_entry_pdf", lambda entry: b"%PDF-1.4")
         monkeypatch.setattr(main, "_stale_document_refusal", lambda digest: None)
@@ -152,24 +155,44 @@ def test_a_proposal_whose_document_changed_since_it_was_published_is_published_a
     assert len(w.sends) == 1
 
 
-def test_one_proposal_without_files_stops_the_press_and_nothing_is_published(fake_supabase,
+def test_one_never_built_proposal_asks_for_its_build_and_nothing_is_published(fake_supabase,
                                                                               monkeypatch):
+    """Hanz, 2026-10-28: a third base bid made by Create Multiple Proposals has no document. The
+    press answers needs_build, naming it, so the page builds it and presses again; nothing is
+    published, minted, written or emailed meanwhile."""
     rows = _three()
     rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
     w = World(fake_supabase, monkeypatch, rows)
+    before = copy.deepcopy(w.store["drafts"])
     r = _press()
     assert r.status_code == 409, r.text
     j = r.json()
-    assert j["code"] == "not_ready_to_send"
-    assert j["error"] == "Nothing was sent. Room 2: build its files on its Files page first."
-    assert j["blocked"] == [{"id": "s2", "label": "Room 2",
-                             "error": "build its files on its Files page first"}]
+    assert j["code"] == "needs_build"
+    assert j["build"] == [{"id": "s2", "label": "Room 2"}]
+    assert j["error"] == ("Nothing was sent. Room 2 has never been built. Open its Proposal step "
+                          "and press Continue to Done, then send again.")
     assert w.publishes == [], "a half-ready project published its other proposals"
     assert w.store["draft_revisions"] == [], "a refused press minted a revision"
     assert w.sends == [], "a refused press emailed the customer"
+    assert w.store["drafts"] == before, "a refused press wrote a draft"
+
+
+def test_two_never_built_proposals_are_both_named(fake_supabase, monkeypatch):
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    rows[2] = _draft("s3", "Room 3", "2026-10-03", files=False)
+    w = World(fake_supabase, monkeypatch, rows)
+    j = _press().json()
+    assert j["code"] == "needs_build"
+    assert [b["id"] for b in j["build"]] == ["s2", "s3"]
+    assert j["error"].startswith("Nothing was sent. Room 2 and Room 3 have never been built. "
+                                 "Open each one's Proposal step")
+    assert w.publishes == [] and w.sends == []
 
 
 def test_every_blocked_proposal_is_named_with_what_to_do(fake_supabase, monkeypatch):
+    """A never-built proposal beside one that cannot go for another reason: the press says both,
+    and building is not started (it could not end in a send)."""
     rows = _three()
     rows[0] = _draft("s1", "Room 1", "2026-10-01", files=False)
     rows[2]["data"]["assigned_estimator"] = ""
@@ -179,9 +202,87 @@ def test_every_blocked_proposal_is_named_with_what_to_do(fake_supabase, monkeypa
     # Room 3 has an estimator now only through the group (Room 1's), so it is not blocked for that.
     r = _press()
     assert r.status_code == 409, r.text
-    assert r.json()["error"] == ("Nothing was sent. Room 1: build its files on its Files page first."
-                                 " Room 2: add a customer email on its Files page first.")
+    j = r.json()
+    assert j["code"] == "not_ready_to_send"
+    assert j["error"] == ("Nothing was sent. Room 1: it has never been built; Send all builds it "
+                          "for you once the others can go."
+                          " Room 2: add a customer email on its Files page first.")
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s1", "needs_build"),
+                                                             ("s2", "no_recipient")]
     assert w.publishes == [] and w.sends == []
+
+
+def test_a_never_built_proposal_with_no_estimator_anywhere_is_not_built(fake_supabase,
+                                                                         monkeypatch):
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    for r in rows:
+        r["data"]["assigned_estimator"] = ""
+    w = World(fake_supabase, monkeypatch, rows)
+    j = _press().json()
+    assert j["code"] == "not_ready_to_send"
+    assert {b["id"]: b["code"] for b in j["blocked"]}["s2"] == "no_estimator"
+    assert w.publishes == [] and w.sends == []
+
+
+def test_a_built_proposal_without_files_is_published_and_its_files_recorded(fake_supabase,
+                                                                             monkeypatch):
+    """Built (the door composed its document) but never downloaded: it needs no page. It is
+    published, and its files are recorded on the draft as its Files page's Download records them."""
+    rows = _three()
+    del rows[1]["data"]["generate_result"]
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"] and len(w.sends) == 1
+    s2 = next(x for x in w.store["drafts"] if x["id"] == "s2")["data"]
+    assert s2["generate_result"]["render_id"] == "r-" + main._canonical_sha256(
+        s2["proposal_payload"])[:8]
+    # The others' own records are left as they were.
+    s1 = next(x for x in w.store["drafts"] if x["id"] == "s1")["data"]
+    assert s1["generate_result"] == {"work_type": "epoxy"}
+    # THE SAME FILES ITS FILES PAGE'S DOWNLOAD HANDS OVER: POST /documents on the same draft.
+    d = client.post("/api/draft/s2/documents", json={})
+    assert d.status_code == 200, d.text
+    assert d.json()["render_id"] == s2["generate_result"]["render_id"]
+    tok = lambda url: url.rsplit("/", 1)[-1]
+    assert (main._FILE_CACHE[tok(d.json()["docx_download_url"])]["content"]
+            == main._FILE_CACHE[tok(s2["generate_result"]["docx_download_url"])]["content"])
+
+
+def test_a_member_with_files_is_not_rebuilt_or_rerecorded(fake_supabase, monkeypatch):
+    """A proposal that HAS its document and files is untouched by the new path: published from its
+    own payload, its generate_result never rewritten, and today's refusals still fire for it."""
+    w = World(fake_supabase, monkeypatch, _three())
+    renders = []
+    real = main._render_documents
+    monkeypatch.setattr(main, "_render_documents", lambda pp, req, want_estimate: (
+        renders.append(want_estimate), real(pp, req, want_estimate=want_estimate))[1])
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert renders == [False, False, False], "a member with files had its workbook rebuilt"
+    for x in w.store["drafts"]:
+        assert x["data"]["generate_result"] == {"work_type": "epoxy"}
+
+
+def test_after_the_build_the_second_press_sends_everything_in_one_email(fake_supabase,
+                                                                        monkeypatch):
+    """THE CASE, server half: the first press asks for Room 2's build; the Proposal step's door
+    composes its document (a payload, no files: continueToDone never visits its Files page in the
+    chain); the press made again publishes all three, records Room 2's files, and sends ONE email."""
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    w = World(fake_supabase, monkeypatch, rows)
+    first = _press({"message": "All three."})
+    assert first.status_code == 409 and first.json()["code"] == "needs_build"
+    s2 = next(x for x in w.store["drafts"] if x["id"] == "s2")
+    s2["data"]["proposal_payload"] = {"values": {"total_formatted": "$2,000", "who": "s2"}}
+    again = _press({"message": "All three."})
+    assert again.status_code == 200, again.text
+    assert w.published_ids == ["s1", "s2", "s3"], "each proposal is published exactly once"
+    assert len(w.sends) == 1 and w.sends[0]["message"] == "All three."
+    assert s2["data"]["generate_result"]["render_id"]
+    assert [len(w.revisions(i)) for i in ("s1", "s2", "s3")] == [1, 1, 1]
 
 
 def test_a_proposal_with_no_estimator_anywhere_is_blocked(fake_supabase, monkeypatch):
@@ -409,3 +510,286 @@ def test_a_republished_neighbour_with_no_stored_choice_keeps_the_portals(fake_su
     assert r.status_code == 200, r.text
     by = {b["draft_id"]: b for b in w.publishes}
     assert "require_deposit" not in by["s1"]
+
+
+# ─── what the Proposal step's tab says is asked before the press builds a proposal unattended ──
+# Review of the build-what-was-never-built change: a proposal of Create Multiple Proposals whose tab
+# says "Estimate changed" or "same sheet as Base Bid 1" was built from its old copy and emailed,
+# because the walk opens its Proposal step with nobody looking. Real fan-out children, real
+# drafts.proposals_view.
+def _fanned(fake_supabase, monkeypatch, parent, bases):
+    """A World holding `parent` (built, with files) and the never-built children Create Multiple
+    Proposals makes for `bases`; returns (world, group id, child ids)."""
+    import test_multi_proposals as tmp
+    p = copy.deepcopy(parent)
+    p["is_test"] = False
+    w = World(fake_supabase, monkeypatch, [{"id": "p1", "data": p, "owner_email": EST,
+                                            "created_at": "2026-10-01", "updated_at": tmp.V,
+                                            "deleted_at": None}])
+    out = drafts.fan_out_proposals("p1", list(bases), "rj@x.test")
+    kids = [c["id"] for c in out["children"]]
+    for k in kids:
+        row = next(r for r in w.store["drafts"] if r["id"] == k)
+        assert not (row["data"].get("proposal_payload") or {}).get("values"), "a child came built"
+    return w, out["group_id"], kids
+
+
+def _press_group(gid, body=None):
+    return client.post("/api/portal/scope-group/%s/send-all" % gid, json=body or {})
+
+
+def test_a_fresh_never_built_child_still_asks_for_its_build(fake_supabase, monkeypatch):
+    """The control: a child whose tab warns about nothing is needs_build, as before."""
+    import test_multi_proposals as tmp
+    w, gid, kids = _fanned(fake_supabase, monkeypatch, tmp.PARENT, ("Epoxy", "Copy1"))
+    j = _press_group(gid).json()
+    assert j["code"] == "needs_build", j
+    assert [b["id"] for b in j["build"]] == kids
+    assert w.publishes == [] and w.sends == []
+
+
+def test_a_stale_never_built_child_is_not_built_and_starts_no_walk(fake_supabase, monkeypatch):
+    """The parent's estimate changed after Room 2 was copied: its tab says "Estimate changed". The
+    press must not build it from its old copy and email that price."""
+    import test_multi_proposals as tmp
+    w, gid, kids = _fanned(fake_supabase, monkeypatch, tmp.PARENT, ("Epoxy", "Copy1"))
+    parent = next(r for r in w.store["drafts"] if r["id"] == "p1")
+    parent["data"]["cell_values"]["Copy1!E20"] = 3100
+    assert [m["stale"] for m in drafts.proposals_view("p1")["members"]] == [False, True]
+    r = _press_group(gid)
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", "a stale proposal started an unattended build"
+    assert "build" not in j
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [(kids[0], "needs_refresh")]
+    assert ("Room 2: the estimate changed after it was copied; press Refresh on its Proposal step "
+            "first.") in j["error"], j["error"]
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+
+
+def test_a_same_as_base_never_built_child_is_not_built(fake_supabase, monkeypatch):
+    """A Base Bid 1 swap left the child on Base Bid 1's sheet: its tab says "same sheet as Base Bid
+    1: press Refresh". Built unattended it would be a second copy of the parent's price."""
+    import test_multi_proposals as tmp
+    w, gid, kids = _fanned(fake_supabase, monkeypatch, tmp.POLISH_FIRST, ("Polish", "Epoxy"))
+    parent = next(r for r in w.store["drafts"] if r["id"] == "p1")
+    parent["data"].update(base_tab_id="Epoxy", base_tab_ids=["Epoxy", "Polish"],
+                          proposal_lump_sum=20000)
+    assert [m["out_of_step"] for m in drafts.proposals_view("p1")["members"]] == [None,
+                                                                                  "same_as_base"]
+    r = _press_group(gid)
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", "an out-of-step proposal started an unattended build"
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [(kids[0], "needs_refresh")]
+    assert ("it prices no base bid of its own (same sheet as Base Bid 1); press Refresh on its "
+            "Proposal step first.") in j["error"], j["error"]
+    assert w.publishes == [] and w.sends == []
+
+
+@pytest.mark.parametrize("mark, code", [
+    ({"closed_lost": {"reason": "price", "by": EST, "at": "2026-10-20", "note": "went elsewhere"}},
+     "closed_lost"),
+    ({"on_hold": {"reason": "on_hold", "note": "owner paused", "by": EST, "at": "2026-10-20",
+                  "until": "2026-11-20"}}, "on_hold"),
+])
+@pytest.mark.parametrize("files", ["never_built", "built_no_files"])
+def test_a_proposal_closed_or_paused_on_the_board_is_never_built_or_sent(fake_supabase, monkeypatch,
+                                                                         mark, code, files):
+    """Before the press built proposals itself, one without files stopped it. A proposal closed lost
+    or on hold on the board must still stop it, not be built and emailed by its neighbours' press."""
+    rows = _three()
+    if files == "never_built":
+        rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    else:
+        del rows[1]["data"]["generate_result"]
+    rows[1]["data"].update(copy.deepcopy(mark))
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", j
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", code)]
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+
+
+# ─── Kyle's placeholders are never sent unattended (Hanz, 2026-10-28) ──
+# A GC proposal's defaults are Kyle's file with its blanks in it ("xx gallons/kits", "[ 1 mob/phase ]",
+# "-or-" choices, "xx Architects", the Sealer's "03xx"). Send all's walk builds a proposal nobody
+# opened, so one that would print them is held, and the press says which and what to do.
+GC_HELD = ("Nothing was sent. Room 2: its scope still has template placeholders (xx gallons, xx kits, "
+           "[ 1 mob/phase ], xx Architects). Open its Proposal step, fill them, then send again.")
+
+
+def _gc_never_built(**data):
+    return _draft("s2", "Room 2", "2026-10-02", files=False, audience="GC", **data)
+
+
+def test_a_never_built_gc_proposal_with_placeholders_is_held_before_any_walk(fake_supabase,
+                                                                            monkeypatch):
+    rows = _three()
+    rows[1] = _gc_never_built()
+    w = World(fake_supabase, monkeypatch, rows)
+    before = copy.deepcopy(w.store["drafts"])
+    r = _press()
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", "a proposal that would print placeholders was walked"
+    assert "build" not in j
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", "placeholders")]
+    assert j["error"] == GC_HELD
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+    assert w.store["drafts"] == before, "a held press wrote a draft"
+
+
+def test_a_gc_sealer_names_its_choices_and_spec(fake_supabase, monkeypatch):
+    rows = _three()
+    rows[1] = _gc_never_built(work_type="sealer", architect="Gould Evans")
+    w = World(fake_supabase, monkeypatch, rows)
+    j = _press().json()
+    assert j["code"] == "not_ready_to_send"
+    assert ("Room 2: its scope still has template placeholders ([ 1 mob/phase ], -or- choices, "
+            "03xx).") in j["error"], j["error"]
+    assert w.publishes == []
+
+
+def test_a_never_built_gc_proposal_whose_words_are_filled_is_still_built(fake_supabase,
+                                                                        monkeypatch):
+    """The control: nothing of Kyle's left to fill, so the press asks for its build as before."""
+    rows = _three()
+    rows[1] = _gc_never_built(scope_notes="Install 3/16in Resinous System. 12 kits of patch.",
+                              schedule_notes="2 mobs. Approx. 1 week.", architect="Gould Evans")
+    w = World(fake_supabase, monkeypatch, rows)
+    j = _press().json()
+    assert j["code"] == "needs_build", j
+    assert w.publishes == []
+
+
+def test_a_never_built_direct_proposal_is_still_built(fake_supabase, monkeypatch):
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    World(fake_supabase, monkeypatch, rows)
+    assert _press().json()["code"] == "needs_build"
+
+
+def _walk_built(values, **data):
+    """Room 2 as Send all's walk left it: a document, no files, `proposal_auto_built`."""
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False, audience="GC",
+                     proposal_auto_built=True, **data)
+    rows[1]["data"]["proposal_payload"] = {"work_type": "epoxy", "audience": "GC",
+                                           "values": dict(values, total_formatted="$2,000")}
+    return rows
+
+
+def test_a_walk_built_proposal_that_prints_placeholders_is_not_sent(fake_supabase, monkeypatch):
+    """THE CASE: the first press walked Room 2; the document the walk composed still prints Kyle's
+    blanks (blank words print the GC defaults), and the second press holds it."""
+    w = World(fake_supabase, monkeypatch, _walk_built({"scope_notes": "", "schedule_notes": "",
+                                                       "architect": ""}))
+    r = _press({"message": "All three."})
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", "placeholders")]
+    assert j["error"] == GC_HELD
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+
+
+def test_a_walk_built_proposal_with_typed_placeholders_is_held(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _walk_built({
+        "scope_notes": "Apply [1 coat -or- up to 2 coats of sealer", "schedule_notes": "1 week",
+        "architect": "Gould", "spec_section": "03xx"}))
+    j = _press().json()
+    assert "(-or- choices, 03xx)" in j["error"], j["error"]
+    assert w.publishes == []
+
+
+def test_a_walk_built_proposal_without_placeholders_goes(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _walk_built({
+        "scope_notes": "Install Resinous System. 12 kits of patch included.",
+        "schedule_notes": "2 mobs, approx. 1 week", "architect": "Gould Evans"}))
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"] and len(w.sends) == 1
+
+
+def test_a_proposal_a_person_composed_is_theirs_to_send_as_written(fake_supabase, monkeypatch):
+    """No mark: somebody opened its Proposal step and pressed Continue, and read what it says."""
+    rows = _walk_built({"scope_notes": "", "schedule_notes": "", "architect": ""})
+    rows[1]["data"]["proposal_auto_built"] = False
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"]
+
+
+def test_the_placeholder_list_is_kyles_own_words():
+    """Each placeholder the press names is in the GC defaults or the GC template words it guards."""
+    words = "\n".join([main._DEFAULT_SCOPE_GC_RESINOUS, main._DEFAULT_SCOPE_GC_SEALER,
+                       main._DEFAULT_SCHEDULE_GC]
+                      + [v for t in main.proposal_writer.TEMPLATE_TOKEN_DEFAULTS.values()
+                         for v in t.values()])
+    for shown, rx in main._PLACEHOLDERS:
+        assert rx.search(words), shown
+    # And none of the Direct defaults trips it: a Direct proposal is never held for its defaults.
+    assert main._placeholders_in({}, "epoxy", "Direct") == []
+    assert main._placeholders_in({}, "polish", "Direct") == []
+    assert main._placeholders_in({}, "polish", "GC") == ["[ 1 mob/phase ]", "xx Architects"]
+
+
+# ─── a proposal still named "Base Bid N" is named after its sheet when it is published ──
+def _old_named(label="Base Bid 2", sheet="Breakroom"):
+    rows = _three()
+    rows[1]["data"]["scope_group"]["label"] = label
+    rows[1]["data"].update(base_tab_id="Copy1", tab_labels={"Copy1": sheet},
+                           priced_tabs=[{"id": "Copy1", "name": sheet, "role": "epoxy"}])
+    return rows
+
+
+def _label_of(w, rid):
+    return next(r for r in w.store["drafts"] if r["id"] == rid)["data"]["scope_group"]["label"]
+
+
+def test_send_all_stores_the_sheet_name_before_publishing(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named())
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert _label_of(w, "s2") == "Breakroom", "the customer would read Base Bid 2"
+    assert {p["id"]: p["label"] for p in r.json()["published"]}["s2"] == "Breakroom"
+    (rev,) = w.revisions("s2")
+    assert rev["data"]["scope_group"]["label"] == "Breakroom", "the snapshot kept the old name"
+    ev = [e for e in w.store["events"] if e.get("action") == "scope_renamed"]
+    assert [(e["detail"]["from"], e["detail"]["to"]) for e in ev] == [("Base Bid 2", "Breakroom")]
+    # The others were named by a person and keep their names.
+    assert (_label_of(w, "s1"), _label_of(w, "s3")) == ("Room 1", "Room 3")
+
+
+def test_the_single_publish_stores_the_sheet_name(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named())
+    r = client.post("/api/portal/publish?draft_id=s2", json={"assigned_estimator": EST})
+    assert r.status_code == 200, r.text
+    assert _label_of(w, "s2") == "Breakroom"
+    assert r.json()["scope_label"] == "Breakroom"
+
+
+def test_a_typed_name_is_never_replaced(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named(label="Upstairs"))
+    assert _press().status_code == 200
+    assert _label_of(w, "s2") == "Upstairs"
+    assert not [e for e in w.store["events"] if e.get("action") == "scope_renamed"]
+
+
+def test_a_sheet_name_another_proposal_has_is_numbered(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named(sheet="Room 1"))
+    assert _press().status_code == 200
+    assert _label_of(w, "s2") == "Room 1 2"
+
+
+def test_a_refused_press_renames_nothing_but_says_the_sheet_name(fake_supabase, monkeypatch):
+    rows = _old_named()
+    rows[1]["data"]["contact_email"] = ""
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 409, r.text
+    assert "Breakroom: add a customer email on its Files page first." in r.json()["error"]
+    assert _label_of(w, "s2") == "Base Bid 2"

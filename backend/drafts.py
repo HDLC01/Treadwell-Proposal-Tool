@@ -1922,6 +1922,81 @@ def _local_sent(draft_id: str) -> bool:
     return bool(latest_revision_no(draft_id))
 
 
+# WHO SIGNS A NEW PROPOSAL OF CREATE MULTIPLE PROPOSALS (Hanz, 2026-10-28): the same person as
+# Base Bid 1, so every proposal of one project is signed alike. The Proposal step signs with the
+# draft's `estimator_name` (proposal-review.js prefillEstimator), else the name its last document was
+# signed with, else whoever has the page open; and at the address its last document carried for that
+# name, else the viewer's (computeTokenValues). A child has neither a name nor a document, so it was
+# signed by whoever opened it, or, built by Send all's walk, by whoever pressed Send all.
+#
+# `estimator_signer` pairs the address with the NAME it belongs to, so a name typed over it later
+# never signs with Base Bid 1's address. Set once, when the child is made: a refresh replaces only
+# _REFRESH_REPLACED, so a signer changed on the child stays.
+PROPOSAL_SIGNER_KEYS = ("estimator_name", "estimator_signer")
+
+
+def _parent_signer(parent: Dict[str, Any]) -> Dict[str, Any]:
+    """{estimator_name, estimator_signer: {name, email}} of `parent`'s signature, the keys it has.
+    {} when the parent names nobody."""
+    pp = parent.get("proposal_payload")
+    signed = (pp.get("values") if isinstance(pp, dict) else None) or {}
+    signed = signed if isinstance(signed, dict) else {}
+    own = parent.get("estimator_name")
+    name = (own.strip() if isinstance(own, str) else "") or str(signed.get("estimator_name") or "").strip()
+    if not name:
+        return {}
+    out: Dict[str, Any] = {"estimator_name": name}
+    email = ""
+    if str(signed.get("estimator_name") or "").strip().lower() == name.lower():
+        email = str(signed.get("estimator_email") or "").strip()
+    held = parent.get("estimator_signer")
+    if not email and isinstance(held, dict) and str(held.get("name") or "").strip().lower() == name.lower():
+        email = str(held.get("email") or "").strip()     # a parent that was itself seeded so
+    if email:
+        out["estimator_signer"] = {"name": name, "email": email}
+    return out
+
+
+def adopt_sheet_label(draft_id: str, actor: Optional[str] = None) -> Optional[str]:
+    """A proposal still stored as "Base Bid N" (_OLD_DEFAULT_LABEL: never renamed), named after its
+    base sheet before it is published (Hanz, 2026-10-28). The tool shows such a proposal by its
+    sheet's name (_shown_label, proposals_view), but the portal reads the STORED label, so the
+    customer's portal and the project's email said "Base Bid 2". The sheet is named off the parent's
+    estimate, as the strip names it (proposals_view), and a clash is numbered (_free_label).
+
+    Returns the new label, or None when nothing was written: no group, a label a person typed (or
+    none), no sheet name, or a name that cannot be freed. Same posture as rename_scope: `updated_at`
+    is not bumped (the publish's draft_version check reads it), and the event is scope_renamed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("id,data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return None
+    data = dict(cur.data[0].get("data") or {})
+    gid, old = _scope_of(data)
+    if not gid or not old or not _OLD_DEFAULT_LABEL.match(old):
+        return None
+    source = data
+    parent_id = data.get("proposal_of")
+    if isinstance(parent_id, str) and parent_id and parent_id != draft_id:
+        prow = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+        if prow.data:
+            source = prow.data[0].get("data") or data
+    sheet = proposal_sheet_label(source, data.get("base_tab_id"))
+    if not sheet or sheet == old:
+        return None
+    taken = {m["label"].lower() for m in _group_rows(gid) if m["id"] != draft_id and m["label"]}
+    want = _free_label(sheet, taken)
+    if want.lower() in taken:
+        return None
+    data["scope_group"] = dict(data["scope_group"], label=want)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor, "scope_renamed", {"project_name": data.get("project_name"),
+                                                 "id": draft_id, "group": gid,
+                                                 "from": old, "to": want})
+    _cache_clear()
+    return want
+
+
 def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] = None,
                       sent: bool = False,
                       child_sent: Optional[Callable[[str], bool]] = None) -> Dict[str, Any]:
@@ -2041,6 +2116,7 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
 
     now = datetime.now(timezone.utc)
     digest = estimate_digest(parent)
+    signer = _parent_signer(parent)
     made: List[Dict[str, Any]] = []
     in_flight: List[str] = []
     shifted: List[Dict[str, Any]] = []
@@ -2055,6 +2131,8 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
             d["estimate_synced_at"] = now.isoformat()
             # Its own words start empty (PROPOSAL_NARRATIVE_KEYS), but its texture starts as ITS sheet's.
             _seed_texture(d, _v2_texture(parent, tab))
+            # And it is signed by whoever signs Base Bid 1 (_parent_signer).
+            d.update(signer)
             stamp = _stamp_at(now, i)
             in_flight[:] = [cid]
             sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,

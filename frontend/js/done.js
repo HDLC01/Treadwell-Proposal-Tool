@@ -744,6 +744,41 @@
     catch { return true; }
   }
 
+  /** SEND ALL, PRESSED AGAIN after it built the proposals that were never built (send-all-chain.js,
+   *  Hanz 2026-10-28). What the estimator chose before the walk (`stash`: the message, recipients,
+   *  follow-up opt-outs, estimator, deposit, notify picks) goes back on screen once the pickers
+   *  have mounted (`mounted`), and the page's own Send button is pressed, so every check it makes
+   *  is made again on the copy as it stands now. Picked files cannot ride a page change: with any,
+   *  nothing is pressed and the estimator is asked to attach them again. */
+  async function resumeSendAll(stash, portalBtn, mounted) {
+    try { await mounted; } catch {}
+    const msgEl = document.getElementById("portal-message");
+    if (msgEl && typeof stash.message === "string") msgEl.value = stash.message;
+    const dep = document.getElementById("portal-require-deposit");
+    if (dep && typeof stash.require_deposit === "boolean") dep.checked = stash.require_deposit;
+    const sel = document.getElementById("portal-estimator");
+    const est = String(stash.assigned_estimator || "").toLowerCase();
+    if (sel && est && Array.from(sel.options || []).some((o) => String(o.value).toLowerCase() === est)) sel.value = est;
+    if (portalRecip.restore) portalRecip.restore(stash.emails, stash.no_followups);
+    if (notifyPick.ready) {
+      notifyPick.changed = {};
+      (stash.notify_add || []).forEach((e) => { notifyPick.changed[String(e).toLowerCase()] = true; });
+      (stash.notify_mute || []).forEach((e) => { notifyPick.changed[String(e).toLowerCase()] = false; });
+    }
+    paintNotifyChips();
+    if (stash.attachments > 0) {
+      if (portalRecip.setErr) {
+        portalRecip.setErr("Every proposal is built now, and nothing has been sent yet. Your attached "
+          + "files could not come along while the others were built: attach them again, then press "
+          + "Send all proposals in one email.");
+      }
+      if (portalBtn.focus) portalBtn.focus();
+      return "attach";
+    }
+    portalBtn.click();
+    return "pressed";
+  }
+
   function mountPortalRecipients() {
     const box = document.getElementById("portal-recipients");
     if (!box) return;
@@ -942,6 +977,21 @@
     portalRecip.commitEdit = () => (!editingIntake) ? true : saveIntake(editInput ? editInput.value : portalRecip.intake);
     portalRecip.setErr = setErr;
     portalRecip.setBusy = (b) => { addInput.disabled = addBtn.disabled = !!b; };
+    // The list as a send left it (`emails` was allEmails() then, `noFu` its opt-outs), put back
+    // when Send all comes back from building the proposals that were never built (resumeSendAll).
+    portalRecip.restore = (emails, noFu) => {
+      const list = (Array.isArray(emails) ? emails : []).map((e) => String(e || "").trim())
+        .filter((e) => EMAIL_RE.test(e));
+      if (!list.length) return;
+      if (portalRecip.hasIntake && list[0].toLowerCase() !== portalRecip.intake.toLowerCase()) {
+        portalRecip.intake = list[0];
+        intakeEdited = true;
+      }
+      portalRecip.extras = portalRecip.hasIntake ? list.slice(1) : list;
+      portalRecip.noFollowups = (Array.isArray(noFu) ? noFu : []).filter((e) => list.indexOf(e) >= 0);
+      setErr("");
+      renderList();
+    };
     portalRecip.ready = true;
     renderList();
   }
@@ -1564,8 +1614,8 @@
     mountRequireDeposit();
     // Awaited so the chips can mark whoever ends up assigned as already-included; the estimator
     // picker is what decides that, and it resolves the roster from the server.
-    mountEstimatorPicker().then(paintNotifyChips).catch(() => {});
-    mountNotifyRoster();
+    const _estMounted = mountEstimatorPicker().then(paintNotifyChips).catch(() => {});
+    const _rosterMounted = Promise.resolve(mountNotifyRoster()).catch(() => {});
     // Changing the estimator changes who is implicitly told, so the chips follow the select.
     const _estSel = document.getElementById("portal-estimator");
     if (_estSel) _estSel.addEventListener("change", paintNotifyChips);
@@ -1805,6 +1855,30 @@
               try { ans = JSON.parse(m[2]) || {}; } catch { ans = { error: m[2] }; }
             }
             allOut = window.TWCrm.scopeSendOutcome(status, ans, null);
+            // PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): nothing was published. Each is
+            // built through its own Proposal step's door (send-all-chain.js), then this page comes
+            // back, puts these choices back on screen and presses Send again, every check above
+            // asked again (resumeSendAll). A page that resumed once never builds again, and a page
+            // that cannot build says the server's manual way.
+            if (allOut.build) {
+              const _stash = { message, emails, no_followups: _publishBody.no_followups,
+                               assigned_estimator: assignedEstimator, require_deposit: requireDeposit,
+                               notify_add: _publishBody.notify_add, notify_mute: _publishBody.notify_mute,
+                               attachments: Array.isArray(attachments) ? attachments.length : 0 };
+              const _back = String(window.location.href || "")
+                .replace(/([?&])composed=1(&|$)/, "$1").replace(/[?&]$/, "");
+              if (window.TWSendAll && window.TWSendAll.start({ group: _group, build: allOut.build,
+                                                               returnUrl: _back, stash: _stash })) {
+                portalBtn.textContent = "Building " + allOut.build.length
+                  + (allOut.build.length === 1 ? " proposal first…" : " proposals first…");
+                if (portalRecip.setErr) portalRecip.setErr(allOut.text);
+                return;
+              }
+              portalBtn.disabled = false; portalBtn.textContent = orig;
+              if (portalRecip.setBusy) portalRecip.setBusy(false);
+              if (portalRecip.setErr) portalRecip.setErr(allOut.fallback);
+              return;
+            }
             const mine = (Array.isArray(ans.published) ? ans.published : []).some((x) => x && x.id === draftId);
             if (!allOut.sent && !mine) {
               // NOTHING of this proposal went anywhere: the button comes back, the sentence says why.
@@ -1926,6 +2000,14 @@
             ? "This proposal has no customer email — add a recipient above." : msg);
         }
       });
+    }
+    // BACK FROM BUILDING (send-all-chain.js): the walk this page started has built every proposal
+    // it named. take() hands it over ONCE, to this project only; then the choices go back on screen
+    // and the button is pressed again (resumeSendAll).
+    if (portalBtn && _myGroup && typeof _myGroup === "object" && _myGroup.id && window.TWSendAll) {
+      let back = null;
+      try { back = window.TWSendAll.take(new URLSearchParams(location.search), _myGroup.id); } catch { back = null; }
+      if (back) resumeSendAll(back.stash || {}, portalBtn, Promise.all([_estMounted, _rosterMounted]));
     }
 
     document.getElementById("restart-btn").addEventListener("click", () => {

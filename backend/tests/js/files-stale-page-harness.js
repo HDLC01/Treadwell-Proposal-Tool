@@ -235,7 +235,8 @@ async function tab(local, server, opts) {
     "checkedDocument", "TWPrice", '"use strict"; ' + SEND);
 
   return {
-    TW, rec, checkedDocument, ls: sandbox.localStorage, window: sandbox.window, portalBtn,
+    TW, rec, checkedDocument, ls: sandbox.localStorage, ss: sandbox.sessionStorage,
+    window: sandbox.window, portalBtn,
     /** The mount's label for the Send button, run on a fresh button. */
     mountLabel: () => { const btn = { textContent: "\u2197 Send to customer portal" };
       new Function("TW", "portalBtn", '"use strict"; ' + GROUP_LABEL)(TW, btn); return btn.textContent; },
@@ -605,6 +606,108 @@ function current() {
         published: [{ id: "d1", label: "Room 2", revision_no: 1 }], failed: { id: "C3", label: "Room 3" },
         error: "Nothing was emailed. Room 3 could not be published (Portal error.). Room 2 was published and will go in the email. Press the button again in a minute to finish." } }),
     };
+  }
+
+  // P. PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): the press answers `needs_build`. The page
+  //    starts Send all's walk (send-all-chain.js, the real module) with what the estimator chose,
+  //    says it is building, and publishes nothing. A page with no walk, or one that already came back
+  //    from one, says the server's manual sentence instead and gives the button back.
+  {
+    const CHAIN = require(path.join(ROOT, "frontend", "js", "send-all-chain.js"));
+    const NEEDS = { status: 409, body: { ok: false, code: "needs_build",
+      build: [{ id: "C3", label: "Room 3" }],
+      error: "Nothing was sent. Room 3 has never been built. Open its Proposal step and press "
+             + "Continue to Done, then send again." } };
+    const press = async (how) => {
+      const w = current();
+      const sg = { id: "G1", label: "Room 2" };
+      const st = JSON.parse(w.local[STATE_KEY]);
+      st.scope_group = sg;
+      w.local[STATE_KEY] = JSON.stringify(st);
+      w.server.d1.scope_group = sg;
+      w.server.version = "2026-10-28T09:00:00+00:00";
+      w.server.sendAllAnswer = NEEDS;
+      const t = await tab(w.local, w.server, { message: "Your three proposals." });
+      const nav = [];
+      t.window.location.href = "https://tool/done.html?composed=1&d=d1";
+      t.window.location.assign = (u) => nav.push(String(u));
+      let chain = null;
+      if (how !== "noWalk") {
+        chain = CHAIN.create({ sessionStorage: t.ss, location: t.window.location,
+                               history: t.window.history, crypto: require("crypto").webcrypto });
+        t.window.TWSendAll = chain;
+        if (how === "cameBack") {
+          t.ss.setItem(chain.KEY, JSON.stringify({ token: "T1", group: "G1", queue: [], built: ["C3"],
+            labels: {}, returnUrl: "/done.html?d=d1", stash: {}, expires: Date.now() + 60000, done: true }));
+          chain.take(new URLSearchParams("?sendall_resume=T1"), "G1");
+        }
+      }
+      t.portalBtn.textContent = t.mountLabel();
+      await t.send();
+      return { button: t.portalBtn.textContent, disabled: t.portalBtn.disabled, err: t.rec.err || null,
+               nav, published: t.rec.published.length, sendAll: (t.rec.sendAll || []).length,
+               record: chain ? JSON.parse(t.ss.getItem(chain.KEY) || "null") : null };
+    };
+    out.needsBuild = { walk: await press("walk"), noWalk: await press("noWalk"),
+                       cameBack: await press("cameBack") };
+  }
+
+  // Q. BACK FROM BUILDING: the mount takes the finished walk once (its own lines, verbatim), and
+  //    resumeSendAll puts the choices back and presses the page's own Send button — or, with files
+  //    attached before the walk, asks for them again and presses nothing.
+  {
+    const CHAIN = require(path.join(ROOT, "frontend", "js", "send-all-chain.js"));
+    const RESUME = lift("resumeSendAll");
+    const resume = new AsyncFunction("document", "portalRecip", "notifyPick", "paintNotifyChips",
+                                     ...RESUME.args, '"use strict"; ' + RESUME.body);
+    const run = async (stash) => {
+      const els = { "portal-message": { value: "" }, "portal-require-deposit": { checked: true },
+                    "portal-estimator": { value: "", options: [{ value: "" }, { value: "rj@wetreadwell.com" },
+                                                              { value: "kyle@wetreadwell.com" }] } };
+      const restored = [];
+      const clicks = [];
+      let err = null;
+      let painted = 0;
+      const notifyPick = { ready: true, changed: { "old@wetreadwell.com": true } };
+      const ret = await resume({ getElementById: (id) => els[id] || null },
+        { restore: (e, n) => restored.push([e, n]), setErr: (m) => { err = m; } },
+        notifyPick, () => { painted++; }, stash, { click: () => clicks.push(1), focus() {} },
+        Promise.resolve());
+      return { ret, message: els["portal-message"].value, deposit: els["portal-require-deposit"].checked,
+               estimator: els["portal-estimator"].value, restored, clicks: clicks.length, err,
+               changed: notifyPick.changed, painted };
+    };
+    const stash = { message: "Your three proposals.", emails: ["customer@example.com", "pm@x.test"],
+                    no_followups: ["pm@x.test"], assigned_estimator: "rj@wetreadwell.com",
+                    require_deposit: false, notify_add: ["troy@wetreadwell.com"], notify_mute: [],
+                    attachments: 0 };
+    out.resume = { plain: await run(stash), attached: await run(Object.assign({}, stash, { attachments: 2 })) };
+
+    // The mount's take, verbatim, run three times: the walk's return, a repaint, another project.
+    const marker = 'if (portalBtn && _myGroup && typeof _myGroup === "object" && _myGroup.id && window.TWSendAll) {';
+    const at = SRC.indexOf(marker);
+    if (at < 0) throw new Error("the mount's take of Send all's walk moved in done.js");
+    const TAKE = marker + balanced(at + marker.length) + "}";
+    const mountTake = new Function("portalBtn", "_myGroup", "window", "location", "resumeSendAll",
+                                   "_estMounted", "_rosterMounted", '"use strict"; ' + TAKE);
+    const ss = storage({});
+    const loc = { pathname: "/done.html", search: "?d=d1&files=1&sendall_resume=T2" };
+    const hist = [];
+    const win = { TWSendAll: CHAIN.create({ sessionStorage: ss, location: loc,
+                                            history: { replaceState: (s, t, u) => hist.push(u) } }) };
+    ss.setItem(win.TWSendAll.KEY, JSON.stringify({ token: "T2", group: "G1", queue: [], built: ["C3"],
+      labels: { C3: "Room 3" }, returnUrl: "/done.html?d=d1&files=1", stash: { message: "hi" },
+      expires: Date.now() + 60000, done: true }));
+    const calls = [];
+    const pressAgain = (s) => calls.push(s);
+    mountTake({}, { id: "G2" }, win, loc, pressAgain, null, null);        // another project's page
+    const otherProject = calls.length;
+    ss.setItem(win.TWSendAll.KEY, JSON.stringify({ token: "T2", group: "G1", queue: [], built: ["C3"],
+      labels: { C3: "Room 3" }, returnUrl: "/done.html?d=d1&files=1", stash: { message: "hi" },
+      expires: Date.now() + 60000, done: true }));
+    mountTake({}, { id: "G1" }, win, loc, pressAgain, null, null);        // back from the walk
+    mountTake({}, { id: "G1" }, win, loc, pressAgain, null, null);        // the same page mounting again
+    out.mountTake = { otherProject, calls, addressBar: hist[hist.length - 1] || null };
   }
 
   process.stdout.write(JSON.stringify(out));

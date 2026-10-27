@@ -5038,8 +5038,8 @@
             + ' 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/>'
             + '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>'}Delete this project</div>
           <p class="note">${sent
-            ? "Off the board, follow-ups stop, restorable from Trash. The link the customer "
-              + "already has keeps working."
+            ? "Off the board, follow-ups stop, restorable from Trash. The customer's link will "
+              + "say this proposal is no longer available. Restore brings it back."
             : "Off the board and into Trash, restorable from there. Nothing reaches the "
               + "customer."}</p>
           <div class="fu-line">
@@ -5238,7 +5238,9 @@
     // the customer does not have yet, then sends the one email (main.py api_scope_group_send_all),
     // the same action as the Files page's "Send all proposals in one email". The retry of the
     // contacts it missed and the "send them again" for a lost result stay on the plain "/send".
-    const post = async (btn, body, route) => {
+    // `resumed`: the press made again by itself once Send all has built the proposals that were never
+    // built (send-all-chain.js). It never starts another build: a second "never built" is said.
+    const post = async (btn, body, route, resumed) => {
       btn.disabled = true;
       if (retryLine) retryLine.style.display = "none";
       say("Sending...");
@@ -5255,6 +5257,20 @@
         return;
       }
       const out = scopeSendOutcome(r.status, j, p);
+      // PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): each is built through its own Proposal
+      // step's door, then this drawer reopens (?open=, the deep link a reload already uses) and the
+      // press is made again, once. A page that cannot build them says the server's manual way.
+      if (out.build) {
+        if (!resumed && window.TWSendAll && window.TWSendAll.start({
+          group: p.scope_group, build: out.build,
+          returnUrl: (location.pathname || "/portal.html") + (location.search || "") })) {
+          say(out.text);
+          return;
+        }
+        btn.disabled = false;
+        say(out.fallback);
+        return;
+      }
       // Somebody got it: remember who did NOT (or forget, when everybody did) before the reload.
       // An unrecorded send (recorded:false) is kept too: its sentence says what the next minutes
       // will show, and the poll's repaint must not wipe it.
@@ -5265,10 +5281,18 @@
       if (out.sent) load();
       else btn.disabled = false;
     };
-    if (send && p && p.scope_group) send.addEventListener("click", () => post(send,
-      // A portal that reports the email's state (scope_send) works out what is new itself; the old
-      // one is asked to send once, or again on purpose.
-      p.scope_send ? {} : { resend: send.dataset.resend === "1" }, "/send-all"));
+    // A portal that reports the email's state (scope_send) works out what is new itself; the old
+    // one is asked to send once, or again on purpose.
+    const sendAllBody = () => (p.scope_send ? {} : { resend: send.dataset.resend === "1" });
+    if (send && p && p.scope_group) send.addEventListener("click", () => post(send, sendAllBody(), "/send-all"));
+    // BACK FROM BUILDING (send-all-chain.js): the press this drawer made before the walk, made again
+    // ONCE. take() hands the finished walk over a single time, to this project only, so a repaint
+    // or a reload never presses anything.
+    if (send && p && p.scope_group && window.TWSendAll) {
+      let back = null;
+      try { back = window.TWSendAll.take(new URLSearchParams(location.search || ""), p.scope_group); } catch { back = null; }
+      if (back) post(send, sendAllBody(), "/send-all", true);
+    }
     if (retry && p && p.scope_group) retry.addEventListener("click", () => post(retry, { retry_failed: true }));
     // The explicit answer to "the last send's result was lost": only this button sends resend_unknown.
     const again = d.querySelector("#scope-resend-unknown");
@@ -5319,8 +5343,8 @@
         title: "Delete this project?",
         name: name,
         after: " comes off the board and its follow-up emails stop.",
-        detail: "The link the customer already has keeps working: it reads the version pinned"
-              + " when you sent it. Restore it from Trash and the reminders stay off.",
+        detail: "The customer's link will say this proposal is no longer available. Restore it"
+              + " from Trash and their link works again; the reminders stay off.",
         confirmText: "Move it to Trash", cancelText: "Keep it",
         tone: "danger", icon: "trash",
       } : {

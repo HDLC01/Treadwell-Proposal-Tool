@@ -2854,6 +2854,65 @@ async function runScenario(name, s) {
       body: { ok: false, code: "publish_failed", published: [{ id: "hs-b", label: "Lab 1", revision_no: 2 }],
               failed: { id: "hs-c", label: "Lab 2" },
               error: "Nothing was emailed. Lab 2 could not be published (Portal error.). Lab 1 was published and will go in the email. Press the button again in a minute to finish." } });
+    // PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): the drawer starts Send all's walk
+    // (window.TWSendAll, send-all-chain.js) with the list and a way back to this drawer, and says it
+    // is building them; a page that cannot walk says the server's manual sentence and gives the
+    // button back. Then the way back: the drawer reopened with `sendall_resume` presses ONCE.
+    {
+      const NEEDS = { status: 409, body: { ok: false, code: "needs_build", build: [{ id: "hs-c", label: "Lab 2" }],
+        error: "Nothing was sent. Lab 2 has never been built. Open its Proposal step and press Continue to Done, then send again." } };
+      const started = [];
+      let walks = true;
+      windowStub.TWSendAll = { start: (o) => { started.push(o); return walks; }, take: () => null };
+      locationStub.pathname = "/portal.html";
+      locationStub.search = "?open=hs-b";
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      out.honest.needsBuild = await press("#scope-send", NEEDS);
+      out.honest.needsBuild.started = started.slice();
+      out.honest.needsBuild.disabled = q("#scope-send").disabled;
+      walks = false;
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      out.honest.needsBuildNoWalk = await press("#scope-send", NEEDS);
+      out.honest.needsBuildNoWalk.disabled = q("#scope-send").disabled;
+      // Back from the walk: take() hands it over once, for this project.
+      const asked = [];
+      let handed = 0;
+      windowStub.TWSendAll = {
+        start: (o) => { started.push(o); return true; },
+        take: (params, group) => {
+          asked.push([params.get("sendall_resume"), group]);
+          return handed++ === 0 && group === "grp_h" ? { stash: null, built: ["hs-c"] } : null;
+        } };
+      locationStub.search = "?open=hs-b&sendall_resume=T9";
+      net.requests.length = 0;
+      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send(-all)?$/, { status: 200,
+        body: { ok: true, results: [{ email: "a@x.test", delivered: true }] } }]];
+      const startsBefore = started.length;
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      await tick();
+      page.open("hs-b");                       // the poll's repaint: nothing is pressed again
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      await tick();
+      out.honest.resumed = { asked, requests: net.requests.filter((r) => /scope-group/.test(r.path)),
+                             note: q("#scope-note").textContent, startedAgain: started.length - startsBefore };
+      // A resumed press answered needs_build AGAIN never starts another walk.
+      handed = 0;
+      net.requests.length = 0;
+      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send(-all)?$/, NEEDS]];
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      await tick();
+      out.honest.resumedNeedsBuild = { requests: net.requests.filter((r) => /scope-group/.test(r.path)).length,
+                                       note: q("#scope-note").textContent, startedAgain: started.length - startsBefore };
+      delete windowStub.TWSendAll;
+      delete locationStub.pathname;
+      locationStub.search = "";
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    }
     // Nothing new to email: no button, the reason instead.
     row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
     page.renderDetail("hs-b", sentData);

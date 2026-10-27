@@ -2293,8 +2293,15 @@
     const _signer = String(mergedValues.estimator_name || "").trim() || String(_viewer.name || "").trim();
     const _signed = ((state.proposal_payload && state.proposal_payload.values) || {});
     const _sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
-    const _signerEmail = !_sameName(_signed.estimator_name, _signer) ? String(_viewer.email || "")
-      : String(_signed.estimator_email || "").trim()
+    // A proposal made by Create Multiple Proposals is signed as Base Bid 1 is (drafts._parent_signer):
+    // its `estimator_signer` pairs that signature's address with its name, so the address is used
+    // only while that same name signs.
+    const _seeded = (state.estimator_signer && typeof state.estimator_signer === "object")
+      ? state.estimator_signer : {};
+    const _seededEmail = _sameName(_seeded.name, _signer) ? String(_seeded.email || "").trim() : "";
+    const _signerEmail = !_sameName(_signed.estimator_name, _signer)
+      ? (_seededEmail || String(_viewer.email || ""))
+      : String(_signed.estimator_email || "").trim() || _seededEmail
         || (_sameName(_viewer.name, _signer) ? String(_viewer.email || "") : "");
 
     const tokenValues = {
@@ -10259,11 +10266,12 @@
     }, 300);
   });
 
+  // BACK GOES TO 3 · GENERATE FILES (Hanz, 2026-10-28: 1 Intake, 2 Estimate, 3 Generate Files,
+  // 4 Proposal, 5 Files). A proposal made from another draft's estimate goes to its OWN step 3,
+  // which builds every proposal of the project and whose Back leads to the parent's estimate.
   document.getElementById("back-btn").addEventListener("click", () => {
     TW.setState(TW.readForm(form));
-    // A proposal made from another draft's estimate goes back to THAT estimate (parentStepHref).
-    const toParent = parentStepHref(TW.isV2Draft && TW.isV2Draft(state) ? "/polish-estimate.html" : "/estimate-review.html");
-    window.location.assign(toParent || TW.withDraft("/estimate-review.html"));
+    window.location.assign(TW.withDraft("/generate.html"));
   });
 
   /** Where an Intake or Estimate link goes from a proposal made from another draft's estimate
@@ -10451,6 +10459,25 @@
     const _allBoxOverrides = mergeOverrideEntry(
       liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, boxOverridesOut);
+    // BUILT BY SEND ALL, OR BY A PERSON (Hanz, 2026-10-28). Send all's walk (send-all-chain.js)
+    // presses this on a proposal nobody has opened, so Kyle's placeholders ("xx gallons", a
+    // "[ 1 mob/phase ]" schedule, "-or-" choices) would reach the customer unread. The document is
+    // marked `proposal_auto_built` and the press holds it while the mark stands
+    // (main._send_all_placeholders); a person's own Continue takes the mark off. The Files page's
+    // door (?compose=files with no walk) rebuilds with nobody looking either, so it leaves the mark
+    // as it is. Inline, not a helper: harnesses lift this function by name. So does a door on the
+    // Generate Files step's walk (kind "generate", send-all-chain.js): it rebuilds a document a
+    // person composed, after the estimate changed, exactly as the Files page's door does.
+    // A door that composes a proposal which NEVER HAD a document is "built by nobody" too, walk or
+    // not: the Files page's own door (View files on a never-opened child of Create Multiple
+    // Proposals) wrote Kyle's GC placeholders with nobody looking, and with no mark the next Send
+    // all published them (review, 2026-10-28). So a door that finds no document marks it.
+    let _q0 = null;
+    try { _q0 = new URLSearchParams(window.location.search); } catch {}
+    const _doorOpened = !!_q0 && _q0.get("compose") === "files";
+    const _walk0 = _doorOpened && window.TWSendAll ? window.TWSendAll.progress(_q0) : null;
+    const _hadDoc0 = !!((liveKey("proposal_payload") || {}).values);
+    const _sendAllBuild = (!!_walk0 && _walk0.kind !== "generate") || (_doorOpened && !_hadDoc0);
 
     const composed = {
       ...mergedValues,
@@ -10505,6 +10532,8 @@
       ...(coverLetterOn() !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
           ? { generate_result: null }
           : {}),
+      ...(_sendAllBuild ? { proposal_auto_built: true }
+          : (!_doorOpened && liveKey("proposal_auto_built") ? { proposal_auto_built: false } : {})),
     };
     // THE COVER LETTER'S OWN STORE, LIVE. coverletter-editor.js keeps the estimator's wording in
     // four top-level keys it REPLACES with setState (persistNow), which the `state` snapshot never
@@ -10561,7 +10590,12 @@
     let _door = null;
     try { _door = new URLSearchParams(window.location.search); } catch {}
     const _viaDoor = !!_door && _door.get("compose") === "files";
-    const _files = TW.withDraft("/done.html?composed=1"
+    // SEND ALL'S WALK (send-all-chain.js, Hanz 2026-10-28): a door opened to build a proposal that
+    // was never built goes on to the next one, or back to the page that pressed Send all, instead
+    // of to this proposal's Files page. Everything above ran exactly as for any other Continue.
+    // window-qualified on purpose: harnesses lift this function by name.
+    const _walk = _viaDoor && window.TWSendAll ? window.TWSendAll.nextHop(_door) : null;
+    const _files = _walk || TW.withDraft("/done.html?composed=1"
       + (_viaDoor && _door.get("files") === "1" ? "&files=1" : ""));
     if (_viaDoor) window.location.replace(_files);
     else window.location.assign(_files);
@@ -10609,7 +10643,17 @@
     if (!q || q.get("compose") !== "files") return;
     const btn = document.getElementById("generate-btn");
     const label = btn ? btn.textContent : "";
-    if (btn) { btn.disabled = true; btn.textContent = "Updating the proposal…"; }
+    // Opened by Send all to build a proposal that was never built (send-all-chain.js): said on the
+    // button, the one line this page shows while it works.
+    const walk = window.TWSendAll ? window.TWSendAll.progress(q) : null;
+    const walkName = walk && walk.kind === "generate" ? "Generate Files" : "Send all";
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = walk ? "Building " + walk.label + " for " + walkName + " (" + walk.i + " of " + walk.n + ")…"
+        : "Updating the proposal…";
+    }
+    // A STOP ENDS THE WALK, so nothing is ever sent after a build that did not happen.
+    const endWalk = () => (window.TWSendAll ? window.TWSendAll.abandon(q) : null);
     // ONLY FROM THE SERVER'S COPY, OR FROM THAT COPY PLUS CHANGES WHOSE SAVE NEVER LANDED. What
     // this page composes from is the blob it was loaded with (TW.bootDigest), and it saves the
     // whole of it: at Continue, and first as it loads (rebuildPricing's setState, 2.5 s later).
@@ -10640,6 +10684,7 @@
     const backToFiles = () => {
       if (leaving) return;
       leaving = true;
+      endWalk();
       TW.dropHeldChanges();
       window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
     };
@@ -10695,9 +10740,14 @@
     // saves as every page does. Could it not be asked, the hold stays, and the note says so.
     const handOver = async (freedHead, unfreedHead) => {
       stopped = true;
+      const ended = endWalk();
+      const lead = !ended ? ""
+        : ended.kind === "generate"
+          ? "Generate Files stopped while rebuilding " + ended.label + ", so its files were not built. "
+          : "Send all stopped while building " + ended.label + ", so nothing was sent to the customer. ";
       const freed = await TW.releaseHeldSaves();
       if (leaving) return;                                // the server held another copy: gone back
-      repaintNote(freed ? freedHead : unfreedHead,
+      repaintNote(lead + (freed ? freedHead : unfreedHead),
         freed ? "Check the document below, then press Continue to Done."
               : "Check your connection, then reload this page. Until then, nothing you change on this page is saved.");
     };
@@ -10714,7 +10764,7 @@
     // reason of its own (another tab has the keys) keeps continueToDone's note: nothing here can
     // save that page's copy.
     if (await continueToDone(null) || leaving) return;
-    if (TW.saveBlocked && TW.saveBlocked()) return;
+    if (TW.saveBlocked && TW.saveBlocked()) { endWalk(); return; }
     await handOver("Your changes are saved now, but the Files page could not be opened for you.",
                    "Your changes could not be saved, so the proposal was not rebuilt for you.");
   }

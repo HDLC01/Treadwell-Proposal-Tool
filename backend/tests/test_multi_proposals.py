@@ -1294,3 +1294,59 @@ def test_a_browser_save_can_neither_clear_nor_seed_the_recorded_base(fake_supaba
     assert _row(store, "p1")["data"]["proposals_base_tab_id"] == "Epoxy"
     assert client.put("/api/draft/new-copy", json={"data": dict(blob, proposals_base_tab_id="X")}).json()["ok"]
     assert "proposals_base_tab_id" not in _row(store, "new-copy")["data"]
+
+
+# ── H. who signs a new proposal (Hanz, 2026-10-28) ─────────────────────────────────────────────
+# Every proposal of one project is signed the same way: a child copies Base Bid 1's signer
+# (drafts._parent_signer), and the Proposal step signs with it (proposal-review.js computeTokenValues,
+# executed in test_send_all_chain.py). The board's estimator (`assigned_estimator`) was copied already.
+KYLE_SIGNED = {"estimator_name": "Kyle Loseke",
+               "proposal_payload": {"values": {"estimator_name": "Kyle Loseke",
+                                               "estimator_email": "kyle@wetreadwell.com"}}}
+
+
+def _fan_signed(fake_supabase, monkeypatch, **signed):
+    data = copy.deepcopy(PARENT)
+    data.update(copy.deepcopy(signed))
+    store = _seed(fake_supabase, monkeypatch, data)
+    return store, _row(store, _fan()["children"][0]["id"])["data"]
+
+
+def test_a_new_proposal_is_signed_as_base_bid_1(fake_supabase, monkeypatch):
+    _store, child = _fan_signed(fake_supabase, monkeypatch, **KYLE_SIGNED)
+    assert child["estimator_name"] == "Kyle Loseke"
+    assert child["estimator_signer"] == {"name": "Kyle Loseke", "email": "kyle@wetreadwell.com"}
+    assert child["assigned_estimator"] == PARENT["assigned_estimator"]
+
+
+def test_the_signer_is_read_off_the_document_when_the_field_was_never_saved(fake_supabase,
+                                                                            monkeypatch):
+    _store, child = _fan_signed(fake_supabase, monkeypatch, proposal_payload={"values": {
+        "estimator_name": "Troy Holmes", "estimator_email": "troy@wetreadwell.com"}})
+    assert child["estimator_name"] == "Troy Holmes"
+    assert child["estimator_signer"] == {"name": "Troy Holmes", "email": "troy@wetreadwell.com"}
+
+
+def test_an_address_another_name_signed_with_is_not_copied(fake_supabase, monkeypatch):
+    """Base Bid 1's field now names Will, its last document was signed by Kyle: Will signs, and
+    Kyle's address is not his."""
+    _store, child = _fan_signed(fake_supabase, monkeypatch, **dict(KYLE_SIGNED,
+                                                                   estimator_name="Will Smith"))
+    assert child["estimator_name"] == "Will Smith"
+    assert "estimator_signer" not in child
+
+
+def test_a_signer_set_on_the_child_stays_on_refresh(fake_supabase, monkeypatch):
+    data = copy.deepcopy(PARENT)
+    data.update(copy.deepcopy(KYLE_SIGNED))
+    store = _seed(fake_supabase, monkeypatch, data)
+    kid = _fan()["children"][0]["id"]
+    _row(store, kid)["data"].update(estimator_name="Troy Holmes", estimator_signer={
+        "name": "Troy Holmes", "email": "troy@wetreadwell.com"})
+    p = _row(store, "p1")["data"]
+    p["estimator_name"] = "RJ Smith"
+    p["cell_values"]["Copy1!E20"] = 3100                  # the estimate moved: a real refresh
+    assert drafts.refresh_proposals("p1", "rj@x.test")["refreshed"] == [kid]
+    child = _row(store, kid)["data"]
+    assert child["estimator_name"] == "Troy Holmes"
+    assert child["estimator_signer"] == {"name": "Troy Holmes", "email": "troy@wetreadwell.com"}

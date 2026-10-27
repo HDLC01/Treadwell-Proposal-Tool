@@ -2162,7 +2162,7 @@ def test_the_page_prices_the_copy_the_sandbox_moved_it_onto(ran):
     # does not cover the beta pages, and the id it would have stamped is the real project's. The
     # intake link is remodelSource()'s "pick a county" — the last one Review builds at render time,
     # now that the switched-off rows carry their own control instead of a link back to Intake.
-    assert c["continueHref"] == "/proposal-review.html?d=proj-1-beta", (
+    assert c["continueHref"] == "/generate.html?d=proj-1-beta", (
         "Continue points at the wrong draft: %r" % c["continueHref"])
     assert c["intakeHref"] == "/polish-intake.html?d=proj-1-beta"
 
@@ -2528,9 +2528,10 @@ def test_the_step_row_says_where_you_are(html):
     assert 'href="/polish-intake.html">1 · Intake' in nav, (
         "step 1 does not point at the beta intake form")
     assert '<span class="step active">2 · Estimate</span>' in nav, "the Estimate pill is not the current page"
-    assert 'href="/proposal-review.html">3 · Proposal' in nav
-    assert 'href="/done.html">4 · Files' in nav
-    assert nav.count("<a ") == 3, "an unexpected number of links in the step row"
+    assert 'href="/generate.html">3 · Generate Files' in nav
+    assert 'href="/proposal-review.html">4 · Proposal' in nav
+    assert 'href="/done.html">5 · Files' in nav
+    assert nav.count("<a ") == 4, "an unexpected number of links in the step row"
     assert html.index("<header") < html.index('<div class="wrap">') < html.index('<span class="beta">BETA</span>'), (
         "the bar is the first thing in the body and the page's own heading comes after it")
     assert "tw-hdr" not in head and head.count("<header") == 1, "nothing but .brand and .progress goes inside the header"

@@ -2184,6 +2184,21 @@ def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
     draft_id, row, by, body = prep["draft_id"], prep["row"], prep["by"], prep["body"]
     emails, digest = prep["emails"], prep["digest"]
     sent_docs, sent_pdf = prep["sent_docs"], prep["sent_pdf"]
+    # THE NAME THE CUSTOMER READS (Hanz, 2026-10-28). A proposal still stored as "Base Bid N" is
+    # shown by its sheet's name in the tool, but the portal reads the stored name, so the customer
+    # and the project's email read "Base Bid 2". It is stored as its sheet's name first
+    # (drafts.adopt_sheet_label), here, after every check, so a refused send renames nothing. The
+    # snapshot below carries the new name too. A failure is only logged: the old name is no reason
+    # to stop a send.
+    _sg_id, _sg_label = drafts._scope_of(row.get("data") or {})
+    if _sg_id and _sg_label and drafts._OLD_DEFAULT_LABEL.match(_sg_label):
+        try:
+            _named = drafts.adopt_sheet_label(draft_id, by)
+        except Exception as exc:  # noqa: BLE001 — a name never stops a send
+            log.warning("publish: could not name %s after its sheet: %s", _log_safe(draft_id), exc)
+            _named = None
+        if _named:
+            row["data"]["scope_group"] = dict(row["data"]["scope_group"], label=_named)
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
@@ -7901,6 +7916,11 @@ class DocumentsIn(BaseModel):
     # can sit on screen while a colleague's save lands. Optional: the page's own builds (the files
     # it shows on arrival) and an older page send nothing, and are built as before.
     draft_version: Optional[str] = None
+    # The 3 · Generate Files step (js/generate.js) builds every proposal of a project with nobody
+    # reading the documents first. A document Send all's walk composed unattended that still prints
+    # Kyle's template placeholders (_send_all_placeholders) is then refused with words, never handed
+    # out as a download. The Files page sends nothing here and builds as before.
+    hold_placeholders: bool = False
 
 
 def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
@@ -7944,6 +7964,12 @@ def api_draft_documents(draft_id: str, request: Request,
     if not (isinstance(pp, dict) and pp.get("values")):
         raise HTTPException(422, "This proposal hasn't been built yet — open the Proposal step "
                                  "and press Continue.")
+    if payload and payload.hold_placeholders:
+        held = _send_all_placeholders(row.get("data") or {}, True)
+        if held:
+            raise HTTPException(409, "Not built — this proposal was put together automatically and "
+                                     "still has template placeholders (%s). Open its Proposal "
+                                     "step, fill them, and press Continue." % ", ".join(held))
     out = _documents_out(_render_documents(pp, request, want_estimate=True))
     if not (row.get("data") or {}).get("generate_result"):
         try:
@@ -8542,6 +8568,140 @@ def _send_all_settled_reason(row: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _send_all_draft_closed(data: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """(code, words) when the board has closed this unsent proposal lost or put it on hold (the
+    draft-side marks, drafts.set_close_lost / set_on_hold), else None. Such a proposal is never
+    built or published by a neighbour's press: before the press built proposals itself, one with no
+    files stopped it, and a lost or paused bid must not reach the customer as a side effect."""
+    if data.get("closed_lost"):
+        return ("closed_lost", "it is closed as lost; bring it back from its card on the board "
+                               "first, or leave it out of this project")
+    if data.get("on_hold"):
+        return ("on_hold", "it is on hold; make it active again from its card on the board first")
+    return None
+
+
+# The Proposal step's own words for a tab that prices no base bid of its own (proposal-review.js
+# OUT_OF_STEP), so the press and the tab say the same thing.
+_SEND_ALL_OUT_OF_STEP = {"same_as_base": "same sheet as Base Bid 1",
+                         "duplicate": "same sheet as another proposal",
+                         "not_base": "its sheet is not a base bid any more",
+                         "sheet_gone": "its sheet is not on the estimate any more"}
+
+
+def _send_all_strip_warning(draft_id: str, data: Dict[str, Any],
+                            strips: Dict[str, Optional[Dict[str, Any]]]) -> Optional[str]:
+    """What the Proposal step's tab strip warns about this proposal of Create Multiple Proposals
+    (drafts.proposals_view: `stale`, its copy of the estimate is older than its parent's; or
+    `out_of_step`, it prices no base bid of its own), in the press's words, or None. A person
+    building it by hand opens that tab and reads the warning before pressing Continue; Send all's
+    walk builds it with nobody looking, so it is asked here and the press stops instead. `strips`
+    holds each parent's view, read once per press. Only a child of a parent can be either."""
+    parent_id = data.get("proposal_of")
+    if not isinstance(parent_id, str) or not parent_id or parent_id == draft_id:
+        return None
+    if parent_id not in strips:
+        strips[parent_id] = drafts.proposals_view(parent_id)
+    view = strips[parent_id] or {}
+    me = next((x for x in view.get("members") or [] if x.get("id") == draft_id), None)
+    if not me:
+        return None
+    if me.get("out_of_step"):
+        why = _SEND_ALL_OUT_OF_STEP.get(me["out_of_step"], "out of step")
+        return ("it prices no base bid of its own (%s); press Refresh on its Proposal step "
+                "first" % why)
+    if me.get("stale"):
+        return ("the estimate changed after it was copied; press Refresh on its Proposal step "
+                "first")
+    return None
+
+
+# KYLE'S PLACEHOLDERS (Hanz, 2026-10-28). The GC narrative defaults and the GC templates' blank-field
+# words are Kyle's own file with its blanks still in it: "xx gallons/kits" of patch material, a
+# "[ 1 mob/phase ]" schedule, "-or-" choices to strike ("Apply [1 coat -or- up to 2 coats"),
+# "xx Architects" and the Sealer spec "03xx" (_DEFAULT_SCOPE_GC_*, _DEFAULT_SCHEDULE_GC,
+# proposal_writer.TEMPLATE_TOKEN_DEFAULTS). A person composing on the Proposal step reads them and
+# fills them; Send all's walk builds a proposal with nobody looking, so such a proposal is held.
+# (shown, pattern), in the order the press names them.
+_PLACEHOLDERS = (
+    ("xx gallons", re.compile(r"\bxx\s+gallons\b", re.I)),
+    ("xx kits", re.compile(r"\bxx\s+(?:gallons\s*/\s*)?kits\b", re.I)),
+    ("[ 1 mob/phase ]", re.compile(r"\[\s*1\s+mob\s*/\s*phase\s*\]", re.I)),
+    ("-or- choices", re.compile(r"(?<![\w-])-or-(?![\w-])", re.I)),
+    ("xx Architects", re.compile(r"\bxx\s+Architects?\b", re.I)),
+    ("03xx", re.compile(r"\b03xx\b", re.I)),
+)
+# The values a template prints that a placeholder can sit in: the narrative and the GC spec line.
+_PLACEHOLDER_KEYS = ("scope_notes", "schedule_notes", "exclusions", "work_notes", "system_name",
+                     "texture", "work_description", "architect", "spec_section", "finish_tag",
+                     "plan_sheet")
+_NARRATIVE_FIELDS = ("scope_notes", "schedule_notes", "exclusions", "architect", "spec_section",
+                     "finish_tag", "plan_sheet", "work_notes", "system_name", "texture")
+
+
+def _placeholders_in(values: Dict[str, Any], work_type: Any, audience: Any) -> List[str]:
+    """Which of _PLACEHOLDERS `values` would print, as fill_proposal fills them: a blank narrative
+    field takes its audience's default (_ensure_value_aliases) and a blank spec-line field its
+    template's words (proposal_writer.TEMPLATE_TOKEN_DEFAULTS). [] for none."""
+    vals = dict(values or {})
+    wt = str(work_type or vals.get("work_type") or "epoxy").lower()
+    aud = str(audience or vals.get("audience") or "Direct")
+    vals["work_type"] = wt
+    try:
+        _ensure_value_aliases(vals, aud)
+        vals = proposal_writer._with_token_defaults(
+            vals, proposal_writer.template_token_defaults(wt, aud))
+    except Exception:  # noqa: BLE001 — judged on the words as they are, never a crash of the press
+        log.warning("placeholder check: defaults could not be applied", exc_info=True)
+    text = "\n".join(str(vals.get(k) or "") for k in _PLACEHOLDER_KEYS)
+    return [shown for shown, rx in _PLACEHOLDERS if rx.search(text)]
+
+
+def _send_all_placeholders(data: Dict[str, Any], built: bool) -> List[str]:
+    """The template placeholders a proposal Send all would build or publish UNATTENDED still prints,
+    or []. Two cases, and only these:
+
+    * never built (`built` False): the document the walk WOULD compose, from the draft's own words,
+      each blank one its default, for the type its Proposal step resolves (effectiveWorkType: combo
+      stays combo, else the base sheet's role when epoxy/polish/gyp, else the draft's work_type). So
+      the press says so before any walk, instead of building a proposal it would then hold.
+    * built by the walk and never composed by a person since (`proposal_auto_built`, which
+      proposal-review.js continueToDone sets on a Send all door and clears on a person's Continue):
+      the document itself, its `values`.
+
+    A proposal a person composed on its Proposal step is theirs to send as they wrote it."""
+    if built:
+        if data.get("proposal_auto_built") is not True:
+            return []
+        pp = data.get("proposal_payload") or {}
+        vals = pp.get("values") if isinstance(pp.get("values"), dict) else {}
+        return _placeholders_in(vals, pp.get("work_type") or vals.get("work_type"),
+                                pp.get("audience") or vals.get("audience") or data.get("audience"))
+    wt = str(data.get("work_type") or "epoxy").lower()
+    if wt != "combo":
+        base = data.get("base_tab_id")
+        role = ""
+        for t in data.get("priced_tabs") or []:
+            if isinstance(t, dict) and t.get("id") == base:
+                role = str(t.get("role") or "").lower()
+                break
+        if role in ("epoxy", "polish", "gyp"):
+            wt = role
+    vals = {k: data.get(k) for k in _NARRATIVE_FIELDS}
+    return _placeholders_in(vals, wt, data.get("audience") or "Direct")
+
+
+def _send_all_label(m: Dict[str, Any], data: Dict[str, Any]) -> str:
+    """A proposal's name in what the press says: the stored one, or for the old "Base Bid N" default
+    the name its tab shows (drafts._shown_label), which is the one its publish stores
+    (drafts.adopt_sheet_label)."""
+    stored = m.get("label") or ""
+    if stored and drafts._OLD_DEFAULT_LABEL.match(stored):
+        return drafts._shown_label(stored, drafts.proposal_sheet_label(
+            data, data.get("base_tab_id"))) or stored
+    return stored or "A proposal"
+
+
 def _send_all_block_reason(refusal: Any) -> str:
     """What the estimator does about one proposal's refused publish, in a few words."""
     if isinstance(refusal, HTTPException):
@@ -8574,9 +8734,16 @@ async def api_scope_group_send_all(group_id: str, request: Request,
 
     Refused before anything is published or sent, flat {ok: false, code, error}: 400
     invalid_scope_group / not_in_group, 404 group_not_found, 409 test_mix, the capability refusals
-    (_scope_groups_refusal), and 409 not_ready_to_send with `blocked` [{id, label, error}] when any
-    proposal cannot be published ("Room 2: build its files on its Files page first"). A publish the
-    portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
+    (_scope_groups_refusal), 409 needs_build with `build` [{id, label}] when the only thing in the
+    way is proposals that were never built (the page builds them and presses again), and 409
+    not_ready_to_send with `blocked` [{id, label, code, error}] when any proposal cannot be
+    published ("Room 2: add a customer email on its Files page first"; a never-built one its
+    Proposal step's tab warns about is `needs_refresh`, and one closed lost or on hold on the board
+    is `closed_lost` / `on_hold`, never `needs_build`; one built or to be built unattended whose
+    words still hold Kyle's template placeholders is `placeholders`, _send_all_placeholders). A
+    publish the portal refuses midway answers 502 publish_failed with the `published` ones and sends
+    nothing. A proposal still named "Base Bid N" is named after its sheet as it is published
+    (_commit_publish, drafts.adopt_sheet_label).
     Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
     label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
     if not drafts.SCOPE_ID_RE.match(group_id or ""):
@@ -8647,10 +8814,12 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
     # nobody approved, so those proposals are blocked rather than guessed about.
     portal_rows: Optional[Dict[str, Dict[str, Any]]] = None
     portal_live = False
+    # Each parent's proposals_view, read once and only when a never-built proposal asks for it.
+    strips: Dict[str, Optional[Dict[str, Any]]] = {}
     for m in live:
         row = rows[m["id"]]
         data = row.get("data") or {}
-        label = m.get("label") or "A proposal"
+        label = _send_all_label(m, data)
         if not _send_all_needs_publish(m["id"], data):
             continue
         if m["id"] != page_id and drafts.latest_revision_no(m["id"]):
@@ -8667,10 +8836,41 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
             if settled:
                 blocked.append({"id": m["id"], "label": label, "error": settled})
                 continue
+        # NEVER BUILT IS NOT THE SAME AS NOT READY (Hanz, 2026-10-28: a third base bid made by
+        # Create Multiple Proposals refused the press five times with "build its files on its Files
+        # page first"). A proposal with no `proposal_payload` has never had its document composed,
+        # and only the Proposal step composes one, so the press answers `needs_build` and the page
+        # that pressed builds each such proposal through that step's own door
+        # (send-all-chain.js), then presses again. One WITH a document but no files yet needs no
+        # page at all: its files are the ones _prepare_publish renders below, recorded on the draft
+        # once it is published (_record_built_files), exactly as its Files page's Download would.
         pp = data.get("proposal_payload")
-        if not data.get("generate_result") or not (isinstance(pp, dict) and pp.get("values")):
-            blocked.append({"id": m["id"], "label": label,
-                            "error": "build its files on its Files page first"})
+        built = isinstance(pp, dict) and bool(pp.get("values"))
+        # WHAT THE OLD REFUSAL USED TO CATCH (review of this change). Until 2026-10-28 any proposal
+        # without files stopped the press, and nobody saw what it would have sent. Now the press
+        # builds or publishes it unattended, so what a person sees before pressing Continue on the
+        # manual path is asked here: closed lost or on hold on the board, and the Proposal step's
+        # tab-strip warnings (_send_all_strip_warning).
+        if not built or not data.get("generate_result"):
+            closed = _send_all_draft_closed(data)
+            if closed:
+                blocked.append({"id": m["id"], "label": label, "code": closed[0],
+                                "error": closed[1]})
+                continue
+        if not built:
+            warn = _send_all_strip_warning(m["id"], data, strips)
+            if warn:
+                blocked.append({"id": m["id"], "label": label, "code": "needs_refresh",
+                                "error": warn})
+                continue
+        # KYLE'S PLACEHOLDERS ARE NEVER SENT UNATTENDED (Hanz, 2026-10-28): a proposal the walk would
+        # build, or built and nobody has composed since, that still prints "xx gallons" or a
+        # "-or-" choice is held, and the press says which and what to do (_send_all_placeholders).
+        held = _send_all_placeholders(data, built)
+        if held:
+            blocked.append({"id": m["id"], "label": label, "code": "placeholders",
+                            "error": "its scope still has template placeholders (%s). Open its "
+                                     "Proposal step, fill them, then send again" % ", ".join(held)})
             continue
         if m["id"] == page_id and page is not None:
             one = page
@@ -8693,29 +8893,53 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                 no_followups=list(page.no_followups) if page else [],
                 assigned_estimator=page_est or own or group_est,
                 require_deposit=dep,
-                has_cover_letter=bool(pp.get("cover_letter_enabled")))
+                has_cover_letter=bool(pp.get("cover_letter_enabled")) if built else None)
         if not one.emails and not str(data.get("contact_email") or "").strip():
-            blocked.append({"id": m["id"], "label": label,
+            blocked.append({"id": m["id"], "label": label, "code": "no_recipient",
                             "error": "add a customer email on its Files page first"})
+            continue
+        if not built:
+            # Asked here as well, because _prepare_publish (which asks it of a built one) cannot run
+            # on a proposal with no document: building it would only end in this refusal.
+            if not (one.assigned_estimator or "").strip():
+                blocked.append({"id": m["id"], "label": label, "code": "no_estimator",
+                                "error": "choose its assigned estimator on its Files page first"})
+            else:
+                blocked.append({"id": m["id"], "label": label, "code": "needs_build",
+                                "error": "it has never been built; Send all builds it for you "
+                                         "once the others can go"})
             continue
         try:
             prep = _prepare_publish(m["id"], request, one, row=row)
         except HTTPException as exc:
             prep = exc
         if isinstance(prep, (Response, HTTPException)):
-            blocked.append({"id": m["id"], "label": label, "error": _send_all_block_reason(prep)})
+            blocked.append({"id": m["id"], "label": label, "code": "refused",
+                            "error": _send_all_block_reason(prep)})
             continue
         prepared.append((m, prep))
     if blocked:
         log.warning("send-all refused for group %s: %s", _log_safe(group_id),
                     "; ".join("%s (%s)" % (b["id"], b["error"]) for b in blocked))
+        if all(b.get("code") == "needs_build" for b in blocked):
+            # NOTHING ELSE STANDS IN THE WAY: the page builds these, then presses again. Nothing was
+            # published, minted or written. `error` is for a page that cannot build them (an older
+            # page, or a browser that blocks the storage the build needs): the manual way, in words.
+            names = [b["label"] for b in blocked]
+            return JSONResponse(status_code=409, content={
+                "ok": False, "code": "needs_build",
+                "build": [{"id": b["id"], "label": b["label"]} for b in blocked],
+                "error": "Nothing was sent. %s %s never been built. Open %s Proposal step and "
+                         "press Continue to Done, then send again." % (
+                             _and_list(names), "has" if len(names) == 1 else "have",
+                             "its" if len(names) == 1 else "each one's")})
         return JSONResponse(status_code=409, content={
             "ok": False, "code": "not_ready_to_send", "blocked": blocked,
             "error": "Nothing was sent. " + " ".join(
                 "%s: %s." % (b["label"], b["error"]) for b in blocked)})
     published: List[Dict[str, Any]] = []
     for m, prep in prepared:
-        label = m.get("label") or "A proposal"
+        label = _send_all_label(m, prep["row"].get("data") or {})
         try:
             out = _commit_publish(prep)
         except Exception as exc:  # noqa: BLE001 — said in words, and nothing is emailed
@@ -8730,9 +8954,36 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                          + (" %s %s published and will go in the email." % (
                              done, "was" if len(published) == 1 else "were") if done else "")
                          + " Press the button again in a minute to finish."})
+        label = drafts._scope_of(prep["row"].get("data") or {})[1] or label   # as now stored
         published.append({"id": m["id"], "label": label,
                           "revision_no": out.get("revision_no") if isinstance(out, dict) else None})
+        if not (prep["row"].get("data") or {}).get("generate_result"):
+            _record_built_files(m["id"], (prep["row"].get("data") or {}).get("proposal_payload"),
+                                request)
     return published
+
+
+def _and_list(names: List[str]) -> str:
+    """"Room 2", "Room 2 and Room 3", "Room 2, Room 3 and Room 4"."""
+    names = [str(n) for n in names if n]
+    if len(names) <= 1:
+        return names[0] if names else "A proposal"
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _record_built_files(draft_id: str, pp: Any, request: Request) -> None:
+    """A proposal the send-all published with a document but no files yet: its files recorded on
+    the draft, as its Files page's Download records them (api_draft_documents, the same render and
+    the same one write), so the board's "has files" and its Files page agree with what was sent.
+    After the publish, and only logged when it fails: the proposal has already gone."""
+    if not (isinstance(pp, dict) and pp.get("values")):
+        return
+    try:
+        out = _documents_out(_render_documents(pp, request, want_estimate=True))
+        drafts.record_generate_result(draft_id, out.model_dump())
+    except Exception as exc:  # noqa: BLE001 — a board column must never undo a send
+        log.warning("send-all: could not record %s's files on the draft: %s",
+                    _log_safe(draft_id), exc)
 
 
 @app.get("/api/scope-group/{group_id}/workbook")

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treadwell Proposal Generator — Generate Files</title>
+<link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg">
+<!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* 3 · GENERATE FILES (js/generate.js): one row per proposal of the project, each with its status
+     and, once built, its three files. Continue is never held back by a row that failed. */
+  .gen-card {
+    background: var(--surface-lowest);
+    border: 1px solid var(--surface-dim);
+    border-radius: 10px;
+    padding: 28px 32px;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .gen-card h1 { margin-top: 0; }
+  .gen-note {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 16px;
+    color: var(--ink-variant);
+  }
+  .gen-note[hidden], .gen-card[hidden], .gen-empty[hidden] { display: none; }
+  .gen-list { list-style: none; margin: 0 0 24px; padding: 0; }
+  .gen-row {
+    border: 1px solid var(--surface-dim);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .gen-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .gen-name { font-weight: 700; }
+  .gen-sheet { font-weight: 400; color: var(--ink-variant); }
+  .gen-here {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+    color: var(--ink-variant); margin-left: 6px;
+  }
+  .gen-status { font-size: 12px; font-weight: 700; color: var(--ink-variant); }
+  .gen-built .gen-status { color: #1f7a3a; }
+  .gen-failed .gen-status { color: var(--treadwell-red); }
+  .gen-msg { font-size: 13px; color: var(--ink-variant); margin: 6px 0 0; }
+  .gen-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .gen-files .download-link { flex: 0 1 auto; padding: 8px 12px; font-size: 13px; }
+  .gen-actions { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .gen-actions a { text-decoration: none; padding: 12px 20px; }
+  @media (max-width: 560px) {
+    .gen-card { padding: 20px 16px; }
+    .gen-actions a { flex: 1 1 100%; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-mark" src="/img/treadwell-bison.svg" width="57" height="36" alt="Treadwell">
+    <div>
+      <div class="brand-name">Treadwell</div>
+      <div class="brand-sub">Proposal Generator</div>
+    </div>
+  </div>
+  <div class="progress">
+    <a class="step" data-step="intake" href="/?edit=1">1 · Intake</a>
+    <a class="step" data-step="estimate" href="/estimate-review.html">2 · Estimate</a>
+    <span class="step active">3 · Generate Files</span>
+    <a class="step" data-step="proposal" href="/proposal-review.html">4 · Proposal</a>
+    <a class="step" data-step="files" href="/done.html">5 · Files</a>
+  </div>
+</header>
+
+<main class="container wide">
+  <section id="gen-main" class="gen-card">
+    <h1>Generate files</h1>
+    <p class="lede">
+      Every visit builds the estimate (.xlsx), the proposal (.docx) and its PDF again from the
+      estimate as it stands, for every proposal of this project. They are your backup of this
+      version. Continue whenever you are ready; one that was not built says why.
+    </p>
+    <p id="gen-note" class="gen-note" role="status" aria-live="polite" hidden></p>
+    <ul id="gen-list" class="gen-list"></ul>
+    <div class="gen-actions">
+      <a id="gen-back" class="btn-secondary" href="/estimate-review.html">← Back to Estimate</a>
+      <a id="gen-continue" class="btn-primary" href="/proposal-review.html">Continue to Proposal →</a>
+    </div>
+  </section>
+
+  <section id="gen-empty" class="gen-card gen-empty" hidden>
+    <h1>No project started</h1>
+    <p class="lede">Start an intake first. The files are built from its estimate.</p>
+    <div class="gen-actions">
+      <a class="btn-primary" href="/projects.html">Go to Projects</a>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+<script src="/js/icons.js"></script>
+<script src="/auth.js"></script>
+<script src="/shared.js"></script>
+<!-- A proposal whose document no longer matches its draft is rebuilt through its own Proposal-step
+     door (send-all-chain.js, window.TWSendAll, kind "generate"). Before the page's script. -->
+<script src="/js/send-all-chain.js?v=20261028-2"></script>
+<script src="/js/generate.js?v=20261028-1"></script>
+
+</body>
+</html>

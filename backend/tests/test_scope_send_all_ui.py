@@ -123,6 +123,146 @@ def test_the_drawer_says_the_send_alls_refusals_as_they_are(drawer):
     assert h["sendAllPublishFailed"]["retryShown"] is False
 
 
+# ── proposals that were never built (Hanz, 2026-10-28) ─────────────────────
+BUILDING = ("Building Room 3 first: it has never been built, so its proposal is made from its default "
+            "wording and its sheet's price, exactly as Continue on its Proposal step would make it. "
+            "Then every proposal goes in one email.")
+MANUAL = ("Nothing was sent. Room 3 has never been built. Open its Proposal step and press Continue "
+          "to Done, then send again.")
+
+
+@pytest.fixture(scope="module")
+def stale_page():
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    return _node(TESTS / "js" / "files-stale-page-harness.js")
+
+
+@needs_node
+def test_the_files_page_says_it_builds_them_and_starts_the_walk(stale_page):
+    """`needs_build`: the page starts Send all's walk to Room 3's own Proposal-step door, carrying
+    what the estimator chose, says it is building, and publishes nothing.
+
+    Mutation (checked by hand, 2026-10-28): drop the `if (allOut.build)` branch in done.js — the
+    walk never starts (`nav` empty) and the button comes back with no building sentence."""
+    w = stale_page["needsBuild"]["walk"]
+    assert w["err"] == BUILDING
+    assert w["button"] == "Building 1 proposal first…" and w["disabled"] is True
+    assert len(w["nav"]) == 1 and w["nav"][0].startswith(
+        "/proposal-review.html?d=C3&compose=files&sendall=")
+    assert w["published"] == 0 and w["sendAll"] == 1
+    rec = w["record"]
+    assert rec["group"] == "G1" and rec["queue"] == ["C3"]
+    assert rec["returnUrl"] == "https://tool/done.html?d=d1", "composed=1 rode the way back"
+    assert rec["stash"] == {"message": "Your three proposals.", "emails": ["customer@example.com"],
+                            "no_followups": [], "assigned_estimator": "kyle@wetreadwell.com",
+                            "require_deposit": False, "notify_add": [], "notify_mute": [],
+                            "attachments": 0}
+
+
+@needs_node
+@pytest.mark.parametrize("case", ["noWalk", "cameBack"])
+def test_a_page_that_cannot_build_says_the_manual_way(stale_page, case):
+    """No walk module, or a page that already came back from a walk (a loop guard): the server's
+    own sentence, the button back, nothing started."""
+    r = stale_page["needsBuild"][case]
+    assert r["err"] == MANUAL
+    assert r["button"] == "Send all proposals in one email" and r["disabled"] is False
+    assert r["nav"] == [] and r["record"] is None and r["published"] == 0
+
+
+@needs_node
+def test_back_from_building_the_choices_return_and_send_is_pressed_again(stale_page):
+    """resumeSendAll, verbatim: the message, deposit, estimator, recipients and notify picks go
+    back, then the page's own Send button is pressed once (so every check runs again).
+
+    Mutation (checked by hand): drop `portalBtn.click();` — clicks is 0."""
+    r = stale_page["resume"]["plain"]
+    assert r["ret"] == "pressed" and r["clicks"] == 1
+    assert r["message"] == "Your three proposals." and r["deposit"] is False
+    assert r["estimator"] == "rj@wetreadwell.com"
+    assert r["restored"] == [[["customer@example.com", "pm@x.test"], ["pm@x.test"]]]
+    assert r["changed"] == {"troy@wetreadwell.com": True} and r["err"] is None
+
+
+@needs_node
+def test_back_from_building_with_files_attached_presses_nothing(stale_page):
+    """Picked files cannot ride a page change, so nothing is sent without them: the estimator is
+    asked to attach them again.
+
+    Mutation (checked by hand): drop the `stash.attachments > 0` stop — clicks is 1."""
+    r = stale_page["resume"]["attached"]
+    assert r["ret"] == "attach" and r["clicks"] == 0
+    assert r["err"].startswith("Every proposal is built now, and nothing has been sent yet.")
+    assert "attach them again" in r["err"]
+
+
+@needs_node
+def test_the_files_page_takes_the_walk_once_and_only_for_its_project(stale_page):
+    m = stale_page["mountTake"]
+    assert m["otherProject"] == 0, "another project's page pressed Send"
+    assert m["calls"] == [{"message": "hi"}], "the walk was not taken exactly once"
+    assert m["addressBar"] == "/done.html?d=d1&files=1"
+
+
+@needs_node
+def test_the_drawer_says_it_builds_them_and_starts_the_walk(drawer):
+    h = drawer["honest"]
+    nb = h["needsBuild"]
+    assert nb["note"] == BUILDING.replace("Room 3", "Lab 2")
+    assert nb["started"] == [{"group": "grp_h", "build": [{"id": "hs-c", "label": "Lab 2"}],
+                              "returnUrl": "/portal.html?open=hs-b"}]
+    assert nb["disabled"] is True
+    nw = h["needsBuildNoWalk"]
+    assert nw["note"] == MANUAL.replace("Room 3", "Lab 2") and nw["disabled"] is False
+
+
+@needs_node
+def test_the_drawer_presses_once_when_it_comes_back(drawer):
+    """The drawer reopened with `sendall_resume` presses the same send-all exactly once across two
+    paints, and a resumed press answered needs_build again never starts another walk."""
+    h = drawer["honest"]
+    r = h["resumed"]
+    assert [x["path"] for x in r["requests"]] == ["/api/portal/scope-group/grp_h/send-all"]
+    assert r["asked"][0] == ["T9", "grp_h"] and r["startedAgain"] == 0
+    again = h["resumedNeedsBuild"]
+    assert again["requests"] == 1 and again["startedAgain"] == 0
+    assert again["note"] == MANUAL.replace("Room 3", "Lab 2")
+
+
+@needs_node
+def test_mutation_the_drawer_ignores_needs_build(tmp_path):
+    """Without the drawer's needs_build branch nothing is started and the walk never runs."""
+    src = (FRONTEND / "js" / "portal.js").read_bytes().decode("utf-8").replace("\r\n", "\n")
+    old = "      if (out.build) {\n"
+    assert src.count(old) == 1
+    front = tmp_path / "frontend"
+    shutil.copytree(FRONTEND, front)
+    (front / "js" / "portal.js").write_bytes(src.replace(old, "      if (false) {\n").encode("utf-8"))
+    out = _node(TESTS / "js" / "drawer-render-harness.js", front)
+    assert out["honest"]["needsBuild"]["started"] == []
+
+
+@needs_node
+def test_mutation_the_drawer_never_resumes(tmp_path):
+    src = (FRONTEND / "js" / "portal.js").read_bytes().decode("utf-8").replace("\r\n", "\n")
+    old = '      if (back) post(send, sendAllBody(), "/send-all", true);\n'
+    assert src.count(old) == 1
+    front = tmp_path / "frontend"
+    shutil.copytree(FRONTEND, front)
+    (front / "js" / "portal.js").write_bytes(src.replace(old, "").encode("utf-8"))
+    out = _node(TESTS / "js" / "drawer-render-harness.js", front)
+    assert out["honest"]["resumed"]["requests"] == []
+
+
+def test_the_walk_loads_before_every_page_that_uses_it():
+    for page, own in (("portal.html", "/js/portal.js"), ("done.html", "/js/done.js"),
+                      ("proposal-review.html", "/js/proposal-review.js")):
+        html = (FRONTEND / page).read_text(encoding="utf-8")
+        assert "/js/send-all-chain.js?v=" in html, page
+        assert html.index("/js/send-all-chain.js") < html.index(own), page
+
+
 # ── one copy of the words ───────────────────────────────────────────────────
 def test_the_words_live_in_one_file_both_pages_load():
     """scopeSendOutcome is crm-core.js's, portal.js takes it from there, and done.js calls it

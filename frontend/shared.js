@@ -1976,7 +1976,7 @@
   // Rewrite static wizard step-nav anchors to carry ?d=. Skips the "/" home and
   // "?new" (a fresh start must NOT inherit a draft id); leaves cross-origin and
   // non-wizard links alone.
-  const _WIZARD_PATH = /^\/(estimate-review|proposal-review|done|dropbox|info-sheet)\.html$|^\/$/;
+  const _WIZARD_PATH = /^\/(estimate-review|generate|proposal-review|done|dropbox|info-sheet)\.html$|^\/$/;
   document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll("a[href]").forEach((a) => {
       try {
@@ -2100,8 +2100,12 @@
    *  set_notify_picks, set_close_lost, set_on_hold, set_won, set_handed_off): who hears about a
    *  send, Lost, On hold, Won, Handed off. No template prints any of them. Counted as inputs, each
    *  one made the next Files visit rebuild the proposal on whichever machine opened it — as
-   *  whoever was signed in there, often not the estimator who wrote it (review of fix 4). */
-  const COMPOSE_IGNORED = [STAMP, "proposal_payload", "proposal_payload_key",
+   *  whoever was signed in there, often not the estimator who wrote it (review of fix 4).
+   *
+   *  And `proposal_auto_built`, which says WHO built the document (Send all's walk, or a person:
+   *  proposal-review.js continueToDone), not what is in it, so the walk's document and the door's
+   *  carry one key. */
+  const COMPOSE_IGNORED = [STAMP, "proposal_payload", "proposal_payload_key", "proposal_auto_built",
     "generate_result", "generated_lump_sum", "portal_message", "portal_emails",
     "require_deposit", "dropbox_result",
     "info_cell_values", "info_tab_structs", "info_template_version", "job_number",
