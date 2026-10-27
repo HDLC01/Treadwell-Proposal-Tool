@@ -475,8 +475,14 @@ function makePage(layout, stateIn) {
 ` + LIFTED + "\n\n" + PAGE_ENTER + "\n\n" + PAGE_BACKSPACE + "\n\n" + GAP_SECTION + `
     // The radio the estimator ticks, and what the panel around the handler supplies: the tab
     // options it edits, and the repaint it ends with (here, the gap's own painter).
+    // The Base-bid controls are checkboxes (several base bids): a flip is the two clicks a person makes, ticking the new
+    // sheet and then unticking the old base, which moves the base to it. The handler runs once per click.
     function flipBaseTo(value) {
-      const rb = { checked: true, value: value };
+      const from = state.base_tab_id;
+      flipOne({ checked: true, value: value });
+      if (from && from !== value) flipOne({ checked: false, value: from });
+    }
+    function flipOne(rb) {
       const opts = state.tab_opts && typeof state.tab_opts === "object" ? state.tab_opts : (state.tab_opts = {});
       const applyAndRefresh = () => { paintOptionsGap(); };
       const reloadForWorkType = () => {};

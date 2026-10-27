@@ -1086,8 +1086,11 @@
     // A bid whose other sheets cannot be read still prices its first sheet (the panel says so and offers nothing else).
     var bids;
     try { bids = allBids(); } catch (err) { bids = Object.fromEntries([[B.ROOT_TAB, bid()]]); }
+    var st = multi ? TW.getState() : null;
     return {
-      open: activeTab, bids: bids, opts: multi ? TW.getState().tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      open: activeTab, bids: bids, opts: st ? st.tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      // The sheets switched to "Its own proposal" (base_tab_ids): the panel tags them Bid N and draws their switches on.
+      baseIds: st && Array.isArray(st.base_tab_ids) ? st.base_tab_ids : undefined,
       confirm: sheetsUi.confirm, armed: sheetsUi.armed, renaming: sheetsUi.renaming, draft: sheetsUi.draft,
       error: sheetsUi.error, notice: sheetsUi.notice, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf,
       reno: jobIsReno()
@@ -1448,6 +1451,14 @@
     var patch = Object.assign({}, made.patch);
     var from = before.ids.length === 1 ? before.ids[0] : null;
     var to = made.patch.base_tab_id === undefined ? null : made.patch.base_tab_id;
+    // THE NEW BASE IS BASE BID 1 (Create Multiple Proposals): a draft that ticked sheets as their own proposals keeps base_tab_id in
+    // base_tab_ids. Picking a ticked sheet swaps the two (the old base stays its own proposal), the way the Estimate step's radio does;
+    // the combined pair is one proposal, so it leaves none ticked.
+    if (PR && Array.isArray(st.base_tab_ids)) {
+      var order = [];
+      try { order = B.sectionsOf(B.withSectionOrder(made.model)).map(function (e) { return e.tab; }); } catch (err) { order = []; }
+      patch.base_tab_ids = PR.moveBaseId(st, from, to, order, true);
+    }
     if (PR && from !== to && st.price_overrides && typeof st.price_overrides === "object") {
       var pov = JSON.parse(JSON.stringify(st.price_overrides));
       var roles = {};
@@ -1480,6 +1491,24 @@
     paintSheets();
   }
 
+  /** The "Its own proposal" switch (Create Multiple Proposals): ticks or unticks the sheet in the draft's base_tab_ids by
+   *  B.proposalBasePatch's rule. Nothing about the bid is repriced: the sheet stays an option here, and becomes a proposal of its own
+   *  when Create Multiple Proposals is pressed on the Proposal step. A refused press (a Seal sheet, the combined pair as the base) says so
+   *  on the sheet's bar. */
+  function toggleOwnProposal(tab) {
+    var st = TW.getState();
+    var on = B.proposalBaseIds(ROOT, st).indexOf(tab) < 0;
+    var ticks = B.proposalBasePatch(st, tab, on, ROOT);
+    sheetsUi.focus = tab + "|own";
+    if (!ticks) {
+      sheetsUi.notice = { at: tab, text: "This sheet can't be a proposal of its own. Make one sheet the base bid first; Seal sheets are options only." };
+      paintSheets();
+      return;
+    }
+    TW.setState(ticks);
+    paintSheets();
+  }
+
   /** Total, or Add / Deduct. A Seal sheet is priced as a total only, so the page refuses the other even if it is asked. */
   function setPriceMode(tab, mode) {
     var e = null;
@@ -1497,6 +1526,7 @@
   /** What each button in the panel does. `tab` is the sheet it is on, `sheet` the type chosen in the Add menu. */
   function sheetsAct(act, tab, sheet) {
     if (act === "on") { toggleOnProposal(tab); return; }
+    if (act === "own") { toggleOwnProposal(tab); return; }
     if (act === "desc") {
       var wasOpen = sheetsUi.descOpen[tab] === true;
       sheetsUi.descOpen = Object.assign({}, sheetsUi.descOpen, Object.fromEntries([[tab, !wasOpen]]));
@@ -1587,6 +1617,15 @@
           '<button type="button" class="btn ghost" data-scope-act="split"' + off + '>Split into separate proposals</button></div>';
     } else if (live >= 2 && blocked) {
       html += '<p class="note">Splitting this bid into separate proposals: ' + esc(blocked) + '</p>';
+    }
+    // SEVERAL BASE BIDS (the sheets switched to "Its own proposal"): the proposals are made on the Proposal step, by its Create
+    // Multiple Proposals button, so the bar says where.
+    var bidIds = [];
+    try { bidIds = B.proposalBaseIds(ROOT, TW.getState()); } catch (err) { bidIds = []; }
+    if (bidIds.length >= 2) {
+      var bidNames = bidIds.map(function (t, i) { var n = t; try { n = B.sectionOf(ROOT, t).label; } catch (err) { n = t; } return "Base Bid " + (i + 1) + " " + n; });
+      html += '<p class="note" data-scope-bids="' + bidIds.length + '">' + bidIds.length + ' base bids, each its own proposal: <strong>' +
+        bidNames.map(esc).join("</strong>, <strong>") + '</strong>. Create the proposals on the Proposal step.</p>';
     }
     if (scopeUi.note) html += '<p class="note' + (scopeUi.bad ? " bad" : "") + '" role="status">' + esc(scopeUi.note) + '</p>';
     if (el.innerHTML !== html) el.innerHTML = html;
@@ -5499,6 +5538,9 @@
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
     // and every decision below turns on that id.
     try { await TW.draftReady; } catch (e) {}
+    // A proposal made from another draft's estimate has no estimate of its own (the server copies the
+    // parent's): it opens the parent's, before anything here can save (TW.redirectProposalChild).
+    if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/polish-estimate.html")) return;
     adopt(TW.getState());
 
     // Before the library, before the form, before anything can be typed: whatever happens after

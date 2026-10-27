@@ -820,6 +820,9 @@
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
     // and every decision below turns on that id.
     try { await TW.draftReady; } catch (e) {}
+    // A proposal made from another draft's estimate shares that draft's intake: it opens there,
+    // before anything here can save (TW.redirectProposalChild).
+    if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/polish-intake.html")) return;
     adoptModel(TW.getState());
 
     // Before the form, before the toggles, before anything can be typed: whatever happens after

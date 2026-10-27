@@ -237,9 +237,15 @@ for (const name of ["polish", "epoxy"]) {
   const p = open(draft(name, unmarked));
   const f = facts(p);
   const pick = name === "polish" ? "Epoxy" : "Polish";
+  // The spreadsheet's Base-bid controls are checkboxes (several base bids): a pick is ticking the new sheet, then
+  // unticking the old base, which moves the base to the sheet ticked.
+  const from = p.st.base_tab_id;
   const radio = radios(p).filter((r) => r.attrs.value === pick)[0];
   radio.checked = true;
   const fired = radio.fire("change");
+  const old = radios(p).filter((r) => r.attrs.value === from)[0];
+  old.checked = false;
+  old.fire("change");
   out.live[name] = Object.assign(f, { fired: fired, after: facts(p), reloads: p.reloads.length, saved: merged(p).base_tab_id });
 }
 

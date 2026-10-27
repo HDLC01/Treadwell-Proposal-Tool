@@ -194,7 +194,10 @@ def test_deleting_a_sent_project_takes_its_card_off_the_board(wired):
     assert "p1" in _board(), "fixture is not on the board, so the test cannot bite"
     r = client.post("/api/project/p1/delete")
     assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "existed": True, "trashed": True, "portal_hidden": True}
+    # `cascaded`: the proposals made from this one's base bids, trashed with it (none here;
+    # test_multi_proposals.py drives a parent that has them).
+    assert r.json() == {"ok": True, "existed": True, "trashed": True, "portal_hidden": True,
+                        "cascaded": []}
     assert wired.portal.hidden("p1")
     assert _draft(wired.store, "p1")["deleted_at"] is not None
     assert "p1" not in _board(), "the card is still on the board"

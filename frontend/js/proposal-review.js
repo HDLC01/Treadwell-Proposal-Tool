@@ -30,6 +30,16 @@
       });
     }
   } catch (e) { /* a stub DOM or an old shared.js: the pills keep their spreadsheet links, which still redirect */ }
+  // A PROPOSAL MADE FROM ANOTHER DRAFT'S ESTIMATE: its Intake and Estimate pills open its parent's (parentStepHref).
+  // Files stays this proposal's own: it is built from this draft's own document.
+  try {
+    if (TWPrice.isProposalChild(state)) {
+      document.querySelectorAll(".progress a.step").forEach(function (a) {
+        var to = parentStepHref(a.getAttribute("href"));
+        if (to) a.setAttribute("href", to);
+      });
+    }
+  } catch (e) { /* the pills keep their links; the intake and estimate pages send a child on themselves */ }
   if (!state.project_name) {
     document.querySelector(".word-canvas").innerHTML = `
       <div style="background:white;padding:40pt 30pt;border-radius:4px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.15);">
@@ -1098,6 +1108,7 @@
     const N = (v) => Number(v) || 0;
     const byId = (id) => all.find(t => t.id === id);
     let baseTab = state.base_tab_id ? byId(state.base_tab_id) : null;
+    const pickedBaseId = state.base_tab_id || null;
     // Refuse an option-only base before anything is priced off it. effectiveWorkType has no seal
     // branch by design, so honouring one would price the bid off a seal sheet and then print the
     // template the intake work type picked. Nulling it lets the migration below resolve a real base.
@@ -1118,6 +1129,10 @@
         state.base_tab_id = resolved.id;
       }
     }
+    // The ticked base sheets keep the base inside them, as Base Bid 1 (TWPrice.baseIds): a base nulled or resolved
+    // just above takes the place of the one it replaced. A draft that never ticked a second sheet has none to keep,
+    // and a base left as it was leaves them as they were.
+    if ((state.base_tab_id || null) !== pickedBaseId && Array.isArray(state.base_tab_ids)) state.base_tab_ids = TWPrice.moveBaseId(state, pickedBaseId, state.base_tab_id);
     let shownBase, salesTax, remodelTax;
     // The sheet's Taxable? / Remodel Tax? answers for a tab, as the Estimate step snapshotted them
     // (estimate-review.js snapshotLumpSumsToState). A snapshot from before they travelled has none,
@@ -1235,6 +1250,7 @@
     // lump sum from that element.
     const _pp = syncPayloadPricing();
     TW.setState({ rooms: state.rooms, base_tab_id: state.base_tab_id, tab_opts: state.tab_opts,
+      ...(Array.isArray(state.base_tab_ids) ? { base_tab_ids: state.base_tab_ids } : {}),
       proposal_lump_sum: shownBase, proposal_sales_tax: salesTax, proposal_remodel_tax: remodelTax,
       proposal_taxable: baseTaxable, proposal_remodel_on: baseRemodelOn,
       sheet_area: state.sheet_area, ...(_pp ? { proposal_payload: _pp } : {}) });
@@ -1884,6 +1900,20 @@
           // explicit named combined base. The base row hides its option controls; the
           // others keep show + total/deduct.
           const baseRO = v2Locked ? " disabled" : "";
+          // SEVERAL BASE BIDS (Create Multiple Proposals). On a spreadsheet draft each sheet's Base-bid control is a
+          // CHECKBOX: every ticked sheet is a base bid, tagged "Base Bid N", and becomes its own proposal; the pricing
+          // base (base_tab_id) is Base Bid 1 and this page prices off it alone (TWPrice.baseIds / toggleBaseId). A v2
+          // draft keeps its read-only radios: its base bids are picked on the v2 sheet strip.
+          //
+          // A CHILD (a proposal the server made from another draft's estimate, TWPrice.isProposalChild) shows its base
+          // ticked and every base control read-only: its estimate is the parent's, and base bids are picked on Base Bid
+          // 1's proposal, which the hint links to.
+          const childOf = TWPrice.isProposalChild(state) ? state.proposal_of : "";
+          const tickIds = v2Locked ? [] : TWPrice.baseIds(state);
+          const baseKind = v2Locked ? "radio" : "checkbox";
+          const baseAttrs = (v2Locked ? ' name="pr-base"' : "") + (baseRO || (childOf ? " disabled" : ""));
+          const childBase = childOf ? allTabs.find(t => t.id === baseId) : null;
+          const parentHref = childOf ? "/proposal-review.html?d=" + encodeURIComponent(childOf) : "";
           // The collapse button is redrawn with the header, so it reads the panel's state back off
           // the class TW.floatPanel toggles (guarded: a harness panel may carry no classList).
           const optsCollapsed = !!(optsPanel.classList && optsPanel.classList.contains("collapsed"));
@@ -1893,11 +1923,19 @@
             (v2Locked
               ? `<p class="op-hint pr-base-locked">Pick the base bid on the estimate. <a class="pr-est-link" href="${esc(estimateHref)}">Open the estimate</a></p>` +
                 `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
-              : `<p class="op-hint">Turn on which sheet is the <strong>Base bid</strong>; mark the others as options (show + total / add/deduct).</p>`) +
-            (wt === "combo" ? `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value=""${!baseId ? " checked" : ""}${baseRO}> Epoxy + Polish (combined)</label>` : "");
+              : childOf
+              ? `<p class="op-hint pr-base-locked">This proposal's base is ${esc(childBase ? childBase.name : (baseId || ""))}. Base bids are picked on Base Bid 1's tab. <a class="pr-parent-link" href="${esc(parentHref)}">Open Base Bid 1</a></p>` +
+                `<p class="op-hint">Mark the other sheets as options (show + total / add/deduct).</p>`
+              : `<p class="op-hint">Tick the <strong>Base bid</strong> sheet. Tick more than one and each is its own proposal; mark the others as options (show + total / add/deduct).</p>`) +
+            (wt === "combo" ? `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value=""${!baseId ? " checked" : ""}> Epoxy + Polish (combined)</label>` : "");
           h += visTabs.map(t => {
             const o = opts[t.id] || {};
             const isBase = effectiveBaseId === t.id;
+            // A ticked sheet that is not the pricing base: Base Bid 2, 3... of this estimate, its own proposal.
+            const isOtherBase = !isBase && tickIds.indexOf(t.id) >= 0;
+            // No tag on a child: it is one proposal of its parent's list, and its place there is the parent's to number.
+            const bidTag = (isBase || isOtherBase) && !v2Locked && !childOf
+              ? ` <span class="pr-bidtag">${esc(TWPrice.baseLabelFor(state, t.id))}</span>` : "";
             const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
             const manual = ((state.tab_notes && state.tab_notes[t.id]) || []).join("\n");
             let r = `<div class="op-row" data-id="${esc(t.id)}">`;
@@ -1908,10 +1946,12 @@
             const nameRow = `<span class="op-name">${esc(t.name)} <span class="op-price">${priceText}</span></span>`;
             r += isOptionOnlyTab(t)
               ? `<div class="pr-baserow" title="Priced as an option only, never as the base bid">${nameRow}</div>`
-              : `<label class="pr-baserow"><input type="radio" name="pr-base" class="pr-base" value="${esc(t.id)}"${isBase ? " checked" : ""}${baseRO}> ` +
-                nameRow + `</label>`;
+              : `<label class="pr-baserow"><input type="${baseKind}"${baseAttrs} class="pr-base" value="${esc(t.id)}"${(isBase || isOtherBase) ? " checked" : ""}> ` +
+                nameRow + bidTag + `</label>`;
             if (isBase) {
-              r += `<div class="pr-optsub"><span class="op-hint">This sheet is the Base bid.</span></div>`;
+              r += `<div class="pr-optsub"><span class="op-hint pr-base-note">This sheet is the Base bid.</span></div>`;
+            } else if (isOtherBase) {
+              r += `<div class="pr-optsub"><span class="op-hint pr-base-note">This sheet is ${esc(TWPrice.baseLabelFor(state, t.id))}: it gets its own proposal.</span></div>`;
             } else if (isPartOfAutoBase(t)) {
               r += `<div class="pr-optsub"><span class="op-hint">Part of the combined base bid.</span></div>`;
             } else {
@@ -1969,10 +2009,23 @@
           // Base-bid radios — turning one on sets the base.
           // On a v2 draft the radios are drawn disabled and wired to nothing: a base is not picked on this page.
           if (!v2Locked) optsPanel.querySelectorAll("input.pr-base").forEach(rb => rb.addEventListener("change", () => {
-            if (!rb.checked) return;
+            // A child's boxes are drawn disabled; one that is fired at anyway changes nothing.
+            if (TWPrice.isProposalChild(state)) return;
             const priorBaseId = state.base_tab_id;
-            state.base_tab_id = rb.value || null;
-            if (rb.value && opts[rb.value]) opts[rb.value].is_option = false;   // base can't also be an option
+            // A tick adds a base bid; unticking the base moves it to the next ticked sheet; the last one is refused.
+            const patch = TWPrice.toggleBaseId(state, rb.value, rb.checked);
+            if (!patch) {
+              if (!rb.checked) {
+                rb.checked = true;
+                const row = Array.from(optsPanel.querySelectorAll(".op-row")).filter(x => x.dataset.id === rb.value)[0];
+                const note = row ? row.querySelector(".pr-base-note") : null;
+                if (note) note.innerHTML = "A proposal needs a base bid. Tick another sheet first, then untick this one.";
+              }
+              return;
+            }
+            state.base_tab_id = patch.base_tab_id;
+            state.base_tab_ids = patch.base_tab_ids;
+            patch.base_tab_ids.forEach(id => { if (opts[id]) opts[id].is_option = false; });   // a base bid can't also be an option
             if (state.base_tab_id !== priorBaseId) {
               // THE SAME RULE as the Estimate step's bid strip (TWPrice.applyBasePick). Hanz,
               // 2026-09-26: keep the words. A base line he re-worded keeps his words; its amount,
@@ -1993,8 +2046,9 @@
                 TW.setState({ price_overrides: pov });
               }
             }
-            applyAndRefresh();
-            reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
+            const baseMoved = state.base_tab_id !== priorBaseId;
+            applyAndRefresh();     // saves base_tab_ids with the base (rebuildPricing), and redraws the tags
+            if (baseMoved) reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
           optsPanel.querySelectorAll(".op-row").forEach(row => {
             const id = row.dataset.id;
@@ -9758,6 +9812,240 @@
       key: "tw_opts_pos", width: 240, collapseKey: "tw_opts_collapsed" });
   })();
 
+  /** THE PROPOSALS OF THIS ESTIMATE ("Create Multiple Proposals", 2026-10-27). One intake, one estimate,
+   *  several proposals: every sheet ticked as a Base bid in Pricing options becomes its own proposal. This
+   *  draft is Base Bid 1's; the others are drafts the SERVER makes from it and keeps copied from its
+   *  estimate (drafts.fan_out_proposals / refresh_proposals), each with its own wording and options.
+   *  This wires the three things on the page that say so:
+   *
+   *    #multi-btn       Create Multiple Proposals. Disabled, with a title saying why, until two sheets
+   *                     are ticked (repainted on every change in the Pricing options card); hidden on a
+   *                     child, whose base bids are its parent's. Pressed: what is typed is saved and
+   *                     waited for, the server's copy is read for its version, the proposals are asked
+   *                     of exactly that copy (POST /api/draft/{id}/proposals {draft_version, base_ids}),
+   *                     and the server's copy replaces this browser's before the page reloads onto it
+   *                     (polish-estimate.js splitPress's order). A refusal is said on #resync-note in
+   *                     the server's own sentence (repaintNote) and nothing moves.
+   *    #proposal-tabs   One tab per proposal once there are two (GET .../proposals). A click opens that
+   *                     proposal's page (a tab switch IS a navigation: this page renders off a one-shot
+   *                     snapshot of one draft). A double-click on the open tab renames it (POST
+   *                     /api/draft/{id}/scope {label, rename}). The x on a child sends it to the Trash.
+   *    #proposals-note  "Estimate changed": a child whose copy of the estimate is older than the
+   *                     estimate (`stale`). Refresh copies it into every proposal again, keeping each
+   *                     one's words (POST .../proposals/refresh {draft_version}), in the same order.
+   *
+   *  Resolves { create, refresh, view, paint } for the harness. Class selectors only, so the harness's
+   *  small DOM can run it. */
+  async function mountProposalTabs() {
+    const strip = document.getElementById("proposal-tabs");
+    const note = document.getElementById("proposals-note");
+    const noteWhat = document.getElementById("proposals-note-what");
+    const refreshBtn = document.getElementById("proposals-refresh");
+    const multi = document.getElementById("multi-btn");
+    const panel = document.getElementById("options-panel");
+    const id = TW.getDraftId();
+    const child = TWPrice.isProposalChild(state);
+    const escH = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    const pageOf = (pid) => "/proposal-review.html?d=" + encodeURIComponent(pid);
+    const urlOf = (pid, tail) => TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(pid) + (tail || "");
+    const members = () => (view && Array.isArray(view.members) ? view.members : []);
+    const nameOf = (m) => (m && m.label) || ("Base Bid " + ((m && m.index) || ""));
+    let view = null;
+    let busy = false;
+    let msg = "";
+
+    async function send(method, url, body) {
+      const init = { method, headers: TW.authHeaders() };
+      if (body) init.body = JSON.stringify(body);
+      const r = await fetch(url, init);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || (j && j.ok === false)) throw new Error((j && (j.error || j.detail)) || ("HTTP " + r.status));
+      return j || {};
+    }
+
+    /** Save, read the version, then ask: the server refuses a copy stored again since (409). */
+    async function post(tail, body, what) {
+      if (form) TW.setState(TW.readForm(form));
+      const saved = await TW.flushState();
+      if (saved === false) throw new Error("This page's changes did not reach the server, so nothing was " + what + ". Reload and try again.");
+      const row = TW.readServerRow ? await TW.readServerRow() : null;
+      if (!row || !row.version) throw new Error("The saved copy could not be read, so nothing was " + what + ". Try again.");
+      return send("POST", urlOf(id, tail), Object.assign({ draft_version: row.version }, body || {}));
+    }
+
+    /** The server's copy in place of this browser's (which also drops a queued save), then the reload. */
+    async function adoptAndReload() {
+      const adopted = TW.useServerCopy ? await TW.useServerCopy() : false;
+      if (adopted) window.location.reload();
+      else window.location.assign(pageOf(id));
+    }
+
+    function paintMulti() {
+      if (!multi) return;
+      multi.hidden = child;
+      const n = TWPrice.baseIds(state).length;
+      multi.disabled = child || busy || n < 2;
+      multi.title = n < 2
+        ? "Tick two or more sheets as a Base bid in Pricing options first. Each one becomes its own proposal."
+        : "Make one proposal for each of the " + n + " ticked base bids. Each gets its own wording and its own options.";
+    }
+
+    function paintStrip() {
+      if (!strip) return;
+      const ms = members();
+      if (ms.length < 2) { strip.hidden = true; strip.innerHTML = ""; return; }
+      strip.innerHTML = `<ul class="pt-list" role="tablist" aria-label="Proposals of this estimate">` + ms.map((m) => {
+        const open = m.id === id;
+        return `<li class="pt-tab${open ? " open" : ""}${m.stale ? " stale" : ""}" data-pt-id="${escH(m.id)}">`
+          + `<button type="button" class="pt-name" role="tab" aria-selected="${open ? "true" : "false"}" data-pt-open="${escH(m.id)}"`
+          + ` title="${open ? "This proposal. Double-click to rename it." : "Open this proposal."}">`
+          + `<span class="pt-nm">${escH(nameOf(m))}</span>`
+          + (m.stale ? `<span class="pt-stale" title="The estimate changed after this proposal was copied from it">Estimate changed</span>` : "")
+          + `</button>`
+          + (m.is_parent ? "" : `<button type="button" class="pt-x" data-pt-del="${escH(m.id)}" aria-label="Delete ${escH(nameOf(m))}" title="Delete this proposal">${icon("x", 13) || "&times;"}</button>`)
+          + `</li>`;
+      }).join("") + `<li class="pt-msg" role="status">${escH(msg)}</li></ul>`;
+      strip.hidden = false;
+      Array.from(strip.querySelectorAll(".pt-name")).forEach((b) => {
+        b.addEventListener("click", () => openTab(b.dataset.ptOpen));
+        b.addEventListener("dblclick", () => { if (b.dataset.ptOpen === id) startRename(b.dataset.ptOpen); });
+      });
+      Array.from(strip.querySelectorAll(".pt-x")).forEach((b) => b.addEventListener("click", () => removeTab(b.dataset.ptDel)));
+    }
+
+    function paintNote() {
+      if (!note) return;
+      const stale = members().filter((m) => m.stale);
+      if (!stale.length) { note.hidden = true; return; }
+      const names = stale.map(nameOf);
+      if (noteWhat) noteWhat.textContent = names.join(", ") + (names.length === 1 ? " still has" : " still have")
+        + " the figures from before. Refresh copies the estimate into every proposal again; each keeps its own wording and options.";
+      if (refreshBtn) refreshBtn.disabled = busy;
+      note.hidden = false;
+    }
+
+    async function openTab(pid) {
+      if (!pid || pid === id || busy) return;
+      try { await TW.flushState(); } catch {}
+      window.location.assign(pageOf(pid));
+    }
+
+    function startRename(pid) {
+      const li = Array.from(strip.querySelectorAll(".pt-tab")).filter((x) => x.dataset.ptId === pid)[0];
+      const m = members().filter((x) => x.id === pid)[0];
+      if (!li || !m || busy) return;
+      li.innerHTML = `<input type="text" class="pt-ren-in" maxlength="80" aria-label="Name of this proposal" value="${escH(m.label || "")}">`;
+      const box = li.querySelector(".pt-ren-in");
+      let done = false;
+      const finish = (save) => { if (done) return; done = true; if (save) rename(m, box.value); else paintStrip(); };
+      box.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); finish(true); }
+        else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      });
+      box.addEventListener("blur", () => finish(true));
+      try { box.focus(); box.select(); } catch {}
+    }
+
+    async function rename(m, raw) {
+      const label = String(raw || "").replace(/\s+/g, " ").trim();
+      if (!label || label === m.label) { paintStrip(); return; }
+      try {
+        const j = await send("POST", urlOf(m.id, "/scope"), { label, rename: true });
+        m.label = j.label || label;
+        msg = "";
+        // The scope group is the server's: this browser only remembers what the server has already.
+        if (m.id === id && TW.setLocalState) TW.setLocalState({ scope_group: { id: j.group_id, label: m.label } }, { alreadyOnServer: true });
+      } catch (err) {
+        msg = "Not renamed. " + ((err && err.message) || "Try again.");
+      }
+      paintStrip();
+    }
+
+    async function removeTab(pid) {
+      const m = members().filter((x) => x.id === pid)[0];
+      if (!m || m.is_parent || busy) return;
+      const ok = await TW.confirmDanger({
+        title: "Delete this proposal?", name: nameOf(m), before: "",
+        after: " goes to the Trash. Base Bid 1 and the estimate stay as they are.",
+        detail: "Its sheet is still ticked as a Base bid, so Create Multiple Proposals would make it again: untick the sheet to stop that.",
+        confirmText: "Delete proposal" });
+      if (!ok) return;
+      busy = true;
+      try {
+        await send("DELETE", urlOf(pid));
+      } catch (err) {
+        busy = false;
+        msg = "Not deleted. " + ((err && err.message) || "Try again.");
+        paintStrip();
+        return;
+      }
+      if (pid === id) { window.location.assign(pageOf(view.parent_id)); return; }
+      busy = false;
+      msg = "";
+      view.members = members().filter((x) => x.id !== pid);
+      paintStrip(); paintNote();
+    }
+
+    async function create() {
+      if (busy || child) return;
+      const ids = TWPrice.baseIds(state);
+      if (ids.length < 2) { paintMulti(); return; }
+      busy = true; paintMulti();
+      const label = multi ? multi.textContent : "";
+      if (multi) multi.textContent = "Creating proposals...";
+      try {
+        await post("/proposals", { base_ids: ids }, "made");
+        await adoptAndReload();
+      } catch (err) {
+        busy = false;
+        if (multi) multi.textContent = label;
+        paintMulti();
+        repaintNote("No proposals were made.", (err && err.message) || "Try again.");
+      }
+    }
+
+    async function refresh() {
+      if (busy) return;
+      busy = true;
+      if (refreshBtn) refreshBtn.disabled = true;
+      try {
+        const j = await post("/proposals/refresh", {}, "refreshed");
+        const skipped = Array.isArray(j.skipped) ? j.skipped : [];
+        // A proposal whose sheet left the estimate cannot be re-copied, and stays as it was. Said here,
+        // without the reload, when this page's own draft did not change; otherwise the reload shows it.
+        if (skipped.length && (j.refreshed || []).indexOf(id) < 0) {
+          if (j.proposals && Array.isArray(j.proposals.members)) view = j.proposals;
+          busy = false;
+          paintStrip(); paintNote();
+          if (noteWhat) noteWhat.textContent = "Refreshed, except " + skipped.map((s) => s.label || "a proposal").join(", ")
+            + ": its sheet is not on the estimate any more, so it was left as it was. Delete it, or put the sheet back and Refresh.";
+          if (note) note.hidden = false;
+          return;
+        }
+        await adoptAndReload();
+      } catch (err) {
+        busy = false;
+        if (refreshBtn) refreshBtn.disabled = false;
+        if (noteWhat) noteWhat.textContent = "Not refreshed. " + ((err && err.message) || "Try again.");
+        if (note) note.hidden = false;
+      }
+    }
+
+    paintMulti();
+    if (multi) multi.addEventListener("click", create);
+    if (refreshBtn) refreshBtn.addEventListener("click", refresh);
+    // A Base-bid tick in the card changes how many proposals there would be.
+    if (panel && panel.addEventListener) panel.addEventListener("change", paintMulti);
+    const api = { create, refresh, view: () => view, paint: paintMulti };
+    if (!id) return api;
+    try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
+    view = TW.readProposals ? await TW.readProposals(id) : null;
+    paintStrip(); paintNote(); paintMulti();
+    return api;
+  }
+  mountProposalTabs().catch(() => {});
+
   // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the
   // document to be on screen before it collects the estimator's edits off it.
   const _firstDocLoad = initDocumentEditor();
@@ -9852,8 +10140,25 @@
 
   document.getElementById("back-btn").addEventListener("click", () => {
     TW.setState(TW.readForm(form));
-    window.location.assign(TW.withDraft("/estimate-review.html"));
+    // A proposal made from another draft's estimate goes back to THAT estimate (parentStepHref).
+    const toParent = parentStepHref(TW.isV2Draft && TW.isV2Draft(state) ? "/polish-estimate.html" : "/estimate-review.html");
+    window.location.assign(toParent || TW.withDraft("/estimate-review.html"));
   });
+
+  /** Where an Intake or Estimate link goes from a proposal made from another draft's estimate
+   *  (TWPrice.isProposalChild): to its PARENT's, because the server copies both from there and a
+   *  child has none of its own (the pages would send it on anyway, TW.redirectProposalChild, one
+   *  hop later). The link keeps its page and its query, with ?d= naming the parent. Answers null
+   *  for any other link (Files is the child's own) and on any other draft: the link stays as it is. */
+  function parentStepHref(href) {
+    if (!TWPrice.isProposalChild(state)) return null;
+    let u;
+    try { u = new URL(String(href || ""), "https://tool.invalid"); } catch { return null; }
+    const intake = u.pathname === "/" && u.searchParams.has("edit");
+    if (!intake && ["/estimate-review.html", "/polish-estimate.html", "/polish-intake.html"].indexOf(u.pathname) < 0) return null;
+    u.searchParams.set("d", state.proposal_of);
+    return u.pathname + "?" + u.searchParams.toString();
+  }
 
   /** The body /api/generate is sent for the document on screen, composed ONCE.
    *

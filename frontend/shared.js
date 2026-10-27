@@ -394,7 +394,9 @@
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
   // Somebody else can change any of them from the CRM while this page holds an older copy.
   // `scope_group` (2026-10-24): which project this proposal is one scope of, and its name there.
-  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group"];
+  // `proposal_of`, `estimate_digest`, `estimate_synced_at` (2026-10-27): whose estimate a proposal made
+  // by Create Multiple Proposals is a copy of, and which copy (drafts.fan_out_proposals).
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group", "proposal_of", "estimate_digest", "estimate_synced_at"];
 
   /** Re-read the server-owned keys for this draft and merge them into local state.
    *
@@ -421,8 +423,11 @@
       const body = await res.json();
       const data = (body && body.data) || {};
       const patch = {};
+      // NOT `estimate_synced_at`: it is the fence that tells the server this page's copy of a
+      // proposal predates a Refresh (drafts.StaleProposalWrite). Merged onto an old estimate it would
+      // wave the old price back in; only a whole fresh copy of the draft may carry the new stamp.
       SERVER_OWNED_KEYS.forEach((k) => {
-        if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
+        if (k !== "estimate_synced_at" && Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
       });
       // Compare before writing: an unconditional write would rewrite the blob on every page load.
       //
@@ -1993,6 +1998,37 @@
     return !!(blob && typeof blob === "object" && blob[STAMP] && id && blob[STAMP] === id);
   }
 
+  /** A PROPOSAL MADE FROM ANOTHER DRAFT'S ESTIMATE ("Create Multiple Proposals") has no intake or
+   *  estimate of its own: the server copies both from its parent (`proposal_of`), and Refresh copies
+   *  them again. So the intake and estimate pages send it to its parent, at `path` (with ?d=<parent>),
+   *  before anything on them can save, and answer true; the caller stops there. Any other draft, and a
+   *  blob that is not provably this page's (isThisDraft, the reason the v2 guards wait for it), answers
+   *  false and nothing happens. `replace`, so Back does not return to a page that would only bounce. */
+  function redirectProposalChild(path) {
+    const blob = getState();
+    const parent = blob && typeof blob.proposal_of === "string" ? blob.proposal_of : "";
+    if (!parent || !isThisDraft(blob)) return false;
+    window.location.replace(path + (path.indexOf("?") >= 0 ? "&" : "?") + "d=" + encodeURIComponent(parent));
+    return true;
+  }
+
+  /** The proposals of this draft's estimate (GET /api/draft/{id}/proposals: {parent_id, group_id,
+   *  estimate_digest, members}), or null when it cannot be read. `id` defaults to this page's draft;
+   *  a child's id answers its parent's list. Reads only. */
+  async function readProposals(id) {
+    const pid = id || getDraftId();
+    if (!pid) return null;
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(pid) + "/proposals",
+                              { headers: authHeaders() });
+      if (!res.ok) return null;
+      const body = await res.json();
+      return body && body.ok !== false && Array.isArray(body.members) ? body : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The keys the SPREADSHEET's Estimate step writes into a draft (estimate-review.js
    *  snapshotLumpSumsToState): the per-tab pricing snapshot, the base pick that names one of those
    *  tabs, and everything derived from them. A v2 draft prices itself and writes none of these, so
@@ -2246,6 +2282,8 @@
     documentHolds,
     isV2Draft,
     isThisDraft,
+    redirectProposalChild,
+    readProposals,
     v2PricingView,
     v2SheetKeysOut,
     draftDigest,
