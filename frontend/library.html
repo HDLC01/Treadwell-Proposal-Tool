@@ -875,6 +875,17 @@
           </span>
           <button class="btn ghost sm" type="button" id="f-clear" data-clear-filters hidden>
             Clear filters</button>
+          <!-- SORT, the Assemblies rail's control in the same place and shape (after Clear, which
+               leaves it alone). Hanz, 2026-10-27: "The newest added item should be put on the
+               first page." Newest first is the default; Name A-Z is the server's order. The
+               choice is ITEM_SORT in library.js, remembered per viewer in this browser only. -->
+          <span class="facet">
+            <label class="flabel" for="f-sort">Sort</label>
+            <select id="f-sort">
+              <option value="new">Newest first</option>
+              <option value="name">Name A–Z</option>
+            </select>
+          </span>
         </div>
       </div>
       <div class="card">
@@ -1391,12 +1402,15 @@
                estimator's view to the server.
 
                Two of these six are DERIVED rather than read off a column — see asmVendorTally
-               and asmOwnerName in library.js. An assembly has no vendor field at all. -->
+               and asmOwnerName in library.js. An assembly has no vendor field at all.
+
+               Newest first is FIRST because it is the default (Hanz, 2026-10-27), so the select
+               reads right before library.js has written its value back. -->
           <span class="facet">
             <label class="flabel" for="fa-sort">Sort</label>
             <select id="fa-sort">
-              <option value="name">Name A–Z</option>
               <option value="new">Newest first</option>
+              <option value="name">Name A–Z</option>
               <option value="scope">Scope or work type</option>
               <option value="unit">Unit</option>
               <option value="vendor">Vendor</option>

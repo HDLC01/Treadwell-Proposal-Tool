@@ -35,13 +35,23 @@ def core(expr: str):
 
 
 @pytest.fixture(scope="module")
-def pager():
+def harness():
     proc = subprocess.run(["node", str(HARNESS), str(FRONTEND)],
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, (
         "the harness itself failed — read this before assuming a product bug:\n" + proc.stderr)
     assert proc.stdout.strip(), "the harness printed nothing:\n" + proc.stderr
-    return json.loads(proc.stdout.strip().splitlines()[-1])["pager"]
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.fixture(scope="module")
+def pager(harness):
+    return harness["pager"]
+
+
+@pytest.fixture(scope="module")
+def newest(harness):
+    return harness["newestFirst"]
 
 
 # ── the page math ─────────────────────────────────────────────────────────────
@@ -127,6 +137,9 @@ def test_a_search_or_a_facet_goes_back_to_page_one_and_counts_the_hits(pager):
 
 
 def test_an_added_or_copied_material_lands_on_screen(pager):
+    """Add material from page 3 lands on page 1 as row 1. Under Name A-Z a copy that sits mid-list
+    moves the table to ITS page: the jump-to-its-page rule, kept for the sort where a new row is
+    not always first."""
     it = pager["items"]
     assert it["beforeAddOnPage"] == 3
     assert it["afterAddFirstRow"] == "pnew"
@@ -218,3 +231,136 @@ def test_the_pagers_are_named_landmarks_that_start_hidden(pager):
     assert m["navs"] == ["items-pager-top", "items-pager", "asm-pager"]
     assert m["steps"] == ["items"] * 4 + ["asm"] * 2
     assert m["spentAtRest"] == 3
+
+
+# ── newest first, on both lists (Hanz, 2026-10-27) ───────────────────────────
+# "The newest added item should be put on the first page." He chose: always newest first, both
+# lists, every time and after a reload, with "Name A-Z" one click away. Driven by the harness's
+# `out.newestFirst` block through the real renderItems / renderList and the page's own ITEM_SORT
+# and ASM_SORT declaration lines.
+
+def test_the_items_table_opens_newest_first_with_undated_rows_last(newest):
+    """created_at descending. m2 and m4 are the SAME instant written two ways ("+00:00" and "Z"),
+    so they tie and fall to the name; compared as text, "Z" beats "+" and m4 would come first. m1
+    has no created_at and goes LAST, never first.
+
+    Mutation: drop sortItems from visibleItems; put the ITEM_SORT default back to "name"; compare
+    created_at as text; or sort blanks first."""
+    assert newest["defaultKey"] == "new"
+    assert newest["defaultOrder"] == ["m5", "m3", "m2", "m4", "m1"], newest["defaultOrder"]
+    assert newest["selectSyncedToDefault"] == "new", (
+        "the Sort control does not show the order the table is in")
+
+
+def test_newest_first_never_reorders_the_model(newest):
+    """visibleItems hands ITEMS itself to the sort when nothing is filtered. A sort in place would
+    reorder the array every other function on the page reads.
+
+    Mutation: `list.sort(...)` instead of `list.slice().sort(...)` in sortItems."""
+    assert newest["modelUntouched"] == ["m1", "m2", "m3", "m4", "m5"], newest["modelUntouched"]
+    assert newest["newIsACopy"] is True
+
+
+def test_name_a_z_is_the_servers_order_passed_through(newest):
+    """list_items() does `.order("name")`, so the array the page holds IS name A-Z, and Name A-Z
+    hands it back as it is - the same rule as the Assemblies rail, which keeps a just-added row at
+    the top for the session and never moves a row while its name is being typed.
+
+    Mutation: make sortItems copy or re-sort for "name"."""
+    assert newest["nameOrder"] == ["m1", "m2", "m3", "m4", "m5"], newest["nameOrder"]
+    assert newest["namePassesThrough"] is True
+    assert newest["selectSyncedToName"] == "name"
+
+
+def test_a_search_narrows_and_then_the_sort_orders_what_is_left(newest):
+    """Filter first, then sort, then the page: "co" leaves Bond Coat and Cove Mix.
+
+    Mutation: return the unsorted filter result from visibleItems."""
+    assert newest["searchedNewest"] == ["m3", "m2"], newest["searchedNewest"]
+    assert newest["searchedByName"] == ["m2", "m3"], newest["searchedByName"]
+
+
+def test_page_one_shows_the_latest_materials_after_a_reload(newest):
+    """Sixty materials in name order, each a minute newer than the last: the newest sixty-first
+    by name is on page 3 under Name A-Z and on page 1 here.
+
+    Mutation: put the ITEM_SORT default back to "name"."""
+    assert newest["reloadFirstPage"] == "p60..p36 (25)", newest["reloadFirstPage"]
+
+
+def test_a_new_material_is_row_one_of_page_one(newest):
+    """From page 3, a material arriving at the END of the array (where the server files
+    "Zz Sealer" by name) is still the first row of page 1, because it is the newest. Without the
+    sort it sits at row 61 and the table would move to page 3 to show it.
+
+    Mutation: drop sortItems from visibleItems."""
+    assert newest["beforeAddPage"] == 3
+    assert newest["afterAddPage"] == 1, newest["afterAddPage"]
+    assert newest["afterAddFirstRow"] == "pnew", newest["afterAddFirstRow"]
+
+
+def test_changing_the_sort_goes_back_to_page_one(newest):
+    """Page 2 of one order means nothing in another, so a sort change starts at page 1, both ways.
+
+    Mutation: leave ITEM_SORT out of itemsPage's view key."""
+    assert newest["beforeSortChangePage"] == 2
+    assert newest["afterSortChangePage"] == 1, newest["afterSortChangePage"]
+    assert newest["afterSortChangeRows"] == "p1..p25 (25)", newest["afterSortChangeRows"]
+    assert newest["beforeSortBackPage"] == 2
+    assert newest["afterSortBackPage"] == 1, newest["afterSortBackPage"]
+    assert newest["afterSortBackFirstRow"] == "pnew"
+
+
+def test_a_saved_sort_choice_is_restored_on_both_lists(newest):
+    """Per viewer, in localStorage: the page's own declaration lines read it as they run. A stored
+    key the select no longer offers, and storage that throws (a private window, blocked site
+    data), both open on the default rather than breaking the page.
+
+    Mutation: drop the savedSort call from either declaration; drop the SORT_KEYS check; or drop
+    the try/catch in savedSort."""
+    assert newest["restoredItemSort"] == "name", newest["restoredItemSort"]
+    assert newest["restoredAsmSort"] == "owner", newest["restoredAsmSort"]
+    assert newest["restoredOrder"] == ["m1", "m2", "m3", "m4", "m5"], newest["restoredOrder"]
+    assert newest["unknownSavedKey"] == ["new", "new"], newest["unknownSavedKey"]
+    assert newest["blockedStorage"] == ["new", "new"], newest["blockedStorage"]
+
+
+def test_picking_a_sort_remembers_it_and_moves_nothing_else(newest):
+    """What a pick stores, under one key per list; a store that refuses does not throw out of the
+    listener. The listeners are top-level wiring, so their bodies are read from source: each one
+    remembers the pick and repaints its own list, and neither clears the filters nor moves the
+    focus off the select somebody is standing in.
+
+    Mutation: drop the rememberSort call from either listener, or the try/catch in rememberSort."""
+    assert newest["written"] == {"tw_library_sort_items": "name",
+                                 "tw_library_sort_asm": "vendor"}, newest["written"]
+    assert newest["refusedWriteThrew"] is False
+    item_body, asm_body = newest["itemListener"], newest["asmListener"]
+    assert 'rememberSort("items", ITEM_SORT)' in item_body, item_body
+    assert "renderItems()" in item_body, item_body
+    assert 'rememberSort("asm", ASM_SORT)' in asm_body, asm_body
+    for body in (item_body, asm_body):
+        assert "clearFilters" not in body and "clearAsmFilters" not in body, body
+        assert ".focus(" not in body, body
+
+
+def test_the_assemblies_rail_opens_newest_first(newest):
+    """Same instruction, the other list: sixty assemblies, each a minute newer, page 1 is the
+    latest twenty-five and the Sort select says so.
+
+    Mutation: put the ASM_SORT default back to "name"."""
+    assert newest["railFirstPage"] == "q60..q36 (25)", newest["railFirstPage"]
+    assert newest["railSelect"] == "new"
+
+
+def test_the_items_sort_control_is_two_choices_in_the_items_filter_bar(newest):
+    """The Assemblies rail's control in the same shape (.facet + .flabel), over the Items table,
+    with exactly the two orders Hanz asked for, the default first. The rail's select lists its
+    default first too.
+
+    Mutation: delete #f-sort, add a third option, or reorder them."""
+    assert newest["itemOptionValues"] == ["new", "name"], newest["itemOptionValues"]
+    assert newest["itemOptionLabels"] == ["Newest first", "Name A–Z"], newest["itemOptionLabels"]
+    assert newest["labelled"] is True
+    assert newest["inTheItemsBar"] is True
+    assert newest["asmFirstOption"] == "new"

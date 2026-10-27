@@ -2812,40 +2812,51 @@ def test_narrowing_the_rail_does_not_close_the_assembly_being_edited(ran):
 # EXECUTED through the real renderList and read off the real rendered rows, because "does it sort"
 # is behaviour and every interesting way it can be wrong is invisible to a source assertion:
 # an assembly has NO vendor column, so that key is derived from the materials on its lines; the
-# author key has to order by a person's name rather than by their email address; and the default
+# author key has to order by a person's name rather than by their email address; and Name A-Z
 # has to be a pass-through of the server's order rather than a client-side name sort, or the
 # newly-created-assembly-at-the-top that Hanz asked for in the same sentence is undone by the very
-# next render.
+# next render. The DEFAULT is Newest first since 2026-10-27 (Hanz: "The newest added item should be
+# put on the first page").
 #
 # The fixtures are six local assemblies and five local materials; the comment on the harness block
 # says what each one is there to make visible.
 
 
 @needs_node
-def test_the_rail_still_arrives_in_the_order_the_server_sent_it(ran):
-    """THE DEFAULT IS A PASS-THROUGH, and that is a decision, not an omission.
+def test_the_rail_opens_newest_first(ran):
+    """Hanz, 2026-10-27: "The newest added item should be put on the first page." He chose newest
+    first on both lists, every time and after a reload, with Name A-Z one click away. So the
+    page's own ASM_SORT line (lifted, not restated) opens the rail on created_at, newest first,
+    when this viewer has saved nothing.
 
-    `list_assemblies()` does `.order("name")`, so the order the page receives IS name A-Z and the
-    default view is what this tab showed before a Sort control existed - which is the whole point:
-    nobody's list silently reorders itself because a feature shipped.
+    Mutation: put the ASM_SORT default back to "name"."""
+    g = ran["asmSort"]
+    assert g["defaultKey"] == "new", g["defaultKey"]
+    assert g["defaultOrder"] == ["s2", "s3", "s4", "s6", "s5", "s1"], (
+        "the rail did not open newest first: %r" % g["defaultOrder"])
+
+
+@needs_node
+def test_name_a_z_is_the_order_the_server_sent(ran):
+    """NAME A-Z IS A PASS-THROUGH, and that is a decision, not an omission.
+
+    `list_assemblies()` does `.order("name")`, so the order the page receives IS name A-Z.
 
     IT ALSO CANNOT BE A CLIENT-SIDE NAME SORT, which is the half a reviewer will want to "fix". A
     brand-new assembly is unshifted to the FRONT of the rail (Hanz: "when a new assembly is added
     it should append up top not below") and an active name sort would drop it straight back under
     N for "New assembly", on the very next render, with the estimator still typing its real name.
-    So: the default respects the array it was given, including this session's prepend, and "Newest
-    first" is the option that makes new-work-on-top survive a reload.
+    So Name A-Z respects the array it was given, including this session's prepend.
 
     The fixture is deliberately NOT in name order, or a pass-through and a name sort would be
     indistinguishable here.
 
     Mutation: make sortAssemblies sort by name for the "name" key."""
     g = ran["asmSort"]
-    assert g["defaultKey"] == "name", g["defaultKey"]
-    assert g["defaultIsTheArrayOrder"] == ["s1", "s2", "s3", "s4", "s5", "s6"], (
-        "the default view reordered a list nobody asked it to: %r" % g["defaultIsTheArrayOrder"])
+    assert g["nameIsTheArrayOrder"] == ["s1", "s2", "s3", "s4", "s5", "s6"], (
+        "Name A-Z reordered the list the server sent: %r" % g["nameIsTheArrayOrder"])
     assert g["namePassesTheArrayThrough"], (
-        "the default key returned a copy rather than the array it was given, so a prepended "
+        "the name key returned a copy rather than the array it was given, so a prepended "
         "assembly cannot stay where it was put")
 
 
@@ -2864,18 +2875,20 @@ def test_a_new_assembly_appears_at_the_top_of_the_rail(ran):
     `ASMS.unshift(...)` would be a behaviour change with no test able to fail without it. The two
     ITEMS.unshift calls in that same listener are still browser-verified only.
 
-    IT IS NOT PERMANENT, and that is deliberate rather than a hole: `list_assemblies()` orders by
-    name, so on the next load it goes back where it belongs. "Newest first" is the option that
-    makes it stick, and it agrees here because the server stamps created_at on create.
+    UNDER THE DEFAULT (Newest first, 2026-10-27) the sort itself puts it first, because the server
+    stamps created_at on create, and it stays first after a reload. UNDER NAME A-Z the prepend is
+    what holds it at the top, for this session only: `list_assemblies()` orders by name, so the
+    next load files it under N.
 
-    Mutation: `list.push(asm)` in placeNewAssembly, or move #asm-addrow back below #asm-list."""
+    Mutation: `list.push(asm)` in placeNewAssembly (the Name A-Z half turns red), or move
+    #asm-addrow back below #asm-list."""
     g = ran["asmSort"]
-    assert g["newAssemblyIsFirst"][0] == "new1", (
-        "a just-created assembly is not the first row in the rail: %r" % g["newAssemblyIsFirst"])
-    assert g["newAssemblyIsFirst"] == ["new1", "s1", "s2", "s3", "s4", "s5", "s6"], (
-        "the prepend disturbed the rest of the order: %r" % g["newAssemblyIsFirst"])
-    assert g["newAssemblyIsFirstUnderNewest"][0] == "new1", (
-        "Newest first did not put the newest one first: %r" % g["newAssemblyIsFirstUnderNewest"])
+    assert g["newAssemblyIsFirst"] == ["new1", "s2", "s3", "s4", "s6", "s5", "s1"], (
+        "under the default a just-created assembly is not first, or the rest is not newest "
+        "first: %r" % g["newAssemblyIsFirst"])
+    assert g["newAssemblyIsFirstUnderName"] == ["new1", "s1", "s2", "s3", "s4", "s5", "s6"], (
+        "under Name A-Z the prepend did not hold it first, or disturbed the rest: %r"
+        % g["newAssemblyIsFirstUnderName"])
     assert g["buttonIsAboveTheRowItCreates"], (
         "the create button is not above the list it prepends to, so the press and the new row are "
         "at opposite ends of the rail")
@@ -3045,7 +3058,8 @@ def test_the_row_says_what_it_was_ordered_by(ran):
     Mutation: print the label unconditionally, put it back on the meta line, or drop the unpriced
     branch from asmSortLabel."""
     g = ran["asmSort"]
-    # The default adds no second line at all.
+    # Name A-Z adds no second line at all. (The default, Newest first, prints "added <date>": see
+    # test_the_added_date_is_rendered_in_business_time.)
     assert all(len(v) == 1 for v in g["nameLabels"].values()), g["nameLabels"]
     assert g["scopeLabels"]["s1"][1] == "Epoxy", g["scopeLabels"]["s1"]
     assert g["scopeLabels"]["s2"][1] == "No scope", g["scopeLabels"]["s2"]
@@ -3134,12 +3148,13 @@ def test_the_sort_control_comes_back_showing_the_key_it_is_on(ran):
     Mutation: drop the assignment out of renderAsmFilterBar."""
     g = ran["asmSort"]
     assert g["sortSelectSynced"] == "vendor", g["sortSelectSynced"]
-    assert g["sortSelectSyncedToDefault"] == "name", g["sortSelectSyncedToDefault"]
-    assert g["optionValues"] == ["name", "new", "scope", "unit", "vendor", "owner"], (
+    assert g["sortSelectSyncedToDefault"] == "new", g["sortSelectSyncedToDefault"]
+    # The default FIRST, so the select reads right before library.js writes its value back.
+    assert g["optionValues"] == ["new", "name", "scope", "unit", "vendor", "owner"], (
         "the markup offers different keys from the ones sortAssemblies answers: %r"
         % g["optionValues"])
-    # The four Hanz named, plus the default and the honest answer to the prepend.
-    assert g["optionLabels"] == ["Name A–Z", "Newest first", "Scope or work type", "Unit",
+    # The four Hanz named, plus the default and the server's own order.
+    assert g["optionLabels"] == ["Newest first", "Name A–Z", "Scope or work type", "Unit",
                                 "Vendor", "Who created it"], g["optionLabels"]
     assert g["hiddenBeatsAnyDisplayRule"], (
         "nothing makes the hidden attribute beat a class display rule, so hiding the filter bar "
