@@ -27,7 +27,7 @@ dropbox==12.0.2
 # the pages that come out have to be the pages that went in, object for object.
 # Pinned, not floated -- a page-copy that started re-encoding content streams
 # would break the byte-identity guarantee silently.
-pypdf==6.21.1
+pypdf==6.21.2
 pydantic>=2.13.4
 anthropic>=0.111.0
 supabase>=2.4
