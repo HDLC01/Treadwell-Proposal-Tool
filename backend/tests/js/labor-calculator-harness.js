@@ -77,9 +77,12 @@ function make(opts) {
     "calcEdit: calcEdit, renderTryIt: renderTryIt, calcProblem: calcProblem, " +
     "setTry: function (v) { CALC_TRY_SF = v; }, calc: function () { return CALC; }, " +
     "saved: function () { return CALC_SAVED; } };";
-  const scope = new Function("$", "esc", "api", "L", "LABOR", "ADMIN", "GLOBAL_MARKUP", "window", body);
+  // LISTS_EDIT: admin, or the library_lists grant. Defaults to the admin flag.
+  const scope = new Function("$", "esc", "api", "L", "LABOR", "ADMIN", "LISTS_EDIT", "GLOBAL_MARKUP", "window", body);
   const api = scope((id) => els[id] || null, esc, fetchStub, L, clone(opts.labor || []),
-                    opts.admin !== false, GLOBAL_MARKUP, { TWBidModel: B });
+                    opts.admin !== false,
+                    opts.listsEdit === undefined ? opts.admin !== false : opts.listsEdit,
+                    GLOBAL_MARKUP, { TWBidModel: B });
   return { api, els, puts, calcPuts, rec, GLOBAL_MARKUP };
 }
 

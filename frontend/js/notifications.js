@@ -50,7 +50,7 @@
   // "test", "lost" and "deposit settled" cannot mean one thing there and another here.
   const C = window.TWCrm;
 
-  let ADMIN = false, MY_EMAIL = "";
+  let ADMIN = false, ROSTER_EDIT = false, MY_EMAIL = "";
   let ROSTER = [];                 // [{email, enabled}]: the GENERAL rows, the floor
   let STEPS = [];                  // [{id, label, hint}], served by the portal, never hardcoded
   let CELLS = {};                  // { emailLower: { stepId: true|false } }: the EXPLICIT rows
@@ -220,10 +220,20 @@
     renderProjects();
   }
 
+  /** May change the team roster and the per-step grid: an admin, or a member given the
+   *  notify_recipients special permission on the Admin page (/api/me's `grants`). The server's
+   *  _require_grant agrees. The per-project chips stay on ADMIN: that route has no grant. */
+  function rosterEditFor(me) {
+    const m = me || {};
+    return m.role === "admin" || m.role === "super_admin"
+      || (Array.isArray(m.grants) && m.grants.indexOf("notify_recipients") !== -1);
+  }
+
   async function boot() {
     try { await window.TWAuth.ready; } catch (e) { /* auth.js handles redirect */ }
     const me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
     ADMIN = me.role === "admin" || me.role === "super_admin";
+    ROSTER_EDIT = rosterEditFor(me);
     MY_EMAIL = (me.email || "").toLowerCase();
     render();
     await load();          // global roster (also fills ROSTER)
@@ -240,7 +250,7 @@
       '<p class="note" style="margin:0 0 10px">' + g.intro + '</p>' +
       '<div id="' + g.alert + '" class="alert"></div>' +
       '<div id="' + g.chips + '" class="chips"><span class="note">Loading…</span></div>' +
-      (ADMIN
+      (ROSTER_EDIT
         // aria-label on both, because two identical "Add" buttons on one page are
         // indistinguishable to anyone reading it through a screen reader's control list.
         ? '<div style="margin-top:16px"><div class="lbl">' + g.addLbl + '</div>' +
@@ -286,7 +296,7 @@
           '<button type="button" class="pp-pg" id="pp-next">Next ' + icon("chev-right", 13) + '</button>' +
         '</nav>' +
       '</div>';
-    if (ADMIN) {
+    if (ROSTER_EDIT) {
       GROUPS.forEach((g) => {
         $(g.btn).addEventListener("click", () => addEmail(g));
         $(g.input).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addEmail(g); } });
@@ -323,14 +333,14 @@
       // is a choice ("everything, deposits included"), and an unexplained twin reads as a bug
       // somebody will "fix" by deleting one of them.
       const both = onList(g.other, x.email);
-      return '<span class="chip ' + (on ? "on " : "") + (ADMIN ? "can" : "") + '" data-id="' + esc(x.id) + '" data-on="' + (on ? 1 : 0) + '"'
-           + ' data-kind="' + esc(g.kind) + '"' + (ADMIN ? ' role="button" tabindex="0"' : "") + '>'
+      return '<span class="chip ' + (on ? "on " : "") + (ROSTER_EDIT ? "can" : "") + '" data-id="' + esc(x.id) + '" data-on="' + (on ? 1 : 0) + '"'
+           + ' data-kind="' + esc(g.kind) + '"' + (ROSTER_EDIT ? ' role="button" tabindex="0"' : "") + '>'
            + avatar(x.email) + esc(nameOf(x.email)) + ' <span class="em">' + esc(x.email) + '</span>'
            + (both ? ' <span class="also">' + esc(g.also) + '</span>' : "")
-           + (ADMIN ? ' <button class="x" title="Remove" aria-label="Remove">&times;</button>' : "")
+           + (ROSTER_EDIT ? ' <button class="x" title="Remove" aria-label="Remove">&times;</button>' : "")
            + '</span>';
-    }).join("") || '<span class="note">' + g.empty + (ADMIN ? " Add someone below." : "") + '</span>';
-    if (ADMIN) {
+    }).join("") || '<span class="note">' + g.empty + (ROSTER_EDIT ? " Add someone below." : "") + '</span>';
+    if (ROSTER_EDIT) {
       wrap.querySelectorAll(".chip").forEach((c) => {
         const id = c.dataset.id, on = c.dataset.on === "1";
         c.addEventListener("click", (e) => { if (e.target.classList.contains("x")) return; toggle(id, !on, c, g); });
@@ -556,7 +566,7 @@
       '<div id="mx-alert" class="alert"></div>' +
       '<div id="mx-legend" class="mx-legend"></div>' +
       '<div class="mx-scroll"><div id="mx-grid"><span class="note">Loading…</span></div></div>' +
-      (ADMIN ? "" : '<p class="note" style="margin-top:12px">Only admins can change this grid.</p>') +
+      (ROSTER_EDIT ? "" : '<p class="note" style="margin-top:12px">Only admins can change this grid.</p>') +
     '</div>';
   }
 
@@ -628,7 +638,7 @@
           + ' data-step="' + esc(st.id) + '" data-state="' + c.state + '"'
           + ' data-on="' + (c.on ? 1 : 0) + '" data-floor="' + (c.floorOn ? 1 : 0) + '"'
           + ' data-next="' + mxNext(c) + '" aria-pressed="' + (c.on ? "true" : "false") + '"'
-          + (ADMIN ? "" : " disabled") + ' aria-label="' + esc(label) + '">'
+          + (ROSTER_EDIT ? "" : " disabled") + ' aria-label="' + esc(label) + '">'
           + '<span class="mx-g" aria-hidden="true">' + esc(MX_LABEL[c.state]) + '</span>'
           + '</button></td>';
       }).join("");
@@ -642,7 +652,7 @@
     }).join("");
     grid.innerHTML = '<table class="mx"><thead>' + head + '</thead><tbody>' + body
       + '</tbody></table>';
-    if (!ADMIN) return;
+    if (!ROSTER_EDIT) return;
     grid.querySelectorAll(".mx-cell").forEach((b) => b.addEventListener("click", () => {
       if (b.disabled) return;
       toggleCell(b.dataset.email, b.dataset.step, b.dataset.next, b);

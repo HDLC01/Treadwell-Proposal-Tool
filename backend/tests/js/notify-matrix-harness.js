@@ -215,6 +215,7 @@ const SOURCE = [
   fn("paintGroup"), fn("mxPeople"), fn("mxCell"), fn("mxNext"), fn("mxColumn"),
   fn("paintLegend"), fn("paintMatrix"), fn("toggleCell"),
   fn("repaintGroups"), fn("load"), fn("toggle"), fn("addEmail"), fn("removeOne"), fn("peopleFor"),
+  fn("rosterEditFor"),
 ].join("\n");
 
 /** The nine steps the portal serves today, in the portal's order. Kept here as a FIXTURE, not as
@@ -296,10 +297,10 @@ function build(opts) {
     confirmDanger: (cfg) => { dialogs.push(cfg); return Promise.resolve(o.confirm !== false); },
   };
   const scope = new Function(
-    "$", "esc", "avatar", "plainAvatar", "nameOf", "api", "TW", "ADMIN", "renderProjects",
+    "$", "esc", "avatar", "plainAvatar", "nameOf", "api", "TW", "ADMIN", "ROSTER_EDIT", "renderProjects",
     "OVERRIDES", "PP_TABS", "PP_IDS", "PP_TAB", "PP_TAB_KEY", "ssSet", "ppGoto",
     '"use strict";\n' + SOURCE + "\n" +
-    "return { render, load, paintGroup, paintMatrix, peopleFor, GROUPS, kindOf, onList,\n" +
+    "return { render, load, paintGroup, paintMatrix, peopleFor, GROUPS, kindOf, onList, rosterEditFor,\n" +
     "         mxPeople, mxCell, mxNext, mxColumn, MX_LABEL, stepsOfRow,\n" +
     "         roster: () => ROSTER, steps: () => STEPS, cells: () => JSON.parse(JSON.stringify(CELLS)) };");
 
@@ -309,6 +310,9 @@ function build(opts) {
     esc, C.avatarHtml,
     (who) => '<span class="nt-av">' + (C.initialsOf(who) || "-") + "</span>",
     C.nameOf, api, TW, o.admin !== false,
+    // The roster controls follow ROSTER_EDIT (admin, or the notify_recipients grant). Defaults to
+    // the admin flag so every scenario written before the grant reads exactly as it did.
+    o.rosterEdit === undefined ? o.admin !== false : o.rosterEdit,
     () => { s.projectRenders++; },
     o.overrides || {},
     [["active", "Active"], ["won", "Won"], ["lost", "Lost"], ["test", "Test"]],
@@ -693,6 +697,36 @@ const out = {};
       fired: s.cellAt("hanz@wetreadwell.com", "viewed").click(),
       puts: s.calls.filter((c) => c.method === "PUT").length,
       grid: s.grid(),
+    };
+  }
+
+  // ── a member given notify_recipients edits the roster and the grid ──────
+  // ROSTER_EDIT comes from the page's own rosterEditFor over an /api/me shape, not a literal.
+  {
+    const probe = build({ rows: MIXED, admin: false });
+    const me = { role: "member", grants: ["notify_recipients"] };
+    const s = build({ rows: MIXED, admin: false, rosterEdit: probe.rosterEditFor(me) });
+    s.render();
+    await s.load();
+    const html = s.dom.root.innerHTML;
+    const fired = s.cellAt("hanz@wetreadwell.com", "viewed").click();
+    await tick(); await tick();
+    out.granted = {
+      decides: {
+        granted: probe.rosterEditFor(me),
+        plain: probe.rosterEditFor({ role: "member", grants: ["markup"] }),
+        none: probe.rosterEditFor({ role: "member" }),
+        admin: probe.rosterEditFor({ role: "admin" }),
+        superAdmin: probe.rosterEditFor({ role: "super_admin", grants: [] }),
+      },
+      hasAddField: html.indexOf('id="' + s.group("general").input + '"') !== -1,
+      saysAdminsOnly: html.indexOf("Only admins can change") !== -1,
+      chipsHaveRemove: s.chipsHtml("general").indexOf('class="x"') !== -1,
+      cellsDisabled: s.cellNodes().map((c) => c.disabled),
+      fired: fired,
+      puts: s.calls.filter((c) => c.method === "PUT").length,
+      // The per-project card stays on ADMIN: its route has no grant.
+      perProjectSaysSelfOnly: html.indexOf("You can toggle only yourself.") !== -1,
     };
   }
 
