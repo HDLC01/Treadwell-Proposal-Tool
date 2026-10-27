@@ -6,7 +6,8 @@ draft's blob, initDraftSync waited for the sign-in and the profile, read the new
 ran again. Now the strip reads its other tabs' drafts ahead (shared.js prefetchDraft: at idle once the strip is drawn, on a
 pointer or the keyboard on a tab, and at the click), keeps each in sessionStorage with the server's `updated_at`, and the
 page that opens runs ONCE on it (bootFromPrefetch). Until the server says the read is still its copy (the same
-`updated_at`), every server save is refused, exactly as for a draft adopted blind; a read that went stale is replaced by the
+`updated_at` and the same whole copy, since the board's Won and the like are written without a new `updated_at`), every
+server save is refused, exactly as for a draft adopted blind; a read that went stale is replaced by the
 server's copy and the page reloads, so it costs what the old way did and is never saved over the newer copy.
 
 Run, not read: js/tab-prefetch-harness.js runs shared.js WHOLE over one fake browser tab and server (each page load a fresh
@@ -99,6 +100,24 @@ def test_an_old_kept_read_is_not_used(boot):
     assert boot["expired"] == {"snapshot": "A", "reloads": 1}
 
 
+def test_a_copy_written_without_a_new_updated_at_is_never_saved_over(boot):
+    """The board's Won, Lost, On hold and Hand off, and the Files page's build record, are written into the row without a
+    new `updated_at` (drafts.set_won, record_generate_result ...). The same version is not the same copy."""
+    u = boot["unbumped"]
+    assert u["snapshotWon"] is False, "the page opened on the read made before the Won"
+    assert u["putsWithoutWon"] == 0, "nothing was saved without the Won and the build record"
+    assert u["reloads"] == 1 and u["reopenedWon"] is True
+    assert u["serverWon"] is True and u["serverBuilt"] is True and u["serverWords"] == "typed after the reload"
+
+
+def test_a_click_long_after_the_idle_read_reads_the_tab_again(boot):
+    r = boot["reread"]
+    assert r["getsSoon"] == 0, "an ask within seconds is the first read's"
+    assert r["getsLate"] == 1 and r["kept"] is True, "minutes later it is read again"
+    assert r["keptWhileReading"] is False, "the older read is not left to open the page while the new one is made"
+    assert r["snapshot"] == "Kyle's newer words" and r["reloads"] == 0, "the page opens on the newer read, no reload"
+
+
 def test_a_server_that_cannot_confirm_leaves_the_saves_refused(boot):
     u = boot["unreachable"]
     assert u["reloads"] == 0 and u["snapshot"] == "B's words"
@@ -147,8 +166,19 @@ BREAKS = {
         BOOT, "shared.js", "    if (!isUnverified(urlId)) return;", "    clearUnverified();",
         lambda r: r["hit"]["putsWhileAsked"] != 0 or r["stale"]["server"] != "Kyle's newer words"),
     "a stale read is kept": (
-        BOOT, "shared.js", "    if (row.version === boot.version) {", "    if (true) {",
+        BOOT, "shared.js", "    if (row.version === boot.version && boot.whole && wholeCopy(row.data) === boot.whole) {",
+        "    if (true) {",
         lambda r: r["stale"]["server"] != "Kyle's newer words" or r["stale"]["reloads"] != 1),
+    "the version alone confirms the read": (
+        BOOT, "shared.js", "    if (row.version === boot.version && boot.whole && wholeCopy(row.data) === boot.whole) {",
+        "    if (row.version === boot.version) {",
+        lambda r: r["unbumped"]["serverWon"] is not True or r["unbumped"]["putsWithoutWon"] != 0),
+    "a later ask is the first read's": (
+        BOOT, "shared.js", "    if (was && Date.now() - was.at < PREFETCH_FRESH_MS) return was.p;", "    if (was) return was.p;",
+        lambda r: r["reread"]["getsLate"] != 1 or r["reread"]["snapshot"] != "Kyle's newer words"),
+    "the older read stays while it is read again": (
+        BOOT, "shared.js", '    if (was) { try { sessionStorage.removeItem(PREFETCH_KEY + ":" + id); } catch {} }', "    void 0;",
+        lambda r: r["reread"]["keptWhileReading"] is not False),
     "a blob with unsaved work is given up": (
         BOOT, "shared.js", "      if (hasWork(blob) && syncedDigest(stamp) !== draftDigest(blob)) return;", "      void 0;",
         lambda r: r["unsaved"]["aSaved"] != "A, typed and not yet saved"),
@@ -156,7 +186,7 @@ BREAKS = {
         BOOT, "shared.js", "    if (!(Date.now() - hit.at < PREFETCH_MAX_AGE_MS)) return;", "    void 0;",
         lambda r: r["expired"]["snapshot"] != "A"),
     "a second ask reads again": (
-        BOOT, "shared.js", "    if (_prefetches.has(id)) return _prefetches.get(id);", "    void 0;",
+        BOOT, "shared.js", "    if (was && Date.now() - was.at < PREFETCH_FRESH_MS) return was.p;", "    void 0;",
         lambda r: r["once"]["gets"] != ["B"] or not r["once"]["samePromise"]),
     "this page's own draft is read ahead": (
         BOOT, "shared.js", "    if (id === getDraftId() || _reloadPending || _leaving) return Promise.resolve(false);",

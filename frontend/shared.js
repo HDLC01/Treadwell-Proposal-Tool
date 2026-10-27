@@ -1354,23 +1354,28 @@
   // IT IS A COPY THE SERVER HAS NOT CONFIRMED, so until it has, the draft is held exactly as a draft
   // adopted blind is (markUnverified): every server save is refused, and a reload reads the server
   // again. confirmPrefetchedBoot asks the server as soon as there is a token. The same `updated_at`
-  // means nobody has saved it since it was read: the refusal is lifted and what the page wrote
+  // and the same whole copy (wholeCopy: the board's Won and the like are written without a new
+  // `updated_at`) mean nothing was written to it since it was read: the refusal is lifted and what the page wrote
   // meanwhile is saved. Anything else, and the server's copy replaces it and the page reloads, which
   // is what every open of another draft did before, so a copy that went stale costs no more than
   // the old way and is never saved over the newer one.
   // Each read under its own key (PREFETCH_KEY + ":" + id), so a page reads only its own; the list
   // under PREFETCH_KEY says what is kept, when, and how big.
   const PREFETCH_KEY = "treadwell.proposal_tool.prefetched";
-  const PREFETCH_MAX_AGE_MS = 10 * 60 * 1000;
+  // A kept read opens a page for a minute at most (bootFromPrefetch), and one read answers every ask
+  // for 20 seconds (prefetchDraft): the click reads again after that, so the page that opens runs
+  // on a read made at the click, not on the one made at idle when this page opened.
+  const PREFETCH_MAX_AGE_MS = 60 * 1000;
+  const PREFETCH_FRESH_MS = 20 * 1000;
   // sessionStorage also holds the UNVERIFIED marker, which must always fit: the kept reads stay
   // well under the ~5M characters a browser allows it.
   const PREFETCH_MAX_CHARS = 1500000;
-  const _prefetches = new Map();     // id -> its one read on this page
+  const _prefetches = new Map();     // id -> {at, p}: its latest read on this page
   let _leaving = false;
   window.addEventListener("pagehide", () => { _leaving = true; });
 
   /** Keep `raw` (one draft's read) under `id`: what is kept goes oldest first, and anything over
-   *  ten minutes old, until it fits. Throws when storage refuses (the caller's catch). */
+   *  PREFETCH_MAX_AGE_MS old, until it fits. Throws when storage refuses (the caller's catch). */
   function keepPrefetched(id, raw) {
     if (raw.length > PREFETCH_MAX_CHARS) return false;
     let list = [];
@@ -1405,13 +1410,19 @@
   }
 
   /** Read draft `id` (another proposal of this estimate) and keep it for the page that opens it.
-   *  Once per draft per page: a second ask gets the first one's promise. Never this page's own
-   *  draft, and nothing from a page that is leaving or reloading. Resolves true when it is kept. */
+   *  A second ask within PREFETCH_FRESH_MS gets the first one's promise; a later one (the click,
+   *  minutes after the idle read) reads it again, and the older kept read is dropped as it starts,
+   *  so the page that opens never runs on more than one read's worth of staleness. Never this
+   *  page's own draft, and nothing from a page that is leaving or reloading. Resolves true when it
+   *  is kept. */
   function prefetchDraft(id) {
     if (!id || typeof id !== "string") return Promise.resolve(false);
-    if (_prefetches.has(id)) return _prefetches.get(id);
+    const was = _prefetches.get(id);
+    if (was && Date.now() - was.at < PREFETCH_FRESH_MS) return was.p;
     if (id === getDraftId() || _reloadPending || _leaving) return Promise.resolve(false);
-    const p = (async () => {
+    if (was) { try { sessionStorage.removeItem(PREFETCH_KEY + ":" + id); } catch {} }
+    const entry = { at: Date.now(), p: null };
+    entry.p = (async () => {
       try {
         const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id),
                                 { headers: authHeaders() });
@@ -1421,20 +1432,21 @@
         const version = (body && typeof body.updated_at === "string") ? body.updated_at : "";
         if (!version || !(data && typeof data === "object" && !Array.isArray(data))) return false;
         if (_leaving || _reloadPending) return false;
-        return keepPrefetched(id, JSON.stringify({ version, at: Date.now(), data }));
+        if (_prefetches.get(id) !== entry) return false;     // a later read of it has started: that one is kept
+        return keepPrefetched(id, JSON.stringify({ version, at: entry.at, data }));
       } catch { return false; }
     })();
-    _prefetches.set(id, p);
-    return p;
+    _prefetches.set(id, entry);
+    return entry.p;
   }
 
-  // Set by bootFromPrefetch when this page runs on a kept read: {id, version, digest}.
+  // Set by bootFromPrefetch when this page runs on a kept read: {id, version, digest, whole}.
   let _prefetchBoot = null;
 
   /** THE FIRST RUN OF THE PAGE, ON A KEPT READ OF ITS DRAFT. Synchronous, before the page's own
    *  scripts take their snapshot of the blob, so the page renders this draft and needs no reload.
    *  The kept read is used once (removed whether it is used or not), and only when:
-   *    - it is this URL's draft, under ten minutes old, with a version;
+   *    - it is this URL's draft, under PREFETCH_MAX_AGE_MS old, with a version;
    *    - the blob is not already this draft's (that is the ordinary load);
    *    - nothing in the blob is unsaved: it is empty, holds no work, or is the copy this browser
    *      last saw the server hold (flushEvictedBlob's own tests). Otherwise the ordinary hydrate,
@@ -1463,7 +1475,21 @@
     const digest = draftDigest(copy);
     markSynced(urlId, digest);
     setDraftId(urlId);
-    _prefetchBoot = { id: urlId, version: hit.version, digest };
+    _prefetchBoot = { id: urlId, version: hit.version, digest, whole: wholeCopy(data) };
+  }
+
+  /** The WHOLE of a server copy, every key but the stamp. `updated_at` alone cannot say the copy is
+   *  unchanged: the board's Won / Lost / On hold / Hand off, the Files page's build record, the notify
+   *  picks and a fan-out's tab options are written into the row without it (drafts.set_won and the
+   *  others), and draftDigest skips generate_result and the server-owned keys. A page that saved its
+   *  older copy over those would erase them. */
+  function wholeCopy(data) {
+    try {
+      const keep = JSON.parse(JSON.stringify(data || {}));
+      if (!keep || typeof keep !== "object" || Array.isArray(keep)) return "";
+      delete keep[STAMP];
+      return hash53(canonJSON(keep));
+    } catch { return ""; }
   }
   try { bootFromPrefetch(); } catch {}
 
@@ -1496,12 +1522,13 @@
     }
     if (_reloadPending) return;
     clearUnverified();
-    if (row.version === boot.version) {
+    // The same `updated_at` AND the same whole copy (wholeCopy): nothing has been written to it since.
+    if (row.version === boot.version && boot.whole && wholeCopy(row.data) === boot.whole) {
       const cur = getState();
       if (cur[STAMP] === boot.id && draftDigest(cur) !== boot.digest) scheduleServerSave(cur);
       return;
     }
-    // Saved again since it was read ahead, or gone: the server's copy, as the ordinary hydrate takes it.
+    // Saved or written again since it was read ahead, or gone: the server's copy, as the ordinary hydrate takes it.
     const data = Object.assign({}, row.data, { [STAMP]: boot.id });
     writeBlob(data);
     markSynced(boot.id, draftDigest(data));

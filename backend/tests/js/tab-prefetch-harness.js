@@ -4,8 +4,9 @@
  * shared by every page load of the tab, a server holding rows with their `updated_at`, and a page load that is a fresh run
  * of the script over those storages (a reload is one more).
  *
- * What it shows: prefetchDraft reads a draft once per page and never this page's own; the next page runs on the kept read
- * with no reload, holding its saves until the server says the read is still its copy; a read that went stale is replaced
+ * What it shows: prefetchDraft reads a draft once per 20 seconds and never this page's own, and again at a later click; the
+ * next page runs on the kept read with no reload, holding its saves until the server says the read is still its copy (the
+ * same updated_at AND the same whole copy); a read that went stale, or was written without a new updated_at, is replaced
  * by the server's copy and nothing is saved over it; a blocked sessionStorage, an expired read, or a blob with unsaved work
  * leaves the ordinary open (read, write, reload) as it was. `timing` measures one tab switch both ways against a server
  * whose every round trip takes RT ms.
@@ -46,6 +47,9 @@ function tab(o) {
   let failGets = false;
   const rt = o.rt || 0;
   const wire = () => (rt ? sleep(rt) : Promise.resolve());
+  // The tab's clock: shared.js's Date.now() is the real one plus `clock.off` (a test moves it on).
+  const clock = { off: 0 };
+  class TabDate extends Date { static now() { return Date.now() + clock.off; } }
   const fetchFn = async (url, init) => {
     const method = (init && init.method) || "GET";
     const id = decodeURIComponent(String(url).split("/api/draft/")[1] || "").split(/[/?]/)[0];
@@ -87,8 +91,8 @@ function tab(o) {
                   createElement: () => ({ setAttribute() {}, appendChild() {}, style: {}, classList: { add() {}, remove() {} } }),
                   head: { appendChild() {} }, body: { appendChild() {}, removeChild() {} }, cookie: "" };
     const con = { log() {}, info() {}, warn: (...a) => log.warns.push(a.join(" ")), error: (...a) => log.warns.push(a.join(" ")) };
-    new Function("window", "document", "localStorage", "sessionStorage", "fetch", "location", "console", SHARED)(
-      win, doc, local, session, fetchFn, loc, con);
+    new Function("window", "document", "localStorage", "sessionStorage", "fetch", "location", "console", "Date", SHARED)(
+      win, doc, local, session, fetchFn, loc, con, TabDate);
     // What a page script's module-top snapshot reads, in the same synchronous run (`const state = TW.getState()`).
     page.TW = win.TW;
     page.snapshot = clone(win.TW.getState());
@@ -113,7 +117,7 @@ function tab(o) {
 
   const blob = () => { try { return JSON.parse(local.getItem(STATE_KEY) || "null"); } catch (e) { return null; } };
   const kept = (id) => (session.m.has(KEPT + ":" + id) ? JSON.parse(session.m.get(KEPT + ":" + id)) : null);
-  return { local, session, rows, log, load, open, hold, blob, kept, stamp, setFail: (v) => { failGets = v; } };
+  return { local, session, rows, log, load, open, hold, blob, kept, stamp, clock, setFail: (v) => { failGets = v; } };
 }
 
 /** A tab on Base Bid 1 (A), with Base Bid 2 (B) on the server: A opened (read, reload) and in step with the server. */
@@ -234,6 +238,53 @@ async function main() {
     await b.TW.flushState();
     out.unreachable = { reloads: t.log.reloads - r0, blocked: b.TW.saveBlocked(), puts: t.log.puts.filter((p) => p[0] === "B").length,
                         snapshot: b.snapshot.scope_notes };
+  }
+
+  // 7b. WRITTEN WITHOUT A NEW updated_at: after the read ahead, the board marks B Won and the Files page records its build
+  //     (drafts.set_won, record_generate_result: neither bumps updated_at). The page that opens on the old read must not
+  //     save it over them: the server's copy replaces it and the page reloads onto that.
+  {
+    const { t, a } = await onA();
+    await a.TW.prefetchDraft("B");
+    t.rows.B.data = Object.assign({}, t.rows.B.data, { won: { at: "2026-10-28T10:05:00+00:00", by: "troy" },
+                                                        generate_result: { estimate_name: "Gym.xlsx" } });
+    const r0 = t.log.reloads, p0 = t.log.puts.length;
+    const b = t.load("B");
+    b.TW.setState({ scope_notes: "typed on the old read" });
+    await b.TW.draftReady;
+    await b.TW.flushState();
+    const putsB = t.log.puts.slice(p0).filter((p) => p[0] === "B");
+    const again = await t.open("B");
+    again.TW.setState({ scope_notes: "typed after the reload" });
+    await again.TW.flushState();
+    out.unbumped = { snapshotWon: !!b.snapshot.won, reloads: t.log.reloads - r0,
+                     putsWithoutWon: putsB.filter((p) => !p[1].won || !p[1].generate_result).length,
+                     reopenedWon: !!again.snapshot.won, serverWon: !!t.rows.B.data.won,
+                     serverBuilt: !!t.rows.B.data.generate_result, serverWords: t.rows.B.data.scope_notes };
+  }
+
+  // 7c. THE CLICK READS AGAIN: an ask within seconds is the first read's; minutes later (the click, long after the idle
+  //     read) it reads again, the older kept read gone while it does, and the page opens on the newer read with no reload.
+  {
+    const { t, a } = await onA();
+    await a.TW.prefetchDraft("B");
+    const g0 = t.log.gets.length;
+    t.clock.off += 5 * 1000;
+    await a.TW.prefetchDraft("B");
+    const getsSoon = t.log.gets.length - g0;
+    t.rows.B = { data: Object.assign({}, t.rows.B.data, { scope_notes: "Kyle's newer words" }), updated_at: t.stamp() };
+    t.clock.off += 5 * 60 * 1000;
+    const release = t.hold("B");
+    const p = a.TW.prefetchDraft("B");
+    await ticks();
+    const keptWhileReading = t.kept("B") !== null;
+    release();
+    const kept = await p;
+    const getsLate = t.log.gets.length - g0 - getsSoon;
+    const r0 = t.log.reloads;
+    const b = t.load("B");
+    await b.TW.draftReady;
+    out.reread = { getsSoon, getsLate, keptWhileReading, kept, snapshot: b.snapshot.scope_notes, reloads: t.log.reloads - r0 };
   }
 
   // 8. TIMING: one tab switch, A -> B, at RT ms a round trip (the sign-in token is one, the profile one more, a draft one).
