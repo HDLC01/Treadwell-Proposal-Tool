@@ -5002,7 +5002,10 @@
     let isAdmin = false;
     try {
       const who = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
-      isAdmin = who.role === "admin" || who.role === "super_admin";
+      // Or a member given the delete_projects special permission (POST /api/project/{id}/delete
+      // opens to exactly that grant).
+      isAdmin = who.role === "admin" || who.role === "super_admin" ||
+        (Array.isArray(who.grants) && who.grants.indexOf("delete_projects") !== -1);
     } catch (e) { /* not signed in yet, so the safe answer is "no control at all" */ }
     if (!isAdmin) return "";
     const sent = !(p && p.not_sent);
