@@ -675,6 +675,51 @@
     return 0;
   }
 
+  /** THE SHEET'S MAN HOURS AND BUDGET BLOCK (Hanz, 2026-10-27: "In the review tab we need to show the Man hours, the budget
+   *  ... Take it from the sheet"). Kyle's Epoxy tab (Polish's cell in brackets; the two are the same formulas a row apart):
+   *    H64 (H56) Total Man Hours   =((A47*B47)+(A48*B48)+(A49*B49)+(A50*B50))*8 + (A52*B52)   the crew's guys x days x 8, and the drive's guys x hours
+   *    H66 (H58) crew size         =A47                                                       the first crew line's guys
+   *    H65 (H57) Total Days        =H64/8/H66
+   *    F72 (F66) Estimated Costs   =SUM(D70,D82,D85)  sub-total + taxes + fees and bond;  I72 (I66) =F72/C87, a square foot
+   *    F73 (F67) Man Hour Budget (Raken)  the same formula as H64
+   *    F87 (F81) Mark Up + Conting.  =SUM(D73,D74,D77)  GP + discount + contingency;  F88 (F82) =F87/D88, of the lump sum
+   *    F74 (F68) GP per Day        =F87/H65
+   *    G87 (G81) GP / MH           =F87/F73;  G88 (G82) =C47, the first crew line's rate ("LaborRate from Above")
+   *    H87 (H81) MarkUp + Soft Costs  =SUM(D73:D77)  GP + discount + super and PTO + soft costs + contingency;  H88 (H82) =H87/D88
+   *  Nothing here is new arithmetic: the hours are laborTotal's, the same rows at $1 an hour (an hours row is guys x hours, a
+   *  day row guys x days x its hours a day, a line switched off is nothing, the fourth hand of Remove existing joint filler is
+   *  Polish A42's =IF(F29="NO",3,4)), and the dollars are the chain's own lines (`bid`, priceSection's or polishBid's answer).
+   *  The sheet's "8 hour days" switch is the crew line's own hours a day. A figure that would divide by nothing is null, as is
+   *  the whole block for a bid that is not priceable. `rows` are the labor rows of the section on show. Pure. */
+  function manHourBudget(rows, conditions, pw, bid) {
+    if (!isObject(bid) || bid.priceable === false) return null;
+    rows = rows instanceof Array ? rows : [];
+    var atOne = rows.map(function (r) { return Object.assign({}, r || {}, { rate: 1 }); });
+    var hours = laborTotal(atOne, conditions, 0);
+    var crewRow = null;
+    for (var i = 0; i < rows.length && !crewRow; i++) {
+      var r = rows[i] || {};
+      if (!isTravelRow(r) && rowOn(r) && num(r.guys) > 0) crewRow = r;
+    }
+    var crew = crewRow ? num(crewRow.guys) : null;
+    var perDay = crewRow ? dayHours(crewRow) : HOURS_PER_DAY;
+    var days = crew && hours > 0 ? hours / perDay / crew : null;
+    var total = num(bid.total), sf = num(bid.sf);
+    var est = num(bid.sub_total) + num(bid.taxes) + num(bid.fees_and_bond);
+    var markup = num(bid.gp) + num(bid.hard_bid) + num(bid.contingency);
+    var soft = markup + num(bid.super_pto) + num(bid.soft_costs);
+    return {
+      man_hours: hours, crew: crew, hours_per_day: perDay, total_days: days,
+      est_costs: est, est_costs_per_sf: sf > 0 ? est / sf : null,
+      budget_hours: hours,
+      gp_per_day: days ? markup / days : null,
+      markup_cont: markup, markup_cont_pct: total ? markup / total : null,
+      gp_per_mh: hours > 0 ? markup / hours : null,
+      labor_rate: crewRow ? laborRateOf(crewRow, pw) : null,
+      markup_soft: soft, markup_soft_pct: total ? soft / total : null
+    };
+  }
+
   /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
    *  2026-10-05: "separate line for Travel Lodging and Per Diem", priced INSIDE the markups like
    *  Kyle's sheet D61 -- they join the sub-total (D64) that GP, super/PTO and soft costs are taken
@@ -7487,6 +7532,7 @@
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    manHourBudget: manHourBudget,
     // The prevailing wage calculator (Labor step): the constants, the card's two figures, and the rate in force.
     PREVAILING: PREVAILING, PREVAILING_TRADES: PREVAILING_TRADES, normalizePrevailing: normalizePrevailing,
     prevailingCrewTrade: prevailingCrewTrade, newPrevailingTradeKey: newPrevailingTradeKey,

@@ -624,12 +624,15 @@
       --rev-travel-band:#e8d8ae;  --rev-travel-tot:#f5eed7;
       --rev-markup-band:#dccadb;  --rev-markup-tot:#f0e7ef;
       /* An option's own card (Phase 15): a clay tint, apart from the four above. Same AA checks. */
-      --rev-option-band:#e3cbbf;  --rev-option-tot:#f3e6df}
+      --rev-option-band:#e3cbbf;  --rev-option-tot:#f3e6df;
+      /* The read-only Man hours & budget card (2026-10-27): a sea-green tint, apart from the others. Same AA checks. */
+      --rev-manhours-band:#c4dcd8; --rev-manhours-tot:#e1efec}
     .rev[data-rev="takeoff"]{--rev-band:var(--rev-takeoff-band);--rev-tot:var(--rev-takeoff-tot)}
     .rev[data-rev="labor"]{--rev-band:var(--rev-labor-band);--rev-tot:var(--rev-labor-tot)}
     .rev[data-rev="travel"]{--rev-band:var(--rev-travel-band);--rev-tot:var(--rev-travel-tot)}
     .rev[data-rev="markup"]{--rev-band:var(--rev-markup-band);--rev-tot:var(--rev-markup-tot)}
     .rev[data-rev="option"]{--rev-band:var(--rev-option-band);--rev-tot:var(--rev-option-tot)}
+    .rev[data-rev="manhours"]{--rev-band:var(--rev-manhours-band);--rev-tot:var(--rev-manhours-tot)}
     .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;
            background:var(--rev-band,var(--surf-low));font:600 12.5px var(--sans)}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
