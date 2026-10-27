@@ -53,6 +53,7 @@
       calendar_event_deleted:"deleted a calendar event",
       // Admin, about a PERSON rather than a project.
       role_changed:"changed the role on", nav_access_changed:"changed tab permissions",
+      special_permissions_changed:"changed special permissions",
       banned:"banned", unbanned:"unbanned", deleted_user:"deleted",
     };
     function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
