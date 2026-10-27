@@ -611,3 +611,185 @@ def test_a_proposal_closed_or_paused_on_the_board_is_never_built_or_sent(fake_su
     assert j["code"] == "not_ready_to_send", j
     assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", code)]
     assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+
+
+# ─── Kyle's placeholders are never sent unattended (Hanz, 2026-10-28) ──
+# A GC proposal's defaults are Kyle's file with its blanks in it ("xx gallons/kits", "[ 1 mob/phase ]",
+# "-or-" choices, "xx Architects", the Sealer's "03xx"). Send all's walk builds a proposal nobody
+# opened, so one that would print them is held, and the press says which and what to do.
+GC_HELD = ("Nothing was sent. Room 2: its scope still has template placeholders (xx gallons, xx kits, "
+           "[ 1 mob/phase ], xx Architects). Open its Proposal step, fill them, then send again.")
+
+
+def _gc_never_built(**data):
+    return _draft("s2", "Room 2", "2026-10-02", files=False, audience="GC", **data)
+
+
+def test_a_never_built_gc_proposal_with_placeholders_is_held_before_any_walk(fake_supabase,
+                                                                            monkeypatch):
+    rows = _three()
+    rows[1] = _gc_never_built()
+    w = World(fake_supabase, monkeypatch, rows)
+    before = copy.deepcopy(w.store["drafts"])
+    r = _press()
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j["code"] == "not_ready_to_send", "a proposal that would print placeholders was walked"
+    assert "build" not in j
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", "placeholders")]
+    assert j["error"] == GC_HELD
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+    assert w.store["drafts"] == before, "a held press wrote a draft"
+
+
+def test_a_gc_sealer_names_its_choices_and_spec(fake_supabase, monkeypatch):
+    rows = _three()
+    rows[1] = _gc_never_built(work_type="sealer", architect="Gould Evans")
+    w = World(fake_supabase, monkeypatch, rows)
+    j = _press().json()
+    assert j["code"] == "not_ready_to_send"
+    assert ("Room 2: its scope still has template placeholders ([ 1 mob/phase ], -or- choices, "
+            "03xx).") in j["error"], j["error"]
+    assert w.publishes == []
+
+
+def test_a_never_built_gc_proposal_whose_words_are_filled_is_still_built(fake_supabase,
+                                                                        monkeypatch):
+    """The control: nothing of Kyle's left to fill, so the press asks for its build as before."""
+    rows = _three()
+    rows[1] = _gc_never_built(scope_notes="Install 3/16in Resinous System. 12 kits of patch.",
+                              schedule_notes="2 mobs. Approx. 1 week.", architect="Gould Evans")
+    w = World(fake_supabase, monkeypatch, rows)
+    j = _press().json()
+    assert j["code"] == "needs_build", j
+    assert w.publishes == []
+
+
+def test_a_never_built_direct_proposal_is_still_built(fake_supabase, monkeypatch):
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
+    World(fake_supabase, monkeypatch, rows)
+    assert _press().json()["code"] == "needs_build"
+
+
+def _walk_built(values, **data):
+    """Room 2 as Send all's walk left it: a document, no files, `proposal_auto_built`."""
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False, audience="GC",
+                     proposal_auto_built=True, **data)
+    rows[1]["data"]["proposal_payload"] = {"work_type": "epoxy", "audience": "GC",
+                                           "values": dict(values, total_formatted="$2,000")}
+    return rows
+
+
+def test_a_walk_built_proposal_that_prints_placeholders_is_not_sent(fake_supabase, monkeypatch):
+    """THE CASE: the first press walked Room 2; the document the walk composed still prints Kyle's
+    blanks (blank words print the GC defaults), and the second press holds it."""
+    w = World(fake_supabase, monkeypatch, _walk_built({"scope_notes": "", "schedule_notes": "",
+                                                       "architect": ""}))
+    r = _press({"message": "All three."})
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", "placeholders")]
+    assert j["error"] == GC_HELD
+    assert w.publishes == [] and w.sends == [] and w.store["draft_revisions"] == []
+
+
+def test_a_walk_built_proposal_with_typed_placeholders_is_held(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _walk_built({
+        "scope_notes": "Apply [1 coat -or- up to 2 coats of sealer", "schedule_notes": "1 week",
+        "architect": "Gould", "spec_section": "03xx"}))
+    j = _press().json()
+    assert "(-or- choices, 03xx)" in j["error"], j["error"]
+    assert w.publishes == []
+
+
+def test_a_walk_built_proposal_without_placeholders_goes(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _walk_built({
+        "scope_notes": "Install Resinous System. 12 kits of patch included.",
+        "schedule_notes": "2 mobs, approx. 1 week", "architect": "Gould Evans"}))
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"] and len(w.sends) == 1
+
+
+def test_a_proposal_a_person_composed_is_theirs_to_send_as_written(fake_supabase, monkeypatch):
+    """No mark: somebody opened its Proposal step and pressed Continue, and read what it says."""
+    rows = _walk_built({"scope_notes": "", "schedule_notes": "", "architect": ""})
+    rows[1]["data"]["proposal_auto_built"] = False
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert w.published_ids == ["s1", "s2", "s3"]
+
+
+def test_the_placeholder_list_is_kyles_own_words():
+    """Each placeholder the press names is in the GC defaults or the GC template words it guards."""
+    words = "\n".join([main._DEFAULT_SCOPE_GC_RESINOUS, main._DEFAULT_SCOPE_GC_SEALER,
+                       main._DEFAULT_SCHEDULE_GC]
+                      + [v for t in main.proposal_writer.TEMPLATE_TOKEN_DEFAULTS.values()
+                         for v in t.values()])
+    for shown, rx in main._PLACEHOLDERS:
+        assert rx.search(words), shown
+    # And none of the Direct defaults trips it: a Direct proposal is never held for its defaults.
+    assert main._placeholders_in({}, "epoxy", "Direct") == []
+    assert main._placeholders_in({}, "polish", "Direct") == []
+    assert main._placeholders_in({}, "polish", "GC") == ["[ 1 mob/phase ]", "xx Architects"]
+
+
+# ─── a proposal still named "Base Bid N" is named after its sheet when it is published ──
+def _old_named(label="Base Bid 2", sheet="Breakroom"):
+    rows = _three()
+    rows[1]["data"]["scope_group"]["label"] = label
+    rows[1]["data"].update(base_tab_id="Copy1", tab_labels={"Copy1": sheet},
+                           priced_tabs=[{"id": "Copy1", "name": sheet, "role": "epoxy"}])
+    return rows
+
+
+def _label_of(w, rid):
+    return next(r for r in w.store["drafts"] if r["id"] == rid)["data"]["scope_group"]["label"]
+
+
+def test_send_all_stores_the_sheet_name_before_publishing(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named())
+    r = _press()
+    assert r.status_code == 200, r.text
+    assert _label_of(w, "s2") == "Breakroom", "the customer would read Base Bid 2"
+    assert {p["id"]: p["label"] for p in r.json()["published"]}["s2"] == "Breakroom"
+    (rev,) = w.revisions("s2")
+    assert rev["data"]["scope_group"]["label"] == "Breakroom", "the snapshot kept the old name"
+    ev = [e for e in w.store["events"] if e.get("action") == "scope_renamed"]
+    assert [(e["detail"]["from"], e["detail"]["to"]) for e in ev] == [("Base Bid 2", "Breakroom")]
+    # The others were named by a person and keep their names.
+    assert (_label_of(w, "s1"), _label_of(w, "s3")) == ("Room 1", "Room 3")
+
+
+def test_the_single_publish_stores_the_sheet_name(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named())
+    r = client.post("/api/portal/publish?draft_id=s2", json={"assigned_estimator": EST})
+    assert r.status_code == 200, r.text
+    assert _label_of(w, "s2") == "Breakroom"
+    assert r.json()["scope_label"] == "Breakroom"
+
+
+def test_a_typed_name_is_never_replaced(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named(label="Upstairs"))
+    assert _press().status_code == 200
+    assert _label_of(w, "s2") == "Upstairs"
+    assert not [e for e in w.store["events"] if e.get("action") == "scope_renamed"]
+
+
+def test_a_sheet_name_another_proposal_has_is_numbered(fake_supabase, monkeypatch):
+    w = World(fake_supabase, monkeypatch, _old_named(sheet="Room 1"))
+    assert _press().status_code == 200
+    assert _label_of(w, "s2") == "Room 1 2"
+
+
+def test_a_refused_press_renames_nothing_but_says_the_sheet_name(fake_supabase, monkeypatch):
+    rows = _old_named()
+    rows[1]["data"]["contact_email"] = ""
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press()
+    assert r.status_code == 409, r.text
+    assert "Breakroom: add a customer email on its Files page first." in r.json()["error"]
+    assert _label_of(w, "s2") == "Base Bid 2"

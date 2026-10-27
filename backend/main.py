@@ -2184,6 +2184,21 @@ def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
     draft_id, row, by, body = prep["draft_id"], prep["row"], prep["by"], prep["body"]
     emails, digest = prep["emails"], prep["digest"]
     sent_docs, sent_pdf = prep["sent_docs"], prep["sent_pdf"]
+    # THE NAME THE CUSTOMER READS (Hanz, 2026-10-28). A proposal still stored as "Base Bid N" is
+    # shown by its sheet's name in the tool, but the portal reads the stored name, so the customer
+    # and the project's email read "Base Bid 2". It is stored as its sheet's name first
+    # (drafts.adopt_sheet_label), here, after every check, so a refused send renames nothing. The
+    # snapshot below carries the new name too. A failure is only logged: the old name is no reason
+    # to stop a send.
+    _sg_id, _sg_label = drafts._scope_of(row.get("data") or {})
+    if _sg_id and _sg_label and drafts._OLD_DEFAULT_LABEL.match(_sg_label):
+        try:
+            _named = drafts.adopt_sheet_label(draft_id, by)
+        except Exception as exc:  # noqa: BLE001 — a name never stops a send
+            log.warning("publish: could not name %s after its sheet: %s", _log_safe(draft_id), exc)
+            _named = None
+        if _named:
+            row["data"]["scope_group"] = dict(row["data"]["scope_group"], label=_named)
     # Snapshot what we are about to send, AFTER every validation above — a 400 must
     # never mint a revision. The portal pins the customer's view to this exact
     # snapshot, so from here on editing the draft cannot change a proposal that has
@@ -8590,6 +8605,92 @@ def _send_all_strip_warning(draft_id: str, data: Dict[str, Any],
     return None
 
 
+# KYLE'S PLACEHOLDERS (Hanz, 2026-10-28). The GC narrative defaults and the GC templates' blank-field
+# words are Kyle's own file with its blanks still in it: "xx gallons/kits" of patch material, a
+# "[ 1 mob/phase ]" schedule, "-or-" choices to strike ("Apply [1 coat -or- up to 2 coats"),
+# "xx Architects" and the Sealer spec "03xx" (_DEFAULT_SCOPE_GC_*, _DEFAULT_SCHEDULE_GC,
+# proposal_writer.TEMPLATE_TOKEN_DEFAULTS). A person composing on the Proposal step reads them and
+# fills them; Send all's walk builds a proposal with nobody looking, so such a proposal is held.
+# (shown, pattern), in the order the press names them.
+_PLACEHOLDERS = (
+    ("xx gallons", re.compile(r"\bxx\s+gallons\b", re.I)),
+    ("xx kits", re.compile(r"\bxx\s+(?:gallons\s*/\s*)?kits\b", re.I)),
+    ("[ 1 mob/phase ]", re.compile(r"\[\s*1\s+mob\s*/\s*phase\s*\]", re.I)),
+    ("-or- choices", re.compile(r"(?<![\w-])-or-(?![\w-])", re.I)),
+    ("xx Architects", re.compile(r"\bxx\s+Architects?\b", re.I)),
+    ("03xx", re.compile(r"\b03xx\b", re.I)),
+)
+# The values a template prints that a placeholder can sit in: the narrative and the GC spec line.
+_PLACEHOLDER_KEYS = ("scope_notes", "schedule_notes", "exclusions", "work_notes", "system_name",
+                     "texture", "work_description", "architect", "spec_section", "finish_tag",
+                     "plan_sheet")
+_NARRATIVE_FIELDS = ("scope_notes", "schedule_notes", "exclusions", "architect", "spec_section",
+                     "finish_tag", "plan_sheet", "work_notes", "system_name", "texture")
+
+
+def _placeholders_in(values: Dict[str, Any], work_type: Any, audience: Any) -> List[str]:
+    """Which of _PLACEHOLDERS `values` would print, as fill_proposal fills them: a blank narrative
+    field takes its audience's default (_ensure_value_aliases) and a blank spec-line field its
+    template's words (proposal_writer.TEMPLATE_TOKEN_DEFAULTS). [] for none."""
+    vals = dict(values or {})
+    wt = str(work_type or vals.get("work_type") or "epoxy").lower()
+    aud = str(audience or vals.get("audience") or "Direct")
+    vals["work_type"] = wt
+    try:
+        _ensure_value_aliases(vals, aud)
+        vals = proposal_writer._with_token_defaults(
+            vals, proposal_writer.template_token_defaults(wt, aud))
+    except Exception:  # noqa: BLE001 — judged on the words as they are, never a crash of the press
+        log.warning("placeholder check: defaults could not be applied", exc_info=True)
+    text = "\n".join(str(vals.get(k) or "") for k in _PLACEHOLDER_KEYS)
+    return [shown for shown, rx in _PLACEHOLDERS if rx.search(text)]
+
+
+def _send_all_placeholders(data: Dict[str, Any], built: bool) -> List[str]:
+    """The template placeholders a proposal Send all would build or publish UNATTENDED still prints,
+    or []. Two cases, and only these:
+
+    * never built (`built` False): the document the walk WOULD compose, from the draft's own words,
+      each blank one its default, for the type its Proposal step resolves (effectiveWorkType: combo
+      stays combo, else the base sheet's role when epoxy/polish/gyp, else the draft's work_type). So
+      the press says so before any walk, instead of building a proposal it would then hold.
+    * built by the walk and never composed by a person since (`proposal_auto_built`, which
+      proposal-review.js continueToDone sets on a Send all door and clears on a person's Continue):
+      the document itself, its `values`.
+
+    A proposal a person composed on its Proposal step is theirs to send as they wrote it."""
+    if built:
+        if data.get("proposal_auto_built") is not True:
+            return []
+        pp = data.get("proposal_payload") or {}
+        vals = pp.get("values") if isinstance(pp.get("values"), dict) else {}
+        return _placeholders_in(vals, pp.get("work_type") or vals.get("work_type"),
+                                pp.get("audience") or vals.get("audience") or data.get("audience"))
+    wt = str(data.get("work_type") or "epoxy").lower()
+    if wt != "combo":
+        base = data.get("base_tab_id")
+        role = ""
+        for t in data.get("priced_tabs") or []:
+            if isinstance(t, dict) and t.get("id") == base:
+                role = str(t.get("role") or "").lower()
+                break
+        if role in ("epoxy", "polish", "gyp"):
+            wt = role
+    vals = {k: data.get(k) for k in _NARRATIVE_FIELDS}
+    return _placeholders_in(vals, wt, data.get("audience") or "Direct")
+
+
+def _send_all_label(m: Dict[str, Any], data: Dict[str, Any]) -> str:
+    """A proposal's name in what the press says: the stored one, or for the old "Base Bid N" default
+    the name its tab shows (drafts._shown_label), which is the one its publish stores
+    (drafts.adopt_sheet_label)."""
+    stored = m.get("label") or ""
+    if stored and drafts._OLD_DEFAULT_LABEL.match(stored):
+        return drafts._shown_label(stored, drafts.proposal_sheet_label(
+            data, data.get("base_tab_id"))) or stored
+    return stored or "A proposal"
+
+
 def _send_all_block_reason(refusal: Any) -> str:
     """What the estimator does about one proposal's refused publish, in a few words."""
     if isinstance(refusal, HTTPException):
@@ -8627,7 +8728,11 @@ async def api_scope_group_send_all(group_id: str, request: Request,
     not_ready_to_send with `blocked` [{id, label, code, error}] when any proposal cannot be
     published ("Room 2: add a customer email on its Files page first"; a never-built one its
     Proposal step's tab warns about is `needs_refresh`, and one closed lost or on hold on the board
-    is `closed_lost` / `on_hold`, never `needs_build`). A publish the portal refuses midway answers 502 publish_failed with the `published` ones and sends nothing.
+    is `closed_lost` / `on_hold`, never `needs_build`; one built or to be built unattended whose
+    words still hold Kyle's template placeholders is `placeholders`, _send_all_placeholders). A
+    publish the portal refuses midway answers 502 publish_failed with the `published` ones and sends
+    nothing. A proposal still named "Base Bid N" is named after its sheet as it is published
+    (_commit_publish, drafts.adopt_sheet_label).
     Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
     label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
     if not drafts.SCOPE_ID_RE.match(group_id or ""):
@@ -8703,7 +8808,7 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
     for m in live:
         row = rows[m["id"]]
         data = row.get("data") or {}
-        label = m.get("label") or "A proposal"
+        label = _send_all_label(m, data)
         if not _send_all_needs_publish(m["id"], data):
             continue
         if m["id"] != page_id and drafts.latest_revision_no(m["id"]):
@@ -8747,6 +8852,15 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                 blocked.append({"id": m["id"], "label": label, "code": "needs_refresh",
                                 "error": warn})
                 continue
+        # KYLE'S PLACEHOLDERS ARE NEVER SENT UNATTENDED (Hanz, 2026-10-28): a proposal the walk would
+        # build, or built and nobody has composed since, that still prints "xx gallons" or a
+        # "-or-" choice is held, and the press says which and what to do (_send_all_placeholders).
+        held = _send_all_placeholders(data, built)
+        if held:
+            blocked.append({"id": m["id"], "label": label, "code": "placeholders",
+                            "error": "its scope still has template placeholders (%s). Open its "
+                                     "Proposal step, fill them, then send again" % ", ".join(held)})
+            continue
         if m["id"] == page_id and page is not None:
             one = page
         else:
@@ -8814,7 +8928,7 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                 "%s: %s." % (b["label"], b["error"]) for b in blocked)})
     published: List[Dict[str, Any]] = []
     for m, prep in prepared:
-        label = m.get("label") or "A proposal"
+        label = _send_all_label(m, prep["row"].get("data") or {})
         try:
             out = _commit_publish(prep)
         except Exception as exc:  # noqa: BLE001 — said in words, and nothing is emailed
@@ -8829,6 +8943,7 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
                          + (" %s %s published and will go in the email." % (
                              done, "was" if len(published) == 1 else "were") if done else "")
                          + " Press the button again in a minute to finish."})
+        label = drafts._scope_of(prep["row"].get("data") or {})[1] or label   # as now stored
         published.append({"id": m["id"], "label": label,
                           "revision_no": out.get("revision_no") if isinstance(out, dict) else None})
         if not (prep["row"].get("data") or {}).get("generate_result"):

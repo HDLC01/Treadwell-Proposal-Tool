@@ -29,6 +29,7 @@ this file each.
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -381,14 +382,31 @@ def test_the_two_dialog_bodies_differ(out):
     assert sent["detail"] != unsent["detail"]
     # What goes quiet.
     assert "follow-up" in sent["after"].lower()
-    # What does NOT change, and why. The customer's link reads the pinned revision, so deleting a
-    # project off our board is not revoking what they were sent -- a dialog that implied otherwise
-    # would be pressed by somebody trying to take a link away.
+    # What the customer sees. Since the portal answers a deleted proposal with "This proposal is no
+    # longer available" (2026-10-28), the old promise that their link "keeps working" was false: the
+    # dialog says what their link will show, and that Restore brings it back.
     low = sent["detail"].lower()
-    assert "keeps working" in low and "pinned" in low
+    assert "keeps working" not in low
+    assert "no longer available" in low and "restore" in low and "works again" in low
     # And the unsent one must not promise to stop something that was never running.
     assert "follow-up" not in unsent["after"].lower()
     assert "never sent" in unsent["detail"].lower()
+
+
+@needs_node
+def test_the_sent_panel_says_the_link_stops_until_restored(out):
+    """The panel beside the button said "The link the customer already has keeps working." The
+    portal now shows a deleted proposal as no longer available, so the panel says that, and that
+    Restore brings it back. The unsent panel still says nothing reaches the customer."""
+    def note(key):
+        html = out[key]["html"]
+        i = html.index('id="del-project"')
+        j = html.rindex('<div class="sec', 0, i)
+        return re.sub(r"\s+", " ", html[j:i]).lower()
+    sent = note("sent")
+    assert "keeps working" not in sent
+    assert "no longer available" in sent and "restore brings it back" in sent
+    assert "nothing reaches the customer" in note("notSent")
 
 
 @needs_node

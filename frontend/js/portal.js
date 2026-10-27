@@ -5038,8 +5038,8 @@
             + ' 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/>'
             + '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>'}Delete this project</div>
           <p class="note">${sent
-            ? "Off the board, follow-ups stop, restorable from Trash. The link the customer "
-              + "already has keeps working."
+            ? "Off the board, follow-ups stop, restorable from Trash. The customer's link will "
+              + "say this proposal is no longer available. Restore brings it back."
             : "Off the board and into Trash, restorable from there. Nothing reaches the "
               + "customer."}</p>
           <div class="fu-line">
@@ -5343,8 +5343,8 @@
         title: "Delete this project?",
         name: name,
         after: " comes off the board and its follow-up emails stop.",
-        detail: "The link the customer already has keeps working: it reads the version pinned"
-              + " when you sent it. Restore it from Trash and the reminders stay off.",
+        detail: "The customer's link will say this proposal is no longer available. Restore it"
+              + " from Trash and their link works again; the reminders stay off.",
         confirmText: "Move it to Trash", cancelText: "Keep it",
         tone: "danger", icon: "trash",
       } : {

@@ -20,6 +20,9 @@
  * no price, a copy saved elsewhere, a save refused) abandons it, so nothing is ever sent after a
  * build that did not happen. The resume is taken once, only by the page of the same project, and a
  * page that has resumed never starts another walk (a second `needs_build` is said in words).
+ * A document a door builds on a walk is marked `proposal_auto_built` (proposal-review.js
+ * continueToDone), and the press holds one that still prints Kyle's template placeholders
+ * ("xx gallons", "-or-" choices; main._send_all_placeholders) until a person composes it.
  *
  * window.TWSendAll: start, nextHop, abandon, progress, take. Node (tests): module.exports.create(root),
  * where root carries sessionStorage, location, history and (optionally) crypto and Date.

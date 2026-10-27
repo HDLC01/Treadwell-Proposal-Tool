@@ -2293,8 +2293,15 @@
     const _signer = String(mergedValues.estimator_name || "").trim() || String(_viewer.name || "").trim();
     const _signed = ((state.proposal_payload && state.proposal_payload.values) || {});
     const _sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
-    const _signerEmail = !_sameName(_signed.estimator_name, _signer) ? String(_viewer.email || "")
-      : String(_signed.estimator_email || "").trim()
+    // A proposal made by Create Multiple Proposals is signed as Base Bid 1 is (drafts._parent_signer):
+    // its `estimator_signer` pairs that signature's address with its name, so the address is used
+    // only while that same name signs.
+    const _seeded = (state.estimator_signer && typeof state.estimator_signer === "object")
+      ? state.estimator_signer : {};
+    const _seededEmail = _sameName(_seeded.name, _signer) ? String(_seeded.email || "").trim() : "";
+    const _signerEmail = !_sameName(_signed.estimator_name, _signer)
+      ? (_seededEmail || String(_viewer.email || ""))
+      : String(_signed.estimator_email || "").trim() || _seededEmail
         || (_sameName(_viewer.name, _signer) ? String(_viewer.email || "") : "");
 
     const tokenValues = {
@@ -10451,6 +10458,17 @@
     const _allBoxOverrides = mergeOverrideEntry(
       liveKey("box_overrides_all"), effectiveWorkType(), state.audience || "Direct",
       templateVersion, boxOverridesOut);
+    // BUILT BY SEND ALL, OR BY A PERSON (Hanz, 2026-10-28). Send all's walk (send-all-chain.js)
+    // presses this on a proposal nobody has opened, so Kyle's placeholders ("xx gallons", a
+    // "[ 1 mob/phase ]" schedule, "-or-" choices) would reach the customer unread. The document is
+    // marked `proposal_auto_built` and the press holds it while the mark stands
+    // (main._send_all_placeholders); a person's own Continue takes the mark off. The Files page's
+    // door (?compose=files with no walk) rebuilds with nobody looking either, so it leaves the mark
+    // as it is. Inline, not a helper: harnesses lift this function by name.
+    let _q0 = null;
+    try { _q0 = new URLSearchParams(window.location.search); } catch {}
+    const _doorOpened = !!_q0 && _q0.get("compose") === "files";
+    const _sendAllBuild = _doorOpened && !!(window.TWSendAll && window.TWSendAll.progress(_q0));
 
     const composed = {
       ...mergedValues,
@@ -10505,6 +10523,8 @@
       ...(coverLetterOn() !== !!((liveKey("proposal_payload") || {}).cover_letter_enabled)
           ? { generate_result: null }
           : {}),
+      ...(_sendAllBuild ? { proposal_auto_built: true }
+          : (!_doorOpened && liveKey("proposal_auto_built") ? { proposal_auto_built: false } : {})),
     };
     // THE COVER LETTER'S OWN STORE, LIVE. coverletter-editor.js keeps the estimator's wording in
     // four top-level keys it REPLACES with setState (persistNow), which the `state` snapshot never

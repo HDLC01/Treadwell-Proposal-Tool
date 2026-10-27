@@ -158,18 +158,61 @@ async function door(b, href, opts) {
     const rendered = bc.server.rendered[bc.server.rendered.length - 1] || null;
 
     const A = ba.server.d1, B = bb.server.d1, C = bc.server.d1;
+    // WHO BUILT IT is the one field allowed to differ (`proposal_auto_built`, Hanz 2026-10-28: the
+    // press holds a walk-built document that still prints Kyle's placeholders). Compared apart.
+    const MARK = "proposal_auto_built";
+    const unmarked = (d) => { const x = Object.assign({}, d); delete x[MARK]; return x; };
     out.parity[name] = {
       composed: { a: !!(A.proposal_payload && A.proposal_payload.values),
                   b: !!(B.proposal_payload && B.proposal_payload.values),
                   c: !!(C.proposal_payload && C.proposal_payload.values) },
       keyed: !!B.proposal_payload_key && B.proposal_payload_key === A.proposal_payload_key,
-      doorVsWalk: firstDiff(A, B),
-      walkVsManual: firstDiff(B, C),
+      marks: { a: A[MARK] === undefined ? null : A[MARK], b: B[MARK] === undefined ? null : B[MARK],
+               c: C[MARK] === undefined ? null : C[MARK] },
+      doorVsWalk: firstDiff(unmarked(A), unmarked(B)),
+      walkVsManual: firstDiff(unmarked(B), unmarked(C)),
       payloadWalkVsGenerated: firstDiff(B.proposal_payload, rendered),
       total: B.proposal_payload && B.proposal_payload.values && B.proposal_payload.values.total_formatted,
       navA: a.nav, navB: bdoor.nav, walkButton: bdoor.button,
       recordAfter: record(bb),
       token: w.door && /sendall=([0-9a-f]+)/.exec(w.door)[1],
+    };
+  }
+
+  // ── THE MARK'S LIFE: the walk sets it, the Files page's door keeps it, a person's Continue clears it
+  {
+    const MARK = "proposal_auto_built";
+    const b = W.browser(child({ audience: "GC" }));
+    const w = startWalk(b, [{ id: "d1", label: "Room 2" }]);
+    await door(b, w.door);
+    const afterWalk = b.server.d1[MARK];
+    await door(b, "/proposal-review.html?compose=files&d=d1");
+    const afterDoor = b.server.d1[MARK];
+    const p = await W.openProposal(b, "/proposal-review.html?d=d1");
+    await p.scope.continueToDone(null);
+    out.mark = { afterWalk: afterWalk === undefined ? null : afterWalk, afterDoor, afterPerson: b.server.d1[MARK] === undefined ? null
+                                                     : b.server.d1[MARK] };
+  }
+
+  // ── WHO SIGNS: a proposal of Create Multiple Proposals is signed as Base Bid 1 is ──────────────
+  // drafts._parent_signer copies Base Bid 1's `estimator_name` and `estimator_signer` onto the child.
+  // Troy presses Send all; the walk builds Kyle's project's new proposal on Troy's machine.
+  {
+    const TROY = { name: "Troy Holmes", email: "troy@wetreadwell.com" };
+    const KYLE_SIGNS = { estimator_name: "Kyle Loseke",
+                         estimator_signer: { name: "Kyle Loseke", email: "kyle@wetreadwell.com" } };
+    const signed = async (patch) => {
+      const b = W.browser(child(patch));
+      b.user = TROY;
+      const w = startWalk(b, [{ id: "d1", label: "Room 2" }]);
+      await door(b, w.door);
+      const v = ((b.server.d1.proposal_payload || {}).values) || {};
+      return { name: v.estimator_name, email: v.estimator_email };
+    };
+    out.signer = {
+      seeded: await signed(KYLE_SIGNS),
+      unseeded: await signed({ estimator_name: "" }),
+      typedOver: await signed(Object.assign({}, KYLE_SIGNS, { estimator_name: "Will Smith" })),
     };
   }
 

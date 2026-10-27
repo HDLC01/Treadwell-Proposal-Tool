@@ -67,6 +67,75 @@ def test_the_walks_document_is_the_manual_paths(ran, name):
 
 
 @pytest.mark.parametrize("name", FIXTURES)
+def test_only_the_walk_marks_its_document(ran, name):
+    """Hanz, 2026-10-28: a proposal built by Send all and never opened that still prints Kyle's
+    placeholders is held by the press (main._send_all_placeholders reads `proposal_auto_built`).
+    The walk's door sets the mark; the plain door and a person's Continue do not."""
+    assert ran["parity"][name]["marks"] == {"a": None, "b": True, "c": None}
+
+
+def test_the_mark_stays_through_the_files_door_and_a_persons_continue_clears_it(ran):
+    m = ran["mark"]
+    assert m["afterWalk"] is True
+    assert m["afterDoor"] is True, "the Files page's unattended rebuild cleared the mark"
+    assert m["afterPerson"] is False, "a person's Continue left the mark on"
+
+
+def test_mutation_continue_never_marks(tmp_path):
+    out = _run(_mutant(tmp_path, "js/proposal-review.js",
+                       "...(_sendAllBuild ? { proposal_auto_built: true }",
+                       "...(false ? { proposal_auto_built: true }"))
+    assert out["mark"]["afterWalk"] is None
+    assert out["parity"]["epoxyDirect"]["marks"]["b"] is None
+
+
+def test_mutation_a_persons_continue_keeps_the_mark(tmp_path):
+    out = _run(_mutant(tmp_path, "js/proposal-review.js",
+                       "(!_doorOpened && liveKey(\"proposal_auto_built\") ? { proposal_auto_built: false } : {})",
+                       "({})"))
+    assert out["mark"]["afterPerson"] is True
+
+
+def test_mutation_the_files_door_clears_the_mark(tmp_path):
+    out = _run(_mutant(tmp_path, "js/proposal-review.js",
+                       "(!_doorOpened && liveKey(\"proposal_auto_built\")",
+                       "(liveKey(\"proposal_auto_built\")"))
+    assert out["mark"]["afterDoor"] is False
+
+
+def test_mutation_the_mark_is_a_compose_input(tmp_path):
+    out = _run(_mutant(tmp_path, "shared.js", "\"proposal_payload_key\", \"proposal_auto_built\",",
+                       "\"proposal_payload_key\","))
+    # The walk's document and the door's would carry different keys: its Files page would rebuild it.
+    assert out["parity"]["epoxyDirect"]["keyed"] is False
+
+
+def test_a_new_proposal_is_signed_as_base_bid_1_whoever_builds_it(ran):
+    """Hanz, 2026-10-28: every proposal of one project signed the same way. The child carries Base
+    Bid 1's signer (drafts._parent_signer); Troy's press builds it signed by Kyle, at Kyle's address."""
+    s = ran["signer"]
+    assert s["seeded"] == {"name": "Kyle Loseke", "email": "kyle@wetreadwell.com"}
+    # Without the copied signer it is whoever built it, as before.
+    assert s["unseeded"] == {"name": "Troy Holmes", "email": "troy@wetreadwell.com"}
+    # A name typed over the copied one never signs with Base Bid 1's address.
+    assert s["typedOver"] == {"name": "Will Smith", "email": "troy@wetreadwell.com"}
+
+
+def test_mutation_the_copied_signer_address_is_ignored(tmp_path):
+    out = _run(_mutant(tmp_path, "js/proposal-review.js",
+                       "const _seededEmail = _sameName(_seeded.name, _signer)",
+                       "const _seededEmail = false && _sameName(_seeded.name, _signer)"))
+    assert out["signer"]["seeded"]["email"] == "troy@wetreadwell.com"
+
+
+def test_mutation_the_copied_address_ignores_its_name(tmp_path):
+    out = _run(_mutant(tmp_path, "js/proposal-review.js",
+                       "const _seededEmail = _sameName(_seeded.name, _signer)",
+                       "const _seededEmail = true"))
+    assert out["signer"]["typedOver"]["email"] == "kyle@wetreadwell.com"
+
+
+@pytest.mark.parametrize("name", FIXTURES)
 def test_only_the_destination_differs(ran, name):
     p = ran["parity"][name]
     assert p["navA"] == [["replace", "/done.html?composed=1&d=d1"]]
