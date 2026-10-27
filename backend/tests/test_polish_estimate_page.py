@@ -4454,7 +4454,8 @@ def test_the_old_empty_row_paths_are_gone():
 # ── Review cards: no header total, one colour each (Hanz, 2026-10-12) ────────────────────────────
 from html.parser import HTMLParser
 
-REVIEW_KEYS = ("takeoff", "labor", "travel", "markup")
+# "manhours": the read-only Man hours & budget card under the markup (2026-10-27, tests/test_review_man_hours.py)
+REVIEW_KEYS = ("takeoff", "labor", "travel", "markup", "manhours")
 # a bid with a Seal option also draws a card of its own, in its own colour (Phase 15, tests/test_v2_seal_option.py)
 OPTION_REVIEW_KEYS = ("option",)
 PAGE_HTML = FRONTEND / "polish-estimate.html"

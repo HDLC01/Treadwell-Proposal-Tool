@@ -3810,7 +3810,40 @@
     }
 
     html += '<div data-rev="markup" class="rev">' + markupTable(b) + '</div>';
+    html += manHoursCard(b, onShow);
     return html;
+  }
+
+  /** MAN HOURS AND BUDGET (Hanz, 2026-10-27: "In the review tab we need to show the Man hours, the budget ... Take it from the
+   *  sheet"). Read only: the block beside the markup on Kyle's Epoxy and Polish tabs, in his words and units, every figure
+   *  B.manHourBudget's (his formulas over the labor rows of the section on show and the chain's own lines). Keyed `mh.*` figures,
+   *  so a keystroke on the Labor or Review step moves them through repaintNumbers. Drawn for an Epoxy or a Polish sheet only:
+   *  the other tabs' blocks are not checked against the workbook yet. A figure that cannot be worked out is left blank. */
+  function manHoursCard(b, onShow) {
+    var layout = onShow ? onShow.layout : "polish";
+    if (layout !== "epoxy" && layout !== "polish") return "";
+    var f = B.manHourBudget(M.labor, M.conditions, B.prevailingApplied(M), b);
+    if (!f) return "";
+    var two = function (n) { return n === null ? "" : B.num(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var cash = function (n) { return n === null ? "" : B.money2(n); };
+    var share = function (n) { return n === null ? "" : (B.num(n) * 100).toFixed(1) + "%"; };
+    var day = f.hours_per_day + " hour days";
+    var rows = [
+      ["Total Man Hours", rvc("mh.hours", two(f.man_hours)), "hrs", "", ""],
+      ["Total Days", rvc("mh.days", two(f.total_days)), { raw: rv("mh.days.u", day) }, "", ""],
+      // The sheet's "^based on X crew size:", in the page's word for a crew (Hanz: the column is Guys, nothing says "Crew").
+      ["^based on X guys", rvc("mh.guys", two(f.crew)), "guys", "", ""],
+      ['Total "Estimated Costs" w/taxes + fees + bond', rvc("mh.est.q", f.est_costs_per_sf === null ? "" : B.fmtSf(b.sf)),
+       { raw: rv("mh.est.u", f.est_costs_per_sf === null ? "" : "SF") },
+       rvc("mh.est.rate", f.est_costs_per_sf === null ? "" : B.money2(f.est_costs_per_sf) + " / SF"), rv("mh.est", cash(f.est_costs))],
+      ["Man Hour Budget (Raken)", rvc("mh.budget", two(f.budget_hours)), "hrs", "", ""],
+      ["GP per Day", "", { raw: rv("mh.gpday.u", "based on " + day) }, "", rv("mh.gpday", cash(f.gp_per_day))],
+      ["Mark Up + Conting.", "", "of the lump sum", rvc("mh.mc.pct", share(f.markup_cont_pct)), rv("mh.mc", cash(f.markup_cont))],
+      ["GP / MH", "", "a man hour", "", rv("mh.gpmh", cash(f.gp_per_mh))],
+      ["LaborRate from Above", "", "", rvc("mh.rate", f.labor_rate === null ? "" : B.money2(f.labor_rate) + " / hr"), ""],
+      ["MarkUp + Soft Costs", "", "of the lump sum", rvc("mh.ms.pct", share(f.markup_soft_pct)), rv("mh.ms", cash(f.markup_soft))]
+    ];
+    return card("Man hours & budget", 1, "manhours", revTable(rows));
   }
 
   /** Any condition Intake has a toggle for and Review already talks about gets a real, clickable
