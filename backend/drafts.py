@@ -234,12 +234,21 @@ def set_test_flag(draft_id: str, is_test: bool,
     means "nobody has said", so the name heuristic still gets a vote, while `False` means
     "somebody looked at this and said it's a real bid" and must beat the heuristic. That's
     what lets a genuinely-named project like "Test Treadwell" be pulled back into Active.
+
+    A SCOPE OF A PROJECT IS NEVER FILED APART FROM ITS PROJECT (finding 7). A change that would put a
+    Test scope beside real ones, or a real scope beside Test ones, in one scope group RAISES
+    ScopeError test_mix (409) and writes nothing: the portal would quietly drop the odd one out of
+    the project's email and its follow-ups, and the board would draw a project nobody can email.
+
     Returns True if the project existed."""
     sb = get_client()
     cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
     if not cur.data:
         return False
     data = dict(cur.data[0].get("data") or {})
+    mixed = _test_flag_mix(draft_id, data, bool(is_test))
+    if mixed:
+        raise ScopeError("test_mix", mixed, 409)
     data["is_test"] = bool(is_test)
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "marked_test" if is_test else "marked_real",
@@ -752,21 +761,127 @@ def default_scope_label(data: Dict[str, Any]) -> str:
     return wt.capitalize() if wt else "Scope 1"
 
 
-def _group_rows(group_id: str) -> List[Dict[str, Any]]:
-    """Every live draft in a scope group, as {id, label, created_at}, oldest first.
+# The Projects page's name heuristic (crm-core.js nameLooksLikeTest), character for character, and the
+# portal's (treadwell-portal scope_groups._TEST_WORD/_DELETE_ME/_ZZ). It decides test-ness only when
+# nobody has said: a stored `is_test` true or false wins in both directions. Narrow on purpose: "demo"
+# lives inside "demolition".
+_TEST_NAME_WORD = re.compile(r"\b(sample|test|verify|demo|qa|bugtest)\b", re.I)
+_TEST_NAME_DELETE_ME = re.compile(r"delete me", re.I)
+_TEST_NAME_ZZ = re.compile(r"^\s*zz", re.I)
 
-    ONE SMALL OBJECT PER DRAFT, never the blob: the projection names data->scope_group only, and the
-    group is found in Python (the ids are a few hundred rows, the objects a few dozen bytes each)."""
-    res = (get_client().table("drafts").select("id,created_at,scope_group:data->scope_group")
+
+def draft_is_test(state: Any) -> bool:
+    """Is a draft a Test project? THE PORTAL'S RULE (scope_groups.draft_is_test), exactly, so the
+    tool and the portal agree about who is in a project (finding 7).
+
+    `state` is the draft's {is_test, project_name}, read off the STORED draft (the server's own
+    flag, never a request's). An explicit `is_test` wins either way; when nobody has said, a
+    test-looking project name makes it a test. A bare flag (not a dict) is judged by the flag alone,
+    as a draft with no name."""
+    if isinstance(state, dict):
+        flag, name = state.get("is_test"), state.get("project_name")
+    else:
+        flag, name = state, None
+    said = _tribool(flag)
+    if said is not None:
+        return said
+    name = str(name or "")
+    return bool(_TEST_NAME_WORD.search(name) or _TEST_NAME_DELETE_ME.search(name)
+                or _TEST_NAME_ZZ.search(name))
+
+
+def live_scope_members(members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """THE ONE "LIVE MEMBER" RULE for a scope group, oldest first (created_at, id).
+
+    `members` are the group's NOT-DELETED drafts as {id, created_at, archived, is_test,
+    project_name, ...} (a deleted draft never reaches this: every caller reads `deleted_at is
+    null`). THE PORTAL'S split_members, ported exactly (finding 7): live = not archived, and of the
+    group's kind. A group is a REAL project as soon as ONE active draft in it is real, and then a
+    Test draft is never a member of it; a group whose active drafts are all Test is a test group, and
+    a real draft is never in one. tests/scope_member_cases.json holds the cases both repos assert.
+    Before 2026-10-25 the tool let the HOME (earliest scope) decide the kind and ignored the name
+    check, and disagreed with the portal in four of five mixed cases."""
+    kept = [m for m in members if not _truthy(m.get("archived"))]
+    kept.sort(key=lambda m: (str(m.get("created_at") or ""), str(m.get("id"))))
+    if not kept:
+        return []
+    group_is_test = all(draft_is_test(m) for m in kept)
+    return [m for m in kept if draft_is_test(m) == group_is_test]
+
+
+def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
+    """Every NOT-DELETED draft in a scope group, archived and test ones included, as {id, label,
+    created_at, archived, is_test, project_name}, oldest first. Callers want `_group_rows` (the live
+    members) unless they are checking the test rule itself.
+
+    ONE SMALL OBJECT PER DRAFT, never the blob: the projection names data->scope_group and three
+    scalars only (the project name is the test rule's fallback, draft_is_test), and the group is
+    found in Python (the ids are a few hundred rows, the objects a few dozen bytes each)."""
+    res = (get_client().table("drafts")
+           .select("id,created_at,scope_group:data->scope_group,archived:data->>archived,"
+                   "is_test:data->>is_test,project_name:data->>project_name")
            .is_("deleted_at", "null").execute())
     out = []
     for r in res.data or []:
-        sg = r["scope_group"] if "scope_group" in r else (r.get("data") or {}).get("scope_group")
+        blob = r.get("data") or {}
+        sg = r["scope_group"] if "scope_group" in r else blob.get("scope_group")
         if isinstance(sg, dict) and not scope_group_problem(sg) and sg.get("id") == group_id:
             out.append({"id": r["id"], "label": sg.get("label") or "",
-                        "created_at": r.get("created_at") or ""})
+                        "created_at": r.get("created_at") or "",
+                        "archived": _truthy(r["archived"] if "archived" in r else blob.get("archived")),
+                        "is_test": r["is_test"] if "is_test" in r else blob.get("is_test"),
+                        "project_name": (r["project_name"] if "project_name" in r
+                                         else blob.get("project_name"))})
     out.sort(key=lambda m: (str(m["created_at"]), str(m["id"])))
     return out
+
+
+def _group_rows(group_id: str) -> List[Dict[str, Any]]:
+    """Every LIVE member of a scope group (live_scope_members), as {id, label, created_at, archived,
+    is_test}, oldest first."""
+    return live_scope_members(_group_rows_all(group_id))
+
+
+def scope_test_mix(draft_id: str, state: Any, group_id: str) -> Optional[str]:
+    """The sentence refusing to put a Test project and a real one in one scope group, or None.
+
+    `state` is the STORED draft blob of `draft_id` (its is_test and project_name, read off its row,
+    never off a request; a bare flag is judged alone, see draft_is_test). Every other not-deleted,
+    not-archived draft of the group must be the same kind, both directions: a test scope must not be
+    emailed beside a real customer's scopes, and a real bid must not sit in a test project where
+    nobody chases it."""
+    mine = draft_is_test(state)
+    for m in _group_rows_all(group_id):
+        if m["id"] == draft_id or m["archived"]:
+            continue
+        if draft_is_test(m) != mine:
+            return ("This is a Test project, and other scopes of this project are real customer "
+                    "proposals." if mine else
+                    "This is a real customer proposal, and other scopes of this project are Test "
+                    "projects.") + " A Test project and a real one cannot be one project: mark them " \
+                                   "the same way on the Projects page first."
+    return None
+
+
+def _test_flag_mix(draft_id: str, data: Dict[str, Any], want_test: bool) -> Optional[str]:
+    """The sentence refusing set_test_flag, or None: the stored draft `data` is a scope of a group,
+    marking it `want_test` changes its kind (draft_is_test), and another not-archived scope of the
+    group is of the other kind. A change that leaves its kind as it was (marking a test-named scope
+    Test by hand) never mixes anything and is allowed."""
+    gid, _label = _scope_of(data)
+    if not gid or draft_is_test(data) == want_test:
+        return None
+    for m in _group_rows_all(gid):
+        if m["id"] == draft_id or m["archived"]:
+            continue
+        if draft_is_test(m) != want_test:
+            return ("Nothing changed: this is one proposal of a project with several, and the "
+                    "others are %s. A Test project and a real one cannot be one project. To file "
+                    "the whole project %s, move its other scopes to Inactive first, change each "
+                    "one, then make them active again."
+                    % (("real customer proposals", "as a test") if want_test
+                       else ("Test projects", "as a real bid")))
+    return None
 
 
 def _free_label(want: str, taken: set) -> str:
@@ -804,6 +919,12 @@ def create_sibling(parent_id: str, label: Any, actor: Optional[str] = None) -> D
         raise ScopeError("invalid_scope_group",
                          "This project's scope group cannot be read (%s)." % scope_group_problem(existing))
     gid = existing["id"] if isinstance(existing, dict) else uuid.uuid4().hex
+    # THE TEST RULE (scope_test_mix): the new scope inherits the parent's is_test, so the only way
+    # this mixes kinds is a parent that differs from the group it is already in.
+    if isinstance(existing, dict):
+        mixed = scope_test_mix(parent_id, parent, gid)
+        if mixed:
+            raise ScopeError("test_mix", mixed, 409)
     members = [m for m in (_group_rows(gid) if existing else []) if m["id"] != parent_id]
     if len(members) + 2 > MAX_SCOPES:
         raise ScopeError("too_many_scopes",
@@ -876,6 +997,17 @@ def rename_scope(draft_id: str, label: Any, actor: Optional[str] = None) -> Dict
 # records were built for the combined bid and are no longer this proposal's, and the Files page
 # would rebuild them from a payload that is gone. The board keeps the scope visible anyway, as "files
 # not built yet" (main.py _not_sent_rows' `files_pending`).
+#
+# THE COMBINED BID'S DROPBOX RECORD AND ITS NARRATIVE GO TOO (2026-10-24 review, finding 39).
+# `dropbox_result` described the combined estimate and proposal filed under the project's old,
+# unscoped names: left on the parent it showed the Dropbox step as already filed (green) for files
+# that are no longer this proposal's. The narrative (scope notes, schedule, exclusions, the system
+# name and texture) was written for the WHOLE job, naming Lab 1 and Lab 2, and would have printed on
+# a Breakroom-only proposal; cleared, the proposal step drafts this scope's own defaults again.
+#
+# SPLIT_HAD_FILES keeps the board honest about the one thing clearing `generate_result` loses: the
+# project WAS in "Created but not sent" (finding 26). main._scope_pending reads it so the split
+# project stays on the board, each scope as "files not built yet", instead of vanishing.
 SPLIT_CLEARS = (
     "rooms", "base_tab_id", "priced_tabs", "computed_bid",
     "proposal_lump_sum", "proposal_sales_tax", "proposal_remodel_tax", "proposal_taxable",
@@ -884,7 +1016,10 @@ SPLIT_CLEARS = (
     "tab_opts", "tab_notes", "tab_labels", "tab_copies", "tab_order",
     "price_lines", "price_overrides", "paragraph_overrides", "box_overrides", "system_overrides",
     "proposal_payload", "generate_result", "generated_lump_sum",
+    "dropbox_result", "scope_notes", "schedule_notes", "exclusions", "system_name",
+    "system_name_manual", "texture",
 )
+SPLIT_HAD_FILES = "split_had_files"
 # What the estimate page sends for each scope of a split: the one-sheet model (bid-model splitOut)
 # and the save the page's own buildSavePatch composes from it (the work type and base the template
 # and the Dropbox name follow, the priced snapshot the card's money reads). Nothing else from the
@@ -902,6 +1037,40 @@ def _split_fields(data: Any) -> Dict[str, Any]:
     return {k: copy.deepcopy(src[k]) for k in SPLIT_CHILD_KEYS if k in src}
 
 
+def _undo_split_children(sb: Any, ids: List[str]) -> None:
+    """Take back the children a failed split minted: delete each, or, when the delete itself fails,
+    strip its scope group so it can never join the project, hold a scope's name or be expected by the
+    combined email. Never raises (the caller is already reporting a failure)."""
+    for cid in ids:
+        try:
+            sb.table("drafts").delete().eq("id", cid).execute()
+            continue
+        except Exception:  # noqa: BLE001 — fall back to detaching it
+            pass
+        try:
+            cur = sb.table("drafts").select("id,data").eq("id", cid).limit(1).execute()
+            blob = dict((cur.data or [{}])[0].get("data") or {})
+            blob.pop("scope_group", None)
+            blob["split_failed"] = True
+            blob["archived"] = True
+            sb.table("drafts").update({"data": blob}).eq("id", cid).execute()
+        except Exception:  # noqa: BLE001 — nothing more can be done from here
+            pass
+    _cache_clear()
+
+
+def _split_landed(sb: Any, parent_id: str, stamp: str) -> Optional[bool]:
+    """Did the parent's split update commit? True when the stored parent carries THIS split's mark,
+    False when it does not, None when the parent cannot be read back (the caller must not guess)."""
+    try:
+        cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+    except Exception:  # noqa: BLE001 — unknown, said as such
+        return None
+    if not cur.data:
+        return False
+    return (cur.data[0].get("data") or {}).get(SPLIT_MARK) == stamp
+
+
 def split_draft(parent_id: str, children: List[Dict[str, Any]],
                 actor: Optional[str] = None) -> Dict[str, Any]:
     """SPLIT ONE ESTIMATE INTO SEPARATE PROPOSALS (tier A1): `children[0]` becomes the parent itself,
@@ -912,12 +1081,15 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
     stale copy of it afterwards (save_draft); its `updated_at` IS bumped, because this is an edit of
     the estimate and every page that checked the old copy must be told so (_stored_since).
 
-    The children are written FIRST: a failure part way leaves the parent exactly as it was, with at
-    worst an extra draft beside it, and never a parent that lost a sheet no child holds.
+    The children are written FIRST: a failure part way leaves the parent exactly as it was, never a
+    parent that lost a sheet no child holds, and the children already minted are taken back
+    (_undo_split_children), so a retry finds the project as it was.
 
     Returns {"group_id", "parent": {"id", "label", "data", "updated_at"}, "children": [{"id",
     "label"}]}. RAISES ScopeError (not_found, invalid_label, label_taken, too_many_scopes,
-    invalid_scope_group)."""
+    invalid_scope_group, split_failed, split_unconfirmed). An error from the parent's update is
+    checked against the stored parent first (_split_landed): a write that committed is a split that
+    happened, never one whose children are taken back."""
     sb = get_client()
     cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
     if not cur.data:
@@ -944,23 +1116,52 @@ def split_draft(parent_id: str, children: List[Dict[str, Any]],
 
     stamp = _now_iso()
     intake = sibling_intake(parent)
-    made = []
-    for c, lab in zip(children[1:], labels[1:]):
-        cid = str(uuid.uuid4())
-        d = copy.deepcopy(intake)
-        d.update(_split_fields(c.get("data")))
-        d["scope_group"] = {"id": gid, "label": lab}
-        d["split_from"] = parent_id
-        sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,
-                                   "created_at": stamp, "updated_at": stamp}).execute()
-        log_event(cid, actor, "created", _summary_detail(d))
-        made.append({"id": cid, "label": lab})
-
+    made: List[Dict[str, Any]] = []
+    # THE CHILD WHOSE INSERT IS IN FLIGHT (finding 24). Like the parent's update below, an insert
+    # can COMMIT and lose its answer (a read timeout, a 5xx after the write), so the id is on the
+    # cleanup list BEFORE the insert is sent: deleting an id that was never written is harmless,
+    # and a committed child left behind would join the project and hold a name a retry needs.
+    in_flight: List[str] = []
     rewritten = {k: v for k, v in parent.items() if k not in SPLIT_CLEARS}
     rewritten.update(_split_fields(children[0].get("data")))
     rewritten["scope_group"] = {"id": gid, "label": labels[0]}
     rewritten[SPLIT_MARK] = stamp
-    sb.table("drafts").update({"data": rewritten, "updated_at": stamp}).eq("id", parent_id).execute()
+    if parent.get("generate_result") or parent.get(SPLIT_HAD_FILES):
+        rewritten[SPLIT_HAD_FILES] = True
+    try:
+        for c, lab in zip(children[1:], labels[1:]):
+            cid = str(uuid.uuid4())
+            d = copy.deepcopy(intake)
+            d.update(_split_fields(c.get("data")))
+            d["scope_group"] = {"id": gid, "label": lab}
+            d["split_from"] = parent_id
+            in_flight[:] = [cid]
+            sb.table("drafts").insert({"id": cid, "data": d, "owner_email": actor,
+                                       "created_at": stamp, "updated_at": stamp}).execute()
+            log_event(cid, actor, "created", _summary_detail(d))
+            made.append({"id": cid, "label": lab})
+            in_flight[:] = []
+        sb.table("drafts").update({"data": rewritten, "updated_at": stamp}).eq("id", parent_id).execute()
+    except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal once cleaned up
+        # AN ERROR FROM THE PARENT'S UPDATE IS AMBIGUOUS: PostgREST may have committed it and the
+        # answer been lost (a read timeout, a 5xx after the write). The parent then already holds
+        # only children[0]'s sheet, so the children are the ONLY copy of the other sheets: taking
+        # them back would lose them for good. Read the parent back and let its split mark decide.
+        landed = _split_landed(sb, parent_id, stamp) if len(made) == len(children) - 1 else False
+        if landed is None:
+            raise ScopeError("split_unconfirmed", "The database did not confirm the split. Nothing "
+                                                  "was removed: reload the board to see whether the "
+                                                  "proposals were made before trying again.",
+                             503) from exc
+        if not landed:
+            # A HALF-FAILED SPLIT TAKES BACK WHAT IT MINTED (finding 27). A child left behind
+            # carries the group's id and a sheet's name: it would join the project, hold the name a
+            # retry needs (label_taken) and be expected by the combined email for ever. Deleted
+            # outright; a child that will not delete is stripped of its group instead.
+            _undo_split_children(sb, [m["id"] for m in made] + in_flight)
+            raise ScopeError("split_failed", "Nothing was split: the database did not take every "
+                                             "part of it, and the parts that were made have been "
+                                             "removed. Try again in a minute.", 503) from exc
     log_event(parent_id, actor, "split_into_scopes",
               {"project_name": parent.get("project_name"), "id": parent_id, "group": gid,
                "scopes": [labels[0]] + [m["label"] for m in made],
@@ -1114,7 +1315,9 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # reason `won_at` gives above: a key this projection does not name reaches no
                 # card, and the board would draw three unrelated projects with one name.
                 "scope_group_id:data->scope_group->>id,"
-                "scope_label:data->scope_group->>label")
+                "scope_label:data->scope_group->>label,"
+                # A split cleared this project's files, which were on the board (SPLIT_HAD_FILES).
+                "split_had_files:data->>split_had_files")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -1152,6 +1355,7 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "handed_off_at": r.get("handed_off_at") or None,
             "scope_group_id": r.get("scope_group_id") or None,
             "scope_label": r.get("scope_label") or None,
+            "split_had_files": _truthy(r.get("split_had_files")),
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -1503,6 +1707,7 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         # The scope group — see the fast path's note. Both paths, for the reason the won mark gives.
         "scope_group_id": (_scope_of(data)[0]),
         "scope_label": (_scope_of(data)[1]),
+        "split_had_files": _truthy(data.get(SPLIT_HAD_FILES)),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),

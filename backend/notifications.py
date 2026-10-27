@@ -28,6 +28,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import basisboard_client
 import drafts as drafts_mod
@@ -466,14 +467,40 @@ def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         due = str(t.get("due_at") or "")
         if due and _is_future(due):
             continue
-        pid = t.get("proposal_id")
+        # A scope group's task lives on the group's HOME scope, which may since have been approved
+        # or closed; the portal names an OPEN member to open instead (link_proposal_id). Absent on
+        # an older portal, and equal to proposal_id on an ordinary task.
+        pid = t.get("link_proposal_id") or t.get("proposal_id")
         label = t.get("label") or "A follow-up"
+        body = f"Follow-up due: {label}"
+        if t.get("stage") == "decision":
+            body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
+            # The portal's link_proposal_id is computed FRESH when the task is viewed (round 3):
+            # the first listed sibling that is STILL OPEN, or the approved scope only when none
+            # is. Trusted as given. Only a portal that does not send it falls back on the first
+            # scope the decision lists (never the approved scope the task is filed on, whose
+            # drawer shows its own deposit card once it raises one).
+            if not t.get("link_proposal_id"):
+                approved = (t.get("approved_scope") or {}).get("proposal_id") \
+                    if isinstance(t.get("approved_scope"), dict) else None
+                sibs = [s.get("proposal_id") for s in (t.get("scopes") or [])
+                        if isinstance(s, dict) and s.get("proposal_id")
+                        and s.get("proposal_id") not in (approved, t.get("proposal_id"))]
+                if sibs:
+                    pid = sibs[0]
+        elif t.get("scope_group") and isinstance(t.get("scopes"), list) and t["scopes"]:
+            # ONE reminder for the whole project, so the row names every scope it covers.
+            names = [str((s or {}).get("label") or "a scope") for s in t["scopes"]
+                     if isinstance(s, dict)]
+            if names:
+                body = "Follow-up due: " + ", ".join(names)
         out.append({
             "id": f"fut:{tid}", "kind": "followup_task", "icon": "mail",
             "severity": "medium", "sort": _TIER_CRM_STEP, "ts": due or now_iso,
             "title": t.get("project_name") or "A project",
-            "body": f"Follow-up due: {label}",
-            "link": f"/portal.html?open={pid}&sec=followup" if pid else "/portal.html",
+            "body": body,
+            "link": f"/portal.html?open={quote(str(pid), safe='')}&sec=followup" if pid
+                    else "/portal.html",
         })
         if len(out) >= 25:
             break

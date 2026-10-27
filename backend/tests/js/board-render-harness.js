@@ -296,4 +296,22 @@ for (const tab of TABS) {
     }
   }
 }
+// THE CHIP FOLLOWS THE PORTAL'S RECORD OF THE ONE EMAIL (2026-10-24 hardening, main.py
+// _scope_send_view): the same board, with the published scope carrying `scope_send` in each of its
+// shapes, and every scope chip read back out of the html with its words.
+try {
+  const scopeChips = (rows) => Array.from(render("active", "board", rows).html
+    .matchAll(/class="chip chip-pause"[^>]*>(Email[^<]*)</g)).map((m) => m[1]);
+  const withSend = (ss) => ROWS.map((p) => (p.proposal_id === "scope-b"
+    ? Object.assign({}, p, { scope_send_pending: false, scope_send: ss }) : p));
+  out.scopeSend = {
+    legacy: scopeChips(ROWS),
+    again: scopeChips(withSend({ mine: true, chip: "Email again: 1 new, 1 revised", label: "Email again: 1 new, 1 revised" })),
+    notMine: scopeChips(withSend({ mine: false, chip: "Email again: 1 new", label: "Email again: 1 new" })),
+    nothing: scopeChips(withSend({ mine: false, chip: null, label: null })),
+    escaped: scopeChips(withSend({ mine: true, chip: "Email <b>", label: "x" })),
+  };
+} catch (e) {
+  out.errors.scopeSend = e.constructor.name + ": " + e.message;
+}
 console.log(JSON.stringify(out));
