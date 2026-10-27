@@ -372,8 +372,93 @@ def test_every_intake_and_estimate_page_stops_on_a_child(out):
     }
 
 
+# ── the proposals follow a base swap (Hanz, 2026-10-28) ─────────────────────────────────────────
+# "Why is there an extra epoxy tab when we only have Epoxy and Polish?" The server flags a child that prices no base bid
+# of its own (drafts.proposals_view `out_of_step`) and Refresh moves it; the pages say so.
+SENT = "Epoxy (the copy the customer has) now prices the same sheet as Base Bid 1. Close it or keep it; nothing was changed."
+
+
+def test_an_out_of_step_proposal_is_said_on_its_tab_and_the_note(out):
+    o = out["page"]["oos"]
+    assert o["tabs"] == [["P1", "Epoxy", None], ["C2", "Epoxy", "same sheet as Base Bid 1"],
+                         ["C3", "Lab", "its sheet is not a base bid any more"], ["C4", "Gym", None]]
+    assert o["note"]["hidden"] is False
+    assert o["note"]["what"] == (
+        "Epoxy (same sheet as Base Bid 1), Lab (its sheet is not a base bid any more): press Refresh. "
+        "Gym still has the figures from before. Refresh copies the estimate into every proposal again; "
+        "each keeps its own wording and options.")
+    assert o["inStep"] == {"note": {"hidden": True, "what": ""}, "oos": [None, None]}
+
+
+def test_a_refresh_that_could_not_move_the_customers_copy_says_the_servers_sentence(out):
+    r = out["page"]["oos"]["refreshSent"]
+    assert r["steps"] == ["setState", "flush", "readRow", "POST /api/draft/P1/proposals/refresh"], "no reload"
+    assert r["note"]["hidden"] is False
+    assert r["note"]["what"].startswith("Refreshed, except Old room: its sheet is not on the estimate any more")
+    assert r["note"]["what"].endswith(SENT)
+
+
+def test_a_base_moved_on_the_pricing_card_says_to_refresh(out):
+    assert out["cardHook"] == {"afterTick": 0, "afterMove": 1, "base": "Copy1"}, \
+        "a tick leaves Base Bid 1 where it is; unticking it moves it, and the strip is told"
+    m = out["page"]["moved"]
+    assert m["before"]["hidden"] is True
+    assert m["after"] == {"hidden": False, "what": "This project has separate proposals: press Refresh so they follow."}
+    assert m["child"]["hidden"] is True and m["alone"]["hidden"] is True
+
+
+def test_make_base_bid_1_on_a_parent_with_proposals_says_to_refresh(out):
+    n = out["estNote"]
+    assert n["parent"] == {"hint": "This project has separate proposals: press Refresh on the Proposal step so they follow.",
+                           "asked": [None], "base": "Epoxy", "ids": ["Epoxy", "Polish"]}
+    assert n["alone"]["hint"] == "" and n["unread"]["hint"] == "", "one proposal, or no answer: nothing to say"
+    assert n["tick"]["hint"] == "" and n["tick"]["asked"] == [], "a tick that leaves the base asks nothing"
+    assert n["child"]["asked"] == [] and n["child"]["base"] == "Polish"
+
+
 # ── the checks go red when the code changes ──────────────────────────────────────────────────────
 BREAKS = {
+    # 2026-10-28: the proposals follow a base swap
+    "an out-of-step proposal's tab says nothing": (
+        "js/proposal-review.js",
+        '          + (m.out_of_step ? `<span class="pt-stale pt-oos"',
+        '          + (false ? `<span class="pt-stale pt-oos"',
+        lambda r: r["page"]["oos"]["tabs"][1][2] != "same sheet as Base Bid 1"),
+    "an out-of-step proposal is not on the note": (
+        "js/proposal-review.js",
+        "      const late = members().filter((m) => m.out_of_step);", "      const late = [];",
+        lambda r: not r["page"]["oos"]["note"]["what"].startswith("Epoxy (same sheet as Base Bid 1)")),
+    "the server's refresh sentence is dropped": (
+        "js/proposal-review.js",
+        "          const said = skipped.filter((s) => s && s.message).map((s) => s.message);",
+        "          const said = [];",
+        lambda r: not r["page"]["oos"]["refreshSent"]["note"]["what"].endswith(SENT)),
+    "the Pricing card does not tell the strip": (
+        "js/proposal-review.js", "              try { window.TWProposalsBaseMoved(); } catch {}", "              void 0;",
+        lambda r: r["cardHook"]["afterMove"] != 1),
+    "the strip ignores a base moved on this page": (
+        "js/proposal-review.js", "    try { window.TWProposalsBaseMoved = () => { baseMoved = true; paintNote(); }; } catch {}",
+        "    void 0;",
+        lambda r: r["page"]["moved"]["after"]["hidden"] is not False),
+    "a child says the base moved": (
+        "js/proposal-review.js", "      const moved = baseMoved && !child && members().length > 1;",
+        "      const moved = baseMoved;",
+        lambda r: r["page"]["moved"]["child"]["hidden"] is not True or r["page"]["moved"]["alone"]["hidden"] is not True),
+    "Make Base Bid 1 says nothing on a parent with proposals": (
+        "js/estimate-review.js",
+        '        if (hint) hint.textContent = "This project has separate proposals: press Refresh on the Proposal step so they follow.";',
+        "        void 0;",
+        lambda r: r["estNote"]["parent"]["hint"] == ""),
+    "Make Base Bid 1 says it on a draft with one proposal": (
+        "js/estimate-review.js",
+        "        const hint = view && Array.isArray(view.members) && view.members.length > 1",
+        "        const hint = view && Array.isArray(view.members)",
+        lambda r: r["estNote"]["alone"]["hint"] != ""),
+    "a tick that keeps the base asks for the proposals": (
+        "js/estimate-review.js",
+        "        && state.base_tab_id !== priorBaseId && !TWPrice.isProposalChild(state)) {",
+        "        && !TWPrice.isProposalChild(state)) {",
+        lambda r: r["estNote"]["tick"]["asked"] != []),
     "the switch has no Option segment": (
         "js/proposal-review.js",
         '                seg("base", "pr-base", "Base bid") + seg("option", "pr-isopt", "Option") + seg("off", "pr-off", "Off") + `</div>`;',
@@ -506,7 +591,7 @@ BREAKS = {
         "if (!label) { paintStrip(); return; }",
         lambda r: r["page"]["sheetNames"]["unchangedFetches"] != 0),
     "a stale proposal is not said": (
-        "js/proposal-review.js", "      const stale = members().filter((m) => m.stale);", "      const stale = [];",
+        "js/proposal-review.js", "      const stale = members().filter((m) => m.stale && !m.out_of_step);", "      const stale = [];",
         lambda r: r["page"]["parent"]["note"]["hidden"] is True),
     "the button ignores how many base bids are ticked": (
         "js/proposal-review.js", "      multi.disabled = child || busy || n < 2;", "      multi.disabled = child || busy;",

@@ -1224,6 +1224,18 @@ function wireBidBar() {
     // else on this path does, and the bar kept the previous base's lump sum until the next cell
     // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
     try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
+    // A PARENT THAT HAS SEPARATE PROPOSALS (Create Multiple Proposals). Hanz, 2026-10-28: "Why is there an extra epoxy
+    // tab when we only have Epoxy and Polish?" Each proposal is matched to its sheet, so a new Base Bid 1 leaves the
+    // proposal on that sheet out of step until Refresh moves it (drafts.refresh_proposals). Said on the bar's hint line
+    // once the save is under way; the next redraw takes it away, like a refused untick's sentence.
+    if (typeof TW === "object" && TW && typeof TW.readProposals === "function"
+        && state.base_tab_id !== priorBaseId && !TWPrice.isProposalChild(state)) {
+      Promise.resolve(TW.readProposals()).then((view) => {
+        const hint = view && Array.isArray(view.members) && view.members.length > 1
+          ? document.getElementById("bid-options-hint") : null;
+        if (hint) hint.textContent = "This project has separate proposals: press Refresh on the Proposal step so they follow.";
+      }).catch(() => {});
+    }
   };
   // "+ Add another system" / "− Fewer systems" toggle (a button → click, not change).
   list.addEventListener("click", (e) => {

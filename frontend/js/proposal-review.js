@@ -2080,6 +2080,11 @@
             }
             const baseMoved = state.base_tab_id !== priorBaseId;
             applyAndRefresh();     // saves base_tab_ids with the base (rebuildPricing), and redraws the tags
+            // A parent with separate proposals: the strip's note says to Refresh, so the proposal on the new Base Bid 1's
+            // sheet moves to the old base's (mountProposalTabs sets the hook; drafts.refresh_proposals moves it).
+            if (baseMoved && typeof window !== "undefined" && window && typeof window.TWProposalsBaseMoved === "function") {
+              try { window.TWProposalsBaseMoved(); } catch {}
+            }
             if (baseMoved) reloadForWorkType();   // Phase B: reload template/narrative/notes if the base changed the work type
           }));
           // A BASE BID switched to Option or Off on its row's switch leaves the base bids first, by the Base-bid control's
@@ -9895,6 +9900,10 @@
    *    #proposals-note  "Estimate changed": a child whose copy of the estimate is older than the
    *                     estimate (`stale`). Refresh copies it into every proposal again, keeping each
    *                     one's words (POST .../proposals/refresh {draft_version}), in the same order.
+   *                     Also a child OUT OF STEP (`out_of_step`: a base swap left it on Base Bid 1's sheet, or
+   *                     its sheet is an Option or Off now), named on its tab and here ("Epoxy (same sheet as
+   *                     Base Bid 1): press Refresh"); Refresh moves it to the base bid it should price. And a
+   *                     Base Bid 1 moved on this page's Pricing card (window.TWProposalsBaseMoved).
    *
    *  Resolves { create, refresh, view, paint } for the harness. Class selectors only, so the harness's
    *  small DOM can run it. */
@@ -9915,9 +9924,15 @@
     // THE TAB SAYS THE SHEET (Hanz, 2026-10-27): the server's display_label is the sheet's name unless a person renamed
     // the proposal (an old untouched "Base Bid N" shows its sheet too); the position is the last resort.
     const nameOf = (m) => (m && (m.display_label || m.label)) || ("Base Bid " + ((m && m.index) || ""));
+    // OUT OF STEP (Hanz, 2026-10-28: "Why is there an extra epoxy tab when we only have Epoxy and Polish?"): a proposal
+    // that prices no base bid of its own, said by the server (drafts.proposals_view `out_of_step`). Refresh moves it.
+    const OUT_OF_STEP = { same_as_base: "same sheet as Base Bid 1", duplicate: "same sheet as another proposal",
+                          not_base: "its sheet is not a base bid any more", sheet_gone: "its sheet is not on the estimate any more" };
+    const whyOf = (m) => (m && m.out_of_step ? (OUT_OF_STEP[m.out_of_step] || "out of step") : "");
     let view = null;
     let busy = false;
     let msg = "";
+    let baseMoved = false;
 
     async function send(method, url, body) {
       const init = { method, headers: TW.authHeaders() };
@@ -9966,6 +9981,7 @@
           + ` title="${open ? "This proposal. Double-click to rename it." : "Open this proposal."}">`
           + `<span class="pt-nm">${escH(nameOf(m))}</span>`
           + (m.stale ? `<span class="pt-stale" title="The estimate changed after this proposal was copied from it">Estimate changed</span>` : "")
+          + (m.out_of_step ? `<span class="pt-stale pt-oos" title="Press Refresh so each proposal prices its own base bid">${escH(whyOf(m))}</span>` : "")
           + `</button>`
           + (m.is_parent ? "" : `<button type="button" class="pt-x" data-pt-del="${escH(m.id)}" aria-label="Delete ${escH(nameOf(m))}" title="Delete this proposal">${icon("x", 13) || "&times;"}</button>`)
           + `</li>`;
@@ -9984,11 +10000,20 @@
 
     function paintNote() {
       if (!note) return;
-      const stale = members().filter((m) => m.stale);
-      if (!stale.length) { note.hidden = true; return; }
-      const names = stale.map(nameOf);
-      if (noteWhat) noteWhat.textContent = names.join(", ") + (names.length === 1 ? " still has" : " still have")
-        + " the figures from before. Refresh copies the estimate into every proposal again; each keeps its own wording and options.";
+      const stale = members().filter((m) => m.stale && !m.out_of_step);
+      const late = members().filter((m) => m.out_of_step);
+      // Base Bid 1 moved on this page (the Pricing card) while the project has separate proposals.
+      const moved = baseMoved && !child && members().length > 1;
+      if (!stale.length && !late.length && !moved) { note.hidden = true; return; }
+      const said = [];
+      if (late.length) said.push(late.map((m) => nameOf(m) + " (" + whyOf(m) + ")").join(", ") + ": press Refresh.");
+      else if (moved) said.push("This project has separate proposals: press Refresh so they follow.");
+      if (stale.length) {
+        const names = stale.map(nameOf);
+        said.push(names.join(", ") + (names.length === 1 ? " still has" : " still have")
+          + " the figures from before. Refresh copies the estimate into every proposal again; each keeps its own wording and options.");
+      }
+      if (noteWhat) noteWhat.textContent = said.join(" ");
       if (refreshBtn) refreshBtn.disabled = busy;
       note.hidden = false;
     }
@@ -10106,8 +10131,13 @@
           if (j.proposals && Array.isArray(j.proposals.members)) view = j.proposals;
           busy = false;
           paintStrip(); paintNote();
-          if (noteWhat) noteWhat.textContent = "Refreshed, except " + skipped.map((s) => s.label || "a proposal").join(", ")
-            + ": its sheet is not on the estimate any more, so it was left as it was. Delete it, or put the sheet back and Refresh.";
+          // The server's own sentence for a proposal that could not follow the base bids (the copy the customer has, or one
+          // with no base bid free for it); the one sentence for a sheet that left the estimate otherwise.
+          const said = skipped.filter((s) => s && s.message).map((s) => s.message);
+          const gone = skipped.filter((s) => !(s && s.message));
+          if (gone.length) said.unshift("Refreshed, except " + gone.map((s) => s.label || "a proposal").join(", ")
+            + ": its sheet is not on the estimate any more, so it was left as it was. Delete it, or put the sheet back and Refresh.");
+          if (noteWhat) noteWhat.textContent = said.join(" ");
           if (note) note.hidden = false;
           return;
         }
@@ -10123,6 +10153,8 @@
     paintMulti();
     if (multi) multi.addEventListener("click", create);
     if (refreshBtn) refreshBtn.addEventListener("click", refresh);
+    // The Pricing card's base-change path calls this when Base Bid 1 moves (renderProposalExtras).
+    try { window.TWProposalsBaseMoved = () => { baseMoved = true; paintNote(); }; } catch {}
     // A Base-bid tick in the card changes how many proposals there would be.
     if (panel && panel.addEventListener) panel.addEventListener("change", paintMulti);
     const api = { create, refresh, view: () => view, paint: paintMulti };
