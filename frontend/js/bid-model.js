@@ -3821,7 +3821,8 @@
       var s = tab === ROOT_TAB ? out : out.tabs[tab];
       if (!isObject(s) || !isObject(s.adjust) || s.adjust.hard_bid !== true) return;
       var next = {};
-      Object.keys(s.adjust).forEach(function (k) { if (k !== "hard_bid") next[k] = s.adjust[k]; });
+      // Only the known adjustment keys are copied (normalizeAdjust's own list), never whatever keys a saved blob carries.
+      ADJUST_KEYS.forEach(function (k) { if (k !== "hard_bid" && has.call(s.adjust, k)) next[k] = s.adjust[k]; });
       var typed = chainAdjust(next);
       if (!has.call(typed, "discount_pct") && !has.call(typed, "discount_amt")) {
         var pct = null;
