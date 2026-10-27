@@ -265,7 +265,7 @@ def test_a_draft_on_its_own_has_no_strip_and_an_off_button_that_says_why(out):
     a = out["page"]["alone"]
     assert a["before"]["stripHidden"] is True and a["before"]["tabs"] == [] and a["before"]["note"]["hidden"] is True
     assert a["before"]["multi"]["disabled"] is True and a["before"]["multi"]["hidden"] is False
-    assert a["before"]["multi"]["title"].startswith("Tick two or more sheets as a Base bid")
+    assert a["before"]["multi"]["title"].startswith("Set two or more sheets to Base bid")
     assert a["afterTick"]["disabled"] is False, "a second tick in the Pricing options card turns the button on"
     assert a["pressedOff"]["log"] == [], "an off button asks nothing"
 
