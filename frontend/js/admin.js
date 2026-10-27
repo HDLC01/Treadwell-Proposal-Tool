@@ -354,16 +354,19 @@
     }
 
     // ── Special permissions ──
-    // Hanz, 2026-10-27: a member sometimes needs ONE thing only admins can do — "a list of names and
-    // then the checkboxes". One row per person, one column per grantable ability; an admin's row is
-    // all ticked and disabled, because the server already lets an admin do every one of them.
+    // Hanz, 2026-10-27: a member sometimes needs something only admins can do — "a list of names and
+    // then the checkboxes" — and then "It should be for the whole tab as well". One row per person,
+    // one column per TAB (every tab in the matrix above except Admin itself, in its order and with
+    // its labels). Ticking one gives that person the tab, even if their role is unticked for it, and
+    // every admin-only edit inside it. An admin's row is all ticked and disabled, because the server
+    // already lets an admin do every one of them.
     //
     // PURE (its inputs are its arguments, and esc is local) so backend/tests/js/special-permissions-
     // harness.js can lift it out and render it on its own.
     function grantsPanelHtml(users, store, status){
       const e = (s) => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
       const head = `<div class="ph"><strong>Special permissions</strong>
-          <span style="color:var(--ink-v)">Give one person one admin-only ability without making them an admin.</span>
+          <span style="color:var(--ink-v)">Give one person a tab without making them an admin.</span>
           <span class="grow"></span>
           <span class="rv-you" id="sp-status" role="status">${e(status||"")}</span></div>`;
       if (!store || !Array.isArray(store.grants_catalog)) {
@@ -371,14 +374,14 @@
           <p class="rv-note">The special permissions didn't load, so there is nothing to change here. Reload the page.</p></div>`;
       }
       const cat = store.grants_catalog, held = store.grants || {};
-      const cols = cat.map(g => `<th class="rv-h" title="${e(g.description)}">${e(g.label)}</th>`).join("");
+      const cols = cat.map(g => `<th class="rv-h" title="${e(g.href||g.key)}">${e(g.label)}</th>`).join("");
       const rows = (users || []).filter(u => u && u.email).map(u => {
         const email = String(u.email).toLowerCase();
         const admin = u.role === "admin" || u.role === "super_admin";
         const mine = held[email] || [];
         const cells = cat.map(g => {
           const on = admin || mine.indexOf(g.key) !== -1;
-          const title = admin ? "Admins have all of these" : ((on ? "Take away: " : "Give: ") + g.description);
+          const title = admin ? "Admins have all of these" : ((on ? "Take away " : "Give ") + g.label);
           return `<td class="rv-cell"><input type="checkbox" data-act="grant" data-email="${e(email)}"` +
             ` data-key="${e(g.key)}"${on?" checked":""}${admin?" disabled":""} aria-label="${e(g.label)} for ${e(u.full_name||email)}" title="${e(title)}"></td>`;
         }).join("");
@@ -386,12 +389,13 @@
           admin?' <span class="rv-lock">Admins have all of these</span>':""}<span class="rv-href">${e(email)}</span></td>${cells}</tr>`;
       }).join("") || `<tr><td colspan="${cat.length+1}" style="padding:24px">No users.</td></tr>`;
       return `<div class="panel" id="sp-panel" style="margin-top:18px;">${head}
-        <div style="overflow-x:auto"><table>
+        <p class="rv-note" id="sp-note" style="margin:0;padding:8px 16px 0">Ticking a tab gives that person the tab and every admin-only edit in it, even if their role is unticked above.</p>
+        <div style="overflow-x:auto;max-width:100%"><table style="white-space:nowrap">
           <thead><tr><th>Person</th>${cols}</tr></thead><tbody>${rows}</tbody>
         </table></div>
         <div class="rv-note"><p>Ticking a box saves it. The server checks these on every request, so a
-          ticked box is a real permission and not just a visible button. Users, roles, bans, tab
-          permissions and this list stay admin-only.${store.updated_at?` Last changed ${e(new Date(store.updated_at).toLocaleDateString())}${store.updated_by?" by "+e(store.updated_by):""}.`:""}</p></div></div>`;
+          ticked box is a real permission and not just a visible button. The Admin page, users, roles,
+          bans, tab permissions and this list stay admin-only.${store.updated_at?` Last changed ${e(new Date(store.updated_at).toLocaleDateString())}${store.updated_by?" by "+e(store.updated_by):""}.`:""}</p></div></div>`;
     }
 
     function renderGrants(status){
@@ -402,7 +406,7 @@
         box.addEventListener("change", () => toggleGrant(box.dataset.email, box.dataset.key, box.checked)));
     }
 
-    /** Flip one ability for one person and save the WHOLE map, which is what the route takes. */
+    /** Flip one tab for one person and save the WHOLE map, which is what the route takes. */
     async function toggleGrant(email, key, on){
       const next = {};
       Object.keys((GRANTS && GRANTS.grants) || {}).forEach(k => { next[k] = GRANTS.grants[k].slice(); });

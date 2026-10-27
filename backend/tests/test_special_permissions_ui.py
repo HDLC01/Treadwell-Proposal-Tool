@@ -20,20 +20,41 @@ def ran():
     return json.loads(proc.stdout)
 
 
-def test_one_row_per_person_and_one_box_per_grant(ran):
+def test_one_row_per_person_and_one_box_per_tab(ran):
     assert ran["rows"] == ["marisol@wetreadwell.com", "kyle@wetreadwell.com",
                            "boss@wetreadwell.com", "hanz@wetreadwell.com"]
-    assert [h["label"] for h in ran["heads"]] == ["Items: price breaks", "Markup rules"]
-    assert [h["title"] for h in ran["heads"]] == ["Edit price breaks.", "Edit markup rules."]
+    # The tab's label as the header, its path as the title.
+    assert [h["label"] for h in ran["heads"]] == ["Items and Assemblies", "Markup"]
+    assert [h["title"] for h in ran["heads"]] == ["/library.html", "/markup.html"]
     assert len(ran["boxes"]) == 4 * 2
+
+
+def test_the_card_says_what_a_tick_gives_and_scrolls_sideways(ran):
+    assert ran["tabNote"]
+    assert ran["scrolls"]
+
+
+def test_the_columns_the_server_serves_are_every_tab_but_admin(monkeypatch):
+    """The card draws one column per catalog entry, and the catalog is TABS minus the Admin page."""
+    import main
+    import nav_access
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(main, "_user_email", lambda request: "boss@wetreadwell.com")
+    monkeypatch.setattr(main.profiles, "get_by_email", lambda e: {
+        "id": "u1", "email": "boss@wetreadwell.com", "role": "admin", "status": "active"})
+    main._profile_cache_clear()
+    body = TestClient(main.app).get("/api/admin/special-permissions").json()
+    main._profile_cache_clear()
+    assert [(g["key"], g["label"]) for g in body["grants_catalog"]] == [
+        (h, t["label"]) for h, t in nav_access.TABS.items() if h != "/admin.html"]
 
 
 def test_member_boxes_follow_the_store_and_can_be_changed(ran):
     by = {(b["email"], b["key"]): b for b in ran["boxes"]}
-    assert by[("marisol@wetreadwell.com", "items_pricing")] == {
-        "email": "marisol@wetreadwell.com", "key": "items_pricing", "checked": True, "disabled": False}
-    assert by[("marisol@wetreadwell.com", "markup")]["checked"] is False
-    assert not any(by[("kyle@wetreadwell.com", k)]["checked"] for k in ("items_pricing", "markup"))
+    assert by[("marisol@wetreadwell.com", "/library.html")] == {
+        "email": "marisol@wetreadwell.com", "key": "/library.html", "checked": True, "disabled": False}
+    assert by[("marisol@wetreadwell.com", "/markup.html")]["checked"] is False
+    assert not any(by[("kyle@wetreadwell.com", k)]["checked"] for k in ("/library.html", "/markup.html"))
     assert not any(b["disabled"] for b in ran["boxes"] if b["email"].startswith(("marisol", "kyle")))
 
 

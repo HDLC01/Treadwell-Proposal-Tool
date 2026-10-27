@@ -365,7 +365,10 @@ async def _nav_gate(request: Request, call_next):
             return JSONResponse(status_code=403, content={
                 "ok": False, "account_paused": True,
                 "error": "Your account is paused. Ask an admin to turn it back on."})
-        denied = nav_access.is_api_denied(role, request.url.path)
+        # A tab given to this person on the Special permissions card is open to them whatever their
+        # role says, so the gate asks about THEIR policy (the role's, minus their granted tabs).
+        denied = nav_access.is_api_denied(role, request.url.path,
+                                          _nav_policy_for(role, prof.get("email") or _user_email(request)))
     except Exception as exc:  # noqa: BLE001
         # FAIL OPEN. This is an internal tool with three accounts where a lockout is an outage the
         # affected person cannot fix, and the data behind these routes is still behind the existing
@@ -1070,7 +1073,7 @@ def api_library_items() -> Dict[str, Any]:
 def api_library_item_create(payload: LibraryItemIn, request: Request) -> Dict[str, Any]:
     body = payload.model_dump(exclude_unset=True)
     if any(k in body for k in library.ITEM_ADMIN_ONLY):
-        _require_grant(request, "items_pricing")
+        _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_item(body, _user_email(request))
     except library.ValidationError as exc:
@@ -1084,7 +1087,7 @@ def api_library_item_update(item_id: str, payload: LibraryItemIn,
     body = payload.model_dump(exclude_unset=True)
     # Price breaks, a bulk cost and a coverage basis are an admin's to set (Phase 11).
     if any(k in body for k in library.ITEM_ADMIN_ONLY):
-        _require_grant(request, "items_pricing")
+        _require_grant(request, special_permissions.LIBRARY)
     try:
         # The caller's identity is the ONLY source of "who edited it" — the payload model has no
         # such field and validate_item would drop it, so a client cannot sign somebody else's name.
@@ -1179,7 +1182,7 @@ def api_library_vendors() -> Dict[str, Any]:
 
 @app.post("/api/library/vendors")
 def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_vendor(payload.model_dump(exclude_unset=True), _user_email(request))
     except library.ValidationError as exc:
@@ -1190,7 +1193,7 @@ def api_library_vendor_create(payload: LibraryVendorIn, request: Request) -> Dic
 @app.patch("/api/library/vendors/{vendor_id}")
 def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
                               request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_vendor(vendor_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1202,7 +1205,7 @@ def api_library_vendor_update(vendor_id: str, payload: LibraryVendorIn,
 
 @app.delete("/api/library/vendors/{vendor_id}")
 def api_library_vendor_delete(vendor_id: str, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_vendor(vendor_id):
         raise HTTPException(404, "That vendor is no longer on the list.")
     # Items naming it keep saying so — they store the name, and a delete here must not rewrite what
@@ -1228,7 +1231,7 @@ def api_library_divisions() -> Dict[str, Any]:
 
 @app.post("/api/library/divisions")
 def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_ref(library.DIVISION_REFS, payload.model_dump(exclude_unset=True),
                                  _user_email(request), label="division")
@@ -1240,7 +1243,7 @@ def api_library_division_create(payload: LibraryRefIn, request: Request) -> Dict
 @app.patch("/api/library/divisions/{division_id}")
 def api_library_division_update(division_id: str, payload: LibraryRefIn,
                                 request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_ref(library.DIVISION_REFS, division_id,
                                  payload.model_dump(exclude_unset=True), label="division")
@@ -1253,7 +1256,7 @@ def api_library_division_update(division_id: str, payload: LibraryRefIn,
 
 @app.delete("/api/library/divisions/{division_id}")
 def api_library_division_delete(division_id: str, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_ref(library.DIVISION_REFS, division_id):
         raise HTTPException(404, "That division is no longer on the list.")
     return {"ok": True, "deleted": division_id}
@@ -1266,7 +1269,7 @@ def api_library_units() -> Dict[str, Any]:
 
 @app.post("/api/library/units")
 def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_ref(library.UNIT_REFS, payload.model_dump(exclude_unset=True),
                                  _user_email(request), label="unit")
@@ -1278,7 +1281,7 @@ def api_library_unit_create(payload: LibraryRefIn, request: Request) -> Dict[str
 @app.patch("/api/library/units/{unit_id}")
 def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
                             request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_ref(library.UNIT_REFS, unit_id,
                                  payload.model_dump(exclude_unset=True), label="unit")
@@ -1291,7 +1294,7 @@ def api_library_unit_update(unit_id: str, payload: LibraryRefIn,
 
 @app.delete("/api/library/units/{unit_id}")
 def api_library_unit_delete(unit_id: str, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     if not library.delete_ref(library.UNIT_REFS, unit_id):
         raise HTTPException(404, "That unit is no longer on the list.")
     return {"ok": True, "deleted": unit_id}
@@ -1333,7 +1336,7 @@ def api_library_labor() -> Dict[str, Any]:
 
 @app.post("/api/library/labor")
 def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.create_labor(payload.model_dump(exclude_unset=True), _user_email(request))
     except library.ValidationError as exc:
@@ -1344,7 +1347,7 @@ def api_library_labor_create(payload: LibraryLaborIn, request: Request) -> Dict[
 @app.patch("/api/library/labor/{labor_id}")
 def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
                              request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.update_labor(labor_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1358,7 +1361,7 @@ def api_library_labor_update(labor_id: str, payload: LibraryLaborIn,
 
 @app.delete("/api/library/labor/{labor_id}")
 def api_library_labor_delete(labor_id: str, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     # 400, NOT 404: `travel` is very much still on the list, and 404 would read as "already gone"
     # to whatever called this — a caller that retried on a 404 would find nothing to retry against.
     # library.delete_labor raises before it even asks the store whether the row exists.
@@ -1395,7 +1398,7 @@ def api_library_labor_calc() -> Dict[str, Any]:
 @app.put("/api/library/labor-calc/{line_id}")
 def api_library_labor_calc_save(line_id: str, payload: LibraryLaborCalcIn,
                                 request: Request) -> Dict[str, Any]:
-    _require_grant(request, "library_lists")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = library.save_labor_calc(line_id, payload.model_dump(exclude_unset=True))
     except library.ValidationError as exc:
@@ -1452,7 +1455,7 @@ def api_markup_rules(layout: Optional[str] = None) -> Dict[str, Any]:
 
 @app.put("/api/markup/rules")
 def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "markup")
+    _require_grant(request, special_permissions.MARKUP)
     try:
         row = markup.upsert_rule(payload.model_dump(exclude_unset=True), _user_email(request))
     except markup.ValidationError as exc:
@@ -1462,7 +1465,7 @@ def api_markup_rule_upsert(payload: MarkupRuleIn, request: Request) -> Dict[str,
 
 @app.delete("/api/markup/rules/{rule_id}")
 def api_markup_rule_delete(rule_id: str, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "markup")
+    _require_grant(request, special_permissions.MARKUP)
     if not markup.delete_rule(rule_id):
         # 404 rather than a cheerful 200: the rule may have gone in another tab, and reporting a
         # successful delete of nothing is how somebody believes a rate was removed when it wasn't.
@@ -1509,7 +1512,7 @@ def api_condition_defaults() -> Dict[str, Any]:
 @app.put("/api/condition-defaults/{condition_key}")
 def api_condition_default_set(condition_key: str, payload: ConditionDefaultIn,
                               request: Request) -> Dict[str, Any]:
-    _require_grant(request, "condition_defaults")
+    _require_grant(request, special_permissions.LIBRARY)
     try:
         row = condition_defaults.set_default(condition_key,
                                              payload.model_dump(exclude_unset=True),
@@ -1814,7 +1817,10 @@ def _guard_notify_picks(request: Request, prior: Any,
     than safe. Carrying an existing entry through is fine; dropping somebody else's is a change, or
     un-muting by omission would be a free bypass.
     """
-    if _caller_is_admin(request):
+    # An admin, or a member given the Direct Projects tab (the drawer's home): the Special
+    # permissions card promises that tab's every admin-only edit, and setting somebody else's
+    # notifications on a project is one.
+    if _may_set_others_notify(request, special_permissions.PROJECTS):
         return
     me = (_user_email(request) or "").strip().lower()
     picks = prior if isinstance(prior, dict) else {}
@@ -3324,7 +3330,7 @@ def api_preview_digest(request: Request) -> Dict[str, Any]:
 # Access (Hanz: "admins edit, staff self-serve"): the GLOBAL roster (add / remove /
 # toggle) is ADMIN-only, enforced here server-side (not just hidden buttons); the
 # per-project overrides allow ANY signed-in staff to toggle THEMSELVES for a project,
-# and admins to toggle anyone. All routes are already bearer-gated by _auth_gate.
+# and admins (or a member given the tab on Special permissions) to toggle anyone. All routes are already bearer-gated by _auth_gate.
 def _caller_is_admin(request: Request) -> bool:
     # Through _require_admin, so it reads the same cached profile as every other role decision in
     # the app. A local profiles.get_by_email() here would be a third role reader and would miss both
@@ -3336,6 +3342,23 @@ def _caller_is_admin(request: Request) -> bool:
         return False
 
 
+def _may_set_others_notify(request: Request, tab: str) -> bool:
+    """May this caller change SOMEBODY ELSE's per-project notifications: an admin, or a member
+    given `tab` on the Admin page's Special permissions card. Through _caller_is_admin first, so
+    the tests that stub it keep meaning what they did; the grant half is _require_grant's own
+    lookup, never anything the browser sends. CLOSED on any failure to read the profile or the
+    grants: a grant widens access, so an unreadable store must not."""
+    if _caller_is_admin(request):
+        return True
+    if not (_user_email(request) or "").strip():
+        return False  # nobody signed in holds no grant, whatever the profile cache has under ""
+    try:
+        _require_grant(request, tab)
+        return True
+    except Exception:  # noqa: BLE001 - HTTPException (no grant) or an unreachable profile store
+        return False
+
+
 @app.get("/api/portal/notify-recipients")
 def api_portal_notify_list() -> Dict[str, Any]:
     return _portal("/api/admin/notify-recipients", "GET")
@@ -3343,7 +3366,7 @@ def api_portal_notify_list() -> Dict[str, Any]:
 
 @app.post("/api/portal/notify-recipients")
 async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
-    _require_grant(request, "notify_recipients")
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3362,7 +3385,7 @@ async def api_portal_notify_add(request: Request) -> Dict[str, Any]:
 
 @app.patch("/api/portal/notify-recipients/{rid}")
 async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "notify_recipients")
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3373,7 +3396,7 @@ async def api_portal_notify_toggle(rid: int, request: Request) -> Dict[str, Any]
 
 @app.delete("/api/portal/notify-recipients/{rid}")
 def api_portal_notify_delete(rid: int, request: Request) -> Dict[str, Any]:
-    _require_grant(request, "notify_recipients")
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     # rid is int-typed, but route it through the same id guard as every other
     # proxied path segment so the outbound URL is provably constrained.
     return _portal("/api/admin/notify-recipients/" + _safe_id(str(rid)), "DELETE")
@@ -3397,7 +3420,7 @@ async def api_portal_notify_step(request: Request) -> Dict[str, Any]:
     serves it to this page through the roster GET, and validates it on the way back in — so the
     only thing checked here is the SHAPE, and a step this tool has never heard of still works the
     day the portal learns it."""
-    _require_grant(request, "notify_recipients")
+    _require_grant(request, special_permissions.NOTIFICATIONS)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -3447,9 +3470,11 @@ async def api_portal_notify_overrides_set(pid: str, request: Request) -> Dict[st
         raise HTTPException(400, "Enter a valid email address.")
     if mode not in ("add", "mute", "clear"):
         raise HTTPException(400, "Invalid mode.")
-    # Admin may toggle anyone; a non-admin may only toggle THEIR OWN address.
+    # An admin, or a member given the Notification Sending tab, may toggle anyone (the Special
+    # permissions card promises the tab's every admin-only edit, and this is one); anybody else may
+    # only toggle THEIR OWN address.
     me = (_user_email(request) or "").strip().lower()
-    if not _caller_is_admin(request) and email != me:
+    if email != me and not _may_set_others_notify(request, special_permissions.NOTIFICATIONS):
         raise HTTPException(403, "You can only change your own notifications for a project.")
     return _portal("/api/admin/proposal/" + _safe_id(pid) + "/notify-overrides", "PUT",
                    {"email": email, "mode": mode})
@@ -7751,7 +7776,7 @@ def api_delete_project(draft_id: str, request: Request) -> Dict[str, Any]:
     becoming a second word for one act.
 
     ADMINS ONLY, at the endpoint and not merely in the drawer."""
-    actor = _require_grant(request, "delete_projects")
+    actor = _require_grant(request, special_permissions.PROJECTS)
     who = actor.get("email")
     hidden = _portal_visibility(draft_id, "delete", who)
     existed = drafts.trash_draft(draft_id, who)
@@ -8550,8 +8575,8 @@ def api_me(request: Request) -> Dict[str, Any]:
         role = prof.get("role", "user")
         return {"ok": True, "email": prof.get("email"), "name": prof.get("full_name"),
                 "role": role, "status": prof.get("status", "active"),
-                "nav_denied": _nav_denied_for(role),
-                "nav_denied_pages": _nav_denied_pages_for(role),
+                "nav_denied": _nav_denied_for(role, prof.get("email") or email),
+                "nav_denied_pages": _nav_denied_pages_for(role, prof.get("email") or email),
                 "grants": _grants_for(role, prof.get("email") or email)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
@@ -8598,21 +8623,46 @@ def _caller_profile(request: Request) -> Optional[Dict[str, Any]]:
     return prof
 
 
-def _nav_denied_for(role: str) -> List[str]:
-    """The tab hrefs `role` may not reach, for /api/me.
+def _granted_tabs(email: Any) -> List[str]:
+    """The tabs this person was given on the Special permissions card. [] on any store trouble."""
+    try:
+        return special_permissions.grants_for(email)
+    except Exception as exc:  # noqa: BLE001 - a bad store grants nothing
+        log.warning("special permissions unreadable for the nav policy: %s", exc)
+        return []
+
+
+def _nav_policy_for(role: str, email: Any = "") -> Dict[str, Any]:
+    """The nav policy as it applies to ONE caller: their role's denied tabs minus the tabs they were
+    granted. Shaped like nav_access.get(), so every nav_access reader takes it as its `policy`.
+
+    Without a grant it IS nav_access.get(), so an ungranted member is judged exactly as before.
+    Raises whatever the policy read raises; callers keep their own fail-open handling.
+    """
+    policy = nav_access.get()
+    granted = _granted_tabs(email) if email else []
+    if not granted:
+        return policy
+    key = str(role or "").strip().lower()
+    return dict(policy, deny={key: [h for h in nav_access.denied_paths(role, policy)
+                                    if h not in granted]})
+
+
+def _nav_denied_for(role: str, email: Any = "") -> List[str]:
+    """The tab hrefs `role` (and this caller, after their granted tabs) may not reach, for /api/me.
 
     auth.js already awaits /api/me at boot before it draws the sidebar, so riding along on that
     response costs no round trip and means the menu and the gate read ONE source. Fails open: a
     policy blip costs a menu item, never the page.
     """
     try:
-        return nav_access.denied_paths(role)
+        return nav_access.denied_paths(role, _nav_policy_for(role, email))
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
 
 
-def _nav_denied_pages_for(role: str) -> Dict[str, str]:
+def _nav_denied_pages_for(role: str, email: Any = "") -> Dict[str, str]:
     """{page path: the denied tab href that owns it}, so auth.js can refuse the page it is ON.
 
     Expanded HERE rather than in the browser because one tab owns two pages — the Polish beta's step
@@ -8620,7 +8670,7 @@ def _nav_denied_pages_for(role: str) -> Dict[str, str]:
     auth.js is the copy that goes stale. Fails open for the same reason as _nav_denied_for.
     """
     try:
-        return nav_access.denied_page_map(role)
+        return nav_access.denied_page_map(role, _nav_policy_for(role, email))
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return {}
@@ -8635,7 +8685,8 @@ def _require_admin(request: Request) -> Dict[str, Any]:
 
 
 def _require_grant(request: Request, key: str) -> Dict[str, Any]:
-    """_require_admin, OR a member who was given `key` on the Admin page's Special permissions card.
+    """_require_admin, OR a member who was given the TAB `key` (a nav_access.TABS href, one of
+    special_permissions.KEYS) on the Admin page's Special permissions card.
 
     Same profile lookup and the same 403 sentence as _require_admin, so a member without the grant
     sees exactly what they saw before this existed. The grant is read by the caller's email off the
@@ -8651,7 +8702,8 @@ def _require_grant(request: Request, key: str) -> Dict[str, Any]:
 
 
 def _grants_for(role: str, email: str) -> List[str]:
-    """The ability keys for /api/me: every key for an admin, the stored grants for anyone else."""
+    """The granted tab hrefs for /api/me: every grantable tab for an admin, the stored grants for
+    anyone else."""
     if role in ("admin", "super_admin"):
         return list(special_permissions.KEYS)
     try:
@@ -8827,8 +8879,9 @@ def api_admin_set_nav_access(payload: NavAccessIn, request: Request) -> Dict[str
             "tabs": nav_access.capability_table()}
 
 
-# ─── Special permissions: one admin-only ability for one named person ─
-# Hanz, 2026-10-27: "a list of names and then the checkboxes". The grants themselves are NOT
+# ─── Special permissions: one tab for one named person ───────────────
+# Hanz, 2026-10-27: "a list of names and then the checkboxes", one box per tab (the tab, plus every
+# admin-only edit inside it). The grants themselves are NOT
 # grantable — both routes are _require_admin — or a member given one could give themselves the rest.
 class SpecialPermissionsIn(BaseModel):
     model_config = {"extra": "forbid"}
