@@ -211,7 +211,8 @@ def test_review_shows_the_open_sheet_alone_with_no_option_card_for_the_seal_opti
     r = page["review"]
     assert r["noOptionCard"] is True, "no 'Seal option' card on the base's Review"
     assert r["handFigure"] == _money(page["priced"]["handSeal"]), "the option is still priced, it is just not listed here"
-    assert r["keys"] == ["takeoff", "labor", "travel", "takeoff", "markup"], "only the open sheet's own cards (the last takeoff-coloured card is the bid's tooling)"
+    assert r["keys"] == ["takeoff", "labor", "travel", "takeoff", "markup", "manhours"], (
+        "only the open sheet's own cards (the last takeoff-coloured card is the bid's tooling; manhours is the read-only Man hours & budget)")
     assert r["noWholeBidCard"] is True and r["noteOnBase"] is False
     assert r["markupTotal"] == _money(page["priced"]["handPolish"]), "the base's own card says the base's price"
 
