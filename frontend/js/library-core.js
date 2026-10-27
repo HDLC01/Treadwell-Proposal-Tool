@@ -714,10 +714,12 @@
   }
 
   // ── pagination, 2026-10-27 ────────────────────────────────────────────────
-  // Hanz: the Items table and the Assemblies rail show 25 at a time. ONE page size for both, here,
-  // so the two tabs cannot drift apart. The page math lives in this file rather than library.js
+  // Hanz: the Items table shows 25 at a time. Both page sizes live here, next to the one set of
+  // page math the two lists share. The page math lives in this file rather than library.js
   // because it is pure and the harnesses load this file whole: nothing has to be lifted to test it.
   var PAGE_SIZE = 25;
+  // The Assemblies rail is a column of cards, not a table: 8 at a time (Hanz, 2026-10-27).
+  var ASM_PAGE_SIZE = 8;
 
   function pageSizeOf(size) {
     var s = Math.floor(Number(size));
@@ -774,7 +776,7 @@
   }
 
   return {
-    PAGE_SIZE: PAGE_SIZE, pageCount: pageCount, clampPage: clampPage, pageOfIndex: pageOfIndex,
+    PAGE_SIZE: PAGE_SIZE, ASM_PAGE_SIZE: ASM_PAGE_SIZE, pageCount: pageCount, clampPage: clampPage, pageOfIndex: pageOfIndex,
     pageSlice: pageSlice, pageInfo: pageInfo,
     itemCopyBody: itemCopyBody,
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
