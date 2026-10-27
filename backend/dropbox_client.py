@@ -438,12 +438,33 @@ def get_root_folder() -> str:
     return os.environ.get("DROPBOX_ROOT_FOLDER", "/Proposals").rstrip("/")
 
 
+_NAME_MAX = 120
+
+
+def _clean_name(name: str) -> str:
+    """Replace the characters Dropbox dislikes with a space, collapse repeats, trim. No length cap."""
+    cleaned = re.sub(r"[\\/:*?\"<>|]", " ", name or "").strip()
+    return re.sub(r"\s+", " ", cleaned)
+
+
 def _sanitize_folder_name(name: str) -> str:
     """Strip / clean characters Dropbox dislikes in folder names."""
-    # Replace illegal chars with a space; collapse repeats; trim.
-    cleaned = re.sub(r"[\\/:*?\"<>|]", " ", name or "").strip()
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned[:120] or "Untitled Project"
+    return _clean_name(name)[:_NAME_MAX] or "Untitled Project"
+
+
+def _fit_scoped(head: str, project_name: str, scope_label: str | None) -> str:
+    """`<head><Project Name> - <Scope>`, cleaned and capped at _NAME_MAX like _sanitize_folder_name,
+    with THE SCOPE KEPT WHOLE (finding 38): when the name is too long it is the PROJECT part that is
+    cut. Capping the whole string cut the scope off the end instead, so with a long project name
+    Lab 1 and Lab 2 got the same file name and the second filing overwrote the first. A name that
+    fits, and every unscoped name, comes out exactly as _sanitize_folder_name made it."""
+    whole = _sanitize_folder_name(f"{head}{_scoped_name(project_name, scope_label)}")
+    label = _clean_name(scope_label or "")
+    if not label or len(_clean_name(f"{head}{_scoped_name(project_name, scope_label)}")) <= _NAME_MAX:
+        return whole
+    tail = f" - {label}"
+    front = _clean_name(f"{head}{project_name}")[:max(_NAME_MAX - len(tail), 0)].rstrip()
+    return f"{front}{tail}"
 
 
 def _deadline_prefix(deadline: str | None) -> str:
@@ -595,16 +616,14 @@ def _project_proposal_name(project_name: str, work_type: str | None,
     TYPE per _PROPOSAL_TYPE_WORDS; the part after the dash is the project name, and for one scope of
     a split project the scope's name after it (_scoped_name)."""
     typ = _PROPOSAL_TYPE_WORDS.get((work_type or "").strip().lower(), "EPOXY")
-    return _sanitize_folder_name(
-        f"{_proposal_date_yy(deadline, bid_date)} TREADWELL {typ} PROPOSAL - "
-        f"{_scoped_name(project_name, scope_label)}"
-    )
+    return _fit_scoped(f"{_proposal_date_yy(deadline, bid_date)} TREADWELL {typ} PROPOSAL - ",
+                       project_name, scope_label)
 
 
 def _estimate_file_name(project_name: str, scope_label: str | None = None) -> str:
     """`$ estimate sheet - <Project Name>[ - <Scope>].xlsx`, the workbook's name in a project
     folder. One function for both filing paths, so the two can never name one scope differently."""
-    return f"$ estimate sheet - {_sanitize_folder_name(_scoped_name(project_name, scope_label))}.xlsx"
+    return f"$ estimate sheet - {_fit_scoped('', project_name, scope_label)}.xlsx"
 
 
 def _find_numbers_subfolder(dbx, FolderMetadata, target: str) -> str:

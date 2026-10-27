@@ -123,6 +123,9 @@ const CONST_NAMES = [
   // The follow-up email being written per task, and the sentence an action leaves behind
   // (2026-10-23, remind mode). followupPanelHtml and the compose box read both on every paint.
   "FU_DRAFT", "FU_NOTICE",
+  // The contacts the project's one email missed, per scope group (2026-10-24 hardening): the lifted
+  // wireScope writes it on a partial send and re-reads it on every paint.
+  "SCOPE_SEND_NOTICE",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -241,6 +244,19 @@ const FN_NAMES = [
   // BOTH renderers embed scopeHtml in their Proposal panel and BOTH call wireScope at the end, so
   // leaving either out is a ReferenceError on every drawer, sent and unsent at once.
   "scopeHtml", "wireScope",
+  // WHAT THE COMBINED SEND DID, IN WORDS (2026-10-24 hardening). TWELFTH addition: wireScope's
+  // send and retry buttons word every answer through it, so leaving it out is a ReferenceError on
+  // the press, which is the only place the delivery truth is said.
+  "scopeSendOutcome",
+  // A SCOPE GROUP'S FOLLOW-UP (2026-10-25): one reminder for the whole project, and the "Decide the
+  // other scopes" card. THIRTEENTH addition: followupTaskHtml calls fuIsGroup, fuGroupHtml and
+  // followupDecisionHtml on every task card (which reach fuScopeNow, fuScopeOpen and fuScopeChip),
+  // and wireFollowup binds wireFuDecision, whose presses reach fuDecisionPicked, fuDecisionReady,
+  // fuScopeNames, fuTaskOf, fuDecide and its two fuDecision*Text sentences. Executed in full by
+  // group-followup-harness.js; lifted here so this harness's drawer stays runnable.
+  "fuIsGroup", "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames", "fuGroupHtml",
+  "followupDecisionHtml", "fuDecisionReady", "fuDecisionPicked", "fuTaskOf", "fuDecisionErrText",
+  "fuDecisionDoneText", "fuDecide", "wireFuDecision",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -2625,6 +2641,151 @@ async function runScenario(name, s) {
   } finally {
     fuNet.answers = [];
     for (const r of scopeAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+  }
+
+  // ── the project's one email, told honestly (2026-10-24 hardening) ─────────────
+  // A portal that reports the email's state (`scope_send`, main.py _scope_send_view): the button
+  // names what it will send, and every answer of the send is PRESSED through the real wireScope and
+  // worded by the real scopeSendOutcome: nobody reached, some reached (and the retry of only those),
+  // a scope left out, nothing new, a sent scope the portal does not link yet, an old portal's bare
+  // 404, and the tool's own portal_not_ready.
+  const honestAdded = [];
+  try {
+    out.honest = {};
+    const members = [{ id: "hs-a", label: "Breakroom", on_board: true, sent: true },
+                     { id: "hs-b", label: "Lab 1", on_board: true, sent: true },
+                     { id: "hs-c", label: "Lab 2", on_board: false, sent: false }];
+    const view = { announced: true, pending: ["hs-b", "hs-c"], new: 1, revised: 1, not_included: [],
+                   label: "Email again: 1 new, 1 revised", chip: "Email again: 1 new, 1 revised", mine: true };
+    const row = { proposal_id: "hs-b", project_name: "Acme HQ", proposal_status: "sent",
+      scope_group: "grp_h", scope_label: "Lab 1", scope_index: 2, scope_count: 3, scope_members: members,
+      scope_send: view };
+    BOARD_ROWS.push(row);
+    honestAdded.push(row);
+    page.setBoard(BOARD_ROWS);
+    const q = (sel) => dom.query(sel);
+    const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+    sentData.proposal.project_name = "Acme HQ";
+    const press = async (sel, answer) => {
+      net.requests.length = 0;
+      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send$/, answer]];
+      await q(sel).fire("click");
+      await tick();
+      return { note: q("#scope-note").textContent,
+               retryShown: q("#scope-retry-line").style.display !== "none",
+               requests: net.requests.filter((r) => /scope-group/.test(r.path)) };
+    };
+    page.open("hs-b");
+    page.renderDetail("hs-b", sentData);
+    out.honest.html = dom.html;
+    out.honest.noOne = await press("#scope-send", { status: 200,
+      body: { ok: true, results: [{ email: "a@x.test", delivered: false }, { email: "b@x.test", delivered: false }] } });
+    out.honest.legacyNoOne = await press("#scope-send", { status: 200,
+      body: { ok: true, already_sent: false, send_no: null, emailed: [] } });
+    out.honest.failed502 = await press("#scope-send", { status: 502,
+      body: { ok: false, error: "delivery_failed", results: [{ email: "a@x.test", delivered: false }] } });
+    out.honest.partial = await press("#scope-send", { status: 200,
+      body: { ok: true, results: [{ email: "a@x.test", delivered: true }, { email: "b@x.test", delivered: false }],
+              not_included: ["hs-c"] } });
+    // THE POLL (refreshLive re-runs openDetail every 12s, and a send that reached anybody reloads):
+    // the drawer is REBUILT, and the portal now calls every scope emailed. A fresh element has no
+    // inline style in this fake DOM, so "shown" reads the markup's own style until a script sets one.
+    const shown = (sel) => {
+      const el = q(sel);
+      if (el.style.display !== undefined) return el.style.display !== "none";
+      const m = new RegExp('id="' + sel.slice(1) + '"[^>]*>').exec(dom.html);
+      return !!m && !/display:\s*none/.test(m[0]);
+    };
+    const repaint = () => {
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      return { note: q("#scope-note").textContent, retryShown: shown("#scope-retry-line"),
+               allSentShown: /id="scope-all-sent"/.test(dom.html) && shown("#scope-all-sent") };
+    };
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
+    out.honest.afterPoll = repaint();
+    out.honest.retry = await press("#scope-retry", { status: 200,
+      body: { ok: true, results: [{ email: "b@x.test", delivered: true }] } });
+    out.honest.afterRetryPoll = repaint();
+    row.scope_send = view;
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.nothing = await press("#scope-send", { status: 409, body: { ok: false, error: "nothing_to_send" } });
+    out.honest.notFound = await press("#scope-send", { status: 404, body: { detail: "Not Found" } });
+    out.honest.notReady = await press("#scope-send", { status: 409,
+      body: { ok: false, code: "portal_not_ready", error: "The customer portal has not been updated for projects with several proposals yet." } });
+    out.honest.sentMissing = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "scopes_not_published", missing: ["hs-a", "hs-c"] } });
+    // Nothing new to email: no button, the reason instead.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
+    page.renderDetail("hs-b", sentData);
+    out.honest.allSentHtml = dom.html;
+    // A SEND WHOSE RESULT WAS LOST (findings 9 and 16): the portal reports Lab 1 as unknown, not
+    // pending, so there is no ordinary button; the drawer says so and offers an explicit resend.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: true, unknown: ["hs-b"], unknown_text: "The result of the last send was lost. Check the thread, then send again." });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.lostHtml = dom.html;
+    out.honest.lostResend = await press("#scope-resend-unknown", { status: 200,
+      body: { ok: true, recorded: true, results: [{ email: "a@x.test", delivered: true }] } });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.lostNothing = await press("#scope-resend-unknown", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: [], unknown: ["hs-b"] } });
+    out.honest.notRecorded = await press("#scope-resend-unknown", { status: 503,
+      body: { ok: false, error: "send_not_recorded", emailed: [] } });
+    out.honest.sentUnrecorded = await press("#scope-resend-unknown", { status: 200,
+      body: { ok: true, recorded: false, results: [{ email: "a@x.test", delivered: true }] } });
+    // ROUND 3, A SEND IN FLIGHT: the portal now reports Lab 1 as in flight (inflight_scope_ids),
+    // neither pending nor lost. The poll rebuilds the drawer: it says an email is on its way, never
+    // "the customer has every scope", and the unrecorded send's sentence is still on screen
+    // (SCOPE_SEND_NOTICE) without offering a retry nobody needs.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: false, unknown: [], unknown_text: null, inflight: ["hs-b"] });
+    out.honest.unrecordedPoll = repaint();
+    out.honest.inflightHtml = dom.html;
+    // ROUND 3, NOT PUBLISHED YET: Lab 2 is in the project but not published (the portal's
+    // not_included). With nothing else to send the drawer says what to do, never "the customer has
+    // every scope"; with two of them it says so in the plural; and a send the portal answers
+    // nothing_to_send because of it says the same.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: false, unknown: [], unknown_text: null, inflight: [], not_included: ["hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedHtml = dom.html;
+    // Two scopes the customer does not have (Breakroom here never sent): the plural.
+    row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a", "hs-c"] });
+    row.scope_members = members.map((m) => (m.id === "hs-a" ? Object.assign({}, m, { sent: false }) : m));
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedTwoHtml = dom.html;
+    row.scope_members = members;
+    // A SENT PARENT NOT ADOPTED YET (TK2 review): Breakroom was emailed as an ordinary proposal
+    // before it gained scopes, so its portal row has no scope_group and the portal lists it in
+    // not_included. It is `sent`: never told to be published again.
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.sentApartHtml = dom.html;
+    row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.sentApartOnlyHtml = dom.html;
+    row.scope_send = Object.assign({}, view, { not_included: ["hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedWithButtonHtml = dom.html;
+    out.honest.nothingUnpublished = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: [] } });
+    out.honest.nothingUnpublishedLost = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: ["hs-b"] } });
+    out.honest.nothingSentApart = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-a", "hs-c"], unknown: [] } });
+  } catch (e) {
+    out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    fuNet.answers = [];
+    for (const r of honestAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
   }
 
   console.log(JSON.stringify(out));

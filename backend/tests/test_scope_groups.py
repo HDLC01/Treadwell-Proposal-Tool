@@ -421,8 +421,13 @@ def test_the_split_clears_every_piece_of_multi_sheet_proposal_state(fake_supabas
         assert d["is_test"] is True and d["project_name"] == "Acme HQ"
         assert d["contact_email"] == "pat@acme.test"
         assert d["scope_group"]["id"] == j["group_id"]
-    # ...and so does what only the parent was ever told (its recipients, its letter, its narrative)
-    assert parent["notify_picks"] == PARENT["notify_picks"] and parent["scope_notes"] == "S"
+    # ...and so does what only the parent was ever told (its recipients, its letter). Its narrative
+    # does NOT: it was written for the whole job, and would print Lab 1 and Lab 2 on a Breakroom-only
+    # proposal (finding 39, test_scope_group_hardening.py).
+    assert parent["notify_picks"] == PARENT["notify_picks"]
+    assert parent["cover_letter_enabled"] is True
+    for k in ("scope_notes", "exclusions", "system_name", "texture", "dropbox_result"):
+        assert k not in parent, "%s of the combined bid survived the split" % k
 
 
 def test_a_freshly_split_scope_shows_as_files_pending_not_missing(fake_supabase, monkeypatch):
@@ -530,6 +535,9 @@ def test_the_combined_send_is_proxied_whole(monkeypatch):
         return main.Response(content=b'{"ok": false, "error": "scopes_not_published", "missing": ["s2"]}',
                              status_code=409, headers={"content-type": "application/json"})
     monkeypatch.setattr(main, "_portal_raw", raw)
+    # a portal that handles scope groups (test_scope_group_hardening.py holds the one that does not)
+    monkeypatch.setattr(main, "_portal_capabilities",
+                        lambda: {"scope_groups": True, "group_followups": True})
     r = client.post("/api/portal/scope-group/%s/send" % GID, json={"message": "hi", "resend": True})
     assert r.status_code == 409 and r.json()["missing"] == ["s2"]
     assert seen["path"] == "/api/admin/scope-group/%s/send" % GID

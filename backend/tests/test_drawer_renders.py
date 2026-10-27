@@ -320,6 +320,9 @@ CONDITIONAL_IDS = {
     # left off a closed-lost proposal, where nothing is being scheduled.
     "fu-task": "only rendered while a follow-up task is waiting on a human",
     "fu-sched": "not rendered on a closed-lost proposal",
+    # Scope groups (2026-10-25): the "Decide the other scopes" card, rendered only for that task in
+    # place of fu-task. Its own ids are pressed in test_group_followup_ui.py.
+    "fu-decide": "only rendered while a scope group's decision task is waiting on a human",
 }
 
 # The NOT-SENT paint's own additions, kept out of the dict above on purpose. On a sent drawer

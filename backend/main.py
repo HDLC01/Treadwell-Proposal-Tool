@@ -1591,6 +1591,73 @@ def _pipeline_snapshot() -> Tuple[List[Dict[str, Any]], str]:
         return [], "offline"
 
 
+# WHAT THE PORTAL ON THE OTHER END CAN DO, asked before anything that only a portal with scope groups
+# handles safely (review findings 0, 4, 9, 23, 31). The tool deploys itself on a push and the portal
+# ships by hand, so for a while either can be newer. A portal without scope groups publishes each
+# scope of a project as an ordinary proposal: it emails the customer once per scope and starts one
+# follow-up cadence per scope, while the tool's Files page says nobody was emailed. So a grouped
+# publish and the combined send ask first, and an old (or silent) portal is refused before a revision
+# or a portal row exists. Ungrouped publishes never ask.
+#
+# Remembered for a minute either way, so a burst of scope publishes asks once, and a portal deployed
+# a minute ago is believed a minute later. A portal that could not be reached is not remembered.
+_CAPS_TTL_S = 60.0
+_CAPS_CACHE: Dict[str, Any] = {"caps": None, "at": 0.0}
+_PORTAL_NOT_READY = ("The customer portal has not been updated for projects with several proposals "
+                     "yet, so nothing was sent and nothing was saved as sent. Ask Hanz to update "
+                     "the portal, then send again.")
+_PORTAL_FOLLOWUPS_NOT_READY = ("The portal's follow-up update has not been applied yet. Nothing was "
+                               "sent.")
+
+
+def _portal_capabilities() -> Dict[str, Any]:
+    """The portal's GET /api/admin/capabilities, {} for a portal that has no such route (an older
+    one answers 404). RAISES HTTPException (502/503) when the portal cannot be asked at all."""
+    now = time.time()
+    if _CAPS_CACHE["caps"] is not None and now - _CAPS_CACHE["at"] < _CAPS_TTL_S:
+        return _CAPS_CACHE["caps"]
+    try:
+        got = _portal("/api/admin/capabilities", "GET")
+        caps = got if isinstance(got, dict) else {}
+    except HTTPException as exc:
+        if exc.status_code not in (404, 405):
+            raise
+        caps = {}
+    except ValueError:          # a 200 that is not JSON (a page, not the route) is not a "yes"
+        caps = {}
+    _CAPS_CACHE.update(caps=caps, at=now)
+    return caps
+
+
+def _scope_groups_refusal() -> Optional[JSONResponse]:
+    """None when the portal handles scope groups AND their per-project follow-ups (capabilities
+    `scope_groups` and `group_followups` both true), else the flat refusal a grouped publish or the
+    combined send answers: 409 portal_not_ready for a portal without them (its own sentence when
+    only the follow-up update is missing), 502 portal_unreachable for one that could not be asked
+    (nothing can be confirmed, so nothing is sent)."""
+    try:
+        caps = _portal_capabilities()
+    except HTTPException as exc:
+        log.warning("portal capabilities unknown (%s): a scope-group send is refused",
+                    exc.status_code)
+        return JSONResponse(status_code=502, content={
+            "ok": False, "code": "portal_unreachable",
+            "error": "Nothing was sent. The customer portal is not answering, so the tool cannot "
+                     "check it is ready for projects with several proposals. Try again in a minute."})
+    if caps.get("scope_groups") is True and caps.get("group_followups") is True:
+        return None
+    if caps.get("scope_groups") is True:
+        # Scope groups without the per-project follow-ups (round 3): the portal would chase each
+        # scope of the project on its own, one reminder per scope, so it is not ready either.
+        log.warning("portal has scope groups but not group follow-ups (capabilities %r): a "
+                    "scope-group send is refused", caps)
+        return JSONResponse(status_code=409, content={"ok": False, "code": "portal_not_ready",
+                                                      "error": _PORTAL_FOLLOWUPS_NOT_READY})
+    log.warning("portal has no scope groups (capabilities %r): a scope-group send is refused", caps)
+    return JSONResponse(status_code=409, content={"ok": False, "code": "portal_not_ready",
+                                                  "error": _PORTAL_NOT_READY})
+
+
 async def _portal_raw(path: str, method: str, blob: bytes, ctype: str) -> Response:
     """The same proxy as `_portal`, for calls whose body is BYTES rather than JSON.
 
@@ -1858,6 +1925,21 @@ def api_portal_publish(draft_id: str, request: Request,
             "error": "Not sent — this proposal's link to the other scopes of its project is "
                      "damaged (%s). Open the project from the board and rename the scope, then "
                      "send." % _scope_problem})
+    _gid = drafts._scope_of(row.get("data") or {})[0]
+    if _gid:
+        # A TEST PROJECT AND A REAL ONE ARE NEVER ONE PROJECT (finding 29), read off the STORED
+        # drafts: a test scope published into a real customer's group would ride their email.
+        _mixed = drafts.scope_test_mix(draft_id, row.get("data") or {}, _gid)
+        if _mixed:
+            log.warning("publish refused for draft %s: test and real scopes in one group",
+                        _log_safe(draft_id))
+            return JSONResponse(status_code=409, content={
+                "ok": False, "code": "test_mix", "error": "Not sent. " + _mixed})
+        # AND ONLY TO A PORTAL THAT KNOWS WHAT A SCOPE IS (_portal_capabilities), before anything is
+        # minted: an older portal would email this scope on its own.
+        _not_ready = _scope_groups_refusal()
+        if _not_ready is not None:
+            return _not_ready
     by = _user_email(request)
     body: Dict[str, Any] = {"draft_id": draft_id, "by": by}
     # WHO BUILT THIS, which is not always who is sending it or who will chase it.
@@ -2443,15 +2525,15 @@ def _scope_groups(summaries: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, A
 
     THE DRAFTS DECIDE WHO IS IN A GROUP, as they do for the portal's combined email: a scope taken
     out of its group keeps a stale scope_group on its portal row, and is an ordinary proposal again.
-    Archived drafts are left out, as they are off the board."""
+    Who counts is drafts.live_scope_members, the ONE rule the label checks and the portal use too:
+    not archived, and never a Test scope in a real project (or the reverse)."""
     out: Dict[str, List[Dict[str, Any]]] = {}
     for s in summaries:
         gid = s.get("scope_group_id")
-        if gid and not s.get("archived"):
+        if gid:
             out.setdefault(gid, []).append(s)
-    for members in out.values():
-        members.sort(key=lambda s: (str(s.get("created_at") or ""), str(s.get("id"))))
-    return out
+    live = {gid: drafts.live_scope_members(members) for gid, members in out.items()}
+    return {gid: members for gid, members in live.items() if members}
 
 
 def _scope_pending(groups: Dict[str, List[Dict[str, Any]]],
@@ -2466,7 +2548,12 @@ def _scope_pending(groups: Dict[str, List[Dict[str, Any]]],
     have = {r.get("proposal_id") for r in sent}
     out: set = set()
     for members in groups.values():
-        if any(s.get("has_files") or s["id"] in have for s in members):
+        # A split does not take a project off the board: a scope whose files the split cleared
+        # (`split_had_files`) still counts as on it, so a "Created but not sent" bid that is split
+        # stays in that column as its scopes, each "files not built yet", instead of vanishing until
+        # somebody re-generates one.
+        if any(s.get("has_files") or s.get("split_had_files") or s["id"] in have
+               for s in members):
             out.update(s["id"] for s in members if not s.get("has_files") and s["id"] not in have)
     return out
 
@@ -2479,15 +2566,25 @@ def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
 
     From the drafts, which decide membership (see _scope_groups). A sent row whose draft says it is in
     no group has its portal copy's stale `scope_group` cleared; a row whose draft is unknown here is
-    left exactly as the portal sent it. An ungrouped project gains no key."""
+    left exactly as the portal sent it. An ungrouped project gains no key.
+
+    Each member also says whether the customer already has it (`sent`: a real portal row, so a
+    project sent BEFORE it gained scopes is a sent member, never "publish it first"), and each row
+    gets `scope_send` (_scope_send_view), the project's one email as the portal reports it."""
     on_board = {r.get("proposal_id") for r in rows}
     by_id = {s["id"]: s for s in summaries}
+    portal_rows = {r.get("proposal_id"): r for r in rows if not r.get("not_sent")}
+    views = {gid: _scope_send_view(members, portal_rows) for gid, members in groups.items()}
     for row in rows:
         s = by_id.get(row.get("proposal_id"))
         if s is None:
             continue
         gid = s.get("scope_group_id")
         members = groups.get(gid) if gid else None
+        # The live-member rule judges THIS row too: an archived scope, or a Test scope in a real
+        # project, is in no group, never "Scope 0 of N" beside the members that count.
+        if members and not any(m["id"] == s["id"] for m in members):
+            members = None
         if not members:
             if row.get("scope_group"):
                 row["scope_group"] = None
@@ -2498,8 +2595,101 @@ def _stamp_scopes(rows: List[Dict[str, Any]], summaries: List[Dict[str, Any]],
         row["scope_label"] = s.get("scope_label")
         row["scope_count"] = len(members)
         row["scope_index"] = next((i + 1 for i, m in enumerate(members) if m["id"] == s["id"]), 0)
+        view = views.get(gid)
+        pending = set(view["pending"]) if view else set()
         row["scope_members"] = [{"id": m["id"], "label": m.get("scope_label") or "",
-                                 "on_board": m["id"] in on_board} for m in members]
+                                 "on_board": m["id"] in on_board,
+                                 "sent": m["id"] in portal_rows,
+                                 "pending": m["id"] in pending} for m in members]
+        if view is not None:
+            # A scope whose last send lost its result carries its own chip: it is neither waiting
+            # for its first email nor known to have gone out (findings 9 and 16).
+            lost = s["id"] in (view.get("unknown") or [])
+            row["scope_send"] = dict(view, mine=s["id"] in pending or lost,
+                                     chip="Email result lost" if lost else view["chip"])
+
+
+def _scope_send_view(members: List[Dict[str, Any]],
+                     portal_rows: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """THE PROJECT'S ONE EMAIL, AS THE PORTAL REPORTS IT: what the card's chip and the drawer's button
+    say. From the portal's `scope_send_state` on the members' rows ({announced, pending_scope_ids,
+    not_included, unknown_scope_ids, kinds, first, inflight_scope_ids}); `announced` in the answer
+    is the GROUP's "emailed before" (the portal's `first` is false); None when no member row carries one, which is an older portal (the card and the
+    drawer then fall back to its `scope_send_pending`, and the send itself is refused as
+    portal_not_ready).
+
+    `pending` are the live members the portal has not emailed at their current version: a scope
+    added or revised after the first email is emailable again (findings 1-3, 7, 11, 14). Which of
+    them is NEW and which REVISED is the portal's own answer, `kinds` ({proposal_id: "new" |
+    "revised"}, finding 22): the board rows carry no last_sent_at to guess it from. A portal that
+    does not report `kinds` gets a button that counts the scopes without naming them ("Email again:
+    2 scopes"), never one that calls a revision new. `label` is the button's words, None when there
+    is nothing to email.
+
+    `unknown` are the members whose last send LOST ITS RESULT (the portal's `unknown_scope_ids`,
+    findings 9 and 16): the emails may or may not have gone out. The portal never re-sends them on
+    its own and never counts them as pending, so without this the drawer said "the customer has
+    every scope" and nobody could send them again. `unknown_text` says so, and the drawer offers a
+    separate, explicit "send them again" (the send's `resend_unknown`).
+
+    `inflight` are the members whose send is IN FLIGHT (the portal's `inflight_scope_ids`, round
+    3): claimed by a send whose result has not been recorded yet. Neither pending nor lost, so the
+    drawer says an email for them is on its way instead of "the customer has every scope"."""
+    states = [portal_rows[m["id"]].get("scope_send_state") for m in members
+              if m["id"] in portal_rows]
+    states = [st for st in states if isinstance(st, dict)]
+    if not states:
+        return None
+    ids = [m["id"] for m in members]
+    want: set = set()
+    left_out: set = set()
+    lost: set = set()
+    flying: set = set()
+    kinds: Dict[str, str] = {}
+    told_kinds = False
+    for st in states:
+        want.update(x for x in (st.get("pending_scope_ids") or []) if isinstance(x, str))
+        left_out.update(x for x in (st.get("not_included") or []) if isinstance(x, str))
+        lost.update(x for x in (st.get("unknown_scope_ids") or []) if isinstance(x, str))
+        flying.update(x for x in (st.get("inflight_scope_ids") or []) if isinstance(x, str))
+        if isinstance(st.get("kinds"), dict):
+            told_kinds = True
+            kinds.update({str(k): str(v) for k, v in st["kinds"].items()})
+    # EMAILED BEFORE is a GROUP fact (round 3). The portal's `announced` is per row: whether THAT
+    # scope's current revision reached the customer, so every pending row says false, and a project
+    # whose every scope was revised looked never emailed ("Send every scope in one email"). The
+    # portal's `first` is the planner's own answer: true only while nothing of the project has ever
+    # been announced. An older portal without it: any announced row, or any scope it calls revised
+    # (a revision is only ever of something the customer already had).
+    firsts = [st["first"] for st in states if isinstance(st.get("first"), bool)]
+    if firsts:
+        announced = any(f is False for f in firsts)
+    else:
+        announced = (any(bool(st.get("announced")) for st in states)
+                     or any(v == "revised" for v in kinds.values()))
+    pending = [i for i in ids if i in want]
+    unknown = [i for i in ids if i in lost and i not in want]
+    inflight = [i for i in ids if i in flying and i not in want and i not in lost]
+    revised = [i for i in pending if kinds.get(i) == "revised"]
+    new = [i for i in pending if i not in revised]
+    if not pending:
+        label = None
+    elif not announced:
+        label = "Send every scope in one email"
+    elif not told_kinds:
+        label = "Email again: %d scope%s" % (len(pending), "" if len(pending) == 1 else "s")
+    else:
+        parts = (["%d new" % len(new)] if new else []) + (["%d revised" % len(revised)] if revised else [])
+        label = "Email again: " + ", ".join(parts)
+    return {"announced": announced, "pending": pending,
+            "new": len(new) if told_kinds else None,
+            "revised": len(revised) if told_kinds else None,
+            "not_included": [i for i in ids if i in left_out], "label": label,
+            "chip": (None if not pending else ("Email not sent" if not announced else label)),
+            "unknown": unknown,
+            "inflight": inflight,
+            "unknown_text": ("The result of the last send was lost. Check the thread, then send "
+                             "again." if unknown else None)}
 
 
 def _not_sent_rows(summaries: List[Dict[str, Any]],
@@ -3337,6 +3527,43 @@ def api_portal_followup_snooze(task_id: str, request: Request,
     until = str((payload.until if payload else "") or "").strip()[:64]
     return _portal_pass(f"/api/admin/followup-task/{_safe_id(task_id)}/snooze", "POST",
                         {"until": until, "by": _user_email(request)})
+
+
+class FollowupScopeDecisionIn(BaseModel):
+    """The answer to a "Decide the other scopes" task (a scope group's sibling was approved)."""
+    action: str = ""
+    scope_ids: List[str] = []
+    reason: Optional[str] = None
+    note: Optional[str] = None
+
+
+_SCOPE_DECISIONS = ("keep", "close", "leave")
+
+
+@app.post("/api/portal/followup-task/{task_id}/scope-decision")
+def api_portal_followup_scope_decision(task_id: str, request: Request,
+                                       payload: Optional[FollowupScopeDecisionIn] = None
+                                       ) -> JSONResponse:
+    """Close the ticked scopes as lost, leave them as they are, or keep chasing them.
+
+    `scope_ids` is ALWAYS forwarded as a list, empty when nothing was ticked: the portal reads a
+    MISSING list as "every scope the task names", and nothing may ever be closed that nobody ticked.
+    Reason and note are judged by the portal (its 400 invalid_reason / note_required and its 409
+    scope_not_open come back whole, so the drawer can say which). `by` is the signed-in user."""
+    tid = _safe_id(task_id)
+    p = payload or FollowupScopeDecisionIn()
+    action = str(p.action or "").strip().lower()
+    if action not in _SCOPE_DECISIONS:
+        raise HTTPException(400, "invalid_action")
+    ids = [_safe_id(str(x or "").strip()) for x in (p.scope_ids or [])][:50]
+    body: Dict[str, Any] = {"action": action, "scope_ids": ids, "by": _user_email(request)}
+    reason = str(p.reason or "").strip().lower()[:64]
+    note = str(p.note or "").strip()[:_NOTE_MAX]
+    if reason:
+        body["reason"] = reason
+    if note:
+        body["note"] = note
+    return _portal_pass(f"/api/admin/followup-task/{tid}/scope-decision", "POST", body)
 
 
 @app.post("/api/portal/proposal/{proposal_id}/followup-plan")
@@ -7971,6 +8198,12 @@ def api_draft_split(draft_id: str, payload: SplitIn, request: Request) -> Any:
 class ScopeSendIn(BaseModel):
     message: str = ""
     resend: bool = False
+    # Mail ONLY the contacts the last send failed to reach (the portal reads who from its own mark),
+    # never everybody again: the drawer's "try the failed contacts again".
+    retry_failed: bool = False
+    # A PERSON'S "send them again" for scopes whose last send lost its result (the portal's
+    # `unknown`, findings 9 and 16). Never assumed: the portal mails them only when asked.
+    resend_unknown: bool = False
 
 
 @app.post("/api/portal/scope-group/{group_id}/send")
@@ -7982,10 +8215,21 @@ async def api_scope_group_send(group_id: str, request: Request,
 
     The portal's answer is handed back WHOLE, status and body, through _portal_raw: the drawer needs
     the `missing` list of a 409 and the `already_sent` of a repeat, and `_portal` keeps only an
-    error string."""
+    error string.
+
+    Asked of a portal that handles scope groups only (_scope_groups_refusal): 409 portal_not_ready
+    or 502 portal_unreachable otherwise, and nothing is forwarded. `retry_failed` mails only the
+    contacts the last send missed; `resend_unknown` is the drawer's explicit "send them again" for
+    scopes whose last send lost its result."""
     if not drafts.SCOPE_ID_RE.match(group_id or ""):
         return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
                                                       "error": "That is not a scope group."})
+    # An older portal has no such route and would answer a bare "Not Found" (finding 31), having
+    # already emailed each scope on its own: said in words, and nothing is forwarded.
+    from starlette.concurrency import run_in_threadpool
+    _not_ready = await run_in_threadpool(_scope_groups_refusal)
+    if _not_ready is not None:
+        return _not_ready
     body: Dict[str, Any] = {"by": _user_email(request) or ""}
     if payload is not None:
         msg = (payload.message or "").strip()
@@ -7993,8 +8237,58 @@ async def api_scope_group_send(group_id: str, request: Request,
             body["message"] = msg[:2000]
         if payload.resend:
             body["resend"] = True
+        if payload.retry_failed:
+            body["retry_failed"] = True
+        if payload.resend_unknown:
+            body["resend_unknown"] = True
     return await _portal_raw("/api/admin/scope-group/%s/send" % _safe_id(group_id), "POST",
                              json.dumps(body).encode("utf-8"), "application/json")
+
+
+@app.get("/api/scope-group/{group_id}/workbook")
+def api_scope_group_workbook(group_id: str) -> Any:
+    """ONE WORKBOOK FOR A PROJECT OF SEVERAL SCOPES, one tab per scope (estimate_writer's
+    fill_group_estimate; RJ's picture). Staff only, like every /api route (the sign-in gate), and a
+    download only: nothing is filed to Dropbox and no draft is written.
+
+    The scopes are the project's LIVE members (drafts._group_rows: not deleted, not archived, never
+    a Test scope beside real ones), each read from its stored draft, in the group's order.
+    200 {ok, xlsx_download_url, filename, tabs: [{id, label, tab, sheet}]} — the link is the usual
+    one-hour /api/file token. Refusals are flat {ok: false, code, error}: 400 invalid_scope_group,
+    404 not_found (no live scope), 409 with the builder's code (a scope it cannot put on a tab of
+    its own, too many scopes), 500 build_failed."""
+    if not drafts.SCOPE_ID_RE.match(group_id or ""):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_scope_group",
+                                                      "error": "That is not a scope group."})
+    members: List[Dict[str, Any]] = []
+    for m in drafts._group_rows(group_id):
+        row = drafts.load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        sg = data.get("scope_group")
+        if not row or not isinstance(sg, dict) or sg.get("id") != group_id:
+            continue                       # deleted or moved out between the two reads
+        members.append({"id": m["id"], "data": data,
+                        "label": sg.get("label") or m.get("label") or ""})
+    if not members:
+        return JSONResponse(status_code=404, content={
+            "ok": False, "code": "not_found", "error": "That project has no scopes any more."})
+    try:
+        plan_tabs = estimate_writer.plan_group_workbook(members)["tabs"]
+        content = estimate_writer.fill_group_estimate(members)
+    except estimate_writer.GroupWorkbookError as exc:
+        return JSONResponse(status_code=409, content={"ok": False, "code": exc.code,
+                                                      "error": exc.message})
+    except Exception:  # noqa: BLE001 — logged; the page gets a sentence, never a stack
+        log.exception("project workbook failed for scope group %s", _log_safe(group_id))
+        return JSONResponse(status_code=500, content={
+            "ok": False, "code": "build_failed",
+            "error": "The project workbook could not be built. Try again."})
+    name = str(members[0]["data"].get("project_name") or "project").replace(" ", "_")[:80]
+    filename = f"{name}_scopes_estimate.xlsx"
+    token = _cache_file(content, filename,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return {"ok": True, "xlsx_download_url": f"/api/file/{token}", "filename": filename,
+            "tabs": plan_tabs}
 
 
 @app.delete("/api/draft/{draft_id}")
@@ -8092,6 +8386,10 @@ def api_test_flag_draft(draft_id: str, payload: TestFlagIn, request: Request) ->
     try:
         existed = drafts.set_test_flag(draft_id, payload.is_test, _user_email(request))
         return {"ok": True, "existed": existed, "is_test": payload.is_test}
+    except drafts.ScopeError as exc:
+        # A scope of a project would be filed apart from its others (test and real in one group):
+        # refused in words, which the Projects page shows as it is (projects.js toggleTest).
+        return _scope_refusal(exc)
     except Exception as exc:  # noqa: BLE001
         log.warning("set_test_flag failed: %s", exc)
         return {"ok": False, "error": "Couldn't file that project."}
