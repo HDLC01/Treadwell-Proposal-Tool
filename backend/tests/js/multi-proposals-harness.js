@@ -593,7 +593,14 @@ async function proposalPage(o) {
     setLocalState: (p, opt) => { log.push(["setLocalState", clone(p), clone(opt)]); },
     confirmDanger: async (d) => { log.push(["confirm", d.title, d.name]); return o.confirm !== false; },
   };
-  const win = { location: { assign: (h) => log.push(["assign", h]), reload: () => log.push(["reload"]) }, TWAuth: null };
+  // `o.ahead`: TW reads other tabs ahead (shared.js prefetchDraft), logged with whether the strip was drawn at the call;
+  // "held" keeps each read in flight until releaseAhead(). The page's idle callbacks wait in `idle` until a test runs them.
+  const idle = [];
+  let releaseAhead = () => {};
+  const aheadP = o.ahead === "held" ? new Promise((r) => { releaseAhead = () => r(true); }) : Promise.resolve(true);
+  if (o.ahead) TW.prefetchDraft = (pid) => { log.push(["prefetch", pid, !els["proposal-tabs"].hidden]); return aheadP; };
+  const win = { location: { assign: (h) => log.push(["assign", h]), reload: () => log.push(["reload"]) }, TWAuth: null,
+                requestIdleCallback: (f) => { idle.push(f); } };
   const st = clone(o.st || { base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1", "Polish"],
                              priced_tabs: [{ id: "Epoxy" }, { id: "Copy1" }, { id: "Polish" }] });
   const mod = new Function("state", "document", "TW", "TWPrice", "window", "fetch", "form",
@@ -625,8 +632,9 @@ async function proposalPage(o) {
     b.fire(type || "click");
     await settle();
   };
-  return { log, els, st, api, mod, look, press, strip, win };
+  return { log, els, st, api, mod, look, press, strip, win, idle, releaseAhead: () => releaseAhead() };
 }
+const reads = (p) => p.log.filter((x) => x[0] === "prefetch").map((x) => x.slice(1));
 const fetches = (p) => p.log.filter((x) => x[0] === "fetch").map((x) => x.slice(1));
 const steps = (p) => p.log.map((x) => (x[0] === "fetch" ? x[1] + " " + x[2] : x[0]));
 
@@ -668,6 +676,32 @@ async function step4() {
     const self = steps(p);
     await p.press(".pt-name", "C3");
     s.navigate = { self, other: steps(p).concat(p.log.filter((x) => x[0] === "assign").map((x) => x[1])) };
+  }
+  // 17b. THE OTHER TABS ARE READ AHEAD (Hanz, 2026-10-27, "pre loading"): nothing before the strip is drawn or before the
+  //      page is idle; then each other tab once, never this one. A pointer or the keyboard on another tab reads it; on this
+  //      one, nothing. A draft on its own reads nothing. A click waits for its tab's read, then leaves.
+  {
+    const p = await proposalPage({ id: "P1", ahead: true });
+    const beforeIdle = reads(p);
+    const queued = p.idle.length;
+    p.idle.splice(0).forEach((f) => f());
+    const afterIdle = reads(p);
+    p.log.length = 0;
+    const tabBtn = (pid) => p.strip.querySelectorAll(".pt-name").filter((b) => b.dataset.ptOpen === pid)[0];
+    tabBtn("C2").fire("pointerenter");
+    tabBtn("P1").fire("pointerenter");
+    tabBtn("P1").fire("focus");
+    tabBtn("C3").fire("focus");
+    s.ahead = { beforeIdle, queued, afterIdle, hover: reads(p) };
+    const q = await proposalPage({ id: "S1", ahead: true, view: { parent_id: "S1", members: [{ id: "S1", index: 1, is_parent: true }] } });
+    s.ahead.alone = { queued: q.idle.length, reads: reads(q) };
+    const r = await proposalPage({ id: "C2", ahead: "held", st: { proposal_of: "P1", base_tab_id: "Copy1", priced_tabs: [{ id: "Copy1" }] } });
+    r.log.length = 0;
+    await r.press(".pt-name", "C3");
+    const waiting = steps(r);
+    r.releaseAhead();
+    await settle();
+    s.ahead.click = { waiting, reads: reads(r), after: steps(r).concat(r.log.filter((x) => x[0] === "assign").map((x) => x[1])) };
   }
   // 18. CREATE MULTIPLE PROPOSALS: saved, version read, asked of that version with the ticked base bids in order, the
   //     server's copy adopted, the page reloaded.

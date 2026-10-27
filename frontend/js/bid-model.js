@@ -675,6 +675,51 @@
     return 0;
   }
 
+  /** THE SHEET'S MAN HOURS AND BUDGET BLOCK (Hanz, 2026-10-27: "In the review tab we need to show the Man hours, the budget
+   *  ... Take it from the sheet"). Kyle's Epoxy tab (Polish's cell in brackets; the two are the same formulas a row apart):
+   *    H64 (H56) Total Man Hours   =((A47*B47)+(A48*B48)+(A49*B49)+(A50*B50))*8 + (A52*B52)   the crew's guys x days x 8, and the drive's guys x hours
+   *    H66 (H58) crew size         =A47                                                       the first crew line's guys
+   *    H65 (H57) Total Days        =H64/8/H66
+   *    F72 (F66) Estimated Costs   =SUM(D70,D82,D85)  sub-total + taxes + fees and bond;  I72 (I66) =F72/C87, a square foot
+   *    F73 (F67) Man Hour Budget (Raken)  the same formula as H64
+   *    F87 (F81) Mark Up + Conting.  =SUM(D73,D74,D77)  GP + discount + contingency;  F88 (F82) =F87/D88, of the lump sum
+   *    F74 (F68) GP per Day        =F87/H65
+   *    G87 (G81) GP / MH           =F87/F73;  G88 (G82) =C47, the first crew line's rate ("LaborRate from Above")
+   *    H87 (H81) MarkUp + Soft Costs  =SUM(D73:D77)  GP + discount + super and PTO + soft costs + contingency;  H88 (H82) =H87/D88
+   *  Nothing here is new arithmetic: the hours are laborTotal's, the same rows at $1 an hour (an hours row is guys x hours, a
+   *  day row guys x days x its hours a day, a line switched off is nothing, the fourth hand of Remove existing joint filler is
+   *  Polish A42's =IF(F29="NO",3,4)), and the dollars are the chain's own lines (`bid`, priceSection's or polishBid's answer).
+   *  The sheet's "8 hour days" switch is the crew line's own hours a day. A figure that would divide by nothing is null, as is
+   *  the whole block for a bid that is not priceable. `rows` are the labor rows of the section on show. Pure. */
+  function manHourBudget(rows, conditions, pw, bid) {
+    if (!isObject(bid) || bid.priceable === false) return null;
+    rows = rows instanceof Array ? rows : [];
+    var atOne = rows.map(function (r) { return Object.assign({}, r || {}, { rate: 1 }); });
+    var hours = laborTotal(atOne, conditions, 0);
+    var crewRow = null;
+    for (var i = 0; i < rows.length && !crewRow; i++) {
+      var r = rows[i] || {};
+      if (!isTravelRow(r) && rowOn(r) && num(r.guys) > 0) crewRow = r;
+    }
+    var crew = crewRow ? num(crewRow.guys) : null;
+    var perDay = crewRow ? dayHours(crewRow) : HOURS_PER_DAY;
+    var days = crew && hours > 0 ? hours / perDay / crew : null;
+    var total = num(bid.total), sf = num(bid.sf);
+    var est = num(bid.sub_total) + num(bid.taxes) + num(bid.fees_and_bond);
+    var markup = num(bid.gp) + num(bid.hard_bid) + num(bid.contingency);
+    var soft = markup + num(bid.super_pto) + num(bid.soft_costs);
+    return {
+      man_hours: hours, crew: crew, hours_per_day: perDay, total_days: days,
+      est_costs: est, est_costs_per_sf: sf > 0 ? est / sf : null,
+      budget_hours: hours,
+      gp_per_day: days ? markup / days : null,
+      markup_cont: markup, markup_cont_pct: total ? markup / total : null,
+      gp_per_mh: hours > 0 ? markup / hours : null,
+      labor_rate: crewRow ? laborRateOf(crewRow, pw) : null,
+      markup_soft: soft, markup_soft_pct: total ? soft / total : null
+    };
+  }
+
   /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
    *  2026-10-05: "separate line for Travel Lodging and Per Diem", priced INSIDE the markups like
    *  Kyle's sheet D61 -- they join the sub-total (D64) that GP, super/PTO and soft costs are taken
@@ -5262,7 +5307,7 @@
       // `split` is the draft's own mark (work-types.js isSplit), so the one save both pages share is also
       // the one that keeps an option's tax answer out of the base's way on a split draft.
       cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),
-    }, rest);
+    }, rest, textureFill(model, state));
   }
 
   // ══ SECTIONS (Phase 10): a bid priced on several workbook tabs ═══════════════════════════════════════════
@@ -6808,6 +6853,60 @@
     return "";
   }
 
+  // ── TEXTURE, PER EPOXY SHEET (Hanz, 2026-10-27: "please put a texture setting in this") ─────────────────────────────
+  // An Epoxy sheet's Material step has a Texture select with the Proposal step's own choices. It is kept on the SECTION
+  // (`texture`, a string; no key means none), so two Epoxy sheets can have two textures. The Proposal step's `texture`
+  // follows the PRICING BASE's Epoxy sheet (textureFill) until somebody picks one there.
+  /** The Proposal step's texture choices (proposal-review.js buildTextureControl), in its order. */
+  var TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
+
+  /** The texture a section holds, trimmed, or "" for none (a missing key, a blank, a value that is not text). */
+  function sectionTexture(section) {
+    return isObject(section) && typeof section.texture === "string" ? section.texture.trim() : "";
+  }
+
+  /** The options of a Texture select holding `saved`: "—" (none), then the choices, with an off-list value kept as its own option
+   *  first (buildTextureControl's rule), as [{ value, label }]. The caller escapes them. */
+  function textureChoices(saved) {
+    var cur = typeof saved === "string" ? saved.trim() : "";
+    var opts = TEXTURE_OPTIONS.slice();
+    if (cur && opts.indexOf(cur) < 0) opts.unshift(cur);
+    return [{ value: "", label: "—" }].concat(opts.map(function (o) { return { value: o, label: o }; }));
+  }
+
+  /** The texture of the bid's pricing base: the first BASE section that is an Epoxy sheet (the Epoxy sheet of a Combo), or "" when
+   *  the base has none (a Polish or Gyp base, an Epoxy sheet that is only an option, a model whose sections cannot be read). */
+  function baseTextureOf(model) {
+    var list;
+    // null = "cannot tell" (unreadable sections, or a model with no base in it, such as the backup save's root-only copy):
+    // textureFill then leaves the Proposal step's texture alone instead of clearing it. "" only when a base was found
+    // and it is not an Epoxy sheet.
+    try { list = sectionsOf(model); } catch (err) { return null; }
+    var sawBase = false;
+    for (var i = 0; i < list.length; i++) {
+      if (!isBaseEntry(list[i])) continue;
+      sawBase = true;
+      if (list[i].role === "epoxy") return sectionTexture(list[i].section);
+    }
+    return sawBase ? "" : null;
+  }
+
+  /** What a save writes to the Proposal step's texture: { texture, texture_from_estimate } set to the base's texture while the
+   *  draft's `texture` is empty or still the one this last filled (`texture_from_estimate`), and {} otherwise. A texture picked on
+   *  the Proposal step (or drafted by the autofill) is never overwritten. {} also when nothing would change, so a bid with no
+   *  texture anywhere saves exactly the keys it always did. */
+  function textureFill(model, state) {
+    var st = isObject(state) ? state : {};
+    var held = typeof st.texture === "string" ? st.texture.trim() : (st.texture == null ? "" : null);
+    var from = typeof st.texture_from_estimate === "string" ? st.texture_from_estimate : null;
+    if (held === null || !(held === "" || (from !== null && held === from))) return {};
+    var want = baseTextureOf(model);
+    if (want === null) return {};
+    if (from === null && want === "") return {};
+    if (held === want && from === want) return {};
+    return { texture: want, texture_from_estimate: want };
+  }
+
   function composePricingSnapshot(model, ctx) {
     if (!isObject(model)) throw new Error("composePricingSnapshot needs the model it is pricing");
     if (!isObject(ctx)) throw new Error("composePricingSnapshot needs ctx, the bids the page priced");
@@ -7487,6 +7586,7 @@
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    manHourBudget: manHourBudget,
     // The prevailing wage calculator (Labor step): the constants, the card's two figures, and the rate in force.
     PREVAILING: PREVAILING, PREVAILING_TRADES: PREVAILING_TRADES, normalizePrevailing: normalizePrevailing,
     prevailingCrewTrade: prevailingCrewTrade, newPrevailingTradeKey: newPrevailingTradeKey,
@@ -7576,6 +7676,9 @@
     splitBlockers: splitBlockers, splitTabs: splitTabs, splitOut: splitOut,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, coveHeightOf: coveHeightOf, sectionSwitcherHtml: sectionSwitcherHtml,
+    // An Epoxy sheet's texture, and what a save hands the Proposal step from the base's.
+    TEXTURE_OPTIONS: TEXTURE_OPTIONS, sectionTexture: sectionTexture, textureChoices: textureChoices,
+    baseTextureOf: baseTextureOf, textureFill: textureFill,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
     sheetsPanelHtml: sheetsPanelHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
     // Several base bids on one estimate, each its own proposal (Create Multiple Proposals): see the block above sheetsFacts.
