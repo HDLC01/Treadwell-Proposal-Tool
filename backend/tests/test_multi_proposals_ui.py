@@ -264,7 +264,8 @@ def test_the_tabs_say_the_sheet_and_a_renamed_one_keeps_its_name(out):
     assert s["labels"] == ["Breakroom", "Lab <2>", "Kitchen"]
     assert s["note"].startswith("Lab <2> still has the figures from before.")
     assert s["boxValue"] == "Lab <2>", "the rename box opens on what the tab says"
-    assert s["unchangedFetches"] == 0, "leaving the name as the tab shows it sends nothing"
+    assert s["acceptFetches"] == [["POST", "/api/draft/C2/scope", {"label": "Lab <2>", "rename": True}]],         "accepting the shown sheet name on an old \"Base Bid 2\" saves it, so the board, portal and Dropbox agree"
+    assert s["unchangedFetches"] == 0, "leaving a stored name unchanged sends nothing"
 
 
 def test_the_x_asks_then_sends_a_child_to_the_trash(out):
@@ -397,9 +398,13 @@ BREAKS = {
     "the rename box opens on the stored label": (
         "js/proposal-review.js", 'aria-label="Name of this proposal" value="${escH(nameOf(m))}">', 'aria-label="Name of this proposal" value="${escH(m.label || "")}">',
         lambda r: r["page"]["sheetNames"]["boxValue"] != "Lab <2>"),
-    "an unchanged sheet name is sent as a rename": (
-        "js/proposal-review.js", "if (!label || label === m.label || label === nameOf(m)) { paintStrip(); return; }",
-        "if (!label || label === m.label) { paintStrip(); return; }",
+    "accepting the shown sheet name on an old default is not saved": (
+        "js/proposal-review.js", "if (!label || label === m.label) { paintStrip(); return; }",
+        "if (!label || label === m.label || label === nameOf(m)) { paintStrip(); return; }",
+        lambda r: r["page"]["sheetNames"]["acceptFetches"] == []),
+    "an unchanged stored name is sent as a rename": (
+        "js/proposal-review.js", "if (!label || label === m.label) { paintStrip(); return; }",
+        "if (!label) { paintStrip(); return; }",
         lambda r: r["page"]["sheetNames"]["unchangedFetches"] != 0),
     "a stale proposal is not said": (
         "js/proposal-review.js", "      const stale = members().filter((m) => m.stale);", "      const stale = [];",

@@ -9951,7 +9951,9 @@
 
     async function rename(m, raw) {
       const label = String(raw || "").replace(/\s+/g, " ").trim();
-      if (!label || label === m.label || label === nameOf(m)) { paintStrip(); return; }
+      // Only the STORED label counts as unchanged: an old "Base Bid N" shows its sheet's name, and accepting that
+      // name must save it, or the board, the portal chip and the Dropbox file names keep saying "Base Bid N".
+      if (!label || label === m.label) { paintStrip(); return; }
       try {
         const j = await send("POST", urlOf(m.id, "/scope"), { label, rename: true });
         m.label = j.label || label;
