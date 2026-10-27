@@ -92,6 +92,9 @@
   // with the same assembly priced on the library page.
   var ASMS = [];
   var ITEMS = [];
+  // The Admin page's headings per work type (GET /api/library/items' `item_categories`): the Material
+  // step draws its rows under them. Null when the store did not come, and the rows are drawn ungrouped.
+  var CATS = null;
 
   var at = 0;
   // The section on show (a workbook tab id). The root, Polish, unless the bid has more than one section and
@@ -2509,6 +2512,92 @@
       rowCardInner(r, i) + '</div>';
   }
 
+  /** THE TAKEOFF ROWS UNDER THE ADMIN PAGE'S HEADINGS (Hanz, 2026-10-27: "we also need to separate these
+   *  categories in the Estimates"), Kyle's "MATERIAL - Patch", "MATERIAL - Epoxy Liquids" and the rest, in
+   *  the Admin order, each with its subtotal, and "Other" last for a row with no heading. A material's
+   *  heading is its own for this section's work type; an assembly's is its Scope when that names one, or
+   *  else the one its materials agree on (L.assemblyCategory).
+   *
+   *  THE CONDITION CARDS (`conds`: Joint Filler, Dye, Remove Existing, on the root) ARE GROUPED WITH THE
+   *  ROWS, each under the heading of the reserved material that prices it (condCategory), and an on card's
+   *  cost counts in that heading's subtotal. Drawn after the groups instead, they sat under the last heading
+   *  with no heading of their own and outside its subtotal, and Polish's Dye and Joint Filler headings could
+   *  never appear at all. A card's key is "c:" + its condition key; a row's is its index.
+   *
+   *  DISPLAY ONLY. M.takeoff keeps its order and every card keeps its real index, so nothing that prices,
+   *  saves or addresses a row by `data-row-card` moves. A work type with no headings, or one where nothing
+   *  is filed under any, draws the rows and then the condition cards as one list, exactly as before. A row
+   *  whose pick changes stays where it is drawn until the panel is next built (the card is repainted in
+   *  place, never moved, so the caret is never taken out of it). */
+  function takeoffRowsHtml(conds) {
+    conds = conds || [];
+    var e = openEntry();
+    var wt = e ? e.layout : "polish";
+    var condHtml = function (c) { return c.cost ? condMaterialCard(c) : condSwitchCard(c); };
+    var keys = M.takeoff.map(function (r, i) { return i; })
+      .concat(conds.map(function (c) { return "c:" + c.key; }));
+    var groups = L.groupByCategory(keys, CATS, wt, function (k) {
+      return typeof k === "number" ? rowCategory(M.takeoff[k], wt) : condCategory(k.slice(2), wt);
+    });
+    if (!groups.length) return M.takeoff.map(takeoffRowCard).join("") + conds.map(condHtml).join("");
+    var byKey = {};
+    conds.forEach(function (c) { byKey["c:" + c.key] = c; });
+    return groups.map(function (g) {
+      return '<div class="tk-cat" data-cat-group="' + esc(g.id || "other") + '">' +
+        '<h3 class="tk-cat-h">' + esc(g.name) + '</h3>' +
+        '<span class="tk-cat-sub">Subtotal <b data-cat-sub="' + esc(g.keys.join(",")) + '">' +
+        esc(moneyAuto(categorySubtotal(g.keys))) + '</b></span></div>' +
+        g.keys.map(function (k) {
+          return typeof k === "number" ? takeoffRowCard(M.takeoff[k], k) : condHtml(byKey[k]);
+        }).join("");
+    }).join("");
+  }
+
+  /** The heading a takeoff row sits under in work type `wt`, {id, name}, or null (Other). */
+  function rowCategory(r, wt) {
+    var k = rowKind(r);
+    if (k === "item") return L.itemCategory(itemById(r.item_id), CATS, wt);
+    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt, ITEMS);
+    return null;
+  }
+
+  /** The seeded heading (backend/item_categories.py) a condition card sits under while its reserved
+   *  material is filed under none: Kyle's sheet has a Joint Filler and a Dye heading for exactly these. */
+  var COND_HEADING = { joint_filler: "polish-joint-filler", dye: "polish-dye" };
+
+  /** The heading condition card `key` sits under in `wt`: its reserved material's own (Items tab), else
+   *  the seeded one for it while that heading is still in the Admin list, else null (Other). Remove
+   *  Existing goes wherever Joint Filler, the card it `needs`, goes. */
+  function condCategory(key, wt) {
+    var c = CONDITION_CARDS.filter(function (x) { return x.key === key; })[0];
+    if (c && c.needs) c = CONDITION_CARDS.filter(function (x) { return x.key === c.needs; })[0] || c;
+    if (!c) return null;
+    var own = L.itemCategory(L.findItem(ITEMS, c.item_id), CATS, wt);
+    if (own) return own;
+    var seeded = COND_HEADING[c.key];
+    return L.categoriesFor(CATS, wt).filter(function (h) { return h.id === seeded; })[0] || null;
+  }
+
+  /** What condition card `key` adds to its heading: its cost while it is in the bid, the figure its own
+   *  Total cost box shows (condFigures), and 0 for a card that buys nothing. */
+  function condSubtotal(key) {
+    var c = CONDITION_CARDS.filter(function (x) { return x.key === key; })[0];
+    if (!c || !c.cost || !(M.conditions || {})[key]) return 0;
+    var cost = B.num(c.cost(B.takeoffSf(M.takeoff)));
+    return cost > 0 ? cost : 0;
+  }
+
+  /** What the rows at these keys come to: the sum of the Total cost each card shows. A key is a row's
+   *  index, or "c:" + a condition card's key. */
+  function categorySubtotal(indexes) {
+    return indexes.reduce(function (sum, i) {
+      if (typeof i === "string" && i.indexOf("c:") === 0) return sum + condSubtotal(i.slice(2));
+      if (!M.takeoff[i]) return sum;
+      var rc = rowCost(M.takeoff[i]);
+      return sum + (rc.empty || !rc.price ? 0 : B.num(rc.price.total));
+    }, 0);
+  }
+
   function rowCardClass(r) {
     return "tk" + (rowKind(r) === "item" ? " mat" : "") + (B.rowOn(r) ? "" : " inert");
   }
@@ -2760,7 +2849,6 @@
     var html = textureCard() + (gypSec ? gypCard(gypSec) : "");
     html += '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
       ' Add assembly or material</button>';
-    html += M.takeoff.map(takeoffRowCard).join("");
 
     // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
     // They are questions about the WORK, and the work is described here. On intake they sat among
@@ -2788,12 +2876,13 @@
     // REMOVE EXISTING FOLLOWS JOINT FILLER: its `needs` card hidden means there is no switch on this
     // page that could ever un-gray it, so it is not drawn either -- unless it is itself switched on.
     // These three are Polish's questions (dye, joint filler, remove existing), so another section has none.
-    html += (activeTab === B.ROOT_TAB ? CONDITION_CARDS : []).filter(function (c) {
+    //
+    // DRAWN WITH THE ROWS, under the heading their reserved material is filed under (takeoffRowsHtml).
+    var conds = (activeTab === B.ROOT_TAB ? CONDITION_CARDS : []).filter(function (c) {
       if (!B.conditionShown(M, c.key)) return false;
       return !c.needs || B.conditionShown(M, c.needs) || !!(M.conditions || {})[c.key];
-    }).map(function (c) {
-      return c.cost ? condMaterialCard(c) : condSwitchCard(c);
-    }).join("");
+    });
+    html += takeoffRowsHtml(conds);
     // THE RENOVATION SWITCH, on the sheets whose patch line it prices: a Polish sheet (the root or a copy) and a Seal option.
     var floorRole = activeTab === B.ROOT_TAB ? "polish" : ((openEntry() || {}).role || "");
     if (floorRole === "polish" || floorRole === "seal") html += renoCard();
@@ -4191,6 +4280,12 @@
       var rc = rowCost(M.takeoff[parseInt(el.getAttribute("data-cost-for"), 10)]);
       el.textContent = rc.text;
       el.className = "costbox" + (rc.empty ? " empty" : "");
+    });
+    // Each heading's subtotal, over the rows drawn under it.
+    document.querySelectorAll("[data-cat-sub]").forEach(function (el) {
+      var keys = String(el.getAttribute("data-cat-sub") || "").split(",").filter(function (s) { return s !== ""; })
+        .map(function (s) { return s.indexOf("c:") === 0 ? s : parseInt(s, 10); });
+      el.textContent = moneyAuto(categorySubtotal(keys));
     });
     document.querySelectorAll("[data-perunit-for]").forEach(function (el) {
       var i = parseInt(el.getAttribute("data-perunit-for"), 10);
@@ -5638,6 +5733,7 @@
       var ij = await res[1].json();
       ASMS = (aj && aj.assemblies) || [];
       ITEMS = (ij && ij.items) || [];
+      CATS = (ij && ij.item_categories) || null;
     } catch (err) {
       $("loading").textContent = "Couldn't load the item library, so there is nothing to price " +
         "against. " + (err.message || "") + " Reload to try again.";

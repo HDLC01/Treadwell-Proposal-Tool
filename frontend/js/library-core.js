@@ -775,7 +775,82 @@
     };
   }
 
+  // ── item categories (Hanz, 2026-10-27) ────────────────────────────────────────────────────────
+  // The Admin page keeps an ordered list of headings per work type (backend/item_categories.py), each
+  // {id, name}. A material stores the ID of its heading per work type in `material_categories`, so a
+  // rename reaches every material with no write, and a removed heading leaves its materials
+  // uncategorised. These three are the whole reading of that, shared by Items and Assemblies (the
+  // Category column) and the v2 estimate (the Material step's groups), so the two cannot disagree.
+
+  /** The ordered headings of one work type, out of GET /api/item-categories (or the `item_categories`
+   *  that rides on GET /api/library/items). [] for an absent store or a work type with none. */
+  function categoriesFor(store, wt) {
+    var map = store && typeof store === "object" ? store.work_types : null;
+    var list = map && typeof map === "object" ? map[String(wt || "").toLowerCase()] : null;
+    return (list instanceof Array ? list : []).filter(function (c) {
+      return c && typeof c.id === "string" && c.id && typeof c.name === "string" && c.name;
+    });
+  }
+
+  /** The heading one material sits under in one work type, {id, name}, or null: never filed there,
+   *  or filed under a heading that has since been removed. */
+  function itemCategory(item, store, wt) {
+    var map = item && item.material_categories;
+    var id = map && typeof map === "object" ? map[String(wt || "").toLowerCase()] : "";
+    if (!id) return null;
+    var list = categoriesFor(store, wt);
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+
+  /** An assembly has no category of its own in the Admin list. Its free-text `category` (the rail's
+   *  Scope) names one when it matches a heading of the work type (case and spacing ignored). Failing
+   *  that, which is every seeded assembly (their Scope is the division: "Epoxy", "Polished Concrete"),
+   *  it sits under the heading ITS MATERIALS agree on: every line whose material (looked up in `items`)
+   *  is filed under a heading of this work type names the same one. Lines whose material is filed
+   *  nowhere do not vote; two headings between them is no heading. Otherwise null. */
+  function assemblyCategory(asm, store, wt, items) {
+    var want = String((asm && asm.category) || "").replace(/\s+/g, " ").trim().toLowerCase();
+    var list = categoriesFor(store, wt);
+    for (var i = 0; want && i < list.length; i++) {
+      if (list[i].name.replace(/\s+/g, " ").trim().toLowerCase() === want) return list[i];
+    }
+    var lines = asm && asm.lines instanceof Array ? asm.lines : [];
+    var agreed = null;
+    for (var j = 0; j < lines.length; j++) {
+      var id = lines[j] && lines[j].item_id;
+      var c = id ? itemCategory(findItem(items || [], id), store, wt) : null;
+      if (!c) continue;
+      if (agreed && agreed.id !== c.id) return null;
+      agreed = c;
+    }
+    return agreed;
+  }
+
+  /** Group `keys` under the work type's headings, in the Admin order, with OTHER LAST. `catOf(key)`
+   *  is each key's {id, name} or null. A heading nothing sits under is left out; keys keep the order
+   *  they were given within their group. Returns [{id, name, other, keys}], and [] when the work type
+   *  has no headings at all, which is the caller's cue to draw its list ungrouped as it always was.
+   *  [] too when nothing is filed under any heading: a lone "Other" over the whole list, its subtotal
+   *  the whole takeoff, separates nothing. */
+  function groupByCategory(keys, store, wt, catOf) {
+    var list = categoriesFor(store, wt);
+    if (!list.length) return [];
+    var groups = list.map(function (c) { return { id: c.id, name: c.name, other: false, keys: [] }; });
+    var other = { id: "", name: "Other", other: true, keys: [] };
+    (keys || []).forEach(function (k) {
+      var c = catOf(k);
+      var g = null;
+      for (var i = 0; c && i < groups.length; i++) if (groups[i].id === c.id) g = groups[i];
+      (g || other).keys.push(k);
+    });
+    var drawn = groups.concat([other]).filter(function (g) { return g.keys.length > 0; });
+    return drawn.length === 1 && drawn[0].other ? [] : drawn;
+  }
+
   return {
+    categoriesFor: categoriesFor, itemCategory: itemCategory, assemblyCategory: assemblyCategory,
+    groupByCategory: groupByCategory,
     PAGE_SIZE: PAGE_SIZE, ASM_PAGE_SIZE: ASM_PAGE_SIZE, pageCount: pageCount, clampPage: clampPage, pageOfIndex: pageOfIndex,
     pageSlice: pageSlice, pageInfo: pageInfo,
     itemCopyBody: itemCopyBody,
