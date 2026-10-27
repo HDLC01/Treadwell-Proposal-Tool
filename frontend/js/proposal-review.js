@@ -9850,7 +9850,9 @@
     const pageOf = (pid) => "/proposal-review.html?d=" + encodeURIComponent(pid);
     const urlOf = (pid, tail) => TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(pid) + (tail || "");
     const members = () => (view && Array.isArray(view.members) ? view.members : []);
-    const nameOf = (m) => (m && m.label) || ("Base Bid " + ((m && m.index) || ""));
+    // THE TAB SAYS THE SHEET (Hanz, 2026-10-27): the server's display_label is the sheet's name unless a person renamed
+    // the proposal (an old untouched "Base Bid N" shows its sheet too); the position is the last resort.
+    const nameOf = (m) => (m && (m.display_label || m.label)) || ("Base Bid " + ((m && m.index) || ""));
     let view = null;
     let busy = false;
     let msg = "";
@@ -9935,7 +9937,7 @@
       const li = Array.from(strip.querySelectorAll(".pt-tab")).filter((x) => x.dataset.ptId === pid)[0];
       const m = members().filter((x) => x.id === pid)[0];
       if (!li || !m || busy) return;
-      li.innerHTML = `<input type="text" class="pt-ren-in" maxlength="80" aria-label="Name of this proposal" value="${escH(m.label || "")}">`;
+      li.innerHTML = `<input type="text" class="pt-ren-in" maxlength="80" aria-label="Name of this proposal" value="${escH(nameOf(m))}">`;
       const box = li.querySelector(".pt-ren-in");
       let done = false;
       const finish = (save) => { if (done) return; done = true; if (save) rename(m, box.value); else paintStrip(); };
@@ -9949,10 +9951,11 @@
 
     async function rename(m, raw) {
       const label = String(raw || "").replace(/\s+/g, " ").trim();
-      if (!label || label === m.label) { paintStrip(); return; }
+      if (!label || label === m.label || label === nameOf(m)) { paintStrip(); return; }
       try {
         const j = await send("POST", urlOf(m.id, "/scope"), { label, rename: true });
         m.label = j.label || label;
+        m.display_label = m.label;
         msg = "";
         // The scope group is the server's: this browser only remembers what the server has already.
         if (m.id === id && TW.setLocalState) TW.setLocalState({ scope_group: { id: j.group_id, label: m.label } }, { alreadyOnServer: true });
