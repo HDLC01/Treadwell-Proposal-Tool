@@ -833,3 +833,251 @@ def test_trashing_a_parent_hides_a_sent_proposals_portal_row(fake_supabase, monk
         monkeypatch.setattr(profiles, "get_by_email", lambda e: {"id": "a1", "email": e, "role": "admin"})
         assert call().status_code == 502
         assert not any(_row(store2, k).get("deleted_at") for k in kids2 + ["p1"])
+
+
+# ── H. the proposals follow a base swap (Hanz, 2026-10-28) ────────────────────────────────────
+# "Why is there an extra epoxy tab when we only have Epoxy and Polish?" Polish was Base Bid 1,
+# Epoxy Base Bid 2 (a child); "Make Base Bid 1" on Epoxy (TWPrice.moveBaseId with keep) moved the
+# PARENT to Epoxy and Polish into the ticked list, and the child stayed on Epoxy.
+POLISH_FIRST = dict(PARENT, base_tab_id="Polish", work_type="polish", proposal_lump_sum=9000,
+                    proposal_sales_tax=360)
+CHILD_WORDS = {"scope_notes": "Child words", "exclusions": "Child exclusions",
+               "price_overrides": {"lines2": {"base": "Our {{price}}"}},
+               "tab_opts": {"Polish": {"is_option": True, "show": True}, "Seal": {"is_option": True}}}
+
+
+def _swap(store, to, ids, lump):
+    """What the Estimate bar's "Make Base Bid 1" saves on the parent (wireBidBar applyBasePatch)."""
+    p = _row(store, "p1")["data"]
+    p.update(base_tab_id=to, base_tab_ids=list(ids), proposal_lump_sum=lump)
+
+
+def _staging(fake_supabase, monkeypatch, old_labels=False):
+    """The staging project: Polish the parent's base, Epoxy its child with words of its own, then the
+    swap. `old_labels`: named as fan-out named them before 2026-10-27 ("Base Bid 1", "Base Bid 2")."""
+    store = _seed(fake_supabase, monkeypatch, POLISH_FIRST)
+    kid = _fan(("Polish", "Epoxy"))["children"][0]["id"]
+    _row(store, kid)["data"].update(copy.deepcopy(CHILD_WORDS))
+    if old_labels:
+        _old_style(store, [kid], ["Base Bid 1", "Base Bid 2"])
+    _swap(store, "Epoxy", ["Epoxy", "Polish"], 20000)
+    return store, kid
+
+
+def _labels(view):
+    return [(m["base_tab_id"], m["display_label"], m["out_of_step"]) for m in view["members"]]
+
+
+@pytest.mark.parametrize("old_labels", [False, True])
+def test_after_a_swap_the_strip_says_the_child_is_out_of_step(fake_supabase, monkeypatch, old_labels):
+    store, kid = _staging(fake_supabase, monkeypatch, old_labels)
+    v = drafts.proposals_view("p1")
+    assert [m["base_tab_id"] for m in v["members"]] == ["Epoxy", "Epoxy"], "the bug: two proposals, one sheet"
+    assert [m["out_of_step"] for m in v["members"]] == [None, "same_as_base"]
+
+
+@pytest.mark.parametrize("old_labels", [False, True])
+def test_refresh_turns_the_duplicate_child_into_the_polish_proposal(fake_supabase, monkeypatch, old_labels):
+    """The repair path for the staging project: Refresh on its parent makes the unsent Epoxy child
+    the Polish proposal, with its own wording, under the same id (its link and its portal identity)."""
+    store, kid = _staging(fake_supabase, monkeypatch, old_labels)
+    out = drafts.refresh_proposals("p1", "rj@x.test")
+    assert out["refreshed"] == [kid] and out["skipped"] == []
+    assert out["moved"] == [{"id": kid, "label": "Polish", "from": "Epoxy", "to": "Polish"}]
+    child = _row(store, kid)["data"]
+    assert (child["base_tab_id"], child["base_tab_ids"], child["work_type"]) == ("Polish", ["Polish"], "polish")
+    assert child["proposal_lump_sum"] == 9000 and child["sheet_area"] == {"polish_sf": 1500}
+    for k, v in CHILD_WORDS.items():
+        if k != "tab_opts":
+            assert child[k] == v, "the move lost the child's own %s" % k
+    assert child["tab_opts"] == {"Polish": {"is_option": False, "show": True}, "Seal": {"is_option": True}}, \
+        "its base is never one of its own options; its other picks stay"
+    assert child["proposal_of"] == "p1" and child["scope_group"]["label"] == "Polish"
+    assert child["estimate_digest"] == drafts.estimate_digest(_row(store, "p1")["data"])
+    assert _row(store, "p1")["data"]["scope_group"]["label"] == "Epoxy", "the parent's sheet name follows it"
+    assert _row(store, "p1")["updated_at"] == V, "renaming the parent is not an edit of its estimate"
+    assert _labels(drafts.proposals_view("p1")) == [("Epoxy", "Epoxy", None), ("Polish", "Polish", None)]
+    assert len(_kids(store)) == 1
+
+
+def test_a_typed_name_survives_the_move(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    _row(store, kid)["data"]["scope_group"]["label"] = "Warehouse floor"
+    _row(store, "p1")["data"]["scope_group"]["label"] = "Main building"
+    drafts.refresh_proposals("p1")
+    assert _row(store, kid)["data"]["scope_group"]["label"] == "Warehouse floor"
+    assert _row(store, kid)["data"]["base_tab_id"] == "Polish"
+    assert _row(store, "p1")["data"]["scope_group"]["label"] == "Main building"
+
+
+def test_a_clash_numbered_sheet_name_is_the_sheet_rule_and_follows_too(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    _row(store, kid)["data"]["scope_group"]["label"] = "Epoxy 2"      # _free_label's clash name
+    drafts.refresh_proposals("p1")
+    assert _row(store, kid)["data"]["scope_group"]["label"] == "Polish"
+
+
+def test_create_multiple_proposals_after_a_swap_makes_no_third_proposal(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    out = _fan(("Epoxy", "Polish"))
+    assert len(_kids(store)) == 1, "a third proposal was made for Polish"
+    assert out["children"] == [{"id": kid, "label": "Polish", "base_tab_id": "Polish", "created": False,
+                                "moved_from": "Epoxy"}]
+    assert out["parent"]["label"] == "Epoxy" and out["out_of_step"] == []
+    child = _row(store, kid)["data"]
+    assert child["base_tab_id"] == "Polish" and child["scope_notes"] == "Child words"
+    assert child["proposal_lump_sum"] == 9000
+    assert _labels(drafts.proposals_view("p1")) == [("Epoxy", "Epoxy", None), ("Polish", "Polish", None)]
+    again = _fan(("Epoxy", "Polish"))
+    assert again["children"][0] == {"id": kid, "label": "Polish", "base_tab_id": "Polish", "created": False}
+    assert len(_kids(store)) == 1
+
+
+def test_a_sheet_switched_to_option_or_off_leaves_its_child_out_of_step_not_deleted(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch)
+    room, pol = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    _row(store, pol)["data"].update(copy.deepcopy(CHILD_WORDS))
+    before = copy.deepcopy(_row(store, pol))
+    _row(store, "p1")["data"]["base_tab_ids"] = ["Epoxy", "Copy1"]      # Polish -> Option (or Off)
+    assert _labels(drafts.proposals_view("p1")) == [("Epoxy", "Epoxy", None), ("Copy1", "Room 2", None),
+                                                    ("Polish", "Polish", "not_base")]
+    out = drafts.refresh_proposals("p1")
+    assert out["refreshed"] == [room] and out["moved"] == []
+    assert out["skipped"] == [{"id": pol, "label": "Polish", "code": "out_of_step", "message": (
+        "Polish prices a sheet that is not a base bid any more and no other base bid is free for it, so it "
+        "was left as it was. Delete it, or set another sheet to Base bid and Refresh.")}]
+    assert _row(store, pol) == before, "an out-of-step child with nowhere to go is left exactly as it was"
+    assert not _row(store, pol).get("deleted_at")
+    # Ticking another sheet gives it somewhere to go: the next Refresh moves it there, words and all.
+    _row(store, "p1")["data"]["base_tab_ids"] = ["Epoxy", "Copy1", "Polish"]
+    assert drafts.refresh_proposals("p1")["moved"] == []
+    assert [m["out_of_step"] for m in drafts.proposals_view("p1")["members"]] == [None, None, None]
+
+
+def test_three_base_bids_and_a_swap(fake_supabase, monkeypatch):
+    """Epoxy the base, Room 2 and Polish its proposals; "Make Base Bid 1" on Polish: the Polish child
+    takes the old base Epoxy, Room 2 stays where it is."""
+    store = _seed(fake_supabase, monkeypatch)
+    room, pol = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    _row(store, pol)["data"].update(copy.deepcopy(CHILD_WORDS))
+    _swap(store, "Polish", ["Polish", "Copy1", "Epoxy"], 9000)
+    assert [(m["id"], m["out_of_step"]) for m in drafts.proposals_view("p1")["members"]] == \
+        [("p1", None), (pol, "same_as_base"), (room, None)]
+    out = drafts.refresh_proposals("p1")
+    assert sorted(out["refreshed"]) == sorted([room, pol])
+    assert out["moved"] == [{"id": pol, "label": "Epoxy", "from": "Polish", "to": "Epoxy"}]
+    assert (_row(store, pol)["data"]["base_tab_id"], _row(store, pol)["data"]["proposal_lump_sum"]) == ("Epoxy", 20000)
+    assert _row(store, pol)["data"]["scope_notes"] == "Child words"
+    assert _row(store, room)["data"]["base_tab_id"] == "Copy1"
+    assert _labels(drafts.proposals_view("p1")) == [("Polish", "Polish", None), ("Copy1", "Room 2", None),
+                                                    ("Epoxy", "Epoxy", None)]
+    assert len(_kids(store)) == 2
+
+
+def test_the_swap_partner_takes_the_old_base_first(fake_supabase, monkeypatch):
+    """Two children out of step and two free sheets: the one on Base Bid 1's own sheet (the swap's
+    partner) goes to the old base, though it is the younger; the other takes the next free sheet."""
+    data = copy.deepcopy(PARENT)
+    data["priced_tabs"].append(_tab("Copy2", "epoxy", 11000, name="Lobby"))
+    store = _seed(fake_supabase, monkeypatch, data)
+    room, pol = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
+    # "Make Base Bid 1" on Polish, Room 2 switched Off, Lobby ticked: Epoxy and Lobby have no proposal.
+    _swap(store, "Polish", ["Polish", "Epoxy", "Copy2"], 9000)
+    out = drafts.refresh_proposals("p1")
+    assert {m["id"]: m["to"] for m in out["moved"]} == {pol: "Epoxy", room: "Copy2"}
+    assert [m["label"] for m in out["moved"]] == ["Epoxy", "Lobby"]
+
+
+def _portal_has(*ids):
+    def portal(path, method="GET", body=None):
+        if any(path == "/api/admin/proposal/%s" % i for i in ids):
+            return {"ok": True}
+        raise main.HTTPException(404, "not_found")
+    return portal
+
+
+SENT_SENTENCE = ("Epoxy (the copy the customer has) now prices the same sheet as Base Bid 1. Close it "
+                 "or keep it; nothing was changed.")
+
+
+def test_a_sent_child_is_never_moved_and_the_route_says_so(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    monkeypatch.setattr(main, "_portal", _portal_has(kid))
+    before = copy.deepcopy(store["drafts"])
+    r = client.post("/api/draft/p1/proposals/refresh", json={"draft_version": V})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["refreshed"] == [] and j["moved"] == []
+    assert j["skipped"] == [{"id": kid, "label": "Epoxy", "code": "sent", "message": SENT_SENTENCE}]
+    assert store["drafts"] == before, "nothing changed for the copy the customer has, nor its parent"
+    assert [m["out_of_step"] for m in j["proposals"]["members"]] == [None, "same_as_base"]
+    # Create Multiple Proposals makes the missing Polish proposal beside it, and says the same.
+    r = client.post("/api/draft/p1/proposals", json={"base_ids": ["Epoxy", "Polish"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["out_of_step"] == [{"id": kid, "label": "Epoxy", "code": "sent", "message": SENT_SENTENCE}]
+    assert _row(store, kid) == next(x for x in before if x["id"] == kid)
+    assert [c["created"] for c in r.json()["children"]] == [True]
+    assert sorted(_row(store, c)["data"]["base_tab_id"] for c in (k["id"] for k in _kids(store))) == ["Epoxy", "Polish"]
+
+
+def test_a_revision_is_proof_of_a_send_without_the_portal(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    store["draft_revisions"].append({"project_id": kid, "revision_no": 1})
+    before = copy.deepcopy(_row(store, kid))
+    out = drafts.refresh_proposals("p1")
+    assert out["skipped"][0]["code"] == "sent" and _row(store, kid) == before
+
+
+def test_a_silent_portal_moves_nothing(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+
+    def down(*a, **k):
+        raise main.HTTPException(502, "down")
+    monkeypatch.setattr(main, "_portal", down)
+    before = copy.deepcopy(store["drafts"])
+    r = client.post("/api/draft/p1/proposals/refresh", json={"draft_version": V})
+    assert r.status_code == 502 and r.json()["code"] == "portal_unreachable"
+    assert r.json()["error"].startswith("Nothing was refreshed.")
+    assert store["drafts"] == before
+    # create asks the parent first (a silent portal is refused there already), then each child to move
+    calls = []
+
+    def parent_only(path, method="GET", body=None):
+        calls.append(path)
+        if path.endswith("/p1"):
+            raise main.HTTPException(404, "not_found")
+        raise main.HTTPException(502, "down")
+    monkeypatch.setattr(main, "_portal", parent_only)
+    r = client.post("/api/draft/p1/proposals", json={"base_ids": ["Epoxy", "Polish"]})
+    assert r.status_code == 502 and r.json()["error"].startswith("No proposals were made.")
+    assert store["drafts"] == before and calls == ["/api/admin/proposal/p1", "/api/admin/proposal/%s" % kid]
+
+
+class _ParentWriteFails(FakeClient):
+    """Every update of the parent's row fails once `arm` is set; the children's go through."""
+
+    arm = False
+
+    def table(self, name):
+        outer = self
+        t = FakeTable(self.store, name, self.captures)
+        real = t.execute
+
+        def execute():
+            if outer.arm and name == "drafts" and t._op == "update" and ("id", "p1") in t._filters:
+                raise RuntimeError("PostgREST blip")
+            return real()
+        t.execute = execute
+        return t
+
+
+def test_a_failed_create_puts_a_moved_child_back(monkeypatch):
+    fake = {}
+    store = _seed(None, monkeypatch, POLISH_FIRST,
+                  client_cls=lambda s: fake.setdefault("c", _ParentWriteFails(s)))
+    kid = _fan(("Polish", "Epoxy"))["children"][0]["id"]
+    _swap(store, "Epoxy", ["Epoxy", "Polish"], 20000)
+    before = copy.deepcopy(store["drafts"])
+    fake["c"].arm = True
+    assert _refused("split_failed", _fan, ("Epoxy", "Polish")).status == 503
+    assert store["drafts"] == before, "the moved child was not put back"

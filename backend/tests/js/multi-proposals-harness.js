@@ -137,7 +137,7 @@ const UNITS = [
   fn("rebuildPricing"),
 ].join(NL);
 
-function open(st) {
+function open(st, win) {
   const panel = new El("div");
   panel.hidden = true;
   const rows = {};
@@ -155,7 +155,7 @@ function open(st) {
   const body = UNITS + NL + "return { renderProposalExtras, rebuildPricing, refreshPriceDisplay, effectiveWorkType };";
   const api = new Function("state", "document", "form", "TW", "window", "templateBlocks", "focusInside", "lineAtSelection",
                            "scheduleFit", "reloadForWorkType", body)(
-    st, document, { querySelector: () => null }, TW, { TWAuth: null }, null, () => false, () => null,
+    st, document, { querySelector: () => null }, TW, win || { TWAuth: null }, null, () => false, () => null,
     () => {}, () => { reloads.push(1); });
   api.rebuildPricing();
   api.refreshPriceDisplay();
@@ -418,6 +418,18 @@ out.sw = (() => {
   return r;
 })();
 
+// 10c. THE PRICING CARD SAYS A BASE MOVE (2026-10-28): a pick that moves Base Bid 1 calls the strip's hook
+//      (window.TWProposalsBaseMoved, which mountProposalTabs sets); a tick that leaves the base where it is does not.
+out.cardHook = (() => {
+  const calls = [];
+  const win = { TWAuth: null, TWProposalsBaseMoved: () => { calls.push("moved"); } };
+  const p = open(sheet("epoxy"), win);
+  setBox(p, "Copy1", true);
+  const afterTick = calls.length;
+  setBox(p, "Epoxy", false);
+  return { afterTick, afterMove: calls.length, base: p.st.base_tab_id };
+})();
+
 // ── the Estimate step ────────────────────────────────────────────────────────────────────────────────────────────
 const est = (name, deps) => L.lift(EST, name, deps, { indent: "", where: "estimate-review.js" });
 
@@ -441,6 +453,39 @@ function bidBarPick(stateIn, steps) {
   }
   return { base_tab_id: state.base_tab_id, base_tab_ids: state.base_tab_ids === undefined ? null : state.base_tab_ids, persisted };
 }
+// 11b. "MAKE BASE BID 1" ON A PARENT WITH SEPARATE PROPOSALS (2026-10-28): after the save the bar's hint line says to
+//      Refresh, once TW.readProposals answers more than one proposal. `members` is how many it answers (null: no
+//      answer); `move` false presses a tick instead, which leaves the base where it was.
+async function bidBarNote(members, o) {
+  const opt = o || {};
+  const state = Object.assign({ work_type: "epoxy", tab_opts: {}, price_overrides: {} },
+                              { base_tab_id: "Polish", base_tab_ids: ["Polish", "Epoxy"] }, clone(opt.state || {}));
+  const listeners = {};
+  const list = { addEventListener: (type, f) => { listeners[type] = f; } };
+  const hint = { textContent: "", innerHTML: "" };
+  const tabs = [{ id: "Epoxy", role: "epoxy", kind: "base" }, { id: "Polish", role: "polish", kind: "base" },
+                { id: "Copy1", role: "epoxy", kind: "copy" }];
+  const asked = [];
+  const TW = { setState: () => {}, readProposals: async (id) => {
+    asked.push(id === undefined ? null : id);
+    return members == null ? null : { parent_id: "P1", members: Array.from({ length: members }, (_, i) => ({ id: "M" + i })) };
+  } };
+  est("wireBidBar", {
+    state, tabs, document: { getElementById: (id) => (id === "bid-options-list" ? list : (id === "bid-options-hint" ? hint : null)) },
+    TWPrice: globalThis.TWPrice, renderBidOptions: () => {}, persistBidOptions: () => {},
+    persistTabState: () => {}, HF: { ready: false }, updateTotalBarFromHF: () => {},
+    ensureOpt: () => ({}), TW,
+  })();
+  if (opt.move === false) {
+    listeners.change({ target: { checked: true, value: "Copy1", classList: { contains: (c) => c === "bb-base" }, closest: () => null } });
+  } else {
+    listeners.click({ target: { dataset: { id: "Epoxy" }, classList: { contains: (c) => c === "bb-mkbase" } } });
+  }
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  return { hint: hint.textContent, asked, base: state.base_tab_id, ids: clone(state.base_tab_ids) };
+}
+
 out.bidBar = {
   // Tick Polish, then untick the base: Polish is the base, Copy1 stays ticked.
   swap: bidBarPick({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] }, [["Polish", true], ["Epoxy", false]]),
@@ -564,7 +609,8 @@ async function proposalPage(o) {
       return { id: li.dataset.ptId, open: li.classList.contains("open"), stale: !!li.querySelector(".pt-stale"),
                label: (li.querySelector(".pt-nm") || { textContent: null }).textContent,
                selected: name ? name.attrs["aria-selected"] : null, x: !!li.querySelector(".pt-x"),
-               renaming: !!li.querySelector(".pt-ren-in") };
+               renaming: !!li.querySelector(".pt-ren-in"),
+               oos: (li.querySelector(".pt-oos") || { textContent: null }).textContent };
     }),
     msg: (strip.querySelector(".pt-msg") || { textContent: null }).textContent,
     note: { hidden: !!els["proposals-note"].hidden, what: els["proposals-note-what"].textContent },
@@ -579,7 +625,7 @@ async function proposalPage(o) {
     b.fire(type || "click");
     await settle();
   };
-  return { log, els, st, api, mod, look, press, strip };
+  return { log, els, st, api, mod, look, press, strip, win };
 }
 const fetches = (p) => p.log.filter((x) => x[0] === "fetch").map((x) => x.slice(1));
 const steps = (p) => p.log.map((x) => (x[0] === "fetch" ? x[1] + " " + x[2] : x[0]));
@@ -741,6 +787,47 @@ async function step4() {
     await r.press(".pt-x", "C3");
     s.del.self = { steps: steps(r), went: r.log.filter((x) => x[0] === "assign").map((x) => x[1]) };
   }
+  // 22b. OUT OF STEP (2026-10-28): the server says a child prices no base bid of its own (the staging project: Polish was
+  //      Base Bid 1, Epoxy Base Bid 2, then "Make Base Bid 1" on Epoxy). Its tab says why; the note names it and says
+  //      to Refresh; a stale one is still said after it.
+  {
+    const view = { parent_id: "P1", group_id: "G1", members: [
+      { id: "P1", label: "Epoxy", display_label: "Epoxy", index: 1, is_parent: true, base_tab_id: "Epoxy", stale: false, out_of_step: null },
+      { id: "C2", label: "Base Bid 2", display_label: "Epoxy", index: 2, is_parent: false, base_tab_id: "Epoxy", stale: false,
+        out_of_step: "same_as_base" },
+      { id: "C3", label: "Lab", display_label: "Lab", index: 3, is_parent: false, base_tab_id: "Copy1", stale: true, out_of_step: "not_base" },
+      { id: "C4", label: "Gym", display_label: "Gym", index: 4, is_parent: false, base_tab_id: "Copy2", stale: true, out_of_step: null },
+    ] };
+    const p = await proposalPage({ id: "P1", view });
+    s.oos = { tabs: p.look().tabs.map((t) => [t.id, t.label, t.oos]), note: p.look().note };
+    // In step: no note at all.
+    const q = await proposalPage({ id: "P1", view: { parent_id: "P1", members: [view.members[0],
+      Object.assign({}, view.members[1], { base_tab_id: "Polish", display_label: "Polish", out_of_step: null })] } });
+    s.oos.inStep = { note: q.look().note, oos: q.look().tabs.map((t) => t.oos) };
+    // Refresh that could not move the copy the customer has: the server's sentence, no reload.
+    const sent = "Epoxy (the copy the customer has) now prices the same sheet as Base Bid 1. Close it or keep it; nothing was changed.";
+    const r = await proposalPage({ id: "P1", view, answers: [[/\/proposals\/refresh$/, "POST", { status: 200, body: { ok: true,
+      refreshed: ["C4"], moved: [], skipped: [{ id: "C2", label: "Base Bid 2", code: "sent", message: sent },
+                                              { id: "C5", label: "Old room", code: "sheet_gone" }], proposals: view } }]] });
+    r.log.length = 0;
+    await r.els["proposals-refresh"].press();
+    await settle();
+    s.oos.refreshSent = { steps: steps(r), note: r.look().note };
+  }
+  // 22c. BASE BID 1 MOVED ON THIS PAGE'S PRICING CARD (window.TWProposalsBaseMoved): a parent with separate proposals
+  //      says to Refresh; a child, or a draft on its own, says nothing.
+  {
+    const p = await proposalPage({ id: "P1", view: { parent_id: "P1", members: PARENT_VIEW.members.map((m) => Object.assign({}, m, { stale: false })) } });
+    const before = p.look().note;
+    p.win.TWProposalsBaseMoved();
+    const after = p.look().note;
+    const c = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1", base_tab_ids: ["Copy1"], priced_tabs: [{ id: "Copy1" }] },
+                                   view: { parent_id: "P1", members: PARENT_VIEW.members.map((m) => Object.assign({}, m, { stale: false })) } });
+    c.win.TWProposalsBaseMoved();
+    const a = await proposalPage({ id: "S1", view: { parent_id: "S1", members: [{ id: "S1", label: "", index: 1, is_parent: true, stale: false }] } });
+    a.win.TWProposalsBaseMoved();
+    s.moved = { before, after, child: c.look().note, alone: a.look().note };
+  }
   // 23. THE CHILD'S LINKS: Intake and Estimate open the parent's, Files stays its own; any other draft keeps its links.
   {
     const c = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1" } });
@@ -845,6 +932,9 @@ Promise.all([
   deleteCopy({ base_tab_id: "Epoxy", tab_copies: [{ id: "Copy1" }] }, "Copy1"),
 ]).then(async ([other, base, lastBase, noList]) => {
   out.deleteTab = { other, base, lastBase, noList };
+  out.estNote = { parent: await bidBarNote(3), alone: await bidBarNote(1), unread: await bidBarNote(null),
+                  tick: await bidBarNote(3, { move: false }),
+                  child: await bidBarNote(3, { state: { proposal_of: "P1", base_tab_id: "Polish", base_tab_ids: ["Polish"] } }) };
   out.page = await step4();
   out.shared = await sharedJs();
   out.guards = guards();

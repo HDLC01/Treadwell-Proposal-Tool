@@ -8335,10 +8335,27 @@ def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Req
             "error": "No proposals were made. The customer portal is not answering, so the tool "
                      "cannot tell whether this proposal was already sent. Try again in a minute."})
     try:
-        out = drafts.fan_out_proposals(draft_id, payload.base_ids, _user_email(request), sent)
+        # A proposal a base swap left out of step is MOVED to the base bid it should price, unless
+        # the customer has it: the same question, asked of that child (drafts._plan_reconcile).
+        out = drafts.fan_out_proposals(draft_id, payload.base_ids, _user_email(request), sent,
+                                       child_sent=_draft_was_sent)
     except drafts.ScopeError as exc:
         return _scope_refusal(exc)
+    except HTTPException as exc:
+        log.warning("create proposals refused for draft %s: the portal could not say whether a "
+                    "proposal to move was sent (%s)", _log_safe(draft_id), exc.status_code)
+        return _proposals_portal_silent("No proposals were made.")
     return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
+
+
+def _proposals_portal_silent(head: str) -> JSONResponse:
+    """502 portal_unreachable for a press that would move a proposal the portal could not say it
+    has: a sent proposal is never moved, so the press waits for an answer rather than guess."""
+    return JSONResponse(status_code=502, content={
+        "ok": False, "code": "portal_unreachable",
+        "error": head + " The customer portal is not answering, so the tool cannot tell whether a "
+                        "proposal that has to follow the base bids was already sent. Try again in "
+                        "a minute."})
 
 
 @app.post("/api/draft/{draft_id}/proposals/refresh")
@@ -8346,10 +8363,13 @@ def api_draft_proposals_refresh(draft_id: str, payload: ProposalsRefreshIn,
                                 request: Request) -> Any:
     """"Estimate changed" -> Refresh (drafts.refresh_proposals): every proposal made from this
     estimate re-copies it and keeps its own words. `draft_id` is the parent or any child; the stale
-    guard is this draft's own row (the page that pressed it flushed and read it).
+    guard is this draft's own row (the page that pressed it flushed and read it). A proposal out of
+    step with the base bids (a base swap) moves to the base bid it should price unless the customer
+    has it (_draft_was_sent): then `skipped` carries the sentence saying so, and it is not touched.
 
-    200 {ok, parent_id, estimate_digest, refreshed: [ids], skipped: [{id, label, code}], proposals}.
-    404 not_found, 409 document_changed."""
+    200 {ok, parent_id, estimate_digest, refreshed: [ids], skipped: [{id, label, code[, message]}],
+    moved: [{id, label, from, to}], proposals}. 404 not_found, 409 document_changed, 502
+    portal_unreachable (nothing was written)."""
     draft_id = _safe_id(draft_id)
     row = drafts.load_draft(draft_id)
     if not row:
@@ -8358,9 +8378,13 @@ def api_draft_proposals_refresh(draft_id: str, payload: ProposalsRefreshIn,
     if stale is not None:
         return stale
     try:
-        out = drafts.refresh_proposals(draft_id, _user_email(request))
+        out = drafts.refresh_proposals(draft_id, _user_email(request), is_sent=_draft_was_sent)
     except drafts.ScopeError as exc:
         return _scope_refusal(exc)
+    except HTTPException as exc:
+        log.warning("refresh proposals refused for draft %s: the portal could not say whether a "
+                    "proposal to move was sent (%s)", _log_safe(draft_id), exc.status_code)
+        return _proposals_portal_silent("Nothing was refreshed.")
     return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
 
 

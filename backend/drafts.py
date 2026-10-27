@@ -26,7 +26,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cachetools
 
@@ -1505,7 +1505,7 @@ def _proposal_rows(parent_id: str, group_id: Optional[str]) -> List[Dict[str, An
         if not row or data.get("proposal_of") != parent_id:
             continue
         out.append({"id": m["id"], "label": m.get("label") or "", "created_at": m.get("created_at"),
-                    "data": data})
+                    "updated_at": row.get("updated_at"), "data": data})
     return out
 
 
@@ -1515,23 +1515,189 @@ def _stamp_at(base: datetime, i: int) -> str:
     return (base + timedelta(microseconds=i)).isoformat()
 
 
+# ── each proposal prices its own sheet (Hanz, 2026-10-28) ────────────────────────────────────────
+# "Why is there an extra epoxy tab when we only have Epoxy and Polish?" Polish was Base Bid 1 (the
+# parent) and Epoxy Base Bid 2 (a child); "Make Base Bid 1" on Epoxy moved the PARENT to Epoxy and
+# the old base Polish into the ticked list, and the child stayed on Epoxy: two proposals priced one
+# sheet and Polish had none. A child is matched to its sheet by its own base_tab_id, so nothing
+# followed a base swap. Create Multiple Proposals and Refresh now RECONCILE first: the sheets the
+# children should price are the parent's base bids after Base Bid 1 (_wanted_sheets); a child on any
+# other sheet is OUT OF STEP (_out_of_step) and, unless the customer has it, takes a wanted sheet
+# that has no child (_plan_reconcile), keeping its wording, its link and its portal identity. One
+# that cannot move is reported and left as it is, never deleted.
+
+# Why a child is out of step, as the strip and the sentences say it.
+_OUT_OF_STEP_WHY = {
+    "same_as_base": "now prices the same sheet as Base Bid 1",
+    "duplicate": "prices the same sheet as another proposal of this project",
+    "not_base": "prices a sheet that is not a base bid any more",
+    "sheet_gone": "prices a sheet that is not on the estimate any more",
+}
+
+
+def _wanted_sheets(parent: Dict[str, Any], ids: Optional[List[str]] = None) -> Optional[List[str]]:
+    """The sheets the children of `parent` should price, in Base Bid order: its base bids
+    (`ids`, else its stored `base_tab_ids`) less Base Bid 1 (its own `base_tab_id`), each once, each a
+    priced sheet that can be a base. None when the parent keeps no list at all: nothing is
+    reconciled then, and every child is taken as it is (the shape before Create Multiple Proposals)."""
+    raw = parent.get("base_tab_ids") if ids is None else ids
+    if not isinstance(raw, list):
+        return None
+    base = parent.get("base_tab_id")
+    priced = _priced_tabs(parent)
+    only = _V2_OPTION_ONLY_ROLES if _is_v2(parent) else _V1_OPTION_ONLY_ROLES
+    out: List[str] = []
+    for t in raw:
+        if (isinstance(t, str) and t and t != base and t not in out and t in priced
+                and str(priced[t].get("role") or "").lower() not in only):
+            out.append(t)
+    return out
+
+
+def _out_of_step(parent: Dict[str, Any], kids: List[Dict[str, Any]],
+                 wanted: Optional[List[str]]) -> Dict[str, str]:
+    """{child id: why} for every child of `kids` (oldest first) that does not price a wanted sheet of
+    its own: `same_as_base` (its sheet is Base Bid 1's, a base swap), `duplicate` (an older child
+    prices it), `sheet_gone` (the estimate has no such priced sheet), `not_base` (its sheet was
+    switched to Option or Off). {} when `wanted` is None."""
+    if wanted is None:
+        return {}
+    base = parent.get("base_tab_id")
+    priced = _priced_tabs(parent)
+    claimed: set = set()
+    out: Dict[str, str] = {}
+    for c in kids:
+        tab = c["data"].get("base_tab_id")
+        if isinstance(tab, str) and tab in wanted and tab not in claimed:
+            claimed.add(tab)
+            continue
+        if isinstance(tab, str) and tab and tab == base:
+            out[c["id"]] = "same_as_base"
+        elif tab in claimed:
+            out[c["id"]] = "duplicate"
+        elif not isinstance(tab, str) or tab not in priced:
+            out[c["id"]] = "sheet_gone"
+        else:
+            out[c["id"]] = "not_base"
+    return out
+
+
+def _shown_label(stored: str, sheet: Optional[str]) -> str:
+    """What a proposal's tab says: a name a person typed is kept; the old "Base Bid N" default (or
+    none) shows its sheet's."""
+    if stored and not _OLD_DEFAULT_LABEL.match(stored):
+        return stored
+    return sheet or stored
+
+
+def _is_sheet_label(stored: Any, parent: Dict[str, Any]) -> bool:
+    """Was `stored` given by the sheet rule rather than typed by a person: none, the old "Base Bid N"
+    default, or the name of a sheet of `parent`'s estimate (a clash's " 2" included, _free_label)?
+    Such a name follows its proposal to another sheet; a typed one never changes."""
+    if not isinstance(stored, str) or not stored.strip() or _OLD_DEFAULT_LABEL.match(stored):
+        return True
+    names = {(proposal_sheet_label(parent, t) or "").lower() for t in _priced_tabs(parent)}
+    names.discard("")
+    low = stored.lower()
+    if low in names:
+        return True
+    m = re.match(r"^(.*) \d+$", low)
+    return bool(m) and m.group(1) in names
+
+
+def _plan_reconcile(parent: Dict[str, Any], kids: List[Dict[str, Any]], wanted: Optional[List[str]],
+                    is_sent: Callable[[str], bool]) -> Dict[str, Any]:
+    """Which child prices which sheet. Returns {"keep": [child], "moves": [(child, sheet)],
+    "stuck": [{"id", "label", "code", "message"}], "free": [sheet with no child]}.
+
+    An out-of-step child (_out_of_step) the customer does not have (`is_sent` false) takes a free
+    wanted sheet, pairing deterministically: the child on Base Bid 1's own sheet first (a swap's
+    partner: the old base is the sheet left free), then the others oldest first, each to the next
+    free sheet in Base Bid order. A SENT one never moves (code `sent`); one with no free sheet left
+    stays (its why). `is_sent` is asked of out-of-step children only, and before anything is written,
+    so a portal that cannot answer stops the whole press. It may raise; this does not catch it."""
+    why = _out_of_step(parent, kids, wanted)
+    keep = [c for c in kids if c["id"] not in why]
+    claimed = {c["data"].get("base_tab_id") for c in keep}
+    free = [t for t in (wanted or []) if t not in claimed]
+    late = sorted((c for c in kids if c["id"] in why),
+                  key=lambda c: 0 if why[c["id"]] == "same_as_base" else 1)
+    moves: List[Tuple[Dict[str, Any], str]] = []
+    stuck: List[Dict[str, Any]] = []
+    for c in late:
+        name = _shown_label(c["label"], proposal_sheet_label(parent, c["data"].get("base_tab_id")))
+        what = _OUT_OF_STEP_WHY[why[c["id"]]]
+        if is_sent(c["id"]):
+            stuck.append({"id": c["id"], "label": c["label"], "code": "sent",
+                          "message": "%s (the copy the customer has) %s. Close it or keep it; "
+                                     "nothing was changed." % (name, what)})
+        elif free:
+            moves.append((c, free.pop(0)))
+        elif why[c["id"]] == "sheet_gone":
+            stuck.append({"id": c["id"], "label": c["label"], "code": "sheet_gone"})
+        else:
+            stuck.append({"id": c["id"], "label": c["label"], "code": "out_of_step",
+                          "message": "%s %s and no other base bid is free for it, so it was left as "
+                                     "it was. Delete it, or set another sheet to Base bid and "
+                                     "Refresh." % (name, what)})
+    return {"keep": keep, "moves": moves, "stuck": stuck, "free": free}
+
+
+# What a refresh or a move REPLACES on a child: its estimate, its money and its base.
+_REFRESH_REPLACED = frozenset((set(PROPOSAL_ESTIMATE_KEYS) - set(PROPOSAL_REFRESH_SKIPS))
+                              | set(PROPOSAL_MONEY_KEYS) | set(PROPOSAL_BASE_KEYS))
+
+
+def _recopied(parent: Dict[str, Any], data: Dict[str, Any], tab: str, digest: str) -> Dict[str, Any]:
+    """A child blob `data` copied afresh from `parent` as the proposal of sheet `tab`: its estimate,
+    money and base replaced (_proposal_copy, refresh), everything else of it kept (its words, option
+    picks, group and server keys), the digest and `estimate_synced_at` stamped (moved on a coarse
+    clock tick: the stamp is the fence StaleProposalWrite reads). RAISES ScopeError as
+    _proposal_copy does."""
+    fresh = _proposal_copy(parent, tab, refresh=True)
+    out = {k: v for k, v in data.items() if k not in _REFRESH_REPLACED}
+    out.update(fresh)
+    now = _now_iso()
+    if now == data.get("estimate_synced_at"):
+        # The stamp is the fence against a page holding the copy before this one
+        # (StaleProposalWrite), so it must move even when the clock has not (a coarse tick).
+        now = _stamp_at(datetime.fromisoformat(now), 1)
+    out["estimate_digest"] = digest
+    out["estimate_synced_at"] = now
+    return out
+
+
+def _local_sent(draft_id: str) -> bool:
+    """The store's own proof that a draft was sent (a revision); the routes ask the portal too."""
+    return bool(latest_revision_no(draft_id))
+
+
 def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] = None,
-                      sent: bool = False) -> Dict[str, Any]:
+                      sent: bool = False,
+                      child_sent: Optional[Callable[[str], bool]] = None) -> Dict[str, Any]:
     """CREATE MULTIPLE PROPOSALS: one child draft per base bid of `parent_id` after the first.
 
     `base_ids` are the ticked base sheets in Base Bid order; `base_ids[0]` must be the parent's own
     base (it stays Base Bid 1's proposal). IDEMPOTENT: a child already made for a sheet is kept as it
-    is (`created: false`), so pressing the button twice makes nothing twice. Children are written
-    FIRST and taken back when anything after fails (_undo_split_children); the parent last: it joins
-    a group (named after its base sheet when unnamed or still the old "Base Bid N" default; every
-    new child is named after ITS sheet, proposal_sheet_label), records `base_tab_ids`, and on a parent the customer
-    does not have yet its children's sheets stop being options of it (`tab_opts[id].is_option`
-    False). A `sent` parent's tab_opts are never edited. The parent's `updated_at` is NOT bumped.
+    is (`created: false`), so pressing the button twice makes nothing twice. RECONCILED FIRST
+    (_plan_reconcile): a child out of step with the ticked sheets (a base swap left it on Base Bid 1's
+    sheet, or its sheet is no base bid any more) that the customer does not have (`child_sent`, the
+    route's portal check; the store's revisions without one) takes a ticked sheet with no child
+    instead of a new child being made for it (`created: false`, `moved_from`); one that cannot move
+    is reported in `out_of_step` and left as it is. Children are written FIRST and taken back when
+    anything after fails (_undo_split_children; a moved one gets its old blob back); the parent last:
+    it joins a group (named after its base sheet when unnamed, still the old "Base Bid N" default, or,
+    on a parent the customer does not have, the name of a sheet that is no longer its base; every new
+    or moved child is named after ITS sheet, proposal_sheet_label, unless a person named it), records
+    `base_tab_ids`, and on a parent the customer does not have yet its children's sheets stop being
+    options of it (`tab_opts[id].is_option` False). A `sent` parent's tab_opts and name are never
+    edited. The parent's `updated_at` is NOT bumped.
 
     Returns {"group_id", "parent": {"id", "label"}, "children": [{"id", "label", "base_tab_id",
-    "created"}]}. RAISES ScopeError: not_found (404); too_few_bases, no_such_sheet, option_only_base,
-    combined_base, base_order, not_fanned_from_child, invalid_scope_group (400); test_mix, label_taken,
-    too_many_scopes (409); split_failed (503)."""
+    "created"[, "moved_from"]}], "out_of_step": [{"id", "label", "code"[, "message"]}]}. RAISES
+    ScopeError: not_found (404); too_few_bases, no_such_sheet, option_only_base, combined_base,
+    base_order, not_fanned_from_child, invalid_scope_group (400); test_mix, label_taken,
+    too_many_scopes (409); split_failed (503). `child_sent` may raise; nothing is written then."""
     sb = get_client()
     cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
     if not cur.data:
@@ -1576,44 +1742,57 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
         mixed = scope_test_mix(parent_id, parent, gid)
         if mixed:
             raise ScopeError("test_mix", mixed, 409)
-    kept = {}
-    for c in _proposal_rows(parent_id, gid if isinstance(existing, dict) else None):
-        tab = c["data"].get("base_tab_id")
-        if isinstance(tab, str) and tab not in kept:
-            kept[tab] = c
+    kids = _proposal_rows(parent_id, gid) if isinstance(existing, dict) else []
+    rec = _plan_reconcile(parent, kids, _wanted_sheets(parent, ids), child_sent or _local_sent)
+    kept = {c["data"]["base_tab_id"]: c for c in rec["keep"]}
+    moved = {tab: c for c, tab in rec["moves"]}
     members = [m for m in (_group_rows(gid) if isinstance(existing, dict) else [])
                if m["id"] != parent_id]
-    new_tabs = [t for t in ids[1:] if t not in kept]
+    new_tabs = [t for t in ids[1:] if t not in kept and t not in moved]
     if len(members) + len(new_tabs) + 1 > MAX_SCOPES:
         raise ScopeError("too_many_scopes",
                          "A project can be split into %d proposals at most." % MAX_SCOPES, 409)
-    taken = {m["label"].lower() for m in members if m["label"]}
+    # A moved child named by the sheet rule takes its new sheet's name, so its old one is free.
+    renamed = {c["id"] for c in moved.values() if _is_sheet_label(c["label"], parent)}
+    taken = {m["label"].lower() for m in members if m["label"] and m["id"] not in renamed}
     # NAMED BY SHEET (Hanz, 2026-10-27): each proposal is called what its base sheet is called on the
     # estimate, so the tabs, the board and the customer's portal say "Breakroom", not "Base Bid 2".
     # A parent keeps a name a person gave it; an unset one, or the old "Base Bid N" default, becomes
-    # its sheet's. Two sheets of one name are told apart by _free_label ("Room", "Room 2").
+    # its sheet's, and so does (when the customer does not have it) the name of a sheet that is no
+    # longer its base. Two sheets of one name are told apart by _free_label ("Room", "Room 2").
     parent_label = (existing or {}).get("label")
-    if not parent_label or _OLD_DEFAULT_LABEL.match(parent_label):
-        parent_label = _free_label(proposal_sheet_label(parent, base) or "Base Bid 1", taken)
+    psheet = proposal_sheet_label(parent, base)
+    if not parent_label or _OLD_DEFAULT_LABEL.match(parent_label) or (
+            not sent and _is_sheet_label(parent_label, parent)
+            and parent_label.lower() != (psheet or "").lower()):
+        parent_label = _free_label(psheet or "Base Bid 1", taken)
     if parent_label.lower() in taken:
         raise ScopeError("label_taken",
                          "“%s” is already the name of a scope of this project." % parent_label, 409)
     taken.add(parent_label.lower())
     plan: List[Tuple[str, str]] = []
+    moves: List[Tuple[Dict[str, Any], str, str]] = []
     for pos, tab in enumerate(ids[1:], start=2):
         if tab in kept:
+            continue
+        if tab in moved and moved[tab]["id"] not in renamed:
+            moves.append((moved[tab], tab, moved[tab]["label"]))
             continue
         lab = _free_label(proposal_sheet_label(parent, tab) or "Base Bid %d" % pos, taken)
         if lab.lower() in taken:
             raise ScopeError("label_taken",
                              "“%s” is already the name of a scope of this project." % lab, 409)
         taken.add(lab.lower())
-        plan.append((tab, lab))
+        if tab in moved:
+            moves.append((moved[tab], tab, lab))
+        else:
+            plan.append((tab, lab))
 
     now = datetime.now(timezone.utc)
     digest = estimate_digest(parent)
     made: List[Dict[str, Any]] = []
     in_flight: List[str] = []
+    shifted: List[Dict[str, Any]] = []
     try:
         for i, (tab, lab) in enumerate(plan, start=1):
             cid = str(uuid.uuid4())
@@ -1630,6 +1809,9 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
             in_flight[:] = []
             log_event(cid, actor, "created", _summary_detail(d))
             made.append({"id": cid, "label": lab, "base_tab_id": tab, "created": True})
+        for c, tab, lab in moves:
+            _move_child(sb, parent, c, tab, lab, digest, actor, parent_id)
+            shifted.append(c)
         rewritten = copy.deepcopy(parent)
         rewritten["scope_group"] = {"id": gid, "label": parent_label}
         rewritten["base_tab_ids"] = list(ids)
@@ -1641,23 +1823,62 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
         sb.table("drafts").update({"data": rewritten}).eq("id", parent_id).execute()
     except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal once cleaned up
         _undo_split_children(sb, [m["id"] for m in made] + in_flight)
+        _undo_moves(sb, shifted)
         raise ScopeError("split_failed", "No proposals were made: the database did not take every "
                                          "part of it, and the parts that were made have been "
                                          "removed. Try again in a minute.", 503) from exc
     log_event(parent_id, actor, "proposals_created",
               {"project_name": parent.get("project_name"), "id": parent_id, "group": gid,
-               "base_tab_ids": list(ids), "ids": [m["id"] for m in made]})
+               "base_tab_ids": list(ids), "ids": [m["id"] for m in made],
+               "moved": [c["id"] for c, _t, _l in moves]})
     _cache_clear()
     by_tab = {m["base_tab_id"]: m for m in made}
+    by_move = {tab: (c, lab) for c, tab, lab in moves}
     children = []
     for tab in ids[1:]:
         if tab in kept:
             children.append({"id": kept[tab]["id"], "label": kept[tab]["label"], "base_tab_id": tab,
                              "created": False})
+        elif tab in by_move:
+            c, lab = by_move[tab]
+            children.append({"id": c["id"], "label": lab, "base_tab_id": tab, "created": False,
+                             "moved_from": c["data"].get("base_tab_id")})
         else:
             children.append(by_tab[tab])
     return {"group_id": gid, "parent": {"id": parent_id, "label": parent_label},
-            "children": children}
+            "children": children, "out_of_step": rec["stuck"]}
+
+
+def _move_child(sb: Any, parent: Dict[str, Any], c: Dict[str, Any], tab: str, label: str,
+                digest: str, actor: Optional[str], parent_id: str) -> Dict[str, Any]:
+    """Write child `c` (a _proposal_rows entry) as the proposal of sheet `tab` (_recopied), named
+    `label`: its wording, link and portal identity stay, its `updated_at` is bumped (its document
+    must be rebuilt), and its new base is never one of its own options. Returns the stored blob.
+    RAISES what _recopied and the write raise."""
+    out = _recopied(parent, c["data"], tab, digest)
+    opts = out.get("tab_opts")
+    if isinstance(opts, dict) and isinstance(opts.get(tab), dict) and opts[tab].get("is_option"):
+        out["tab_opts"] = dict(opts, **{tab: dict(opts[tab], is_option=False)})
+    if isinstance(out.get("scope_group"), dict) and out["scope_group"].get("label") != label:
+        out["scope_group"] = dict(out["scope_group"], label=label)
+    now = out["estimate_synced_at"]
+    sb.table("drafts").update({"data": out, "updated_at": now}).eq("id", c["id"]).execute()
+    log_event(c["id"], actor, "proposal_moved",
+              {"project_name": out.get("project_name"), "id": c["id"], "from": parent_id,
+               "from_sheet": c["data"].get("base_tab_id"), "to_sheet": tab})
+    return out
+
+
+def _undo_moves(sb: Any, rows: List[Dict[str, Any]]) -> None:
+    """Put back the blob and `updated_at` of every child a failed press had moved (_move_child).
+    Never raises (the caller is already reporting a failure)."""
+    for c in rows:
+        try:
+            sb.table("drafts").update({"data": c["data"], "updated_at": c.get("updated_at")}) \
+                .eq("id", c["id"]).execute()
+        except Exception:  # noqa: BLE001 — nothing more can be done from here
+            pass
+    _cache_clear()
 
 
 def _resolve_parent(draft_id: str) -> Optional[Dict[str, Any]]:
@@ -1674,7 +1895,8 @@ def _resolve_parent(draft_id: str) -> Optional[Dict[str, Any]]:
     return row
 
 
-def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
+def refresh_proposals(draft_id: str, actor: Optional[str] = None,
+                      is_sent: Optional[Callable[[str], bool]] = None) -> Dict[str, Any]:
     """CATCH EVERY PROPOSAL UP WITH THE ESTIMATE ("Estimate changed" -> Refresh). `draft_id` is the
     parent or any child of it.
 
@@ -1683,23 +1905,68 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, A
     else (its words and option picks, PROPOSAL_NARRATIVE_KEYS, its group, its server keys) is kept,
     the digest and `estimate_synced_at` are stamped, and its `updated_at` IS bumped: its document
     must be rebuilt, and a Files page that checked the old copy is refused (_stored_since). A child
-    whose base sheet is no longer priced is skipped (`sheet_gone`). The parent is not touched.
+    whose base sheet is no longer priced is skipped (`sheet_gone`).
 
-    Returns {"parent_id", "estimate_digest", "refreshed": [ids], "skipped": [{"id", "label",
-    "code"}]}. RAISES ScopeError not_found (404)."""
+    RECONCILED FIRST (_plan_reconcile, the parent's stored base bids): a child OUT OF STEP with them
+    (a base swap left it on Base Bid 1's sheet, or its sheet is no base bid any more) that the
+    customer does not have (`is_sent`, the route's portal check; the store's revisions without one)
+    is MOVED to a base bid with no proposal, copied afresh as that sheet's and, unless a person named
+    it, named after it (`moved`). One the customer has is never moved (`skipped`, code `sent`, with
+    the sentence saying so); one with no free base bid is left as it is (`out_of_step`), never
+    deleted. When a child moved, a parent the customer does not have whose name is still another
+    sheet's takes its own sheet's name (its `updated_at` is not bumped); otherwise the parent is not
+    touched.
+
+    Returns {"parent_id", "estimate_digest", "refreshed": [ids], "skipped": [{"id", "label", "code"
+    [, "message"]}], "moved": [{"id", "label", "from", "to"}]}. RAISES ScopeError not_found (404);
+    `is_sent` may raise, and nothing is written then."""
     prow = _resolve_parent(draft_id)
     if prow is None:
         raise ScopeError("not_found", "That project is not there any more.", 404)
     parent_id, parent = prow["id"], prow.get("data") or {}
-    gid, _label = _scope_of(parent)
+    gid, plabel = _scope_of(parent)
     digest = estimate_digest(parent)
     priced = _priced_tabs(parent)
-    replaced = (set(PROPOSAL_ESTIMATE_KEYS) - set(PROPOSAL_REFRESH_SKIPS)) \
-        | set(PROPOSAL_MONEY_KEYS) | set(PROPOSAL_BASE_KEYS)
+    replaced = _REFRESH_REPLACED
     sb = get_client()
     refreshed: List[str] = []
     skipped: List[Dict[str, Any]] = []
-    for c in _proposal_rows(parent_id, gid):
+    moved_out: List[Dict[str, Any]] = []
+    sent = is_sent or _local_sent
+    kids = _proposal_rows(parent_id, gid)
+    rec = _plan_reconcile(parent, kids, _wanted_sheets(parent), sent)
+    # Every name is settled, and every portal question asked, before anything is written.
+    moves: List[Tuple[Dict[str, Any], str, str]] = []
+    new_plabel: Optional[str] = None
+    if rec["moves"]:
+        renamed = {c["id"] for c, _t in rec["moves"] if _is_sheet_label(c["label"], parent)}
+        taken = {m["label"].lower() for m in _group_rows(gid)
+                 if m["label"] and m["id"] not in renamed and m["id"] != parent_id}
+        psheet = proposal_sheet_label(parent, parent.get("base_tab_id"))
+        if plabel and psheet and plabel.lower() != psheet.lower() \
+                and _is_sheet_label(plabel, parent) and not sent(parent_id):
+            new_plabel = _free_label(psheet, taken)
+        taken.add((new_plabel or plabel or "").lower())
+        for c, tab in rec["moves"]:
+            lab = c["label"]
+            if c["id"] in renamed:
+                lab = _free_label(proposal_sheet_label(parent, tab) or lab or tab, taken)
+            taken.add(lab.lower())
+            moves.append((c, tab, lab))
+    for c, tab, lab in moves:
+        try:
+            _move_child(sb, parent, c, tab, lab, digest, actor, parent_id)
+        except ScopeError as exc:
+            skipped.append({"id": c["id"], "label": c["label"], "code": exc.code})
+            continue
+        refreshed.append(c["id"])
+        moved_out.append({"id": c["id"], "label": lab, "from": c["data"].get("base_tab_id"),
+                          "to": tab})
+    if new_plabel and moved_out:
+        pdata = dict(parent, scope_group=dict(parent["scope_group"], label=new_plabel))
+        sb.table("drafts").update({"data": pdata}).eq("id", parent_id).execute()
+    skipped.extend(rec["stuck"])
+    for c in rec["keep"]:
         data = c["data"]
         tab = data.get("base_tab_id")
         if not isinstance(tab, str) or tab not in priced:
@@ -1725,14 +1992,15 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None) -> Dict[str, A
         refreshed.append(c["id"])
     _cache_clear()
     return {"parent_id": parent_id, "estimate_digest": digest, "refreshed": refreshed,
-            "skipped": skipped}
+            "skipped": skipped, "moved": moved_out}
 
 
 def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     """The proposal page's tab strip: the parent first, then its children in the parent's
     `base_tab_ids` order, each {id, label, display_label, sheet_label, lump_sum, index, is_parent,
-    base_tab_id, stale, estimate_synced_at}; `stale` is a child whose digest is not the parent's
-    current one. `label` is the stored scope name; `display_label` is what the strip shows: the
+    base_tab_id, stale, out_of_step, estimate_synced_at}; `stale` is a child whose digest is not the
+    parent's current one; `out_of_step` is None, or why a child prices no base bid of its own
+    (_out_of_step: same_as_base, duplicate, not_base, sheet_gone). `label` is the stored scope name; `display_label` is what the strip shows: the
     stored name, unless it is the old untouched "Base Bid N" default, which shows the base sheet's
     name (`sheet_label`, off the parent's estimate). `lump_sum` is that proposal's own
     proposal_lump_sum (a number, or None when it has none yet). `draft_id` is the parent or any child
@@ -1748,18 +2016,15 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     digest = estimate_digest(parent)
     order = [t for t in (parent.get("base_tab_ids") or []) if isinstance(t, str)]
     kids = _proposal_rows(parent_id, gid) if not parent.get("proposal_of") else []
+    # Read oldest first, before the strip's order: the oldest child on a sheet is the one that keeps it.
+    why = _out_of_step(parent, kids, _wanted_sheets(parent))
 
     def rank(c: Dict[str, Any]) -> Tuple[int, str]:
         tab = c["data"].get("base_tab_id")
         return (order.index(tab) if tab in order else len(order), str(c.get("created_at") or ""))
 
     kids.sort(key=rank)
-
-    def shown(stored: str, sheet: Optional[str]) -> str:
-        # A name a person typed is kept; the old "Base Bid N" default (or none) shows the sheet's.
-        if stored and not _OLD_DEFAULT_LABEL.match(stored):
-            return stored
-        return sheet or stored
+    shown = _shown_label
 
     psheet = proposal_sheet_label(parent, parent.get("base_tab_id"))
     pstored = plabel or ("Base Bid 1" if kids else "")
@@ -1767,7 +2032,7 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                 "display_label": shown(pstored, psheet) if kids else pstored,
                 "sheet_label": psheet, "lump_sum": _money_or_none(parent.get("proposal_lump_sum")),
                 "is_parent": True, "base_tab_id": parent.get("base_tab_id"), "stale": False,
-                "estimate_synced_at": None}]
+                "out_of_step": None, "estimate_synced_at": None}]
     for i, c in enumerate(kids, start=2):
         tab = c["data"].get("base_tab_id")
         sheet = proposal_sheet_label(parent, tab)
@@ -1776,6 +2041,10 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                         "lump_sum": _money_or_none(c["data"].get("proposal_lump_sum")),
                         "is_parent": False, "base_tab_id": tab,
                         "stale": c["data"].get("estimate_digest") != digest,
+                        # OUT OF STEP: this proposal does not price a base bid of its own (a base swap
+                        # left it on Base Bid 1's sheet, or its sheet is an Option or Off now). The
+                        # strip says so and Refresh moves it (refresh_proposals).
+                        "out_of_step": why.get(c["id"]),
                         "estimate_synced_at": c["data"].get("estimate_synced_at")})
     return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members}
 
