@@ -904,6 +904,101 @@
     };
   }
 
+  // ── SEVERAL BASE BIDS ON ONE ESTIMATE ("Create Multiple Proposals") ───────────────────────────────
+  // One intake, one estimate, several proposals: the estimator ticks several sheets as base bids ("Base Bid 1",
+  // "Base Bid 2", ...) and each becomes its own proposal. The ticked sheets are `base_tab_ids`, beside the one
+  // pricing base `base_tab_id`, which stays exactly what it was (the page prices off it alone). THE INVARIANT:
+  // `base_tab_id` is in `base_tab_ids`, and it is Base Bid 1 -- this draft is Base Bid 1's proposal, and the server
+  // refuses a fan-out whose first id is not this draft's own base (drafts.fan_out_proposals, `base_order`). The
+  // others follow in the sheets' own order (`order`: the Estimate step passes its tab strip; omitted, the draft's
+  // priced_tabs order, which the Estimate step writes in strip order).
+  //
+  // Lives here, in a core module, for the reason allV2 does: rebuildPricing, renderProposalExtras and the Estimate
+  // step's bid-bar handler call these, and every harness that lifts one of those loads this file whole.
+
+  function orderOf(state, order) {
+    if (Array.isArray(order)) return order;
+    if (state && Array.isArray(state.priced_tabs)) {
+      return state.priced_tabs.map(function (t) { return t && t.id; });
+    }
+    return null;
+  }
+
+  /** The ticked base sheets, in Base Bid order: `base_tab_id` first, then the other ticked sheets in `order`
+   *  (an id `order` does not hold -- a sheet deleted since -- is left out). A draft that never ticked a second
+   *  sheet has no `base_tab_ids` and answers [base_tab_id]. No pricing base (a combo's combined Epoxy + Polish
+   *  base) answers only the other ticked ids, which a combined base never has. */
+  function baseIds(state, order) {
+    if (!state || typeof state !== "object") return [];
+    var base = typeof state.base_tab_id === "string" && state.base_tab_id ? state.base_tab_id : null;
+    var raw = Array.isArray(state.base_tab_ids) ? state.base_tab_ids : [];
+    var ord = orderOf(state, order);
+    var seen = {};
+    var rest = [];
+    raw.forEach(function (id) {
+      if (typeof id !== "string" || !id || id === base || seen[id]) return;
+      if (ord && ord.indexOf(id) < 0) return;
+      seen[id] = true;
+      rest.push(id);
+    });
+    if (ord) rest.sort(function (a, b) { return ord.indexOf(a) - ord.indexOf(b); });
+    return base ? [base].concat(rest) : rest;
+  }
+
+  /** "Base Bid N" for a ticked sheet (N its 1-based place in baseIds), "" for one that is not ticked. */
+  function baseLabelFor(state, id, order) {
+    var i = baseIds(state, order).indexOf(id);
+    return i < 0 ? "" : "Base Bid " + (i + 1);
+  }
+
+  /** The patch a tick or an untick of one sheet's Base-bid box makes: { base_tab_id, base_tab_ids }, or null when
+   *  the box changes nothing or is refused. THE RULES:
+   *   - ticking a sheet adds it as the next Base Bid; the pricing base stays where it was;
+   *   - unticking the pricing base's box moves the base to the next ticked sheet (it becomes Base Bid 1);
+   *   - unticking the LAST ticked sheet is refused: a proposal always has a base bid (null);
+   *   - the combined Epoxy + Polish base of a combo (id "") is one base on its own: ticking it makes it the only
+   *     one (no pricing base, no other ticked sheet: a combined base cannot be split into proposals), and ticking a
+   *     sheet while it is the base replaces it with that sheet. */
+  function toggleBaseId(state, id, on, order) {
+    if (!state || typeof state !== "object") return null;
+    var base = typeof state.base_tab_id === "string" && state.base_tab_id ? state.base_tab_id : null;
+    var current = baseIds(state, order);
+    if (id === "" || id == null) {
+      if (!on || !base) return null;           // the combined base is unticked only by ticking a sheet
+      return { base_tab_id: null, base_tab_ids: [] };
+    }
+    if (on) {
+      if (!base) return { base_tab_id: id, base_tab_ids: [id] };
+      if (current.indexOf(id) >= 0) return null;
+      return { base_tab_id: base, base_tab_ids: baseIds({ base_tab_id: base, base_tab_ids: current.concat([id]) }, order || orderOf(state)) };
+    }
+    if (current.indexOf(id) < 0) return null;
+    var left = current.filter(function (x) { return x !== id; });
+    if (!left.length) return null;             // the last one: refused
+    var next = id === base ? left[0] : base;
+    return { base_tab_id: next, base_tab_ids: baseIds({ base_tab_id: next, base_tab_ids: left }, order || orderOf(state)) };
+  }
+
+  /** The ticked sheets after the pricing base moved from `from` to `to` by some other road than a Base-bid box (the
+   *  Estimate step's base radio, an option-only base the Proposal step refuses, the copy that was the base deleted):
+   *  `from` is replaced by `to`, which is Base Bid 1. `to` null (a combined base) leaves no ticked sheet.
+   *  `keep` (the Estimate step's radio, a base the estimator picked): when `to` is already ticked, `from` stays
+   *  ticked in its place, so picking Base Bid 2 as the base swaps the two instead of dropping the old base. The
+   *  other roads leave it off: `from` was refused or deleted there, and is no base bid any more. */
+  function moveBaseId(state, from, to, order, keep) {
+    if (!to) return [];
+    var raw = state && Array.isArray(state.base_tab_ids) ? state.base_tab_ids : [];
+    var swap = !!(keep && typeof from === "string" && from && from !== to && raw.indexOf(to) >= 0);
+    var ids = raw.map(function (x) { return x === from ? to : (swap && x === to ? from : x); });
+    return baseIds({ base_tab_id: to, base_tab_ids: ids }, order || orderOf(state));
+  }
+
+  /** Is this draft one of the proposals a fan-out made from another draft's estimate (a child)? Its estimate is
+   *  the parent's, copied by the server, so its base is not picked here. */
+  function isProposalChild(state) {
+    return !!(state && typeof state === "object" && typeof state.proposal_of === "string" && state.proposal_of);
+  }
+
 
   return {
     AMOUNT: AMOUNT, TAX: TAX, PHRASE: PHRASE, KNOWN_PHRASES: KNOWN_PHRASES,
@@ -922,5 +1017,7 @@
     HEADING_KEYS: HEADING_KEYS, cleanLineProps: cleanLineProps, lineDefault: lineDefault,
     lineIntent: lineIntent, resolveLineProps: resolveLineProps, paraStep: paraStep,
     overrideFor: overrideFor, allV2: allV2, noBasePrice: noBasePrice,
+    baseIds: baseIds, baseLabelFor: baseLabelFor, toggleBaseId: toggleBaseId, moveBaseId: moveBaseId,
+    isProposalChild: isProposalChild,
   };
 });

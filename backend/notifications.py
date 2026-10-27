@@ -28,6 +28,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import basisboard_client
 import drafts as drafts_mod
@@ -391,6 +392,119 @@ def _refresh_portal_messages(state: Dict[str, Any]) -> None:
         return
     state["portal_messages"] = data.get("messages") or []
     state["portal_msgs_synced_at"] = _now_iso()
+
+
+# ── follow-up tasks waiting on a human ─────────────────────────────────
+# Remind mode (v1): the portal does not email the customer on its own, it parks a TASK for the
+# assigned estimator and waits for somebody to press Send, Skip, Snooze or "I called them". A task
+# nobody sees is a customer nobody chases, so each one waiting gets a bell row.
+#
+# THE SAME UPSTREAM CALL AS THE DRAWER'S PROXY, made the same way as every refresher here. The
+# proxy (main.py, /api/portal/followup-tasks) forwards to /api/admin/followup-tasks; this reads
+# that endpoint directly rather than going through the proxy over HTTP, because the proxy sits
+# behind the browser sign-in this server-side poll does not have, and a request from this process
+# to itself would be a loop through the auth gate for no gain. One bell for the whole team, one
+# last-seen marker, exactly like the rest of this file: not a per-user count.
+_FOLLOWUP_TASKS_TTL_S = 55
+
+
+def _refresh_followup_tasks(state: Dict[str, Any]) -> None:
+    """Poll the portal for pending follow-up tasks and cache them in `state`. Throttled and
+    best-effort like _refresh_portal_messages: unconfigured or failing keeps the previous cache."""
+    base = (os.environ.get("PORTAL_ADMIN_URL") or "").rstrip("/")
+    token = (os.environ.get("SERVICE_TOKEN") or "").strip()
+    if not base or not token:
+        return
+    synced_at = state.get("followup_tasks_synced_at")
+    if synced_at:
+        try:
+            if (_now() - datetime.fromisoformat(synced_at)).total_seconds() < _FOLLOWUP_TASKS_TTL_S:
+                return
+        except Exception:              # noqa: BLE001 - bad stored value → refresh anyway
+            pass
+    import httpx
+    try:
+        with httpx.Client(timeout=8.0, headers={"X-Service-Token": token}) as c:
+            resp = c.get(base + "/api/admin/followup-tasks")
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:           # noqa: BLE001 - never let the portal break the bell
+        log.warning("portal follow-up tasks fetch failed: %s", exc)
+        return
+    if not data.get("ok"):
+        return
+    state["followup_tasks"] = data.get("tasks") or []
+    state["followup_tasks_synced_at"] = _now_iso()
+
+
+def _is_future(stamp: str) -> bool:
+    """True when an ISO stamp is later than now. Parsed rather than string-compared, because the
+    portal writes both "…Z" and "…+00:00", and a date-only stamp means that whole day is due. An
+    unreadable stamp counts as due: a reminder shown early beats one never shown."""
+    try:
+        when = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        return when.date() > _biz_today()
+    return when > _now()
+
+
+def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One bell row per task that is DUE. A task the portal has parked for later is not news yet.
+
+    The id is the task's, so a task that stays pending across polls stays one row, and `ts` is when
+    it fell due, so it counts as unread once and not on every refresh. The link opens the drawer on
+    its Follow-up tab, where the email is waiting to be read and sent."""
+    out: List[Dict[str, Any]] = []
+    now_iso = _now_iso()
+    for t in (state.get("followup_tasks") or []):
+        if not isinstance(t, dict):
+            continue
+        tid = t.get("id")
+        if tid is None:
+            continue
+        due = str(t.get("due_at") or "")
+        if due and _is_future(due):
+            continue
+        # A scope group's task lives on the group's HOME scope, which may since have been approved
+        # or closed; the portal names an OPEN member to open instead (link_proposal_id). Absent on
+        # an older portal, and equal to proposal_id on an ordinary task.
+        pid = t.get("link_proposal_id") or t.get("proposal_id")
+        label = t.get("label") or "A follow-up"
+        body = f"Follow-up due: {label}"
+        if t.get("stage") == "decision":
+            body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
+            # The portal's link_proposal_id is computed FRESH when the task is viewed (round 3):
+            # the first listed sibling that is STILL OPEN, or the approved scope only when none
+            # is. Trusted as given. Only a portal that does not send it falls back on the first
+            # scope the decision lists (never the approved scope the task is filed on, whose
+            # drawer shows its own deposit card once it raises one).
+            if not t.get("link_proposal_id"):
+                approved = (t.get("approved_scope") or {}).get("proposal_id") \
+                    if isinstance(t.get("approved_scope"), dict) else None
+                sibs = [s.get("proposal_id") for s in (t.get("scopes") or [])
+                        if isinstance(s, dict) and s.get("proposal_id")
+                        and s.get("proposal_id") not in (approved, t.get("proposal_id"))]
+                if sibs:
+                    pid = sibs[0]
+        elif t.get("scope_group") and isinstance(t.get("scopes"), list) and t["scopes"]:
+            # ONE reminder for the whole project, so the row names every scope it covers.
+            names = [str((s or {}).get("label") or "a scope") for s in t["scopes"]
+                     if isinstance(s, dict)]
+            if names:
+                body = "Follow-up due: " + ", ".join(names)
+        out.append({
+            "id": f"fut:{tid}", "kind": "followup_task", "icon": "mail",
+            "severity": "medium", "sort": _TIER_CRM_STEP, "ts": due or now_iso,
+            "title": t.get("project_name") or "A project",
+            "body": body,
+            "link": f"/portal.html?open={quote(str(pid), safe='')}&sec=followup" if pid
+                    else "/portal.html",
+        })
+        if len(out) >= 25:
+            break
+    return out
 
 
 # The portal feed carries more than chat: submitting a deposit posts its own row.
@@ -765,6 +879,10 @@ def get_notifications() -> Dict[str, Any]:
             _refresh_crm(state)
         except Exception as exc:       # noqa: BLE001 - never let the CRM diff break the bell
             log.warning("crm refresh failed: %s", exc)
+        try:
+            _refresh_followup_tasks(state)
+        except Exception as exc:       # noqa: BLE001 - never let the follow-up tasks break the bell
+            log.warning("follow-up tasks refresh failed: %s", exc)
         _save_state(state)
         last_seen = state.get("last_seen_at") or _EPOCH
 
@@ -788,6 +906,8 @@ def get_notifications() -> Dict[str, Any]:
     # an approval last time. Within a tier the order is newest-first.
     items.extend(_retier(state.get("crm_events"), _TIER_CRM_STEP))
     items.extend(_draft_event_notifications())
+    # Follow-ups waiting on somebody here (remind mode): our own pipeline asking for a human.
+    items.extend(_followup_task_notifications(state))
 
     # ORDER: everything that HAPPENED, newest first, then the deadlines by urgency.
     #

@@ -141,9 +141,11 @@ const UNITS = [
 ].join(NL);
 
 /** One page on one draft. `st` is the draft (the page mutates it in place, as the real one does its `state`). */
-function open(st) {
+function open(st, pre) {
   const panel = new El("div");
   panel.hidden = true;
+  // TW.floatPanel adds `collapsed` at init when the estimator left the panel collapsed, BEFORE the first render.
+  if (pre && pre.collapsed) panel.classList.add("collapsed");
   const rows = {};
   for (const id of ["base-bid-heading", "combo-price-block", "base-bid-row", "sales-tax-row", "remodel-tax-row", "total-row",
                     "options-heading", "rooms-block", "price-lines-block", "alternate-block"]) rows[id] = rowEl(id);
@@ -235,9 +237,15 @@ for (const name of ["polish", "epoxy"]) {
   const p = open(draft(name, unmarked));
   const f = facts(p);
   const pick = name === "polish" ? "Epoxy" : "Polish";
+  // The spreadsheet's Base-bid controls are checkboxes (several base bids): a pick is ticking the new sheet, then
+  // unticking the old base, which moves the base to the sheet ticked.
+  const from = p.st.base_tab_id;
   const radio = radios(p).filter((r) => r.attrs.value === pick)[0];
   radio.checked = true;
   const fired = radio.fire("change");
+  const old = radios(p).filter((r) => r.attrs.value === from)[0];
+  old.checked = false;
+  old.fire("change");
   out.live[name] = Object.assign(f, { fired: fired, after: facts(p), reloads: p.reloads.length, saved: merged(p).base_tab_id });
 }
 
@@ -364,6 +372,24 @@ out.unpriced = (() => {
     },
   };
   return res;
+})();
+
+// THE HEADER CARRIES THE COLLAPSE BUTTON (2026-10-27: the panel floats at every width, so on a narrow screen it sits over
+// the page and must fold to its header). The header is rebuilt on every render, so the button is drawn by the render and
+// its aria-expanded is read back off the class TW.floatPanel toggles -- open and collapsed alike.
+out.header = (() => {
+  const look = (pre) => {
+    const p = open(draft("polish"), pre);
+    const drag = p.panel.querySelector(".op-drag");
+    const btn = drag ? drag.querySelector(".op-collapse") : null;
+    return {
+      dragFirst: p.panel.children[0] === drag,
+      title: drag ? (drag.querySelector(".op-title") || { textContent: null }).textContent : null,
+      button: !!btn, tag: btn ? btn.tagName : null, type: btn ? btn.attrs.type : null,
+      expanded: btn ? btn.attrs["aria-expanded"] : null, label: btn ? btn.attrs["aria-label"] : null,
+    };
+  };
+  return { open: look(), collapsed: look({ collapsed: true }) };
 })();
 
 console.log(JSON.stringify(out));

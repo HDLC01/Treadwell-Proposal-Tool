@@ -155,6 +155,17 @@ def _clear_service_rate_window():
     main._SERVICE_HITS.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_portal_capabilities():
+    """main.py remembers the portal's /api/admin/capabilities answer for a minute (_CAPS_CACHE).
+    Cleared around every test, like the caches above, so one test's portal (old or new) is never
+    the next test's."""
+    import main
+    main._CAPS_CACHE.update(caps=None, at=0.0)
+    yield
+    main._CAPS_CACHE.update(caps=None, at=0.0)
+
+
 @pytest.fixture
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""

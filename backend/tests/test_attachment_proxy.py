@@ -128,7 +128,9 @@ def test_publish_attachments_are_forwarded_but_not_decoded():
     the 10 MB total — putting a second copy of any of that here is how the two ends stop agreeing
     about which files are allowed."""
     import inspect
-    src = inspect.getsource(main.api_portal_publish)
+    # The publish's checks and body live in _prepare_publish since 2026-10-27 (the send-all
+    # publishes through it too); api_portal_publish is its two-line caller.
+    src = inspect.getsource(main._prepare_publish)
     assert 'body["attachments"] = payload.attachments[:10]' in src
     assert "b64decode" not in src, (
         "the tool started decoding attachments — that is the portal's rule to own")
@@ -139,7 +141,9 @@ def test_a_send_with_nothing_attached_carries_the_byte_for_byte_legacy_body():
     uses none of them produces exactly the request the portal has always received. Worth pinning:
     this route is the one action in the product that must not fail."""
     import inspect
-    src = inspect.getsource(main.api_portal_publish)
+    # The publish's checks and body live in _prepare_publish since 2026-10-27 (the send-all
+    # publishes through it too); api_portal_publish is its two-line caller.
+    src = inspect.getsource(main._prepare_publish)
     assert "if payload and payload.attachments:" in src
 
 

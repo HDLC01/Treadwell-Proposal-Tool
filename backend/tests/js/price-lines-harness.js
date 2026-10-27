@@ -359,8 +359,13 @@ function estimatePick(draft, pick, edits, pageTabs) {
   deps.persistBidOptions = erLift("persistBidOptions", deps);
   deps.persistTabState = erLift("persistTabState", deps);
   erLift("wireBidBar", deps)();
-  listeners.change({ target: { checked: true, value: pick, classList: { contains: (c) => c === "bb-base" },
-                               closest: () => null } });
+  // The Base-bid boxes are checkboxes (Create Multiple Proposals): the base moves by ticking the new sheet and
+  // unticking the old one, which hands the pricing base to the next ticked sheet.
+  const box = (value, checked) => ({ checked, value, classList: { contains: (c) => c === "bb-base" },
+                                     closest: () => null });
+  const prior = state.base_tab_id;
+  listeners.change({ target: box(pick, true) });
+  if (prior && prior !== pick) listeners.change({ target: box(prior, false) });
   const saved = Object.assign(JSON.parse(JSON.stringify(draft)), ...sets);
   return { saved, sets, snapshots, state };
 }
@@ -677,13 +682,19 @@ function openProposal(draft) {
   api.refreshPriceDisplay();
   return { st, api, draft };
 }
-/** A Base-bid pick in the Proposal step's own sidebar, through its real radio handler. */
+/** A Base-bid pick in the Proposal step's own sidebar, through its real handler. The Base-bid controls are checkboxes
+ *  (several base bids, "Create Multiple Proposals"): ticking a sheet adds it as a base bid and unticking the base moves
+ *  the base to it, so a pick is the two clicks a person makes -- tick the new sheet, untick the old base. */
 function sidebarPick(p, id) {
   const panel = p.api.pg.ids["options-panel"];
-  const radio = panel.querySelectorAll("input.pr-base").find((r) => r.attrs.value === id);
-  if (!radio) throw new Error("no Base-bid radio for " + id + " in the sidebar");
+  const box = (v) => panel.querySelectorAll("input.pr-base").find((r) => r.attrs.value === v);
+  const from = p.st.base_tab_id || "";
+  const radio = box(id);
+  if (!radio) throw new Error("no Base-bid box for " + id + " in the sidebar");
   radio.checked = true;
   fire(radio, "change");
+  const old = from !== id && (p.st.base_tab_id || "") === from ? box(from) : null;
+  if (old && from) { old.checked = false; fire(old, "change"); }
   return p.api.saved(p.draft);
 }
 const snap = (p) => ({ base_tab_id: p.st.base_tab_id, lump: p.st.proposal_lump_sum, rows: priceRows(p.api),

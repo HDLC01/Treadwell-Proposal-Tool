@@ -449,6 +449,24 @@ def test_a_non_admin_can_read_the_grid_and_change_nothing(ran):
 
 
 @needs_node
+def test_a_member_with_the_notification_sending_tab_gets_the_roster_controls(ran):
+    """Special permissions: the server lets a member given the Notification Sending tab
+    ("/notifications.html") POST/PATCH/DELETE the roster and PUT the step grid, so the page must
+    hand her the controls. Without it the Admin card's ticked box would claim an ability she cannot
+    reach. The old ability key (notify_recipients) no longer opens anything on the page.
+    Mutation: drop the grant check in rosterEditFor, or read ADMIN in paintMatrix/rosterCardHtml."""
+    g = ran["granted"]
+    assert g["decides"] == {"granted": True, "plain": False, "oldKey": False, "none": False,
+                            "admin": True, "superAdmin": True}
+    assert g["hasAddField"] and not g["saysAdminsOnly"]
+    assert g["chipsHaveRemove"]
+    assert not any(g["cellsDisabled"])
+    assert g["fired"] is not False and g["puts"] == 1
+    # The per-project chips follow the same grant: the card promises the tab's every admin-only edit.
+    assert not g["perProjectSaysSelfOnly"]
+
+
+@needs_node
 def test_a_failed_write_says_so_and_leaves_the_grid_telling_the_truth(ran):
     """The cell must snap back to what the server still holds. A cell that stays where the click
     put it is a screen claiming a change that never landed."""

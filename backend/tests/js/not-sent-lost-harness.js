@@ -149,6 +149,11 @@ function lift(deps) {
     // is asked and the request is shaped. renderNotSent embeds one and calls the other
     // unconditionally, so a missing bind is a ReferenceError for the whole panel.
     + source("deleteProjectHtml") + "\n" + source("wireDeleteProject") + "\n"
+    // The project's scopes (2026-10-24): renderNotSent embeds the markup and calls the wiring
+    // unconditionally. The markup for real; the wiring recorded, because pressing it is
+    // drawer-render-harness.js's subject and this file's DOM has no querySelectorAll.
+    + source("scopeHtml") + "\n"
+    + "function wireScope() {}\n"
     // Recorded rather than lifted: applySecPanel reaches for ALL_SEC_CARDS/SEC_ELIGIBLE and two
     // lazy fetches, the estimator picker is another file's subject, and the notify roster is a
     // network read. Recording each means a RENAME in portal.js still fails loudly here.

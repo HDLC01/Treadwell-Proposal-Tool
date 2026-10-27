@@ -112,6 +112,26 @@ context loaded.
   `want_cover_letter` gate — all three replay paths now build the letter, because "the proposal
   without the letter" is a document missing its first page. The old separate letter reached no
   customer: the portal never implemented it.
+- **Create Multiple Proposals (built 2026-10-27, branch `feat/multiple-proposals`, not shipped).**
+  One intake and one estimate, several proposals. The estimator ticks sheets as base bids
+  (`base_tab_ids`, "Base Bid N" by position; v1 on the Pricing options card, v2 with the sheet
+  strip's "Its own proposal" switch) and presses the button on the proposal page's ribbon. Each
+  other base bid becomes a CHILD draft row made and refreshed by the server
+  (`drafts.fan_out_proposals` / `refresh_proposals` / `proposals_view`, routes
+  `/api/draft/{id}/proposals` and `/proposals/refresh`), because the portal's proposal is one
+  `drafts` row. The child carries three server-owned keys (`proposal_of`, `estimate_digest`,
+  `estimate_synced_at`), copies the parent's estimate and keeps its own wording, options and files.
+  The proposal page shows a tab strip, and an "Estimate changed" banner with Refresh when the
+  parent's estimate digest moves. A child opened on an intake or estimate page goes to its parent.
+  `/split` refuses a parent that has fanned out (`has_proposals`), and trashing the parent trashes
+  its children. The drawer's project-workbook button opens the group HOME's Files page when the
+  home (the member the others were made from, else the first scope) is a v1 estimate, since its
+  `.xlsx` already has every tab. That holds only for the proposals made FROM the home: a v1 group of
+  independent #711 scopes (no `proposal_of`) gets no button, and a mixed one gets "Open <home>'s
+  workbook". A v2 group builds `/api/scope-group/{gid}/workbook` instead, which
+  refuses v1 members. The board's `scope_members[]` carries `proposal_of` and `v2` for this. Plan:
+  `~/.claude/plans/pasted-content-id-1027-okay-lets-steady-whale.md`; tests
+  `test_multi_proposals.py`, `test_multi_proposals_ui.py`, `test_scope_board_ui.py`.
 - **Generation never emits a raw `{{token}}`.** `_ensure_value_aliases` in
   `main.py` backfills `job_name`↔`project_name`, `work_description`←address, and
   `site_visit_date`←bid date before filling, so a customer-facing proposal can't

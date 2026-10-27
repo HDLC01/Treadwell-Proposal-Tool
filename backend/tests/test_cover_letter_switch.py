@@ -798,7 +798,9 @@ def test_the_portal_is_told_the_proposal_has_a_letter():
     pins. Read FRESH out of TW.getState() at send time, not off the module-top `state`: this call
     site runs AFTER TW.flushState() (asserted below), which is what makes a fresh read race-free —
     the flush has just made the browser's copy and the server's copy identical."""
-    m = re.search(r'TW\.postJSON\("/api/portal/publish\?draft_id=[^;]+;', DONE_JS, re.S)
+    # The body is built once since 2026-10-27 (`_publishBody`) and posted either to the publish or,
+    # for a proposal of a project with several, inside the send-all.
+    m = re.search(r'const _publishBody = \{[^;]+;', DONE_JS, re.S)
     assert m, "the publish call moved — re-derive this check"
     body = m.group(0)
     assert "has_cover_letter" in body, (

@@ -290,12 +290,19 @@
     staff_pause_expired: "Told the team: the pause ended",
     staff_personal_followup: "Told the team: worth a call",
     staff_deposit_outstanding: "Told the team: deposit outstanding",
+    staff_followup_due: "Told the team: a follow-up is due",
+    // Scope groups (2026-10-24): the task that asks what to do with the other scopes once one
+    // is approved, and the estimator email that raises it and re-nags about it while unanswered.
+    scope_decision: "Decide the other scopes",
+    staff_scope_decision: "Told the team: decide the other scopes",
   };
   // Bookkeeping the portal writes as a staff_note carrying an `action` key. Kept rather than
   // filtered out: "automation off" three weeks ago is the answer to "why has nothing gone out".
   var FU_ACTION = {
     reassigned: "Reassigned", automation_on: "Automation on", automation_off: "Automation off",
     paused: "Paused", closed_lost: "Closed lost", reactivated: "Reactivated",
+    followup_skipped: "Follow-up skipped", followup_snoozed: "Follow-up snoozed",
+    scope_group_resume: "Kept chasing the other scopes", scope_group_sent: "Project email sent",
   };
 
   /** Was this row an email that LEFT the building, and which way? "customer", "staff" or "".

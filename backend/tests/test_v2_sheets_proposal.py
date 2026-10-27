@@ -189,6 +189,20 @@ def test_a_v2_draft_lists_every_sheet_it_holds_and_has_no_add_another_system(pan
     assert 'Gyp (USG 1-8")' not in s["liveRows"] and s["liveAdd"] is True, "a spreadsheet draft hides the other work types' sheets"
 
 
+def test_the_panel_header_draws_a_collapse_button_that_says_whether_it_is_open(panel):
+    """The Pricing options card floats at every width now, so on a narrow screen it sits over the page and has to fold to
+    its header. The header is rebuilt on every render, so the render draws the button and reads the state back off the
+    `collapsed` class TW.floatPanel toggles: a collapsed panel re-rendered must still say it is collapsed."""
+    h = panel["header"]
+    for state, expanded in (("open", "true"), ("collapsed", "false")):
+        got = h[state]
+        assert got["dragFirst"] is True, "the drag header must stay the panel's first child (the collapsed CSS keeps it)"
+        assert got["title"] == "Pricing options"
+        assert got["button"] is True and got["tag"] == "BUTTON" and got["type"] == "button", got
+        assert got["expanded"] == expanded, (state, got)
+        assert got["label"], "an icon-only button needs an accessible name"
+
+
 # ── 2. THE DOCUMENT ──────────────────────────────────────────────────────────────────────────────
 def _drive(state, work_type, template=None):
     """The page opens the draft (rebuildPricing, then the paint) and composes the payload Continue hands /api/generate."""

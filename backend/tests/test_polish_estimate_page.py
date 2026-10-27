@@ -2103,8 +2103,11 @@ def test_nothing_is_revealed_before_the_sandbox_settles(ran):
         "#main was revealed before the item library landed, so the first paint prices nothing")
     assert b["loadingHidden"] and b["mainShown"] and b["bidBarShown"]
     # The company labor rate is read for every bid (it feeds the "Default $X" line), in parallel.
+    # ...and, AFTER the first paint, the distance: the fixture is a saved bid with no distance on file and a city and state, which is
+    # measured on open since 2026-10-22 (Hanz). Never before the paint.
     assert b["fetches"] == ["/api/markup/rules?layout=global", "/api/library/assemblies",
-                            "/api/library/items"]
+                            "/api/library/items", "/api/distance"]
+    assert b["log"].index("fetch:/api/distance") > b["log"].index("show:main")
     assert b["projLine"] == "Nearman Creek · Kansas City, KS"
 
 
@@ -3482,7 +3485,7 @@ def test_a_far_job_turns_the_three_travel_lines_on_and_writes_no_to_b4(ran):
     Mutation: leave `conditions.local` alone in B.applyDistance, or stop writing the cell."""
     d = ran["distance"]
     assert d["requestBody"] == {"address": "100 Main St", "city": "Wichita", "state": "KS",
-                                "zip": "67202"}
+                                "zip": "67202", "county": ""}
     assert d["requests"] == 1
     f = d["far"]
     assert f["note"] == "120.4 mi from Olathe office"
@@ -3567,14 +3570,13 @@ def test_no_usable_address_means_no_request_and_a_plain_message(ran):
     assert "intake step" in d["blank"]["status"]
 
 
-def test_a_saved_bid_is_not_repriced_until_the_estimator_asks(ran):
-    """A bid with stated labor never looks the distance up on its own (that would add lodging to a
-    bid already quoted); the button does it, and the answer applies.
-
-    Mutation: drop the new-bid gate in init()."""
+def test_a_saved_bid_with_no_distance_at_all_is_measured_on_open(ran):
+    """CHANGED 2026-10-22 (Hanz: a Wichita bid with no street sat at "local" for good). A saved bid that has NO distance on file,
+    never measured and never typed, looks it up on open as a new bid does, and the answer applies; the button still asks again.
+    A saved bid WITH a distance never asks on open (O2's tests, and tests/test_polish_distance_approx.py)."""
     d = ran["distance"]
-    assert d["savedFetches"] == 0
-    assert d["savedBefore"]["note"] == UNKNOWN_NOTE and d["savedBefore"]["lodging"] is False
+    assert d["savedFetches"] == 1
+    assert d["savedBefore"]["note"] == "150 mi from Olathe office" and d["savedBefore"]["lodging"] is True
     s = d["savedAfter"]
     assert s["note"] == "150 mi from Olathe office" and s["lodging"] is True and s["local"] is False
 

@@ -120,6 +120,12 @@ const CONST_NAMES = [
   // addition to these lists for the same reason as the six below, and it would be the widest of
   // them: a missing CHEV is a ReferenceError inside renderDetail itself, so the whole drawer.
   "CHEV",
+  // The follow-up email being written per task, and the sentence an action leaves behind
+  // (2026-10-23, remind mode). followupPanelHtml and the compose box read both on every paint.
+  "FU_DRAFT", "FU_NOTICE",
+  // The contacts the project's one email missed, per scope group (2026-10-24 hardening): the lifted
+  // wireScope writes it on a partial send and re-reads it on every paint.
+  "SCOPE_SEND_NOTICE",
 ];
 // The page's mutable module state, lifted by name rather than re-declared here: rename one in
 // portal.js and this file fails loudly instead of testing a variable the page no longer has.
@@ -216,6 +222,40 @@ const FN_NAMES = [
   // nothing — what it is doing is keeping openDetail runnable. The behaviour is executed in
   // backend/tests/js/tab-memo-harness.js, which gives it a location and a history to write to.
   "markDrawerInUrl",
+  // THE FOLLOW-UP TASK AND THE REMINDER SCHEDULE (2026-10-23, remind mode). NINTH addition for the
+  // same reason as the eight above, and every one of them is reached from something already lifted:
+  // followupPanelHtml paints the notice, the schedule and the task card (which paints the compose
+  // box, which reads fuYmd); wireFollowup binds the schedule (saveFuPlan), the compose box
+  // (wireFuCompose) and the four task buttons (fuTaskAct, fuSay, fuAddDays); applySecPanel fetches
+  // the draft (loadFuDraft, which repaints through paintFuCompose); and fuTaskAct finishes through
+  // fuSettle and words its outcome with the three fu*Text helpers. Leaving any one out is a
+  // ReferenceError on every sent drawer, or worse, only on the press that reaches it.
+  "fuNoticeHtml", "followupScheduleHtml", "followupTaskHtml", "followupComposeHtml", "fuYmd",
+  "fuAddDays", "wireFuCompose", "paintFuCompose", "loadFuDraft", "fuErrText", "fuGoneText",
+  "fuDoneText", "fuSay", "fuSettle", "fuTaskAct", "saveFuPlan",
+  // THE BUTTON IN THE EMAIL (2026-10-23): the drawn button and the "your portal link was removed"
+  // notice. TENTH addition for the same reason: followupComposeHtml reads fuCta, fuLinkState and
+  // fuLinkNote on every ready paint; wireFuCompose binds paintFuLink (on every keystroke in the
+  // message) and fuLinkBack (the fix, which calls fuPutLinkBack); wireFollowup's Send calls
+  // fuLinkState, paintFuLink and fuCta; loadFuDraft records fuLinkLine. Any one left out is a
+  // ReferenceError on every drawer with a ready draft, or only on the press that reaches it.
+  "fuCta", "fuLinkState", "fuLinkLine", "fuLinkNote", "fuPutLinkBack", "paintFuLink", "fuLinkBack",
+  // THE PROJECT'S SCOPES (2026-10-24, RJ's split projects). ELEVENTH addition for the same reason:
+  // BOTH renderers embed scopeHtml in their Proposal panel and BOTH call wireScope at the end, so
+  // leaving either out is a ReferenceError on every drawer, sent and unsent at once.
+  "scopeHtml", "wireScope",
+  // scopeSendOutcome (the TWELFTH addition, 2026-10-24) MOVED to crm-core.js on 2026-10-27, so the
+  // Files page words its "Send all proposals in one email" the same way: it is bound now through
+  // portal.js's own `const { scopeSendOutcome } = C;` line, read above with the other imports.
+  // A SCOPE GROUP'S FOLLOW-UP (2026-10-25): one reminder for the whole project, and the "Decide the
+  // other scopes" card. THIRTEENTH addition: followupTaskHtml calls fuIsGroup, fuGroupHtml and
+  // followupDecisionHtml on every task card (which reach fuScopeNow, fuScopeOpen and fuScopeChip),
+  // and wireFollowup binds wireFuDecision, whose presses reach fuDecisionPicked, fuDecisionReady,
+  // fuScopeNames, fuTaskOf, fuDecide and its two fuDecision*Text sentences. Executed in full by
+  // group-followup-harness.js; lifted here so this harness's drawer stays runnable.
+  "fuIsGroup", "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames", "fuGroupHtml",
+  "followupDecisionHtml", "fuDecisionReady", "fuDecisionPicked", "fuTaskOf", "fuDecisionErrText",
+  "fuDecisionDoneText", "fuDecide", "wireFuDecision",
 ];
 
 // openDetail, RENAMED so the module can hold both it and the stub the action helpers call.
@@ -331,6 +371,10 @@ function makeDom() {
       children: [],
       removed: false,
       appendChild(n) { this.children.push(n); if (n) n.parent = this; return n; },
+      // The project workbook's download (wireScope, 2026-10-27): an <a download> appended to the
+      // body, clicked, and taken out again. Counted, so "the file was saved" is read, not assumed.
+      removeChild(n) { if (n) n.detached = true; return n; },
+      click() { this.clicks = (this.clicks || 0) + 1; },
       remove() { this.removed = true; },
       addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
       removeEventListener() {},
@@ -374,6 +418,7 @@ function makeDom() {
   // page holds, so what a test can honestly ask about it is where it was appended and what was
   // set on it — which is precisely the pair that regressed when the caption arrived.
   dom.made = [];
+  dom.body = makeEl("body");
   dom.create = (tag) => {
     const el = makeEl("made:" + tag + ":" + dom.made.length);
     el.tagName = String(tag).toUpperCase();
@@ -717,9 +762,22 @@ const isDetailGet = (p, init) =>
 // had never run in this harness while it reported the feature green.
 const isFileGet = (p) => /\/file\/[^/]+$/.test(p);
 const files = { fails: false };
+// The follow-up TASK routes (remind mode, 2026-10-23), answerable per route with a real status, so
+// a 409 can be told from a 502 and a 200 carrying `warnings` from a plain one. A list of
+// [pattern, {status, body}], first match wins; empty means the generic answer below.
+const fuNet = { answers: [] };
+const fuAnswerFor = (p) => {
+  for (const [re, ans] of fuNet.answers) if (re.test(p)) return ans;
+  return null;
+};
 const api = (p, init) => {
   net.requests.push({ path: p, method: (init && init.method) || "GET",
                       body: init && init.body ? JSON.parse(init.body) : null });
+  const fa = fuAnswerFor(p);
+  if (fa) {
+    return Promise.resolve({ ok: fa.status < 400, status: fa.status,
+                             json: () => Promise.resolve(JSON.parse(JSON.stringify(fa.body))) });
+  }
   if (isDetailGet(p, init) && detailFetch.data) {
     return Promise.resolve({ ok: true, status: 200,
                              json: () => Promise.resolve(detailFetch.data) });
@@ -791,7 +849,7 @@ const injected = [
                  // markup ships without a src. A created node is NOT in dom.html (nothing parses
                  // it back into the bag of markup), so what it proves is where the node was put
                  // and what was set on it, which is exactly what regressed.
-                 createElement: (tag) => dom.create(tag) }],
+                 createElement: (tag) => dom.create(tag), body: dom.body }],
   // No createObjectURL in Node, and portal.js never calls `new URL(...)`, so a two-method stub is
   // the whole surface. Recorded, because "was an object URL minted for this id" is how the
   // per-id cache is checked without reaching into ATT_URLS.
@@ -888,6 +946,8 @@ const body = `"use strict";
     // and nowhere else on the client (see the merge at the top of renderDetail).
     row: (pid) => ALL.filter((x) => x.proposal_id === pid)[0] || null,
     sig: () => DRAWER_SIG,
+    // The follow-up email as the page holds it, per task: what Send would send.
+    fuDraft: (tid) => (FU_DRAFT.has(tid) ? JSON.parse(JSON.stringify(FU_DRAFT.get(tid))) : null),
   };`;
 
 // The REAL closeDrawer (and remaskDeposits, the one helper it calls), run against this same DOM
@@ -2096,6 +2156,774 @@ async function runScenario(name, s) {
   } catch (e) {
     out.errors.att = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
     files.fails = false;
+  }
+
+  // ── REMIND MODE: the follow-up task, its email, and the reminder schedule (2026-10-23) ────────
+  // The portal parks a follow-up as a TASK for the assigned estimator instead of emailing the
+  // customer itself, and the drawer is where that person reads the draft and decides. Everything
+  // below is pressed, not read: which route each button reaches, with what body, what a 409 does to
+  // the card, and that the draft is fetched once and shown as a loading line until it lands.
+  // Driven through the real renderDetail, focusSection and wireFollowup, with the board row as the
+  // only place the task lives (the pipeline feed carries it; the detail payload does not).
+  try {
+    out.fuTask = {};
+    const FU_PID = "futask";
+    const futRow = { proposal_id: FU_PID, project_name: "Nearman Creek", proposal_status: "sent",
+                     sent_at: "2026-08-10T12:00:00Z", assigned_estimator: "kyle@wetreadwell.com",
+                     unread: 0, followup_task: null,
+                     followup_plan: { mode: "remind", interval_days: 5, stop_after: null,
+                                      next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" } };
+    BOARD_ROWS.push(futRow);
+    const fuData = () => payload({
+      proposal: { project_name: "Nearman Creek", customer_name: "Dave Nunn",
+                  customer_email: "dave@x.com", url: PORTAL_URL, token: URL_TOKEN,
+                  proposal_status: "sent", deposit_status: "pending", contacts_status: "pending",
+                  assigned_estimator: "kyle@wetreadwell.com",
+                  followup_state: { enrolled: true, enabled: true } },
+      approval: null, contacts: [], deposits: [], followups: [],
+      recipient_activity: [{ email: "dave@x.com", name: "Dave Nunn", followups: true },
+                           { email: "ap@x.com", name: "Ann Boyle", followups: false }],
+    });
+    const TASK = (id, over) => Object.assign({ id, status: "pending", template: "second_nudge",
+      label: "Second nudge", stage: "pre", due_at: "2026-10-22T12:00:00Z" }, over || {});
+    // AI-authored text with markup AND an entity in it: the escaping claim is that both come back
+    // out of the markup as exactly these characters, neither executed nor double-decoded.
+    const XSS_TITLE = 'Re: <script>alert(1)</script> & "the slab"';
+    const XSS_BODY = "Hi Dave &amp; team,\n<img src=x onerror=alert(1)> any news? {link}";
+    const DEFAULT_DRAFT = { title: "Following up", body: "Hi Dave, {link}", cta: "Open",
+                            source: "default" };
+    const fuAll = [];                                  // every request any scenario below made
+    net.requests.length = 0;                           // ...and none from the blocks above
+    const reset =() => { fuAll.push(...net.requests); fuNet.answers.length = 0;
+                          net.requests.length = 0; };
+    const answer = (re, status, body) => fuNet.answers.push([re, { status, body }]);
+    const compose = () => ((dom.els.get("#fu-compose") || {}).innerHTML) || "";
+    const settle = async () => { for (let i = 0; i < 10; i++) await tick(); };
+    const reqs = (re) => net.requests.filter((r) => re.test(r.path))
+      .map((r) => ({ path: r.path, method: r.method, body: r.body }));
+    const el = (id) => dom.getElementById(id);
+    const alertOf = () => { const a = el("fu-task-alert");
+                            return a ? { text: a.textContent, err: a.classList.contains("is-err") }
+                                     : null; };
+    async function openTask(task) {
+      futRow.followup_task = task;
+      const d = fuData();
+      page.open(FU_PID);
+      page.cache(FU_PID, d);
+      page.renderDetail(FU_PID, d);
+      return d;
+    }
+
+    // 1. THE DRAFT: a loading line, then the AI draft, fetched ONCE per task.
+    reset();
+    answer(/\/followup-task\/t-1\/ai-draft$/, 200,
+           { ok: true, draft: { title: XSS_TITLE, body: XSS_BODY, cta: "Open your proposal",
+                                source: "ai" }, fallback: false, ai: true });
+    await openTask(TASK("t-1"));
+    const before = { html: dom.html, sendDisabled: !!(el("fu-send") || {}).disabled,
+                     aiRequests: reqs(/ai-draft/).length };
+    page.focusSection("followup");
+    const loading = { compose: compose(), sendDisabled: !!el("fu-send").disabled,
+                      aiRequests: reqs(/ai-draft/) };
+    await settle();
+    const ready = { compose: compose(), sendDisabled: !!el("fu-send").disabled,
+                    draft: page.fuDraft("t-1") };
+    page.focusSection("chat");
+    page.focusSection("followup");
+    const moved = fuData();
+    moved.proposal.contacts_status = "received";
+    page.cache(FU_PID, moved);
+    page.renderDetail(FU_PID, moved);
+    await settle();
+    out.fuTask.draft = { before, loading, ready,
+                         afterRepaint: { html: dom.html, aiRequests: reqs(/ai-draft/).length } };
+
+    // 2. SEND, after editing, with a warning on the 200.
+    reset();
+    answer(/\/followup-task\/t-1\/send$/, 200,
+           { ok: true, task: { id: "t-1", status: "sent" }, warnings: ["touch_not_recorded"] });
+    const ti = el("fu-title");
+    ti.value = "Edited subject";
+    await ti.fire("input");
+    const bo = el("fu-body");
+    bo.value = "Edited body {link}";
+    await bo.fire("input");
+    await el("fu-send").fire("click");
+    await settle();
+    out.fuTask.send = { requests: reqs(/followup-task/), html: dom.html,
+                        rowTask: futRow.followup_task, draftAfter: page.fuDraft("t-1") };
+
+    // 3. SKIP, 4. "I CALLED THEM", 5. SNOOZE: no draft needed for any of these.
+    reset();
+    answer(/\/followup-task\/t-2\/skip$/, 200, { ok: true, task: { id: "t-2", status: "skipped" } });
+    await openTask(TASK("t-2"));
+    await el("fu-skip").fire("click");
+    await settle();
+    out.fuTask.skip = { requests: reqs(/followup-task/), html: dom.html };
+
+    reset();
+    answer(/\/followup-task\/t-3\/called$/, 200, { ok: true, task: { id: "t-3", status: "called" } });
+    await openTask(TASK("t-3"));
+    el("fu-called-kind").value = "text";
+    el("fu-called-note").value = "  Spoke Friday ";
+    await el("fu-called").fire("click");
+    await settle();
+    out.fuTask.called = { requests: reqs(/followup-task/), html: dom.html };
+
+    reset();
+    answer(/\/followup-task\/t-4\/snooze$/, 200,
+           { ok: true, task: { id: "t-4", status: "snoozed" }, next_at: "2026-08-20" });
+    await openTask(TASK("t-4"));
+    el("fu-snooze-when").value = "7";
+    await el("fu-snooze").fire("click");
+    await settle();
+    out.fuTask.snoozeQuick = { requests: reqs(/followup-task/), html: dom.html,
+                               plan: JSON.parse(JSON.stringify(futRow.followup_plan)) };
+
+    reset();
+    answer(/\/followup-task\/t-5\/snooze$/, 200, { ok: true, next_at: "2026-09-01" });
+    await openTask(TASK("t-5"));
+    el("fu-snooze-date").value = "2026-09-01";
+    await el("fu-snooze").fire("click");
+    await settle();
+    out.fuTask.snoozePicked = { requests: reqs(/followup-task/) };
+
+    reset();
+    await openTask(TASK("t-6"));
+    el("fu-snooze-date").value = "2026-08-01";
+    await el("fu-snooze").fire("click");
+    await settle();
+    out.fuTask.snoozePast = { requests: reqs(/followup-task/), alert: alertOf(),
+                              stillThere: /id="fu-task"/.test(dom.html) };
+
+    // 6. THE TASK MOVED ON: a 409 is a plain sentence and the card goes, not "Failed: ...".
+    reset();
+    answer(/\/followup-task\/t-7\/ai-draft$/, 200,
+           { ok: true, draft: DEFAULT_DRAFT, fallback: true, ai: false });
+    answer(/\/followup-task\/t-7\/send$/, 409,
+           { ok: false, error: "out_of_scope", reason: "approved", detail: "out_of_scope" });
+    await openTask(TASK("t-7"));
+    page.focusSection("followup");
+    await settle();
+    const fallbackCompose = compose();
+    const goneBtn = el("fu-send");
+    await goneBtn.fire("click");
+    await settle();
+    out.fuTask.gone = { compose: fallbackCompose, requests: reqs(/\/send$/), html: dom.html,
+                        label: goneBtn.textContent, rowTask: futRow.followup_task };
+
+    reset();
+    answer(/\/followup-task\/t-8\/skip$/, 409,
+           { ok: false, error: "already_decided", status: "sent", detail: "already_decided" });
+    await openTask(TASK("t-8"));
+    await el("fu-skip").fire("click");
+    await settle();
+    out.fuTask.decided = { html: dom.html, rowTask: futRow.followup_task };
+
+    // 7. THE SEND FAILED: the card stays, the button comes back, and it says it is safe to retry.
+    reset();
+    answer(/\/followup-task\/t-9\/ai-draft$/, 200,
+           { ok: true, draft: DEFAULT_DRAFT, fallback: false, ai: false });
+    answer(/\/followup-task\/t-9\/send$/, 502,
+           { ok: false, error: "send_failed", detail: "send_failed" });
+    await openTask(TASK("t-9"));
+    page.focusSection("followup");
+    await settle();
+    const failBtn = el("fu-send");
+    await failBtn.fire("click");
+    await settle();
+    out.fuTask.sendFailed = { alert: alertOf(), disabled: !!failBtn.disabled,
+                              label: failBtn.textContent,
+                              stillThere: /id="fu-task"/.test(dom.html),
+                              rowTask: futRow.followup_task };
+
+    // 8. NO DRAFT AT ALL (the portal is down): retry, then a blank page, and Send refuses to post
+    //    an empty email or one without its {link}.
+    reset();
+    answer(/\/followup-task\/t-10\/ai-draft$/, 502,
+           { ok: false, error: "Could not reach the customer portal.",
+             detail: "Could not reach the customer portal." });
+    await openTask(TASK("t-10"));
+    page.focusSection("followup");
+    await settle();
+    const failedCompose = compose();
+    const sendWhileFailed = !!el("fu-send").disabled;
+    await el("fu-draft-retry").fire("click");
+    await settle();
+    const aiAfterRetry = reqs(/ai-draft/).length;
+    dom.focused = null;
+    await el("fu-draft-blank").fire("click");
+    await settle();
+    const blankCompose = compose();
+    const focusAfterBlank = dom.focused;
+    const blankSendDisabled = !!el("fu-send").disabled;
+    await el("fu-send").fire("click");
+    await settle();
+    const alertEmpty = alertOf();
+    const t10 = el("fu-title");
+    t10.value = "Checking in";
+    await t10.fire("input");
+    const b10 = el("fu-body");
+    b10.value = "Any news on the pour?";
+    await b10.fire("input");
+    await el("fu-send").fire("click");
+    await settle();
+    out.fuTask.noDraft = { failedCompose, sendWhileFailed, aiAfterRetry, blankCompose,
+                           focusAfterBlank, blankSendDisabled, alertEmpty,
+                           alertNoLink: alertOf(), sends: reqs(/\/send$/).length };
+
+    // 9. SOMEBODY ELSE'S SEND IN FLIGHT: nothing pressable, and no draft fetched for it.
+    reset();
+    await openTask(TASK("t-11", { status: "sending" }));
+    page.focusSection("followup");
+    await settle();
+    out.fuTask.sending = { html: dom.html, aiRequests: reqs(/ai-draft/).length,
+                           sendDisabled: !!el("fu-send").disabled,
+                           skipDisabled: !!el("fu-skip").disabled };
+
+    // 10. ESCAPE closes the open disclosure and stops there; on a closed one it is left alone, so
+    //     the drawer's own Escape still works.
+    reset();
+    await openTask(TASK("t-12"));
+    const esc2 = (box) => ({ key: "Escape", target: box, prevented: false, stopped: false,
+                             preventDefault() { this.prevented = true; },
+                             stopPropagation() { this.stopped = true; } });
+    out.fuTask.escape = {};
+    for (const [boxId, sumId] of [["fu-snooze-box", "fu-snooze-sum"],
+                                  ["fu-called-box", "fu-called-sum"]]) {
+      const box = el(boxId);
+      box.open = true;
+      dom.focused = null;
+      const ev = esc2(box);
+      await box.fire("keydown", ev);
+      const ev2 = esc2(box);
+      await box.fire("keydown", ev2);
+      out.fuTask.escape[boxId] = { open: box.open, stopped: ev.stopped, prevented: ev.prevented,
+                                   focused: dom.focused, wantFocus: "#" + sumId,
+                                   closedStopped: ev2.stopped };
+    }
+
+    // 11. THE SCHEDULE: rendered from the plan, saved per field on change, never per keystroke.
+    reset();
+    const SAVED_PLAN = { mode: "remind", interval_days: 7, stop_after: null, next_at: "2026-10-27",
+                         anchor_at: "2026-10-20T12:00:00Z" };
+    answer(/\/followup-plan$/, 200, { ok: true, followup_plan: SAVED_PLAN });
+    // The snoozes above moved next_at on the row, which is the point of them; start this one from
+    // the plan as the pipeline first served it.
+    futRow.followup_plan = { mode: "remind", interval_days: 5, stop_after: null,
+                             next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" };
+    await openTask(null);
+    const schedHtml = dom.html;
+    const paintsBefore = dom.paints;
+    const save = async (id, value, evt) => {
+      const f = el(id);
+      f.value = value;
+      fuAll.push(...net.requests);
+      net.requests.length = 0;
+      await f.fire(evt || "change");
+      await settle();
+      const a = el("fu-sched-alert");
+      return { bodies: reqs(/followup-plan/).map((r) => r.body),
+               paths: reqs(/followup-plan/).map((r) => r.path),
+               msg: a ? a.textContent : null, err: a ? a.classList.contains("is-err") : null };
+    };
+    const sched = {
+      html: schedHtml,
+      typed: await save("fu-every", "9", "input"),
+      every: await save("fu-every", "7"),
+      planAfter: JSON.parse(JSON.stringify(futRow.followup_plan)),
+      cleared: await save("fu-every", ""),
+      tooBig: await save("fu-every", "200"),
+      fraction: await save("fu-every", "2.5"),
+      stop: await save("fu-stop", "3"),
+      next: await save("fu-next", "2026-08-20"),
+      pastNext: await save("fu-next", "2026-08-01"),
+    };
+    sched.repaintedBySave = dom.paints > paintsBefore;
+    fuNet.answers.length = 0;
+    answer(/\/followup-plan$/, 400, { ok: false, error: "bad_interval", detail: "bad_interval",
+                                      message: "That interval is not allowed." });
+    sched.refused = await save("fu-stop", "4");
+    out.fuTask.schedule = sched;
+
+    // 12. WHO IT GOES TO agrees with the ticks below it, including a contact whose payload row
+    //     carries no `followups` flag at all: the sentence used to count him in while his box sat
+    //     unticked (audit, 2026-10-23).
+    reset();
+    futRow.followup_task = TASK("t-13");
+    const mixed = fuData();
+    mixed.recipient_activity = [{ email: "dave@x.com", name: "Dave Nunn", followups: true },
+                                { email: "ap@x.com", name: "Ann Boyle", followups: false },
+                                { email: "joe@x.com", name: "Joe Park" }];
+    page.open(FU_PID);
+    page.cache(FU_PID, mixed);
+    page.renderDetail(FU_PID, mixed);
+    out.fuTask.who = { html: dom.html };
+
+    // 13. THE AI BUDGET IS SPENT: still a draft to send, and the note says why it is the standard one.
+    reset();
+    answer(/\/followup-task\/t-14\/ai-draft$/, 200,
+           { ok: true, draft: DEFAULT_DRAFT, fallback: true, ai: false, rate_limited: true });
+    await openTask(TASK("t-14"));
+    page.focusSection("followup");
+    await settle();
+    out.fuTask.rateLimited = { compose: compose(), sendDisabled: !!el("fu-send").disabled };
+
+    // 14. THE BUTTON IN THE EMAIL (2026-10-23). {link} is what becomes the button to the customer's
+    //     portal page, and it was a bare word in a textarea that an edit could delete without a
+    //     sign. Now the button is drawn under the message, and the moment the token goes a notice
+    //     says so with a one-press fix. Driven as an estimator would: delete it, try to send anyway,
+    //     press the fix, relabel the button, send. The body is the AI's own convention, {link} on a
+    //     line of its own, so the fix has to put it back EXACTLY where it was.
+    reset();
+    const OWN_LINE = "Hi Dave,\n\nJust checking the slab plan still works for you.\n\n{link}\n\n"
+      + "Thanks,\nKyle";
+    answer(/\/followup-task\/t-15\/ai-draft$/, 200,
+           { ok: true, draft: { title: "Checking in", body: OWN_LINE, cta: "Review and approve",
+                                source: "ai" }, fallback: false, ai: true });
+    answer(/\/followup-task\/t-15\/send$/, 200, { ok: true, task: { id: "t-15", status: "sent" } });
+    await openTask(TASK("t-15"));
+    page.focusSection("followup");
+    await settle();
+    const linkVis = () => ({
+      ok: !el("fu-link-ok").hidden, okText: el("fu-link-ok").textContent,
+      gone: !el("fu-link-gone").hidden, goneText: el("fu-link-gone-text").textContent,
+      fixLabel: el("fu-link-fix").textContent, many: !el("fu-link-many").hidden,
+    });
+    const btn = { compose: compose() };
+    const b15 = el("fu-body");
+    b15.value = OWN_LINE.replace("{link}", "");          // the estimator deletes the token
+    await b15.fire("input");
+    btn.afterDelete = linkVis();
+    await el("fu-send").fire("click");                   // ...and presses Send without fixing it
+    await settle();
+    btn.ignored = { alert: alertOf(), sends: reqs(/\/send$/).length, still: linkVis() };
+    dom.focused = null;
+    await el("fu-link-fix").fire("click");               // the one-press fix
+    btn.fixed = { value: b15.value, draft: page.fuDraft("t-15").body, link: linkVis(),
+                  focused: dom.focused, alert: alertOf() };
+    b15.value = OWN_LINE + "\n\nP.S. {link}";              // in twice: one button, so refused
+    await b15.fire("input");
+    btn.twice = linkVis();
+    await el("fu-send").fire("click");
+    await settle();
+    btn.twiceRefused = { alert: alertOf(), sends: reqs(/\/send$/).length };
+    b15.value = OWN_LINE;
+    await b15.fire("input");
+    const c15 = el("fu-cta");
+    c15.value = "See the price";                         // relabel the button
+    await c15.fire("input");
+    btn.relabelled = { preview: el("fu-cta-preview").textContent,
+                       draftCta: page.fuDraft("t-15").cta };
+    await el("fu-send").fire("click");
+    await settle();
+    btn.sent = reqs(/\/send$/);
+    out.fuTask.button = btn;
+
+    // 15. THE BUTTON LABEL IS TEXT, NEVER MARKUP: from the AI (escaped into the markup) and from the
+    //     estimator (written as textContent, never as innerHTML). An empty label falls back to the
+    //     portal's own default, and what the preview shows is what is posted.
+    reset();
+    const XSS_CTA = '<script>alert(1)</script> &amp; "go"';
+    answer(/\/followup-task\/t-16\/ai-draft$/, 200,
+           { ok: true, draft: { title: "Hi", body: "Hello\n\n{link}", cta: XSS_CTA, source: "ai" },
+             fallback: false, ai: true });
+    answer(/\/followup-task\/t-16\/send$/, 200, { ok: true, task: { id: "t-16", status: "sent" } });
+    await openTask(TASK("t-16"));
+    page.focusSection("followup");
+    await settle();
+    const ctaEsc = { compose: compose() };
+    const c16 = el("fu-cta");
+    c16.value = "   ";
+    await c16.fire("input");
+    ctaEsc.emptyPreview = el("fu-cta-preview").textContent;
+    c16.value = 'Tom &amp; <b>Jerry</b>';
+    await c16.fire("input");
+    ctaEsc.typedPreview = el("fu-cta-preview").textContent;
+    ctaEsc.previewWroteHtml = dom.parts.has("#fu-cta-preview");
+    await el("fu-send").fire("click");
+    await settle();
+    ctaEsc.sent = reqs(/\/send$/);
+    out.fuTask.ctaEscape = ctaEsc;
+
+    // 16. A PAGE WRITTEN FROM BLANK never had a link to remove, so the notice says it has none yet,
+    //     and the fix appends it as its own paragraph after what was written.
+    reset();
+    answer(/\/followup-task\/t-17\/ai-draft$/, 502, { ok: false, error: "down", detail: "down" });
+    await openTask(TASK("t-17"));
+    page.focusSection("followup");
+    await settle();
+    await el("fu-draft-blank").fire("click");
+    await settle();
+    const blank = { compose: compose() };
+    const b17 = el("fu-body");
+    b17.value = "Any news on the pour?\n";
+    await b17.fire("input");
+    blank.before = linkVis();
+    await el("fu-link-fix").fire("click");
+    blank.value = b17.value;
+    blank.after = linkVis();
+    out.fuTask.blankLink = blank;
+
+    reset();
+    out.fuTask.allPaths = fuAll.map((r) => r.path);
+    futRow.followup_task = null;
+  } catch (e) {
+    out.errors.fuTask = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  }
+
+  // ── the project's scopes (2026-10-24: RJ's split projects) ─────────────────
+  // Two rows of one scope group, added LAST so nothing above renders them: a scope nobody has built
+  // files for yet (not sent, files_pending) and a published one waiting for the combined email.
+  // Both drawers are rendered and every scope control is PRESSED, through the real wireScope.
+  const scopeAdded = [];
+  try {
+    out.scope = {};
+    const members = [{ id: "scope-a", label: "Breakroom", on_board: true },
+                     { id: "scope-b", label: "Lab 1", on_board: true },
+                     { id: "scope-c", label: "Lab <2>", on_board: false }];
+    const grp = { scope_group: "grp_x", scope_count: 3, scope_members: members };
+    const nsRow = Object.assign({ proposal_id: "scope-a", project_name: "Acme HQ", not_sent: true,
+      files_pending: true, drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com",
+      scope_label: "Breakroom", scope_index: 1 }, grp);
+    const sentRow = Object.assign({ proposal_id: "scope-b", project_name: "Acme HQ", proposal_status: "sent",
+      scope_label: "Lab 1", scope_index: 2, scope_send_pending: true }, grp);
+    BOARD_ROWS.push(nsRow, sentRow);
+    scopeAdded.push(nsRow, sentRow);
+    page.setBoard(BOARD_ROWS);
+    const q = (sel) => dom.query(sel);
+
+    page.open("scope-a");
+    dom.paints = 0;
+    page.renderNotSent("scope-a", nsRow);
+    out.scope.notSent = { html: dom.html, missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
+    // The siblings: one on the board opens its drawer, one that is not opens its estimate.
+    nav.length = 0;
+    const opens = dom.queryAll("[data-scope-open]");
+    for (const b of opens) await b.fire("click");
+    out.scope.siblingNav = nav.slice();
+    out.scope.siblingButtons = opens.map((b) => b.dataset.scopeOpen);
+    // A proposal made from another scope's estimate ("Create Multiple Proposals": its board member carries
+    // proposal_of), not on the board yet: it is marked, and it opens on its own proposal page, not the intake.
+    {
+      const withChild = members.concat([{ id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-a" }]);
+      page.open("scope-a");
+      page.renderNotSent("scope-a", Object.assign({}, nsRow, { scope_members: withChild, scope_count: 4 }));
+      nav.length = 0;
+      const childOpens = dom.queryAll("[data-scope-open]");
+      for (const b of childOpens) await b.fire("click");
+      out.scope.proposalChild = { marks: childOpens.map((b) => [b.dataset.scopeOpen, b.dataset.scopeProposal || ""]),
+                                  nav: nav.slice() };
+      // THE PROJECT WORKBOOK (plan step 6): this group's home is scope-b, the member scope-d was made
+      // from (NOT the first scope), and it is a v1 estimate, so the button opens scope-b's Files page
+      // and builds nothing. Rendered on scope-d's own drawer, so "home" cannot be confused with "this
+      // drawer's project" or with "the oldest scope". Every other scope was made from scope-b, so its
+      // .xlsx really is the whole project.
+      const childD = { id: "scope-d", label: "Base Bid 2", on_board: false, proposal_of: "scope-b" };
+      const fromB = members.map((m) => (m.id === "scope-b" ? m : Object.assign({}, m, { proposal_of: "scope-b" })))
+        .concat([childD]);
+      // A v1 group's workbook button for these members, rendered on scope-d's drawer.
+      const v1BookFor = (ms) => {
+        page.open("scope-d");
+        page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: ms,
+                                                                scope_count: ms.length, scope_index: ms.length }));
+        const b = q("#scope-workbook");
+        return { present: !!b, files: b ? b.dataset.files : null, html: dom.html };
+      };
+      // Mixed: scope-d was made from scope-b, but Breakroom and Lab <2> have their own estimates,
+      // which are not in scope-b's file.
+      out.scope.v1Mixed = v1BookFor(members.concat([childD]));
+      // A #711 group of independent v1 scopes (no proposal_of at all): no member's file is the project.
+      out.scope.v1Independent = v1BookFor(members);
+      page.open("scope-d");
+      page.renderNotSent("scope-d", Object.assign({}, nsRow, { proposal_id: "scope-d", scope_members: fromB,
+                                                              scope_count: 4, scope_index: 4 }));
+      net.requests.length = 0;
+      nav.length = 0;
+      const v1Book = q("#scope-workbook");
+      out.scope.v1Book = { present: !!v1Book, label: v1Book ? v1Book.dataset.files : null,
+                           html: dom.html };
+      if (v1Book) await v1Book.fire("click");
+      await tick();
+      out.scope.v1Book.nav = nav.slice();
+      out.scope.v1Book.requests = net.requests.map((r) => r.path);
+    }
+    // A v2 group (every member an Estimating Tool v2 estimate): the button BUILDS the group workbook
+    // through /api/scope-group/{gid}/workbook and saves the file under the server's name; a refusal is
+    // said in the server's sentence and nothing is saved.
+    {
+      const v2Members = members.map((m) => Object.assign({}, m, { v2: true }));
+      const v2Row = Object.assign({}, nsRow, { scope_members: v2Members });
+      page.open("scope-a");
+      page.renderNotSent("scope-a", v2Row);
+      out.scope.v2Book = { html: dom.html };
+      net.requests.length = 0;
+      nav.length = 0;
+      dom.body.children.length = 0;
+      fuNet.answers = [[/\/api\/scope-group\/grp_x\/workbook$/, { status: 200,
+        body: { ok: true, xlsx_download_url: "/api/file/tok-wb", filename: "Acme_HQ_scopes_estimate.xlsx", tabs: [] } }]];
+      await q("#scope-workbook").fire("click");
+      await tick();
+      const saved = dom.body.children.filter((n) => n && n.tagName === "A");
+      out.scope.v2Book.ok = { requests: net.requests.map((r) => [r.method, r.path]), nav: nav.slice(),
+                              saved: saved.map((a) => ({ download: a.download, clicks: a.clicks || 0, detached: !!a.detached })),
+                              note: q("#scope-note").textContent, disabled: q("#scope-workbook").disabled };
+      net.requests.length = 0;
+      dom.body.children.length = 0;
+      fuNet.answers = [[/\/api\/scope-group\/grp_x\/workbook$/, { status: 409,
+        body: { ok: false, code: "member_no_base", error: "“Lab 1” is not priced on one sheet. Make one sheet its base first." } }]];
+      await q("#scope-workbook").fire("click");
+      await tick();
+      out.scope.v2Book.refused = { requests: net.requests.map((r) => r.path), saved: dom.body.children.length,
+                                   note: q("#scope-note").textContent, disabled: q("#scope-workbook").disabled };
+      fuNet.answers = [];
+      // A project of ONE proposal (a group whose other scopes were deleted) has no project workbook
+      // to offer: its own Files page is the workbook.
+      page.open("scope-a");
+      page.renderNotSent("scope-a", Object.assign({}, nsRow, { scope_count: 1, scope_members: [members[0]] }));
+      out.scope.loneBook = /id="scope-workbook"/.test(dom.html);
+    }
+
+    // The sent drawer: the same card, in SEC_TABS, with the combined email's button.
+    const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+    sentData.proposal.project_name = "Acme HQ";
+    page.open("scope-b");
+    page.renderDetail("scope-b", sentData);
+    out.scope.sent = { html: dom.html, eligible: page.eligible(),
+                       missing: dom.lookups.filter((l) => !l.present).map((l) => l.id) };
+    net.requests.length = 0;
+    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send(-all)?$/, { status: 409,
+      body: { ok: false, error: "scopes_not_published", missing: ["scope-a", "scope-c"] } }]];
+    await q("#scope-send").fire("click");
+    await tick();
+    out.scope.notPublished = { note: q("#scope-note").textContent,
+                               requests: net.requests.filter((r) => /scope-group/.test(r.path)) };
+    fuNet.answers = [[/\/api\/portal\/scope-group\/grp_x\/send(-all)?$/, { status: 200,
+      body: { ok: true, already_sent: false, emailed: ["a@x.test", "b@x.test"] } }]];
+    await q("#scope-send").fire("click");
+    await tick();
+    out.scope.sentOk = { note: q("#scope-note").textContent };
+  } catch (e) {
+    out.errors.scope = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    fuNet.answers = [];
+    for (const r of scopeAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+  }
+
+  // ── one proposal or several (2026-10-27, plan step 7) ───────────────────────
+  // The card shows ONLY on a project with two or more proposals, and nowhere offers a new scope.
+  // Rendered for real in both drawers: a project of one (no group, and a group left with one live
+  // member), a project whose only sibling is not on the board yet, and a project of one that gains a
+  // sibling and is painted again.
+  const oneAdded = [];
+  try {
+    out.one = {};
+    const q = (sel) => dom.query(sel);
+    const sentData = () => {
+      const d = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+      d.proposal.project_name = "Solo Co";
+      return d;
+    };
+    const card = () => ({ html: dom.html, eligible: page.eligible() });
+    const soloSent = { proposal_id: "solo-s", project_name: "Solo Co", proposal_status: "sent" };
+    const soloNs = { proposal_id: "solo-n", project_name: "Solo Co", not_sent: true,
+      drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com" };
+    // A group whose other member was archived: _stamp_scopes still says scope_count 1.
+    const lone = { proposal_id: "lone-s", project_name: "Solo Co", proposal_status: "sent",
+      scope_group: "grp_l", scope_label: "Base Bid 1", scope_index: 1, scope_count: 1,
+      scope_members: [{ id: "lone-s", label: "Base Bid 1", on_board: true, sent: true }] };
+    // Its only sibling is not on the board yet: still two proposals.
+    const offBoard = { proposal_id: "pair-s", project_name: "Solo Co", proposal_status: "sent",
+      scope_group: "grp_p", scope_label: "Base Bid 1", scope_index: 1, scope_count: 2, scope_send_pending: true,
+      scope_members: [{ id: "pair-s", label: "Base Bid 1", on_board: true, sent: true },
+                      { id: "pair-c", label: "Base Bid 2", on_board: false, sent: false, proposal_of: "pair-s" }] };
+    const offBoardNs = Object.assign({}, offBoard, { proposal_id: "pair-n", proposal_status: undefined,
+      not_sent: true, drafted_at: "2026-10-20T10:00:00Z", estimator_email: "kyle@wetreadwell.com",
+      scope_members: [{ id: "pair-n", label: "Base Bid 1", on_board: true },
+                      { id: "pair-c", label: "Base Bid 2", on_board: false }] });
+    const grows = { proposal_id: "grow-s", project_name: "Solo Co", proposal_status: "sent" };
+    BOARD_ROWS.push(soloSent, soloNs, lone, offBoard, offBoardNs, grows);
+    oneAdded.push(soloSent, soloNs, lone, offBoard, offBoardNs, grows);
+    page.setBoard(BOARD_ROWS);
+
+    page.open("solo-s"); page.renderDetail("solo-s", sentData()); out.one.soloSent = card();
+    page.open("solo-n"); page.renderNotSent("solo-n", soloNs); out.one.soloNotSent = card();
+    page.open("lone-s"); page.renderDetail("lone-s", sentData()); out.one.loneSent = card();
+    page.open("pair-s"); page.renderDetail("pair-s", sentData()); out.one.offBoardSent = card();
+    nav.length = 0;
+    const offOpen = dom.queryAll("[data-scope-open]");
+    for (const b of offOpen) await b.fire("click");
+    out.one.offBoardNav = nav.slice();
+    page.open("pair-n"); page.renderNotSent("pair-n", offBoardNs); out.one.offBoardNotSent = card();
+    // A project of one, then the server makes it a group of two and the poll paints again.
+    page.open("grow-s"); page.renderDetail("grow-s", sentData()); out.one.growBefore = card();
+    Object.assign(grows, { scope_group: "grp_g", scope_label: "Base Bid 1", scope_index: 1, scope_count: 2,
+      scope_send_pending: true,
+      scope_members: [{ id: "grow-s", label: "Base Bid 1", on_board: true, sent: true },
+                      { id: "grow-c", label: "Base Bid 2", on_board: true, sent: false, proposal_of: "grow-s" }] });
+    page.setBoard(BOARD_ROWS);
+    // No page.open: the poll's own repaint, past the drawer's signature guard.
+    page.renderDetail("grow-s", sentData()); out.one.growAfter = card();
+    out.one.growSendPresent = !!q("#scope-send");
+  } catch (e) {
+    out.errors.one = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    for (const r of oneAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
+    page.setBoard(BOARD_ROWS);
+  }
+
+  // ── the project's one email, told honestly (2026-10-24 hardening) ─────────────
+  // A portal that reports the email's state (`scope_send`, main.py _scope_send_view): the button
+  // names what it will send, and every answer of the send is PRESSED through the real wireScope and
+  // worded by the real scopeSendOutcome: nobody reached, some reached (and the retry of only those),
+  // a scope left out, nothing new, a sent scope the portal does not link yet, an old portal's bare
+  // 404, and the tool's own portal_not_ready.
+  const honestAdded = [];
+  try {
+    out.honest = {};
+    const members = [{ id: "hs-a", label: "Breakroom", on_board: true, sent: true },
+                     { id: "hs-b", label: "Lab 1", on_board: true, sent: true },
+                     { id: "hs-c", label: "Lab 2", on_board: false, sent: false }];
+    const view = { announced: true, pending: ["hs-b", "hs-c"], new: 1, revised: 1, not_included: [],
+                   label: "Email again: 1 new, 1 revised", chip: "Email again: 1 new, 1 revised", mine: true };
+    const row = { proposal_id: "hs-b", project_name: "Acme HQ", proposal_status: "sent",
+      scope_group: "grp_h", scope_label: "Lab 1", scope_index: 2, scope_count: 3, scope_members: members,
+      scope_send: view };
+    BOARD_ROWS.push(row);
+    honestAdded.push(row);
+    page.setBoard(BOARD_ROWS);
+    const q = (sel) => dom.query(sel);
+    const sentData = JSON.parse(JSON.stringify(SCENARIOS.sent.data));
+    sentData.proposal.project_name = "Acme HQ";
+    const press = async (sel, answer) => {
+      net.requests.length = 0;
+      fuNet.answers = [[/\/api\/portal\/scope-group\/grp_h\/send(-all)?$/, answer]];
+      await q(sel).fire("click");
+      await tick();
+      return { note: q("#scope-note").textContent,
+               retryShown: q("#scope-retry-line").style.display !== "none",
+               requests: net.requests.filter((r) => /scope-group/.test(r.path)) };
+    };
+    page.open("hs-b");
+    page.renderDetail("hs-b", sentData);
+    out.honest.html = dom.html;
+    out.honest.noOne = await press("#scope-send", { status: 200,
+      body: { ok: true, results: [{ email: "a@x.test", delivered: false }, { email: "b@x.test", delivered: false }] } });
+    out.honest.legacyNoOne = await press("#scope-send", { status: 200,
+      body: { ok: true, already_sent: false, send_no: null, emailed: [] } });
+    out.honest.failed502 = await press("#scope-send", { status: 502,
+      body: { ok: false, error: "delivery_failed", results: [{ email: "a@x.test", delivered: false }] } });
+    out.honest.partial = await press("#scope-send", { status: 200,
+      body: { ok: true, results: [{ email: "a@x.test", delivered: true }, { email: "b@x.test", delivered: false }],
+              not_included: ["hs-c"] } });
+    // THE POLL (refreshLive re-runs openDetail every 12s, and a send that reached anybody reloads):
+    // the drawer is REBUILT, and the portal now calls every scope emailed. A fresh element has no
+    // inline style in this fake DOM, so "shown" reads the markup's own style until a script sets one.
+    const shown = (sel) => {
+      const el = q(sel);
+      if (el.style.display !== undefined) return el.style.display !== "none";
+      const m = new RegExp('id="' + sel.slice(1) + '"[^>]*>').exec(dom.html);
+      return !!m && !/display:\s*none/.test(m[0]);
+    };
+    const repaint = () => {
+      page.open("hs-b");
+      page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+      return { note: q("#scope-note").textContent, retryShown: shown("#scope-retry-line"),
+               allSentShown: /id="scope-all-sent"/.test(dom.html) && shown("#scope-all-sent") };
+    };
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
+    out.honest.afterPoll = repaint();
+    out.honest.retry = await press("#scope-retry", { status: 200,
+      body: { ok: true, results: [{ email: "b@x.test", delivered: true }] } });
+    out.honest.afterRetryPoll = repaint();
+    row.scope_send = view;
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.nothing = await press("#scope-send", { status: 409, body: { ok: false, error: "nothing_to_send" } });
+    out.honest.notFound = await press("#scope-send", { status: 404, body: { detail: "Not Found" } });
+    out.honest.notReady = await press("#scope-send", { status: 409,
+      body: { ok: false, code: "portal_not_ready", error: "The customer portal has not been updated for projects with several proposals yet." } });
+    out.honest.sentMissing = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "scopes_not_published", missing: ["hs-a", "hs-c"] } });
+    // THE SEND-ALL'S OWN REFUSALS (2026-10-27): the press published nothing, or stopped midway, and
+    // emailed nobody. The server's sentence names each proposal; the drawer says it as it is.
+    out.honest.sendAllBlocked = await press("#scope-send", { status: 409,
+      body: { ok: false, code: "not_ready_to_send", blocked: [{ id: "hs-c", label: "Lab 2", error: "x" }],
+              error: "Nothing was sent. Lab 2: build its files on its Files page first." } });
+    out.honest.sendAllPublishFailed = await press("#scope-send", { status: 502,
+      body: { ok: false, code: "publish_failed", published: [{ id: "hs-b", label: "Lab 1", revision_no: 2 }],
+              failed: { id: "hs-c", label: "Lab 2" },
+              error: "Nothing was emailed. Lab 2 could not be published (Portal error.). Lab 1 was published and will go in the email. Press the button again in a minute to finish." } });
+    // Nothing new to email: no button, the reason instead.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null, mine: false });
+    page.renderDetail("hs-b", sentData);
+    out.honest.allSentHtml = dom.html;
+    // A SEND WHOSE RESULT WAS LOST (findings 9 and 16): the portal reports Lab 1 as unknown, not
+    // pending, so there is no ordinary button; the drawer says so and offers an explicit resend.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: true, unknown: ["hs-b"], unknown_text: "The result of the last send was lost. Check the thread, then send again." });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.lostHtml = dom.html;
+    out.honest.lostResend = await press("#scope-resend-unknown", { status: 200,
+      body: { ok: true, recorded: true, results: [{ email: "a@x.test", delivered: true }] } });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.lostNothing = await press("#scope-resend-unknown", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: [], unknown: ["hs-b"] } });
+    out.honest.notRecorded = await press("#scope-resend-unknown", { status: 503,
+      body: { ok: false, error: "send_not_recorded", emailed: [] } });
+    out.honest.sentUnrecorded = await press("#scope-resend-unknown", { status: 200,
+      body: { ok: true, recorded: false, results: [{ email: "a@x.test", delivered: true }] } });
+    // ROUND 3, A SEND IN FLIGHT: the portal now reports Lab 1 as in flight (inflight_scope_ids),
+    // neither pending nor lost. The poll rebuilds the drawer: it says an email is on its way, never
+    // "the customer has every scope", and the unrecorded send's sentence is still on screen
+    // (SCOPE_SEND_NOTICE) without offering a retry nobody needs.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: false, unknown: [], unknown_text: null, inflight: ["hs-b"] });
+    out.honest.unrecordedPoll = repaint();
+    out.honest.inflightHtml = dom.html;
+    // ROUND 3, NOT PUBLISHED YET: Lab 2 is in the project but not published (the portal's
+    // not_included). With nothing else to send the drawer says what to do, never "the customer has
+    // every scope"; with two of them it says so in the plural; and a send the portal answers
+    // nothing_to_send because of it says the same.
+    row.scope_send = Object.assign({}, view, { pending: [], new: 0, revised: 0, label: null, chip: null,
+      mine: false, unknown: [], unknown_text: null, inflight: [], not_included: ["hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedHtml = dom.html;
+    // Two scopes the customer does not have (Breakroom here never sent): the plural.
+    row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a", "hs-c"] });
+    row.scope_members = members.map((m) => (m.id === "hs-a" ? Object.assign({}, m, { sent: false }) : m));
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedTwoHtml = dom.html;
+    row.scope_members = members;
+    // A SENT PARENT NOT ADOPTED YET (TK2 review): Breakroom was emailed as an ordinary proposal
+    // before it gained scopes, so its portal row has no scope_group and the portal lists it in
+    // not_included. It is `sent`: never told to be published again.
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.sentApartHtml = dom.html;
+    row.scope_send = Object.assign({}, row.scope_send, { not_included: ["hs-a"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.sentApartOnlyHtml = dom.html;
+    row.scope_send = Object.assign({}, view, { not_included: ["hs-c"] });
+    page.open("hs-b");
+    page.renderDetail("hs-b", JSON.parse(JSON.stringify(sentData)));
+    out.honest.unpublishedWithButtonHtml = dom.html;
+    out.honest.nothingUnpublished = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: [] } });
+    out.honest.nothingUnpublishedLost = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-c"], unknown: ["hs-b"] } });
+    out.honest.nothingSentApart = await press("#scope-send", { status: 409,
+      body: { ok: false, error: "nothing_to_send", not_included: ["hs-a", "hs-c"], unknown: [] } });
+  } catch (e) {
+    out.errors.honest = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
+  } finally {
+    fuNet.answers = [];
+    for (const r of honestAdded) BOARD_ROWS.splice(BOARD_ROWS.indexOf(r), 1);
   }
 
   console.log(JSON.stringify(out));

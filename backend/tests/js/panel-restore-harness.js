@@ -78,10 +78,22 @@ function iife(src, name, where) {
 // ── the shims ────────────────────────────────────────────────────────────────
 /** A panel with the two measurements that matter and nothing invented. `position` is settable so a
  *  single element can play both the floating and the in-the-flow case. */
-function makePanel(id, floatWidth, flowWidth, handleClass) {
+function makePanel(id, floatWidth, flowWidth, handleClass, collapseClass) {
   const handle = {
     className: handleClass,
     closest(sel) { return sel === "." + handleClass ? handle : null; },
+    setPointerCapture() {},
+  };
+  // The header's collapse button: INSIDE the header, so closest() finds the header from it too, as
+  // a browser's would. That is what makes "a press on the button is not a drag" testable.
+  const button = {
+    className: collapseClass || "op-collapse",
+    attrs: {},
+    closest(sel) {
+      if (sel === "." + button.className) return button;
+      return sel === "." + handleClass ? handle : null;
+    },
+    setAttribute(k, v) { button.attrs[k] = String(v); },
     setPointerCapture() {},
   };
   const el = {
@@ -97,7 +109,8 @@ function makePanel(id, floatWidth, flowWidth, handleClass) {
       remove: (c) => el.classes.delete(c),
       contains: (c) => el.classes.has(c),
     },
-    contains: (n) => n === handle,
+    button,
+    contains: (n) => n === handle || n === button,
     addEventListener: (t, h) => { el.listeners[t] = h; },
     getBoundingClientRect() {
       return {
@@ -121,8 +134,20 @@ function makePanel(id, floatWidth, flowWidth, handleClass) {
 function makeEnv(panel, key, saved, win) {
   const store = {};
   if (saved !== undefined) store[key] = JSON.stringify(saved);
+  // A window that can be resized after the page opened: `resize(w, h)` changes its size and
+  // delivers the event to every listener, as a browser does when the estimator narrows it.
+  const winListeners = {};
+  const window = {
+    innerWidth: win.w, innerHeight: win.h,
+    addEventListener: (t, h) => { (winListeners[t] = winListeners[t] || []).push(h); },
+  };
   return {
-    window: { innerWidth: win.w, innerHeight: win.h },
+    window,
+    resize(w, h) {
+      window.innerWidth = w; window.innerHeight = h;
+      (winListeners.resize || []).forEach((f) => f({ type: "resize" }));
+      return (winListeners.resize || []).length;
+    },
     localStorage: {
       getItem: (k) => (k in store ? store[k] : null),
       setItem: (k, v) => { store[k] = String(v); },
@@ -491,6 +516,137 @@ out.float = {};
     cheat: restoreFar("verbal-cheat", "vc-drag", "tw_vcheat_pos", {
       body: fn(VERBAL, "initCheatDrag", "polish-verbal.js"), call: "initCheatDrag();" }),
   };
+}
+
+// -- 9. A WINDOW RESIZE RE-CLAMPS ---------------------------------------------------------------
+// The rail floats at EVERY width since 2026-10-27 (it used to drop into the flow below 1400px), so a
+// window narrowed after the page opened can leave a moved panel's header past the edge. Through the
+// rail's own initialiser: restored at a legal spot on a wide window, the window narrows, the window
+// widens back. The re-clamp starts from where the estimator PUT it, so widening returns it there,
+// and no resize ever writes storage.
+const railInit = () => ({
+  body: "const RAW = " + iife(REVIEW, "initOptionsPanelDrag", "proposal-review.js") + ";", call: "RAW();" });
+out.resize = {};
+{
+  const panel = makePanel("options-panel", 240, 1000, "op-drag");
+  const env = makeEnv(panel, "tw_opts_pos", { left: 1400, top: 900 }, WIN);
+  global.window = env.window;
+  const init = railInit();
+  runInit(init.body, init.call, env);
+  const restored = panel.at();
+  const listeners = env.resize(1100, 700);
+  const narrowed = panel.at();
+  env.resize(1750, 1125);
+  out.resize.rail = { listeners, restored, narrowed, widened: panel.at(), saved: JSON.parse(env.store["tw_opts_pos"]) };
+}
+{
+  // a panel the estimator DRAGGED re-clamps from the spot it was dropped on
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210 });
+  panel.fire("pointermove", { clientX: 1410, clientY: 610 });     // dropped at 1400, 600
+  panel.fire("pointerup", {});
+  const dropped = panel.at();
+  env.resize(1000, 500);
+  const narrowed = panel.at();
+  env.resize(1750, 1125);
+  out.resize.dragged = { dropped, narrowed, widened: panel.at(), saved: JSON.parse(env.store["tw_probe_pos"]) };
+}
+{
+  // never moved: the CSS's right:16px keeps it on screen at any width, so a resize writes nothing
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  env.resize(900, 600);
+  out.resize.neverMoved = { left: panel.style.left, top: panel.style.top, right: panel.style.right, keys: keysOf(env) };
+}
+{
+  // a panel the CSS has put back in the flow (the cheat sheet below its breakpoint) is not touched
+  const panel = makePanel("verbal-cheat", 250, 1000, "vc-drag");
+  panel.position = "static";
+  const env = makeEnv(panel, "tw_vcheat_pos", { left: 1265, top: 264 }, { w: 1100, h: 900 });
+  global.window = env.window;
+  runInit(fn(VERBAL, "initCheatDrag", "polish-verbal.js"), "initCheatDrag();", env);
+  env.resize(900, 700);
+  out.resize.inFlowAtOpen = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+}
+{
+  // the case that needs the gate: restored while FLOATING on a wide window (so there is a spot to
+  // re-clamp from), then the window narrows past the cheat sheet's breakpoint and the CSS puts it
+  // in the flow. Clamping now would measure the whole column (1000px) and drag left to 96.
+  const panel = makePanel("verbal-cheat", 250, 1000, "vc-drag");
+  const env = makeEnv(panel, "tw_vcheat_pos", { left: 1265, top: 264 }, WIN);
+  global.window = env.window;
+  runInit(fn(VERBAL, "initCheatDrag", "polish-verbal.js"), "initCheatDrag();", env);
+  const restored = panel.at();
+  panel.position = "static";
+  env.resize(1100, 900);
+  out.resize.inFlow = { restored, after: panel.at() };
+}
+
+// -- 10. COLLAPSE TO THE HEADER PILL --------------------------------------------------------------
+// On a narrow screen the floating rail sits over the page, so it folds to its header. The rail's
+// initialiser passes collapseKey "tw_opts_collapsed"; the button is `.op-collapse` inside the header.
+out.collapse = {};
+{
+  const panel = makePanel("options-panel", 240, 1000, "op-drag");
+  const env = makeEnv(panel, "tw_opts_pos", undefined, WIN);
+  global.window = env.window;
+  const init = railInit();
+  runInit(init.body, init.call, env);
+  const start = panel.classList.contains("collapsed");
+  // Reported, not thrown: an initialiser that stops passing collapseKey binds no click, and the
+  // test should say so rather than the whole harness dying under every other test in the file.
+  const bound = "click" in panel.listeners;
+  if (!bound) panel.listeners.click = () => {};
+  panel.fire("click", { target: panel.button });
+  const first = { collapsed: panel.classList.contains("collapsed"), stored: env.store["tw_opts_collapsed"],
+                  aria: panel.button.attrs["aria-expanded"] };
+  panel.fire("click", { target: panel.button });
+  const second = { collapsed: panel.classList.contains("collapsed"), stored: env.store["tw_opts_collapsed"],
+                   aria: panel.button.attrs["aria-expanded"] };
+  // a click on the header itself (not the button) toggles nothing
+  panel.fire("click", { target: panel.handle });
+  const headerClick = panel.classList.contains("collapsed");
+  // a press on the button is not a drag: nothing moves, no dragging class, nothing saved
+  panel.style.left = "1000"; panel.style.top = "200";
+  panel.fire("pointerdown", { clientX: 1010, clientY: 210, target: panel.button });
+  const classOnPress = panel.classList.contains("op-dragging");
+  panel.fire("pointermove", { clientX: 1300, clientY: 500, target: panel.button });
+  panel.fire("pointerup", { target: panel.button });
+  out.collapse.rail = { bound, start, first, second, headerClick, classOnPress, afterPress: panel.at(),
+                        posSaved: env.store["tw_opts_pos"] || null };
+}
+{
+  // left collapsed last time: it opens collapsed
+  const panel = makePanel("options-panel", 240, 1000, "op-drag");
+  const env = makeEnv(panel, "tw_opts_pos", undefined, WIN);
+  env.store["tw_opts_collapsed"] = "1";
+  global.window = env.window;
+  const init = railInit();
+  runInit(init.body, init.call, env);
+  out.collapse.reopened = panel.classList.contains("collapsed");
+}
+{
+  // no collapseKey: the helper binds no click at all (the cheat sheet has no collapse)
+  const panel = makePanel("sheets", 256, 1000, "sh-drag");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  loadTW(env).floatPanel(panel, OPTS);
+  out.collapse.noKey = { boundClick: "click" in panel.listeners };
+}
+{
+  // a blocked store: the button still folds the panel, it just is not remembered
+  const panel = makePanel("sheets", 256, 1000, "sh-drag", "sh-collapse");
+  const env = makeEnv(panel, "tw_probe_pos", undefined, WIN);
+  env.localStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
+  let threw = false;
+  try {
+    loadTW(env).floatPanel(panel, Object.assign({ collapseKey: "tw_probe_collapsed", collapseButton: "sh-collapse" }, OPTS));
+    panel.fire("click", { target: panel.button });
+  } catch (err) { threw = true; }
+  out.collapse.blocked = { threw, collapsed: panel.classList.contains("collapsed") };
 }
 
 process.stdout.write(JSON.stringify(out) + "\n");

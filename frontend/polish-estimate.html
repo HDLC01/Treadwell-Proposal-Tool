@@ -179,6 +179,9 @@
        as a second selected tab). */
     .sheets .sh-tab.base .sh-basetag{flex:none;font:700 9.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;
       color:var(--card);background:var(--ink);border-radius:999px;padding:2px 6px}
+    /* "Bid N": the sheet is the base bid of its own proposal (Create Multiple Proposals). Outlined, so it never reads as the base's tag. */
+    .sheets .sh-bidtag{flex:none;font:700 9.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;
+      color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:1px 6px;margin-left:4px}
     .sheets .sh-tab.open{position:relative;z-index:1;margin-bottom:-1px;padding-bottom:1px;background:var(--card);
       box-shadow:inset 0 3px 0 var(--red)}
     .sheets .sh-addbtn.on{background:var(--red-tint);color:var(--red-dark)}
@@ -779,6 +782,13 @@
          letter-spacing:-.02em}
     .total .psf{font-size:12px;color:var(--ink-v);font-family:var(--mono)}
     @media (max-width:760px){ .total{margin-left:0;text-align:left;width:100%} .maths{width:100%} }
+    /* The scope bar (paintScopeBar): one row per thing it says, the controls at the row's end. */
+    .scope-bar{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
+    .scope-bar .scope-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+    .scope-bar .scope-row span{flex:1 1 280px;min-width:0}
+    .scope-bar input[type="text"]{flex:1 1 200px;min-width:0;min-height:36px;padding:6px 9px;font:inherit}
+    .scope-bar .note{margin:0}
+    .scope-bar .note.bad{color:#9b1c1c;font-weight:600}
   </style>
 </head>
 <body>
@@ -822,6 +832,9 @@
 
     <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
+    <!-- Which scope of its project this draft is, and the split of a several-sheet bid into one proposal per sheet (RJ, 2026-10-24).
+         Drawn by js/polish-estimate.js paintScopeBar; hidden while it has nothing to say. -->
+    <section class="scope-bar" id="scope-bar" aria-label="Scopes of this project" hidden></section>
     <div class="loading" id="loading">Loading the item library…</div>
 
     <div id="main" hidden>

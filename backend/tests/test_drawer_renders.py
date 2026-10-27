@@ -314,6 +314,20 @@ CONDITIONAL_IDS = {
     # state, so allowlisting it here leaves it covered rather than untested.
     "handoff-mark": "only rendered on a won project nobody has handed off yet",
     "handoff-undo": "only rendered on a project already handed to operations",
+    # Remind mode (2026-10-23). The task card exists only while the portal has a follow-up waiting
+    # on a human, and wireFollowup looks it up first and wires nothing else of it when it is absent;
+    # its own ids are pressed in test_followup_task_drawer.py, which renders one. The schedule is
+    # left off a closed-lost proposal, where nothing is being scheduled.
+    "fu-task": "only rendered while a follow-up task is waiting on a human",
+    "fu-sched": "not rendered on a closed-lost proposal",
+    # Scope groups (2026-10-25): the "Decide the other scopes" card, rendered only for that task in
+    # place of fu-task. Its own ids are pressed in test_group_followup_ui.py.
+    "fu-decide": "only rendered while a scope group's decision task is waiting on a human",
+    # Plan step 7 (2026-10-27): "Proposals of this project" renders only on a project with two or
+    # more proposals, and applySecPanel's loop over ALL_SEC_CARDS skips a card it cannot find. NOT A
+    # RELAXATION: test_scope_board_ui.py pins it present AND eligible on every grouped drawer it
+    # paints, and absent AND ineligible on a project of one.
+    "dsec-scope": "only rendered on a project with two or more proposals",
 }
 
 # The NOT-SENT paint's own additions, kept out of the dict above on purpose. On a sent drawer

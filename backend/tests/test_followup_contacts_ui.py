@@ -115,7 +115,7 @@ def test_only_contacts_actually_being_sent_to_can_be_opted_out():
 
 def test_the_publish_request_carries_it():
     code = _code("done.js")
-    i = code.index("/api/portal/publish")
+    i = code.index("const _publishBody = {")   # posted to the publish or the send-all (2026-10-27)
     body = code[i:i + 700]
     assert "no_followups: portalRecip.noFollowupsToSend()" in body, (
         "the send does not tell the portal who to leave out")

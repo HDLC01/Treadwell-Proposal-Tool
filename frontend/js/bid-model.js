@@ -1073,7 +1073,10 @@
    *  `distance: {miles, source, key}`:
    *    miles   a number (0 is a real answer), or null for "unknown";
    *    source  "google" (the server's figure) or "typed" (the estimator's own, which always wins);
-   *    key     which address the figure belongs to (distanceKey), so a changed address is noticed.
+   *    key     which address the figure belongs to (distanceKey), so a changed address is noticed;
+   *    precision, measured_to, street_not_found   on a server figure since 2026-10-22: "street", or the centre of the "zip",
+   *            "city" or "county" a job with no street (or a street the geocoder could not find) was measured to, and its name.
+   *            A centre figure is approximate (isApproxDistance) and is measured again when the address changes (distanceWantsLookup).
    *  `conditions.local` stays on the model -- it is still what Polish!B4 / Epoxy!B4 are written from
    *  -- but it is DERIVED now: under 70 miles is local. At 70 or more the three travel lines come
    *  on (Travel Labor by un-graying, Lodging and Per Diem by switching on); under 70 they go gray.
@@ -1095,18 +1098,36 @@
     return (isFinite(n) && n >= 0) ? Math.round(n * 10) / 10 : null;
   }
 
-  /** The address a distance belongs to, lower-cased and squeezed -- or "" when the address is too
-   *  thin to look up (needs a street AND a city+state or a zip, the same rule the server applies in
-   *  distance.clean_address). "" means: do not ask, and say so. */
-  function distanceKey(address, city, state, zip) {
+  /** The address a distance belongs to, lower-cased and squeezed -- or "" when there is too little
+   *  to place the job. "" means: do not ask, and say so. ENOUGH IS (Hanz, 2026-10-22: a bid with a
+   *  city, a state and a county and no street was called local): a street that can be placed (a
+   *  city + state, or a zip), OR a zip, OR a city + state, OR a county with a state (its own ", KS",
+   *  or the state box). The server applies the same rule (distance.can_place;
+   *  tests/test_distance_key_parity.py runs the two over one table) and measures a job with no street
+   *  to the centre of its zip, city or county.
+   *
+   *  A STREET'S KEY IS THE FOUR PARTS IT ALWAYS WAS: its figure does not depend on the county, and
+   *  every street figure saved before the county counted keeps matching its address. Without a
+   *  street the county is part of the key, because it can be what the figure was measured to. */
+  function distanceKey(address, city, state, zip, county) {
     function one(v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().toLowerCase(); }
-    var a = one(address), c = one(city), s = one(state), z = one(zip);
-    if (!a) return "";
-    if (!((c && s) || z)) return "";
-    return [a, c, s, z].join("|");
+    var a = one(address), c = one(city), s = one(state), z = one(zip), k = one(county);
+    if (a && ((c && s) || z)) return [a, c, s, z].join("|");
+    // The county carries its own state ("sedgwick county, ks"): the text after its LAST comma is two letters (distance._split_state's rule).
+    var countyState = k.indexOf(",") >= 0 && /^[a-z]{2}$/.test(k.slice(k.lastIndexOf(",") + 1).trim());
+    if (!(z || (c && s) || (k && (s || countyState)))) return "";
+    return [a, c, s, z, k].join("|");
   }
 
-  /** A saved `distance` read as a full one, or undefined when there is none. Never throws. */
+  /** What an answer can have been measured to. "street" is the address itself; the other three are a
+   *  centre (the Census Gazetteer's), so the figure is approximate. */
+  var APPROX_PRECISIONS = ["zip", "city", "county"];
+  var PRECISION_WORDS = { zip: "zip code center", city: "city center", county: "county center" };
+
+  /** A saved `distance` read as a full one, or undefined when there is none. Never throws.
+   *  `precision` and `measured_to` (what a server figure was measured to) and `street_not_found` are
+   *  kept when the record has them and are absent otherwise, so a figure saved before they existed
+   *  reads, and saves, exactly as it did (as a street figure). */
   function normalizeDistance(d) {
     if (!d || typeof d !== "object") return undefined;
     var out = { miles: milesOrNull(d.miles), source: d.source === "typed" ? "typed" : "google",
@@ -1114,7 +1135,42 @@
     // A record with no figure says nothing (a failed lookup is never stored, so it is asked again
     // on the next open -- the key may have been configured since).
     if (out.miles === null) return undefined;
+    if (out.source === "typed") return out;
+    if (APPROX_PRECISIONS.indexOf(d.precision) >= 0 || d.precision === "street") out.precision = d.precision;
+    if (typeof d.measured_to === "string" && d.measured_to) out.measured_to = d.measured_to.slice(0, 200);
+    if (d.street_not_found === true && out.precision && out.precision !== "street") out.street_not_found = true;
     return out;
+  }
+
+  /** Is this distance a server figure measured to a CENTRE (zip, city or county), not to the street? */
+  function isApproxDistance(d) {
+    return !!d && typeof d === "object" && d.source !== "typed" && APPROX_PRECISIONS.indexOf(d.precision) >= 0 &&
+      milesOrNull(d.miles) !== null;
+  }
+
+  /** SHOULD THE PAGE MEASURE THE JOB WHEN IT OPENS? `d` is the distance on file, `key` the address's
+   *  distanceKey now. Yes when there is no distance at all (never measured, never typed: Hanz,
+   *  2026-10-22, a saved bid too), and when a CENTRE figure's address has changed since (a street was
+   *  added: the exact figure replaces the approximate one). Never for a typed figure (only the button
+   *  replaces one), and never for a street figure (it keeps "the address changed since this was
+   *  measured" and the button, as before). */
+  function distanceWantsLookup(d, key) {
+    var dist = normalizeDistance(d);
+    if (!dist) return true;
+    if (!isApproxDistance(dist)) return false;       // a typed figure (never a centre) or a street figure
+    return !!key && dist.key !== key;
+  }
+
+  /** DOES THE PAGE MEASURE THIS BID WHEN IT OPENS? distanceWantsLookup, with one more rule for a SAVED bid
+   *  (`isNew` false) that has no distance at all: when its conditions already say FAR (`conditions.local === false`,
+   *  which only the old intake switch, the Polish!B4 cell or autofill's B4 flag can have written) it is a stated
+   *  answer and is left for the button. Measured on open, a near centre figure turned that bid's Lodging and Per
+   *  Diem off and saved a new price with no click (the 2026-10-22 audit's finding 1). A saved bid that says local
+   *  (the shipped default, Hanz's Wichita bid) is still measured, and a far answer fills its travel. */
+  function openWantsDistance(model, key, isNew) {
+    var dist = normalizeDistance(model && model.distance);
+    if (!dist && !isNew && isObject(model) && isObject(model.conditions) && model.conditions.local === false) return false;
+    return distanceWantsLookup(model && model.distance, key);
   }
 
   /** Is a job at this many miles a travel job? Unknown is false: it is not asked to be anything. */
@@ -1124,12 +1180,20 @@
   }
 
   /** The model with a distance answer applied, IN PLACE (and returned). `result` is
-   *  `{miles, source, key}`; a result with no usable miles records nothing and changes nothing. */
+   *  `{miles, source, key}`, and for a server figure also `precision`, `measured_to` and
+   *  `street_not_found` (what /api/distance answers: see normalizeDistance); a result with no usable
+   *  miles records nothing and changes nothing. */
   function applyDistance(model, result) {
     var miles = milesOrNull(result && result.miles);
     if (!model || miles === null) return model;
-    model.distance = { miles: miles, source: (result.source === "typed" ? "typed" : "google"),
+    var typed = result.source === "typed";
+    model.distance = { miles: miles, source: (typed ? "typed" : "google"),
                        key: String(result.key || "") };
+    var kept = typed ? null : normalizeDistance(Object.assign({}, result, { miles: miles, source: "google" }));
+    var precision = kept && kept.precision;
+    if (precision) model.distance.precision = precision;
+    if (kept && kept.measured_to) model.distance.measured_to = kept.measured_to;
+    if (kept && kept.street_not_found) model.distance.street_not_found = true;
     var far = miles >= LOCAL_MILES;
     if (!model.conditions) model.conditions = {};
     model.conditions.local = !far;
@@ -2387,10 +2451,26 @@
     var d = model && model.distance;
     if (d && milesOrNull(d.miles) !== null) {
       var n = milesOrNull(d.miles);
+      // A figure measured to a CENTRE (no street, or a street the geocoder could not find) says it is one, in whole miles
+      // (Hanz, 2026-10-22): "About 190 miles to Wichita, KS (city center)".
+      if (isApproxDistance(d)) return "About " + Math.round(n) + " miles to " + (d.measured_to || "the job") + " (" + PRECISION_WORDS[d.precision] + ")";
       var shown = (n % 1 === 0) ? String(n) : n.toFixed(1);
       return shown + " mi from Olathe office" + (d.source === "typed" ? " (typed by you)" : "");
     }
     return "Distance unknown — enter miles";
+  }
+
+  /** The words on a dimmed Travel Labor card (the page's `.inertline`): why it is gray. A job MEASURED under 70 miles is local;
+   *  a job with NO distance is not known to be anything, and is never called local (Hanz, 2026-10-22: a Wichita bid with no
+   *  street said "This job is marked local" and filled no travel). `model` is the WHOLE model (the distance is the job's),
+   *  `carrier` the name on screen of the sheet the miles are typed on. Its price is not touched: an unknown distance still
+   *  prices no travel until miles arrive. */
+  function travelInertWords(model, carrier) {
+    var d = model && model.distance;
+    if (!d || milesOrNull(d.miles) === null) {
+      return "Distance unknown. Add the job's city and state on the intake step, or type the miles on the " + (carrier || "base") + " sheet.";
+    }
+    return "This job is marked local, so no travel is expected — type here anyway if it needs drive time.";
   }
 
   /** HOW THE TRAVEL LINES ARE WORKED OUT, in plain words (Hanz, 2026-10-06: "a note that it is
@@ -5917,6 +5997,10 @@
     ["tab_opts", "tab_notes"].forEach(function (key) {
       if (holds(st[key], byTab)) patch[key] = without(st[key], byTab);
     });
+    // Its "Its own proposal" tick (base_tab_ids), or the next sheet handed this id comes back a base bid of its own proposal.
+    if (Array.isArray(st.base_tab_ids) && st.base_tab_ids.indexOf(tab) >= 0) {
+      patch.base_tab_ids = st.base_tab_ids.filter(function (x) { return x !== tab; });
+    }
     var pov = st.price_overrides;
     if (isObject(pov)) {
       var changed = false;
@@ -6241,6 +6325,100 @@
     var patch = { work_type: baseOf(out).jobType, base_tab_id: want.length === 1 ? want[0] : null };
     if (touched) patch.tab_opts = opts;
     return { model: out, patch: patch };
+  }
+
+  // ══ SPLITTING A BID INTO SEPARATE PROPOSALS (scope groups, tier A1; RJ, 2026-10-24) ═══════════════════════════════════════════════════
+  //
+  // A client gets a few separately priced scopes under one project (Breakroom polish, Lab 1 epoxy, Lab 2 epoxy), each its OWN proposal the customer
+  // approves on its own. The estimator can build them as SHEETS of one estimate first, as today, and then split: each sheet becomes a one-sheet bid with
+  // itself as the base, and the server files each as a scope of one project (POST /api/draft/{id}/split, backend/drafts.py split_draft).
+  //
+  // WHAT A SHEET IS PRICED AT DOES NOT MOVE. A sheet that was the base keeps the job's Lodging and Per Diem as they stood, typed figures included: they
+  // are its crew's. A sheet that was an OPTION was charged its own crew's nights (optionTravelCosts, ownNights) and never the job's typed quantity, so as
+  // a bid of its own its two lines FOLLOW ITS OWN LABOR (qty_follow "labor": jobNights of a one-base bid is that sheet's own count), which is the same
+  // figure. That is the audit's hazard answered by CLEARING, not by refusing: copying the carrier's typed "10 nights" onto every scope would bill the
+  // Breakroom crew's hotel on Lab 1 and Lab 2 as well. And an option that held no Travel Labor row of its own is given none: pickBase hands a new base a
+  // copy of the old base's drive (moveTravelLabor), which here would put the Breakroom crew's typed trip on the Lab crew's proposal.
+  //
+  // NOTHING IS GUESSED. A bid whose base is Epoxy and Polish PRICED TOGETHER, a bid with an option that can never be a base (Seal, Leveling), a bid
+  // with no base, and a bid of one sheet are refused with the reason: each needs the estimator to decide something first.
+
+  /** Why this bid cannot be split into separate proposals, in the estimator's words, or null when it can. Reads only; never throws. */
+  function splitBlockers(model) {
+    var list = readableSections(model);
+    if (list === null) return "This bid's sheets cannot be read, so they cannot be split.";
+    var live = list.filter(function (e) { return e.kind !== "off"; });
+    if (live.length < 2) return "There is only one sheet on this bid, so there is nothing to split.";
+    var lone = live.filter(function (e) { return types.tab(types.tabOfSheet(e.sheet)).optionOnly; })[0];
+    if (lone) {
+      return "The " + lone.label + " sheet is an option on a bid and never a bid of its own, so it cannot become its own proposal. " +
+        "Delete it, or make it part of another sheet, before you split.";
+    }
+    var base = baseOf(model);
+    if (base.ids.length === 2) {
+      return "The base bid is an Epoxy and a Polish sheet priced together. Make one sheet the base before you split, so each sheet is priced on its own.";
+    }
+    if (base.ids.length !== 1) return "This bid has no base sheet. Make one sheet the base before you split.";
+    return null;
+  }
+
+  /** The sheets a split makes proposals of, in the bid's order: every sheet that is part of the bid. [] when it cannot be split (splitBlockers). */
+  function splitTabs(model) {
+    if (splitBlockers(model) !== null) return [];
+    return activeSections(model).map(function (e) { return e.tab; });
+  }
+
+  /** ONE SHEET OF A BID AS A BID OF ITS OWN (the block above). Answers `{ model, patch, label, carrier }`: a NEW model whose only base is `tabId`, with
+   *  every other sheet under `tabs` deleted (and the Polish root marked off when it is not the sheet), the draft's side of it (`patch`: pickBase's
+   *  `work_type` and `base_tab_id`, and what deleteSection forgets of each deleted sheet), the sheet's name, and whether this sheet carried the job's
+   *  travel before (`carrier`). `ctx.state` is the draft. THROWS with splitBlockers' words, for a sheet the bid does not have and for one that is off.
+   *  Pure: the model handed in is not touched. */
+  function splitOut(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("splitOut needs the model");
+    var blocked = splitBlockers(model);
+    if (blocked !== null) throw new Error(blocked);
+    var entry = sectionOf(model, tabId);
+    if (entry.kind === "off") throw new Error("The " + entry.label + " sheet is not part of this bid, so it cannot become a proposal.");
+    var carrierBefore = travelCarrier(model);
+    var heldDrive = travelRowsIn(entry.section).length > 0;
+    var draftNow = isObject(ctx) && isObject(ctx.state) ? ctx.state : {};
+    var made = pickBase(model, [tabId], { state: draftNow });
+    var out = made.model;
+    var patch = Object.assign({}, made.patch);
+    draftNow = Object.assign({}, draftNow, patch);
+    sectionsOf(out).forEach(function (e) {
+      if (e.root || e.tab === tabId) return;
+      var gone = deleteSection(out, e.tab, { state: draftNow });
+      out = gone.model;
+      patch = Object.assign(patch, gone.patch);
+      draftNow = Object.assign({}, draftNow, gone.patch);
+    });
+    if (tabId !== ROOT_TAB) {
+      out = withSectionKind(out, ROOT_TAB, "off");
+      // pickBase filed the old base as an option ON the proposal; the root is off now, so that entry says something about nothing.
+      if (isObject(patch.tab_opts) && has.call(patch.tab_opts, ROOT_TAB)) {
+        patch.tab_opts = Object.fromEntries(Object.keys(patch.tab_opts).filter(function (k) { return k !== ROOT_TAB; })
+          .map(function (k) { return [k, patch.tab_opts[k]]; }));
+      }
+    }
+    out = jsonCopy(out);
+    var mine = sectionOf(out, tabId).section;
+    // An option that had no drive of its own is given none (see the block above): pickBase's copy of the old base's row is the other crew's.
+    if (!heldDrive && mine.labor instanceof Array) mine.labor = mine.labor.filter(function (r) { return !isTravelRow(r); });
+    // A sheet that was not the carrier charges its own crew's nights, as it did as an option: never the job's typed quantity.
+    if (tabId !== carrierBefore && isObject(out.travel)) {
+      TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = out.travel[k];
+        if (!isObject(l)) return;
+        l.qty_auto = true;
+        l.qty_follow = "labor";
+        delete l.qty_typed;
+      });
+    }
+    syncAutoGuys(out);
+    patch.work_type = baseOf(out).jobType;
+    patch.base_tab_id = tabId;
+    return { model: out, patch: patch, label: entry.label, carrier: tabId === carrierBefore };
   }
 
   /** A SINGLE-base job's Travel Labor row follows its one base (pickBase calls this only when the job has one base before and after the pick and the base moved; since
@@ -6848,6 +7026,59 @@
     return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
+  // ── SEVERAL BASE BIDS ON ONE v2 ESTIMATE ("Create Multiple Proposals") ─────────────────────────────────────
+  // The v2 side of TWPrice.baseIds / toggleBaseId (price-lines-core.js): a sheet the estimator switches to "Its own proposal" is
+  // ticked in the draft's `base_tab_ids`, beside the one pricing base (the model's kind:"base" section, which `base_tab_id` names).
+  // The model is not touched: the ticked sheets stay options on this draft's proposal, and the server makes each its own proposal
+  // when Create Multiple Proposals is pressed on the Proposal step (drafts.fan_out_proposals). The invariant is the v1 one: the
+  // pricing base is Base Bid 1, the others follow in the sheets' order (sectionsOf(withSectionOrder(model))).
+
+  /** The section entries a "Its own proposal" switch is read against, in the bid's order, and the one pricing base's tab (null for
+   *  the combined Epoxy + Polish pair, or none). null when the sections cannot be read. */
+  function proposalSheets(model) {
+    var entries = readableSections(withSectionOrder(model));
+    if (entries === null) return null;
+    var bases = entries.filter(isBaseEntry);
+    return { entries: entries, base: bases.length === 1 ? bases[0].tab : null };
+  }
+
+  /** Can this entry be a base bid of its own proposal? A sheet that is part of the bid (not off) and that can be a base (Seal never is). */
+  function canOwnProposal(e) {
+    return !!e && e.kind !== "off" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;
+  }
+
+  /** The base bids of a v2 draft in Base Bid order: the pricing base first, then every sheet `state.base_tab_ids` ticks that can be
+   *  one, in the bid's order. [] for a bid whose base is the combined pair (it is one proposal; the pair cannot be split) or whose
+   *  sections cannot be read. A draft that never ticked a sheet answers [the base]. */
+  function proposalBaseIds(model, state) {
+    var ps = proposalSheets(model);
+    if (ps === null || ps.base === null) return [];
+    var raw = isObject(state) && Array.isArray(state.base_tab_ids) ? state.base_tab_ids : [];
+    var rest = ps.entries.filter(function (e) { return e.tab !== ps.base && canOwnProposal(e) && raw.indexOf(e.tab) >= 0; })
+      .map(function (e) { return e.tab; });
+    return [ps.base].concat(rest);
+  }
+
+  /** THE "ITS OWN PROPOSAL" SWITCH: the patch `{ base_tab_id, base_tab_ids }` a press on sheet `tab` makes (`on` true ticks it), or
+   *  null when it changes nothing or is refused. Pure: `state` (the draft) and `model` are not touched. The rule is
+   *  TWPrice.toggleBaseId's, ordered by the model's sections, with the v2 refusals:
+   *   - ticking a sheet adds it as the next Base Bid; the pricing base stays where it is;
+   *   - unticking a sheet takes it off; the pricing base is never unticked here (it is Base Bid 1, and it is moved by the base radio);
+   *   - an option-only sheet (Seal), a sheet that is off, a sheet the bid does not have, and every sheet while the base is the combined
+   *     Epoxy + Polish pair are refused (null): a combined base is one proposal, so one sheet must be made the base first. */
+  function proposalBasePatch(state, tab, on, model) {
+    if (!isObject(state)) return null;
+    var ps = proposalSheets(model);
+    if (ps === null || ps.base === null || tab === ps.base) return null;
+    var e = ps.entries.filter(function (x) { return x.tab === tab; })[0];
+    if (!canOwnProposal(e)) return null;
+    var now = proposalBaseIds(model, state);
+    var ticked = now.indexOf(tab) >= 0;
+    if (!!on === ticked) return null;
+    var want = on ? now.concat([tab]) : now.filter(function (x) { return x !== tab; });
+    return { base_tab_id: ps.base, base_tab_ids: proposalBaseIds(model, { base_tab_ids: want }) };
+  }
+
   /** WHAT THE PANEL SAYS ABOUT EACH SHEET, worked out once for the panel and the "Open sheet" line. Every sheet that is part of
    *  the bid, as { e, base, inBase, opt, optOnly, canBase, price, on, mode, typeLabel, lead, figure, off }; the base bid(s)' ids
    *  and total; the combined pair and its total. A bid whose sections cannot be read is the root alone, with `unreadable` set. */
@@ -6872,6 +7103,10 @@
     };
     var baseTotal = sumOf(baseIds);
     var pair = unreadable ? null : combinedPair(model);
+    // The sheets that are base bids of their own proposals (view.baseIds, the draft's base_tab_ids), in Base Bid order. Tagged "Bid N"
+    // only once there are two: a bid of one proposal says nothing new.
+    var bidIds = unreadable ? [] : proposalBaseIds(model, { base_tab_ids: Array.isArray(v.baseIds) ? v.baseIds : [] });
+    var several = bidIds.length >= 2;
     var rows = list.map(function (e) {
       var rec = types.tab(types.tabOfSheet(e.sheet));
       var base = baseIds.length === 1 && baseIds[0] === e.tab;
@@ -6896,12 +7131,15 @@
           }
         } else lead = "Option, total";
       }
+      var at = bidIds.indexOf(e.tab);
       return { e: e, base: base, inBase: inBase, opt: opt, optOnly: optOnly, canBase: !optOnly, price: price, on: on, mode: mode,
                desc: typeof held.desc === "string" ? held.desc : "", typeLabel: e.role === "seal" ? e.sheet : rec.label,
-               lead: lead, figure: figure, off: off };
+               lead: lead, figure: figure, off: off,
+               // "Its own proposal": offered on an option that can be a base, while the bid has one pricing base (bidIds is [] for the pair)
+               own: opt && at > 0, canOwn: opt && !optOnly && !unreadable && baseIds.length === 1, bid: several && at >= 0 ? at + 1 : 0 };
     });
     return { view: v, unreadable: unreadable, entries: entries, rows: rows, baseIds: baseIds, baseTotal: baseTotal,
-             pair: pair, pairTotal: pair ? sumOf(pair) : null };
+             pair: pair, pairTotal: pair ? sumOf(pair) : null, bidIds: bidIds };
   }
 
   /** What a base change says before it is made: { title, body } for pressing `ids` (one sheet, or the combined pair). The base
@@ -7041,7 +7279,10 @@
           escHtml(t) + '"' + key(t, "open") + ' title="Double-click to rename" aria-current="' + (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) +
           '</span><span class="sh-price' + (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span>' +
           // THE BASE SAYS SO IN WORDS (browser walk, 2026-10-20): its red edge read as a second selected tab.
-          (r.base || r.inBase ? '<span class="sh-basetag">Base</span>' : "") + '</button>';
+          (r.base || r.inBase ? '<span class="sh-basetag">Base</span>' : "") +
+          // BID N: which proposal this sheet is the base bid of, once two or more sheets are (base_tab_ids, "Its own proposal").
+          (r.bid ? '<span class="sh-bidtag" data-sh-bid="' + r.bid + '" title="Base Bid ' + r.bid + ': its own proposal">Bid ' + r.bid + '</span>' : "") +
+          '</button>';
       }
       return s + '</li>';
     }
@@ -7092,6 +7333,14 @@
           }
           s += '</div></div>';
           if (r.optOnly) s += '<p class="sh-note">Seal sheets are options only. They are priced as a total and can\'t be the base bid.</p>';
+          // ITS OWN PROPOSAL (Create Multiple Proposals): this sheet is a base bid too, of a proposal of its own made on the Proposal step.
+          // Refused while Epoxy + Polish are the base together (the pair is one proposal), and never offered on a Seal sheet.
+          var pairBase = !r.optOnly && !f.unreadable && f.baseIds.length === 2;
+          if (r.canOwn || pairBase) {
+            s += '<button type="button" class="mw-sw sh-own' + (r.own ? " on" : "") + '" role="switch" aria-checked="' + (r.own ? "true" : "false") +
+              '" data-sh-act="own"' + tabAttr + key(t, "own") + (r.canOwn ? "" : ' disabled title="Make one sheet the base first: Epoxy + Polish together are one proposal"') +
+              '><span class="track"></span>Its own proposal' + (r.bid ? ' <span class="sh-bidtag">Base Bid ' + r.bid + '</span>' : "") + '</button>';
+          }
         }
         var locked = r.base || r.inBase || e.root;
         var armed = v.armed === t && !locked;
@@ -7219,6 +7468,8 @@
     LOCAL_MILES: LOCAL_MILES, milesOrNull: milesOrNull, distanceKey: distanceKey,
     normalizeDistance: normalizeDistance, driveHoursFor: driveHoursFor, isFarMiles: isFarMiles, applyDistance: applyDistance,
     clearDistance: clearDistance, distanceNote: distanceNote, travelHow: travelHow,
+    // A job with no street measured to a centre (2026-10-22): which figures are approximate, when the page measures on open, and the words of a dimmed card.
+    isApproxDistance: isApproxDistance, distanceWantsLookup: distanceWantsLookup, openWantsDistance: openWantsDistance,travelInertWords: travelInertWords,
     // Travel Labor filled from the distance (2026-10-20): what it wrote, where it says so, the crew size its guys follow, and the
     // marker the estimator's typing leaves so an answer never writes into a box they have touched.
     driveHoursAreTools: driveHoursAreTools, driveHoursSource: driveHoursSource,
@@ -7285,10 +7536,14 @@
     MAX_COPIES: MAX_COPIES, polishBid: polishBid, baseOf: baseOf, pickBase: pickBase, sheetsToAdd: sheetsToAdd,
     copySection: copySection, addSheet: addSheet, renameSection: renameSection, deleteSection: deleteSection,
     validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
+    // Splitting a bid's sheets into separate proposals (scope groups, tier A1): see the block above splitBlockers.
+    splitBlockers: splitBlockers, splitTabs: splitTabs, splitOut: splitOut,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, coveHeightOf: coveHeightOf, sectionSwitcherHtml: sectionSwitcherHtml,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
     sheetsPanelHtml: sheetsPanelHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
+    // Several base bids on one estimate, each its own proposal (Create Multiple Proposals): see the block above sheetsFacts.
+    proposalBaseIds: proposalBaseIds, proposalBasePatch: proposalBasePatch,
     optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
     // A Gyp sheet's key changes with its preset: what the draft kept under the old key follows (see moveSheetDraftPatch).
     moveSheetDraftPatch: moveSheetDraftPatch,
