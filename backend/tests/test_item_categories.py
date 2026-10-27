@@ -227,16 +227,18 @@ def test_a_category_set_through_the_api_reads_back_and_survives_a_jsonb_reload(s
     it = _mk()
     c = _as(monkeypatch, "user")
     r = c.patch("/api/library/items/%s" % it["id"],
-                json={"material_categories": {"polish": "polish-patch", "epoxy": "epoxy-extras"}})
+                json={"material_categories": {"gyp": "gyp-bags", "epoxy": "epoxy-extras"}})
     assert r.status_code == 200
-    assert r.json()["item"]["material_categories"] == {"epoxy": "epoxy-extras", "polish": "polish-patch"}
-    # A reload: the stored map round-trips through JSON with its keys in jsonb's order (length, then bytes).
+    assert r.json()["item"]["material_categories"] == {"epoxy": "epoxy-extras", "gyp": "gyp-bags"}
+    # A reload: the stored map round-trips through JSON with its keys in jsonb's order (length, then bytes),
+    # which puts "gyp" before "epoxy" - the opposite of the store's own order.
     row = store["library_items"][0]
     raw = row["material_categories"]
     row["material_categories"] = json.loads(json.dumps(dict(sorted(raw.items(), key=lambda kv: (len(kv[0]), kv[0])))))
     listed = c.get("/api/library/items").json()["items"][0]["material_categories"]
-    assert listed == {"epoxy": "epoxy-extras", "polish": "polish-patch"}
-    assert list(listed) == ["epoxy", "polish"], "read back in the store's own order, whatever jsonb did"
+    assert list(row["material_categories"]) == ["gyp", "epoxy"], "the reload did not reorder: not a real round trip"
+    assert listed == {"epoxy": "epoxy-extras", "gyp": "gyp-bags"}
+    assert list(listed) == ["epoxy", "gyp"], "read back in the store's own order, whatever jsonb did"
 
 
 def test_a_category_alone_moves_no_price_date(store, monkeypatch):
