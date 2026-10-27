@@ -24,6 +24,14 @@
  * continueToDone), and the press holds one that still prints Kyle's template placeholders
  * ("xx gallons", "-or-" choices; main._send_all_placeholders) until a person composes it.
  *
+ * TWO KINDS OF WALK (Hanz, 2026-10-28). "sendall" (the default) is the above. "generate" is the
+ * 3 · Generate Files step (js/generate.js): a proposal whose saved document no longer matches its
+ * draft (the estimate changed) is walked through the same door so its files are built from the
+ * estimate as it stands, then the walk goes back to that step. A generate walk never marks the
+ * document `proposal_auto_built` (the Files page's own door leaves the mark alone too, and these are
+ * documents a person already composed), the door's words name the Generate Files step, and only
+ * the page of its own kind can take it: a Files page never presses Send after a generate walk.
+ *
  * window.TWSendAll: start, nextHop, abandon, progress, take. Node (tests): module.exports.create(root),
  * where root carries sessionStorage, location, history and (optionally) crypto and Date.
  */
@@ -110,10 +118,13 @@
     return r;
   }
 
+  /** "generate" or "sendall": a record written before kinds existed is a Send all walk. */
+  function kindOf(k) { return k === "generate" ? "generate" : "sendall"; }
+
   /** Begin the walk: `o.build` [{id, label}] are the proposals the press named, `o.returnUrl` the
-   *  page that pressed, `o.stash` what that page needs to press again. Leaves for the first door and
-   *  answers true; false (nothing written, nowhere gone) when it cannot, so the caller says the
-   *  press's own sentence instead. */
+   *  page that pressed, `o.stash` what that page needs to press again, `o.kind` "generate" for the
+   *  Generate Files step (else Send all). Leaves for the first door and answers true; false (nothing
+   *  written, nowhere gone) when it cannot, so the caller says the press's own sentence instead. */
   function start(o) {
     o = o || {};
     var group = String(o.group || "");
@@ -125,7 +136,7 @@
     build.forEach(function (b) { labels[String(b.id)] = String(b.label || "A proposal"); });
     var r = { token: token(), group: group, queue: ids, built: [], labels: labels,
               returnUrl: stripOwn(o.returnUrl || "/portal.html"), stash: o.stash || null,
-              expires: now() + TTL_MS, done: false };
+              expires: now() + TTL_MS, done: false, kind: kindOf(o.kind) };
     if (!write(r)) return false;
     try { root.location.assign(doorUrl(ids[0], r.token)); } catch (e) { clear(); return false; }
     return true;
@@ -159,19 +170,21 @@
 
   function progressOf(r, id) {
     var n = r.built.length + r.queue.length;
-    return { label: r.labels[id] || "A proposal", i: Math.min(r.built.length + 1, n), n: n };
+    return { label: r.labels[id] || "A proposal", i: Math.min(r.built.length + 1, n), n: n,
+             kind: kindOf(r.kind) };
   }
 
-  /** {label, i, n} for this door's banner, or null. */
+  /** {label, i, n, kind} for this door's banner, or null. */
   function progress(params) {
     var r = live(params);
     return r ? progressOf(r, get(params, "d")) : null;
   }
 
-  /** The finished walk, ONCE, for the page that pressed (`group` is its project): {stash, built,
-   *  labels}. Null for anything else, and the record is gone either way: an expired walk, another
-   *  project's, one that never finished, or one already taken never presses anything. */
-  function take(params, group) {
+  /** The finished walk, ONCE, for the page that pressed (`group` is its project, `kind` its kind of
+   *  walk, Send all when omitted): {stash, built, labels}. Null for anything else, and the record is
+   *  gone either way: an expired walk, another project's, another kind's, one that never finished,
+   *  or one already taken never presses anything. */
+  function take(params, group, kind) {
     var tok = get(params, "sendall_resume");
     if (!tok) return null;
     try {
@@ -183,6 +196,7 @@
     if (!r || r.token !== tok) return null;
     clear();
     if (!r.done || !group || r.group !== String(group) || !(r.expires > now())) return null;
+    if (kindOf(r.kind) !== kindOf(kind)) return null;
     resumed[r.group] = true;
     return { stash: r.stash, built: r.built.slice(), labels: r.labels };
   }

@@ -7916,6 +7916,11 @@ class DocumentsIn(BaseModel):
     # can sit on screen while a colleague's save lands. Optional: the page's own builds (the files
     # it shows on arrival) and an older page send nothing, and are built as before.
     draft_version: Optional[str] = None
+    # The 3 · Generate Files step (js/generate.js) builds every proposal of a project with nobody
+    # reading the documents first. A document Send all's walk composed unattended that still prints
+    # Kyle's template placeholders (_send_all_placeholders) is then refused with words, never handed
+    # out as a download. The Files page sends nothing here and builds as before.
+    hold_placeholders: bool = False
 
 
 def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
@@ -7959,6 +7964,12 @@ def api_draft_documents(draft_id: str, request: Request,
     if not (isinstance(pp, dict) and pp.get("values")):
         raise HTTPException(422, "This proposal hasn't been built yet — open the Proposal step "
                                  "and press Continue.")
+    if payload and payload.hold_placeholders:
+        held = _send_all_placeholders(row.get("data") or {}, True)
+        if held:
+            raise HTTPException(409, "Not built — this proposal was put together automatically and "
+                                     "still has template placeholders (%s). Open its Proposal "
+                                     "step, fill them, and press Continue." % ", ".join(held))
     out = _documents_out(_render_documents(pp, request, want_estimate=True))
     if not (row.get("data") or {}).get("generate_result"):
         try:

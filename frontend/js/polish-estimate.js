@@ -1881,8 +1881,9 @@
       // withDraft, not a bare path: this panel is rendered long after shared.js has finished
       // stamping ?d= onto the static links, and on a test copy the id it would have stamped is
       // the REAL project's. Continue has to carry the draft the page is actually editing.
-      : '<a class="btn" href="' + esc(TW.withDraft("/proposal-review.html")) +
-        '">Continue to proposal →</a>';
+      // 3 · Generate Files comes next (Hanz, 2026-10-28): it builds the files, then leads on to the proposal.
+      : '<a class="btn" href="' + esc(TW.withDraft("/generate.html")) +
+        '">Continue to generate files →</a>';
     return '<section class="sec"><div class="sec-h"><h2>' + esc(title) + '</h2>' +
       (blurb ? '<p>' + esc(blurb) + '</p>' : '') + '</div><div class="sec-b">' + body + '</div>' +
       '<div class="nav"><span class="step-of">Step ' + (at + 1) + ' of ' + STEPS.length +

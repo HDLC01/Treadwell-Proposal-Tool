@@ -5409,9 +5409,11 @@ document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
   window.location.assign(TW.withDraft("/?edit=1"));   // back to intake for the current draft (home is Projects)
 });
+// Continue goes to 3 · Generate Files (Hanz, 2026-10-28), which builds every proposal's files from
+// the estimate as it stands, then leads on to the Proposal step.
 document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign(TW.withDraft("/proposal-review.html"));
+  window.location.assign(TW.withDraft("/generate.html"));
 });
 // EVERY STEP PILL LEAVES WITH THE EDIT THE GRID IS STILL HOLDING. A cell edit lives in `cellValues`
 // and HyperFormula until the grid's `change` listener runs persistTabState 300ms later (`_cbTimer`),

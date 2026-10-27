@@ -28,7 +28,7 @@ def app_pages():
 def test_there_are_app_pages_to_check():
     """A rename that empties the glob would make every test below vacuously pass."""
     names = {p.name for p in app_pages()}
-    assert {"index.html", "projects.html", "done.html", "info-sheet.html"} <= names
+    assert {"index.html", "projects.html", "done.html", "info-sheet.html", "generate.html"} <= names
 
 
 @pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)

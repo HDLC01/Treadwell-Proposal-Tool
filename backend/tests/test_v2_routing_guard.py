@@ -367,8 +367,16 @@ DOORS = [
      "a proposal child opened on the estimate goes to its parent's"),
     ("js/index.js", 'TW.redirectProposalChild("/?edit=1")', 1, INTAKE,
      "a proposal child opened on the intake goes to its parent's"),
-    ("js/proposal-review.js", ': "/estimate-review.html");', 1, SHEET,
-     "Back from a proposal child goes to its parent's estimate (parentStepHref)"),
+    # 3 · Generate Files (2026-10-28): step 3 of the wizard. Its 1 · Intake and 2 · Estimate pills and its
+    # Back are the spreadsheet's, re-pointed by generate.js to the v2 pages for a v2 draft and to the PARENT's
+    # for a proposal child; the destination pages run their own guards either way. (The Proposal step's
+    # Back now leads here, so it no longer names the estimate.)
+    ("generate.html", 'href="/?edit=1"', 1, INTAKE, "the 1 · Intake step pill"),
+    ("generate.html", 'href="/estimate-review.html"', 2, SHEET, "the 2 · Estimate step pill, and Back"),
+    ("js/generate.js", 'var INTAKE = "/?edit=1";', 1, INTAKE,
+     "the 1 · Intake pill's spreadsheet target (stepTargets; v2 and a proposal child are re-pointed)"),
+    ("js/generate.js", 'var ESTIMATE = "/estimate-review.html";', 1, SHEET,
+     "the 2 · Estimate pill's and Back's spreadsheet target (stepTargets)"),
     ("js/proposal-review.js", 'u.searchParams.has("edit")', 1, NOT_A_DOOR,
      "parentStepHref reads the parameter to re-point a child's Intake pill, it opens nothing"),
     ("js/proposal-review.js", '["/estimate-review.html", "/polish-estimate.html", "/polish-intake.html"]', 1, SHEET,
@@ -380,8 +388,8 @@ DOORS = [
     ("js/portal.js", "&edit=1", 3, INTAKE, "the board's drawer: Open, a scope not on the board"),
     ("js/projects.js", "&edit=1", 1, INTAKE, "a Projects card (a v2 card goes to the v2 intake first)"),
     ("js/proposal-review.js", 'href="/?edit=1"', 1, INTAKE, "Go to Intake on the no-project card"),
-    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 2, SHEET,
-     "Back from the proposal step, and the Pricing options panel's link to the estimate on a v2 draft"),
+    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 1, SHEET,
+     "the Pricing options panel's link to the estimate on a v2 draft"),
     ("shared.js", 'searchParams.has("edit")', 1, NOT_A_DOOR,
      "the step-link rewriter reads the parameter, it opens nothing"),
 ]

@@ -2206,7 +2206,7 @@ const rendered = [];      // every string the page put on screen, for the Labour
       expected: L.priceAssembly(ASMS[2], ITEMS, 500).total,
       rows: copy.api.model().takeoff.length,
       // Continue carries the draft the page settled ON, not the one it opened with.
-      continueHref: (/href="([^"]*proposal-review[^"]*)"/
+      continueHref: (/href="([^"]*generate\.html[^"]*)"/
         .exec(copy.dom.get("panels").innerHTML) || [])[1],
       intakeHref: (/href="([^"]*polish-intake[^"]*)"/
         .exec(copy.dom.get("panels").innerHTML) || [])[1],

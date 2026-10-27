@@ -150,7 +150,7 @@ def test_the_walk_goes_member_by_member_then_back(ran):
     assert w["started"] is True
     assert w["firstDoor"] == "/proposal-review.html?d=d1&compose=files&sendall=" + tok
     assert w["firstNav"] == [["replace", "/proposal-review.html?d=d2&compose=files&sendall=" + tok]]
-    assert w["progress2"] == {"label": "Room 3", "i": 2, "n": 2}
+    assert w["progress2"] == {"label": "Room 3", "i": 2, "n": 2, "kind": "sendall"}
     assert w["last"] == "/done.html?d=d0&files=1&sendall_resume=" + tok
     assert w["replay"] is None, "a finished walk sent a door somewhere"
     assert w["recordDone"] is True

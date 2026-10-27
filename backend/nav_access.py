@@ -316,7 +316,8 @@ LOCKED_ROLES: Tuple[str, ...] = ("super_admin",)
 # Pages with no sidebar row, which this policy never touches. The four wizard screens plus the two
 # unlinked-but-live pages. Listed so the next person does not have to work out why /done.html is
 # absent from TABS and conclude it was forgotten.
-#   index / estimate-review / proposal-review / done — the wizard; every proposal goes through them
+#   index / estimate-review / generate / proposal-review / done — the wizard; every proposal goes
+#                    through them (generate.html is step 3, Generate Files, since 2026-10-28)
 #   dropbox.html     — reached from the wizard's step 5, never from the menu
 #   login.html       — signing in cannot require being signed in
 #
@@ -327,8 +328,8 @@ LOCKED_ROLES: Tuple[str, ...] = ("super_admin",)
 # contradiction that test would report as a failure, which is the point of keeping them separate
 # rather than deriving one from the other.
 ALWAYS_OPEN_PAGES: Tuple[str, ...] = (
-    "/", "/index.html", "/estimate-review.html", "/proposal-review.html", "/done.html",
-    "/dropbox.html", "/login.html",
+    "/", "/index.html", "/estimate-review.html", "/generate.html", "/proposal-review.html",
+    "/done.html", "/dropbox.html", "/login.html",
 )
 
 # GATED BUT NOT IN THE SIDEBAR — the exact opposite of ALWAYS_OPEN_PAGES above, and the reason both

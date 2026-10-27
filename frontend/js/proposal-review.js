@@ -10266,11 +10266,12 @@
     }, 300);
   });
 
+  // BACK GOES TO 3 · GENERATE FILES (Hanz, 2026-10-28: 1 Intake, 2 Estimate, 3 Generate Files,
+  // 4 Proposal, 5 Files). A proposal made from another draft's estimate goes to its OWN step 3,
+  // which builds every proposal of the project and whose Back leads to the parent's estimate.
   document.getElementById("back-btn").addEventListener("click", () => {
     TW.setState(TW.readForm(form));
-    // A proposal made from another draft's estimate goes back to THAT estimate (parentStepHref).
-    const toParent = parentStepHref(TW.isV2Draft && TW.isV2Draft(state) ? "/polish-estimate.html" : "/estimate-review.html");
-    window.location.assign(toParent || TW.withDraft("/estimate-review.html"));
+    window.location.assign(TW.withDraft("/generate.html"));
   });
 
   /** Where an Intake or Estimate link goes from a proposal made from another draft's estimate
@@ -10464,11 +10465,14 @@
     // marked `proposal_auto_built` and the press holds it while the mark stands
     // (main._send_all_placeholders); a person's own Continue takes the mark off. The Files page's
     // door (?compose=files with no walk) rebuilds with nobody looking either, so it leaves the mark
-    // as it is. Inline, not a helper: harnesses lift this function by name.
+    // as it is. Inline, not a helper: harnesses lift this function by name. So does a door on the
+    // Generate Files step's walk (kind "generate", send-all-chain.js): it rebuilds a document a
+    // person composed, after the estimate changed, exactly as the Files page's door does.
     let _q0 = null;
     try { _q0 = new URLSearchParams(window.location.search); } catch {}
     const _doorOpened = !!_q0 && _q0.get("compose") === "files";
-    const _sendAllBuild = _doorOpened && !!(window.TWSendAll && window.TWSendAll.progress(_q0));
+    const _walk0 = _doorOpened && window.TWSendAll ? window.TWSendAll.progress(_q0) : null;
+    const _sendAllBuild = !!_walk0 && _walk0.kind !== "generate";
 
     const composed = {
       ...mergedValues,
@@ -10637,9 +10641,10 @@
     // Opened by Send all to build a proposal that was never built (send-all-chain.js): said on the
     // button, the one line this page shows while it works.
     const walk = window.TWSendAll ? window.TWSendAll.progress(q) : null;
+    const walkName = walk && walk.kind === "generate" ? "Generate Files" : "Send all";
     if (btn) {
       btn.disabled = true;
-      btn.textContent = walk ? "Building " + walk.label + " for Send all (" + walk.i + " of " + walk.n + ")…"
+      btn.textContent = walk ? "Building " + walk.label + " for " + walkName + " (" + walk.i + " of " + walk.n + ")…"
         : "Updating the proposal…";
     }
     // A STOP ENDS THE WALK, so nothing is ever sent after a build that did not happen.
@@ -10731,7 +10736,10 @@
     const handOver = async (freedHead, unfreedHead) => {
       stopped = true;
       const ended = endWalk();
-      const lead = ended ? "Send all stopped while building " + ended.label + ", so nothing was sent to the customer. " : "";
+      const lead = !ended ? ""
+        : ended.kind === "generate"
+          ? "Generate Files stopped while rebuilding " + ended.label + ", so its files were not built. "
+          : "Send all stopped while building " + ended.label + ", so nothing was sent to the customer. ";
       const freed = await TW.releaseHeldSaves();
       if (leaving) return;                                // the server held another copy: gone back
       repaintNote(lead + (freed ? freedHead : unfreedHead),

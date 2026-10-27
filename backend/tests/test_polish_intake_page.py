@@ -756,12 +756,14 @@ def test_every_pill_link_carries_the_draft_the_page_settled_on(ran):
     # would then have been [] == [] and reported green. The harness now throws on a missed slice;
     # this is the same guard on the test's side of the boundary, so neither half can go quiet alone.
     assert all(p.values()), "the harness handed back an empty pill list: %r" % p
-    assert p["raw"] == ["/polish-estimate.html", "/proposal-review.html", "/done.html"]
+    assert p["raw"] == ["/polish-estimate.html", "/generate.html", "/proposal-review.html",
+                        "/done.html"]
     assert p["stampedBySharedJs"][0] == "/polish-estimate.html", (
         "shared.js has started stamping the beta pages; if _WIZARD_PATH now covers them this test "
         "and the sandbox's BETA_PATH rule both want revisiting")
     assert p["afterSandbox"] == [
         "/polish-estimate.html?d=proj-1-beta",
+        "/generate.html?d=proj-1-beta",
         "/proposal-review.html?d=proj-1-beta",
         "/done.html?d=proj-1-beta"], (
         "a step link still points somewhere other than the draft this page settled on: %r"
@@ -1178,9 +1180,10 @@ def test_the_step_row_says_where_you_are_and_where_the_beta_goes(html):
         "the Intake pill is not the current page")
     assert 'href="/polish-estimate.html">2 · Estimate' in nav, (
         "step 2 does not point at the beta calculator")
-    assert 'href="/proposal-review.html">3 · Proposal' in nav
-    assert 'href="/done.html">4 · Files' in nav
-    assert nav.count("<a ") == 3, "an unexpected number of links in the step row"
+    assert 'href="/generate.html">3 · Generate Files' in nav
+    assert 'href="/proposal-review.html">4 · Proposal' in nav
+    assert 'href="/done.html">5 · Files' in nav
+    assert nav.count("<a ") == 4, "an unexpected number of links in the step row"
 
 
 def test_the_page_says_it_is_the_beta_and_a_separate_form(html):
