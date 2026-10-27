@@ -1091,6 +1091,13 @@ function renderBidOptions() {
     if (isBase) {
       // "Base Bid N", the label the Proposal card prints for the same sheet (TWPrice.baseLabelFor).
       inner += `<span class="bb-tag">${_escBB(TWPrice.baseLabelFor(state, t.id, tabOrder) || "base bid")}</span>`;
+      // THE ONE-CLICK BASE MOVE. The radio this box replaced moved the base in one click; a tick only adds a base
+      // bid, so an estimator ticking Polish out of habit got Base Bid 2 while Epoxy went on being the price. A ticked
+      // sheet that is not the pricing base carries this button, which makes it Base Bid 1 (the old base stays ticked).
+      // (With a pricing base, `soloBase` is null, so a base chip here that is not the base is a ticked sheet.)
+      if (baseId && t.id !== baseId && !childLocked) {
+        inner += `<button type="button" class="bb-mkbase" data-id="${_escBB(t.id)}" title="Price the proposal from this sheet; ${_escBB(labelFor(baseId))} stays a base bid">Make Base Bid 1</button>`;
+      }
     } else if (isPartOfAutoBase(t)) {
       // BOTH sheets carry the tag on a combo — that is the whole ask. No option controls: a
       // sheet already inside the base bid cannot also be an option against it, which is the
@@ -1150,8 +1157,56 @@ function renderBidOptions() {
 function wireBidBar() {
   const list = document.getElementById("bid-options-list");
   if (!list) return;
+  // A base-bid change, whichever control made it (a box, or "Make Base Bid 1"): the patch
+  // { base_tab_id, base_tab_ids } lands, then the one base-change path runs.
+  const applyBasePatch = (patch, priorBaseId) => {
+    state.base_tab_id = patch.base_tab_id;
+    state.base_tab_ids = patch.base_tab_ids;
+    patch.base_tab_ids.forEach(id => { if (state.tab_opts[id]) state.tab_opts[id].is_option = false; });  // base ≠ option
+    // The Proposal step's edits to the base's lines follow the new base, by THE SAME RULE its own
+    // base picker applies (TWPrice.applyBasePick). This used to clear only
+    // price_overrides.single_bid, so Hanz, 2026-09-26: "the base bid was not updating" -- a base
+    // line saved with the old tab's figure went on printing it. And then: keep the words. His
+    // words stay; the amount, the words for the tab's system and the tax wording are the new
+    // base's. `roles` from this page's own tab list: a copy made a moment ago is not in
+    // priced_tabs until persistTabState below prices it.
+    if (state.base_tab_id !== priorBaseId) {
+      TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
+                            { workType: state.work_type,
+                              roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
+                              // The tax wording the base line prints before the pick, so a line
+                              // in the old shape is read as drawing it would read it.
+                              basePhrase: TWPrice.draftBasePhrase(state) });
+    }
+    // Base moved or only the ticked list changed, the same save: renderBidOptions redraws the tags, and
+    // persistTabState lands base_tab_id, base_tab_ids and priced_tabs (the Proposal card numbers by its order).
+    renderBidOptions();
+    // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
+    // rooms) and then saves, where persistBidOptions only saved. Picking a sheet the snapshot had
+    // not priced yet (a copy made a moment ago, no cell edited since) and leaving by a step pill
+    // sent the Proposal step a base it could not find, and it fell back to the Epoxy tab's price
+    // and wrote that over the pick. It also carries this page's cell edits (`cellValues`), which
+    // the `...state` in persistBidOptions put back to what they were when the page opened.
+    persistTabState();   // a base bid change: priced and saved
+    // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
+    // else on this path does, and the bar kept the previous base's lump sum until the next cell
+    // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
+    try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
+  };
   // "+ Add another system" / "− Fewer systems" toggle (a button → click, not change).
   list.addEventListener("click", (e) => {
+    if (e.target.classList.contains("bb-mkbase")) {   // "Make Base Bid 1" on a ticked sheet
+      const to = e.target.dataset && e.target.dataset.id;
+      const priorBaseId = state.base_tab_id;
+      if (TWPrice.isProposalChild(state) || !to) return;   // a child's base is its parent's
+      if (!priorBaseId || to === priorBaseId) return;
+      // The same move the old radio made (TWPrice.moveBaseId with `keep`): the sheet becomes Base Bid 1 and the old
+      // base stays ticked in its place, then the same base-change path a box takes.
+      applyBasePatch({ base_tab_id: to,
+                       base_tab_ids: TWPrice.moveBaseId(state, priorBaseId, to, tabs.map(t => t.id), true) },
+                     priorBaseId);
+      return;
+    }
     if (!e.target.classList.contains("bb-addsys-btn")) return;
     state.reveal_systems = !state.reveal_systems;
     renderBidOptions();
@@ -1175,38 +1230,7 @@ function wireBidBar() {
         }
         return;
       }
-      state.base_tab_id = patch.base_tab_id;
-      state.base_tab_ids = patch.base_tab_ids;
-      patch.base_tab_ids.forEach(id => { if (state.tab_opts[id]) state.tab_opts[id].is_option = false; });  // base ≠ option
-      // The Proposal step's edits to the base's lines follow the new base, by THE SAME RULE its own
-      // base picker applies (TWPrice.applyBasePick). This used to clear only
-      // price_overrides.single_bid, so Hanz, 2026-09-26: "the base bid was not updating" -- a base
-      // line saved with the old tab's figure went on printing it. And then: keep the words. His
-      // words stay; the amount, the words for the tab's system and the tax wording are the new
-      // base's. `roles` from this page's own tab list: a copy made a moment ago is not in
-      // priced_tabs until persistTabState below prices it.
-      if (state.base_tab_id !== priorBaseId) {
-        TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
-                              { workType: state.work_type,
-                                roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
-                                // The tax wording the base line prints before the pick, so a line
-                                // in the old shape is read as drawing it would read it.
-                                basePhrase: TWPrice.draftBasePhrase(state) });
-      }
-      // Base moved or only the ticked list changed, the same save: renderBidOptions redraws the tags, and
-      // persistTabState lands base_tab_id, base_tab_ids and priced_tabs (the Proposal card numbers by its order).
-      renderBidOptions();
-      // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
-      // rooms) and then saves, where persistBidOptions only saved. Picking a sheet the snapshot had
-      // not priced yet (a copy made a moment ago, no cell edited since) and leaving by a step pill
-      // sent the Proposal step a base it could not find, and it fell back to the Epoxy tab's price
-      // and wrote that over the pick. It also carries this page's cell edits (`cellValues`), which
-      // the `...state` in persistBidOptions put back to what they were when the page opened.
-      persistTabState();
-      // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
-      // else on this path does, and the bar kept the previous base's lump sum until the next cell
-      // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
-      try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
+      applyBasePatch(patch, priorBaseId);
       return;
     }
     const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;

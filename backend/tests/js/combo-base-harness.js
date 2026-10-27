@@ -467,6 +467,43 @@ const out = {};
   // g. A child: every box disabled, a forced change changes nothing.
   const child = page({ base_tab_id: "Copy1", base_tab_ids: ["Copy1"], proposal_of: "P1" }, [["Epoxy", true], ["Copy1", false]]);
   out.multiChild = Object.assign(summary(child), { boxes: boxesOf(child.html) });
+
+  // h. THE ONE-CLICK BASE MOVE ("Make Base Bid 1"). A tick only adds a base bid, so the estimator who ticks Polish
+  // the way they clicked the old radio gets Base Bid 2 while Epoxy stays the price. A ticked sheet that is not the
+  // pricing base carries a button that makes it Base Bid 1 in one click, the old base staying ticked.
+  const mkBtns = (html) => [...html.matchAll(/<button type="button" class="bb-mkbase" data-id="([^"]*)"/g)].map((m) => m[1]);
+  const clickMk = (h, id) => h.document.els["bid-options-list"].listeners.click[0]({
+    target: { classList: { contains: (c) => c === "bb-mkbase" }, dataset: { id } } });
+  /** Render, wire, run the change `steps`, then click "Make Base Bid 1" on `mk`. */
+  function mkPage(st, steps, mk) {
+    const p = page(st, steps);
+    const before = persisted(p.h);
+    const htmlBefore = p.h.document.els["bid-options-list"].innerHTML;
+    const baseBefore = p.h.state.base_tab_id;
+    if (mk) clickMk(p.h, mk);
+    const html = p.h.document.els["bid-options-list"].innerHTML;
+    return { p, htmlBefore, baseBefore, html, persistedByClick: persisted(p.h) - before };
+  }
+  const shown = mkPage({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1"] });
+  // The finding's own walk: an Epoxy draft with Polish as an option; the estimator ticks Polish, then makes it the base.
+  const habit = mkPage({ base_tab_id: "Epoxy",
+                         tab_opts: { Polish: { is_option: true, show: true, price_mode: "total" } } },
+                       [["Polish", true]], "Polish");
+  const three = mkPage({ base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Polish", "Copy1"] }, [], "Copy1");
+  const childMk = mkPage({ base_tab_id: "Copy1", base_tab_ids: ["Copy1", "Epoxy"], proposal_of: "P1" }, [], "Epoxy");
+  const comboMk = mkPage({ work_type: "combo", base_tab_id: null });
+  out.makeBase = {
+    buttons: mkBtns(shown.html),
+    afterTick: { buttons: mkBtns(habit.htmlBefore), base_tab_id: habit.baseBefore },
+    habit: Object.assign(summary(habit.p), { persistedByClick: habit.persistedByClick,
+      polishIsOption: habit.p.h.state.tab_opts.Polish.is_option,
+      tags: { Epoxy: tagOf(habit.html, "Epoxy"), Polish: tagOf(habit.html, "Polish") },
+      buttons: mkBtns(habit.html) }),
+    three: Object.assign(summary(three.p), { persistedByClick: three.persistedByClick }),
+    child: Object.assign(summary(childMk.p), { persistedByClick: childMk.persistedByClick,
+      buttons: mkBtns(childMk.htmlBefore) }),
+    comboButtons: mkBtns(comboMk.html),
+  };
 }
 
 console.log(JSON.stringify(out));

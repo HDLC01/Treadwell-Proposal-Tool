@@ -6,7 +6,9 @@ card; the Estimate bar had one round radio per sheet. The bar now draws the card
 sheet that may be a base, tagged "Base Bid N" as the card tags the same sheet, under the card's rule
 (TWPrice.toggleBaseId): a tick adds a base bid, unticking the pricing base moves it to the next ticked sheet, the
 last one is refused. An option-only sheet (Seal) has no box, the combo's combined chip is one base on its own, and a
-child's boxes are disabled.
+child's boxes are disabled. A tick only adds a base bid, so the one-click base move the radio gave is a "Make Base
+Bid 1" button on each ticked sheet that is not the pricing base (TWPrice.moveBaseId with `keep`, then the same
+base-change path a box takes).
 
 Run, not read: js/combo-base-harness.js executes the real renderBidOptions and the real #bid-bar change handler out
 of estimate-review.js, with the real price-lines-core.js. The BREAKS at the bottom prove each check goes red when the
@@ -118,6 +120,38 @@ def test_a_childs_boxes_are_disabled_and_change_nothing(out):
     assert c["base_tab_id"] == "Copy1" and c["base_tab_ids"] == ["Copy1"] and c["persisted"] == 0, c
 
 
+def test_a_ticked_sheet_that_is_not_the_base_offers_make_base_bid_1(out):
+    m = out["makeBase"]
+    assert m["buttons"] == ["Copy1"], "only a ticked sheet that is not the pricing base offers the move"
+    assert m["comboButtons"] == [], "a combined base has no ticked sheet to move to"
+
+
+def test_make_base_bid_1_moves_the_base_in_one_click(out):
+    # The finding's walk: Polish ticked out of habit is Base Bid 2 and Epoxy is still the price ...
+    m = out["makeBase"]
+    assert m["afterTick"] == {"buttons": ["Polish"], "base_tab_id": "Epoxy"}
+    # ... and one click on Polish's "Make Base Bid 1" makes Polish the price, Epoxy staying a base bid.
+    h = m["habit"]
+    assert h["base_tab_id"] == "Polish" and h["base_tab_ids"] == ["Polish", "Epoxy"], h
+    assert h["basePicks"] == [["Epoxy", "Polish"]], "the move must run the base-change path (applyBasePick)"
+    assert h["persistedByClick"] == 1, "the move must price and save (persistTabState)"
+    assert h["polishIsOption"] is False
+    assert h["tags"] == {"Epoxy": "Base Bid 2", "Polish": "Base Bid 1"}
+    assert h["buttons"] == ["Epoxy"], "the old base now offers the move back"
+
+
+def test_make_base_bid_1_picks_any_ticked_sheet_not_only_the_next(out):
+    t = out["makeBase"]["three"]
+    assert t["base_tab_id"] == "Copy1" and t["base_tab_ids"] == ["Copy1", "Epoxy", "Polish"], t
+    assert t["basePicks"] == [["Epoxy", "Copy1"]] and t["persistedByClick"] == 1
+
+
+def test_a_child_has_no_make_base_bid_1(out):
+    c = out["makeBase"]["child"]
+    assert c["buttons"] == []
+    assert c["base_tab_id"] == "Copy1" and c["persistedByClick"] == 0 and c["basePicks"] == [], c
+
+
 ER = "js/estimate-review.js"
 BREAKS = {
     "the box is a radio again": (
@@ -143,17 +177,17 @@ BREAKS = {
         "      const patch = TWPrice.toggleBaseId(state, el.value, true, tabs.map(t => t.id));",
         lambda r: r["multiUntickBase"]["base_tab_id"] != "Polish"),
     "the list is not kept": (
-        ER, "      state.base_tab_ids = patch.base_tab_ids;", "      void 0;",
+        ER, "    state.base_tab_ids = patch.base_tab_ids;", "    void 0;",
         lambda r: r["multiTick"]["base_tab_ids"] != ["Epoxy", "Polish", "Copy1"]),
     "the base-change path does not run": (
-        ER, "      if (state.base_tab_id !== priorBaseId) {", "      if (false) {",
+        ER, "    if (state.base_tab_id !== priorBaseId) {", "    if (false) {",
         lambda r: r["multiUntickBase"]["basePicks"] != [["Epoxy", "Polish"]]),
     "a ticked base bid stays an option": (
-        ER, "      patch.base_tab_ids.forEach(id => { if (state.tab_opts[id]) state.tab_opts[id].is_option = false; });  // base ≠ option",
-        "      void 0;",
+        ER, "    patch.base_tab_ids.forEach(id => { if (state.tab_opts[id]) state.tab_opts[id].is_option = false; });  // base ≠ option",
+        "    void 0;",
         lambda r: r["multiTick"]["polishIsOption"] is not False),
     "a tick is not saved": (
-        ER, "      persistTabState();", "      void 0;",
+        ER, "    persistTabState();   // a base bid change: priced and saved", "    void 0;",
         lambda r: r["multiTick"]["persisted"] != 1),
     "a refused untick leaves the box off": (
         ER, "          el.checked = true;", "          void 0;",
@@ -171,6 +205,25 @@ BREAKS = {
     "a forced change on a child's box is honoured": (
         ER, "      if (TWPrice.isProposalChild(state)) return;", "      void 0;",
         lambda r: r["multiChild"]["base_tab_ids"] != ["Copy1"] or r["multiChild"]["persisted"] != 0),
+    "no Make Base Bid 1 button": (
+        ER, "      if (baseId && t.id !== baseId && !childLocked) {", "      if (false) {",
+        lambda r: r["makeBase"]["buttons"] != ["Copy1"]),
+    "Make Base Bid 1 on a child": (
+        ER, "      if (baseId && t.id !== baseId && !childLocked) {",
+        "      if (baseId && t.id !== baseId) {",
+        lambda r: r["makeBase"]["child"]["buttons"] != []),
+    "Make Base Bid 1 does nothing": (
+        ER, '    if (e.target.classList.contains("bb-mkbase")) {   // "Make Base Bid 1" on a ticked sheet',
+        "    if (false) {",
+        lambda r: r["makeBase"]["habit"]["base_tab_id"] != "Polish"),
+    "Make Base Bid 1 drops the old base": (
+        ER, "                       base_tab_ids: TWPrice.moveBaseId(state, priorBaseId, to, tabs.map(t => t.id), true) },",
+        "                       base_tab_ids: TWPrice.moveBaseId(state, priorBaseId, to, tabs.map(t => t.id), false) },",
+        lambda r: r["makeBase"]["habit"]["base_tab_ids"] != ["Polish", "Epoxy"]),
+    "a forced Make Base Bid 1 on a child is honoured": (
+        ER, "      if (TWPrice.isProposalChild(state) || !to) return;   // a child's base is its parent's",
+        "      if (!to) return;",
+        lambda r: r["makeBase"]["child"]["base_tab_id"] != "Copy1" or r["makeBase"]["child"]["persistedByClick"] != 0),
 }
 
 

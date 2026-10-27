@@ -346,10 +346,10 @@ BREAKS = {
         "js/proposal-review.js", "            if (TWPrice.isProposalChild(state)) return;", "            void 0;",
         lambda r: r["child"]["after"] != {"base_tab_id": "Copy1", "base_tab_ids": ["Copy1"]}),
     "the bid-bar boxes do not keep the ticked list": (
-        "js/estimate-review.js", "      state.base_tab_ids = patch.base_tab_ids;", "      void 0;",
+        "js/estimate-review.js", "    state.base_tab_ids = patch.base_tab_ids;", "    void 0;",
         lambda r: r["bidBar"]["swap"]["base_tab_ids"] != ["Polish", "Copy1"]),
     "the bid-bar boxes do not move the base on an untick": (
-        "js/estimate-review.js", "      state.base_tab_id = patch.base_tab_id;", "      void 0;",
+        "js/estimate-review.js", "    state.base_tab_id = patch.base_tab_id;", "    void 0;",
         lambda r: r["bidBar"]["toTicked"]["base_tab_id"] != "Copy1"),
     "moveBaseId never swaps": (
         "js/price-lines-core.js",
