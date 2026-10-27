@@ -1490,11 +1490,98 @@
     patchSoon("items", it.id, { price_breaks: breaksForSave(it.price_breaks) });
   }
 
+  /** The 25 materials the table draws, out of the `shown` (searched and filtered) list.
+   *
+   *  renderItems runs on a dozen events, so the page is decided HERE from state, never by the
+   *  caller: a changed search or facet goes back to page 1, exactly ONE material id the last
+   *  render had not seen (Add material, Duplicate) moves to the page that holds it, and a list
+   *  that shrank under the page (a delete) is clamped onto its new last page. Every other repaint
+   *  (a save reply, More/Less, a price break) keeps the page it found. A reload that brings several
+   *  new ids at once moves nothing: that is other people's work arriving, not a row just made. */
+  function itemsPage(shown) {
+    var st = PAGER.items;
+    var view = String(itemQuery) + "\n" + JSON.stringify(FILTERS);
+    if (st.view !== null && st.view !== view) st.page = 1;
+    st.view = view;
+    if (st.known) {
+      var fresh = [];
+      for (var i = 0; i < shown.length; i++) if (!st.known[shown[i].id]) fresh.push(i);
+      if (fresh.length === 1) st.page = L.pageOfIndex(fresh[0], L.PAGE_SIZE);
+    }
+    var known = {};
+    for (var k = 0; k < ITEMS.length; k++) known[ITEMS[k].id] = true;
+    st.known = known;
+    st.page = L.clampPage(st.page, shown.length, L.PAGE_SIZE);
+    return L.pageSlice(shown, st.page, L.PAGE_SIZE);
+  }
+
+  /** The rail's 25 cards, out of `shown`. Same rules as itemsPage for the view and the clamp; the
+   *  difference is what counts as "just made": an assembly OPENED since the last render (+ New
+   *  assembly, a deep link, the Defaults tab's Edit, the first load) moves the rail to the page
+   *  holding it, so the aria-current card is on screen whenever an assembly is opened. A click on a
+   *  card is already on this page and moves nothing. */
+  function asmPage(shown, area) {
+    var st = PAGER.asm;
+    var view = String(asmQuery) + "\n" + JSON.stringify(ASM_FILTERS) + "\n" + ASM_SORT + "\n" + area;
+    if (st.view !== null && st.view !== view) st.page = 1;
+    st.view = view;
+    if (openId !== st.open) {
+      st.open = openId;
+      for (var i = 0; i < shown.length; i++) {
+        if (shown[i].id === openId) { st.page = L.pageOfIndex(i, L.PAGE_SIZE); break; }
+      }
+    }
+    st.page = L.clampPage(st.page, shown.length, L.PAGE_SIZE);
+    return L.pageSlice(shown, st.page, L.PAGE_SIZE);
+  }
+
+  /** Write one pager: hidden when everything fits on one page, otherwise "Page 2 of 6",
+   *  "26–50 of 140" and the two edge buttons. The buttons are STATIC markup in library.html and
+   *  only their state changes here, so the one a keyboard user just pressed keeps the focus. They
+   *  say they are spent with aria-disabled rather than `disabled`, which would drop that focus on
+   *  the floor the moment Next reached the last page. */
+  function paintPager(id, info) {
+    var nav = $(id);
+    if (!nav) return;
+    nav.hidden = !info.paged;
+    var prev = $(id + "-prev"), next = $(id + "-next");
+    if (prev) prev.setAttribute("aria-disabled", info.page <= 1 ? "true" : "false");
+    if (next) next.setAttribute("aria-disabled", info.page >= info.pages ? "true" : "false");
+    if ($(id + "-page")) $(id + "-page").textContent = info.paged ? info.label : "";
+    if ($(id + "-range")) $(id + "-range").textContent = info.paged ? info.range : "";
+  }
+
+  /** Previous / Next. `kind` is "items" or "asm", `step` -1 or 1. Past either end it does nothing,
+   *  which is what a press on a spent button reaches. */
+  function turnPage(kind, step) {
+    var st = PAGER[kind];
+    if (!st) return;
+    var total = kind === "items" ? visibleItems().length : visibleAssemblies($("area").value).length;
+    var to = L.clampPage(st.page + (Number(step) || 0), total, L.PAGE_SIZE);
+    if (to === st.page) return;
+    st.page = to;
+    if (kind === "items") renderItems(); else renderList();
+  }
+
+  /** Move the Items table to the page holding material `id`, if the current search shows it at
+   *  all. For focusItemRow, which is sent a row from another tab that may be pages away. */
+  function showItemPage(id) {
+    var shown = visibleItems();
+    for (var i = 0; i < shown.length; i++) {
+      if (shown[i].id !== id) continue;
+      var to = L.pageOfIndex(i, L.PAGE_SIZE);
+      if (to !== PAGER.items.page) { PAGER.items.page = to; renderItems(); }
+      return true;
+    }
+    return false;
+  }
+
   function renderItems() {
     var out = "";
     var shown = visibleItems();
-    for (var i = 0; i < shown.length; i++) {
-      var it = shown[i];
+    var rows = itemsPage(shown);
+    for (var i = 0; i < rows.length; i++) {
+      var it = rows[i];
       out += '<tr data-item="' + esc(it.id) + '">' +
         // THE SAVE BUTTON'S OWN CELL, the FIRST cell, so Save sits left of the name (Hanz,
         // 2026-10-12) and is the first stop in the keyboard order. library.html pins it to the
@@ -1574,6 +1661,10 @@
       $("item-hits").textContent = filtering
         ? shown.length + " of " + ITEMS.length + " shown" : "";
     }
+    // Under the table, and a compact copy over it: 25 rows is a long scroll to reach the bottom one.
+    var pg = L.pageInfo(PAGER.items.page, shown.length, L.PAGE_SIZE);
+    paintPager("items-pager", pg);
+    paintPager("items-pager-top", pg);
     // The tab badge stays the TOTAL. It is how many materials Treadwell has, not how many are on
     // screen right now, and a badge that moved as somebody typed would read as rows disappearing.
     $("n-items").textContent = ITEMS.length;
@@ -1686,7 +1777,9 @@
         '[data-item="' + id + '"] input[data-f="name"]');
     };
     var el = find();
-    if (!el && anyFilterActive()) { clearFilters(); el = find(); }
+    // ON ANOTHER PAGE of the table: move to the page that holds it, then look again.
+    if (!el) { showItemPage(id); el = find(); }
+    if (!el && anyFilterActive()) { clearFilters(); showItemPage(id); el = find(); }
     if (el && el.focus) el.focus();
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
   }
@@ -1947,8 +2040,9 @@
   function renderList() {
     var area = $("area").value, out = "";
     var shown = visibleAssemblies(area);
-    for (var i = 0; i < shown.length; i++) {
-      var a = shown[i], p = L.priceAssembly(a, ITEMS, area);
+    var cards = asmPage(shown, area);
+    for (var i = 0; i < cards.length; i++) {
+      var a = cards[i], p = L.priceAssembly(a, ITEMS, area);
       var per = p.per_unit == null ? "not priced" : L.perUnit(p.per_unit) + "/" + esc(a.unit);
       // The value the rail is ORDERED on. A sort whose result cannot be read off the rows is a
       // list that just reshuffled itself; see asmSortLabel for which keys say something and which
@@ -2003,6 +2097,7 @@
       $("asm-hits").textContent = filtering
         ? shown.length + " of " + ASMS.length + " shown" : "";
     }
+    paintPager("asm-pager", L.pageInfo(PAGER.asm.page, shown.length, L.PAGE_SIZE));
     renderAsmFilterBar();
   }
 
@@ -2049,6 +2144,16 @@
    *  must not light up the hits count, must not raise the no-match panel, and must not be reset
    *  by Clear filters. One line, so library-ui-harness.js can lift the default verbatim. */
   var ASM_SORT = "name";
+
+  /** WHICH PAGE EACH LIST IS ON (Hanz, 2026-10-27: 25 at a time on Items and on Assemblies).
+   *
+   *  A PLAIN VARIABLE, the fourth view state on this page held to the itemQuery rule: never saved,
+   *  never on a record. Per tab, so leaving Items for Assemblies and coming back finds the same page.
+   *  `view` is the last search/facet/sort the page was worked out under (a change sends it back to
+   *  page 1); `known` is the material ids the last render saw (one new id is a row somebody just
+   *  added or copied, and the table moves to its page); `open` is the assembly whose page the rail
+   *  last moved to. One line, so library-ui-harness.js can lift the declaration verbatim. */
+  var PAGER = { items: { page: 1, view: null, known: null }, asm: { page: 1, view: null, open: undefined } };
 
   /** Is the tab showing a subset? Text, facets, or both.
    *
@@ -5271,6 +5376,16 @@
     // Both the bar's button and the empty state's, one handler.
     if (t.closest && t.closest("[data-clear-filters]")) { clearFilters(); return; }
     if (t.closest && t.closest("[data-clear-asm-filters]")) { clearAsmFilters(); return; }
+
+    // Previous / Next under the Items table and the Assemblies rail. A spent button says so with
+    // aria-disabled (it keeps the focus that way, see paintPager) and does nothing.
+    var pager = t.closest && t.closest("[data-pager]");
+    if (pager) {
+      if (pager.getAttribute("aria-disabled") !== "true") {
+        turnPage(pager.getAttribute("data-pager"), Number(pager.getAttribute("data-step")));
+      }
+      return;
+    }
 
     var open = t.closest && t.closest("[data-open]");
     if (open) { openId = open.getAttribute("data-open"); paint(); return; }
