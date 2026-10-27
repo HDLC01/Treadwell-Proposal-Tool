@@ -3389,11 +3389,16 @@
     staff_pause_expired: "Told the team: the pause ended",
     staff_personal_followup: "Told the team: worth a call",
     staff_deposit_outstanding: "Told the team: deposit outstanding",
+    staff_followup_due: "Told the team: a follow-up is due",
+    scope_decision: "Decide the other scopes",
+    staff_scope_decision: "Told the team: decide the other scopes",
   };
   // Bookkeeping the portal writes as a `staff_note` with an `action` key.
   const FU_ACTION = {
     reassigned: "Reassigned", automation_on: "Automation on", automation_off: "Automation off",
     paused: "Paused", closed_lost: "Closed lost", reactivated: "Reactivated",
+    followup_skipped: "Follow-up skipped", followup_snoozed: "Follow-up snoozed",
+    scope_group_resume: "Kept chasing the other scopes", scope_group_sent: "Project email sent",
   };
   const STATUS_LABEL = { delayed: "Delayed", not_moving_forward: "Not moving forward", resume: "Back on" };
 
