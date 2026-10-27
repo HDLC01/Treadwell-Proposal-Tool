@@ -7,8 +7,8 @@ Three things this file has to prove, none of them satisfied by reading the sourc
   * the proxy forwards the SIGNED-IN caller's own email as staff_email -- never one the client
     supplies, or a member could claim someone else's reveal in the portal's audit log.
   * the response is never cached (Cache-Control: no-store) -- it carries the plaintext numbers.
-  * a role denied the Active Projects board (nav_access.py's /portal.html entry) is refused this
-    route too, through the real middleware, not just through a source-text grep of nav_access.py.
+  * the nav gate never refuses this route: /portal.html is LOCKED, and since 2026-10-27 (Hanz chose
+    "hides the tab only" for every tab) no TABS entry claims an API route at all.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -104,14 +104,15 @@ def test_portal_html_cannot_actually_be_denied_so_this_route_is_reachable_by_any
     assert r.status_code == 200, r.text
 
 
-def test_the_gate_would_refuse_the_route_if_the_board_could_ever_be_denied(monkeypatch):
-    """The forward-looking half: nav_access.TABS really does claim /api/portal/deposit/ for
-    /portal.html (test_nav_access.py proves the wiring against a synthetic policy dict; this proves
-    the same thing end-to-end through the live _nav_gate middleware). Bypasses save()'s LOCKED
-    filter by monkeypatching nav_access.get() directly, since that is the only way to observe what
-    this table WOULD do if /portal.html ever stopped being locked."""
+def test_the_gate_does_not_refuse_the_route_even_if_the_board_were_denied(monkeypatch):
+    """/portal.html claimed /api/portal/deposit/ until 2026-10-27, when Hanz chose "hides the tab
+    only" for every tab and every TABS "api" tuple went empty. Bypasses save()'s LOCKED filter by
+    monkeypatching nav_access.get() directly: even a policy denying the board refuses nothing at the
+    nav gate. The route stays behind sign-in, as it always was."""
     monkeypatch.setattr(nav_access, "get", lambda: {"deny": {"user": ["/portal.html"]}})
     c = _as(monkeypatch, "user")
+    _wire(monkeypatch, role="user", email="staffer@wetreadwell.com")   # stub portal, no network
+    main._profile_cache_clear()
     r = c.post("/api/portal/deposit/dep-1/reveal", json={})
-    assert r.status_code == 403
-    assert r.json().get("nav_denied") is True
+    assert r.status_code == 200, r.text
+    assert not r.json().get("nav_denied"), r.text

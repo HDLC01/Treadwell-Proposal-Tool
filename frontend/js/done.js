@@ -1011,6 +1011,55 @@
     return out;
   }
 
+  /** THE LUMP SUM ROW OF A PROJECT WITH SEVERAL PROPOSALS (Hanz, 2026-10-27: "in the ready to
+   *  generate"). `pv` is GET /api/draft/{id}/proposals (TW.readProposals), `currentId` this page's
+   *  draft, `currentFigure` the figure the row already shows for it (the saved document's total, as
+   *  above: not re-derived here). With two proposals or more, and this draft among them, #rv-lump
+   *  becomes one line per proposal: its name (the sheet's, unless a person renamed it) and its own
+   *  lump sum, this one marked "(this one)" and carrying `currentFigure`; one with no figure yet
+   *  says "not priced yet". NO TOTAL: they are separate proposals, each approved on its own, so a
+   *  sum would be a price nobody is offered. Anything else leaves the row exactly as it is.
+   *  Generate still builds only this proposal. */
+  function paintReadyProposals(pv, currentId, currentFigure) {
+    const el = document.getElementById("rv-lump");
+    const ms = pv && Array.isArray(pv.members) ? pv.members : [];
+    if (!el || ms.length < 2 || !ms.some((m) => m && m.id === currentId)) return false;
+    const usd = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const list = document.createElement("ul");
+    list.className = "rv-props";
+    ms.forEach((m) => {
+      const mine = m.id === currentId;
+      const name = m.display_label || m.sheet_label || m.label || ("Base Bid " + (m.index || ""));
+      const li = document.createElement("li");
+      li.className = "rv-prop" + (mine ? " current" : "");
+      const nm = document.createElement("span");
+      nm.className = "rv-prop-nm";
+      nm.textContent = name;
+      li.appendChild(nm);
+      const sum = document.createElement("span");
+      const n = typeof m.lump_sum === "number" && isFinite(m.lump_sum) ? m.lump_sum : null;
+      const fig = mine ? (currentFigure || (n == null ? "" : usd(n))) : (n == null ? "" : usd(n));
+      sum.className = fig && fig !== "—" ? "rv-prop-sum" : "rv-prop-sum none";
+      sum.textContent = fig && fig !== "—" ? fig : "not priced yet";
+      li.appendChild(sum);
+      if (mine) {
+        const tag = document.createElement("span");
+        tag.className = "rv-prop-this";
+        tag.textContent = "(this one)";
+        li.appendChild(tag);
+      }
+      list.appendChild(li);
+    });
+    const note = document.createElement("p");
+    note.className = "rv-props-note";
+    note.textContent = "Separate proposals, each approved on its own. Generate builds this one.";
+    el.textContent = "";
+    el.classList.remove("money");
+    el.appendChild(list);
+    el.appendChild(note);
+    return true;
+  }
+
   function showPreGenerate() {
     preEl.style.display = "";
     // Show the project deadline as a compact YY.MM.DD due date.
@@ -1029,6 +1078,15 @@
     const _rvTotal = _rvPp && _rvPp.values && typeof _rvPp.values.total_formatted === "string"
       && money(_rvPp.values.total_formatted) != null ? _rvPp.values.total_formatted : "";
     document.getElementById("rv-lump").textContent     = _rvTotal || state.lump_sum_display || "—";
+    // EVERY PROPOSAL OF THIS ESTIMATE, one line each (Create Multiple Proposals, 2026-10-27). The
+    // figure painted just above stays THIS proposal's line; the others are the server's. A draft
+    // with no proposals, or a list that cannot be read, keeps the single figure.
+    (async function readyProposals() {
+      let pv = null;
+      try { pv = TW.readProposals ? await TW.readProposals(TW.getDraftId()) : null; } catch { pv = null; }
+      const lumpEl = document.getElementById("rv-lump");
+      paintReadyProposals(pv, TW.getDraftId(), lumpEl ? lumpEl.textContent : "");
+    })();
     // PAGE 1, SAID OUT LOUD, BEFORE ANYTHING IS BUILT. Through `coverLetterCheck` so this row and
     // the post-generate banner cannot come to disagree — see that function for why the source is
     // `proposal_payload` and not the top-level flag. The row is hidden rather than showing "No",

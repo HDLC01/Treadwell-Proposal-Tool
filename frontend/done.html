@@ -46,6 +46,15 @@
     font-size: 18px;
     font-weight: 800;
   }
+  /* One line per proposal of the estimate (done.js paintReadyProposals): name, its own figure. */
+  .rv-props { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .rv-prop { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .rv-prop-nm { min-width: 0; overflow-wrap: anywhere; }
+  .rv-prop-sum { color: var(--treadwell-red-dark); font-weight: 800; }
+  .rv-prop.current .rv-prop-sum { font-size: 18px; }
+  .rv-prop-sum.none { color: var(--ink-variant); font-weight: 600; }
+  .rv-prop-this { color: var(--ink-variant); font-size: 12px; font-weight: 600; }
+  .rv-props-note { margin: 8px 0 0; color: var(--ink-variant); font-size: 12px; font-weight: 500; }
   .review-actions {
     display: flex;
     justify-content: space-between;
