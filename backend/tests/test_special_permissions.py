@@ -312,6 +312,16 @@ def _gate_refused(client, path):
         return False
 
 
+@pytest.fixture
+def history_sealed(monkeypatch):
+    """Every tab hides only since 2026-10-27 (#720), so the nav gate refuses no API route by
+    itself. The grant override inside the gate (_nav_policy_for) is still real code: these tests
+    put History's old route claim back to prove a granted person gets through it and others don't."""
+    monkeypatch.setitem(nav_access.TABS, "/history.html",
+                        {**nav_access.TABS["/history.html"], "api": ("/api/history",)})
+
+
+@pytest.mark.usefixtures("history_sealed")
 def test_the_nav_gate_lets_a_granted_person_reach_the_tabs_api(monkeypatch):
     nav_access.save({"user": ["/history.html"]}, "h")
     sp.save({MARISOL: ["/history.html"]}, "h")
@@ -319,12 +329,14 @@ def test_the_nav_gate_lets_a_granted_person_reach_the_tabs_api(monkeypatch):
     assert _gate_refused(_as(monkeypatch, "user"), "/api/history") is False
 
 
+@pytest.mark.usefixtures("history_sealed")
 def test_a_grant_of_a_different_tab_leaves_the_gate_shut(monkeypatch):
     nav_access.save({"user": ["/history.html"]}, "h")
     sp.save({MARISOL: ["/library.html"]}, "h")
     assert _gate_refused(_as(monkeypatch, "user"), "/api/history") is True
 
 
+@pytest.mark.usefixtures("history_sealed")
 def test_the_gate_and_me_fail_closed_on_the_grant_when_its_store_throws(monkeypatch):
     """A broken grants store grants nothing: the role's denial stands, and nothing 500s."""
     nav_access.save({"user": ["/history.html"]}, "h")
