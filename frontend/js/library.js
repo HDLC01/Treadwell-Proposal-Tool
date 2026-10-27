@@ -41,11 +41,12 @@
   var DIVISION_USE = {};
   var UNIT_USE = {};
   var ADMIN = false;               // may change administration lists; everyone may pick from them
-  // May edit an item's price breaks, bulk cost and coverage basis: an admin, or a member given the
-  // items_pricing special permission on the Admin page (/api/me's `grants`). The server agrees.
+  // May edit an item's price breaks, bulk cost and coverage basis: an admin, or a member given THIS
+  // TAB ("/library.html") on the Admin page's Special permissions card (/api/me's `grants` are tab
+  // hrefs). The server agrees: every admin-only edit on this page opens to that one tab grant.
   var ITEMS_PRICING = false;
-  // The same rule for two more grants: vendors / divisions / units / labor lines and the labor
-  // calculator (library_lists), and the Defaults tab's condition sliders (condition_defaults).
+  // The same rule, the same tab: vendors / divisions / units / labor lines and the labor
+  // calculator, and the Defaults tab's condition sliders.
   var LISTS_EDIT = false;
   var DEFAULTS_EDIT = false;
   var openId = null;
@@ -123,9 +124,10 @@
       if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready;
       var me = (window.TWAuth && window.TWAuth.user && window.TWAuth.user()) || {};
       ADMIN = me.role === "admin" || me.role === "super_admin";
-      ITEMS_PRICING = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("items_pricing") !== -1);
-      LISTS_EDIT = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("library_lists") !== -1);
-      DEFAULTS_EDIT = ADMIN || (Array.isArray(me.grants) && me.grants.indexOf("condition_defaults") !== -1);
+      var tabGranted = Array.isArray(me.grants) && me.grants.indexOf("/library.html") !== -1;
+      ITEMS_PRICING = ADMIN || tabGranted;
+      LISTS_EDIT = ADMIN || tabGranted;
+      DEFAULTS_EDIT = ADMIN || tabGranted;
     } catch (e) { ADMIN = false; ITEMS_PRICING = false; LISTS_EDIT = false; DEFAULTS_EDIT = false; }
     try {
       var rs = await Promise.all([api("/api/library/items"), api("/api/library/assemblies"),
@@ -1628,7 +1630,7 @@
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
           // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin or a member
-          // granted items_pricing.
+          // granted this tab on the Special permissions card.
           (ITEMS_PRICING ? '<button class="btn ghost sm" type="button" data-item-more-toggle="' + esc(it.id) +
             '" aria-expanded="' + (itemMoreOpen[it.id] ? "true" : "false") + '" aria-label="' +
             (itemMoreOpen[it.id] ? "Hide" : "Show") + " price breaks, bulk cost and coverage basis for " +

@@ -221,12 +221,13 @@
   }
 
   /** May change the team roster and the per-step grid: an admin, or a member given the
-   *  notify_recipients special permission on the Admin page (/api/me's `grants`). The server's
+   *  Notification Sending tab ("/notifications.html") on the Admin page's Special permissions card
+   *  (/api/me's `grants` are tab hrefs). The server's
    *  _require_grant agrees. The per-project chips stay on ADMIN: that route has no grant. */
   function rosterEditFor(me) {
     const m = me || {};
     return m.role === "admin" || m.role === "super_admin"
-      || (Array.isArray(m.grants) && m.grants.indexOf("notify_recipients") !== -1);
+      || (Array.isArray(m.grants) && m.grants.indexOf("/notifications.html") !== -1);
   }
 
   async function boot() {

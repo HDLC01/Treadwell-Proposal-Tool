@@ -449,13 +449,14 @@ def test_a_non_admin_can_read_the_grid_and_change_nothing(ran):
 
 
 @needs_node
-def test_a_member_with_the_notify_recipients_grant_gets_the_roster_controls(ran):
-    """Special permissions: the server lets a member with notify_recipients POST/PATCH/DELETE the
-    roster and PUT the step grid, so the page must hand her the controls. Without it the Admin
-    card's ticked box would claim an ability she cannot reach.
+def test_a_member_with_the_notification_sending_tab_gets_the_roster_controls(ran):
+    """Special permissions: the server lets a member given the Notification Sending tab
+    ("/notifications.html") POST/PATCH/DELETE the roster and PUT the step grid, so the page must
+    hand her the controls. Without it the Admin card's ticked box would claim an ability she cannot
+    reach. The old ability key (notify_recipients) no longer opens anything on the page.
     Mutation: drop the grant check in rosterEditFor, or read ADMIN in paintMatrix/rosterCardHtml."""
     g = ran["granted"]
-    assert g["decides"] == {"granted": True, "plain": False, "none": False,
+    assert g["decides"] == {"granted": True, "plain": False, "oldKey": False, "none": False,
                             "admin": True, "superAdmin": True}
     assert g["hasAddField"] and not g["saysAdminsOnly"]
     assert g["chipsHaveRemove"]

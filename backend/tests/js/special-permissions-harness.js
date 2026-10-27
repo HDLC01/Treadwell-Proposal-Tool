@@ -13,10 +13,10 @@ const grantsPanelHtml = new Function(src.slice(start, end) + "\nreturn grantsPan
 
 const store = {
   grants_catalog: [
-    { key: "items_pricing", label: "Items: price breaks", description: "Edit price breaks." },
-    { key: "markup", label: "Markup rules", description: "Edit markup rules." },
+    { key: "/library.html", label: "Items and Assemblies", href: "/library.html" },
+    { key: "/markup.html", label: "Markup", href: "/markup.html" },
   ],
-  grants: { "marisol@wetreadwell.com": ["items_pricing"] },
+  grants: { "marisol@wetreadwell.com": ["/library.html"] },
   updated_at: "2026-10-27T15:00:00Z", updated_by: "hanz@wetreadwell.com",
 };
 const users = [
@@ -50,7 +50,7 @@ const puts = [];
 const wiring = new Function("document", "grantsPanelHtml", "USERS", "GRANTS", "apiFull", "errText",
   src.slice(wStart, wEnd) + "\nreturn { toggleGrant };")(
   page, grantsPanelHtml, users, store, (url, opts) => { puts.push(opts); return new Promise(() => {}); }, () => "");
-wiring.toggleGrant("kyle@wetreadwell.com", "markup", true);
+wiring.toggleGrant("kyle@wetreadwell.com", "/markup.html", true);
 const inFlight = { puts: puts.length, allDisabled: liveBoxes.every((b) => b.disabled) };
 
 process.stdout.write(JSON.stringify({
@@ -58,4 +58,6 @@ process.stdout.write(JSON.stringify({
   status: /id="sp-status"[^>]*>Saved\.</.test(html),
   adminNote: (html.match(/Admins have all of these<\/span>/g) || []).length,
   failedSaysSo: /didn't load/.test(failed) && !/type="checkbox"/.test(failed),
+  tabNote: /id="sp-note"[^>]*>Ticking a tab gives that person the tab and every admin-only edit in it, even if their role is unticked above\.</.test(html),
+  scrolls: /<div style="overflow-x:auto[^"]*"><table/.test(html),
 }));

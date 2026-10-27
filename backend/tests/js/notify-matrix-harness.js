@@ -700,11 +700,11 @@ const out = {};
     };
   }
 
-  // ── a member given notify_recipients edits the roster and the grid ──────
+  // ── a member given the Notification Sending tab edits the roster and the grid ──
   // ROSTER_EDIT comes from the page's own rosterEditFor over an /api/me shape, not a literal.
   {
     const probe = build({ rows: MIXED, admin: false });
-    const me = { role: "member", grants: ["notify_recipients"] };
+    const me = { role: "member", grants: ["/notifications.html"] };
     const s = build({ rows: MIXED, admin: false, rosterEdit: probe.rosterEditFor(me) });
     s.render();
     await s.load();
@@ -714,7 +714,8 @@ const out = {};
     out.granted = {
       decides: {
         granted: probe.rosterEditFor(me),
-        plain: probe.rosterEditFor({ role: "member", grants: ["markup"] }),
+        plain: probe.rosterEditFor({ role: "member", grants: ["/markup.html"] }),
+        oldKey: probe.rosterEditFor({ role: "member", grants: ["notify_recipients"] }),
         none: probe.rosterEditFor({ role: "member" }),
         admin: probe.rosterEditFor({ role: "admin" }),
         superAdmin: probe.rosterEditFor({ role: "super_admin", grants: [] }),

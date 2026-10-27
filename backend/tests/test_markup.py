@@ -812,10 +812,10 @@ def test_the_write_routes_carry_the_admin_gate_and_the_read_does_not():
     for verb, path in routes.items():
         i = src.index('@app.%s("%s")' % (verb, path))
         body = src[i:src.index("@app.", i + 10)]
-        # _require_grant(request, "markup") is the same gate plus a member given the markup
-        # special permission on the Admin page (special_permissions.py).
+        # _require_grant(request, special_permissions.MARKUP) is the same gate plus a member given
+        # the Markup tab on the Admin page's Special permissions card (special_permissions.py).
         gated = ("_require_admin(request)" in body
-                 or '_require_grant(request, "markup")' in body)
+                 or "_require_grant(request, special_permissions.MARKUP)" in body)
         assert gated == (verb != "get"), (
             "%s %s is %s" % (verb.upper(), path, "gated" if gated else "ungated"))
 
