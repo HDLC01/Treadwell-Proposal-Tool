@@ -54,7 +54,9 @@ function drawn(b) {
   const at = h.indexOf('<div data-rev="manhours"');
   if (at < 0) return { present: false };
   const part = h.slice(at, h.indexOf("</table>", at));
-  const text = (s) => dec(String(s).replace(/<[^>]*>/g, "")).replace(/\s+/g, " ").trim();
+  // Strip tags until none is left (one pass can leave a tag rebuilt from the pieces around it).
+  const strip = (s) => { let out = String(s), prev; do { prev = out; out = out.replace(/<[^>]*>/g, ""); } while (out !== prev); return out; };
+  const text = (s) => dec(strip(s)).replace(/\s+/g, " ").trim();
   const figs = {};
   (part.match(/data-rv="mh\.[^"]*">[^<]*</g) || []).forEach((m) => { const x = /data-rv="([^"]*)">([^<]*)</.exec(m); figs[x[1]] = dec(x[2]); });
   return {
