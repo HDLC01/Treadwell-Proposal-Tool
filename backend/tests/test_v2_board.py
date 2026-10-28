@@ -756,6 +756,49 @@ def test_hand_it_off_does_not_ask_once_the_contacts_are_in(payload):
     assert [f["body"] for f in run["fetches"] if f["method"] != "GET"] == [{"status": "handed_off"}]
 
 
+_FU_NOTE = ("Saved as won, but the automatic follow-up emails could not be switched off for this "
+            "project, because the customer portal did not answer. Press Turn automation off on the "
+            "Follow-up tab.")
+
+
+def test_a_won_mark_whose_emails_could_not_be_stopped_says_so_in_a_dialog(payload):
+    """Review finding: the status route answers 200 with `followups_note` when the portal could not
+    switch the automatic emails off, and this board dropped it, so the card moved to Won/Approved
+    and the customer kept being emailed with nobody told. Mutation: drop the followups_note dialog
+    from v2-board.js post(); `confirms` is empty."""
+    answer = {"ok": True, "status": "won", "followups_off": [], "followups_failed": ["v-fresh"],
+              "followups_note": _FU_NOTE}
+    run = _run(payload, [{"name": "w", "confirm": False, "postAnswer": answer,
+                          "actions": [{"type": "won", "id": "v-fresh"}]}])["runs"][0]
+    assert [c["title"] for c in run["confirms"]] == ["Follow-up emails are still on"], run["confirms"]
+    assert run["confirms"][0]["message"] == _FU_NOTE
+    assert run["opened"] == [], "OK still sent the browser somewhere"
+    # the save itself is reported as a save, not a failure
+    assert not any(b["text"].startswith("Failed") for b in run["buttons"]), run["buttons"]
+    # Open the project goes to the Direct Projects drawer's Follow-up tab, where the switch is
+    yes = _run(payload, [{"name": "y", "confirm": True, "postAnswer": answer,
+                          "actions": [{"type": "won", "id": "v-fresh"}]}])["runs"][0]
+    assert yes["opened"] == ["/portal.html?open=v-fresh&sec=followup"], yes["opened"]
+
+
+def test_a_hand_off_whose_emails_could_not_be_stopped_says_so_too(payload):
+    rows = [dict(p, contacts_status="received") if p["proposal_id"] == "v-deposit" else p
+            for p in payload["proposals"]]
+    answer = {"ok": True, "status": "handed_off", "followups_note": _FU_NOTE}
+    run = _run(dict(payload, proposals=rows), [{"name": "h", "confirm": False, "postAnswer": answer,
+               "actions": [{"type": "handoff", "id": "v-deposit"}]}])["runs"][0]
+    assert [c["title"] for c in run["confirms"]] == ["Follow-up emails are still on"], run["confirms"]
+
+
+def test_a_won_mark_the_portal_took_shows_no_dialog(payload):
+    """The counterexample: an answer with no note (the emails were switched off) asks nothing."""
+    answer = {"ok": True, "status": "won", "followups_off": ["v-fresh"], "followups_failed": [],
+              "followups_note": ""}
+    run = _run(payload, [{"name": "w", "postAnswer": answer,
+                          "actions": [{"type": "won", "id": "v-fresh"}]}])["runs"][0]
+    assert run["confirms"] == [] and run["opened"] == [], run
+
+
 def test_mark_as_lost_on_an_unsent_bid_closes_the_draft_with_the_reason_and_the_note(payload):
     run = _run(payload, [{"name": "l", "actions": [
         {"type": "lost", "id": "v-fresh", "reason": "price", "note": "Wilson was 12% under."}]}])["runs"][0]

@@ -650,8 +650,38 @@ def test_both_undo_buttons_tell_the_prompt_which_mark_they_undo(out):
 @needs_node
 def test_the_won_panel_no_longer_says_the_follow_ups_carry_on(out):
     """The drawer copy around wonControlHtml claimed "Follow-ups do NOT stop" until 2026-10-28."""
-    for key in ("sentOffered", "sentAlreadyWon", "notSentOffered"):
+    for key in ("sentOffered", "sentAlreadyWon", "sentAlreadyWonOff", "notSentOffered"):
         html = out["won"][key]["html"]
         assert "carry on" not in html and "do NOT stop" not in html, key
-    assert "follow-up emails are switched off" in out["won"]["sentAlreadyWon"]["html"]
+    assert "follow-up emails are switched off" in out["won"]["sentAlreadyWonOff"]["html"]
     assert "switches the automatic follow-up emails off" in out["won"]["sentOffered"]["html"]
+
+
+@needs_node
+def test_the_won_and_handed_off_panels_say_what_the_follow_ups_are_actually_doing(out):
+    """Review finding: the Won/Approved and Handed off copy said, as a fact, that the automatic
+    emails are switched off. False for a project marked before 2026-10-28 (nothing back-fills it),
+    for a switch-off the portal did not answer, and after somebody turned automation back on.
+    The sentence now reads the project's follow-up state. Mutation: make either sentence static
+    again (the "on" drawers then claim "switched off" / "are off")."""
+    w = out["won"]
+    on, off = w["sentAlreadyWon"]["html"], w["sentAlreadyWonOff"]["html"]   # enabled true / false
+    assert "still on for this project" in on and "Turn automation off" in on, on
+    assert "are switched off" not in on, "a project still being emailed says the emails stopped"
+    assert "are switched off" in off and "still on" not in off, off
+    h_on, h_off = w["sentHandedOffOn"]["html"], w["sentHandedOffOff"]["html"]
+    assert "Handed Off tab" in h_on and "Handed Off tab" in h_off, "not the handed-off panel"
+    assert "still on for this project" in h_on and "emails are off" not in h_on, h_on
+    assert "emails are off" in h_off and "still on" not in h_off, h_off
+
+
+@needs_node
+def test_a_won_mark_the_portal_switched_off_repaints_as_off_at_once(out):
+    """The copy reads the follow-up state, so a successful switch-off (followups_off names this
+    project) must reach the repainted payload, or the drawer says "still on" until the next fetch.
+    Counterexample: the failed switch-off just before it repaints as still on. Mutation: drop the
+    followup_state patch in wireWon's post, or the DETAIL_CACHE write in the sent drawer's repaint."""
+    ok = out["won"]["sentMarkedFuOff"]
+    assert ok["pressed"], "the button never rendered, so this proves nothing"
+    assert "are switched off" in ok["html"] and "still on for this project" not in ok["html"]
+    assert "still on for this project" in out["won"]["sentMarkedFuFailed"]["html"]

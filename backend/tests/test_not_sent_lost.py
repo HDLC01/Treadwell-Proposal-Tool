@@ -496,6 +496,17 @@ def test_undoing_a_won_mark_does_not_promise_the_emails_start_again(out):
 
 
 @needs_node
+def test_undoing_a_mark_on_a_project_still_being_emailed_does_not_say_they_stay_off(out):
+    """Review finding: "stay off" was said whatever the project's follow-up state. A mark made
+    before 2026-10-28, or one the portal did not answer, left the emails on. Mutation: drop the
+    follow-up-state branch in confirmBringBack; both read "stay off"."""
+    d = out["bringBackFollowups"]
+    for k in ("chasedWon", "chasedHandedOff"):
+        assert "still on for this project" in d[k] and "stay off" not in d[k], (k, d[k])
+        assert "Turn automation off" in d[k], (k, d[k])
+
+
+@needs_node
 def test_undoing_a_won_mark_on_an_unsent_bid_says_nothing_was_sent(out):
     """An unsent project has no portal row, so nothing was switched off and nothing will start."""
     d = out["bringBackFollowups"]

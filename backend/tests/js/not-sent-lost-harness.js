@@ -521,8 +521,13 @@ const wonByHand = () => Object.assign({}, LIVE, { won_at: "2026-08-18T15:00:00Z"
     await h.m.confirmBringBack(sent, "", "won");
     await h.m.confirmBringBack(sent, "", "handed_off");
     await h.m.confirmBringBack(Object.assign({}, LIVE, { won_at: "2026-08-19" }), "", "won");
+    // still being emailed (a mark before 2026-10-28, or a switch-off the portal did not answer)
+    const chased = Object.assign({}, sent, { followup_state: { enrolled: true, enabled: true } });
+    await h.m.confirmBringBack(chased, "", "won");
+    await h.m.confirmBringBack(chased, "", "handed_off");
     out.bringBackFollowups = { plain: h.prompts[0].detail, won: h.prompts[1].detail,
-                               handedOff: h.prompts[2].detail, unsentWon: h.prompts[3].detail };
+                               handedOff: h.prompts[2].detail, unsentWon: h.prompts[3].detail,
+                               chasedWon: h.prompts[4].detail, chasedHandedOff: h.prompts[5].detail };
   }
 
   // 10c. the comment, printed back. Requiring a sentence and never showing it anywhere would cost

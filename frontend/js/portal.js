@@ -1693,6 +1693,16 @@
     const control = (btn, words) => (acts
       ? btn + '<span class="acts-say">' + words + "</span>"
       : '<p class="note">' + words + "</p>" + btn);
+    // ARE THE AUTOMATIC EMAILS STILL GOING OUT, read off the project's own follow-up state rather
+    // than assumed from the mark. A mark made before 2026-10-28, a switch-off the portal did not
+    // answer, or automation turned back on afterwards all leave a won or handed-off project being
+    // chased, and the drawer must not say the emails stopped while the portal keeps sending them.
+    // On = enrolled, switched on and not yet approved (approval ends the cadence; followupState).
+    const fuState = C.followup(p);
+    const chased = !!fuState.enrolled && !!fuState.enabled
+      && String(p.proposal_status || "") !== "approved";
+    const stillOn = "the automatic follow-up emails are still on for this project. Press Turn "
+      + "automation off, above, to stop them.";
     // No em dash anywhere in this copy: it renders in the sent drawer, where that is a house rule
     // (test_no_em_dash_in_the_panels_copy) because the portal's own system lines use one as a field
     // separator and splitSystem cuts on it.
@@ -1704,8 +1714,9 @@
         ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="handoff-undo">Bring it back to the board</button></div>',
           acts
           ? "Operations has this one, so it has left the Active board and sits on the Handed Off tab. "
-            + "Handing it off switched the automatic follow-up emails off, and bringing it back "
-            + "does not turn them on again."
+            + (chased ? "But " + stillOn
+              : "The automatic follow-up emails are off, and bringing it back does not turn them "
+                + "on again.")
           : "Somebody handed this to operations, so it has left the Active board and sits on the "
             + "Handed Off tab. Bring it back if that press was early: the card returns to whichever "
             + "Active column its own dates earn.")}
@@ -1723,13 +1734,15 @@
         ${control('<div class="fu-line">' + handoffBtn
             + '<button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>',
           acts
-          ? "Somebody marked this won, so it sits in the Won/Approved column, and the automatic "
-            + "follow-up emails are switched off. Undoing the mark does not turn them back on. "
+          ? "Somebody marked this won, so it sits in the Won/Approved column, "
+            + (chased ? "but " + stillOn + " "
+              : "and the automatic follow-up emails are switched off. Undoing the mark does not "
+                + "turn them back on. ")
             + "Hand it off once operations has it."
           : "Somebody marked this won, so it sits in the Won/Approved column on the Active board, "
             + "and counts under Active on the Notification Sending page. The customer is not emailed "
-            + "about the mark, and marking it won switched the automatic follow-up emails off on "
-            + "every proposal of it already sent. Undoing the mark does not turn them back on. Hand "
+            + "about the mark. It has not been sent, so no automatic follow-up emails go out for "
+            + "it, and sending it while it is marked won switches them off as it goes. Hand "
             + "it off once operations has the contact info, and the card leaves the board for the "
             + "Handed Off tab.")}
         <p class="note" id="won-note"></p>${close}`;
@@ -1827,6 +1840,12 @@
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        // THE PORTAL SWITCHED THIS PROJECT'S EMAILS OFF, so the repaint says so now rather than
+        // "still on" until the next fetch: wonControlHtml reads the follow-up state, not the mark.
+        if ((j.followups_off || []).indexOf(pid) >= 0) {
+          patch = Object.assign({}, patch, { followup_state: Object.assign({},
+            (row && row.followup_state) || {}, { enabled: false }) });
+        }
         repaint(patch);
         load();                     // the chip and the Won count live on the board behind this
         // Saved, but the portal could not be told to stop the automatic emails (Won and Hand it off
@@ -4316,6 +4335,10 @@
     wireWon(pid, p, (patch) => {
       const r = ALL.find((x) => x.proposal_id === pid);
       if (r) Object.assign(r, patch);
+      // The follow-up state is drawn from the PAYLOAD (renderDetail merges only won_at off the
+      // row), so a switch-off the mark just made goes onto the cached proposal too.
+      const cachedP = DETAIL_CACHE[pid] && DETAIL_CACHE[pid].proposal;
+      if (cachedP && patch.followup_state) cachedP.followup_state = patch.followup_state;
       DRAWER_SIG = "";
       // openDetail caches the payload before it ever renders, so this is populated whenever these
       // buttons exist. Guarded rather than defaulted: inventing a payload here would render a drawer
@@ -4550,8 +4573,14 @@
     // UNDOING A WON MARK OR A HAND-OFF DOES NOT RESTART THE EMAILS (2026-10-28): both switched the
     // automatic follow-ups off on the portal, and whether to chase the customer again is a
     // decision for the Follow-up tab's own switch, so "start again" would be a false promise there.
+    // And only when they ARE off: a mark from before 2026-10-28, or one the portal did not answer,
+    // left them on, and "stay off" would then be the same false claim the drawer used to make.
+    const st = C.followup(p);
     const fu = !undoing ? "Follow-up reminders start again."
       : p.not_sent ? "Nothing has been sent, so there are no follow-up emails to start."
+      : (st.enrolled && st.enabled)
+        ? "The automatic follow-up emails are still on for this project, and bringing it back"
+          + " does not change that. Press Turn automation off, on the Follow-up tab, to stop them."
       : "The automatic follow-up emails stay off: " + (undoing === "handed_off" ? "handing it off"
           : "marking it won") + " switched them off, and bringing it back does not turn them on."
         + " Press Turn automation on, on the Follow-up tab, to chase the customer again.";

@@ -2271,7 +2271,12 @@ def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:  # noqa: BLE001 — the send itself succeeded
             log.warning("publish: could not record %s's estimator on the draft: %s",
                         draft_id, exc)
+    # SENT AFTER A WON MARK OR A HAND-OFF: the portal has just enrolled this proposal in the
+    # automatic emails, about a job already won (_followups_off_after_publish). Every publish goes
+    # through here, the send-all's included.
+    _fu_off = _followups_off_after_publish(draft_id, row.get("data") or {}, by)
     if isinstance(out, dict):
+        out.update(_fu_off)
         out.setdefault("revision_no", rev_no)
         # A scope's publish emails NOBODY (the portal holds it for the project's one combined email),
         # so the Files page must not say "sent to the customer". It reads this to say what did happen.
@@ -8959,6 +8964,9 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
         label = drafts._scope_of(prep["row"].get("data") or {})[1] or label   # as now stored
         published.append({"id": m["id"], "label": label,
                           "revision_no": out.get("revision_no") if isinstance(out, dict) else None})
+        # Sent after a won mark, and the portal would not switch its emails off (_commit_publish).
+        if isinstance(out, dict) and out.get("followups_note"):
+            published[-1]["followups_note"] = out["followups_note"]
         if not (prep["row"].get("data") or {}).get("generate_result"):
             _record_built_files(m["id"], (prep["row"].get("data") or {}).get("proposal_payload"),
                                 request)
@@ -9289,8 +9297,17 @@ def _followups_off_for_outcome(draft_id: str, actor: Optional[str]) -> Dict[str,
 
     EVERY PROPOSAL OF A SCOPE GROUP. A project with several scopes is one project to the customer,
     who is chased with one email for all of them, so a won mark on any scope stops the lot (the
-    portal does the same when the customer approves one scope: group_chase_stopped). Only proposals
-    that HAVE been sent are asked: an unsent one has no portal row, and asking would be a 404.
+    portal does the same when the customer approves one scope: group_chase_stopped).
+
+    EVERY ONE IS ASKED, sent or not, and the portal's 404 is the answer "never sent, nothing to stop".
+    A missing revision row is NOT proof a proposal was never sent: revisions began with #219
+    (2026-07-31), so a proposal published before then has a live portal row, may still be on the
+    cadence, and has no revision (the reason _draft_was_sent asks the portal too). Skipping on it
+    left those customers being emailed while the drawer said the emails had stopped. The revision
+    row still counts for one thing: when the portal cannot be asked, a proposal with no revision on
+    a box with NO portal configured (503) has nothing chasing it, so it is not called a failure;
+    on an unreachable portal (502) it is, because a pre-#219 one cannot be told apart from an
+    unsent one without asking.
 
     NEVER RAISES. The mark is already saved when this runs, and it stays saved; what this returns
     says which proposals could not be switched off, so the route can SAY so rather than fail
@@ -9311,17 +9328,17 @@ def _followups_off_for_outcome(draft_id: str, actor: Optional[str]) -> Dict[str,
     except Exception as exc:  # noqa: BLE001 — cannot tell which proposals there are: say so
         log.warning("follow-up switch-off: could not read %s: %s", draft_id, exc)
         return {"off": off, "failed": [draft_id]}
-    unreachable = False
+    unreachable: Optional[int] = None       # the status the portal could not be asked with
     for pid in ids:
         try:
-            if not drafts.latest_revision_no(pid):
-                continue                    # never sent: no portal row, nothing is chasing it
-        except Exception as exc:  # noqa: BLE001
+            revised: Optional[bool] = bool(drafts.latest_revision_no(pid))
+        except Exception as exc:  # noqa: BLE001 — unknown: the portal is asked all the same
             log.warning("follow-up switch-off: revision lookup failed for %s: %s", pid, exc)
-            failed.append(pid)
-            continue
-        if unreachable:
-            failed.append(pid)              # sent, and the portal is down: still being chased
+            revised = None
+        if unreachable is not None:
+            if unreachable == 503 and revised is False:
+                continue                    # no portal on this box, and no sign it was ever sent
+            failed.append(pid)              # may be sent, and the portal is down: maybe chased
             continue
         try:
             _portal(f"/api/admin/proposal/{_safe_id(pid)}/followup-automation", "POST",
@@ -9330,13 +9347,76 @@ def _followups_off_for_outcome(draft_id: str, actor: Optional[str]) -> Dict[str,
         except HTTPException as exc:
             if exc.status_code == 404:
                 continue                    # the portal has no such proposal, so nothing to stop
+            if exc.status_code in (502, 503):
+                unreachable = exc.status_code
+                if exc.status_code == 503 and revised is False:
+                    continue
             log.warning("follow-up switch-off failed for %s: %s", pid, exc.detail)
             failed.append(pid)
-            unreachable = exc.status_code in (502, 503)
         except Exception as exc:  # noqa: BLE001
             log.warning("follow-up switch-off failed for %s: %s", pid, exc)
             failed.append(pid)
     return {"off": off, "failed": failed}
+
+
+def _outcome_mark_of(draft_id: str, data: Dict[str, Any]) -> str:
+    """"won" or "handed off" when this proposal, or any live proposal of its scope group, carries the
+    mark on its draft; "" otherwise. Read off the STORED drafts (the mark is server-owned)."""
+    def _mark(d: Dict[str, Any]) -> str:
+        if d.get("handed_off"):
+            return "handed off"
+        return "won" if d.get("won") else ""
+    found = _mark(data or {})
+    if found:
+        return found
+    gid = drafts._scope_of(data or {})[0]
+    if not gid:
+        return ""
+    for m in drafts._group_rows(gid):
+        mid = m.get("id")
+        if not mid or mid == draft_id:
+            continue
+        found = _mark(((drafts.load_draft(mid) or {}).get("data")) or {})
+        if found:
+            return found
+    return ""
+
+
+def _followups_off_after_publish(draft_id: str, data: Dict[str, Any],
+                                 actor: Optional[str]) -> Dict[str, Any]:
+    """A proposal SENT AFTER its project was marked won or handed off starts with its automatic
+    follow-up emails switched off. {} when there is no mark; else the keys the status route answers
+    with (followups_off, followups_failed, followups_note).
+
+    The switch-off at the mark (_followups_off_for_outcome) can only reach proposals the portal
+    already has. One sent later (the customer said yes on the phone, then the formal proposal goes
+    out for signature; or scope 3 of a group sent after scope 1 was marked won) was enrolled by the
+    portal's first publish (portal db.enroll_followup) and chased about a job already won. So
+    _commit_publish asks for the same switch right after the portal took the proposal. The portal
+    keeps followup_disabled_at across re-publishes and the combined scope email (enroll_followup
+    never clears it), so the first send is the only one that needs this.
+
+    NEVER RAISES: the proposal has already gone to the customer when this runs."""
+    try:
+        what = _outcome_mark_of(draft_id, data)
+    except Exception as exc:  # noqa: BLE001 — cannot tell: the publish answer says so
+        log.warning("publish: could not read the won / hand-off marks for %s: %s",
+                    _log_safe(draft_id), exc)
+        return {}
+    if not what:
+        return {}
+    try:
+        _portal(f"/api/admin/proposal/{_safe_id(draft_id)}/followup-automation", "POST",
+                {"enabled": False, "by": actor})
+        return {"followups_off": [draft_id], "followups_failed": [], "followups_note": ""}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("publish: follow-up switch-off failed for %s (project %s): %s",
+                    _log_safe(draft_id), what, getattr(exc, "detail", None) or exc)
+        return {"followups_off": [], "followups_failed": [draft_id],
+                "followups_note": ("Sent. This project is marked %s, but the automatic follow-up "
+                                   "emails could not be switched off for this proposal, because "
+                                   "the customer portal did not answer. Press Turn automation off "
+                                   "on the Follow-up tab." % what)}
 
 
 def _followups_off_note(result: Dict[str, Any], what: str) -> str:

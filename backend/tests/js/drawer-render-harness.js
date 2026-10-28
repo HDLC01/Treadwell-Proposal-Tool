@@ -1344,6 +1344,20 @@ async function runScenario(name, s) {
     page.cache("wonsent", wonData);
     page.renderDetail("wonsent", wonData);
     out.won.sentAlreadyWon = { html: dom.html, merged: wonData.proposal.won_at };
+    // THE SAME DRAWER WITH ITS EMAILS ACTUALLY OFF, and handed off both ways (review finding: the
+    // copy said "switched off" as a fact, which was false for a mark made before 2026-10-28, a
+    // switch-off the portal did not answer, or automation turned back on). Restored after.
+    wonData.proposal.followup_state = { enrolled: true, enabled: false };
+    page.renderDetail("wonsent", wonData);
+    out.won.sentAlreadyWonOff = { html: dom.html };
+    wonData.proposal.handed_off_at = "2026-08-28T15:00:00+00:00";
+    page.renderDetail("wonsent", wonData);
+    out.won.sentHandedOffOff = { html: dom.html };
+    wonData.proposal.followup_state = { enrolled: true, enabled: true };
+    page.renderDetail("wonsent", wonData);
+    out.won.sentHandedOffOn = { html: dom.html };
+    delete wonData.proposal.handed_off_at;
+    page.renderDetail("wonsent", wonData);
     // Undoing it, ASKED and refused: what the prompt says about the follow-up emails is the claim
     // (2026-10-28: the mark switched them off, and the undo must not promise they start again).
     prompt.calls.length = 0;
@@ -1390,6 +1404,21 @@ async function runScenario(name, s) {
       followups_note: "Saved as won, but the automatic follow-up emails could not be switched off." } }]];
     out.won.sentMarkedFuFailed = await pressWon("won-mark");
     fuNet.answers = [];
+
+    // ── saved, and the portal DID switch them off: the repaint says so straight away ──
+    // The drawer copy reads the follow-up state (review finding: it used to state "switched off"
+    // as a fact), so the route's followups_off has to reach the repainted payload.
+    page.row("marksent").won_at = "";
+    markData.proposal.followup_state = { enrolled: true, enabled: true };
+    page.open("marksent");
+    page.cache("marksent", markData);
+    page.renderDetail("marksent", markData);
+    fuNet.answers = [[/^\/api\/draft\/[^/]+\/status$/, { status: 200, body: {
+      ok: true, status: "won", followups_off: ["marksent"], followups_failed: [],
+      followups_note: "" } }]];
+    out.won.sentMarkedFuOff = await pressWon("won-mark");
+    fuNet.answers = [];
+    markData.proposal.followup_state = { enrolled: true, enabled: true };
 
     // ── a refused write ──
     // The optimistic patch is the hazard in this design: the panel redraws from a row it patched
