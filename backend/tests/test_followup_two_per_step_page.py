@@ -189,9 +189,29 @@ def test_when_the_portal_stored_something_else_the_page_says_so_and_shows_it(ran
     assert r["alert"].startswith("Saved, but the portal stored different values")
 
 
-def test_reset_is_asked_first_and_is_an_empty_payload(ran):
+def test_reset_is_asked_first_and_is_an_explicit_flag_beside_an_empty_payload(ran):
+    """Mutation: drop `reset: true` from the PUT and this fails. The two-per-step portal fills an
+    absent field from what is SAVED, so a bare `{settings: {}}` saves the current cadence again."""
     assert ran["reset"]["asked"] == 1
-    assert ran["reset"]["puts"] == [{"settings": {}}]
+    assert ran["reset"]["puts"] == [{"settings": {}, "reset": True}]
+
+
+def test_an_acknowledged_reset_says_so_and_shows_the_defaults_the_portal_answered(ran):
+    r = ran["reset"]
+    assert r["alert"] == "Reset to the default cadence." and r["alertOk"] is True
+    assert (r["boxes"]["no2"]["days"], r["boxes"]["est"]["days"]) == ("5", "2")
+
+
+def test_a_reset_the_portal_did_not_apply_is_never_called_a_reset(ran):
+    """Review finding 2026-10-29: Reset sent an empty payload, the portal refilled it from the
+    saved row (not_opened 1st = 20 days, estimator off), stored the same values again, and the page
+    still said "Reset to the default cadence." in green. Mutation: say that sentence whenever the
+    PUT succeeds, ignoring the portal's `reset` acknowledgement, and this fails."""
+    r = ran["resetIgnored"]
+    assert r["alert"] != "Reset to the default cadence."
+    assert r["alert"].startswith("Not reset.") and r["alertOk"] is False
+    # The boxes show what the portal kept, so nobody reads the old values as defaults.
+    assert (r["boxes"]["no1"]["days"], r["boxes"]["est"]["on"]) == ("20", False)
 
 
 # ── the flat spelling ───────────────────────────────────────────────────────────
@@ -250,3 +270,21 @@ def test_the_settings_put_passes_the_portal_s_refusal_through_with_its_field(mon
     assert j["ok"] is False
     assert calls[0][0:2] == ("/api/admin/settings/followups", "PUT")
     assert calls[0][2]["by"], "the server no longer stamps who changed it"
+
+
+def test_the_settings_put_forwards_the_reset_flag_and_hands_back_the_acknowledgement(monkeypatch):
+    """The reset contract rides the proxy both ways: `reset: true` reaches the portal, and the
+    portal's `reset: true` reaches the page, which only says "Reset" when it sees it. Mutation:
+    rebuild the payload from `settings` alone in the proxy, or drop `reset` from its answer."""
+    calls = []
+
+    def fake_call(path, method="GET", body=None):
+        calls.append((path, method, body))
+        return 200, {"ok": True, "reset": True, "settings": {"steps": {}}, "saved": True}
+
+    monkeypatch.setattr(main, "_portal_call", fake_call)
+    monkeypatch.setattr(main.profiles, "get_by_email", lambda e: {"email": e, "role": "admin"})
+    client = TestClient(main.app)
+    r = client.put("/api/followup-settings", json={"settings": {}, "reset": True})
+    assert r.status_code == 200 and r.json()["reset"] is True
+    assert calls[0][2]["reset"] is True and calls[0][2]["settings"] == {}

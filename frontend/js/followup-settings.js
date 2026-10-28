@@ -747,12 +747,21 @@
       tone: "warn",
     });
     if (!ok) return;
-    // Saving an empty payload is how a reset is expressed: the server fills every field from the
-    // shipped defaults, so there is no second definition of "default" on this side to drift.
+    // A reset is an EXPLICIT `reset: true` beside an empty settings object, and the portal fills
+    // every field from its own shipped defaults, so there is no second definition of "default" on
+    // this side to drift.
+    //
+    // Why the flag (2026-10-29). The two-per-step portal's validate() fills a field the payload
+    // leaves out from what is SAVED now, not from the defaults, so a bare empty payload just
+    // saved the current cadence again, and the page still said "Reset to the default cadence."
+    // over the bad values somebody pressed Reset to undo, while the customer emails kept going
+    // out on them. So the success sentence now waits for the portal to say it applied the
+    // defaults (`reset: true` in its answer). Without that the boxes show what it kept, and the
+    // page says nothing was reset.
     try {
       var r = await api("/api/followup-settings", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {} }) });
+        body: JSON.stringify({ settings: {}, reset: true }) });
       var j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
       CFG = j.settings || {};
@@ -761,7 +770,9 @@
       fillTemplate();
       renderPreview(j.previews && j.previews[KEY]);
       showWhoChanged(j);      // a reset IS a change, and it is the newest one
-      say("Reset to the default cadence.", true);
+      if (j.reset === true) say("Reset to the default cadence.", true);
+      else say("Not reset. The customer portal kept the saved cadence, which the boxes show. "
+        + "It needs an update before Reset works.");
     } catch (err) {
       say("Couldn't reset that: " + (err.message || "try again"));
     }

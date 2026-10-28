@@ -186,16 +186,39 @@ async function run() {
     out.errors.oldPortal = e.constructor.name + ": " + e.message + "\n" + e.stack;
   }
 
-  // 9. RESET is an empty payload, asked first.
+  // 9. RESET is an explicit flag beside an empty payload, asked first. The portal ACKNOWLEDGES it
+  //    (`reset: true`) and answers with its shipped defaults; the boxes show those.
   try {
-    const page = makePage([GET_NEW, { status: 200, body: { ok: true, settings: NEW_SETTINGS,
-                                                            saved: false, previews: {} } }]);
+    const defaults = JSON.parse(JSON.stringify(NEW_SETTINGS));
+    defaults.steps.not_opened.second = rule(true, 5);
+    defaults.estimator = rule(true, 2);
+    const page = makePage([GET_NEW, { status: 200, body: { ok: true, reset: true, settings: defaults,
+                                                            saved: true, previews: {} } }]);
     await settle();
     await page.el("reset").fire("click");
     await settle();
-    out.reset = { puts: puts(page), asked: page.danger.length, alert: page.el("alert").textContent };
+    out.reset = { puts: puts(page), asked: page.danger.length, alert: page.el("alert").textContent,
+                  alertOk: page.el("alert").className.indexOf("ok") >= 0, boxes: boxes(page) };
   } catch (e) {
     out.errors.reset = e.constructor.name + ": " + e.message + "\n" + e.stack;
+  }
+
+  // 9b. A PORTAL THAT IGNORES THE FLAG: it fills the empty payload from what is saved, stores the
+  //     same cadence again and answers without `reset`. The page must not say it reset.
+  try {
+    const kept = JSON.parse(JSON.stringify(NEW_SETTINGS));
+    kept.steps.not_opened.first = rule(true, 20);
+    kept.estimator = rule(false, 1);
+    const page = makePage([{ status: 200, body: Object.assign({}, GET_NEW.body, { settings: kept }) },
+                           { status: 200, body: { ok: true, settings: kept, saved: true,
+                                                  previews: {} } }]);
+    await settle();
+    await page.el("reset").fire("click");
+    await settle();
+    out.resetIgnored = { puts: puts(page), alert: page.el("alert").textContent,
+                         alertOk: page.el("alert").className.indexOf("ok") >= 0, boxes: boxes(page) };
+  } catch (e) {
+    out.errors.resetIgnored = e.constructor.name + ": " + e.message + "\n" + e.stack;
   }
 
   // 10. THE FLAT SPELLING (not_opened_first_on, ..._days, estimator_on/_days), which the portal

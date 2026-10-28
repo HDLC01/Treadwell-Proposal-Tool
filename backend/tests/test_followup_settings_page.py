@@ -117,8 +117,10 @@ def test_the_saved_values_are_read_back_after_saving(js):
 def test_a_reset_is_an_empty_payload_not_a_second_copy_of_the_defaults(js):
     """Otherwise "default" is defined in two places and they drift."""
     i = js.index('$("reset").addEventListener')
-    block = js[i:i + 1400]
-    assert "settings: {}" in block
+    # The whole handler, up to the load() call that follows it: a fixed-width window stopped
+    # reaching the PUT the moment the handler's comment grew.
+    block = js[i:js.index("load();", i)]
+    assert "settings: {}, reset: true" in block
     assert "24" not in block and "72" not in block, (
         "the page appears to hardcode default numbers; the server owns those")
 
