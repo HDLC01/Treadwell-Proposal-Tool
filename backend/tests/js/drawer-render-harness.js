@@ -882,8 +882,11 @@ const injected = [
   // between the prompt for a closed bid and the prompt for a held one: it is the sentence that
   // names the hold as the thing coming off. The prompt's own wording is not-sent-lost-harness's
   // subject (it lifts the real confirmBringBack); what this file drives is what each caller ASKS.
-  ["confirmBringBack", (p, extra) => { prompt.calls.push({ name: p && p.project_name,
-                                                          extra: extra === undefined ? null : extra });
+  // `undoing` too (2026-10-28): which mark the undo takes off decides whether the prompt may say
+  // the follow-up emails start again.
+  ["confirmBringBack", (p, extra, undoing) => { prompt.calls.push({ name: p && p.project_name,
+                                                          extra: extra === undefined ? null : extra,
+                                                          undoing: undoing === undefined ? null : undoing });
                                        return Promise.resolve(prompt.answer); }],
   // HOLD_MONTHS is a module const the sent drawer's close-out handler reads. Bound by NAME off
   // portal.js rather than typed here, so a change to the number cannot make this harness test a
@@ -1341,6 +1344,24 @@ async function runScenario(name, s) {
     page.cache("wonsent", wonData);
     page.renderDetail("wonsent", wonData);
     out.won.sentAlreadyWon = { html: dom.html, merged: wonData.proposal.won_at };
+    // Undoing it, ASKED and refused: what the prompt says about the follow-up emails is the claim
+    // (2026-10-28: the mark switched them off, and the undo must not promise they start again).
+    prompt.calls.length = 0;
+    const promptWas = prompt.answer;
+    prompt.answer = false;
+    out.won.sentUndoAsked = Object.assign({}, await pressWon("won-undo", false),
+                                          { prompts: prompt.calls.slice() });
+    // The hand-off undo, the same way: handed off, rendered, Bring it back pressed and refused.
+    prompt.calls.length = 0;
+    // On the PAYLOAD: renderDetail merges only won_at off the board row (portal.js), so this is the
+    // one place a sent drawer can be drawn handed off from.
+    wonData.proposal.handed_off_at = "2026-08-28T15:00:00+00:00";
+    page.renderDetail("wonsent", wonData);
+    out.won.sentHandoffUndoAsked = Object.assign({}, await pressWon("handoff-undo", false),
+                                                 { prompts: prompt.calls.slice() });
+    delete wonData.proposal.handed_off_at;
+    page.renderDetail("wonsent", wonData);
+    prompt.answer = promptWas;
 
     // ── the sent drawer: marking one from scratch ──
     const markData = payload({ proposal: { project_name: "Northgate Fulfilment",
@@ -1356,6 +1377,19 @@ async function runScenario(name, s) {
     out.won.sentOffered = { html: dom.html };
     const sentMark = await pressWon("won-mark");
     out.won.sentMarked = Object.assign({}, sentMark, { rowWonAt: (page.row("marksent") || {}).won_at });
+
+    // ── saved, but the portal could not switch the follow-up emails off ──
+    // The route answers 200 with `followups_note` (main.py _followups_off_note): the mark is saved
+    // and the sentence has to reach the screen, in the note the repaint drew, not the one it replaced.
+    page.row("marksent").won_at = "";
+    page.open("marksent");
+    page.cache("marksent", markData);
+    page.renderDetail("marksent", markData);
+    fuNet.answers = [[/^\/api\/draft\/[^/]+\/status$/, { status: 200, body: {
+      ok: true, status: "won", followups_off: [], followups_failed: ["marksent"],
+      followups_note: "Saved as won, but the automatic follow-up emails could not be switched off." } }]];
+    out.won.sentMarkedFuFailed = await pressWon("won-mark");
+    fuNet.answers = [];
 
     // ── a refused write ──
     // The optimistic patch is the hazard in this design: the panel redraws from a row it patched

@@ -9275,6 +9275,83 @@ def _hold_until(now: Optional[datetime] = None) -> str:
                      day=min(d.day, calendar.monthrange(year, month)[1])).isoformat()
 
 
+def _followups_off_for_outcome(draft_id: str, actor: Optional[str]) -> Dict[str, Any]:
+    """Switch the automatic customer follow-up emails OFF on the portal, after a won or hand-off mark.
+
+    Hanz, 2026-10-28: "If staff mark a project Won (or Hand it off) by hand in the tool while the
+    portal still says sent/viewed, the automatic customer emails STOP." The won mark lives on OUR
+    blob and the portal never reads it, so without this the portal kept emailing a customer who had
+    already said yes on the phone.
+
+    THE SAME CALL THE DRAWER'S FOLLOW-UPS SWITCH MAKES (`followup-automation`, enabled false), not a
+    new portal route: that switch is the one per-project stop both repos already agree on, it is
+    sticky across re-publishes, and turning it back on is a control the drawer already has.
+
+    EVERY PROPOSAL OF A SCOPE GROUP. A project with several scopes is one project to the customer,
+    who is chased with one email for all of them, so a won mark on any scope stops the lot (the
+    portal does the same when the customer approves one scope: group_chase_stopped). Only proposals
+    that HAVE been sent are asked: an unsent one has no portal row, and asking would be a 404.
+
+    NEVER RAISES. The mark is already saved when this runs, and it stays saved; what this returns
+    says which proposals could not be switched off, so the route can SAY so rather than fail
+    silently. A portal that cannot be reached at all is not asked again for the rest of the group:
+    twelve 20-second timeouts would be the drawer hanging for four minutes.
+
+    Returns {"off": [ids switched off], "failed": [ids not switched off or not checked]}."""
+    off: List[str] = []
+    failed: List[str] = []
+    try:
+        row = drafts.load_draft(draft_id)
+        gid = drafts._scope_of((row or {}).get("data") or {})[0] if row else None
+        ids = [draft_id]
+        if gid:
+            for m in drafts._group_rows(gid):
+                if m.get("id") and m["id"] not in ids:
+                    ids.append(m["id"])
+    except Exception as exc:  # noqa: BLE001 — cannot tell which proposals there are: say so
+        log.warning("follow-up switch-off: could not read %s: %s", draft_id, exc)
+        return {"off": off, "failed": [draft_id]}
+    unreachable = False
+    for pid in ids:
+        try:
+            if not drafts.latest_revision_no(pid):
+                continue                    # never sent: no portal row, nothing is chasing it
+        except Exception as exc:  # noqa: BLE001
+            log.warning("follow-up switch-off: revision lookup failed for %s: %s", pid, exc)
+            failed.append(pid)
+            continue
+        if unreachable:
+            failed.append(pid)              # sent, and the portal is down: still being chased
+            continue
+        try:
+            _portal(f"/api/admin/proposal/{_safe_id(pid)}/followup-automation", "POST",
+                    {"enabled": False, "by": actor})
+            off.append(pid)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue                    # the portal has no such proposal, so nothing to stop
+            log.warning("follow-up switch-off failed for %s: %s", pid, exc.detail)
+            failed.append(pid)
+            unreachable = exc.status_code in (502, 503)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("follow-up switch-off failed for %s: %s", pid, exc)
+            failed.append(pid)
+    return {"off": off, "failed": failed}
+
+
+def _followups_off_note(result: Dict[str, Any], what: str) -> str:
+    """The sentence the drawer and the card show when `_followups_off_for_outcome` left any proposal
+    still being chased, or "" when nothing was left on. `what` is "marked won" or "handed off"."""
+    failed = result.get("failed") or []
+    if not failed:
+        return ""
+    many = len(failed) + len(result.get("off") or []) > 1
+    return ("Saved as %s, but the automatic follow-up emails could not be switched off for %s, "
+            "because the customer portal did not answer. Press Turn automation off on the "
+            "Follow-up tab." % (what, ("%d of the proposals of this project" % len(failed))
+                                       if many else "this project"))
+
+
 class DraftStatusIn(BaseModel):
     """Close an unsent project as lost or on hold, mark one won or handed off, or clear any of it."""
     status: str = "closed_lost"
@@ -9338,6 +9415,12 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
     instead of killing it (HOLD_REASONS above), and an unsent project has no portal row to pause,
     so the draft records the reason and a date and the board keeps the card in its Created column.
 
+    WON AND HANDED OFF ALSO STOP THE AUTOMATIC CUSTOMER EMAILS, since 2026-10-28 (Hanz: "If staff
+    mark a project Won (or Hand it off) by hand in the tool while the portal still says sent/viewed,
+    the automatic customer emails STOP"). See _followups_off_for_outcome. The mark is saved either
+    way; `followups_note` says so when the portal could not be told. Clearing either mark does NOT
+    turn them back on.
+
     THE COMMENT IS REQUIRED on both closing paths, and only there. See NOTE_REQUIRED."""
     status = (payload.status or "").strip().lower()
     if status in ("won", "not_won"):
@@ -9348,7 +9431,16 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
             raise HTTPException(502, "Could not save the status.") from exc
         if not existed:
             raise HTTPException(404, "project_not_found")
-        return {"ok": True, "status": status}
+        if status == "not_won":
+            # CLEARING THE MARK DOES NOT TURN THE FOLLOW-UPS BACK ON, deliberately. Whether a
+            # customer should be emailed again is a decision, and the Follow-up tab's own switch is
+            # where it is made; an undo that resumed the chasing would also resume it on a project
+            # somebody had switched off for a reason of their own.
+            return {"ok": True, "status": status}
+        fu = _followups_off_for_outcome(draft_id, _user_email(request))
+        return {"ok": True, "status": status, "followups_off": fu["off"],
+                "followups_failed": fu["failed"],
+                "followups_note": _followups_off_note(fu, "won")}
 
     if status in ("handed_off", "not_handed_off"):
         try:
@@ -9359,7 +9451,12 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
             raise HTTPException(502, "Could not save the status.") from exc
         if not existed:
             raise HTTPException(404, "project_not_found")
-        return {"ok": True, "status": status}
+        if status == "not_handed_off":
+            return {"ok": True, "status": status}     # same rule as not_won above
+        fu = _followups_off_for_outcome(draft_id, _user_email(request))
+        return {"ok": True, "status": status, "followups_off": fu["off"],
+                "followups_failed": fu["failed"],
+                "followups_note": _followups_off_note(fu, "handed off")}
 
     if status == "bring_back":
         try:

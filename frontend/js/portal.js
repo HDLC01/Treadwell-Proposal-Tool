@@ -672,6 +672,15 @@
       row.won_at = new Date().toISOString();
       renderBoard();
       load();
+      // THE MARK STOPS THE AUTOMATIC CUSTOMER EMAILS (main.py _followups_off_for_outcome), and when
+      // the portal could not be told, the mark is saved anyway and the server says so. A card has
+      // no note line to put it in and is repainted out from under the press, so it is a dialog,
+      // with the way to fix it one press away. Inline rather than a helper beside this function:
+      // card-actions-harness lifts this one by name, and a new name here would be unbound there.
+      if (j.followups_note && await TW.confirmDanger({
+        title: "Follow-up emails are still on", message: j.followups_note,
+        confirmText: "Open the project", cancelText: "OK", tone: "warn", icon: "warning",
+      })) openDetail(row.proposal_id);
     } catch (err) {
       btn.textContent = "Failed: " + (err.message || "retry");
       btn.disabled = false;
@@ -713,6 +722,12 @@
       row.handed_off_at = new Date().toISOString();
       renderBoard();
       load();
+      // Same as markCardWon: handing off stops the automatic emails, and a portal that could not be
+      // told is said out loud rather than left to keep emailing the customer.
+      if (j.followups_note && await TW.confirmDanger({
+        title: "Follow-up emails are still on", message: j.followups_note,
+        confirmText: "Open the project", cancelText: "OK", tone: "warn", icon: "warning",
+      })) openDetail(row.proposal_id);
     } catch (err) {
       btn.textContent = "Failed: " + (err.message || "retry");
       btn.disabled = false;
@@ -1688,7 +1703,9 @@
       return `${open}${head("Handed off")}
         ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="handoff-undo">Bring it back to the board</button></div>',
           acts
-          ? "Operations has this one, so it has left the Active board and sits on the Handed Off tab."
+          ? "Operations has this one, so it has left the Active board and sits on the Handed Off tab. "
+            + "Handing it off switched the automatic follow-up emails off, and bringing it back "
+            + "does not turn them on again."
           : "Somebody handed this to operations, so it has left the Active board and sits on the "
             + "Handed Off tab. Bring it back if that press was early: the card returns to whichever "
             + "Active column its own dates earn.")}
@@ -1697,18 +1714,24 @@
     // THE HAND-OFF BUTTON, on both won states below. Written once here rather than twice, where the
     // two copies would drift apart the first time the label changed.
     const handoffBtn = '<button type="button" class="btn btn-s" id="handoff-mark">Hand it off</button>';
+    // THE EMAILS STOP, since 2026-10-28. Hanz: "If staff mark a project Won (or Hand it off) by
+    // hand in the tool while the portal still says sent/viewed, the automatic customer emails
+    // STOP." Until that day these sentences said the opposite, and so did the product. Undoing
+    // either mark does NOT turn them back on (main.py api_draft_status), and the copy says so.
     if (C.wonByHand(p)) {
       return `${open}${head("Won/Approved")}
         ${control('<div class="fu-line">' + handoffBtn
             + '<button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>',
           acts
-          ? "Somebody marked this won, so it sits in the Won/Approved column. The follow-up emails "
-            + "carry on until the customer approves in the portal. Hand it off once operations has it."
+          ? "Somebody marked this won, so it sits in the Won/Approved column, and the automatic "
+            + "follow-up emails are switched off. Undoing the mark does not turn them back on. "
+            + "Hand it off once operations has it."
           : "Somebody marked this won, so it sits in the Won/Approved column on the Active board, "
-            + "and counts under Active on the Notification Sending page. Follow-ups do NOT stop: the "
-            + "automatic emails carry on until the customer approves in the portal, and the customer "
-            + "is not emailed about the mark either way. Hand it off once operations has the contact info, and the card leaves "
-            + "the board for the Handed Off tab.")}
+            + "and counts under Active on the Notification Sending page. The customer is not emailed "
+            + "about the mark, and marking it won switched the automatic follow-up emails off on "
+            + "every proposal of it already sent. Undoing the mark does not turn them back on. Hand "
+            + "it off once operations has the contact info, and the card leaves the board for the "
+            + "Handed Off tab.")}
         <p class="note" id="won-note"></p>${close}`;
     }
     if (C.isWon(p)) {
@@ -1761,13 +1784,15 @@
     return `${open}${head("Won it already?")}
       ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark as won/approved</button></div>',
         acts
-        ? "Moves it to the Won/Approved column. It stays on the Active board and the follow-up "
-          + "emails carry on until the customer approves in the portal. You can undo it."
+        ? "Moves it to the Won/Approved column and switches the automatic follow-up emails off. It "
+          + "stays on the Active board. You can undo the mark, but that does not turn the emails "
+          + "back on."
         : "Mark it won as soon as they say yes on the phone. It does not wait for the customer to "
-          + "click Approve or for the deposit to land, the customer is not emailed, and the "
-          + "follow-ups carry on until the customer approves in the portal. The card moves to the Won/Approved column "
-          + "and STAYS on the Active board, so nothing stops being chased. Hand it off separately "
-          + "once operations takes it over. You can undo it.")}
+          + "click Approve or for the deposit to land, and the customer is not emailed. The card "
+          + "moves to the Won/Approved column and STAYS on the Active board. Any proposal of it "
+          + "already sent stops getting the automatic follow-up emails. Hand it off separately "
+          + "once operations takes it over. You can undo the mark, but that does not turn the "
+          + "emails back on.")}
       <p class="note" id="won-note"></p>${close}`;
   }
 
@@ -1804,6 +1829,11 @@
         if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
         repaint(patch);
         load();                     // the chip and the Won count live on the board behind this
+        // Saved, but the portal could not be told to stop the automatic emails (Won and Hand it off
+        // switch them off; main.py _followups_off_for_outcome). Written into the REPAINTED note,
+        // since repaint replaced the one this function started with.
+        const said = $("won-note");
+        if (said && j.followups_note) said.textContent = j.followups_note;
       } catch (err) {
         btn.textContent = orig;
         btn.disabled = false;
@@ -1823,7 +1853,8 @@
     // WHAT THE DIALOG SAYS IS THE FEATURE, not the fact that it exists. Every one of these four
     // sentences answers a question somebody would otherwise have to ask the person who built it:
     // it does not wait for the customer to approve, it does not wait for the deposit, the customer
-    // is not emailed, the follow-ups carry on until the customer approves, and it can be undone. `tone`
+    // is not emailed, the automatic follow-up emails stop (since 2026-10-28; before that they
+    // carried on), and it can be undone, though the undo leaves the emails off. `tone`
     // is warn rather than danger, and that is the honest reading: winning a job is good news and
     // reversible, so it takes the same tone as pausing the chasing rather than the tone of a delete.
     if (mark) mark.addEventListener("click", async () => {
@@ -1832,8 +1863,9 @@
         before: "Move ", name: (row && row.project_name) || "this project",
         after: " to the Won/Approved column?",
         detail: "It does not wait for the customer to approve or for the deposit to land, and the"
-          + " customer is not emailed. The card stays on the Active board, the follow-ups carry on"
-          + " until the customer approves in the portal, and you can undo this.",
+          + " customer is not emailed. The card stays on the Active board and the automatic"
+          + " follow-up emails stop. You can undo this, but undoing it does not turn the emails"
+          + " back on.",
         // A tick, not a trophy: confirmDanger's own warn default is a WASTEBASKET, which is the
         // wrong picture entirely on the one dialog here that is good news. Kept to the same kind of
         // glyph the other two in this file use (the pause and the play) rather than an emoji.
@@ -1852,7 +1884,7 @@
     // forward "active" to the portal and resume a cadence somebody may have paused on purpose.
     const undo = $("won-undo");
     if (undo) undo.addEventListener("click", async () => {
-      if (!(await confirmBringBack(row || {}))) return;
+      if (!(await confirmBringBack(row || {}, "", "won"))) return;
       post(undo, { status: "not_won" }, { won_at: "" });
     });
 
@@ -1872,7 +1904,7 @@
     // board in whatever column it earns, which for a won job is Won/Approved.
     const handUndo = $("handoff-undo");
     if (handUndo) handUndo.addEventListener("click", async () => {
-      if (!(await confirmBringBack(row || {}))) return;
+      if (!(await confirmBringBack(row || {}, "", "handed_off"))) return;
       post(handUndo, { status: "not_handed_off" }, { handed_off_at: "" });
     });
   }
@@ -3545,7 +3577,8 @@
     return { val: "On", lead:
       "The tool emails the customer automatically until they approve: at most 2 follow-up emails "
       + "before they open the proposal and 2 after. It stops when they approve, when the project is "
-      + "closed lost, or when you turn automation off." };
+      + "closed lost, when somebody here marks it won or hands it off, or when you turn automation "
+      + "off." };
   }
 
   function followupPanelHtml(p, data) {
@@ -4499,8 +4532,9 @@
       before: "We have not recorded the contact info for ",
       name: (p && p.project_name) || "this project",
       after: " yet.",
-      detail: "Handing off takes it off the Active board and onto the Handed Off tab. Operations"
-        + " will need those details from somewhere. You can bring it back.",
+      detail: "Handing off takes it off the Active board and onto the Handed Off tab, and the"
+        + " automatic follow-up emails stop. Operations will need those details from somewhere."
+        + " You can bring it back.",
       confirmText: "Hand it off", cancelText: "Not yet", tone: "warn", icon: "arrow-right",
     });
   }
@@ -4512,12 +4546,20 @@
    *  is what the delay and the deposit confirms in this same drawer already use, it traps focus
    *  between its two buttons, and it focuses Cancel. `warn`, not `danger`: this undoes something
    *  rather than destroying it. */
-  function confirmBringBack(p, extra) {
+  function confirmBringBack(p, extra, undoing) {
+    // UNDOING A WON MARK OR A HAND-OFF DOES NOT RESTART THE EMAILS (2026-10-28): both switched the
+    // automatic follow-ups off on the portal, and whether to chase the customer again is a
+    // decision for the Follow-up tab's own switch, so "start again" would be a false promise there.
+    const fu = !undoing ? "Follow-up reminders start again."
+      : p.not_sent ? "Nothing has been sent, so there are no follow-up emails to start."
+      : "The automatic follow-up emails stay off: " + (undoing === "handed_off" ? "handing it off"
+          : "marking it won") + " switched them off, and bringing it back does not turn them on."
+        + " Press Turn automation on, on the Follow-up tab, to chase the customer again.";
     return TW.confirmDanger({
       title: "Bring this back?",
       before: "Put ", name: p.project_name || "this project",
       after: " back under " + reopenDestination(p) + "?",
-      detail: "Follow-up reminders start again." + (extra ? " " + extra : ""),
+      detail: fu + (extra ? " " + extra : ""),
       confirmText: "Bring it back", cancelText: "Leave it", tone: "warn", icon: "undo",
     });
   }

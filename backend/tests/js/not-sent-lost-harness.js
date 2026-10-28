@@ -160,7 +160,7 @@ function lift(deps) {
     + "function applySecPanel() { panelCalls.push(ACTIVE_SEC); }\n"
     + "function wireNotSentAssign(pid) { assignCalls.push(pid); }\n"
     + "function loadNotSentNotify() {}\n"
-    + "return { renderNotSent, wireNotSentLost, closeOutDialog, reopenDestination,"
+    + "return { renderNotSent, wireNotSentLost, closeOutDialog, reopenDestination, confirmBringBack,"
     + "         deleteProjectHtml,"
     + "         sig: () => DRAWER_SIG, setSig: (v) => { DRAWER_SIG = v; },"
     + "         panelCalls, assignCalls };";
@@ -510,6 +510,19 @@ const wonByHand = () => Object.assign({}, LIVE, { won_at: "2026-08-18T15:00:00Z"
     const h = harness(wonByHand(), { declineBringBack: true });
     await clickWonUndo(h);
     out.wonUndoDeclined = { requests: h.requests, prompts: h.prompts };
+  }
+  // 10b-ii. what the bring-back prompt says about the follow-up emails, per kind of undo. Since
+  // 2026-10-28 a won mark and a hand-off switch them off on the portal, and undoing either does
+  // not switch them back on, so only the plain bring-back may promise they start again.
+  {
+    const h = harness(LIVE);
+    const sent = { project_name: "Fairview Clinic", proposal_status: "sent" };
+    await h.m.confirmBringBack(sent);
+    await h.m.confirmBringBack(sent, "", "won");
+    await h.m.confirmBringBack(sent, "", "handed_off");
+    await h.m.confirmBringBack(Object.assign({}, LIVE, { won_at: "2026-08-19" }), "", "won");
+    out.bringBackFollowups = { plain: h.prompts[0].detail, won: h.prompts[1].detail,
+                               handedOff: h.prompts[2].detail, unsentWon: h.prompts[3].detail };
   }
 
   // 10c. the comment, printed back. Requiring a sentence and never showing it anywhere would cost
