@@ -1,4 +1,4 @@
-"""The follow-up tab for a project of several scopes: one reminder per project, and the decision.
+"""The follow-up tab for a project of several scopes: the decision after one scope is approved.
 
 The portal (2026-10-24, Hanz's decisions 2, 6-9) chases a project of several separately-priced
 scopes as ONE project. Its follow-up task lists every scope it covers and shows on every scope's
@@ -7,8 +7,9 @@ task asks a person to close them as lost, leave them, or keep chasing them. Noth
 without a tick, a reason and a note.
 
 EXECUTED, not read: backend/tests/js/group-followup-harness.js runs the real followupTaskHtml,
-followupDecisionHtml, wireFuDecision, fuDecide, fuSettle and loadFuDraft out of portal.js with only
-the network, the dialog and the repaint stubbed. The bell half is notifications.py, called directly.
+followupDecisionHtml, wireFuDecision, fuDecide and fuSettle out of portal.js with only the network,
+the dialog and the repaint stubbed. Since 2026-10-28 the worker emails the customer itself, so the
+decision is the only follow-up task the drawer draws. The bell half is notifications.py, called directly.
 """
 import json
 import pathlib
@@ -26,7 +27,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 JS = pathlib.Path(__file__).resolve().parent / "js"
 HARNESS = JS / "group-followup-harness.js"
-SNAPSHOT = JS / "group-followup-ungrouped.json"
 
 
 @pytest.fixture(scope="module")
@@ -53,55 +53,26 @@ def _text(html: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-# ── an ordinary task renders exactly as it did ─────────────────────────────────
-@pytest.mark.parametrize("shape", ["loading", "ready", "sending", "deposit", "view"])
-def test_an_ungrouped_task_renders_byte_for_byte_as_before(out, shape):
-    """The snapshot is the card as the renderer drew it BEFORE scope groups (see the file's
-    `_made_from`). `view` is the portal's full task view, whose group keys are present and null:
-    an ordinary task carrying them must not grow a scope list or lose its recipient sentence."""
-    before = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["ungrouped"]
-    assert out["ungrouped"][shape] == before[shape]
+# ── a cadence reminder is not a task any more ───────────────────────────────────
+@pytest.mark.parametrize("shape", ["summary", "sending", "deposit", "view", "group", "none"])
+def test_a_cadence_reminder_task_draws_no_card(out, shape):
+    """Hanz, 2026-10-28: "the follow ups should be a follow up email to the customer okay?" The
+    portal's worker emails the customer itself again, so a reminder task row left over from the
+    remind-only weeks (any shape the pipeline serves: the compact summary, a send in flight, the
+    deposit stage, the full view with null group keys, a scope group's project reminder) draws
+    NOTHING: a Send button beside an email the worker sends on its own would be a double email.
 
-
-def test_the_snapshot_is_of_a_real_card():
-    """Guards the guard: an empty or broken snapshot would make the comparison above vacuous."""
-    before = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["ungrouped"]
-    assert set(before) == {"loading", "ready", "sending", "deposit", "view"}
-    for shape, html in before.items():
-        assert 'id="fu-task"' in html and 'id="fu-send"' in html and 'id="fu-snooze"' in html, shape
-    assert "Goes to everyone ticked under Who gets chased: Dave Nunn." in before["loading"]
-    assert 'id="fu-title"' in before["ready"]
-
-
-# ── the group reminder ────────────────────────────────────────────────────────
-def test_a_group_reminder_is_one_card_for_the_whole_project(out):
-    html = out["group"]["html"]
-    text = _text(html)
-    assert "One reminder for the whole project: <strong>Acme Labs</strong>." in html
-    # Every scope, with its label (escaped) and its status chip. Lab 2 was closed after the task was
-    # raised, and the chip follows the board rather than the task's frozen list.
-    items = re.findall(r"<li>(.*?)</li>", html)
-    assert [_text(i) for i in items] == ["Breakroom Open", "Lab 1 Open", "Lab <2> Closed lost"]
-    assert "Lab &lt;2&gt;" in html and "Lab <2>" not in html
-    assert "One email goes to each contact, listing only the scopes they are on." in text
-    # This scope's own "Who gets chased" names are not who a project email goes to.
-    assert "Dave Nunn" not in text and "Who gets chased" not in text
-
-
-def test_a_group_reminder_keeps_the_whole_email_writer(out):
-    html = out["group"]["html"]
-    for el_id in ("fu-task", "fu-compose", "fu-send", "fu-skip", "fu-called", "fu-snooze",
-                  "fu-task-alert"):
-        assert 'id="%s"' % el_id in html, el_id
-    assert out["group"]["draftRequests"] == ["/api/portal/followup-task/g-1/ai-draft"]
-    assert out["group"]["draft"]["state"] == "ready"
+    Mutation: let followupTaskHtml fall through to a card for a non-decision task and every shape
+    here fails."""
+    assert out["reminders"][shape] == "", out["reminders"][shape][:300]
 
 
 # ── the decision card ─────────────────────────────────────────────────────────
 def test_the_decision_card_names_the_approved_scope_and_lists_the_others(dec):
     text = _text(dec["html"])
     assert text.startswith("Decide the other scopes Breakroom was approved - it is now the project.")
-    assert "Reminders for the other scopes of Acme Labs have stopped, and nothing has been closed." in text
+    assert ("Follow-up emails about the other scopes of Acme Labs have stopped, and nothing has been "
+            "closed." in text)
     assert dec["boxes"] == [{"id": "s2", "disabled": False}, {"id": "s3", "disabled": False},
                             {"id": "s4", "disabled": True}], "a scope approved since is tickable"
     assert " checked" not in dec["html"], "a scope is ticked before anybody ticked it"
@@ -161,8 +132,8 @@ def test_close_sends_exactly_the_ticked_scopes_the_reason_and_the_note(dec):
 
 
 @pytest.mark.parametrize("action,said", [
-    ("leave", "Left as they are. Their reminders stay off."),
-    ("keep", "Reminders start again for every scope that is still open."),
+    ("leave", "Left as they are. Their follow-up emails stay off."),
+    ("keep", "Follow-up emails start again for every scope that is still open."),
 ])
 def test_leave_and_keep_close_nothing_and_ask_nothing(dec, action, said):
     got = dec[action]
@@ -179,8 +150,9 @@ def test_keep_says_when_the_portal_could_not_record_it(dec):
 
 
 def test_keep_explains_itself_in_one_plain_sentence(dec):
-    assert ("Reminders start again for every scope that is still open, one interval from now."
-            in _text(dec["html"]))
+    """"One interval from now" went with the interval (2026-10-28): nothing repeats any more."""
+    assert "Follow-up emails start again for every scope that is still open." in _text(dec["html"])
+    assert "interval" not in _text(dec["html"])
 
 
 @pytest.mark.parametrize("name,said", [
@@ -223,7 +195,7 @@ def test_every_class_the_decision_card_emits_is_styled(out, dec):
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     auth = re.sub(r"/\*.*?\*/", "", (FRONTEND / "auth.js").read_text(encoding="utf-8"), flags=re.S)
     defined = set(re.findall(r"\.(-?[_a-zA-Z][\w-]*)", css + auth))
-    emitted = {c for g in re.findall(r'class="([^"]*)"', dec["html"] + out["group"]["html"])
+    emitted = {c for g in re.findall(r'class="([^"]*)"', dec["html"])
                for c in g.split() if c}
     assert not sorted(emitted - defined), sorted(emitted - defined)
 
@@ -258,15 +230,17 @@ def _bell(monkeypatch, *tasks):
     return {r["id"]: r for r in n._followup_task_notifications({"followup_tasks": list(tasks)})}
 
 
-def test_the_bell_names_every_scope_of_a_group_reminder(monkeypatch):
-    row = _bell(monkeypatch, GROUP_TASK)["fut:g1"]
-    assert row["body"] == "Follow-up due: Breakroom, Lab 1, Lab 2"
-    assert row["title"] == "Acme Labs"
-
-
-def test_the_bell_opens_the_open_scope_the_portal_names_not_the_home(monkeypatch):
-    row = _bell(monkeypatch, GROUP_TASK)["fut:g1"]
-    assert row["link"] == "/portal.html?open=s2&sec=followup"
+@pytest.mark.parametrize("task", [
+    GROUP_TASK,
+    {"id": "t1", "proposal_id": "p1", "project_name": "Nearman Creek", "label": "Second nudge",
+     "due_at": "2026-10-23T12:00:00Z"},
+    {"id": "t2", "proposal_id": "p1", "project_name": "Nearman Creek", "label": "Deposit reminder",
+     "stage": "deposit", "due_at": "2026-10-23T12:00:00Z", "scope_group": None, "scopes": []},
+], ids=["group-reminder", "ordinary", "deposit"])
+def test_a_cadence_reminder_never_rings(monkeypatch, task):
+    """2026-10-28: the worker emails the customer itself, so a reminder task left over from remind
+    mode is nobody's job. Mutation: drop the stage check in _followup_task_notifications."""
+    assert _bell(monkeypatch, task) == {}
 
 
 def test_the_bell_says_what_a_decision_task_is(monkeypatch):
@@ -286,7 +260,7 @@ def test_a_decision_task_opens_a_sibling_not_the_approved_scope_chasing_its_depo
         {"proposal_id": "s2", "label": "Lab 1", "status": "sent"},
         {"proposal_id": "s3", "label": "Lab 2", "status": "viewed"}]), deposit)
     assert rows["fut:d1"]["link"] == "/portal.html?open=s2&sec=followup"
-    assert rows["fut:d2"]["link"] == "/portal.html?open=s1&sec=followup"
+    assert "fut:d2" not in rows, "a deposit reminder task rang the bell"
 
 
 def test_a_decision_task_opens_the_sibling_the_portal_names_now(monkeypatch):
@@ -322,17 +296,6 @@ def test_a_decision_task_with_no_sibling_listed_keeps_the_portals_link(monkeypat
     assert row["link"] == "/portal.html?open=s1&sec=followup"
 
 
-def test_an_ordinary_task_rings_exactly_as_before(monkeypatch):
-    task = {"id": "t1", "proposal_id": "p1", "project_name": "Nearman Creek",
-            "label": "Second nudge", "due_at": "2026-10-23T12:00:00Z"}
-    row = _bell(monkeypatch, task)["fut:t1"]
-    assert row["body"] == "Follow-up due: Second nudge"
-    assert row["link"] == "/portal.html?open=p1&sec=followup"
-    # The full task view's null group keys change nothing.
-    row2 = _bell(monkeypatch, dict(task, scope_group=None, scopes=[], link_proposal_id="p1"))["fut:t1"]
-    assert row2 == row
-
-
 def test_a_link_id_never_escapes_its_query_value(monkeypatch):
-    row = _bell(monkeypatch, dict(GROUP_TASK, link_proposal_id="s2&sec=x#y"))["fut:g1"]
+    row = _bell(monkeypatch, dict(DECISION_TASK, link_proposal_id="s2&sec=x#y"))["fut:d1"]
     assert row["link"] == "/portal.html?open=s2%26sec%3Dx%23y&sec=followup"

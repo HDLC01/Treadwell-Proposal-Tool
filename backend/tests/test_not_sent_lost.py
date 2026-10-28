@@ -477,3 +477,39 @@ def test_a_bid_closed_before_the_comment_existed_shows_no_empty_quote(out):
     html = out["notePrinted"]["lostNoNote"]
     assert "ns-why" not in html, "an empty quote is drawn for a bid that never had a comment"
     assert "closed lost" in html, "the panel did not render at all, so this proves nothing"
+
+
+# ── the bring-back prompt and the follow-up emails (2026-10-28) ───────────────
+# A won mark and a hand-off switch the automatic customer emails off (main.py
+# _followups_off_for_outcome), and undoing either does NOT switch them back on. So the prompt may
+# promise "Follow-up reminders start again" only for the plain bring-back.
+@needs_node
+def test_undoing_a_won_mark_does_not_promise_the_emails_start_again(out):
+    """Mutation: confirmBringBack ignoring its third argument says "start again" for all four."""
+    d = out["bringBackFollowups"]
+    assert d["plain"].startswith("Follow-up reminders start again."), d["plain"]
+    for k in ("won", "handedOff"):
+        assert "start again" not in d[k], (k, d[k])
+        assert "stay off" in d[k] and "does not turn them on" in d[k], (k, d[k])
+        assert "Turn automation on" in d[k], (k, d[k])
+    assert "marking it won" in d["won"] and "handing it off" in d["handedOff"], d
+
+
+@needs_node
+def test_undoing_a_mark_on_a_project_still_being_emailed_does_not_say_they_stay_off(out):
+    """Review finding: "stay off" was said whatever the project's follow-up state. A mark made
+    before 2026-10-28, or one the portal did not answer, left the emails on. Mutation: drop the
+    follow-up-state branch in confirmBringBack; both read "stay off"."""
+    d = out["bringBackFollowups"]
+    for k in ("chasedWon", "chasedHandedOff"):
+        assert "still on for this project" in d[k] and "stay off" not in d[k], (k, d[k])
+        assert "Turn automation off" in d[k], (k, d[k])
+
+
+@needs_node
+def test_undoing_a_won_mark_on_an_unsent_bid_says_nothing_was_sent(out):
+    """An unsent project has no portal row, so nothing was switched off and nothing will start."""
+    d = out["bringBackFollowups"]
+    assert d["unsentWon"] == "Nothing has been sent, so there are no follow-up emails to start.", d
+    # And the real Undo button on the not-sent drawer passes the mark it is undoing.
+    assert out["wonUndone"]["prompts"][0]["detail"] == d["unsentWon"], out["wonUndone"]["prompts"]

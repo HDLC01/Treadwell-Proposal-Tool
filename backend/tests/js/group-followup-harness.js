@@ -5,33 +5,30 @@
  * every scope it covers (`scope_group`, `scopes`), and when one scope is approved it raises a
  * decision task (stage 'decision') asking what to do with the others. This runs the REAL renderers
  * and wiring out of frontend/js/portal.js -- followupTaskHtml, followupDecisionHtml, wireFuDecision,
- * fuDecide, fuSettle, loadFuDraft -- in one lifted scope holding only what portal.js binds itself,
+ * fuDecide, fuSettle -- in one lifted scope holding only what portal.js binds itself,
  * with the page's edges stubbed: the network (`api`), the confirmation dialog
  * (`TW.confirmDanger`) and the repaint the settle triggers (`renderDetail`, `load`, `openDetail`).
  *
  * WHAT IT PRODUCES, for test_group_followup_ui.py:
- *   ungrouped    an ordinary task's card in four shapes, compared there BYTE FOR BYTE with a
- *                snapshot of the card as it rendered before scope groups existed;
- *   group        the group reminder card, and the draft fetch it still makes;
+ *   reminders    a cadence reminder task, ungrouped and grouped, in every shape the pipeline
+ *                serves: since 2026-10-28 the worker emails the customer itself, so each draws
+ *                NOTHING (no card, no Send);
  *   decision     the decision card: what it renders and what it leaves out, the enable rule as
  *                the controls change, every request each button sends, the dialog it asks
  *                through, and what each refusal and success says;
  *   sentLog      the Follow-ups page's words for the new templates, from followups-core.js.
  *
- * SNAPSHOT MODE: `node group-followup-harness.js <frontend> --snapshot <old portal.js>` renders
- * only the ungrouped shapes out of an OLDER portal.js, lifting only the five functions the card had
- * then. That is how group-followup-ungrouped.json was made (from the tree before this change), and
- * how it can be remade and checked by anyone.
+ * (The SNAPSHOT MODE and group-followup-ungrouped.json went on 2026-10-28: they pinned the remind-
+ * only reminder card byte for byte, and that card is gone.)
  *
- * Usage: node group-followup-harness.js <frontend-dir> [--snapshot <portal.js>]  ->  one line of JSON
+ * Usage: node group-followup-harness.js <frontend-dir>  ->  one line of JSON
  */
 const path = require("path");
 const L = require("./_lib.js");
 
 const ROOT = path.resolve(process.argv[2]);
-const SNAP = process.argv[3] === "--snapshot" ? path.resolve(process.argv[4]) : null;
 const C = require(path.join(ROOT, "js", "crm-core.js"));
-const src = L.read(SNAP || path.join(ROOT, "js", "portal.js"));
+const src = L.read(path.join(ROOT, "js", "portal.js"));
 const IND = { indent: "  ", where: "portal.js" };
 
 // ── the DOM: a bag of the markup last rendered, answering lookups out of it ────────────────────
@@ -116,26 +113,22 @@ const stubs = {
 };
 
 // ── the lifted scope ─────────────────────────────────────────────────────────────────────────
-const BASE_FNS = ["followupTaskHtml", "followupComposeHtml", "fuCta", "fuLinkState", "fuLinkNote"];
-const FNS = BASE_FNS.concat([
-  "fuIsGroup", "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames", "fuGroupHtml",
+const fns = [
+  "followupTaskHtml", "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames",
   "followupDecisionHtml", "fuDecisionReady", "fuDecisionPicked", "fuTaskOf", "fuDecisionErrText",
   "fuDecisionDoneText", "fuDecide", "wireFuDecision", "fuSay", "fuSettle",
-  "loadFuDraft", "paintFuCompose", "wireFuCompose", "fuErrText", "fuGoneText",
-  "fuLinkLine", "paintFuLink", "fuLinkBack", "fuPutLinkBack",
-]);
-const fns = SNAP ? BASE_FNS : FNS;
+];
 // `$` by its own pattern: _lib's declaration matcher ends the name on a word boundary, which a
 // name that IS `$` never has.
 const DOLLAR = L.grab(src, /\n {2}const \$ = \(id\) => document\.getElementById\(id\);/,
                       "portal.js's `const $`").trim();
 const body = [
   DOLLAR, L.grabConst(src, "esc", IND), L.grabConst(src, "CHEV", IND),
-  L.grabConst(src, "FU_TEMPLATE_LABEL", IND), L.grabConst(src, "FU_DRAFT", IND),
+  L.grabConst(src, "FU_TEMPLATE_LABEL", IND),
   L.grabConst(src, "FU_NOTICE", IND), L.grabConst(src, "DETAIL_CACHE", IND),
   "let ALL = []; let CUR_PID = null; let DRAWER_SIG = \"\";",
   fns.map((n) => L.liftSource(src, n, IND)).join("\n"),
-  "return { " + fns.join(", ") + ", FU_DRAFT, FU_NOTICE,",
+  "return { " + fns.join(", ") + ", FU_NOTICE,",
   "  setAll: (rows) => { ALL = rows; }, setCur: (pid) => { CUR_PID = pid; },",
   "  sig: () => DRAWER_SIG };",
 ].join("\n");
@@ -146,65 +139,35 @@ const page = new Function(...Object.keys(deps), body)(...Object.values(deps));
 const tick = () => new Promise((r) => setImmediate(r));
 const settle = async () => { for (let i = 0; i < 8; i++) await tick(); };
 
-// ── the ungrouped card, four shapes ──────────────────────────────────────────────────────────
-// The pipeline's compact summary (_task_summary: no group keys at all on an ordinary task), and
-// the full task view (_task_view: the group keys present and null/empty). Both must render exactly
-// as the card did before scope groups.
-const DATA = { recipient_activity: [{ email: "dave@x.com", name: "Dave Nunn", followups: true },
-                                    { email: "ap@x.com", name: "Ann Boyle", followups: false }] };
+// ── cadence reminder tasks draw nothing ──────────────────────────────────────────────────────
+// The pipeline's compact summary (_task_summary: no group keys at all on an ordinary task), the
+// full task view (_task_view: the group keys present and null/empty), a deposit-stage one, one in
+// flight, and a scope group's reminder for the whole project. Every one of these was a card with a
+// Send button until 2026-10-28; the worker sends the customer email itself now.
 const SUMMARY = { id: "t-1", status: "pending", template: "second_nudge", label: "Second nudge",
                   stage: "pre", due_at: "2026-10-22T12:00:00Z" };
-const READY = { state: "ready", title: "Following up <on> the slab", body: "Hi Dave,\n\n{link}",
-                cta: "Open it", source: "ai", fallback: false, linkLine: 2 };
-function ungrouped() {
+const SCOPES = [{ proposal_id: "s1", label: "Breakroom", status: "sent" },
+                { proposal_id: "s2", label: "Lab 1", status: "viewed" }];
+function reminders() {
   const row = (t) => ({ proposal_id: "p1", project_name: "Nearman Creek", followup_task: t });
-  page.FU_DRAFT.clear();
-  const out = {};
-  out.loading = page.followupTaskHtml(row(SUMMARY), DATA);
-  page.FU_DRAFT.set("t-1", Object.assign({}, READY));
-  out.ready = page.followupTaskHtml(row(SUMMARY), DATA);
-  out.sending = page.followupTaskHtml(row(Object.assign({}, SUMMARY, { status: "sending" })), DATA);
-  out.deposit = page.followupTaskHtml(
-    row({ id: "t-2", status: "pending", template: "deposit_nudge", stage: "deposit" }), {});
-  out.view = page.followupTaskHtml(row(Object.assign({}, SUMMARY, {
-    proposal_id: "p1", scope_group: null, scopes: [], approved_scope: null,
-    link_proposal_id: "p1" })), DATA);
-  page.FU_DRAFT.clear();
-  return out;
+  return {
+    summary: page.followupTaskHtml(row(SUMMARY)),
+    sending: page.followupTaskHtml(row(Object.assign({}, SUMMARY, { status: "sending" }))),
+    deposit: page.followupTaskHtml(
+      row({ id: "t-2", status: "pending", template: "deposit_nudge", stage: "deposit" })),
+    view: page.followupTaskHtml(row(Object.assign({}, SUMMARY, {
+      proposal_id: "p1", scope_group: null, scopes: [], approved_scope: null,
+      link_proposal_id: "p1" }))),
+    group: page.followupTaskHtml(row(Object.assign({}, SUMMARY, { id: "g-1", label: "Check-in",
+      template: "checkin", proposal_id: "s1", scope_group: "grp-1", scopes: SCOPES,
+      approved_scope: null, link_proposal_id: "s1" }))),
+    none: page.followupTaskHtml(row(null)),
+  };
 }
 
 const out = { errors: {} };
 async function run() {
-  out.ungrouped = ungrouped();
-  if (SNAP) return;
-
-  // ── the group reminder: ONE task for the whole project ─────────────────────────────────────
-  const SCOPES = [{ proposal_id: "s1", label: "Breakroom", status: "sent" },
-                  { proposal_id: "s2", label: "Lab 1", status: "viewed" },
-                  { proposal_id: "s3", label: "Lab <2>", status: "sent" }];
-  try {
-    const GROUP = Object.assign({}, SUMMARY, { id: "g-1", label: "Check-in", template: "checkin",
-      proposal_id: "s1", scope_group: "grp-1", scopes: SCOPES, approved_scope: null,
-      link_proposal_id: "s1" });
-    const rows = [
-      { proposal_id: "s1", project_name: "Acme Labs", proposal_status: "sent", followup_task: GROUP },
-      { proposal_id: "s2", project_name: "Acme Labs", proposal_status: "viewed", followup_task: GROUP },
-      // Closed since the task was raised: the chip follows the board, not the frozen list.
-      { proposal_id: "s3", project_name: "Acme Labs", proposal_status: "closed_lost", followup_task: GROUP },
-    ];
-    page.setAll(rows);
-    const html = page.followupTaskHtml(rows[1], DATA);
-    net.requests.length = 0;
-    net.answers = [[/\/followup-task\/g-1\/ai-draft$/, { status: 200,
-      body: { ok: true, draft: { title: "T", body: "B\n\n{link}", source: "ai" }, ai: true } }]];
-    page.setCur("s2");
-    await page.loadFuDraft("s2");
-    out.group = { html, draftRequests: net.requests.map((r) => r.path),
-                  draft: page.FU_DRAFT.get("g-1") || null };
-    page.FU_DRAFT.clear();
-  } catch (e) {
-    out.errors.group = e.constructor.name + ": " + e.message + "\n" + e.stack;
-  }
+  out.reminders = reminders();
 
   // ── the decision card ──────────────────────────────────────────────────────────────────────
   const DEC_SCOPES = [{ proposal_id: "s2", label: "Lab 1", status: "sent" },
@@ -234,7 +197,7 @@ async function run() {
     page.setAll(rows);
     page.setCur("s1");
     page.FU_NOTICE.clear();
-    dom.paint(page.followupTaskHtml(rows[0], DATA));
+    dom.paint(page.followupTaskHtml(rows[0]));
     page.wireFuDecision("s1", "d-1");
     net.requests.length = 0;
     net.answers = [];
@@ -263,8 +226,7 @@ async function run() {
       .map((a) => ({ id: a["data-fu-scope"], disabled: "disabled" in a }));
     out.decision.reasons = attrsOf((a) => "value" in a && !("id" in a) && !("type" in a))
       .map((a) => a.value);
-    // No draft is fetched for a decision task: it has no email.
-    await page.loadFuDraft("s1");
+    // Painting the decision card asks the portal for nothing: it has no email to draft.
     out.decision.draftRequests = net.requests.map((r) => r.path);
 
     // THE ENABLE RULE, step by step.

@@ -120,9 +120,9 @@ const CONST_NAMES = [
   // addition to these lists for the same reason as the six below, and it would be the widest of
   // them: a missing CHEV is a ReferenceError inside renderDetail itself, so the whole drawer.
   "CHEV",
-  // The follow-up email being written per task, and the sentence an action leaves behind
-  // (2026-10-23, remind mode). followupPanelHtml and the compose box read both on every paint.
-  "FU_DRAFT", "FU_NOTICE",
+  // The sentence an action leaves behind (2026-10-23). followupPanelHtml reads it on every paint.
+  // FU_DRAFT left this list on 2026-10-28 with the remind-only email writer it belonged to.
+  "FU_NOTICE",
   // The contacts the project's one email missed, per scope group (2026-10-24 hardening): the lifted
   // wireScope writes it on a partial send and re-reads it on every paint.
   "SCOPE_SEND_NOTICE",
@@ -230,16 +230,13 @@ const FN_NAMES = [
   // the draft (loadFuDraft, which repaints through paintFuCompose); and fuTaskAct finishes through
   // fuSettle and words its outcome with the three fu*Text helpers. Leaving any one out is a
   // ReferenceError on every sent drawer, or worse, only on the press that reaches it.
-  "fuNoticeHtml", "followupScheduleHtml", "followupTaskHtml", "followupComposeHtml", "fuYmd",
-  "fuAddDays", "wireFuCompose", "paintFuCompose", "loadFuDraft", "fuErrText", "fuGoneText",
-  "fuDoneText", "fuSay", "fuSettle", "fuTaskAct", "saveFuPlan",
-  // THE BUTTON IN THE EMAIL (2026-10-23): the drawn button and the "your portal link was removed"
-  // notice. TENTH addition for the same reason: followupComposeHtml reads fuCta, fuLinkState and
-  // fuLinkNote on every ready paint; wireFuCompose binds paintFuLink (on every keystroke in the
-  // message) and fuLinkBack (the fix, which calls fuPutLinkBack); wireFollowup's Send calls
-  // fuLinkState, paintFuLink and fuCta; loadFuDraft records fuLinkLine. Any one left out is a
-  // ReferenceError on every drawer with a ready draft, or only on the press that reaches it.
-  "fuCta", "fuLinkState", "fuLinkLine", "fuLinkNote", "fuPutLinkBack", "paintFuLink", "fuLinkBack",
+  // 2026-10-28: the remind-only email writer (followupComposeHtml, wireFuCompose, paintFuCompose,
+  // loadFuDraft, fuTaskAct, fuDoneText, fuGoneText, fuAddDays and the seven fuLink*/fuCta helpers
+  // of the button in the email) went from portal.js, because the cadence emails the customer
+  // itself again. What is left: the schedule's one date (saveFuPlan, fuErrText), the task card that
+  // draws only the scope decision, and the notice and settle the decision card still uses.
+  "fuNoticeHtml", "followupScheduleHtml", "followupTaskHtml", "fuYmd",
+  "fuErrText", "fuSay", "fuSettle", "saveFuPlan",
   // THE PROJECT'S SCOPES (2026-10-24, RJ's split projects). ELEVENTH addition for the same reason:
   // BOTH renderers embed scopeHtml in their Proposal panel and BOTH call wireScope at the end, so
   // leaving either out is a ReferenceError on every drawer, sent and unsent at once.
@@ -248,12 +245,13 @@ const FN_NAMES = [
   // Files page words its "Send all proposals in one email" the same way: it is bound now through
   // portal.js's own `const { scopeSendOutcome } = C;` line, read above with the other imports.
   // A SCOPE GROUP'S FOLLOW-UP (2026-10-25): one reminder for the whole project, and the "Decide the
-  // other scopes" card. THIRTEENTH addition: followupTaskHtml calls fuIsGroup, fuGroupHtml and
-  // followupDecisionHtml on every task card (which reach fuScopeNow, fuScopeOpen and fuScopeChip),
+  // other scopes" card. THIRTEENTH addition: followupTaskHtml calls followupDecisionHtml on every
+  // decision task (which reaches fuScopeNow, fuScopeOpen and fuScopeChip; fuIsGroup and fuGroupHtml
+  // went on 2026-10-28 with the group reminder card),
   // and wireFollowup binds wireFuDecision, whose presses reach fuDecisionPicked, fuDecisionReady,
   // fuScopeNames, fuTaskOf, fuDecide and its two fuDecision*Text sentences. Executed in full by
   // group-followup-harness.js; lifted here so this harness's drawer stays runnable.
-  "fuIsGroup", "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames", "fuGroupHtml",
+  "fuScopeNow", "fuScopeOpen", "fuScopeChip", "fuScopeNames",
   "followupDecisionHtml", "fuDecisionReady", "fuDecisionPicked", "fuTaskOf", "fuDecisionErrText",
   "fuDecisionDoneText", "fuDecide", "wireFuDecision",
 ];
@@ -884,8 +882,11 @@ const injected = [
   // between the prompt for a closed bid and the prompt for a held one: it is the sentence that
   // names the hold as the thing coming off. The prompt's own wording is not-sent-lost-harness's
   // subject (it lifts the real confirmBringBack); what this file drives is what each caller ASKS.
-  ["confirmBringBack", (p, extra) => { prompt.calls.push({ name: p && p.project_name,
-                                                          extra: extra === undefined ? null : extra });
+  // `undoing` too (2026-10-28): which mark the undo takes off decides whether the prompt may say
+  // the follow-up emails start again.
+  ["confirmBringBack", (p, extra, undoing) => { prompt.calls.push({ name: p && p.project_name,
+                                                          extra: extra === undefined ? null : extra,
+                                                          undoing: undoing === undefined ? null : undoing });
                                        return Promise.resolve(prompt.answer); }],
   // HOLD_MONTHS is a module const the sent drawer's close-out handler reads. Bound by NAME off
   // portal.js rather than typed here, so a change to the number cannot make this harness test a
@@ -946,8 +947,6 @@ const body = `"use strict";
     // and nowhere else on the client (see the merge at the top of renderDetail).
     row: (pid) => ALL.filter((x) => x.proposal_id === pid)[0] || null,
     sig: () => DRAWER_SIG,
-    // The follow-up email as the page holds it, per task: what Send would send.
-    fuDraft: (tid) => (FU_DRAFT.has(tid) ? JSON.parse(JSON.stringify(FU_DRAFT.get(tid))) : null),
   };`;
 
 // The REAL closeDrawer (and remaskDeposits, the one helper it calls), run against this same DOM
@@ -1345,6 +1344,38 @@ async function runScenario(name, s) {
     page.cache("wonsent", wonData);
     page.renderDetail("wonsent", wonData);
     out.won.sentAlreadyWon = { html: dom.html, merged: wonData.proposal.won_at };
+    // THE SAME DRAWER WITH ITS EMAILS ACTUALLY OFF, and handed off both ways (review finding: the
+    // copy said "switched off" as a fact, which was false for a mark made before 2026-10-28, a
+    // switch-off the portal did not answer, or automation turned back on). Restored after.
+    wonData.proposal.followup_state = { enrolled: true, enabled: false };
+    page.renderDetail("wonsent", wonData);
+    out.won.sentAlreadyWonOff = { html: dom.html };
+    wonData.proposal.handed_off_at = "2026-08-28T15:00:00+00:00";
+    page.renderDetail("wonsent", wonData);
+    out.won.sentHandedOffOff = { html: dom.html };
+    wonData.proposal.followup_state = { enrolled: true, enabled: true };
+    page.renderDetail("wonsent", wonData);
+    out.won.sentHandedOffOn = { html: dom.html };
+    delete wonData.proposal.handed_off_at;
+    page.renderDetail("wonsent", wonData);
+    // Undoing it, ASKED and refused: what the prompt says about the follow-up emails is the claim
+    // (2026-10-28: the mark switched them off, and the undo must not promise they start again).
+    prompt.calls.length = 0;
+    const promptWas = prompt.answer;
+    prompt.answer = false;
+    out.won.sentUndoAsked = Object.assign({}, await pressWon("won-undo", false),
+                                          { prompts: prompt.calls.slice() });
+    // The hand-off undo, the same way: handed off, rendered, Bring it back pressed and refused.
+    prompt.calls.length = 0;
+    // On the PAYLOAD: renderDetail merges only won_at off the board row (portal.js), so this is the
+    // one place a sent drawer can be drawn handed off from.
+    wonData.proposal.handed_off_at = "2026-08-28T15:00:00+00:00";
+    page.renderDetail("wonsent", wonData);
+    out.won.sentHandoffUndoAsked = Object.assign({}, await pressWon("handoff-undo", false),
+                                                 { prompts: prompt.calls.slice() });
+    delete wonData.proposal.handed_off_at;
+    page.renderDetail("wonsent", wonData);
+    prompt.answer = promptWas;
 
     // ── the sent drawer: marking one from scratch ──
     const markData = payload({ proposal: { project_name: "Northgate Fulfilment",
@@ -1360,6 +1391,34 @@ async function runScenario(name, s) {
     out.won.sentOffered = { html: dom.html };
     const sentMark = await pressWon("won-mark");
     out.won.sentMarked = Object.assign({}, sentMark, { rowWonAt: (page.row("marksent") || {}).won_at });
+
+    // ── saved, but the portal could not switch the follow-up emails off ──
+    // The route answers 200 with `followups_note` (main.py _followups_off_note): the mark is saved
+    // and the sentence has to reach the screen, in the note the repaint drew, not the one it replaced.
+    page.row("marksent").won_at = "";
+    page.open("marksent");
+    page.cache("marksent", markData);
+    page.renderDetail("marksent", markData);
+    fuNet.answers = [[/^\/api\/draft\/[^/]+\/status$/, { status: 200, body: {
+      ok: true, status: "won", followups_off: [], followups_failed: ["marksent"],
+      followups_note: "Saved as won, but the automatic follow-up emails could not be switched off." } }]];
+    out.won.sentMarkedFuFailed = await pressWon("won-mark");
+    fuNet.answers = [];
+
+    // ── saved, and the portal DID switch them off: the repaint says so straight away ──
+    // The drawer copy reads the follow-up state (review finding: it used to state "switched off"
+    // as a fact), so the route's followups_off has to reach the repainted payload.
+    page.row("marksent").won_at = "";
+    markData.proposal.followup_state = { enrolled: true, enabled: true };
+    page.open("marksent");
+    page.cache("marksent", markData);
+    page.renderDetail("marksent", markData);
+    fuNet.answers = [[/^\/api\/draft\/[^/]+\/status$/, { status: 200, body: {
+      ok: true, status: "won", followups_off: ["marksent"], followups_failed: [],
+      followups_note: "" } }]];
+    out.won.sentMarkedFuOff = await pressWon("won-mark");
+    fuNet.answers = [];
+    markData.proposal.followup_state = { enrolled: true, enabled: true };
 
     // ── a refused write ──
     // The optimistic patch is the hazard in this design: the panel redraws from a row it patched
@@ -2158,261 +2217,82 @@ async function runScenario(name, s) {
     files.fails = false;
   }
 
-  // ── REMIND MODE: the follow-up task, its email, and the reminder schedule (2026-10-23) ────────
-  // The portal parks a follow-up as a TASK for the assigned estimator instead of emailing the
-  // customer itself, and the drawer is where that person reads the draft and decides. Everything
-  // below is pressed, not read: which route each button reaches, with what body, what a 409 does to
-  // the card, and that the draft is fetched once and shown as a loading line until it lands.
-  // Driven through the real renderDetail, focusSection and wireFollowup, with the board row as the
-  // only place the task lives (the pipeline feed carries it; the detail payload does not).
+  // ── AUTOMATIC FOLLOW-UP EMAILS: the schedule, and no email writer (2026-10-28) ────────────────
+  // Hanz: "the follow ups should be a follow up email to the customer okay?" The portal's worker
+  // emails the customer itself again, so the drawer has no email to write: a cadence reminder task
+  // left on a row from the remind-only weeks must draw NO card and fetch NO AI draft, and the
+  // schedule is the next email's date and nothing else. Everything below is pressed or painted
+  // through the real renderDetail, focusSection and wireFollowup.
   try {
     out.fuTask = {};
     const FU_PID = "futask";
     const futRow = { proposal_id: FU_PID, project_name: "Nearman Creek", proposal_status: "sent",
                      sent_at: "2026-08-10T12:00:00Z", assigned_estimator: "kyle@wetreadwell.com",
                      unread: 0, followup_task: null,
-                     followup_plan: { mode: "remind", interval_days: 5, stop_after: null,
-                                      next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" } };
+                     followup_plan: { next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" } };
     BOARD_ROWS.push(futRow);
-    const fuData = () => payload({
+    const fuData = (status) => payload({
       proposal: { project_name: "Nearman Creek", customer_name: "Dave Nunn",
                   customer_email: "dave@x.com", url: PORTAL_URL, token: URL_TOKEN,
-                  proposal_status: "sent", deposit_status: "pending", contacts_status: "pending",
-                  assigned_estimator: "kyle@wetreadwell.com",
+                  proposal_status: status || "sent", deposit_status: "pending",
+                  contacts_status: "pending", assigned_estimator: "kyle@wetreadwell.com",
                   followup_state: { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], followups: [],
-      recipient_activity: [{ email: "dave@x.com", name: "Dave Nunn", followups: true },
-                           { email: "ap@x.com", name: "Ann Boyle", followups: false }],
+      recipient_activity: [{ email: "dave@x.com", name: "Dave Nunn", followups: true }],
     });
-    const TASK = (id, over) => Object.assign({ id, status: "pending", template: "second_nudge",
-      label: "Second nudge", stage: "pre", due_at: "2026-10-22T12:00:00Z" }, over || {});
-    // AI-authored text with markup AND an entity in it: the escaping claim is that both come back
-    // out of the markup as exactly these characters, neither executed nor double-decoded.
-    const XSS_TITLE = 'Re: <script>alert(1)</script> & "the slab"';
-    const XSS_BODY = "Hi Dave &amp; team,\n<img src=x onerror=alert(1)> any news? {link}";
-    const DEFAULT_DRAFT = { title: "Following up", body: "Hi Dave, {link}", cta: "Open",
-                            source: "default" };
     const fuAll = [];                                  // every request any scenario below made
     net.requests.length = 0;                           // ...and none from the blocks above
-    const reset =() => { fuAll.push(...net.requests); fuNet.answers.length = 0;
+    const reset = () => { fuAll.push(...net.requests); fuNet.answers.length = 0;
                           net.requests.length = 0; };
     const answer = (re, status, body) => fuNet.answers.push([re, { status, body }]);
-    const compose = () => ((dom.els.get("#fu-compose") || {}).innerHTML) || "";
     const settle = async () => { for (let i = 0; i < 10; i++) await tick(); };
     const reqs = (re) => net.requests.filter((r) => re.test(r.path))
       .map((r) => ({ path: r.path, method: r.method, body: r.body }));
     const el = (id) => dom.getElementById(id);
-    const alertOf = () => { const a = el("fu-task-alert");
-                            return a ? { text: a.textContent, err: a.classList.contains("is-err") }
-                                     : null; };
-    async function openTask(task) {
+    async function open(task, status) {
       futRow.followup_task = task;
-      const d = fuData();
+      futRow.proposal_status = status || "sent";
+      const d = fuData(status);
       page.open(FU_PID);
       page.cache(FU_PID, d);
       page.renderDetail(FU_PID, d);
       return d;
     }
 
-    // 1. THE DRAFT: a loading line, then the AI draft, fetched ONCE per task.
+    // 1. A LEGACY CADENCE REMINDER TASK on the row: no card, no Send, and no paid AI draft fetched
+    //    when the tab is opened. The worker sends that email itself now.
     reset();
-    answer(/\/followup-task\/t-1\/ai-draft$/, 200,
-           { ok: true, draft: { title: XSS_TITLE, body: XSS_BODY, cta: "Open your proposal",
-                                source: "ai" }, fallback: false, ai: true });
-    await openTask(TASK("t-1"));
-    const before = { html: dom.html, sendDisabled: !!(el("fu-send") || {}).disabled,
-                     aiRequests: reqs(/ai-draft/).length };
-    page.focusSection("followup");
-    const loading = { compose: compose(), sendDisabled: !!el("fu-send").disabled,
-                      aiRequests: reqs(/ai-draft/) };
-    await settle();
-    const ready = { compose: compose(), sendDisabled: !!el("fu-send").disabled,
-                    draft: page.fuDraft("t-1") };
-    page.focusSection("chat");
-    page.focusSection("followup");
-    const moved = fuData();
-    moved.proposal.contacts_status = "received";
-    page.cache(FU_PID, moved);
-    page.renderDetail(FU_PID, moved);
-    await settle();
-    out.fuTask.draft = { before, loading, ready,
-                         afterRepaint: { html: dom.html, aiRequests: reqs(/ai-draft/).length } };
-
-    // 2. SEND, after editing, with a warning on the 200.
-    reset();
-    answer(/\/followup-task\/t-1\/send$/, 200,
-           { ok: true, task: { id: "t-1", status: "sent" }, warnings: ["touch_not_recorded"] });
-    const ti = el("fu-title");
-    ti.value = "Edited subject";
-    await ti.fire("input");
-    const bo = el("fu-body");
-    bo.value = "Edited body {link}";
-    await bo.fire("input");
-    await el("fu-send").fire("click");
-    await settle();
-    out.fuTask.send = { requests: reqs(/followup-task/), html: dom.html,
-                        rowTask: futRow.followup_task, draftAfter: page.fuDraft("t-1") };
-
-    // 3. SKIP, 4. "I CALLED THEM", 5. SNOOZE: no draft needed for any of these.
-    reset();
-    answer(/\/followup-task\/t-2\/skip$/, 200, { ok: true, task: { id: "t-2", status: "skipped" } });
-    await openTask(TASK("t-2"));
-    await el("fu-skip").fire("click");
-    await settle();
-    out.fuTask.skip = { requests: reqs(/followup-task/), html: dom.html };
-
-    reset();
-    answer(/\/followup-task\/t-3\/called$/, 200, { ok: true, task: { id: "t-3", status: "called" } });
-    await openTask(TASK("t-3"));
-    el("fu-called-kind").value = "text";
-    el("fu-called-note").value = "  Spoke Friday ";
-    await el("fu-called").fire("click");
-    await settle();
-    out.fuTask.called = { requests: reqs(/followup-task/), html: dom.html };
-
-    reset();
-    answer(/\/followup-task\/t-4\/snooze$/, 200,
-           { ok: true, task: { id: "t-4", status: "snoozed" }, next_at: "2026-08-20" });
-    await openTask(TASK("t-4"));
-    el("fu-snooze-when").value = "7";
-    await el("fu-snooze").fire("click");
-    await settle();
-    out.fuTask.snoozeQuick = { requests: reqs(/followup-task/), html: dom.html,
-                               plan: JSON.parse(JSON.stringify(futRow.followup_plan)) };
-
-    reset();
-    answer(/\/followup-task\/t-5\/snooze$/, 200, { ok: true, next_at: "2026-09-01" });
-    await openTask(TASK("t-5"));
-    el("fu-snooze-date").value = "2026-09-01";
-    await el("fu-snooze").fire("click");
-    await settle();
-    out.fuTask.snoozePicked = { requests: reqs(/followup-task/) };
-
-    reset();
-    await openTask(TASK("t-6"));
-    el("fu-snooze-date").value = "2026-08-01";
-    await el("fu-snooze").fire("click");
-    await settle();
-    out.fuTask.snoozePast = { requests: reqs(/followup-task/), alert: alertOf(),
-                              stillThere: /id="fu-task"/.test(dom.html) };
-
-    // 6. THE TASK MOVED ON: a 409 is a plain sentence and the card goes, not "Failed: ...".
-    reset();
-    answer(/\/followup-task\/t-7\/ai-draft$/, 200,
-           { ok: true, draft: DEFAULT_DRAFT, fallback: true, ai: false });
-    answer(/\/followup-task\/t-7\/send$/, 409,
-           { ok: false, error: "out_of_scope", reason: "approved", detail: "out_of_scope" });
-    await openTask(TASK("t-7"));
+    answer(/ai-draft$/, 200, { ok: true, draft: { title: "T", body: "B {link}", source: "ai" } });
+    await open({ id: "t-1", status: "pending", template: "second_nudge", label: "Second nudge",
+                 stage: "pre", due_at: "2026-10-22T12:00:00Z" });
     page.focusSection("followup");
     await settle();
-    const fallbackCompose = compose();
-    const goneBtn = el("fu-send");
-    await goneBtn.fire("click");
-    await settle();
-    out.fuTask.gone = { compose: fallbackCompose, requests: reqs(/\/send$/), html: dom.html,
-                        label: goneBtn.textContent, rowTask: futRow.followup_task };
+    out.fuTask.legacy = { html: dom.html, requests: net.requests.map((r) => r.path) };
 
+    // 2. THE DECISION TASK is still a card: it is a decision for a person, not an email.
     reset();
-    answer(/\/followup-task\/t-8\/skip$/, 409,
-           { ok: false, error: "already_decided", status: "sent", detail: "already_decided" });
-    await openTask(TASK("t-8"));
-    await el("fu-skip").fire("click");
-    await settle();
-    out.fuTask.decided = { html: dom.html, rowTask: futRow.followup_task };
-
-    // 7. THE SEND FAILED: the card stays, the button comes back, and it says it is safe to retry.
-    reset();
-    answer(/\/followup-task\/t-9\/ai-draft$/, 200,
-           { ok: true, draft: DEFAULT_DRAFT, fallback: false, ai: false });
-    answer(/\/followup-task\/t-9\/send$/, 502,
-           { ok: false, error: "send_failed", detail: "send_failed" });
-    await openTask(TASK("t-9"));
+    await open({ id: "d-1", status: "pending", template: "scope_decision", stage: "decision",
+                 label: "Decide the other scopes", scope_group: "grp-1",
+                 scopes: [{ proposal_id: "s2", label: "Lab 1", status: "sent" }],
+                 approved_scope: { proposal_id: FU_PID, label: "Breakroom" } }, "approved");
     page.focusSection("followup");
     await settle();
-    const failBtn = el("fu-send");
-    await failBtn.fire("click");
-    await settle();
-    out.fuTask.sendFailed = { alert: alertOf(), disabled: !!failBtn.disabled,
-                              label: failBtn.textContent,
-                              stillThere: /id="fu-task"/.test(dom.html),
-                              rowTask: futRow.followup_task };
+    out.fuTask.decision = { html: dom.html, requests: net.requests.map((r) => r.path) };
 
-    // 8. NO DRAFT AT ALL (the portal is down): retry, then a blank page, and Send refuses to post
-    //    an empty email or one without its {link}.
+    // 3. WHAT THE PANEL SAYS while it is chasing, and once the proposal is approved.
     reset();
-    answer(/\/followup-task\/t-10\/ai-draft$/, 502,
-           { ok: false, error: "Could not reach the customer portal.",
-             detail: "Could not reach the customer portal." });
-    await openTask(TASK("t-10"));
-    page.focusSection("followup");
-    await settle();
-    const failedCompose = compose();
-    const sendWhileFailed = !!el("fu-send").disabled;
-    await el("fu-draft-retry").fire("click");
-    await settle();
-    const aiAfterRetry = reqs(/ai-draft/).length;
-    dom.focused = null;
-    await el("fu-draft-blank").fire("click");
-    await settle();
-    const blankCompose = compose();
-    const focusAfterBlank = dom.focused;
-    const blankSendDisabled = !!el("fu-send").disabled;
-    await el("fu-send").fire("click");
-    await settle();
-    const alertEmpty = alertOf();
-    const t10 = el("fu-title");
-    t10.value = "Checking in";
-    await t10.fire("input");
-    const b10 = el("fu-body");
-    b10.value = "Any news on the pour?";
-    await b10.fire("input");
-    await el("fu-send").fire("click");
-    await settle();
-    out.fuTask.noDraft = { failedCompose, sendWhileFailed, aiAfterRetry, blankCompose,
-                           focusAfterBlank, blankSendDisabled, alertEmpty,
-                           alertNoLink: alertOf(), sends: reqs(/\/send$/).length };
+    await open(null, "sent");
+    out.fuTask.leadOn = { html: dom.html };
+    reset();
+    await open(null, "approved");
+    out.fuTask.leadApproved = { html: dom.html };
 
-    // 9. SOMEBODY ELSE'S SEND IN FLIGHT: nothing pressable, and no draft fetched for it.
+    // 4. THE SCHEDULE: rendered from the plan, saved on change, never per keystroke.
     reset();
-    await openTask(TASK("t-11", { status: "sending" }));
-    page.focusSection("followup");
-    await settle();
-    out.fuTask.sending = { html: dom.html, aiRequests: reqs(/ai-draft/).length,
-                           sendDisabled: !!el("fu-send").disabled,
-                           skipDisabled: !!el("fu-skip").disabled };
-
-    // 10. ESCAPE closes the open disclosure and stops there; on a closed one it is left alone, so
-    //     the drawer's own Escape still works.
-    reset();
-    await openTask(TASK("t-12"));
-    const esc2 = (box) => ({ key: "Escape", target: box, prevented: false, stopped: false,
-                             preventDefault() { this.prevented = true; },
-                             stopPropagation() { this.stopped = true; } });
-    out.fuTask.escape = {};
-    for (const [boxId, sumId] of [["fu-snooze-box", "fu-snooze-sum"],
-                                  ["fu-called-box", "fu-called-sum"]]) {
-      const box = el(boxId);
-      box.open = true;
-      dom.focused = null;
-      const ev = esc2(box);
-      await box.fire("keydown", ev);
-      const ev2 = esc2(box);
-      await box.fire("keydown", ev2);
-      out.fuTask.escape[boxId] = { open: box.open, stopped: ev.stopped, prevented: ev.prevented,
-                                   focused: dom.focused, wantFocus: "#" + sumId,
-                                   closedStopped: ev2.stopped };
-    }
-
-    // 11. THE SCHEDULE: rendered from the plan, saved per field on change, never per keystroke.
-    reset();
-    const SAVED_PLAN = { mode: "remind", interval_days: 7, stop_after: null, next_at: "2026-10-27",
-                         anchor_at: "2026-10-20T12:00:00Z" };
+    const SAVED_PLAN = { next_at: "2026-11-02", anchor_at: "2026-10-20T12:00:00Z" };
     answer(/\/followup-plan$/, 200, { ok: true, followup_plan: SAVED_PLAN });
-    // The snoozes above moved next_at on the row, which is the point of them; start this one from
-    // the plan as the pipeline first served it.
-    futRow.followup_plan = { mode: "remind", interval_days: 5, stop_after: null,
-                             next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" };
-    await openTask(null);
+    futRow.followup_plan = { next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" };
+    await open(null, "sent");
     const schedHtml = dom.html;
     const paintsBefore = dom.paints;
     const save = async (id, value, evt) => {
@@ -2429,145 +2309,23 @@ async function runScenario(name, s) {
     };
     const sched = {
       html: schedHtml,
-      typed: await save("fu-every", "9", "input"),
-      every: await save("fu-every", "7"),
+      typed: await save("fu-next", "2026-11-02", "input"),
+      next: await save("fu-next", "2026-11-02"),
       planAfter: JSON.parse(JSON.stringify(futRow.followup_plan)),
-      cleared: await save("fu-every", ""),
-      tooBig: await save("fu-every", "200"),
-      fraction: await save("fu-every", "2.5"),
-      stop: await save("fu-stop", "3"),
-      next: await save("fu-next", "2026-08-20"),
+      cleared: await save("fu-next", ""),
       pastNext: await save("fu-next", "2026-08-01"),
+      junk: await save("fu-next", "next week"),
     };
     sched.repaintedBySave = dom.paints > paintsBefore;
     fuNet.answers.length = 0;
-    answer(/\/followup-plan$/, 400, { ok: false, error: "bad_interval", detail: "bad_interval",
-                                      message: "That interval is not allowed." });
-    sched.refused = await save("fu-stop", "4");
+    answer(/\/followup-plan$/, 400, { ok: false, error: "date_too_far", detail: "date_too_far" });
+    sched.refused = await save("fu-next", "2027-12-01");
     out.fuTask.schedule = sched;
-
-    // 12. WHO IT GOES TO agrees with the ticks below it, including a contact whose payload row
-    //     carries no `followups` flag at all: the sentence used to count him in while his box sat
-    //     unticked (audit, 2026-10-23).
-    reset();
-    futRow.followup_task = TASK("t-13");
-    const mixed = fuData();
-    mixed.recipient_activity = [{ email: "dave@x.com", name: "Dave Nunn", followups: true },
-                                { email: "ap@x.com", name: "Ann Boyle", followups: false },
-                                { email: "joe@x.com", name: "Joe Park" }];
-    page.open(FU_PID);
-    page.cache(FU_PID, mixed);
-    page.renderDetail(FU_PID, mixed);
-    out.fuTask.who = { html: dom.html };
-
-    // 13. THE AI BUDGET IS SPENT: still a draft to send, and the note says why it is the standard one.
-    reset();
-    answer(/\/followup-task\/t-14\/ai-draft$/, 200,
-           { ok: true, draft: DEFAULT_DRAFT, fallback: true, ai: false, rate_limited: true });
-    await openTask(TASK("t-14"));
-    page.focusSection("followup");
-    await settle();
-    out.fuTask.rateLimited = { compose: compose(), sendDisabled: !!el("fu-send").disabled };
-
-    // 14. THE BUTTON IN THE EMAIL (2026-10-23). {link} is what becomes the button to the customer's
-    //     portal page, and it was a bare word in a textarea that an edit could delete without a
-    //     sign. Now the button is drawn under the message, and the moment the token goes a notice
-    //     says so with a one-press fix. Driven as an estimator would: delete it, try to send anyway,
-    //     press the fix, relabel the button, send. The body is the AI's own convention, {link} on a
-    //     line of its own, so the fix has to put it back EXACTLY where it was.
-    reset();
-    const OWN_LINE = "Hi Dave,\n\nJust checking the slab plan still works for you.\n\n{link}\n\n"
-      + "Thanks,\nKyle";
-    answer(/\/followup-task\/t-15\/ai-draft$/, 200,
-           { ok: true, draft: { title: "Checking in", body: OWN_LINE, cta: "Review and approve",
-                                source: "ai" }, fallback: false, ai: true });
-    answer(/\/followup-task\/t-15\/send$/, 200, { ok: true, task: { id: "t-15", status: "sent" } });
-    await openTask(TASK("t-15"));
-    page.focusSection("followup");
-    await settle();
-    const linkVis = () => ({
-      ok: !el("fu-link-ok").hidden, okText: el("fu-link-ok").textContent,
-      gone: !el("fu-link-gone").hidden, goneText: el("fu-link-gone-text").textContent,
-      fixLabel: el("fu-link-fix").textContent, many: !el("fu-link-many").hidden,
-    });
-    const btn = { compose: compose() };
-    const b15 = el("fu-body");
-    b15.value = OWN_LINE.replace("{link}", "");          // the estimator deletes the token
-    await b15.fire("input");
-    btn.afterDelete = linkVis();
-    await el("fu-send").fire("click");                   // ...and presses Send without fixing it
-    await settle();
-    btn.ignored = { alert: alertOf(), sends: reqs(/\/send$/).length, still: linkVis() };
-    dom.focused = null;
-    await el("fu-link-fix").fire("click");               // the one-press fix
-    btn.fixed = { value: b15.value, draft: page.fuDraft("t-15").body, link: linkVis(),
-                  focused: dom.focused, alert: alertOf() };
-    b15.value = OWN_LINE + "\n\nP.S. {link}";              // in twice: one button, so refused
-    await b15.fire("input");
-    btn.twice = linkVis();
-    await el("fu-send").fire("click");
-    await settle();
-    btn.twiceRefused = { alert: alertOf(), sends: reqs(/\/send$/).length };
-    b15.value = OWN_LINE;
-    await b15.fire("input");
-    const c15 = el("fu-cta");
-    c15.value = "See the price";                         // relabel the button
-    await c15.fire("input");
-    btn.relabelled = { preview: el("fu-cta-preview").textContent,
-                       draftCta: page.fuDraft("t-15").cta };
-    await el("fu-send").fire("click");
-    await settle();
-    btn.sent = reqs(/\/send$/);
-    out.fuTask.button = btn;
-
-    // 15. THE BUTTON LABEL IS TEXT, NEVER MARKUP: from the AI (escaped into the markup) and from the
-    //     estimator (written as textContent, never as innerHTML). An empty label falls back to the
-    //     portal's own default, and what the preview shows is what is posted.
-    reset();
-    const XSS_CTA = '<script>alert(1)</script> &amp; "go"';
-    answer(/\/followup-task\/t-16\/ai-draft$/, 200,
-           { ok: true, draft: { title: "Hi", body: "Hello\n\n{link}", cta: XSS_CTA, source: "ai" },
-             fallback: false, ai: true });
-    answer(/\/followup-task\/t-16\/send$/, 200, { ok: true, task: { id: "t-16", status: "sent" } });
-    await openTask(TASK("t-16"));
-    page.focusSection("followup");
-    await settle();
-    const ctaEsc = { compose: compose() };
-    const c16 = el("fu-cta");
-    c16.value = "   ";
-    await c16.fire("input");
-    ctaEsc.emptyPreview = el("fu-cta-preview").textContent;
-    c16.value = 'Tom &amp; <b>Jerry</b>';
-    await c16.fire("input");
-    ctaEsc.typedPreview = el("fu-cta-preview").textContent;
-    ctaEsc.previewWroteHtml = dom.parts.has("#fu-cta-preview");
-    await el("fu-send").fire("click");
-    await settle();
-    ctaEsc.sent = reqs(/\/send$/);
-    out.fuTask.ctaEscape = ctaEsc;
-
-    // 16. A PAGE WRITTEN FROM BLANK never had a link to remove, so the notice says it has none yet,
-    //     and the fix appends it as its own paragraph after what was written.
-    reset();
-    answer(/\/followup-task\/t-17\/ai-draft$/, 502, { ok: false, error: "down", detail: "down" });
-    await openTask(TASK("t-17"));
-    page.focusSection("followup");
-    await settle();
-    await el("fu-draft-blank").fire("click");
-    await settle();
-    const blank = { compose: compose() };
-    const b17 = el("fu-body");
-    b17.value = "Any news on the pour?\n";
-    await b17.fire("input");
-    blank.before = linkVis();
-    await el("fu-link-fix").fire("click");
-    blank.value = b17.value;
-    blank.after = linkVis();
-    out.fuTask.blankLink = blank;
 
     reset();
     out.fuTask.allPaths = fuAll.map((r) => r.path);
     futRow.followup_task = null;
+    futRow.proposal_status = "sent";
   } catch (e) {
     out.errors.fuTask = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }

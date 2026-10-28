@@ -451,11 +451,16 @@ def _is_future(stamp: str) -> bool:
 
 
 def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """One bell row per task that is DUE. A task the portal has parked for later is not news yet.
+    """One bell row per DECISION task that is due. A task parked for later is not news yet.
+
+    ONLY THE SCOPE DECISION RINGS (2026-10-28). Hanz: "the follow ups should be a follow up email to
+    the customer". The portal's worker emails the customer itself again, so a cadence reminder task
+    (a row left over from the remind-only weeks) is nobody's job: ringing for it would send somebody
+    to a Follow-up tab that, rightly, has no email on it to send. The "Decide the other scopes" task
+    is still a decision for a person, and its card is on that tab.
 
     The id is the task's, so a task that stays pending across polls stays one row, and `ts` is when
-    it fell due, so it counts as unread once and not on every refresh. The link opens the drawer on
-    its Follow-up tab, where the email is waiting to be read and sent."""
+    it fell due, so it counts as unread once and not on every refresh."""
     out: List[Dict[str, Any]] = []
     now_iso = _now_iso()
     for t in (state.get("followup_tasks") or []):
@@ -467,33 +472,25 @@ def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         due = str(t.get("due_at") or "")
         if due and _is_future(due):
             continue
+        if t.get("stage") != "decision":
+            continue
         # A scope group's task lives on the group's HOME scope, which may since have been approved
         # or closed; the portal names an OPEN member to open instead (link_proposal_id). Absent on
         # an older portal, and equal to proposal_id on an ordinary task.
         pid = t.get("link_proposal_id") or t.get("proposal_id")
-        label = t.get("label") or "A follow-up"
-        body = f"Follow-up due: {label}"
-        if t.get("stage") == "decision":
-            body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
-            # The portal's link_proposal_id is computed FRESH when the task is viewed (round 3):
-            # the first listed sibling that is STILL OPEN, or the approved scope only when none
-            # is. Trusted as given. Only a portal that does not send it falls back on the first
-            # scope the decision lists (never the approved scope the task is filed on, whose
-            # drawer shows its own deposit card once it raises one).
-            if not t.get("link_proposal_id"):
-                approved = (t.get("approved_scope") or {}).get("proposal_id") \
-                    if isinstance(t.get("approved_scope"), dict) else None
-                sibs = [s.get("proposal_id") for s in (t.get("scopes") or [])
-                        if isinstance(s, dict) and s.get("proposal_id")
-                        and s.get("proposal_id") not in (approved, t.get("proposal_id"))]
-                if sibs:
-                    pid = sibs[0]
-        elif t.get("scope_group") and isinstance(t.get("scopes"), list) and t["scopes"]:
-            # ONE reminder for the whole project, so the row names every scope it covers.
-            names = [str((s or {}).get("label") or "a scope") for s in t["scopes"]
-                     if isinstance(s, dict)]
-            if names:
-                body = "Follow-up due: " + ", ".join(names)
+        body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
+        # The portal's link_proposal_id is computed FRESH when the task is viewed (round 3): the
+        # first listed sibling that is STILL OPEN, or the approved scope only when none is. Trusted
+        # as given. Only a portal that does not send it falls back on the first scope the decision
+        # lists (never the approved scope the task is filed on).
+        if not t.get("link_proposal_id"):
+            approved = (t.get("approved_scope") or {}).get("proposal_id") \
+                if isinstance(t.get("approved_scope"), dict) else None
+            sibs = [s.get("proposal_id") for s in (t.get("scopes") or [])
+                    if isinstance(s, dict) and s.get("proposal_id")
+                    and s.get("proposal_id") not in (approved, t.get("proposal_id"))]
+            if sibs:
+                pid = sibs[0]
         out.append({
             "id": f"fut:{tid}", "kind": "followup_task", "icon": "mail",
             "severity": "medium", "sort": _TIER_CRM_STEP, "ts": due or now_iso,

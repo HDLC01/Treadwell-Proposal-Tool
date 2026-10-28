@@ -605,7 +605,7 @@ def test_a_job_won_by_the_numbers_has_no_undo_but_can_still_be_handed_off(ran):
 
 
 @needs_node
-def test_the_drawer_of_an_approved_unpaid_job_offers_the_hand_off_and_says_the_chasing_goes_on(ran):
+def test_the_drawer_of_an_approved_unpaid_job_offers_the_hand_off_and_says_the_money_is_out(ran):
     """THE BRANCH THAT DID NOT EXIST, and the reason no test caught the card-side bug either: every
     other won-ish fixture in this harness carries `won_at`, so every one of them reached the panel
     through wonByHand and rendered correctly whatever the approved-only path did. This row is the
@@ -614,9 +614,9 @@ def test_the_drawer_of_an_approved_unpaid_job_offers_the_hand_off_and_says_the_c
     press whose only effect was to write a stamp for something the portal had already recorded.
 
     The copy is its own rather than a share of the deposit-in branch, and that is the point: that
-    branch's promise is "the deposit is settled" and here it is precisely not. The panel has to say
-    the chasing carries on, because handing off does not end it — the cadence runs on deposit_status
-    and has never heard of hand-off."""
+    branch's promise is "the deposit is settled" and here it is precisely not. Since 2026-10-28 the
+    automatic follow-ups stop at approval and nothing chases the deposit, so the panel has to say
+    the money is still out and that nobody but a person is chasing it."""
     html = ran["wonControl"]["approved-unpaid"]
     assert html, "the approved-but-unpaid panel renders nothing at all"
     assert 'id="handoff-mark"' in html, (
@@ -627,6 +627,8 @@ def test_the_drawer_of_an_approved_unpaid_job_offers_the_hand_off_and_says_the_c
         "it offers to take off a mark nobody made, which would save and change nothing")
     assert "deposit is still outstanding" in html, (
         "the panel does not say the money is out, so Hand it off reads as 'this one is finished'")
+    assert "follow-ups stopped when they approved" in html, (
+        "the panel implies the cadence is still chasing the deposit, which stopped at approval")
     assert "Handed Off tab" in html or "operations has it" in html, (
         "it does not say what pressing Hand it off actually does")
 

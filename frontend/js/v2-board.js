@@ -203,6 +203,7 @@
     btn.disabled = true;
     var orig = btn.textContent;
     btn.textContent = "Saving…";
+    var said = "";
     try {
       var r = await api(path, {
         method: "POST",
@@ -213,11 +214,25 @@
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       if (patch) { patch(); SIG = ""; render(); }
       load();
+      said = j.followups_note || "";
     } catch (err) {
       btn.textContent = "Failed: " + (err.message || "retry");
       btn.disabled = false;
       setTimeout(function () { btn.textContent = orig; }, 2600);
+      return;
     }
+    // SAVED, BUT THE CUSTOMER IS STILL BEING EMAILED. Won and Hand it off switch the automatic
+    // follow-up emails off (main.py _followups_off_for_outcome); when the portal could not be told,
+    // the mark is saved anyway and the answer carries `followups_note`. portal.js markCardWon says it
+    // in the same dialog. This board has no Follow-up tab, so "Open the project" goes to the Direct
+    // Projects drawer's (the ?open=&sec=followup deep link the Follow-ups board uses). After the
+    // try, so a dialog that failed could never be reported as a failed save.
+    if (!said) return;
+    var id = decodeURIComponent(btn.dataset.won || btn.dataset.handoff || btn.dataset.lost || "");
+    if (await TW.confirmDanger({
+      title: "Follow-up emails are still on", message: said,
+      confirmText: "Open the project", cancelText: "OK", tone: "warn", icon: "warning",
+    }) && id) window.location.assign("/portal.html?open=" + encodeURIComponent(id) + "&sec=followup");
   }
 
   /** Mark as won/approved. No prompt, as on Direct Projects: nothing is sent and the card stays on

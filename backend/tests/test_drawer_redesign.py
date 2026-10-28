@@ -506,8 +506,8 @@ def test_a_short_thread_sits_on_the_composer():
 # THE ORIGINAL REASON HAS SINCE GONE AND THE PROMPT HAS NOT, deliberately. On 2026-08-28 winning a
 # job stopped removing the card: it moves to the Won/Approved COLUMN and stays on the Active board,
 # and the press that empties it off the board is now Hand it off. So this dialog no longer guards a
-# disappearance -- it guards a state change that starts a customer-facing clock (the follow-ups keep
-# running until the money is in) and that the estimator would otherwise have to undo in the drawer.
+# disappearance -- it guards a state change the estimator would otherwise have to undo in the drawer
+# (the follow-ups keep running until the customer approves in the portal).
 # Kept because Hanz approved it and Mark delayed and Mark closed lost both still ask; the thing that
 # had to change is WHAT IT SAYS, which is what the assertion below pins.
 @needs_node
@@ -555,8 +555,14 @@ def test_the_ask_names_the_four_things_people_get_wrong_about_it(out):
         "it does not say the mark runs ahead of the customer's own approval")
     assert "deposit" in detail, "it does not say it runs ahead of the money"
     assert "not emailed" in detail, "it does not say the customer hears nothing"
-    assert "carry on" in detail or "carries on" in detail, (
-        "it does not say the follow-ups keep going, which is the thing people assume stops")
+    # REVERSED 2026-10-28. Hanz: "If staff mark a project Won (or Hand it off) by hand in the tool
+    # while the portal still says sent/viewed, the automatic customer emails STOP." This line
+    # used to require "carry on", which is now the false claim.
+    assert "follow-up emails stop" in detail, (
+        "it does not say the automatic follow-up emails stop")
+    assert "carry on" not in detail and "carries on" not in detail, detail
+    assert "does not turn the emails back on" in detail, (
+        "it does not say undoing the mark leaves the emails off")
     assert "undo" in detail, "it does not say the mark can be taken off"
     assert "—" not in detail, "an em dash reached the dialog copy"
 
@@ -613,3 +619,69 @@ def test_a_photo_gets_a_reserved_box_rather_than_reflowing_the_thread_when_it_la
         "the picture is not cropped into the reserved well, so it will resize it on arrival")
     assert _resolved("background", "a", {"att-img"}, [{"att-list"}]) == "rgba(0,0,0,.06)", (
         "an empty box with no tint reads as a rendering failure rather than as a photo loading")
+
+
+# ── Won / Hand it off stop the automatic customer emails (2026-10-28) ────────
+@needs_node
+def test_a_drawer_won_whose_emails_could_not_be_stopped_says_so_in_the_note(out):
+    """The mark is saved (200) but the portal could not be told, so the route's followups_note has
+    to reach the screen, in the note the REPAINT drew. Mutation: drop the note write in wireWon's
+    post, or write it before repaint(), and this reads empty."""
+    r = out["won"]["sentMarkedFuFailed"]
+    assert r["pressed"], "the button never rendered, so this proves nothing"
+    assert [q["path"] for q in r["requests"] if q["method"] == "POST"] == ["/api/draft/marksent/status"]
+    assert "could not be switched off" in r["note"], r["note"]
+    # The counterexample: an ordinary save leaves the note empty.
+    assert out["won"]["sentMarked"]["note"] == "", out["won"]["sentMarked"]["note"]
+
+
+@needs_node
+def test_both_undo_buttons_tell_the_prompt_which_mark_they_undo(out):
+    """confirmBringBack only stops promising "Follow-up reminders start again" when the caller says
+    it is undoing a won mark or a hand-off (test_not_sent_lost.py executes the wording). Mutation:
+    drop the third argument at either call site in wireWon."""
+    assert [c["undoing"] for c in out["won"]["sentUndoAsked"]["prompts"]] == ["won"], (
+        out["won"]["sentUndoAsked"])
+    assert [c["undoing"] for c in out["won"]["sentHandoffUndoAsked"]["prompts"]] == ["handed_off"], (
+        out["won"]["sentHandoffUndoAsked"])
+    assert out["won"]["sentUndoAsked"]["requests"] == [], "a refused prompt still posted"
+
+
+@needs_node
+def test_the_won_panel_no_longer_says_the_follow_ups_carry_on(out):
+    """The drawer copy around wonControlHtml claimed "Follow-ups do NOT stop" until 2026-10-28."""
+    for key in ("sentOffered", "sentAlreadyWon", "sentAlreadyWonOff", "notSentOffered"):
+        html = out["won"][key]["html"]
+        assert "carry on" not in html and "do NOT stop" not in html, key
+    assert "follow-up emails are switched off" in out["won"]["sentAlreadyWonOff"]["html"]
+    assert "switches the automatic follow-up emails off" in out["won"]["sentOffered"]["html"]
+
+
+@needs_node
+def test_the_won_and_handed_off_panels_say_what_the_follow_ups_are_actually_doing(out):
+    """Review finding: the Won/Approved and Handed off copy said, as a fact, that the automatic
+    emails are switched off. False for a project marked before 2026-10-28 (nothing back-fills it),
+    for a switch-off the portal did not answer, and after somebody turned automation back on.
+    The sentence now reads the project's follow-up state. Mutation: make either sentence static
+    again (the "on" drawers then claim "switched off" / "are off")."""
+    w = out["won"]
+    on, off = w["sentAlreadyWon"]["html"], w["sentAlreadyWonOff"]["html"]   # enabled true / false
+    assert "still on for this project" in on and "Turn automation off" in on, on
+    assert "are switched off" not in on, "a project still being emailed says the emails stopped"
+    assert "are switched off" in off and "still on" not in off, off
+    h_on, h_off = w["sentHandedOffOn"]["html"], w["sentHandedOffOff"]["html"]
+    assert "Handed Off tab" in h_on and "Handed Off tab" in h_off, "not the handed-off panel"
+    assert "still on for this project" in h_on and "emails are off" not in h_on, h_on
+    assert "emails are off" in h_off and "still on" not in h_off, h_off
+
+
+@needs_node
+def test_a_won_mark_the_portal_switched_off_repaints_as_off_at_once(out):
+    """The copy reads the follow-up state, so a successful switch-off (followups_off names this
+    project) must reach the repainted payload, or the drawer says "still on" until the next fetch.
+    Counterexample: the failed switch-off just before it repaints as still on. Mutation: drop the
+    followup_state patch in wireWon's post, or the DETAIL_CACHE write in the sent drawer's repaint."""
+    ok = out["won"]["sentMarkedFuOff"]
+    assert ok["pressed"], "the button never rendered, so this proves nothing"
+    assert "are switched off" in ok["html"] and "still on for this project" not in ok["html"]
+    assert "still on for this project" in out["won"]["sentMarkedFuFailed"]["html"]
