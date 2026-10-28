@@ -104,13 +104,14 @@ def test_switching_email_keeps_what_was_typed(js):
         "the current tab must be collected BEFORE the key changes")
 
 
-def test_clamped_numbers_are_read_back_after_saving(js):
-    """Numbers are pulled into range on the way in. Somebody who typed 2 hours has to see they got
-    4, rather than believing their edit took."""
+def test_the_saved_values_are_read_back_after_saving(js):
+    """The portal refuses a day out of range rather than adjusting it (2026-10-28), so the boxes
+    are refilled from what it STORED, and the page says so if that ever differs from what was typed.
+    Executed in test_followup_two_per_step_page.py; this pins that the read-back is in Save."""
     i = js.index('$("save").addEventListener')
-    block = js[i:i + 2000]
+    block = js[i:i + 2600]
     assert "fillNumbers();" in block, "the form is not refreshed from what was stored"
-    assert "adjusted" in block, "nothing tells the user their value was changed"
+    assert "stored different values" in block, "nothing tells the user their value was changed"
 
 
 def test_a_reset_is_an_empty_payload_not_a_second_copy_of_the_defaults(js):

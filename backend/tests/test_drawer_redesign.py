@@ -506,8 +506,8 @@ def test_a_short_thread_sits_on_the_composer():
 # THE ORIGINAL REASON HAS SINCE GONE AND THE PROMPT HAS NOT, deliberately. On 2026-08-28 winning a
 # job stopped removing the card: it moves to the Won/Approved COLUMN and stays on the Active board,
 # and the press that empties it off the board is now Hand it off. So this dialog no longer guards a
-# disappearance -- it guards a state change that starts a customer-facing clock (the follow-ups keep
-# running until the money is in) and that the estimator would otherwise have to undo in the drawer.
+# disappearance -- it guards a state change the estimator would otherwise have to undo in the drawer
+# (the follow-ups keep running until the customer approves in the portal).
 # Kept because Hanz approved it and Mark delayed and Mark closed lost both still ask; the thing that
 # had to change is WHAT IT SAYS, which is what the assertion below pins.
 @needs_node

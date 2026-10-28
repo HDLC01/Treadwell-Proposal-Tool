@@ -3061,13 +3061,16 @@ def api_followup_settings() -> Dict[str, Any]:
 
 
 @app.put("/api/followup-settings")
-async def api_save_followup_settings(request: Request) -> Dict[str, Any]:
+async def api_save_followup_settings(request: Request) -> JSONResponse:
     body = await request.json()
     payload = dict(body or {})
     # Stamp who changed it. These settings send email to CUSTOMERS, so "who and when" has to be
     # answerable later, and the browser must not be the thing that decides whose name goes on it.
     payload["by"] = _user_email(request)
-    return _portal("/api/admin/settings/followups", "PUT", payload)
+    # PASSED THROUGH, refusal and all (2026-10-28). The portal refuses a day outside 1 to 90 with
+    # 400 {ok: false, error: <sentence>, field}, and the page shows that sentence under the box
+    # `field` names. `_portal` would raise it as a bare {"detail": sentence} and lose the field.
+    return _portal_pass("/api/admin/settings/followups", "PUT", payload)
 
 
 @app.post("/api/followup-settings/preview")
@@ -3584,11 +3587,10 @@ class FollowupSnoozeIn(BaseModel):
 
 
 class FollowupPlanIn(BaseModel):
-    """Every field optional, and ABSENT is different from null: absent leaves that part of the
-    schedule alone, null puts it back on the global default. Forwarded with exclude_unset, so a
-    change to one field never resets the other two."""
-    interval_days: Optional[int] = None
-    stop_after: Optional[int] = None
+    """The one thing a project's schedule still takes: `next_at`, the day the next follow-up email
+    is due. Absent leaves it alone, null puts it back on the global schedule; forwarded with
+    exclude_unset. "Then every" (interval_days) and "Stop after" (stop_after) went on 2026-10-28:
+    the cadence is two emails per step and nothing repeats, so they are not forwarded at all."""
     next_at: Optional[str] = None
 
 
@@ -3679,8 +3681,8 @@ def api_portal_followup_scope_decision(task_id: str, request: Request,
 @app.post("/api/portal/proposal/{proposal_id}/followup-plan")
 def api_portal_followup_plan(proposal_id: str, request: Request,
                              payload: Optional[FollowupPlanIn] = None) -> JSONResponse:
-    """This proposal's reminder schedule: when the next one is due, how often after that, and when
-    to stop. Remind mode is the only mode in v1, so there is no mode field to forward."""
+    """This proposal's follow-up schedule: the day its next automatic email to the customer is due.
+    There is no mode field to forward."""
     body: Dict[str, Any] = payload.model_dump(exclude_unset=True) if payload else {}
     body["by"] = _user_email(request)
     return _portal_pass(f"/api/admin/proposal/{_safe_id(proposal_id)}/followup-plan", "POST", body)
