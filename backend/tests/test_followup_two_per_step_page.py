@@ -48,7 +48,7 @@ def ran():
 def _visible(html: str) -> str:
     body = re.sub(r"<!--.*?-->", "", html, flags=re.S)
     body = body[body.index("<body"):]
-    body = re.sub(r"<script.*?</script>", "", body, flags=re.S)
+    body = re.sub(r"<script.*?</scripts*>", "", body, flags=re.S | re.I)
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body))
 
 

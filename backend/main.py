@@ -9326,14 +9326,14 @@ def _followups_off_for_outcome(draft_id: str, actor: Optional[str]) -> Dict[str,
                 if m.get("id") and m["id"] not in ids:
                     ids.append(m["id"])
     except Exception as exc:  # noqa: BLE001 — cannot tell which proposals there are: say so
-        log.warning("follow-up switch-off: could not read %s: %s", draft_id, exc)
+        log.warning("follow-up switch-off: could not read %s: %s", _log_safe(draft_id), _log_safe(exc))
         return {"off": off, "failed": [draft_id]}
     unreachable: Optional[int] = None       # the status the portal could not be asked with
     for pid in ids:
         try:
             revised: Optional[bool] = bool(drafts.latest_revision_no(pid))
         except Exception as exc:  # noqa: BLE001 — unknown: the portal is asked all the same
-            log.warning("follow-up switch-off: revision lookup failed for %s: %s", pid, exc)
+            log.warning("follow-up switch-off: revision lookup failed for %s: %s", _log_safe(pid), _log_safe(exc))
             revised = None
         if unreachable is not None:
             if unreachable == 503 and revised is False:
@@ -9351,10 +9351,10 @@ def _followups_off_for_outcome(draft_id: str, actor: Optional[str]) -> Dict[str,
                 unreachable = exc.status_code
                 if exc.status_code == 503 and revised is False:
                     continue
-            log.warning("follow-up switch-off failed for %s: %s", pid, exc.detail)
+            log.warning("follow-up switch-off failed for %s: %s", _log_safe(pid), _log_safe(exc.detail))
             failed.append(pid)
         except Exception as exc:  # noqa: BLE001
-            log.warning("follow-up switch-off failed for %s: %s", pid, exc)
+            log.warning("follow-up switch-off failed for %s: %s", _log_safe(pid), _log_safe(exc))
             failed.append(pid)
     return {"off": off, "failed": failed}
 
