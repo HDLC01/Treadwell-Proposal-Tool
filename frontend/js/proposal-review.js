@@ -10465,19 +10465,21 @@
     // marked `proposal_auto_built` and the press holds it while the mark stands
     // (main._send_all_placeholders); a person's own Continue takes the mark off. The Files page's
     // door (?compose=files with no walk) rebuilds with nobody looking either, so it leaves the mark
-    // as it is. Inline, not a helper: harnesses lift this function by name. So does a door on the
-    // Generate Files step's walk (kind "generate", send-all-chain.js): it rebuilds a document a
+    // as it is. Inline, not a helper: harnesses lift this function by name. So does the 3 · Generate
+    // Files step's hidden compose frame (?compose=frame, shared.js FRAME): it rebuilds a document a
     // person composed, after the estimate changed, exactly as the Files page's door does.
     // A door that composes a proposal which NEVER HAD a document is "built by nobody" too, walk or
     // not: the Files page's own door (View files on a never-opened child of Create Multiple
     // Proposals) wrote Kyle's GC placeholders with nobody looking, and with no mark the next Send
-    // all published them (review, 2026-10-28). So a door that finds no document marks it.
+    // all published them (review, 2026-10-28). So a door that finds no document marks it, the
+    // Generate Files frame included: its default-wording backup is never sent unattended.
     let _q0 = null;
     try { _q0 = new URLSearchParams(window.location.search); } catch {}
-    const _doorOpened = !!_q0 && _q0.get("compose") === "files";
-    const _walk0 = _doorOpened && window.TWSendAll ? window.TWSendAll.progress(_q0) : null;
+    const _framed0 = !!_q0 && _q0.get("compose") === "frame" && !!(TW.inFrame && TW.inFrame());
+    const _doorOpened = (!!_q0 && _q0.get("compose") === "files") || _framed0;
+    const _walk0 = _doorOpened && !_framed0 && window.TWSendAll ? window.TWSendAll.progress(_q0) : null;
     const _hadDoc0 = !!((liveKey("proposal_payload") || {}).values);
-    const _sendAllBuild = (!!_walk0 && _walk0.kind !== "generate") || (_doorOpened && !_hadDoc0);
+    const _sendAllBuild = !!_walk0 || (_doorOpened && !_hadDoc0);
 
     const composed = {
       ...mergedValues,
@@ -10582,6 +10584,12 @@
                   "Check your connection, then press Continue to Done again. If it says this a second time, tell Hanz before you send anything.");
       return false;
     }
+    // 3 · GENERATE FILES' HIDDEN FRAME goes nowhere: the document is on the server, and the step that
+    // made the frame builds its files and stays where it is (shared.js FRAME).
+    if (TW.inFrame && TW.inFrame()) {
+      TW.frameReport({ phase: "saved" });
+      return true;
+    }
     // `composed=1` tells the Files page this document was built from this page a moment ago, so it
     // does not send the estimator back through its door (done.js). Opened BY that door
     // (?compose=files, see composeForFiles), this page REPLACES itself, so the Back button from
@@ -10640,16 +10648,27 @@
   async function composeForFiles() {
     let q = null;
     try { q = new URLSearchParams(window.location.search); } catch { return; }
-    if (!q || q.get("compose") !== "files") return;
+    // THE SAME DOOR IN 3 · GENERATE FILES' HIDDEN FRAME (?compose=frame, shared.js FRAME): it composes
+    // exactly as below, and where this door would go to the Files page it tells the step that made
+    // the frame instead (TW.frameReport), which stays on screen. Only in a real frame: the same URL
+    // opened as a page is an ordinary visit.
+    const framed = !!q && q.get("compose") === "frame" && !!(TW.inFrame && TW.inFrame());
+    if (!q || (q.get("compose") !== "files" && !framed)) return;
+    if (framed) {
+      TW.frameReport({ phase: "started" });
+      if (!(TW.frameSeeded && TW.frameSeeded())) {
+        TW.frameReport({ phase: "stopped", reason: "Its saved copy could not be handed to the Proposal step." });
+        return;
+      }
+    }
     const btn = document.getElementById("generate-btn");
     const label = btn ? btn.textContent : "";
     // Opened by Send all to build a proposal that was never built (send-all-chain.js): said on the
     // button, the one line this page shows while it works.
-    const walk = window.TWSendAll ? window.TWSendAll.progress(q) : null;
-    const walkName = walk && walk.kind === "generate" ? "Generate Files" : "Send all";
+    const walk = !framed && window.TWSendAll ? window.TWSendAll.progress(q) : null;
     if (btn) {
       btn.disabled = true;
-      btn.textContent = walk ? "Building " + walk.label + " for " + walkName + " (" + walk.i + " of " + walk.n + ")…"
+      btn.textContent = walk ? "Building " + walk.label + " for Send all (" + walk.i + " of " + walk.n + ")…"
         : "Updating the proposal…";
     }
     // A STOP ENDS THE WALK, so nothing is ever sent after a build that did not happen.
@@ -10686,6 +10705,11 @@
       leaving = true;
       endWalk();
       TW.dropHeldChanges();
+      if (framed) {
+        TW.frameReport({ phase: "stopped", reason: "It was saved again somewhere else while it was being "
+          + "rebuilt, so nothing was written over it. Reload this page to build it from the copy saved now." });
+        return;
+      }
       window.location.replace(TW.withDraft("/done.html" + (q.get("files") === "1" ? "?files=1" : "")));
     };
     // The page's OWN save through the hold is the third yes: that copy is the one it put there, and
@@ -10738,13 +10762,17 @@
     // job Won, went back to a Files card whose one button dropped everything typed (review of fix
     // 4, round 3). So the server is asked once more now; on a yes the page's copy is saved and it
     // saves as every page does. Could it not be asked, the hold stays, and the note says so.
-    const handOver = async (freedHead, unfreedHead) => {
+    const handOver = async (freedHead, unfreedHead, frameWhy) => {
       stopped = true;
+      // A compose frame is nobody's page: it says why to the step that made it, and keeps every save
+      // held (shared.js releaseHeldSaves refuses a frame).
+      if (framed) {
+        TW.frameReport({ phase: "stopped", reason: frameWhy || "Its Proposal step could not rebuild it." });
+        return;
+      }
       const ended = endWalk();
       const lead = !ended ? ""
-        : ended.kind === "generate"
-          ? "Generate Files stopped while rebuilding " + ended.label + ", so its files were not built. "
-          : "Send all stopped while building " + ended.label + ", so nothing was sent to the customer. ";
+        : "Send all stopped while building " + ended.label + ", so nothing was sent to the customer. ";
       const freed = await TW.releaseHeldSaves();
       if (leaving) return;                                // the server held another copy: gone back
       repaintNote(lead + (freed ? freedHead : unfreedHead),
@@ -10753,7 +10781,10 @@
     };
     if (timedOut || !templateVersion || verdict !== "ok") {
       await handOver("The Files page needs this proposal rebuilt from your latest changes, and it could not be done for you.",
-                     "The saved copy of this project could not be read, so the proposal was not rebuilt for you.");
+                     "The saved copy of this project could not be read, so the proposal was not rebuilt for you.",
+                     timedOut ? "Its Proposal step took too long to open."
+                       : !templateVersion ? "Its proposal template did not load."
+                       : "Its saved copy could not be read. Check your connection, then reload this page.");
       return;
     }
     // THE DOOR'S OWN CONTINUE CAN STOP TOO: the server could not be asked as it saved (a deploy
@@ -10764,8 +10795,18 @@
     // reason of its own (another tab has the keys) keeps continueToDone's note: nothing here can
     // save that page's copy.
     if (await continueToDone(null) || leaving) return;
-    if (TW.saveBlocked && TW.saveBlocked()) { endWalk(); return; }
+    // What continueToDone said as it stopped (a base with no price, a save refused), for a frame.
+    const said = (() => {
+      const h = document.getElementById("resync-note-head");
+      return h && typeof h.textContent === "string" ? h.textContent.trim() : "";
+    })();
+    if (TW.saveBlocked && TW.saveBlocked()) {
+      endWalk();
+      if (framed) TW.frameReport({ phase: "stopped", reason: said || "Its Proposal step could not save it." });
+      return;
+    }
     await handOver("Your changes are saved now, but the Files page could not be opened for you.",
-                   "Your changes could not be saved, so the proposal was not rebuilt for you.");
+                   "Your changes could not be saved, so the proposal was not rebuilt for you.",
+                   said || "Its Proposal step could not save it.");
   }
   composeForFiles();

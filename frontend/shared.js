@@ -9,7 +9,7 @@
  * navigates via window.location.assign(). No SPA, no router — just
  * static HTML pages talking through the storage bucket.
  */
-(function () {
+(function (hostLocal, hostSession) {
   const STATE_KEY = "treadwell.proposal_tool.state";
   const DRAFT_ID_KEY = "treadwell.proposal_tool.draft_id";
   const RELOAD_GUARD = "treadwell.proposal_tool.hydrated_once";
@@ -31,6 +31,93 @@
   // to the last one the server did hold. A write landing after that (the cover letter's template
   // arriving while the page unloads) would undo it, so every write from here is refused too.
   let _givenUp = false;
+
+  // ─── A HIDDEN COMPOSE FRAME (3 · Generate Files, Hanz 2026-10-29) ───
+  // "If we are on the generate files it should stay on that page until I click continue." Step 3
+  // used to walk the tab through each proposal's Proposal-step door and back, so the address bar
+  // flipped between steps. It now runs that same door in a hidden same-origin iframe instead
+  // (proposal-review.html?d=<id>&compose=frame&frame=<token>, js/generate.js composeInFrame), so the
+  // document is composed by the Proposal step's own code with nobody leaving step 3.
+  //
+  // THE ONE BLOB IS EVERY PAGE'S, AND A FRAME MUST NOT TOUCH IT. localStorage holds one draft blob
+  // shared by every tab and frame of the origin, and the Proposal page writes it as it loads, at
+  // Continue, and hydrates over it when it holds another project. A frame doing that would put a
+  // sibling's draft into the slot the page that made it (or another tab) is working in. So a page
+  // running as such a frame (the token in its URL AND not the top window) gets its OWN storage from
+  // this file: two in-memory stores in place of localStorage and sessionStorage, for every read and
+  // write below. Its draft is the copy the page that made it has just read from the server, handed
+  // over once by token (window.parent.TWComposeFrames.seed); it never hydrates, never reloads, never
+  // evicts or flushes anything, sends nothing as it goes, and saves only through the Proposal
+  // step's own guarded save (composeForFiles' hold: the server is asked again at that moment, and a
+  // copy saved since is never written over). It tells the page that made it how it went with
+  // postMessage, to that page's own origin (frameReport). Other scripts on the page keep the real
+  // storage for their own per-viewer keys (the sign-in, the sidebar's state): only this file holds
+  // the draft. Opened as a top-level page, the same URL is an ordinary visit.
+  const FRAME_TOKEN_RE = /^[A-Za-z0-9_-]{16,80}$/;
+  /** The real storage of `name`, or null where the browser refuses it (private mode, blocked). Read
+   *  through the getters this file's wrapper is called with (its last lines), which name
+   *  `localStorage` / `sessionStorage` OUTSIDE this function, where the two names below cannot
+   *  shadow them: the page's own, or whatever a harness hands this file under those names. */
+  function hostStore(name) {
+    try { return (name === "localStorage" ? hostLocal() : hostSession()) || null; } catch { return null; }
+  }
+  function memoryStore() {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(String(k)) ? m.get(String(k)) : null),
+      setItem: (k, v) => { m.set(String(k), String(v)); },
+      removeItem: (k) => { m.delete(String(k)); },
+      clear: () => { m.clear(); },
+      key: (i) => { const ks = Array.from(m.keys()); return i >= 0 && i < ks.length ? ks[i] : null; },
+      get length() { return m.size; },
+    };
+  }
+  /** {token, local, session, seed} when this page runs as a compose frame, else null. */
+  function frameMode() {
+    let token = null;
+    try {
+      if (!window.parent || window.parent === window || window.top === window) return null;
+      const q = new URL(window.location.href).searchParams;
+      if (q.get("compose") !== "frame") return null;
+      token = q.get("frame");
+    } catch { return null; }
+    if (!token || !FRAME_TOKEN_RE.test(token)) return null;
+    const f = { token, local: memoryStore(), session: memoryStore(), seed: null };
+    // The API base the page that made it uses (a debug override), read, never written.
+    try {
+      const base = hostStore("localStorage").getItem("tw_api_base");
+      if (base) f.local.setItem("tw_api_base", base);
+    } catch {}
+    // The draft, handed over once by the page that made this frame. Reading another origin's
+    // window throws, so only a same-origin parent can hand one over.
+    try {
+      const host = window.parent;
+      if (host.location.origin !== window.location.origin) return f;
+      const give = host.TWComposeFrames && host.TWComposeFrames.seed;
+      const s = typeof give === "function" ? give(token) : null;
+      if (s && typeof s === "object" && typeof s.id === "string"
+          && s.data && typeof s.data === "object" && !Array.isArray(s.data)) {
+        f.seed = JSON.parse(JSON.stringify({ id: s.id, data: s.data }));
+      }
+    } catch {}
+    return f;
+  }
+  const FRAME = frameMode();
+  // Every read and write of the draft's storage in this file goes through these two names.
+  const localStorage = FRAME ? FRAME.local : hostStore("localStorage");
+  const sessionStorage = FRAME ? FRAME.session : hostStore("sessionStorage");
+
+  /** Tell the page that made this frame how it is going: {phase: "started" | "saved" | "stopped",
+   *  reason?}. Posted to that page's own origin only; nothing when this is not a compose frame. */
+  function frameReport(msg) {
+    if (!FRAME) return false;
+    try {
+      window.parent.postMessage(Object.assign({}, msg || {}, { tw_compose_frame: FRAME.token,
+                                                               id: getDraftId() }),
+                                window.location.origin);
+      return true;
+    } catch { return false; }
+  }
 
   /**
    * API base URL resolution (in priority order):
@@ -1049,6 +1136,7 @@
    *  gate does let through lifts it. */
   async function releaseHeldSaves() {
     const hold = _hold;
+    if (FRAME) return false;        // nobody works on a compose frame: its saves stay held
     if (!hold) return true;
     hold.handedOver = true;
     if (hold.dirty) return (await flushHeld(hold)) && _hold !== hold;
@@ -1233,6 +1321,9 @@
   // ?d= draft doesn't own the local blob, hydrate it (fetch → clean-replace →
   // reload). This self-heals after corruption and covers cross-device opens.
   async function initDraftSync() {
+    // A compose frame's draft is the copy it was handed (seedFrame), or nothing it may write: it
+    // never reads another copy into its storage and never reloads.
+    if (FRAME) return;
     if (_prefetchBoot) return confirmPrefetchedBoot(_prefetchBoot);   // this page ran on a kept read (bootFromPrefetch)
     // The pull below hits the auth-gated /api/draft/{id}. Wait for the Supabase
     // token (set by auth.js) so the GET isn't 401'd — otherwise a reopened link
@@ -1492,6 +1583,27 @@
       return hash53(canonJSON(keep));
     } catch { return ""; }
   }
+  /** A COMPOSE FRAME'S DRAFT goes into its own storage before any page script reads the blob: the
+   *  server's copy its parent handed over, stamped, with this browser's record that the server holds
+   *  exactly it (SYNCED_KEY), so the Proposal step's door reads it as the server's copy. No copy, or
+   *  one for another draft than the URL's: every write from this page is refused (_givenUp), and
+   *  the door says it stopped. */
+  function seedFrame() {
+    if (!FRAME) return;
+    let urlId = null;
+    try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
+    const s = FRAME.seed;
+    if (!s || !urlId || s.id !== urlId) { _givenUp = true; return; }
+    const blob = Object.assign({}, s.data, { [STAMP]: urlId });
+    localStorage.setItem(STATE_KEY, JSON.stringify(blob));
+    localStorage.setItem(DRAFT_ID_KEY, urlId);
+    localStorage.setItem(SYNCED_KEY, urlId + ":" + draftDigest(blob));
+    // HELD FROM THE FIRST WRITE: the page writes as it loads (its pricing rebuild), before its door
+    // holds the saves behind the server's say-so. Until then, and should the door never run (the
+    // page stopped as it loaded), nothing it writes is sent: this gate never says yes.
+    _hold = { gate: async () => false, dirty: false, handedOver: false, saved: null, touches: 0 };
+  }
+  try { seedFrame(); } catch { _givenUp = true; }
   try { bootFromPrefetch(); } catch {}
 
   /** initDraftSync for a page that ran on a kept read: ask the server whether it is still its copy.
@@ -1561,7 +1673,7 @@
 
   // Browser Back can restore a frozen (bfcache) page whose in-memory state
   // belongs to another draft; reload so initDraftSync re-validates ownership.
-  window.addEventListener("pageshow", (e) => { if (e.persisted) window.location.reload(); });
+  window.addEventListener("pageshow", (e) => { if (e.persisted && !FRAME) window.location.reload(); });
   // Flush the pending debounced save on navigation so the last ≤2.5s of edits
   // aren't dropped (same refusal rule as scheduleServerSave).
   //
@@ -1575,6 +1687,7 @@
   let _pageSavesOnLeave = null;
   function pageSavesOnLeave(isPending) { _pageSavesOnLeave = typeof isPending === "function" ? isPending : null; }
   window.addEventListener("pagehide", () => {
+    if (FRAME) return;              // a compose frame saves only through its door's guarded save
     // A SAVE THAT HAS NOT BEEN ANSWERED GOES AGAIN (X1, round 5, B1). A plain request is dropped with its page if it has not reached the server,
     // and a page that waited a bounded time for its save and left (Continue, the beta door) left it uploading. Sent again as a keepalive request,
     // which the page's going cannot cancel; the same copy twice is harmless. Not for a page that holds its saves behind a gate, has given its
@@ -2504,5 +2617,12 @@
     heldSaveDigest,
     releaseHeldSaves,
     dropHeldChanges,
+    // A compose frame of 3 · Generate Files: its token (null on every other page), whether it was
+    // handed a draft it may compose, and its one way to say how it went (see FRAME at the top).
+    inFrame: () => (FRAME ? FRAME.token : null),
+    frameSeeded: () => !!FRAME && !!FRAME.seed && !_givenUp,
+    frameReport,
   };
-})();
+  // Read lazily, from out here: see hostStore. A browser that refuses storage throws on the read,
+  // which hostStore catches, exactly as every read in this file always has.
+})(function () { return localStorage; }, function () { return sessionStorage; });
