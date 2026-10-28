@@ -1,4 +1,4 @@
-"""3 · GENERATE FILES (Hanz, 2026-10-28).
+"""3 · GENERATE FILES (Hanz, 2026-10-28; reworked 2026-10-29).
 
 "The top navigation bar, before we go to proposal, we should add another step that says generate
 files, so that every time we would have a backup or a safety net that it would generate the files
@@ -9,10 +9,18 @@ every time we change something in the estimate." The wizard is now
 and every arrival at step 3 builds the .xlsx, .docx and PDF of every live proposal of the project
 (frontend/js/generate.js), through the Files step's own route (/api/draft/{id}/documents).
 
-EXECUTED, NOT READ: js/generate-step-harness.js runs the real generate.js over the real shared.js and
-send-all-chain.js, and walks the real Proposal-step door (files-door-harness.js's world). Each
-mutation test breaks ONE line in a scratch copy of one file and requires the harness to go red; the
-mutation is asserted to have applied. The pills are read off every wizard page's markup.
+"If we have multiple base bids why does it only generate one file and why does it go back and forth
+from proposal to generate files" / "It should always generate the 3 proposals already" / "if we are
+on the generate files it should stay on that page until I click continue" (2026-10-29). So step 3
+never leaves: a stale or out-of-step child is caught up by the project's Refresh first, and a
+document older than its draft, or one nobody wrote yet, is composed by the Proposal step's own door
+in a hidden same-origin iframe that shared.js keeps off the tab's one localStorage blob (FRAME).
+
+EXECUTED, NOT READ: js/generate-step-harness.js runs the real generate.js over the real shared.js,
+and opens each frame as the real Proposal page in frame mode (files-door-harness.js's world: the
+real continueToDone / composeForFiles). Each mutation test breaks ONE line in a scratch copy of one
+file and requires the harness to go red; the mutation is asserted to have applied. The pills are
+read off every wizard page's markup.
 """
 import copy
 import json
@@ -25,7 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from test_scope_send_all import World, _draft
+from test_scope_send_all import GC_HELD, World, _draft, _press, _three
 
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "generate-step-harness.js"
@@ -33,6 +41,8 @@ FRONTEND = TESTS.parents[1] / "frontend"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 client = TestClient(main.app)
+
+DEFAULT_WORDING = "Built from the default wording; review it on its Proposal tab before sending."
 
 
 def _run(front=None):
@@ -66,90 +76,245 @@ def _row(rows, rid):
     return next(r for r in rows if r["id"] == rid)
 
 
-# ── one draft: the estimate changed, so the document is rebuilt first ──────────────────────
+# ── staging's project: three base bids, three proposals, one page ────────────────────────────
 @needs_node
-def test_a_changed_estimate_is_rebuilt_through_the_proposal_door_then_built(ran):
-    """THE CASE. The last Continue built $10,000 / Smooth. The Estimate step then re-priced to $12,500
-    and picked Orange Peel, and Continue led to step 3. Rendering the saved document would hand out
-    the old price; the page walks the tab through the Proposal step's own door instead, which composes
-    the document from the estimate as it stands and comes back, and the files are built from THAT."""
+def test_staging_shape_builds_all_three_without_leaving_the_page(ran):
+    """THE CASE (staging, 2026-10-29). Base Bid 1 Epoxy's document is older than the estimate, the
+    Polish proposal's copy of the estimate is stale, and Room 2 was never opened. Before: 1 of 3
+    built, the tab flipping between Proposal and Generate Files, and "press Refresh on its Proposal
+    step" twice. Now all three are built, each at its own sheet's price, and the address bar never
+    moved."""
+    s = ran["staging"]
+    assert [(r["id"], r["name"], r["status"], r["total"]) for r in s["rows"]] == [
+        ("d1", "Epoxy", "built", "$12,500"), ("c2", "Polish", "built", "$8,000"),
+        ("c3", "Room 2", "built", "$6,000")], s["rows"]
+    assert s["nav"] == [] and s["urls"] == ["/generate.html?d=d1"] and s["url"] == "/generate.html?d=d1"
+    assert s["frames"]["nav"] == [], "a frame navigated"
+    assert s["frames"]["errors"] == []
+    assert s["renders"] == [["d1", "$12,500"], ["c2", "$8,000"], ["c3", "$6,000"]]
+    assert len(s["links"]) == 9
+    assert s["note"] == "All 3 proposals are built."
+    assert s["next"] == "/proposal-review.html?d=d1"
+
+
+@needs_node
+def test_one_steady_progress_line(ran):
+    assert ran["staging"]["notes"] == [
+        "Generating files…",
+        "Generating files: copying the estimate into 1 proposal…",
+        "Generating files: Epoxy (1 of 3)…",
+        "Generating files: Polish (2 of 3)…",
+        "Generating files: Room 2 (3 of 3)…",
+        "All 3 proposals are built."]
+
+
+@needs_node
+def test_refresh_runs_once_first_with_the_saved_copys_version(ran):
+    """The Proposal step's "Estimate changed" banner's own call, once, with the version of the saved
+    copy it read (the server refuses a copy stored again since)."""
+    s = ran["staging"]
+    assert s["refreshCalls"] == 1
+    assert s["refreshes"] == [{"id": "d1", "versioned": True}]
+
+
+@needs_node
+def test_one_hidden_frame_at_a_time_each_torn_down(ran):
+    f = ran["staging"]["frames"]
+    assert f["opened"] == ["d1", "c2", "c3"]
+    assert f["maxLive"] == 1 and f["live"] == 0, "frames overlapped or one was left on the page"
+    assert f["phases"] == ["d1:started", "d1:saved", "c2:started", "c2:saved", "c3:started", "c3:saved"]
+    assert f["targets"] == ["https://tool"], "a frame posted to an origin other than its own"
+    assert ran["staging"]["listening"] == 0, "a message listener was left behind"
+    for a in ran["staging"]["frameAttrs"]:
+        assert a["className"] == "gen-frame" and a["inert"] == "" and a["hidden"] == "true" and a["tab"] == "-1"
+        assert re.fullmatch(r"/proposal-review\.html\?d=(d1|c2|c3)&compose=frame&frame=TOK", a["src"]), a["src"]
+
+
+@needs_node
+def test_the_never_opened_one_is_a_marked_backup(ran):
+    """Room 2 nobody opened: its document is the template's default wording, built as a backup and
+    said so. The door marks it `proposal_auto_built` (Send all still holds its placeholders), and its
+    build is not refused by the hold the others ask for. The two a person composed stay unmarked."""
+    s = ran["staging"]
+    assert _row(s["rows"], "c3")["message"] == DEFAULT_WORDING
+    assert _row(s["rows"], "d1")["message"] == "" and _row(s["rows"], "c2")["message"] == ""
+    assert s["c3"]["mark"] is True
+    assert s["d1Mark"] is None and s["c2Mark"] is None
+    assert s["holds"] == {"d1": True, "c2": True, "c3": False}
+
+
+@needs_node
+def test_send_all_still_refuses_the_backup_while_it_prints_placeholders(ran, fake_supabase,
+                                                                       monkeypatch):
+    """The document the frame composed for Room 2 (a GC scope, its words blank), exactly as the
+    harness saved it, put on Send all's project: the press holds it with Kyle's placeholders."""
+    c3 = ran["staging"]["c3"]
+    assert c3["mark"] is True and c3["audience"] == "GC"
+    rows = _three()
+    rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False, audience="GC",
+                     proposal_auto_built=c3["mark"])
+    rows[1]["data"]["proposal_payload"] = copy.deepcopy(c3["payload"])
+    w = World(fake_supabase, monkeypatch, rows)
+    r = _press({"message": "All three."})
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert [(b["id"], b["code"]) for b in j["blocked"]] == [("s2", "placeholders")]
+    assert j["error"] == GC_HELD
+    assert w.publishes == [] and w.sends == []
+
+
+@needs_node
+def test_this_browsers_copy_takes_the_document_its_frame_composed(ran):
+    """The open proposal's document was composed in a frame and saved; this browser's copy was the
+    saved copy until then, so it takes the new one, and no page here holds the one from before."""
+    s = ran["staging"]
+    assert s["slotOwner"] == "d1" and s["slotTotal"] == "$12,500" and s["slotIsServer"]
+
+
+# ── one draft ───────────────────────────────────────────────────────────────────────────────
+@needs_node
+def test_a_changed_estimate_is_composed_in_a_frame_then_built_without_leaving(ran):
+    """The last Continue built $10,000 / Smooth. The Estimate step then re-priced to $12,500 and
+    picked Orange Peel. The document is composed again by the Proposal step's door, in a frame, and
+    the files are built from THAT, at the new price; the tab never left step 3."""
     o = ran["oneDraft"]
     assert o["builtBefore"] == "$10,000"
-    pages = [s["page"] for s in o["stops"]]
-    assert pages == ["generate", "proposal", "generate"], o["stops"]
-    assert "compose=files" in o["stops"][0]["nav"][0][1] and "sendall=" in o["stops"][0]["nav"][0][1]
-    assert o["stops"][1]["said"][0] == "Building Door Test for Generate Files (1 of 1)…"
-    assert o["stops"][1]["nav"][0][1].startswith("/generate.html?d=d1&sendall_resume=")
-    assert o["stops"][2]["nav"] == [], "the page walked again after it came back"
+    assert o["nav"] == [] and o["url"] == "/generate.html?d=d1"
+    assert o["frames"]["opened"] == ["d1"] and o["frames"]["nav"] == []
     assert o["rendered"] == [{"id": "d1", "texture": "Orange Peel", "total": "$12,500"}], o["rendered"]
     assert o["rows"] == [{"id": "d1", "name": "Door Test", "sheet": "", "status": "built",
                           "total": "$12,500", "message": "", "current": True}]
     assert o["links"] == ["0:xlsx_download_url", "0:docx_download_url", "0:pdf_download_url"]
     assert o["note"] == "The files are built."
-    assert o["url"] == "/generate.html?d=d1", "the resume token stayed in the address bar"
-    assert o["chainLeft"] is None, "the finished walk was left in sessionStorage"
+    assert o["mark"] is None, "a document a person composed was marked as built by nobody"
+    assert o["slotTotal"] == "$12,500"
+    assert o["chainLeft"] is None, "a walk record was written"
     assert o["next"] == "/proposal-review.html?d=d1"
 
 
 @needs_node
-def test_a_generate_walk_does_not_mark_the_document_auto_built(ran):
-    """A document a person composed, rebuilt after an estimate change, is not "built by nobody":
-    Send all's placeholder hold (proposal_auto_built) stays as it was, as the Files page's door
-    leaves it."""
-    assert ran["oneDraft"]["mark"] is None
-
-
-@needs_node
 def test_every_arrival_builds_again(ran):
-    """Nothing changed since the last visit: no walk, and the files are built again (the backup is the
-    latest build, not one kept from an earlier visit)."""
     a = ran["again"]
-    assert a["nav"] == []
+    assert a["nav"] == [] and a["frames"] == 0
     assert a["posted"] == ["d1"] and a["newRenders"] == 1
     assert a["rows"][0]["status"] == "built" and a["rows"][0]["total"] == "$12,500"
     assert a["pdfs"] == 2, "the PDF was not made on each visit"
 
 
 @needs_node
-def test_a_files_page_never_takes_a_generate_walk(ran):
-    """The walk's record is one sessionStorage slot shared with Send all. A Files page that took a
-    finished generate walk would press Send for the estimator."""
-    k = ran["kinds"]
-    assert k["door"] == "/proposal-review.html?d=d1&compose=files&sendall=TOK"
-    assert k["doorNav"][0][1].startswith("/generate.html?d=d1&sendall_resume=")
-    assert k["filesTook"] is None
+def test_a_late_change_this_browser_holds_is_saved_first_then_built(ran):
+    """"ahead": Kyle's note never reached the server and nobody has saved since. Saving it loses
+    nothing of anyone's (the old door saved it too), so it is saved, and the document carries it."""
+    a = ran["ahead"]
+    assert a["nav"] == []
+    assert a["serverNote"] == "Kyle's note, saved late"
+    assert a["docNote"] == "Kyle's note, saved late"
+    assert a["rows"][0]["status"] == "built"
+    assert a["localNote"] == "Kyle's note, saved late"
+
+
+# ── the frame and the tab's storage ──────────────────────────────────────────────────────────
+@needs_node
+@pytest.mark.parametrize("which", ["thisProject", "otherProject"])
+def test_a_frame_leaves_the_tabs_storage_byte_identical(ran, which):
+    """The Proposal page in frame mode composed and saved Room 2. localStorage (the one draft blob
+    every tab shares, the synced record, the draft id, a sidebar key) and sessionStorage are byte for
+    byte as they were, whether they held this project or another tab's."""
+    i = ran["isolated_" + which]
+    assert i["lsSame"], "the frame wrote the tab's localStorage"
+    assert i["ssSame"], "the frame wrote the tab's sessionStorage"
+    assert i["phases"] == ["started", "saved"] and set(i["targets"]) == {"https://tool"}
+    assert i["nav"] == []
+    assert i["saved"] and i["mark"] is True
+    assert i["putsTo"] == ["c3"], "the frame saved something other than its own proposal"
+    assert i["d1Puts"] == 1, "the frame saved the project open in the tab"
+    assert i["seedTaken"] == 1
 
 
 @needs_node
-def test_a_page_that_came_back_never_walks_again(ran):
-    """A forged or expired resume: the document still does not match, and the page says so rather
-    than walking (a loop guard, like the Files page's `composed=1`). Nothing is built from the old
-    document either."""
-    f = ran["forgedResume"]
-    assert f["nav"] == [] and f["posted"] == []
-    assert f["rows"][0]["status"] == "failed"
-    assert f["rows"][0]["message"].startswith("It could not be rebuilt from the latest estimate here.")
+def test_a_frame_cannot_save_over_a_newer_server_copy(ran):
+    """RJ saves Polish elsewhere right after its frame read it. The frame's save asks the server
+    again, finds RJ's copy, and writes nothing; its row says so and the page stays."""
+    n = ran["newer"]
+    assert n["putsTo"] == [], "the frame saved over RJ's copy"
+    assert n["c2Scope"] == "RJ's scope, saved elsewhere" and n["c2Doc"] == "$8,000.00"
+    assert n["frames"]["phases"] == ["c2:started", "c2:stopped"]
+    c2 = _row(n["rows"], "c2")
+    assert c2["status"] == "failed"
+    assert c2["message"].startswith("It was saved again somewhere else while it was being rebuilt")
+    assert n["posted"] == ["d1"], "files were built from a document that was not composed"
+    assert n["nav"] == [] and n["url"] == "/generate.html?d=d1"
 
 
-# ── three proposals, one never opened ────────────────────────────────────────────────────────
 @needs_node
-def test_three_proposals_each_built_at_its_own_price_and_the_unopened_one_waits(ran):
-    """Base Bid 1 (Epoxy, $10,000) and a child that was opened (Polish, $14,000) are both built, each
-    from its own saved document at its own sheet's price. The child nobody opened has no document:
-    composing it here would put Kyle's placeholders into a customer-facing file nobody read, so it is
-    not built and says its files come from its Proposal step. Nothing walks, and Continue is open."""
-    t = ran["three"]
-    assert t["nav"] == [], "a walk started for a proposal that was never opened"
-    assert t["posted"] == ["d1", "c2"], t["posted"]
-    assert t["renders"] == [["d1", "$10,000"], ["c2", "$14,000.00"]]
-    assert t["holdAsked"], "the build did not ask the server to hold an unattended placeholder document"
-    rows = t["rows"]
-    assert [(r["id"], r["name"], r["status"]) for r in rows] == [
-        ("d1", "Epoxy", "built"), ("c2", "Polish", "built"), ("c3", "Seal", "later")]
-    assert _row(rows, "d1")["total"] == "$10,000" and _row(rows, "c2")["total"] == "$14,000.00"
-    assert "built when you open it on the Proposal step" in _row(rows, "c3")["message"]
-    assert [l.split(":")[0] for l in t["links"]] == ["0", "0", "0", "1", "1", "1"], "a link for an unbuilt row"
-    assert t["next"] == "/proposal-review.html?d=d1" and t["nextDisabled"] is False
+def test_a_stopped_frame_says_why_and_the_page_stays(ran):
+    s = ran["stopped"]
+    c2 = _row(s["rows"], "c2")
+    assert c2["status"] == "failed" and c2["message"] == "Its proposal template did not load."
+    assert s["nav"] == [] and s["url"] == "/generate.html?d=d1" and s["frames"]["nav"] == []
+    assert s["putsTo"] == []
+    assert s["note"].startswith("1 of 2 built.") and "You can still continue" in s["note"]
+    assert s["next"] == "/proposal-review.html?d=d1" and s["nextDisabled"] is False
+
+
+@needs_node
+def test_a_message_from_another_origin_is_ignored(ran):
+    """A page of another origin posted "saved" with Polish's token, as the frame's own window, before
+    the frame stopped. Taken, it would have built Polish's old document as if it were new."""
+    s = ran["stopped"]
+    assert _row(s["rows"], "c2")["status"] == "failed"
+    assert s["posted"] == ["d1"]
+
+
+# ── what is not refreshed or built ───────────────────────────────────────────────────────────
+@needs_node
+def test_no_auto_refresh_from_a_kept_copy(ran):
+    """Kyle's tab holds an edit whose save never landed, and the saved copy has moved since ("kept").
+    Refresh is not run (it can rewrite this project's own saved copy); the stale Polish says so; a
+    sibling whose document holds is built, one whose document is old is composed in its frame; and
+    Kyle's copy is exactly as it was."""
+    k = ran["kept"]
+    assert k["refreshes"] == 0 and k["refreshCalls"] == 0
+    assert k["nav"] == []
+    rows = k["rows"]
+    assert _row(rows, "d1")["status"] == "failed"
+    assert _row(rows, "d1")["message"].startswith("This browser's copy of the project doesn't match")
+    assert _row(rows, "c2")["status"] == "skipped"
+    assert _row(rows, "c2")["message"] == (
+        "The estimate changed after this proposal was copied from it. Refresh was not run here: "
+        "first choose which copy of the proposal open here to keep, on its Files step. Then come back.")
+    assert _row(rows, "c4")["status"] == "built" and _row(rows, "c5")["status"] == "built"
+    assert k["posted"] == ["c4", "c5"] and k["frames"]["opened"] == ["c5"]
+    assert k["localNote"] == "Kyle's note, never saved" and k["slotSame"]
+
+
+@needs_node
+def test_a_sent_child_a_lost_sibling_and_failed_builds_say_why(ran):
+    h = ran["held"]
+    rows = h["rows"]
+    assert h["refreshes"] == 1 and h["nav"] == []
+    assert _row(rows, "d1")["status"] == "built"
+    assert _row(rows, "c3")["status"] == "skipped"
+    assert _row(rows, "c3")["message"] == "Seal: the customer already has this proposal, so it was not moved."
+    assert _row(rows, "c5")["message"] == "It is closed as lost on the board."
+    assert _row(rows, "c2")["status"] == "failed"
+    assert _row(rows, "c2")["message"] == "Could not build the proposal document."
+    assert _row(rows, "c4")["status"] == "failed"
+    assert _row(rows, "c4")["message"] == ("The estimate and proposal were built, but the PDF could "
+                                           "not be made: Failed to render the PDF. Please try again.")
+    assert h["posted"] == ["d1", "c2", "c4"]
+    assert h["links"] == ["0:xlsx_download_url", "0:docx_download_url", "0:pdf_download_url"]
+    assert h["note"].startswith("1 of 5 built.") and "You can still continue" in h["note"]
+    assert h["next"] == "/proposal-review.html?d=d1" and h["nextDisabled"] is False
+
+
+@needs_node
+def test_a_refused_refresh_says_the_servers_sentence(ran):
+    r = ran["refused"]
+    assert r["nav"] == [] and r["posted"] == ["d1"]
+    assert _row(r["rows"], "c2")["message"] == (
+        "The estimate changed after this proposal was copied from it. Refresh did not go through: "
+        "Nothing changed. This project was saved again after this page read it.")
 
 
 @needs_node
@@ -157,8 +322,10 @@ def test_a_childs_step_three_builds_the_same_list(ran):
     """Opened on a proposal child, step 3 builds the project's list from its parent's view; Back and
     the Intake and Estimate pills go to the PARENT's, Proposal and Files stay the child's own."""
     c = ran["fromChild"]
+    assert c["nav"] == [] and c["url"] == "/generate.html?d=c2" and c["slotOwner"] == "c2"
     assert [(r["id"], r["status"], r["current"]) for r in c["rows"]] == [
-        ("d1", "built", False), ("c2", "built", True), ("c3", "later", False)]
+        ("d1", "built", False), ("c2", "built", True), ("c3", "built", False)]
+    assert _row(c["rows"], "c3")["message"] == DEFAULT_WORDING
     assert c["back"] == "/estimate-review.html?d=d1"
     assert c["pills"] == {"intake": "/?edit=1&d=d1", "estimate": "/estimate-review.html?d=d1",
                           "proposal": "/proposal-review.html?d=c2", "files": "/done.html?d=c2"}
@@ -166,57 +333,14 @@ def test_a_childs_step_three_builds_the_same_list(ran):
 
 
 @needs_node
-def test_a_failed_build_says_why_and_never_blocks_continue(ran):
-    f = ran["failed"]
-    rows = f["rows"]
-    assert _row(rows, "d1")["status"] == "built"
-    assert _row(rows, "c2")["status"] == "failed"
-    assert _row(rows, "c2")["message"] == "Could not build the proposal document."
-    assert _row(rows, "c4")["status"] == "failed"
-    assert _row(rows, "c4")["message"] == ("The estimate and proposal were built, but the PDF could "
-                                           "not be made: Failed to render the PDF. Please try again.")
-    assert f["links"] == ["0:xlsx_download_url", "0:docx_download_url", "0:pdf_download_url"]
-    assert f["note"].startswith("1 of 3 built.") and "You can still continue" in f["note"]
-    assert f["next"] == "/proposal-review.html?d=d1" and f["nextDisabled"] is False
-
-
-@needs_node
-def test_a_stale_out_of_step_or_lost_child_is_not_built(ran):
-    """The Proposal step's tab strip warns about a stale or out-of-step child; nobody reads that
-    warning here, so the row says it in the same words and nothing is built from the old copy. A
-    sibling closed lost on the board is left alone."""
-    h = ran["held"]
-    assert h["posted"] == ["d1"] and h["nav"] == []
-    rows = h["rows"]
-    assert _row(rows, "c2")["status"] == "skipped"
-    assert _row(rows, "c2")["message"].startswith("The estimate changed after this proposal was copied")
-    assert _row(rows, "c3")["message"] == ("It prices no base bid of its own (same sheet as Base Bid "
-                                           "1). Press Refresh on its Proposal step, then come back.")
-    assert _row(rows, "c5")["message"] == "It is closed as lost on the board."
-
-
-@needs_node
-def test_a_copy_that_is_not_the_saved_one_starts_no_walk(ran):
-    """Review, 2026-10-28. This browser's copy of the open proposal holds an unsaved edit and the
-    saved one has moved since ("kept"). A sibling whose document no longer matches would need its
-    door, and walking there hands the one copy slot to the sibling: the edit is gone before the
-    Files step's "choose which copy to keep" card could offer it. So nothing walks, the sibling
-    says why, a sibling that needs no door is still built, and the edit is still in this browser."""
-    k = ran["kept"]
-    assert k["nav"] == [], "a walk started and left this browser's unsaved copy behind"
-    assert k["walk"] is None
-    rows = k["rows"]
-    assert _row(rows, "d1")["status"] == "failed"
-    assert _row(rows, "c2")["status"] == "failed"
-    assert _row(rows, "c2")["message"] == ("Not rebuilt: first choose which copy of the proposal open "
-                                           "here to keep, on its Files step. Then come back.")
-    assert _row(rows, "c4")["status"] == "built" and k["posted"] == ["c4"]
-    assert k["localNote"] == "Kyle's note, never saved"
+def test_a_walk_record_of_the_old_generate_kind_is_nobodys(ran):
+    """A tab that was on the old walk as this deploys: a Files page never takes it (it would press
+    Send), and a door never continues it."""
+    assert ran["oldKind"] == {"took": None, "progress": None, "next": None}
 
 
 @needs_node
 def test_back_and_the_pills_follow_the_draft(ran):
-    """Back from step 3 goes to the estimate: the spreadsheet's, or the v2 page for a v2 draft."""
     v1, v2 = ran["pillsV1"], ran["pillsV2"]
     assert v1 == {"pills": {"intake": "/?edit=1&d=d1", "estimate": "/estimate-review.html?d=d1",
                             "proposal": "/proposal-review.html?d=d1", "files": "/done.html?d=d1"},
@@ -233,35 +357,75 @@ def test_no_project_builds_nothing(ran):
 
 # ── mutations: each scenario above goes red without the line it relies on ───────────────────
 G = "js/generate.js"
+P = "js/proposal-review.js"
 MUTATIONS = [
-    ("compose", G, '    if ((isCurrent && seen.status === "ahead") || !TW.documentHolds(data)) return "compose";',
-     '    if (false) return "compose";',
-     lambda o: o["oneDraft"]["rendered"] and o["oneDraft"]["rendered"][0]["total"] == "$10,000"),
-    ("loop-guard", G, "      if (!cameBack && window.TWSendAll) {", "      if (window.TWSendAll) {",
-     lambda o: o["forgedResume"]["nav"] != []),
-    ("never-opened", G,
-     '    if (!(pp && typeof pp === "object" && pp.values && typeof pp.values === "object")) {',
-     "    if (false) {",
-     lambda o: o["three"]["nav"] != []),
-    ("failure-said", G, "    if (!r.ok) { fail(row, r.error); return; }", "    if (!r.ok) { return; }",
-     lambda o: _row(o["failed"]["rows"], "c2")["status"] != "failed"),
-    ("every-arrival", G, "               plan: sort(m, data, m.id === id, seen, walked) };",
-     '               plan: data && data.generate_result ? { status: "built", message: "" }'
-     " : sort(m, data, m.id === id, seen, walked) };",
+    ("stays-on-page", G, "        var out = await composeInFrame(r, r.data);",
+     '        window.location.assign("/proposal-review.html?d=" + r.id + "&compose=files");'
+     ' var out = { ok: false, reason: "left" };',
+     lambda o: o["staging"]["nav"] != []),
+    ("frame-continue-stays", P, '      TW.frameReport({ phase: "saved" });\n      return true;\n', "",
+     lambda o: o["staging"]["frames"]["nav"] != []
+     and _row(o["staging"]["rows"], "c3")["status"] != "built"),
+    ("frame-isolation", "shared.js",
+     '  const localStorage = FRAME ? FRAME.local : hostStore("localStorage");',
+     '  const localStorage = hostStore("localStorage");',
+     lambda o: not o["isolated_otherProject"]["lsSame"]),
+    ("frame-guard", P, '        ? "ok" : "not-the-saved-copy";', '        ? "ok" : "ok";',
+     lambda o: o["newer"]["putsTo"] != []),
+    ("origin-check", G,
+     "        if (!e || e.origin !== origin() || e.source !== frame.contentWindow) return;",
+     "        if (!e || e.source !== frame.contentWindow) return;",
+     lambda o: _row(o["stopped"]["rows"], "c2")["status"] == "built"),
+    ("refresh-first", G, "    if (behind.length && !NOT_SAVED[seen.status]) {", "    if (false) {",
+     lambda o: o["staging"]["refreshCalls"] == 0
+     and _row(o["staging"]["rows"], "c2")["status"] != "built"),
+    ("kept-no-refresh", G, "    if (behind.length && !NOT_SAVED[seen.status]) {",
+     "    if (behind.length) {",
+     lambda o: o["kept"]["refreshes"] != 0),
+    ("one-frame-at-a-time", G,
+     '      composeThenBuild(rows.filter(function (r) { return r.plan === "frame"; })),',
+     '      Promise.all(rows.filter(function (r) { return r.plan === "frame"; })'
+     '.map(function (r) { return composeThenBuild([r]); })),',
+     lambda o: o["staging"]["frames"]["maxLive"] > 1),
+    ("frame-marks-backup", P,
+     '    const _doorOpened = (!!_q0 && _q0.get("compose") === "files") || _framed0;',
+     '    const _doorOpened = !!_q0 && _q0.get("compose") === "files";',
+     lambda o: o["staging"]["c3"]["mark"] is not True),
+    ("backup-not-held", G, "                       { hold_placeholders: !row.auto });",
+     "                       { hold_placeholders: true });",
+     lambda o: o["staging"]["holds"]["c3"] is not False),
+    ("backup-said", G,
+     '    row.message = row.auto ? "Built from the default wording; review it on its Proposal tab'
+     ' before sending." : "";',
+     '    row.message = "";',
+     lambda o: _row(o["staging"]["rows"], "c3")["message"] != DEFAULT_WORDING),
+    ("slot-takes-it", G,
+     "    if (framedCurrent) { try { await TW.reconcileWithServer(); } catch (e) {"
+     " /* the next page asks again */ } }",
+     "", lambda o: o["oneDraft"]["slotTotal"] != "$12,500"),
+    ("ahead-saved", G,
+     "      TW.setState({});\n      if (await TW.flushState()) seen = await TW.reconcileWithServer();",
+     "", lambda o: o["ahead"]["serverNote"] != "Kyle's note, saved late"),
+    ("every-arrival", G, "      var plan = sort(m, data, m.id === id, seen, refresh);",
+     '      var plan = data && data.generate_result ? { status: "built", message: "" }'
+     " : sort(m, data, m.id === id, seen, refresh);",
      lambda o: o["again"]["posted"] == []),
+    ("failure-said", G, "    if (!r.ok) { fail(row, r.error); return; }", "    if (!r.ok) { return; }",
+     lambda o: _row(o["held"]["rows"], "c2")["status"] != "failed"),
     ("stale-child", G, "    if (!m.is_parent && m.stale) {", "    if (false) {",
-     lambda o: "c2" in o["held"]["posted"]),
+     lambda o: _row(o["refused"]["rows"], "c2")["status"] == "built"),
+    ("sent-child", G, '    if (held) return { status: "skipped", message: held };', "",
+     lambda o: _row(o["held"]["rows"], "c3")["message"]
+     != "Seal: the customer already has this proposal, so it was not moved."),
     ("child-pills", G, "    return parent && TW.isThisDraft(st) ? parent : TW.getDraftId();",
      "    return TW.getDraftId();",
      lambda o: o["fromChild"]["back"] == "/estimate-review.html?d=c2"),
-    ("no-auto-mark", "js/proposal-review.js",
-     '    const _sendAllBuild = (!!_walk0 && _walk0.kind !== "generate") || (_doorOpened && !_hadDoc0);',
-     "    const _sendAllBuild = !!_walk0;",
-     lambda o: o["oneDraft"]["mark"] is True),
-    ("kept-no-walk", G, "    if (compose.length && unsure) {", "    if (false) {",
-     lambda o: o["kept"]["nav"] != []),
-    ("take-kind", "js/send-all-chain.js", "    if (kindOf(r.kind) !== kindOf(kind)) return null;\n", "",
-     lambda o: o["kinds"]["filesTook"] is not None),
+    ("old-kind-take", "js/send-all-chain.js", "    if (!isSendAll(r)) return null;\n", "",
+     lambda o: o["oldKind"]["took"] is not None),
+    ("old-kind-live", "js/send-all-chain.js",
+     "    if (!r || r.token !== tok || r.done || !isSendAll(r)) return null;",
+     "    if (!r || r.token !== tok || r.done) return null;",
+     lambda o: o["oldKind"]["progress"] is not None),
 ]
 
 
@@ -342,11 +506,15 @@ def test_the_estimate_steps_continue_and_the_proposal_steps_back_lead_to_step_th
     assert "Back to Generate Files" in (FRONTEND / "proposal-review.html").read_bytes().decode("utf-8")
 
 
-def test_the_page_loads_the_walk_before_its_own_script():
+def test_the_page_loads_shared_before_its_own_script_and_no_walk():
+    """No walk any more: generate.html loads no send-all-chain.js, and its frame is styled hidden."""
     html = (FRONTEND / "generate.html").read_bytes().decode("utf-8")
-    order = ["/js/icons.js", "/auth.js", "/shared.js", "/js/send-all-chain.js", "/js/generate.js"]
+    order = ["/js/icons.js", "/auth.js", "/shared.js", "/js/generate.js"]
     at = [html.index(s) for s in order]
     assert at == sorted(at), order
+    assert "send-all-chain.js" not in html
+    css = re.search(r"\.gen-frame \{(.*?)\}", html, re.S)
+    assert css and "opacity: 0" in css.group(1) and "pointer-events: none" in css.group(1)
 
 
 # ── the server: an unattended document with placeholders is held, only when asked ────────────
@@ -357,8 +525,8 @@ def _walk_built_gc():
     return row
 
 
-def test_the_generate_step_is_refused_a_walk_built_document_with_placeholders(fake_supabase,
-                                                                              monkeypatch):
+def test_a_held_build_of_a_walk_built_document_with_placeholders_is_refused(fake_supabase,
+                                                                            monkeypatch):
     w = World(fake_supabase, monkeypatch, [_walk_built_gc()])
     r = client.post("/api/draft/s2/documents", json={"hold_placeholders": True})
     assert r.status_code == 409, r.text
@@ -369,11 +537,11 @@ def test_the_generate_step_is_refused_a_walk_built_document_with_placeholders(fa
     assert "generate_result" not in w.store["drafts"][0]["data"], "a held build recorded files"
 
 
-def test_the_files_page_still_builds_it_as_before(fake_supabase, monkeypatch):
-    """The control: the Files page sends no flag and builds as it always has (its own Send is held
-    by Send all's check); so the hold is the new flag's, not a change to Download."""
+def test_the_files_page_and_a_backup_build_it_as_before(fake_supabase, monkeypatch):
+    """The control: the Files page, and step 3's default-wording backup, send no hold and build as
+    they always have (Send all's own check holds the send)."""
     w = World(fake_supabase, monkeypatch, [_walk_built_gc()])
-    r = client.post("/api/draft/s2/documents", json={})
+    r = client.post("/api/draft/s2/documents", json={"hold_placeholders": False})
     assert r.status_code == 200, r.text
     assert w.store["drafts"][0]["data"].get("generate_result")
 

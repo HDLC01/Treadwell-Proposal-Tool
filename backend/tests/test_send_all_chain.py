@@ -247,8 +247,8 @@ def test_mutation_abandon_keeps_the_walk(tmp_path):
 
 def test_mutation_handover_does_not_end_the_walk(tmp_path):
     out = _run(_mutant(tmp_path, "js/proposal-review.js",
-                       "      stopped = true;\n      const ended = endWalk();",
-                       "      stopped = true;\n      const ended = null;"))
+                       "      const ended = endWalk();\n      const lead = !ended",
+                       "      const ended = null;\n      const lead = !ended"))
     s = out["stops"]["noTemplate"]
     assert s["record"] is not None and not s["note"].startswith("Send all stopped")
 

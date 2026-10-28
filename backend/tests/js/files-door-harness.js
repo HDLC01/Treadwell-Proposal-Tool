@@ -254,7 +254,9 @@ const TROY = { name: "Troy Holmes", email: "troy@wetreadwell.com" };
 function storage() {
   const m = new Map();
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)),
-           removeItem: (k) => m.delete(k) };
+           removeItem: (k) => m.delete(k),
+           /** Every key and value, exactly, in one string (a scenario compares two of them). */
+           dump: () => JSON.stringify([...m.entries()].sort()) };
 }
 
 function browser(serverDraft, localDraft) {
@@ -267,8 +269,10 @@ function browser(serverDraft, localDraft) {
 }
 function local(b) { return JSON.parse(b.ls.getItem(STATE_KEY) || "{}"); }
 
-/** One page load at `href`: shared.js runs fresh against the browser's storage. */
-async function load(b, href) {
+/** One page load at `href`: shared.js runs fresh against the browser's storage. `env.parent`: the
+ *  page runs in an iframe of that window (window.parent and window.top), as 3 · Generate Files'
+ *  hidden compose frame does. */
+async function load(b, href, env) {
   const nav = [];
   const timers = [];
   const loc = { origin: "https://tool" };
@@ -313,6 +317,20 @@ async function load(b, href) {
         return g.then(() => json(200, { data: copy(b.server.d1) }));
       }
       return json(200, { data: copy(b.server.d1) });
+    }
+    // The other proposals of the project (b.server.drafts), for a page opened on one of them.
+    const other = /^\/api\/draft\/([^/]+)$/.exec(u);
+    const oid = other ? decodeURIComponent(other[1]) : null;
+    if (oid && b.server.drafts && Object.prototype.hasOwnProperty.call(b.server.drafts, oid)) {
+      if (method === "PUT") {
+        const data = JSON.parse(opts.body).data;
+        (b.server.otherPuts = b.server.otherPuts || []).push({ id: oid, data: copy(data) });
+        b.server.drafts[oid] = copy(data);
+        return json(200, { ok: true });
+      }
+      const served = json(200, { data: copy(b.server.drafts[oid]), updated_at: "2026-10-28T10:00:00Z" });
+      if (typeof b.server.onGet === "function") b.server.onGet(oid);
+      return served;
     }
     if (u.indexOf("/api/coverletter-template") === 0) {   // the cover letter's template, when asked
       b.log.push("letter-template");
@@ -362,6 +380,7 @@ async function load(b, href) {
     // Whoever is signed in on this browser: Kyle, unless the scenario says otherwise.
     TWAuth: { ready: Promise.resolve(), user: () => copy(b.user || KYLE) },
   };
+  if (env && env.parent) { sandbox.window.parent = env.parent; sandbox.window.top = env.parent; }
   sandbox.location = loc;
   sandbox.history = history;
   const docListeners = [];
@@ -420,7 +439,7 @@ function anyNode() {
  *  `never`: it does not finish). */
 async function openProposal(b, href, opts) {
   const o = opts || {};
-  const page = await load(b, href);
+  const page = await load(b, href, o.frameParent ? { parent: o.frameParent } : undefined);
   const TW = page.TW;
   const state = loadState(TW);                         // the page's one-shot snapshot (line 14, real)
   const form = { elements: FIELDS.map((f) => ({ name: f.name, type: f.type, value: f.value,
