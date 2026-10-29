@@ -155,6 +155,25 @@ const GROUP = { scope_group: { id: "G1", label: "Polish Room 2" } };
     out.three = snap(p);
   }
 
+  // A project split into scopes (#711), this estimate then given Create Multiple Proposals: the
+  // group's other scope (Office) is sent by Send all too, so it is listed and named after the strip.
+  // And Office's own page, whose strip is itself alone.
+  {
+    const SCOPED = Object.assign(JSON.parse(JSON.stringify(VIEW)), { group_others: [
+      { id: "S9", label: "Office", lump_sum: 5000, document_total: "$5,100.00" }] });
+    const p = page({ id: "C2", st: ST("$15,999.00", GROUP), answers: [SCOPED] });
+    p.arrive(); await settle();
+    out.scoped = snap(p);
+    const ALONE = { parent_id: "S9", group_id: "G1", members: [
+      { id: "S9", label: "Office", display_label: "Office", sheet_label: "Epoxy", index: 1, is_parent: true,
+        lump_sum: 5000, document_total: "$5,100.00" }],
+      group_others: VIEW.members.map((m) => ({ id: m.id, label: m.display_label, lump_sum: m.lump_sum,
+                                               document_total: m.document_total })) };
+    const q = page({ id: "S9", st: ST("$5,100.00", { scope_group: { id: "G1", label: "Office" } }), answers: [ALONE] });
+    q.arrive(); await settle();
+    out.scopeAlone = snap(q);
+  }
+
   // The same page with no figure of its own on the card (paintLumpSum hid the row) and no group.
   {
     const p = page({ id: "C3", st: { project_name: "Acme Plant", work_type: "epoxy" }, answers: [VIEW] });

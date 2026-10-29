@@ -2822,8 +2822,9 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     the Total its built document prints (_document_total), None before it is built. `draft_id` is the
     parent or any child of it. None when it is gone.
 
-    Returns {"parent_id", "group_id", "estimate_digest", "members"}; a draft with no children answers
-    its own row alone."""
+    Returns {"parent_id", "group_id", "estimate_digest", "members", "group_others"}; a draft with no
+    children answers its own row alone. `group_others` is the rest of its scope group
+    (_group_others), [] for a draft in none."""
     prow = _resolve_parent(draft_id)
     if prow is None:
         return None
@@ -2862,7 +2863,32 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                         # strip says so and Refresh moves it (refresh_proposals).
                         "out_of_step": why.get(c["id"]),
                         "estimate_synced_at": c["data"].get("estimate_synced_at")})
-    return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members}
+    return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members,
+            "group_others": _group_others(rows, {m["id"] for m in members})}
+
+
+def _group_others(rows: List[Dict[str, Any]], mine: set) -> List[Dict[str, Any]]:
+    """The scope group's LIVE members that are not in this strip (`mine`), oldest first: the other
+    scopes of a project split into scopes (#711), and the proposals made from THEIR estimates. "Send
+    all proposals in one email" sends every live member (main.py _send_all_publish reads the same
+    _group_rows), so the Files page lists and names these too, never a smaller set than it sends.
+    Each is {id, label, lump_sum, document_total}; `label` is the name the press says
+    (main.py _send_all_label). Only these are loaded, so a strip with none costs nothing."""
+    out = []
+    for m in rows or []:
+        if m["id"] in mine:
+            continue
+        row = load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        if not row:
+            continue
+        stored = m.get("label") or ""
+        out.append({"id": m["id"],
+                    "label": _shown_label(stored, proposal_sheet_label(data, data.get("base_tab_id")))
+                    or "A proposal",
+                    "lump_sum": _money_or_none(data.get("proposal_lump_sum")),
+                    "document_total": _document_total(data)})
+    return out
 
 
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:

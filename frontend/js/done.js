@@ -1144,6 +1144,14 @@
     const revWhich = document.getElementById("revisions-which");
     const sendWhich = document.getElementById("send-which");
     [which, revWhich, sendWhich].forEach((el) => { if (el) { el.textContent = ""; el.hidden = true; } });
+    // THE WHOLE PROJECT, not only this estimate's strip: a project split into scopes (#711) holds
+    // the other scopes and their proposals too (`group_others`, after the strip), and Send all
+    // sends every one of them, so the list and the sentences below never name a smaller set.
+    const others = pv && Array.isArray(pv.group_others) ? pv.group_others : [];
+    if (pv && Array.isArray(pv.members) && others.length) {
+      pv = Object.assign({}, pv, { members: pv.members.concat(others.filter((o) => o && o.id).map((o) => (
+        { id: o.id, display_label: o.label, lump_sum: o.lump_sum, document_total: o.document_total }))) });
+    }
     const many = paintReadyProposals(pv, currentId, currentFigure, {
       into: "lump-sum", link: true,
       note: "Separate proposals, each approved on its own. The files here are this one's.",

@@ -442,6 +442,13 @@
     /* The send panel keeps the top of the column. History, the info sheet and the exit
        follow it, because none of them is a reason to scroll. */
     .fp-lanes { grid-template-columns: minmax(0, 1fr); }
+    /* A card holding the proposals' list stacks here, not at 820px. Side by side between 820 and
+       about 1000px the list took the room the header and buttons had: the buttons went one per
+       line, "Proposal generated" broke in two and the card grew to 210px (measured at 840px). */
+    .fp-ready:has(.fp-money--list) { flex-direction: column; align-items: flex-start; gap: 14px; }
+    .fp-ready:has(.fp-money--list) .fp-money.fp-money--list { max-width: none; width: 100%; }
+    .fp-ready:has(.fp-money--list) .fp-dl { width: 100%; justify-content: flex-start; }
+    .fp-ready:has(.fp-money--list) .fp-dl .download-link { flex: 1 1 140px; text-align: center; padding: 12px 10px; }
   }
   @media (max-width: 820px) {
     .fp-ready { flex-direction: column; align-items: flex-start; gap: 14px; }

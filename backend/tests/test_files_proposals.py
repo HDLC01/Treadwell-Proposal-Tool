@@ -90,6 +90,35 @@ def test_sent_versions_and_the_send_card_name_the_proposals(out):
                               "that is new or changed since the customer last got it.")
 
 
+def test_a_project_split_into_scopes_lists_and_names_every_proposal_send_all_sends(out):
+    """REVIEW FINDING: the other scope's proposals are in the email too, so they are on the list
+    (after the strip, a link to their own Files page) and in the Send card's sentence."""
+    c = out["scoped"]
+    assert _lines(c) == [
+        (False, ["Breakroom", "$20,000.00"]),
+        (True, ["Polish Room 2", "$15,999.00", "(this one)"]),
+        (False, ["Kitchen", "not priced yet"]),
+        (False, ["Office", "$5,100.00"]),
+    ]
+    assert _links(c)[3] == "/done.html?d=S9"
+    assert c["which"] == "Polish Room 2 · proposal 2 of 4"
+    assert c["sendWhich"].startswith("One email for Breakroom, Polish Room 2, Kitchen and Office.")
+
+
+def test_a_scope_whose_own_strip_is_one_still_lists_the_project(out):
+    """Office's own page: one row in its strip, three more in its group. The button is Send all, so
+    the page says what it sends and lists every price, never a single LUMP SUM."""
+    c = out["scopeAlone"]
+    assert c["key"] == "Lump sums"
+    assert _lines(c) == [
+        (True, ["Office", "$5,100.00", "(this one)"]),
+        (False, ["Breakroom", "$20,000.00"]),
+        (False, ["Polish Room 2", "$15,000.50"]),
+        (False, ["Kitchen", "not priced yet"]),
+    ]
+    assert c["sendWhich"].startswith("One email for Office, Breakroom, Polish Room 2 and Kitchen.")
+
+
 def test_the_send_card_says_nothing_where_the_button_is_not_send_all(out):
     assert out["unpriced"]["sendWhich"] is None and out["late"]["sendWhich"] is None
 
@@ -171,6 +200,9 @@ BREAKS = {
         "js/done.js",
         "      if (row && val) { if (currentFigure) val.textContent = currentFigure; else row.hidden = true; }", "",
         lambda r: r["backToOne"]["text"] != "$20,000.00"),
+    "the rest of the scope group is left out": (
+        "js/done.js", "    if (pv && Array.isArray(pv.members) && others.length) {", "    if (false) {",
+        lambda r: len(r["scoped"]["rows"] or []) != 4 or r["scopeAlone"]["rows"] is not None),
 }
 
 
@@ -203,3 +235,44 @@ def test_the_view_carries_each_built_proposals_document_total(fake_supabase, mon
     ms = drafts.proposals_view(kids[1])["members"]
     assert [m["document_total"] for m in ms] == ["$20,400.00", None, "$9,150.50"]
     assert [m["lump_sum"] for m in ms] == [20000, 15000, 9000], "lump_sum is unchanged"
+
+
+def test_the_view_carries_the_rest_of_the_scope_group_send_all_sends(fake_supabase, monkeypatch):
+    """REVIEW FINDING: a project split into scopes (#711) and then given Create Multiple Proposals
+    holds proposals outside this estimate's strip, and Send all (main.py _send_all_publish, over
+    drafts._group_rows) emails every one. proposals_view names them in `group_others`, oldest first,
+    with their own figures; an archived scope is not one (it is not sent). A strip in no group: [].
+
+    Mutation: return [] from drafts._group_others -- Office is never named."""
+    import copy as _copy
+    from test_multi_proposals import PARENT, _fan, _seed
+    data = _copy.deepcopy(PARENT)
+    data["scope_group"] = {"id": "G711", "label": "Warehouse"}
+    office = {"id": "s2", "owner_email": "kyle@x.test", "created_at": "2026-10-02", "updated_at": "x",
+              "deleted_at": None,
+              "data": {"project_name": "Acme HQ", "is_test": True, "base_tab_id": "Epoxy",
+                       "scope_group": {"id": "G711", "label": "Office"}, "proposal_lump_sum": 5000,
+                       "proposal_payload": {"values": {"total_formatted": "$5,100.00"}}}}
+    gone = {"id": "s3", "owner_email": "kyle@x.test", "created_at": "2026-10-03", "updated_at": "x",
+            "deleted_at": None,
+            "data": {"project_name": "Acme HQ", "is_test": True, "archived": True,
+                     "scope_group": {"id": "G711", "label": "Old"}, "proposal_lump_sum": 1}}
+    _seed(fake_supabase, monkeypatch, data, extra=(office, gone))
+    kids = [c["id"] for c in _fan(("Epoxy", "Polish"))["children"]]
+    for rid in ("p1", kids[0]):
+        v = drafts.proposals_view(rid)
+        assert [m["id"] for m in v["members"]] == ["p1", kids[0]]
+        assert v["group_others"] == [{"id": "s2", "label": "Office", "lump_sum": 5000,
+                                      "document_total": "$5,100.00"}]
+    alone = drafts.proposals_view("s2")
+    assert [m["id"] for m in alone["members"]] == ["s2"]
+    assert [o["id"] for o in alone["group_others"]] == ["p1", kids[0]]
+    assert [o["label"] for o in alone["group_others"]] == ["Warehouse", "Polish"], \
+        "the names the press says: a scope keeps the name a person gave it"
+    assert [o["lump_sum"] for o in alone["group_others"]] == [20000, 9000]
+
+
+def test_a_strip_in_no_group_has_no_others(fake_supabase, monkeypatch):
+    from test_multi_proposals import _seed
+    _seed(fake_supabase, monkeypatch)
+    assert drafts.proposals_view("p1")["group_others"] == []
