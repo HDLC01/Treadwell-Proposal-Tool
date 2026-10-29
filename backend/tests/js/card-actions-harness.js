@@ -403,6 +403,18 @@ async function press(which, id, className) {
     out.handoffFailed = await press("handoff", "won-received");
     net.fails = false;
 
+    // ── saved, but the follow-up emails could not be switched off ──
+    // main.py answers 200 with `followups_note` when the portal could not be told. The card is
+    // repainted out from under the press, so it is a dialog, and saying yes opens the project.
+    net.respond = { ok: true, followups_off: [], followups_failed: ["sent-1"],
+                    followups_note: "Saved as won, but the automatic follow-up emails could not be switched off." };
+    confirmed.answer = true;
+    out.markWonFuFailed = await press("won", "sent-1");
+    confirmed.answer = false;
+    out.handoffFuFailed = await press("handoff", "won-received");
+    net.respond = { ok: true };
+    confirmed.answer = true;
+
     // ── Lost, dismissed ──
     answer.value = null;
     out.lostDismissed = await press("lost", "sent-1");

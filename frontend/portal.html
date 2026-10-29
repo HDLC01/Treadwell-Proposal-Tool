@@ -369,46 +369,16 @@
   .fu-lbl { margin-top:11px; }
   .fu-alert:empty { display:none; }
   .fu-alert { color:var(--red-dark); margin:0; }
-  /* ── the follow-up waiting on a human (remind mode) ────────────────────────
-     The one card on the tab that ends in an email to the customer, so it is the one with a frame:
-     everything else here is bookkeeping. The status lines are plain ink until they report a
-     refusal, and a notice that the portal flagged something reads amber rather than red, because
-     the customer-facing half of that action already happened. */
-  .fu-task { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line);
-    border-radius:9px; padding:11px 13px; background:#fff; }
-  .fu-compose { display:flex; flex-direction:column; gap:6px; }
-  .fu-title { flex:none; width:100%; min-height:38px; padding:8px 10px; font:inherit; }
-  .fu-body { width:100%; min-height:260px; padding:8px 10px; border:1px solid var(--line);
-    border-radius:7px; font:inherit; line-height:1.45; resize:vertical; box-sizing:border-box; }
-  .fu-body:focus { outline:none; border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
-  .fu-drafting { font-style:italic; }
-  /* The button the customer gets, drawn under the message with the drawer's own primary button
-     classes so it reads as the real thing. It is a picture, not a control: no pointer, no hover. The
-     dashed frame says "this is part of the email", apart from the drawer's own Send below it. */
-  .fu-cta { display:flex; flex-direction:column; gap:6px; border:1px dashed var(--line);
-    border-radius:8px; padding:9px 11px; background:var(--surf-low); }
-  .fu-cta-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .fu-cta-btn { display:inline-flex; align-items:center; min-height:38px; max-width:100%;
-    cursor:default; pointer-events:none; overflow-wrap:anywhere; }
-  .fu-cta-in { flex:none; width:100%; max-width:320px; min-height:36px; padding:6px 8px; font:inherit; }
-  .fu-link-ok { margin:0; flex:1 1 200px; }
-  .fu-link-gone { display:flex; gap:8px 10px; align-items:center; flex-wrap:wrap; margin:0;
-    background:var(--red-light); border:1px solid var(--red-dark); border-radius:7px; padding:8px 10px; }
-  .fu-link-gone p { margin:0; flex:1 1 220px; color:var(--red-dark); font-weight:600; font-size:12.5px; }
-  .fu-link-gone .btn { min-height:36px; }
-  .fu-link-many { margin:0; color:var(--red-dark); }
-  /* [hidden] restated: .fu-link-gone sets display, which outranks the attribute (see .crm-degraded). */
-  .fu-link-ok[hidden], .fu-link-gone[hidden], .fu-link-many[hidden] { display:none; }
-  .fu-more > .fu-line { margin-top:8px; }
+  /* ── the follow-up schedule's status line ─────────────────────────────────
+     The cadence emails the customer itself (2026-10-28), so the remind-only email writer's task
+     card and its styles (compose box, drawn button, the {link} notices) went with it. The status
+     line is plain ink until it reports a refusal. */
   .fu-msg { margin:0; }
-  .fu-msg:empty, .fu-notice:empty { display:none; }
+  .fu-msg:empty { display:none; }
   .fu-msg.is-err { color:var(--red-dark); }
-  .fu-notice { margin:0; color:var(--ink); }
-  .fu-notice.is-warn { color:#8a5a00; }
   .fu-sched { display:flex; flex-direction:column; gap:7px; }
   .fu-sched label { font-size:12.5px; color:var(--ink); min-width:118px; }
   .fu-date { flex:0 0 auto; min-height:36px; padding:6px 8px; font:inherit; }
-  .fu-num { flex:0 0 76px; width:76px; min-height:36px; padding:6px 8px; font:inherit; }
   /* The log. Three columns so the WHAT lines up down the page — scanning "did anyone
      call?" should not mean reading every row. Fixed-width first column, date last. */
   .fu-log { border:1px solid var(--line); border-radius:8px; background:var(--surf-low);

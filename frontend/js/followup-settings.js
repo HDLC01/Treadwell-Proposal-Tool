@@ -1,10 +1,10 @@
-// Follow-up cadence editor — the chase schedule and the four customer emails.
+// Follow-up cadence editor — the two-per-step schedule and the customer emails it sends.
 // Externalized (CSP: no inline scripts). Do not add inline scripts.
 //
 // WHY THE PREVIEW IS THE POINT OF THIS PAGE.
 //
-// Everything edited here ends up in a CUSTOMER's inbox, and it repeats every few days until
-// somebody notices. A form full of text boxes gives no feedback at all: an unfilled placeholder,
+// Everything edited here ends up in a CUSTOMER's inbox, sent automatically, up to four times per
+// proposal, before somebody notices. A form full of text boxes gives no feedback at all: an unfilled placeholder,
 // a deleted button or a sentence that reads oddly in the letterhead are all invisible until a
 // customer has it. So the right-hand side renders what they will actually receive, live, and the
 // server does the rendering — the same code path the worker uses, so the preview cannot flatter
@@ -22,24 +22,47 @@
   // Names to fall back on if the server does not send them. It does (`labels` on the GET), and its
   // copy is the one the refusal messages quote, so the two can never name the same email
   // differently — these are only here so the tabs are never blank.
+  //
+  // The cadence is two emails per step since 2026-10-28, one template per email, the portal's
+  // mapping (followup_settings.CADENCE_TEMPLATES): not opened 1st = not_viewed, not opened 2nd =
+  // not_viewed_2 (new), opened 1st = next_steps, opened 2nd = second_nudge. The portal serves its
+  // own names; this list is only what to fall back on.
   var LABELS = {
     sent: "Proposal sent",
-    not_viewed: "Not opened yet",
-    next_steps: "After they open it",
-    second_nudge: "Second reminder",
-    checkin: "Recurring check-in",
-    deposit_nudge: "Deposit reminder",
+    not_viewed: "Not opened, 1st",
+    not_viewed_2: "Not opened, 2nd",
+    next_steps: "Opened, 1st",
+    second_nudge: "Opened, 2nd",
   };
   // Fallback only — the portal serves these (editor_titles). Present so a failed or older GET
   // still shows which email is open rather than an empty heading.
   var EDITOR_TITLES = {
     sent: "Proposal sent — the first email, when you publish it",
-    not_viewed: "First reminder — after not opening",
-    next_steps: "Next steps — after they open it",
-    second_nudge: "Second reminder — opened, still no decision",
-    checkin: "Recurring check-in — repeats until they decide",
-    deposit_nudge: "Deposit reminder — approved, deposit not yet in",
+    not_viewed: "Not opened yet — 1st email, days after sending",
+    not_viewed_2: "Not opened yet — 2nd email, days after the 1st",
+    next_steps: "Opened, no decision — 1st email, days after they open it",
+    second_nudge: "Opened, no decision — 2nd email, days after the 1st",
   };
+  // NEVER A TAB, even when an older portal still serves them. Hanz, 2026-10-28: nothing repeats and
+  // nothing chases a deposit, so the recurring check-in and the deposit reminder are not emails the
+  // cadence sends any more. Their stored wording is still round-tripped (collect sends CFG.templates
+  // whole), so nothing is lost if the portal still keeps them.
+  var RETIRED = { checkin: true, deposit_nudge: true };
+
+  // The four customer emails and the estimator's note, as [id on the page, step, which email].
+  // The ids are the page's (followup-settings.html); the step and email names are the portal's.
+  //
+  // TWO SPELLINGS OF ONE SCHEDULE are read and written, because the portal half was built at the
+  // same time as this page: NESTED {steps: {not_opened|opened: {first|second: {on, days}}},
+  // estimator: {on, days}}, and FLAT {not_opened_first_on, not_opened_first_days, ...,
+  // estimator_on, estimator_days}. The page answers in whichever spelling the portal sent (SHAPE),
+  // so a save never carries a shape the portal ignores.
+  var RULES = [["no1", "not_opened", "first"], ["no2", "not_opened", "second"],
+               ["op1", "opened", "first"], ["op2", "opened", "second"]];
+  var SHAPE = "nested";           // "nested" | "flat" | "old" (flat hours: shown, never saved)
+  var STEP_NAME = { no1: "Not opened yet", no2: "Not opened yet", op1: "Opened, no decision",
+                    op2: "Opened, no decision", est: "Estimator" };
+  var RULE_IDS = ["no1", "no2", "op1", "op2", "est"];
   var TOKENS = ["{first_name}", "{project}", "{need}", "{link}"];
 
   // Every request waits for the bearer token in ONE place — the Bid Calendar shipped a 401 that
@@ -92,22 +115,44 @@
 
   // A read that FAILED must not be shown as a read that came back empty.
   //
-  // Saving replaces the whole row — all five intervals, the send window and the wording of all
-  // four emails. So if the page shows the shipped defaults after a failed read, says "never
+  // Saving replaces the whole row — every switch and number, the send window and the wording of
+  // every email. So if the page shows the shipped defaults after a failed read, says "never
   // changed", and lets somebody press Save, it overwrites wording that may have been written by
   // hand months ago, with no history to recover it from and that estimator's name on the change.
   // The only safe posture when we cannot see the current values is to refuse to write them.
   var locked = false;             // read failed: the form is editable but must not be saved
 
-  function lockForFailedRead(failed) {
+  // `why` is the sentence when the lock is for another reason than a failed read: a portal that has
+  // not been updated for the two-per-step cadence answers without `steps`, and saving the new shape
+  // to it would make its validate() refill every old field from the shipped defaults.
+  function lockForFailedRead(failed, why) {
     locked = !!failed;
-    $("save").disabled = failed;
-    $("reset").disabled = failed;
+    $("save").disabled = !!failed;
+    $("reset").disabled = !!failed;
     if (failed) {
-      say("Couldn't read the saved cadence, so this shows the shipped defaults — which may not be "
-        + "what is in use. Saving is off until it can be read, because it would replace the real "
-        + "settings and all four email drafts. Try reloading in a minute.");
+      say(why || ("Couldn't read the saved cadence, so this shows the shipped defaults — which may "
+        + "not be what is in use. Saving is off until it can be read, because it would replace the "
+        + "real settings and every email's wording. Try reloading in a minute."));
     }
+  }
+
+  var OLD_PORTAL = "The customer portal has not been updated for the new follow-ups yet, so this "
+    + "shows its old settings as the new ones would read them. Saving is off until it is updated.";
+
+  /** An older portal's flat settings, read the way the migration maps them: both 1st emails are
+   *  first_nudge_hours, both 2nd emails second_nudge_hours, the estimator staff_personal_hours,
+   *  every switch on. Only ever shown with saving locked. */
+  function fromOldShape(s) {
+    var d = function (h) {
+      var n = Number(h);
+      return h == null || !isFinite(n) ? null : Math.max(1, Math.round(n / 24));
+    };
+    var step = function () {
+      return { first: { on: true, days: d(s.first_nudge_hours) },
+               second: { on: true, days: d(s.second_nudge_hours) } };
+    };
+    return { steps: { not_opened: step(), opened: step() },
+             estimator: { on: true, days: d(s.staff_personal_hours) } };
   }
 
   // ── load ───────────────────────────────────────────────────────────────────
@@ -116,7 +161,14 @@
       var r = await api("/api/followup-settings");
       var j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
-      CFG = j.settings;
+      CFG = j.settings || {};
+      SHAPE = shapeOf(CFG);
+      var oldPortal = SHAPE === "old";
+      if (oldPortal) {
+        var mapped = fromOldShape(CFG);
+        CFG.steps = mapped.steps;
+        CFG.estimator = mapped.estimator;
+      }
       if (Array.isArray(j.tokens) && j.tokens.length) TOKENS = j.tokens;
       // The server owns WHICH emails exist, what each is called, and the order they appear in.
       //
@@ -132,7 +184,7 @@
       if (j.labels && typeof j.labels === "object") {
         var served = {};
         Object.keys(j.labels).forEach(function (k) {
-          if (j.labels[k]) served[k] = j.labels[k];
+          if (j.labels[k] && !RETIRED[k]) served[k] = j.labels[k];
         });
         if (Object.keys(served).length) LABELS = served;
       }
@@ -152,10 +204,11 @@
         Object.keys(j.editor_titles).forEach(function (k) {
           if (j.editor_titles[k]) EDITOR_TITLES[k] = j.editor_titles[k];
         });
-      }      $("loading").hidden = true;
+      }
+      $("loading").hidden = true;
       $("main").hidden = false;
       showWhoChanged(j);
-      lockForFailedRead(!!j.read_failed);
+      lockForFailedRead(!!j.read_failed || oldPortal, j.read_failed ? "" : OLD_PORTAL);
       paintTabs();
       fillNumbers();
       fillTemplate();
@@ -165,28 +218,144 @@
     }
   }
 
-  // ── days on screen, hours in the database ────────────────────────────────
-  // Hanz, 2026-08-12: "Change the timing to Days instead of Hours". Hours is what the WORKER
-  // reads (followup_rules compares against *_hours, and the bounds in followup_settings.py are
-  // in hours), so converting the stored unit would mean touching the rules engine, the bounds,
-  // the digest and every existing row. The unit people read is a presentation concern, so it is
-  // converted here and nowhere else.
+  // ── the switches and the days ─────────────────────────────────────────────
+  // Days on the page AND in the payload: the portal's two-per-step settings are stored in days
+  // ({on, days} per email), so nothing is converted here any more.
   //
-  // Rounded, not floored: a stored 36 hours from before this change shows as 2 days rather than
-  // 1, which is the nearer truth. Floor 1 day, because 0 would mean "chase instantly, for ever".
-  function toDays(hours) { return Math.max(1, Math.round(Number(hours || 0) / 24)); }
-  function toHours(days) { return Math.max(1, Math.round(Number(days || 0))) * 24; }
+  // WHAT WAS SAVED IS WHAT IS SHOWN. Every box is filled from the settings the portal answered
+  // with, never from a local default, and a value the portal did not send reads as an empty box
+  // rather than as a number nobody chose.
+
+  /** Which spelling these settings are in: "nested", "flat", or "old" (the flat hours of the
+   *  repeating cadence, which a portal not yet updated still serves). */
+  function shapeOf(cfg) {
+    if (cfg && cfg.steps && typeof cfg.steps === "object") return "nested";
+    if (cfg && ("not_opened_first_days" in cfg || "not_opened_first_on" in cfg)) return "flat";
+    return "old";
+  }
+
+  /** After a save or a reset: answer in the spelling the portal just answered in, unless it sent
+   *  something unreadable, in which case keep the one the page loaded with. */
+  function adoptShape() {
+    var got = shapeOf(CFG);
+    if (got !== "old") SHAPE = got;
+  }
+
+  /** The flat spelling's key stem for one row: "not_opened_first", ..., "estimator". */
+  function flatStem(id) {
+    if (id === "est") return "estimator";
+    for (var i = 0; i < RULES.length; i++) {
+      if (RULES[i][0] === id) return RULES[i][1] + "_" + RULES[i][2];
+    }
+    return "";
+  }
+
+  /** One email's stored {on, days}, or {} when the settings do not carry it. Either spelling. */
+  function ruleOf(cfg, id) {
+    if (shapeOf(cfg) === "flat") {
+      var stem = flatStem(id), out = {};
+      if (stem + "_on" in cfg) out.on = cfg[stem + "_on"];
+      if (stem + "_days" in cfg) out.days = cfg[stem + "_days"];
+      return out;
+    }
+    if (id === "est") return (cfg && cfg.estimator) || {};
+    for (var i = 0; i < RULES.length; i++) {
+      if (RULES[i][0] !== id) continue;
+      var step = ((cfg && cfg.steps) || {})[RULES[i][1]] || {};
+      return step[RULES[i][2]] || {};
+    }
+    return {};
+  }
+
+  /** A row's switch and days, from what was stored; an off row reads dimmed. */
+  function paintRule(id, rule) {
+    $(id + "-on").checked = rule.on === true;
+    $(id + "-days").value = rule.days == null ? "" : String(rule.days);
+    paintSwitch(id);
+  }
+
+  function paintSwitch(id) {
+    $(id + "-row").classList.toggle("is-off", !$(id + "-on").checked);
+  }
 
   function fillNumbers() {
     // The project-level subject lives here rather than in fillTemplate: it belongs to the
     // whole cadence, so switching tabs must not reload or clear it.
     $("thread-subject").value = CFG.thread_subject || "";
-    $("first").value = toDays(CFG.first_nudge_hours);
-    $("second").value = toDays(CFG.second_nudge_hours);
-    $("recurring").value = toDays(CFG.recurring_hours);
-    $("staff").value = toDays(CFG.staff_personal_hours);
-    // NOT a duration — a count of reminders. It was always unitless and stays unitless.
-    $("maxrec").value = CFG.max_recurring;
+    RULE_IDS.forEach(function (id) { paintRule(id, ruleOf(CFG, id)); });
+    clearRefusals();
+  }
+
+  /** The days box as typed: a whole number when it is one, else the text itself, so 0, -3, 2.5 or
+   *  "abc" reach the portal as typed and are REFUSED there with its sentence. Never replaced here:
+   *  a page that turned 0 into 1 is the silent clamp this cadence was rebuilt to get rid of. */
+  function daysTyped(id) {
+    var raw = String($(id + "-days").value == null ? "" : $(id + "-days").value).trim();
+    return /^-?\d+$/.test(raw) ? Number(raw) : raw;
+  }
+
+  function ruleTyped(id) {
+    return { on: !!$(id + "-on").checked, days: daysTyped(id) };
+  }
+
+  /** Every switch and number, flat, for comparing what was sent with what was stored. */
+  function rulesKey(cfg) {
+    return JSON.stringify(RULE_IDS.map(function (id) {
+      var r = ruleOf(cfg, id);
+      return [r.on === true, r.days == null ? null : String(r.days)];
+    }));
+  }
+
+  // ── a refusal, shown where it applies ──────────────────────────────────────
+  /** Which row a portal refusal is about, from its `field` in either spelling
+   *  ("steps.opened.second.days", "opened_second_days", "estimator.days", ...). Null when it names
+   *  no row: a template refusal, say. */
+  function ruleForField(field) {
+    var f = "." + String(field || "").toLowerCase().replace(/[^a-z]+/g, ".") + ".";
+    if (f.indexOf(".estimator.") >= 0) return "est";
+    var step = f.indexOf(".not.opened.") >= 0 ? "no" : f.indexOf(".opened.") >= 0 ? "op" : "";
+    var which = f.indexOf(".second.") >= 0 ? "2" : f.indexOf(".first.") >= 0 ? "1" : "";
+    return step && which ? step + which : null;
+  }
+
+  /** The same, read off the portal's own sentence when it sends no `field`: its days refusals
+   *  name the step and the email ("Not opened yet: the 2nd email must be 1 to 90 days after the
+   *  1st.", "Tell the estimator must be ..."). Null for any other sentence. */
+  function ruleForSentence(msg) {
+    var m = String(msg || "").toLowerCase();
+    if (m.indexOf("tell the estimator") === 0) return "est";
+    var step = m.indexOf("not opened yet:") === 0 ? "no"
+      : m.indexOf("opened, no decision:") === 0 ? "op" : "";
+    var which = /\b2nd email\b/.test(m) ? "2" : /\b1st email\b/.test(m) ? "1" : "";
+    return step && which ? step + which : null;
+  }
+
+  function clearRefusals() {
+    RULE_IDS.forEach(function (id) { clearRefusal(id); });
+  }
+
+  function clearRefusal(id) {
+    var err = $(id + "-err");
+    err.textContent = "";
+    err.hidden = true;
+    $(id + "-days").removeAttribute("aria-invalid");
+  }
+
+  /** The portal's own sentence, under the box it is about and in the alert line, with the step
+   *  named in the alert because "2nd email must be 1 to 90 days after the 1st" is true of both. */
+  function showRefusal(j, status) {
+    var msg = String((j && (j.error || j.detail)) || ("HTTP " + status));
+    var id = ruleForField(j && j.field) || ruleForSentence(msg);
+    if (id) {
+      var err = $(id + "-err");
+      err.textContent = msg;
+      err.hidden = false;
+      $(id + "-days").setAttribute("aria-invalid", "true");
+      $(id + "-days").focus();
+      var step = STEP_NAME[id];
+      if (msg.toLowerCase().indexOf(step.toLowerCase()) !== 0) msg = step + ": " + msg;
+    }
+    say("Not saved. " + msg.replace(/[.\s]+$/, "") + ".");
   }
 
   function paintTabs() {
@@ -230,12 +399,7 @@
     t.cta = $("t-cta").value;
     CFG.templates = CFG.templates || {};
     CFG.templates[KEY] = t;
-    return {
-      first_nudge_hours: toHours($("first").value),
-      second_nudge_hours: toHours($("second").value),
-      recurring_hours: toHours($("recurring").value),
-      staff_personal_hours: toHours($("staff").value),
-      max_recurring: $("maxrec").value,
+    return Object.assign(scheduleTyped(), {
       // THE SEND WINDOW IS ROUND-TRIPPED, NOT OMITTED, and that is not a style choice.
       //
       // Hanz took the two hour selects off this page on 2026-08-10, but the window is still stored
@@ -261,6 +425,28 @@
       // would silently reset a customised subject the first time anybody edited an email.
       thread_subject: $("thread-subject").value,
       templates: CFG.templates,
+    });
+  }
+
+  /** The two-per-step schedule as typed, in the spelling the portal answered in (SHAPE). No
+   *  recurring interval, no stop-after count and no deposit fields: the portal ignores them for the
+   *  cadence, and a page that still sent them would read as though they did something. */
+  function scheduleTyped() {
+    if (SHAPE === "flat") {
+      var flat = {};
+      RULE_IDS.forEach(function (id) {
+        var r = ruleTyped(id);
+        flat[flatStem(id) + "_on"] = r.on;
+        flat[flatStem(id) + "_days"] = r.days;
+      });
+      return flat;
+    }
+    return {
+      steps: {
+        not_opened: { first: ruleTyped("no1"), second: ruleTyped("no2") },
+        opened: { first: ruleTyped("op1"), second: ruleTyped("op2") },
+      },
+      estimator: ruleTyped("est"),
     };
   }
 
@@ -501,40 +687,48 @@
   // why Save is greyed out. Losing it on the first keystroke would leave a dead button and no
   // reason given.
   var clearUnlessLocked = function () { if (!locked) say(""); };
-  ["first", "second", "recurring", "staff", "maxrec"].forEach(function (id) {
-    $(id).addEventListener("input", clearUnlessLocked);
+  RULE_IDS.forEach(function (id) {
+    $(id + "-days").addEventListener("input", function () {
+      clearRefusal(id);
+      clearUnlessLocked();
+    });
+    $(id + "-on").addEventListener("change", function () {
+      paintSwitch(id);
+      clearUnlessLocked();
+    });
   });
 
   $("save").addEventListener("click", async function () {
     var btn = this;
     btn.disabled = true;
     say("");
+    clearRefusals();
     try {
       var payload = collect();
       var r = await api("/api/followup-settings", {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: payload }) });
-      var j = await r.json();
-      if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
-      // Numbers get pulled into range on the way in, so the SAVED values are re-read into the
-      // form. Somebody who typed 2 hours needs to see they got 4 rather than believe it stuck.
-      var before = JSON.stringify([payload.first_nudge_hours, payload.second_nudge_hours,
-                                   payload.recurring_hours, payload.staff_personal_hours,
-                                   payload.max_recurring].map(Number));
-      CFG = j.settings;
+      var j = await r.json().catch(function () { return {}; });
+      // A REFUSAL KEEPS WHAT WAS TYPED. The portal refuses a day out of 1 to 90 with a sentence
+      // and a `field`; the boxes are not refilled, so the 0 somebody typed is still there to fix.
+      if (!r.ok || j.ok === false) { showRefusal(j, r.status); return; }
+      // The boxes are refilled from what the portal STORED, so the page shows what was saved.
+      // The portal refuses rather than adjusts, so the two should always match; if they ever do
+      // not, the page says so instead of letting somebody believe their numbers took.
+      var typed = rulesKey(payload);
+      CFG = j.settings || {};
+      adoptShape();
       fillNumbers();
       fillTemplate();
       renderPreview(j.previews && j.previews[KEY]);
       showWhoChanged(j);
-      var after = JSON.stringify([CFG.first_nudge_hours, CFG.second_nudge_hours,
-                                  CFG.recurring_hours, CFG.staff_personal_hours,
-                                  CFG.max_recurring].map(Number));
-      say(before === after ? "Saved."
-        : "Saved — some numbers were outside the allowed range and have been adjusted.", true);
+      say(typed === rulesKey(CFG) ? "Saved."
+        : "Saved, but the portal stored different values from the ones typed. The boxes now show "
+          + "what it stored.", true);
     } catch (err) {
       say("Couldn't save that: " + (err.message || "try again"));
     } finally {
-      btn.disabled = false;
+      btn.disabled = locked;
     }
   });
 
@@ -546,27 +740,39 @@
       // send_end_hour, which has always been true. What changed on 2026-08-10 is that the card
       // showing those hours is gone, so a window somebody had set to 9-17 snaps back to 8-18 with
       // nothing on screen before or after to say it happened.
-      message: "Every timing, the hours those emails may go out, and all four emails go back to "
-             + "how they were before anybody edited them.",
+      message: "Every switch and number, the hours those emails may go out, and every email's "
+             + "wording go back to how they were before anybody edited them.",
       detail: "Proposals already being chased carry on — nothing is re-sent.",
       confirmText: "Reset cadence",
       tone: "warn",
     });
     if (!ok) return;
-    // Saving an empty payload is how a reset is expressed: the server fills every field from the
-    // shipped defaults, so there is no second definition of "default" on this side to drift.
+    // A reset is an EXPLICIT `reset: true` beside an empty settings object, and the portal fills
+    // every field from its own shipped defaults, so there is no second definition of "default" on
+    // this side to drift.
+    //
+    // Why the flag (2026-10-29). The two-per-step portal's validate() fills a field the payload
+    // leaves out from what is SAVED now, not from the defaults, so a bare empty payload just
+    // saved the current cadence again, and the page still said "Reset to the default cadence."
+    // over the bad values somebody pressed Reset to undo, while the customer emails kept going
+    // out on them. So the success sentence now waits for the portal to say it applied the
+    // defaults (`reset: true` in its answer). Without that the boxes show what it kept, and the
+    // page says nothing was reset.
     try {
       var r = await api("/api/followup-settings", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {} }) });
+        body: JSON.stringify({ settings: {}, reset: true }) });
       var j = await r.json();
       if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || ("HTTP " + r.status));
-      CFG = j.settings;
+      CFG = j.settings || {};
+      adoptShape();
       fillNumbers();
       fillTemplate();
       renderPreview(j.previews && j.previews[KEY]);
       showWhoChanged(j);      // a reset IS a change, and it is the newest one
-      say("Reset to the default cadence.", true);
+      if (j.reset === true) say("Reset to the default cadence.", true);
+      else say("Not reset. The customer portal kept the saved cadence, which the boxes show. "
+        + "It needs an update before Reset works.");
     } catch (err) {
       say("Couldn't reset that: " + (err.message || "try again"));
     }

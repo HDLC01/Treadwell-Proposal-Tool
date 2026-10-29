@@ -174,6 +174,42 @@ def test_a_send_that_cannot_read_the_saved_copy_is_not_sent(ran):
     assert m["err"] and m["err"].startswith("Couldn't check the saved proposal"), m
 
 
+def test_a_send_whose_followups_could_not_be_switched_off_says_so_on_the_page(ran, monkeypatch):
+    """Review of the production follow-ups port. A proposal sent after its project was marked Won,
+    while the portal could not be told to stop its follow-up emails: the publish answers 200 with
+    `followups_note`, and the page used to read only `ok` and the drift, so the button said "Sent
+    to customer portal" and the customer kept being chased about a job already won. The sentence is
+    now drawn in #portal-result, with a link to the project's Follow-up tab; with no note, nothing
+    extra is drawn.
+
+    Mutation: drop the `j.followups_note` block from the Send handler in done.js and nothing is
+    drawn, so the first assertion fails."""
+    import main
+    from fastapi import HTTPException
+
+    def down(path, method="GET", body=None):
+        raise HTTPException(502, "Could not reach the customer portal.")
+    monkeypatch.setattr(main, "_portal", down)
+    real = main._followups_off_after_publish("d1", {"won": {"at": "2026-10-20T15:00:00Z"}},
+                                             "kyle@wetreadwell.com")["followups_note"]
+
+    fu = ran["followupsNote"]
+    n = fu["note"]
+    assert n["posted"] == 1 and n["err"] is None, n
+    assert n["shown"] == "", n
+    assert len(n["drawn"]) == 1, ("the follow-ups note was not drawn on the Send page", n)
+    p = n["drawn"][0]
+    assert p["tag"] == "p" and p["cls"] == "portal-drift", p
+    # The harness answers with main.py's own sentence, so a reworded note is still this test's.
+    assert p["text"].strip() == real, (p["text"], real)
+    assert p["links"] == [{"tag": "a", "href": "/portal.html?open=d1&sec=followup",
+                           "text": "Open the Follow-up tab"}], p
+    for name in ("noNote", "noKey"):
+        q = fu[name]
+        assert q["posted"] == 1 and q["err"] is None, (name, q)
+        assert q["drawn"] == [], (name, q)
+
+
 def test_the_publish_carries_when_the_checked_copy_was_saved(ran):
     """Review of fix 4, round 2. Send checked this page's copy against the server's, then waited
     (encoding attachments, the network) before the publish reached the server, which reloads the

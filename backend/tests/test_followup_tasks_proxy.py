@@ -226,25 +226,27 @@ def test_a_409_from_any_decision_comes_back_as_a_409(monkeypatch, action, body, 
 
 
 # ── the schedule ────────────────────────────────────────────────────────────
-def test_the_plan_forwards_only_the_fields_that_were_sent(monkeypatch):
-    calls = _portal(monkeypatch, [(200, {"ok": True, "followup_plan": {"mode": "remind"}})])
-    client.post(f"/api/portal/proposal/{PID}/followup-plan", json={"interval_days": 5})
+def test_the_plan_forwards_only_the_next_email_date(monkeypatch):
+    """2026-10-28: the per-project schedule is the next email's date and nothing else. "Then every"
+    (interval_days) and "Stop after" (stop_after) went with the repeating cadence, so they are not
+    forwarded even if an old page sends them. Mutation: put them back on FollowupPlanIn."""
+    calls = _portal(monkeypatch, [(200, {"ok": True, "followup_plan": {}})])
+    client.post(f"/api/portal/proposal/{PID}/followup-plan", json={"next_at": "2026-11-01"})
     assert calls[-1] == {"path": f"/api/admin/proposal/{PID}/followup-plan", "method": "POST",
-                         "body": {"interval_days": 5, "by": "tester@wetreadwell.com"}}
-    # null is "back to the default", which is different from leaving it alone.
+                         "body": {"next_at": "2026-11-01", "by": "tester@wetreadwell.com"}}
+    # null is "back on the usual schedule", which is different from leaving it alone.
     client.post(f"/api/portal/proposal/{PID}/followup-plan", json={"next_at": None})
     assert calls[-1]["body"] == {"next_at": None, "by": "tester@wetreadwell.com"}
     client.post(f"/api/portal/proposal/{PID}/followup-plan",
-                json={"stop_after": 4, "next_at": "2026-11-01", "mode": "auto"})
-    assert calls[-1]["body"] == {"stop_after": 4, "next_at": "2026-11-01",
-                                 "by": "tester@wetreadwell.com"}, "a mode field leaked through"
+                json={"interval_days": 5, "stop_after": 4, "next_at": "2026-11-01", "mode": "auto"})
+    assert calls[-1]["body"] == {"next_at": "2026-11-01", "by": "tester@wetreadwell.com"}, (
+        "a retired schedule field, or a mode, leaked through")
 
 
 def test_the_plan_passes_the_portals_answer_back(monkeypatch):
-    plan = {"mode": "remind", "interval_days": 5, "stop_after": None, "next_at": "2026-11-01",
-            "anchor_at": "2026-10-20"}
+    plan = {"next_at": "2026-11-01", "anchor_at": "2026-10-20"}
     _portal(monkeypatch, [(200, {"ok": True, "followup_plan": plan})])
-    r = client.post(f"/api/portal/proposal/{PID}/followup-plan", json={"interval_days": 5})
+    r = client.post(f"/api/portal/proposal/{PID}/followup-plan", json={"next_at": "2026-11-01"})
     assert r.status_code == 200 and r.json()["followup_plan"] == plan
 
 

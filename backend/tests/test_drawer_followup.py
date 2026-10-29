@@ -45,12 +45,11 @@ def _block(name: str) -> str:
 # ARE rendered — the invariant it protects is "no handler reaches for something nobody renders",
 # and where in the panel the markup comes from is not part of that claim.
 #
-# THREE MORE since 2026-10-23 (remind mode), for the same reason: followupPanelHtml interpolates the
-# reminder schedule and the pending-task card, and the task card interpolates the compose box, so
-# their ids are part of "the panel" for this check exactly as the contact list's are.
+# ONE MORE since 2026-10-23, for the same reason: followupPanelHtml interpolates the schedule, so
+# its ids are part of "the panel" for this check exactly as the contact list's are. (The task card
+# and the compose box of the remind-only email writer left this list on 2026-10-28 with the writer.)
 PANEL = (_block("followupPanelHtml") + _block("followupContactsHtml")
-         + _block("followupScheduleHtml") + _block("followupTaskHtml")
-         + _block("followupComposeHtml"))
+         + _block("followupScheduleHtml"))
 WIRE = _block("wireFollowup")
 
 

@@ -11,7 +11,8 @@
  *                               |"won"|"handoff"|"lost"|"lost-cancel"|"new"|"new-top", ...} ] }
  *     "won"/"handoff"/"lost" press that card button on the bid `id`. "lost" then answers the close-out
  *     dialog with `reason` and `note` and presses its confirm button; "lost-cancel" presses Cancel.
- *     "confirm" is what the hand-off prompt (TW.confirmDanger) answers; true when absent. "new" is the
+ *     "confirm" is what the hand-off prompt (TW.confirmDanger) answers; true when absent. "postAnswer"
+ *     is the JSON body every write answers with ({ ok: true } when absent). "new" is the
  *     column's "+ New", "new-top" the page's New estimate button. "local" turns localStorage on, as a
  *     recording store seeded with these keys; only "+ New" may touch it.
  *
@@ -113,7 +114,11 @@ async function run(payload, scenario) {
       const rec = { url: String(url), method: method };
       if (init && init.body) rec.body = JSON.parse(init.body);
       fetches.push(rec);
-      if (method !== "GET") return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      // `postAnswer`: what every write answers (the status route's 200 body), { ok: true } when absent.
+      if (method !== "GET") {
+        const answer = scenario.postAnswer || { ok: true };
+        return { ok: true, status: 200, json: async () => answer };
+      }
       return { ok: true, json: async () => payload };
     },
   };

@@ -452,3 +452,37 @@ def test_the_card_body_still_opens_the_drawer(out):
     """Which is what makes the nine assertions above mean something: the row branch is reachable,
     it is simply reached after the buttons."""
     assert out["plainCardClick"]["openedDrawer"] == ["sent-1"], out["plainCardClick"]
+
+
+# ── Won / Hand it off stop the automatic customer emails (2026-10-28) ────────
+# Hanz: "If staff mark a project Won (or Hand it off) by hand in the tool while the portal still
+# says sent/viewed, the automatic customer emails STOP." The server switches them off
+# (main.py _followups_off_for_outcome); when the portal cannot be told, the mark is still saved
+# and the answer carries `followups_note`. A card is repainted out from under the press, so the
+# sentence is a dialog, never a silent success.
+@needs_node
+def test_a_card_won_whose_emails_could_not_be_stopped_says_so_and_offers_the_project(out):
+    """Mutation: drop the followups_note dialog from markCardWon and nothing is asked."""
+    r = out["markWonFuFailed"]
+    assert [q["body"] for q in r["requests"]] == [{"status": "won"}], r["requests"]
+    assert len(r["prompts"]) == 1, "the portal failure was swallowed: %r" % r["prompts"]
+    assert "could not be switched off" in r["prompts"][0]["message"], r["prompts"][0]
+    assert r["prompts"][0]["confirmText"] == "Open the project"
+    assert r["openedDrawer"] == ["sent-1"], "saying yes did not open the project to fix it"
+
+
+@needs_node
+def test_a_card_handed_off_whose_emails_could_not_be_stopped_says_so(out):
+    """Mutation: drop the dialog from markCardHandoff. Answered OK here, so nothing opens."""
+    r = out["handoffFuFailed"]
+    assert [q["body"] for q in r["requests"]] == [{"status": "handed_off"}], r["requests"]
+    assert len(r["prompts"]) == 1, "the portal failure was swallowed: %r" % r["prompts"]
+    assert "could not be switched off" in r["prompts"][0]["message"]
+    assert r["openedDrawer"] == []
+
+
+@needs_node
+def test_a_card_whose_emails_were_stopped_asks_nothing(out):
+    """The counterexample that makes the two above mean something: the ordinary answer carries no
+    note, so the press stays as quiet as it always was."""
+    assert out["markWon"]["prompts"] == [], out["markWon"]["prompts"]

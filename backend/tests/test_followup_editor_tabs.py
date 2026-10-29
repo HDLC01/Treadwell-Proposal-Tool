@@ -33,17 +33,23 @@ CODE = "\n".join(l for l in SRC.splitlines() if not l.strip().startswith("//"))
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
-# What the portal serves today, in its order (followup_settings.LABELS). Not imported — the portal
-# is a separate repo and a separate container; this is the contract between them, and writing it out
-# is what makes a drift visible here rather than on the page.
+# What the portal serves for the two-per-step cadence (2026-10-28), in its order. Not imported —
+# the portal is a separate repo and a separate container; this is the contract between them, and
+# writing it out is what makes a drift visible here rather than on the page.
+# One template per email: not opened 1st/2nd = not_viewed/not_viewed_2, opened 1st/2nd =
+# next_steps/second_nudge (portal followup_settings.CADENCE_TEMPLATES).
 SERVED = {
     "sent": "Proposal sent",
-    "not_viewed": "Not opened yet",
-    "next_steps": "After they open it",
-    "second_nudge": "Second reminder",
-    "checkin": "Recurring check-in",
-    "deposit_nudge": "Deposit reminder",
+    "not_viewed": "Not opened, 1st",
+    "not_viewed_2": "Not opened, 2nd",
+    "next_steps": "Opened, 1st",
+    "second_nudge": "Opened, 2nd",
 }
+# What a portal from before 2026-10-28 serves: its six, two of them emails the cadence no longer
+# sends. The page must never give those two a tab.
+OLD_SERVED = {"sent": "Proposal sent", "not_viewed": "Not opened yet",
+              "next_steps": "After they open it", "second_nudge": "Second reminder",
+              "checkin": "Recurring check-in", "deposit_nudge": "Deposit reminder"}
 
 
 def test_the_served_labels_replace_the_local_list_rather_than_renaming_it():
@@ -91,9 +97,12 @@ def test_every_tab_has_a_when_it_fires_heading():
 
 
 @needs_node
-def test_the_deposit_reminder_and_the_sent_email_both_get_a_tab():
+@pytest.mark.parametrize("served", [SERVED, OLD_SERVED], ids=["new-portal", "old-portal"])
+def test_the_sent_email_gets_a_tab_and_the_retired_two_never_do(served):
     """Runs the merge FOR REAL against the payload the portal sends. Source assertions prove the
-    shape; only executing it proves six tabs come out, in the order the portal listed them."""
+    shape; only executing it proves the four tabs come out, in the order the portal listed them,
+    and that an older portal's recurring check-in and deposit reminder are dropped (Hanz,
+    2026-10-28: nothing repeats and nothing chases a deposit). Mutation: drop RETIRED."""
     script = """
     const src = require("fs").readFileSync(%s, "utf8");
     // The two declarations and the merge block, lifted out of the IIFE.
@@ -109,14 +118,16 @@ def test_the_deposit_reminder_and_the_sent_email_both_get_a_tab():
     const run = new Function("j", "KEY",
       decl + "\\n" + memo + "\\n" + merge + "\\nreturn { keys: Object.keys(LABELS), labels: LABELS, KEY: KEY };");
     console.log(JSON.stringify(run(j, KEY)));
-    """ % (json.dumps(str(EDITOR)), json.dumps({"labels": SERVED, "editor_titles": {}}))
+    """ % (json.dumps(str(EDITOR)), json.dumps({"labels": served, "editor_titles": {}}))
     proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     got = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert got["keys"] == list(SERVED), (
-        "the editor paints %s, not the six the portal serves in its order" % got["keys"])
-    assert got["labels"]["deposit_nudge"] == "Deposit reminder"
+    want = [k for k in served if k not in ("checkin", "deposit_nudge")]
+    assert got["keys"] == want, (
+        "the editor paints %s, not the %s the portal serves in its order" % (got["keys"], want))
+    assert "deposit_nudge" not in got["labels"] and "checkin" not in got["labels"]
     assert got["labels"]["sent"] == "Proposal sent"
+    assert got["labels"]["second_nudge"] == served["second_nudge"], "the served name was not used"
 
 
 @needs_node

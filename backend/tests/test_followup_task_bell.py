@@ -1,7 +1,8 @@
-"""A follow-up waiting on somebody here rings the bell.
+"""A follow-up task waiting on somebody here rings the bell: since 2026-10-28, only the decision.
 
-Remind mode (v1) parks every follow-up as a TASK for the assigned estimator instead of emailing
-the customer on its own, so a task nobody notices is a customer nobody chases. Same shape as the
+Remind mode (2026-10-23) parked every follow-up as a TASK for the estimator. Since 2026-10-28 the
+portal's worker emails the customer itself again, so the one follow-up task left for a person is a
+scope group's "Decide the other scopes", and it is the only one that rings. Same shape as the
 portal-messages source: polled, throttled, cached in the shared state, one team-wide bell.
 """
 from datetime import datetime, timedelta, timezone
@@ -85,18 +86,22 @@ def test_the_poll_is_throttled(monkeypatch):
 def test_a_due_task_becomes_one_bell_row_that_opens_the_follow_up_tab(monkeypatch):
     monkeypatch.setattr(n, "_now", lambda: NOW)
     state = {"followup_tasks": [
-        {"id": "t1", "proposal_id": "p1", "project_name": "Nearman Creek",
-         "label": "Second nudge", "due_at": "2026-10-23T12:00:00Z"},
+        {"id": "t1", "proposal_id": "p1", "project_name": "Nearman Creek", "stage": "decision",
+         "label": "Decide the other scopes", "due_at": "2026-10-23T12:00:00Z"},
         # Not due yet: parked for next week.
-        {"id": "t2", "proposal_id": "p2", "project_name": "Later Co",
+        {"id": "t2", "proposal_id": "p2", "project_name": "Later Co", "stage": "decision",
          "due_at": (NOW + timedelta(days=5)).isoformat()},
-        {"proposal_id": "p3"},                                  # no id: dropped
+        {"proposal_id": "p3", "stage": "decision"},             # no id: dropped
+        # A cadence reminder left over from remind mode: the worker sends that email itself now.
+        {"id": "t4", "proposal_id": "p4", "project_name": "Old Co", "stage": "pre",
+         "label": "Second nudge", "due_at": "2026-10-22T12:00:00Z"},
     ]}
     items = n._followup_task_notifications(state)
-    assert [i["id"] for i in items] == ["fut:t1"]
+    assert [i["id"] for i in items] == ["fut:t1"], "a cadence reminder still rings the bell"
     row = items[0]
     assert row["link"] == "/portal.html?open=p1&sec=followup"
-    assert row["title"] == "Nearman Creek" and "Second nudge" in row["body"]
+    assert row["title"] == "Nearman Creek"
+    assert row["body"] == "Decide the other scopes: Nearman Creek"
     assert row["ts"] == "2026-10-23T12:00:00Z"
     assert row["kind"] == "followup_task" and row["sort"] == n._TIER_CRM_STEP
 
@@ -104,7 +109,10 @@ def test_a_due_task_becomes_one_bell_row_that_opens_the_follow_up_tab(monkeypatc
 def test_the_bell_carries_the_task_through_get_notifications(monkeypatch):
     monkeypatch.setattr(n, "_load_state", lambda: {"followup_tasks": [
         {"id": "t9", "proposal_id": "p9", "project_name": "Halstead Cannery",
-         "label": "Check-in", "due_at": "2026-10-23T09:00:00+00:00"}]})
+         "stage": "decision", "label": "Decide the other scopes",
+         "due_at": "2026-10-23T09:00:00+00:00"},
+        {"id": "t8", "proposal_id": "p8", "project_name": "Old Co", "label": "Check-in",
+         "due_at": "2026-10-23T09:00:00+00:00"}]})
     monkeypatch.setattr(n, "_save_state", lambda s: None)
     monkeypatch.setattr(n, "_now", lambda: NOW)
     monkeypatch.setattr(n.basisboard_client, "is_configured", lambda: False)
