@@ -113,8 +113,10 @@
   </div>
   <div class="wrap">
     <p class="hint">After a proposal is sent, the tool emails the customer automatically: at most
-      two follow-up emails before they open it and two after they open it, then it stops. One
-      schedule for everybody. Changes apply from the next check onwards; nothing is re-sent.</p>
+      two follow-up emails before they open it and two after they open it, then it stops. Both
+      steps count from the day the proposal was sent: a 1st email goes out that many days after
+      the send, never sooner than that after the email before it, and a 2nd email that many days
+      after its 1st. One schedule for everybody. Changes apply from the next check onwards; nothing is re-sent.</p>
 
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
     <div class="loading" id="loading">Loading…</div>
@@ -155,7 +157,7 @@
             <input type="checkbox" role="switch" id="op1-on" aria-label="Opened, no decision: 1st email on" />
             <label for="op1-days">1st email</label>
             <input id="op1-days" class="num" type="number" min="1" max="90" step="1" inputmode="numeric" />
-            <span>days after they open it</span>
+            <span>days after sending, and never sooner than a day after they open it</span>
           </div>
           <p class="ferr" id="op1-err" role="alert" hidden></p>
           <div class="rule" id="op2-row">
