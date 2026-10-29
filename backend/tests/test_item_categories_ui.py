@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 
 import pytest
@@ -29,6 +30,7 @@ from _seed_support import plan_json
 
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "item-categories-harness.js"
+PAGE_HTML = FRONTEND / "polish-estimate.html"
 LIBRARY_HARNESS = TESTS / "js" / "library-ui-harness.js"
 
 
@@ -256,6 +258,88 @@ def test_grouping_is_display_only_on_the_epoxy_golden_job(ran):
     assert e["withCats"]["saves"] == e["withoutCats"]["saves"]
 
 
+# ── each heading its own container (Hanz, 2026-10-29: "each category should have a different container like we
+#    have for the review tab") ─────────────────────────────────────────────────────────────────────────────────
+def test_each_heading_is_its_own_container_with_its_cards_inside_it(ran):
+    """The cards counted under a heading are the ones INSIDE its container (before its </section>), so a card
+    drawn after a container closes is loose, not filed."""
+    g = ran["grouped"]
+    assert g["opened"] == len(g["groups"]) == 5, "a container was drawn some other way than the band and body"
+    assert g["loose"] == [], "a card sits outside every container"
+    assert g["labels"] == [x["name"] for x in g["groups"]], "the container is named for its heading"
+    assert ran["condCards"]["loose"] == [], "a condition card fell out of its heading's container"
+    assert ran["epoxyTotals"]["withCats"]["loose"] == []
+
+
+def test_each_heading_wears_the_colour_of_its_place_in_the_admin_list(ran):
+    """Same colour on every bid and after a reload; Other is its own neutral; a heading empty on this bid does not
+    shift the colours of the ones after it (Epoxy: Patch and Extras are empty, Liquids and Cove keep 2 and 4)."""
+    assert ran["grouped"]["tones"] == ["1", "2", "3", "4", "other"]
+    assert ran["reloadedTones"] == [[x["name"], t] for x, t in zip(ran["grouped"]["groups"], ran["grouped"]["tones"])]
+    assert ran["reorderedTones"] == [["Joint Filler", "1"], ["Dye", "2"], ["Floor", "3"], ["Patch", "4"],
+                                     ["Other", "other"]], "the colour follows the Admin order"
+    assert ran["epoxyTotals"]["withCats"]["tones"] == [["Epoxy Liquids", "2"], ["Cove", "4"]]
+
+
+def test_the_containers_subtotals_add_up_to_the_material_total(ran):
+    for case in (ran["grouped"], ran["condCards"]):
+        assert case["materialTotal"] > 0
+        assert case["subtotalSum"] == pytest.approx(case["materialTotal"], abs=0.03), case
+
+
+def _container_palette_faults(css):
+    """What is wrong with the containers' colours in this page text: [] when every --cat-N-band exists, each is
+    its own hue, ink and --ink-v on each clear WCAG AA, and a rule assigns each by data-cat-tone."""
+    token = {m.group(1): m.group(2).lower() for m in re.finditer(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})", css)}
+    faults = []
+    bands = []
+    for key in [str(n) for n in range(1, 7)] + ["other"]:
+        band = token.get("cat-%s-band" % key)
+        if not band:
+            faults.append("no --cat-%s-band" % key)
+            continue
+        bands.append(band)
+        for ink in ("ink", "ink-v"):
+            if _contrast(band, token[ink]) < 4.5:
+                faults.append("--%s on --cat-%s-band is %.2f:1" % (ink, key, _contrast(band, token[ink])))
+        if key != "other" and ('.tk-cat[data-cat-tone="%s"]{--cat-band:var(--cat-%s-band)}' % (key, key)) not in css:
+            faults.append("no rule assigns tone " + key)
+    if len(set(bands)) != len(bands):
+        faults.append("two tones share a colour")
+    rule = re.search(r"\.tk-cat\{[^}]*\}", css)
+    if not rule or "overflow:hidden" in rule.group(0):
+        faults.append("the container clips what its cards open")
+    if not re.search(r"\.tk-cat-head\{[^}]*flex-wrap:wrap", css):
+        faults.append("the band does not wrap at a narrow width")
+    return faults
+
+
+def _luminance(hex6):
+    ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+
+def _contrast(a, b):
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def test_every_container_colour_is_its_own_and_readable():
+    assert _container_palette_faults(PAGE_HTML.read_bytes().decode("utf-8")) == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ("--cat-3-band:#e6cdb6;", "--cat-3-band:#8a6f55;"),             # too dark for the ink on it
+    ("--cat-5-band:#dccadb;", "--cat-5-band:#ecdba6;"),             # the same as tone 1
+    ('.tk-cat[data-cat-tone="6"]{--cat-band:var(--cat-6-band)}', ""),
+])
+def test_the_palette_check_goes_red(old, new):
+    css = PAGE_HTML.read_bytes().decode("utf-8")
+    assert css.count(old) == 1
+    assert _container_palette_faults(css.replace(old, new)) != []
+
+
 # ── mutations: each check above goes red when its change is taken out ─────────
 def _scratch(tmp_path, rel, old, new):
     """A scratch frontend with one line broken and every other file the harnesses read copied unmodified."""
@@ -306,6 +390,13 @@ MUTATIONS = {
         '    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt, ITEMS);',
         "    if (k === \"asm\") return null;",
         lambda r: [x["cards"] for x in r["grouped"]["groups"]][:2] == [[3], [0, 2]]),
+    "the cards drawn after the container closes": (
+        "js/polish-estimate.js", "        '<div class=\"tk-cat-body\">' +",
+        "        '<div class=\"tk-cat-body\"></div></section>' +",
+        lambda r: r["grouped"]["loose"] == [] and r["condCards"]["loose"] == []),
+    "every heading in one colour": (
+        "js/polish-estimate.js", "return String(i % CAT_TONES + 1);", 'return "1";',
+        lambda r: r["grouped"]["tones"] == ["1", "2", "3", "4", "other"]),
     "the Admin add lets a duplicate through": (
         "js/admin.js", "        if (!clean || taken(clean)) return null;", "        if (!clean) return null;",
         lambda r: r["admin"]["addDup"] is None),
