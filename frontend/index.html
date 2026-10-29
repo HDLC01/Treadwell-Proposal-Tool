@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-tw-drawn="main">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -8,6 +8,10 @@
 <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="/styles.css">
+<!-- The page-to-page cross-fade and its hold (reveal.css, js/reveal.js). In <head> on purpose:
+     reveal.js listens for `pagereveal`, which fires before the first frame. -->
+<link rel="stylesheet" href="/reveal.css">
+<script src="/js/reveal.js"></script>
 <style>
   /* Per-system Scope groups */
   .system-block + .system-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(128,128,128,.3); }

@@ -28,9 +28,10 @@ const NL = String.fromCharCode(10);
 const where = { indent: "  ", where: "done.js" };
 
 const FNS = ["money", "proposalName", "portalErrMsg", "paintLumpSum", "paintReadyProposals",
-             "paintFilesProposals", "refreshFilesProposals", "paintRowFiles", "downloadOther", "fileStem",
+             "paintFilesProposals", "refreshFilesProposals", "wireFilesLinks", "openFilesLink", "paintRowFiles",
+             "downloadOther", "fileStem",
              "builtAt", "freshDocuments"].map((n) => L.liftSource(SRC, n, where));
-const RECORDS = ["filesProposals", "ROW_FILES", "rowFiles", "checkedDocument"]
+const RECORDS = ["filesProposals", "filesLinks", "ROW_FILES", "rowFiles", "checkedDocument"]
   .map((n) => L.grabConst(SRC, n, where));
 const WIRING = (function () {
   const start = SRC.indexOf("function showPostGenerate(result) {");
