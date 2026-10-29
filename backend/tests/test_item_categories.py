@@ -224,7 +224,7 @@ def test_only_known_work_types_and_real_ids_are_kept():
 
 def test_a_category_set_through_the_api_reads_back_and_survives_a_jsonb_reload(store, monkeypatch):
     """jsonb hands an object back key-sorted, so the map comes back in another order; it must mean the same."""
-    it = _mk()
+    it = _mk(divisions=["Epoxy", "Gypsum Underlayment"])
     c = _as(monkeypatch, "user")
     r = c.patch("/api/library/items/%s" % it["id"],
                 json={"material_categories": {"gyp": "gyp-bags", "epoxy": "epoxy-extras"}})
@@ -242,14 +242,14 @@ def test_a_category_set_through_the_api_reads_back_and_survives_a_jsonb_reload(s
 
 
 def test_a_category_alone_moves_no_price_date(store, monkeypatch):
-    it = _mk()
+    it = _mk(divisions=["Epoxy"])
     _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"],
                                    json={"material_categories": {"epoxy": "epoxy-patch"}})
     assert store["library_items"][0].get("cost_updated_at") is None
 
 
 def test_a_database_without_the_column_answers_a_readable_400(store, monkeypatch):
-    it = _mk()
+    it = _mk(divisions=["Epoxy"])
     real = library.get_client()
 
     class Missing:
@@ -287,3 +287,101 @@ def test_the_items_read_says_whether_the_database_has_the_column(store, monkeypa
     store["library_items"][0]["material_categories"] = None
     body = c.get("/api/library/items").json()
     assert body["categories_writable"] is True and body["items"][0]["material_categories"] == {}
+
+
+# ── category follows division (Hanz, 2026-10-29) ─────────────────────────────
+# "Category and Division should always be tied together. How is it that Paint Blie has Epoxy and Polish in
+# the categories but is not selected in the divisions?" The server STRIPS a category for a work type none of
+# the material's divisions is priced on, for every caller: refusing would make a queued Items-tab save
+# unsaveable over a heading the estimator cannot see.
+def test_each_division_reads_as_the_work_type_it_is_priced_on():
+    assert [ic.division_work_type(d) for d in ("Polished Concrete", "  epoxy ", "Gypsum   Underlayment",
+                                               "Seal", "LEVELING", "Polish", "Gyp", "Paint", "", None)] == [
+        "polish", "epoxy", "gyp", "seal", "leveling", "polish", "gyp", "", "", ""]
+
+
+def test_a_category_outside_the_divisions_is_stripped_on_a_patch(store, monkeypatch):
+    it = _mk(divisions=["Epoxy"])
+    r = _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"],
+                                       json={"material_categories": {"epoxy": "epoxy-patch", "polish": "polish-floor"}})
+    assert r.status_code == 200, "stripped, not refused"
+    assert r.json()["item"]["material_categories"] == {"epoxy": "epoxy-patch"}
+    assert store["library_items"][0]["material_categories"] == {"epoxy": "epoxy-patch"}
+
+
+def test_a_material_in_no_division_keeps_no_category(store, monkeypatch):
+    """Paint Blie: no division ticked, Epoxy and Polish categories. Neither survives a save."""
+    it = _mk()
+    r = _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"],
+                                       json={"material_categories": {"epoxy": "epoxy-patch", "polish": "polish-floor"}})
+    assert r.status_code == 200 and r.json()["item"]["material_categories"] == {}
+    assert store["library_items"][0]["material_categories"] is None
+
+
+def test_unticking_a_division_takes_its_category_out_in_the_same_save(store, monkeypatch):
+    it = _mk(divisions=["Epoxy", "Polished Concrete"])
+    c = _as(monkeypatch, "user")
+    c.patch("/api/library/items/%s" % it["id"],
+            json={"material_categories": {"epoxy": "epoxy-extras", "polish": "polish-floor"}})
+    assert store["library_items"][0]["material_categories"] == {"epoxy": "epoxy-extras", "polish": "polish-floor"}
+    r = c.patch("/api/library/items/%s" % it["id"], json={"divisions": ["Epoxy"]})
+    assert r.status_code == 200
+    assert r.json()["item"]["divisions"] == ["Epoxy"]
+    assert r.json()["item"]["material_categories"] == {"epoxy": "epoxy-extras"}
+    # Unticking the last one empties the map, stored as NULL like any empty map.
+    r = c.patch("/api/library/items/%s" % it["id"], json={"divisions": []})
+    assert r.json()["item"]["material_categories"] == {}
+    assert store["library_items"][0]["material_categories"] is None
+
+
+def test_a_division_change_never_sends_the_column_to_a_database_without_it(store, monkeypatch):
+    """The fake store's row, like one on a database without item_categories.sql, has no key at all."""
+    it = _mk(divisions=["Epoxy", "Polished Concrete"])
+    assert "material_categories" not in store["library_items"][0]
+    sent = []
+    real = library.get_client()
+
+    class Spy:
+        def table(self, name):
+            t = real.table(name)
+            update = t.update
+
+            def recording(patch):
+                sent.append(dict(patch))
+                return update(patch)
+            t.update = recording
+            return t
+    monkeypatch.setattr(library, "get_client", lambda: Spy())
+    r = _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"], json={"divisions": ["Epoxy"]})
+    assert r.status_code == 200 and sent and all("material_categories" not in p for p in sent)
+
+
+def test_a_division_change_that_strips_nothing_writes_no_category(store, monkeypatch):
+    it = _mk(divisions=["Epoxy"])
+    c = _as(monkeypatch, "user")
+    c.patch("/api/library/items/%s" % it["id"], json={"material_categories": {"epoxy": "epoxy-cove"}})
+    patch = library.validate_item({"divisions": ["Epoxy", "Polished Concrete"]}, partial=True)
+    library._categories_follow_divisions(patch, store["library_items"][0])
+    assert "material_categories" not in patch, "a tick that removes nothing must not rewrite the map"
+
+
+def test_a_new_material_is_created_with_only_its_divisions_categories(store):
+    it = _mk(divisions=["Polished Concrete"], material_categories={"epoxy": "epoxy-patch", "polish": "polish-dye"})
+    assert it["material_categories"] == {"polish": "polish-dye"}
+    assert store["library_items"][0]["material_categories"] == {"polish": "polish-dye"}
+
+
+def test_a_legacy_row_with_empty_divisions_keeps_the_category_its_old_division_allows(store, monkeypatch):
+    """A row written before divisions existed: divisions '[]' (the column default) beside category 'Epoxy'.
+    The page reads it as in Epoxy and offers an Epoxy select (itemDivisions falls back to the category), so a
+    pick made there must survive the save, and a Polish one must still go."""
+    it = _mk(divisions=["Epoxy"])
+    store["library_items"][0]["divisions"] = []
+    store["library_items"][0]["category"] = "Epoxy"
+    r = _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"],
+                                       json={"material_categories": {"epoxy": "epoxy-patch", "polish": "polish-floor"}})
+    assert r.status_code == 200
+    assert (r.json()["item"]["divisions"], r.json()["item"]["category"]) == ([], "Epoxy"), (
+        "what the page reads, and its itemDivisions falls back to the category")
+    assert r.json()["item"]["material_categories"] == {"epoxy": "epoxy-patch"}
+    assert store["library_items"][0]["material_categories"] == {"epoxy": "epoxy-patch"}

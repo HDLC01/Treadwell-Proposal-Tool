@@ -18,7 +18,9 @@ The mutation tests at the bottom break a scratch copy of the page and prove the 
 from __future__ import annotations
 
 import json
+import math
 import pathlib
+import re
 import shutil
 
 import pytest
@@ -27,8 +29,11 @@ from _golden_support import FRONTEND, break_source
 from _node import last_json_line, require_node, run_node
 from _seed_support import plan_json
 
+import item_categories as ic
+
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "item-categories-harness.js"
+PAGE_HTML = FRONTEND / "polish-estimate.html"
 LIBRARY_HARNESS = TESTS / "js" / "library-ui-harness.js"
 
 
@@ -98,14 +103,14 @@ def test_each_edit_sends_the_whole_set_with_ids_kept(ran):
 
 
 # ── the Items tab ────────────────────────────────────────────────────────────
-def test_the_category_cell_offers_one_select_per_work_type_the_material_is_used_in(lib):
+def test_the_category_cell_offers_one_select_per_division_the_material_is_in(lib):
     c = lib["cells"]
     assert c["c1"]["selects"] == ["epoxy"] and c["c1"]["epoxy"] == "epoxy-patch" and not c["c1"]["labelled"]
     assert c["c2"]["selects"] == ["polish"] and c["c2"]["polish"] == ""
-    assert c["c3"]["selects"] == ["epoxy", "polish"] and c["c3"]["labelled"], "two work types, each labelled"
+    assert c["c3"]["selects"] == ["epoxy", "polish"] and c["c3"]["labelled"], "two divisions, each labelled"
     assert (c["c3"]["epoxy"], c["c3"]["polish"]) == ("epoxy-extras", "polish-floor")
-    assert c["c6"]["selects"] == ["polish"], "a Defaults-tab work type counts as one the material is used in"
-    assert c["c5"]["selects"] == ["epoxy", "polish"], "a material in no work type is offered every one with headings"
+    assert c["c6"]["selects"] == [], "a Defaults-tab work type is not a division: it offers no select"
+    assert c["c5"]["selects"] == [], "a material in no division is offered nothing"
     assert lib["epoxyOptions"] == ["", "epoxy-patch", "epoxy-liquids", "epoxy-extras", "epoxy-cove"], (
         "the work type's headings, in the Admin order, after None")
 
@@ -145,9 +150,9 @@ def test_a_pick_the_database_refuses_is_dropped_so_the_material_still_saves(lib_
 
 def test_choosing_a_category_queues_the_whole_map_as_a_new_object(lib):
     e = lib["edit"]
-    assert e["afterAdd"] == {"kind": "items", "id": "c1",
-                             "body": {"material_categories": {"epoxy": "epoxy-patch", "polish": "polish-dye"}}}
-    assert e["modelAfterAdd"] == {"epoxy": "epoxy-patch", "polish": "polish-dye"}
+    assert e["afterAdd"] == {"kind": "items", "id": "c3",
+                             "body": {"material_categories": {"epoxy": "epoxy-extras", "polish": "polish-dye"}}}
+    assert e["modelAfterAdd"] == {"epoxy": "epoxy-extras", "polish": "polish-dye"}
     assert e["afterClear"]["body"] == {"material_categories": {"polish": "polish-dye"}}, "None takes the work type out"
     assert e["snapshotUntouched"], "the map was written into, so a Cancel could not put the old one back"
 
@@ -161,6 +166,68 @@ def test_the_category_facet_filters_like_the_others(lib):
     assert lib["barOptions"] == ["", "Patch", "Epoxy Liquids", "Extras", "Cove", "Floor", "Dye", "Joint Filler",
                                  lib["NONE"]], "every name once, in the Admin order"
     assert lib["patch"]["barValue"] == "Patch"
+
+
+# ── category follows division (Hanz, 2026-10-29) ─────────────────────────────
+# "Category and Division should always be tied together. How is it that Paint Blie has Epoxy and Polish in the
+# categories but is not selected in the divisions?"
+def test_a_material_in_no_division_says_to_pick_one_and_offers_no_select(lib):
+    t = lib["tied"]["before"]
+    assert t["t1"] == {"selects": [], "pickDivision": True, "noneSetUp": False}, (
+        "Paint Blie: no division ticked, so no Epoxy or Polish select, whatever categories it holds")
+    assert t["t5"]["selects"] == [] and t["t5"]["pickDivision"], "Defaults-tab work types do not widen the pickers"
+    assert t["t6"]["selects"] == ["epoxy"], "a Defaults-tab Polish on an Epoxy material offers no Polish select"
+
+
+def test_only_the_ticked_divisions_get_a_select(lib):
+    t = lib["tied"]["before"]
+    assert t["t2"]["selects"] == ["epoxy"] and t["t2"]["epoxy"] == "epoxy-patch", (
+        "a category the material holds for a division it is not in offers no select")
+    assert t["t3"] == {"selects": [], "pickDivision": False, "noneSetUp": True}, (
+        "a division whose work type has no categories set up shows no select for it")
+    assert t["t4"]["selects"] == ["epoxy", "polish"]
+
+
+def test_unticking_a_division_takes_its_category_out_in_the_same_save(lib):
+    u = lib["tied"]["afterUntick"]
+    assert u["body"] == {"kind": "items", "id": "t4",
+                         "body": {"divisions": ["Epoxy"], "material_categories": {"epoxy": "epoxy-extras"}}}
+    assert u["model"] == {"epoxy": "epoxy-extras"} and u["cell"]["selects"] == ["epoxy"]
+    assert u["snapshotUntouched"], "the map was written into, so a Cancel could not put the old one back"
+    off = lib["tied"]["afterAllOff"]
+    assert off["epoxyOff"]["body"] == {"divisions": ["Polished Concrete"], "material_categories": {}}
+    assert off["body"]["body"] == {"divisions": []}, "nothing left to take out: the map is not re-sent"
+    assert off["cell"] == {"selects": [], "pickDivision": True, "noneSetUp": False}
+
+
+def test_ticking_a_division_brings_its_select_back_at_none(lib):
+    r = lib["tied"]["afterRetick"]
+    assert r["body"]["body"] == {"divisions": ["Polished Concrete", "Epoxy"]}, "a tick takes nothing out"
+    assert r["cell"]["selects"] == ["epoxy", "polish"] and r["cell"]["polish"] == ""
+    t1 = lib["tied"]["afterTickT1"]
+    assert t1["body"]["body"] == {"divisions": ["Epoxy"], "material_categories": {"epoxy": "epoxy-patch"}}, (
+        "Paint Blie's first tick keeps the Epoxy category and drops the Polish one it had no division for")
+    assert t1["cell"]["selects"] == ["epoxy"] and t1["cell"]["epoxy"] == "epoxy-patch"
+
+
+def test_a_chip_click_redraws_the_category_cell_on_screen_without_a_rerender(lib):
+    """The page does not redraw the row on a chip click (it would lose the chip's focus). Without its own
+    repaint the cell kept saying "Pick a division first" after a tick, and kept a Polish select showing
+    Floor after Polished Concrete was unticked -- picking from it sent the category straight back."""
+    r = lib["tied"]["repaint"]
+    assert r["selectorIsReal"], "the repaint's selector must match the row renderItems draws"
+    assert r["untickPolish"] == {"selects": ["epoxy"], "epoxy": "epoxy-extras", "polish": None,
+                                 "pickDivision": False}, "the Polish select leaves with the division"
+    assert r["retickPolish"]["selects"] == ["epoxy", "polish"] and r["retickPolish"]["polish"] == ""
+    assert r["tickPaintBlie"] == {"selects": ["epoxy"], "epoxy": "epoxy-patch", "polish": None,
+                                  "pickDivision": False}, "Paint Blie's Epoxy select appears on the tick"
+    assert r["untickPaintBlie"]["selects"] == [] and r["untickPaintBlie"]["pickDivision"]
+
+
+def test_the_page_and_the_server_read_a_division_as_the_same_work_type(lib):
+    pairs = lib["tied"]["divisionWorkTypes"]
+    assert len(pairs) > 5 and any(wt == "" for _, wt in pairs) and any(wt == "seal" for _, wt in pairs)
+    assert [[n, ic.division_work_type(n)] for n, _ in pairs] == pairs
 
 
 # ── the Material step ────────────────────────────────────────────────────────
@@ -256,6 +323,169 @@ def test_grouping_is_display_only_on_the_epoxy_golden_job(ran):
     assert e["withCats"]["saves"] == e["withoutCats"]["saves"]
 
 
+# ── each heading its own container (Hanz, 2026-10-29: "each category should have a different container like we
+#    have for the review tab") ─────────────────────────────────────────────────────────────────────────────────
+def test_each_heading_is_its_own_container_with_its_cards_inside_it(ran):
+    """The cards counted under a heading are the ones INSIDE its container (before its </section>), so a card
+    drawn after a container closes is loose, not filed."""
+    g = ran["grouped"]
+    assert g["opened"] == len(g["groups"]) == 5, "a container was drawn some other way than the band and body"
+    assert g["loose"] == [], "a card sits outside every container"
+    assert g["labels"] == [x["name"] for x in g["groups"]], "the container is named for its heading"
+    assert ran["condCards"]["loose"] == [], "a condition card fell out of its heading's container"
+    assert ran["epoxyTotals"]["withCats"]["loose"] == []
+
+
+def test_each_heading_wears_the_colour_of_its_place_in_the_admin_list(ran):
+    """Same colour on every bid and after a reload; Other is its own neutral; a heading empty on this bid does not
+    shift the colours of the ones after it (Epoxy: Patch and Extras are empty, Liquids and Cove keep 2 and 4)."""
+    assert ran["grouped"]["tones"] == ["1", "2", "3", "4", "other"]
+    assert ran["reloadedTones"] == [[x["name"], t] for x, t in zip(ran["grouped"]["groups"], ran["grouped"]["tones"])]
+    assert ran["reorderedTones"] == [["Joint Filler", "1"], ["Dye", "2"], ["Floor", "3"], ["Patch", "4"],
+                                     ["Other", "other"]], "the colour follows the Admin order"
+    assert ran["epoxyTotals"]["withCats"]["tones"] == [["Epoxy Liquids", "2"], ["Cove", "4"]]
+
+
+def test_the_containers_subtotals_add_up_to_the_material_total(ran):
+    for case in (ran["grouped"], ran["condCards"]):
+        assert case["materialTotal"] > 0
+        assert case["subtotalSum"] == pytest.approx(case["materialTotal"], abs=0.03), case
+
+
+def _container_palette_faults(css):
+    """What is wrong with the containers' colours in this page text: [] when every --cat-N-band exists, each is
+    its own hue, ink and --ink-v on each clear WCAG AA, and a rule assigns each by data-cat-tone."""
+    token = {m.group(1): m.group(2).lower() for m in re.finditer(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})", css)}
+    faults = []
+    bands = []
+    for key in [str(n) for n in range(1, 7)] + ["other"]:
+        band = token.get("cat-%s-band" % key)
+        if not band:
+            faults.append("no --cat-%s-band" % key)
+            continue
+        bands.append(band)
+        for ink in ("ink", "ink-v"):
+            if _contrast(band, token[ink]) < 4.5:
+                faults.append("--%s on --cat-%s-band is %.2f:1" % (ink, key, _contrast(band, token[ink])))
+        if key != "other" and ('.tk-cat[data-cat-tone="%s"]{--cat-band:var(--cat-%s-band)}' % (key, key)) not in css:
+            faults.append("no rule assigns tone " + key)
+    if len(set(bands)) != len(bands):
+        faults.append("two tones share a colour")
+    faults += _colour_blind_faults(token)
+    # Other is told apart by its outline, not a hue: an untinted band and a dashed border a person can see.
+    other = token.get("cat-other-band")
+    if other and _chroma(other) > 3:
+        faults.append("Other's band is tinted (%s)" % other)
+    if '.tk-cat[data-cat-tone="other"]{border:1px dashed var(--ink-3)}' not in css:
+        faults.append("Other has no dashed border")
+    elif _contrast(token["card"], token["ink-3"]) < 3:
+        faults.append("Other's dashed border is too faint on white")
+    rule = re.search(r"\.tk-cat\{[^}]*\}", css)
+    if not rule or "overflow:hidden" in rule.group(0):
+        faults.append("the container clips what its cards open")
+    if not re.search(r"\.tk-cat-head\{[^}]*flex-wrap:wrap", css):
+        faults.append("the band does not wrap at a narrow width")
+    return faults
+
+
+def _luminance(hex6):
+    ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+
+def _contrast(a, b):
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+# Machado, Oliveira and Fernandes (2009), full severity, applied to linear sRGB: how a red-green colour-blind eye
+# sees a colour. Deuteranopia and protanopia are the common ones (about 1 man in 12 has some red-green deficiency).
+_CVD = {
+    "deuteranopia": ((0.367322, 0.860646, -0.227968), (0.280085, 0.672501, 0.047413), (-0.011820, 0.042940, 0.968881)),
+    "protanopia": ((0.152286, 1.052583, -0.204868), (0.114503, 0.786281, 0.099216), (-0.003882, -0.048116, 1.051998)),
+}
+
+
+def _linear(hex6):
+    ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    return [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+
+
+def _lab(rgb):
+    r, g, b = (min(1.0, max(0.0, v)) for v in rgb)
+    xyz = (0.4124 * r + 0.3576 * g + 0.1805 * b, 0.2126 * r + 0.7152 * g + 0.0722 * b,
+           0.0193 * r + 0.1192 * g + 0.9505 * b)
+    f = [t ** (1 / 3) if t > 216 / 24389 else (24389 / 27 * t + 16) / 116
+         for t in (xyz[0] / 0.95047, xyz[1], xyz[2] / 1.08883)]
+    return 116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])
+
+
+def _seen_by(hex6, kind):
+    m, c = _CVD[kind], _linear(hex6)
+    return _lab([sum(m[i][j] * c[j] for j in range(3)) for i in range(3)])
+
+
+def _chroma(hex6):
+    _, a, b = _lab(_linear(hex6))
+    return (a * a + b * b) ** 0.5
+
+
+def _colour_blind_faults(token, least=10.0):
+    """Tones that look alike to a red-green colour-blind eye where they can sit side by side: each tone against the
+    next two after it in the cycle (the next one, or the one after an empty heading; the cycle wraps 6 -> 1)."""
+    faults = []
+    for n in range(1, 7):
+        for step in (1, 2):
+            m = (n + step - 1) % 6 + 1
+            a, b = token.get("cat-%d-band" % n), token.get("cat-%d-band" % m)
+            if not (a and b):
+                continue
+            for kind in _CVD:
+                d = math.dist(_seen_by(a, kind), _seen_by(b, kind))
+                if d < least:
+                    faults.append("tones %d and %d are delta E %.1f apart under %s" % (n, m, d, kind))
+    return faults
+
+
+def test_every_container_colour_is_its_own_and_readable():
+    assert _container_palette_faults(PAGE_HTML.read_bytes().decode("utf-8")) == []
+
+
+# The palette before the colour-blind review (2026-10-30): Dye (3, tan) over Joint Filler (4, sage) over Other on
+# every Polish bid read as near the same beige to a deuteranope (delta E 7.6 and 4.1).
+_FIRST_PALETTE = ("--cat-1-band:#ecdba6;", "--cat-2-band:#c9d8e8;", "--cat-3-band:#e6cdb6;",
+                  "--cat-4-band:#cddcc7;", "--cat-5-band:#dccadb;", "--cat-6-band:#c4dcd8;")
+
+
+def _with_first_palette(css):
+    for line in _FIRST_PALETTE:
+        key = line.split(":")[0]
+        css, n = re.subn(re.escape(key) + r":#[0-9a-f]{6};", line, css)
+        assert n == 1, key
+    return css
+
+
+def test_the_first_palette_fails_the_colour_blind_check():
+    faults = _colour_blind_faults({m.group(1): m.group(2) for m in re.finditer(
+        r"--([a-z0-9-]+):\s*(#[0-9a-f]{6})", _with_first_palette(PAGE_HTML.read_bytes().decode("utf-8")))})
+    assert any(f.startswith("tones 3 and 4 ") and "deuteranopia" in f for f in faults), faults
+
+
+@pytest.mark.parametrize("old,new", [
+    ("--cat-5-band:#e6cdb6;", "--cat-5-band:#8a6f55;"),             # too dark for the ink on it
+    ("--cat-5-band:#e6cdb6;", "--cat-5-band:#eddca7;"),             # the same as tone 1
+    ('.tk-cat[data-cat-tone="6"]{--cat-band:var(--cat-6-band)}', ""),
+    ("--cat-other-band:#ffffff}", "--cat-other-band:#e2ded5}"),     # Other tinted again
+    ('.tk-cat[data-cat-tone="other"]{border:1px dashed var(--ink-3)}', ""),
+    ("--cat-4-band:#d5ede9;", "--cat-4-band:#cddcc7;"),             # sea swapped for a sage beside the sage
+])
+def test_the_palette_check_goes_red(old, new):
+    css = PAGE_HTML.read_bytes().decode("utf-8")
+    assert css.count(old) == 1
+    assert _container_palette_faults(css.replace(old, new)) != []
+
+
 # ── mutations: each check above goes red when its change is taken out ─────────
 def _scratch(tmp_path, rel, old, new):
     """A scratch frontend with one line broken and every other file the harnesses read copied unmodified."""
@@ -306,6 +536,13 @@ MUTATIONS = {
         '    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt, ITEMS);',
         "    if (k === \"asm\") return null;",
         lambda r: [x["cards"] for x in r["grouped"]["groups"]][:2] == [[3], [0, 2]]),
+    "the cards drawn after the container closes": (
+        "js/polish-estimate.js", "        '<div class=\"tk-cat-body\">' +",
+        "        '<div class=\"tk-cat-body\"></div></section>' +",
+        lambda r: r["grouped"]["loose"] == [] and r["condCards"]["loose"] == []),
+    "every heading in one colour": (
+        "js/polish-estimate.js", "return String(i % CAT_TONES + 1);", 'return "1";',
+        lambda r: r["grouped"]["tones"] == ["1", "2", "3", "4", "other"]),
     "the Admin add lets a duplicate through": (
         "js/admin.js", "        if (!clean || taken(clean)) return null;", "        if (!clean) return null;",
         lambda r: r["admin"]["addDup"] is None),
@@ -326,6 +563,7 @@ def test_mutation_goes_red(name, tmp_path):
     assert not check(last_json_line(proc.stdout)), name + " left its check green"
 
 
+PICKERS = "    return order.filter(function (wt) { return mine[wt] && L.categoriesFor(CATS, wt).length > 0; });"
 LIBRARY_MUTATIONS = {
     "the facet ignores the category": (
         "js/library.js", "    if (F.category && !categoryHits(it, F.category)) return false;", "    void categoryHits;",
@@ -338,8 +576,36 @@ LIBRARY_MUTATIONS = {
         "js/library.js", "    if (!CATS_WRITABLE) return '<span", "    if (false) return '<span",
         lambda c: c["noColumn"]["selects"] == []),
     "every work type offered to every material": (
-        "js/library.js", "    return own.length ? own : withCats;", "    return withCats;",
+        "js/library.js", PICKERS,
+        "    return order.filter(function (wt) { return L.categoriesFor(CATS, wt).length > 0; });",
         lambda c: c["cells"]["c1"]["selects"] == ["epoxy"]),
+    "a held category widens the pickers": (
+        "js/library.js", PICKERS,
+        "    return order.filter(function (wt) { return (mine[wt] || (it.material_categories || {})[wt]) && "
+        "L.categoriesFor(CATS, wt).length > 0; });",
+        lambda c: c["tied"]["before"]["t2"]["selects"] == ["epoxy"]),
+    "the Defaults-tab work types widen the pickers": (
+        "js/library.js", PICKERS,
+        "    return order.filter(function (wt) { return (mine[wt] || (it.default_work_types || []).indexOf(wt) >= 0) "
+        "&& L.categoriesFor(CATS, wt).length > 0; });",
+        lambda c: c["tied"]["before"]["t6"]["selects"] == ["epoxy"]),
+    "no sentence for a material in no division": (
+        "js/library.js",
+        "    if (!itemDivisions(it).length) return '<span class=\"catnote\">Pick a division first</span>';",
+        "    void 0;",
+        lambda c: c["tied"]["before"]["t1"]["pickDivision"]),
+    "an unticked division keeps its category": (
+        "js/library.js",
+        "      if (Object.keys(keptCats).length !== Object.keys(it.material_categories || {}).length) {",
+        "      if (false) {",
+        lambda c: c["tied"]["afterUntick"]["model"] == {"epoxy": "epoxy-extras"}),
+    "a division the page reads differently from the server": (
+        "js/library.js", "    return DIVISION_WORK_TYPE[key] ||", "    return DIVISION_WORK_TYPE[key.replace(/ /g, \"\")] ||",
+        lambda c: [[n, ic.division_work_type(n)] for n, _ in c["tied"]["divisionWorkTypes"]]
+        == c["tied"]["divisionWorkTypes"]),
+    "a chip click leaves the Category cell stale": (
+        "js/library.js", "      paintCategoryCell(it);", "      void paintCategoryCell;",
+        lambda c: (c["tied"]["repaint"]["untickPolish"] or {}).get("selects") == ["epoxy"]),
 }
 
 

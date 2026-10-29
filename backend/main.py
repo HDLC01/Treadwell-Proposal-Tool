@@ -2588,6 +2588,12 @@ def api_portal_pipeline() -> Dict[str, Any]:
     # it as Direct, which is where that project has always been. A row the drafts list has never
     # heard of is left without the key; the board reads that as Direct too.
     audiences = {s["id"]: s.get("audience") for s in summaries}
+    # The star (drafts.set_starred), carried for the reason the won mark is: it lives on OUR draft,
+    # so a sent project's row arrives without it, and a starred sent card would not rise to the top
+    # of its column. Written whenever the draft is known, None included: on a portal outage these
+    # rows are the CACHE's own objects (_pipeline_snapshot "stale"), and a star stamped on one by an
+    # earlier read would otherwise survive the star being taken off.
+    stars = {s["id"]: s.get("starred_at") for s in summaries}
     for row in rows:
         pid = row.get("proposal_id")
         if pid in flags:
@@ -2603,6 +2609,8 @@ def api_portal_pipeline() -> Dict[str, Any]:
             row["won_at"] = wons[pid]
         if hands.get(pid):
             row["handed_off_at"] = hands[pid]
+        if pid in stars:
+            row["starred_at"] = stars[pid]
     if portal_status == "offline":
         # Only with a cold cache. With a warm one the real rows are right there, and inventing
         # a second card for a project already on the board would double it.
@@ -2835,7 +2843,10 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             continue
         # A scope of a project already on the board is drawn even before its files are built
         # (_scope_pending), and says so (`files_pending`) instead of claiming paperwork exists.
-        files_pending = not s.get("has_files") and s["id"] in pending
+        # So is a COPY of a project (drafts.copy_project), from the moment it is made. Hanz,
+        # 2026-10-29: "When we copy a project, the copied project should live under Created but not
+        # sent." A copy has no files (they were the original's), so it says "files not built yet".
+        files_pending = not s.get("has_files") and (s["id"] in pending or bool(s.get("copied_from")))
         if not s.get("has_files") and not files_pending:
             continue
         out.append({
@@ -2867,6 +2878,9 @@ def _not_sent_rows(summaries: List[Dict[str, Any]],
             # rare pair but a real one: a job won on the phone, priced, and passed straight to
             # operations without the customer ever being sent the paperwork.
             "handed_off_at": s.get("handed_off_at"),
+            # Starred (drafts.set_starred): the card sits at the top of its column. Unconditional,
+            # for the reason won_at gives.
+            "starred_at": s.get("starred_at"),
         })
         if files_pending:
             out[-1]["files_pending"] = True
@@ -2970,6 +2984,8 @@ def _sent_unknown_rows(summaries: List[Dict[str, Any]],
             # unconditionally because a null here is the complete truth rather than a key invented
             # over a portal field, and isWon reads the stamp's truthiness.
             "won_at": s.get("won_at"),
+            # Starred — ours too, so a starred card stays on top through the outage.
+            "starred_at": s.get("starred_at"),
         })
         # The one status we can still state, because somebody in this app typed it. Shaped as the
         # portal's own closed_lost state for the same reason `_not_sent_rows` does it: isLost()
@@ -9750,6 +9766,71 @@ def api_draft_status(draft_id: str, payload: DraftStatusIn, request: Request) ->
         raise HTTPException(404, "project_not_found")
     return {"ok": True, "status": "closed_lost" if reason else "active",
             "reason": reason or None}
+
+
+class DraftStarIn(BaseModel):
+    """Star a project, or take its star off."""
+    starred: bool = True
+
+
+@app.post("/api/draft/{draft_id}/star")
+def api_draft_star(draft_id: str, payload: DraftStarIn, request: Request) -> Any:
+    """Star or unstar a project from the board (drafts.set_starred). Hanz, 2026-10-29: "the ability
+    to Star a project and it always gets put up to the top of the pipeline."
+
+    Its own small route rather than a field of the autosave, because every browser save PUTs the
+    whole blob: the star is server-owned (drafts._SERVER_OWNED_KEYS) and only this route writes it.
+    One star per project, shared by the team, so anybody who can see the board may press it
+    (nav_access: /api/draft/* is never gated). Never touches the portal: the board stamps the star
+    onto a sent project's row from the drafts list (api_portal_pipeline).
+
+    200 {ok, starred}; 404 {ok: false, code: not_found}; 409 {ok: false, code: star_busy} when the
+    project kept being saved under the press (drafts.StarBusy: nothing was written)."""
+    draft_id = _safe_id(draft_id)
+    try:
+        found = drafts.set_starred(draft_id, bool(payload.starred), _user_email(request))
+    except drafts.StarBusy:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "star_busy",
+            "error": "The project was being saved at the same moment, so the star was not changed. "
+                     "Press it again."})
+    if not found:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
+                                                      "error": "That project is not there any more."})
+    return {"ok": True, "starred": bool(payload.starred)}
+
+
+def _copy_portal_lost() -> List[str]:
+    """The proposal ids the portal's pipeline calls closed_lost (a sent proposal the customer declined
+    or a rep closed from its drawer), for drafts.copy_project to leave out of a copy. The live answer,
+    else the cached one (_pipeline_snapshot); with neither, none, and only the board's own marks on
+    the drafts count."""
+    rows, _status = _pipeline_snapshot()
+    return [str(p.get("proposal_id")) for p in rows
+            if isinstance(p, dict) and str(p.get("proposal_status") or "") == "closed_lost"]
+
+
+@app.post("/api/draft/{draft_id}/copy")
+def api_draft_copy(draft_id: str, request: Request) -> Any:
+    """COPY A PROJECT from the board (drafts.copy_project). Hanz, 2026-10-29: "we should be able to
+    copy a project ... the copied project should live under Created but not sent."
+
+    The copy is the same job without its send history, owned by whoever pressed Copy, named
+    "<project> (copy)", and on the board's "Created but not sent" column at once. A project of
+    several proposals is copied whole, whichever card was pressed, less the proposals closed lost or
+    on hold (drafts.copy_project). Nothing is sent, published, filed to Dropbox or emailed, and the
+    copy has no portal row until somebody sends it. The portal is only READ, and only for a project
+    of several proposals: its pipeline (_pipeline_snapshot, the board's own read and its cache) is
+    where a SENT proposal the customer declined is closed lost (_copy_portal_lost).
+
+    200 {ok, id, ids, project_name, group_id, from, left_out}; refusals are flat {ok: false, code,
+    error}: 404 not_found, 503 copy_failed."""
+    draft_id = _safe_id(draft_id)
+    try:
+        return {"ok": True, **drafts.copy_project(draft_id, _user_email(request),
+                                                  closed_ids=_copy_portal_lost)}
+    except drafts.ScopeError as exc:
+        return _scope_refusal(exc)
 
 
 class NotifyPicksIn(BaseModel):

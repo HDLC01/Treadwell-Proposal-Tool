@@ -109,9 +109,28 @@
   .deal { position:relative; background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; cursor:pointer;
     transition:border-color .15s,box-shadow .15s; }
   .deal:hover { border-color:var(--red); box-shadow:0 2px 8px rgba(0,0,0,.05); }
-  .deal .name { font-weight:700; padding-right:26px; }
-  .deal .unread { position:absolute; top:8px; right:8px; min-width:20px; height:20px; padding:0 6px; border-radius:999px;
+  .deal .name { font-weight:700; padding-right:58px; }
+  /* Copy and the star (2026-10-29), top right of every card. Quiet until pointed at, like the
+     outcome buttons; a star that is ON is filled amber, and aria-pressed says so in words. */
+  .deal .deal-tools { position:absolute; top:6px; right:6px; display:flex; gap:2px; }
+  .deal .deal-tool { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px;
+    padding:0; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--ink-v); cursor:pointer; }
+  .deal .deal-tool:hover, .deal .deal-tool:focus-visible { border-color:var(--line); background:#fff; color:var(--red-dark); }
+  .deal .deal-tool:disabled { opacity:.55; cursor:default; }
+  .deal .deal-star.is-on { color:#b45309; }
+  .deal .deal-star.is-on svg { fill:currentColor; }
+  .ptable .t-star { color:#b45309; display:inline-flex; vertical-align:-1px; }
+  .ptable .t-star svg { fill:currentColor; }
+  .deal:has(.unread) .name { padding-right:88px; }
+  .deal .unread { position:absolute; top:8px; right:62px; min-width:20px; height:20px; padding:0 6px; border-radius:999px;
     background:var(--red); color:#fff; font-size:11px; font-weight:800; line-height:20px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+  /* Copy and the star are touch targets on a phone too. After the rules above so it wins them. */
+  @media (max-width:767px) {
+    .deal .deal-tool { width:40px; height:40px; }
+    .deal .name { padding-right:86px; }
+    .deal .unread { right:92px; }
+    .deal:has(.unread) .name { padding-right:118px; }
+  }
   .deal .meta { color:var(--ink-v); font-size:12px; margin-top:3px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .deal .meta.who, .deal .meta.act { color:var(--ink); font-weight:600; }

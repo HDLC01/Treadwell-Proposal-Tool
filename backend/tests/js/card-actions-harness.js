@@ -257,6 +257,8 @@ const body = `"use strict";
   ${fn("tableHtml")}
   ${fn("icon")}
   ${fn("cardRowOf")}
+  ${fn("toggleCardStar")}
+  ${fn("copyCardProject")}
   ${fn("markCardWon")}
   ${fn("markCardHandoff")}
   ${fn("confirmHandoff")}
