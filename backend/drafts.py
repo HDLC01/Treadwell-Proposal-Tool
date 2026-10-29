@@ -38,6 +38,16 @@ from supabase_client import get_client
 _log = logging.getLogger("drafts")
 
 
+def _log_safe(value: object, limit: int = 200) -> str:
+    """A caller-controlled value (a draft id off the URL, an exception carrying a typed sheet name)
+    made safe for a log line: repr() writes a newline as the two characters \\n, so nobody can forge
+    a log line. The same rule as main._log_safe, which this module cannot import."""
+    text = "" if value is None else str(value)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return repr(text)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -175,12 +185,12 @@ def save_draft(draft_id: str, data: Dict[str, Any],
                 carry_sheet_names(draft_id, prior, data)
             except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
                 _log.warning("save of %s: the sheet names were not carried into its proposals: %s",
-                             draft_id, exc)
+                             _log_safe(draft_id), _log_safe(exc))
             try:
                 sync_proposal_labels(draft_id, owner_email, parent=data)
             except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
                 _log.warning("save of %s: the proposals were not renamed after their sheets: %s",
-                             draft_id, exc)
+                             _log_safe(draft_id), _log_safe(exc))
     else:
         if keep_server_owned:
             data = {k: v for k, v in data.items() if k not in _NEVER_SEEDED_BY_A_BROWSER}
