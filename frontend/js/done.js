@@ -1215,6 +1215,8 @@
     if (seq !== filesProposals.seq) return;
     if (pv) filesProposals.pv = pv;
     paintFilesProposals(filesProposals.pv, id, figure);
+    // The page is drawn: js/reveal.js may now play the fade from the page before (a no-op after).
+    if (typeof TWReveal !== "undefined") TWReveal.done();
   }
 
   /** EACH LINE OF STEP 5's LIST DOWNLOADS ITS OWN PROPOSAL (Hanz, 2026-10-29: "each lump sum should
@@ -1427,6 +1429,7 @@
       try { pv = TW.readProposals ? await TW.readProposals(TW.getDraftId()) : null; } catch { pv = null; }
       const lumpEl = document.getElementById("rv-lump");
       paintReadyProposals(pv, TW.getDraftId(), lumpEl ? lumpEl.textContent : "");
+      if (typeof TWReveal !== "undefined") TWReveal.done();   // drawn (js/reveal.js)
     })();
     // PAGE 1, SAID OUT LOUD, BEFORE ANYTHING IS BUILT. Through `coverLetterCheck` so this row and
     // the post-generate banner cannot come to disagree — see that function for why the source is

@@ -55,13 +55,16 @@ def scripts(page):
 def test_every_external_script_is_deferred(page):
     """One classic tag among deferred ones does not merely lose the speed-up — it REORDERS the
     page, because a classic script runs where it sits and a deferred one waits for the parser."""
-    classic = [src for src, deferred in scripts(page) if not deferred]
+    # Except /js/reveal.js, the one classic tag on purpose (2026-10-30): a few lines in <head> that
+    # must hear `pagereveal`, which fires before the first frame and before any deferred script runs.
+    # It reads no other script and none reads it at load, so it reorders nothing.
+    classic = [src for src, deferred in scripts(page) if not deferred and src != "/js/reveal.js"]
     assert classic == [], "%s still has parser-blocking scripts: %s" % (page, classic)
 
 
 @pytest.mark.parametrize("page,expected", [
     ("estimate-review.html", [
-        "hyperformula", "/js/xl-excel-rounding.js", "supabase-js", "/js/icons.js",
+        "/js/reveal.js", "hyperformula", "/js/xl-excel-rounding.js", "supabase-js", "/js/icons.js",
         "/auth.js", "/shared.js", "/js/tab-memo.js", "/js/crm-core.js",
         "/js/price-lines-core.js", "/js/estimate-review.js",
     ]),

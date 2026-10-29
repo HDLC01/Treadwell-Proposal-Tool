@@ -1,0 +1,29 @@
+/* The wizard pages' page-to-page cross-fade (Intake, Estimate, Generate Files, Proposal, Files).
+
+   Switching proposals and every step pill is a real page load, so instead of blanking between the
+   two pages the browser cross-fades from one to the next. js/reveal.js holds the fade on the old
+   page until the new one has drawn its content and its sidebar. A browser without cross-document
+   view transitions just loads the page, and so does reduced motion.
+
+   Its own file, linked only by the wizard pages, because a transition runs only when BOTH pages opt
+   in: the board, Projects and the rest keep loading the way they always have.
+
+   NOTHING IS NAMED (view-transition-name), deliberately. A name pairs the two pages only if the
+   element is drawn in the new page's FIRST frame, when the browser captures it, and the sidebar is
+   not (auth.js builds it after /api/me) nor is the proposal tab strip (it ships `hidden`): named,
+   each would fade out over the page on its own (the customer portal hit exactly this, a5fd0ba). The
+   header and step pills ARE in the first frame, but they are not sticky, so from a page scrolled
+   down a named header would slide in from above the window. Unnamed, the chrome still holds still:
+   reveal.js plays the fade only once the new page's chrome matches the old one, and the fade of two
+   identical pixels is that pixel. */
+@view-transition { navigation: auto; }
+::view-transition-group(*) { animation-duration: .2s; }
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+}
+
+/* While the page boots (js/reveal.js), the sidebar a desktop user keeps open is drawn open on
+   arrival rather than sliding in and shoving the page sideways. Later opens and closes still slide.
+   Specific enough to beat auth.js's injected body / #tw-sidebar transitions. */
+html.tw-booting body,
+html.tw-booting body > #tw-sidebar { transition: none; }

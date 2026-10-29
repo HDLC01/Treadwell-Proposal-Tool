@@ -10185,11 +10185,14 @@
     readAhead();
     return api;
   }
-  mountProposalTabs().catch(() => {});
+  const _tabsMounted = mountProposalTabs().catch(() => {});
 
   // The FIRST template load, kept so the Files page's door (composeForFiles, below) can wait for the
   // document to be on screen before it collects the estimator's edits off it.
   const _firstDocLoad = initDocumentEditor();
+  // The page is drawn once the proposal tab strip and the document are both on screen: js/reveal.js
+  // then plays the fade from the page before, so switching proposals never shows an empty page.
+  if (typeof TWReveal !== "undefined") TWReveal.done(_tabsMounted, _firstDocLoad);
 
   // Recompute base + options from the per-tab snapshot first (no-op for older
   // drafts without it), so the price display below reflects the current base.
