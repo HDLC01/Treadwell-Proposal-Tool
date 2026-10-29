@@ -27,6 +27,8 @@ from _golden_support import FRONTEND, break_source
 from _node import last_json_line, require_node, run_node
 from _seed_support import plan_json
 
+import item_categories as ic
+
 TESTS = pathlib.Path(__file__).resolve().parent
 HARNESS = TESTS / "js" / "item-categories-harness.js"
 LIBRARY_HARNESS = TESTS / "js" / "library-ui-harness.js"
@@ -98,14 +100,14 @@ def test_each_edit_sends_the_whole_set_with_ids_kept(ran):
 
 
 # ── the Items tab ────────────────────────────────────────────────────────────
-def test_the_category_cell_offers_one_select_per_work_type_the_material_is_used_in(lib):
+def test_the_category_cell_offers_one_select_per_division_the_material_is_in(lib):
     c = lib["cells"]
     assert c["c1"]["selects"] == ["epoxy"] and c["c1"]["epoxy"] == "epoxy-patch" and not c["c1"]["labelled"]
     assert c["c2"]["selects"] == ["polish"] and c["c2"]["polish"] == ""
-    assert c["c3"]["selects"] == ["epoxy", "polish"] and c["c3"]["labelled"], "two work types, each labelled"
+    assert c["c3"]["selects"] == ["epoxy", "polish"] and c["c3"]["labelled"], "two divisions, each labelled"
     assert (c["c3"]["epoxy"], c["c3"]["polish"]) == ("epoxy-extras", "polish-floor")
-    assert c["c6"]["selects"] == ["polish"], "a Defaults-tab work type counts as one the material is used in"
-    assert c["c5"]["selects"] == ["epoxy", "polish"], "a material in no work type is offered every one with headings"
+    assert c["c6"]["selects"] == [], "a Defaults-tab work type is not a division: it offers no select"
+    assert c["c5"]["selects"] == [], "a material in no division is offered nothing"
     assert lib["epoxyOptions"] == ["", "epoxy-patch", "epoxy-liquids", "epoxy-extras", "epoxy-cove"], (
         "the work type's headings, in the Admin order, after None")
 
@@ -145,9 +147,9 @@ def test_a_pick_the_database_refuses_is_dropped_so_the_material_still_saves(lib_
 
 def test_choosing_a_category_queues_the_whole_map_as_a_new_object(lib):
     e = lib["edit"]
-    assert e["afterAdd"] == {"kind": "items", "id": "c1",
-                             "body": {"material_categories": {"epoxy": "epoxy-patch", "polish": "polish-dye"}}}
-    assert e["modelAfterAdd"] == {"epoxy": "epoxy-patch", "polish": "polish-dye"}
+    assert e["afterAdd"] == {"kind": "items", "id": "c3",
+                             "body": {"material_categories": {"epoxy": "epoxy-extras", "polish": "polish-dye"}}}
+    assert e["modelAfterAdd"] == {"epoxy": "epoxy-extras", "polish": "polish-dye"}
     assert e["afterClear"]["body"] == {"material_categories": {"polish": "polish-dye"}}, "None takes the work type out"
     assert e["snapshotUntouched"], "the map was written into, so a Cancel could not put the old one back"
 
@@ -161,6 +163,54 @@ def test_the_category_facet_filters_like_the_others(lib):
     assert lib["barOptions"] == ["", "Patch", "Epoxy Liquids", "Extras", "Cove", "Floor", "Dye", "Joint Filler",
                                  lib["NONE"]], "every name once, in the Admin order"
     assert lib["patch"]["barValue"] == "Patch"
+
+
+# ── category follows division (Hanz, 2026-10-29) ─────────────────────────────
+# "Category and Division should always be tied together. How is it that Paint Blie has Epoxy and Polish in the
+# categories but is not selected in the divisions?"
+def test_a_material_in_no_division_says_to_pick_one_and_offers_no_select(lib):
+    t = lib["tied"]["before"]
+    assert t["t1"] == {"selects": [], "pickDivision": True, "noneSetUp": False}, (
+        "Paint Blie: no division ticked, so no Epoxy or Polish select, whatever categories it holds")
+    assert t["t5"]["selects"] == [] and t["t5"]["pickDivision"], "Defaults-tab work types do not widen the pickers"
+    assert t["t6"]["selects"] == ["epoxy"], "a Defaults-tab Polish on an Epoxy material offers no Polish select"
+
+
+def test_only_the_ticked_divisions_get_a_select(lib):
+    t = lib["tied"]["before"]
+    assert t["t2"]["selects"] == ["epoxy"] and t["t2"]["epoxy"] == "epoxy-patch", (
+        "a category the material holds for a division it is not in offers no select")
+    assert t["t3"] == {"selects": [], "pickDivision": False, "noneSetUp": True}, (
+        "a division whose work type has no categories set up shows no select for it")
+    assert t["t4"]["selects"] == ["epoxy", "polish"]
+
+
+def test_unticking_a_division_takes_its_category_out_in_the_same_save(lib):
+    u = lib["tied"]["afterUntick"]
+    assert u["body"] == {"kind": "items", "id": "t4",
+                         "body": {"divisions": ["Epoxy"], "material_categories": {"epoxy": "epoxy-extras"}}}
+    assert u["model"] == {"epoxy": "epoxy-extras"} and u["cell"]["selects"] == ["epoxy"]
+    assert u["snapshotUntouched"], "the map was written into, so a Cancel could not put the old one back"
+    off = lib["tied"]["afterAllOff"]
+    assert off["epoxyOff"]["body"] == {"divisions": ["Polished Concrete"], "material_categories": {}}
+    assert off["body"]["body"] == {"divisions": []}, "nothing left to take out: the map is not re-sent"
+    assert off["cell"] == {"selects": [], "pickDivision": True, "noneSetUp": False}
+
+
+def test_ticking_a_division_brings_its_select_back_at_none(lib):
+    r = lib["tied"]["afterRetick"]
+    assert r["body"]["body"] == {"divisions": ["Polished Concrete", "Epoxy"]}, "a tick takes nothing out"
+    assert r["cell"]["selects"] == ["epoxy", "polish"] and r["cell"]["polish"] == ""
+    t1 = lib["tied"]["afterTickT1"]
+    assert t1["body"]["body"] == {"divisions": ["Epoxy"], "material_categories": {"epoxy": "epoxy-patch"}}, (
+        "Paint Blie's first tick keeps the Epoxy category and drops the Polish one it had no division for")
+    assert t1["cell"]["selects"] == ["epoxy"] and t1["cell"]["epoxy"] == "epoxy-patch"
+
+
+def test_the_page_and_the_server_read_a_division_as_the_same_work_type(lib):
+    pairs = lib["tied"]["divisionWorkTypes"]
+    assert len(pairs) > 5 and any(wt == "" for _, wt in pairs) and any(wt == "seal" for _, wt in pairs)
+    assert [[n, ic.division_work_type(n)] for n, _ in pairs] == pairs
 
 
 # ── the Material step ────────────────────────────────────────────────────────
@@ -326,6 +376,7 @@ def test_mutation_goes_red(name, tmp_path):
     assert not check(last_json_line(proc.stdout)), name + " left its check green"
 
 
+PICKERS = "    return order.filter(function (wt) { return mine[wt] && L.categoriesFor(CATS, wt).length > 0; });"
 LIBRARY_MUTATIONS = {
     "the facet ignores the category": (
         "js/library.js", "    if (F.category && !categoryHits(it, F.category)) return false;", "    void categoryHits;",
@@ -338,8 +389,33 @@ LIBRARY_MUTATIONS = {
         "js/library.js", "    if (!CATS_WRITABLE) return '<span", "    if (false) return '<span",
         lambda c: c["noColumn"]["selects"] == []),
     "every work type offered to every material": (
-        "js/library.js", "    return own.length ? own : withCats;", "    return withCats;",
+        "js/library.js", PICKERS,
+        "    return order.filter(function (wt) { return L.categoriesFor(CATS, wt).length > 0; });",
         lambda c: c["cells"]["c1"]["selects"] == ["epoxy"]),
+    "a held category widens the pickers": (
+        "js/library.js", PICKERS,
+        "    return order.filter(function (wt) { return (mine[wt] || (it.material_categories || {})[wt]) && "
+        "L.categoriesFor(CATS, wt).length > 0; });",
+        lambda c: c["tied"]["before"]["t2"]["selects"] == ["epoxy"]),
+    "the Defaults-tab work types widen the pickers": (
+        "js/library.js", PICKERS,
+        "    return order.filter(function (wt) { return (mine[wt] || (it.default_work_types || []).indexOf(wt) >= 0) "
+        "&& L.categoriesFor(CATS, wt).length > 0; });",
+        lambda c: c["tied"]["before"]["t6"]["selects"] == ["epoxy"]),
+    "no sentence for a material in no division": (
+        "js/library.js",
+        "    if (!itemDivisions(it).length) return '<span class=\"catnote\">Pick a division first</span>';",
+        "    void 0;",
+        lambda c: c["tied"]["before"]["t1"]["pickDivision"]),
+    "an unticked division keeps its category": (
+        "js/library.js",
+        "      if (Object.keys(keptCats).length !== Object.keys(it.material_categories || {}).length) {",
+        "      if (false) {",
+        lambda c: c["tied"]["afterUntick"]["model"] == {"epoxy": "epoxy-extras"}),
+    "a division the page reads differently from the server": (
+        "js/library.js", "    return DIVISION_WORK_TYPE[key] ||", "    return DIVISION_WORK_TYPE[key.replace(/ /g, \"\")] ||",
+        lambda c: [[n, ic.division_work_type(n)] for n, _ in c["tied"]["divisionWorkTypes"]]
+        == c["tied"]["divisionWorkTypes"]),
 }
 
 

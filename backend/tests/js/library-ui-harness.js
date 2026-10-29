@@ -623,6 +623,10 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   var CATS_WRITABLE = state.CATS_WRITABLE === undefined ? true : state.CATS_WRITABLE;
   ${grab(/^  var CATEGORY_NONE = .*;$/m, "the CATEGORY_NONE declaration")}
   ${grab(/^  var DIVISION_WORK_TYPE = \{.*\};$/m, "the DIVISION_WORK_TYPE declaration")}
+  // categoryWorkTypes and categoriesInDivisions ask divisionWorkType; onItemEdit's divisions branch asks
+  // categoriesInDivisions. Every scope below that lifts onItemEdit lifts these three too.
+  ${fn("divisionWorkType")}
+  ${fn("categoriesInDivisions")}
   ${fn("categoryWorkTypes")}
   ${fn("categoryCell")}
   ${fn("withCategory")}
@@ -770,6 +774,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
   return { setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
            categoryCell, categoryHits, categoryFilterNames, categoryWorkTypes, CATEGORY_NONE,
+           divisionWorkType, categoriesInDivisions,
            setCats: function (c) { CATS = c; },
            // THE PAGERS. The search, the sort and the open assembly are plain variables on the page
            // and its listeners just assign them, so these setters are those assignments and nothing
@@ -1716,6 +1721,12 @@ async function conflictChecks() {
     // because the name branch calls them.
     ${fn("similarNames")}
     ${fn("dupeHtml")}
+    // onItemEdit's divisions branch: category follows division (2026-10-29).
+    var CATS = state.CATS || null;
+    ${grab(/^  var DIVISION_WORK_TYPE = \{.*\};$/m, "the DIVISION_WORK_TYPE declaration")}
+    ${fn("itemDivisions")}
+    ${fn("divisionWorkType")}
+    ${fn("categoriesInDivisions")}
     ${fn("onItemEdit")}
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
              rememberItem: rememberItem, onItemEdit: onItemEdit,
@@ -5850,6 +5861,12 @@ function itemRowDoc(rowHtml, id) {
     ${fn("itemSaveButtonHtml")}
     ${fn("showUnsaved")}
     ${fn("hideUnsaved")}
+    // onItemEdit's divisions branch: category follows division (2026-10-29).
+    var CATS = state.CATS || null;
+    ${grab(/^  var DIVISION_WORK_TYPE = \{.*\};$/m, "the DIVISION_WORK_TYPE declaration")}
+    ${fn("itemDivisions")}
+    ${fn("divisionWorkType")}
+    ${fn("categoriesInDivisions")}
     ${fn("onItemEdit")}
     return { onItemEdit: onItemEdit, hideUnsaved: hideUnsaved,
              pending: function () { return Object.keys(pendingPatch); } };
@@ -7102,15 +7119,61 @@ async function manualSaveChecks() {
     getAttribute: (k) => (k === "data-f" ? "material_category" : (k === "data-wt" ? wt : null)),
     closest: (sel) => (sel === "[data-item]" ? { getAttribute: () => id } : null),
   });
+  // c3: in Epoxy and Polished Concrete, so both of its selects are on screen to be picked from.
   const e = build({ ITEMS: JSON.parse(JSON.stringify(MATS)), CATS: CATS });
   e.api.renderItems();
-  const c1 = e.api.itemsNow().filter((x) => x.id === "c1")[0];
-  const beforeMap = c1.material_categories;
-  e.api.onItemEdit({ target: target("c1", "polish", "polish-dye") });
+  const c3 = e.api.itemsNow().filter((x) => x.id === "c3")[0];
+  const beforeMap = c3.material_categories;
+  e.api.onItemEdit({ target: target("c3", "polish", "polish-dye") });
   const afterAdd = JSON.parse(JSON.stringify(e.api.QUEUED[e.api.QUEUED.length - 1]));
-  const modelAfterAdd = JSON.parse(JSON.stringify(e.api.itemsNow().filter((x) => x.id === "c1")[0].material_categories));
-  e.api.onItemEdit({ target: target("c1", "epoxy", "") });
+  const modelAfterAdd = JSON.parse(JSON.stringify(e.api.itemsNow().filter((x) => x.id === "c3")[0].material_categories));
+  e.api.onItemEdit({ target: target("c3", "epoxy", "") });
   const afterClear = JSON.parse(JSON.stringify(e.api.QUEUED[e.api.QUEUED.length - 1]));
+
+  // CATEGORY FOLLOWS DIVISION (Hanz, 2026-10-29: "Category and Division should always be tied together").
+  // Paint Blie had no division ticked and still showed Epoxy and Polish selects. Rendered by the real
+  // renderItems; the divisions are toggled through the real chip markup and the real onItemEdit.
+  const TIED = [
+    mat("t1", [], { epoxy: "epoxy-patch", polish: "polish-floor" }, { name: "Paint Blie" }),
+    mat("t2", ["Epoxy"], { epoxy: "epoxy-patch", polish: "polish-floor" }),
+    mat("t3", ["Gypsum Underlayment"], {}),
+    mat("t4", ["Epoxy", "Polished Concrete"], { epoxy: "epoxy-extras", polish: "polish-floor" }),
+    mat("t5", [], {}, { default_work_types: ["polish", "epoxy"] }),
+    mat("t6", ["Epoxy"], {}, { default_work_types: ["polish"] }),
+  ];
+  const t = build({ ITEMS: JSON.parse(JSON.stringify(TIED)), CATS: CATS });
+  const tiedCell = (id) => {
+    t.api.renderItems();
+    const cell = cellOf(rowOf(t.dom.nodes["items-body"].innerHTML, id));
+    return { selects: selects(cell), epoxy: selectedIn(cell, "epoxy"), polish: selectedIn(cell, "polish"),
+             pickDivision: /class="catnote">Pick a division first</.test(cell), noneSetUp: /None set up/.test(cell) };
+  };
+  const tiedBefore = {};
+  TIED.forEach((m) => { tiedBefore[m.id] = tiedCell(m.id); });
+  const toggle = (id, division) => {
+    t.api.renderItems();
+    const chips = chipRowFromHtml(id, divisionCellOf(rowOf(t.dom.nodes["items-body"].innerHTML, id)));
+    const chip = chips.inputs.filter((x) => x.div === division)[0];
+    chip.checked = !chip.checked;
+    t.api.onItemEdit({ type: "change", target: chip });
+    return JSON.parse(JSON.stringify(t.api.QUEUED[t.api.QUEUED.length - 1]));
+  };
+  const t4 = () => t.api.itemsNow().filter((x) => x.id === "t4")[0];
+  const t4Map = t4().material_categories;
+  const untickPolish = toggle("t4", "Polished Concrete");
+  const afterUntick = { body: untickPolish, model: JSON.parse(JSON.stringify(t4().material_categories)),
+                        cell: tiedCell("t4"), snapshotUntouched: JSON.stringify(t4Map) === '{"epoxy":"epoxy-extras","polish":"polish-floor"}' };
+  const retickPolish = toggle("t4", "Polished Concrete");
+  const afterRetick = { body: retickPolish, cell: tiedCell("t4") };
+  const epoxyOff = toggle("t4", "Epoxy");
+  const lastOff = toggle("t4", "Polished Concrete");
+  const afterAllOff = { epoxyOff: epoxyOff, body: lastOff, cell: tiedCell("t4") };
+  const tickT1 = toggle("t1", "Epoxy");
+  const afterTickT1 = { body: tickT1, cell: tiedCell("t1") };
+  const DIV_NAMES = ["Polished Concrete", "  epoxy ", "Gypsum   Underlayment", "Seal", "LEVELING", "Polish", "Gyp",
+                     "Paint", ""];
+  const tied = { before: tiedBefore, afterUntick, afterRetick, afterAllOff, afterTickT1,
+                 divisionWorkTypes: DIV_NAMES.map((n) => [n, t.api.divisionWorkType(n)]) };
 
   // THE FACET: the real visibleItems / matchesFilters / filterSummary / renderFilterBar.
   const facet = (category) => {
@@ -7126,7 +7189,9 @@ async function manualSaveChecks() {
     cells, epoxyOptions,
     bare: { selects: selects(bareCell), noneSetUp: /None set up/.test(bareCell) },
     noColumn: { selects: selects(noColCell), says: /Not on this database yet/.test(noColCell) },
-    edit: { afterAdd, modelAfterAdd, afterClear, snapshotUntouched: JSON.stringify(beforeMap) === '{"epoxy":"epoxy-patch"}' },
+    edit: { afterAdd, modelAfterAdd, afterClear,
+            snapshotUntouched: JSON.stringify(beforeMap) === '{"epoxy":"epoxy-extras","polish":"polish-floor"}' },
+    tied,
     patch: facet("Patch"), floor: facet("floor"), none: facet(NONE), off: facet(""),
     barOptions: (facet("").bar.match(/<option value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]),
     NONE,

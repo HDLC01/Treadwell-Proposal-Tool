@@ -817,8 +817,33 @@ def _clashing_item(name: Any, *, ignore_id: Optional[str] = None) -> Optional[Di
     return None
 
 
+def _categories_follow_divisions(patch: Dict[str, Any], stored: Optional[Dict[str, Any]]) -> None:
+    """CATEGORY FOLLOWS DIVISION, for every caller (Hanz, 2026-10-29: "Category and Division should
+    always be tied together"). A category for a work type none of the material's divisions is priced on
+    is STRIPPED, not refused: the Items tab sends divisions and categories in separate debounced saves, a
+    refused save is requeued with every later edit of that row folded into it, and a 400 here would make
+    the material unsaveable over a heading the estimator can no longer even see. Stripping is also what
+    "untick the division" means.
+
+    `patch` is validate_item's output and is changed in place; `stored` is the row as it is now (None on
+    a create). A patch that moves only the divisions also carries the cut-down map when the stored one
+    loses a key, and ONLY then: a database without the column has no stored map to lose one from, so a
+    division change there never names the column."""
+    has_cats = "material_categories" in patch
+    if not has_cats and "divisions" not in patch:
+        return
+    divisions = (patch["divisions"] if "divisions" in patch
+                 else _coerce_divisions((stored or {}).get("divisions"), (stored or {}).get("category")))
+    held = item_categories.coerce_item_categories(
+        patch["material_categories"] if has_cats else (stored or {}).get("material_categories"))
+    kept = item_categories.within_divisions(held, divisions)
+    if has_cats or kept != held:
+        patch["material_categories"] = kept or None
+
+
 def create_item(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str, Any]:
     row = validate_item(payload)
+    _categories_follow_divisions(row, None)
     clash = _clashing_item(row.get("name"))
     if clash:
         raise ValidationError("\"%s\" is already in the library." % clash["name"])
@@ -864,6 +889,7 @@ def update_item(item_id: str, payload: Dict[str, Any],
         clash = _clashing_item(patch["name"], ignore_id=item_id)
         if clash:
             raise ValidationError("\"%s\" is already in the library." % clash["name"])
+    _categories_follow_divisions(patch, rows[0])
     # A PRICE REVISION, which is what Hanz asked to be able to see: "Date modified update should
     # only trigger when cost is modified". So the stamp moves when the number actually changes —
     # not when the name is corrected, and not when the same cost is saved again by the debounced
