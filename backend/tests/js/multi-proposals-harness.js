@@ -805,6 +805,56 @@ async function step4() {
     await settle();
     s.sheetNames = { labels, note, boxValue, acceptFetches, unchangedFetches: fetches(q).length };
   }
+  // 21c. ONE NAME (Hanz, 2026-10-29): renaming a tab renames its SHEET on Base Bid 1's estimate. On Base Bid 1's own page the
+  //      server's parent_patch (the estimate's keys as stored) is taken into this page's state and its local copy, so the next
+  //      save cannot put the old sheet name back; the strip is the server's answer (every proposal's name may follow). On a
+  //      child's page the parent's keys are not this page's and are left alone.
+  {
+    const patch = { tab_labels: { Copy1: "Room 2", Epoxy: "Polish Room" },
+                    priced_tabs: [{ id: "Epoxy", name: "Polish Room" }, { id: "Copy1", name: "Room 2" }, { id: "Polish", name: "Polish" }] };
+    const after = { parent_id: "P1", group_id: "G1", members: [
+      { id: "P1", label: "Polish Room", display_label: "Polish Room", index: 1, is_parent: true, stale: false },
+      { id: "C2", label: "Room 2", display_label: "Room 2", index: 2, is_parent: false, stale: true },
+      { id: "C3", label: "Polish", display_label: "Polish", index: 3, is_parent: false, stale: true },
+    ] };
+    const answer = { ok: true, group_id: "G1", label: "Polish Room", parent_id: "P1",
+                     sheet: { id: "Epoxy", label: "Polish Room" }, parent_patch: patch, proposals: after };
+    const st = { base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1", "Polish"], tab_labels: { Copy1: "Room 2" },
+                 priced_tabs: [{ id: "Epoxy", name: "Epoxy" }, { id: "Copy1", name: "Room 2" }, { id: "Polish", name: "Polish" }] };
+    const p = await proposalPage({ id: "P1", st, answers: [[/\/api\/draft\/P1\/scope$/, "POST", { status: 200, body: answer }]] });
+    await p.press(".pt-name", "P1", "dblclick");
+    const box = p.strip.querySelector(".pt-ren-in");
+    box.value = "Polish Room";
+    p.log.length = 0;
+    box.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    const parentPage = { steps: steps(p), fetches: fetches(p), labels: p.look().tabs.map((t) => t.label),
+                         local: p.log.filter((x) => x[0] === "setLocalState").map((x) => x.slice(1)),
+                         state: { tab_labels: p.st.tab_labels, priced_tabs: p.st.priced_tabs } };
+    const q = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1", priced_tabs: [{ id: "Copy1" }] },
+      answers: [[/\/api\/draft\/C2\/scope$/, "POST", { status: 200, body: Object.assign({}, answer, { label: "Lab 9" }) }]] });
+    await q.press(".pt-name", "C2", "dblclick");
+    const qbox = q.strip.querySelector(".pt-ren-in");
+    qbox.value = "Lab 9";
+    q.log.length = 0;
+    qbox.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    const childPage = { local: q.log.filter((x) => x[0] === "setLocalState").map((x) => x.slice(1)),
+                        tab_labels: q.st.tab_labels === undefined ? null : q.st.tab_labels,
+                        labels: q.look().tabs.map((t) => t.label) };
+    // A refusal (the parent saved again while renaming) is said on the strip and nothing is taken.
+    const r = await proposalPage({ id: "P1", st: clone(st), answers: [[/\/api\/draft\/P1\/scope$/, "POST", { status: 409,
+      body: { ok: false, code: "parent_changed", error: "Base Bid 1's estimate was saved again while this was renaming its sheet. Reload the page and try again." } }]] });
+    await r.press(".pt-name", "P1", "dblclick");
+    const rbox = r.strip.querySelector(".pt-ren-in");
+    rbox.value = "Polish Room";
+    r.log.length = 0;
+    rbox.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    const refused = { msg: r.look().msg, local: r.log.filter((x) => x[0] === "setLocalState").length,
+                      tab_labels: r.st.tab_labels };
+    s.oneName = { parentPage, childPage, refused };
+  }
   // 22. DELETE: the x asks first; a yes sends the child to the Trash and takes its tab off (Base Bid 1's page stays);
   //     a no sends nothing; a child deleting itself goes to Base Bid 1.
   {

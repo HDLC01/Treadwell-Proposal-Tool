@@ -9902,8 +9902,9 @@
    *                     the server's own sentence (repaintNote) and nothing moves.
    *    #proposal-tabs   One tab per proposal once there are two (GET .../proposals). A click opens that
    *                     proposal's page (a tab switch IS a navigation: this page renders off a one-shot
-   *                     snapshot of one draft). A double-click on the open tab renames it (POST
-   *                     /api/draft/{id}/scope {label, rename}). The x on a child sends it to the Trash.
+   *                     snapshot of one draft). A double-click on the open tab renames it, which renames its SHEET on
+   *                     Base Bid 1's estimate (POST /api/draft/{id}/scope {label, rename, draft_version}, saved and read
+   *                     first: one name for the sheet and its proposal). The x on a child sends it to the Trash.
    *    #proposals-note  "Estimate changed": a child whose copy of the estimate is older than the
    *                     estimate (`stale`). Refresh copies it into every proposal again, keeping each
    *                     one's words (POST .../proposals/refresh {draft_version}), in the same order.
@@ -9928,8 +9929,8 @@
     const pageOf = (pid) => "/proposal-review.html?d=" + encodeURIComponent(pid);
     const urlOf = (pid, tail) => TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(pid) + (tail || "");
     const members = () => (view && Array.isArray(view.members) ? view.members : []);
-    // THE TAB SAYS THE SHEET (Hanz, 2026-10-27): the server's display_label is the sheet's name unless a person renamed
-    // the proposal (an old untouched "Base Bid N" shows its sheet too); the position is the last resort.
+    // THE TAB SAYS THE SHEET (Hanz, 2026-10-27; one name, 2026-10-29): the server's display_label is the sheet's name (a
+    // clash numbered), and renaming the tab renames the sheet; the position is the last resort.
     const nameOf = (m) => (m && (m.display_label || m.label)) || ("Base Bid " + ((m && m.index) || ""));
     // OUT OF STEP (Hanz, 2026-10-28: "Why is there an extra epoxy tab when we only have Epoxy and Polish?"): a proposal
     // that prices no base bid of its own, said by the server (drafts.proposals_view `out_of_step`). Refresh moves it.
@@ -10070,12 +10071,20 @@
       // name must save it, or the board, the portal chip and the Dropbox file names keep saying "Base Bid N".
       if (!label || label === m.label) { paintStrip(); return; }
       try {
-        const j = await send("POST", urlOf(m.id, "/scope"), { label, rename: true });
+        // ONE NAME (Hanz, 2026-10-29: "Whatever the sheet name is, that would be the name of the proposals"): the server renames
+        // this proposal's SHEET on Base Bid 1's estimate and names every proposal after its sheet (drafts.rename_proposal). Saved
+        // and read first (post), so a save still queued on this page cannot land after it with the old sheet name.
+        const j = await post("/scope", { label, rename: true }, "renamed");
         m.label = j.label || label;
         m.display_label = m.label;
+        if (j.proposals && Array.isArray(j.proposals.members)) view = j.proposals;   // every proposal's name may have followed
         msg = "";
+        // On Base Bid 1's own page the estimate is this page's draft: its renamed sheet (parent_patch) is taken into this page's
+        // copy too, or the next save would put the old name back and the proposals would follow it.
+        const own = (j.parent_id === id && j.parent_patch && typeof j.parent_patch === "object") ? j.parent_patch : {};
+        Object.keys(own).forEach((k) => { if (k in state) state[k] = own[k]; });
         // The scope group is the server's: this browser only remembers what the server has already.
-        if (m.id === id && TW.setLocalState) TW.setLocalState({ scope_group: { id: j.group_id, label: m.label } }, { alreadyOnServer: true });
+        if (m.id === id && TW.setLocalState) TW.setLocalState(Object.assign({ scope_group: { id: j.group_id, label: m.label } }, own), { alreadyOnServer: true });
       } catch (err) {
         msg = "Not renamed. " + ((err && err.message) || "Try again.");
       }

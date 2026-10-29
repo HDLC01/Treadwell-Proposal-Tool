@@ -74,9 +74,11 @@
         el.className=""; el.innerHTML = ev.map(e => {
           const d = e.detail || {};
           const proj = d.project_name ? `<span class="proj">${esc(d.project_name)}</span>` : "";
+          // A proposal's new name (one name = its sheet's, 2026-10-29), so the feed says what it is called now.
+          const named = e.action === "scope_renamed" && d.to ? ` <span class="act">to “${esc(d.to)}”</span>` : "";
           return `<div class="row"><span class="dot ${esc(e.action)}"></span>
             <div><span class="who">${esc(e.actor_email||"someone")}</span>
-            <span class="act">${esc(VERB[e.action]||e.action)}</span> ${proj}
+            <span class="act">${esc(VERB[e.action]||e.action)}</span> ${proj}${named}
             <span class="total">${money(d.total)}</span></div>
             <span class="when">${esc(when(e.created_at))}</span></div>`;
         }).join("");

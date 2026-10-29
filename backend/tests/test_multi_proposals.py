@@ -315,18 +315,19 @@ def _old_style(store, kids, labels):
         _row(store, kid)["data"]["scope_group"]["label"] = lab
 
 
-def test_old_base_bid_labels_display_as_the_sheet_and_a_renamed_one_is_kept(fake_supabase, monkeypatch):
+def test_every_tab_displays_its_sheets_name_whatever_is_stored(fake_supabase, monkeypatch):
+    """ONE NAME (Hanz, 2026-10-29): an old "Base Bid N" and a name typed by hand both show the sheet's
+    name; reading the strip writes nothing (the next save stores it, sync_proposal_labels)."""
     store = _seed(fake_supabase, monkeypatch)
     kids = [c["id"] for c in _fan(("Epoxy", "Copy1", "Polish"))["children"]]
     _old_style(store, kids, ["Base Bid 1", "Base Bid 2", "Kitchen"])
     v = drafts.proposals_view("p1")
     ms = v["members"]
     assert [m["label"] for m in ms] == ["Base Bid 1", "Base Bid 2", "Kitchen"], "the stored name is not rewritten"
-    assert [m["display_label"] for m in ms] == ["Epoxy", "Room 2", "Kitchen"]
+    assert [m["display_label"] for m in ms] == ["Epoxy", "Room 2", "Polish"]
     assert [m["sheet_label"] for m in ms] == ["Epoxy", "Room 2", "Polish"]
-    # only the exact untouched default: "Base Bid 2 East" is a name somebody typed
     _old_style(store, kids, ["Base Bid 1 East", "base bid 2", "Base Bid"])
-    assert [m["display_label"] for m in drafts.proposals_view("p1")["members"]] ==         ["Base Bid 1 East", "base bid 2", "Base Bid"]
+    assert [m["display_label"] for m in drafts.proposals_view("p1")["members"]] == ["Epoxy", "Room 2", "Polish"]
 
 
 def test_the_view_carries_each_proposals_lump_sum(fake_supabase, monkeypatch):

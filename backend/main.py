@@ -2184,14 +2184,14 @@ def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
     draft_id, row, by, body = prep["draft_id"], prep["row"], prep["by"], prep["body"]
     emails, digest = prep["emails"], prep["digest"]
     sent_docs, sent_pdf = prep["sent_docs"], prep["sent_pdf"]
-    # THE NAME THE CUSTOMER READS (Hanz, 2026-10-28). A proposal still stored as "Base Bid N" is
-    # shown by its sheet's name in the tool, but the portal reads the stored name, so the customer
-    # and the project's email read "Base Bid 2". It is stored as its sheet's name first
-    # (drafts.adopt_sheet_label), here, after every check, so a refused send renames nothing. The
-    # snapshot below carries the new name too. A failure is only logged: the old name is no reason
-    # to stop a send.
+    # THE NAME THE CUSTOMER READS (Hanz, 2026-10-28; 2026-10-29). The portal reads the stored name
+    # at this publish, so a proposal whose stored name is not its sheet's (an old "Base Bid N", or a
+    # sheet renamed on the estimate since) is given its sheet's name first, with every other
+    # proposal of its estimate (drafts.adopt_sheet_label, the one-name rule), here, after every
+    # check, so a refused send renames nothing. The snapshot below carries the new name too. A
+    # failure is only logged: the old name is no reason to stop a send.
     _sg_id, _sg_label = drafts._scope_of(row.get("data") or {})
-    if _sg_id and _sg_label and drafts._OLD_DEFAULT_LABEL.match(_sg_label):
+    if _sg_id:
         try:
             _named = drafts.adopt_sheet_label(draft_id, by)
         except Exception as exc:  # noqa: BLE001 — a name never stops a send
@@ -8219,9 +8219,11 @@ def api_draft_scope(draft_id: str, payload: ScopeIn, request: Request) -> Any:
 
     New: 200 {ok, id, group_id, label, parent_label} — `id` is the new draft, which shares this
     project's intake (drafts.sibling_intake) and goes through the ordinary pipeline on its own.
-    Rename: 200 {ok, group_id, label}. Refusals are flat {ok: false, code, error}: 404 not_found,
-    400 invalid_label / not_grouped / invalid_scope_group, 409 document_changed / label_taken /
-    too_many_scopes."""
+    Rename: 200 {ok, group_id, label}; for a proposal of an estimate with proposals its sheet is
+    renamed (drafts.rename_proposal), and the answer adds parent_id, sheet {id, label},
+    parent_patch, renamed and proposals (the strip). Refusals are flat {ok: false, code, error}:
+    404 not_found, 400 invalid_label / not_grouped / invalid_scope_group, 409 document_changed /
+    label_taken / too_many_scopes / parent_gone / sheet_gone / parent_changed."""
     draft_id = _safe_id(draft_id)
     row = drafts.load_draft(draft_id)
     if not row:
@@ -8234,7 +8236,13 @@ def api_draft_scope(draft_id: str, payload: ScopeIn, request: Request) -> Any:
     actor = _user_email(request)
     try:
         if payload.rename:
-            return {"ok": True, **drafts.rename_scope(draft_id, payload.label, actor)}
+            # A proposal of an estimate with proposals is renamed by renaming its SHEET on that
+            # estimate (drafts.rename_proposal, the one-name rule); any other scope as before. The
+            # strip is answered too, since every proposal's name may follow.
+            out = drafts.rename_proposal(draft_id, payload.label, actor)
+            if out.get("sheet"):
+                out["proposals"] = drafts.proposals_view(draft_id)
+            return {"ok": True, **out}
         return {"ok": True, **drafts.create_sibling(draft_id, payload.label, actor)}
     except drafts.ScopeError as exc:
         return _scope_refusal(exc)
@@ -8698,10 +8706,27 @@ def _send_all_placeholders(data: Dict[str, Any], built: bool) -> List[str]:
     return _placeholders_in(vals, wt, data.get("audience") or "Direct")
 
 
+def _sync_group_names(group_id: str, actor: Optional[str]) -> None:
+    """Name every proposal of each estimate with proposals in scope group `group_id` after its sheet
+    (drafts.sync_proposal_labels). Best-effort: a failure is logged, and the names stay as stored."""
+    try:
+        rows = drafts._group_rows(group_id)
+        parents = []
+        for m in rows:
+            pid = m.get("proposal_of") or None
+            if pid and pid not in parents:
+                parents.append(pid)
+        for pid in parents:
+            drafts.sync_proposal_labels(pid, actor)
+    except Exception as exc:  # noqa: BLE001 — a name never stops a send
+        log.warning("scope group %s: the proposals were not named after their sheets: %s",
+                    _log_safe(group_id), exc)
+
+
 def _send_all_label(m: Dict[str, Any], data: Dict[str, Any]) -> str:
-    """A proposal's name in what the press says: the stored one, or for the old "Base Bid N" default
-    the name its tab shows (drafts._shown_label), which is the one its publish stores
-    (drafts.adopt_sheet_label)."""
+    """A proposal's name in what the press says: the stored one (the press stored THE ONE NAME first,
+    _sync_group_names), or for an old "Base Bid N" default that could not be renamed the name its
+    tab shows (drafts._shown_label)."""
     stored = m.get("label") or ""
     if stored and drafts._OLD_DEFAULT_LABEL.match(stored):
         return drafts._shown_label(stored, drafts.proposal_sheet_label(
@@ -8749,8 +8774,9 @@ async def api_scope_group_send_all(group_id: str, request: Request,
     is `closed_lost` / `on_hold`, never `needs_build`; one built or to be built unattended whose
     words still hold Kyle's template placeholders is `placeholders`, _send_all_placeholders). A
     publish the portal refuses midway answers 502 publish_failed with the `published` ones and sends
-    nothing. A proposal still named "Base Bid N" is named after its sheet as it is published
-    (_commit_publish, drafts.adopt_sheet_label).
+    nothing. Every proposal of an estimate with proposals is named after its sheet first
+    (_sync_group_names, drafts.sync_proposal_labels), and again as it is published (_commit_publish,
+    drafts.adopt_sheet_label).
     Otherwise the portal's answer to the combined send, status and body, with `published` [{id,
     label, revision_no}] added: a second press with nothing new is its 409 nothing_to_send."""
     if not drafts.SCOPE_ID_RE.match(group_id or ""):
@@ -8781,6 +8807,10 @@ async def api_scope_group_send_all(group_id: str, request: Request,
 
 def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) -> Any:
     """The publishing half of the send-all: a refusal Response, or the list of what it published."""
+    # THE ONE NAME FIRST (drafts.sync_proposal_labels): every proposal of each estimate in the
+    # group is named after its sheet before anything is said or published, so the press's own
+    # sentences, every publish and the combined email (which reads the draft's name) agree.
+    _sync_group_names(group_id, _user_email(request))
     members = drafts._group_rows(group_id)
     if not members:
         return JSONResponse(status_code=404, content={

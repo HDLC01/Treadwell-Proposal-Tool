@@ -23,6 +23,7 @@ import base64
 import copy
 import hashlib
 import json
+import logging
 import math
 import re
 import uuid
@@ -33,6 +34,8 @@ import cachetools
 
 import price_rules
 from supabase_client import get_client
+
+_log = logging.getLogger("drafts")
 
 
 def _now_iso() -> str:
@@ -144,6 +147,16 @@ def save_draft(draft_id: str, data: Dict[str, Any],
             elif keep_server_owned and key in _NEVER_SEEDED_BY_A_BROWSER:
                 data.pop(key, None)
         sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
+        # ONE NAME (Hanz, 2026-10-29): an estimate with proposals names each of them after its base
+        # sheet, so a sheet renamed on the estimate renames its proposal here, on the save that
+        # carried the new name (sync_proposal_labels). A failure never fails the save: the next save
+        # names them again.
+        if _may_have_proposals(data):
+            try:
+                sync_proposal_labels(draft_id, owner_email, parent=data)
+            except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
+                _log.warning("save of %s: the proposals were not renamed after their sheets: %s",
+                             draft_id, exc)
     else:
         if keep_server_owned:
             data = {k: v for k, v in data.items() if k not in _NEVER_SEEDED_BY_A_BROWSER}
@@ -850,7 +863,9 @@ def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
            .select("id,created_at,scope_group:data->scope_group,archived:data->>archived,"
                    "is_test:data->>is_test,project_name:data->>project_name,"
                    # Whose base bid this proposal was made from (fan_out_proposals), or None.
-                   "proposal_of:data->>proposal_of")
+                   "proposal_of:data->>proposal_of,"
+                   # The sheet it prices, which names it (sync_proposal_labels).
+                   "base_tab_id:data->>base_tab_id")
            .is_("deleted_at", "null").execute())
     out = []
     for r in res.data or []:
@@ -860,6 +875,8 @@ def _group_rows_all(group_id: str) -> List[Dict[str, Any]]:
             out.append({"id": r["id"], "label": sg.get("label") or "",
                         "proposal_of": (r["proposal_of"] if "proposal_of" in r
                                         else blob.get("proposal_of")) or None,
+                        "base_tab_id": (r["base_tab_id"] if "base_tab_id" in r
+                                        else blob.get("base_tab_id")) or None,
                         "created_at": r.get("created_at") or "",
                         "archived": _truthy(r["archived"] if "archived" in r else blob.get("archived")),
                         "is_test": r["is_test"] if "is_test" in r else blob.get("is_test"),
@@ -1532,11 +1549,15 @@ def proposal_children(parent_id: str, group_id: Optional[str]) -> List[Dict[str,
             if m.get("proposal_of") == parent_id and m["id"] != parent_id]
 
 
-def _proposal_rows(parent_id: str, group_id: Optional[str]) -> List[Dict[str, Any]]:
+def _proposal_rows(parent_id: str, group_id: Optional[str],
+                   members: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """proposal_children, each with its stored blob ({id, label, created_at, data}); a child deleted
-    or moved out between the two reads is left out."""
+    or moved out between the two reads is left out. `members` is the group's _group_rows when the
+    caller has read them already (they are not read again)."""
     out = []
-    for m in proposal_children(parent_id, group_id):
+    kids = (proposal_children(parent_id, group_id) if members is None else
+            [m for m in members if m.get("proposal_of") == parent_id and m["id"] != parent_id])
+    for m in kids:
         row = load_draft(m["id"])
         data = (row or {}).get("data") or {}
         if not row or data.get("proposal_of") != parent_id:
@@ -1957,30 +1978,300 @@ def _parent_signer(parent: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def adopt_sheet_label(draft_id: str, actor: Optional[str] = None) -> Optional[str]:
-    """A proposal still stored as "Base Bid N" (_OLD_DEFAULT_LABEL: never renamed), named after its
-    base sheet before it is published (Hanz, 2026-10-28). The tool shows such a proposal by its
-    sheet's name (_shown_label, proposals_view), but the portal reads the STORED label, so the
-    customer's portal and the project's email said "Base Bid 2". The sheet is named off the parent's
-    estimate, as the strip names it (proposals_view), and a clash is numbered (_free_label).
+# ── ONE NAME: a proposal is called what its base sheet is called (Hanz, 2026-10-29) ──────────────
+# "I changed the label on these sheets and it didn't change. Whatever the sheet name is, that would
+# be the name of the proposals, so we have it unified throughout all the steps." A proposal's name was
+# stored once, when Create Multiple Proposals made it (its sheet's name THEN), so a sheet renamed on
+# the estimate later left the proposal on the old name, and step 3 said "Polish (Polish Room)".
+#
+# THE RULE (proposal_names): every proposal of an estimate is named after ITS base sheet on the
+# PARENT's estimate (proposal_sheet_label of its base_tab_id; Base Bid 1 after its own base), in the
+# strip's order, a clash numbered by _free_label ("Room", "Room 2"), the names of the group's other
+# scopes (RJ's scopes, which are not proposals of this estimate) kept free. A name typed by hand is
+# not kept: renaming a proposal renames its sheet (rename_proposal), so the two never disagree.
+#
+# WHERE IT LIVES: scope_group.label, as before, so the board, the drawer, the Dropbox file names and
+# the portal (which reads it at a publish, and the combined email, which reads it at a send) are
+# unchanged. sync_proposal_labels stores it after every save of the parent's estimate (save_draft),
+# before every publish (adopt_sheet_label) and before Send all; proposals_view shows the same rule,
+# so the strip never waits for a save. Nothing here calls the portal or emails anybody.
+SHEET_NAME_MAX = 31                        # a workbook's own limit (estimate-review / bid-model)
+_SHEET_NAME_BAD = re.compile(r'[!:\\/?*\[\]"]')
 
-    Returns the new label, or None when nothing was written: no group, a label a person typed (or
-    none), no sheet name, or a name that cannot be freed. Same posture as rename_scope: `updated_at`
-    is not bumped (the publish's draft_version check reads it), and the event is scope_renamed."""
+
+def _may_have_proposals(data: Dict[str, Any]) -> bool:
+    """Could this blob be an estimate with proposals (Create Multiple Proposals' parent)? Read off
+    the blob alone, so a save of any other draft asks the database nothing more: it is in a scope
+    group, is no proposal of another draft, and has been fanned out (PROPOSALS_BASE) or keeps a list
+    of base bids."""
+    data = data or {}
+    return (isinstance(data.get("scope_group"), dict) and not data.get("proposal_of")
+            and (PROPOSALS_BASE in data or isinstance(data.get("base_tab_ids"), list)))
+
+
+def _strip_rank(parent: Dict[str, Any]) -> Callable[[Any, Any], Tuple[int, str]]:
+    """The strip's order of the children of `parent`: by their sheet's place in its base bids, then
+    oldest first. rank(base_tab_id, created_at)."""
+    order = [t for t in (parent.get("base_tab_ids") or []) if isinstance(t, str)]
+
+    def rank(tab: Any, created_at: Any) -> Tuple[int, str]:
+        return (order.index(tab) if tab in order else len(order), str(created_at or ""))
+    return rank
+
+
+def proposal_names(parent: Dict[str, Any], members: List[Dict[str, Any]],
+                   reserved: Any = ()) -> Dict[str, str]:
+    """THE ONE NAME of each of `members` ([{id, label, base_tab_id}], the strip's order, Base Bid 1
+    first): its base sheet's name on `parent`'s estimate, made free of `reserved` (names taken by
+    the group's other scopes) and of the members before it. A member whose base names no sheet (a
+    combined base) keeps its stored name; one with neither is "Base Bid N". Returns {id: name}."""
+    taken = {str(x).lower() for x in reserved if x}
+    out: Dict[str, str] = {}
+    for i, m in enumerate(members, start=1):
+        want = (proposal_sheet_label(parent, m.get("base_tab_id"))
+                or str(m.get("label") or "").strip() or "Base Bid %d" % i)
+        name = _free_label(want, taken)
+        taken.add(name.lower())
+        out[m["id"]] = name
+    return out
+
+
+def _proposal_family(parent_id: str, parent: Dict[str, Any],
+                     rows: Optional[List[Dict[str, Any]]] = None
+                     ) -> Optional[Tuple[str, List[Dict[str, Any]], set]]:
+    """(group id, members, reserved) of the estimate `parent_id` (blob `parent`): Base Bid 1 then its
+    live children in the strip's order, each {id, label, base_tab_id, created_at}, and the names of
+    the group's other live scopes. None when it is no estimate with proposals. `rows` is the group's
+    _group_rows when the caller has read them."""
+    gid, plabel = _scope_of(parent)
+    if not gid or (parent or {}).get("proposal_of"):
+        return None
+    rows = _group_rows(gid) if rows is None else rows
+    kids = [m for m in rows if m.get("proposal_of") == parent_id and m["id"] != parent_id]
+    if not kids:
+        return None
+    rank = _strip_rank(parent)
+    kids.sort(key=lambda m: rank(m.get("base_tab_id"), m.get("created_at")))
+    members = [{"id": parent_id, "label": plabel or "", "base_tab_id": parent.get("base_tab_id"),
+                "created_at": None}] + [
+        {"id": m["id"], "label": m.get("label") or "", "base_tab_id": m.get("base_tab_id"),
+         "created_at": m.get("created_at")} for m in kids]
+    ids = {m["id"] for m in members}
+    reserved = {m["label"] for m in rows if m["id"] not in ids and m.get("label")}
+    return gid, members, reserved
+
+
+def _sync_names(parent_id: str, parent: Dict[str, Any], actor: Optional[str]
+                ) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+    """sync_proposal_labels' work: ({id: the one name}, [{id, from, to}] of what was written)."""
+    fam = _proposal_family(parent_id, parent)
+    if fam is None:
+        return {}, []
+    gid, members, reserved = fam
+    names = proposal_names(parent, members, reserved)
+    sb = get_client()
+    changed: List[Dict[str, Any]] = []
+    for m in members:
+        new = names[m["id"]]
+        if new == m["label"]:
+            continue
+        # The row as it is now, so nothing else of it is written back (only its name changes).
+        cur = sb.table("drafts").select("id,data").eq("id", m["id"]).limit(1).execute()
+        if not cur.data:
+            continue
+        data = dict(cur.data[0].get("data") or {})
+        sg = data.get("scope_group")
+        if not isinstance(sg, dict) or sg.get("id") != gid or sg.get("label") == new:
+            continue
+        old = sg.get("label")
+        data["scope_group"] = dict(sg, label=new)
+        sb.table("drafts").update({"data": data}).eq("id", m["id"]).execute()
+        log_event(m["id"], actor, "scope_renamed", {"project_name": data.get("project_name"),
+                                                    "id": m["id"], "group": gid, "from": old,
+                                                    "to": new, "sheet": m.get("base_tab_id")})
+        changed.append({"id": m["id"], "from": old, "to": new})
+    if changed:
+        _cache_clear()
+    return names, changed
+
+
+def sync_proposal_labels(parent_id: str, actor: Optional[str] = None,
+                         parent: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """STORE THE ONE NAME (proposal_names) on every proposal of the estimate `parent_id` whose stored
+    name differs, Base Bid 1 included: scope_group.label only, each row re-read before it is written
+    so nothing else of it changes, `updated_at` NOT bumped (a name is not work on a proposal, and the
+    publish's draft_version check reads it), each logged as scope_renamed. `parent` is the estimate's
+    blob when the caller holds it (save_draft has just stored it). Never calls the portal.
+
+    Returns [{id, from, to}] of what was renamed; [] for a draft that is no estimate with proposals."""
+    if parent is None:
+        cur = get_client().table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
+        if not cur.data:
+            return []
+        parent = cur.data[0].get("data") or {}
+    return _sync_names(parent_id, parent, actor)[1]
+
+
+def _sheet_names(data: Dict[str, Any]) -> Dict[str, str]:
+    """{sheet id: its name} of an estimate, as its own page names the sheets: a v2 model's sections
+    (bid-model.js sectionsOf: the root's `label` else "Polish", a section's `label` else its id), a
+    spreadsheet's tabs (estimate-review.js labelFor: tab_labels[id] else the id)."""
+    data = data or {}
+    out: Dict[str, str] = {}
+
+    def named(v: Any, fallback: str) -> str:
+        return v if isinstance(v, str) and v.strip() else fallback
+    if _is_v2(data):
+        pe = data["polish_estimate"]
+        out[_V2_ROOT_TAB] = named(pe.get("label"), _V2_ROOT_TAB)
+        tabs = pe.get("tabs") if isinstance(pe.get("tabs"), dict) else {}
+        for sid, sec in tabs.items():
+            if isinstance(sec, dict) and sid != _V2_ROOT_TAB:
+                out[str(sid)] = named(sec.get("label"), str(sid))
+        return out
+    labels = data.get("tab_labels") if isinstance(data.get("tab_labels"), dict) else {}
+    copies = data.get("tab_copies")
+    ids: List[Any] = list(data.get("tab_order") or []) if isinstance(data.get("tab_order"), list) else []
+    ids += [t.get("id") for t in (data.get("priced_tabs") or []) if isinstance(t, dict)]
+    if isinstance(copies, dict):
+        ids += list(copies)
+    elif isinstance(copies, list):
+        ids += [c.get("id") for c in copies if isinstance(c, dict)]
+    ids += list(labels)
+    for t in ids:
+        if isinstance(t, str) and t and t not in out:
+            out[t] = named(labels.get(t), t)
+    return out
+
+
+def _sheet_name_problem(names: Dict[str, str], tab: str, want: str) -> Optional[Tuple[str, str]]:
+    """(code, sentence) when `want` will not do as the name of sheet `tab` (the estimate pages' own
+    rules: 31 characters at most, none of ! : \\ / ? * [ ] ", not another sheet's name, any case),
+    else None. The name the sheet already has always does."""
+    if want.lower() == (names.get(tab) or "").lower():
+        return None
+    if len(want) > SHEET_NAME_MAX:
+        return "invalid_label", "A sheet name can have %d characters at most." % SHEET_NAME_MAX
+    if _SHEET_NAME_BAD.search(want):
+        return "invalid_label", 'A sheet name cannot have any of these: ! : \\ / ? * [ ] "'
+    if any(t != tab and n.lower() == want.lower() for t, n in names.items()):
+        return "label_taken", "“%s” is already the name of a sheet on this estimate." % want
+    return None
+
+
+def _renamed_sheet(parent: Dict[str, Any], tab: str, want: str) -> Dict[str, Any]:
+    """The keys of `parent` that call sheet `tab` `want`, as new objects: the v2 section's `label`
+    (the root's own `label`), or tab_labels[tab]; and the price snapshot's name of it
+    (priced_tabs[].name), which the proposal's option lines print."""
+    patch: Dict[str, Any] = {}
+    if _is_v2(parent):
+        pe = copy.deepcopy(parent["polish_estimate"])
+        if tab == _V2_ROOT_TAB:
+            pe["label"] = want
+        else:
+            pe["tabs"][tab] = dict(pe["tabs"][tab], label=want)
+        patch["polish_estimate"] = pe
+    else:
+        labels = parent.get("tab_labels")
+        patch["tab_labels"] = dict(labels if isinstance(labels, dict) else {}, **{tab: want})
+    priced = parent.get("priced_tabs")
+    if isinstance(priced, list) and any(isinstance(t, dict) and t.get("id") == tab for t in priced):
+        patch["priced_tabs"] = [dict(t, name=want) if isinstance(t, dict) and t.get("id") == tab
+                                else copy.deepcopy(t) for t in priced]
+    return patch
+
+
+def rename_proposal(draft_id: str, label: Any, actor: Optional[str] = None) -> Dict[str, Any]:
+    """RENAME A PROPOSAL ON ITS TAB = RENAME ITS SHEET (the one-name rule above): the base sheet of
+    `draft_id` (Base Bid 1 or a child) is renamed on the PARENT's estimate (tab_labels, or the v2
+    section's label, and its priced_tabs name), and every proposal of it is then named after its
+    sheet (sync_proposal_labels), so the tab, the estimate and the board say the same. A draft that
+    is no proposal of an estimate with proposals (an RJ scope) is renamed as before (rename_scope),
+    and so is Base Bid 1 when its base is two sheets priced together (no one sheet to name).
+
+    The parent is written only if it has not been stored since it was read (its `updated_at`), and
+    its `updated_at` is not bumped. Returns {group_id, label (this draft's name now), parent_id,
+    sheet: {id, label}, parent_patch (the parent's keys as stored, for a page holding the parent),
+    renamed: [{id, from, to}]}. RAISES ScopeError: not_found (404), not_grouped and invalid_label
+    (400), label_taken, parent_gone, sheet_gone and parent_changed (409)."""
+    row = load_draft(draft_id)
+    if not row:
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    data = row.get("data") or {}
+    gid, _old = _scope_of(data)
+    if not gid:
+        raise ScopeError("not_grouped", "This project is not split into scopes, so it has no "
+                                        "scope name to change.")
+    pid = data.get("proposal_of")
+    if isinstance(pid, str) and pid and pid != draft_id:
+        prow = load_draft(pid) if draft_is_active(pid) else None
+        if not prow:
+            raise ScopeError("parent_gone", "Base Bid 1's estimate is not there any more, so this "
+                                            "proposal's sheet cannot be renamed.", 409)
+    else:
+        pid, prow = draft_id, row
+        if _proposal_family(pid, data) is None:
+            return rename_scope(draft_id, label, actor)
+    parent = prow.get("data") or {}
+    tab = data.get("base_tab_id")
+    if pid == draft_id and not (isinstance(tab, str) and tab):
+        return rename_scope(draft_id, label, actor)
+    names = _sheet_names(parent)
+    if not isinstance(tab, str) or tab not in names:
+        raise ScopeError("sheet_gone", "This proposal's sheet is not on the estimate any more, so "
+                                       "it has no sheet name to change. Press Refresh first.", 409)
+    want = clean_scope_label(label)
+    why = _sheet_name_problem(names, tab, want)
+    if why:
+        raise ScopeError(why[0], why[1], 409 if why[0] == "label_taken" else 400)
+    patch: Dict[str, Any] = {}
+    if want != names[tab]:
+        patch = _renamed_sheet(parent, tab, want)
+        parent = dict(parent, **patch)
+        q = get_client().table("drafts").update({"data": parent}).eq("id", pid)
+        if prow.get("updated_at"):
+            q = q.eq("updated_at", prow["updated_at"])
+        if not q.execute().data:
+            raise ScopeError("parent_changed", "Base Bid 1's estimate was saved again while this "
+                                               "was renaming its sheet. Reload the page and try "
+                                               "again.", 409)
+        _cache_clear()
+    names_now, changed = _sync_names(pid, parent, actor)
+    return {"group_id": gid, "label": names_now.get(draft_id) or _scope_of(data)[1] or want,
+            "parent_id": pid, "sheet": {"id": tab, "label": want}, "parent_patch": patch,
+            "renamed": changed}
+
+
+def adopt_sheet_label(draft_id: str, actor: Optional[str] = None) -> Optional[str]:
+    """THE NAME THE CUSTOMER READS, stored before a publish (Hanz, 2026-10-28; generalised
+    2026-10-29). The portal reads the STORED label at a publish, so a proposal is given THE ONE NAME
+    first: for a proposal of an estimate with proposals, every proposal of it is named after its
+    sheet (sync_proposal_labels) whenever its stored name differs, a typed one included. Otherwise,
+    a draft still stored as "Base Bid N" (_OLD_DEFAULT_LABEL) is named after its base sheet off the
+    parent's estimate when it has one, a clash numbered (_free_label).
+
+    Returns this draft's new label, or None when its own name did not change. Same posture as
+    rename_scope: `updated_at` is not bumped (the publish's draft_version check reads it), and the
+    event is scope_renamed. Never calls the portal: the publish that follows carries the name."""
     sb = get_client()
     cur = sb.table("drafts").select("id,data").eq("id", draft_id).limit(1).execute()
     if not cur.data:
         return None
     data = dict(cur.data[0].get("data") or {})
     gid, old = _scope_of(data)
-    if not gid or not old or not _OLD_DEFAULT_LABEL.match(old):
+    if not gid:
         return None
-    source = data
+    family_id, family = draft_id, data
     parent_id = data.get("proposal_of")
     if isinstance(parent_id, str) and parent_id and parent_id != draft_id:
         prow = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
-        if prow.data:
-            source = prow.data[0].get("data") or data
+        family_id, family = parent_id, ((prow.data[0].get("data") or data) if prow.data else None)
+    if family is not None and _proposal_family(family_id, family) is not None:
+        changed = _sync_names(family_id, family, actor)[1]
+        return next((c["to"] for c in changed if c["id"] == draft_id), None)
+    if not old or not _OLD_DEFAULT_LABEL.match(old):
+        return None
+    source = data if family is None else family
     sheet = proposal_sheet_label(source, data.get("base_tab_id"))
     if not sheet or sheet == old:
         return None
@@ -2359,11 +2650,12 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     `base_tab_ids` order, each {id, label, display_label, sheet_label, lump_sum, index, is_parent,
     base_tab_id, stale, out_of_step, estimate_synced_at}; `stale` is a child whose digest is not the
     parent's current one; `out_of_step` is None, or why a child prices no base bid of its own
-    (_out_of_step: same_as_base, duplicate, not_base, sheet_gone). `label` is the stored scope name; `display_label` is what the strip shows: the
-    stored name, unless it is the old untouched "Base Bid N" default, which shows the base sheet's
-    name (`sheet_label`, off the parent's estimate). `lump_sum` is that proposal's own
-    proposal_lump_sum (a number, or None when it has none yet). `draft_id` is the parent or any child
-    of it. None when it is gone.
+    (_out_of_step: same_as_base, duplicate, not_base, sheet_gone). `label` is the stored scope name;
+    `display_label` is what the strip shows: THE ONE NAME (proposal_names: its base sheet's name on
+    the parent's estimate, a clash numbered), which sync_proposal_labels stores on the next save, so
+    the strip never waits for one. `sheet_label` is the sheet's own name. `lump_sum` is that
+    proposal's own proposal_lump_sum (a number, or None when it has none yet). `draft_id` is the
+    parent or any child of it. None when it is gone.
 
     Returns {"parent_id", "group_id", "estimate_digest", "members"}; a draft with no children answers
     its own row alone."""
@@ -2373,22 +2665,19 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     parent_id, parent = prow["id"], prow.get("data") or {}
     gid, plabel = _scope_of(parent)
     digest = estimate_digest(parent)
-    order = [t for t in (parent.get("base_tab_ids") or []) if isinstance(t, str)]
-    kids = _proposal_rows(parent_id, gid) if not parent.get("proposal_of") else []
+    rows = _group_rows(gid) if gid and not parent.get("proposal_of") else []
+    kids = _proposal_rows(parent_id, gid, rows) if not parent.get("proposal_of") else []
     # Read oldest first, before the strip's order: the oldest child on a sheet is the one that keeps it.
     why = _out_of_step(parent, kids, _wanted_sheets(parent))
-
-    def rank(c: Dict[str, Any]) -> Tuple[int, str]:
-        tab = c["data"].get("base_tab_id")
-        return (order.index(tab) if tab in order else len(order), str(c.get("created_at") or ""))
-
-    kids.sort(key=rank)
-    shown = _shown_label
+    rank = _strip_rank(parent)
+    kids.sort(key=lambda c: rank(c["data"].get("base_tab_id"), c.get("created_at")))
+    fam = _proposal_family(parent_id, parent, rows) if kids else None
+    names = proposal_names(parent, fam[1], fam[2]) if fam else {}
 
     psheet = proposal_sheet_label(parent, parent.get("base_tab_id"))
     pstored = plabel or ("Base Bid 1" if kids else "")
     members = [{"id": parent_id, "label": pstored, "index": 1,
-                "display_label": shown(pstored, psheet) if kids else pstored,
+                "display_label": names.get(parent_id) or pstored,
                 "sheet_label": psheet, "lump_sum": _money_or_none(parent.get("proposal_lump_sum")),
                 "is_parent": True, "base_tab_id": parent.get("base_tab_id"), "stale": False,
                 "out_of_step": None, "estimate_synced_at": None}]
@@ -2396,7 +2685,8 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
         tab = c["data"].get("base_tab_id")
         sheet = proposal_sheet_label(parent, tab)
         members.append({"id": c["id"], "label": c["label"], "index": i,
-                        "display_label": shown(c["label"], sheet), "sheet_label": sheet,
+                        "display_label": names.get(c["id"]) or _shown_label(c["label"], sheet),
+                        "sheet_label": sheet,
                         "lump_sum": _money_or_none(c["data"].get("proposal_lump_sum")),
                         "is_parent": False, "base_tab_id": tab,
                         "stale": c["data"].get("estimate_digest") != digest,
