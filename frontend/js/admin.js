@@ -277,7 +277,8 @@
               .join(", ")}. Switching one off removes the tab and blocks the page; somebody who
             knows the route can still read the data.</p>`:""}
           <p><strong>Auto Followups is the exception worth knowing about.</strong> Saving it is not
-            admin-gated: any signed-in member may rewrite the four recurring customer emails, and
+            admin-gated: any signed-in member may rewrite the follow-up emails the tool sends
+            customers automatically, and
             the save replaces the settings row with no history. The sidebar and the server agree
             here — it is the permission itself that is broader than the ones above.</p>
           <p>Five tabs everybody can open still gate controls <em>inside</em> the page on role:

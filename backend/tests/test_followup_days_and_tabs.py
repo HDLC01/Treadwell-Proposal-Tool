@@ -7,16 +7,10 @@ Hanz, 2026-08-12:
      in the Not opened yet category the Label would be 'First Reminder after not Opening' / Just to
      clearly show what category we are in."
 
-DAYS ON SCREEN, HOURS IN THE DATABASE — and that is the whole design decision here.
-
-Hours is what the WORKER reads: followup_rules compares against `*_hours`, the floors and ceilings
-in followup_settings.BOUNDS are in hours, and every settings row ever written stores hours.
-Changing the stored unit would mean touching the rules engine, the bounds, the digest, and
-migrating live data — to change a word on a form. So the conversion lives in the editor and
-nowhere else, and this file pins that it is a round trip rather than a one-way lossy change.
-
-Rounded rather than floored, because a stored 36 hours from before this change reads as 2 days,
-which is the nearer truth. Floored at 1 day, because 0 would mean "chase instantly, for ever".
+DAYS ON SCREEN AND IN THE PAYLOAD since 2026-10-28. Until then the editor converted days on
+screen to the hours the worker stored; the two-per-step settings ({on, days} per email) are stored
+in days, so nothing is converted and nothing is floored. 0 is not silently made 1 any more: the
+portal refuses it with a sentence (test_followup_two_per_step_page.py).
 
 THE TAB HEADING IS SERVED, NOT HARDCODED. LABELS (short, for the tabs) is already served by the
 portal because its validation refusals quote those names verbatim — "the Not opened yet email
@@ -59,71 +53,30 @@ def _block(fn: str) -> str:
     pytest.fail("unbalanced braces reading %s" % fn)
 
 
-# ── days on screen ───────────────────────────────────────────────────────────
+# ── days on screen AND in the payload (2026-10-28) ───────────────────────────────
 def test_the_form_says_days_and_not_hours():
     page = HTML.read_text(encoding="utf-8")
     assert "<span>hours</span>" not in page, "a timing field still reads hours"
-    assert page.count("<span>days</span>") == 4, (
-        "expected exactly the four durations in days; the fifth field is a COUNT of reminders "
-        "and was always unitless")
-    assert "Days between reminders" in page, "the card's own sentence still says hours"
-    assert "<span>reminders</span>" in page, "Stop after N lost its unit"
+    assert page.count("<span>days after") == 5, (
+        "expected the five durations in days: two emails per step, and the estimator's")
+    assert "<span>reminders</span>" not in page, "Stop after N is back"
 
 
 def test_no_hour_figure_survives_anywhere_on_the_page():
-    """One hint read "72 is the 'every 3 days' on the flow chart" — true in hours and nonsense
-    beside a field showing 3. It was rewritten to say 3, and then Hanz deleted all five hints
-    on 2026-08-12, so what is left to assert is that no stale hour figure lingers."""
     page = HTML.read_text(encoding="utf-8")
     for stale in ("72 is the", "72 hours", "48 hours", "24 hours"):
         assert stale not in page, "a leftover hour figure is still on screen: %r" % stale
 
 
-def test_the_four_durations_are_converted_on_the_way_in_and_out():
-    fill, collect = _block("fillNumbers"), _block("collect")
-    for field in ("first", "second", "recurring", "staff"):
-        assert 'toDays(CFG.%s' % ("first_nudge_hours" if field == "first" else
-                                  "second_nudge_hours" if field == "second" else
-                                  "recurring_hours" if field == "recurring" else
-                                  "staff_personal_hours") in fill, (
-            "the %s field is filled without converting to days" % field)
-        assert 'toHours($("%s").value)' % field in collect, (
-            "the %s field is saved without converting back to hours" % field)
-
-
-def test_the_reminder_COUNT_is_not_converted():
-    """max_recurring is "stop after N reminders" — a count, not a duration. Multiplying it by 24
-    would turn 20 reminders into 480 and the cadence would nag for a year."""
-    fill, collect = _block("fillNumbers"), _block("collect")
-    assert 'CFG.max_recurring' in fill and "toDays(CFG.max_recurring" not in fill
-    assert 'max_recurring: $("maxrec").value' in collect, (
-        "the reminder count is being converted as though it were a duration")
-
-
-@pytest.mark.parametrize("hours,days", [
-    (24, 1), (48, 2), (72, 3), (720, 30),
-    (36, 2),    # a pre-existing odd value rounds to the NEARER day, not down to 1
-    (12, 1),    # under a day still means "chase after a day", never 0
-    (0, 1),     # 0 days would be "chase instantly, for ever"
-])
-def test_the_conversion_is_a_round_trip(hours, days):
-    """Run for real rather than asserted from the source: the arithmetic is the whole risk here,
-    and a stored cadence that drifts every time somebody opens the page would be silent."""
-    import shutil
-    import subprocess
-    if not shutil.which("node"):
-        pytest.skip("node is not installed")
-    src = _js()
-    to_days = src[src.index("function toDays"):src.index("\n", src.index("function toHours"))]
-    out = subprocess.run(
-        ["node", "-e", to_days + "\nconsole.log(JSON.stringify([toDays(%d), toHours(toDays(%d))]));"
-         % (hours, hours)],
-        capture_output=True, text=True, encoding="utf-8", timeout=60)
-    assert out.returncode == 0, out.stderr
-    import json
-    got_days, back = json.loads(out.stdout)
-    assert got_days == days, "%dh should read as %d days, got %d" % (hours, days, got_days)
-    assert back == days * 24, "saving %d days did not store %dh" % (days, days * 24)
+def test_nothing_is_converted_any_more():
+    """The two-per-step settings are stored in DAYS ({on, days} per email), so the hour helpers
+    went: a page that still multiplied by 24 would send 72 for "3 days", which the portal refuses
+    as out of 1..90. Executed in test_followup_two_per_step_page.py (the PUT carries days)."""
+    code = _code()
+    for gone in ("function toDays", "function toHours", "toHours(", "toDays("):
+        assert gone not in code, gone
+    # The old flat hours are READ (fromOldShape, for a portal not yet updated) and never written.
+    assert "_hours" not in _block("collect") and "_hours" not in _block("scheduleTyped")
 
 
 def test_the_send_window_is_still_round_tripped():
@@ -168,7 +121,7 @@ def test_there_is_a_local_fallback_so_the_heading_is_never_blank():
     """A failed or older GET must still say which email is open."""
     code = _code()
     assert re.search(r"var EDITOR_TITLES = \{", code), "no fallback map"
-    for key in ("not_viewed", "next_steps", "second_nudge", "checkin"):
+    for key in ("not_viewed", "next_steps", "second_nudge"):
         assert key in code[code.index("var EDITOR_TITLES"):code.index("var EDITOR_TITLES") + 600]
 
 
@@ -177,8 +130,9 @@ def test_the_fallback_wording_names_when_the_email_fires():
     repeat the tab."""
     code = _code()
     block = code[code.index("var EDITOR_TITLES"):code.index("};", code.index("var EDITOR_TITLES"))]
-    assert "First reminder" in block and "after not opening" in block
-    assert "Recurring check-in" in block and "repeats until" in block
+    assert "Not opened yet — 1st email, days after sending" in block
+    assert "Opened, no decision — 1st email, days after they open it" in block
+    assert "Recurring check-in" not in block, "a fallback heading for an email nothing sends"
 
 
 def test_the_heading_falls_back_to_the_tab_label_rather_than_to_nothing():

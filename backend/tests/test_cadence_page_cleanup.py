@@ -575,12 +575,14 @@ def test_the_dead_hint_style_went_with_them():
 
 
 def test_the_timing_card_still_says_what_the_numbers_mean():
-    """Deleting the per-field hints must not leave five bare boxes. The card's own sentence is
-    what survives, and it is the thing that says the unit."""
+    """Deleting the per-field hints must not leave bare boxes. Since 2026-10-28 every box says its
+    own unit and what it counts from, beside it ("days after the 1st")."""
     page = _page()
-    assert "Days between reminders" in page
-    assert page.count("<span>days</span>") == 4
-    assert "<span>reminders</span>" in page, "Stop after N lost its unit"
+    assert ("Stops when approved, lost, or the project's Follow-ups switch is off."
+            in " ".join(page.split()))
+    for unit in ("days after sending", "days after they open it", "days after the 1st",
+                 "days after the last email"):
+        assert "<span>%s</span>" % unit in page, unit
 
 
 def test_the_emails_card_blurb_is_gone():

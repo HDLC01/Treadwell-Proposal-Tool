@@ -572,7 +572,7 @@
       // Kept at Hanz's request on 2026-08-11 after the Follow-ups board came out; the full
       // sequence is on Follow-ups above. Beside Notification Sending because the two answer one question
       // from opposite ends: who hears from us, and what they hear. This page is the only editor for the
-      // four recurring customer emails, and its save REPLACES the single settings row with no history, so
+      // automatic follow-up emails to customers, and its save REPLACES the single settings row with no history, so
       // an unreachable version of it is one wording change away from being unrecoverable.
       navItem("/followup-settings.html", "timer", "Auto Followups") +
       (isAdmin ? navItem("/admin.html", "shield", "Admin") : "") +

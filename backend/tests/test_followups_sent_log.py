@@ -168,7 +168,7 @@ def test_the_automated_sends_are_listed_with_the_side_that_got_them(ran):
     said "sent to the customer" would tell an estimator the customer had been chased twice when
     they had been chased once."""
     html = ran["open"]["html"]
-    assert "Second nudge" in html, "the customer reminder is not listed"
+    assert "Follow-up: opened, 2nd email" in html, "the customer reminder is not listed"
     assert "sent to the customer" in html
     assert "Told the team: worth a call" in html, "the staff reminder is not listed"
     assert "sent to the estimator, not the customer" in html
@@ -297,7 +297,7 @@ def test_the_page_and_the_drawer_word_a_follow_up_the_same_way(ran):
     values come out of the module) and read on the drawer's.
 
     If they ever have to differ, the honest fix is to name the difference here rather than to
-    delete the test: an estimator reading "Second nudge" on this page and something else in the
+    delete the test: an estimator reading "Follow-up: opened, 2nd email" on this page and something else in the
     drawer for the same row cannot tell they are the same event."""
     portal = (FRONTEND / "js" / "portal.js").read_text(encoding="utf-8")
     for name, got in (("FU_TEMPLATE_LABEL", ran["templates"]),
@@ -324,56 +324,58 @@ def test_every_template_the_worker_can_send_has_a_label():
 def _portal_templates(portal) -> set:
     """Every `template` the portal can write into portal_followups, read from its CURRENT source.
 
-    Remind-only (2026-10-23) and scope groups (2026-10-24) moved the customer templates out of
-    literal `Due(key, "customer", "x")` calls into the cadence's ladder tuples, which is why the old
-    one-pattern read found four. Each place a template can come from is read on its own, and each
-    has to find something, so a reshaped source fails here instead of shrinking the set quietly:
+    The two-per-step cadence (2026-10-28) replaced the old ladder tuples with one template per email
+    (followup_settings.CADENCE_TEMPLATES / TEMPLATE_KEYS) and named the estimator email as a
+    constant (followup_rules.ESTIMATOR_TEMPLATE). Each place a template can come from is read on its
+    own, and the main ones have to find something, so a reshaped source fails here instead of
+    shrinking the set quietly:
 
-      * the ladder tuples in followup_rules._customer_plan, `(offset?, "tag", "template", bool)`;
-      * followup_settings.TEMPLATE_KEYS, the cadence's own list of customer templates;
-      * every `Due(..., "customer"|"staff", "template")` with a literal template, in the rules,
-        the worker and main.py (the staff notes, the follow-up-due note, the scope decision email);
-      * every `"template": "x"` literal written into a row's detail (the decision re-nag), and the
-        task-template constants in followup_rules (GROUP_TASK_TEMPLATE_*: the decision task row).
+      * followup_settings.TEMPLATE_KEYS, the cadence's customer emails, and LEGACY_TEMPLATE_KEYS,
+        the old ladder's check-in and deposit chase, which old rows still carry;
+      * every module-level `*TEMPLATE* = "x"` constant in the rules, the worker and main.py (the
+        estimator email, the scope decision task);
+      * every `Due(..., "customer"|"staff", "template")` with a literal template;
+      * every `"template": "x"` literal written into a row's detail (the decision re-nag).
     """
     rules = (portal / "followup_rules.py").read_text(encoding="utf-8")
     worker = (portal / "followup_worker.py").read_text(encoding="utf-8")
     main_src = (portal / "main.py").read_text(encoding="utf-8")
     settings = (portal / "followup_settings.py").read_text(encoding="utf-8")
 
-    ladder = set(re.findall(
-        r'\(\s*(?:[\w.]+,\s*)?"[a-z0-9]+",\s*"([a-z_]+)",\s*(?:True|False)\s*\)', rules))
-    m = re.search(r"^TEMPLATE_KEYS\s*=\s*\(([^)]*)\)", settings, re.M)
-    keys = set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
+    def _tuple(name):
+        m = re.search(r"^%s\s*=\s*\(([^)]*)\)" % name, settings, re.M)
+        return set(re.findall(r'"([a-z0-9_]+)"', m.group(1))) if m else set()
+
+    keys = _tuple("TEMPLATE_KEYS")
+    legacy = _tuple("LEGACY_TEMPLATE_KEYS")
+    consts = set()
+    for src in (rules, worker, main_src):
+        consts |= set(re.findall(r'^[A-Z_]*TEMPLATE[A-Z_]*\s*=\s*"([a-z0-9_]+)"', src, re.M))
     dues = set()
     for src in (rules, worker, main_src):
         # Inside a Due( call only: a row's detail dict also reads `"audience": "staff", "template":`.
         dues |= set(re.findall(
-            r'\bDue\((?:[^()]|\([^()]*\))*?"(?:customer|staff)",\s*"([a-z_]+)"\s*[,)]', src, re.S))
+            r'\bDue\((?:[^()]|\([^()]*\))*?"(?:customer|staff)",\s*"([a-z0-9_]+)"\s*[,)]', src, re.S))
     literal = set()
     for src in (worker, main_src):
-        literal |= set(re.findall(r'"template":\s*"([a-z_]+)"', src))
-    consts = set(re.findall(r'^GROUP_TASK_TEMPLATE_\w+\s*=\s*"([a-z_]+)"', rules, re.M))
+        literal |= set(re.findall(r'"template":\s*"([a-z0-9_]+)"', src))
 
-    for name, found, floor in (("ladder tuples", ladder, 5), ("TEMPLATE_KEYS", keys, 5),
-                               ("Due(...) calls", dues, 5)):
+    for name, found, floor in (("TEMPLATE_KEYS", keys, 4), ("*TEMPLATE* constants", consts, 2)):
         assert len(found) >= floor, (
             "only found %s from the portal's %s; this test needs rewriting rather than passing on "
             "a short set" % (sorted(found), name))
-    # The ladder and the settings list are two spellings of one fact; if they disagree the read of
-    # one of them has broken.
-    assert ladder == keys, "ladder %s != TEMPLATE_KEYS %s" % (sorted(ladder), sorted(keys))
-    return ladder | keys | dues | literal | consts
+    return keys | legacy | consts | dues | literal
 
 
 def test_the_template_read_finds_every_shape_the_portal_uses():
-    """A guard on the guard above: the read has to see the group surface as well as the cadence,
-    or a new template could arrive unlabelled while the subset check passes on what it did see."""
+    """A guard on the guard above: the read has to see the cadence's four emails, the estimator
+    email and the group surface, or a new template could arrive unlabelled while the subset check
+    passes on what it did see."""
     portal = _portal_backend()
     found = _portal_templates(portal)
-    for known in ("not_viewed", "checkin", "deposit_nudge", "staff_not_viewed",
-                  "staff_deposit_outstanding", "staff_followup_due", "staff_scope_decision",
-                  "scope_decision"):
+    for known in ("not_viewed", "not_viewed_2", "next_steps", "second_nudge",
+                  "staff_followups_done", "staff_scope_decision", "scope_decision",
+                  "checkin", "deposit_nudge"):
         assert known in found, "%s was not read out of the portal: %s" % (known, sorted(found))
 
 

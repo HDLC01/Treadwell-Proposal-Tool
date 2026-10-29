@@ -87,6 +87,18 @@
     .pv-note { color:var(--ink-v); font-size:11.5px; margin:8px 0 0; }
     .bad { background:var(--warn-bg); border:1px solid #e8d9a8; color:var(--warn);
       border-radius:8px; padding:10px 12px; font-size:12.5px; }
+    /* the cadence: one fieldset per step, one row per email */
+    .step { border:1px solid var(--line); border-radius:10px; padding:10px 14px 12px;
+      margin:0 0 12px; }
+    .step legend { font:700 12.5px system-ui; padding:0 6px; text-transform:uppercase;
+      letter-spacing:.04em; color:var(--ink-v); }
+    .rule { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 0; }
+    .rule label { margin:0; min-width:120px; }
+    .rule input[type="checkbox"] { width:auto; accent-color:var(--red); margin:0; }
+    .rule span { color:var(--ink-v); font-size:12.5px; }
+    .rule.is-off label, .rule.is-off span, .rule.is-off input.num { opacity:.55; }
+    input.num[aria-invalid="true"] { border-color:var(--red); background:var(--red-tint); }
+    .ferr { color:var(--red-dark); font-size:12.5px; margin:0 0 4px; }
     [hidden] { display:none !important; }
     .loading { color:var(--ink-v); text-align:center; padding:40px; }
       /* The "which email am I editing" heading. Reads as a caption for the form below rather
@@ -100,40 +112,73 @@
     <h1>Auto Followups</h1>
   </div>
   <div class="wrap">
-    <p class="hint">How often a sent proposal gets chased, and what those emails say. One schedule
-      for everybody. Changes apply to every proposal already being chased, from the next check
-      onwards — nothing is re-sent retroactively.</p>
+    <p class="hint">After a proposal is sent, the tool emails the customer automatically: at most
+      two follow-up emails before they open it and two after they open it, then it stops. One
+      schedule for everybody. Changes apply from the next check onwards; nothing is re-sent.</p>
 
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
     <div class="loading" id="loading">Loading…</div>
 
     <div id="main" hidden>
-      <div class="card">
-        <h2>Timing</h2>
-        <p class="sub">Days between reminders. The first number is the wait after sending, and
-          again after the customer first opens it.</p>
-        <div class="grid">
-          <div>
-            <label for="first">First reminder</label>
-            <div class="row"><input id="first" class="num" inputmode="numeric" /><span>days</span></div>
+      <!-- THE CADENCE, as Hanz approved it on 2026-10-28. Two customer emails per step and nothing
+           that repeats: no "Then every", no "Stop after", no recurring check-in and no deposit
+           chase. Each email has its own switch and its own days. The days are never silently
+           replaced: 0 or 200 is refused by the portal with a sentence, which is shown under the
+           box it is about (showRefusal in followup-settings.js), and after a save the boxes are
+           refilled from what the portal stored. -->
+      <div class="card" id="cadence">
+        <h2>Auto follow-ups</h2>
+        <p class="sub">Sent → Approved. Stops when approved, lost, or the project's Follow-ups
+          switch is off.</p>
+
+        <fieldset class="step" id="step-not_opened">
+          <legend>Not opened yet</legend>
+          <div class="rule" id="no1-row">
+            <input type="checkbox" role="switch" id="no1-on" aria-label="Not opened yet: 1st email on" />
+            <label for="no1-days">1st email</label>
+            <input id="no1-days" class="num" type="number" min="1" max="90" step="1" inputmode="numeric" />
+            <span>days after sending</span>
           </div>
-          <div>
-            <label for="second">Second reminder</label>
-            <div class="row"><input id="second" class="num" inputmode="numeric" /><span>days</span></div>
+          <p class="ferr" id="no1-err" role="alert" hidden></p>
+          <div class="rule" id="no2-row">
+            <input type="checkbox" role="switch" id="no2-on" aria-label="Not opened yet: 2nd email on" />
+            <label for="no2-days">2nd email</label>
+            <input id="no2-days" class="num" type="number" min="1" max="90" step="1" inputmode="numeric" />
+            <span>days after the 1st</span>
           </div>
-          <div>
-            <label for="recurring">Then every</label>
-            <div class="row"><input id="recurring" class="num" inputmode="numeric" /><span>days</span></div>
+          <p class="ferr" id="no2-err" role="alert" hidden></p>
+        </fieldset>
+
+        <fieldset class="step" id="step-opened">
+          <legend>Opened, no decision</legend>
+          <div class="rule" id="op1-row">
+            <input type="checkbox" role="switch" id="op1-on" aria-label="Opened, no decision: 1st email on" />
+            <label for="op1-days">1st email</label>
+            <input id="op1-days" class="num" type="number" min="1" max="90" step="1" inputmode="numeric" />
+            <span>days after they open it</span>
           </div>
-          <div>
-            <label for="staff">Tell the estimator after</label>
-            <div class="row"><input id="staff" class="num" inputmode="numeric" /><span>days</span></div>
+          <p class="ferr" id="op1-err" role="alert" hidden></p>
+          <div class="rule" id="op2-row">
+            <input type="checkbox" role="switch" id="op2-on" aria-label="Opened, no decision: 2nd email on" />
+            <label for="op2-days">2nd email</label>
+            <input id="op2-days" class="num" type="number" min="1" max="90" step="1" inputmode="numeric" />
+            <span>days after the 1st</span>
           </div>
-          <div>
-            <label for="maxrec">Stop after</label>
-            <div class="row"><input id="maxrec" class="num" inputmode="numeric" /><span>reminders</span></div>
+          <p class="ferr" id="op2-err" role="alert" hidden></p>
+        </fieldset>
+
+        <fieldset class="step" id="step-estimator">
+          <legend>Estimator</legend>
+          <div class="rule" id="est-row">
+            <input type="checkbox" role="switch" id="est-on" aria-label="Tell the estimator on" />
+            <label for="est-days">Tell the estimator</label>
+            <input id="est-days" class="num" type="number" min="1" max="90" step="1" inputmode="numeric" />
+            <span>days after the last email</span>
           </div>
-        </div>
+          <p class="ferr" id="est-err" role="alert" hidden></p>
+          <p class="sub" style="margin:4px 0 0">An email to the assigned estimator, not the customer,
+            when a step's last follow-up has gone out and there is still no decision.</p>
+        </fieldset>
       </div>
 
       <!-- "When emails may go out" used to be a card here: two hour selects, #startH and #endH.

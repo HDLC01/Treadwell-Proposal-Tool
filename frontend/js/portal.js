@@ -653,6 +653,15 @@
       row.won_at = new Date().toISOString();
       renderBoard();
       load();
+      // THE MARK STOPS THE AUTOMATIC CUSTOMER EMAILS (main.py _followups_off_for_outcome), and when
+      // the portal could not be told, the mark is saved anyway and the server says so. A card has
+      // no note line to put it in and is repainted out from under the press, so it is a dialog,
+      // with the way to fix it one press away. Inline rather than a helper beside this function:
+      // card-actions-harness lifts this one by name, and a new name here would be unbound there.
+      if (j.followups_note && await TW.confirmDanger({
+        title: "Follow-up emails are still on", message: j.followups_note,
+        confirmText: "Open the project", cancelText: "OK", tone: "warn", icon: "warning",
+      })) openDetail(row.proposal_id);
     } catch (err) {
       btn.textContent = "Failed: " + (err.message || "retry");
       btn.disabled = false;
@@ -694,6 +703,12 @@
       row.handed_off_at = new Date().toISOString();
       renderBoard();
       load();
+      // Same as markCardWon: handing off stops the automatic emails, and a portal that could not be
+      // told is said out loud rather than left to keep emailing the customer.
+      if (j.followups_note && await TW.confirmDanger({
+        title: "Follow-up emails are still on", message: j.followups_note,
+        confirmText: "Open the project", cancelText: "OK", tone: "warn", icon: "warning",
+      })) openDetail(row.proposal_id);
     } catch (err) {
       btn.textContent = "Failed: " + (err.message || "retry");
       btn.disabled = false;
@@ -1276,9 +1291,10 @@
        <div class="dpanel" id="dpanel-followup" role="tabpanel" aria-labelledby="dtab-followup" tabindex="-1">
         <div class="sec" id="dsec-ns-followup">
           <div class="lbl">Follow-up</div>
-          <p class="note">Chasing starts when you send this. From then on the assigned estimator
-          gets the reminders and this project appears in the morning digest until the deposit is
-          in. Nobody is chased before a proposal exists.</p>
+          <p class="note">Chasing starts when you send this. From then on the tool emails the
+          customer automatically until they approve, the assigned estimator gets the "Tell the
+          estimator" email, and this project appears in the morning digest. Nobody is chased before
+          a proposal exists.</p>
         </div>
         <!-- Hanz, 2026-08-19: "Allow to mark a proposal as lost tho in the Created not sent
              category." The commonest dead bid there is: priced, generated, and then the GC went
@@ -1655,6 +1671,16 @@
     const control = (btn, words) => (acts
       ? btn + '<span class="acts-say">' + words + "</span>"
       : '<p class="note">' + words + "</p>" + btn);
+    // ARE THE AUTOMATIC EMAILS STILL GOING OUT, read off the project's own follow-up state rather
+    // than assumed from the mark. A mark made before 2026-10-28, a switch-off the portal did not
+    // answer, or automation turned back on afterwards all leave a won or handed-off project being
+    // chased, and the drawer must not say the emails stopped while the portal keeps sending them.
+    // On = enrolled, switched on and not yet approved (approval ends the cadence; followupState).
+    const fuState = C.followup(p);
+    const chased = !!fuState.enrolled && !!fuState.enabled
+      && String(p.proposal_status || "") !== "approved";
+    const stillOn = "the automatic follow-up emails are still on for this project. Press Turn "
+      + "automation off, above, to stop them.";
     // No em dash anywhere in this copy: it renders in the sent drawer, where that is a house rule
     // (test_no_em_dash_in_the_panels_copy) because the portal's own system lines use one as a field
     // separator and splitSystem cuts on it.
@@ -1665,7 +1691,10 @@
       return `${open}${head("Handed off")}
         ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="handoff-undo">Bring it back to the board</button></div>',
           acts
-          ? "Operations has this one, so it has left the Active board and sits on the Handed Off tab."
+          ? "Operations has this one, so it has left the Active board and sits on the Handed Off tab. "
+            + (chased ? "But " + stillOn
+              : "The automatic follow-up emails are off, and bringing it back does not turn them "
+                + "on again.")
           : "Somebody handed this to operations, so it has left the Active board and sits on the "
             + "Handed Off tab. Bring it back if that press was early: the card returns to whichever "
             + "Active column its own dates earn.")}
@@ -1674,18 +1703,26 @@
     // THE HAND-OFF BUTTON, on both won states below. Written once here rather than twice, where the
     // two copies would drift apart the first time the label changed.
     const handoffBtn = '<button type="button" class="btn btn-s" id="handoff-mark">Hand it off</button>';
+    // THE EMAILS STOP, since 2026-10-28. Hanz: "If staff mark a project Won (or Hand it off) by
+    // hand in the tool while the portal still says sent/viewed, the automatic customer emails
+    // STOP." Until that day these sentences said the opposite, and so did the product. Undoing
+    // either mark does NOT turn them back on (main.py api_draft_status), and the copy says so.
     if (C.wonByHand(p)) {
       return `${open}${head("Won/Approved")}
         ${control('<div class="fu-line">' + handoffBtn
             + '<button type="button" class="btn btn-s" id="won-undo">Undo the won mark</button></div>',
           acts
-          ? "Somebody marked this won, so it sits in the Won/Approved column. The chasing carries "
-            + "on until the deposit is in. Hand it off once operations has it."
+          ? "Somebody marked this won, so it sits in the Won/Approved column, "
+            + (chased ? "but " + stillOn + " "
+              : "and the automatic follow-up emails are switched off. Undoing the mark does not "
+                + "turn them back on. ")
+            + "Hand it off once operations has it."
           : "Somebody marked this won, so it sits in the Won/Approved column on the Active board, "
-            + "and counts under Active on the Notification Sending page. Follow-ups do NOT stop: the "
-            + "chasing runs until the deposit is in, and the customer is not emailed about this "
-            + "either way. Hand it off once operations has the contact info, and the card leaves "
-            + "the board for the Handed Off tab.")}
+            + "and counts under Active on the Notification Sending page. The customer is not emailed "
+            + "about the mark. It has not been sent, so no automatic follow-up emails go out for "
+            + "it, and sending it while it is marked won switches them off as it goes. Hand "
+            + "it off once operations has the contact info, and the card leaves the board for the "
+            + "Handed Off tab.")}
         <p class="note" id="won-note"></p>${close}`;
     }
     if (C.isWon(p)) {
@@ -1725,12 +1762,12 @@
         ${control('<div class="fu-line">' + handoffBtn + "</div>",
           acts
           ? "The customer approved this in the portal, so it counts as won without anyone marking "
-            + "it. The deposit is still outstanding and the chasing carries on. Hand it off once "
-            + "operations has it."
+            + "it. The deposit is still outstanding, and the automatic follow-ups stopped when they "
+            + "approved, so chase the deposit by hand. Hand it off once operations has it."
           : "The customer approved this in the portal, so it sits in the Won/Approved column on the "
-            + "Active board without anyone having marked it. The deposit is still outstanding, so "
-            + "the follow-ups carry on and it does NOT yet count as won on the Notification Sending "
-            + "page. There is nothing to bring back here: no person marked it, so there is no mark "
+            + "Active board without anyone having marked it. The deposit is still outstanding, so it "
+            + "does NOT yet count as won on the Notification Sending page, and nothing chases it: the "
+            + "automatic follow-ups stopped when they approved. There is nothing to bring back here: no person marked it, so there is no mark "
             + "to take off, and un-approving it lives on the Proposal tab. Hand it off once "
             + "operations has it, and the card leaves the board for the Handed Off tab.")}
         <p class="note" id="won-note"></p>${close}`;
@@ -1738,13 +1775,15 @@
     return `${open}${head("Won it already?")}
       ${control('<div class="fu-line"><button type="button" class="btn btn-s" id="won-mark">Mark as won/approved</button></div>',
         acts
-        ? "Moves it to the Won/Approved column. It stays on the Active board and the chasing carries "
-          + "on until the deposit is in. You can undo it."
+        ? "Moves it to the Won/Approved column and switches the automatic follow-up emails off. It "
+          + "stays on the Active board. You can undo the mark, but that does not turn the emails "
+          + "back on."
         : "Mark it won as soon as they say yes on the phone. It does not wait for the customer to "
-          + "click Approve or for the deposit to land, the customer is not emailed, and the "
-          + "follow-ups carry on until the money is in. The card moves to the Won/Approved column "
-          + "and STAYS on the Active board, so nothing stops being chased. Hand it off separately "
-          + "once operations takes it over. You can undo it.")}
+          + "click Approve or for the deposit to land, and the customer is not emailed. The card "
+          + "moves to the Won/Approved column and STAYS on the Active board. Any proposal of it "
+          + "already sent stops getting the automatic follow-up emails. Hand it off separately "
+          + "once operations takes it over. You can undo the mark, but that does not turn the "
+          + "emails back on.")}
       <p class="note" id="won-note"></p>${close}`;
   }
 
@@ -1779,8 +1818,19 @@
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        // THE PORTAL SWITCHED THIS PROJECT'S EMAILS OFF, so the repaint says so now rather than
+        // "still on" until the next fetch: wonControlHtml reads the follow-up state, not the mark.
+        if ((j.followups_off || []).indexOf(pid) >= 0) {
+          patch = Object.assign({}, patch, { followup_state: Object.assign({},
+            (row && row.followup_state) || {}, { enabled: false }) });
+        }
         repaint(patch);
         load();                     // the chip and the Won count live on the board behind this
+        // Saved, but the portal could not be told to stop the automatic emails (Won and Hand it off
+        // switch them off; main.py _followups_off_for_outcome). Written into the REPAINTED note,
+        // since repaint replaced the one this function started with.
+        const said = $("won-note");
+        if (said && j.followups_note) said.textContent = j.followups_note;
       } catch (err) {
         btn.textContent = orig;
         btn.disabled = false;
@@ -1800,7 +1850,8 @@
     // WHAT THE DIALOG SAYS IS THE FEATURE, not the fact that it exists. Every one of these four
     // sentences answers a question somebody would otherwise have to ask the person who built it:
     // it does not wait for the customer to approve, it does not wait for the deposit, the customer
-    // is not emailed, the chasing carries on until the money is in, and it can be undone. `tone`
+    // is not emailed, the automatic follow-up emails stop (since 2026-10-28; before that they
+    // carried on), and it can be undone, though the undo leaves the emails off. `tone`
     // is warn rather than danger, and that is the honest reading: winning a job is good news and
     // reversible, so it takes the same tone as pausing the chasing rather than the tone of a delete.
     if (mark) mark.addEventListener("click", async () => {
@@ -1809,8 +1860,9 @@
         before: "Move ", name: (row && row.project_name) || "this project",
         after: " to the Won/Approved column?",
         detail: "It does not wait for the customer to approve or for the deposit to land, and the"
-          + " customer is not emailed. The card stays on the Active board, the follow-ups carry on"
-          + " until the money is in, and you can undo this.",
+          + " customer is not emailed. The card stays on the Active board and the automatic"
+          + " follow-up emails stop. You can undo this, but undoing it does not turn the emails"
+          + " back on.",
         // A tick, not a trophy: confirmDanger's own warn default is a WASTEBASKET, which is the
         // wrong picture entirely on the one dialog here that is good news. Kept to the same kind of
         // glyph the other two in this file use (the pause and the play) rather than an emoji.
@@ -1829,7 +1881,7 @@
     // forward "active" to the portal and resume a cadence somebody may have paused on purpose.
     const undo = $("won-undo");
     if (undo) undo.addEventListener("click", async () => {
-      if (!(await confirmBringBack(row || {}))) return;
+      if (!(await confirmBringBack(row || {}, "", "won"))) return;
       post(undo, { status: "not_won" }, { won_at: "" });
     });
 
@@ -1849,7 +1901,7 @@
     // board in whatever column it earns, which for a won job is Won/Approved.
     const handUndo = $("handoff-undo");
     if (handUndo) handUndo.addEventListener("click", async () => {
-      if (!(await confirmBringBack(row || {}))) return;
+      if (!(await confirmBringBack(row || {}, "", "handed_off"))) return;
       post(handUndo, { status: "not_handed_off" }, { handed_off_at: "" });
     });
   }
@@ -2063,18 +2115,9 @@
   const REPLY_DRAFT = {};        // unsent text survives the post-action re-render
   const NT_CACHE = {};           // chips per PROJECT, so a poll doesn't refetch them
   const REV_CACHE = {};          // sent versions per PROJECT, for the same reason
-  // The follow-up email being written, per TASK (not per project, and not per render): the AI
-  // draft is fetched ONCE when the Follow-up tab first shows a task, and whatever the estimator
-  // types into it survives every repaint after that, exactly as REPLY_DRAFT does for the chat box.
-  // { state: "loading" | "ready" | "failed", title, body, cta, source, fallback, msg }
-  // A Map, not an object: the key is a task id the server chose, and a Map cannot have its
-  // prototype replaced through a key the way `obj["__proto__"] = …` can.
-  const FU_DRAFT = new Map();
-  // What the last Send / Skip / Snooze / "I called them" did, per project, so the sentence survives
-  // the repaint that removes the card it was pressed on. { text, warn, at }
-  // A Map, not an object, for the same reason as FU_DRAFT above: `pid` is server-chosen data, and a
-  // Map cannot have its prototype replaced through a key the way `obj["__proto__"] = …` can.
-  const FU_NOTICE = new Map();
+  // (FU_DRAFT, the remind-only email writer's per-task draft, and FU_NOTICE, the sentence its
+  // buttons left behind, went on 2026-10-28 with the writer: the cadence emails the customer itself
+  // again, so there is no email here for anybody to write and no task card to answer.)
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
   // A separate one-way latch from DEEPLINK_USED (see load() below): DEEPLINK_USED guards the &sec=
@@ -2135,9 +2178,6 @@
       loadNotifyChips(CUR_PID, RENDER_GEN);
       loadRevisions(CUR_PID, RENDER_GEN);
     }
-    // The follow-up email's first draft: a paid ~20s AI call, so only once somebody is actually
-    // looking at the tab, and only once per task (loadFuDraft keys it on the task id).
-    if (sec === "followup" && !NS_MODE) loadFuDraft(CUR_PID);
     if (sec === "chat") requestAnimationFrame(() => {
       const t = $("thread");
       if (!t) return;
@@ -3380,9 +3420,13 @@
   // reached the customer, and a history that reads "Second nudge" beside "Told the team: not opened"
   // is the difference between knowing whether the customer has been bothered or we have.
   const FU_TEMPLATE_LABEL = {
-    not_viewed: "Nudge: not opened yet",
-    next_steps: "Next steps after viewing",
-    second_nudge: "Second nudge",
+    // The four emails of the two-per-step cadence (2026-10-28), one template each. Earlier rows
+    // of the same three keys were the same emails in the old ladder's places.
+    not_viewed: "Follow-up: not opened, 1st email",
+    not_viewed_2: "Follow-up: not opened, 2nd email",
+    next_steps: "Follow-up: opened, 1st email",
+    second_nudge: "Follow-up: opened, 2nd email",
+    // History only: the old ladder's repeating check-in and its deposit chase. Nothing sends these.
     checkin: "Check-in",
     deposit_nudge: "Deposit reminder",
     staff_not_viewed: "Told the team: still not opened",
@@ -3390,6 +3434,9 @@
     staff_personal_followup: "Told the team: worth a call",
     staff_deposit_outstanding: "Told the team: deposit outstanding",
     staff_followup_due: "Told the team: a follow-up is due",
+    // The "Tell the estimator" email of the two-per-step cadence: a step's last customer email
+    // went out N days ago and there is still no decision.
+    staff_followups_done: "Told the estimator: the follow-ups are done, no decision yet",
     scope_decision: "Decide the other scopes",
     staff_scope_decision: "Told the team: decide the other scopes",
   };
@@ -3504,21 +3551,17 @@
       "This proposal was sent before automatic follow-ups existed. Switch them on to start the cadence from today." };
     if (!f.enabled) return { val: "Off", lead:
       "Automatic follow-ups are off for this project. Nothing is sent to the customer unless you send it." };
-    // Approved with the money still out. Said before the general case because the general case
-    // promises the cadence STOPS at approval, which stopped being true on 2026-08-12 — Hanz:
-    // "followups should be automated until a deposit has been received." An estimator reading
-    // the old sentence on a won job would think nothing more was going out, and would either
-    // duplicate the chase by hand or leave it entirely.
-    if (String(p.proposal_status || "") === "approved" && !C.depositSatisfied(p)) {
-      const told = String(p.deposit_status || "") === "submitted";
-      return { val: "On", lead: told
-        ? "Approved, and they've told us the deposit is on its way, so they aren't being emailed "
-          + "about it any more. You keep getting reminded until it actually lands."
-        : "Approved. Following up automatically until the deposit is in. Their reminders stop as "
-          + "soon as they tell us it's on the way; yours continue until it lands." };
-    }
+    // APPROVED IS THE END OF IT AGAIN (Hanz, 2026-10-28). The cadence runs from "proposal sent"
+    // until the proposal is approved, and nothing chases the deposit: the 2026-08-12 deposit chase
+    // is gone from the cadence. So a won job says the emails stopped, switch on or not, rather than
+    // "On", which would tell an estimator something was still going out.
+    if (String(p.proposal_status || "") === "approved") return { val: "Stopped", lead:
+      "Approved, so the automatic follow-up emails have stopped. Nothing chases the deposit." };
     return { val: "On", lead:
-      "Following up automatically until the customer approves, replies, or tells us their timeline changed." };
+      "The tool emails the customer automatically until they approve: at most 2 follow-up emails "
+      + "before they open the proposal and 2 after. It stops when they approve, when the project is "
+      + "closed lost, when somebody here marks it won or hands it off, or when you turn automation "
+      + "off." };
   }
 
   function followupPanelHtml(p, data) {
@@ -3572,8 +3615,6 @@
              either, and no em dash: it ships inside a template literal, inside the panel.) -->
         ${hold && hold.note ? '<p class="note ns-why">“' + esc(hold.note) + '”</p>' : ""}
         <div id="fu-alert" class="note fu-alert"></div>
-        ${fuNoticeHtml()}
-        ${followupTaskHtml(p, data)}
 
         <div class="fu-line">
           <button class="btn btn-s" id="fu-toggle" ${isLost(p) ? "disabled" : ""}
@@ -3583,7 +3624,7 @@
             enabled ? "Turn automation off" : "Turn automation on"}</button>
         </div>
 
-        ${isLost(p) ? "" : followupScheduleHtml(p)}
+        ${isLost(p) || String(p.proposal_status || "") === "approved" ? "" : followupScheduleHtml(p)}
         ${followupContactsHtml(data.recipient_activity)}
         </div>
 
@@ -3618,7 +3659,7 @@
           <button class="btn btn-s" id="fu-reassign" disabled>Reassign</button>
         </div>
         <p class="note">${assignee
-          ? "They get this project's follow-up emails and its line in the morning digest."
+          ? "They get this project's estimator email (the customer's follow-ups are sent automatically) and its line in the morning digest."
           : "Nobody is assigned. The digest skips unassigned proposals, so this one is being chased by nobody."}</p>
         </div>
 
@@ -3735,13 +3776,18 @@
       </details>`;
   }
 
-  // ── the follow-up waiting on a human (remind mode, v1) ────────────────────
-  // The portal no longer emails the customer on its own: when a follow-up falls due it parks a
-  // TASK for the ASSIGNED ESTIMATOR (the "Assigned to" picker below; the portal falls back to its
-  // own roster when nobody is assigned) and waits. That person reads the draft here and sends it,
-  // skips it, puts it off, or says they already rang. The "Tell the team" chips on the Files page
-  // are a different list for a different thing (who hears that a proposal went out) and are not
-  // read anywhere in this section.
+  // ── the follow-up schedule ─────────────────────────────────────────────────
+  // Hanz, 2026-10-28: "the follow ups should be a follow up email to the customer". The portal's
+  // worker EMAILS THE CUSTOMER ITSELF at each due follow-up: at most two emails while the proposal
+  // is not opened and two once it is, from sending until it is approved, and nothing on an
+  // approved, lost or switched-off project. The remind-only weeks (2026-10-23, when it parked a
+  // task for the estimator to write and send from here) are over, and the email writer and its
+  // task card went with them. NO FOLLOW-UP TASK IS DRAWN: a reminder task row left over from those
+  // weeks is still readable on the pipeline row, but a Send button beside an email the worker
+  // sends on its own would be the double email this change exists to prevent. What is left here
+  // is the next email's date and the Follow-ups switch. The "Tell the estimator" email goes to
+  // the ASSIGNED ESTIMATOR (the "Assigned to" picker below); the "Tell the team" chips on the Files
+  // page are a different list for a different thing and are not read anywhere in this section.
 
   /** A plain "YYYY-MM-DD" in Central for a date input. A date-only value passes straight through;
    *  a timestamp is read in the business timezone, so a reminder due at 1am UTC does not show as
@@ -3755,452 +3801,45 @@
       month: "2-digit", day: "2-digit" }).format(new Date(t));
   }
 
-  /** `ymd` plus `n` days, as "YYYY-MM-DD". Noon UTC, so no timezone can tip it over a midnight. */
-  function fuAddDays(ymd, n) {
-    const t = Date.parse(String(ymd) + "T12:00:00Z");
-    if (isNaN(t)) return "";
-    return new Date(t + n * 86400000).toISOString().slice(0, 10);
-  }
-
-  /** The sentence an action left behind, for a minute or two after the card it was pressed on is
-   *  gone. Read off CUR_PID because the panel is only ever painted for the open project. */
-  function fuNoticeHtml() {
-    const n = CUR_PID ? FU_NOTICE.get(CUR_PID) : null;
-    if (!n || Date.now() - n.at > 120000) return "";
-    return `<p class="note fu-notice${n.warn ? " is-warn" : ""}" role="status">${esc(n.text)}</p>`;
-  }
-
-  /** The reminder schedule: when the next reminder falls due, how often after that, and when to
-   *  stop. Remind mode is the only mode in v1, so there is no mode switch to draw. An empty box is
-   *  the global default from Follow-up settings, and saving an empty box puts it back on it. */
+  /** The project's follow-up schedule: the day its next automatic email to the customer is due,
+   *  and nothing else. "Then every" and "Stop after" went on 2026-10-28 (Hanz): the cadence is two
+   *  emails per step, set on Auto Followups, and nothing repeats, so there is no interval or count
+   *  left to override per project. Moving the date moves the next email; an empty box puts it back
+   *  on the usual schedule. The other per-project control is the Follow-ups switch above. */
   function followupScheduleHtml(p) {
     const plan = (p && p.followup_plan) || {};
-    const num = (v) => (v == null || v === "" ? "" : String(v));
     return `
       <div class="fu-sched" id="fu-sched">
         <div class="lbl fu-lbl">Reminder schedule</div>
         <div class="fu-line">
-          <label for="fu-next">Next reminder on</label>
+          <label for="fu-next">Next email on</label>
           <input id="fu-next" type="date" class="tw-input fu-date" value="${esc(fuYmd(plan.next_at))}">
         </div>
-        <div class="fu-line">
-          <label for="fu-every">Then every</label>
-          <input id="fu-every" type="number" class="tw-input fu-num" min="1" max="90" step="1"
-                 inputmode="numeric" placeholder="default" value="${esc(num(plan.interval_days))}">
-          <span class="note">days</span>
-        </div>
-        <div class="fu-line">
-          <label for="fu-stop">Stop after</label>
-          <input id="fu-stop" type="number" class="tw-input fu-num" min="1" max="60" step="1"
-                 inputmode="numeric" placeholder="default" value="${esc(num(plan.stop_after))}">
-          <span class="note">reminders</span>
-        </div>
         <p class="note fu-msg" id="fu-sched-alert" role="status"></p>
-        <p class="note">An empty box uses the default from Follow-up settings. The reminders go to
-        the assigned estimator, chosen under Assigned to below.</p>
+        <p class="note">The tool emails the customer automatically: at most 2 follow-up emails before
+        they open the proposal and 2 after they open it, as set on Auto Followups, and it stops when
+        they approve. Moving this date moves the next one; an empty box puts it back on the usual
+        schedule. The "Tell the estimator" email goes to the assigned estimator, chosen under
+        Assigned to below.</p>
       </div>`;
   }
 
-  /** The compose box for one task, in whichever of its three states it is in. Never an empty box
-   *  that looks sendable: while the draft is on its way it is a sentence, and Send stays off. */
-  function followupComposeHtml(d) {
-    if (!d || d.state === "loading") {
-      return '<p class="note fu-drafting">Writing a first draft from the conversation…</p>';
-    }
-    if (d.state === "failed") {
-      return `<p class="note">No draft this time${d.msg ? ": " + esc(d.msg) : "."}</p>
-        <div class="fu-line">
-          <button class="btn btn-s" id="fu-draft-retry">Try again</button>
-          <button class="btn btn-s" id="fu-draft-blank">Write it myself</button>
-        </div>`;
-    }
-    const src = d.source === "ai" ? "Drafted by AI from the conversation. Read it before you send it."
-      : d.source === "blank" ? "Written by you."
-      : d.rateLimited ? "The standard wording: the AI has written a lot of drafts in the last few minutes."
-      : d.fallback ? "The standard wording: the AI draft was not usable this time."
-      : "The standard wording.";
-    // THE BUTTON, DRAWN. {link} in the message is where the portal puts the button to the
-    // customer's proposal page, and as a bare word in a textarea nothing showed that deleting it
-    // also deleted the button. So the button the customer gets is drawn here with its label, and
-    // the line under it reports on {link} as the estimator types (paintFuLink): fine, inline (a
-    // plain link, not the button), missing (with a one-press fix), or in more than once.
-    const st = fuLinkState(d.body);
-    const note = fuLinkNote(st, d);
-    const hide = (on) => (on ? "" : " hidden");
-    return `
-      <label class="lbl" for="fu-title">Subject</label>
-      <input id="fu-title" class="tw-input fu-title" type="text" maxlength="200" value="${esc(d.title)}">
-      <label class="lbl" for="fu-body">Message</label>
-      <textarea id="fu-body" class="fu-body" rows="14">${esc(d.body)}</textarea>
-      <p class="note">${esc(src)}</p>
-      <div class="fu-cta" id="fu-cta-box">
-        <div class="lbl">The button in the email</div>
-        <div class="fu-cta-row">
-          <span class="btn btn-p fu-cta-btn" id="fu-cta-preview" aria-hidden="true">${esc(fuCta(d))}</span>
-          <p class="note fu-link-ok" id="fu-link-ok"${hide(st === "ok" || st === "inline")}>${esc(note.ok)}</p>
-        </div>
-        <div class="fu-link-gone" id="fu-link-gone" role="status"${hide(st === "gone")}>
-          <p id="fu-link-gone-text">${esc(note.gone)}</p>
-          <button type="button" class="btn btn-s" id="fu-link-fix">${esc(note.fix)}</button>
-        </div>
-        <p class="note fu-link-many" id="fu-link-many" role="status"${hide(st === "many")}>${esc(note.many)}</p>
-        <label class="lbl" for="fu-cta">Button label</label>
-        <input id="fu-cta" class="tw-input fu-cta-in" type="text" maxlength="60"
-               placeholder="${esc(fuCta(null))}" value="${esc(d.cta || "")}">
-      </div>`;
-  }
-
-  /** The label on the customer's button: what the estimator typed, or the portal's own default for
-   *  an empty box. ALWAYS what is posted on Send, so the drawn button and the sent one agree; 60 is
-   *  the portal's own cap (followup_settings.validate_template). */
-  function fuCta(d) {
-    const s = String((d && d.cta) || "").trim();
-    return s ? s.slice(0, 60) : "View your proposal";
-  }
-
-  /** Where {link} stands in a message: "ok" once on a line of its own (the portal draws the button),
-   *  "inline" once inside a sentence (the portal turns it into a plain underlined link, not the
-   *  button: email_sender._block_html), "gone", or "many". A paragraph is what the portal splits
-   *  on, a blank line, so "a line of its own" means a paragraph that is {link} and nothing else. */
-  function fuLinkState(body) {
-    const s = String(body || "");
-    const n = s.split("{link}").length - 1;
-    if (n === 0) return "gone";
-    if (n > 1) return "many";
-    return s.split(/\n\s*\n/).some((p) => p.trim() === "{link}") ? "ok" : "inline";
-  }
-
-  /** The line {link} is on, counted in "\n"s, or null when it is not there. Remembered while the
-   *  token is present so the fix can put it back where it was rather than at the bottom. */
-  function fuLinkLine(body) {
-    const s = String(body || "");
-    const at = s.indexOf("{link}");
-    return at < 0 ? null : s.slice(0, at).split("\n").length - 1;
-  }
-
-  /** The words around the drawn button, for each state. A page started from blank never had a
-   *  link to lose, so it is not told one was removed. */
-  function fuLinkNote(st, d) {
-    const had = !!d && Number.isInteger(d.linkLine);
-    return {
-      ok: st === "inline"
-        ? "{link} is inside a sentence, so it arrives as a plain link, not this button. Put it on a line of its own for the button."
-        : "This goes where {link} is in the message, and opens their proposal.",
-      gone: had ? "Your portal link was removed, so this email has no button to their proposal."
-        : "This email has no portal link yet, so there is no button to their proposal.",
-      fix: had ? "Add the portal link back" : "Add the portal link",
-      many: "{link} is in the message more than once. The email has one button, so keep one and delete the rest.",
-    };
-  }
-
-  /** `body` with {link} put back as a paragraph of its own, nothing else removed. At line `at` (where
-   *  it last was) if that is known: onto the blank line deleting it left behind, or in front of the
-   *  line that now sits there. Otherwise after everything written. Blank lines are added around it
-   *  only where missing, because the portal draws the button only for a paragraph that is {link}
-   *  alone. */
-  function fuPutLinkBack(body, at) {
-    const lines = String(body || "").split("\n");
-    if (!lines.some((l) => l.trim())) return "{link}";
-    let i = Number.isInteger(at) && at >= 0 && at < lines.length ? at : lines.length;
-    if (i < lines.length && !lines[i].trim()) lines[i] = "{link}";
-    else lines.splice(i, 0, "{link}");
-    if (i > 0 && lines[i - 1].trim()) { lines.splice(i, 0, ""); i += 1; }
-    if (i + 1 < lines.length && lines[i + 1].trim()) lines.splice(i + 1, 0, "");
-    return lines.join("\n");
-  }
-
-  /** Bring the line under the drawn button up to date with the message as it stands. Per keystroke
-   *  and without a repaint, so the caret stays in the message. Every word set here is one of
-   *  fuLinkNote's fixed sentences, through textContent. */
-  function paintFuLink(tid) {
-    const d = FU_DRAFT.get(tid);
-    if (!d || d.state !== "ready") return;
-    const st = fuLinkState(d.body);
-    const note = fuLinkNote(st, d);
-    const ok = $("fu-link-ok"), gone = $("fu-link-gone"), many = $("fu-link-many");
-    const goneText = $("fu-link-gone-text"), fix = $("fu-link-fix");
-    if (ok) { ok.hidden = !(st === "ok" || st === "inline"); ok.textContent = note.ok; }
-    if (gone) gone.hidden = st !== "gone";
-    if (goneText) goneText.textContent = note.gone;
-    if (fix) fix.textContent = note.fix;
-    if (many) many.hidden = st !== "many";
-  }
-
-  /** "Add the portal link back": {link} into the message as its own paragraph, the box updated in
-   *  place, and the caret left on it so the estimator can see where it went. */
-  function fuLinkBack(tid) {
-    const d = FU_DRAFT.get(tid);
-    if (!d || d.state !== "ready") return;
-    if (fuLinkState(d.body) === "gone") {
-      d.body = fuPutLinkBack(d.body, d.linkLine);
-      d.linkLine = fuLinkLine(d.body);
-    }
-    const bo = $("fu-body");
-    if (bo) {
-      bo.value = d.body;
-      bo.focus();
-      const at = d.body.indexOf("{link}");
-      if (at >= 0 && typeof bo.setSelectionRange === "function") bo.setSelectionRange(at, at + 6);
-    }
-    paintFuLink(tid);
-    fuSay("");
-  }
-
-  /** The follow-up the portal is waiting on somebody here for, or nothing. `status` is pending or
-   *  sending; a sending task is somebody else's Send in flight, so nothing on it is pressable. */
-  function followupTaskHtml(p, data) {
-    const t = p && p.followup_task;
-    if (!t || !t.id) return "";
-    const sending = String(t.status || "") === "sending";
-    const d = FU_DRAFT.get(String(t.id));
-    const what = t.label || FU_TEMPLATE_LABEL[t.template] || "Follow-up";
-    const due = t.due_at ? "Due " + TW.fmtBizDate(t.due_at) : "Due now";
-    const stage = t.stage === "deposit" ? "Chasing the deposit" : "Before they decide";
-    // WHO IT GOES TO is the "Who gets chased" list further down this group, read off the same
-    // payload WITH THE SAME TEST, so the two cannot disagree about a contact. That list ticks a box
-    // only for a truthy `followups`; this used `!== false`, which counted a contact with no flag in
-    // the sentence while the box right below it sat unticked (audit, 2026-10-23).
-    const who = ((data && data.recipient_activity) || [])
-      .filter((r) => r && r.followups).map((r) => r.name || r.email).filter(Boolean);
-    return `
-      <div class="fu-task" id="fu-task" data-task="${esc(t.id)}">
-        <div class="lbl fu-lbl">Follow-up waiting on you</div>
-        <p class="note"><strong>${esc(what)}</strong> · ${esc(due)} · ${esc(stage)}</p>
-        <p class="note">${who.length
-          ? "Goes to everyone ticked under Who gets chased: " + esc(who.join(", ")) + "."
-          : "Goes to the contacts ticked under Who gets chased."} Nothing reaches the customer until you press Send.</p>
-        <div id="fu-compose" class="fu-compose">${sending
-          ? '<p class="note">Sending now…</p>' : followupComposeHtml(d)}</div>
-        <p class="note fu-msg" id="fu-task-alert" role="status"></p>
-        <div class="fu-line">
-          <button class="btn btn-p" id="fu-send" ${!sending && d && d.state === "ready" ? "" : "disabled"}>Send</button>
-          <button class="btn btn-s" id="fu-skip" ${sending ? "disabled" : ""}>Skip this one</button>
-        </div>
-        <details class="why fu-more" id="fu-called-box">
-          <summary id="fu-called-sum">${CHEV}I already reached them another way</summary>
-          <div class="fu-line">
-            <select id="fu-called-kind" class="tw-select" aria-label="How you reached them">
-              <option value="call">Call</option>
-              <option value="text">Text</option>
-              <option value="email">Email</option>
-              <option value="note">Note</option>
-            </select>
-            <input id="fu-called-note" type="text" class="fu-note" maxlength="2000"
-                   placeholder="Spoke to Dave, decision Friday" aria-label="Note">
-            <button class="btn btn-s" id="fu-called" ${sending ? "disabled" : ""}>Mark it done</button>
-          </div>
-        </details>
-        <details class="why fu-more" id="fu-snooze-box">
-          <summary id="fu-snooze-sum">${CHEV}Not yet, remind me later</summary>
-          <div class="fu-line">
-            <select id="fu-snooze-when" class="tw-select" aria-label="Remind me">
-              <option value="3">In 3 days</option>
-              <option value="7">In a week</option>
-              <option value="14">In 2 weeks</option>
-            </select>
-            <input id="fu-snooze-date" type="date" class="tw-input fu-date" aria-label="Or pick a date">
-            <button class="btn btn-s" id="fu-snooze" ${sending ? "disabled" : ""}>Snooze</button>
-          </div>
-        </details>
-      </div>`;
-  }
-
-  /** Bind the compose box's own controls, which differ by state. Called from wireFollowup on a
-   *  full repaint and from paintFuCompose when the draft lands without one, so the lookups are
-   *  always the ones the state just rendered. */
-  function wireFuCompose(pid, tid) {
-    const d = FU_DRAFT.get(tid);
-    if (!d) return;
-    if (d.state === "ready") {
-      const ti = $("fu-title"), bo = $("fu-body");
-      if (ti) ti.addEventListener("input", () => { const x = FU_DRAFT.get(tid); if (x) x.title = ti.value; });
-      if (bo) bo.addEventListener("input", () => {
-        const x = FU_DRAFT.get(tid);
-        if (!x) return;
-        x.body = bo.value;
-        const at = fuLinkLine(x.body);
-        if (at != null) x.linkLine = at;      // kept through a deletion: it is where the fix goes
-        paintFuLink(tid);
-      });
-      const ci = $("fu-cta");
-      if (ci) ci.addEventListener("input", () => {
-        const x = FU_DRAFT.get(tid);
-        if (!x) return;
-        x.cta = ci.value;
-        const pv = $("fu-cta-preview");
-        if (pv) pv.textContent = fuCta(x);
-      });
-      const fix = $("fu-link-fix");
-      if (fix) fix.addEventListener("click", () => fuLinkBack(tid));
-    } else if (d.state === "failed") {
-      const again = $("fu-draft-retry"), blank = $("fu-draft-blank");
-      if (again) again.addEventListener("click", () => { FU_DRAFT.delete(tid); loadFuDraft(pid); });
-      if (blank) blank.addEventListener("click", () => {
-        FU_DRAFT.set(tid, { state: "ready", title: "", body: "", cta: "", source: "blank" });
-        paintFuCompose(pid, tid);
-        const t = $("fu-title");
-        if (t) t.focus();
-      });
-    }
-  }
-
-  /** Repaint ONLY the compose box. The draft lands seconds after the panel did, and a whole-drawer
-   *  repaint for it would take the caret out of a schedule box somebody is typing in. */
-  function paintFuCompose(pid, tid) {
-    if (CUR_PID !== pid) return;
-    const card = $("fu-task");
-    if (!card || card.dataset.task !== tid) return;
-    const box = $("fu-compose");
-    if (!box) return;
-    const d = FU_DRAFT.get(tid);
-    box.innerHTML = followupComposeHtml(d);
-    const send = $("fu-send");
-    if (send) send.disabled = !(d && d.state === "ready");
-    wireFuCompose(pid, tid);
-  }
-
-  /** Fetch the first draft for the open project's task, once. The server runs the AI and falls back
-   *  to the portal's own wording on any AI failure, so a failure HERE is the portal or the network,
-   *  and the box says so and offers a retry or a blank page rather than pretending. */
-  async function loadFuDraft(pid) {
-    const row = pid ? ALL.find((x) => x.proposal_id === pid) : null;
-    const t = row && row.followup_task;
-    if (!t || !t.id || String(t.status || "") === "sending") return;
-    const tid = String(t.id);
-    if (FU_DRAFT.has(tid)) return;
-    FU_DRAFT.set(tid, { state: "loading" });
-    paintFuCompose(pid, tid);
-    let next;
-    try {
-      const r = await api("/api/portal/followup-task/" + encodeURIComponent(tid) + "/ai-draft",
-                          { method: "POST" });
-      const j = await r.json().catch(() => ({}));
-      const d = j && j.draft;
-      if (!r.ok || j.ok === false) throw new Error(fuErrText(j, r.status, "draft"));
-      if (!d || typeof d !== "object") throw new Error("the server sent no draft");
-      const body = String(d.body || "");
-      next = { state: "ready", title: String(d.title || ""), body,
-               cta: d.cta ? String(d.cta) : "", source: String(d.source || ""),
-               fallback: !!j.fallback, rateLimited: !!j.rate_limited,
-               linkLine: fuLinkLine(body) };
-    } catch (err) {
-      next = { state: "failed", msg: (err && err.message) || "" };
-    }
-    // Only over the loading state it replaces: "Write it myself" pressed mid-fetch wins.
-    const cur = FU_DRAFT.get(tid);
-    if (cur && cur.state === "loading") FU_DRAFT.set(tid, next);
-    paintFuCompose(pid, tid);
-  }
-
-  /** Why an action did not happen, in words. The portal's own `message` wins where it sent one. */
-  function fuErrText(j, status, action) {
+  /** Why the schedule was not saved, in words. The portal's own `message` wins where it sent one. */
+  function fuErrText(j, status) {
     const code = String((j && (j.error || j.detail)) || "");
-    if (code === "out_of_scope" || code === "already_decided") return fuGoneText(code);
-    if (code === "send_failed" || status === 502) {
-      return action === "send" ? "The email did not go out, so nothing was sent. It is safe to try again."
-        : "The portal could not be reached. Try again.";
-    }
-    if (code === "empty") return "Write a subject and a message first.";
+    if (status === 502) return "The portal could not be reached. Try again.";
     if (code === "invalid_date") return "That date could not be read.";
     if (code === "date_in_past") return "Pick a date after today.";
     if (code === "date_too_far") return "That date is too far out.";
-    if (code === "invalid_kind") return "Pick how you reached them.";
     if (j && j.message) return String(j.message);
-    if (code === "invalid_draft") return "The portal would not send that wording.";
     return code || ("HTTP " + status);
   }
 
-  /** The task is gone from under you: the portal expired it, or somebody else dealt with it. */
-  function fuGoneText(code) {
-    return code === "already_decided"
-      ? "Somebody already dealt with this reminder, so nothing was sent."
-      : "This proposal moved on since the reminder was made, so nothing was sent.";
-  }
-
-  /** What a successful action did, plus anything the portal asked us to check. A warning is the
-   *  customer-facing half having worked and the bookkeeping half not: worth a sentence, not an
-   *  error, because pressing the button again would do the customer-facing half twice. */
-  function fuDoneText(action, j) {
-    const said = action === "send" ? "Sent."
-      : action === "skip" ? "Skipped. Nothing was sent."
-      : action === "snooze" ? "Snoozed" + (j && j.next_at ? " until " + TW.fmtBizDay(fuYmd(j.next_at)) : "")
-        + ". Nothing was sent."
-      : "Marked done. Nothing was sent.";
-    const warn = ((j && Array.isArray(j.warnings)) ? j.warnings : []).map((w) =>
-      w === "task_not_finalised" ? "It may still show as waiting; skip it if it comes back."
-      : w === "touch_not_recorded" ? "It is not in the History below yet."
-      : "The portal flagged something to check (" + String(w) + ").");
-    return { text: [said].concat(warn).join(" "), warn: warn.length > 0 };
-  }
-
-  /** Say something on the task card. */
-  function fuSay(msg, bad) {
-    const el = $("fu-task-alert");
-    if (!el) return;
-    el.textContent = msg || "";
-    el.classList.toggle("is-err", !!bad);
-  }
-
-  /** The task is finished with, one way or another: leave the sentence, take the card off, and
-   *  check with the portal. The board row is patched first and the panel repainted from the cached
-   *  payload (the won control's pattern), so the card goes the moment the portal says so rather
-   *  than at the next poll. */
-  async function fuSettle(pid, tid, note, j) {
-    FU_DRAFT.delete(tid);
-    FU_NOTICE.set(pid, { text: note.text, warn: !!note.warn, at: Date.now() });
-    const row = ALL.find((x) => x.proposal_id === pid);
-    if (row) {
-      row.followup_task = null;
-      if (j && j.next_at && row.followup_plan && typeof row.followup_plan === "object") {
-        const plan = Object.fromEntries(Object.entries(row.followup_plan));
-        plan.next_at = j.next_at;
-        row.followup_plan = plan;
-      }
-    }
-    DRAWER_SIG = "";
-    if (CUR_PID === pid && DETAIL_CACHE[pid]) renderDetail(pid, DETAIL_CACHE[pid]);
-    await load();
-    if (CUR_PID === pid) openDetail(pid);
-  }
-
-  /** Send, Skip, Snooze or "I called them" on one task. Not through `act`: that reads every
-   *  failure as "Failed: <code>" on the button, and here a 409 is not a failure to retry, it is
-   *  the portal saying the reminder no longer applies, which wants its own sentence and the card
-   *  taken away. */
-  async function fuTaskAct(pid, tid, action, body, btn) {
-    fuSay("");
-    btn.disabled = true;
-    const orig = btn.textContent;
-    btn.textContent = "Working…";
-    let r, j;
-    try {
-      r = await api("/api/portal/followup-task/" + encodeURIComponent(tid) + "/" + action,
-                    { method: "POST", body: JSON.stringify(body) });
-      j = await r.json().catch(() => ({}));
-    } catch (err) {
-      btn.disabled = false; btn.textContent = orig;
-      fuSay("Could not reach the server, so nothing was sent. Try again.", true);
-      return;
-    }
-    const code = String((j && (j.error || j.detail)) || "");
-    if (r.status === 409 || code === "out_of_scope" || code === "already_decided") {
-      await fuSettle(pid, tid, { text: fuGoneText(code), warn: true }, null);
-      return;
-    }
-    if (!r.ok || (j && j.ok === false)) {
-      btn.disabled = false; btn.textContent = orig;
-      fuSay(fuErrText(j, r.status, action), true);
-      return;
-    }
-    await fuSettle(pid, tid, fuDoneText(action, j), j);
-  }
-
-  /** Save one schedule field. On change, not per keystroke: a number box fires `change` on blur or
-   *  Enter, a date box when a date is picked. Only the field that changed is sent, so editing the
-   *  interval can never reset the stop count; an empty box is sent as null, which is "back to the
-   *  default". The panel is NOT repainted: the board row is patched, and the next quiet poll shows
-   *  it, so the caret stays where it is if the estimator goes straight on to the next box. */
-  async function saveFuPlan(pid, key, el, lo, hi) {
+  /** Save the next email's date. On change, not per keystroke: a date box fires `change` when a
+   *  date is picked. Only `next_at` is sent; an empty box is sent as null, which is "back on the
+   *  usual schedule". The panel is NOT repainted: the board row is patched, and the next quiet
+   *  poll shows it, so the caret stays where it is. */
+  async function saveFuPlan(pid, el) {
     const say = (m, bad) => {
       const box = $("fu-sched-alert");
       if (!box) return;
@@ -4210,32 +3849,22 @@
     const raw = String(el.value == null ? "" : el.value).trim();
     let val = null;
     if (raw) {
-      if (key === "next_at") {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) { say("Pick a date.", true); return; }
-        if (raw < TW.bizToday()) { say("Pick today or a later date.", true); return; }
-        val = raw;
-      } else {
-        const n = Number(raw);
-        if (!Number.isInteger(n) || n < lo || n > hi) {
-          say("Use a whole number from " + lo + " to " + hi + ".", true);
-          return;
-        }
-        val = n;
-      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) { say("Pick a date.", true); return; }
+      if (raw < TW.bizToday()) { say("Pick today or a later date.", true); return; }
+      val = raw;
     }
     say("Saving…");
-    const body = {};
-    body[key] = val;
+    const body = { next_at: val };
     try {
       const r = await api("/api/portal/proposal/" + encodeURIComponent(pid) + "/followup-plan",
                           { method: "POST", body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(fuErrText(j, r.status, "plan"));
+      if (!r.ok || j.ok === false) throw new Error(fuErrText(j, r.status));
       const row = ALL.find((x) => x.proposal_id === pid);
       if (row && j.followup_plan && typeof j.followup_plan === "object") {
         row.followup_plan = Object.fromEntries(Object.entries(j.followup_plan));
       }
-      say(val == null ? "Back on the default." : "Saved.");
+      say(val == null ? "Back on the usual schedule." : "Saved.");
     } catch (err) {
       say("Not saved: " + String((err && err.message) || "try again").replace(/[.\s]+$/, "") + ".", true);
     }
@@ -4281,86 +3910,13 @@
       if (e.key === "Enter") { e.preventDefault(); addC.click(); }
     });
 
-    // ── the reminder schedule ─────────────────────────────────────────────
+    // ── the follow-up schedule: the next email's date ─────────────────────
     // `change`, like the estimator picker below, never `input`: one save per decision, not one
     // per keystroke. Absent on a closed-lost proposal, where nothing is being scheduled.
+    // Absent on an approved proposal too, where the emails have stopped.
     if ($("fu-sched")) {
-      for (const [id, key, lo, hi] of [["fu-next", "next_at", 0, 0],
-                                       ["fu-every", "interval_days", 1, 90],
-                                       ["fu-stop", "stop_after", 1, 60]]) {
-        const el = $(id);
-        if (el) el.addEventListener("change", () => saveFuPlan(pid, key, el, lo, hi));
-      }
-    }
-
-    // ── the follow-up waiting on a human ──────────────────────────────────
-    // Rendered only when the pipeline row carries a pending task, so every lookup below sits
-    // behind the card's own.
-    const taskCard = $("fu-task");
-    const tid = taskCard ? String(taskCard.dataset.task || "") : "";
-    if (tid) {
-      wireFuCompose(pid, tid);
-      const sendBtn = $("fu-send");
-      if (sendBtn) sendBtn.addEventListener("click", (e) => {
-        const d = FU_DRAFT.get(tid);
-        if (!d || d.state !== "ready") return;
-        const title = String(d.title || "").trim(), body = String(d.body || "").trim();
-        if (!title || !body) { fuSay("Write a subject and a message first.", true); return; }
-        // The portal refuses anything else (invalid_draft); said here first so a cleared-and-
-        // rewritten email does not cost a round trip to find out. The notice under the drawn
-        // button is repainted too, so the refusal points at a fix that is on screen.
-        const st = fuLinkState(body);
-        if (st === "gone" || st === "many") {
-          paintFuLink(tid);
-          fuSay(st === "gone"
-            ? "Nothing was sent: the message has no {link}, so the customer would get no button to their proposal. Press “"
-              + fuLinkNote(st, d).fix + "” above."
-            : "Keep {link} in the message exactly once: it becomes the button to their proposal.", true);
-          return;
-        }
-        // The label is always sent, the default included, so the button drawn above is the one
-        // the customer gets rather than whatever the portal's template default happens to be.
-        fuTaskAct(pid, tid, "send", { title, body, cta: fuCta(d) }, e.target);
-      });
-      const skipBtn = $("fu-skip");
-      if (skipBtn) skipBtn.addEventListener("click", (e) => fuTaskAct(pid, tid, "skip", {}, e.target));
-      const calledBtn = $("fu-called");
-      if (calledBtn) calledBtn.addEventListener("click", (e) => {
-        const kind = ($("fu-called-kind") || {}).value || "call";
-        const note = String(($("fu-called-note") || {}).value || "").trim();
-        fuTaskAct(pid, tid, "called", note ? { kind, note } : { kind }, e.target);
-      });
-      const calledNote = $("fu-called-note");
-      if (calledNote && calledBtn) calledNote.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") { e.preventDefault(); calledBtn.click(); }
-      });
-      const snoozeBtn = $("fu-snooze");
-      if (snoozeBtn) snoozeBtn.addEventListener("click", (e) => {
-        const today = TW.bizToday();
-        const picked = String(($("fu-snooze-date") || {}).value || "").trim();
-        if (picked && !(/^\d{4}-\d{2}-\d{2}$/.test(picked) && picked > today)) {
-          fuSay("Pick a date after today.", true);
-          return;
-        }
-        const days = Number(($("fu-snooze-when") || {}).value) || 3;
-        fuTaskAct(pid, tid, "snooze", { until: picked || fuAddDays(today, days) }, e.target);
-      });
-      // ESCAPE CLOSES THE OPEN DISCLOSURE, and only that. Without this it fell through to the
-      // page's own Escape, which shuts the whole drawer: a rep half way through choosing a snooze
-      // date lost the project they were on. Stopped here, so the drawer's Escape still works one
-      // press later, from anywhere else. Focus goes back to the summary that opened it.
-      for (const [boxId, sumId] of [["fu-called-box", "fu-called-sum"],
-                                    ["fu-snooze-box", "fu-snooze-sum"]]) {
-        const box = $(boxId);
-        if (box) box.addEventListener("keydown", (e) => {
-          if (e.key !== "Escape" || !box.open) return;
-          e.preventDefault();
-          e.stopPropagation();
-          box.open = false;
-          const sum = $(sumId);
-          if (sum) sum.focus();
-        });
-      }
+      const nextEl = $("fu-next");
+      if (nextEl) nextEl.addEventListener("change", () => saveFuPlan(pid, nextEl));
     }
 
     const toggle = $("fu-toggle");
@@ -4470,6 +4026,10 @@
     wireWon(pid, p, (patch) => {
       const r = ALL.find((x) => x.proposal_id === pid);
       if (r) Object.assign(r, patch);
+      // The follow-up state is drawn from the PAYLOAD (renderDetail merges only won_at off the
+      // row), so a switch-off the mark just made goes onto the cached proposal too.
+      const cachedP = DETAIL_CACHE[pid] && DETAIL_CACHE[pid].proposal;
+      if (cachedP && patch.followup_state) cachedP.followup_state = patch.followup_state;
       DRAWER_SIG = "";
       // openDetail caches the payload before it ever renders, so this is populated whenever these
       // buttons exist. Guarded rather than defaulted: inventing a payload here would render a drawer
@@ -4686,8 +4246,9 @@
       before: "We have not recorded the contact info for ",
       name: (p && p.project_name) || "this project",
       after: " yet.",
-      detail: "Handing off takes it off the Active board and onto the Handed Off tab. Operations"
-        + " will need those details from somewhere. You can bring it back.",
+      detail: "Handing off takes it off the Active board and onto the Handed Off tab, and the"
+        + " automatic follow-up emails stop. Operations will need those details from somewhere."
+        + " You can bring it back.",
       confirmText: "Hand it off", cancelText: "Not yet", tone: "warn", icon: "arrow-right",
     });
   }
@@ -4699,12 +4260,26 @@
    *  is what the delay and the deposit confirms in this same drawer already use, it traps focus
    *  between its two buttons, and it focuses Cancel. `warn`, not `danger`: this undoes something
    *  rather than destroying it. */
-  function confirmBringBack(p, extra) {
+  function confirmBringBack(p, extra, undoing) {
+    // UNDOING A WON MARK OR A HAND-OFF DOES NOT RESTART THE EMAILS (2026-10-28): both switched the
+    // automatic follow-ups off on the portal, and whether to chase the customer again is a
+    // decision for the Follow-up tab's own switch, so "start again" would be a false promise there.
+    // And only when they ARE off: a mark from before 2026-10-28, or one the portal did not answer,
+    // left them on, and "stay off" would then be the same false claim the drawer used to make.
+    const st = C.followup(p);
+    const fu = !undoing ? "Follow-up reminders start again."
+      : p.not_sent ? "Nothing has been sent, so there are no follow-up emails to start."
+      : (st.enrolled && st.enabled)
+        ? "The automatic follow-up emails are still on for this project, and bringing it back"
+          + " does not change that. Press Turn automation off, on the Follow-up tab, to stop them."
+      : "The automatic follow-up emails stay off: " + (undoing === "handed_off" ? "handing it off"
+          : "marking it won") + " switched them off, and bringing it back does not turn them on."
+        + " Press Turn automation on, on the Follow-up tab, to chase the customer again.";
     return TW.confirmDanger({
       title: "Bring this back?",
       before: "Put ", name: p.project_name || "this project",
       after: " back under " + reopenDestination(p) + "?",
-      detail: "Follow-up reminders start again." + (extra ? " " + extra : ""),
+      detail: fu + (extra ? " " + extra : ""),
       confirmText: "Bring it back", cancelText: "Leave it", tone: "warn", icon: "undo",
     });
   }
@@ -4910,12 +4485,11 @@
     // as long as the drawer stays open. Mutating `p` before the signature is what makes the mark
     // part of it — so a colleague's mark repaints this panel on the next poll.
     if (row) p.won_at = row.won_at || "";
-    // The follow-up waiting on a human, and the reminder schedule. Both ride the PIPELINE row (the
-    // portal's /api/admin/pipeline serves them; the staff detail payload is not where the task list
-    // lives), so they are merged here for the same reason as the won mark, and BEFORE the signature
-    // so a task appearing, being sent by a colleague, or the schedule moving repaints the panel.
+    // The follow-up schedule rides the PIPELINE row (the portal's /api/admin/pipeline serves it;
+    // the staff detail payload is not where it lives), so it is merged here for the same reason as
+    // the won mark, and BEFORE the signature so the schedule moving repaints the panel. (The row's
+    // `followup_task` is no longer merged: since 2026-10-28 no follow-up task card is drawn.)
     if (row) {
-      p.followup_task = row.followup_task || null;
       p.followup_plan = row.followup_plan || p.followup_plan || null;
     }
     // The view stamps, read the same way and for the same reason: the staff detail payload has

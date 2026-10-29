@@ -450,11 +450,17 @@ def _is_future(stamp: str) -> bool:
 
 
 def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """One bell row per task that is DUE. A task the portal has parked for later is not news yet.
+    """One bell row per DECISION task that is due. A task parked for later is not news yet.
+
+    ONLY THE SCOPE DECISION RINGS (2026-10-28). Hanz: "the follow ups should be a follow up email to
+    the customer". The portal's worker emails the customer itself again, so a cadence reminder task
+    (a row left over from the remind-only weeks) is nobody's job: ringing for it would send somebody
+    to a Follow-up tab that, rightly, has no email on it to send. The "Decide the other scopes" task
+    is still a decision for a person. A production tool has no scope groups, so in practice no
+    follow-up task rings there at all; a decision task the portal sends is still shown.
 
     The id is the task's, so a task that stays pending across polls stays one row, and `ts` is when
-    it fell due, so it counts as unread once and not on every refresh. The link opens the drawer on
-    its Follow-up tab, where the email is waiting to be read and sent."""
+    it fell due, so it counts as unread once and not on every refresh."""
     out: List[Dict[str, Any]] = []
     now_iso = _now_iso()
     for t in (state.get("followup_tasks") or []):
@@ -466,13 +472,17 @@ def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         due = str(t.get("due_at") or "")
         if due and _is_future(due):
             continue
-        pid = t.get("proposal_id")
-        label = t.get("label") or "A follow-up"
+        if t.get("stage") != "decision":
+            continue
+        # The portal names the proposal to open (link_proposal_id) on a decision task; absent on an
+        # older portal, and equal to proposal_id on an ordinary task.
+        pid = t.get("link_proposal_id") or t.get("proposal_id")
+        body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
         out.append({
             "id": f"fut:{tid}", "kind": "followup_task", "icon": "mail",
             "severity": "medium", "sort": _TIER_CRM_STEP, "ts": due or now_iso,
             "title": t.get("project_name") or "A project",
-            "body": f"Follow-up due: {label}",
+            "body": body,
             "link": f"/portal.html?open={pid}&sec=followup" if pid else "/portal.html",
         })
         if len(out) >= 25:

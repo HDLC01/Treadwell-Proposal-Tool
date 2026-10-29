@@ -125,12 +125,11 @@
    *  chasing is meaningless. */
   function automation(p, today) {
     var col = column(p);
-    // "approved" is no longer a blanket stop. Hanz, 2026-08-12: "followups should be automated
-    // until a deposit has been received." A won job with the money still out IS being chased, and
-    // returning "" here painted no badge at all — staff would read the page as "nothing is going
-    // out" while the worker emailed the customer every few days.
-    if (col === "lost") return "";
-    if (col === "approved" && depositIn(p)) return "";
+    // "approved" is a blanket stop again. Hanz, 2026-10-28: follow-ups run from "proposal sent"
+    // until the proposal is APPROVED, and nothing chases the deposit any more, so a won job is
+    // never "chasing" whatever its deposit says. (From 2026-08-12 to 2026-10-28 an approved job with
+    // the money still out was chased, and this returned "chasing" for it.)
+    if (col === "lost" || col === "approved") return "";
     if (pausedUntil(p, today)) return "paused";
     var f = followup(p);
     return (f.enrolled && f.enabled) ? "chasing" : "off";
@@ -281,9 +280,13 @@
   // is scheduling bookkeeping. Staff templates read "Told the team" because nothing in them reached
   // the customer, which is the difference between having bothered them and having bothered us.
   var FU_TEMPLATE_LABEL = {
-    not_viewed: "Nudge: not opened yet",
-    next_steps: "Next steps after viewing",
-    second_nudge: "Second nudge",
+    // The four emails of the two-per-step cadence (2026-10-28), one template each. Earlier rows
+    // of the same three keys were the same emails in the old ladder's places.
+    not_viewed: "Follow-up: not opened, 1st email",
+    not_viewed_2: "Follow-up: not opened, 2nd email",
+    next_steps: "Follow-up: opened, 1st email",
+    second_nudge: "Follow-up: opened, 2nd email",
+    // History only: the old ladder's repeating check-in and its deposit chase. Nothing sends these.
     checkin: "Check-in",
     deposit_nudge: "Deposit reminder",
     staff_not_viewed: "Told the team: still not opened",
@@ -291,6 +294,9 @@
     staff_personal_followup: "Told the team: worth a call",
     staff_deposit_outstanding: "Told the team: deposit outstanding",
     staff_followup_due: "Told the team: a follow-up is due",
+    // The "Tell the estimator" email of the two-per-step cadence: a step's last customer email
+    // went out N days ago and there is still no decision.
+    staff_followups_done: "Told the estimator: the follow-ups are done, no decision yet",
     // Scope groups (2026-10-24): the task that asks what to do with the other scopes once one
     // is approved, and the estimator email that raises it and re-nags about it while unanswered.
     scope_decision: "Decide the other scopes",
