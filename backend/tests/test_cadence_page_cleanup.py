@@ -581,9 +581,12 @@ def test_the_timing_card_still_says_what_the_numbers_mean():
     assert ("Stops when approved, lost, or the project's Follow-ups switch is off."
             in " ".join(page.split()))
     for unit in ("days after sending", "days after the 1st", "days after the last email"):
-        assert "<span>%s</span>" % unit in page, unit
-    # Hanz, 2026-10-29: both steps' 1st email counts from the day it was sent.
-    assert page.count("<span>days after sending</span>") == 2, "each step's 1st email counts from sending"
+        assert "<span>%s" % unit in page, unit
+    # Hanz, 2026-10-29: both steps' 1st email counts from the day it was sent, and the opened
+    # step's 1st never goes sooner than a day after they open it.
+    assert page.count("<span>days after sending</span>") == 1, "the not-opened 1st email"
+    assert page.count("<span>days after sending, and never sooner than a day after they open "
+                      "it</span>") == 1, "the opened 1st email"
     assert "days after they open it" not in page
 
 

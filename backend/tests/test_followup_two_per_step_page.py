@@ -68,6 +68,21 @@ def test_the_card_reads_as_the_approved_mock():
     assert "Tell the estimator" in text
 
 
+def test_the_opened_1st_email_says_it_waits_a_day_after_they_open_it():
+    """Hanz, 2026-10-29: "Wait 1 day after they open". The opened step's 1st email is due at the
+    latest of sent + its days and opened + 1 day, so a late opener is not thanked within minutes.
+    The box says so beside it; the not-opened box does not (it has no open to wait for).
+
+    Mutation: put back "<span>days after sending</span>" on op1-row and this fails."""
+    def row(rid):
+        start = HTML.index('id="%s"' % rid)
+        return _visible("<body>" + HTML[start:HTML.index("</div>", start)])
+
+    assert "days after sending, and never sooner than a day after they open it" in row("op1-row")
+    assert "open it" not in row("no1-row")
+    assert "—" not in row("op1-row")
+
+
 def test_the_intro_says_both_steps_count_from_the_day_it_was_sent():
     """Hanz, 2026-10-29: "the days should be based off the date it was sent". The opened step used
     to count from the day they opened it; it counts from the send now, like the first step.
