@@ -66,7 +66,7 @@ def test_three_proposals_list_three_rows_with_their_own_figures_and_no_total(out
         (True, ["Polish Room 2", "$15,999.00", "(this one)"]),
         (False, ["Kitchen", "not priced yet"]),
     ], "this one carries the card's own figure (its document's total), the others their documents'"
-    assert c["note"] == "Separate proposals, each approved on its own. The files here are this one's."
+    assert c["note"] == "Separate proposals, each approved on its own. Each line's buttons download that one's files."
     assert "total" not in c["text"].lower() and "$35,999" not in c["text"] and "$35,000" not in c["text"]
     assert c["key"] == "Lump sums" and "fp-money--list" in c["rowClass"].split() and c["rowHidden"] is False
 

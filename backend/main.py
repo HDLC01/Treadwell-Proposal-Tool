@@ -7928,6 +7928,10 @@ class DocumentsIn(BaseModel):
     # Kyle's template placeholders (_send_all_placeholders) is then refused with words, never handed
     # out as a download. The Files page sends nothing here and builds as before.
     hold_placeholders: bool = False
+    # False from ANOTHER proposal's line on step 5's list (done.js downloadOther): its files are
+    # handed out and nothing is recorded on it. Send all asks a proposal with no files whether it is
+    # closed lost or on hold (_send_all_draft_closed); a neighbour's press must not answer that.
+    record: bool = True
 
 
 def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
@@ -7978,7 +7982,7 @@ def api_draft_documents(draft_id: str, request: Request,
                                      "still has template placeholders (%s). Open its Proposal "
                                      "step, fill them, and press Continue." % ", ".join(held))
     out = _documents_out(_render_documents(pp, request, want_estimate=True))
-    if not (row.get("data") or {}).get("generate_result"):
+    if (payload is None or payload.record) and not (row.get("data") or {}).get("generate_result"):
         try:
             drafts.record_generate_result(draft_id, out.model_dump())
         except Exception as exc:  # noqa: BLE001 — a board column must never block a download

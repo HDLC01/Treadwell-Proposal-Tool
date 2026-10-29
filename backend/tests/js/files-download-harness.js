@@ -150,7 +150,7 @@ function page(opts) {
   // already read, as it is by the time the estimator presses a button.
   const filesProposals = { seq: 0, pv: opts.pv || null };
   const stem = new Function(...STEM.args, "TW", "filesProposals", '"use strict"; ' + STEM.body);
-  const fileStem = (project) => stem(project, TW, filesProposals);
+  const fileStem = (project, who) => stem(project, who, TW, filesProposals);
   const downloadRevision = new AsyncFunction(
     ...REVISION.args, "TW", "fetch", "Blob", "URL", "document", "setTimeout", "icon", "console",
     "fileStem", '"use strict"; ' + REVISION.body);
@@ -179,10 +179,11 @@ function page(opts) {
       const wire = new Function(
         "result", "state", "TW", "document", "freshDocuments", "paintLumpSum", "refreshFilesProposals",
         "fetch", "Blob", "URL", "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
-        "coverLetterCheck", "fileStem", '"use strict";\n' + WIRING);
+        "coverLetterCheck", "fileStem", "rowFiles", '"use strict";\n' + WIRING);
       wire(result, JSON.parse(JSON.stringify(opts.state)), TW, doc, freshDocuments, () => { painted++; },
            () => { listed++; }, fetchStub, BlobStub, URLStub, () => 0, () => "", { error() {} },
-           checkedDocument, TWPRICE, windowStub, async () => ({ enabled: false }), fileStem);
+           checkedDocument, TWPRICE, windowStub, async () => ({ enabled: false }), fileStem,
+           { mine: null, said: {} });
       const saved = {};
       for (const id of Object.keys(handlers)) {
         const before = clicked.length;

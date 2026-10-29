@@ -22,8 +22,12 @@ const ROOT = path.resolve(process.argv[2]);
 const SRC = L.read(path.join(ROOT, "js", "done.js"));
 
 const FNS = ["money", "paintLumpSum", "paintReadyProposals", "proposalName", "paintFilesProposals",
-             "refreshFilesProposals"].map((n) => L.liftSource(SRC, n, { indent: "  ", where: "done.js" }));
-const RECORD = L.grabConst(SRC, "filesProposals", { indent: "  ", where: "done.js" });
+             "refreshFilesProposals", "paintRowFiles"].map((n) => L.liftSource(SRC, n, { indent: "  ", where: "done.js" }));
+// Each line's own buttons (paintRowFiles, #744) and the records they read; their presses are driven
+// in files-row-downloads-harness.js.
+const NL = String.fromCharCode(10);
+const RECORD = ["filesProposals", "ROW_FILES", "rowFiles"]
+  .map((n) => L.grabConst(SRC, n, { indent: "  ", where: "done.js" })).join(NL);
 const HEAD = (function () {
   const start = SRC.indexOf("function showPostGenerate(result) {");
   const end = SRC.indexOf("// Carry the draft across", start);
@@ -41,6 +45,9 @@ class El {
     this.href = undefined;
     this.style = {};
     this._text = "";
+    this.disabled = false;
+    this.attrs = {};
+    this.listeners = {};
     const self = this;
     const has = (c) => self.className.split(/\s+/).indexOf(c) >= 0;
     this.classList = {
@@ -51,6 +58,8 @@ class El {
     };
   }
   appendChild(c) { this.children.push(c); return c; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); }
   get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join("") : this._text; }
   set textContent(v) { this.children = []; this._text = String(v); }
 }
@@ -110,7 +119,12 @@ function snap(p) {
     text: val.textContent,
     rows: list ? list.children.map((li) => ({
       current: li.className.split(" ").indexOf("current") >= 0,
-      parts: li.children.map((c) => [c.tagName, c.className, c.textContent, c.href === undefined ? null : c.href]),
+      // The name, the figure and the tag; each line's own buttons and its message are `files`.
+      parts: li.children.filter((c) => !/^rv-prop-(dl|msg)$/.test(c.className))
+        .map((c) => [c.tagName, c.className, c.textContent, c.href === undefined ? null : c.href]),
+      files: li.children.filter((c) => /^rv-prop-(dl|msg)$/.test(c.className)).map((c) => (c.className === "rv-prop-dl"
+        ? c.children.map((b) => [b.textContent, b.disabled, (b.listeners.click || []).length])
+        : (c.hidden ? null : c.textContent))),
     })) : null,
     note: (val.children.filter((c) => c.className === "rv-props-note")[0] || { textContent: null }).textContent,
     which: n["which-proposal"].hidden ? null : n["which-proposal"].textContent,
