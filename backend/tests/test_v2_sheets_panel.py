@@ -593,6 +593,7 @@ def test_switching_a_sheet_on_ticks_it_after_the_base_tags_bid_n_and_reprices_no
     one = o["one"]
     assert one["ids"] == ["Polish", "Epoxy"] and one["base"] == "Polish", "the pricing base stays Base Bid 1"
     assert one["checked"] == "true" and one["switchTag"] is True
+    assert one["switchLabel"] == "Separate base bid", "Hanz 2026-10-29: the switch was 'Its own proposal'"
     assert one["bids"] == {"Polish": 1, "Epoxy": 2}
     assert one["kinds"] == o["kinds0"] == _OWN_KINDS and one["lump"] == o["lump0"], "the switch changes no kind and no price"
     assert one["scope"].endswith("2 base bids, each its own proposal: Base Bid 1 Polish , Base Bid 2 Epoxy . Create the proposals on the Proposal step.")

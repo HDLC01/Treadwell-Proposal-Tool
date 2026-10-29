@@ -1008,6 +1008,7 @@ async function ownProposal() {
   clickIf(b, sel("own", "Epoxy"));
   const one = { ids: idsOf(), base: b.store.blob.base_tab_id, checked: ownOf("Epoxy")[1], bids: bidsOf(), scope: scopeText(),
                 switchTag: /data-sh-act="own"[^>]*>[\s\S]*?Base Bid 2<\/span><\/button>/.test(rowHtml(b, "Epoxy")),
+                switchLabel: /data-sh-act="own"[^>]*><span class="track"><\/span>([^<]*)</.exec(rowHtml(b, "Epoxy"))[1].trim(),
                 kinds: kinds(), lump: b.api.bid().total };
   openSheet(b, "Copy1");
   clickIf(b, sel("own", "Copy1"));

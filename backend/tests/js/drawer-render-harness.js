@@ -2231,12 +2231,12 @@ async function runScenario(name, s) {
                      unread: 0, followup_task: null,
                      followup_plan: { next_at: "2026-10-27", anchor_at: "2026-10-20T12:00:00Z" } };
     BOARD_ROWS.push(futRow);
-    const fuData = (status) => payload({
+    const fuData = (status, state) => payload({
       proposal: { project_name: "Nearman Creek", customer_name: "Dave Nunn",
                   customer_email: "dave@x.com", url: PORTAL_URL, token: URL_TOKEN,
                   proposal_status: status || "sent", deposit_status: "pending",
                   contacts_status: "pending", assigned_estimator: "kyle@wetreadwell.com",
-                  followup_state: { enrolled: true, enabled: true } },
+                  followup_state: state || { enrolled: true, enabled: true } },
       approval: null, contacts: [], deposits: [], followups: [],
       recipient_activity: [{ email: "dave@x.com", name: "Dave Nunn", followups: true }],
     });
@@ -2249,10 +2249,10 @@ async function runScenario(name, s) {
     const reqs = (re) => net.requests.filter((r) => re.test(r.path))
       .map((r) => ({ path: r.path, method: r.method, body: r.body }));
     const el = (id) => dom.getElementById(id);
-    async function open(task, status) {
+    async function open(task, status, state) {
       futRow.followup_task = task;
       futRow.proposal_status = status || "sent";
-      const d = fuData(status);
+      const d = fuData(status, state);
       page.open(FU_PID);
       page.cache(FU_PID, d);
       page.renderDetail(FU_PID, d);
@@ -2321,6 +2321,16 @@ async function runScenario(name, s) {
     answer(/\/followup-plan$/, 400, { ok: false, error: "date_too_far", detail: "date_too_far" });
     sched.refused = await save("fu-next", "2027-12-01");
     out.fuTask.schedule = sched;
+
+    // 5. THE SWITCH WHILE IT IS OFF. Turning a sent proposal's follow-ups back on keeps its send
+    //    date, so the switch must not promise a cadence "from today"; a proposal that was never
+    //    enrolled does start from today (set_followup_enabled stamps now()).
+    reset();
+    await open(null, "sent", { enrolled: true, enabled: false });
+    out.fuTask.toggleReenable = { html: dom.html };
+    reset();
+    await open(null, "sent", { enrolled: false, enabled: false });
+    out.fuTask.toggleNever = { html: dom.html };
 
     reset();
     out.fuTask.allPaths = fuAll.map((r) => r.path);

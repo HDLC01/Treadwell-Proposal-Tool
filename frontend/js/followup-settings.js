@@ -40,7 +40,7 @@
     sent: "Proposal sent — the first email, when you publish it",
     not_viewed: "Not opened yet — 1st email, days after sending",
     not_viewed_2: "Not opened yet — 2nd email, days after the 1st",
-    next_steps: "Opened, no decision — 1st email, days after they open it",
+    next_steps: "Opened, no decision — 1st email, days after sending",
     second_nudge: "Opened, no decision — 2nd email, days after the 1st",
   };
   // NEVER A TAB, even when an older portal still serves them. Hanz, 2026-10-28: nothing repeats and
