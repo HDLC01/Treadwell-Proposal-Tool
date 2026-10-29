@@ -413,7 +413,7 @@ def test_the_wizard_links_follow_the_copy():
     body = _block(PAGE, "repointWizardLinks")
     assert "TW.getDraftId()" in body and 'searchParams.set("d", id)' in body
     shell = _block(ESTIMATE, "shell")
-    assert 'TW.withDraft("/proposal-review.html")' in shell, (
+    assert 'TW.withDraft("/generate.html")' in shell, (
         "the Continue button is a bare path, so it relies on whatever draft id happens to be "
         "stored rather than the one being edited")
     # Same rule on the beta intake form, whose Continue leads INTO the beta calculator.

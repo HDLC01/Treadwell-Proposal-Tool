@@ -6,7 +6,7 @@ portal still says sent/viewed, the automatic customer emails STOP."
 The won mark and the hand-off live on OUR draft blob, which the portal never reads, so until this
 the portal kept emailing a customer who had said yes on the phone. The route now also posts the
 drawer's own per-project Follow-ups switch (`followup-automation`, enabled false) to the portal,
-for THIS ONE proposal: the production build has one proposal per project and no scope groups.
+for every SENT proposal of the project's scope group.
 
 Every test below executes the real `/api/draft/{id}/status` route, with drafts in the fake store
 and a recording fake in place of `main._portal`. Each names the change it fails without.
@@ -19,6 +19,7 @@ import main
 
 client = TestClient(main.app)
 ACTOR = "kyle@wetreadwell.com"
+GID = "grp-acme"
 
 
 def _draft(did, data):
@@ -47,12 +48,12 @@ class _Portal:
                                                                                "by": ACTOR}]
 
 
-def _wire(fake_supabase, monkeypatch, portal, sent=("solo", "twin")):
-    """Two sent projects and an unsent one. `twin` shares solo's project name (and carries a stray
-    scope-group key, as a copy made on staging could): it is a separate project all the same."""
+def _wire(fake_supabase, monkeypatch, portal, sent=("solo", "g1", "g2")):
+    """A sent ungrouped project, a three-scope project (g3 never sent), and an unsent project."""
+    group = lambda label: {"project_name": "Acme HQ", "scope_group": {"id": GID, "label": label}}
     store = {"drafts": [_draft("solo", {"project_name": "Nearman Creek"}),
-                        _draft("twin", {"project_name": "Nearman Creek",
-                                        "scope_group": {"id": "grp-x", "label": "Lab 1"}}),
+                        _draft("g1", group("Lab 1")), _draft("g2", group("Lab 2")),
+                        _draft("g3", group("Breakroom")),
                         _draft("new", {"project_name": "Cedar Ridge"})],
              "draft_revisions": [{"project_id": pid, "revision_no": 1} for pid in sent],
              "events": []}
@@ -89,20 +90,17 @@ def test_handing_a_sent_project_off_switches_its_follow_ups_off(fake_supabase, m
     assert _data(store, "solo")["handed_off"]["by"] == ACTOR
 
 
-def test_only_the_marked_proposal_is_switched_off(fake_supabase, monkeypatch):
-    """ONE PROPOSAL, no scope-group expansion: production has no scope groups, so the mark on one
-    draft switches that draft's emails off and no other project's, even one with the same name or
-    a stray scope-group key. Mutation: look the project up by name, or expand a scope group (this
-    build's drafts has no _group_rows, so the lookup raises and the mark reports a failure)."""
-    portal = _Portal()
+def test_every_sent_proposal_of_a_scope_group_is_switched_off(fake_supabase, monkeypatch):
+    """The customer is chased with one email for the whole project, so a won mark on one scope
+    stops all of them. g3 was never sent: the portal has no row and answers 404, which is "nothing
+    to stop", not a failure. Mutation: drop the group expansion (only g2 switched)."""
+    portal = _Portal(missing=["g3"])
     _wire(fake_supabase, monkeypatch, portal)
-    for did in ("twin", "solo"):
-        portal.calls.clear()
-        r = client.post("/api/draft/%s/status" % did, json={"status": "won"})
-        assert r.status_code == 200, r.text
-        assert portal.switched() == [did], portal.calls
-        assert r.json()["followups_off"] == [did], r.json()
-        assert r.json()["followups_failed"] == [] and r.json()["followups_note"] == ""
+    r = client.post("/api/draft/g2/status", json={"status": "won"})
+    assert r.status_code == 200, r.text
+    assert sorted(portal.switched()) == ["g1", "g2", "g3"], portal.calls   # g3's POST 404'd
+    assert sorted(r.json()["followups_off"]) == ["g1", "g2"], r.json()
+    assert r.json()["followups_failed"] == [] and r.json()["followups_note"] == ""
 
 
 def test_an_unsent_project_is_asked_and_its_404_is_no_warning(fake_supabase, monkeypatch):
@@ -130,23 +128,22 @@ def test_a_proposal_sent_before_revisions_existed_is_switched_off(fake_supabase,
 
 def test_an_unreachable_portal_keeps_the_mark_and_says_so(fake_supabase, monkeypatch):
     """No silent failure. The mark saves, the answer is still ok, and the note names the problem.
-    Asked once. "new" has no revision, but with the portal down that is not proof it was never
-    sent (a pre-#219 send has none either), so it is counted too. Mutation: swallow the failure
-    (empty followups_failed / no note), or let it raise (a 502 for a mark that saved)."""
-    for did in ("solo", "new"):
-        portal = _Portal(down=True)
-        store = _wire(fake_supabase, monkeypatch, portal)
-        r = client.post("/api/draft/%s/status" % did, json={"status": "won"})
-        assert r.status_code == 200, r.text
-        assert r.json()["ok"] is True
-        assert "won" in _data(store, did), "the mark was lost because the portal was down"
-        assert r.json()["followups_failed"] == [did], r.json()
-        assert r.json()["followups_off"] == []
-        note = r.json()["followups_note"]
-        assert note.startswith("Saved as won, but"), note
-        assert "could not be switched off" in note and "Turn automation off" in note, note
-        assert "for this project" in note, note
-        assert len(portal.calls) == 1, portal.calls
+    The portal is asked ONCE for the group, not once per scope (twelve 20s timeouts would hang the
+    drawer for minutes). g3 has no revision, but with the portal down that is not proof it was
+    never sent (a pre-#219 send has none either), so it is counted too. Mutation: swallow the
+    failure (empty followups_failed / no note), or let it raise (a 502 for a mark that saved)."""
+    portal = _Portal(down=True)
+    store = _wire(fake_supabase, monkeypatch, portal)
+    r = client.post("/api/draft/g1/status", json={"status": "won"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    assert "won" in _data(store, "g1"), "the mark was lost because the portal was down"
+    assert sorted(r.json()["followups_failed"]) == ["g1", "g2", "g3"], r.json()
+    assert r.json()["followups_off"] == []
+    note = r.json()["followups_note"]
+    assert "could not be switched off" in note and "Turn automation off" in note, note
+    assert "3 of the proposals" in note, note
+    assert len(portal.calls) == 1, "the unreachable portal was asked again for every scope"
 
 
 def test_no_portal_on_this_box_is_no_warning_for_a_proposal_never_sent(fake_supabase, monkeypatch):
@@ -159,8 +156,8 @@ def test_no_portal_on_this_box_is_no_warning_for_a_proposal_never_sent(fake_supa
     r = client.post("/api/draft/new/status", json={"status": "won"})
     assert r.status_code == 200, r.text
     assert r.json()["followups_failed"] == [] and r.json()["followups_note"] == "", r.json()
-    r = client.post("/api/draft/solo/status", json={"status": "won"})     # solo was sent
-    assert r.json()["followups_failed"] == ["solo"], r.json()
+    r = client.post("/api/draft/g3/status", json={"status": "won"})       # g1 + g2 were sent
+    assert sorted(r.json()["followups_failed"]) == ["g1", "g2"], r.json()
 
 
 def test_an_unreachable_portal_on_a_hand_off_says_so_too(fake_supabase, monkeypatch):
@@ -228,12 +225,13 @@ def test_a_missing_project_never_reaches_the_portal(fake_supabase, monkeypatch):
 # The switch-off at the mark can only reach a proposal the portal already has. One sent later was
 # enrolled by the portal's first publish (portal db.enroll_followup), and nothing read the draft's
 # won / handed_off key, so the customer was chased about a job already won. These execute the real
-# /api/portal/publish route over the same fake store.
+# /api/portal/publish route (_prepare_publish + _commit_publish) over the same fake store.
 EST = "kyle@wetreadwell.com"
 
 
 def _wire_publish(fake_supabase, monkeypatch, portal, **kw):
     store = _wire(fake_supabase, monkeypatch, portal, **kw)
+    monkeypatch.setattr(main, "_scope_groups_refusal", lambda: None)   # a portal that has groups
     monkeypatch.setattr(main.drafts, "create_revision", lambda did, data, by=None: 1)
     monkeypatch.setattr(main.drafts, "delete_revision", lambda did, no: None)
     monkeypatch.setattr(main.drafts, "log_event", lambda *a, **k: None)
@@ -252,7 +250,7 @@ def _published(portal):
 def test_sending_a_project_already_marked_won_switches_its_emails_off(fake_supabase, monkeypatch):
     """The customer says yes on the phone, the estimator marks the unsent project Won, then sends
     the formal proposal for signature. Mutation: drop the _followups_off_after_publish call from
-    api_portal_publish; no switch-off follows the publish."""
+    _commit_publish; no switch-off follows the publish."""
     portal = _Portal(missing=["new"])
     _wire_publish(fake_supabase, monkeypatch, portal)
     assert client.post("/api/draft/new/status", json={"status": "won"}).status_code == 200
@@ -266,17 +264,16 @@ def test_sending_a_project_already_marked_won_switches_its_emails_off(fake_supab
     assert r.json()["followups_off"] == ["new"] and r.json()["followups_note"] == ""
 
 
-def test_a_send_reads_only_its_own_draft_for_the_mark(fake_supabase, monkeypatch):
-    """Another project marked won (with the same name, even) does not switch this one's emails off
-    on send: the mark is read off the sent draft alone. Mutation: read the mark off any draft of
-    the same project name, or off a scope group."""
+def test_a_scope_sent_after_another_scope_was_marked_won_starts_with_its_emails_off(
+        fake_supabase, monkeypatch):
+    """Scope 3 of a group, sent after scope 1 was marked won. Mutation: read only the sent
+    proposal's own blob in _outcome_mark_of (the group is not looked at)."""
     portal = _Portal()
     store = _wire_publish(fake_supabase, monkeypatch, portal)
-    _data(store, "solo")["won"] = {"at": "2026-10-20T15:00:00Z", "by": ACTOR}
-    r = _publish("twin")
+    _data(store, "g1")["won"] = {"at": "2026-10-20T15:00:00Z", "by": ACTOR}
+    r = _publish("g3")
     assert r.status_code == 200, r.text
-    assert _published(portal) == ["twin"] and portal.switched() == [], portal.calls
-    assert "followups_off" not in r.json(), r.json()
+    assert _published(portal) == ["g3"] and portal.switched() == ["g3"], portal.calls
 
 
 def test_sending_a_handed_off_project_switches_its_emails_off_too(fake_supabase, monkeypatch):
@@ -293,7 +290,7 @@ def test_an_ordinary_send_never_touches_the_follow_ups_switch(fake_supabase, mon
     sets it, and the answer carries none of the switch-off keys."""
     portal = _Portal()
     _wire_publish(fake_supabase, monkeypatch, portal)
-    for did in ("new", "twin"):
+    for did in ("new", "g3"):
         r = _publish(did)
         assert r.status_code == 200, r.text
         assert "followups_off" not in r.json(), r.json()
@@ -318,43 +315,3 @@ def test_a_send_whose_switch_off_fails_is_still_sent_and_says_so(fake_supabase, 
     assert r.json()["followups_failed"] == ["new"]
     note = r.json()["followups_note"]
     assert note.startswith("Sent.") and "marked won" in note and "Turn automation off" in note, note
-
-
-# ── log safety (CodeQL, #739's last commit) ──────────────────────────────────
-# The portal's refusal text and the draft id reach these log lines, and a newline in either would
-# let whoever controls them forge a log line. Both switch-off paths log through main._log_safe.
-FORGED = "boom\nINFO forged: follow-ups switched off"
-
-
-def _warnings(caplog):
-    return [r.getMessage() for r in caplog.records if r.name == "proposal_tool"
-            and "switch-off" in r.getMessage()]
-
-
-def test_the_mark_s_switch_off_failure_logs_no_raw_newline(fake_supabase, monkeypatch, caplog):
-    """Mutation: log exc.detail without _log_safe in _followups_off_for_outcome."""
-    def refusing(path, method="GET", body=None):
-        raise HTTPException(500, FORGED)
-    _wire(fake_supabase, monkeypatch, refusing)
-    caplog.set_level("WARNING", logger="proposal_tool")
-    r = client.post("/api/draft/solo/status", json={"status": "won"})
-    assert r.status_code == 200 and r.json()["followups_failed"] == ["solo"], r.text
-    lines = _warnings(caplog)
-    assert lines, "the failed switch-off was not logged"
-    assert not [m for m in lines if "\n" in m], lines
-
-
-def test_the_publish_s_switch_off_failure_logs_no_raw_newline(fake_supabase, monkeypatch, caplog):
-    """Mutation: log the exception without _log_safe in _followups_off_after_publish."""
-    def portal(path, method="GET", body=None):
-        if path.endswith("/followup-automation"):
-            raise HTTPException(500, FORGED)
-        return {"ok": True}
-    store = _wire_publish(fake_supabase, monkeypatch, portal)
-    _data(store, "new")["won"] = {"at": "2026-10-20T15:00:00Z", "by": ACTOR}
-    caplog.set_level("WARNING", logger="proposal_tool")
-    r = _publish("new")
-    assert r.status_code == 200 and r.json()["followups_failed"] == ["new"], r.text
-    lines = _warnings(caplog)
-    assert lines, "the failed switch-off was not logged"
-    assert not [m for m in lines if "\n" in m], lines

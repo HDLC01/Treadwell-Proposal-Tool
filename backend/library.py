@@ -52,6 +52,8 @@ from typing import Any, Dict, List, Optional
 
 from supabase_client import get_client
 
+import item_categories
+
 # THE WORK TYPES, IMPORTED FROM markup.py RATHER THAN RETYPED. markup.TABS is the closed
 # list of the five sheet tabs a bid can sit on, and it is already the vocabulary the markup
 # rules are filed under. A fourth hand-written copy is how a default ends up filed against a
@@ -89,7 +91,8 @@ LABOR = "library_labor"
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
 ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
                  "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types",
-                 "default_on", "price_breaks", "bulk_cost", "coverage_basis")
+                 "default_on", "price_breaks", "bulk_cost", "coverage_basis",
+                 "material_categories")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types",
                 "default_on")
 VENDOR_WRITABLE = ("name", "notes")
@@ -618,6 +621,13 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         out["bulk_cost"] = bulk if (bulk is None or bulk > 0) else None
     if "coverage_basis" in payload:
         out["coverage_basis"] = _coerce_coverage_basis(payload.get("coverage_basis"))
+    # THE MATERIAL STEP'S HEADING, per work type (item_categories.py): {"epoxy": "epoxy-patch"}.
+    # Written ONLY when the request carries it, for the reason the three above are: a database that
+    # has not had backend/ops/item_categories.sql applied must never be sent a column it lacks. An
+    # empty map is a real answer ("uncategorised everywhere") and is stored as NULL.
+    if "material_categories" in payload:
+        cats = item_categories.coerce_item_categories(payload.get("material_categories"))
+        out["material_categories"] = cats or None
 
     for col, limit in (("category", _MAX_TEXT), ("sku", 80),
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
@@ -681,6 +691,10 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "bulk_cost": _as_float(row.get("bulk_cost")),
         "coverage_basis": (row.get("coverage_basis")
                            if row.get("coverage_basis") in COVERAGE_BASES else None),
+        # {work type: category id}. Always present, {} for a material filed under nothing and for
+        # every row read from a database without the column yet (it reads as uncategorised, which
+        # is what it is). The id is resolved to a name against item_categories on the page.
+        "material_categories": item_categories.coerce_item_categories(row.get("material_categories")),
         "sku": row.get("sku") or "",
         "vendor": row.get("vendor") or "",
         "notes": row.get("notes") or "",
@@ -716,12 +730,25 @@ def _as_float(v: Any) -> Optional[float]:
 
 
 def list_items() -> List[Dict[str, Any]]:
+    return list_items_and_category_column()[0]
+
+
+def list_items_and_category_column() -> "tuple[List[Dict[str, Any]], bool]":
+    """The materials, and whether this database has the `material_categories` column yet.
+
+    select("*") names every column a row has, so a row WITHOUT the key is a database that has not
+    had backend/ops/item_categories.sql applied. The Items tab reads the answer before it offers a
+    Category select: a pick on such a database fails, and a failed save stays queued with every
+    later edit of that row folded into it, so one pick would make the material unsaveable. An empty
+    library cannot tell, and answers True: it has no row to pick a category on."""
     sb = get_client()
     res = (sb.table(ITEMS).select("*")
            .is_("deleted_at", "null")
            .order("name")
            .limit(2000).execute())
-    return [_shape_item(r) for r in (res.data or [])]
+    rows = res.data or []
+    has_column = not rows or any("material_categories" in r for r in rows)
+    return [_shape_item(r) for r in rows], has_column
 
 
 def get_item(item_id: str) -> Optional[Dict[str, Any]]:
@@ -849,7 +876,16 @@ def update_item(item_id: str, payload: Dict[str, Any],
           or ("price_breaks" in patch
               and patch["price_breaks"] != _shape_price_breaks(rows[0].get("price_breaks")))):
         patch["cost_updated_at"] = patch["updated_at"]
-    sb.table(ITEMS).update(patch).eq("id", item_id).execute()
+    try:
+        sb.table(ITEMS).update(patch).eq("id", item_id).execute()
+    except Exception as exc:  # noqa: BLE001 - re-raised unless it is the missing category column
+        # A DATABASE WITHOUT backend/ops/item_categories.sql refuses a write that names the column.
+        # Say so in words the Items tab can show, rather than a 500 that reads as the save breaking.
+        if "material_categories" in patch and "material_categories" in str(exc):
+            raise ValidationError(
+                "Categories can't be saved on this database yet: it needs the material_categories "
+                "column (backend/ops/item_categories.sql).") from exc
+        raise
     return get_item(item_id)
 
 

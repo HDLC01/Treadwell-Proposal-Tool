@@ -675,6 +675,51 @@
     return 0;
   }
 
+  /** THE SHEET'S MAN HOURS AND BUDGET BLOCK (Hanz, 2026-10-27: "In the review tab we need to show the Man hours, the budget
+   *  ... Take it from the sheet"). Kyle's Epoxy tab (Polish's cell in brackets; the two are the same formulas a row apart):
+   *    H64 (H56) Total Man Hours   =((A47*B47)+(A48*B48)+(A49*B49)+(A50*B50))*8 + (A52*B52)   the crew's guys x days x 8, and the drive's guys x hours
+   *    H66 (H58) crew size         =A47                                                       the first crew line's guys
+   *    H65 (H57) Total Days        =H64/8/H66
+   *    F72 (F66) Estimated Costs   =SUM(D70,D82,D85)  sub-total + taxes + fees and bond;  I72 (I66) =F72/C87, a square foot
+   *    F73 (F67) Man Hour Budget (Raken)  the same formula as H64
+   *    F87 (F81) Mark Up + Conting.  =SUM(D73,D74,D77)  GP + discount + contingency;  F88 (F82) =F87/D88, of the lump sum
+   *    F74 (F68) GP per Day        =F87/H65
+   *    G87 (G81) GP / MH           =F87/F73;  G88 (G82) =C47, the first crew line's rate ("LaborRate from Above")
+   *    H87 (H81) MarkUp + Soft Costs  =SUM(D73:D77)  GP + discount + super and PTO + soft costs + contingency;  H88 (H82) =H87/D88
+   *  Nothing here is new arithmetic: the hours are laborTotal's, the same rows at $1 an hour (an hours row is guys x hours, a
+   *  day row guys x days x its hours a day, a line switched off is nothing, the fourth hand of Remove existing joint filler is
+   *  Polish A42's =IF(F29="NO",3,4)), and the dollars are the chain's own lines (`bid`, priceSection's or polishBid's answer).
+   *  The sheet's "8 hour days" switch is the crew line's own hours a day. A figure that would divide by nothing is null, as is
+   *  the whole block for a bid that is not priceable. `rows` are the labor rows of the section on show. Pure. */
+  function manHourBudget(rows, conditions, pw, bid) {
+    if (!isObject(bid) || bid.priceable === false) return null;
+    rows = rows instanceof Array ? rows : [];
+    var atOne = rows.map(function (r) { return Object.assign({}, r || {}, { rate: 1 }); });
+    var hours = laborTotal(atOne, conditions, 0);
+    var crewRow = null;
+    for (var i = 0; i < rows.length && !crewRow; i++) {
+      var r = rows[i] || {};
+      if (!isTravelRow(r) && rowOn(r) && num(r.guys) > 0) crewRow = r;
+    }
+    var crew = crewRow ? num(crewRow.guys) : null;
+    var perDay = crewRow ? dayHours(crewRow) : HOURS_PER_DAY;
+    var days = crew && hours > 0 ? hours / perDay / crew : null;
+    var total = num(bid.total), sf = num(bid.sf);
+    var est = num(bid.sub_total) + num(bid.taxes) + num(bid.fees_and_bond);
+    var markup = num(bid.gp) + num(bid.hard_bid) + num(bid.contingency);
+    var soft = markup + num(bid.super_pto) + num(bid.soft_costs);
+    return {
+      man_hours: hours, crew: crew, hours_per_day: perDay, total_days: days,
+      est_costs: est, est_costs_per_sf: sf > 0 ? est / sf : null,
+      budget_hours: hours,
+      gp_per_day: days ? markup / days : null,
+      markup_cont: markup, markup_cont_pct: total ? markup / total : null,
+      gp_per_mh: hours > 0 ? markup / hours : null,
+      labor_rate: crewRow ? laborRateOf(crewRow, pw) : null,
+      markup_soft: soft, markup_soft_pct: total ? soft / total : null
+    };
+  }
+
   /** THE TWO TRAVEL COSTS BESIDE TRAVEL LABOR: LODGING (a night) and PER DIEM (a day). Hanz,
    *  2026-10-05: "separate line for Travel Lodging and Per Diem", priced INSIDE the markups like
    *  Kyle's sheet D61 -- they join the sub-total (D64) that GP, super/PTO and soft costs are taken
@@ -3594,19 +3639,6 @@
   /** DOES THIS POLISH SECTION CARRY THE SHEET'S PATCH LINE (Polish!D17)? Its profile says (the `polishPatch` quirk):
    *  polish-rev3, and any later profile that keeps it. Every bid saved before 2026-10-16 is rev2 or legacy and has no
    *  patch line, so its total does not move. Reads the model without throwing. */
-  /** WHETHER A SECTION'S CHAIN HAS KYLE'S HARD BID RULE (the profile's hasHardBid): the Polish root on polish-rev3 and
-   *  later, and every Epoxy, Seal and Leveling section. Gyp, and a rev2 or legacy Polish root, have none, and the Review
-   *  step shows them no switch. */
-  function hardBidRuleOn(model, tab) {
-    if (!isObject(model)) return false;
-    if (tab === ROOT_TAB) return !!rootProfile(model).quirks.hasHardBid;
-    if (!isObject(model.tabs) || !has.call(model.tabs, tab)) return false;
-    var s = model.tabs[tab];
-    var stamp = isObject(s) && typeof s.profile === "string" ? PROFILE_STAMP.exec(s.profile) : null;
-    if (!stamp) return false;
-    try { return !!engine.resolveProfile(stamp[1]).quirks.hasHardBid; } catch (err) { return false; }
-  }
-
   function polishPatchOn(model, tab) {
     if (!isObject(model)) return false;
     if (tab === ROOT_TAB) return !!rootProfile(model).quirks.polishPatch;
@@ -3672,8 +3704,8 @@
       out.hard_bid = r.hard_bid; out.hard_bid_pct = r.hard_bid_pct;
       if (r.discount_refused) out.discount_refused = true;
     } else if (r.hard_bid) {
-      // A DISCOUNT THE HARD BID RULE GAVE (polish-rev3, the job's Hard bid switch on), with nothing typed. Only a bid
-      // that answered Hard bid has one, so every other bid keeps its keys.
+      // A DISCOUNT THE HARD BID RULE GAVE, with nothing typed. Since 2026-10-27 only settleHardBid prices with the rule
+      // (to turn a saved switch into the typed figure it gave), so every other bid keeps its keys.
       out.hard_bid = r.hard_bid; out.hard_bid_pct = r.hard_bid_pct;
     }
     return out;
@@ -3707,10 +3739,10 @@
   //   supplier_pct   % off the Sherwin-Williams liquids (Epoxy B41); the escalation is kept (see MATERIAL_ESCALATION)
   //   polycrete_pct  % off the Poly-Crete liquids (Epoxy C41); blank follows supplier_pct, as C41 = B41 does
   //   (no `bulk`: the Bulk Discount switch was removed from v2 on 2026-10-20, Hanz; normalizeAdjust drops a saved one)
-  //   hard_bid       the Hard bid switch (Hanz, 2026-10-17; the tab's B5): Kyle's rule fills the discount, 4% from a
-  //                  $60,000 sub-total, 2.5% on a local job from $13,000, until a discount is typed. A section's own
-  //                  answer, as each of his tabs has its own B5, and kept here rather than in the job's `conditions` so a
-  //                  bid that never pressed it saves exactly what it saved before.
+  //   hard_bid       LEGACY, READ ONCE. The Hard bid switch (2026-10-17, #685) was REMOVED on 2026-10-27 (Hanz: "I told
+  //                  you to remove this hard bid discount"). It no longer prices anything. A bid saved with it on is still
+  //                  read with it, so the page can turn it into the typed discount it gave (settleHardBid) the first time
+  //                  the bid is opened with its library, and the bid's price does not move. Nothing writes it any more.
   var ADJUST_PCT_KEYS = Object.freeze(["discount_pct", "ship_pct", "gp_pct", "super_pct", "soft_pct",
                                        "supplier_pct", "polycrete_pct"]);
   var ADJUST_KEYS = Object.freeze(ADJUST_PCT_KEYS.concat(["discount_amt", "hard_bid"]));
@@ -3793,21 +3825,70 @@
     return out;
   }
 
-  /** The material overrides alone (supplier, Poly-Crete), and the Hard bid switch: what a section's boxes do to
-   *  its MATERIAL, and which rule its discount follows, without the figures typed over the markup lines. The Review step
-   *  greys each markup box with the rule's figure for the material the section really buys (and the Discount box with
-   *  the hard bid rule's), so the rule it shows is the one a typed figure replaces. Null when there are none. */
+  /** The material overrides alone (supplier, Poly-Crete): what a section's boxes do to its MATERIAL, without the
+   *  figures typed over the markup lines. The Review step greys each markup box with the rule's figure for the material
+   *  the section really buys, so the rule it shows is the one a typed figure replaces. Null when there are none. */
   function materialOnlyAdjust(adj) {
     var a = normalizeAdjust(adj);
     if (!a) return null;
-    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct, hard_bid: a.hard_bid });
+    return normalizeAdjust({ supplier_pct: a.supplier_pct, polycrete_pct: a.polycrete_pct });
   }
 
-  /** The job's conditions as one section's chain reads them: the section's Hard bid switch (its `adjust`) is the
-   *  chain's `hard_bid`. The job's own object is handed back untouched when the switch is off. */
-  function chainConditions(conditions, adj) {
-    var a = normalizeAdjust(adj);
-    return a && a.hard_bid ? Object.assign({}, conditions || {}, { hard_bid: true }) : conditions;
+  /** The job's conditions as a section's chain reads them. They are the job's own, untouched: a section's saved Hard bid
+   *  switch prices nothing since 2026-10-27. Only settleHardBid prices with Kyle's rule on (`ctx.hardBidRule`), to learn
+   *  the discount a saved switch gave. */
+  function ruleConditions(conditions, ctx) {
+    return ctx && ctx.hardBidRule === true ? Object.assign({}, conditions || {}, { hard_bid: true }) : conditions;
+  }
+
+  /** A fraction as the figure a % box holds: 2.5% reads "2.5". */
+  function pctTyped(f) {
+    return String(parseFloat((Math.abs(f) * 100).toPrecision(6)));
+  }
+
+  /** TURN A SAVED HARD BID SWITCH INTO THE DISCOUNT IT GAVE (Hanz, 2026-10-27: the switch is gone). A section saved with
+   *  `adjust.hard_bid: true` and no usable discount typed was priced with Kyle's rule (4% off from a $60,000 sub-total,
+   *  2.5% on a local job from $13,000). Its price must not move, so the rule's percentage for that section, at the
+   *  sub-total it has now, is written into its Discount box as a typed figure, and `hard_bid` is dropped. A % or $ the
+   *  estimator typed already won over the rule, so it stays and `hard_bid` is just dropped. A section the rule gave nothing
+   *  (or that cannot be priced) just loses the key.
+   *
+   *  It needs the section's material, which the page's library prices, so it runs on the page once the library is in,
+   *  not in migrateModel. `ctx` is what priceTabs takes: `material(entry)` and `remodel_rate`. Hands back the model it
+   *  was given when no section carries the switch (a bid that never had it is untouched, byte for byte); otherwise a new
+   *  model, the sections it changed copied, nothing else moved. Never throws for a section it cannot price. */
+  function settleHardBid(model, ctx) {
+    if (!isObject(model)) return model;
+    var tabs = isObject(model.tabs) ? Object.keys(model.tabs) : [];
+    var ids = [ROOT_TAB].concat(tabs.filter(function (t) { return t !== ROOT_TAB; }));
+    var out = model;
+    ids.forEach(function (tab) {
+      var s = tab === ROOT_TAB ? out : out.tabs[tab];
+      if (!isObject(s) || !isObject(s.adjust) || s.adjust.hard_bid !== true) return;
+      var next = {};
+      // Only the known adjustment keys are copied (normalizeAdjust's own list), never whatever keys a saved blob carries.
+      ADJUST_KEYS.forEach(function (k) { if (k !== "hard_bid" && has.call(s.adjust, k)) next[k] = s.adjust[k]; });
+      var typed = chainAdjust(next);
+      if (!has.call(typed, "discount_pct") && !has.call(typed, "discount_amt")) {
+        var pct = null;
+        try {
+          var c = Object.assign({}, ctx || {}, { hardBidRule: true });
+          var r = tab === ROOT_TAB ? polishBid(out, tab, c) : priceSection(out, tab, c);
+          if (r && r.priceable !== false && typeof r.hard_bid_pct === "number" && r.hard_bid_pct) pct = r.hard_bid_pct;
+        } catch (err) { pct = null; }
+        // A discount_pct typed but unusable was left out of the price, and the rule priced; the rule's figure replaces it.
+        if (pct !== null) next.discount_pct = pctTyped(pct);
+      }
+      var adj = normalizeAdjust(next);
+      var section = copyInto({}, s);
+      if (adj) section.adjust = adj; else delete section.adjust;
+      if (tab === ROOT_TAB) {
+        out = section;
+      } else {
+        out = copyInto(copyInto({}, out), { tabs: copyInto(copyInto({}, out.tabs), Object.fromEntries([[tab, section]])) });
+      }
+    });
+    return out;
   }
 
   /** What the markup chain takes from a section's boxes (bid-engine's `adjust`): fractions for the rates, the
@@ -5226,7 +5307,7 @@
       // `split` is the draft's own mark (work-types.js isSplit), so the one save both pages share is also
       // the one that keeps an option's tax answer out of the base's way on a split draft.
       cell_values: conditionCellWrites(model.conditions, cells, ctx.library, types.isSplit(state)),
-    }, rest);
+    }, rest, textureFill(model, state));
   }
 
   // ══ SECTIONS (Phase 10): a bid priced on several workbook tabs ═══════════════════════════════════════════
@@ -5745,7 +5826,7 @@
       labor: laborTotal(s.labor, model.conditions, prevailingApplied(model)),
       // The carrier is charged the job's travel; a line that follows the labor is charged what every base section counts together (travelOpts, jobNights).
       travel: carrier ? travelCosts(model.travel, s.labor, travelOpts(model, e.tab)).total : 0,
-      contingency: s.contingency, fees: s.fees, conditions: chainConditions(model.conditions, s.adjust),
+      contingency: s.contingency, fees: s.fees, conditions: ruleConditions(model.conditions, ctx),
       sf: takeoffSf(s.takeoff), remodel_rate: ctx.remodel_rate,
       adjust: chainAdjust(s.adjust)
     };
@@ -5826,7 +5907,7 @@
       tooling: profile.quirks.toolingInSubTotal ? takeoffTooling(s.takeoff, model.conditions) : 0,
       contingency: s.contingency,
       fees: s.fees,
-      conditions: chainConditions(model.conditions, s.adjust),
+      conditions: ruleConditions(model.conditions, ctx),
       sf: takeoffSf(s.takeoff),
       remodel_rate: ctx.remodel_rate,
       adjust: chainAdjust(s.adjust)
@@ -5997,6 +6078,10 @@
     ["tab_opts", "tab_notes"].forEach(function (key) {
       if (holds(st[key], byTab)) patch[key] = without(st[key], byTab);
     });
+    // Its "Its own proposal" tick (base_tab_ids), or the next sheet handed this id comes back a base bid of its own proposal.
+    if (Array.isArray(st.base_tab_ids) && st.base_tab_ids.indexOf(tab) >= 0) {
+      patch.base_tab_ids = st.base_tab_ids.filter(function (x) { return x !== tab; });
+    }
     var pov = st.price_overrides;
     if (isObject(pov)) {
       var changed = false;
@@ -6321,6 +6406,100 @@
     var patch = { work_type: baseOf(out).jobType, base_tab_id: want.length === 1 ? want[0] : null };
     if (touched) patch.tab_opts = opts;
     return { model: out, patch: patch };
+  }
+
+  // ══ SPLITTING A BID INTO SEPARATE PROPOSALS (scope groups, tier A1; RJ, 2026-10-24) ═══════════════════════════════════════════════════
+  //
+  // A client gets a few separately priced scopes under one project (Breakroom polish, Lab 1 epoxy, Lab 2 epoxy), each its OWN proposal the customer
+  // approves on its own. The estimator can build them as SHEETS of one estimate first, as today, and then split: each sheet becomes a one-sheet bid with
+  // itself as the base, and the server files each as a scope of one project (POST /api/draft/{id}/split, backend/drafts.py split_draft).
+  //
+  // WHAT A SHEET IS PRICED AT DOES NOT MOVE. A sheet that was the base keeps the job's Lodging and Per Diem as they stood, typed figures included: they
+  // are its crew's. A sheet that was an OPTION was charged its own crew's nights (optionTravelCosts, ownNights) and never the job's typed quantity, so as
+  // a bid of its own its two lines FOLLOW ITS OWN LABOR (qty_follow "labor": jobNights of a one-base bid is that sheet's own count), which is the same
+  // figure. That is the audit's hazard answered by CLEARING, not by refusing: copying the carrier's typed "10 nights" onto every scope would bill the
+  // Breakroom crew's hotel on Lab 1 and Lab 2 as well. And an option that held no Travel Labor row of its own is given none: pickBase hands a new base a
+  // copy of the old base's drive (moveTravelLabor), which here would put the Breakroom crew's typed trip on the Lab crew's proposal.
+  //
+  // NOTHING IS GUESSED. A bid whose base is Epoxy and Polish PRICED TOGETHER, a bid with an option that can never be a base (Seal, Leveling), a bid
+  // with no base, and a bid of one sheet are refused with the reason: each needs the estimator to decide something first.
+
+  /** Why this bid cannot be split into separate proposals, in the estimator's words, or null when it can. Reads only; never throws. */
+  function splitBlockers(model) {
+    var list = readableSections(model);
+    if (list === null) return "This bid's sheets cannot be read, so they cannot be split.";
+    var live = list.filter(function (e) { return e.kind !== "off"; });
+    if (live.length < 2) return "There is only one sheet on this bid, so there is nothing to split.";
+    var lone = live.filter(function (e) { return types.tab(types.tabOfSheet(e.sheet)).optionOnly; })[0];
+    if (lone) {
+      return "The " + lone.label + " sheet is an option on a bid and never a bid of its own, so it cannot become its own proposal. " +
+        "Delete it, or make it part of another sheet, before you split.";
+    }
+    var base = baseOf(model);
+    if (base.ids.length === 2) {
+      return "The base bid is an Epoxy and a Polish sheet priced together. Make one sheet the base before you split, so each sheet is priced on its own.";
+    }
+    if (base.ids.length !== 1) return "This bid has no base sheet. Make one sheet the base before you split.";
+    return null;
+  }
+
+  /** The sheets a split makes proposals of, in the bid's order: every sheet that is part of the bid. [] when it cannot be split (splitBlockers). */
+  function splitTabs(model) {
+    if (splitBlockers(model) !== null) return [];
+    return activeSections(model).map(function (e) { return e.tab; });
+  }
+
+  /** ONE SHEET OF A BID AS A BID OF ITS OWN (the block above). Answers `{ model, patch, label, carrier }`: a NEW model whose only base is `tabId`, with
+   *  every other sheet under `tabs` deleted (and the Polish root marked off when it is not the sheet), the draft's side of it (`patch`: pickBase's
+   *  `work_type` and `base_tab_id`, and what deleteSection forgets of each deleted sheet), the sheet's name, and whether this sheet carried the job's
+   *  travel before (`carrier`). `ctx.state` is the draft. THROWS with splitBlockers' words, for a sheet the bid does not have and for one that is off.
+   *  Pure: the model handed in is not touched. */
+  function splitOut(model, tabId, ctx) {
+    if (!isObject(model)) throw new Error("splitOut needs the model");
+    var blocked = splitBlockers(model);
+    if (blocked !== null) throw new Error(blocked);
+    var entry = sectionOf(model, tabId);
+    if (entry.kind === "off") throw new Error("The " + entry.label + " sheet is not part of this bid, so it cannot become a proposal.");
+    var carrierBefore = travelCarrier(model);
+    var heldDrive = travelRowsIn(entry.section).length > 0;
+    var draftNow = isObject(ctx) && isObject(ctx.state) ? ctx.state : {};
+    var made = pickBase(model, [tabId], { state: draftNow });
+    var out = made.model;
+    var patch = Object.assign({}, made.patch);
+    draftNow = Object.assign({}, draftNow, patch);
+    sectionsOf(out).forEach(function (e) {
+      if (e.root || e.tab === tabId) return;
+      var gone = deleteSection(out, e.tab, { state: draftNow });
+      out = gone.model;
+      patch = Object.assign(patch, gone.patch);
+      draftNow = Object.assign({}, draftNow, gone.patch);
+    });
+    if (tabId !== ROOT_TAB) {
+      out = withSectionKind(out, ROOT_TAB, "off");
+      // pickBase filed the old base as an option ON the proposal; the root is off now, so that entry says something about nothing.
+      if (isObject(patch.tab_opts) && has.call(patch.tab_opts, ROOT_TAB)) {
+        patch.tab_opts = Object.fromEntries(Object.keys(patch.tab_opts).filter(function (k) { return k !== ROOT_TAB; })
+          .map(function (k) { return [k, patch.tab_opts[k]]; }));
+      }
+    }
+    out = jsonCopy(out);
+    var mine = sectionOf(out, tabId).section;
+    // An option that had no drive of its own is given none (see the block above): pickBase's copy of the old base's row is the other crew's.
+    if (!heldDrive && mine.labor instanceof Array) mine.labor = mine.labor.filter(function (r) { return !isTravelRow(r); });
+    // A sheet that was not the carrier charges its own crew's nights, as it did as an option: never the job's typed quantity.
+    if (tabId !== carrierBefore && isObject(out.travel)) {
+      TRAVEL_LINE_KEYS.forEach(function (k) {
+        var l = out.travel[k];
+        if (!isObject(l)) return;
+        l.qty_auto = true;
+        l.qty_follow = "labor";
+        delete l.qty_typed;
+      });
+    }
+    syncAutoGuys(out);
+    patch.work_type = baseOf(out).jobType;
+    patch.base_tab_id = tabId;
+    return { model: out, patch: patch, label: entry.label, carrier: tabId === carrierBefore };
   }
 
   /** A SINGLE-base job's Travel Labor row follows its one base (pickBase calls this only when the job has one base before and after the pick and the base moved; since
@@ -6674,6 +6853,60 @@
     return "";
   }
 
+  // ── TEXTURE, PER EPOXY SHEET (Hanz, 2026-10-27: "please put a texture setting in this") ─────────────────────────────
+  // An Epoxy sheet's Material step has a Texture select with the Proposal step's own choices. It is kept on the SECTION
+  // (`texture`, a string; no key means none), so two Epoxy sheets can have two textures. The Proposal step's `texture`
+  // follows the PRICING BASE's Epoxy sheet (textureFill) until somebody picks one there.
+  /** The Proposal step's texture choices (proposal-review.js buildTextureControl), in its order. */
+  var TEXTURE_OPTIONS = ["Smooth", "Orange Peel", "Light", "Medium", "Heavy"];
+
+  /** The texture a section holds, trimmed, or "" for none (a missing key, a blank, a value that is not text). */
+  function sectionTexture(section) {
+    return isObject(section) && typeof section.texture === "string" ? section.texture.trim() : "";
+  }
+
+  /** The options of a Texture select holding `saved`: "—" (none), then the choices, with an off-list value kept as its own option
+   *  first (buildTextureControl's rule), as [{ value, label }]. The caller escapes them. */
+  function textureChoices(saved) {
+    var cur = typeof saved === "string" ? saved.trim() : "";
+    var opts = TEXTURE_OPTIONS.slice();
+    if (cur && opts.indexOf(cur) < 0) opts.unshift(cur);
+    return [{ value: "", label: "—" }].concat(opts.map(function (o) { return { value: o, label: o }; }));
+  }
+
+  /** The texture of the bid's pricing base: the first BASE section that is an Epoxy sheet (the Epoxy sheet of a Combo), or "" when
+   *  the base has none (a Polish or Gyp base, an Epoxy sheet that is only an option, a model whose sections cannot be read). */
+  function baseTextureOf(model) {
+    var list;
+    // null = "cannot tell" (unreadable sections, or a model with no base in it, such as the backup save's root-only copy):
+    // textureFill then leaves the Proposal step's texture alone instead of clearing it. "" only when a base was found
+    // and it is not an Epoxy sheet.
+    try { list = sectionsOf(model); } catch (err) { return null; }
+    var sawBase = false;
+    for (var i = 0; i < list.length; i++) {
+      if (!isBaseEntry(list[i])) continue;
+      sawBase = true;
+      if (list[i].role === "epoxy") return sectionTexture(list[i].section);
+    }
+    return sawBase ? "" : null;
+  }
+
+  /** What a save writes to the Proposal step's texture: { texture, texture_from_estimate } set to the base's texture while the
+   *  draft's `texture` is empty or still the one this last filled (`texture_from_estimate`), and {} otherwise. A texture picked on
+   *  the Proposal step (or drafted by the autofill) is never overwritten. {} also when nothing would change, so a bid with no
+   *  texture anywhere saves exactly the keys it always did. */
+  function textureFill(model, state) {
+    var st = isObject(state) ? state : {};
+    var held = typeof st.texture === "string" ? st.texture.trim() : (st.texture == null ? "" : null);
+    var from = typeof st.texture_from_estimate === "string" ? st.texture_from_estimate : null;
+    if (held === null || !(held === "" || (from !== null && held === from))) return {};
+    var want = baseTextureOf(model);
+    if (want === null) return {};
+    if (from === null && want === "") return {};
+    if (held === want && from === want) return {};
+    return { texture: want, texture_from_estimate: want };
+  }
+
   function composePricingSnapshot(model, ctx) {
     if (!isObject(model)) throw new Error("composePricingSnapshot needs the model it is pricing");
     if (!isObject(ctx)) throw new Error("composePricingSnapshot needs ctx, the bids the page priced");
@@ -6928,6 +7161,59 @@
     return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
+  // ── SEVERAL BASE BIDS ON ONE v2 ESTIMATE ("Create Multiple Proposals") ─────────────────────────────────────
+  // The v2 side of TWPrice.baseIds / toggleBaseId (price-lines-core.js): a sheet the estimator switches to "Its own proposal" is
+  // ticked in the draft's `base_tab_ids`, beside the one pricing base (the model's kind:"base" section, which `base_tab_id` names).
+  // The model is not touched: the ticked sheets stay options on this draft's proposal, and the server makes each its own proposal
+  // when Create Multiple Proposals is pressed on the Proposal step (drafts.fan_out_proposals). The invariant is the v1 one: the
+  // pricing base is Base Bid 1, the others follow in the sheets' order (sectionsOf(withSectionOrder(model))).
+
+  /** The section entries a "Its own proposal" switch is read against, in the bid's order, and the one pricing base's tab (null for
+   *  the combined Epoxy + Polish pair, or none). null when the sections cannot be read. */
+  function proposalSheets(model) {
+    var entries = readableSections(withSectionOrder(model));
+    if (entries === null) return null;
+    var bases = entries.filter(isBaseEntry);
+    return { entries: entries, base: bases.length === 1 ? bases[0].tab : null };
+  }
+
+  /** Can this entry be a base bid of its own proposal? A sheet that is part of the bid (not off) and that can be a base (Seal never is). */
+  function canOwnProposal(e) {
+    return !!e && e.kind !== "off" && !types.tab(types.tabOfSheet(e.sheet)).optionOnly;
+  }
+
+  /** The base bids of a v2 draft in Base Bid order: the pricing base first, then every sheet `state.base_tab_ids` ticks that can be
+   *  one, in the bid's order. [] for a bid whose base is the combined pair (it is one proposal; the pair cannot be split) or whose
+   *  sections cannot be read. A draft that never ticked a sheet answers [the base]. */
+  function proposalBaseIds(model, state) {
+    var ps = proposalSheets(model);
+    if (ps === null || ps.base === null) return [];
+    var raw = isObject(state) && Array.isArray(state.base_tab_ids) ? state.base_tab_ids : [];
+    var rest = ps.entries.filter(function (e) { return e.tab !== ps.base && canOwnProposal(e) && raw.indexOf(e.tab) >= 0; })
+      .map(function (e) { return e.tab; });
+    return [ps.base].concat(rest);
+  }
+
+  /** THE "ITS OWN PROPOSAL" SWITCH: the patch `{ base_tab_id, base_tab_ids }` a press on sheet `tab` makes (`on` true ticks it), or
+   *  null when it changes nothing or is refused. Pure: `state` (the draft) and `model` are not touched. The rule is
+   *  TWPrice.toggleBaseId's, ordered by the model's sections, with the v2 refusals:
+   *   - ticking a sheet adds it as the next Base Bid; the pricing base stays where it is;
+   *   - unticking a sheet takes it off; the pricing base is never unticked here (it is Base Bid 1, and it is moved by the base radio);
+   *   - an option-only sheet (Seal), a sheet that is off, a sheet the bid does not have, and every sheet while the base is the combined
+   *     Epoxy + Polish pair are refused (null): a combined base is one proposal, so one sheet must be made the base first. */
+  function proposalBasePatch(state, tab, on, model) {
+    if (!isObject(state)) return null;
+    var ps = proposalSheets(model);
+    if (ps === null || ps.base === null || tab === ps.base) return null;
+    var e = ps.entries.filter(function (x) { return x.tab === tab; })[0];
+    if (!canOwnProposal(e)) return null;
+    var now = proposalBaseIds(model, state);
+    var ticked = now.indexOf(tab) >= 0;
+    if (!!on === ticked) return null;
+    var want = on ? now.concat([tab]) : now.filter(function (x) { return x !== tab; });
+    return { base_tab_id: ps.base, base_tab_ids: proposalBaseIds(model, { base_tab_ids: want }) };
+  }
+
   /** WHAT THE PANEL SAYS ABOUT EACH SHEET, worked out once for the panel and the "Open sheet" line. Every sheet that is part of
    *  the bid, as { e, base, inBase, opt, optOnly, canBase, price, on, mode, typeLabel, lead, figure, off }; the base bid(s)' ids
    *  and total; the combined pair and its total. A bid whose sections cannot be read is the root alone, with `unreadable` set. */
@@ -6952,6 +7238,10 @@
     };
     var baseTotal = sumOf(baseIds);
     var pair = unreadable ? null : combinedPair(model);
+    // The sheets that are base bids of their own proposals (view.baseIds, the draft's base_tab_ids), in Base Bid order. Tagged "Bid N"
+    // only once there are two: a bid of one proposal says nothing new.
+    var bidIds = unreadable ? [] : proposalBaseIds(model, { base_tab_ids: Array.isArray(v.baseIds) ? v.baseIds : [] });
+    var several = bidIds.length >= 2;
     var rows = list.map(function (e) {
       var rec = types.tab(types.tabOfSheet(e.sheet));
       var base = baseIds.length === 1 && baseIds[0] === e.tab;
@@ -6976,12 +7266,15 @@
           }
         } else lead = "Option, total";
       }
+      var at = bidIds.indexOf(e.tab);
       return { e: e, base: base, inBase: inBase, opt: opt, optOnly: optOnly, canBase: !optOnly, price: price, on: on, mode: mode,
                desc: typeof held.desc === "string" ? held.desc : "", typeLabel: e.role === "seal" ? e.sheet : rec.label,
-               lead: lead, figure: figure, off: off };
+               lead: lead, figure: figure, off: off,
+               // "Its own proposal": offered on an option that can be a base, while the bid has one pricing base (bidIds is [] for the pair)
+               own: opt && at > 0, canOwn: opt && !optOnly && !unreadable && baseIds.length === 1, bid: several && at >= 0 ? at + 1 : 0 };
     });
     return { view: v, unreadable: unreadable, entries: entries, rows: rows, baseIds: baseIds, baseTotal: baseTotal,
-             pair: pair, pairTotal: pair ? sumOf(pair) : null };
+             pair: pair, pairTotal: pair ? sumOf(pair) : null, bidIds: bidIds };
   }
 
   /** What a base change says before it is made: { title, body } for pressing `ids` (one sheet, or the combined pair). The base
@@ -7121,7 +7414,10 @@
           escHtml(t) + '"' + key(t, "open") + ' title="Double-click to rename" aria-current="' + (open ? "true" : "false") + '"><span class="sh-nm">' + escHtml(e.label) +
           '</span><span class="sh-price' + (r.price === null ? " none" : "") + '">' + (r.price === null ? "no price" : money(r.price)) + '</span>' +
           // THE BASE SAYS SO IN WORDS (browser walk, 2026-10-20): its red edge read as a second selected tab.
-          (r.base || r.inBase ? '<span class="sh-basetag">Base</span>' : "") + '</button>';
+          (r.base || r.inBase ? '<span class="sh-basetag">Base</span>' : "") +
+          // BID N: which proposal this sheet is the base bid of, once two or more sheets are (base_tab_ids, "Its own proposal").
+          (r.bid ? '<span class="sh-bidtag" data-sh-bid="' + r.bid + '" title="Base Bid ' + r.bid + ': its own proposal">Bid ' + r.bid + '</span>' : "") +
+          '</button>';
       }
       return s + '</li>';
     }
@@ -7172,6 +7468,14 @@
           }
           s += '</div></div>';
           if (r.optOnly) s += '<p class="sh-note">Seal sheets are options only. They are priced as a total and can\'t be the base bid.</p>';
+          // ITS OWN PROPOSAL (Create Multiple Proposals): this sheet is a base bid too, of a proposal of its own made on the Proposal step.
+          // Refused while Epoxy + Polish are the base together (the pair is one proposal), and never offered on a Seal sheet.
+          var pairBase = !r.optOnly && !f.unreadable && f.baseIds.length === 2;
+          if (r.canOwn || pairBase) {
+            s += '<button type="button" class="mw-sw sh-own' + (r.own ? " on" : "") + '" role="switch" aria-checked="' + (r.own ? "true" : "false") +
+              '" data-sh-act="own"' + tabAttr + key(t, "own") + (r.canOwn ? "" : ' disabled title="Make one sheet the base first: Epoxy + Polish together are one proposal"') +
+              '><span class="track"></span>Separate base bid' + (r.bid ? ' <span class="sh-bidtag">Base Bid ' + r.bid + '</span>' : "") + '</button>';
+          }
         }
         var locked = r.base || r.inBase || e.root;
         var armed = v.armed === t && !locked;
@@ -7282,6 +7586,7 @@
     setMeasurement: setMeasurement,
     seedConditionsShown: seedConditionsShown, conditionShown: conditionShown,
     pinSavedBlankRates: pinSavedBlankRates, laborCost: laborCost, laborRateOf: laborRateOf, laborTotal: laborTotal, removeExistingHand: removeExistingHand,travelManDays: travelManDays,
+    manHourBudget: manHourBudget,
     // The prevailing wage calculator (Labor step): the constants, the card's two figures, and the rate in force.
     PREVAILING: PREVAILING, PREVAILING_TRADES: PREVAILING_TRADES, normalizePrevailing: normalizePrevailing,
     prevailingCrewTrade: prevailingCrewTrade, newPrevailingTradeKey: newPrevailingTradeKey,
@@ -7356,7 +7661,7 @@
     withSectionOrder: withSectionOrder, tabIdsInOrder: tabIdsInOrder,
     // Phase 12: the model as a panel sees one section, and the sections a job type is made of.
     ADJUST_KEYS: ADJUST_KEYS, MATERIAL_ESCALATION: MATERIAL_ESCALATION, DISCOUNT_VENDORS: DISCOUNT_VENDORS,
-    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn, hardBidRuleOn: hardBidRuleOn,
+    normalizeAdjust: normalizeAdjust, adjustProblems: adjustProblems, polishPatchOn: polishPatchOn, settleHardBid: settleHardBid,
     materialOnlyAdjust: materialOnlyAdjust, chainAdjust: chainAdjust, materialAdjust: materialAdjust,
     pctFraction: pctFraction,
     SECTION_KEYS: SECTION_KEYS, sectionView: sectionView, sectionsForJob: sectionsForJob, sectionsToAdd: sectionsToAdd, sectionsLeaving: sectionsLeaving,
@@ -7367,10 +7672,17 @@
     MAX_COPIES: MAX_COPIES, polishBid: polishBid, baseOf: baseOf, pickBase: pickBase, sheetsToAdd: sheetsToAdd,
     copySection: copySection, addSheet: addSheet, renameSection: renameSection, deleteSection: deleteSection,
     validateLabel: validateLabel, nextCopyId: nextCopyId, optionSettings: optionSettings,
+    // Splitting a bid's sheets into separate proposals (scope groups, tier A1): see the block above splitBlockers.
+    splitBlockers: splitBlockers, splitTabs: splitTabs, splitOut: splitOut,
     seedNewSections: seedNewSections, syncAutoGuys: syncAutoGuys, poolsPacks: poolsPacks,
     composePricingSnapshot: composePricingSnapshot, coveHeightOf: coveHeightOf, sectionSwitcherHtml: sectionSwitcherHtml,
+    // An Epoxy sheet's texture, and what a save hands the Proposal step from the base's.
+    TEXTURE_OPTIONS: TEXTURE_OPTIONS, sectionTexture: sectionTexture, textureChoices: textureChoices,
+    baseTextureOf: baseTextureOf, textureFill: textureFill,
     // Sheets phase 3: the floating panel's markup and the proposal settings it writes (pure, see the block above blockers()).
     sheetsPanelHtml: sheetsPanelHtml, baseChangeWords: baseChangeWords, combinedPair: combinedPair,
+    // Several base bids on one estimate, each its own proposal (Create Multiple Proposals): see the block above sheetsFacts.
+    proposalBaseIds: proposalBaseIds, proposalBasePatch: proposalBasePatch,
     optionIsOn: optionIsOn, tabOptPatch: tabOptPatch, optionOnlyTotalPatch: optionOnlyTotalPatch,
     // A Gyp sheet's key changes with its preset: what the draft kept under the old key follows (see moveSheetDraftPatch).
     moveSheetDraftPatch: moveSheetDraftPatch,

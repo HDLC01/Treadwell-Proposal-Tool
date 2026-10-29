@@ -407,6 +407,44 @@
   .resync-note > svg { flex:0 0 auto; margin-top:1px; color:#a07c00; }
   .rn-text { margin:0; font-size:13px; line-height:1.45; }
   .rn-text strong { color:#5f4700; }
+  /* The Estimate-changed strip's one button, after its sentence. */
+  #proposals-note .rn-text { flex:1 1 auto; }
+  .pn-refresh { flex:none; align-self:center; border:1px solid #a07c00; background:#fff; color:#5f4700;
+    padding:4px 14px; border-radius:2px; font-size:12px; font-weight:600; cursor:pointer; }
+  .pn-refresh:disabled { opacity:.55; cursor:wait; }
+  /* Create Multiple Proposals: disabled means "tick two base bids first" (its title says so), not
+     "busy", so it does not take the ribbon's wait cursor. `[hidden]` after the class rule, which
+     would otherwise outrank the attribute. */
+  .word-ribbon #multi-btn { margin-right: 10px; }
+  .word-ribbon #multi-btn:disabled { cursor: not-allowed; }
+  .word-ribbon #multi-btn[hidden] { display: none; }
+  /* THE PROPOSAL TABS, styled like the v2 estimate's sheet strip (polish-estimate.html .sh-strip):
+     the strip scrolls sideways rather than the page, the open tab has the red edge and rubs out the
+     baseline under it. */
+  .proposal-tabs { flex: none; overflow-x: auto; overflow-y: hidden; padding: 6px 10px 0;
+    background: #f3f2f1; border-bottom: 1px solid #d6d3d0; }
+  .proposal-tabs[hidden] { display: none; }
+  .pt-list { list-style: none; margin: 0; padding: 0; display: flex; align-items: flex-end; gap: 3px;
+    min-width: max-content; }
+  .pt-tab { display: flex; align-items: center; background: rgba(27,28,28,.045);
+    border: 1px solid #d6d3d0; border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .pt-tab:hover { background: rgba(27,28,28,.08); }
+  .pt-tab.open { position: relative; z-index: 1; margin-bottom: -1px; padding-bottom: 1px; background: #fff;
+    box-shadow: inset 0 3px 0 var(--treadwell-red, #9e001f); }
+  .pt-name { display: flex; align-items: baseline; gap: 8px; background: none; border: 0; padding: 8px 10px;
+    font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1.2; color: #444; cursor: pointer; white-space: nowrap; }
+  .pt-tab.open .pt-name { color: var(--treadwell-red, #9e001f); }
+  .pt-name:focus-visible, .pt-x:focus-visible { outline: 2px solid var(--treadwell-red, #9e001f); outline-offset: 1px; }
+  .pt-nm { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+  .pt-stale { font-family: inherit; font-size: 9.5px; font-weight: 700; line-height: 1; letter-spacing: .05em; text-transform: uppercase; color: #7a5c00;
+    background: #fdf6e3; border: 1px solid #e8d9a8; border-radius: 999px; padding: 2px 6px; }
+  .pt-x { display: flex; align-items: center; background: none; border: 0; padding: 3px; margin-right: 6px;
+    border-radius: 4px; color: #777; cursor: pointer; }
+  .pt-x:hover { background: rgba(158,0,31,.08); color: var(--treadwell-red, #9e001f); }
+  .pt-ren-in { width: 18ch; margin: 4px 8px; font-family: inherit; font-size: 13px; font-weight: 600; padding: 3px 6px;
+    border: 1px solid var(--treadwell-red, #9e001f); border-radius: 4px; }
+  .pt-msg { align-self: center; margin-left: 10px; font-size: 12px; color: #7a5c00; white-space: nowrap; }
+  .pt-msg:empty { display: none; }
 </style>
 </head>
 <body class="word-app">
@@ -425,8 +463,9 @@
   <div class="progress" style="display: flex; gap: 4px; flex-wrap: wrap;">
     <a class="step" href="/?edit=1">1 · Intake</a>
     <a class="step" href="/estimate-review.html">2 · Estimate</a>
-    <span class="step active">3 · Proposal</span>
-    <a class="step" href="/done.html">4 · Files</a>
+    <a class="step" href="/generate.html">3 · Generate Files</a>
+    <span class="step active">4 · Proposal</span>
+    <a class="step" href="/done.html">5 · Files</a>
   </div>
   <div class="ribbon-spacer"></div>
   <!-- Ctrl+S reports here. `role="status"` + `aria-live="polite"` is the standard idiom for a
@@ -446,6 +485,13 @@
        matching the fact that the letter becomes page 1 of the one proposal document at generate
        time. It had a separate editor tab until 2026-09-09 (Hanz removed it); the editing came
        back 2026-09-11, on this same page rather than as a tab this time. -->
+  <!-- ONE ESTIMATE, SEVERAL PROPOSALS (2026-10-27). Every sheet ticked as a Base bid in Pricing
+       options becomes its own proposal: this asks the server to make one per ticked base bid after
+       the first (POST /api/draft/{id}/proposals), and the tab strip below switches between them.
+       Disabled, with a title saying why, until two sheets are ticked; hidden on a proposal made from
+       another draft's estimate, whose base bids are picked on Base Bid 1's tab. Wired by
+       proposal-review.js mountProposalTabs. -->
+  <button type="button" id="multi-btn" class="secondary" disabled>Create Multiple Proposals</button>
   <label class="ribbon-cl" title="Adds Treadwell's letterhead page in front of the proposal. Off by default.">
     <input type="checkbox" id="cl-toggle">
     <span>Cover letter</span>
@@ -466,9 +512,16 @@
       <option value="EXEMPT" hidden disabled>Tax exempt</option>
     </select>
   </label>
-  <button type="button" id="back-btn" class="secondary">← Back to Estimate</button>
+  <button type="button" id="back-btn" class="secondary">← Back to Generate Files</button>
   <button type="button" id="generate-btn">Continue to Done →</button>
 </div>
+
+<!-- THE PROPOSALS OF THIS ESTIMATE: one tab per proposal (Base Bid 1 is this estimate's own draft,
+     the others the drafts the server made from it). A click opens that proposal's page; a double-click
+     renames it; the x deletes a proposal made from the estimate. Hidden until there are two. Between
+     the ribbon and the formatting row, so it is page chrome and never scrolls with the document.
+     Drawn by proposal-review.js mountProposalTabs. -->
+<div id="proposal-tabs" class="proposal-tabs" hidden></div>
 
 <!-- The formatting ribbon's row. Kyle, 2026-08-24, on the B / I / U bar that used to float
      beside the caret: "Can we move this editable box on top as well but keep it static like a
@@ -505,6 +558,21 @@
     <span id="resync-note-what"></span>
     <span id="resync-note-do">Look over the document below, then press Continue to Done. That
     rebuilds it and takes you back to Files to send.</span></p>
+</div>
+
+<!-- THE ESTIMATE CHANGED SINCE A PROPOSAL WAS COPIED FROM IT. Each proposal made from this estimate
+     holds a copy of it, so a change on the estimate does not reach them on its own. Refresh copies it
+     into every proposal again; each keeps its own wording and its own options. Painted by
+     proposal-review.js mountProposalTabs off GET /api/draft/{id}/proposals (`stale`). -->
+<div id="proposals-note" class="resync-note" role="status" hidden>
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+    <path d="M12 9v4"/><path d="M12 17h.01"/>
+  </svg>
+  <p class="rn-text"><strong id="proposals-note-head">Estimate changed.</strong>
+    <span id="proposals-note-what"></span></p>
+  <button type="button" id="proposals-refresh" class="pn-refresh">Refresh</button>
 </div>
 
 <!-- LEFT rail: the structured "Proposal fields" that feed the document's
@@ -729,7 +797,10 @@
 <!-- The proposal's licensed typeface, fetched from behind the login and registered with FontFace.
      Before the page's script, which hands it the refit to run once the font is in. -->
 <script src="/js/proposal-fonts.js?v=20260926-rel"></script>
-<script src="/js/proposal-review.js?v=20260928-combo-tax-control"></script>
+<!-- Send all builds a proposal that was never built, through the Proposal step's own door
+     (send-all-chain.js, window.TWSendAll). Before the page's script, which reads it at a press. -->
+<script src="/js/send-all-chain.js?v=20261029-1"></script>
+<script src="/js/proposal-review.js?v=20261029-compose-frame"></script>
 <!-- AFTER proposal-review.js, always. The cover letter borrows that file's token resolver and its
      "aim at nothing" call for the formatting ribbon, both of which are top-level functions in the
      shared script scope; loaded first it would find neither. Every borrow is feature-detected, so

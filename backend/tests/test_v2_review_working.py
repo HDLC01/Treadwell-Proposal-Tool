@@ -312,7 +312,8 @@ def problems(d):
 def test_every_review_table_has_the_five_labelled_columns(ran):
     p = problems(ran)
     assert p["header"] == [] and p["columns"] == [], p["header"] + p["columns"]
-    assert [c["key"] for c in ran["epoxy"]["cards"]] == ["takeoff", "labor", "travel", "takeoff", "markup"]
+    # the last is the read-only Man hours & budget card (2026-10-27, tests/test_review_man_hours.py)
+    assert [c["key"] for c in ran["epoxy"]["cards"]] == ["takeoff", "labor", "travel", "takeoff", "markup", "manhours"]
     assert ran["epoxy"]["cards"][0]["head"] == ["Item", "Quantity", "Unit", "Rate", "Total"]
 
 

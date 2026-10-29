@@ -131,6 +131,8 @@ create index if not exists library_items_live_name_idx
   on public.library_items (name) where deleted_at is null;
 create index if not exists library_items_category_idx
   on public.library_items (category) where deleted_at is null;
+-- Item categories per work type (2026-10-28): {work type: Admin category id}. backend/ops/item_categories.sql.
+alter table public.library_items add column if not exists material_categories jsonb;
 
 create table if not exists public.library_assemblies (
   id           text primary key,
