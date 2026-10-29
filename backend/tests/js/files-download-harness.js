@@ -52,6 +52,20 @@ const FRESH = lift("freshDocuments");
 const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const GENERATE = lift("doGenerate");
+// THE BUTTONS' FILE NAMES. The stretch of showPostGenerate that names the files and wires the three
+// download buttons, verbatim: from the info-sheet link to the end of the PDF button, the nested
+// downloadAs and the cover-letter banner included. Each press runs the REAL downloadAs, so what is
+// captured is the `a.download` the browser saves the file under.
+const WIRING = (function () {
+  const start = SRC.indexOf("function showPostGenerate(result) {");
+  const from = SRC.indexOf("// Carry the draft across", start);
+  const to = SRC.indexOf("// NO SEPARATE COVER-LETTER DOWNLOAD", from);
+  if (start < 0 || from < 0 || to < 0) {
+    throw new Error("showPostGenerate's download wiring could not be lifted out of done.js. "
+      + "Repoint this harness; do not delete the scenarios.");
+  }
+  return SRC.slice(from, to);
+})();
 
 const OLD = { work_type: "epoxy", xlsx_download_url: "/api/file/OLDX",
               docx_download_url: "/api/file/OLD", pdf_download_url: "/api/file/OLD/pdf" };
@@ -141,6 +155,31 @@ function page(opts) {
       documentStub, () => 0, () => "", { error() {} }, checkedDocument, TWPRICE, windowStub),
     generate: () => doGenerate(documentStub, freshDocuments, preEl,
                                (r) => shown.push(r), () => {}, TW, st),
+    /** showPostGenerate's download wiring run over three buttons, then each one pressed: the file
+     *  name every press saved, by button. `state` is the page's module-top snapshot. */
+    names: async (result) => {
+      const btns = {};
+      const handlers = {};
+      ["dl-xlsx", "dl-docx", "dl-pdf"].forEach((id) => {
+        btns[id] = Object.assign(button(), { style: {},
+          addEventListener: (ev, fn) => { if (ev === "click") handlers[id] = fn; } });
+      });
+      const doc = Object.assign({}, documentStub, { getElementById: (id) => btns[id] || null });
+      const wire = new Function(
+        "result", "state", "TW", "document", "freshDocuments", "paintLumpSum", "refreshFilesProposals",
+        "fetch", "Blob", "URL", "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
+        "coverLetterCheck", '"use strict";\n' + WIRING);
+      wire(result, JSON.parse(JSON.stringify(opts.state)), TW, doc, freshDocuments, () => { painted++; },
+           () => { listed++; }, fetchStub, BlobStub, URLStub, () => 0, () => "", { error() {} },
+           checkedDocument, TWPRICE, windowStub, async () => ({ enabled: false }));
+      const saved = {};
+      for (const id of Object.keys(handlers)) {
+        const before = clicked.length;
+        await handlers[id]();
+        saved[id] = clicked.slice(before);
+      }
+      return saved;
+    },
   };
 }
 
@@ -265,6 +304,31 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     const b = button();
     await p.download("pdf_download_url", "x.pdf", b);
     out.serverCopy.unreadable = { asked: p.asked, log: p.log, clicked: p.clicked, button: b.textContent };
+  }
+
+  // I. THE NAME EACH BUTTON SAVES UNDER. Hanz, 2026-10-29: the proposal's name is its sheet's,
+  //    "in the generate file and in the files". One proposal: the project's name, as always. One of
+  //    several (scope_group): "<project>_<its name>", the project part cut to fit, the name kept.
+  {
+    const R = { xlsx_download_url: "/x", docx_download_url: "/d", pdf_download_url: "/p" };
+    const LONG = "Kansas State University Biosciences Research Facility Phase Two Renovation";
+    out.names = {};
+    for (const [name, st, result] of [
+      ["single", { proposal_payload: SAVED, project_name: "Multiple proposals" }, R],
+      ["group", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                  scope_group: { id: "G1", label: "Polish Room 2" } }, R],
+      ["groupNoPdf", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                       scope_group: { id: "G1", label: "Polish Room 2" } },
+       { xlsx_download_url: "/x", docx_download_url: "/d" }],
+      ["longProject", { proposal_payload: SAVED, project_name: LONG,
+                        scope_group: { id: "G1", label: "Epoxy Lab 2 (North Wing)" } }, R],
+      ["longSingle", { proposal_payload: SAVED, project_name: LONG }, R],
+      ["blankLabel", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                       scope_group: { id: "G1", label: "  " } }, R],
+      ["noProject", { proposal_payload: SAVED, scope_group: { id: "G1", label: "Office" } }, R],
+    ]) {
+      out.names[name] = await page({ state: st }).names(result);
+    }
   }
 
   process.stdout.write(JSON.stringify(out));

@@ -237,3 +237,52 @@ def test_download_builds_nothing_when_the_servers_copy_cannot_be_read(ran):
     s = ran["serverCopy"]["unreadable"]
     assert s["log"] == ["flush", "read"] and s["clicked"] == [], s
     assert s["button"] == "Failed — try again"
+
+
+def _saved(names):
+    """Each button's one saved file name ({button id: name})."""
+    assert all(len(v) == 1 for v in names.values()), names
+    return {k: v[0] for k, v in names.items()}
+
+
+def test_one_proposal_downloads_under_the_project_name_as_always(ran):
+    """A draft in no scope group keeps exactly the names it had: "<project>_estimate.xlsx" etc.,
+    and a long project name is still cut at 60 characters."""
+    assert _saved(ran["names"]["single"]) == {
+        "dl-xlsx": "Multiple_proposals_estimate.xlsx",
+        "dl-docx": "Multiple_proposals_proposal.docx",
+        "dl-pdf": "Multiple_proposals_proposal.pdf"}
+    long_single = "Kansas_State_University_Biosciences_Research_Facility_Phase_"
+    assert len(long_single) == 60
+    assert _saved(ran["names"]["longSingle"])["dl-pdf"] == long_single + "_proposal.pdf"
+
+
+def test_one_of_several_proposals_downloads_under_the_project_and_its_sheet_name(ran):
+    """Hanz, 2026-10-29: the proposal's name is its sheet's "in the files" too. A draft in a scope
+    group (Create Multiple Proposals, or RJ's scopes) saves "<project>_<scope_group.label>_...",
+    every button, so three proposals of one project no longer download under one name.
+
+    Mutation: name the files from state.project_name only (the code before) -- every name here
+    loses "_Polish_Room_2"."""
+    assert _saved(ran["names"]["group"]) == {
+        "dl-xlsx": "Multiple_proposals_Polish_Room_2_estimate.xlsx",
+        "dl-docx": "Multiple_proposals_Polish_Room_2_proposal.docx",
+        "dl-pdf": "Multiple_proposals_Polish_Room_2_proposal.pdf"}
+    assert _saved(ran["names"]["groupNoPdf"]) == {
+        "dl-xlsx": "Multiple_proposals_Polish_Room_2_estimate.xlsx",
+        "dl-docx": "Multiple_proposals_Polish_Room_2_proposal.docx"}
+    assert _saved(ran["names"]["noProject"])["dl-pdf"] == "proposal_Office_proposal.pdf"
+
+
+def test_a_long_project_name_is_cut_and_the_sheet_name_survives(ran):
+    """The project part is the one cut; the proposal's own name is kept whole, through the same
+    filename-safe rule (anything but A-Z a-z 0-9 . _ - becomes one _)."""
+    pdf = _saved(ran["names"]["longProject"])["dl-pdf"]
+    assert pdf.endswith("_Epoxy_Lab_2_North_Wing__proposal.pdf"), pdf
+    assert pdf.startswith("Kansas_State_University_"), pdf
+    assert len(pdf) - len("_proposal.pdf") <= 80, pdf
+
+
+def test_a_blank_proposal_name_falls_back_to_the_project_name(ran):
+    """A group whose label is blank names nothing new: the one-proposal names, not "<project>__"."""
+    assert _saved(ran["names"]["blankLabel"]) == _saved(ran["names"]["single"])

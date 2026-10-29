@@ -1557,9 +1557,19 @@
     const infoLink = document.getElementById("info-sheet-link");
     if (infoLink) infoLink.href = TW.withDraft("/info-sheet.html");
 
-    const safeName = (state.project_name || "proposal")
-      .replace(/[^A-Za-z0-9._-]+/g, "_")
-      .slice(0, 60);
+    // ONE OF SEVERAL PROPOSALS (Create Multiple Proposals, or a project split into scopes): its
+    // files are named "<project>_<its name>", its name being scope_group.label, which #741 keeps
+    // equal to its sheet's (Hanz, 2026-10-29: the sheet name verbatim "in the files"), so three
+    // proposals of one project no longer download under one name. The project part is the one
+    // cut to fit; the proposal's name is kept whole. No group: the name is exactly as before.
+    const _fileSafe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const _fileGroup = (TW.getState() || {}).scope_group;
+    const _fileLabel = (_fileGroup && typeof _fileGroup === "object" && typeof _fileGroup.label === "string")
+      ? _fileSafe(_fileGroup.label.trim()).slice(0, 60) : "";
+    const safeName = /[A-Za-z0-9]/.test(_fileLabel)
+      ? _fileSafe(state.project_name || "proposal").slice(0, Math.max(20, 80 - _fileLabel.length - 1))
+        + "_" + _fileLabel
+      : _fileSafe(state.project_name || "proposal").slice(0, 60);
 
     async function downloadAs(urlKey, filename, button) {
       const orig = button.textContent;
