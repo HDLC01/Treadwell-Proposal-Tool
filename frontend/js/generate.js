@@ -52,17 +52,23 @@
  *     files made, the PDF included (POST /api/draft/{id}/documents/held). The files come back under
  *     fresh tokens; nothing is rendered and LibreOffice does not run.
  * An estimate-only edit changes the draft's inputs, so its document no longer holds: it is composed
- * again and rebuilt. A link whose token has expired since (a restart, an hour) builds the files
- * again and downloads them, as the Files step does. "Rebuild all" builds every one again, cache or
- * not: the safety net. Compose frames run FRAME_LIMIT at once (each its own window, token, seed and
- * draft), builds LIMIT at once; the server caps LibreOffice itself (main._PDF_RENDER_SEM).
+ * again and rebuilt. A link whose token has expired since (a restart, an hour) builds the files of
+ * the copy its row was judged on again (`draft_version`) and downloads them, as the Files step does;
+ * a copy saved since is refused and the link says to reload. "Rebuild all" builds every one again,
+ * cache or not: the safety net. Compose frames run FRAME_LIMIT at once (each its own window, token,
+ * seed and draft); builds run LIMIT at once in all, the frames' included (`buildSlot`); the server
+ * caps the template fills (main._GENERATE_SEM) and LibreOffice (main._PDF_RENDER_SEM) itself.
  */
 (function () {
   "use strict";
   var TW = window.TW;
   var LIMIT = 3;                                   // builds at once
   var FRAME_LIMIT = 2;                             // hidden Proposal pages composing at once
-  var FRAME_MS = 30000;                            // a compose frame that has not reported by then stops
+  // A compose frame has FRAME_OPEN_MS to load its Proposal page and say "started", then FRAME_MS
+  // from "started" to save; the load is not taken out of the compose's time, because two frames
+  // load side by side with builds running (review of c6016a9d).
+  var FRAME_OPEN_MS = 60000;
+  var FRAME_MS = 30000;
   var FRAME_LOAD_GRACE_MS = 3000;                  // loaded, and still nothing said: it never started
   // The Intake and Estimate steps of the spreadsheet flow (a v2 draft goes to the v2 pages).
   var INTAKE = "/?edit=1";
@@ -137,20 +143,27 @@
   }
   var AUTO_SAID = "Built from the default wording; review it on its Proposal tab before sending.";
 
+  /** The version (`updated_at`) of the saved copy `row` was judged on, kept on the row; "" when it
+   *  cannot be named. The open proposal was read through reconcileWithServer, which keeps no
+   *  version: it is read again, and named only when that copy carries the same document and still
+   *  holds. Never rejects. */
+  async function versionOf(row) {
+    if (row.version) return row.version;
+    try {
+      var again = await readRow(row.id);
+      if (!again || !TW.documentHolds(again.data) || !row.data
+          || again.data.proposal_payload_key !== row.data.proposal_payload_key) return "";
+      row.version = again.version || "";
+    } catch (e) { row.version = ""; }
+    return row.version;
+  }
+
   /** Are `row`'s files already built for exactly its saved document? Only asked of a row whose
    *  document holds for its draft (sort's "build"). True, and the row takes its files, only when the
    *  server says so of that very saved copy (see "ONLY WHAT CHANGED" at the top); false on any doubt. */
   async function upToDate(row) {
     try {
-      var version = row.version;
-      if (!version) {
-        // The open proposal was read through reconcileWithServer, which keeps no version: read again,
-        // and judge only a copy that carries the same document and still holds.
-        var again = await readRow(row.id);
-        if (!again || !TW.documentHolds(again.data) || !row.data
-            || again.data.proposal_payload_key !== row.data.proposal_payload_key) return false;
-        version = again.version;
-      }
+      var version = await versionOf(row);
       if (!version) return false;
       var r = await call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents/held",
                          { draft_version: version, hold_placeholders: !row.auto });
@@ -169,8 +182,32 @@
   /** Build one proposal's files: the route the Files step uses, then its PDF, so a PDF that cannot be
    *  made is said here rather than at the Files step. A backup composed from the default wording
    *  (`row.auto`) is built as it stands and says to review it; any other document asks the server to
-   *  hold one that was put together unattended and still prints placeholders. */
-  async function build(row, force) {
+   *  hold one that was put together unattended and still prints placeholders.
+   *  AT MOST LIMIT AT ONCE, WHOEVER ASKS (review of c6016a9d): the pool of proposals that hold and
+   *  every compose frame that has saved share `buildSlot`, so the server's template fills (each
+   *  workbook alone ~40 MB) never run more than LIMIT at once from this page. */
+  function build(row, force) {
+    return buildSlot(function () { return buildNow(row, force); });
+  }
+  /** At most `n` of the functions handed to it run at once; the rest wait their turn, in order. */
+  function limiter(n) {
+    var free = n;
+    var queue = [];
+    function release() {
+      var next = queue.shift();
+      if (next) next(); else free++;
+    }
+    return function (fn) {
+      return new Promise(function (resolve) {
+        if (free > 0) { free--; resolve(); } else queue.push(resolve);
+      }).then(function () {
+        return Promise.resolve().then(fn).then(function (v) { release(); return v; },
+                                               function (e) { release(); throw e; });
+      });
+    };
+  }
+  var buildSlot = limiter(LIMIT);
+  async function buildNow(row, force) {
     row.status = "building";
     row.message = "";
     paint();
@@ -267,17 +304,22 @@
         if (!e || e.origin !== origin() || e.source !== frame.contentWindow) return;
         var d = e.data;
         if (!d || typeof d !== "object" || d.tw_compose_frame !== tok || d.id !== row.id) return;
-        if (d.phase === "started") { started = true; return; }
+        if (d.phase === "started") {
+          if (started) return;
+          started = true;
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(tooLong, FRAME_MS);
+          return;
+        }
         if (d.phase === "saved") finish({ ok: true });
         else if (d.phase === "stopped") {
           finish({ ok: false, reason: typeof d.reason === "string" && d.reason ? d.reason
                                       : "Its Proposal step could not rebuild it." });
         }
       }
+      function tooLong() { finish({ ok: false, reason: "Its Proposal step took too long to rebuild it." }); }
       window.addEventListener("message", onMessage);
-      timer = setTimeout(function () {
-        finish({ ok: false, reason: "Its Proposal step took too long to rebuild it." });
-      }, FRAME_MS);
+      timer = setTimeout(tooLong, FRAME_OPEN_MS);
       frame.addEventListener("load", function () {
         loads++;
         // A second page in the frame: the Proposal step sent it somewhere else, so it is not composing.
@@ -371,11 +413,19 @@
       if (resp.status === 404) {
         // ITS TOKEN EXPIRED (they live in the server's memory: a restart, or an hour). The files of
         // its saved document are built again, as the Files step does, and this file is fetched once more.
-        var again = await call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents",
-                               { hold_placeholders: !row.auto });
+        // OF THE COPY THE ROW SHOWS, OR NOT AT ALL (review of c6016a9d): the build names the saved copy
+        // the row was judged on (`draft_version`), so a copy saved since, from another tab, is refused
+        // (409) and the link says to reload this page, which judges it again, as before the heal.
+        if (!row.version) throw new Error("expired");
+        var again = await buildSlot(function () {
+          return call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents",
+                      { hold_placeholders: !row.auto, draft_version: row.version });
+        });
+        if (again.status === 409) throw new Error("expired");
         if (!again.ok || !again.body || !again.body[key]) throw new Error(again.error || "HTTP 404");
         row.files = again.body;
         if (typeof again.body.document_total === "string") row.total = again.body.document_total;
+        paint();
         resp = await fetch(TW.absoluteUrl(row.files[key]), { headers: TW.authHeaders() });
       }
       if (!resp.ok) throw new Error(resp.status === 404 ? "expired" : "HTTP " + resp.status);
@@ -560,17 +610,21 @@
       var out = await composeInFrame(r, r.data);
       if (!out.ok) { fail(r, out.reason); return; }
       if (r.current) framedCurrent = true;
+      // The copy its frame saved, so a link healed later builds that copy or says to reload.
+      var saved = await readRow(r.id);
+      r.version = saved && saved.data && saved.data.proposal_payload ? saved.version : "";
       await build(r, force);
     }
     await Promise.all([
       pool(rows.filter(function (r) { return r.plan === "build"; }), LIMIT,
-           function (r) { begin(r); return build(r, force); }),
+           async function (r) { begin(r); await versionOf(r); return build(r, force); }),
       pool(rows.filter(function (r) { return r.plan === "frame"; }), FRAME_LIMIT, composeThenBuild),
     ]);
     // The open proposal's document was composed in a frame and saved: this browser's copy takes it,
     // as it was the saved copy until then ("adopted"), so no page here holds the one from before.
     if (framedCurrent) { try { await TW.reconcileWithServer(); } catch (e) { /* the next page asks again */ } }
-    rows.forEach(function (r) { delete r.data; delete r.version; });
+    // `version` stays: it is the saved copy each row's files are of, which an expired link heals from.
+    rows.forEach(function (r) { delete r.data; });
     say(summary());
   }
 

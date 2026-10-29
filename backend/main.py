@@ -7756,12 +7756,22 @@ def api_get_file_pdf(token: str) -> Response:
 #     result is memoised here, and `_entry_pdf` memoises the PDF on the .docx entry, so a Send
 #     inside the cache's life hands out the very bytes the Download did. Past it (an hour, 24
 #     other renders, a restart), the Send renders the same key again: same content, new timestamps.
+#     So does step 3's "Rebuild all" (`fresh`, js/generate.js), on purpose: it replaces the cached
+#     render inside its life, so a Send after it hands out the rebuilt bytes, not the ones a
+#     Download before it gave. Same key, so the same content and the Send is not refused; only the
+#     timestamps differ, exactly as past the cache's life. Accepted (review of c6016a9d): keeping the
+#     old PDF on a fresh rebuild would mean "Rebuild all" did not rebuild the PDF.
+#   * AT MOST _GENERATE_SEM FILLS AT ONCE. One fill loads the estimate workbook (~40 MB resident
+#     for the template alone), the .docx and the cover letter, on a small shared box; step 3 builds
+#     several proposals at once, and two estimators can press it together. LibreOffice has its
+#     own, smaller cap (_PDF_RENDER_SEM).
 #
 # In process memory, like _FILE_CACHE. What makes a SENT PDF permanent is draft_revision_documents,
 # not this.
 _RENDER_CACHE: cachetools.TTLCache = cachetools.TTLCache(maxsize=24, ttl=3600)
 _RENDER_LOCKS: Dict[str, threading.Lock] = {}
 _RENDER_LOCKS_GUARD = threading.Lock()
+_GENERATE_SEM = threading.Semaphore(3)   # template fills at once, across every caller (see above)
 
 
 def _canonical_sha256(obj: Any) -> str:
@@ -7836,7 +7846,8 @@ def _render_documents(payload: Dict[str, Any], request: Request, *,
         with _RENDER_LOCKS_GUARD:   # a TTLCache is not safe across threads on its own
             docs = None if fresh else _RENDER_CACHE.get(key)
         if docs is None or (want_estimate and docs.get("xlsx") is None):
-            out = _generate(gi, request, persist=False, want_estimate=want_estimate)
+            with _GENERATE_SEM:
+                out = _generate(gi, request, persist=False, want_estimate=want_estimate)
             docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
             if not docx_entry:
                 raise HTTPException(500, "Could not build the proposal document.")

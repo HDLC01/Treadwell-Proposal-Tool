@@ -209,6 +209,51 @@ def test_the_cap_check_sees_an_uncapped_server(monkeypatch):
     assert _peak_concurrent_pdf_renders(monkeypatch) > 2
 
 
+# ── the template fills are capped too (review of c6016a9d) ──────────────────────────────────
+def _peak_concurrent_fills(fake_supabase, monkeypatch, n=6):
+    """`n` different documents rendered together through the real `_render_documents` (distinct
+    keys, so the per-document lock does not serialise them); the peak number of `_generate` calls
+    running at once."""
+    Server(fake_supabase, monkeypatch)
+    live = {"now": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def slow(gi, request, *, persist=True, want_estimate=True, fit_report=None):
+        with lock:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        time.sleep(0.2)
+        with lock:
+            live["now"] -= 1
+        docx = main._cache_file(b"docx", "p_proposal.docx", "application/octet-stream")
+        xlsx = main._cache_file(b"xlsx", "p_estimate.xlsx", "application/octet-stream")
+        return main.GenerateOut(work_type="epoxy", audience="Direct",
+                                xlsx_download_url=f"/api/file/{xlsx}", docx_download_url=f"/api/file/{docx}",
+                                pdf_download_url=f"/api/file/{docx}/pdf", totals={})
+    monkeypatch.setattr(main, "_generate", slow)
+    out = []
+    threads = [threading.Thread(target=lambda i=i: out.append(main._render_documents(
+        _payload(total="$%d" % (1000 + i)), None, want_estimate=True))) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert len(out) == n and len({d["render_id"] for d in out}) == n
+    return live["peak"]
+
+
+def test_at_most_three_template_fills_run_at_once(fake_supabase, monkeypatch):
+    """Step 3 builds several proposals at once and two estimators can press it together: however
+    many builds arrive, no more than three workbook-and-document fills run at once on the 2 GB box."""
+    assert _peak_concurrent_fills(fake_supabase, monkeypatch) == 3
+
+
+def test_the_fill_cap_check_sees_an_uncapped_server(fake_supabase, monkeypatch):
+    """The control: with the cap opened wide the same six fills run together."""
+    monkeypatch.setattr(main, "_GENERATE_SEM", threading.Semaphore(100))
+    assert _peak_concurrent_fills(fake_supabase, monkeypatch) > 3
+
+
 def test_every_libreoffice_call_in_main_is_under_the_cap():
     """Every place main.py starts LibreOffice (a .docx to PDF, the invoice PDF) holds the semaphore."""
     lines = inspect.getsource(main).splitlines()

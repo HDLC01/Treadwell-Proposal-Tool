@@ -178,6 +178,10 @@ async function openGenerate(b, href) {
       posted.push({ id, body });
       const d = draftOf(id);
       if (!d) return json(404, { detail: "Draft not found" });
+      // main.py _stored_since: a copy saved after the one the page names is not built.
+      if (body.draft_version && body.draft_version !== (b.server.version || VERSION)) {
+        return json(409, { detail: "Not built — this proposal was saved again after this page checked it." });
+      }
       const fail = (b.server.failDocs || {})[id];
       if (fail) return json(fail[0], { detail: fail[1] });
       const pp = d.proposal_payload;
@@ -192,10 +196,18 @@ async function openGenerate(b, href) {
         (b.server.renders = b.server.renders || []).push({ id, payload: copy(pp), rebuild: !!body.rebuild });
       }
       lastKey[id] = key;
-      return json(200, filesOf(id, pp));
+      // HOW MANY BUILDS ARE IN FLIGHT: from its POST until its PDF is fetched (step 3's build()).
+      // `holdDocs` (a scenario's) keeps the answers back while it says so, as a slow server would.
+      const live = b.server.inBuild = b.server.inBuild || new Set();
+      live.add(id);
+      b.server.peakBuilds = Math.max(b.server.peakBuilds || 0, live.size);
+      const answer = json(200, filesOf(id, pp));
+      if (!b.server.holdDocs) return answer;
+      return new Promise((res) => { const tick = () => (b.server.holdDocs() ? setImmediate(tick) : res(answer)); tick(); });
     }
     m = /^\/api\/file\/([^/]+)-D(\d+)\/pdf$/.exec(u);
     if (m) {
+      if (b.server.inBuild) b.server.inBuild.delete(m[1]);
       if (Number(m[2]) <= (b.server.expireBefore || 0)) return json(404, { detail: "File expired or already downloaded" });
       (b.server.pdfs = b.server.pdfs || []).push(m[1]);
       const fail = (b.server.failPdf || {})[m[1]];
@@ -246,6 +258,9 @@ async function openGenerate(b, href) {
   // ── the frames ──
   const winListeners = [];
   const frames = { opened: [], live: 0, maxLive: 0, nav: [], posts: [], errors: [], frameUrls: [], together: [] };
+  b.frames = frames;
+  // Every timer the page set ({ms, fn, cleared}); none fires unless a scenario fires it.
+  const timers = b.timers = [];
   const liveIds = new Set();
   const deliver = (ev) => winListeners.filter(([t]) => t === "message").forEach(([, h]) => h(ev));
   let sandbox = null;
@@ -267,6 +282,10 @@ async function openGenerate(b, href) {
         const o = Object.assign({}, (b.frameOpts || {})[id] || {});
         const forge = o.forge;
         delete o.forge;
+        // A slow load: the scenario's `beforeLoad` runs (and is awaited) before the page is opened.
+        const beforeLoad = o.beforeLoad;
+        delete o.beforeLoad;
+        if (beforeLoad) await beforeLoad();
         const p = await W.openProposal(b, src, Object.assign(o, { frameParent: parent }));
         el.contentWindow = p.page.window;
         el.listeners.filter(([t]) => t === "load").forEach(([, h]) => h());
@@ -315,7 +334,8 @@ async function openGenerate(b, href) {
     URLSearchParams, Map, Set, isFinite, Uint8Array, Blob: HBlob,
     localStorage: b.ls, sessionStorage: b.ss,
     // A timer gets an id, as a browser gives one, and never fires (a save is sent by flushState).
-    setTimeout: (() => { let n = 0; return () => ++n; })(), clearTimeout: () => {},
+    setTimeout: (fn, ms) => timers.push({ ms, fn, cleared: false }),
+    clearTimeout: (n) => { if (timers[n - 1]) timers[n - 1].cleared = true; },
     fetch, document,
   };
   sandbox.window = {
@@ -347,6 +367,8 @@ async function openGenerate(b, href) {
     frames, refreshCalls: sandbox.window.TWGenerate.refreshCalls(),
     listening: winListeners.filter(([t]) => t === "message").length,
     rebuildShown: !nodes["gen-rebuild"].hidden, rebuildDisabled: !!nodes["gen-rebuild"].disabled,
+    /** The rows and the list as they are NOW (the fields above are as they were when snapped). */
+    liveRows: () => sandbox.window.TWGenerate.rows(), liveList: () => nodes["gen-list"].innerHTML,
     /** Press row `i`'s `key` file link, as a person clicks it in the list; resolves with what was
      *  saved (null when nothing) and the button's own text after. */
     download: async (i, key) => {
@@ -722,8 +744,12 @@ async function stagingProject() {
     b.server.expireBefore = b.server.gen;
     const rendersMid = (b.server.renders || []).length;
     const healed = await g.download(0, "pdf_download_url");
+    // Polish was composed in its frame and built: its link heals off the copy that frame saved.
+    const healedFrame = await g.download(1, "pdf_download_url");
     out.expired = { xlsx: xlsx.saved, pdf: pdf.saved, healed: healed.saved, healedText: healed.text,
-                    posted: g.posted.slice(postedBefore).map((p) => [p.id, p.body.hold_placeholders, !!p.body.rebuild]),
+                    healedFrame: healedFrame.saved, healedFrameText: healedFrame.text,
+                    posted: g.posted.slice(postedBefore).map((p) => [p.id, p.body.hold_placeholders, !!p.body.rebuild,
+                                                                     p.body.draft_version || null]),
                     rendered: (b.server.renders || []).length - rendersMid };
     // "REBUILD ALL".
     const rb = { renders: (b.server.renders || []).length, pdfs: (b.server.pdfs || []).length,
@@ -736,6 +762,66 @@ async function stagingProject() {
       pdfs: (b.server.pdfs || []).length - rb.pdfs, checks: (b.server.checks || []).length - rb.checks,
       frames: r.frames.opened.length - rb.frames, rebuildShown: r.rebuildShown, rebuildDisabled: r.rebuildDisabled,
     };
+    // SAVED SINCE, IN ANOTHER TAB: Epoxy is re-priced and saved elsewhere ($12,000), then every token
+    // expires. Epoxy's link must not build that copy under the row that shows $10,000: it says to reload.
+    b.server.version = "2026-10-28T11:00:00Z";
+    b.server.d1 = Object.assign(copy(b.server.d1), { proposal_payload: Object.assign(copy(b.server.d1.proposal_payload),
+      { values: Object.assign(copy(b.server.d1.proposal_payload.values), { total_formatted: "$12,000" }) }) });
+    b.server.expireBefore = b.server.gen;
+    const sincePosted = r.posted.length;
+    const sinceRenders = (b.server.renders || []).length;
+    const since = await r.download(0, "pdf_download_url");
+    out.savedSince = { saved: since.saved, text: since.text,
+                       posted: r.posted.slice(sincePosted).map((p) => [p.id, p.body.draft_version || null]),
+                       rendered: (b.server.renders || []).length - sinceRenders,
+                       row: [r.liveRows()[0].status, r.liveRows()[0].total],
+                       statusText: [...r.liveList().matchAll(/<span class="gen-status">([^<]*)<\/span>/g)].map((x) => x[1])[0] };
+  }
+
+  // ── AT MOST THREE BUILDS AT ONCE, THE FRAMES' INCLUDED (review of c6016a9d) ────────────────
+  // Three proposals hold (d1, c2, c4), two are composed in frames (c3, c5). The server answers no build
+  // until both frames have saved, and a while after: every build that would start then has started.
+  {
+    const b = await continued();
+    b.server.drafts = { c2: await keyed(child("Room 2", { proposal_payload: oldDoc("$6,000.00") })),
+                        c3: child("Polish", { proposal_payload: oldDoc("$8,000.00") }),
+                        c4: await keyed(child("Polish", { proposal_payload: oldDoc("$7,000.00") })),
+                        c5: child("Room 2") };
+    b.server.view = view([{ id: "d1", sheet_label: "Epoxy" }, { id: "c2", sheet_label: "Room 2" },
+                          { id: "c3", sheet_label: "Polish" }, { id: "c4", sheet_label: "Gyp" },
+                          { id: "c5", sheet_label: "Seal" }]);
+    // A frame that never saves (a broken page) must not hang the harness: the answers go out anyway
+    // after `cap` polls, and `heldUntilSaved` says whether they waited for both frames.
+    let after = 0;
+    let polls = 0;
+    const cap = 20000;
+    b.server.holdDocs = () => {
+      if (++polls > cap) return false;
+      const saved = new Set(((b.frames || {}).posts || []).filter((p) => p.msg.phase === "saved").map((p) => p.msg.id));
+      if (!(saved.has("c3") && saved.has("c5"))) return true;
+      b.server.heldUntilSaved = true;
+      return ++after < 300;
+    };
+    const g = await openGenerate(b, "/generate.html?d=d1");
+    out.buildCap = { peak: b.server.peakBuilds, heldUntilSaved: !!b.server.heldUntilSaved, polls, rows: rowsBrief(g).map((x) => [x.id, x.status]),
+                     frames: frameBrief(g).opened.slice().sort(), maxLive: g.frames.maxLive, note: g.note };
+  }
+
+  // ── A SLOW LOAD IS NOT TAKEN OUT OF THE COMPOSE'S TIME (review of c6016a9d) ────────────────
+  // Room 2's Proposal page takes 30 seconds to load: every 30-second timer set by then runs out. The
+  // frame still composes and the row is built; its 30 seconds start once the page says "started".
+  {
+    const b = await continued();
+    b.server.drafts = { c3: child("Room 2") };
+    b.server.view = view([{ id: "d1", sheet_label: "Epoxy" }, { id: "c3", sheet_label: "Room 2" }]);
+    let fired = 0;
+    b.frameOpts = { c3: { beforeLoad: async () => {
+      b.timers.forEach((t) => { if (!t.cleared && t.ms === 30000) { t.cleared = true; fired++; t.fn(); } });
+      await settle();
+    } } };
+    const g = await openGenerate(b, "/generate.html?d=d1");
+    out.slowLoad = { rows: rowsBrief(g).map((x) => [x.id, x.status, x.message]), fired,
+                     limits: b.timers.filter((t) => t.ms >= 30000).map((t) => t.ms), note: g.note };
   }
 
   // ── AN ESTIMATE-ONLY CHANGE IS REBUILT ─────────────────────────────────────────────────────

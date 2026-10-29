@@ -76,6 +76,14 @@ def _row(rows, rid):
     return next(r for r in rows if r["id"] == rid)
 
 
+def _row_status(rows, rid):
+    """The status of `rid` in a list of [id, status, ...] rows (None when it is not there)."""
+    return next((r[1] for r in rows if r[0] == rid), None)
+
+
+VERSION = "2026-10-28T10:00:00Z"   # the harness's updated_at for every draft (generate-step-harness.js)
+
+
 # ── staging's project: three base bids, three proposals, one page ────────────────────────────
 @needs_node
 def test_staging_shape_builds_all_three_without_leaving_the_page(ran):
@@ -249,7 +257,22 @@ def test_up_to_date_links_download_and_heal_after_a_restart(ran):
     assert e["xlsx"] == {"name": "Epoxy_estimate.xlsx", "bytes": "X d1"}
     assert e["pdf"] == {"name": "Room_2_proposal.pdf", "bytes": "%PDF c3"}
     assert e["healed"] == {"name": "Epoxy_proposal.pdf", "bytes": "%PDF d1"}
-    assert e["posted"] == [["d1", True, False]] and e["rendered"] == 0
+    assert e["healedFrame"] == {"name": "Polish_proposal.pdf", "bytes": "%PDF c2"}
+    # Each heal names the saved copy its row was judged on (Polish: the copy its frame saved).
+    assert e["posted"] == [["d1", True, False, VERSION], ["c2", True, False, VERSION]]
+    assert e["rendered"] == 0
+
+
+@needs_node
+def test_a_link_of_a_copy_saved_since_says_reload_and_builds_nothing(ran):
+    """Review of c6016a9d: Epoxy was re-priced and saved in another tab ($12,000) after its row was
+    judged ($10,000), then every token expired. Its link must not build and download the $12,000 copy
+    under a row that reads $10,000: the heal names the copy judged, the server refuses (409), and the
+    link says to reload this page, which judges the row again."""
+    s = ran["savedSince"]
+    assert s["posted"] == [["d1", VERSION]]
+    assert s["saved"] is None and s["text"] == "Expired, reload this page"
+    assert s["rendered"] == 0 and s["row"] == ["built", "$10,000"] and s["statusText"] == "Built · $10,000"
 
 
 @needs_node
@@ -258,11 +281,35 @@ def test_rebuild_all_builds_every_one_again(ran):
     nothing about what is up to date."""
     r = ran["rebuild"]
     assert [(x["id"], x["status"]) for x in r["rows"]] == [("d1", "built"), ("c2", "built"), ("c3", "built")]
-    assert r["posted"] == [["d1", True], ["c2", True], ["c3", True]]
-    assert r["rendered"] == [["d1", True], ["c2", True], ["c3", True]]
+    assert sorted(r["posted"]) == [["c2", True], ["c3", True], ["d1", True]]
+    assert sorted(r["rendered"]) == [["c2", True], ["c3", True], ["d1", True]]
     assert r["pdfs"] == 3 and r["checks"] == 0 and r["frames"] == 0
     assert r["note"] == "All 3 proposals are built." and r["nav"] == []
     assert r["rebuildShown"] and not r["rebuildDisabled"] and len(r["links"]) == 9
+
+
+@needs_node
+def test_no_more_than_three_builds_at_once_frames_included(ran):
+    """Review of c6016a9d: three proposals that hold build while two frames compose; the server
+    answers no build until both frames have saved. The frames' builds wait for a place: never more
+    than three POST /documents (each until its PDF is fetched) in flight, and all five are built."""
+    c = ran["buildCap"]
+    assert c["heldUntilSaved"], "the answers went out before both frames saved: the check proves nothing"
+    assert c["peak"] == 3, c
+    assert c["rows"] == [["d1", "built"], ["c2", "built"], ["c3", "built"], ["c4", "built"], ["c5", "built"]]
+    assert c["frames"] == ["c3", "c5"] and c["maxLive"] == 2
+    assert c["note"] == "All 5 proposals are built."
+
+
+@needs_node
+def test_a_slow_load_is_not_taken_out_of_the_compose_time(ran):
+    """Review of c6016a9d: Room 2's Proposal page took 30 seconds to load (two frames load side by
+    side with builds running). It still composes and is built: the frame has a minute to load and
+    say "started", then its own 30 seconds to save."""
+    s = ran["slowLoad"]
+    assert s["fired"] == 0, "a 30-second limit was already running while the page loaded"
+    assert [r[:2] for r in s["rows"]] == [["d1", "built"], ["c3", "built"]], s["rows"]
+    assert s["limits"] == [60000, 30000], "the load limit, then the compose limit armed at started"
 
 
 @needs_node
@@ -489,6 +536,23 @@ MUTATIONS = [
      lambda o: o["estimateOnly"]["rows"][1] != ["c2", "built", "$9,500"]),
     ("expired-link-heals", G, "      if (resp.status === 404) {", "      if (false) {",
      lambda o: o["expired"]["healed"] is None),
+    ("builds-share-one-limit", G, "    return buildSlot(function () { return buildNow(row, force); });",
+     "    return buildNow(row, force);", lambda o: o["buildCap"]["peak"] > 3),
+    ("load-not-in-compose-time", G, "      timer = setTimeout(tooLong, FRAME_OPEN_MS);",
+     "      timer = setTimeout(tooLong, FRAME_MS);",
+     lambda o: _row_status(o["slowLoad"]["rows"], "c3") != "built"),
+    ("compose-limit-armed-at-started", G,
+     "          timer = setTimeout(tooLong, FRAME_MS);\n          return;", "          return;",
+     lambda o: 30000 not in o["slowLoad"]["limits"]),
+    ("heal-names-the-copy", G,
+     "                      { hold_placeholders: !row.auto, draft_version: row.version });",
+     "                      { hold_placeholders: !row.auto });",
+     lambda o: o["savedSince"]["saved"] is not None),
+    ("heal-409-says-reload", G, '        if (again.status === 409) throw new Error("expired");', "",
+     lambda o: o["savedSince"]["text"] != "Expired, reload this page"),
+    ("frame-row-keeps-its-version", G,
+     '      r.version = saved && saved.data && saved.data.proposal_payload ? saved.version : "";',
+     '      r.version = "";', lambda o: o["expired"]["healedFrame"] is None),
     ("rebuild-all-is-fresh", G, "    if (force) ask.rebuild = true;", "    if (false) ask.rebuild = true;",
      lambda o: o["rebuild"]["rendered"] == []),
     ("rebuild-all-asks-nothing", G,
