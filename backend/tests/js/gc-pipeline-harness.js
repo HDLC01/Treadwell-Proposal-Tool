@@ -151,7 +151,7 @@ const make = new Function(
    let ALL = [];
    let TAB = "active", VIEW = "board";
    let EST = "", PERIOD = "", SORTFIELD = "activity", SORTDIR = "desc";
-   let BOARD_SIG = "", DEGRADED_SIG = "", DEEPLINK_USED = false;
+   let BOARD_SIG = "", DEGRADED_SIG = "", DEEPLINK_USED = false, LOAD_GEN = 0;
    let CUR_PID = null, REDIRECTED = false;
    // Which board, exactly as portal.js computes it — off <body data-pipeline>.
    const document = PAGE.document;
