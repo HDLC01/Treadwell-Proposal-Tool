@@ -207,6 +207,20 @@ def test_ticking_a_division_brings_its_select_back_at_none(lib):
     assert t1["cell"]["selects"] == ["epoxy"] and t1["cell"]["epoxy"] == "epoxy-patch"
 
 
+def test_a_chip_click_redraws_the_category_cell_on_screen_without_a_rerender(lib):
+    """The page does not redraw the row on a chip click (it would lose the chip's focus). Without its own
+    repaint the cell kept saying "Pick a division first" after a tick, and kept a Polish select showing
+    Floor after Polished Concrete was unticked -- picking from it sent the category straight back."""
+    r = lib["tied"]["repaint"]
+    assert r["selectorIsReal"], "the repaint's selector must match the row renderItems draws"
+    assert r["untickPolish"] == {"selects": ["epoxy"], "epoxy": "epoxy-extras", "polish": None,
+                                 "pickDivision": False}, "the Polish select leaves with the division"
+    assert r["retickPolish"]["selects"] == ["epoxy", "polish"] and r["retickPolish"]["polish"] == ""
+    assert r["tickPaintBlie"] == {"selects": ["epoxy"], "epoxy": "epoxy-patch", "polish": None,
+                                  "pickDivision": False}, "Paint Blie's Epoxy select appears on the tick"
+    assert r["untickPaintBlie"]["selects"] == [] and r["untickPaintBlie"]["pickDivision"]
+
+
 def test_the_page_and_the_server_read_a_division_as_the_same_work_type(lib):
     pairs = lib["tied"]["divisionWorkTypes"]
     assert len(pairs) > 5 and any(wt == "" for _, wt in pairs) and any(wt == "seal" for _, wt in pairs)
@@ -416,6 +430,9 @@ LIBRARY_MUTATIONS = {
         "js/library.js", "    return DIVISION_WORK_TYPE[key] ||", "    return DIVISION_WORK_TYPE[key.replace(/ /g, \"\")] ||",
         lambda c: [[n, ic.division_work_type(n)] for n, _ in c["tied"]["divisionWorkTypes"]]
         == c["tied"]["divisionWorkTypes"]),
+    "a chip click leaves the Category cell stale": (
+        "js/library.js", "      paintCategoryCell(it);", "      void paintCategoryCell;",
+        lambda c: (c["tied"]["repaint"]["untickPolish"] or {}).get("selects") == ["epoxy"]),
 }
 
 

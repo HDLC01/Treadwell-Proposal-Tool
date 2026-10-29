@@ -832,10 +832,15 @@ def _categories_follow_divisions(patch: Dict[str, Any], stored: Optional[Dict[st
     has_cats = "material_categories" in patch
     if not has_cats and "divisions" not in patch:
         return
+    # The stored divisions read the way the page reads them (library.js itemDivisions): an EMPTY list
+    # falls back to the old single `category` too, not only a missing one. A row written before
+    # divisions existed holds divisions '[]' (the column default) beside category 'Epoxy'; the page
+    # shows it in Epoxy with an Epoxy select, so the server must not strip the category picked there.
+    stored = stored or {}
     divisions = (patch["divisions"] if "divisions" in patch
-                 else _coerce_divisions((stored or {}).get("divisions"), (stored or {}).get("category")))
+                 else _coerce_divisions(stored.get("divisions")) or _coerce_divisions(None, stored.get("category")))
     held = item_categories.coerce_item_categories(
-        patch["material_categories"] if has_cats else (stored or {}).get("material_categories"))
+        patch["material_categories"] if has_cats else stored.get("material_categories"))
     kept = item_categories.within_divisions(held, divisions)
     if has_cats or kept != held:
         patch["material_categories"] = kept or None

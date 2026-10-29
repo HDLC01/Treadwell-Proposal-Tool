@@ -1306,6 +1306,16 @@
     }).join("");
   }
 
+  /** Redraws ONE row's Category cell and nothing else in the row. A division chip click must not
+   *  re-render the row (divisionPick: it would throw away the focus on the chip), but the Category
+   *  selects follow the divisions, so a tick has to bring its select in and an untick has to take one
+   *  out at once -- a select left on screen for an unticked division still shows a category the save
+   *  just took out, and picking from it would send that category straight back. */
+  function paintCategoryCell(it) {
+    var cell = document.querySelector('#items-body [data-item="' + it.id + '"] .cell-cat');
+    if (cell) cell.innerHTML = categoryCell(it);
+  }
+
   /** `map` with work type `wt` set to category `id` (or taken out for ""), as a NEW object. */
   function withCategory(map, wt, id) {
     var out = {};
@@ -5173,6 +5183,7 @@
         it.material_categories = keptCats;
         divBody.material_categories = keptCats;
       }
+      paintCategoryCell(it);
       renderList(); renderPanel();
       patchSoon("items", it.id, divBody);
       return;

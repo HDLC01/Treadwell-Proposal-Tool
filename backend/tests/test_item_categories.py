@@ -369,3 +369,19 @@ def test_a_new_material_is_created_with_only_its_divisions_categories(store):
     it = _mk(divisions=["Polished Concrete"], material_categories={"epoxy": "epoxy-patch", "polish": "polish-dye"})
     assert it["material_categories"] == {"polish": "polish-dye"}
     assert store["library_items"][0]["material_categories"] == {"polish": "polish-dye"}
+
+
+def test_a_legacy_row_with_empty_divisions_keeps_the_category_its_old_division_allows(store, monkeypatch):
+    """A row written before divisions existed: divisions '[]' (the column default) beside category 'Epoxy'.
+    The page reads it as in Epoxy and offers an Epoxy select (itemDivisions falls back to the category), so a
+    pick made there must survive the save, and a Polish one must still go."""
+    it = _mk(divisions=["Epoxy"])
+    store["library_items"][0]["divisions"] = []
+    store["library_items"][0]["category"] = "Epoxy"
+    r = _as(monkeypatch, "user").patch("/api/library/items/%s" % it["id"],
+                                       json={"material_categories": {"epoxy": "epoxy-patch", "polish": "polish-floor"}})
+    assert r.status_code == 200
+    assert (r.json()["item"]["divisions"], r.json()["item"]["category"]) == ([], "Epoxy"), (
+        "what the page reads, and its itemDivisions falls back to the category")
+    assert r.json()["item"]["material_categories"] == {"epoxy": "epoxy-patch"}
+    assert store["library_items"][0]["material_categories"] == {"epoxy": "epoxy-patch"}

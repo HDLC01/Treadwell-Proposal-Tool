@@ -629,6 +629,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("categoriesInDivisions")}
   ${fn("categoryWorkTypes")}
   ${fn("categoryCell")}
+  // onItemEdit's divisions branch redraws the row's Category cell through this (2026-10-30).
+  ${fn("paintCategoryCell")}
   ${fn("withCategory")}
   ${fn("itemCategoryNames")}
   ${fn("categoryFilterNames")}
@@ -1727,6 +1729,10 @@ async function conflictChecks() {
     ${fn("itemDivisions")}
     ${fn("divisionWorkType")}
     ${fn("categoriesInDivisions")}
+    // ...and redraws that row's Category cell, so the cell's helpers come with it (2026-10-30).
+    ${fn("categoryWorkTypes")}
+    ${fn("categoryCell")}
+    ${fn("paintCategoryCell")}
     ${fn("onItemEdit")}
     return { patchSoon: patchSoon, adoptConflict: adoptConflict,
              rememberItem: rememberItem, onItemEdit: onItemEdit,
@@ -5863,10 +5869,15 @@ function itemRowDoc(rowHtml, id) {
     ${fn("hideUnsaved")}
     // onItemEdit's divisions branch: category follows division (2026-10-29).
     var CATS = state.CATS || null;
+    var CATS_WRITABLE = true;
     ${grab(/^  var DIVISION_WORK_TYPE = \{.*\};$/m, "the DIVISION_WORK_TYPE declaration")}
     ${fn("itemDivisions")}
     ${fn("divisionWorkType")}
     ${fn("categoriesInDivisions")}
+    // ...and redraws that row's Category cell, so the cell's helpers come with it (2026-10-30).
+    ${fn("categoryWorkTypes")}
+    ${fn("categoryCell")}
+    ${fn("paintCategoryCell")}
     ${fn("onItemEdit")}
     return { onItemEdit: onItemEdit, hideUnsaved: hideUnsaved,
              pending: function () { return Object.keys(pendingPatch); } };
@@ -7172,7 +7183,36 @@ async function manualSaveChecks() {
   const afterTickT1 = { body: tickT1, cell: tiedCell("t1") };
   const DIV_NAMES = ["Polished Concrete", "  epoxy ", "Gypsum   Underlayment", "Seal", "LEVELING", "Polish", "Gyp",
                      "Paint", ""];
-  const tied = { before: tiedBefore, afterUntick, afterRetick, afterAllOff, afterTickT1,
+  // THE CELL ON SCREEN, WITH NO renderItems AFTER THE CLICK. The real page does not redraw the row on a chip
+  // click (it would lose the chip's focus), so the scenarios above, which call renderItems before reading,
+  // could not see a Category cell left stale. Here the document answers ONLY the selector the page repaints
+  // with, and that selector is checked against the class and attribute the real renderItems row carries.
+  const catSel = (id) => '#items-body [data-item="' + id + '"] .cell-cat';
+  const p = build({ ITEMS: JSON.parse(JSON.stringify(TIED)), CATS: CATS }, [catSel("t4"), catSel("t1")]);
+  const painted = (id) => {
+    const w = p.doc.writes.filter((x) => x.sel === catSel(id)).pop();
+    const sel = (wt) => { const v = selectedIn(w.html, wt); return v === undefined ? null : v; };
+    return w ? { selects: selects(w.html), epoxy: sel("epoxy"), polish: sel("polish"),
+                 pickDivision: /class="catnote">Pick a division first</.test(w.html) } : null;
+  };
+  const pToggle = (id, division) => {
+    p.api.renderItems();
+    const chips = chipRowFromHtml(id, divisionCellOf(rowOf(p.dom.nodes["items-body"].innerHTML, id)));
+    const chip = chips.inputs.filter((x) => x.div === division)[0];
+    chip.checked = !chip.checked;
+    p.api.onItemEdit({ type: "change", target: chip });
+    return painted(id);
+  };
+  p.api.renderItems();
+  const t4Row = rowOf(p.dom.nodes["items-body"].innerHTML, "t4");
+  const repaint = {
+    selectorIsReal: /^<tr data-item="t4"/.test(t4Row.trim()) && /<td class="cell-cat">/.test(t4Row),
+    untickPolish: pToggle("t4", "Polished Concrete"),
+    retickPolish: pToggle("t4", "Polished Concrete"),
+    tickPaintBlie: pToggle("t1", "Epoxy"),
+    untickPaintBlie: pToggle("t1", "Epoxy"),
+  };
+  const tied = { before: tiedBefore, afterUntick, afterRetick, afterAllOff, afterTickT1, repaint,
                  divisionWorkTypes: DIV_NAMES.map((n) => [n, t.api.divisionWorkType(n)]) };
 
   // THE FACET: the real visibleItems / matchesFilters / filterSummary / renderFilterBar.
