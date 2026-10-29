@@ -18,6 +18,7 @@ The mutation tests at the bottom break a scratch copy of the page and prove the 
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import re
 import shutil
@@ -306,6 +307,15 @@ def _container_palette_faults(css):
             faults.append("no rule assigns tone " + key)
     if len(set(bands)) != len(bands):
         faults.append("two tones share a colour")
+    faults += _colour_blind_faults(token)
+    # Other is told apart by its outline, not a hue: an untinted band and a dashed border a person can see.
+    other = token.get("cat-other-band")
+    if other and _chroma(other) > 3:
+        faults.append("Other's band is tinted (%s)" % other)
+    if '.tk-cat[data-cat-tone="other"]{border:1px dashed var(--ink-3)}' not in css:
+        faults.append("Other has no dashed border")
+    elif _contrast(token["card"], token["ink-3"]) < 3:
+        faults.append("Other's dashed border is too faint on white")
     rule = re.search(r"\.tk-cat\{[^}]*\}", css)
     if not rule or "overflow:hidden" in rule.group(0):
         faults.append("the container clips what its cards open")
@@ -325,14 +335,86 @@ def _contrast(a, b):
     return (la + 0.05) / (lb + 0.05)
 
 
+# Machado, Oliveira and Fernandes (2009), full severity, applied to linear sRGB: how a red-green colour-blind eye
+# sees a colour. Deuteranopia and protanopia are the common ones (about 1 man in 12 has some red-green deficiency).
+_CVD = {
+    "deuteranopia": ((0.367322, 0.860646, -0.227968), (0.280085, 0.672501, 0.047413), (-0.011820, 0.042940, 0.968881)),
+    "protanopia": ((0.152286, 1.052583, -0.204868), (0.114503, 0.786281, 0.099216), (-0.003882, -0.048116, 1.051998)),
+}
+
+
+def _linear(hex6):
+    ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    return [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+
+
+def _lab(rgb):
+    r, g, b = (min(1.0, max(0.0, v)) for v in rgb)
+    xyz = (0.4124 * r + 0.3576 * g + 0.1805 * b, 0.2126 * r + 0.7152 * g + 0.0722 * b,
+           0.0193 * r + 0.1192 * g + 0.9505 * b)
+    f = [t ** (1 / 3) if t > 216 / 24389 else (24389 / 27 * t + 16) / 116
+         for t in (xyz[0] / 0.95047, xyz[1], xyz[2] / 1.08883)]
+    return 116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])
+
+
+def _seen_by(hex6, kind):
+    m, c = _CVD[kind], _linear(hex6)
+    return _lab([sum(m[i][j] * c[j] for j in range(3)) for i in range(3)])
+
+
+def _chroma(hex6):
+    _, a, b = _lab(_linear(hex6))
+    return (a * a + b * b) ** 0.5
+
+
+def _colour_blind_faults(token, least=10.0):
+    """Tones that look alike to a red-green colour-blind eye where they can sit side by side: each tone against the
+    next two after it in the cycle (the next one, or the one after an empty heading; the cycle wraps 6 -> 1)."""
+    faults = []
+    for n in range(1, 7):
+        for step in (1, 2):
+            m = (n + step - 1) % 6 + 1
+            a, b = token.get("cat-%d-band" % n), token.get("cat-%d-band" % m)
+            if not (a and b):
+                continue
+            for kind in _CVD:
+                d = math.dist(_seen_by(a, kind), _seen_by(b, kind))
+                if d < least:
+                    faults.append("tones %d and %d are delta E %.1f apart under %s" % (n, m, d, kind))
+    return faults
+
+
 def test_every_container_colour_is_its_own_and_readable():
     assert _container_palette_faults(PAGE_HTML.read_bytes().decode("utf-8")) == []
 
 
+# The palette before the colour-blind review (2026-10-30): Dye (3, tan) over Joint Filler (4, sage) over Other on
+# every Polish bid read as near the same beige to a deuteranope (delta E 7.6 and 4.1).
+_FIRST_PALETTE = ("--cat-1-band:#ecdba6;", "--cat-2-band:#c9d8e8;", "--cat-3-band:#e6cdb6;",
+                  "--cat-4-band:#cddcc7;", "--cat-5-band:#dccadb;", "--cat-6-band:#c4dcd8;")
+
+
+def _with_first_palette(css):
+    for line in _FIRST_PALETTE:
+        key = line.split(":")[0]
+        css, n = re.subn(re.escape(key) + r":#[0-9a-f]{6};", line, css)
+        assert n == 1, key
+    return css
+
+
+def test_the_first_palette_fails_the_colour_blind_check():
+    faults = _colour_blind_faults({m.group(1): m.group(2) for m in re.finditer(
+        r"--([a-z0-9-]+):\s*(#[0-9a-f]{6})", _with_first_palette(PAGE_HTML.read_bytes().decode("utf-8")))})
+    assert any(f.startswith("tones 3 and 4 ") and "deuteranopia" in f for f in faults), faults
+
+
 @pytest.mark.parametrize("old,new", [
-    ("--cat-3-band:#e6cdb6;", "--cat-3-band:#8a6f55;"),             # too dark for the ink on it
-    ("--cat-5-band:#dccadb;", "--cat-5-band:#ecdba6;"),             # the same as tone 1
+    ("--cat-5-band:#e6cdb6;", "--cat-5-band:#8a6f55;"),             # too dark for the ink on it
+    ("--cat-5-band:#e6cdb6;", "--cat-5-band:#eddca7;"),             # the same as tone 1
     ('.tk-cat[data-cat-tone="6"]{--cat-band:var(--cat-6-band)}', ""),
+    ("--cat-other-band:#ffffff}", "--cat-other-band:#e2ded5}"),     # Other tinted again
+    ('.tk-cat[data-cat-tone="other"]{border:1px dashed var(--ink-3)}', ""),
+    ("--cat-4-band:#d5ede9;", "--cat-4-band:#cddcc7;"),             # sea swapped for a sage beside the sage
 ])
 def test_the_palette_check_goes_red(old, new):
     css = PAGE_HTML.read_bytes().decode("utf-8")
