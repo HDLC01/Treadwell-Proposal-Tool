@@ -406,9 +406,11 @@ async function jobSwitchSection() {
            reopened: Object.assign(reopenedOut, { after: reopenedAfter }), clearedOnSection: clearedOut };
 }
 
-/** THE HARD BID SWITCH on the Review step's Discount line (Hanz, 2026-10-17), driven through the page: by click and by the
- *  keyboard, with a discount typed over the rule and cleared again. Every figure is held to priceSection over the same
- *  section with the same `adjust`, worked out without the page. */
+/** NO HARD BID SWITCH (Hanz, 2026-10-27: "I told you to remove this hard bid discount"). The switch the Discount line carried
+ *  from 2026-10-17 is gone: the Review step draws no switch and no note, the % box is greyed 0, and the two boxes still price
+ *  as typed. A bid SAVED with the switch on opens with the discount it gave typed in the % box (B.settleHardBid, in init),
+ *  at exactly the price the switch gave it, and saves that once. Every figure is held to priceSection over the same section,
+ *  worked out without the page. */
 async function hardBidSection() {
   const b = await open(epoxyDraft());
   const api = b.api;
@@ -418,12 +420,13 @@ async function hardBidSection() {
   b.clock.fire();
   api.go(2);
   const section = () => api.model().tabs.Epoxy;
-  const hand = (adj) => {
-    const m = clone(api.model());
+  // `rule`: price as the switch did (the rule on), which is what a saved bid with the switch on was priced at
+  const hand = (adj, model, rule) => {
+    const m = clone(model || api.model());
     if (adj) m.tabs.Epoxy.adjust = adj; else delete m.tabs.Epoxy.adjust;
     const lib = LIB.itemsForBid(items, B.materialAdjust(m.tabs.Epoxy.adjust));
     const priceRow = (r) => { const a = asms.find((x) => x.id === r.assembly_id); return a ? LIB.priceAssembly(a, lib, B.num(r.measurement)) : null; };
-    return B.priceSection(m, "Epoxy", { material: (e) => {
+    return B.priceSection(m, "Epoxy", { hardBidRule: rule === true, material: (e) => {
       const t = e.section.takeoff;
       const r = X.sectionMaterial(t, { items: lib, sf: B.takeoffSf(t), rowPrice: priceRow, pool: B.poolsPacks(e.section) });
       return { material: r.material, tooling: r.tooling };
@@ -431,35 +434,43 @@ async function hardBidSection() {
   };
   const box = () => P.need(b, '[data-adj="discount_pct"]');
   const ph = () => String(box().placeholder || box().attrs.placeholder || "");
-  const note = () => (b.doc.querySelector("[data-hbnote]") || {}).textContent || null;
-  const sw = () => b.doc.querySelector("[data-adj-hb]");
+  const page = () => html(b, "panels");
   const o = {};
   const before = api.activeBid();
-  o.before = { switchShown: !!sw(), aria: sw() && sw().attrs["aria-checked"], placeholder: ph(), note: note(),
-    hardBid: before.hard_bid || 0, total: before.total, adjust: section().adjust === undefined ? "absent" : section().adjust };
-
-  const node = sw();
-  P.clickOn(b, "[data-adj-hb]");
-  const on = api.activeBid();
-  const want = hand({ hard_bid: true });
-  o.on = { stored: clone(section().adjust), aria: sw().attrs["aria-checked"], sameNode: sw() === node,
-    hardBid: on.hard_bid, handHardBid: want.hard_bid, rulePct: want.hard_bid_pct, total: on.total, handTotal: want.total,
-    subTotal: on.sub_total, placeholder: ph(), note: note(),
-    shown: (b.doc.querySelector("[data-mkdisc]") || {}).textContent, rowOff: (b.doc.querySelector("[data-disc-row]") || {}).className };
+  o.review = { switchEl: !!b.doc.querySelector("[data-adj-hb]"), noteEl: !!b.doc.querySelector("[data-hbnote]"),
+    words: /Hard bid|data-adj-hb|data-hbnote|hbline|4% off from/.test(page()), hasDiscountRow: /data-disc-row/.test(page()),
+    hasAmtBox: !!b.doc.querySelector('[data-adj="discount_amt"]'), placeholder: ph(), hardBid: before.hard_bid || 0,
+    total: before.total, hand: hand(null).total, subTotal: before.sub_total };
 
   P.typeInto(b, '[data-adj="discount_pct"]', "3");
-  o.typed = { hardBid: api.activeBid().hard_bid, hand: hand({ hard_bid: true, discount_pct: "3" }).hard_bid,
-    ruleWas: on.hard_bid };
+  o.pct = { hardBid: api.activeBid().hard_bid, total: api.activeBid().total, hand: hand({ discount_pct: "3" }),
+    stored: clone(section().adjust) };
+  o.pct.hand = { hardBid: o.pct.hand.hard_bid, total: o.pct.hand.total };
   P.typeInto(b, '[data-adj="discount_pct"]', "");
-  o.cleared = { hardBid: api.activeBid().hard_bid, rule: on.hard_bid };
-
-  node.click = function () { b.doc.fire("click", { target: node, preventDefault() {} }); };
-  b.doc.fire("keydown", { target: node, key: " ", preventDefault() {} });
+  P.typeInto(b, '[data-adj="discount_amt"]', "1500");
+  const amtHand = hand({ discount_amt: "1500" });
+  o.amt = { hardBid: api.activeBid().hard_bid, total: api.activeBid().total, handTotal: amtHand.total };
+  P.typeInto(b, '[data-adj="discount_amt"]', "");
+  o.cleared = { hardBid: api.activeBid().hard_bid || 0, total: api.activeBid().total,
+    adjust: section().adjust === undefined ? "absent" : clone(section().adjust) };
   b.clock.fire();
-  const last = b.rec.saves[b.rec.saves.length - 1];
-  o.off = { aria: sw().attrs["aria-checked"], adjust: section().adjust === undefined ? "absent" : clone(section().adjust),
-    savedHasKey: Object.prototype.hasOwnProperty.call(last.polish_estimate.tabs.Epoxy, "adjust"),
-    hardBid: api.activeBid().hard_bid || 0, total: api.activeBid().total, placeholder: ph(), note: note() };
+
+  // A BID SAVED WITH THE SWITCH ON, opened by the page.
+  const blob = clone(b.store.blob);
+  blob.polish_estimate.tabs.Epoxy.adjust = { hard_bid: true };
+  const was = hand({ hard_bid: true }, null, true);
+  const raw = hand({ hard_bid: true }, null, false);
+  const re = await open(blob);
+  re.api.go(2);
+  const reBid = re.api.activeBid();
+  const savesOnOpen = re.rec.saves.length;
+  re.clock.fire();
+  const last = re.rec.saves[re.rec.saves.length - 1] || null;
+  o.saved = { wasHardBid: was.hard_bid, wasTotal: was.total, rawTotal: raw.total, subTotal: was.sub_total,
+    adjust: clone(re.api.model().tabs.Epoxy.adjust), hardBid: reBid.hard_bid, total: reBid.total,
+    placeholderBox: (re.doc.querySelector('[data-adj="discount_pct"]') || {}).value, savesOnOpen: savesOnOpen,
+    armed: savesOnOpen === 0, saved: last ? clone(last.polish_estimate.tabs.Epoxy.adjust) : null,
+    lump: last ? last.proposal_lump_sum : null, switchEl: !!re.doc.querySelector("[data-adj-hb]") };
   return o;
 }
 

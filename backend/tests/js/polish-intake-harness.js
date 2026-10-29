@@ -1723,8 +1723,8 @@ out.engineMoves = (function () {
     }
     const nav = pageHtml.slice(navFrom, navTo);
     const raw = (nav.match(/href="([^"]+)"/g) || []).map((h) => h.slice(6, -1));
-    if (raw.length !== 3) {
-      throw new Error("parsed " + raw.length + " step links out of polish-intake.html, expected 3 " +
+    if (raw.length !== 4) {
+      throw new Error("parsed " + raw.length + " step links out of polish-intake.html, expected 4 " +
         "— rewrite this block rather than testing an empty list");
     }
 

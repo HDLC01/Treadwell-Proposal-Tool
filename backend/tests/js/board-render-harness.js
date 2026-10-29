@@ -175,6 +175,19 @@ const ROWS = [
   { proposal_id: "lost-2", project_name: "Old Mill Retrofit", proposal_status: "closed_lost" },
   { proposal_id: "lost-3", project_name: "zz scratch", proposal_status: "closed_lost", is_test: true,
     followup_state: { closed_lost_reason: "aliens" } },
+  // Two scopes of one project split into separate proposals (2026-10-24, RJ). One has no files yet
+  // and is on the board only beside its sibling (main.py _not_sent_rows' files_pending); the other
+  // is published and waiting for the project's one combined email.
+  { proposal_id: "scope-a", project_name: "Acme HQ", not_sent: true, files_pending: true,
+    drafted_at: "2026-10-20T12:00:00Z", estimator_email: "kyle@wetreadwell.com",
+    scope_group: "grp_x", scope_label: "Breakroom", scope_index: 1, scope_count: 2,
+    scope_members: [{ id: "scope-a", label: "Breakroom", on_board: true },
+                    { id: "scope-b", label: "Lab <1>", on_board: true }] },
+  { proposal_id: "scope-b", project_name: "Acme HQ", proposal_status: "sent",
+    sent_at: "2026-10-21T12:00:00Z", assigned_estimator: "kyle@wetreadwell.com",
+    scope_group: "grp_x", scope_label: "Lab <1>", scope_index: 2, scope_count: 2, scope_send_pending: true,
+    scope_members: [{ id: "scope-a", label: "Breakroom", on_board: true },
+                    { id: "scope-b", label: "Lab <1>", on_board: true }] },
   // Deliberately threadbare: a row with nothing but an id, to catch a template that assumes a field.
   { proposal_id: "bare-1" },
 ];
@@ -270,10 +283,35 @@ for (const tab of TABS) {
         wonChip: r.html.includes("chip-won"),
         rawToken: /\$\{/.test(r.html),
         undefinedLeak: r.html.includes("undefined"),
+        // A scope's place in its project (2026-10-24), read back out of the html: the card's line,
+        // the table's tag, and the two scope chips, each with the text the estimator reads.
+        scopeLines: Array.from(r.html.matchAll(/class="meta scope-line" title="([^"]*)">([^<]*)</g))
+          .map((m) => ({ title: m[1], text: m[2] })),
+        scopeTags: Array.from(r.html.matchAll(/class="scope-tag"[^>]*>([^<]*)</g)).map((m) => m[1]),
+        filesPendingChips: (r.html.match(/>Files not built yet</g) || []).length,
+        emailNotSentChips: (r.html.match(/>Email not sent</g) || []).length,
       };
     } catch (e) {
       out.errors[key] = e.constructor.name + ": " + e.message;
     }
   }
+}
+// THE CHIP FOLLOWS THE PORTAL'S RECORD OF THE ONE EMAIL (2026-10-24 hardening, main.py
+// _scope_send_view): the same board, with the published scope carrying `scope_send` in each of its
+// shapes, and every scope chip read back out of the html with its words.
+try {
+  const scopeChips = (rows) => Array.from(render("active", "board", rows).html
+    .matchAll(/class="chip chip-pause"[^>]*>(Email[^<]*)</g)).map((m) => m[1]);
+  const withSend = (ss) => ROWS.map((p) => (p.proposal_id === "scope-b"
+    ? Object.assign({}, p, { scope_send_pending: false, scope_send: ss }) : p));
+  out.scopeSend = {
+    legacy: scopeChips(ROWS),
+    again: scopeChips(withSend({ mine: true, chip: "Email again: 1 new, 1 revised", label: "Email again: 1 new, 1 revised" })),
+    notMine: scopeChips(withSend({ mine: false, chip: "Email again: 1 new", label: "Email again: 1 new" })),
+    nothing: scopeChips(withSend({ mine: false, chip: null, label: null })),
+    escaped: scopeChips(withSend({ mine: true, chip: "Email <b>", label: "x" })),
+  };
+} catch (e) {
+  out.errors.scopeSend = e.constructor.name + ": " + e.message;
 }
 console.log(JSON.stringify(out));

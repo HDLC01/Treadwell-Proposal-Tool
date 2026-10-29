@@ -439,29 +439,35 @@ def test_the_checks_go_red_when_the_page_or_the_model_changes(tmp_path, name):
 # ── the override boxes on the Review step (Hanz, 2026-10-16) ─────────────────────────────────────────────────────────
 # Driven through the page: each box typed as a person types it, the figures read off the step afterwards, and every
 # price held to the engines (priceSection over the library the bid buys), never to a number typed here.
-def test_the_hard_bid_switch_fills_the_discount_with_kyles_rule_and_a_typed_figure_still_wins(ran):
-    """Hanz, 2026-10-17: "lets make the hard bid have those rules but still overridable in the review tab". The switch is on
-    the Discount line of an Epoxy section's Review step; on, the box shows the rule's figure greyed and the rule prices."""
+def test_the_review_step_has_no_hard_bid_switch_and_its_discount_boxes_still_price(ran):
+    """Hanz, 2026-10-27: "I told you to remove this hard bid discount why is it still here". The switch of 2026-10-17 is
+    gone from the Discount line: no switch, no note, the % box greyed 0, and a typed % or $ prices as before."""
     h = ran["hardBid"]
-    b = h["before"]
-    assert b["switchShown"] and b["aria"] == "false" and b["hardBid"] == 0 and b["adjust"] == "absent"
-    assert b["placeholder"] == "0" and "4% off from $60,000" in b["note"]
+    r = h["review"]
+    assert not r["switchEl"] and not r["noteEl"] and not r["words"], "the Hard bid switch is still drawn"
+    assert r["hasDiscountRow"] and r["hasAmtBox"] and r["placeholder"] == "0"
+    assert r["subTotal"] >= 13000, "the fixture is too small for the old rule to have given anything, so this proves nothing"
+    assert r["hardBid"] == 0 and r["total"] == r["hand"], "nothing fills the line by rule any more"
 
-    on = h["on"]
-    assert on["stored"] == {"hard_bid": True} and on["aria"] == "true" and on["sameNode"], "the switch was redrawn"
-    assert on["subTotal"] >= 13000, "the fixture is too small for the rule to give anything, so this proves nothing"
-    assert on["hardBid"] == on["handHardBid"] != 0 and on["total"] == on["handTotal"]
-    assert on["rulePct"] == pytest.approx(-0.025)
-    assert on["placeholder"] == "2.5" and "takes 2.5% off" in on["note"]
-    assert on["rowOff"] == "" and on["shown"].replace(",", "").lstrip("-$") == str(-on["hardBid"])
+    p = h["pct"]
+    assert p["stored"] == {"discount_pct": "3"}
+    assert p["hardBid"] == p["hand"]["hardBid"] < 0 and p["total"] == p["hand"]["total"] < r["total"]
+    a = h["amt"]
+    assert a["hardBid"] == -1500 and a["total"] == a["handTotal"] < r["total"]
+    c = h["cleared"]
+    assert c["hardBid"] == 0 and c["total"] == r["total"] and c["adjust"] == "absent"
 
-    t = h["typed"]
-    assert t["hardBid"] == t["hand"] != t["ruleWas"], "a typed 3% did not replace the rule"
-    assert h["cleared"]["hardBid"] == h["cleared"]["rule"], "clearing the box did not go back to the rule"
 
-    off = h["off"]
-    assert off["aria"] == "false" and off["adjust"] == "absent" and not off["savedHasKey"]
-    assert off["hardBid"] == 0 and off["total"] == b["total"] and off["placeholder"] == "0"
+def test_a_bid_saved_with_the_switch_on_opens_at_the_price_it_was_saved_at(ran):
+    """A saved bid priced by the rule keeps its price: the page opens it with the rule's figure typed in the % box
+    (B.settleHardBid) and saves that once, with the switch gone."""
+    s = ran["hardBid"]["saved"]
+    assert s["wasHardBid"] < 0 and s["rawTotal"] > s["wasTotal"], "the fixture's rule gave nothing, so this proves nothing"
+    assert s["subTotal"] < 60000 and s["adjust"] == {"discount_pct": "2.5"}
+    assert (s["hardBid"], s["total"]) == (s["wasHardBid"], s["wasTotal"]), "the saved bid's price moved"
+    assert s["placeholderBox"] == "2.5", "the figure is typed in the box, the estimator's own from now on"
+    assert s["saved"] == {"discount_pct": "2.5"}, "the open did not save the settled discount"
+    assert not s["switchEl"]
 
 
 def test_the_review_step_offers_every_box_with_the_rule_greyed_in(ran):

@@ -54,6 +54,9 @@
   const { STAGES, STAGE_SUBMITTED, STAGE_CREATED, NATURAL_DIR, SORT_FIELDS } = C;
   const { stage: stageOf, lastActivity, activityTs, stageTs, estimatorOf, isAssigned,
           isLost, isTest, lostReason, followupOff, nameOf, cardTotal } = C;
+  // What the project's one email did, in words: shared with the Files page's "Send all proposals
+  // in one email" (done.js), so the board and the Files page say it the same way (crm-core.js).
+  const { scopeSendOutcome } = C;
   const fu = C.followup;
   const avatar = C.avatarHtml;
   /** The same chip with the identity colour taken OUT — for the drawer's notification
@@ -262,6 +265,15 @@
       // Deliberately not drawn on a lost row (this is inside the else): a dead deal's chip already
       // says the only thing that still matters about it, and "we can't tell if they opened it" is
       // noise on a bid nobody is working.
+      // A scope of a split project whose own files are not built yet (main.py _not_sent_rows'
+      // files_pending): on the board beside its siblings, and saying it has no paperwork yet.
+      if (p.files_pending) out.push('<span class="chip chip-unknown" title="This scope has no proposal yet: open its estimate and press Continue on the Proposal step">Files not built yet</span>');
+      // Published, and waiting for the project's ONE combined email, which is sent from the drawer.
+      // The words come from the portal's own record of that email (main.py _scope_send_view: "Email
+      // not sent", or "Email again: 1 new, 1 revised" once a scope is added or revised after it), on
+      // the cards of the scopes it has not reached. An older portal sends only scope_send_pending.
+      const ss = p.scope_group && p.scope_send;
+      if (ss ? (ss.mine && ss.chip) : (p.scope_group && p.scope_send_pending)) out.push('<span class="chip chip-pause" title="Published, but the customer has not been emailed this scope yet: they get one email for the project, sent from this project\'s drawer">' + esc(ss ? ss.chip : "Email not sent") + "</span>");
       if (p.portal_unknown) out.push('<span class="chip chip-unknown" title="This was sent — but the customer portal isn\'t responding, so we can\'t tell whether the customer has opened it, approved it, or paid a deposit">Portal status unknown</span>');
       // WON. Hanz, 2026-08-19: "CRM lost and won should also tie up to the notification sending
       // okay?" The Notification Sending page files these under a Won tab; same predicate, from
@@ -441,6 +453,12 @@
         <div class="deal" data-id="${esc(p.proposal_id)}">
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
           <div class="name">${esc(p.project_name || "Proposal")}</div>
+          ${p.scope_group && p.scope_count > 1
+            // One scope of a project split into several proposals: its place and its name, and its
+            // siblings' names on hover. Written out here rather than in a helper, because four
+            // harnesses lift this renderer and a new name in it is a ReferenceError in each.
+            ? `<div class="meta scope-line" title="${esc("Scopes of this project: " + (p.scope_members || []).map((m) => (m && m.label) || "Unnamed scope").join(", "))}">Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}${p.scope_label ? " · " + esc(p.scope_label) : ""}</div>`
+            : ""}
           <div class="meta">${esc(p.customer_email || "")}</div>
           ${recipientLine(p)}
           <div class="meta who"><span class="k">Estimator:</span> ${who}</div>
@@ -570,6 +588,7 @@
       const chips = chipsHtml(p);
       return `<tr class="trow" data-id="${esc(p.proposal_id)}" tabindex="0">
         <td class="t-name">${esc(p.project_name || "Proposal")}${
+          p.scope_group && p.scope_label && p.scope_count > 1 ? ` <span class="scope-tag" title="Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}">${esc(p.scope_label)}</span>` : ""}${
           p.unread ? ` <span class="unread-dot" title="${p.unread} unread customer message${p.unread === 1 ? "" : "s"}">${p.unread}</span>` : ""}</td>
         <td>${esc(p.customer_name || p.customer_email || "")}</td>
         <td>${esc(stageOf(p))}${chips ? `<div class="chips">${chips}</div>` : ""}</td>
@@ -1200,8 +1219,9 @@
        <div class="dpanel" id="dpanel-proposal" role="tabpanel" aria-labelledby="dtab-proposal" tabindex="-1">
         <div class="sec" id="dsec-ns-proposal">
           <div class="lbl">Not sent yet</div>
-          <p class="note">The estimate and the proposal are generated, and nobody has sent them to
-          the customer. Nothing reaches them until you do.</p>
+          <p class="note">${row.files_pending
+            ? "This scope's files are not built yet. Open the estimate, finish it, and press Continue on the Proposal step. Nothing reaches the customer until you send it."
+            : "The estimate and the proposal are generated, and nobody has sent them to the customer. Nothing reaches them until you do."}</p>
         </div>
         <div class="sec">
           <div class="facts">
@@ -1213,6 +1233,7 @@
             ${row.drafted_at ? fact("Created", esc(TW.fmtBizDate(row.drafted_at))) : ""}
           </div>
         </div>
+        ${scopeHtml(row, pid, false)}
         <!-- Assign it HERE, not only from the Projects tab. Hanz, 2026-08-13: "Allow to choose
              the estimator on the Created but not sent". The Estimator fact above is a GUESS until
              somebody picks — the draft's author, drawn with a "?" — and this drawer was the one
@@ -1384,6 +1405,7 @@
     wireNotSentAssign(pid, row);
     wireNotSentLost(pid, row);
     wireDeleteProject(pid, row);
+    wireScope(pid, row);
     // The row IS the board's own object (renderNotSent is only ever called with ALL.find(...)), so
     // patching it in place is what makes the mark survive the 12s poll that re-opens this drawer
     // before load() has returned — a copy would be repainted away by the next tick.
@@ -2094,8 +2116,10 @@
     // in, and the way to remove a project belongs after everything that describes it. dsec-files
     // sits ABOVE dsec-revisions for the same reason, since 2026-08-26 — Hanz: "Move 'Open Files'
     // above the revisions please" — and the panel markup in renderDetail carries the same order.
+    // dsec-scope (2026-10-24): the project's other scopes and the combined email, after the
+    // paperwork and its versions and before the delete, which stays last.
     proposal: ["dsec-customer", "dsec-recipients", "dsec-approved", "dsec-notify",
-               "dsec-files", "dsec-revisions", "dsec-delete"],
+               "dsec-files", "dsec-revisions", "dsec-scope", "dsec-delete"],
     deposit:  ["dsec-deposit"],
     contacts: ["dsec-contacts"],
     // No `schedule`. Hanz removed scheduling from both apps on 2026-08-11, the Mark scheduled
@@ -2115,9 +2139,19 @@
   const REPLY_DRAFT = {};        // unsent text survives the post-action re-render
   const NT_CACHE = {};           // chips per PROJECT, so a poll doesn't refetch them
   const REV_CACHE = {};          // sent versions per PROJECT, for the same reason
-  // (FU_DRAFT, the remind-only email writer's per-task draft, and FU_NOTICE, the sentence its
-  // buttons left behind, went on 2026-10-28 with the writer: the cadence emails the customer itself
-  // again, so there is no email here for anybody to write and no task card to answer.)
+  // What the last answer on the "Decide the other scopes" card did, per project, so the sentence
+  // survives the repaint that removes the card it was pressed on. { text, warn, at }
+  // A Map, not an object: `pid` is server-chosen data, and a Map cannot have its prototype replaced
+  // through a key the way `obj["__proto__"] = …` can.
+  //
+  // (FU_DRAFT, the remind-only email writer's per-task draft, went on 2026-10-28 with the writer:
+  // the cadence emails the customer itself again, so there is no email here for anybody to write.)
+  const FU_NOTICE = new Map();
+  // The contacts the project's one email did NOT reach, per scope GROUP, so the sentence and the
+  // retry button survive the 12s poll and the post-send reload that rebuild the drawer (wireScope).
+  // Without it they lasted one repaint, and the rebuilt drawer said the customer had everything.
+  // Cleared by the next send that reaches everybody. { text } A Map for FU_NOTICE's reason.
+  const SCOPE_SEND_NOTICE = new Map();
   let RENDER_GEN = 0;
   let DEEPLINK_USED = false;
   // A separate one-way latch from DEEPLINK_USED (see load() below): DEEPLINK_USED guards the &sec=
@@ -3437,6 +3471,8 @@
     // The "Tell the estimator" email of the two-per-step cadence: a step's last customer email
     // went out N days ago and there is still no decision.
     staff_followups_done: "Told the estimator: the follow-ups are done, no decision yet",
+    // Scope groups (2026-10-24): the task that asks what to do with the other scopes once one
+    // is approved, and the estimator email that raises it and re-nags about it while unanswered.
     scope_decision: "Decide the other scopes",
     staff_scope_decision: "Told the team: decide the other scopes",
   };
@@ -3615,6 +3651,8 @@
              either, and no em dash: it ships inside a template literal, inside the panel.) -->
         ${hold && hold.note ? '<p class="note ns-why">“' + esc(hold.note) + '”</p>' : ""}
         <div id="fu-alert" class="note fu-alert"></div>
+        ${fuNoticeHtml()}
+        ${followupTaskHtml(p)}
 
         <div class="fu-line">
           <button class="btn btn-s" id="fu-toggle" ${isLost(p) ? "disabled" : ""}
@@ -3779,16 +3817,14 @@
       </details>`;
   }
 
-  // ── the follow-up schedule ─────────────────────────────────────────────────
+  // ── the follow-up schedule, and the one follow-up task left ───────────────
   // Hanz, 2026-10-28: "the follow ups should be a follow up email to the customer". The portal's
   // worker EMAILS THE CUSTOMER ITSELF at each due follow-up: at most two emails while the proposal
   // is not opened and two once it is, from sending until it is approved, and nothing on an
   // approved, lost or switched-off project. The remind-only weeks (2026-10-23, when it parked a
-  // task for the estimator to write and send from here) are over, and the email writer and its
-  // task card went with them. NO FOLLOW-UP TASK IS DRAWN: a reminder task row left over from those
-  // weeks is still readable on the pipeline row, but a Send button beside an email the worker
-  // sends on its own would be the double email this change exists to prevent. What is left here
-  // is the next email's date and the Follow-ups switch. The "Tell the estimator" email goes to
+  // task for the estimator to write and send from here) are over, and the email writer went with
+  // them. What is left here is the next email's date, and the scope group's "Decide the other
+  // scopes" card, which is still a decision for a person. The "Tell the estimator" email goes to
   // the ASSIGNED ESTIMATOR (the "Assigned to" picker below); the "Tell the team" chips on the Files
   // page are a different list for a different thing and are not read anywhere in this section.
 
@@ -3802,6 +3838,14 @@
     if (!s || isNaN(t)) return "";
     return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric",
       month: "2-digit", day: "2-digit" }).format(new Date(t));
+  }
+
+  /** The sentence an action left behind, for a minute or two after the card it was pressed on is
+   *  gone. Read off CUR_PID because the panel is only ever painted for the open project. */
+  function fuNoticeHtml() {
+    const n = CUR_PID ? FU_NOTICE.get(CUR_PID) : null;
+    if (!n || Date.now() - n.at > 120000) return "";
+    return `<p class="note fu-notice${n.warn ? " is-warn" : ""}" role="status">${esc(n.text)}</p>`;
   }
 
   /** The project's follow-up schedule: the day its next automatic email to the customer is due,
@@ -3828,6 +3872,238 @@
       </div>`;
   }
 
+  /** The follow-up task the portal is waiting on somebody here for, or nothing.
+   *
+   *  ONLY THE SCOPE DECISION IS STILL A TASK (2026-10-28). Hanz: "the follow ups should be a follow
+   *  up email to the customer". The portal's worker emails the customer itself again, so a cadence
+   *  reminder is not a job for anybody here and there is no email in this drawer to write, send,
+   *  skip or snooze. A reminder task row left over from the remind-only weeks is still readable on
+   *  the pipeline row; it is simply not drawn, because a Send button beside an email the worker
+   *  sends on its own would be the double email this change exists to prevent. */
+  function followupTaskHtml(p) {
+    const t = p && p.followup_task;
+    if (!t || !t.id) return "";
+    return t.stage === "decision" ? followupDecisionHtml(p, t) : "";
+  }
+
+  // ── SCOPE GROUPS: one reminder per project, and the decision after one scope is approved ──────
+  // The portal (followup_worker, 2026-10-24) chases a project of several scopes as ONE project: its
+  // task lists every scope it covers (`scopes: [{proposal_id, label, status}]`, `scope_group`) and
+  // shows on every scope's drawer. When one scope is approved the chase on the others stops and a
+  // "Decide the other scopes" task (stage 'decision') asks a person what to do with them. Nothing
+  // is ever closed without a tick, a reason and a note.
+
+  /** Where one scope stands NOW: the board's row when it has one (the task's list was frozen when
+   *  it was raised, and a scope may have been approved or closed since), else what the task says. */
+  function fuScopeNow(s) {
+    const id = s && s.proposal_id;
+    const row = id ? ALL.find((x) => x && x.proposal_id === id) : null;
+    return String((row && row.proposal_status) || (s && s.status) || "");
+  }
+
+  function fuScopeOpen(status) {
+    return status === "sent" || status === "viewed";
+  }
+
+  /** One scope's status, as a chip. */
+  function fuScopeChip(s) {
+    const st = fuScopeNow(s);
+    const [word, cls] = fuScopeOpen(st) ? ["Open", "chip"]
+      : st === "approved" ? ["Approved", "chip chip-won"]
+      : st === "closed_lost" ? ["Closed lost", "chip chip-lost"]
+      : st === "delayed" ? ["Paused", "chip chip-pause"]
+      : [st ? st.replace(/_/g, " ") : "Unknown", "chip chip-unknown"];
+    return `<span class="${cls}">${esc(word)}</span>`;
+  }
+
+  /** The labels of these scope ids, as the task names them, joined for a sentence. */
+  function fuScopeNames(t, ids) {
+    const scopes = (t && Array.isArray(t.scopes)) ? t.scopes : [];
+    return (ids || []).map((id) => {
+      const s = scopes.find((x) => x && x.proposal_id === id);
+      return (s && s.label) || "a scope";
+    }).join(", ");
+  }
+
+  /** The "Decide the other scopes" card. No email, so no compose box and no Send, Skip, Called or
+   *  Snooze: three answers, and the one that closes anything needs a tick, a reason and a note. */
+  function followupDecisionHtml(p, t) {
+    const approved = (t.approved_scope && t.approved_scope.label) || "One scope";
+    const scopes = Array.isArray(t.scopes) ? t.scopes.filter((s) => s && s.proposal_id) : [];
+    const items = scopes.map((s) => {
+      const open = fuScopeOpen(fuScopeNow(s));
+      return `<li><label><input type="checkbox" data-fu-scope="${esc(s.proposal_id)}"${open ? "" : " disabled"}> ${
+        esc(s.label || "Unnamed scope")}</label> ${fuScopeChip(s)}</li>`;
+    }).join("");
+    // Kyle's close-out answers that CLOSE (the two hold answers do not, and the portal refuses
+    // them here): the same list, in the same order, as every other close-out dialog.
+    const reasons = C.CLOSE_CHOICES.filter((c) => c.outcome === "lost")
+      .map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("");
+    return `
+      <div class="fu-task" id="fu-decide" data-task="${esc(t.id)}">
+        <div class="lbl fu-lbl">${esc(t.label || "Decide the other scopes")}</div>
+        <p class="note"><strong>${esc(approved)}</strong> was approved - it is now the project. Follow-up emails about the other scopes of ${
+          esc((p && p.project_name) || "this project")} have stopped, and nothing has been closed.</p>
+        ${items ? `<ul class="scope-list" id="fu-dec-scopes">${items}</ul>`
+                : '<p class="note">No other scope is listed on this task.</p>'}
+        <div class="fu-line">
+          <select id="fu-dec-reason" class="tw-select" aria-label="Why they were lost">
+            <option value="">Why were they lost?</option>${reasons}
+          </select>
+          <input id="fu-dec-note" type="text" class="fu-note" maxlength="2000"
+                 placeholder="They went ahead with the lab floors only" aria-label="Note">
+        </div>
+        <p class="note fu-msg" id="fu-task-alert" role="status"></p>
+        <div class="fu-line">
+          <button class="btn btn-dang" id="fu-dec-close" disabled>Close the ticked scopes as lost</button>
+          <button class="btn btn-s" id="fu-dec-leave">Leave them as they are</button>
+        </div>
+        <details class="why fu-more" id="fu-dec-keep-box">
+          <summary id="fu-dec-keep-sum">${CHEV}Keep chasing them</summary>
+          <p class="note">Follow-up emails start again for every scope that is still open.</p>
+          <div class="fu-line">
+            <button class="btn btn-s" id="fu-dec-keep">Keep chasing them</button>
+          </div>
+        </details>
+      </div>`;
+  }
+
+  /** May "Close the ticked scopes as lost" be pressed? A scope, a reason and a note, all three. */
+  function fuDecisionReady(ids, reason, note) {
+    return (ids || []).length > 0 && !!String(reason || "").trim() && !!String(note || "").trim();
+  }
+
+  /** What the decision card says right now: the ticked open scopes, the reason and the note. */
+  function fuDecisionPicked() {
+    const card = $("fu-decide");
+    const ids = card ? Array.from(card.querySelectorAll("[data-fu-scope]"))
+      .filter((b) => b.checked && !b.disabled).map((b) => String(b.dataset.fuScope || "")) : [];
+    return { ids, reason: String(($("fu-dec-reason") || {}).value || "").trim(),
+             note: String(($("fu-dec-note") || {}).value || "").trim() };
+  }
+
+  /** The open task on a board row, or null. */
+  function fuTaskOf(pid) {
+    const row = pid ? ALL.find((x) => x.proposal_id === pid) : null;
+    return (row && row.followup_task) || null;
+  }
+
+  /** Why the portal did not take a scope decision, in words. */
+  function fuDecisionErrText(j, status, t) {
+    const code = String((j && (j.error || j.detail)) || "");
+    if (code === "scope_not_open") {
+      const ids = Array.isArray(j && j.scope_ids) ? j.scope_ids : [];
+      return "Nothing was closed: " + (fuScopeNames(t, ids) || "a ticked scope")
+        + (ids.length > 1 ? " are" : " is") + " no longer open (approved or closed since). Untick "
+        + (ids.length > 1 ? "them" : "it") + " and try again.";
+    }
+    if (code === "invalid_reason") return "Nothing was closed: pick why they were lost.";
+    if (code === "note_required") return "Nothing was closed: write a note saying why.";
+    if (code === "no_scopes") return "Nothing was closed: tick at least one scope.";
+    if (code === "unknown_scope") {
+      return "Nothing was closed: a ticked scope is no longer part of this decision. Reload the page and try again.";
+    }
+    if (status === 502 || status === 503) return "The portal could not be reached, so nothing changed. Try again.";
+    if (j && j.message) return String(j.message);
+    return "Nothing changed (" + (code || "HTTP " + status) + ").";
+  }
+
+  /** What a scope decision did, including what the portal did NOT close and why. */
+  function fuDecisionDoneText(action, j, t) {
+    const names = (k) => fuScopeNames(t, Array.isArray(j && j[k]) ? j[k] : []);
+    let parts, warn = false;
+    if (action === "close") {
+      const closed = names("closed"), skipped = names("skipped"), failed = names("failed");
+      parts = [closed ? "Closed as lost: " + closed + "." : "Nothing was closed."];
+      if (skipped) parts.push("Left open, because they were approved or closed since: " + skipped + ".");
+      if (failed) parts.push("Could not close " + failed + ". Close it from its own drawer.");
+      warn = !!(skipped || failed || !closed);
+    } else if (action === "keep") {
+      parts = ["Follow-up emails start again for every scope that is still open."];
+    } else {
+      parts = ["Left as they are. Their follow-up emails stay off."];
+    }
+    const w = (j && Array.isArray(j.warnings)) ? j.warnings : [];
+    if (w.includes("resume_not_recorded")) {
+      parts.push("The portal could not record it, so the follow-up emails may not start again.");
+      warn = true;
+    }
+    return { text: parts.join(" "), warn };
+  }
+
+  /** Post one answer to the decision task. A refusal keeps the card and says why; a task somebody
+   *  else already answered is taken away, like a reminder somebody else dealt with. */
+  async function fuDecide(pid, tid, body, btn) {
+    const t = fuTaskOf(pid);
+    fuSay("");
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Working…";
+    let r, j;
+    try {
+      r = await api("/api/portal/followup-task/" + encodeURIComponent(tid) + "/scope-decision",
+                    { method: "POST", body: JSON.stringify(body) });
+      j = await r.json().catch(() => ({}));
+    } catch (err) {
+      btn.disabled = false; btn.textContent = orig;
+      fuSay("Could not reach the server, so nothing changed. Try again.", true);
+      return;
+    }
+    const code = String((j && (j.error || j.detail)) || "");
+    if (code === "already_decided" || code === "not_a_decision_task") {
+      await fuSettle(pid, tid, { text: "Somebody already answered this, so nothing changed.", warn: true }, null);
+      return;
+    }
+    if (!r.ok || (j && j.ok === false)) {
+      btn.disabled = false; btn.textContent = orig;
+      fuSay(fuDecisionErrText(j, r.status, t), true);
+      return;
+    }
+    await fuSettle(pid, tid, fuDecisionDoneText(body.action, j, t), j);
+  }
+
+  /** Bind the decision card. Close is enabled only while fuDecisionReady holds, and still asks
+   *  through TW.confirmDanger, naming the scopes, before anything is sent. */
+  function wireFuDecision(pid, tid) {
+    const card = $("fu-decide");
+    if (!card || !tid) return;
+    const closeBtn = $("fu-dec-close");
+    const paint = () => {
+      const s = fuDecisionPicked();
+      if (closeBtn) closeBtn.disabled = !fuDecisionReady(s.ids, s.reason, s.note);
+    };
+    card.querySelectorAll("[data-fu-scope]").forEach((b) => b.addEventListener("change", paint));
+    const reason = $("fu-dec-reason");
+    if (reason) reason.addEventListener("change", paint);
+    const note = $("fu-dec-note");
+    if (note) note.addEventListener("input", paint);
+    paint();
+    if (closeBtn) closeBtn.addEventListener("click", async (e) => {
+      const s = fuDecisionPicked();
+      if (!fuDecisionReady(s.ids, s.reason, s.note)) {
+        fuSay(!s.ids.length ? "Tick the scopes to close first."
+          : !s.reason ? "Pick why they were lost first." : "Write a note saying why first.", true);
+        return;
+      }
+      const btn = e.target;
+      const ok = await TW.confirmDanger({
+        title: "Close these scopes as lost?",
+        before: "Close ", name: fuScopeNames(fuTaskOf(pid), s.ids), after: " as lost?",
+        detail: "Their proposals are closed and nobody is reminded about them again. The approved"
+          + " scope is not touched.",
+        confirmText: "Close them", cancelText: "Not yet", icon: "trash",
+      });
+      if (!ok) return;
+      fuDecide(pid, tid, { action: "close", scope_ids: s.ids, reason: s.reason, note: s.note }, btn);
+    });
+    const leave = $("fu-dec-leave");
+    if (leave) leave.addEventListener("click", (e) =>
+      fuDecide(pid, tid, { action: "leave", scope_ids: [] }, e.target));
+    const keep = $("fu-dec-keep");
+    if (keep) keep.addEventListener("click", (e) =>
+      fuDecide(pid, tid, { action: "keep", scope_ids: [] }, e.target));
+  }
+
   /** Why the schedule was not saved, in words. The portal's own `message` wins where it sent one. */
   function fuErrText(j, status) {
     const code = String((j && (j.error || j.detail)) || "");
@@ -3837,6 +4113,35 @@
     if (code === "date_too_far") return "That date is too far out.";
     if (j && j.message) return String(j.message);
     return code || ("HTTP " + status);
+  }
+
+  /** Say something on the task card. */
+  function fuSay(msg, bad) {
+    const el = $("fu-task-alert");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("is-err", !!bad);
+  }
+
+  /** The task is finished with, one way or another: leave the sentence, take the card off, and
+   *  check with the portal. The board row is patched first and the panel repainted from the cached
+   *  payload (the won control's pattern), so the card goes the moment the portal says so rather
+   *  than at the next poll. */
+  async function fuSettle(pid, tid, note, j) {
+    FU_NOTICE.set(pid, { text: note.text, warn: !!note.warn, at: Date.now() });
+    const row = ALL.find((x) => x.proposal_id === pid);
+    if (row) {
+      row.followup_task = null;
+      if (j && j.next_at && row.followup_plan && typeof row.followup_plan === "object") {
+        const plan = Object.fromEntries(Object.entries(row.followup_plan));
+        plan.next_at = j.next_at;
+        row.followup_plan = plan;
+      }
+    }
+    DRAWER_SIG = "";
+    if (CUR_PID === pid && DETAIL_CACHE[pid]) renderDetail(pid, DETAIL_CACHE[pid]);
+    await load();
+    if (CUR_PID === pid) openDetail(pid);
   }
 
   /** Save the next email's date. On change, not per keystroke: a date box fires `change` when a
@@ -3922,6 +4227,10 @@
       const nextEl = $("fu-next");
       if (nextEl) nextEl.addEventListener("change", () => saveFuPlan(pid, nextEl));
     }
+
+    // A scope group's "Decide the other scopes" task: its own card, its own three answers.
+    const decCard = $("fu-decide");
+    if (decCard) wireFuDecision(pid, String(decCard.dataset.task || ""));
 
     const toggle = $("fu-toggle");
     if (toggle) toggle.addEventListener("click", async (e) => {
@@ -4342,8 +4651,8 @@
             + ' 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/>'
             + '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>'}Delete this project</div>
           <p class="note">${sent
-            ? "Off the board, follow-ups stop, restorable from Trash. The link the customer "
-              + "already has keeps working."
+            ? "Off the board, follow-ups stop, restorable from Trash. The customer's link will "
+              + "say this proposal is no longer available. Restore brings it back."
             : "Off the board and into Trash, restorable from there. Nothing reaches the "
               + "customer."}</p>
           <div class="fu-line">
@@ -4352,6 +4661,270 @@
           <p class="note del-note" id="del-note"></p>
         </div>`;
   }
+
+  /** THE PROJECT'S SCOPES, in both drawers (RJ, 2026-10-24: Breakroom, Lab 1 and Lab 2 under one
+   *  project, each its own proposal, ONE combined email). `p` carries the board row's scope fields
+   *  (main.py _stamp_scopes: scope_group, scope_label, scope_index, scope_count, scope_members,
+   *  scope_send_pending), `pid` is this drawer's project and `sent` picks the card id: the sent
+   *  drawer's is in SEC_TABS like its siblings, the not-sent panel keeps its dsec-ns-* ids outside.
+   *
+   *  ONLY A PROJECT WITH TWO OR MORE PROPOSALS GETS THE CARD (Hanz, 2026-10-27): it lists them
+   *  (each opens its own drawer, or its estimate when it is not on the board yet) and holds "Send
+   *  all proposals in one email", which publishes whichever the customer does not have yet and
+   *  sends the combined email (a proposal's own publish emails nobody). A project with one proposal has nothing to list or send, so this returns "" and
+   *  the caller's eligibility reads that. The old "New scope for this project" box is gone: the
+   *  proposal page's Create Multiple Proposals is how a project becomes several. A member that is
+   *  not on the board yet still counts (scope_members lists every live member).
+   *
+   *  THREE HARNESSES LIFT THE RENDERERS THAT CALL THIS (drawer-render, not-sent-assign,
+   *  not-sent-lost), so it reads nothing but `esc` and its arguments, and no dash in the copy: the
+   *  drawer's style has none and test_drawer_renders greps for it. */
+  function scopeHtml(p, pid, sent) {
+    const grouped = !!(p && p.scope_group);
+    const members = grouped && Array.isArray(p.scope_members) ? p.scope_members : [];
+    if (!(grouped && Math.max(members.length, Number(p.scope_count) || 0) > 1)) return "";
+    const list = members.map((m) => {
+      const name = esc((m && m.label) || "Unnamed scope");
+      if (m && m.id === pid) return `<li><strong>${name}</strong> <span class="note">(this one)</span></li>`;
+      // data-scope-proposal: a proposal made from another scope's estimate (main.py _stamp_scopes
+      // `proposal_of`). Off the board, it opens on its own proposal page: it has no intake of its own.
+      return `<li><button type="button" class="btn-link" data-scope-open="${esc(m && m.id)}"`
+        + ` data-scope-board="${m && m.on_board ? "1" : ""}" data-scope-proposal="${m && m.proposal_of ? "1" : ""}">${name}</button>`
+        + (m && m.on_board ? "" : ' <span class="note">(not on the board yet)</span>') + "</li>";
+    }).join("");
+    const where = (p.scope_count > 1
+      ? `Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}${p.scope_label ? ": <strong>" + esc(p.scope_label) + "</strong>" : ""}. ` : "")
+        + "Each scope is its own proposal, approved on its own, and the customer gets one email with every link.";
+    // THE PROJECT'S ONE EMAIL, as the portal reports it (main.py _scope_send_view, `scope_send`): the
+    // button names what it will send ("Email again: 1 new, 1 revised"), and with nothing new to send
+    // there is no button, only the reason. An older portal reports only scope_send_pending, and keeps
+    // the old pair of buttons (its send is refused as portal_not_ready, in words).
+    const ss = grouped && p.scope_send && typeof p.scope_send === "object" ? p.scope_send : null;
+    // Scopes whose last send LOST ITS RESULT (the portal's unknown_scope_ids, findings 9 and 16):
+    // maybe emailed, maybe not. Never "the customer has every scope", and never re-sent by the
+    // ordinary button: a separate, explicit one asks the portal to send them again.
+    const lost = ss && Array.isArray(ss.unknown) ? ss.unknown : [];
+    // Scopes whose send is IN FLIGHT (the portal's inflight_scope_ids, round 3): claimed by a send
+    // whose result is not recorded yet. Not pending and not lost, and not "every scope" either.
+    const flying = ss && Array.isArray(ss.inflight) ? ss.inflight : [];
+    // Scopes not published yet (the portal's not_included): the email cannot carry them, so the
+    // customer does NOT have every scope; the drawer says what to do instead (round 3). The portal
+    // also lists a project sent BEFORE it gained scopes there (its row has no scope_group until the
+    // combined send adopts it): that member is `sent`, so it is never told to be published again,
+    // which would mint a revision and can reopen an approval (_stamp_scopes, finding 1).
+    const leftOut = ss && Array.isArray(ss.not_included) ? ss.not_included : [];
+    const isSent = (id) => members.some((x) => x && x.id === id && x.sent);
+    const unpublished = leftOut.filter((id) => !isSent(id));
+    const apart = leftOut.filter(isSent);
+    const namesOf = (ids) => ids.map((id) => {
+      const m = members.filter((x) => x && x.id === id)[0];
+      return esc((m && m.label) || "a scope");
+    }).join(", ");
+    // ONE PRESS (Hanz, 2026-10-27: "it must come in one email only"): the button publishes every
+    // proposal the customer does not have yet and sends the one email (main.py send-all), so a
+    // proposal not published yet is a reason to DRAW it, never a reason to send the estimator off
+    // to publish it first. Both drawers draw it: the not-sent one too, so the first email of a
+    // project nobody has published yet can go from the board.
+    const SEND_ALL = "Send all proposals in one email";
+    const sendBtn = (label) => `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="">${esc(label)}</button></div>`;
+    let send = "";
+    if (grouped && ss) {
+      const label = ss.label || (unpublished.length ? SEND_ALL : "");
+      send = label
+        ? sendBtn(label)
+        : (!sent || lost.length || flying.length ? "" : '<p class="note" id="scope-all-sent">The customer has every scope of this project in their email. A revision goes out with Send all proposals in one email on its Files page.</p>');
+      if (unpublished.length) {
+        send += `<p class="note" id="scope-not-published">Not published yet: ${namesOf(unpublished)}. ${unpublished.length === 1
+          ? "Send all proposals in one email publishes it and emails it with the others." : "Send all proposals in one email publishes them and emails them with the others."}</p>`;
+      }
+      if (apart.length) {
+        send += `<p class="note" id="scope-sent-apart">Already with the customer as its own proposal: ${namesOf(apart)}. ${apart.length === 1
+          ? "Do not publish it again; it joins" : "Do not publish them again; they join"} this project's email on the next send.</p>`;
+      }
+      if (flying.length) {
+        send += `<p class="note" id="scope-inflight">An email for ${namesOf(flying)} is being sent, or its result has not been recorded yet. Check back in a few minutes.</p>`;
+      }
+      if (lost.length) {
+        send += `<p class="note" id="scope-unknown">${esc(ss.unknown_text || "The result of the last send was lost. Check the thread, then send again.")} ${lost.length === 1 ? "Scope" : "Scopes"}: ${namesOf(lost)}.</p>`
+          + `<div class="fu-line"><button type="button" class="btn btn-s" id="scope-resend-unknown">Send ${lost.length === 1 ? "it" : "them"} again</button></div>`;
+      }
+    } else if (grouped && sent) {
+      send = `<div class="fu-line"><button type="button" class="btn btn-p" id="scope-send" data-resend="${p.scope_send_pending ? "" : "1"}">${
+          p.scope_send_pending ? "Send every scope in one email" : "Email every scope again"}</button></div>`;
+    } else if (grouped) {
+      // A proposal not published yet, and no email state from the portal (nothing of the project
+      // has been published, or an older portal, which the send refuses in words).
+      send = sendBtn(SEND_ALL);
+    }
+    // style, not the hidden attribute: .fu-line's own display rule would defeat `hidden`.
+    send += '<div class="fu-line" id="scope-retry-line" style="display:none"><button type="button" class="btn btn-s" id="scope-retry">Try the contacts that did not get it again</button></div>';
+    if (!grouped) send = "";
+    // THE PROJECT WORKBOOK, one per project of several proposals. Its HOME is the member the
+    // others were made from (Create Multiple Proposals' `proposal_of`), else the first scope. A v1
+    // home's own .xlsx is already one workbook with a tab per sheet (main.py builds it from
+    // cell_values and tab_copies), so the button opens the home's Files page; a v2 home's group is
+    // built by /api/scope-group/{gid}/workbook, which refuses v1 members (member_not_v2).
+    const homeId = (members.filter((m) => m && m.proposal_of && members.some((x) => x && x.id === m.proposal_of))[0] || {}).proposal_of
+      || (members[0] && members[0].id) || "";
+    const home = members.filter((x) => x && x.id === homeId)[0];
+    // A v1 home's .xlsx holds only the sheets of the proposals MADE FROM it. With none (a #711 group
+    // of scopes that each have their own estimate) there is no project workbook to open; when some
+    // other scope was not made from it, the button names whose workbook it is.
+    const others = home ? members.filter((m) => m && m.id !== homeId) : [];
+    const fanned = others.filter((m) => m.proposal_of === homeId).length;
+    const v1Whole = fanned > 0 && fanned === others.length;
+    const book = grouped && p.scope_count > 1 && home && (home.v2 || fanned > 0)
+      ? `<div class="fu-line"><button type="button" class="btn btn-s" id="scope-workbook" data-files="${home.v2 ? "" : esc(homeId)}">${
+          home.v2 ? "Download the project workbook" : v1Whole ? "Open the project workbook"
+            : "Open " + esc(home.label || "the first scope") + "'s workbook"}</button></div>`
+        + `<p class="note">${home.v2 ? "One workbook with a tab for each scope."
+          : v1Whole ? "It is " + esc(home.label || "the first scope") + "'s estimate, on its Files page."
+            : "It has " + esc(home.label || "the first scope") + " and the proposals made from it. Each other scope's estimate is on its own Files page."}</p>`
+      : "";
+    return `
+        <div class="sec" id="${sent ? "dsec-scope" : "dsec-ns-scope"}">
+          <div class="lbl">Proposals of this project${grouped && p.scope_count > 1
+            ? '<span class="sec-ans">' + esc(p.scope_count) + " proposals</span>" : ""}</div>
+          <p class="note">${where}</p>
+          ${list ? `<ul class="scope-list">${list}</ul>` : ""}
+          ${send}
+          ${book}
+          <p class="note" id="scope-note" role="status"></p>
+        </div>`;
+  }
+
+  /** What the scope controls do (scopeHtml). Looked up through the drawer's own querySelector
+   *  rather than $(), because the send button only exists once a scope has been published and a
+   *  scope list only on a grouped project: a guarded lookup is how the drawer harness tells "not
+   *  rendered on this project" from "wired to nothing".
+   *
+   *  A refusal is said in the server's own sentence, after a word on what failed, the way the
+   *  delete control says its errors: a 409 for a copy saved again since this drawer read it reads
+   *  "Nothing changed. This project was saved again ...", which is the instruction to reload. */
+  function wireScope(pid, p) {
+    const d = $("drawer");
+    if (!d) return;
+    const note = d.querySelector("#scope-note");
+    const say = (msg) => { if (note) note.textContent = msg || ""; };
+    d.querySelectorAll("[data-scope-open]").forEach((b) => b.addEventListener("click", () => {
+      const id = b.dataset.scopeOpen;
+      if (!id) return;
+      if (b.dataset.scopeBoard) { openDetail(id); return; }
+      // A proposal made from another scope's estimate shares that estimate and intake: its own page is the proposal.
+      if (b.dataset.scopeProposal) { window.location.assign("/proposal-review.html?d=" + encodeURIComponent(id)); return; }
+      window.location.assign("/?d=" + encodeURIComponent(id) + "&edit=1");
+    }));
+    // The project workbook (scopeHtml): a v1 home's Files page, or the v2 group's built workbook,
+    // fetched with the sign-in (/api/file is bearer-gated) and saved under the server's file name.
+    const book = d.querySelector("#scope-workbook");
+    if (book && p && p.scope_group) book.addEventListener("click", async () => {
+      if (book.dataset.files) {
+        window.location.assign("/done.html?d=" + encodeURIComponent(book.dataset.files) + "&files=1");
+        return;
+      }
+      book.disabled = true;
+      say("Building the project workbook...");
+      try {
+        const r = await api("/api/scope-group/" + encodeURIComponent(p.scope_group) + "/workbook");
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false || !j.xlsx_download_url) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+        const f = await api(j.xlsx_download_url);
+        if (!f.ok) throw new Error("The download link has expired. Try again.");
+        const blobUrl = URL.createObjectURL(await f.blob());
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = j.filename || "project_estimate.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+        say("");
+      } catch (err) {
+        say("Couldn't build the project workbook. " + (err.message || "Try again."));
+      }
+      book.disabled = false;
+    });
+    const send = d.querySelector("#scope-send");
+    const retryLine = d.querySelector("#scope-retry-line");
+    const retry = d.querySelector("#scope-retry");
+    // `route` "/send-all" is the project's ONE press (Hanz, 2026-10-27): it publishes every proposal
+    // the customer does not have yet, then sends the one email (main.py api_scope_group_send_all),
+    // the same action as the Files page's "Send all proposals in one email". The retry of the
+    // contacts it missed and the "send them again" for a lost result stay on the plain "/send".
+    // `resumed`: the press made again by itself once Send all has built the proposals that were never
+    // built (send-all-chain.js). It never starts another build: a second "never built" is said.
+    const post = async (btn, body, route, resumed) => {
+      btn.disabled = true;
+      if (retryLine) retryLine.style.display = "none";
+      say("Sending...");
+      let r = null;
+      let j = {};
+      try {
+        r = await api("/api/portal/scope-group/" + encodeURIComponent(p.scope_group) + (route || "/send"), {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        j = await r.json().catch(() => ({}));
+      } catch (err) {
+        btn.disabled = false;
+        say("Couldn't send it. " + (err.message || "Try again."));
+        return;
+      }
+      const out = scopeSendOutcome(r.status, j, p);
+      // PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): each is built through its own Proposal
+      // step's door, then this drawer reopens (?open=, the deep link a reload already uses) and the
+      // press is made again, once. A page that cannot build them says the server's manual way.
+      if (out.build) {
+        if (!resumed && window.TWSendAll && window.TWSendAll.start({
+          group: p.scope_group, build: out.build,
+          returnUrl: (location.pathname || "/portal.html") + (location.search || "") })) {
+          say(out.text);
+          return;
+        }
+        btn.disabled = false;
+        say(out.fallback);
+        return;
+      }
+      // Somebody got it: remember who did NOT (or forget, when everybody did) before the reload.
+      // An unrecorded send (recorded:false) is kept too: its sentence says what the next minutes
+      // will show, and the poll's repaint must not wipe it.
+      if (out.sent && (out.retry || out.unrecorded)) SCOPE_SEND_NOTICE.set(p.scope_group, { text: out.text, retry: !!out.retry });
+      else if (out.sent) SCOPE_SEND_NOTICE.delete(p.scope_group);
+      say(out.text);
+      if (out.retry && retryLine) retryLine.style.display = "";
+      if (out.sent) load();
+      else btn.disabled = false;
+    };
+    // A portal that reports the email's state (scope_send) works out what is new itself; the old
+    // one is asked to send once, or again on purpose.
+    const sendAllBody = () => (p.scope_send ? {} : { resend: send.dataset.resend === "1" });
+    if (send && p && p.scope_group) send.addEventListener("click", () => post(send, sendAllBody(), "/send-all"));
+    // BACK FROM BUILDING (send-all-chain.js): the press this drawer made before the walk, made again
+    // ONCE. take() hands the finished walk over a single time, to this project only, so a repaint
+    // or a reload never presses anything.
+    if (send && p && p.scope_group && window.TWSendAll) {
+      let back = null;
+      try { back = window.TWSendAll.take(new URLSearchParams(location.search || ""), p.scope_group); } catch { back = null; }
+      if (back) post(send, sendAllBody(), "/send-all", true);
+    }
+    if (retry && p && p.scope_group) retry.addEventListener("click", () => post(retry, { retry_failed: true }));
+    // The explicit answer to "the last send's result was lost": only this button sends resend_unknown.
+    const again = d.querySelector("#scope-resend-unknown");
+    if (again && p && p.scope_group) again.addEventListener("click", () => post(again, { resend_unknown: true }));
+    // A REBUILT DRAWER STILL SAYS WHO WAS MISSED (SCOPE_SEND_NOTICE): the portal marks a scope
+    // emailed once anybody got it, so without this the poll's repaint read "the customer has every
+    // scope" and dropped the retry, and the contacts it missed never heard. Only where the retry
+    // button is drawn (the sent drawer of a grouped project).
+    const left = p && p.scope_group && retryLine ? SCOPE_SEND_NOTICE.get(p.scope_group) : null;
+    if (left) {
+      say(left.text);
+      if (left.retry) retryLine.style.display = "";
+      const all = d.querySelector("#scope-all-sent");
+      if (all) all.style.display = "none";
+    }
+  }
+
+  // scopeSendOutcome lives in crm-core.js since 2026-10-27 (destructured above): the Files page's
+  // "Send all proposals in one email" words its answers through the same function.
 
   /** The button, its confirmation, and what it does. Called by BOTH renderers.
    *
@@ -4383,8 +4956,8 @@
         title: "Delete this project?",
         name: name,
         after: " comes off the board and its follow-up emails stop.",
-        detail: "The link the customer already has keeps working: it reads the version pinned"
-              + " when you sent it. Restore it from Trash and the reminders stay off.",
+        detail: "The customer's link will say this proposal is no longer available. Restore it"
+              + " from Trash and their link works again; the reminders stay off.",
         confirmText: "Move it to Trash", cancelText: "Keep it",
         tone: "danger", icon: "trash",
       } : {
@@ -4489,13 +5062,23 @@
     // as long as the drawer stays open. Mutating `p` before the signature is what makes the mark
     // part of it — so a colleague's mark repaints this panel on the next poll.
     if (row) p.won_at = row.won_at || "";
-    // The follow-up schedule rides the PIPELINE row (the portal's /api/admin/pipeline serves it;
-    // the staff detail payload is not where it lives), so it is merged here for the same reason as
-    // the won mark, and BEFORE the signature so the schedule moving repaints the panel. (The row's
-    // `followup_task` is no longer merged: since 2026-10-28 no follow-up task card is drawn.)
+    // The follow-up waiting on a human, and the reminder schedule. Both ride the PIPELINE row (the
+    // portal's /api/admin/pipeline serves them; the staff detail payload is not where the task list
+    // lives), so they are merged here for the same reason as the won mark, and BEFORE the signature
+    // so a task appearing, being sent by a colleague, or the schedule moving repaints the panel.
     if (row) {
+      p.followup_task = row.followup_task || null;
       p.followup_plan = row.followup_plan || p.followup_plan || null;
     }
+    // The project's scopes (scopeHtml), off the BOARD row for the reason the won mark gives: the
+    // drafts decide who is in a group (main.py _stamp_scopes), and the portal's detail payload only
+    // knows what its own row cached. ASSIGNED, so a scope taken out of its group clears here too.
+    if (row) {
+      ["scope_group", "scope_label", "scope_index", "scope_count", "scope_members",
+       "scope_send_pending", "scope_send"].forEach((k) => { p[k] = row[k] === undefined ? null : row[k]; });
+    }
+    // Built once, like delHtml: "" on a project with one proposal, and eligibility reads this answer.
+    const scopeCard = scopeHtml(p, pid, true);
     // The view stamps, read the same way and for the same reason: the staff detail payload has
     // no viewed_at/last_viewed_at on `proposal` (checked against the portal's own handler), the
     // BOARD list endpoint serves both, and the thread's "they opened it" card below is rendered
@@ -4686,6 +5269,7 @@
              delete. The dialog this button opens carries the heavier of the two bodies, because
              this one stops the follow-up emails.
              NB no em dash in this comment: test_drawer_renders.py greps the whole panel. -->
+        ${scopeCard}
         ${delHtml}
        </div>
 
@@ -4766,6 +5350,8 @@
     setSecEligible("dsec-revisions", true);
     // Always: every project has files and an info sheet, sent or not, won or lost.
     setSecEligible("dsec-files", true);
+    // Only when the card renders: a project with two or more proposals (scopeHtml returns "" else).
+    setSecEligible("dsec-scope", !!scopeCard);
     // Only when the markup exists. A non-admin renders nothing here, and an eligible id with no
     // element is exactly the mismatch test_drawer_renders.py asserts against.
     setSecEligible("dsec-delete", !!delHtml);
@@ -4784,6 +5370,7 @@
     $("go-info").addEventListener("click",
       () => window.location.assign("/info-sheet.html?d=" + encodeURIComponent(pid)));
     wireDeleteProject(pid, p);
+    wireScope(pid, p);
 
     // Reveal a deposit's bank numbers. Nothing here is cached beyond the open drawer: every
     // press calls POST /api/portal/deposit/{id}/reveal fresh (bank_crypto.py, portal repo,

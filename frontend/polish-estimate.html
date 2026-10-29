@@ -179,6 +179,9 @@
        as a second selected tab). */
     .sheets .sh-tab.base .sh-basetag{flex:none;font:700 9.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;
       color:var(--card);background:var(--ink);border-radius:999px;padding:2px 6px}
+    /* "Bid N": the sheet is the base bid of its own proposal (Create Multiple Proposals). Outlined, so it never reads as the base's tag. */
+    .sheets .sh-bidtag{flex:none;font:700 9.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;
+      color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:1px 6px;margin-left:4px}
     .sheets .sh-tab.open{position:relative;z-index:1;margin-bottom:-1px;padding-bottom:1px;background:var(--card);
       box-shadow:inset 0 3px 0 var(--red)}
     .sheets .sh-addbtn.on{background:var(--red-tint);color:var(--red-dark)}
@@ -414,6 +417,12 @@
     .tk-h{display:flex;align-items:center;gap:9px;margin:0 0 13px}
     @media (max-width:760px){ .tk-h{flex-wrap:wrap} }
     .tk-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
+    /* A category heading over its rows (Admin > Item categories), Kyle's "MATERIAL - Patch", with the
+       rows' subtotal on the right. */
+    .tk-cat{display:flex;align-items:baseline;gap:12px;margin:16px 0 8px;padding:0 0 5px;border-bottom:1px solid var(--line)}
+    .tk-cat-h{margin:0;font:700 11.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-v)}
+    .tk-cat-sub{margin-left:auto;font:600 12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-v)}
+    .tk-cat-sub b{color:var(--ink)}
     /* A row nobody has searched on yet. Amber because that is this app's "waiting on a person"
        colour -- the sandbox note, the rail's att pip -- and a pill because it labels. It leaves
        the moment a name resolves, so a finished takeoff shows none of them. */
@@ -621,12 +630,15 @@
       --rev-travel-band:#e8d8ae;  --rev-travel-tot:#f5eed7;
       --rev-markup-band:#dccadb;  --rev-markup-tot:#f0e7ef;
       /* An option's own card (Phase 15): a clay tint, apart from the four above. Same AA checks. */
-      --rev-option-band:#e3cbbf;  --rev-option-tot:#f3e6df}
+      --rev-option-band:#e3cbbf;  --rev-option-tot:#f3e6df;
+      /* The read-only Man hours & budget card (2026-10-27): a sea-green tint, apart from the others. Same AA checks. */
+      --rev-manhours-band:#c4dcd8; --rev-manhours-tot:#e1efec}
     .rev[data-rev="takeoff"]{--rev-band:var(--rev-takeoff-band);--rev-tot:var(--rev-takeoff-tot)}
     .rev[data-rev="labor"]{--rev-band:var(--rev-labor-band);--rev-tot:var(--rev-labor-tot)}
     .rev[data-rev="travel"]{--rev-band:var(--rev-travel-band);--rev-tot:var(--rev-travel-tot)}
     .rev[data-rev="markup"]{--rev-band:var(--rev-markup-band);--rev-tot:var(--rev-markup-tot)}
     .rev[data-rev="option"]{--rev-band:var(--rev-option-band);--rev-tot:var(--rev-option-tot)}
+    .rev[data-rev="manhours"]{--rev-band:var(--rev-manhours-band);--rev-tot:var(--rev-manhours-tot)}
     .rev-h{display:flex;align-items:center;gap:10px;padding:10px 14px;
            background:var(--rev-band,var(--surf-low));font:600 12.5px var(--sans)}
     .rev-h button{background:none;border:0;color:var(--red-dark);font:600 12px var(--sans);
@@ -735,7 +747,6 @@
     .adjbox input:not(:placeholder-shown){background:var(--red-tint);border-color:var(--red);color:var(--red-dark)}
     .adjbox input:hover,.mk input:hover{border-color:var(--red)}
     .adjbox input:focus,.mk input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(200,16,46,.16)}
-    .mk .hbline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
     .mk tr.band .bandnote{margin-left:8px;font:500 11px var(--sans);letter-spacing:0;text-transform:none;color:var(--ink-v)}
     .adjwarn{display:block;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;color:var(--red);font:600 11.5px var(--sans);text-align:right;max-width:none}
     .adjwarn[hidden]{display:none}
@@ -779,6 +790,13 @@
          letter-spacing:-.02em}
     .total .psf{font-size:12px;color:var(--ink-v);font-family:var(--mono)}
     @media (max-width:760px){ .total{margin-left:0;text-align:left;width:100%} .maths{width:100%} }
+    /* The scope bar (paintScopeBar): one row per thing it says, the controls at the row's end. */
+    .scope-bar{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
+    .scope-bar .scope-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+    .scope-bar .scope-row span{flex:1 1 280px;min-width:0}
+    .scope-bar input[type="text"]{flex:1 1 200px;min-width:0;min-height:36px;padding:6px 9px;font:inherit}
+    .scope-bar .note{margin:0}
+    .scope-bar .note.bad{color:#9b1c1c;font-weight:600}
   </style>
 </head>
 <body>
@@ -802,8 +820,9 @@
       <div class="progress">
         <a class="step" href="/polish-intake.html">1 · Intake</a>
         <span class="step active">2 · Estimate</span>
-        <a class="step" href="/proposal-review.html">3 · Proposal</a>
-        <a class="step" href="/done.html">4 · Files</a>
+        <a class="step" href="/generate.html">3 · Generate Files</a>
+        <a class="step" href="/proposal-review.html">4 · Proposal</a>
+        <a class="step" href="/done.html">5 · Files</a>
       </div>
     </header>
     <!-- THE SHEET BAR, on every bid (js/polish-estimate.js paintSheets, markup from B.sheetsPanelHtml): a strip of tabs, one a
@@ -822,6 +841,9 @@
 
     <p class="sandbox" id="sandbox-note" role="status" aria-live="polite" hidden></p>
     <p class="alert" id="alert" role="status" aria-live="polite"></p>
+    <!-- Which scope of its project this draft is, and the split of a several-sheet bid into one proposal per sheet (RJ, 2026-10-24).
+         Drawn by js/polish-estimate.js paintScopeBar; hidden while it has nothing to say. -->
+    <section class="scope-bar" id="scope-bar" aria-label="Scopes of this project" hidden></section>
     <div class="loading" id="loading">Loading the item library…</div>
 
     <div id="main" hidden>

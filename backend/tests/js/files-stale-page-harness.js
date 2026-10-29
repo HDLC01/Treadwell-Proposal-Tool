@@ -33,6 +33,9 @@ const SRC = fs.readFileSync(path.join(ROOT, "frontend", "js", "done.js"), "utf8"
 // The price rule's page half, as done.html loads it before done.js: Send and Download ask its one
 // question (TWPrice.confirmOwnFigures) before a price line with a figure of his own goes out.
 const TWPRICE = require(path.join(ROOT, "frontend", "js", "price-lines-core.js"));
+// The board's words for the project's one email (crm-core.js scopeSendOutcome), as done.html loads
+// it before done.js: a grouped proposal's "Send all proposals in one email" says its answer in them.
+const TWCRM = require(path.join(ROOT, "frontend", "js", "crm-core.js"));
 
 function balanced(startIndex) {
   let depth = 1;
@@ -56,6 +59,14 @@ function lift(name) {
            body: balanced(m.index + m[0].length) };
 }
 
+/** The lines that name the Send button of a grouped proposal when the page mounts, verbatim. */
+function liftGroupLabel() {
+  const from = SRC.indexOf("const _myGroup = ");
+  const to = SRC.indexOf("if (portalBtn) {", from);
+  if (from < 0 || to < 0) throw new Error("the grouped Send button's label moved in done.js");
+  return SRC.slice(from, to);
+}
+
 function liftSendHandler() {
   const marker = 'portalBtn.addEventListener("click", async () => {';
   const i = SRC.indexOf(marker);
@@ -70,6 +81,7 @@ const DOWNLOAD = lift("downloadAs");
 const ERR_MSG = lift("portalErrMsg");
 const REFUSAL = lift("staleDocRefusal");
 const SEND = liftSendHandler();
+const GROUP_LABEL = liftGroupLabel();
 const STALE_CODE = (/const STALE_DOCUMENT_CODE\s*=\s*"([^"]+)"/.exec(SRC) || [])[1];
 if (!STALE_CODE) throw new Error("STALE_DOCUMENT_CODE moved in done.js");
 
@@ -117,14 +129,21 @@ async function tab(local, server, opts) {
                          render_id: "K:" + pp.values.texture,
                          document_total: pp.values.total_formatted });
     }
+    // "Send all proposals in one email" (2026-10-27): the project's one press, for a grouped proposal.
+    if (url.includes("/api/portal/scope-group/")) {
+      rec.sendAll = (rec.sendAll || []).concat([{ path: url.replace(/^https?:\/\/[^/]+/, ""), method,
+                                                  body: JSON.parse(opts.body) }]);
+      const a = server.sendAllAnswer || { status: 200, body: { ok: true, published: [{ id: "d1" }],
+        results: [{ email: "customer@example.com", delivered: true }] } };
+      return json(a.status, a.body);
+    }
     if (url.includes("/api/portal/publish")) {
       rec.published.push(JSON.parse(opts.body));
       rec.versionAtPublish = server.version;          // the draft the server would reload now
       if (server.refuse) return json(409, server.refuse);
       // A colleague's save that lands while the publish is running.
       if (server.duringPublish) Object.assign(server.d1, server.duringPublish);
-      // `publishAnswer`: extra keys api_portal_publish adds to its 200 (followups_note, ...).
-      return json(200, Object.assign({ ok: true, revision_no: 1 }, server.publishAnswer || {}));
+      return json(200, server.publishAnswer || { ok: true, revision_no: 1 });
     }
     if (method === "PUT" && url.includes("/api/draft/d1")) {
       const b = JSON.parse(opts.body);
@@ -134,6 +153,10 @@ async function tab(local, server, opts) {
       return json(200, { ok: true });
     }
     if (url.includes("/api/file/")) return json(200, {});
+    // The proposal page's list of proposals (GET /api/draft/{id}/proposals), when the scenario gives one.
+    if (method === "GET" && url.includes("/api/draft/d1/proposals")) {
+      return server.proposals ? json(200, server.proposals) : json(404, { ok: false, code: "not_found" });
+    }
     if (method === "GET" && url.includes("/api/draft/d1")) {
       if (server.failGet) return json(503, { detail: "down" });
       // `updated_at`, as api_load_draft answers it, when the scenario gives the row one.
@@ -153,22 +176,19 @@ async function tab(local, server, opts) {
     location: { href: "https://tool/done.html?d=d1", origin: "https://tool", search: "?d=d1",
                 reload() {}, assign() {} },
     history: { replaceState() {} }, addEventListener() {}, crypto: { randomUUID: () => "x" },
-    TWAuth: { ready: Promise.resolve() },
+    TWAuth: { ready: Promise.resolve() }, TWCrm: TWCRM,
   };
   sandbox.location = sandbox.window.location;
   // The customer message the estimator typed, when the scenario gives one.
   const msgEl = { value: (opts && opts.message) || "" };
   sandbox.document = {
     addEventListener() {}, removeEventListener() {}, querySelectorAll: () => [],
-    // Elements keep what is appended to them, so a scenario can read what the page drew.
-    createElement: (tag) => ({ tag, style: {}, children: [],
-                               appendChild(c) { this.children.push(c); }, setAttribute() {},
-                               click() {}, classList: { add() {}, remove() {} } }),
+    createElement: () => ({ style: {}, appendChild() {}, setAttribute() {}, click() {},
+                            classList: { add() {}, remove() {} } }),
     createTextNode: () => ({}), head: { appendChild() {} },
     body: { appendChild() {}, removeChild() {} },
-    // `resultEl`: the page's #portal-result, when the scenario reads what lands in it.
     getElementById: (id) => (id === "portal-message" ? msgEl
-      : (id === "portal-result" && opts && opts.resultEl) ? opts.resultEl : null),
+      : (id === "portal-result" && opts && opts.result) ? opts.result : null),
   };
   vm.createContext(sandbox);
   vm.runInContext(SHARED, sandbox);
@@ -197,7 +217,7 @@ async function tab(local, server, opts) {
     .bind(null, TW, builtAt);
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
-    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
+    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "refreshFilesProposals", "fetch", "Blob", "URL", "document",
     "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
     '"use strict"; ' + DOWNLOAD.body);
 
@@ -215,13 +235,17 @@ async function tab(local, server, opts) {
     "checkedDocument", "TWPrice", '"use strict"; ' + SEND);
 
   return {
-    TW, rec, checkedDocument, ls: sandbox.localStorage, window: sandbox.window,
+    TW, rec, checkedDocument, ls: sandbox.localStorage, ss: sandbox.sessionStorage,
+    window: sandbox.window, portalBtn,
+    /** The mount's label for the Send button, run on a fresh button. */
+    mountLabel: () => { const btn = { textContent: "\u2197 Send to customer portal" };
+      new Function("TW", "portalBtn", '"use strict"; ' + GROUP_LABEL)(TW, btn); return btn.textContent; },
     /** Fire every timer shared.js queued — the 2.5 s autosave debounce among them. */
     elapse: () => { const due = timers.splice(0); due.forEach((fn) => { if (fn) fn(); }); },
     download: () => downloadAs(
       "pdf_download_url", "X_proposal.pdf",
       { textContent: "Download PDF", disabled: false, innerHTML: "" },
-      TW, freshDocuments, () => {}, fetch, class { constructor() {} },
+      TW, freshDocuments, () => {}, () => {}, fetch, class { constructor() {} },
       { createObjectURL: () => "blob:1", revokeObjectURL() {} }, sandbox.document,
       () => 0, () => "", { error: (e) => { rec.downloadError = String(e); } }, checkedDocument,
       TWPRICE, sandbox.window),
@@ -518,37 +542,6 @@ function current() {
     out.serverCopyAsked = r;
   }
 
-  // O. Review of the production follow-ups port. A proposal sent after its project was marked
-  //    Won, while the portal could not be told to switch its follow-up emails off: the publish
-  //    answers 200 with `followups_note` (main.py _followups_off_after_publish). The page must
-  //    draw that sentence, with the way to the Follow-up tab, in #portal-result. And with no note
-  //    (the switch-off worked, or there was no mark) nothing extra is drawn.
-  {
-    const r = {};
-    const NOTE = "Sent. This project is marked won, but the automatic follow-up emails could not "
-      + "be switched off for this proposal, because the customer portal did not answer. Press "
-      + "Turn automation off on the Follow-up tab.";
-    for (const [name, answer] of [["note", { followups_note: NOTE, followups_failed: ["d1"] }],
-                                  ["noNote", { followups_note: "", followups_off: ["d1"] }],
-                                  ["noKey", {}]]) {
-      const w = current();
-      w.server.publishAnswer = answer;
-      const resultEl = { style: { display: "none" }, textContent: "", children: [],
-                         appendChild(c) { this.children.push(c); } };
-      const t = await tab(w.local, w.server, { resultEl });
-      await t.send();
-      r[name] = {
-        posted: t.rec.published.length, err: t.rec.err || null,
-        shown: resultEl.style.display,
-        drawn: resultEl.children.map((p) => ({
-          tag: p.tag, cls: p.className || "", text: p.textContent || "",
-          links: (p.children || []).map((a) => ({ tag: a.tag, href: a.href, text: a.textContent })),
-        })),
-      };
-    }
-    out.followupsNote = r;
-  }
-
   // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.
   {
     const w = current();
@@ -556,6 +549,165 @@ function current() {
     w.server.failGet = true;
     await t.send();
     out.serverUnreadable = { posted: t.rec.published.length, err: t.rec.err || null };
+  }
+
+  // N. ONE OF SEVERAL PROPOSALS MADE FROM ONE ESTIMATE ("Create Multiple Proposals"): the publish answers with its
+  //    scope group, and the line under the button says which proposal of how many (GET .../proposals). A scope made the
+  //    older way (a list of one) or a list that cannot be read keeps the scope sentence.
+  {
+    const said = async (proposals) => {
+      const w = current();
+      w.server.publishAnswer = { ok: true, revision_no: 1, scope_group: "G1", scope_label: "Base Bid 2" };
+      w.server.proposals = proposals;
+      const result = { style: {}, textContent: "", kids: [], appendChild(c) { this.kids.push(c); } };
+      const t = await tab(w.local, w.server, { result });
+      await t.send();
+      return { posted: t.rec.published.length, err: t.rec.err || null,
+               lines: result.kids.filter((k) => k.className === "portal-scope").map((k) => k.textContent) };
+    };
+    out.groupedPublish = {
+      three: await said({ ok: true, parent_id: "P1", members: [{ id: "P1" }, { id: "d1" }, { id: "C3" }] }),
+      one: await said({ ok: true, parent_id: "d1", members: [{ id: "d1" }] }),
+      unread: await said(null),
+    };
+  }
+
+  // O. A PROPOSAL OF A PROJECT WITH SEVERAL (Hanz, 2026-10-27): "it should send out without publishing
+  //    ... And it must come in one email only." The button is named for the one press, posts ONCE to
+  //    the send-all and never to the publish, and says the answer in the board drawer's own words.
+  {
+    const grouped = async (answer) => {
+      const w = current();
+      const sg = { id: "G1", label: "Room 2" };
+      const st = JSON.parse(w.local[STATE_KEY]);
+      st.scope_group = sg;
+      w.local[STATE_KEY] = JSON.stringify(st);
+      w.server.d1.scope_group = sg;
+      w.server.version = "2026-10-27T09:00:00+00:00";
+      if (answer) w.server.sendAllAnswer = answer;
+      const result = { style: {}, textContent: "", kids: [], appendChild(c) { this.kids.push(c); } };
+      const t = await tab(w.local, w.server, { result, message: "Your three proposals." });
+      const label = t.mountLabel();
+      t.portalBtn.textContent = label;
+      await t.send();
+      return { label, button: t.portalBtn.textContent, disabled: t.portalBtn.disabled,
+               sendAll: t.rec.sendAll || [], published: t.rec.published.length,
+               err: t.rec.err || null, result: result.textContent };
+    };
+    const ungrouped = await tab(current().local, current().server);
+    out.sendAll = {
+      ungroupedLabel: ungrouped.mountLabel(),
+      sent: await grouped(null),
+      blocked: await grouped({ status: 409, body: { ok: false, code: "not_ready_to_send",
+        blocked: [{ id: "C3", label: "Room 3", error: "build its files on its Files page first" }],
+        error: "Nothing was sent. Room 3: build its files on its Files page first." } }),
+      nothing: await grouped({ status: 409, body: { ok: false, error: "nothing_to_send", published: [] } }),
+      halfway: await grouped({ status: 502, body: { ok: false, code: "publish_failed",
+        published: [{ id: "d1", label: "Room 2", revision_no: 1 }], failed: { id: "C3", label: "Room 3" },
+        error: "Nothing was emailed. Room 3 could not be published (Portal error.). Room 2 was published and will go in the email. Press the button again in a minute to finish." } }),
+    };
+  }
+
+  // P. PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): the press answers `needs_build`. The page
+  //    starts Send all's walk (send-all-chain.js, the real module) with what the estimator chose,
+  //    says it is building, and publishes nothing. A page with no walk, or one that already came back
+  //    from one, says the server's manual sentence instead and gives the button back.
+  {
+    const CHAIN = require(path.join(ROOT, "frontend", "js", "send-all-chain.js"));
+    const NEEDS = { status: 409, body: { ok: false, code: "needs_build",
+      build: [{ id: "C3", label: "Room 3" }],
+      error: "Nothing was sent. Room 3 has never been built. Open its Proposal step and press "
+             + "Continue to Done, then send again." } };
+    const press = async (how) => {
+      const w = current();
+      const sg = { id: "G1", label: "Room 2" };
+      const st = JSON.parse(w.local[STATE_KEY]);
+      st.scope_group = sg;
+      w.local[STATE_KEY] = JSON.stringify(st);
+      w.server.d1.scope_group = sg;
+      w.server.version = "2026-10-28T09:00:00+00:00";
+      w.server.sendAllAnswer = NEEDS;
+      const t = await tab(w.local, w.server, { message: "Your three proposals." });
+      const nav = [];
+      t.window.location.href = "https://tool/done.html?composed=1&d=d1";
+      t.window.location.assign = (u) => nav.push(String(u));
+      let chain = null;
+      if (how !== "noWalk") {
+        chain = CHAIN.create({ sessionStorage: t.ss, location: t.window.location,
+                               history: t.window.history, crypto: require("crypto").webcrypto });
+        t.window.TWSendAll = chain;
+        if (how === "cameBack") {
+          t.ss.setItem(chain.KEY, JSON.stringify({ token: "T1", group: "G1", queue: [], built: ["C3"],
+            labels: {}, returnUrl: "/done.html?d=d1", stash: {}, expires: Date.now() + 60000, done: true }));
+          chain.take(new URLSearchParams("?sendall_resume=T1"), "G1");
+        }
+      }
+      t.portalBtn.textContent = t.mountLabel();
+      await t.send();
+      return { button: t.portalBtn.textContent, disabled: t.portalBtn.disabled, err: t.rec.err || null,
+               nav, published: t.rec.published.length, sendAll: (t.rec.sendAll || []).length,
+               record: chain ? JSON.parse(t.ss.getItem(chain.KEY) || "null") : null };
+    };
+    out.needsBuild = { walk: await press("walk"), noWalk: await press("noWalk"),
+                       cameBack: await press("cameBack") };
+  }
+
+  // Q. BACK FROM BUILDING: the mount takes the finished walk once (its own lines, verbatim), and
+  //    resumeSendAll puts the choices back and presses the page's own Send button — or, with files
+  //    attached before the walk, asks for them again and presses nothing.
+  {
+    const CHAIN = require(path.join(ROOT, "frontend", "js", "send-all-chain.js"));
+    const RESUME = lift("resumeSendAll");
+    const resume = new AsyncFunction("document", "portalRecip", "notifyPick", "paintNotifyChips",
+                                     ...RESUME.args, '"use strict"; ' + RESUME.body);
+    const run = async (stash) => {
+      const els = { "portal-message": { value: "" }, "portal-require-deposit": { checked: true },
+                    "portal-estimator": { value: "", options: [{ value: "" }, { value: "rj@wetreadwell.com" },
+                                                              { value: "kyle@wetreadwell.com" }] } };
+      const restored = [];
+      const clicks = [];
+      let err = null;
+      let painted = 0;
+      const notifyPick = { ready: true, changed: { "old@wetreadwell.com": true } };
+      const ret = await resume({ getElementById: (id) => els[id] || null },
+        { restore: (e, n) => restored.push([e, n]), setErr: (m) => { err = m; } },
+        notifyPick, () => { painted++; }, stash, { click: () => clicks.push(1), focus() {} },
+        Promise.resolve());
+      return { ret, message: els["portal-message"].value, deposit: els["portal-require-deposit"].checked,
+               estimator: els["portal-estimator"].value, restored, clicks: clicks.length, err,
+               changed: notifyPick.changed, painted };
+    };
+    const stash = { message: "Your three proposals.", emails: ["customer@example.com", "pm@x.test"],
+                    no_followups: ["pm@x.test"], assigned_estimator: "rj@wetreadwell.com",
+                    require_deposit: false, notify_add: ["troy@wetreadwell.com"], notify_mute: [],
+                    attachments: 0 };
+    out.resume = { plain: await run(stash), attached: await run(Object.assign({}, stash, { attachments: 2 })) };
+
+    // The mount's take, verbatim, run three times: the walk's return, a repaint, another project.
+    const marker = 'if (portalBtn && _myGroup && typeof _myGroup === "object" && _myGroup.id && window.TWSendAll) {';
+    const at = SRC.indexOf(marker);
+    if (at < 0) throw new Error("the mount's take of Send all's walk moved in done.js");
+    const TAKE = marker + balanced(at + marker.length) + "}";
+    const mountTake = new Function("portalBtn", "_myGroup", "window", "location", "resumeSendAll",
+                                   "_estMounted", "_rosterMounted", '"use strict"; ' + TAKE);
+    const ss = storage({});
+    const loc = { pathname: "/done.html", search: "?d=d1&files=1&sendall_resume=T2" };
+    const hist = [];
+    const win = { TWSendAll: CHAIN.create({ sessionStorage: ss, location: loc,
+                                            history: { replaceState: (s, t, u) => hist.push(u) } }) };
+    ss.setItem(win.TWSendAll.KEY, JSON.stringify({ token: "T2", group: "G1", queue: [], built: ["C3"],
+      labels: { C3: "Room 3" }, returnUrl: "/done.html?d=d1&files=1", stash: { message: "hi" },
+      expires: Date.now() + 60000, done: true }));
+    const calls = [];
+    const pressAgain = (s) => calls.push(s);
+    mountTake({}, { id: "G2" }, win, loc, pressAgain, null, null);        // another project's page
+    const otherProject = calls.length;
+    ss.setItem(win.TWSendAll.KEY, JSON.stringify({ token: "T2", group: "G1", queue: [], built: ["C3"],
+      labels: { C3: "Room 3" }, returnUrl: "/done.html?d=d1&files=1", stash: { message: "hi" },
+      expires: Date.now() + 60000, done: true }));
+    mountTake({}, { id: "G1" }, win, loc, pressAgain, null, null);        // back from the walk
+    mountTake({}, { id: "G1" }, win, loc, pressAgain, null, null);        // the same page mounting again
+    out.mountTake = { otherProject, calls, addressBar: hist[hist.length - 1] || null };
   }
 
   process.stdout.write(JSON.stringify(out));

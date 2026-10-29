@@ -35,6 +35,11 @@
       window.location.replace(TW.withDraft("/polish-intake.html"));
       throw new Error("index: a v2 draft belongs on polish-intake.html");
     }
+    // A proposal made from another draft's estimate shares that draft's intake: it opens there.
+    if ((q.has("d") || q.has("edit")) && typeof TW.redirectProposalChild === "function"
+        && TW.redirectProposalChild("/?edit=1")) {
+      throw new Error("index: a proposal made from another estimate, sent to that intake");
+    }
   }
 
   // Restore previous state if user clicked Back from screen 2

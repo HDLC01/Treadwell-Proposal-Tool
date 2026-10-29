@@ -540,8 +540,9 @@
       if (!url) throw new Error("That document isn't available for this revision.");
       const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
       if (!resp.ok) throw new Error("HTTP " + resp.status);
-      const safe = String((out.project_name || TW.getState().project_name || "proposal"))
-        .replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+      // One of several proposals: its own name rides in this one too (fileStem), or every
+      // proposal's "rev1" saves under one name.
+      const safe = fileStem(out.project_name || TW.getState().project_name);
       const ext = kind === "pdf" ? "pdf" : kind;
       const name = `${safe}_rev${revNo}_${kind === "xlsx" ? "estimate" : "proposal"}.${ext}`;
       // octet-stream so the browser saves under our name instead of letting the
@@ -744,6 +745,41 @@
     catch { return true; }
   }
 
+  /** SEND ALL, PRESSED AGAIN after it built the proposals that were never built (send-all-chain.js,
+   *  Hanz 2026-10-28). What the estimator chose before the walk (`stash`: the message, recipients,
+   *  follow-up opt-outs, estimator, deposit, notify picks) goes back on screen once the pickers
+   *  have mounted (`mounted`), and the page's own Send button is pressed, so every check it makes
+   *  is made again on the copy as it stands now. Picked files cannot ride a page change: with any,
+   *  nothing is pressed and the estimator is asked to attach them again. */
+  async function resumeSendAll(stash, portalBtn, mounted) {
+    try { await mounted; } catch {}
+    const msgEl = document.getElementById("portal-message");
+    if (msgEl && typeof stash.message === "string") msgEl.value = stash.message;
+    const dep = document.getElementById("portal-require-deposit");
+    if (dep && typeof stash.require_deposit === "boolean") dep.checked = stash.require_deposit;
+    const sel = document.getElementById("portal-estimator");
+    const est = String(stash.assigned_estimator || "").toLowerCase();
+    if (sel && est && Array.from(sel.options || []).some((o) => String(o.value).toLowerCase() === est)) sel.value = est;
+    if (portalRecip.restore) portalRecip.restore(stash.emails, stash.no_followups);
+    if (notifyPick.ready) {
+      notifyPick.changed = {};
+      (stash.notify_add || []).forEach((e) => { notifyPick.changed[String(e).toLowerCase()] = true; });
+      (stash.notify_mute || []).forEach((e) => { notifyPick.changed[String(e).toLowerCase()] = false; });
+    }
+    paintNotifyChips();
+    if (stash.attachments > 0) {
+      if (portalRecip.setErr) {
+        portalRecip.setErr("Every proposal is built now, and nothing has been sent yet. Your attached "
+          + "files could not come along while the others were built: attach them again, then press "
+          + "Send all proposals in one email.");
+      }
+      if (portalBtn.focus) portalBtn.focus();
+      return "attach";
+    }
+    portalBtn.click();
+    return "pressed";
+  }
+
   function mountPortalRecipients() {
     const box = document.getElementById("portal-recipients");
     if (!box) return;
@@ -942,6 +978,21 @@
     portalRecip.commitEdit = () => (!editingIntake) ? true : saveIntake(editInput ? editInput.value : portalRecip.intake);
     portalRecip.setErr = setErr;
     portalRecip.setBusy = (b) => { addInput.disabled = addBtn.disabled = !!b; };
+    // The list as a send left it (`emails` was allEmails() then, `noFu` its opt-outs), put back
+    // when Send all comes back from building the proposals that were never built (resumeSendAll).
+    portalRecip.restore = (emails, noFu) => {
+      const list = (Array.isArray(emails) ? emails : []).map((e) => String(e || "").trim())
+        .filter((e) => EMAIL_RE.test(e));
+      if (!list.length) return;
+      if (portalRecip.hasIntake && list[0].toLowerCase() !== portalRecip.intake.toLowerCase()) {
+        portalRecip.intake = list[0];
+        intakeEdited = true;
+      }
+      portalRecip.extras = portalRecip.hasIntake ? list.slice(1) : list;
+      portalRecip.noFollowups = (Array.isArray(noFu) ? noFu : []).filter((e) => list.indexOf(e) >= 0);
+      setErr("");
+      renderList();
+    };
     portalRecip.ready = true;
     renderList();
   }
@@ -1011,6 +1062,345 @@
     return out;
   }
 
+  /** THE LUMP SUM ROW OF A PROJECT WITH SEVERAL PROPOSALS (Hanz, 2026-10-27: "in the ready to
+   *  generate"). `pv` is GET /api/draft/{id}/proposals (TW.readProposals), `currentId` this page's
+   *  draft, `currentFigure` the figure the row already shows for it (the saved document's total, as
+   *  above: not re-derived here). With two proposals or more, and this draft among them, #rv-lump
+   *  becomes one line per proposal: its name (the sheet's, unless a person renamed it) and its own
+   *  lump sum, this one marked "(this one)" and carrying `currentFigure`; one with no figure yet
+   *  says "not priced yet". NO TOTAL: they are separate proposals, each approved on its own, so a
+   *  sum would be a price nobody is offered. Anything else leaves the row exactly as it is.
+   *  Generate still builds only this proposal.
+   *
+   *  Another proposal's figure is the Total ITS document prints (`document_total`, the server's
+   *  read of that proposal's saved payload, the same figure its own Files page shows), and its
+   *  `lump_sum` only before it was ever built. `opts` is how step 5 FILES reuses this list
+   *  (paintFilesProposals): `into` another element than #rv-lump, its own `note`, `link`, which
+   *  makes each other proposal's name a link to its own Files page, and `files`, called with each
+   *  line, its proposal and whether it is this one, to add that proposal's buttons (paintRowFiles). */
+  function paintReadyProposals(pv, currentId, currentFigure, opts) {
+    const el = document.getElementById((opts && opts.into) || "rv-lump");
+    const ms = pv && Array.isArray(pv.members) ? pv.members : [];
+    if (!el || ms.length < 2 || !ms.some((m) => m && m.id === currentId)) return false;
+    const usd = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const list = document.createElement("ul");
+    list.className = "rv-props";
+    ms.forEach((m) => {
+      const mine = m.id === currentId;
+      const name = proposalName(m);
+      const li = document.createElement("li");
+      li.className = "rv-prop" + (mine ? " current" : "");
+      const nm = document.createElement(opts && opts.link && !mine ? "a" : "span");
+      nm.className = "rv-prop-nm";
+      if (opts && opts.link && !mine) nm.href = "/done.html?d=" + encodeURIComponent(m.id);
+      nm.textContent = name;
+      li.appendChild(nm);
+      const sum = document.createElement("span");
+      const doc = typeof m.document_total === "string" && money(m.document_total) != null ? m.document_total : "";
+      const n = typeof m.lump_sum === "number" && isFinite(m.lump_sum) ? m.lump_sum : null;
+      const theirs = doc || (n == null ? "" : usd(n));
+      const fig = mine ? (currentFigure || theirs) : theirs;
+      sum.className = fig && fig !== "—" ? "rv-prop-sum" : "rv-prop-sum none";
+      sum.textContent = fig && fig !== "—" ? fig : "not priced yet";
+      li.appendChild(sum);
+      if (mine) {
+        const tag = document.createElement("span");
+        tag.className = "rv-prop-this";
+        tag.textContent = "(this one)";
+        li.appendChild(tag);
+      }
+      if (opts && opts.files) opts.files(li, m, mine);
+      list.appendChild(li);
+    });
+    const note = document.createElement("p");
+    note.className = "rv-props-note";
+    note.textContent = (opts && opts.note) || "Separate proposals, each approved on its own. Generate builds this one.";
+    el.textContent = "";
+    el.classList.remove("money");
+    el.appendChild(list);
+    el.appendChild(note);
+    return true;
+  }
+
+  /** A proposal's name as the strip shows it: its sheet's name (proposals_view `display_label`,
+   *  #741), verbatim. */
+  function proposalName(m) {
+    return m.display_label || m.sheet_label || m.label || ("Base Bid " + (m.index || ""));
+  }
+
+  /** STEP 5 FILES OF A PROJECT WITH SEVERAL PROPOSALS (Hanz, 2026-10-29: "could we also show
+   *  multiple lump sums here? before we send out", and "show the sheet names in the 5. Files
+   *  section as well"). `pv`, `currentId`, `currentFigure` as paintReadyProposals takes them;
+   *  `currentFigure` is what paintLumpSum put on the card ("" when it hid the row).
+   *
+   *  With two proposals or more, and this draft among them: the LUMP SUM column becomes the Ready
+   *  card's list (same names, same figures, same order, NO TOTAL), each other name a link to its own
+   *  Files page; the header names this proposal by its sheet; the Sent versions card says whose
+   *  versions they are; and the Send card names the proposals its one email is for. Anything else
+   *  (one proposal, a list that cannot be read) takes every one of those away and leaves the single
+   *  figure exactly as paintLumpSum painted it. */
+  function paintFilesProposals(pv, currentId, currentFigure) {
+    const row = document.getElementById("lump-row");
+    const val = document.getElementById("lump-sum");
+    const key = document.getElementById("lump-key");
+    const which = document.getElementById("which-proposal");
+    const revWhich = document.getElementById("revisions-which");
+    const sendWhich = document.getElementById("send-which");
+    [which, revWhich, sendWhich].forEach((el) => { if (el) { el.textContent = ""; el.hidden = true; } });
+    // THE WHOLE PROJECT, not only this estimate's strip: a project split into scopes (#711) holds
+    // the other scopes and their proposals too (`group_others`, after the strip), and Send all
+    // sends every one of them, so the list and the sentences below never name a smaller set.
+    const others = pv && Array.isArray(pv.group_others) ? pv.group_others : [];
+    if (pv && Array.isArray(pv.members) && others.length) {
+      pv = Object.assign({}, pv, { members: pv.members.concat(others.filter((o) => o && o.id).map((o) => (
+        { id: o.id, display_label: o.label, lump_sum: o.lump_sum, document_total: o.document_total }))) });
+    }
+    const many = paintReadyProposals(pv, currentId, currentFigure, {
+      into: "lump-sum", link: true, files: paintRowFiles,
+      note: "Separate proposals, each approved on its own. Each line's buttons download that one's files.",
+    });
+    if (row) row.classList.toggle("fp-money--list", many);
+    if (key) key.textContent = many ? "Lump sums" : "Lump sum";
+    if (!many) {
+      // The single figure, as paintLumpSum leaves it: a list painted earlier on this page is put back.
+      if (row && val) { if (currentFigure) val.textContent = currentFigure; else row.hidden = true; }
+      return false;
+    }
+    if (row) row.hidden = false;
+    const ms = pv.members;
+    const at = ms.findIndex((m) => m && m.id === currentId);
+    const names = ms.map(proposalName);
+    if (which) {
+      const nm = document.createElement("strong");
+      nm.className = "fp-which-nm";
+      nm.textContent = names[at];
+      which.appendChild(nm);
+      const pos = document.createElement("span");
+      pos.className = "fp-which-of";
+      pos.textContent = " · proposal " + (at + 1) + " of " + ms.length;
+      which.appendChild(pos);
+      which.hidden = false;
+    }
+    if (revWhich) {
+      revWhich.textContent = "Sent versions of " + names[at] + " only. Each proposal keeps its own.";
+      revWhich.hidden = false;
+    }
+    // Only where the button is the project's one press (showPostGenerate labels it from scope_group).
+    const g = (TW.getState() || {}).scope_group;
+    if (sendWhich && g && typeof g === "object" && g.id && pv.group_id === g.id) {
+      const said = names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1] : names[0];
+      sendWhich.textContent = "One email for " + said + ". It names each one that is new or changed "
+        + "since the customer last got it.";
+      sendWhich.hidden = false;
+    }
+    return true;
+  }
+
+  /** Read this project's proposals and paint them onto step 5 (paintFilesProposals). Called right
+   *  after every paintLumpSum, so the list repaints wherever the single figure does: each arrival
+   *  (a regenerate, the page Send all comes back to after building) and each download, which builds
+   *  fresh. The last list read is painted at once and then replaced by the new read; a read that
+   *  fails keeps it, and an older read answering late is dropped. */
+  const filesProposals = { seq: 0, pv: null };
+  async function refreshFilesProposals() {
+    const id = TW.getDraftId();
+    const row = document.getElementById("lump-row");
+    const val = document.getElementById("lump-sum");
+    // Taken NOW, straight after paintLumpSum wrote it: the list replaces that text below.
+    const figure = row && val && !row.hidden ? val.textContent : "";
+    const seq = ++filesProposals.seq;
+    if (filesProposals.pv) paintFilesProposals(filesProposals.pv, id, figure);
+    let pv = null;
+    try { pv = TW.readProposals ? await TW.readProposals(id) : null; } catch { pv = null; }
+    if (seq !== filesProposals.seq) return;
+    if (pv) filesProposals.pv = pv;
+    paintFilesProposals(filesProposals.pv, id, figure);
+  }
+
+  /** EACH LINE OF STEP 5's LIST DOWNLOADS ITS OWN PROPOSAL (Hanz, 2026-10-29: "each lump sum should
+   *  have a download button ... it should be aligned to the row"). Three small buttons per line, the
+   *  same three files as the big buttons at the top, for THAT line's proposal:
+   *    * this one's are the big buttons' own press (showPostGenerate's downloadAs, kept in
+   *      `rowFiles.mine` once the card is wired), under the same names;
+   *    * another one's build THAT proposal's files from ITS saved document (downloadOther);
+   *    * one never built (no document, so no `document_total`) has its buttons off and says so.
+   *      Nothing is built for it from this page's draft or any other. */
+  const ROW_FILES = [
+    { key: "pdf_download_url", label: "PDF", tail: "_proposal.pdf" },
+    { key: "docx_download_url", label: ".docx", tail: "_proposal.docx" },
+    { key: "xlsx_download_url", label: ".xlsx", tail: "_estimate.xlsx" },
+  ];
+  // `said`: what a line last said about its press, by proposal id, kept until its next press, so the
+  // repaint that follows a press (the list read again) does not wipe it. `own`: THIS one's three
+  // buttons, by file, made once and moved into every repaint. downloadAs repaints the list straight
+  // after its build and then writes "Downloading…", "Downloaded" or "Failed — try again" to the
+  // button it was pressed with, so that button has to be the one on the page (review of #744: a
+  // fresh one showed none of it and took a second press mid-download).
+  const rowFiles = { mine: null, said: {}, own: {} };
+  function paintRowFiles(li, m, mine) {
+    const name = proposalName(m);
+    const built = mine || (typeof m.document_total === "string" && money(m.document_total) != null);
+    const box = document.createElement("span");
+    box.className = "rv-prop-dl";
+    const msg = document.createElement("span");
+    msg.className = "rv-prop-msg";
+    msg.setAttribute("aria-live", "polite");
+    ROW_FILES.forEach((f) => {
+      let b = mine ? rowFiles.own[f.key] : null;
+      if (!b) {
+        b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-secondary rv-prop-dl-b";
+        b.textContent = f.label;
+        if (!built) b.disabled = true;
+        else if (mine) {
+          const held = b;
+          b.addEventListener("click", () => {
+            if (rowFiles.mine) rowFiles.mine(f.key, fileStem(state.project_name) + f.tail, held);
+          });
+          rowFiles.own[f.key] = b;
+        } else b.addEventListener("click", () => downloadOther(m, f, b, msg));
+      }
+      b.setAttribute("aria-label", f.label + " of " + name);
+      box.appendChild(b);
+    });
+    li.appendChild(box);
+    msg.textContent = built ? (rowFiles.said[m.id] || "") : "Not built yet. Open it to build its files.";
+    msg.hidden = !msg.textContent;
+    li.appendChild(msg);
+  }
+
+  /** ANOTHER PROPOSAL's file, built from ITS saved document: GET /api/draft/{its id} for that
+   *  document and when it was stored, then POST /api/draft/{its id}/documents with that
+   *  `draft_version`, the route its own Files page's buttons use, so the server builds the copy read
+   *  here and nothing stored since. Nothing of this page's draft goes with it.
+   *
+   *  THE FILE CARRIES THE FIGURE ITS LINE SHOWS. The document read must print the line's figure
+   *  (`document_total`), and so must the render; when either differs (it was saved again after the
+   *  list was read) nothing is saved, the list is read again and the line says so.
+   *
+   *  The .docx and PDF ask the question the big buttons ask about a price line with a figure of his
+   *  own (TWPrice.confirmSavedCopy), of the document read. Builds and saves a file, nothing more:
+   *  no navigation, no send, no email, no Dropbox, and nothing recorded on that proposal
+   *  (`record: false`): Send all asks a proposal with no files whether it is closed lost or on
+   *  hold, and a neighbour's press must not answer that for it. It goes as THAT proposal
+   *  (X-Project-Id), so the server's "generated" event lands in its History, not this one's. */
+  async function downloadOther(m, f, button, msg) {
+    const orig = button.textContent;
+    const name = proposalName(m);
+    button.disabled = true;
+    delete rowFiles.said[m.id];
+    msg.textContent = "";
+    msg.hidden = true;
+    let moved = false;
+    try {
+      const shown = money(m.document_total);
+      if (shown == null) throw new Error("Not built yet. Open it to build its files.");
+      let res;
+      try {
+        res = await fetch(TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(m.id),
+                          { headers: TW.authHeaders() });
+      } catch {
+        res = null;
+      }
+      if (!res || !res.ok) throw new Error("Couldn't read " + name + ". Check your connection and try again.");
+      const row = await res.json();
+      const data = row && row.data && typeof row.data === "object" ? row.data : null;
+      const pp = data && data.proposal_payload;
+      if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") {
+        throw new Error("Not built yet. Open it to build its files.");
+      }
+      const changed = "Its price changed since this page read it. The line shows the new figure "
+                    + "now; press again to download it.";
+      if (money(pp.values.total_formatted) !== shown) { moved = true; throw new Error(changed); }
+      const version = typeof row.updated_at === "string" ? row.updated_at : "";
+      if (f.key !== "xlsx_download_url") {
+        // The big buttons' one check (TWPrice.confirmSavedCopy), asked of THAT proposal's copy just
+        // read: nothing of this page's is flushed or asked about.
+        const theirs = { flushState: () => true, getDraftId: () => m.id, getState: () => data,
+                         readServerRow: () => ({ data: data, version: version }) };
+        const asked = await TWPrice.confirmSavedCopy(theirs, "download", TWPrice.ownFigureDialog(TW, "download"));
+        if (!asked.go) return;   // he cancelled: nothing built, nothing said
+      }
+      button.textContent = "Downloading…";
+      const path = "/api/draft/" + encodeURIComponent(m.id) + "/documents";
+      const body = { record: false };
+      if (version) body.draft_version = version;
+      const headers = TW.authHeaders();
+      headers["X-Project-Id"] = m.id;
+      const built = await fetch(TW.resolveApiBase() + path,
+                                { method: "POST", headers: headers, body: JSON.stringify(body) });
+      if (!built.ok) {
+        moved = built.status === 409;   // saved again since the read
+        const text = await built.text().catch(() => built.statusText);
+        throw new Error("POST " + path + " → " + built.status + ": " + text);
+      }
+      const out = await built.json();
+      if (!out || money(out.document_total) !== shown) { moved = true; throw new Error(changed); }
+      const url = out[f.key];
+      if (!url) throw new Error("That file isn't available for " + name + ".");
+      const file = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
+      if (!file.ok) throw new Error("The file didn't come back (" + (file.statusText || ("HTTP " + file.status)) + "). Try again.");
+      // octet-stream, as downloadAs does: the browser saves it under `a.download` and never opens
+      // the PDF inline under the blob's UUID.
+      const blob = new Blob([await file.arrayBuffer()], { type: "application/octet-stream" });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      const project = (typeof data.project_name === "string" && data.project_name.trim()) || state.project_name;
+      a.download = fileStem(project, { id: m.id, name: name }) + f.tail;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+    } catch (err) {
+      console.error("Download failed", err);
+      msg.textContent = rowFiles.said[m.id] = "Not downloaded: " + portalErrMsg(err);
+      msg.hidden = false;
+      // paintLumpSum first, as downloadAs does: refreshFilesProposals reads this one's figure off
+      // the card, which holds the whole list until paintLumpSum puts the figure back.
+      if (moved) { paintLumpSum(); refreshFilesProposals(); }
+    } finally {
+      button.textContent = orig;
+      button.disabled = false;
+    }
+  }
+
+  /** THE NAME A DOWNLOAD ON THIS PAGE SAVES UNDER, before "_proposal.pdf" and the rest: step 5's
+   *  three buttons (showPostGenerate) and Sent versions (downloadRevision). `project` is the
+   *  project's name. Anything but A-Z a-z 0-9 . _ - becomes one _, as it always has.
+   *
+   *  ONE PROPOSAL (no scope_group): the project's name cut at 60, exactly as before.
+   *  ONE OF SEVERAL (Create Multiple Proposals, or a project split into scopes): "<project>_<its
+   *  name>" (Hanz, 2026-10-29: the sheet name verbatim "in the files"), so the proposals of one
+   *  project never save under one name. Its name is the one the header shows: this draft's
+   *  display_label once step 5's list is read (filesProposals), the stored scope_group.label until
+   *  then, which sync_proposal_labels keeps equal to it (#741). The name is kept whole (a sheet's is
+   *  31 characters at most, a scope's SCOPE_LABEL_MAX = 80); the project part is the one cut, to fit
+   *  80 beside it and never below 20, so the stem is 101 characters at most. A name with no letter
+   *  or digit left (blank, or all non-Latin) would tell no two proposals apart, so the draft's own
+   *  id stands in for it.
+   *
+   *  `who`, {id, name}: ANOTHER proposal of the project, for its own buttons on step 5's list
+   *  (downloadOther). It is one of several by being on that list, so the same rule runs over its id
+   *  and the name its line shows. */
+  function fileStem(project, who) {
+    const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const proj = safe(project || "proposal");
+    const g = (TW.getState() || {}).scope_group;
+    if (!who && (!g || typeof g !== "object")) return proj.slice(0, 60);
+    const id = who ? String(who.id || "") : (TW.getDraftId() || "");
+    const pv = filesProposals.pv;
+    const me = !who && pv && Array.isArray(pv.members) ? pv.members.find((m) => m && m.id === id) : null;
+    const shown = who ? String(who.name || "").trim()
+      : (me && typeof me.display_label === "string" && me.display_label.trim())
+      || (typeof g.label === "string" ? g.label.trim() : "");
+    let name = safe(shown).slice(0, 80);
+    if (!/[A-Za-z0-9]/.test(name)) name = safe(id).slice(0, 8);
+    if (!name) return proj.slice(0, 60);
+    return proj.slice(0, Math.max(20, 80 - name.length - 1)) + "_" + name;
+  }
+
   function showPreGenerate() {
     preEl.style.display = "";
     // Show the project deadline as a compact YY.MM.DD due date.
@@ -1029,6 +1419,15 @@
     const _rvTotal = _rvPp && _rvPp.values && typeof _rvPp.values.total_formatted === "string"
       && money(_rvPp.values.total_formatted) != null ? _rvPp.values.total_formatted : "";
     document.getElementById("rv-lump").textContent     = _rvTotal || state.lump_sum_display || "—";
+    // EVERY PROPOSAL OF THIS ESTIMATE, one line each (Create Multiple Proposals, 2026-10-27). The
+    // figure painted just above stays THIS proposal's line; the others are the server's. A draft
+    // with no proposals, or a list that cannot be read, keeps the single figure.
+    (async function readyProposals() {
+      let pv = null;
+      try { pv = TW.readProposals ? await TW.readProposals(TW.getDraftId()) : null; } catch { pv = null; }
+      const lumpEl = document.getElementById("rv-lump");
+      paintReadyProposals(pv, TW.getDraftId(), lumpEl ? lumpEl.textContent : "");
+    })();
     // PAGE 1, SAID OUT LOUD, BEFORE ANYTHING IS BUILT. Through `coverLetterCheck` so this row and
     // the post-generate banner cannot come to disagree — see that function for why the source is
     // `proposal_payload` and not the top-level flag. The row is hidden rather than showing "No",
@@ -1338,15 +1737,12 @@
       `${state.project_name} · ${wt} · ${audience}`;
 
     paintLumpSum();
+    refreshFilesProposals();   // every proposal of the project, beside the figure
 
     // Carry the draft across so the info sheet opens on THIS project rather than
     // whichever one the browser last held.
     const infoLink = document.getElementById("info-sheet-link");
     if (infoLink) infoLink.href = TW.withDraft("/info-sheet.html");
-
-    const safeName = (state.project_name || "proposal")
-      .replace(/[^A-Za-z0-9._-]+/g, "_")
-      .slice(0, 60);
 
     async function downloadAs(urlKey, filename, button) {
       const orig = button.textContent;
@@ -1376,6 +1772,7 @@
         // saved again since the copy the question was asked of.
         const out = await freshDocuments(checkedVersion);
         paintLumpSum();
+        refreshFilesProposals();
         const url = out && out[urlKey];
         if (!url) throw new Error("That file isn't available for this project.");
         // Downloads now require the Supabase bearer (no longer a public
@@ -1479,18 +1876,22 @@
     const xlsxBtn = document.getElementById("dl-xlsx");
     const docxBtn = document.getElementById("dl-docx");
     const pdfBtn  = document.getElementById("dl-pdf");
+    // Named at the press, not here: by then step 5's list has been read, so the name is the one the
+    // header shows (fileStem).
     xlsxBtn.addEventListener("click", () => downloadAs(
-      "xlsx_download_url", `${safeName}_estimate.xlsx`, xlsxBtn));
+      "xlsx_download_url", `${fileStem(state.project_name)}_estimate.xlsx`, xlsxBtn));
     docxBtn.addEventListener("click", () => downloadAs(
-      "docx_download_url", `${safeName}_proposal.docx`, docxBtn));
+      "docx_download_url", `${fileStem(state.project_name)}_proposal.docx`, docxBtn));
     // PDF is rendered on demand from the .docx (LibreOffice). Only wire the
     // button when the backend returned a pdf url (older cached results won't).
     if (result.pdf_download_url) {
       pdfBtn.addEventListener("click", () => downloadAs(
-        "pdf_download_url", `${safeName}_proposal.pdf`, pdfBtn));
+        "pdf_download_url", `${fileStem(state.project_name)}_proposal.pdf`, pdfBtn));
     } else {
       pdfBtn.style.display = "none";
     }
+    // THIS proposal's line on step 5's list presses exactly these (paintRowFiles).
+    rowFiles.mine = downloadAs;
     // NO SEPARATE COVER-LETTER DOWNLOAD. There used to be a fourth button here, and a careful
     // two-part gate on it (a letter cached for THIS `result`, AND the estimator's current choice)
     // because `result` can be stale. Both are gone: the letter is page 1 of the .docx and the PDF
@@ -1506,8 +1907,8 @@
     mountRequireDeposit();
     // Awaited so the chips can mark whoever ends up assigned as already-included; the estimator
     // picker is what decides that, and it resolves the roster from the server.
-    mountEstimatorPicker().then(paintNotifyChips).catch(() => {});
-    mountNotifyRoster();
+    const _estMounted = mountEstimatorPicker().then(paintNotifyChips).catch(() => {});
+    const _rosterMounted = Promise.resolve(mountNotifyRoster()).catch(() => {});
     // Changing the estimator changes who is implicitly told, so the chips follow the select.
     const _estSel = document.getElementById("portal-estimator");
     if (_estSel) _estSel.addEventListener("change", paintNotifyChips);
@@ -1535,6 +1936,14 @@
       });
     }
     const portalBtn = document.getElementById("portal-btn");
+    // ONE OF SEVERAL PROPOSALS OF A PROJECT (a scope group, Hanz 2026-10-27: "when I send the
+    // proposals out it should send out without publishing ... And it must come in one email only"):
+    // the button is the project's one press, which publishes every proposal the customer does not
+    // have yet and sends them all in one email (main.py api_scope_group_send_all).
+    const _myGroup = (TW.getState() || {}).scope_group;
+    if (portalBtn && _myGroup && typeof _myGroup === "object" && _myGroup.id) {
+      portalBtn.textContent = "Send all proposals in one email";
+    }
     if (portalBtn) {
       portalBtn.addEventListener("click", async () => {
         const requireDeposit = readRequireDeposit();
@@ -1690,8 +2099,7 @@
           const _pp = (_liveState.proposal_payload && typeof _liveState.proposal_payload === "object")
             ? _liveState.proposal_payload : {};
           const hasCoverLetter = !!_pp.cover_letter_enabled;
-          const j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId),
-                                      { emails, message, require_deposit: requireDeposit,
+          const _publishBody = { emails, message, require_deposit: requireDeposit,
                                         has_cover_letter: hasCoverLetter,
                                         // They travel in this body rather than being uploaded
                                         // first because on a FIRST send the portal proposal row
@@ -1715,8 +2123,67 @@
                                         document_render_id: checkedDocument.renderId || undefined,
                                         // When the server last stored the copy checked above.
                                         // The server refuses a draft stored again since.
-                                        draft_version: (_row && _row.version) || undefined });
-          if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+                                        draft_version: (_row && _row.version) || undefined };
+          // ONE PRESS, ONE EMAIL for a proposal of a project with several (the label set at mount):
+          // every proposal the customer does not have yet is published and the customer gets ONE
+          // email listing them all. Every check above has run on THIS proposal; the server runs the
+          // publish's own checks on every one and sends nothing when any cannot go. Its answer is
+          // said in the board drawer's own sentences (TWCrm.scopeSendOutcome, crm-core.js).
+          const _group = (_liveState.scope_group && typeof _liveState.scope_group === "object"
+            && _liveState.scope_group.id) || "";
+          let j = null;
+          let allOut = null;
+          if (_group) {
+            portalBtn.textContent = "Sending all proposals…";
+            let status = 200;
+            let ans = {};
+            try {
+              ans = await TW.postJSON("/api/portal/scope-group/" + encodeURIComponent(_group) + "/send-all",
+                                      { draft_id: draftId, message, publish: _publishBody }) || {};
+            } catch (e) {
+              // postJSON throws "POST <path> → <status>: <body>" on a refusal; the body is the answer.
+              const m = /→ (\d{3}): ([\s\S]*)$/.exec(String((e && e.message) || ""));
+              if (!m) throw e;
+              status = Number(m[1]);
+              try { ans = JSON.parse(m[2]) || {}; } catch { ans = { error: m[2] }; }
+            }
+            allOut = window.TWCrm.scopeSendOutcome(status, ans, null);
+            // PROPOSALS THAT WERE NEVER BUILT (Hanz, 2026-10-28): nothing was published. Each is
+            // built through its own Proposal step's door (send-all-chain.js), then this page comes
+            // back, puts these choices back on screen and presses Send again, every check above
+            // asked again (resumeSendAll). A page that resumed once never builds again, and a page
+            // that cannot build says the server's manual way.
+            if (allOut.build) {
+              const _stash = { message, emails, no_followups: _publishBody.no_followups,
+                               assigned_estimator: assignedEstimator, require_deposit: requireDeposit,
+                               notify_add: _publishBody.notify_add, notify_mute: _publishBody.notify_mute,
+                               attachments: Array.isArray(attachments) ? attachments.length : 0 };
+              const _back = String(window.location.href || "")
+                .replace(/([?&])composed=1(&|$)/, "$1").replace(/[?&]$/, "");
+              if (window.TWSendAll && window.TWSendAll.start({ group: _group, build: allOut.build,
+                                                               returnUrl: _back, stash: _stash })) {
+                portalBtn.textContent = "Building " + allOut.build.length
+                  + (allOut.build.length === 1 ? " proposal first…" : " proposals first…");
+                if (portalRecip.setErr) portalRecip.setErr(allOut.text);
+                return;
+              }
+              portalBtn.disabled = false; portalBtn.textContent = orig;
+              if (portalRecip.setBusy) portalRecip.setBusy(false);
+              if (portalRecip.setErr) portalRecip.setErr(allOut.fallback);
+              return;
+            }
+            const mine = (Array.isArray(ans.published) ? ans.published : []).some((x) => x && x.id === draftId);
+            if (!allOut.sent && !mine) {
+              // NOTHING of this proposal went anywhere: the button comes back, the sentence says why.
+              portalBtn.disabled = false; portalBtn.textContent = orig;
+              if (portalRecip.setBusy) portalRecip.setBusy(false);
+              if (portalRecip.setErr) portalRecip.setErr(allOut.text);
+              return;
+            }
+          } else {
+            j = await TW.postJSON("/api/portal/publish?draft_id=" + encodeURIComponent(draftId), _publishBody);
+            if (j && j.ok === false) throw new Error(j.error || j.detail || "Send failed.");
+          }
           // Only now. Clearing before the request would lose the files on a failed send and leave
           // the estimator re-picking them with no idea they had gone.
           sendAtts.clear();
@@ -1741,12 +2208,47 @@
             TW.flushState();          // sent now, not 2.5 s later, while the check above still holds
           }
           if (portalRecip.setBusy) portalRecip.setBusy(false);
-          portalBtn.textContent = "\u2713 Sent to customer portal";
+          if (allOut) {
+            // What the one press did, in the drawer's words: sent in one email, or (this proposal
+            // published, the email not sent) why not, and that pressing again finishes it.
+            portalBtn.textContent = allOut.sent ? "\u2713 Sent, one email with every proposal" : orig;
+            mountRevisions();
+            const res = document.getElementById("portal-result");
+            if (res) { res.style.display = ""; res.textContent = allOut.text; }
+            if (!allOut.sent && portalRecip.setErr) portalRecip.setErr(allOut.text);
+            if (allOut.sent) setTimeout(() => { portalBtn.textContent = orig; portalBtn.disabled = false; }, 2500);
+            else portalBtn.disabled = false;
+            return;
+          }
+          // ONE SCOPE OF A PROJECT SPLIT INTO SEVERAL PROPOSALS (2026-10-24) is published and emails NOBODY: the customer gets
+          // one email with every scope, sent from the project's drawer on the board (main.py adds scope_group to the answer).
+          const scoped = !!(j && j.scope_group);
+          portalBtn.textContent = scoped ? "\u2713 Published (not emailed yet)" : "\u2713 Sent to customer portal";
           mountRevisions();   // the send just created a new version \u2014 show it
           const r = document.getElementById("portal-result");
           if (r) {
             r.style.display = "";
             r.textContent = "";
+            if (scoped) {
+              // ONE OF SEVERAL PROPOSALS MADE FROM ONE ESTIMATE ("Create Multiple Proposals", 2026-10-27): said
+              // as a proposal of N (GET /api/draft/{id}/proposals, the proposal page's own tab list). A scope
+              // made the older way, or a list that cannot be read, keeps the scope wording.
+              let ofN = 0;
+              try {
+                const pv = TW.readProposals ? await TW.readProposals(draftId) : null;
+                ofN = pv && Array.isArray(pv.members) && pv.members.length >= 2 ? pv.members.length : 0;
+              } catch { ofN = 0; }
+              const s = document.createElement("p");
+              s.className = "portal-scope";
+              s.textContent = ofN
+                ? "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                  + "one of " + ofN + " proposals of this project. The customer has not been emailed about it yet: the project's "
+                  + "one email, which names every new or revised proposal, is sent from the project's drawer on the board."
+                : "Published as " + (j.scope_label ? "\u201c" + j.scope_label + "\u201d, " : "")
+                  + "one scope of this project. The customer has not been emailed about it yet: the project's one email, "
+                  + "which names every new or revised scope, is sent from the project's drawer on the board.";
+              r.appendChild(s);
+            }
             // NO LINK AND NO RECIPIENT LIST. Removed on Hanz's ask (2026-08-26). The URL is a
             // secret token that opens the customer's proposal, and there is no reason for it to
             // sit on screen after a send — the CRM drawer copies it on demand when somebody
@@ -1755,22 +2257,6 @@
             // The element stays, because the DRIFT WARNING below still needs somewhere to land,
             // and that one must never be dropped: it is the only thing that says the customer
             // received different numbers from the ones on this screen.
-            //
-            // SENT AFTER A WON MARK OR A HAND-OFF, AND THE PORTAL WAS NOT TOLD. The publish still
-            // answers 200, but `followups_note` (main.py _followups_off_after_publish) says the
-            // new proposal is still enrolled in the automatic emails, so the customer would be
-            // chased about a job already won. Drawn here, with the one place to switch it off,
-            // because the button's "Sent" is otherwise the only thing this page shows.
-            if (j && typeof j.followups_note === "string" && j.followups_note) {
-              const fu = document.createElement("p");
-              fu.className = "portal-drift";
-              fu.textContent = j.followups_note + " ";
-              const fuLink = document.createElement("a");
-              fuLink.href = "/portal.html?open=" + encodeURIComponent(draftId) + "&sec=followup";
-              fuLink.textContent = "Open the Follow-up tab";
-              fu.appendChild(fuLink);
-              r.appendChild(fu);
-            }
             const drift = publishDrift(j.sent_snapshot);
             if (drift) {
               const w = document.createElement("p");
@@ -1807,6 +2293,14 @@
             ? "This proposal has no customer email — add a recipient above." : msg);
         }
       });
+    }
+    // BACK FROM BUILDING (send-all-chain.js): the walk this page started has built every proposal
+    // it named. take() hands it over ONCE, to this project only; then the choices go back on screen
+    // and the button is pressed again (resumeSendAll).
+    if (portalBtn && _myGroup && typeof _myGroup === "object" && _myGroup.id && window.TWSendAll) {
+      let back = null;
+      try { back = window.TWSendAll.take(new URLSearchParams(location.search), _myGroup.id); } catch { back = null; }
+      if (back) resumeSendAll(back.stash || {}, portalBtn, Promise.all([_estMounted, _rosterMounted]));
     }
 
     document.getElementById("restart-btn").addEventListener("click", () => {

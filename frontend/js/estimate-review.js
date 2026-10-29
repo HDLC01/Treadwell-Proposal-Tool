@@ -238,6 +238,12 @@ if (TW.isV2Draft(state) && TW.isThisDraft(state)) {
   window.location.replace(TW.withDraft("/polish-estimate.html"));
   throw new Error("estimate-review: a v2 draft has no spreadsheet, sent to polish-estimate.html");
 }
+// A PROPOSAL MADE FROM ANOTHER DRAFT'S ESTIMATE ("Create Multiple Proposals") has no estimate of its
+// own: the server copies its parent's. Opened here it goes to the parent's estimate, before anything
+// below can write a snapshot over the copy (TW.redirectProposalChild, the same rule as above).
+if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/estimate-review.html")) {
+  throw new Error("estimate-review: a proposal made from another estimate, sent to that estimate");
+}
 
 // ─── Project Info canonicalization ──────────────────────────────────
 // In the source xlsx, the Polish/Gyp/Seal/etc sheets reference Epoxy's
@@ -965,8 +971,8 @@ const _escBB = (s) => String(s).replace(/[&<>"']/g,
 const _moneyBB = (n) => "$" + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
 // Render the per-sheet Base-bid toggles + option chips into #bid-bar. Every priced
-// tab is a chip with a "Base bid" radio; non-base chips carry the option (show +
-// total/deduct) controls. Plus an Auto/combined chip.
+// tab is a chip with a "Base bid" checkbox; non-base chips carry the option (show +
+// total/deduct) controls. Plus, on a combo, the combined Epoxy + Polish chip.
 function renderBidOptions() {
   const list = document.getElementById("bid-options-list");
   if (!list) return;
@@ -989,6 +995,17 @@ function renderBidOptions() {
     baseId = autoBase.id;
     TW.setState({ base_tab_id: baseId });
   }
+  // SEVERAL BASE BIDS (Create Multiple Proposals), the Proposal step's Pricing options card one step earlier. Hanz,
+  // 2026-10-27: "we must be able to set a base bid in the excel sheet tab options at the top already". Each sheet's
+  // Base-bid control is a CHECKBOX: every ticked sheet is a base bid, tagged "Base Bid N", and becomes its own
+  // proposal; the pricing base (base_tab_id) is Base Bid 1. Numbered in this page's tab-strip order, which is the
+  // order persistTabState writes priced_tabs in, and priced_tabs is the order the Proposal card numbers by, so
+  // Base Bid N reads the same on both steps.
+  const tabOrder = tabs.map(t => t.id);
+  const tickIds = TWPrice.baseIds(state, tabOrder);
+  // A child (a proposal the server made from another draft's estimate) is sent to its parent's estimate before
+  // this page draws (TW.redirectProposalChild); its boxes are drawn disabled all the same.
+  const childLocked = TWPrice.isProposalChild(state);
   // gyp is a priced role too, so all 5 gyp variants live in `priced` on EVERY
   // job. By default show only the job's own work-type chips (gyp → gyp variants;
   // else → epoxy/polish) plus anything engaged. Cross-type systems stay hidden
@@ -999,7 +1016,7 @@ function renderBidOptions() {
   // sheet carries fixed overhead at 0 SF, so that would never hide anything. The
   // stale-base guard above still runs on the unfiltered `priced` list.
   const chipEngaged = (t) =>
-    t.id === baseId ||
+    t.id === baseId || tickIds.indexOf(t.id) >= 0 ||
     (state.tab_opts[t.id] && state.tab_opts[t.id].is_option);
   // A gyp job shows gyp; every other job shows the non-gyp systems, which now includes Seal —
   // that IS the estimator's request ("Seal doesn't come up as an optional system to add"). Anything
@@ -1040,15 +1057,29 @@ function renderBidOptions() {
   const comboComboTotal = () => priced
     .filter(t => t.kind === "base" && COMBINED_BASE_ROLES.has(t.role))
     .reduce((s, t) => s + (HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0), 0);
-  const baseRadio = (val, checked, label) =>
-    `<label class="bb-baselbl" title="Set as the Base bid"><input type="radio" name="bb-base" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
+  const baseBox = (val, checked, label) =>
+    `<label class="bb-baselbl" title="Base bid: tick to give this its own proposal"><input type="checkbox" class="bb-base" value="${_escBB(val)}"${checked ? " checked" : ""}${childLocked ? " disabled" : ""}> <span class="bb-name">${_escBB(label)}</span></label>`;
+  // ONE CHOICE PER SHEET. Hanz, 2026-10-27: "There should be an option to make multiple base bids and there should be
+  // an option to make it an option in one proposal". The base-bid box hid a sheet's option controls the moment it was
+  // ticked and showed them only unticked, so the two choices never stood side by side and the option road was not
+  // found. Each sheet now has one three-way switch: Base bid (its own proposal) | Option (inside the proposal, under
+  // the base) | Off. `segs` names the segments drawn ("base", "option", "off"); `role` the one that is on; `lock` the
+  // ones drawn disabled. The Base segment keeps the box's class (bb-base), so it takes the box's road in wireBidBar.
+  const roleSwitch = (t, role, segs, lock) => {
+    const v = _escBB(t.id), nm = _escBB("bb-role-" + t.id);
+    const one = (seg, cls, label) => segs.indexOf(seg) < 0 ? "" :
+      `<label class="bb-seg-btn${role === seg ? " on" : ""}"><input type="radio" class="${cls}" value="${v}" name="${nm}"` +
+      `${role === seg ? " checked" : ""}${lock.indexOf(seg) >= 0 ? " disabled" : ""}> ${label}</label>`;
+    return `<span class="bb-seg" role="radiogroup" aria-label="${_escBB(labelFor(t.id))}: base bid, option or off">` +
+      one("base", "bb-base", "Base bid") + one("option", "bb-isopt", "Option") + one("off", "bb-off", "Off") + `</span>`;
+  };
   let html = "";
   // Combo's combined base, as a real named chip and — the part this screen never had — the way
   // BACK from a single-sheet pick. Narrowing a combo to one sheet was one click and permanent
   // here; only the Proposal screen could restore the pair.
   if (wt === "combo") {
     html += `<span class="bb-opt bb-combined">` +
-      baseRadio("", !baseId, "Epoxy + Polish (combined)") +
+      baseBox("", !baseId, "Epoxy + Polish (combined)") +
       `<span class="bb-price">${_moneyBB(comboComboTotal())}</span>` +
       (comboBoth ? `<span class="bb-tag">base bid</span>`
                  : `<span class="bb-sub"><span class="bb-hint">Both sheets as one base bid</span></span>`) +
@@ -1056,31 +1087,51 @@ function renderBidOptions() {
   }
   html += visible.map(t => {
     const o = state.tab_opts[t.id] || {};
-    const isBase = baseId === t.id || soloBase === t.id;
+    // A base bid: the pricing base, or another ticked sheet (Base Bid 2, 3...). Never an option-only sheet, which
+    // has no box to tick.
+    const isBase = !isOptionOnlyRole(t.role)
+      && (baseId === t.id || soloBase === t.id || tickIds.indexOf(t.id) >= 0);
     const isOpt = !!o.is_option, show = o.show !== false, mode = o.price_mode === "deduct" ? "deduct" : "total";
     const tot = HF.ready ? hfNum(t.id, totalCellsFor(t.id).total) : 0;
     // An option-only sheet gets its NAME, not a Base-bid radio. Every visible chip used to carry
     // one, so the moment Seal became visible the base bid was one click from a document the tool
     // cannot produce: role "seal" has no template, so effectiveWorkType falls back to the intake
     // type and the customer receives the Epoxy proposal carrying the seal's price.
-    const nameCell = isOptionOnlyRole(t.role)
+    const optOnly = isOptionOnlyRole(t.role);
+    const nameCell = optOnly
       ? `<span class="bb-name" title="Priced as an option only, never as the base bid">${_escBB(labelFor(t.id))}</span>`
-      : baseRadio(t.id, isBase, labelFor(t.id));
+      : `<span class="bb-name">${_escBB(labelFor(t.id))}</span>`;
+    // The switch. A sheet inside a combo's combined base offers only Base bid (to bid it on its own): it cannot be an
+    // option against a base it is part of. A child's base bids are its parent's, so on a child the Base segment is
+    // read-only everywhere and a base bid's whole switch is; its other sheets' Option / Off stay its own.
+    const inCombined = !isBase && isPartOfAutoBase(t);
+    const role = isBase ? "base" : (isOpt ? "option" : "off");
+    const segs = inCombined ? ["base"] : (optOnly ? ["option", "off"] : ["base", "option", "off"]);
+    const lock = childLocked ? (isBase ? ["base", "option", "off"] : ["base"]) : [];
     let inner = nameCell +
-                `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>`;
+                `<span class="bb-price">${tot ? _moneyBB(tot) : ""}</span>` +
+                roleSwitch(t, inCombined ? "" : role, segs, lock);
     if (isBase) {
-      inner += `<span class="bb-tag">base bid</span>`;
+      // "Base Bid N", the label the Proposal card prints for the same sheet (TWPrice.baseLabelFor).
+      inner += `<span class="bb-tag">${_escBB(TWPrice.baseLabelFor(state, t.id, tabOrder) || "base bid")}</span>`;
+      // THE ONE-CLICK BASE MOVE. The radio this box replaced moved the base in one click; a tick only adds a base
+      // bid, so an estimator ticking Polish out of habit got Base Bid 2 while Epoxy went on being the price. A ticked
+      // sheet that is not the pricing base carries this button, which makes it Base Bid 1 (the old base stays ticked).
+      // (With a pricing base, `soloBase` is null, so a base chip here that is not the base is a ticked sheet.)
+      if (baseId && t.id !== baseId && !childLocked) {
+        inner += `<button type="button" class="bb-mkbase" data-id="${_escBB(t.id)}" title="Price the proposal from this sheet; ${_escBB(labelFor(baseId))} stays a base bid">Make Base Bid 1</button>`;
+      }
     } else if (isPartOfAutoBase(t)) {
       // BOTH sheets carry the tag on a combo — that is the whole ask. No option controls: a
       // sheet already inside the base bid cannot also be an option against it, which is the
       // double-count the rooms snapshot used to build.
       inner += `<span class="bb-tag">base bid</span>` +
         `<span class="bb-sub"><span class="bb-hint">Part of the combined base bid — ` +
-        `tick this sheet to bid it on its own.</span></span>`;
-    } else {
+        `choose Base bid to bid this sheet on its own.</span></span>`;
+    } else if (isOpt) {
+      // An Option's own controls, under the switch, exactly as the "add as option" box opened them.
       inner += `<span class="bb-sub">` +
-        `<label title="Add this sheet to the proposal as an option"><input type="checkbox" class="bb-isopt"${isOpt ? " checked" : ""}> add as option</label>` +
-        `<span class="bb-optsub"${isOpt ? "" : ' style="display:none"'}>` +
+        `<span class="bb-optsub">` +
         `<label><input type="checkbox" class="bb-show"${show ? " checked" : ""}> show in proposal</label>` +
         // Marked an option but not shown = configured into thin air: the rooms snapshot drops
         // `show === false` rows, so it reaches neither the PDF nor the customer portal. That
@@ -1103,19 +1154,34 @@ function renderBidOptions() {
   // "+ Add another system" — reveals the cross-work-type chips (e.g. Epoxy/Polish
   // on a gyp job) so the estimator can mark them as options for a multi-system
   // bid. Only shown when there ARE hidden systems to reveal.
+  // Hanz, 2026-10-27: "I couldn't add more base bids". A third base bid is often a sheet of another system (the Gyp
+  // sheets on an epoxy job), and "+ Add another system" did not say that is where they were. The button names them.
   if (hasHiddenSystems) {
-    const lbl = revealSystems ? "− Fewer systems" : "+ Add another system";
+    // "Gyp, Leveling…": the systems behind the button, by role, in sheet order, three at most.
+    const kinds = [];
+    priced.filter(t => !defaultChipVisible(t)).forEach(t => {
+      const r = String(t.role || "").toLowerCase();
+      const n = r ? r.charAt(0).toUpperCase() + r.slice(1) : "";
+      if (n && kinds.indexOf(n) < 0) kinds.push(n);
+    });
+    const lbl = revealSystems ? "− Fewer sheets"
+      : "+ Show other sheets (" + kinds.slice(0, 3).join(", ") + (kinds.length > 3 ? "…" : "") + ")";
     html += `<span class="bb-opt bb-addsys"><button type="button" class="bb-addsys-btn">${_escBB(lbl)}</button></span>`;
   }
   list.innerHTML = html;
   // The legend explains base vs. option. On a combo it has to say the thing that is not obvious
   // from the controls: the price already covers both sheets, and picking one is how you narrow
   // the bid, not how you confirm it.
+  // Redrawn on every render, so a refused untick's sentence (wireBidBar) goes once the bar changes again.
   const hint = document.getElementById("bid-options-hint");
   if (hint && wt === "combo") {
     hint.innerHTML = "A combo bid is <b>both</b> sheets: Epoxy&nbsp;+&nbsp;Polish are the " +
       "<b>base&nbsp;bid</b> and the proposal prices them as Option&nbsp;1 and Option&nbsp;2. " +
       "Pick a single sheet only to bid that system <b>on its own</b>.";
+  } else if (hint) {
+    // The same words estimate-review.html ships, and the Proposal step's Pricing options card prints.
+    hint.innerHTML = "<b>Base&nbsp;bid</b> = its own proposal. <b>Option</b> = listed inside the proposal under the base. " +
+      "<b>Off</b> = not on the proposal. With two or more base bids, press <b>Create Multiple Proposals</b> on the Proposal step.";
   }
 }
 
@@ -1123,8 +1189,68 @@ function renderBidOptions() {
 function wireBidBar() {
   const list = document.getElementById("bid-options-list");
   if (!list) return;
+  // A base-bid change, whichever control made it (a box, or "Make Base Bid 1"): the patch
+  // { base_tab_id, base_tab_ids } lands, then the one base-change path runs.
+  const applyBasePatch = (patch, priorBaseId) => {
+    state.base_tab_id = patch.base_tab_id;
+    state.base_tab_ids = patch.base_tab_ids;
+    patch.base_tab_ids.forEach(id => { if (state.tab_opts[id]) state.tab_opts[id].is_option = false; });  // base ≠ option
+    // The Proposal step's edits to the base's lines follow the new base, by THE SAME RULE its own
+    // base picker applies (TWPrice.applyBasePick). This used to clear only
+    // price_overrides.single_bid, so Hanz, 2026-09-26: "the base bid was not updating" -- a base
+    // line saved with the old tab's figure went on printing it. And then: keep the words. His
+    // words stay; the amount, the words for the tab's system and the tax wording are the new
+    // base's. `roles` from this page's own tab list: a copy made a moment ago is not in
+    // priced_tabs until persistTabState below prices it.
+    if (state.base_tab_id !== priorBaseId) {
+      TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
+                            { workType: state.work_type,
+                              roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
+                              // The tax wording the base line prints before the pick, so a line
+                              // in the old shape is read as drawing it would read it.
+                              basePhrase: TWPrice.draftBasePhrase(state) });
+    }
+    // Base moved or only the ticked list changed, the same save: renderBidOptions redraws the tags, and
+    // persistTabState lands base_tab_id, base_tab_ids and priced_tabs (the Proposal card numbers by its order).
+    renderBidOptions();
+    // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
+    // rooms) and then saves, where persistBidOptions only saved. Picking a sheet the snapshot had
+    // not priced yet (a copy made a moment ago, no cell edited since) and leaving by a step pill
+    // sent the Proposal step a base it could not find, and it fell back to the Epoxy tab's price
+    // and wrote that over the pick. It also carries this page's cell edits (`cellValues`), which
+    // the `...state` in persistBidOptions put back to what they were when the page opened.
+    persistTabState();   // a base bid change: priced and saved
+    // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
+    // else on this path does, and the bar kept the previous base's lump sum until the next cell
+    // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
+    try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
+    // A PARENT THAT HAS SEPARATE PROPOSALS (Create Multiple Proposals). Hanz, 2026-10-28: "Why is there an extra epoxy
+    // tab when we only have Epoxy and Polish?" Each proposal is matched to its sheet, so a new Base Bid 1 leaves the
+    // proposal on that sheet out of step until Refresh moves it (drafts.refresh_proposals). Said on the bar's hint line
+    // once the save is under way; the next redraw takes it away, like a refused untick's sentence.
+    if (typeof TW === "object" && TW && typeof TW.readProposals === "function"
+        && state.base_tab_id !== priorBaseId && !TWPrice.isProposalChild(state)) {
+      Promise.resolve(TW.readProposals()).then((view) => {
+        const hint = view && Array.isArray(view.members) && view.members.length > 1
+          ? document.getElementById("bid-options-hint") : null;
+        if (hint) hint.textContent = "This project has separate proposals: press Refresh on the Proposal step so they follow.";
+      }).catch(() => {});
+    }
+  };
   // "+ Add another system" / "− Fewer systems" toggle (a button → click, not change).
   list.addEventListener("click", (e) => {
+    if (e.target.classList.contains("bb-mkbase")) {   // "Make Base Bid 1" on a ticked sheet
+      const to = e.target.dataset && e.target.dataset.id;
+      const priorBaseId = state.base_tab_id;
+      if (TWPrice.isProposalChild(state) || !to) return;   // a child's base is its parent's
+      if (!priorBaseId || to === priorBaseId) return;
+      // The same move the old radio made (TWPrice.moveBaseId with `keep`): the sheet becomes Base Bid 1 and the old
+      // base stays ticked in its place, then the same base-change path a box takes.
+      applyBasePatch({ base_tab_id: to,
+                       base_tab_ids: TWPrice.moveBaseId(state, priorBaseId, to, tabs.map(t => t.id), true) },
+                     priorBaseId);
+      return;
+    }
     if (!e.target.classList.contains("bb-addsys-btn")) return;
     state.reveal_systems = !state.reveal_systems;
     renderBidOptions();
@@ -1132,49 +1258,67 @@ function wireBidBar() {
   });
   list.addEventListener("change", (e) => {
     const el = e.target;
-    if (el.classList.contains("bb-base")) {          // Base-bid radio toggled
-      if (!el.checked) return;
+    if (el.classList.contains("bb-base")) {          // Base-bid checkbox ticked or unticked
+      // A child's boxes are drawn disabled; one that is fired at anyway changes nothing.
+      if (TWPrice.isProposalChild(state)) return;
       const priorBaseId = state.base_tab_id;
-      state.base_tab_id = el.value || null;
-      if (el.value && state.tab_opts[el.value]) state.tab_opts[el.value].is_option = false;  // base ≠ option
-      // The Proposal step's edits to the base's lines follow the new base, by THE SAME RULE its own
-      // base picker applies (TWPrice.applyBasePick). This used to clear only
-      // price_overrides.single_bid, so Hanz, 2026-09-26: "the base bid was not updating" -- a base
-      // line saved with the old tab's figure went on printing it. And then: keep the words. His
-      // words stay; the amount, the words for the tab's system and the tax wording are the new
-      // base's. `roles` from this page's own tab list: a copy made a moment ago is not in
-      // priced_tabs until persistTabState below prices it.
-      if (state.base_tab_id !== priorBaseId) {
-        TWPrice.applyBasePick(state.price_overrides, priorBaseId, state.base_tab_id, state.priced_tabs,
-                              { workType: state.work_type,
-                                roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
-                                // The tax wording the base line prints before the pick, so a line
-                                // in the old shape is read as drawing it would read it.
-                                basePhrase: TWPrice.draftBasePhrase(state) });
+      // THE PROPOSAL CARD'S RULE (TWPrice.toggleBaseId), numbered in this page's tab-strip order: a tick adds a
+      // base bid; unticking the pricing base moves it to the next ticked sheet; the last one is refused. The
+      // combo's combined chip (value "") is one base on its own, as it is there.
+      const patch = TWPrice.toggleBaseId(state, el.value, el.checked, tabs.map(t => t.id));
+      if (!patch) {
+        if (!el.checked) {
+          el.checked = true;
+          const hint = document.getElementById("bid-options-hint");
+          if (hint) hint.innerHTML = "A proposal needs a base bid. Tick another sheet first, then untick this one.";
+        }
+        return;
       }
-      renderBidOptions();
-      // PRICED AND SAVED: persistTabState takes the pricing snapshot (priced_tabs, the lump sum, the
-      // rooms) and then saves, where persistBidOptions only saved. Picking a sheet the snapshot had
-      // not priced yet (a copy made a moment ago, no cell edited since) and leaving by a step pill
-      // sent the Proposal step a base it could not find, and it fell back to the Epoxy tab's price
-      // and wrote that over the pick. It also carries this page's cell edits (`cellValues`), which
-      // the `...state` in persistBidOptions put back to what they were when the page opened.
-      persistTabState();
-      // The bottom Total bar follows the base tab, so a new base has to repaint it here: nothing
-      // else on this path does, and the bar kept the previous base's lump sum until the next cell
-      // edit or reload (Hanz, 2026-09-25: base back to Epoxy $7,696, bar still read $15,149).
-      try { if (HF && HF.ready) updateTotalBarFromHF(); } catch {}
+      applyBasePatch(patch, priorBaseId);
       return;
     }
     const wrap = el.closest(".bb-opt"); if (!wrap || !wrap.dataset.id) return;
     const o = ensureOpt(wrap.dataset.id);
-    if (el.classList.contains("bb-isopt")) {
-      o.is_option = el.checked;
-      // Reset `show`, don't merely default it: an option un-shown earlier stayed un-shown when
-      // re-enabled, so ticking "add as option" did nothing anywhere. Same fix as the Proposal
-      // screen's pr-isopt handler — the two strips write the same state and must agree.
-      if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
-      const sub = wrap.querySelector(".bb-optsub"); if (sub) sub.style.display = el.checked ? "" : "none";
+    if (el.classList.contains("bb-isopt") || el.classList.contains("bb-off")) {   // the switch's Option or Off
+      // A BASE BID switched to Option or Off leaves the base bids first, by the box's own rule (TWPrice.toggleBaseId):
+      // the pricing base hands Base Bid 1 to the next base bid, the last one is refused. A child's base bids are its
+      // parent's: its switch on a base bid is drawn disabled, and one fired at anyway changes nothing.
+      const order = tabs.map(t => t.id);
+      const priorBaseId = state.base_tab_id;
+      let patch = null;
+      if (TWPrice.baseIds(state, order).indexOf(wrap.dataset.id) >= 0) {
+        patch = TWPrice.isProposalChild(state) ? null : TWPrice.toggleBaseId(state, wrap.dataset.id, false, order);
+        if (!patch) {
+          renderBidOptions();   // the switch goes back to Base bid
+          const hint = document.getElementById("bid-options-hint");
+          if (hint && !TWPrice.isProposalChild(state)) {
+            hint.innerHTML = "A proposal needs a base bid. Make another sheet a Base bid first, then switch this one.";
+          }
+          return;
+        }
+      }
+      if (el.classList.contains("bb-isopt")) {
+        o.is_option = el.checked;
+        // Reset `show`, don't merely default it: an option un-shown earlier stayed un-shown when
+        // re-enabled, so ticking "add as option" did nothing anywhere. Same fix as the Proposal
+        // screen's pr-isopt handler — the two strips write the same state and must agree.
+        if (o.is_option) { o.show = true; if (!o.price_mode) o.price_mode = "total"; }
+      } else {
+        o.is_option = false;
+      }
+      if (patch) {
+        applyBasePatch(patch, priorBaseId);   // redraws, prices and saves (is_option with it)
+      } else {
+        renderBidOptions();   // the Option controls open or close under the switch
+        persistBidOptions();
+      }
+      // The redraw replaced the switch: keep the keyboard on it (arrow keys walk a radio group).
+      try {
+        const again = Array.from(list.querySelectorAll("input." + (el.classList.contains("bb-off") ? "bb-off" : "bb-isopt")))
+          .filter(x => x.value === wrap.dataset.id)[0];
+        if (again) again.focus();
+      } catch {}
+      return;
     } else if (el.classList.contains("bb-show")) {
       o.show = el.checked;
     } else if (el.classList.contains("bb-mode")) {
@@ -1439,7 +1583,12 @@ async function deleteTab(id) {
   // ...and the option's edited words and the lines typed around it and its own tax rows.
   reKeyPriceLineOverrides(k => (k === "option:" + id || k.startsWith("option:" + id + ":")) ? null : k);
   const wasBase = state.base_tab_id === id;
-  if (wasBase) state.base_tab_id = null;   // fall back to auto-derive
+  // A deleted sheet is no base bid of this estimate. (A proposal already made from it is not removed here: the
+  // server only skips it on Refresh, `sheet_gone`.) When it was the pricing base and other sheets are ticked, the next one is the base, as unticking it
+  // on the Proposal step would make it; else the base falls back to the derived one, below.
+  const leftBases = Array.isArray(state.base_tab_ids) ? state.base_tab_ids.filter(x => x !== id && x !== state.base_tab_id) : null;
+  if (leftBases) state.base_tab_ids = state.base_tab_ids.filter(x => x !== id);
+  if (wasBase) state.base_tab_id = (leftBases && leftBases.length) ? leftBases[0] : null;   // else fall back to auto-derive
   buildTabs();
   // Deleting the BASE copy changes the base, to the one the sheet derives (renderBidOptions
   // persists it), so the copy's edited base lines follow it by THE SAME RULE both base pickers
@@ -1449,7 +1598,8 @@ async function deleteTab(id) {
   // takes the copy's figure off the draft. Without it the copy's figure printed under the derived
   // base's price, unasked. `roles`: the copy has left this page's tab list, not priced_tabs.
   if (wasBase) {
-    const next = (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
+    const next = state.base_tab_id ? resolveBaseTab()
+      : (state.work_type || "epoxy").toLowerCase() === "combo" ? null : resolveBaseTab();
     TWPrice.applyBasePick(state.price_overrides, id, next ? next.id : null, state.priced_tabs,
                           { workType: state.work_type,
                             roles: Object.fromEntries(tabs.map(t => [t.id, t.role])),
@@ -5206,6 +5356,8 @@ function snapshotLumpSumsToState() {
   // mirrors this). Every priced tab, not just the shown options. `sf`/`sys_names`
   // carry the tab's own Area inputs so the proposal's Area line can follow the
   // resolved BASE tab (see state.sheet_area below).
+  // A tab whose layout cannot be read has no phase cell (taxFlagsFor guards the same read), not a broken snapshot.
+  const tabPhase = (id) => { try { return phaseAt(id); } catch (e) { return 0; } };
   state.priced_tabs = pricedTabs().map(t => {
     const c = totalCellsFor(t.id);
     return Object.assign({
@@ -5217,6 +5369,9 @@ function snapshotLumpSumsToState() {
       // Where this tab's own Taxable? / Remodel Tax? live, so the intake's two switches can set
       // the BASE's answer on a split draft (index.js splitFlagCells).
       flag_cells: jobFlagCellsFor(t.id),
+      // The tab's own phase surcharge and cost side, so a proposal the server makes of THIS tab (Create Multiple
+      // Proposals: drafts._child_money) carries its phase_price and cost_snapshot, not the base's.
+      phase: tabPhase(t.id), costs: costAt(t.id).costs, man_hours: costAt(t.id).mh,
     }, taxFlagsFor(t.id));   // {taxable, remodel_on}: the Proposal step's rebuildPricing reads them
   });
   // Area (SF / cove LF) for the proposal, sourced from the BASE tab(s) ONLY —
@@ -5254,9 +5409,11 @@ document.getElementById("back-btn").addEventListener("click", () => {
   persistTabState();
   window.location.assign(TW.withDraft("/?edit=1"));   // back to intake for the current draft (home is Projects)
 });
+// Continue goes to 3 · Generate Files (Hanz, 2026-10-28), which builds every proposal's files from
+// the estimate as it stands, then leads on to the Proposal step.
 document.getElementById("continue-btn").addEventListener("click", () => {
   persistTabState();
-  window.location.assign(TW.withDraft("/proposal-review.html"));
+  window.location.assign(TW.withDraft("/generate.html"));
 });
 // EVERY STEP PILL LEAVES WITH THE EDIT THE GRID IS STILL HOLDING. A cell edit lives in `cellValues`
 // and HyperFormula until the grid's `change` listener runs persistTabState 300ms later (`_cbTimer`),

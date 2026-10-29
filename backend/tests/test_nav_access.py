@@ -422,8 +422,9 @@ def test_the_two_doors_into_polish_step_two_are_still_the_two_this_assumes():
     # done.js and proposal-review.js joined on 2026-10-20: a v2 draft's step pills go straight to the v2 estimate rather
     # than through estimate-review.js's redirect, which was already a door to it. The page is gated where it is served
     # (page_denied), so a pill is no way past a denial.
-    assert doors == ["done.js", "estimate-review.html", "estimate-review.js", "polish-intake.html",
-                     "polish-intake.js", "proposal-review.js"], doors
+    # generate.js joined on 2026-10-28: 3 · Generate Files points a v2 draft's Estimate pill and Back at it.
+    assert doors == ["done.js", "estimate-review.html", "estimate-review.js", "generate.js",
+                     "polish-intake.html", "polish-intake.js", "proposal-review.js"], doors
 
 
 def test_the_pages_with_no_sidebar_row_are_never_denied():

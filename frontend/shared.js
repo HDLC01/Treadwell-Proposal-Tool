@@ -9,7 +9,7 @@
  * navigates via window.location.assign(). No SPA, no router — just
  * static HTML pages talking through the storage bucket.
  */
-(function () {
+(function (hostLocal, hostSession) {
   const STATE_KEY = "treadwell.proposal_tool.state";
   const DRAFT_ID_KEY = "treadwell.proposal_tool.draft_id";
   const RELOAD_GUARD = "treadwell.proposal_tool.hydrated_once";
@@ -31,6 +31,93 @@
   // to the last one the server did hold. A write landing after that (the cover letter's template
   // arriving while the page unloads) would undo it, so every write from here is refused too.
   let _givenUp = false;
+
+  // ─── A HIDDEN COMPOSE FRAME (3 · Generate Files, Hanz 2026-10-29) ───
+  // "If we are on the generate files it should stay on that page until I click continue." Step 3
+  // used to walk the tab through each proposal's Proposal-step door and back, so the address bar
+  // flipped between steps. It now runs that same door in a hidden same-origin iframe instead
+  // (proposal-review.html?d=<id>&compose=frame&frame=<token>, js/generate.js composeInFrame), so the
+  // document is composed by the Proposal step's own code with nobody leaving step 3.
+  //
+  // THE ONE BLOB IS EVERY PAGE'S, AND A FRAME MUST NOT TOUCH IT. localStorage holds one draft blob
+  // shared by every tab and frame of the origin, and the Proposal page writes it as it loads, at
+  // Continue, and hydrates over it when it holds another project. A frame doing that would put a
+  // sibling's draft into the slot the page that made it (or another tab) is working in. So a page
+  // running as such a frame (the token in its URL AND not the top window) gets its OWN storage from
+  // this file: two in-memory stores in place of localStorage and sessionStorage, for every read and
+  // write below. Its draft is the copy the page that made it has just read from the server, handed
+  // over once by token (window.parent.TWComposeFrames.seed); it never hydrates, never reloads, never
+  // evicts or flushes anything, sends nothing as it goes, and saves only through the Proposal
+  // step's own guarded save (composeForFiles' hold: the server is asked again at that moment, and a
+  // copy saved since is never written over). It tells the page that made it how it went with
+  // postMessage, to that page's own origin (frameReport). Other scripts on the page keep the real
+  // storage for their own per-viewer keys (the sign-in, the sidebar's state): only this file holds
+  // the draft. Opened as a top-level page, the same URL is an ordinary visit.
+  const FRAME_TOKEN_RE = /^[A-Za-z0-9_-]{16,80}$/;
+  /** The real storage of `name`, or null where the browser refuses it (private mode, blocked). Read
+   *  through the getters this file's wrapper is called with (its last lines), which name
+   *  `localStorage` / `sessionStorage` OUTSIDE this function, where the two names below cannot
+   *  shadow them: the page's own, or whatever a harness hands this file under those names. */
+  function hostStore(name) {
+    try { return (name === "localStorage" ? hostLocal() : hostSession()) || null; } catch { return null; }
+  }
+  function memoryStore() {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(String(k)) ? m.get(String(k)) : null),
+      setItem: (k, v) => { m.set(String(k), String(v)); },
+      removeItem: (k) => { m.delete(String(k)); },
+      clear: () => { m.clear(); },
+      key: (i) => { const ks = Array.from(m.keys()); return i >= 0 && i < ks.length ? ks[i] : null; },
+      get length() { return m.size; },
+    };
+  }
+  /** {token, local, session, seed} when this page runs as a compose frame, else null. */
+  function frameMode() {
+    let token = null;
+    try {
+      if (!window.parent || window.parent === window || window.top === window) return null;
+      const q = new URL(window.location.href).searchParams;
+      if (q.get("compose") !== "frame") return null;
+      token = q.get("frame");
+    } catch { return null; }
+    if (!token || !FRAME_TOKEN_RE.test(token)) return null;
+    const f = { token, local: memoryStore(), session: memoryStore(), seed: null };
+    // The API base the page that made it uses (a debug override), read, never written.
+    try {
+      const base = hostStore("localStorage").getItem("tw_api_base");
+      if (base) f.local.setItem("tw_api_base", base);
+    } catch {}
+    // The draft, handed over once by the page that made this frame. Reading another origin's
+    // window throws, so only a same-origin parent can hand one over.
+    try {
+      const host = window.parent;
+      if (host.location.origin !== window.location.origin) return f;
+      const give = host.TWComposeFrames && host.TWComposeFrames.seed;
+      const s = typeof give === "function" ? give(token) : null;
+      if (s && typeof s === "object" && typeof s.id === "string"
+          && s.data && typeof s.data === "object" && !Array.isArray(s.data)) {
+        f.seed = JSON.parse(JSON.stringify({ id: s.id, data: s.data }));
+      }
+    } catch {}
+    return f;
+  }
+  const FRAME = frameMode();
+  // Every read and write of the draft's storage in this file goes through these two names.
+  const localStorage = FRAME ? FRAME.local : hostStore("localStorage");
+  const sessionStorage = FRAME ? FRAME.session : hostStore("sessionStorage");
+
+  /** Tell the page that made this frame how it is going: {phase: "started" | "saved" | "stopped",
+   *  reason?}. Posted to that page's own origin only; nothing when this is not a compose frame. */
+  function frameReport(msg) {
+    if (!FRAME) return false;
+    try {
+      window.parent.postMessage(Object.assign({}, msg || {}, { tw_compose_frame: FRAME.token,
+                                                               id: getDraftId() }),
+                                window.location.origin);
+      return true;
+    } catch { return false; }
+  }
 
   /**
    * API base URL resolution (in priority order):
@@ -393,7 +480,11 @@
 
   // Keys the SERVER owns inside the blob (the mirror of _SERVER_OWNED_KEYS in backend/drafts.py).
   // Somebody else can change any of them from the CRM while this page holds an older copy.
-  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived"];
+  // `scope_group` (2026-10-24): which project this proposal is one scope of, and its name there.
+  // `proposal_of`, `estimate_digest`, `estimate_synced_at` (2026-10-27): whose estimate a proposal made
+  // by Create Multiple Proposals is a copy of, and which copy (drafts.fan_out_proposals).
+  // `proposals_base_tab_id` (2026-10-28): the base those proposals were last matched against.
+  const SERVER_OWNED_KEYS = ["assigned_estimator", "is_test", "archived", "scope_group", "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id"];
 
   /** Re-read the server-owned keys for this draft and merge them into local state.
    *
@@ -420,8 +511,11 @@
       const body = await res.json();
       const data = (body && body.data) || {};
       const patch = {};
+      // NOT `estimate_synced_at`: it is the fence that tells the server this page's copy of a
+      // proposal predates a Refresh (drafts.StaleProposalWrite). Merged onto an old estimate it would
+      // wave the old price back in; only a whole fresh copy of the draft may carry the new stamp.
       SERVER_OWNED_KEYS.forEach((k) => {
-        if (Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
+        if (k !== "estimate_synced_at" && Object.prototype.hasOwnProperty.call(data, k)) patch[k] = data[k];
       });
       // Compare before writing: an unconditional write would rewrite the blob on every page load.
       //
@@ -432,7 +526,8 @@
       // Kyle's $10,000 copy back over RJ's revision the moment the estimator picker re-read the
       // assignment, because the assignment had "moved".
       const cur = getState();
-      const moved = Object.keys(patch).filter((k) => cur[k] !== patch[k]);
+      // By value: `scope_group` is an object, and a reference test would call it moved on every load.
+      const moved = Object.keys(patch).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(patch[k]));
       if (moved.length) setLocalState(patch);
       return patch;
     } catch {
@@ -1041,6 +1136,7 @@
    *  gate does let through lifts it. */
   async function releaseHeldSaves() {
     const hold = _hold;
+    if (FRAME) return false;        // nobody works on a compose frame: its saves stay held
     if (!hold) return true;
     hold.handedOver = true;
     if (hold.dirty) return (await flushHeld(hold)) && _hold !== hold;
@@ -1225,6 +1321,10 @@
   // ?d= draft doesn't own the local blob, hydrate it (fetch → clean-replace →
   // reload). This self-heals after corruption and covers cross-device opens.
   async function initDraftSync() {
+    // A compose frame's draft is the copy it was handed (seedFrame), or nothing it may write: it
+    // never reads another copy into its storage and never reloads.
+    if (FRAME) return;
+    if (_prefetchBoot) return confirmPrefetchedBoot(_prefetchBoot);   // this page ran on a kept read (bootFromPrefetch)
     // The pull below hits the auth-gated /api/draft/{id}. Wait for the Supabase
     // token (set by auth.js) so the GET isn't 401'd — otherwise a reopened link
     // would start empty instead of hydrating.
@@ -1333,6 +1433,224 @@
     }
   }
 
+  // ─── A proposal tab's draft, read before it is opened ─────────────
+  // Hanz, 2026-10-27: "can we make the switching of the proposals tabs more efficient? like pre
+  // loading". A tab of the proposal strip opens another draft, and opening another draft was TWO
+  // page loads: the page ran on the old draft's blob, initDraftSync waited for the sign-in and the
+  // profile, read the new draft, wrote it and reloaded, and the page ran again. So the strip reads
+  // its other tabs' drafts ahead (prefetchDraft, at idle, on hover, and at the click), keeps each
+  // with the server's `updated_at` in sessionStorage (this tab only; a convenience, never the
+  // record), and the page that opens takes its draft from there in its FIRST run
+  // (bootFromPrefetch), before any page script reads the blob.
+  //
+  // IT IS A COPY THE SERVER HAS NOT CONFIRMED, so until it has, the draft is held exactly as a draft
+  // adopted blind is (markUnverified): every server save is refused, and a reload reads the server
+  // again. confirmPrefetchedBoot asks the server as soon as there is a token. The same `updated_at`
+  // and the same whole copy (wholeCopy: the board's Won and the like are written without a new
+  // `updated_at`) mean nothing was written to it since it was read: the refusal is lifted and what the page wrote
+  // meanwhile is saved. Anything else, and the server's copy replaces it and the page reloads, which
+  // is what every open of another draft did before, so a copy that went stale costs no more than
+  // the old way and is never saved over the newer one.
+  // Each read under its own key (PREFETCH_KEY + ":" + id), so a page reads only its own; the list
+  // under PREFETCH_KEY says what is kept, when, and how big.
+  const PREFETCH_KEY = "treadwell.proposal_tool.prefetched";
+  // A kept read opens a page for a minute at most (bootFromPrefetch), and one read answers every ask
+  // for 20 seconds (prefetchDraft): the click reads again after that, so the page that opens runs
+  // on a read made at the click, not on the one made at idle when this page opened.
+  const PREFETCH_MAX_AGE_MS = 60 * 1000;
+  const PREFETCH_FRESH_MS = 20 * 1000;
+  // sessionStorage also holds the UNVERIFIED marker, which must always fit: the kept reads stay
+  // well under the ~5M characters a browser allows it.
+  const PREFETCH_MAX_CHARS = 1500000;
+  const _prefetches = new Map();     // id -> {at, p}: its latest read on this page
+  let _leaving = false;
+  window.addEventListener("pagehide", () => { _leaving = true; });
+
+  /** Keep `raw` (one draft's read) under `id`: what is kept goes oldest first, and anything over
+   *  PREFETCH_MAX_AGE_MS old, until it fits. Throws when storage refuses (the caller's catch). */
+  function keepPrefetched(id, raw) {
+    if (raw.length > PREFETCH_MAX_CHARS) return false;
+    let list = [];
+    try { list = JSON.parse(sessionStorage.getItem(PREFETCH_KEY) || "[]"); } catch { list = []; }
+    if (!Array.isArray(list)) list = [];
+    const now = Date.now();
+    const drop = (e) => { try { sessionStorage.removeItem(PREFETCH_KEY + ":" + e.id); } catch {} };
+    list = list.filter((e) => {
+      const keep = e && e.id !== id && now - e.at < PREFETCH_MAX_AGE_MS;
+      if (!keep && e && e.id !== id) drop(e);
+      return keep;
+    });
+    let total = raw.length;
+    list.forEach((e) => { total += e.n || 0; });
+    while (list.length && total > PREFETCH_MAX_CHARS) { const e = list.shift(); total -= e.n || 0; drop(e); }
+    sessionStorage.setItem(PREFETCH_KEY + ":" + id, raw);
+    list.push({ id, at: now, n: raw.length });
+    sessionStorage.setItem(PREFETCH_KEY, JSON.stringify(list));
+    return true;
+  }
+
+  /** The kept read of `id`, {version, at, data}, taken out of storage (it is used once), or null. */
+  function takePrefetched(id) {
+    let hit = null;
+    try {
+      const raw = sessionStorage.getItem(PREFETCH_KEY + ":" + id);
+      if (raw === null) return null;
+      sessionStorage.removeItem(PREFETCH_KEY + ":" + id);
+      hit = JSON.parse(raw);
+    } catch { return null; }
+    return (hit && typeof hit === "object" && !Array.isArray(hit)) ? hit : null;
+  }
+
+  /** Read draft `id` (another proposal of this estimate) and keep it for the page that opens it.
+   *  A second ask within PREFETCH_FRESH_MS gets the first one's promise; a later one (the click,
+   *  minutes after the idle read) reads it again, and the older kept read is dropped as it starts,
+   *  so the page that opens never runs on more than one read's worth of staleness. Never this
+   *  page's own draft, and nothing from a page that is leaving or reloading. Resolves true when it
+   *  is kept. */
+  function prefetchDraft(id) {
+    if (!id || typeof id !== "string") return Promise.resolve(false);
+    const was = _prefetches.get(id);
+    if (was && Date.now() - was.at < PREFETCH_FRESH_MS) return was.p;
+    if (id === getDraftId() || _reloadPending || _leaving) return Promise.resolve(false);
+    if (was) { try { sessionStorage.removeItem(PREFETCH_KEY + ":" + id); } catch {} }
+    const entry = { at: Date.now(), p: null };
+    entry.p = (async () => {
+      try {
+        const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(id),
+                                { headers: authHeaders() });
+        if (!res.ok) return false;
+        const body = await res.json();
+        const data = body && body.data;
+        const version = (body && typeof body.updated_at === "string") ? body.updated_at : "";
+        if (!version || !(data && typeof data === "object" && !Array.isArray(data))) return false;
+        if (_leaving || _reloadPending) return false;
+        if (_prefetches.get(id) !== entry) return false;     // a later read of it has started: that one is kept
+        return keepPrefetched(id, JSON.stringify({ version, at: entry.at, data }));
+      } catch { return false; }
+    })();
+    _prefetches.set(id, entry);
+    return entry.p;
+  }
+
+  // Set by bootFromPrefetch when this page runs on a kept read: {id, version, digest, whole}.
+  let _prefetchBoot = null;
+
+  /** THE FIRST RUN OF THE PAGE, ON A KEPT READ OF ITS DRAFT. Synchronous, before the page's own
+   *  scripts take their snapshot of the blob, so the page renders this draft and needs no reload.
+   *  The kept read is used once (removed whether it is used or not), and only when:
+   *    - it is this URL's draft, under PREFETCH_MAX_AGE_MS old, with a version;
+   *    - the blob is not already this draft's (that is the ordinary load);
+   *    - nothing in the blob is unsaved: it is empty, holds no work, or is the copy this browser
+   *      last saw the server hold (flushEvictedBlob's own tests). Otherwise the ordinary hydrate,
+   *      which flushes it first, decides;
+   *    - the refusal of server saves has been recorded, before the copy goes in. */
+  function bootFromPrefetch() {
+    let urlId = null;
+    try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
+    if (!urlId) return;
+    const hit = takePrefetched(urlId);
+    if (!hit) return;
+    const data = hit.data;
+    if (!(typeof hit.version === "string" && hit.version && data && typeof data === "object" && !Array.isArray(data))) return;
+    if (!(Date.now() - hit.at < PREFETCH_MAX_AGE_MS)) return;
+    const blob = getState();
+    const stamp = blob[STAMP] || null;
+    if (stamp === urlId || guardBlocks(urlId)) return;
+    if (Object.keys(blob).some((k) => k !== STAMP)) {
+      if (!stamp) return;
+      if (hasWork(blob) && syncedDigest(stamp) !== draftDigest(blob)) return;
+    }
+    markUnverified(urlId);
+    if (!isUnverified(urlId)) return;
+    const copy = Object.assign({}, data, { [STAMP]: urlId });
+    if (!writeBlob(copy)) { clearUnverified(); return; }
+    const digest = draftDigest(copy);
+    markSynced(urlId, digest);
+    setDraftId(urlId);
+    _prefetchBoot = { id: urlId, version: hit.version, digest, whole: wholeCopy(data) };
+  }
+
+  /** The WHOLE of a server copy, every key but the stamp. `updated_at` alone cannot say the copy is
+   *  unchanged: the board's Won / Lost / On hold / Hand off, the Files page's build record, the notify
+   *  picks and a fan-out's tab options are written into the row without it (drafts.set_won and the
+   *  others), and draftDigest skips generate_result and the server-owned keys. A page that saved its
+   *  older copy over those would erase them. */
+  function wholeCopy(data) {
+    try {
+      const keep = JSON.parse(JSON.stringify(data || {}));
+      if (!keep || typeof keep !== "object" || Array.isArray(keep)) return "";
+      delete keep[STAMP];
+      return hash53(canonJSON(keep));
+    } catch { return ""; }
+  }
+  /** A COMPOSE FRAME'S DRAFT goes into its own storage before any page script reads the blob: the
+   *  server's copy its parent handed over, stamped, with this browser's record that the server holds
+   *  exactly it (SYNCED_KEY), so the Proposal step's door reads it as the server's copy. No copy, or
+   *  one for another draft than the URL's: every write from this page is refused (_givenUp), and
+   *  the door says it stopped. */
+  function seedFrame() {
+    if (!FRAME) return;
+    let urlId = null;
+    try { urlId = new URL(window.location.href).searchParams.get("d"); } catch {}
+    const s = FRAME.seed;
+    if (!s || !urlId || s.id !== urlId) { _givenUp = true; return; }
+    const blob = Object.assign({}, s.data, { [STAMP]: urlId });
+    localStorage.setItem(STATE_KEY, JSON.stringify(blob));
+    localStorage.setItem(DRAFT_ID_KEY, urlId);
+    localStorage.setItem(SYNCED_KEY, urlId + ":" + draftDigest(blob));
+    // HELD FROM THE FIRST WRITE: the page writes as it loads (its pricing rebuild), before its door
+    // holds the saves behind the server's say-so. Until then, and should the door never run (the
+    // page stopped as it loaded), nothing it writes is sent: this gate never says yes.
+    _hold = { gate: async () => false, dirty: false, handedOver: false, saved: null, touches: 0 };
+  }
+  try { seedFrame(); } catch { _givenUp = true; }
+  try { bootFromPrefetch(); } catch {}
+
+  /** initDraftSync for a page that ran on a kept read: ask the server whether it is still its copy.
+   *  Only the token is waited for (not the profile), so the answer is usually in before the
+   *  document's own template, which waits for both. A server that cannot be read leaves the saves
+   *  refused, as a blind adopt does, and the next load reads it again. */
+  async function confirmPrefetchedBoot(boot) {
+    try {
+      const a = window.TWAuth;
+      const gate = a && (a.tokenReady || a.ready);
+      if (gate) await gate;
+    } catch {}
+    const read = async () => {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(boot.id),
+                              { headers: authHeaders() });
+      if (res.status === 404) return { data: {}, version: null };
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const body = await res.json();
+      const data = body && body.data;
+      if (!(data && typeof data === "object" && !Array.isArray(data))) throw new Error("no draft");
+      return { data, version: (typeof body.updated_at === "string") ? body.updated_at : "" };
+    };
+    let row = null;
+    try { row = await read(); }
+    catch { try { row = await read(); } catch { row = null; } }
+    if (!row) {
+      console.error("[TW] could not confirm draft", boot.id, "— editing locally, but saves are held back until it can be read");
+      return;
+    }
+    if (_reloadPending) return;
+    clearUnverified();
+    // The same `updated_at` AND the same whole copy (wholeCopy): nothing has been written to it since.
+    if (row.version === boot.version && boot.whole && wholeCopy(row.data) === boot.whole) {
+      const cur = getState();
+      if (cur[STAMP] === boot.id && draftDigest(cur) !== boot.digest) scheduleServerSave(cur);
+      return;
+    }
+    // Saved or written again since it was read ahead, or gone: the server's copy, as the ordinary hydrate takes it.
+    const data = Object.assign({}, row.data, { [STAMP]: boot.id });
+    writeBlob(data);
+    markSynced(boot.id, draftDigest(data));
+    setDraftId(boot.id);
+    setGuard(boot.id);
+    _reloadPending = true;
+    window.location.reload();
+  }
+
   // The digest of the blob as this page FOUND it, taken before initDraftSync can touch it. Every
   // page reads its module-top snapshot (`const state = TW.getState()`) in the same synchronous run
   // right after this script, so this is the digest of what that snapshot was built from — before
@@ -1355,7 +1673,7 @@
 
   // Browser Back can restore a frozen (bfcache) page whose in-memory state
   // belongs to another draft; reload so initDraftSync re-validates ownership.
-  window.addEventListener("pageshow", (e) => { if (e.persisted) window.location.reload(); });
+  window.addEventListener("pageshow", (e) => { if (e.persisted && !FRAME) window.location.reload(); });
   // Flush the pending debounced save on navigation so the last ≤2.5s of edits
   // aren't dropped (same refusal rule as scheduleServerSave).
   //
@@ -1369,6 +1687,7 @@
   let _pageSavesOnLeave = null;
   function pageSavesOnLeave(isPending) { _pageSavesOnLeave = typeof isPending === "function" ? isPending : null; }
   window.addEventListener("pagehide", () => {
+    if (FRAME) return;              // a compose frame saves only through its door's guarded save
     // A SAVE THAT HAS NOT BEEN ANSWERED GOES AGAIN (X1, round 5, B1). A plain request is dropped with its page if it has not reached the server,
     // and a page that waited a bounded time for its save and left (Continue, the beta door) left it uploading. Sent again as a keepalive request,
     // which the page's going cannot cancel; the same copy twice is harmless. Not for a page that holds its saves behind a gate, has given its
@@ -1770,7 +2089,7 @@
   // Rewrite static wizard step-nav anchors to carry ?d=. Skips the "/" home and
   // "?new" (a fresh start must NOT inherit a draft id); leaves cross-origin and
   // non-wizard links alone.
-  const _WIZARD_PATH = /^\/(estimate-review|proposal-review|done|dropbox|info-sheet)\.html$|^\/$/;
+  const _WIZARD_PATH = /^\/(estimate-review|generate|proposal-review|done|dropbox|info-sheet)\.html$|^\/$/;
   document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll("a[href]").forEach((a) => {
       try {
@@ -1894,8 +2213,12 @@
    *  set_notify_picks, set_close_lost, set_on_hold, set_won, set_handed_off): who hears about a
    *  send, Lost, On hold, Won, Handed off. No template prints any of them. Counted as inputs, each
    *  one made the next Files visit rebuild the proposal on whichever machine opened it — as
-   *  whoever was signed in there, often not the estimator who wrote it (review of fix 4). */
-  const COMPOSE_IGNORED = [STAMP, "proposal_payload", "proposal_payload_key",
+   *  whoever was signed in there, often not the estimator who wrote it (review of fix 4).
+   *
+   *  And `proposal_auto_built`, which says WHO built the document (Send all's walk, or a person:
+   *  proposal-review.js continueToDone), not what is in it, so the walk's document and the door's
+   *  carry one key. */
+  const COMPOSE_IGNORED = [STAMP, "proposal_payload", "proposal_payload_key", "proposal_auto_built",
     "generate_result", "generated_lump_sum", "portal_message", "portal_emails",
     "require_deposit", "dropbox_result",
     "info_cell_values", "info_tab_structs", "info_template_version", "job_number",
@@ -1989,6 +2312,37 @@
   function isThisDraft(blob) {
     const id = getDraftId();
     return !!(blob && typeof blob === "object" && blob[STAMP] && id && blob[STAMP] === id);
+  }
+
+  /** A PROPOSAL MADE FROM ANOTHER DRAFT'S ESTIMATE ("Create Multiple Proposals") has no intake or
+   *  estimate of its own: the server copies both from its parent (`proposal_of`), and Refresh copies
+   *  them again. So the intake and estimate pages send it to its parent, at `path` (with ?d=<parent>),
+   *  before anything on them can save, and answer true; the caller stops there. Any other draft, and a
+   *  blob that is not provably this page's (isThisDraft, the reason the v2 guards wait for it), answers
+   *  false and nothing happens. `replace`, so Back does not return to a page that would only bounce. */
+  function redirectProposalChild(path) {
+    const blob = getState();
+    const parent = blob && typeof blob.proposal_of === "string" ? blob.proposal_of : "";
+    if (!parent || !isThisDraft(blob)) return false;
+    window.location.replace(path + (path.indexOf("?") >= 0 ? "&" : "?") + "d=" + encodeURIComponent(parent));
+    return true;
+  }
+
+  /** The proposals of this draft's estimate (GET /api/draft/{id}/proposals: {parent_id, group_id,
+   *  estimate_digest, members}), or null when it cannot be read. `id` defaults to this page's draft;
+   *  a child's id answers its parent's list. Reads only. */
+  async function readProposals(id) {
+    const pid = id || getDraftId();
+    if (!pid) return null;
+    try {
+      const res = await fetch(resolveApiBase() + "/api/draft/" + encodeURIComponent(pid) + "/proposals",
+                              { headers: authHeaders() });
+      if (!res.ok) return null;
+      const body = await res.json();
+      return body && body.ok !== false && Array.isArray(body.members) ? body : null;
+    } catch {
+      return null;
+    }
   }
 
   /** The keys the SPREADSHEET's Estimate step writes into a draft (estimate-review.js
@@ -2244,6 +2598,9 @@
     documentHolds,
     isV2Draft,
     isThisDraft,
+    redirectProposalChild,
+    readProposals,
+    prefetchDraft,
     v2PricingView,
     v2SheetKeysOut,
     draftDigest,
@@ -2260,5 +2617,12 @@
     heldSaveDigest,
     releaseHeldSaves,
     dropHeldChanges,
+    // A compose frame of 3 · Generate Files: its token (null on every other page), whether it was
+    // handed a draft it may compose, and its one way to say how it went (see FRAME at the top).
+    inFrame: () => (FRAME ? FRAME.token : null),
+    frameSeeded: () => !!FRAME && !!FRAME.seed && !_givenUp,
+    frameReport,
   };
-})();
+  // Read lazily, from out here: see hostStore. A browser that refuses storage throws on the read,
+  // which hostStore catches, exactly as every read in this file always has.
+})(function () { return localStorage; }, function () { return sessionStorage; });

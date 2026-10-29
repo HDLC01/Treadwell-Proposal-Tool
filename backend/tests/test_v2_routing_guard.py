@@ -359,13 +359,37 @@ DOORS = [
     ("js/estimate-review.js", 'TW.withDraft("/?edit=1")', 1, INTAKE, "Back to intake"),
     ("js/index.js", 'TW.withDraft("/estimate-review.html")', 1, SHEET,
      "Continue on the live intake (the handler also refuses a v2 draft itself)"),
-    ("js/index.js", 'q.has("edit")', 1, NOT_A_DOOR, "the load guard reads the parameter, it opens nothing"),
+    # 2 since 2026-10-27: the proposal-child load guard reads it too (TW.redirectProposalChild, below).
+    ("js/index.js", 'q.has("edit")', 2, NOT_A_DOOR, "the load guards read the parameter, they open nothing"),
+    # Create Multiple Proposals (2026-10-27): a proposal made from another draft's estimate is sent to its PARENT's
+    # intake or estimate, which then runs its own guard on the parent like any other load.
+    ("js/estimate-review.js", 'TW.redirectProposalChild("/estimate-review.html")', 1, SHEET,
+     "a proposal child opened on the estimate goes to its parent's"),
+    ("js/index.js", 'TW.redirectProposalChild("/?edit=1")', 1, INTAKE,
+     "a proposal child opened on the intake goes to its parent's"),
+    # 3 · Generate Files (2026-10-28): step 3 of the wizard. Its 1 · Intake and 2 · Estimate pills and its
+    # Back are the spreadsheet's, re-pointed by generate.js to the v2 pages for a v2 draft and to the PARENT's
+    # for a proposal child; the destination pages run their own guards either way. (The Proposal step's
+    # Back now leads here, so it no longer names the estimate.)
+    ("generate.html", 'href="/?edit=1"', 1, INTAKE, "the 1 · Intake step pill"),
+    ("generate.html", 'href="/estimate-review.html"', 2, SHEET, "the 2 · Estimate step pill, and Back"),
+    ("js/generate.js", 'var INTAKE = "/?edit=1";', 1, INTAKE,
+     "the 1 · Intake pill's spreadsheet target (stepTargets; v2 and a proposal child are re-pointed)"),
+    ("js/generate.js", 'var ESTIMATE = "/estimate-review.html";', 1, SHEET,
+     "the 2 · Estimate pill's and Back's spreadsheet target (stepTargets)"),
+    ("js/proposal-review.js", 'u.searchParams.has("edit")', 1, NOT_A_DOOR,
+     "parentStepHref reads the parameter to re-point a child's Intake pill, it opens nothing"),
+    ("js/proposal-review.js", '["/estimate-review.html", "/polish-estimate.html", "/polish-intake.html"]', 1, SHEET,
+     "parentStepHref re-points a child's Estimate link to its parent's estimate"),
     ("js/leads.js", "&edit=1", 2, INTAKE, "Leads: open the project a lead became"),
-    ("js/portal.js", "&edit=1", 2, INTAKE, "the board's drawer: Open"),
+    # 3 since 2026-10-27: the drawer's scope list opens a sibling not on the board yet on the intake
+    # (index.js sends a v2 draft on to the v2 intake). The "New scope for this project" button that made
+    # the 4th door is gone: Create Multiple Proposals on the Proposal step replaced it.
+    ("js/portal.js", "&edit=1", 3, INTAKE, "the board's drawer: Open, a scope not on the board"),
     ("js/projects.js", "&edit=1", 1, INTAKE, "a Projects card (a v2 card goes to the v2 intake first)"),
     ("js/proposal-review.js", 'href="/?edit=1"', 1, INTAKE, "Go to Intake on the no-project card"),
-    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 2, SHEET,
-     "Back from the proposal step, and the Pricing options panel's link to the estimate on a v2 draft"),
+    ("js/proposal-review.js", 'TW.withDraft("/estimate-review.html")', 1, SHEET,
+     "the Pricing options panel's link to the estimate on a v2 draft"),
     ("shared.js", 'searchParams.has("edit")', 1, NOT_A_DOOR,
      "the step-link rewriter reads the parameter, it opens nothing"),
 ]

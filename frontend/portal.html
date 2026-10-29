@@ -369,13 +369,18 @@
   .fu-lbl { margin-top:11px; }
   .fu-alert:empty { display:none; }
   .fu-alert { color:var(--red-dark); margin:0; }
-  /* ── the follow-up schedule's status line ─────────────────────────────────
-     The cadence emails the customer itself (2026-10-28), so the remind-only email writer's task
-     card and its styles (compose box, drawn button, the {link} notices) went with it. The status
-     line is plain ink until it reports a refusal. */
+  /* ── the follow-up task card: since 2026-10-28 only the scope decision ──────
+     The cadence emails the customer itself, so the remind-only email writer's styles (compose box,
+     drawn button, the {link} notices) went with it. The status lines are plain ink until they
+     report a refusal, and a notice that the portal flagged something reads amber rather than red. */
+  .fu-task { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line);
+    border-radius:9px; padding:11px 13px; background:#fff; }
+  .fu-more > .fu-line { margin-top:8px; }
   .fu-msg { margin:0; }
-  .fu-msg:empty { display:none; }
+  .fu-msg:empty, .fu-notice:empty { display:none; }
   .fu-msg.is-err { color:var(--red-dark); }
+  .fu-notice { margin:0; color:var(--ink); }
+  .fu-notice.is-warn { color:#8a5a00; }
   .fu-sched { display:flex; flex-direction:column; gap:7px; }
   .fu-sched label { font-size:12.5px; color:var(--ink); min-width:118px; }
   .fu-date { flex:0 0 auto; min-height:36px; padding:6px 8px; font:inherit; }
@@ -483,6 +488,13 @@
   .ns-assign select { flex:1 1 190px; min-width:0; min-height:38px; padding:7px 9px;
     border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); font:inherit; }
   .ns-assign .btn { min-height:38px; }
+  .scope-list { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:4px; }
+  .btn-link { background:none; border:0; padding:0; font:inherit; color:var(--red-dark);
+    text-decoration:underline; cursor:pointer; }
+  .scope-line { font-weight:600; }
+  .scope-tag { font-size:12px; font-weight:600; padding:1px 6px; border-radius:6px;
+    border:1px solid var(--line); white-space:nowrap; }
+  #scope-note:empty { display:none; }
   .ns-assign-note:empty { display:none; }
   .ns-assign-note { margin:0; color:var(--red-dark); font-weight:600; }
   .btn { min-height:42px; padding:0 16px; border-radius:7px; border:1px solid transparent; font:inherit; font-weight:700;
@@ -924,6 +936,9 @@
   <!-- Board logic (stages, dates, ordering) — must load BEFORE portal.js, which
        reads window.TWCrm at module scope. -->
   <script src="/js/crm-core.js"></script>
+  <!-- Send all builds a proposal that was never built, through the Proposal step's own door
+       (send-all-chain.js, window.TWSendAll). Before the page's script, which reads it at a press. -->
+  <script src="/js/send-all-chain.js?v=20261029-1"></script>
   <script src="/js/portal.js"></script>
 </body>
 </html>

@@ -28,6 +28,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import basisboard_client
 import drafts as drafts_mod
@@ -456,8 +457,7 @@ def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     the customer". The portal's worker emails the customer itself again, so a cadence reminder task
     (a row left over from the remind-only weeks) is nobody's job: ringing for it would send somebody
     to a Follow-up tab that, rightly, has no email on it to send. The "Decide the other scopes" task
-    is still a decision for a person. A production tool has no scope groups, so in practice no
-    follow-up task rings there at all; a decision task the portal sends is still shown.
+    is still a decision for a person, and its card is on that tab.
 
     The id is the task's, so a task that stays pending across polls stays one row, and `ts` is when
     it fell due, so it counts as unread once and not on every refresh."""
@@ -474,16 +474,30 @@ def _followup_task_notifications(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         if t.get("stage") != "decision":
             continue
-        # The portal names the proposal to open (link_proposal_id) on a decision task; absent on an
-        # older portal, and equal to proposal_id on an ordinary task.
+        # A scope group's task lives on the group's HOME scope, which may since have been approved
+        # or closed; the portal names an OPEN member to open instead (link_proposal_id). Absent on
+        # an older portal, and equal to proposal_id on an ordinary task.
         pid = t.get("link_proposal_id") or t.get("proposal_id")
         body = f"Decide the other scopes: {t.get('project_name') or 'a project'}"
+        # The portal's link_proposal_id is computed FRESH when the task is viewed (round 3): the
+        # first listed sibling that is STILL OPEN, or the approved scope only when none is. Trusted
+        # as given. Only a portal that does not send it falls back on the first scope the decision
+        # lists (never the approved scope the task is filed on).
+        if not t.get("link_proposal_id"):
+            approved = (t.get("approved_scope") or {}).get("proposal_id") \
+                if isinstance(t.get("approved_scope"), dict) else None
+            sibs = [s.get("proposal_id") for s in (t.get("scopes") or [])
+                    if isinstance(s, dict) and s.get("proposal_id")
+                    and s.get("proposal_id") not in (approved, t.get("proposal_id"))]
+            if sibs:
+                pid = sibs[0]
         out.append({
             "id": f"fut:{tid}", "kind": "followup_task", "icon": "mail",
             "severity": "medium", "sort": _TIER_CRM_STEP, "ts": due or now_iso,
             "title": t.get("project_name") or "A project",
             "body": body,
-            "link": f"/portal.html?open={pid}&sec=followup" if pid else "/portal.html",
+            "link": f"/portal.html?open={quote(str(pid), safe='')}&sec=followup" if pid
+                    else "/portal.html",
         })
         if len(out) >= 25:
             break

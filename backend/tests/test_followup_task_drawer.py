@@ -5,8 +5,8 @@ worker SENDS the customer email at each due follow-up (at most two before they o
 two after, from sending until it is approved). That reverses remind mode (2026-10-23), when a due
 follow-up was parked as a TASK for the estimator to write and send from this drawer. So:
 
-  * a follow-up task left on a pipeline row draws no card and fetches no AI draft (this build has
-    no scope groups, so not even a "Decide the other scopes" task is a card here);
+  * a cadence reminder task left on a pipeline row draws no card and fetches no AI draft;
+  * the scope group's "Decide the other scopes" card is the one task left (it is a decision);
   * the per-project schedule is the next email's date and nothing else ("Then every" and "Stop
     after" went with the repeating cadence), and the Follow-ups switch stays;
   * the wording says the tool emails the customer automatically, and that approval stops it.
@@ -97,7 +97,7 @@ def test_a_cadence_reminder_task_draws_no_card_and_costs_no_ai_draft(fu):
     2026-10-28 this painted "Follow-up waiting on you" with a Send button and fetched a paid AI
     draft. The worker sends that email itself now, so a Send here would be a second email.
 
-    Mutation: put the task card back into followupPanelHtml, and the ids come back."""
+    Mutation: let followupTaskHtml draw a card for a non-decision task, and the ids come back."""
     html = fu["legacy"]["html"]
     for el_id in ("fu-task", "fu-compose", "fu-send", "fu-skip", "fu-called", "fu-snooze"):
         assert 'id="%s"' % el_id not in html, el_id
@@ -106,26 +106,20 @@ def test_a_cadence_reminder_task_draws_no_card_and_costs_no_ai_draft(fu):
     assert fu["legacy"]["requests"] == [], "opening the tab still asks for an AI draft"
 
 
-def test_a_decision_task_draws_no_card_on_this_build(fu):
-    """A scope group's "Decide the other scopes" task can only come from a project of several
-    proposals, which this build does not have, so it draws nothing either: no decision card, no
-    task card, no Send, and nothing fetched."""
+def test_the_scope_decision_is_still_a_card(fu):
+    """The one follow-up task that is still a person's job: closing or keeping the other scopes."""
     html = fu["decision"]["html"]
-    for el_id in ("fu-decide", "fu-dec-close", "fu-task", "fu-send"):
-        assert 'id="%s"' % el_id not in html, el_id
-    assert 'id="fu-sched"' not in html, "an approved project offers a date for an email"
+    assert 'id="fu-decide"' in html and 'id="fu-dec-close"' in html
+    assert 'id="fu-send"' not in html
     assert fu["decision"]["requests"] == []
 
 
 def test_the_writer_is_gone_from_portal_js():
     """Not just unreachable: deleted, so nothing can wire a Send to a reminder by accident."""
     for name in ("followupComposeHtml", "wireFuCompose", "paintFuCompose", "loadFuDraft",
-                 "fuTaskAct", "fuDoneText", "fuLinkState", "fuPutLinkBack", "fuGroupHtml",
-                 # and the task card it lived in, with the notice and settle its buttons used
-                 "followupTaskHtml", "followupDecisionHtml", "fuNoticeHtml", "fuSay", "fuSettle"):
+                 "fuTaskAct", "fuDoneText", "fuLinkState", "fuPutLinkBack", "fuGroupHtml"):
         assert not re.search(r"function %s\s*\(" % name, PORTAL_JS), name
-    code = re.sub(r"//[^\n]*", "", PORTAL_JS)
-    assert "FU_DRAFT" not in code and "FU_NOTICE" not in code
+    assert "FU_DRAFT" not in re.sub(r"//[^\n]*", "", PORTAL_JS)
 
 
 # ── what the panel says ───────────────────────────────────────────────────────
@@ -257,7 +251,7 @@ def test_the_follow_up_code_and_the_notification_code_share_nothing():
     the "Assigned to" picker, posted to /assign). The notification chips in this drawer and the
     "Tell the team" chips on the Files page decide who hears about replies, approvals and a send.
     Neither side of this file may read the other's list."""
-    fu_fns = ("followupScheduleHtml", "saveFuPlan")
+    fu_fns = ("followupTaskHtml", "followupScheduleHtml", "fuSettle", "saveFuPlan")
     for fn in fu_fns:
         body = _block(fn)
         for word in ("notify", "nt-chip", "NT_CACHE", "notify_picks", "Tell the team"):

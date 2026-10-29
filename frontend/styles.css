@@ -1775,6 +1775,16 @@ html.tw-nav-open .fields-panel { left: calc(var(--tw-w, 240px) + 16px); }
 .options-panel .pr-baserow { display: block; font-weight: 700; margin: 8px 0 2px; cursor: pointer; }
 /* A v2 estimate picks the base, so this page draws the base radios disabled and says where to pick it. */
 .options-panel .pr-baserow input.pr-base:disabled { cursor: not-allowed; }
+/* A sheet's one switch on a spreadsheet draft: Base bid | Option | Off (the Estimate bar's .bb-seg twin). */
+.options-panel .pr-seg { display: flex; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; margin: 2px 0 4px; }
+.options-panel .pr-seg .pr-seg-btn { position: relative; flex: 1 1 0; display: block; text-align: center; margin: 0;
+  padding: 4px 6px; font-size: 11.5px; font-weight: 600; color: #555; background: #fff; }
+.options-panel .pr-seg .pr-seg-btn + .pr-seg-btn { border-left: 1px solid #ddd; }
+.options-panel .pr-seg .pr-seg-btn.on { background: #c8102e; color: #fff; }
+.options-panel .pr-seg .pr-seg-btn input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.options-panel .pr-seg .pr-seg-btn:focus-within { outline: 2px solid #c8102e; outline-offset: -2px; }
+.options-panel .pr-seg .pr-seg-btn:has(input:disabled) { cursor: not-allowed; opacity: .55; }
+.options-panel .pr-seg .pr-seg-btn.on:has(input:disabled) { opacity: .8; }
 .options-panel .pr-base-locked { color: #444; }
 .options-panel .pr-base-locked a { color: #c8102e; font-weight: 600; }
 .options-panel .pr-optsub { margin: 2px 0 0 18px; padding-left: 8px; border-left: 2px solid #eee; }

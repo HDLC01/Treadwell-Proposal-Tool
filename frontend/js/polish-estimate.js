@@ -92,6 +92,9 @@
   // with the same assembly priced on the library page.
   var ASMS = [];
   var ITEMS = [];
+  // The Admin page's headings per work type (GET /api/library/items' `item_categories`): the Material
+  // step draws its rows under them. Null when the store did not come, and the rows are drawn ungrouped.
+  var CATS = null;
 
   var at = 0;
   // The section on show (a workbook tab id). The root, Polish, unless the bid has more than one section and
@@ -869,12 +872,18 @@
 
   // ── saving ──────────────────────────────────────────────────────────────────
   var saveTimer = null;
+  // Set the moment "Split into separate proposals" is pressed and never cleared on this page: see saveSoon and splitPress.
+  var splitting = false;
   // WHAT IS WRITTEN, AND WHY EACH KEY IS THERE, IS B.buildSavePatch'S BUSINESS (bid-model.js).
   // This page and its pagehide flush used to compose the blob by hand in two places, and the two
   // drifted: the flush skipped the condition cells and the measured-floor fallback. Both call it
   // now, so a key can only be added or fixed once. `bid` is the price this page computes (the
   // library lives here), `library` is what it priced Dye and Joint Filler with.
   function saveSoon() {
+    // A SPLIT IS IN FLIGHT OR DONE (splitPress): this page's model is the copy from before it, and a save of it would put every
+    // sheet back on the first scope (the server refuses it too: drafts.SPLIT_MARK). Nothing is queued until the page has reloaded
+    // onto the server's copy.
+    if (splitting) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       // DISARMED ONCE IT HAS RUN (2026-10-19, "When I go back from proposal to estimate it doesnt save my values"). The
@@ -1080,8 +1089,11 @@
     // A bid whose other sheets cannot be read still prices its first sheet (the panel says so and offers nothing else).
     var bids;
     try { bids = allBids(); } catch (err) { bids = Object.fromEntries([[B.ROOT_TAB, bid()]]); }
+    var st = multi ? TW.getState() : null;
     return {
-      open: activeTab, bids: bids, opts: multi ? TW.getState().tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      open: activeTab, bids: bids, opts: st ? st.tab_opts : undefined, sf: optionStartSf(), icon: icon,
+      // The sheets switched to "Its own proposal" (base_tab_ids): the panel tags them Bid N and draws their switches on.
+      baseIds: st && Array.isArray(st.base_tab_ids) ? st.base_tab_ids : undefined,
       confirm: sheetsUi.confirm, armed: sheetsUi.armed, renaming: sheetsUi.renaming, draft: sheetsUi.draft,
       error: sheetsUi.error, notice: sheetsUi.notice, descOpen: sheetsUi.descOpen, pick: sheetsUi.pick, busy: sheetsUi.busy, sysDesc: sysDescOf,
       reno: jobIsReno()
@@ -1198,6 +1210,8 @@
     if (openChanged) stripReveal(el.querySelector("[data-sh-strip]"), el.querySelector("[data-sh-cur]"));
     if (want) focusSheetsKey(want);
     if (!headObserver && (drew || shown)) syncHeadHeight();
+    // The scope bar reads the same sheets (whether the bid can be split into proposals), so it is drawn when they are.
+    paintScopeBar();
   }
 
   /** Scroll the strip, and only the strip, just far enough to show `tab` (inline: nearest, with no page jump: scrollIntoView
@@ -1440,6 +1454,14 @@
     var patch = Object.assign({}, made.patch);
     var from = before.ids.length === 1 ? before.ids[0] : null;
     var to = made.patch.base_tab_id === undefined ? null : made.patch.base_tab_id;
+    // THE NEW BASE IS BASE BID 1 (Create Multiple Proposals): a draft that ticked sheets as their own proposals keeps base_tab_id in
+    // base_tab_ids. Picking a ticked sheet swaps the two (the old base stays its own proposal), the way the Estimate step's radio does;
+    // the combined pair is one proposal, so it leaves none ticked.
+    if (PR && Array.isArray(st.base_tab_ids)) {
+      var order = [];
+      try { order = B.sectionsOf(B.withSectionOrder(made.model)).map(function (e) { return e.tab; }); } catch (err) { order = []; }
+      patch.base_tab_ids = PR.moveBaseId(st, from, to, order, true);
+    }
     if (PR && from !== to && st.price_overrides && typeof st.price_overrides === "object") {
       var pov = JSON.parse(JSON.stringify(st.price_overrides));
       var roles = {};
@@ -1472,6 +1494,24 @@
     paintSheets();
   }
 
+  /** The "Its own proposal" switch (Create Multiple Proposals): ticks or unticks the sheet in the draft's base_tab_ids by
+   *  B.proposalBasePatch's rule. Nothing about the bid is repriced: the sheet stays an option here, and becomes a proposal of its own
+   *  when Create Multiple Proposals is pressed on the Proposal step. A refused press (a Seal sheet, the combined pair as the base) says so
+   *  on the sheet's bar. */
+  function toggleOwnProposal(tab) {
+    var st = TW.getState();
+    var on = B.proposalBaseIds(ROOT, st).indexOf(tab) < 0;
+    var ticks = B.proposalBasePatch(st, tab, on, ROOT);
+    sheetsUi.focus = tab + "|own";
+    if (!ticks) {
+      sheetsUi.notice = { at: tab, text: "This sheet can't be a proposal of its own. Make one sheet the base bid first; Seal sheets are options only." };
+      paintSheets();
+      return;
+    }
+    TW.setState(ticks);
+    paintSheets();
+  }
+
   /** Total, or Add / Deduct. A Seal sheet is priced as a total only, so the page refuses the other even if it is asked. */
   function setPriceMode(tab, mode) {
     var e = null;
@@ -1489,6 +1529,7 @@
   /** What each button in the panel does. `tab` is the sheet it is on, `sheet` the type chosen in the Add menu. */
   function sheetsAct(act, tab, sheet) {
     if (act === "on") { toggleOnProposal(tab); return; }
+    if (act === "own") { toggleOwnProposal(tab); return; }
     if (act === "desc") {
       var wasOpen = sheetsUi.descOpen[tab] === true;
       sheetsUi.descOpen = Object.assign({}, sheetsUi.descOpen, Object.fromEntries([[tab, !wasOpen]]));
@@ -1524,6 +1565,185 @@
     if (act === "add-close") { sheetsUi.pick = false; sheetsUi.focus = "add|menu"; paintSheets(); return; }
     if (act === "add") { addSheetPress(sheet); return; }
   }
+
+  // ── scopes: one project, several separately approved proposals (RJ, 2026-10-24) ─────────────
+  // A client can get a few separately priced scopes under one project (Breakroom polish, Lab 1 epoxy, Lab 2 epoxy), each its own
+  // proposal. The bar under the alert says which scope of its project this draft is (and renames it), and offers to SPLIT a bid
+  // built as several sheets into one proposal per sheet (tier A1): B.splitOut makes each sheet a bid of its own, this page prices
+  // each the way it prices the sheet now (scopeSave), and POST /api/draft/{id}/split files them as scopes of one project.
+  var scopeUi = { renaming: false, draft: "", ask: false, busy: false, note: "", bad: false };
+
+  /** This draft's place in a project split into scopes ({ id, label }), or null. Server-owned (drafts._SERVER_OWNED_KEYS). */
+  function scopeOfDraft() {
+    var sg = TW.getState().scope_group;
+    return sg && typeof sg === "object" && typeof sg.id === "string" ? sg : null;
+  }
+
+  /** The sheets a split makes proposals of, the one that carries the job's travel FIRST: that one stays on this draft. [] when the
+   *  bid cannot be split (B.splitBlockers says why). */
+  function splitOrder() {
+    var tabs = [];
+    try { tabs = B.splitTabs(ROOT); } catch (err) { return []; }
+    if (tabs.length < 2) return [];
+    var carrier = B.travelCarrier(ROOT);
+    return [carrier].concat(tabs.filter(function (t) { return t !== carrier; }));
+  }
+
+  /** Draw the scope bar: the scope's name (and its rename box), the split button or the reason there is none, and the last thing
+   *  the bar has to say. Hidden when it has nothing to show. */
+  function paintScopeBar() {
+    var el = $("scope-bar");
+    if (!el) return;
+    var sg = scopeOfDraft();
+    var order = splitOrder();
+    var blocked = null, live = 0;
+    try { blocked = B.splitBlockers(ROOT); live = B.activeSections(ROOT).length; } catch (err) { blocked = null; live = 0; }
+    var names = order.map(function (t) { try { return B.sectionOf(ROOT, t).label; } catch (err) { return t; } });
+    var off = scopeUi.busy || splitting ? " disabled" : "";
+    var html = "";
+    if (sg) {
+      html += scopeUi.renaming
+        ? '<div class="scope-row"><label for="scope-label-box">This scope is called</label>' +
+          '<input type="text" id="scope-label-box" maxlength="80" value="' + esc(scopeUi.draft) + '">' +
+          '<button type="button" class="btn" data-scope-act="rename-save"' + off + '>Save name</button>' +
+          '<button type="button" class="btn ghost" data-scope-act="rename-cancel"' + off + '>Cancel</button></div>'
+        : '<div class="scope-row"><span>One scope of this project: <strong>' + esc(sg.label || "Unnamed scope") + '</strong></span>' +
+          '<button type="button" class="btn ghost" data-scope-act="rename"' + off + '>Rename</button></div>';
+    }
+    if (order.length >= 2) {
+      html += scopeUi.ask
+        ? '<div class="scope-row"><span>Split into ' + order.length + ' separate proposals: <strong>' + names.map(esc).join("</strong>, <strong>") +
+          '</strong>? Each is priced as it is now and sent on its own; ' + esc(names[0]) + ' stays on this page.</span>' +
+          '<button type="button" class="btn" data-scope-act="split-yes"' + off + '>Split them</button>' +
+          '<button type="button" class="btn ghost" data-scope-act="split-no"' + off + '>Keep one proposal</button></div>'
+        : '<div class="scope-row"><span>Each sheet a proposal of its own, approved on its own?</span>' +
+          '<button type="button" class="btn ghost" data-scope-act="split"' + off + '>Split into separate proposals</button></div>';
+    } else if (live >= 2 && blocked) {
+      html += '<p class="note">Splitting this bid into separate proposals: ' + esc(blocked) + '</p>';
+    }
+    // SEVERAL BASE BIDS (the sheets switched to "Its own proposal"): the proposals are made on the Proposal step, by its Create
+    // Multiple Proposals button, so the bar says where.
+    var bidIds = [];
+    try { bidIds = B.proposalBaseIds(ROOT, TW.getState()); } catch (err) { bidIds = []; }
+    if (bidIds.length >= 2) {
+      var bidNames = bidIds.map(function (t, i) { var n = t; try { n = B.sectionOf(ROOT, t).label; } catch (err) { n = t; } return "Base Bid " + (i + 1) + " " + n; });
+      html += '<p class="note" data-scope-bids="' + bidIds.length + '">' + bidIds.length + ' base bids, each its own proposal: <strong>' +
+        bidNames.map(esc).join("</strong>, <strong>") + '</strong>. Create the proposals on the Proposal step.</p>';
+    }
+    if (scopeUi.note) html += '<p class="note' + (scopeUi.bad ? " bad" : "") + '" role="status">' + esc(scopeUi.note) + '</p>';
+    if (el.innerHTML !== html) el.innerHTML = html;
+    el.hidden = !html;
+  }
+
+  /** ONE SCOPE'S SAVE, priced the way this page prices it: B.buildSavePatch over the scope's own model, with the page's pricing
+   *  pointed at that model while it runs. The page finds a takeoff's section, its pooling and its discounts BY IDENTITY in ROOT
+   *  (poolsList, sectionOfList, gypEntryOf), so pricing a copy while ROOT is the whole bid would price it as no section's. */
+  function scopeSave(model, draftState) {
+    var keepRoot = ROOT, keepM = M, keepTab = activeTab;
+    try {
+      ROOT = model; M = model; activeTab = B.ROOT_TAB;
+      return B.buildSavePatch(model, draftState, priceCtx());
+    } finally {
+      ROOT = keepRoot; M = keepM; activeTab = keepTab;
+    }
+  }
+
+  /** Rename this scope: through POST /api/draft/{id}/scope, because the group is the server's, then remembered in this browser only
+   *  (the server has it already). */
+  async function renameScopePress() {
+    var box = $("scope-label-box");
+    if (box) scopeUi.draft = box.value;            // what is in the box when Save is pressed, whatever events came before
+    var label = String(scopeUi.draft || "").replace(/\s+/g, " ").trim();
+    if (!label) { scopeUi.note = "Give the scope a name."; scopeUi.bad = true; paintScopeBar(); return; }
+    scopeUi.busy = true; scopeUi.note = ""; paintScopeBar();
+    try {
+      var r = await fetch(TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(TW.getDraftId()) + "/scope", {
+        method: "POST", headers: TW.authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ label: label, rename: true })
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+      if (TW.setLocalState) TW.setLocalState({ scope_group: { id: j.group_id, label: j.label } }, { alreadyOnServer: true });
+      scopeUi.renaming = false; scopeUi.note = "Renamed."; scopeUi.bad = false;
+    } catch (err) {
+      scopeUi.note = "The scope could not be renamed. " + ((err && err.message) || "Try again."); scopeUi.bad = true;
+    } finally {
+      scopeUi.busy = false;
+      paintScopeBar();
+    }
+  }
+
+  /** SPLIT INTO SEPARATE PROPOSALS. In this order, and the order is the fix for the audit's race:
+   *    1. `splitting` is set, so nothing this page does from here queues a save (saveSoon);
+   *    2. what was typed is saved and waited for (TW.flushState), and the server's copy is read for its version: the split is
+   *       asked of exactly that copy (a save landing since is a 409, and nothing is split);
+   *    3. each scope's model and save are composed (B.splitOut, scopeSave) and sent;
+   *    4. on success the SERVER'S copy replaces this browser's (TW.useServerCopy, which also drops any queued save) BEFORE the
+   *       page reloads onto it. A save of the old copy that still got out (another tab) is refused by the server
+   *       (drafts.SPLIT_MARK), so the split survives either way.
+   *  A refusal leaves the page exactly as it was, saving again. */
+  async function splitPress() {
+    if (splitting || scopeUi.busy) return;
+    var order = splitOrder();
+    if (order.length < 2) return;
+    splitting = true;
+    scopeUi.busy = true; scopeUi.ask = false; scopeUi.note = "Saving, then splitting..."; scopeUi.bad = false;
+    paintScopeBar();
+    var done = false;
+    try {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      var now = TW.getState();
+      TW.setState(Object.assign({}, now, savePatch(now)));
+      var saved = await TW.flushState();
+      if (saved === false) throw new Error("this page's changes did not reach the server, so nothing was split. Reload and try again.");
+      var row = TW.readServerRow ? await TW.readServerRow() : null;
+      if (!row || !row.version) throw new Error("the saved copy could not be read, so nothing was split. Try again.");
+      var draftState = TW.getState();
+      var children = order.map(function (tab) {
+        var k = B.splitOut(ROOT, tab, { state: draftState });
+        var st = Object.assign({}, draftState, k.patch);
+        return { tab_id: tab, label: k.label, data: Object.assign({}, k.patch, scopeSave(k.model, st)) };
+      });
+      var r = await fetch(TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(TW.getDraftId()) + "/split", {
+        method: "POST", headers: TW.authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ draft_version: row.version, children: children })
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+      done = true;
+      scopeUi.note = "Split into " + children.length + " proposals. Opening " + children[0].label + "...";
+      paintScopeBar();
+      var adopted = TW.useServerCopy ? await TW.useServerCopy() : false;
+      if (adopted) window.location.reload();
+      else window.location.assign("/polish-estimate.html?d=" + encodeURIComponent(TW.getDraftId()));
+    } catch (err) {
+      scopeUi.note = "Not split: " + ((err && err.message) || "try again."); scopeUi.bad = true;
+    } finally {
+      scopeUi.busy = false;
+      // A refusal gives the page back; a split keeps it shut until it has reloaded onto the server's copy.
+      if (!done) splitting = false;
+      paintScopeBar();
+    }
+  }
+
+  function scopeAct(act) {
+    if (act === "rename") { var sg = scopeOfDraft(); scopeUi.renaming = true; scopeUi.draft = (sg && sg.label) || ""; scopeUi.note = ""; paintScopeBar(); return; }
+    if (act === "rename-cancel") { scopeUi.renaming = false; scopeUi.note = ""; paintScopeBar(); return; }
+    if (act === "rename-save") { renameScopePress(); return; }
+    if (act === "split") { scopeUi.ask = true; scopeUi.note = ""; paintScopeBar(); return; }
+    if (act === "split-no") { scopeUi.ask = false; paintScopeBar(); return; }
+    if (act === "split-yes") { splitPress(); return; }
+  }
+
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var b = t && t.closest ? t.closest("[data-scope-act]") : null;
+    if (b) scopeAct(b.getAttribute("data-scope-act"));
+  });
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t && t.id === "scope-label-box") scopeUi.draft = t.value;
+  });
 
   /** Is the section on show edited on the page's own panels? Polish, Epoxy and Gyp are (their work types are `ready`
    *  in Estimating Tool v2). The others, until their phases, show the summary below, so nothing is hidden. */
@@ -1661,8 +1881,9 @@
       // withDraft, not a bare path: this panel is rendered long after shared.js has finished
       // stamping ?d= onto the static links, and on a test copy the id it would have stamped is
       // the REAL project's. Continue has to carry the draft the page is actually editing.
-      : '<a class="btn" href="' + esc(TW.withDraft("/proposal-review.html")) +
-        '">Continue to proposal →</a>';
+      // 3 · Generate Files comes next (Hanz, 2026-10-28): it builds the files, then leads on to the proposal.
+      : '<a class="btn" href="' + esc(TW.withDraft("/generate.html")) +
+        '">Continue to generate files →</a>';
     return '<section class="sec"><div class="sec-h"><h2>' + esc(title) + '</h2>' +
       (blurb ? '<p>' + esc(blurb) + '</p>' : '') + '</div><div class="sec-b">' + body + '</div>' +
       '<div class="nav"><span class="step-of">Step ' + (at + 1) + ' of ' + STEPS.length +
@@ -2292,6 +2513,92 @@
       rowCardInner(r, i) + '</div>';
   }
 
+  /** THE TAKEOFF ROWS UNDER THE ADMIN PAGE'S HEADINGS (Hanz, 2026-10-27: "we also need to separate these
+   *  categories in the Estimates"), Kyle's "MATERIAL - Patch", "MATERIAL - Epoxy Liquids" and the rest, in
+   *  the Admin order, each with its subtotal, and "Other" last for a row with no heading. A material's
+   *  heading is its own for this section's work type; an assembly's is its Scope when that names one, or
+   *  else the one its materials agree on (L.assemblyCategory).
+   *
+   *  THE CONDITION CARDS (`conds`: Joint Filler, Dye, Remove Existing, on the root) ARE GROUPED WITH THE
+   *  ROWS, each under the heading of the reserved material that prices it (condCategory), and an on card's
+   *  cost counts in that heading's subtotal. Drawn after the groups instead, they sat under the last heading
+   *  with no heading of their own and outside its subtotal, and Polish's Dye and Joint Filler headings could
+   *  never appear at all. A card's key is "c:" + its condition key; a row's is its index.
+   *
+   *  DISPLAY ONLY. M.takeoff keeps its order and every card keeps its real index, so nothing that prices,
+   *  saves or addresses a row by `data-row-card` moves. A work type with no headings, or one where nothing
+   *  is filed under any, draws the rows and then the condition cards as one list, exactly as before. A row
+   *  whose pick changes stays where it is drawn until the panel is next built (the card is repainted in
+   *  place, never moved, so the caret is never taken out of it). */
+  function takeoffRowsHtml(conds) {
+    conds = conds || [];
+    var e = openEntry();
+    var wt = e ? e.layout : "polish";
+    var condHtml = function (c) { return c.cost ? condMaterialCard(c) : condSwitchCard(c); };
+    var keys = M.takeoff.map(function (r, i) { return i; })
+      .concat(conds.map(function (c) { return "c:" + c.key; }));
+    var groups = L.groupByCategory(keys, CATS, wt, function (k) {
+      return typeof k === "number" ? rowCategory(M.takeoff[k], wt) : condCategory(k.slice(2), wt);
+    });
+    if (!groups.length) return M.takeoff.map(takeoffRowCard).join("") + conds.map(condHtml).join("");
+    var byKey = {};
+    conds.forEach(function (c) { byKey["c:" + c.key] = c; });
+    return groups.map(function (g) {
+      return '<div class="tk-cat" data-cat-group="' + esc(g.id || "other") + '">' +
+        '<h3 class="tk-cat-h">' + esc(g.name) + '</h3>' +
+        '<span class="tk-cat-sub">Subtotal <b data-cat-sub="' + esc(g.keys.join(",")) + '">' +
+        esc(moneyAuto(categorySubtotal(g.keys))) + '</b></span></div>' +
+        g.keys.map(function (k) {
+          return typeof k === "number" ? takeoffRowCard(M.takeoff[k], k) : condHtml(byKey[k]);
+        }).join("");
+    }).join("");
+  }
+
+  /** The heading a takeoff row sits under in work type `wt`, {id, name}, or null (Other). */
+  function rowCategory(r, wt) {
+    var k = rowKind(r);
+    if (k === "item") return L.itemCategory(itemById(r.item_id), CATS, wt);
+    if (k === "asm") return L.assemblyCategory(asmById(r.assembly_id), CATS, wt, ITEMS);
+    return null;
+  }
+
+  /** The seeded heading (backend/item_categories.py) a condition card sits under while its reserved
+   *  material is filed under none: Kyle's sheet has a Joint Filler and a Dye heading for exactly these. */
+  var COND_HEADING = { joint_filler: "polish-joint-filler", dye: "polish-dye" };
+
+  /** The heading condition card `key` sits under in `wt`: its reserved material's own (Items tab), else
+   *  the seeded one for it while that heading is still in the Admin list, else null (Other). Remove
+   *  Existing goes wherever Joint Filler, the card it `needs`, goes. */
+  function condCategory(key, wt) {
+    var c = CONDITION_CARDS.filter(function (x) { return x.key === key; })[0];
+    if (c && c.needs) c = CONDITION_CARDS.filter(function (x) { return x.key === c.needs; })[0] || c;
+    if (!c) return null;
+    var own = L.itemCategory(L.findItem(ITEMS, c.item_id), CATS, wt);
+    if (own) return own;
+    var seeded = COND_HEADING[c.key];
+    return L.categoriesFor(CATS, wt).filter(function (h) { return h.id === seeded; })[0] || null;
+  }
+
+  /** What condition card `key` adds to its heading: its cost while it is in the bid, the figure its own
+   *  Total cost box shows (condFigures), and 0 for a card that buys nothing. */
+  function condSubtotal(key) {
+    var c = CONDITION_CARDS.filter(function (x) { return x.key === key; })[0];
+    if (!c || !c.cost || !(M.conditions || {})[key]) return 0;
+    var cost = B.num(c.cost(B.takeoffSf(M.takeoff)));
+    return cost > 0 ? cost : 0;
+  }
+
+  /** What the rows at these keys come to: the sum of the Total cost each card shows. A key is a row's
+   *  index, or "c:" + a condition card's key. */
+  function categorySubtotal(indexes) {
+    return indexes.reduce(function (sum, i) {
+      if (typeof i === "string" && i.indexOf("c:") === 0) return sum + condSubtotal(i.slice(2));
+      if (!M.takeoff[i]) return sum;
+      var rc = rowCost(M.takeoff[i]);
+      return sum + (rc.empty || !rc.price ? 0 : B.num(rc.price.total));
+    }, 0);
+  }
+
   function rowCardClass(r) {
     return "tk" + (rowKind(r) === "item" ? " mat" : "") + (B.rowOn(r) ? "" : " inert");
   }
@@ -2540,10 +2847,9 @@
     // built in and ROW n keeps meaning what it says. The caret goes with it -- see the handler --
     // which is what makes a button at the top and a row at the bottom read as one action.
     var gypSec = gypOpen();
-    var html = gypSec ? gypCard(gypSec) : "";
+    var html = textureCard() + (gypSec ? gypCard(gypSec) : "");
     html += '<button class="btn addline" data-add-row="1">' + icon("plus", 16) +
       ' Add assembly or material</button>';
-    html += M.takeoff.map(takeoffRowCard).join("");
 
     // ── the three that came off the intake form, 2026-09-16 ─────────────────────────────────
     // They are questions about the WORK, and the work is described here. On intake they sat among
@@ -2571,12 +2877,13 @@
     // REMOVE EXISTING FOLLOWS JOINT FILLER: its `needs` card hidden means there is no switch on this
     // page that could ever un-gray it, so it is not drawn either -- unless it is itself switched on.
     // These three are Polish's questions (dye, joint filler, remove existing), so another section has none.
-    html += (activeTab === B.ROOT_TAB ? CONDITION_CARDS : []).filter(function (c) {
+    //
+    // DRAWN WITH THE ROWS, under the heading their reserved material is filed under (takeoffRowsHtml).
+    var conds = (activeTab === B.ROOT_TAB ? CONDITION_CARDS : []).filter(function (c) {
       if (!B.conditionShown(M, c.key)) return false;
       return !c.needs || B.conditionShown(M, c.needs) || !!(M.conditions || {})[c.key];
-    }).map(function (c) {
-      return c.cost ? condMaterialCard(c) : condSwitchCard(c);
-    }).join("");
+    });
+    html += takeoffRowsHtml(conds);
     // THE RENOVATION SWITCH, on the sheets whose patch line it prices: a Polish sheet (the root or a copy) and a Seal option.
     var floorRole = activeTab === B.ROOT_TAB ? "polish" : ((openEntry() || {}).role || "");
     if (floorRole === "polish" || floorRole === "seal") html += renoCard();
@@ -2594,6 +2901,32 @@
 
     return shell("Material",
       "One row per assembly. The library prices it against the measurement you give it.", html);
+  }
+
+  /** THE EPOXY SHEET'S TEXTURE (Hanz, 2026-10-27: "please put a texture setting in this"), at the top of its Material step: the
+   *  Proposal step's own choices (B.textureChoices, an off-list value kept as its own option, every value escaped). It is the
+   *  sheet's own (`section.texture`), and the base's reaches the Proposal step on the next save (B.textureFill). "" on any sheet
+   *  that is not an Epoxy sheet. The select is handled in the delegated `change` listener, which repaints in place, so it keeps focus. */
+  function textureCard() {
+    var e = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (!e || e.role !== "epoxy") return "";
+    var cur = B.sectionTexture(e.section);
+    var opts = B.textureChoices(cur).map(function (o) {
+      return '<option value="' + esc(o.value) + '"' + (o.value === cur ? " selected" : "") + '>' + esc(o.label) + '</option>';
+    }).join("");
+    return '<div class="tk floor" data-texture-card="1">' +
+      '<div class="tk-h"><span class="tag">Texture</span><span class="tk-sub">Prints on the proposal</span></div>' +
+      '<div class="f"><select data-texture="1" aria-label="Texture">' + opts + '</select>' +
+      '<p class="hint">The finish of this epoxy floor. The base bid\'s texture fills the Proposal step\'s Texture until one is picked there.</p></div>' +
+      '</div>';
+  }
+
+  /** Keep `value` as the texture of the Epoxy sheet on show; blank takes the key off. */
+  function setTexture(value) {
+    var e = activeTab === B.ROOT_TAB ? null : openEntry();
+    if (!e || e.role !== "epoxy") return;
+    var v = String(value == null ? "" : value).trim();
+    if (v) e.section.texture = v; else delete e.section.texture;
   }
 
   /** What an Epoxy section charges that is not one of its rows, in words: the patch (a flat price on the whole
@@ -3567,7 +3900,40 @@
     }
 
     html += '<div data-rev="markup" class="rev">' + markupTable(b) + '</div>';
+    html += manHoursCard(b, onShow);
     return html;
+  }
+
+  /** MAN HOURS AND BUDGET (Hanz, 2026-10-27: "In the review tab we need to show the Man hours, the budget ... Take it from the
+   *  sheet"). Read only: the block beside the markup on Kyle's Epoxy and Polish tabs, in his words and units, every figure
+   *  B.manHourBudget's (his formulas over the labor rows of the section on show and the chain's own lines). Keyed `mh.*` figures,
+   *  so a keystroke on the Labor or Review step moves them through repaintNumbers. Drawn for an Epoxy or a Polish sheet only:
+   *  the other tabs' blocks are not checked against the workbook yet. A figure that cannot be worked out is left blank. */
+  function manHoursCard(b, onShow) {
+    var layout = onShow ? onShow.layout : "polish";
+    if (layout !== "epoxy" && layout !== "polish") return "";
+    var f = B.manHourBudget(M.labor, M.conditions, B.prevailingApplied(M), b);
+    if (!f) return "";
+    var two = function (n) { return n === null ? "" : B.num(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var cash = function (n) { return n === null ? "" : B.money2(n); };
+    var share = function (n) { return n === null ? "" : (B.num(n) * 100).toFixed(1) + "%"; };
+    var day = f.hours_per_day + " hour days";
+    var rows = [
+      ["Total Man Hours", rvc("mh.hours", two(f.man_hours)), "hrs", "", ""],
+      ["Total Days", rvc("mh.days", two(f.total_days)), { raw: rv("mh.days.u", day) }, "", ""],
+      // The sheet's "^based on X crew size:", in the page's word for a crew (Hanz: the column is Guys, nothing says "Crew").
+      ["^based on X guys", rvc("mh.guys", two(f.crew)), "guys", "", ""],
+      ['Total "Estimated Costs" w/taxes + fees + bond', rvc("mh.est.q", f.est_costs_per_sf === null ? "" : B.fmtSf(b.sf)),
+       { raw: rv("mh.est.u", f.est_costs_per_sf === null ? "" : "SF") },
+       rvc("mh.est.rate", f.est_costs_per_sf === null ? "" : B.money2(f.est_costs_per_sf) + " / SF"), rv("mh.est", cash(f.est_costs))],
+      ["Man Hour Budget (Raken)", rvc("mh.budget", two(f.budget_hours)), "hrs", "", ""],
+      ["GP per Day", "", { raw: rv("mh.gpday.u", "based on " + day) }, "", rv("mh.gpday", cash(f.gp_per_day))],
+      ["Mark Up + Conting.", "", "of the lump sum", rvc("mh.mc.pct", share(f.markup_cont_pct)), rv("mh.mc", cash(f.markup_cont))],
+      ["GP / MH", "", "a man hour", "", rv("mh.gpmh", cash(f.gp_per_mh))],
+      ["LaborRate from Above", "", "", rvc("mh.rate", f.labor_rate === null ? "" : B.money2(f.labor_rate) + " / hr"), ""],
+      ["MarkUp + Soft Costs", "", "of the lump sum", rvc("mh.ms.pct", share(f.markup_soft_pct)), rv("mh.ms", cash(f.markup_soft))]
+    ];
+    return card("Man hours & budget", 1, "manhours", revTable(rows));
   }
 
   /** Any condition Intake has a toggle for and Review already talks about gets a real, clickable
@@ -3634,13 +4000,6 @@
       default: return "";
     }
   }
-  function adjOn(key) {
-    var a = B.normalizeAdjust(M.adjust);
-    if (!a) return false;
-    if (key === "hard_bid") return a.hard_bid === true;
-    return false;
-  }
-
   /** Write one box into the section on show. The keys are named one by one (never `obj[key] = value` with a key off
    *  an attribute), and the whole set goes back through normalizeAdjust, so a cleared box takes its key away and a
    *  section left with nothing typed saves no `adjust` at all. */
@@ -3655,7 +4014,6 @@
       case "soft_pct": a.soft_pct = value; break;
       case "supplier_pct": a.supplier_pct = value; break;
       case "polycrete_pct": a.polycrete_pct = value; break;
-      case "hard_bid": a.hard_bid = value === true; break;
       default: return;
     }
     var next = B.normalizeAdjust(a);
@@ -3714,18 +4072,6 @@
     return '<span class="mkused" aria-hidden="true" data-mkrate="' + key + '">' + esc(f == null ? "" : B.pct(f)) + '</span>';
   }
 
-  /** The Discount box's greyed figure: what Kyle's hard bid rule gives (the switch on), else 0. */
-  function discountRule(rb) {
-    return rb && rb.hard_bid_pct ? pctNum(-rb.hard_bid_pct) : "0";
-  }
-
-  /** The words beside the Hard bid switch: the rule while it is off, what it gives while it is on. */
-  function hardBidNote(rb) {
-    if (!adjOn("hard_bid")) return "4% off from $60,000, 2.5% on a local job from $13,000";
-    if (rb && rb.hard_bid_pct) return "the rule takes " + pctNum(-rb.hard_bid_pct) + "% off; a figure you type wins";
-    return "the rule gives nothing here: under $13,000, or not local and under $60,000";
-  }
-
   /** One % box over a rule. `rule` is the figure the sheet's rule gives, shown greyed as the placeholder. */
   function adjBox(key, rule) {
     var label = { ship_pct: "Shipping", gp_pct: "GP", super_pct: "Superintendent and PTO", soft_pct: "Soft costs",
@@ -3780,18 +4126,14 @@
     // a plain discount now, a % or a $ (the $ wins), blank is none, and nothing turns it on by itself.
     // The discount's amount is keyed `data-mkdisc`, not `data-mk`: a bid with nothing typed has no such line in its
     // chain, and the review's every-money-cell-is-the-chain check stays exactly as strict as it was.
-    // HARD BID (Hanz, 2026-10-17): the job's switch sits on this line, because the line is what it moves. On, the box shows
-    // Kyle's rule greyed (4% from $60,000, 2.5% local from $13,000) and the rule prices; a figure typed in either box
-    // still wins. Shown only where the section's chain has the rule.
+    // NO HARD BID SWITCH (Hanz, 2026-10-27: "I told you to remove this hard bid discount"). The switch of 2026-10-17 is
+    // gone and nothing fills this line by rule: the boxes are the estimator's own, greyed 0. A bid saved with the switch on
+    // opens with the discount it gave typed in the % box (B.settleHardBid, in init), so its price does not move.
     // A DISCOUNT TYPED IN DOLLARS has no % (the chain reports none), so it has no base either.
-    var hb = B.hardBidRuleOn(ROOT, activeTab);
     var disc = baseCells("disc", b.hard_bid_pct === null ? null : bases.disc, "of subtotal + GP", b.hard_bid_pct);
-    r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span>' +
-      (hb ? '<div class="hbline">' + B.sliderHtml(adjOn("hard_bid"), 'data-adj-hb="1"', "Hard bid",
-              "Kyle's Hard bid answer for this sheet: his rule fills the discount until you type one") +
-            ' <span class="note" data-hbnote>' + esc(hardBidNote(rb)) + '</span></div>' : '') + '</td>' +
+    r += '<tr data-disc-row' + (b.hard_bid ? '' : ' class="off"') + '><td>Discount <span class="note">% or $, yours to set</span></td>' +
       '<td class="q r">' + disc[0] + '</td><td class="u">' + disc[1] + '</td>' +
-      '<td class="rt r">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", discountRule(rb)) + '</td>' +
+      '<td class="rt r">' + rateSpan(b, "discount_pct") + adjBox("discount_pct", "0") + '</td>' +
       '<td class="amt"><span class="adjbox adjamt">$<input data-adj="discount_amt" value="' + esc(adjTyped("discount_amt")) +
       '" placeholder="0" inputmode="decimal" aria-label="Discount in dollars; it wins over the percentage">' +
       adjWarnHtml("discount_amt") + '</span> <span data-mkdisc>' + esc(moneyAuto(b.hard_bid || 0)) + '</span></td></tr>';
@@ -3939,6 +4281,12 @@
       var rc = rowCost(M.takeoff[parseInt(el.getAttribute("data-cost-for"), 10)]);
       el.textContent = rc.text;
       el.className = "costbox" + (rc.empty ? " empty" : "");
+    });
+    // Each heading's subtotal, over the rows drawn under it.
+    document.querySelectorAll("[data-cat-sub]").forEach(function (el) {
+      var keys = String(el.getAttribute("data-cat-sub") || "").split(",").filter(function (s) { return s !== ""; })
+        .map(function (s) { return s.indexOf("c:") === 0 ? s : parseInt(s, 10); });
+      el.textContent = moneyAuto(categorySubtotal(keys));
     });
     document.querySelectorAll("[data-perunit-for]").forEach(function (el) {
       var i = parseInt(el.getAttribute("data-perunit-for"), 10);
@@ -4212,9 +4560,8 @@
         super_pct: pctNum(rb.super_pct != null ? rb.super_pct : B.RATES.SUPER_PTO),
         soft_pct: pctNum(rb.soft_pct != null ? rb.soft_pct : B.RATES.SOFT_COSTS),
         polycrete_pct: adjTyped("supplier_pct") || "0",
-        discount_pct: discountRule(rb)
+        discount_pct: "0"
       };
-      document.querySelectorAll("[data-hbnote]").forEach(function (el) { el.textContent = hardBidNote(rb); });
       adjEls.forEach(function (el) {
         var k = el.getAttribute("data-adj");
         if (Object.prototype.hasOwnProperty.call(ruleOf, k) && el.placeholder !== ruleOf[k]) el.placeholder = ruleOf[k];
@@ -4442,7 +4789,7 @@
     if (!t || !t.closest || (e.key !== " " && e.key !== "Enter")) return;
     // data-cond is the job's condition switch, the Prevailing wage card's among them.
     var sw = t.closest("[data-on-tk]") || t.closest("[data-on-lab]") || t.closest("[data-on-trv]") ||
-      t.closest("[data-cond]") || t.closest("[data-adj-hb]") || t.closest("[data-reno-sw]");
+      t.closest("[data-cond]") || t.closest("[data-reno-sw]");
     if (!sw) return;
     e.preventDefault();
     sw.click();
@@ -4574,18 +4921,6 @@
     // THE ON/OFF SLIDER on a takeoff row and on a labor row (the condition cards' own switch is the
     // `data-cond` one below). Off is an explicit `enabled:false`; back on DELETES the key, so a row
     // that has been flipped back is indistinguishable from one never touched.
-    // THE HARD BID SWITCH on the Discount line: the rule's figure goes into the box (greyed) and the price, and the
-    // words beside the switch say what it gives. In place: the repaint moves the note, the box's
-    // grey figure and the line, and the focus stays on the switch.
-    var hbSw = t.closest("[data-adj-hb]");
-    if (hbSw) {
-      setAdjust("hard_bid", !adjOn("hard_bid"));
-      var hbNow = adjOn("hard_bid");
-      hbSw.className = "mw-sw" + (hbNow ? " on" : "");
-      hbSw.setAttribute("aria-checked", hbNow ? "true" : "false");
-      changed(false);
-      return;
-    }
     var gypIso = t.closest("[data-gyp-iso]");
     if (gypIso) {
       var isoSec = gypOpen();
@@ -5065,6 +5400,12 @@
     if (shMode !== null) { setPriceMode(shMode, el.value); return; }
     // The Gyp card's three selects (sheet, mix, sound mat). The sheet moves the section to another workbook tab, so
     // the whole page is repainted; the other two reprice and repaint the panel.
+    // THE EPOXY SHEET'S TEXTURE: nothing on the panel moves with it, so it repaints in place and the select keeps the focus.
+    if (el.getAttribute("data-texture") !== null) {
+      setTexture(el.value);
+      changed(false);
+      return;
+    }
     var gypSel = el.getAttribute("data-gyp");
     if (gypSel === "preset" || gypSel === "mix" || gypSel === "sound_mat") {
       setGyp(gypSel, el.value);
@@ -5321,6 +5662,9 @@
     // shared.js is still deciding which draft this page is on (it can even hydrate and reload),
     // and every decision below turns on that id.
     try { await TW.draftReady; } catch (e) {}
+    // A proposal made from another draft's estimate has no estimate of its own (the server copies the
+    // parent's): it opens the parent's, before anything here can save (TW.redirectProposalChild).
+    if (typeof TW.redirectProposalChild === "function" && TW.redirectProposalChild("/polish-estimate.html")) return;
     adopt(TW.getState());
 
     // Before the library, before the form, before anything can be typed: whatever happens after
@@ -5390,6 +5734,7 @@
       var ij = await res[1].json();
       ASMS = (aj && aj.assemblies) || [];
       ITEMS = (ij && ij.items) || [];
+      CATS = (ij && ij.item_categories) || null;
     } catch (err) {
       $("loading").textContent = "Couldn't load the item library, so there is nothing to price " +
         "against. " + (err.message || "") + " Reload to try again.";
@@ -5400,6 +5745,15 @@
       say("The item library has no assemblies yet, so a takeoff row has nothing to point at. " +
           "Add one under Items & Assemblies first.");
     }
+
+    // A BID SAVED WITH THE HARD BID SWITCH ON (removed 2026-10-27) opens with the discount it gave TYPED in its Discount box
+    // (B.settleHardBid): the rule no longer prices anything, and the bid's price must not move. Here, the moment the library
+    // can price its material and before anything below reshapes the bid. A bid that never had the switch is handed back as
+    // it was. One that had it is saved once, as a restructure is, so the draft holds the typed figure from now on.
+    var unsettled = ROOT;
+    ROOT = B.settleHardBid(ROOT, { material: sectionMaterial, remodel_rate: remodelRate() });
+    var hardBidSettled = ROOT !== unsettled;
+    if (hardBidSettled) show(activeTab);
 
     // The library's default labor lines, added BESIDE the four the model ships with, so a brand
     // new bid opens holding Travel and every line the estimator set up under Items & Assemblies.
@@ -5493,6 +5847,7 @@
     // shows, and the Review's figures and the Proposal step read the draft's saved price (priced_tabs, proposal_lump_sum). Saved once here, as a restructure is, so the three say the same price
     // (round 7, the pass-2 audit's A1: the bar showed $92,153 and Continue to proposal printed $90,422 until some edit saved). Left inside the save's debounce, the page's exit writes it (pagehide).
     if (drivesGiven) saveSoon();
+    if (hardBidSettled) saveSoon();
     // THE TAKEOFF TOTAL IS polish_sf, SO MAKE THE DRAFT SAY SO NOW. Two ways the draft can be
     // behind the model this page just opened with: (1) seeding filled rows in memory only, so
     // polish_sf held System 1 alone and computed_bid held nothing until the first edit; (2) the
