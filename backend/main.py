@@ -8897,8 +8897,10 @@ def _send_all_publish(group_id: str, request: Request, payload: ScopeSendAllIn) 
         # without files stopped the press, and nobody saw what it would have sent. Now the press
         # builds or publishes it unattended, so what a person sees before pressing Continue on the
         # manual path is asked here: closed lost or on hold on the board, and the Proposal step's
-        # tab-strip warnings (_send_all_strip_warning).
-        if not built or not data.get("generate_result"):
+        # tab-strip warnings (_send_all_strip_warning). A NEIGHBOUR is asked whether or not it has
+        # files: its own Download built them, which says nothing about whether it is still lost or
+        # paused (review of #747, 2026-10-29). The page that pressed keeps the files rule.
+        if m["id"] != page_id or not built or not data.get("generate_result"):
             closed = _send_all_draft_closed(data)
             if closed:
                 blocked.append({"id": m["id"], "label": label, "code": closed[0],
