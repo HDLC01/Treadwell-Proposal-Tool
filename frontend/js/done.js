@@ -1231,8 +1231,12 @@
     { key: "xlsx_download_url", label: ".xlsx", tail: "_estimate.xlsx" },
   ];
   // `said`: what a line last said about its press, by proposal id, kept until its next press, so the
-  // repaint that follows a press (the list read again) does not wipe it.
-  const rowFiles = { mine: null, said: {} };
+  // repaint that follows a press (the list read again) does not wipe it. `own`: THIS one's three
+  // buttons, by file, made once and moved into every repaint. downloadAs repaints the list straight
+  // after its build and then writes "Downloading…", "Downloaded" or "Failed — try again" to the
+  // button it was pressed with, so that button has to be the one on the page (review of #744: a
+  // fresh one showed none of it and took a second press mid-download).
+  const rowFiles = { mine: null, said: {}, own: {} };
   function paintRowFiles(li, m, mine) {
     const name = proposalName(m);
     const built = mine || (typeof m.document_total === "string" && money(m.document_total) != null);
@@ -1242,17 +1246,22 @@
     msg.className = "rv-prop-msg";
     msg.setAttribute("aria-live", "polite");
     ROW_FILES.forEach((f) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "btn-secondary rv-prop-dl-b";
-      b.textContent = f.label;
+      let b = mine ? rowFiles.own[f.key] : null;
+      if (!b) {
+        b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-secondary rv-prop-dl-b";
+        b.textContent = f.label;
+        if (!built) b.disabled = true;
+        else if (mine) {
+          const held = b;
+          b.addEventListener("click", () => {
+            if (rowFiles.mine) rowFiles.mine(f.key, fileStem(state.project_name) + f.tail, held);
+          });
+          rowFiles.own[f.key] = b;
+        } else b.addEventListener("click", () => downloadOther(m, f, b, msg));
+      }
       b.setAttribute("aria-label", f.label + " of " + name);
-      if (!built) b.disabled = true;
-      else if (mine) {
-        b.addEventListener("click", () => {
-          if (rowFiles.mine) rowFiles.mine(f.key, fileStem(state.project_name) + f.tail, b);
-        });
-      } else b.addEventListener("click", () => downloadOther(m, f, b, msg));
       box.appendChild(b);
     });
     li.appendChild(box);
@@ -1272,8 +1281,10 @@
    *
    *  The .docx and PDF ask the question the big buttons ask about a price line with a figure of his
    *  own (TWPrice.confirmSavedCopy), of the document read. Builds and saves a file, nothing more:
-   *  no navigation, no send, no email, no Dropbox. The server records `has_files` on that proposal
-   *  the first time its files are built, as its own Download does (api_draft_documents). */
+   *  no navigation, no send, no email, no Dropbox, and nothing recorded on that proposal
+   *  (`record: false`): Send all asks a proposal with no files whether it is closed lost or on
+   *  hold, and a neighbour's press must not answer that for it. It goes as THAT proposal
+   *  (X-Project-Id), so the server's "generated" event lands in its History, not this one's. */
   async function downloadOther(m, f, button, msg) {
     const orig = button.textContent;
     const name = proposalName(m);
@@ -1312,14 +1323,19 @@
         if (!asked.go) return;   // he cancelled: nothing built, nothing said
       }
       button.textContent = "Downloading…";
-      let out;
-      try {
-        out = await TW.postJSON("/api/draft/" + encodeURIComponent(m.id) + "/documents",
-                                version ? { draft_version: version } : {});
-      } catch (err) {
-        moved = /→ 409/.test(String((err && err.message) || ""));   // saved again since the read
-        throw err;
+      const path = "/api/draft/" + encodeURIComponent(m.id) + "/documents";
+      const body = { record: false };
+      if (version) body.draft_version = version;
+      const headers = TW.authHeaders();
+      headers["X-Project-Id"] = m.id;
+      const built = await fetch(TW.resolveApiBase() + path,
+                                { method: "POST", headers: headers, body: JSON.stringify(body) });
+      if (!built.ok) {
+        moved = built.status === 409;   // saved again since the read
+        const text = await built.text().catch(() => built.statusText);
+        throw new Error("POST " + path + " → " + built.status + ": " + text);
       }
+      const out = await built.json();
       if (!out || money(out.document_total) !== shown) { moved = true; throw new Error(changed); }
       const url = out[f.key];
       if (!url) throw new Error("That file isn't available for " + name + ".");
@@ -1341,7 +1357,9 @@
       console.error("Download failed", err);
       msg.textContent = rowFiles.said[m.id] = "Not downloaded: " + portalErrMsg(err);
       msg.hidden = false;
-      if (moved) refreshFilesProposals();
+      // paintLumpSum first, as downloadAs does: refreshFilesProposals reads this one's figure off
+      // the card, which holds the whole list until paintLumpSum puts the figure back.
+      if (moved) { paintLumpSum(); refreshFilesProposals(); }
     } finally {
       button.textContent = orig;
       button.disabled = false;

@@ -79,8 +79,10 @@ def test_a_proposal_never_built_has_its_buttons_off_and_says_why(out):
                                         (".xlsx", "Acme_Plant_Polish_Room_2_estimate.xlsx")])
 def test_this_ones_line_is_the_big_buttons_press(out, label, name):
     s = out["same"][label]
-    assert s["row"] == s["big"], "the same requests, the same name, the same busy state"
+    same = lambda d: {k: v for k, v in d.items() if k != "onPage"}   # a top button is on no line
+    assert same(s["row"]) == same(s["big"]), "the same requests, the same name, the same busy state"
     assert s["row"]["saved"] == [name]
+    assert s["row"]["pids"] == ["C2"] and s["row"]["onPage"] is True
     assert [q for q in s["row"]["reqs"] if q.startswith("post ")] == [
         "post /api/draft/C2/documents " + ("{}" if label == ".xlsx" else '{"draft_version":"v-C2"}')]
 
@@ -96,8 +98,9 @@ def test_this_ones_line_builds_nothing_before_the_card_is_wired(out):
 def test_another_line_builds_its_own_proposal_from_its_saved_document(out, label, file, name):
     o = out["other"][label]
     assert o["reqs"] == ["get /api/draft/P1",
-                         "post /api/draft/P1/documents {\"draft_version\":\"v-P1\"}",
+                         'post /api/draft/P1/documents {"record":false,"draft_version":"v-P1"}',
                          "get " + file], "its own row, its own id, the copy read; no flush of this page"
+    assert o["pids"] == ["P1"], "the build is logged against P1, never this page's C2"
     assert o["saved"] == [name]
     assert o["busy"] == [["Downloading…", True]]
     assert o["pressed"] == [label, False], "the button comes back once the file is saved"
@@ -109,12 +112,15 @@ def test_a_document_saved_again_at_another_figure_builds_nothing(out):
     assert m["reqs"] == ["get /api/draft/P1"] and m["saved"] == []
     assert m["asked"] == ["C2"], "the list is read again"
     assert m["after"]["msg"] == CHANGED and m["pressed"] == ["PDF", False]
+    assert m["mine"]["sum"] == "$15,000.50", "this line's figure is its own, not the list's text"
+    assert out["movedTwice"]["mine"]["sum"] == "$15,000.50"
 
 
 def test_the_file_must_print_the_lines_figure(out):
     r = out["renderMoved"]
     assert r["saved"] == [], "the render answered $19,000.00 against the line's $20,000.00"
     assert r["after"]["msg"] == CHANGED and r["asked"] == ["C2"]
+    assert r["mine"]["sum"] == "$15,000.50"
 
 
 def test_the_own_figure_question_is_asked_of_its_document_and_cancel_builds_nothing(out):
@@ -134,9 +140,20 @@ def test_failures_say_so_on_the_line_and_the_button_comes_back(out):
     p = out["postFails"]
     assert p["after"]["msg"] == "Not downloaded: Not built — this proposal was saved again."
     assert p["asked"] == ["C2"] and p["pressed"] == [".docx", False]
+    assert p["mine"]["sum"] == "$15,000.50", "a 409 leaves this line's figure alone"
     r = out["readFails"]
     assert r["reqs"] == ["get /api/draft/P1"] and r["saved"] == []
     assert r["after"]["msg"] == "Not downloaded: Couldn't read Breakroom. Check your connection and try again."
+
+
+def test_this_ones_line_keeps_its_busy_state_and_failure_on_the_page(out):
+    """downloadAs repaints the list right after its build; the button it holds must be the one on
+    the page, so "Failed — try again" shows there and a second press cannot start mid-download."""
+    f = out["mineFails"]
+    assert f["saved"] == []
+    assert f["onPage"] is True, "the pressed button was replaced by the repaint"
+    assert f["shown"] == ["Failed — try again", True]
+    assert f["buttons"] == 3
 
 
 def test_a_one_proposal_project_is_unchanged(out):
@@ -152,13 +169,27 @@ BREAKS = {
         "    rowFiles.mine = downloadAs;", "",
         lambda r: r["same"]["PDF"]["row"] == r["same"]["PDF"]["big"]),
     "another line builds this page's draft": (
-        '        out = await TW.postJSON("/api/draft/" + encodeURIComponent(m.id) + "/documents",',
-        '        out = await TW.postJSON("/api/draft/" + encodeURIComponent(TW.getDraftId()) + "/documents",',
+        '      const path = "/api/draft/" + encodeURIComponent(m.id) + "/documents";',
+        '      const path = "/api/draft/" + encodeURIComponent(TW.getDraftId()) + "/documents";',
         lambda r: r["other"]["PDF"]["saved"] == ["Acme_Plant_Breakroom_proposal.pdf"]),
     "the copy read is not named to the server": (
-        "                                version ? { draft_version: version } : {});",
-        "                                {});",
-        lambda r: 'post /api/draft/P1/documents {"draft_version":"v-P1"}' in r["other"]["PDF"]["reqs"]),
+        "      if (version) body.draft_version = version;", "",
+        lambda r: 'post /api/draft/P1/documents {"record":false,"draft_version":"v-P1"}'
+                  in r["other"]["PDF"]["reqs"]),
+    "a neighbour's press records files on it": (
+        "      const body = { record: false };", "      const body = {};",
+        lambda r: 'post /api/draft/P1/documents {"record":false,"draft_version":"v-P1"}'
+                  in r["other"]["PDF"]["reqs"]),
+    "the build is logged against this page": (
+        '      headers["X-Project-Id"] = m.id;', "",
+        lambda r: r["other"]["PDF"]["pids"] == ["P1"]),
+    "a moved price repaints over this line's figure": (
+        "      if (moved) { paintLumpSum(); refreshFilesProposals(); }",
+        "      if (moved) refreshFilesProposals();",
+        lambda r: r["moved"]["mine"]["sum"] == "$15,000.50"),
+    "this line's buttons are made again on every repaint": (
+        "    let b = mine ? rowFiles.own[f.key] : null;", "    let b = null;",
+        lambda r: r["mineFails"]["onPage"] is True),
     "the read document's figure is not checked": (
         "      if (money(pp.values.total_formatted) !== shown) { moved = true; throw new Error(changed); }", "",
         lambda r: r["moved"]["reqs"] == ["get /api/draft/P1"]),
@@ -191,7 +222,7 @@ BREAKS = {
         lambda r: r["fileFails"]["after"]["msg"] == "Not downloaded: The file didn't come back "
                                                     "(Internal Server Error). Try again."),
     "a moved price does not read the list again": (
-        "      if (moved) refreshFilesProposals();", "",
+        "      if (moved) { paintLumpSum(); refreshFilesProposals(); }", "",
         lambda r: r["moved"]["asked"] == ["C2"]),
 }
 
@@ -270,3 +301,48 @@ def test_another_proposal_saved_again_after_the_read_is_not_built(two):
     p1["updated_at"] = "2026-10-29T11:00:00+00:00"
     r = client.post("/api/draft/p1/documents", json={"draft_version": row["updated_at"]})
     assert r.status_code == 409, r.text
+
+
+# ── a neighbour's line press records nothing on that proposal (review of #744) ───────────────────
+
+@pytest.mark.parametrize("mark, code", [
+    ({"closed_lost": {"reason": "price", "by": EST, "at": "2026-10-20", "note": "went elsewhere"}},
+     "closed_lost"),
+    ({"on_hold": {"reason": "on_hold", "note": "owner paused", "by": EST, "at": "2026-10-20",
+                  "until": "2026-11-20"}}, "on_hold"),
+])
+def test_a_line_press_does_not_open_a_closed_proposal_to_send_all(fake_supabase, monkeypatch,
+                                                                  mark, code):
+    """s2 has a document, no files, and is closed lost or on hold. Its line's button on s1's page
+    builds its files (GET /api/draft/s2, POST its /documents with `record: false`, exactly what
+    downloadOther sends). Send all's closed/on-hold guard runs only for a proposal with no files, so
+    a press that recorded `generate_result` on s2 would let the next Send all publish and email it.
+
+    Mutation: drop the `record` check in api_draft_documents -- the press records, Send all says 200."""
+    import test_scope_send_all as tsa
+    rows = tsa._three()
+    del rows[1]["data"]["generate_result"]
+    rows[1]["data"].update(copy.deepcopy(mark))
+    w = tsa.World(fake_supabase, monkeypatch, rows)
+    row = tsa.client.get("/api/draft/s2").json()
+    r = tsa.client.post("/api/draft/s2/documents",
+                        json={"draft_version": row["updated_at"], "record": False})
+    assert r.status_code == 200, r.text
+    s2 = [d for d in w.store["drafts"] if d["id"] == "s2"][0]
+    assert not s2["data"].get("generate_result"), "a neighbour's press recorded files on s2"
+    r = tsa._press()
+    assert r.status_code == 409, r.text
+    assert [(b["id"], b["code"]) for b in r.json()["blocked"]] == [("s2", code)]
+    assert w.publishes == [] and w.sends == []
+
+
+def test_its_own_download_still_records_its_files(fake_supabase, monkeypatch):
+    """The control: a press with no `record` (its own Files page, generate.js) records as before."""
+    import test_scope_send_all as tsa
+    rows = tsa._three()
+    del rows[1]["data"]["generate_result"]
+    w = tsa.World(fake_supabase, monkeypatch, rows)
+    r = tsa.client.post("/api/draft/s2/documents", json={})
+    assert r.status_code == 200, r.text
+    s2 = [d for d in w.store["drafts"] if d["id"] == "s2"][0]
+    assert s2["data"].get("generate_result")

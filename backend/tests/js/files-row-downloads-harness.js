@@ -111,6 +111,19 @@ async function page(o) {
   const st = JSON.parse(JSON.stringify(o.st || ST));
   const view = o.view || VIEW;
   let pressed = null;
+  const REFUSED = "{\"detail\":\"Not built — this proposal was saved again.\"}";
+  // One build route, reached by TW.postJSON (this page's own, freshDocuments) or by a POST fetch
+  // (another line's, downloadOther). `pid`: the X-Project-Id it carried, the project the server's
+  // "generated" event is logged against.
+  const post = (p, body, pid) => {
+    log.reqs.push("post " + p + " " + JSON.stringify(body));
+    (log.pids = log.pids || []).push(pid);
+    if (pressed) log.busy.push([pressed.textContent, pressed.disabled]);
+    if (o.postFails) return null;
+    const id = decodeURIComponent(p.split("/")[3]);
+    const total = (o.renderTotals && o.renderTotals[id]) || rows[id].data.proposal_payload.values.total_formatted;
+    return RENDER(id, total);
+  };
   const TW = {
     getState: () => st,
     getDraftId: () => o.id || "C2",
@@ -120,19 +133,22 @@ async function page(o) {
     readServerRow: async () => { log.reqs.push("read own"); const r = rows[o.id || "C2"]; return { data: r.data, version: r.updated_at }; },
     readProposals: async (id) => { log.asked.push(id); return JSON.parse(JSON.stringify(view)); },
     postJSON: async (p, body) => {
-      log.reqs.push("post " + p + " " + JSON.stringify(body));
-      if (pressed) log.busy.push([pressed.textContent, pressed.disabled]);
-      if (o.postFails) throw new Error("POST " + p + " → 409: {\"detail\":\"Not built — this proposal was saved again.\"}");
-      const id = decodeURIComponent(p.split("/")[3]);
-      const total = (o.renderTotals && o.renderTotals[id]) || rows[id].data.proposal_payload.values.total_formatted;
-      return RENDER(id, total);
+      const out = post(p, body, o.id || "C2");
+      if (!out) throw new Error("POST " + p + " → 409: " + REFUSED);
+      return out;
     },
     resolveApiBase: () => "",
     absoluteUrl: (u) => u,
-    authHeaders: () => ({ Authorization: "Bearer t" }),
+    // As shared.js's: this page's id rides every request.
+    authHeaders: () => ({ "Content-Type": "application/json", Authorization: "Bearer t", "X-Project-Id": o.id || "C2" }),
     confirmDanger: (q) => { log.confirms.push(q.title); return Promise.resolve(o.confirm !== false); },
   };
-  const fetch = async (url) => {
+  const fetch = async (url, init) => {
+    if (init && init.method === "POST") {
+      const out = post(url, JSON.parse(init.body), (init.headers || {})["X-Project-Id"]);
+      return out ? { ok: true, status: 200, json: async () => out }
+                 : { ok: false, status: 409, statusText: "Conflict", text: async () => REFUSED };
+    }
     log.reqs.push("get " + url);
     const m = /^\/api\/draft\/([^/]+)$/.exec(url);
     if (m) {
@@ -174,16 +190,21 @@ async function page(o) {
     for (const fn of b.listeners.click || []) await fn();
     await settle();
     pressed = null;
-    // The pressed button itself once the press is over (a repaint may have replaced its line).
+    // The pressed button itself once the press is over (a repaint may have replaced its line), and
+    // whether it is still the one on the page.
     log.after = [b.textContent, b.disabled];
+    log.onPage = lines().some((li) => li.children.some((c) => c.className === "rv-prop-dl"
+                                                              && c.children.indexOf(b) >= 0));
   };
   return {
     log, nodes, api,
     snap: () => lines().map((li) => {
       const box = li.children.filter((c) => c.className === "rv-prop-dl")[0];
       const msg = li.children.filter((c) => c.className === "rv-prop-msg")[0];
+      const sum = li.children.filter((c) => /\brv-prop-sum\b/.test(c.className))[0];
       return {
         name: li.children[0].textContent,
+        sum: sum ? sum.textContent : null,
         last: li.children.indexOf(box) === li.children.length - 2 && li.children.indexOf(msg) === li.children.length - 1,
         buttons: box ? box.children.map((b) => ({ label: b.textContent, disabled: b.disabled, type: b.type,
                                                   cls: b.className, aria: b.attrs["aria-label"] || null,
@@ -194,14 +215,16 @@ async function page(o) {
     btn, press,
     /** Press one of the three big buttons at the top. */
     top: (id) => press(nodes[id]),
-    reset: () => { log.after = null; log.reqs.length = 0; log.saved.length = 0; log.asked.length = 0; log.confirms.length = 0; log.busy.length = 0; },
+    reset: () => { log.after = null; log.onPage = null; log.pids = []; log.reqs.length = 0; log.saved.length = 0;
+                   log.asked.length = 0; log.confirms.length = 0; log.busy.length = 0; },
   };
 }
 
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r, 0)); };
 const take = (log) => JSON.parse(JSON.stringify({ reqs: log.reqs, saved: log.saved, asked: log.asked,
                                                    confirms: log.confirms, busy: log.busy,
-                                                   pressed: log.after || null }));
+                                                   pressed: log.after || null, onPage: log.onPage,
+                                                   pids: log.pids || [] }));
 
 (async () => {
   const out = {};
@@ -249,7 +272,10 @@ const take = (log) => JSON.parse(JSON.stringify({ reqs: log.reqs, saved: log.sav
                                          updated_at: "v-P1b" } } });
     p.reset();
     await p.press(p.btn("P1", "PDF"));
-    out.moved = Object.assign(take(p.log), { after: p.snap()[0] });
+    out.moved = Object.assign(take(p.log), { after: p.snap()[0], mine: p.snap()[1] });
+    // Pressed again (the list re-read still says $20,000.00): THIS line's figure stays its own.
+    await p.press(p.btn("P1", "PDF"));
+    out.movedTwice = { mine: p.snap()[1] };
   }
 
   // The render answers another figure than the line's: nothing is saved.
@@ -257,7 +283,18 @@ const take = (log) => JSON.parse(JSON.stringify({ reqs: log.reqs, saved: log.sav
     const p = await page({ renderTotals: { P1: "$19,000.00" } });
     p.reset();
     await p.press(p.btn("P1", "PDF"));
-    out.renderMoved = Object.assign(take(p.log), { after: p.snap()[0] });
+    out.renderMoved = Object.assign(take(p.log), { after: p.snap()[0], mine: p.snap()[1] });
+  }
+
+  // THIS line's press keeps its busy state and its failure on the button that is on the page:
+  // downloadAs repaints the list straight after its build, before the file is fetched.
+  {
+    const p = await page({ fileFails: "/api/file/C2" });
+    p.reset();
+    await p.press(p.btn("C2", "PDF"));
+    const pdf = p.snap()[1].buttons.filter((b) => b.aria === "PDF of Polish Room 2")[0];
+    out.mineFails = Object.assign(take(p.log), { shown: pdf ? [pdf.label, pdf.disabled] : null,
+                                                 buttons: p.snap()[1].buttons.length });
   }
 
   // A price line with a figure of his own on P1's document: asked first; Cancel builds nothing.
@@ -286,7 +323,7 @@ const take = (log) => JSON.parse(JSON.stringify({ reqs: log.reqs, saved: log.sav
     const q = await page({ postFails: true });
     q.reset();
     await q.press(q.btn("P1", ".docx"));
-    out.postFails = Object.assign(take(q.log), { after: q.snap()[0] });
+    out.postFails = Object.assign(take(q.log), { after: q.snap()[0], mine: q.snap()[1] });
     const r = await page({ readFails: true });
     r.reset();
     await r.press(r.btn("P1", ".xlsx"));
