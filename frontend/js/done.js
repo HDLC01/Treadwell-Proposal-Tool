@@ -1215,8 +1215,66 @@
     if (seq !== filesProposals.seq) return;
     if (pv) filesProposals.pv = pv;
     paintFilesProposals(filesProposals.pv, id, figure);
+    wireFilesLinks(id);   // each other proposal's name opens it on its draft read ahead
     // The page is drawn: js/reveal.js may now play the fade from the page before (a no-op after).
     if (typeof TWReveal !== "undefined") TWReveal.done();
+  }
+
+  /** A NAME IN THE LUMP SUMS LIST OPENS ITS PROPOSAL ON ITS DRAFT READ AHEAD, as the Proposal step's
+   *  tab strip does (proposal-review.js openTab / readAhead). Without it the Files page of the other
+   *  proposal loaded on this one's blob, read its own draft and RELOADED itself (shared.js
+   *  initDraftSync, adoptAndReload), and a reload gets no cross-fade: the white flash Hanz saw on
+   *  this exact path (2026-10-29). With the draft kept in sessionStorage by TW.prefetchDraft, the
+   *  page that opens runs once on it (bootFromPrefetch). Still a real page load (location.assign).
+   *    * At idle, once the list is first drawn: every other name's draft is read (never this one).
+   *    * A pointer or the keyboard on a name: that one is read now.
+   *    * The click: read it (or take the read in flight), save this page (TW.flushState), wait for
+   *      the read a little at most, then go. A late read leaves the next page to read it itself.
+   *  A click with a modifier key (a new tab or window) is the browser's, untouched. One listener
+   *  set on #lump-sum, which done.html ships and every repaint of the list keeps. */
+  const filesLinks = { wired: false, ahead: false, going: false };
+  function wireFilesLinks(currentId) {
+    const el = document.getElementById("lump-sum");
+    if (!el || typeof el.addEventListener !== "function" || !TW.prefetchDraft) return;
+    const idOf = (a) => {
+      const m = /[?&]d=([^&#]*)/.exec((a && a.getAttribute && a.getAttribute("href")) || "");
+      try { return m ? decodeURIComponent(m[1]) : ""; } catch { return ""; }
+    };
+    const linkOf = (t) => (t && typeof t.closest === "function" ? t.closest("a.rv-prop-nm") : null);
+    if (!filesLinks.wired) {
+      filesLinks.wired = true;
+      const ahead = (e) => {
+        const pid = idOf(linkOf(e.target));
+        if (pid && pid !== TW.getDraftId()) TW.prefetchDraft(pid);
+      };
+      el.addEventListener("pointerover", ahead);
+      el.addEventListener("focusin", ahead);
+      el.addEventListener("click", (e) => {
+        const a = linkOf(e.target);
+        const pid = idOf(a);
+        if (!pid || pid === TW.getDraftId() || e.defaultPrevented) return;
+        if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        openFilesLink(pid, a.getAttribute("href"));
+      });
+    }
+    if (filesLinks.ahead) return;
+    const others = Array.from(el.querySelectorAll("a.rv-prop-nm")).map(idOf).filter((x) => x && x !== currentId);
+    if (!others.length) return;
+    filesLinks.ahead = true;
+    const go = () => others.forEach((x) => TW.prefetchDraft(x));
+    if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(go, { timeout: 2000 });
+    else setTimeout(go, 300);
+  }
+  async function openFilesLink(pid, href) {
+    if (filesLinks.going) return;
+    filesLinks.going = true;
+    try {
+      const ahead = Promise.race([TW.prefetchDraft(pid), new Promise((r) => setTimeout(r, 1200))]);
+      try { await TW.flushState(); } catch {}
+      try { await ahead; } catch {}
+      window.location.assign(href);
+    } finally { filesLinks.going = false; }
   }
 
   /** EACH LINE OF STEP 5's LIST DOWNLOADS ITS OWN PROPOSAL (Hanz, 2026-10-29: "each lump sum should

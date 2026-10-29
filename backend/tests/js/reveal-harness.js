@@ -194,7 +194,10 @@ async function scenarios() {
     const read = deferred();
     const log = [];
     const src = L.grabConst(DONE, "filesProposals", { indent: "  ", where: "done.js" }) + NL
+      + L.grabConst(DONE, "filesLinks", { indent: "  ", where: "done.js" }) + NL
       + L.liftSource(DONE, "refreshFilesProposals", { indent: "  ", where: "done.js" }) + NL
+      + L.liftSource(DONE, "wireFilesLinks", { indent: "  ", where: "done.js" }) + NL
+      + L.liftSource(DONE, "openFilesLink", { indent: "  ", where: "done.js" }) + NL
       + "refreshFilesProposals();";
     w.ctx.TW = { getDraftId: () => "d1", readProposals: () => read.p };
     w.ctx.document.getElementById = ((orig) => (id) => (id === "lump-row" || id === "lump-sum" ? null : orig(id)))(w.ctx.document.getElementById);

@@ -234,7 +234,7 @@ def test_the_sidebar_does_not_slide_in_while_the_page_boots():
     """auth.js gives body and #tw-sidebar a transition; while `html.tw-booting` is on, reveal.css
     turns both off so the open rail is drawn open. The child combinator needs the rail on <body>."""
     css = _strip_comments((FRONTEND / "reveal.css").read_text(encoding="utf-8"))
-    rule = re.search(r"html\.tw-booting body,\s*html\.tw-booting body > #tw-sidebar\s*\{([^}]*)\}", css)
+    rule = re.search(r"html\.tw-booting body,\s*html\.tw-booting body > #tw-sidebar\s*(?:,[^{]*)?\{([^}]*)\}", css)
     assert rule and "transition: none" in rule.group(1)
     auth = (FRONTEND / "auth.js").read_text(encoding="utf-8")
     assert "document.body.appendChild(aside);" in auth
@@ -266,3 +266,40 @@ def _page_background(name):
 def test_the_page_behind_the_content_is_never_white(name):
     """What shows between the fade and the content is the app's surface, not a white page."""
     assert _page_background(name) not in ("", "#fff", "#ffffff", "white", "transparent")
+
+
+# ── the polish estimate's bid bar lands with the page ─────────────────────────────────────────
+def _bar_transition(reveal_css, booting, nav_open=True, width=1280):
+    """The `transition` the cascade gives the polish estimate's fixed bid bar (#bidbar.bid), from
+    reveal.css (linked first in <head>) and the page's own <style>, with `tw-booting` (js/reveal.js)
+    and `tw-nav-open` (auth.js) on <html> or not. Resolved by test_v2_total_bar_beside_sidebar.py's
+    cascade reader: importance, specificity, source order."""
+    import test_v2_total_bar_beside_sidebar as cascade
+    page = (FRONTEND / "polish-estimate.html").read_text(encoding="utf-8")
+    rules = cascade.parse_rules(reveal_css + "\n" + page[page.index("<style>") + 7:page.index("</style>")])
+    classes = tuple(c for c, on in (("tw-booting", booting), ("tw-nav-open", nav_open)) if on)
+    bar = cascade.BAR
+    ancestors = [("html", "", classes), cascade.BODY]
+    best, winner = None, None
+    for selector, decls, media, order in rules:
+        if "transition" not in decls or not cascade.could_match(selector, bar):
+            continue
+        if not cascade.selector_matches(selector, bar, ancestors) or not cascade.media_applies(media, width):
+            continue
+        key = ("!important" in decls["transition"], cascade.specificity(selector), order)
+        if best is None or key > best:
+            best, winner = key, decls["transition"].replace("!important", "").strip()
+    return winner
+
+
+def test_the_bid_bar_does_not_slide_in_while_the_page_boots():
+    """polish-estimate.html's `.bid` follows the open rail with its own `transition: left .2s`. While
+    the page boots the body and the rail land without a slide, so the bar must too, or it slides 240px
+    on its own during the cross-fade. Once booted it still slides with the body."""
+    css = (FRONTEND / "reveal.css").read_text(encoding="utf-8")
+    assert _bar_transition(css, booting=True) == "none"
+    assert _bar_transition(css, booting=False).startswith("left .2s")
+    # The check can fail: without the selector the bar keeps its slide while the page boots.
+    broken = css.replace(",\nhtml.tw-booting .bid {", " {").replace(",\r\nhtml.tw-booting .bid {", " {")
+    assert broken != css
+    assert _bar_transition(broken, booting=True).startswith("left .2s")

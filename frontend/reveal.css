@@ -24,6 +24,8 @@
 
 /* While the page boots (js/reveal.js), the sidebar a desktop user keeps open is drawn open on
    arrival rather than sliding in and shoving the page sideways. Later opens and closes still slide.
-   Specific enough to beat auth.js's injected body / #tw-sidebar transitions. */
+   Specific enough to beat auth.js's injected body / #tw-sidebar transitions. The polish estimate's
+   fixed bid bar (.bid) follows the rail with its own slide; it lands with the page, not after it. */
 html.tw-booting body,
-html.tw-booting body > #tw-sidebar { transition: none; }
+html.tw-booting body > #tw-sidebar,
+html.tw-booting .bid { transition: none; }
