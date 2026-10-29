@@ -2543,15 +2543,36 @@
     if (!groups.length) return M.takeoff.map(takeoffRowCard).join("") + conds.map(condHtml).join("");
     var byKey = {};
     conds.forEach(function (c) { byKey["c:" + c.key] = c; });
+    // EACH HEADING IS ITS OWN CONTAINER (Hanz, 2026-10-29, with Kyle's sheet: "each category should have a
+    // different container like we have for the review tab"): a box with the heading and its subtotal in a
+    // tinted band on top and the heading's cards inside it, in the colour catTone gives that heading.
     return groups.map(function (g) {
-      return '<div class="tk-cat" data-cat-group="' + esc(g.id || "other") + '">' +
-        '<h3 class="tk-cat-h">' + esc(g.name) + '</h3>' +
+      return '<section class="tk-cat" data-cat-group="' + esc(g.id || "other") + '" data-cat-tone="' +
+        catTone(g, wt) + '" aria-label="' + esc(g.name) + '">' +
+        '<div class="tk-cat-head"><h3 class="tk-cat-h">' + esc(g.name) + '</h3>' +
         '<span class="tk-cat-sub">Subtotal <b data-cat-sub="' + esc(g.keys.join(",")) + '">' +
         esc(moneyAuto(categorySubtotal(g.keys))) + '</b></span></div>' +
+        '<div class="tk-cat-body">' +
         g.keys.map(function (k) {
           return typeof k === "number" ? takeoffRowCard(M.takeoff[k], k) : condHtml(byKey[k]);
-        }).join("");
+        }).join("") + '</div></section>';
     }).join("");
+  }
+
+  /** How many colours the Material step's heading containers cycle through (--cat-1-band .. --cat-6-band in
+   *  polish-estimate.html). */
+  var CAT_TONES = 6;
+
+  /** The colour of heading `g`'s container in work type `wt`: "1".."6" from the heading's place in the Admin
+   *  list, and "other" for Other. THE ADMIN PLACE, NOT THE PLACE ON THIS BID: the Admin list is the same for
+   *  every bid, so a heading wears the same colour on every bid and after a reload, and one left empty on this
+   *  bid does not shift the colours of the headings after it. Neighbours in the Admin list never share one
+   *  (up to six of them). The colour only ever repeats the name in the band, it never replaces it. */
+  function catTone(g, wt) {
+    if (!g || g.other || !g.id) return "other";
+    var list = L.categoriesFor(CATS, wt);
+    for (var i = 0; i < list.length; i++) if (list[i].id === g.id) return String(i % CAT_TONES + 1);
+    return "other";
   }
 
   /** The heading a takeoff row sits under in work type `wt`, {id, name}, or null (Other). */
