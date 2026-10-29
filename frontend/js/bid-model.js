@@ -7474,7 +7474,7 @@
           if (r.canOwn || pairBase) {
             s += '<button type="button" class="mw-sw sh-own' + (r.own ? " on" : "") + '" role="switch" aria-checked="' + (r.own ? "true" : "false") +
               '" data-sh-act="own"' + tabAttr + key(t, "own") + (r.canOwn ? "" : ' disabled title="Make one sheet the base first: Epoxy + Polish together are one proposal"') +
-              '><span class="track"></span>Its own proposal' + (r.bid ? ' <span class="sh-bidtag">Base Bid ' + r.bid + '</span>' : "") + '</button>';
+              '><span class="track"></span>Separate base bid' + (r.bid ? ' <span class="sh-bidtag">Base Bid ' + r.bid + '</span>' : "") + '</button>';
           }
         }
         var locked = r.base || r.inBase || e.root;
