@@ -10079,10 +10079,14 @@
         m.display_label = m.label;
         if (j.proposals && Array.isArray(j.proposals.members)) view = j.proposals;   // every proposal's name may have followed
         msg = "";
-        // On Base Bid 1's own page the estimate is this page's draft: its renamed sheet (parent_patch) is taken into this page's
-        // copy too, or the next save would put the old name back and the proposals would follow it.
-        const own = (j.parent_id === id && j.parent_patch && typeof j.parent_patch === "object") ? j.parent_patch : {};
-        Object.keys(own).forEach((k) => { if (k in state) state[k] = own[k]; });
+        // What the server wrote to THIS page's draft is taken into this page's copy too (patches[id]): on Base Bid 1's page its
+        // renamed sheet and the rename's stamp (drafts.SHEET_NAMES_MARK, without which its next save is refused), on a
+        // proposal's page the new name it was given and the stamp that keeps it up to date (drafts.carry_sheet_names). Left
+        // out, the next save would put the old name back, or be refused. An older answer has only parent_patch.
+        const mine = (j.patches && typeof j.patches === "object") ? j.patches[id]
+          : (j.parent_id === id ? j.parent_patch : null);
+        const own = (mine && typeof mine === "object") ? mine : {};
+        Object.keys(own).forEach((k) => { state[k] = own[k]; });
         // The scope group is the server's: this browser only remembers what the server has already.
         if (m.id === id && TW.setLocalState) TW.setLocalState(Object.assign({ scope_group: { id: j.group_id, label: m.label } }, own), { alreadyOnServer: true });
       } catch (err) {

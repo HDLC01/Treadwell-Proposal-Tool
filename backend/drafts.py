@@ -85,6 +85,15 @@ _SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group"
 # the children also hold them (save_draft refuses it, StaleSplitWrite).
 SPLIT_MARK = "split_at"
 
+# Stamped on Base Bid 1's estimate each time rename_proposal renames one of its sheets from a
+# proposal's tab (a server write that does not bump `updated_at`), and carried by every copy of the
+# estimate read AFTER it. A browser save whose blob does not carry the stamp the row has was built
+# from a copy read BEFORE the rename: storing it would put the old sheet name back, and the save's
+# own sync (sync_proposal_labels) would then rename every proposal back after it. save_draft refuses
+# it (StaleSheetNamesWrite), as it refuses a copy from before a split. Not server-owned, like
+# SPLIT_MARK: TW.refreshServerOwned must never hand an old copy the new stamp.
+SHEET_NAMES_MARK = "sheet_names_at"
+
 # Server-owned keys a BROWSER'S save may not even seed on a row that has never had them (the rest of
 # _SERVER_OWNED_KEYS may: "the blob may still seed a key the row has never had", save_draft). A scope
 # group is joined only through create_sibling and split_draft. The beta's sandbox PUTs a copy of a real
@@ -107,6 +116,11 @@ class StaleProposalWrite(Exception):
     back, while `estimate_digest` (server-owned) kept the new one and hid the "Estimate changed"
     banner. `estimate_synced_at` is the fence, as SPLIT_MARK is for a split: a blob that does not
     carry the stamp the row has was read before the last refresh."""
+
+
+class StaleSheetNamesWrite(Exception):
+    """A browser save of a copy of an estimate read before rename_proposal renamed one of its sheets
+    (SHEET_NAMES_MARK)."""
 
 
 def save_draft(draft_id: str, data: Dict[str, Any],
@@ -137,6 +151,9 @@ def save_draft(draft_id: str, data: Dict[str, Any],
         # current stamp and wave it through.
         if keep_server_owned and prior.get(SPLIT_MARK) and data.get(SPLIT_MARK) != prior.get(SPLIT_MARK):
             raise StaleSplitWrite(draft_id)
+        if (keep_server_owned and prior.get(SHEET_NAMES_MARK)
+                and data.get(SHEET_NAMES_MARK) != prior.get(SHEET_NAMES_MARK)):
+            raise StaleSheetNamesWrite(draft_id)
         if (keep_server_owned and prior.get("estimate_synced_at")
                 and data.get("estimate_synced_at") != prior.get("estimate_synced_at")):
             raise StaleProposalWrite(draft_id)
@@ -149,9 +166,16 @@ def save_draft(draft_id: str, data: Dict[str, Any],
         sb.table("drafts").update({"data": data, "updated_at": now}).eq("id", draft_id).execute()
         # ONE NAME (Hanz, 2026-10-29): an estimate with proposals names each of them after its base
         # sheet, so a sheet renamed on the estimate renames its proposal here, on the save that
-        # carried the new name (sync_proposal_labels). A failure never fails the save: the next save
-        # names them again.
+        # carried the new name (sync_proposal_labels). A save that changed ONLY sheet names takes the
+        # names into every proposal that was up to date, which stays up to date (carry_sheet_names).
+        # A failure never fails the save: the next save names them again (a proposal whose names
+        # were not carried shows "Estimate changed", and Refresh copies them).
         if _may_have_proposals(data):
+            try:
+                carry_sheet_names(draft_id, prior, data)
+            except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
+                _log.warning("save of %s: the sheet names were not carried into its proposals: %s",
+                             draft_id, exc)
             try:
                 sync_proposal_labels(draft_id, owner_email, parent=data)
             except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
@@ -2181,6 +2205,116 @@ def _renamed_sheet(parent: Dict[str, Any], tab: str, want: str) -> Dict[str, Any
     return patch
 
 
+# ── A NAME IS NOT A NEW ESTIMATE (review of the one-name change) ──────────────────────────────────
+# estimate_digest hashes the sheets' names too (tab_labels, priced_tabs[].name, a v2 section's
+# `label`), so a sheet renamed on the estimate, or from a proposal's tab, called every proposal of it
+# "Estimate changed", Send all refused the never-built ones and Generate Files re-copied the estimate
+# into sent ones, while each proposal's own copy (the option lines and workbook tab names its
+# documents print) kept the old name. The digest's formula is NOT changed (every stored digest would
+# then read as stale): instead a change of the estimate that is ONLY names is carried into each
+# proposal that was up to date with it, which is given the new digest in the same write.
+def _nameless_estimate(data: Dict[str, Any]) -> Dict[str, Any]:
+    """What estimate_digest hashes, less the sheets' names: tab_labels, every priced_tabs `name`
+    and, on a v2 model, the root's and each section's `label`. Only compared, never stored: it shares
+    `data`'s values (no deep copy, which an estimate's every save would pay for) and changes none."""
+    src = data or {}
+    out = {k: src[k] for k in PROPOSAL_ESTIMATE_KEYS
+           if k not in PROPOSAL_REFRESH_SKIPS and k in src}
+    out.pop("tab_labels", None)
+    if isinstance(out.get("priced_tabs"), list):
+        out["priced_tabs"] = [{k: v for k, v in t.items() if k != "name"} if isinstance(t, dict)
+                              else t for t in out["priced_tabs"]]
+    if _is_v2(src):
+        pe = {k: v for k, v in src["polish_estimate"].items() if k != "label"}
+        if isinstance(pe.get("tabs"), dict):
+            pe["tabs"] = {sid: ({k: v for k, v in sec.items() if k != "label"}
+                                if isinstance(sec, dict) else sec)
+                          for sid, sec in pe["tabs"].items()}
+        out["polish_estimate"] = pe
+    return out
+
+
+def _named_as(child: Dict[str, Any], parent: Dict[str, Any]) -> Dict[str, Any]:
+    """The keys of proposal `child` that name its sheets, as `parent` names them now: tab_labels,
+    priced_tabs[].name and a v2 model's root and section labels; only those that differ, as new
+    objects. Nothing else of them changes (a v2 child's kinds stay its own, _v2_child_model)."""
+    patch: Dict[str, Any] = {}
+    want = parent.get("tab_labels")
+    if isinstance(want, dict) and child.get("tab_labels") != want:
+        patch["tab_labels"] = copy.deepcopy(want)
+    names = {t["id"]: t.get("name") for t in parent.get("priced_tabs") or []
+             if isinstance(t, dict) and isinstance(t.get("id"), str)}
+    priced = child.get("priced_tabs")
+    if isinstance(priced, list):
+        out = []
+        for t in priced:
+            t = copy.deepcopy(t)
+            if isinstance(t, dict) and t.get("id") in names:
+                if names[t["id"]] is None:
+                    t.pop("name", None)
+                else:
+                    t["name"] = names[t["id"]]
+            out.append(t)
+        if out != priced:
+            patch["priced_tabs"] = out
+    if _is_v2(parent) and _is_v2(child):
+        ppe, pe = parent["polish_estimate"], copy.deepcopy(child["polish_estimate"])
+
+        def take(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+            if "label" in src:
+                dst["label"] = copy.deepcopy(src["label"])
+            else:
+                dst.pop("label", None)
+        take(pe, ppe)
+        ptabs = ppe.get("tabs") if isinstance(ppe.get("tabs"), dict) else {}
+        for sid, sec in (pe.get("tabs") or {}).items() if isinstance(pe.get("tabs"), dict) else ():
+            if isinstance(sec, dict) and isinstance(ptabs.get(sid), dict):
+                take(sec, ptabs[sid])
+        if pe != child["polish_estimate"]:
+            patch["polish_estimate"] = pe
+    return patch
+
+
+def carry_sheet_names(parent_id: str, before: Dict[str, Any], after: Dict[str, Any]
+                      ) -> Dict[str, Dict[str, Any]]:
+    """WHEN THE ESTIMATE `parent_id` CHANGED FROM `before` TO `after` ONLY IN ITS SHEETS' NAMES,
+    take the names into every proposal of it that was up to date with `before` (its
+    `estimate_digest` is `before`'s): its naming keys (_named_as) and the new digest in ONE write, so
+    it never reads as "Estimate changed" for a name. `estimate_synced_at` moves too (the fence
+    against a page holding the copy with the old names, StaleProposalWrite); `updated_at` does not
+    (a name is no work on a proposal, and the publish's draft_version check reads it). A proposal
+    already behind the estimate is left for Refresh, which copies the names with the rest; one saved
+    meanwhile is left as it is (compare-and-set on its `updated_at`). No event: the name itself is
+    logged by sync_proposal_labels.
+
+    Returns {proposal id: the keys written}; {} when the change was more than names, or none."""
+    old_d, new_d = estimate_digest(before), estimate_digest(after)
+    if old_d == new_d or _nameless_estimate(before) != _nameless_estimate(after):
+        return {}
+    gid, _label = _scope_of(after)
+    sb = get_client()
+    out: Dict[str, Dict[str, Any]] = {}
+    for m in proposal_children(parent_id, gid):
+        row = load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        if not row or data.get("proposal_of") != parent_id or data.get("estimate_digest") != old_d:
+            continue
+        patch = _named_as(data, after)
+        now = _now_iso()
+        if now == data.get("estimate_synced_at"):
+            now = _stamp_at(datetime.fromisoformat(now), 1)      # the fence must move (a coarse tick)
+        patch["estimate_digest"] = new_d
+        patch["estimate_synced_at"] = now
+        q = sb.table("drafts").update({"data": dict(data, **patch)}).eq("id", m["id"])
+        if row.get("updated_at"):
+            q = q.eq("updated_at", row["updated_at"])
+        if q.execute().data:
+            out[m["id"]] = patch
+    if out:
+        _cache_clear()
+    return out
+
+
 def rename_proposal(draft_id: str, label: Any, actor: Optional[str] = None) -> Dict[str, Any]:
     """RENAME A PROPOSAL ON ITS TAB = RENAME ITS SHEET (the one-name rule above): the base sheet of
     `draft_id` (Base Bid 1 or a child) is renamed on the PARENT's estimate (tab_labels, or the v2
@@ -2190,10 +2324,16 @@ def rename_proposal(draft_id: str, label: Any, actor: Optional[str] = None) -> D
     and so is Base Bid 1 when its base is two sheets priced together (no one sheet to name).
 
     The parent is written only if it has not been stored since it was read (its `updated_at`), and
-    its `updated_at` is not bumped. Returns {group_id, label (this draft's name now), parent_id,
-    sheet: {id, label}, parent_patch (the parent's keys as stored, for a page holding the parent),
-    renamed: [{id, from, to}]}. RAISES ScopeError: not_found (404), not_grouped and invalid_label
-    (400), label_taken, parent_gone, sheet_gone and parent_changed (409)."""
+    its `updated_at` is not bumped; it is stamped SHEET_NAMES_MARK, so a page still holding its copy
+    from before cannot save the old name back (StaleSheetNamesWrite). Every proposal that was up to
+    date with the estimate takes the new name into its own copy and stays up to date
+    (carry_sheet_names): a name is no reason for "Estimate changed".
+
+    Returns {group_id, label (this draft's name now), parent_id, sheet: {id, label}, parent_patch
+    (the parent's keys as stored, the stamp included, for a page holding the parent), patches
+    ({draft id: the keys written to it}, the parent's and every proposal's, so the page that asked
+    takes its own), renamed: [{id, from, to}]}. RAISES ScopeError: not_found (404), not_grouped and
+    invalid_label (400), label_taken, parent_gone, sheet_gone and parent_changed (409)."""
     row = load_draft(draft_id)
     if not row:
         raise ScopeError("not_found", "That project is not there any more.", 404)
@@ -2225,8 +2365,14 @@ def rename_proposal(draft_id: str, label: Any, actor: Optional[str] = None) -> D
     if why:
         raise ScopeError(why[0], why[1], 409 if why[0] == "label_taken" else 400)
     patch: Dict[str, Any] = {}
+    patches: Dict[str, Dict[str, Any]] = {}
     if want != names[tab]:
+        before = parent
         patch = _renamed_sheet(parent, tab, want)
+        stamp = _now_iso()
+        if stamp == parent.get(SHEET_NAMES_MARK):
+            stamp = _stamp_at(datetime.fromisoformat(stamp), 1)      # the fence must move
+        patch[SHEET_NAMES_MARK] = stamp
         parent = dict(parent, **patch)
         q = get_client().table("drafts").update({"data": parent}).eq("id", pid)
         if prow.get("updated_at"):
@@ -2236,10 +2382,16 @@ def rename_proposal(draft_id: str, label: Any, actor: Optional[str] = None) -> D
                                                "was renaming its sheet. Reload the page and try "
                                                "again.", 409)
         _cache_clear()
+        patches[pid] = patch
+        try:
+            patches.update(carry_sheet_names(pid, before, parent))
+        except Exception as exc:  # noqa: BLE001 — the sheet is renamed; Refresh copies the name
+            _log.warning("rename of %s's sheet: the name was not carried into its proposals: %s",
+                         pid, exc)
     names_now, changed = _sync_names(pid, parent, actor)
     return {"group_id": gid, "label": names_now.get(draft_id) or _scope_of(data)[1] or want,
             "parent_id": pid, "sheet": {"id": tab, "label": want}, "parent_patch": patch,
-            "renamed": changed}
+            "patches": patches, "renamed": changed}
 
 
 def adopt_sheet_label(draft_id: str, actor: Optional[str] = None) -> Optional[str]:

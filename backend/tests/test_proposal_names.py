@@ -75,6 +75,30 @@ def _without_label(row):
     return out
 
 
+_NAME_KEYS = ("tab_labels", "estimate_digest", "estimate_synced_at")
+
+
+def _without_names(row):
+    """`row` less what a sheet's new name may change on a proposal: its scope name, its copy of the
+    sheet names (tab_labels, priced_tabs[].name, a v2 label) and the digest and fence moved with
+    them."""
+    out = _without_label(row)
+    d = out["data"]
+    for k in _NAME_KEYS:
+        d.pop(k, None)
+    d["priced_tabs"] = [{k: v for k, v in t.items() if k != "name"} for t in d.get("priced_tabs") or []]
+    pe = d.get("polish_estimate")
+    if isinstance(pe, dict):
+        pe.pop("label", None)
+        for sec in (pe.get("tabs") or {}).values():
+            sec.pop("label", None)
+    return out
+
+
+def _stale(rid="p1"):
+    return [m["stale"] for m in drafts.proposals_view(rid)["members"]]
+
+
 def _view_names(rid="p1"):
     return [(m["label"], m["display_label"]) for m in drafts.proposals_view(rid)["members"]]
 
@@ -86,10 +110,13 @@ def test_staging_a_sheet_renamed_on_the_estimate_renames_its_proposal(fake_supab
     before = {x: copy.deepcopy(_row(store, x)) for x in kid.values()}
     _put(store, "p1", **_renamed_polish())
     assert [_label(store, x) for x in ("p1", kid["Polish"], kid["Copy1"])] == ["Epoxy", "Polish Room", "Room 2"]
-    # Only the name of the renamed sheet's proposal changed, and its updated_at did not move.
-    assert _without_label(_row(store, kid["Polish"])) == _without_label(before[kid["Polish"]])
-    assert _row(store, kid["Polish"])["updated_at"] == before[kid["Polish"]]["updated_at"]
-    assert _row(store, kid["Copy1"]) == before[kid["Copy1"]]
+    # Only the renamed sheet's proposal changed its name; every proposal took the sheet names into its
+    # own copy and stays up to date (carry_sheet_names, section D); no updated_at moved.
+    for x in kid.values():
+        got, was = _without_names(_row(store, x)), _without_names(before[x])
+        assert got == was, x
+        assert _row(store, x)["updated_at"] == before[x]["updated_at"]
+    assert _label(store, kid["Copy1"]) == "Room 2"
     ev = [e for e in store["events"] if e["action"] == "scope_renamed"]
     assert [(e["project_id"], e["detail"]["from"], e["detail"]["to"]) for e in ev] == \
         [(kid["Polish"], "Polish", "Polish Room")]
@@ -399,3 +426,119 @@ def test_send_all_names_every_proposal_after_its_sheet_first(fake_supabase, monk
     names = {x["id"]: x["label"] for x in r.json()["published"]}
     assert names[kid["Polish"]] == "Polish Room"
     assert len(w.sends) == 1
+
+
+# ── D. a name is not a new estimate (review: a rename called every proposal "Estimate changed") ──
+def _names_of(store, rid):
+    d = _row(store, rid)["data"]
+    return d.get("tab_labels"), {t["id"]: t.get("name") for t in d["priced_tabs"]}
+
+
+def test_a_tab_rename_leaves_every_proposal_up_to_date_and_takes_the_name_into_each(fake_supabase, monkeypatch):
+    """The review's probe: renaming the Polish proposal's tab used to turn the strip's stale flags
+    from [F, F, F] to [F, T, T] while each child's own copy (the option lines and workbook tab names
+    its documents print) still said "Polish"."""
+    store, kid = _staging(fake_supabase, monkeypatch)
+    assert _stale() == [False, False, False]
+    before = {x: copy.deepcopy(_row(store, x)) for x in kid.values()}
+    r = _rename(kid["Polish"], "Polish Room", store)
+    assert r.status_code == 200, r.text
+    assert _stale() == [False, False, False], "a name alone made a proposal stale"
+    parent = _row(store, "p1")["data"]
+    for x in kid.values():
+        labels, names = _names_of(store, x)
+        assert labels == parent["tab_labels"] == {"Copy1": "Room 2", "Polish": "Polish Room"}, x
+        assert names["Polish"] == "Polish Room" and names["Copy1"] == "Room 2", x
+        row = _row(store, x)
+        assert row["data"]["estimate_digest"] == drafts.estimate_digest(parent)
+        assert row["data"]["estimate_synced_at"] != before[x]["data"]["estimate_synced_at"], "the fence moved"
+        assert row["updated_at"] == before[x]["updated_at"], "a name is no work on a proposal"
+        assert _without_names(row) == _without_names(before[x]), "nothing else of it changed"
+    # The answer hands each page what was written to its draft (proposal-review.js takes patches[id]).
+    patches = r.json()["patches"]
+    assert set(patches) == {"p1"} | set(kid.values())
+    assert patches[kid["Polish"]]["estimate_synced_at"] == _row(store, kid["Polish"])["data"]["estimate_synced_at"]
+
+
+def test_a_sheet_renamed_on_the_estimate_leaves_every_proposal_up_to_date(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    _put(store, "p1", **_renamed_polish())
+    assert _stale() == [False, False, False]
+    assert all(_names_of(store, x)[1]["Polish"] == "Polish Room" for x in kid.values())
+
+
+def test_a_v2_section_rename_leaves_every_proposal_up_to_date(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch, V2)
+    out = drafts.fan_out_proposals("p1", ["Polish", "Copy1", "Epoxy"])
+    lab2, lab1 = [c["id"] for c in out["children"]]
+    kinds = {x: copy.deepcopy(_row(store, x)["data"]["polish_estimate"]["tabs"]["Copy1"]["kind"]) for x in (lab2, lab1)}
+    assert _rename(lab2, "Room 2", store).status_code == 200
+    assert _rename("p1", "Polish Room", store).status_code == 200
+    assert _stale() == [False, False, False]
+    for x in (lab2, lab1):
+        pe = _row(store, x)["data"]["polish_estimate"]
+        assert (pe["label"], pe["tabs"]["Copy1"]["label"]) == ("Polish Room", "Room 2"), x
+        assert pe["tabs"]["Copy1"]["kind"] == kinds[x], "a child's own kinds stay its own"
+
+
+def test_a_name_with_a_new_price_is_still_a_changed_estimate(fake_supabase, monkeypatch):
+    """The control: a save that renames a sheet AND changes a figure leaves the proposals stale, for
+    Refresh to copy both."""
+    store, kid = _staging(fake_supabase, monkeypatch)
+    cells = dict(PARENT["cell_values"], **{"Epoxy!E20": 4100})
+    _put(store, "p1", cell_values=cells, **_renamed_polish())
+    assert _stale() == [False, True, True]
+    assert _names_of(store, kid["Polish"])[1]["Polish"] == "Polish"
+
+
+def test_a_proposal_already_behind_is_left_for_refresh(fake_supabase, monkeypatch):
+    store, kid = _staging(fake_supabase, monkeypatch)
+    _row(store, kid["Copy1"])["data"]["estimate_digest"] = "an older estimate"
+    behind = copy.deepcopy(_row(store, kid["Copy1"]))
+    _put(store, "p1", **_renamed_polish())
+    assert _stale() == [False, False, True]
+    assert _without_label(_row(store, kid["Copy1"])) == _without_label(behind)
+
+
+def test_a_proposal_page_holding_the_old_names_cannot_save_them_back(fake_supabase, monkeypatch):
+    """The carry moves the proposal's fence (estimate_synced_at), as Refresh does, so a page that read
+    it before cannot put the old names back under the new digest."""
+    store, kid = _staging(fake_supabase, monkeypatch)
+    old = copy.deepcopy(_row(store, kid["Polish"])["data"])
+    _put(store, "p1", **_renamed_polish())
+    r = client.put("/api/draft/%s" % kid["Polish"], json={"data": old})
+    assert (r.status_code, r.json()["code"]) == (409, "refreshed_since"), r.text
+    assert _names_of(store, kid["Polish"])[1]["Polish"] == "Polish Room"
+
+
+# ── E. a copy of the estimate read before a tab rename cannot undo it ─────────────────────────────
+def test_an_old_copy_of_the_estimate_cannot_put_the_old_sheet_name_back(fake_supabase, monkeypatch):
+    """The review's probe: an estimate page opened before the Polish tab was renamed PUT its copy
+    and got a 200; the sheet went back to "Polish" and so did the proposal's name, with nobody told."""
+    store, kid = _staging(fake_supabase, monkeypatch)
+    old = copy.deepcopy(_row(store, "p1")["data"])            # an open estimate page's copy
+    r = _rename(kid["Polish"], "Polish Room", store)
+    assert r.status_code == 200, r.text
+    after = copy.deepcopy(store["drafts"])
+    events = len(store["events"])
+    s = client.put("/api/draft/p1", json={"data": old})
+    assert (s.status_code, s.json()["code"]) == (409, "renamed_since"), s.text
+    assert s.json()["error"].startswith("Not saved")
+    assert store["drafts"] == after and len(store["events"]) == events, "the refused save changed something"
+    # The page that renamed took parent_patch (the stamp with it): its next save goes through.
+    mine = dict(old, **r.json()["parent_patch"])
+    ok = client.put("/api/draft/p1", json={"data": mine})
+    assert ok.status_code == 200 and ok.json()["ok"] is True, ok.text
+    assert _label(store, kid["Polish"]) == "Polish Room"
+    assert _row(store, "p1")["data"]["tab_labels"]["Polish"] == "Polish Room"
+
+
+def test_each_tab_rename_moves_the_fence(fake_supabase, monkeypatch):
+    """A copy read between two renames is as old as one read before both."""
+    store, kid = _staging(fake_supabase, monkeypatch)
+    assert _rename(kid["Polish"], "Polish Room", store).status_code == 200
+    between = copy.deepcopy(_row(store, "p1")["data"])
+    assert _rename(kid["Copy1"], "Kitchen", store).status_code == 200
+    s = client.put("/api/draft/p1", json={"data": between})
+    assert (s.status_code, s.json()["code"]) == (409, "renamed_since"), s.text
+    assert _label(store, kid["Copy1"]) == "Kitchen"

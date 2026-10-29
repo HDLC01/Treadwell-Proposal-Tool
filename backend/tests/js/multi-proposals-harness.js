@@ -811,14 +811,22 @@ async function step4() {
   //      child's page the parent's keys are not this page's and are left alone.
   {
     const patch = { tab_labels: { Copy1: "Room 2", Epoxy: "Polish Room" },
-                    priced_tabs: [{ id: "Epoxy", name: "Polish Room" }, { id: "Copy1", name: "Room 2" }, { id: "Polish", name: "Polish" }] };
+                    priced_tabs: [{ id: "Epoxy", name: "Polish Room" }, { id: "Copy1", name: "Room 2" }, { id: "Polish", name: "Polish" }],
+                    sheet_names_at: "2026-10-29T10:00:00+00:00" };
+    // What the server wrote to each proposal that was up to date (drafts.carry_sheet_names): its own copy of the names and
+    // the new fence. A child's page takes ITS entry, never Base Bid 1's.
+    const childPatch = { tab_labels: { Copy1: "Room 2", Epoxy: "Polish Room" },
+                         priced_tabs: [{ id: "Copy1", name: "Room 2" }, { id: "Epoxy", name: "Polish Room" }],
+                         estimate_digest: "D-2", estimate_synced_at: "2026-10-29T10:00:01+00:00" };
     const after = { parent_id: "P1", group_id: "G1", members: [
       { id: "P1", label: "Polish Room", display_label: "Polish Room", index: 1, is_parent: true, stale: false },
       { id: "C2", label: "Room 2", display_label: "Room 2", index: 2, is_parent: false, stale: true },
       { id: "C3", label: "Polish", display_label: "Polish", index: 3, is_parent: false, stale: true },
     ] };
     const answer = { ok: true, group_id: "G1", label: "Polish Room", parent_id: "P1",
-                     sheet: { id: "Epoxy", label: "Polish Room" }, parent_patch: patch, proposals: after };
+                     sheet: { id: "Epoxy", label: "Polish Room" }, parent_patch: patch,
+                     patches: { P1: patch, C2: childPatch, C3: Object.assign({}, childPatch, { estimate_digest: "D-3" }) },
+                     proposals: after };
     const st = { base_tab_id: "Epoxy", base_tab_ids: ["Epoxy", "Copy1", "Polish"], tab_labels: { Copy1: "Room 2" },
                  priced_tabs: [{ id: "Epoxy", name: "Epoxy" }, { id: "Copy1", name: "Room 2" }, { id: "Polish", name: "Polish" }] };
     const p = await proposalPage({ id: "P1", st, answers: [[/\/api\/draft\/P1\/scope$/, "POST", { status: 200, body: answer }]] });
@@ -830,7 +838,17 @@ async function step4() {
     await settle();
     const parentPage = { steps: steps(p), fetches: fetches(p), labels: p.look().tabs.map((t) => t.label),
                          local: p.log.filter((x) => x[0] === "setLocalState").map((x) => x.slice(1)),
-                         state: { tab_labels: p.st.tab_labels, priced_tabs: p.st.priced_tabs } };
+                         state: { tab_labels: p.st.tab_labels, priced_tabs: p.st.priced_tabs,
+                                  sheet_names_at: p.st.sheet_names_at === undefined ? null : p.st.sheet_names_at } };
+    // An answer from before `patches` (parent_patch alone) still reaches Base Bid 1's own page.
+    const lp = await proposalPage({ id: "P1", st: clone(st), answers: [[/\/api\/draft\/P1\/scope$/, "POST", { status: 200,
+      body: Object.assign({}, answer, { patches: undefined }) }]] });
+    await lp.press(".pt-name", "P1", "dblclick");
+    const lbox = lp.strip.querySelector(".pt-ren-in");
+    lbox.value = "Polish Room";
+    lbox.fire("keydown", { key: "Enter", preventDefault() {} });
+    await settle();
+    parentPage.legacy = { tab_labels: lp.st.tab_labels, sheet_names_at: lp.st.sheet_names_at === undefined ? null : lp.st.sheet_names_at };
     const q = await proposalPage({ id: "C2", st: { proposal_of: "P1", base_tab_id: "Copy1", priced_tabs: [{ id: "Copy1" }] },
       answers: [[/\/api\/draft\/C2\/scope$/, "POST", { status: 200, body: Object.assign({}, answer, { label: "Lab 9" }) }]] });
     await q.press(".pt-name", "C2", "dblclick");
@@ -841,6 +859,9 @@ async function step4() {
     await settle();
     const childPage = { local: q.log.filter((x) => x[0] === "setLocalState").map((x) => x.slice(1)),
                         tab_labels: q.st.tab_labels === undefined ? null : q.st.tab_labels,
+                        priced_tabs: q.st.priced_tabs, estimate_digest: q.st.estimate_digest === undefined ? null : q.st.estimate_digest,
+                        estimate_synced_at: q.st.estimate_synced_at === undefined ? null : q.st.estimate_synced_at,
+                        sheet_names_at: q.st.sheet_names_at === undefined ? null : q.st.sheet_names_at,
                         labels: q.look().tabs.map((t) => t.label) };
     // A refusal (the parent saved again while renaming) is said on the strip and nothing is taken.
     const r = await proposalPage({ id: "P1", st: clone(st), answers: [[/\/api\/draft\/P1\/scope$/, "POST", { status: 409,

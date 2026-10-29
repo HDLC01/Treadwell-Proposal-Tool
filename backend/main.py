@@ -8157,6 +8157,16 @@ def api_save_draft(draft_id: str, payload: DraftIn, request: Request) -> Dict[st
             "ok": False, "code": "split_since",
             "error": "Not saved — this project was split into separate proposals after this "
                      "page opened it. Reload the page to work on the scope it is now."})
+    except drafts.StaleSheetNamesWrite:
+        # A copy of the estimate from BEFORE a proposal's tab renamed one of its sheets
+        # (drafts.SHEET_NAMES_MARK): storing it would put the old sheet name back, and every
+        # proposal's name would follow it back, with nobody told.
+        log.warning("save refused for draft %s: the page's copy predates a sheet rename",
+                    _log_safe(draft_id))
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "renamed_since",
+            "error": "Not saved — a sheet of this estimate was renamed from a proposal's tab after "
+                     "this page opened it. Reload the page to work on the renamed copy."})
     except drafts.StaleProposalWrite:
         # A copy of a proposal from BEFORE Refresh re-priced it (drafts.StaleProposalWrite): storing
         # it would put the old price back under the new digest, and nobody would be told.
