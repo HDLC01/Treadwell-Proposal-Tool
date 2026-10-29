@@ -1075,8 +1075,9 @@
    *  Another proposal's figure is the Total ITS document prints (`document_total`, the server's
    *  read of that proposal's saved payload, the same figure its own Files page shows), and its
    *  `lump_sum` only before it was ever built. `opts` is how step 5 FILES reuses this list
-   *  (paintFilesProposals): `into` another element than #rv-lump, its own `note`, and `link`, which
-   *  makes each other proposal's name a link to its own Files page. */
+   *  (paintFilesProposals): `into` another element than #rv-lump, its own `note`, `link`, which
+   *  makes each other proposal's name a link to its own Files page, and `files`, called with each
+   *  line, its proposal and whether it is this one, to add that proposal's buttons (paintRowFiles). */
   function paintReadyProposals(pv, currentId, currentFigure, opts) {
     const el = document.getElementById((opts && opts.into) || "rv-lump");
     const ms = pv && Array.isArray(pv.members) ? pv.members : [];
@@ -1108,6 +1109,7 @@
         tag.textContent = "(this one)";
         li.appendChild(tag);
       }
+      if (opts && opts.files) opts.files(li, m, mine);
       list.appendChild(li);
     });
     const note = document.createElement("p");
@@ -1154,8 +1156,8 @@
         { id: o.id, display_label: o.label, lump_sum: o.lump_sum, document_total: o.document_total }))) });
     }
     const many = paintReadyProposals(pv, currentId, currentFigure, {
-      into: "lump-sum", link: true,
-      note: "Separate proposals, each approved on its own. The files here are this one's.",
+      into: "lump-sum", link: true, files: paintRowFiles,
+      note: "Separate proposals, each approved on its own. Each line's buttons download that one's files.",
     });
     if (row) row.classList.toggle("fp-money--list", many);
     if (key) key.textContent = many ? "Lump sums" : "Lump sum";
@@ -1215,6 +1217,137 @@
     paintFilesProposals(filesProposals.pv, id, figure);
   }
 
+  /** EACH LINE OF STEP 5's LIST DOWNLOADS ITS OWN PROPOSAL (Hanz, 2026-10-29: "each lump sum should
+   *  have a download button ... it should be aligned to the row"). Three small buttons per line, the
+   *  same three files as the big buttons at the top, for THAT line's proposal:
+   *    * this one's are the big buttons' own press (showPostGenerate's downloadAs, kept in
+   *      `rowFiles.mine` once the card is wired), under the same names;
+   *    * another one's build THAT proposal's files from ITS saved document (downloadOther);
+   *    * one never built (no document, so no `document_total`) has its buttons off and says so.
+   *      Nothing is built for it from this page's draft or any other. */
+  const ROW_FILES = [
+    { key: "pdf_download_url", label: "PDF", tail: "_proposal.pdf" },
+    { key: "docx_download_url", label: ".docx", tail: "_proposal.docx" },
+    { key: "xlsx_download_url", label: ".xlsx", tail: "_estimate.xlsx" },
+  ];
+  // `said`: what a line last said about its press, by proposal id, kept until its next press, so the
+  // repaint that follows a press (the list read again) does not wipe it.
+  const rowFiles = { mine: null, said: {} };
+  function paintRowFiles(li, m, mine) {
+    const name = proposalName(m);
+    const built = mine || (typeof m.document_total === "string" && money(m.document_total) != null);
+    const box = document.createElement("span");
+    box.className = "rv-prop-dl";
+    const msg = document.createElement("span");
+    msg.className = "rv-prop-msg";
+    msg.setAttribute("aria-live", "polite");
+    ROW_FILES.forEach((f) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn-secondary rv-prop-dl-b";
+      b.textContent = f.label;
+      b.setAttribute("aria-label", f.label + " of " + name);
+      if (!built) b.disabled = true;
+      else if (mine) {
+        b.addEventListener("click", () => {
+          if (rowFiles.mine) rowFiles.mine(f.key, fileStem(state.project_name) + f.tail, b);
+        });
+      } else b.addEventListener("click", () => downloadOther(m, f, b, msg));
+      box.appendChild(b);
+    });
+    li.appendChild(box);
+    msg.textContent = built ? (rowFiles.said[m.id] || "") : "Not built yet. Open it to build its files.";
+    msg.hidden = !msg.textContent;
+    li.appendChild(msg);
+  }
+
+  /** ANOTHER PROPOSAL's file, built from ITS saved document: GET /api/draft/{its id} for that
+   *  document and when it was stored, then POST /api/draft/{its id}/documents with that
+   *  `draft_version`, the route its own Files page's buttons use, so the server builds the copy read
+   *  here and nothing stored since. Nothing of this page's draft goes with it.
+   *
+   *  THE FILE CARRIES THE FIGURE ITS LINE SHOWS. The document read must print the line's figure
+   *  (`document_total`), and so must the render; when either differs (it was saved again after the
+   *  list was read) nothing is saved, the list is read again and the line says so.
+   *
+   *  The .docx and PDF ask the question the big buttons ask about a price line with a figure of his
+   *  own (TWPrice.confirmSavedCopy), of the document read. Builds and saves a file, nothing more:
+   *  no navigation, no send, no email, no Dropbox. The server records `has_files` on that proposal
+   *  the first time its files are built, as its own Download does (api_draft_documents). */
+  async function downloadOther(m, f, button, msg) {
+    const orig = button.textContent;
+    const name = proposalName(m);
+    button.disabled = true;
+    delete rowFiles.said[m.id];
+    msg.textContent = "";
+    msg.hidden = true;
+    let moved = false;
+    try {
+      const shown = money(m.document_total);
+      if (shown == null) throw new Error("Not built yet. Open it to build its files.");
+      let res;
+      try {
+        res = await fetch(TW.resolveApiBase() + "/api/draft/" + encodeURIComponent(m.id),
+                          { headers: TW.authHeaders() });
+      } catch {
+        res = null;
+      }
+      if (!res || !res.ok) throw new Error("Couldn't read " + name + ". Check your connection and try again.");
+      const row = await res.json();
+      const data = row && row.data && typeof row.data === "object" ? row.data : null;
+      const pp = data && data.proposal_payload;
+      if (!pp || typeof pp !== "object" || !pp.values || typeof pp.values !== "object") {
+        throw new Error("Not built yet. Open it to build its files.");
+      }
+      const changed = "Its price changed since this page read it. The line shows the new figure "
+                    + "now; press again to download it.";
+      if (money(pp.values.total_formatted) !== shown) { moved = true; throw new Error(changed); }
+      const version = typeof row.updated_at === "string" ? row.updated_at : "";
+      if (f.key !== "xlsx_download_url") {
+        // The big buttons' one check (TWPrice.confirmSavedCopy), asked of THAT proposal's copy just
+        // read: nothing of this page's is flushed or asked about.
+        const theirs = { flushState: () => true, getDraftId: () => m.id, getState: () => data,
+                         readServerRow: () => ({ data: data, version: version }) };
+        const asked = await TWPrice.confirmSavedCopy(theirs, "download", TWPrice.ownFigureDialog(TW, "download"));
+        if (!asked.go) return;   // he cancelled: nothing built, nothing said
+      }
+      button.textContent = "Downloading…";
+      let out;
+      try {
+        out = await TW.postJSON("/api/draft/" + encodeURIComponent(m.id) + "/documents",
+                                version ? { draft_version: version } : {});
+      } catch (err) {
+        moved = /→ 409/.test(String((err && err.message) || ""));   // saved again since the read
+        throw err;
+      }
+      if (!out || money(out.document_total) !== shown) { moved = true; throw new Error(changed); }
+      const url = out[f.key];
+      if (!url) throw new Error("That file isn't available for " + name + ".");
+      const file = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
+      if (!file.ok) throw new Error("The file didn't come back (" + (file.statusText || ("HTTP " + file.status)) + "). Try again.");
+      // octet-stream, as downloadAs does: the browser saves it under `a.download` and never opens
+      // the PDF inline under the blob's UUID.
+      const blob = new Blob([await file.arrayBuffer()], { type: "application/octet-stream" });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      const project = (typeof data.project_name === "string" && data.project_name.trim()) || state.project_name;
+      a.download = fileStem(project, { id: m.id, name: name }) + f.tail;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+    } catch (err) {
+      console.error("Download failed", err);
+      msg.textContent = rowFiles.said[m.id] = "Not downloaded: " + portalErrMsg(err);
+      msg.hidden = false;
+      if (moved) refreshFilesProposals();
+    } finally {
+      button.textContent = orig;
+      button.disabled = false;
+    }
+  }
+
   /** THE NAME A DOWNLOAD ON THIS PAGE SAVES UNDER, before "_proposal.pdf" and the rest: step 5's
    *  three buttons (showPostGenerate) and Sent versions (downloadRevision). `project` is the
    *  project's name. Anything but A-Z a-z 0-9 . _ - becomes one _, as it always has.
@@ -1228,16 +1361,21 @@
    *  31 characters at most, a scope's SCOPE_LABEL_MAX = 80); the project part is the one cut, to fit
    *  80 beside it and never below 20, so the stem is 101 characters at most. A name with no letter
    *  or digit left (blank, or all non-Latin) would tell no two proposals apart, so the draft's own
-   *  id stands in for it. */
-  function fileStem(project) {
+   *  id stands in for it.
+   *
+   *  `who`, {id, name}: ANOTHER proposal of the project, for its own buttons on step 5's list
+   *  (downloadOther). It is one of several by being on that list, so the same rule runs over its id
+   *  and the name its line shows. */
+  function fileStem(project, who) {
     const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_");
     const proj = safe(project || "proposal");
     const g = (TW.getState() || {}).scope_group;
-    if (!g || typeof g !== "object") return proj.slice(0, 60);
-    const id = TW.getDraftId() || "";
+    if (!who && (!g || typeof g !== "object")) return proj.slice(0, 60);
+    const id = who ? String(who.id || "") : (TW.getDraftId() || "");
     const pv = filesProposals.pv;
-    const me = pv && Array.isArray(pv.members) ? pv.members.find((m) => m && m.id === id) : null;
-    const shown = (me && typeof me.display_label === "string" && me.display_label.trim())
+    const me = !who && pv && Array.isArray(pv.members) ? pv.members.find((m) => m && m.id === id) : null;
+    const shown = who ? String(who.name || "").trim()
+      : (me && typeof me.display_label === "string" && me.display_label.trim())
       || (typeof g.label === "string" ? g.label.trim() : "");
     let name = safe(shown).slice(0, 80);
     if (!/[A-Za-z0-9]/.test(name)) name = safe(id).slice(0, 8);
@@ -1734,6 +1872,8 @@
     } else {
       pdfBtn.style.display = "none";
     }
+    // THIS proposal's line on step 5's list presses exactly these (paintRowFiles).
+    rowFiles.mine = downloadAs;
     // NO SEPARATE COVER-LETTER DOWNLOAD. There used to be a fourth button here, and a careful
     // two-part gate on it (a letter cached for THIS `result`, AND the estimator's current choice)
     // because `result` can be stale. Both are gone: the letter is page 1 of the .docx and the PDF
