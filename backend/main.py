@@ -7813,7 +7813,7 @@ def _render_lock(key: str) -> threading.Lock:
 
 
 def _render_documents(payload: Dict[str, Any], request: Request, *,
-                      want_estimate: bool) -> Dict[str, Any]:
+                      want_estimate: bool, fresh: bool = False) -> Dict[str, Any]:
     """The files for `payload`: `{"docx": entry, "xlsx": entry | None, "payload_sha256", ...}`.
 
     The entries are _FILE_CACHE-shaped dicts (`content`, `filename`, `content_type`, and a `_pdf`
@@ -7825,12 +7825,16 @@ def _render_documents(payload: Dict[str, Any], request: Request, *,
 
     `want_estimate=False` builds no workbook (the customer's PDF and Send read the .docx only). A
     later caller that wants the workbook gets it added to the SAME entry set, keeping the .docx
-    already handed out, because that .docx may already carry the PDF somebody downloaded."""
+    already handed out, because that .docx may already carry the PDF somebody downloaded.
+
+    `fresh=True` is step 3's "Rebuild all" (js/generate.js): the cached render is not reused, the
+    files are built again and replace it. Same key, so the same content; new bytes (timestamps),
+    which a later Send then hands out, as it does past the cache's life."""
     gi = GenerateIn(**copy.deepcopy(payload))
     key = _render_key(payload, gi)
     with _render_lock(key):
         with _RENDER_LOCKS_GUARD:   # a TTLCache is not safe across threads on its own
-            docs = _RENDER_CACHE.get(key)
+            docs = None if fresh else _RENDER_CACHE.get(key)
         if docs is None or (want_estimate and docs.get("xlsx") is None):
             out = _generate(gi, request, persist=False, want_estimate=want_estimate)
             docx_entry = _FILE_CACHE.get((out.docx_download_url or "").rsplit("/", 1)[-1])
@@ -7932,6 +7936,9 @@ class DocumentsIn(BaseModel):
     # handed out and nothing is recorded on it. Send all asks a proposal with no files whether it is
     # closed lost or on hold (_send_all_draft_closed); a neighbour's press must not answer that.
     record: bool = True
+    # True from step 3's "Rebuild all" only: build the files again even when this exact document's
+    # render is cached (_render_documents `fresh`). Everyone else reuses the cached render.
+    rebuild: bool = False
 
 
 def _stored_since(row: Dict[str, Any], version: Optional[str]) -> bool:
@@ -7981,13 +7988,82 @@ def api_draft_documents(draft_id: str, request: Request,
             raise HTTPException(409, "Not built — this proposal was put together automatically and "
                                      "still has template placeholders (%s). Open its Proposal "
                                      "step, fill them, and press Continue." % ", ".join(held))
-    out = _documents_out(_render_documents(pp, request, want_estimate=True))
+    if payload and payload.rebuild:   # step 3's "Rebuild all": not the cached render
+        out = _documents_out(_render_documents(pp, request, want_estimate=True, fresh=True))
+    else:
+        out = _documents_out(_render_documents(pp, request, want_estimate=True))
     if (payload is None or payload.record) and not (row.get("data") or {}).get("generate_result"):
         try:
             drafts.record_generate_result(draft_id, out.model_dump())
         except Exception as exc:  # noqa: BLE001 — a board column must never block a download
             log.warning("could not record %s's files on the draft: %s", draft_id, exc)
     return out
+
+
+class DocumentsHeldIn(BaseModel):
+    # The saved copy step 3 judged "its document holds" on (the row's `updated_at`, from GET
+    # /api/draft/{id}). Required: without it there is no saying the server's copy is that one.
+    draft_version: str = ""
+    hold_placeholders: bool = False
+
+
+def _render_held(pp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The cached render of exactly `pp` with ALL THREE files already built (the .docx, the .xlsx
+    and the .docx's PDF), or None. Reads the cache only: never renders, never runs LibreOffice."""
+    try:
+        gi = GenerateIn(**copy.deepcopy(pp))
+        key = _render_key(pp, gi)
+    except Exception:  # noqa: BLE001 — a payload that does not even parse is not "built"
+        return None
+    with _RENDER_LOCKS_GUARD:
+        docs = _RENDER_CACHE.get(key)
+    if not docs or docs.get("render_id") != key or not docs.get("xlsx"):
+        return None
+    if (docs.get("docx") or {}).get("_pdf") is None:
+        return None
+    return docs
+
+
+@app.post("/api/draft/{draft_id}/documents/held")
+def api_draft_documents_held(draft_id: str, request: Request,
+                             payload: DocumentsHeldIn) -> Dict[str, Any]:
+    """Step 3 (js/generate.js): "are this proposal's files already built for exactly its saved
+    document?" Hanz, 2026-10-29: "if we only edited one proposal then it should only regenerate
+    that proposal".
+
+    `{"held": true, "files": GenerateOut}` only when ALL of these are true, else `{"held": false}`:
+      * the draft is the copy the page judged (`draft_version` is its `updated_at` now). The page
+        has already checked that copy's document holds for its draft (TW.documentHolds: built
+        from the inputs the draft carries now, estimate included);
+      * it has a document (`proposal_payload` with values), and it is not held for placeholders;
+      * this process's render cache holds the render of exactly that document — `_render_key`:
+        the payload's hash (everything the .xlsx and the .docx are filled from), the template's
+        content and the renderer's code — with the .docx, the .xlsx AND the PDF already made.
+    The files are handed out under fresh tokens (`_documents_out`), so nothing is rendered and
+    LibreOffice does not run. Anything short of that is "not held" and the page builds as before."""
+    draft_id = _safe_id(draft_id)
+    row = drafts.load_draft(draft_id)
+    if not row:
+        raise HTTPException(404, "Draft not found")
+    version = (payload.draft_version or "").strip()
+    if not version or _stored_since(row, version):
+        return {"ok": True, "held": False}
+    data = row.get("data") or {}
+    pp = data.get("proposal_payload")
+    if not (isinstance(pp, dict) and pp.get("values")):
+        return {"ok": True, "held": False}
+    if payload.hold_placeholders and _send_all_placeholders(data, True):
+        return {"ok": True, "held": False}
+    docs = _render_held(pp)
+    if docs is None:
+        return {"ok": True, "held": False}
+    out = _documents_out(docs)
+    if not data.get("generate_result"):
+        try:
+            drafts.record_generate_result(draft_id, out.model_dump())
+        except Exception as exc:  # noqa: BLE001 — a board column must never block a download
+            log.warning("could not record %s's files on the draft: %s", draft_id, exc)
+    return {"ok": True, "held": True, "files": out.model_dump()}
 
 
 # ─── Project persistence (Supabase) ───────────────────────────────────

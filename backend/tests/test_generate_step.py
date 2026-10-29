@@ -118,16 +118,32 @@ def test_refresh_runs_once_first_with_the_saved_copys_version(ran):
 
 
 @needs_node
-def test_one_hidden_frame_at_a_time_each_torn_down(ran):
+def test_two_hidden_frames_at_a_time_each_torn_down(ran):
+    """"Why not generate them in parallel also" (Hanz, 2026-10-29): the Proposal pages compose two at
+    a time (FRAME_LIMIT), never three (each is a 10k-line page), and none is left on the page."""
     f = ran["staging"]["frames"]
     assert f["opened"] == ["d1", "c2", "c3"]
-    assert f["maxLive"] == 1 and f["live"] == 0, "frames overlapped or one was left on the page"
-    assert f["phases"] == ["d1:started", "d1:saved", "c2:started", "c2:saved", "c3:started", "c3:saved"]
+    assert f["maxLive"] == 2 and f["live"] == 0, "not two at once, more than two, or one left on the page"
+    assert ["c2", "d1"] in f["together"], "Epoxy and Polish were never composed at the same time"
+    for rid in ("d1", "c2", "c3"):
+        assert [p for p in f["phases"] if p.startswith(rid + ":")] == [rid + ":started", rid + ":saved"]
     assert f["targets"] == ["https://tool"], "a frame posted to an origin other than its own"
     assert ran["staging"]["listening"] == 0, "a message listener was left behind"
     for a in ran["staging"]["frameAttrs"]:
         assert a["className"] == "gen-frame" and a["inert"] == "" and a["hidden"] == "true" and a["tab"] == "-1"
         assert re.fullmatch(r"/proposal-review\.html\?d=(d1|c2|c3)&compose=frame&frame=TOK", a["src"]), a["src"]
+
+
+@needs_node
+def test_two_frames_at_once_each_save_only_their_own_draft(ran):
+    """Epoxy's and Polish's frames ran together. Each saved its own proposal's document, at its own
+    sheet's price, and nothing else: no child's document reached the project's own draft, and the
+    tab's one localStorage slot is still the project's (each frame has its own window, token, seed
+    and in-memory storage: shared.js FRAME)."""
+    s = ran["staging"]
+    assert s["framePuts"] == [["c2", "Polish", "$8,000"], ["c3", "Room 2", "$6,000"]], s["framePuts"]
+    assert s["d1Puts"] and all(p == [None, None, "$12,500"] for p in s["d1Puts"]), s["d1Puts"]
+    assert s["slotOwner"] == "d1" and s["slotTotal"] == "$12,500"
 
 
 @needs_node
@@ -193,12 +209,73 @@ def test_a_changed_estimate_is_composed_in_a_frame_then_built_without_leaving(ra
 
 
 @needs_node
-def test_every_arrival_builds_again(ran):
+def test_an_unchanged_arrival_is_up_to_date_and_builds_nothing(ran):
+    """Nothing changed since the last visit built it: no frame, no build, no PDF, and the row says
+    so with its price."""
     a = ran["again"]
     assert a["nav"] == [] and a["frames"] == 0
-    assert a["posted"] == ["d1"] and a["newRenders"] == 1
-    assert a["rows"][0]["status"] == "built" and a["rows"][0]["total"] == "$12,500"
-    assert a["pdfs"] == 2, "the PDF was not made on each visit"
+    assert a["posted"] == [] and a["newRenders"] == 0
+    assert a["rows"][0]["status"] == "uptodate" and a["rows"][0]["total"] == "$12,500"
+    assert a["pdfs"] == 1, "the PDF was made again"
+
+
+# ── only what changed is rebuilt (Hanz, 2026-10-29) ─────────────────────────────────────────
+@needs_node
+def test_only_the_edited_proposal_is_rebuilt(ran):
+    """"If we only edited one proposal then it should only regenerate that proposal." Three built on
+    the first visit; RJ then rewrote Polish's scope. The next visit composes and builds Polish only;
+    Epoxy and Room 2 are "Up to date" with their prices and their three links, each asked of the
+    server with the version of the copy judged."""
+    o = ran["onlyChanged"]
+    assert [r["status"] for r in o["first"]["rows"]] == ["built"] * 3 and o["first"]["posted"] == ["d1", "c2", "c3"]
+    assert [(r["id"], r["status"], r["total"]) for r in o["rows"]] == [
+        ("d1", "uptodate", "$10,000"), ("c2", "built", "$8,000"), ("c3", "uptodate", "$6,000.00")], o["rows"]
+    assert o["statusText"] == ["Up to date · $10,000", "Built · $8,000", "Up to date · $6,000.00"]
+    assert o["posted"] == ["c2"] and o["frames"] == ["c2"] and o["rendered"] == ["c2"] and o["pdfs"] == ["c2"]
+    assert o["c2Scope"] == "RJ's new scope for the polish"
+    assert sorted(o["checked"]) == [["c3", True, True], ["d1", True, True]]
+    assert len(o["links"]) == 9
+    assert o["note"] == "1 rebuilt, 2 up to date."
+    assert o["notes"][-1] == "1 rebuilt, 2 up to date."
+    assert o["nav"] == [] and o["rebuildShown"] and not o["rebuildDisabled"]
+
+
+@needs_node
+def test_up_to_date_links_download_and_heal_after_a_restart(ran):
+    """The links of an "Up to date" row download its files. After a restart (every token expired) a
+    link builds the files of the saved document again (the render is still cached: no new render)
+    and downloads, as the Files step does, instead of dead-ending."""
+    e = ran["expired"]
+    assert e["xlsx"] == {"name": "Epoxy_estimate.xlsx", "bytes": "X d1"}
+    assert e["pdf"] == {"name": "Room_2_proposal.pdf", "bytes": "%PDF c3"}
+    assert e["healed"] == {"name": "Epoxy_proposal.pdf", "bytes": "%PDF d1"}
+    assert e["posted"] == [["d1", True, False]] and e["rendered"] == 0
+
+
+@needs_node
+def test_rebuild_all_builds_every_one_again(ran):
+    """The safety net: "Rebuild all" builds all three again, past the cached renders, and asks
+    nothing about what is up to date."""
+    r = ran["rebuild"]
+    assert [(x["id"], x["status"]) for x in r["rows"]] == [("d1", "built"), ("c2", "built"), ("c3", "built")]
+    assert r["posted"] == [["d1", True], ["c2", True], ["c3", True]]
+    assert r["rendered"] == [["d1", True], ["c2", True], ["c3", True]]
+    assert r["pdfs"] == 3 and r["checks"] == 0 and r["frames"] == 0
+    assert r["note"] == "All 3 proposals are built." and r["nav"] == []
+    assert r["rebuildShown"] and not r["rebuildDisabled"] and len(r["links"]) == 9
+
+
+@needs_node
+def test_an_estimate_only_change_is_rebuilt(ran):
+    """The Polish sheet re-priced on the estimate, no word of either proposal touched, and the server
+    still holding each one's OLD document rendered with its PDF. Neither is "up to date": each
+    document no longer holds for its draft, so each is composed again and built, Polish at $9,500."""
+    e = ran["estimateOnly"]
+    assert e["first"] == [["d1", "built", "$10,000"], ["c2", "built", "$8,000.00"]]
+    assert e["rows"] == [["d1", "built", "$10,000"], ["c2", "built", "$9,500"]], e["rows"]
+    assert e["rendered"] == [["d1", "$10,000"], ["c2", "$9,500"]]
+    assert e["frames"] == ["d1", "c2"] and e["refreshCalls"] == 1
+    assert e["note"] == "All 2 proposals are built."
 
 
 @needs_node
@@ -359,8 +436,8 @@ def test_no_project_builds_nothing(ran):
 G = "js/generate.js"
 P = "js/proposal-review.js"
 MUTATIONS = [
-    ("stays-on-page", G, "        var out = await composeInFrame(r, r.data);",
-     '        window.location.assign("/proposal-review.html?d=" + r.id + "&compose=files");'
+    ("stays-on-page", G, "      var out = await composeInFrame(r, r.data);",
+     '      window.location.assign("/proposal-review.html?d=" + r.id + "&compose=files");'
      ' var out = { ok: false, reason: "left" };',
      lambda o: o["staging"]["nav"] != []),
     ("frame-continue-stays", P, '      TW.frameReport({ phase: "saved" });\n      return true;\n', "",
@@ -382,22 +459,19 @@ MUTATIONS = [
     ("kept-no-refresh", G, "    if (behind.length && !NOT_SAVED[seen.status]) {",
      "    if (behind.length) {",
      lambda o: o["kept"]["refreshes"] != 0),
-    ("one-frame-at-a-time", G,
-     '      composeThenBuild(rows.filter(function (r) { return r.plan === "frame"; })),',
-     '      Promise.all(rows.filter(function (r) { return r.plan === "frame"; })'
-     '.map(function (r) { return composeThenBuild([r]); })),',
-     lambda o: o["staging"]["frames"]["maxLive"] > 1),
+    ("frames-in-parallel", G, "  var FRAME_LIMIT = 2;", "  var FRAME_LIMIT = 1;",
+     lambda o: o["staging"]["frames"]["maxLive"] < 2),
+    ("frames-capped-at-two", G, "  var FRAME_LIMIT = 2;", "  var FRAME_LIMIT = 99;",
+     lambda o: o["staging"]["frames"]["maxLive"] > 2),
     ("frame-marks-backup", P,
      '    const _doorOpened = (!!_q0 && _q0.get("compose") === "files") || _framed0;',
      '    const _doorOpened = !!_q0 && _q0.get("compose") === "files";',
      lambda o: o["staging"]["c3"]["mark"] is not True),
-    ("backup-not-held", G, "                       { hold_placeholders: !row.auto });",
-     "                       { hold_placeholders: true });",
+    ("backup-not-held", G, "    var ask = { hold_placeholders: !row.auto };",
+     "    var ask = { hold_placeholders: true };",
      lambda o: o["staging"]["holds"]["c3"] is not False),
-    ("backup-said", G,
-     '    row.message = row.auto ? "Built from the default wording; review it on its Proposal tab'
-     ' before sending." : "";',
-     '    row.message = "";',
+    ("backup-said", G, '    row.message = row.auto ? AUTO_SAID : "";\n    paint();',
+     '    row.message = "";\n    paint();',
      lambda o: _row(o["staging"]["rows"], "c3")["message"] != DEFAULT_WORDING),
     ("slot-takes-it", G,
      "    if (framedCurrent) { try { await TW.reconcileWithServer(); } catch (e) {"
@@ -406,10 +480,24 @@ MUTATIONS = [
     ("ahead-saved", G,
      "      TW.setState({});\n      if (await TW.flushState()) seen = await TW.reconcileWithServer();",
      "", lambda o: o["ahead"]["serverNote"] != "Kyle's note, saved late"),
-    ("every-arrival", G, "      var plan = sort(m, data, m.id === id, seen, refresh);",
-     '      var plan = data && data.generate_result ? { status: "built", message: "" }'
-     " : sort(m, data, m.id === id, seen, refresh);",
-     lambda o: o["again"]["posted"] == []),
+    ("only-what-changed", G,
+     '    var holding = force ? [] : rows.filter(function (r) { return r.plan === "build"; });',
+     "    var holding = [];",
+     lambda o: o["onlyChanged"]["posted"] != ["c2"] and o["again"]["posted"] == ["d1"]),
+    ("up-to-date-needs-the-document-to-hold", G, '    return TW.documentHolds(data) ? "build" : "frame";',
+     '    return "build";',
+     lambda o: o["estimateOnly"]["rows"][1] != ["c2", "built", "$9,500"]),
+    ("expired-link-heals", G, "      if (resp.status === 404) {", "      if (false) {",
+     lambda o: o["expired"]["healed"] is None),
+    ("rebuild-all-is-fresh", G, "    if (force) ask.rebuild = true;", "    if (false) ask.rebuild = true;",
+     lambda o: o["rebuild"]["rendered"] == []),
+    ("rebuild-all-asks-nothing", G,
+     '    var holding = force ? [] : rows.filter(function (r) { return r.plan === "build"; });',
+     '    var holding = rows.filter(function (r) { return r.plan === "build"; });',
+     lambda o: [x["status"] for x in o["rebuild"]["rows"]] != ["built"] * 3),
+    ("up-to-date-said", G, '    if (fresh) {\n      if (!built && !failed) {',
+     '    if (false) {\n      if (!built && !failed) {',
+     lambda o: o["onlyChanged"]["note"] != "1 rebuilt, 2 up to date."),
     ("failure-said", G, "    if (!r.ok) { fail(row, r.error); return; }", "    if (!r.ok) { return; }",
      lambda o: _row(o["held"]["rows"], "c2")["status"] != "failed"),
     ("stale-child", G, "    if (!m.is_parent && m.stale) {", "    if (false) {",

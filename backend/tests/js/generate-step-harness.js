@@ -69,6 +69,10 @@ const webcrypto = require("crypto").webcrypto;
 const KEY = "treadwell.sendall.chain";
 const ORIGIN = "https://tool";
 const settle = () => new Promise((r) => setImmediate(r));
+const VERSION = "2026-10-28T10:00:00Z";            // every draft's updated_at, unless b.server.version
+/** A document's identity as main._canonical_sha256 reads it: canonical JSON (sorted keys). */
+const canon = (x) => JSON.stringify(x, (k, v) => (v && typeof v === "object" && !Array.isArray(v)
+  ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {}) : v));
 
 // The step pills, as generate.html marks them up.
 const PILLS = (() => {
@@ -134,6 +138,39 @@ async function openGenerate(b, href) {
     }
     m = /^\/api\/draft\/([^/]+)\/proposals$/.exec(u);
     if (m) return b.server.view ? json(200, Object.assign({ ok: true }, copy(b.server.view))) : json(404, { ok: false });
+    // main.py's render cache, as _render_documents keeps it: one render per document (its payload,
+    // canonical), reused by every later build of the same document unless `rebuild` asks for a new
+    // one; `pdf` once that render's PDF was made (_entry_pdf). Every build and every "held" answer
+    // mints fresh download tokens (_documents_out); a token minted at or before `b.server.expireBefore`
+    // has expired (a restart, an hour) and its file answers 404.
+    const cache = b.server.cache = b.server.cache || {};
+    const lastKey = b.server.lastKey = b.server.lastKey || {};
+    const filesOf = (id, pp) => {
+      const g = b.server.gen = (b.server.gen || 0) + 1;
+      return { work_type: pp.work_type, audience: pp.audience,
+               docx_download_url: "/api/file/" + id + "-D" + g, pdf_download_url: "/api/file/" + id + "-D" + g + "/pdf",
+               xlsx_download_url: "/api/file/" + id + "-X" + g, render_id: "K-" + id,
+               document_total: pp.values.total_formatted };
+    };
+    m = /^\/api\/draft\/([^/]+)\/documents\/held$/.exec(u);
+    if (m && method === "POST") {
+      // main.py api_draft_documents_held: the very saved copy, a document, its render cached with
+      // all three files made; else not held.
+      const id = decodeURIComponent(m[1]);
+      const body = JSON.parse((opts && opts.body) || "{}");
+      (b.server.checks = b.server.checks || []).push({ id, body });
+      const d = draftOf(id);
+      if (!d) return json(404, { detail: "Draft not found" });
+      const no = json(200, { ok: true, held: false });
+      if (!body.draft_version || body.draft_version !== (b.server.version || VERSION)) return no;
+      const pp = d.proposal_payload;
+      if (!(pp && pp.values)) return no;
+      const c = cache[canon(pp)];
+      if (!c || !c.pdf) return no;
+      if (!d.generate_result) d.generate_result = { recorded: true };
+      lastKey[id] = canon(pp);
+      return json(200, { ok: true, held: true, files: filesOf(id, pp) });
+    }
     m = /^\/api\/draft\/([^/]+)\/documents$/.exec(u);
     if (m && method === "POST") {
       const id = decodeURIComponent(m[1]);
@@ -149,17 +186,30 @@ async function openGenerate(b, href) {
       }
       // main.py api_draft_documents: the generate_result is recorded only the first time.
       if (!d.generate_result) d.generate_result = { recorded: true };
-      (b.server.renders = b.server.renders || []).push({ id, payload: copy(pp) });
-      return json(200, { work_type: pp.work_type, audience: pp.audience,
-                         docx_download_url: "/api/file/" + id + "-D", pdf_download_url: "/api/file/" + id + "-D/pdf",
-                         xlsx_download_url: "/api/file/" + id + "-X", render_id: "K-" + id,
-                         document_total: pp.values.total_formatted });
+      const key = canon(pp);
+      if (body.rebuild || !cache[key]) {
+        cache[key] = { pdf: false };
+        (b.server.renders = b.server.renders || []).push({ id, payload: copy(pp), rebuild: !!body.rebuild });
+      }
+      lastKey[id] = key;
+      return json(200, filesOf(id, pp));
     }
-    m = /^\/api\/file\/([^/]+)-D\/pdf$/.exec(u);
+    m = /^\/api\/file\/([^/]+)-D(\d+)\/pdf$/.exec(u);
     if (m) {
+      if (Number(m[2]) <= (b.server.expireBefore || 0)) return json(404, { detail: "File expired or already downloaded" });
       (b.server.pdfs = b.server.pdfs || []).push(m[1]);
       const fail = (b.server.failPdf || {})[m[1]];
-      return fail ? json(500, { detail: fail }) : json(200, undefined);
+      if (fail) return json(500, { detail: fail });
+      if (cache[lastKey[m[1]]]) cache[lastKey[m[1]]].pdf = true;
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error("not json")),
+                               arrayBuffer: () => Promise.resolve(new TextEncoder().encode("%PDF " + m[1]).buffer) });
+    }
+    m = /^\/api\/file\/([^/]+)-(X|D)(\d+)$/.exec(u);
+    if (m) {
+      if (Number(m[3]) <= (b.server.expireBefore || 0)) return json(404, { detail: "File expired or already downloaded" });
+      (b.server.fileGets = b.server.fileGets || []).push(m[1] + ":" + m[2]);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error("not json")),
+                               arrayBuffer: () => Promise.resolve(new TextEncoder().encode(m[2] + " " + m[1]).buffer) });
     }
     m = /^\/api\/draft\/([^/]+)$/.exec(u);
     if (m) {
@@ -171,7 +221,7 @@ async function openGenerate(b, href) {
         return json(200, { ok: true });
       }
       const d = draftOf(id);
-      return d ? json(200, { data: copy(d), updated_at: "2026-10-28T10:00:00Z" }) : json(404, { detail: "Draft not found" });
+      return d ? json(200, { data: copy(d), updated_at: b.server.version || VERSION }) : json(404, { detail: "Draft not found" });
     }
     return json(200, {});
   };
@@ -180,7 +230,8 @@ async function openGenerate(b, href) {
     textContent: "", innerHTML: "", attrs: {}, listeners: [],
     setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; },
     addEventListener(ev, h) { this.listeners.push([ev, h]); } });
-  ["gen-list", "gen-note", "gen-back", "gen-continue", "gen-empty", "gen-main"].forEach(node);
+  ["gen-list", "gen-note", "gen-back", "gen-continue", "gen-empty", "gen-main", "gen-rebuild"].forEach(node);
+  nodes["gen-rebuild"].hidden = true;
   nodes["gen-back"].attrs.href = "/estimate-review.html";
   nodes["gen-continue"].attrs.href = "/proposal-review.html";
   // Every line the progress note showed, in order.
@@ -194,7 +245,8 @@ async function openGenerate(b, href) {
 
   // ── the frames ──
   const winListeners = [];
-  const frames = { opened: [], live: 0, maxLive: 0, nav: [], posts: [], errors: [], frameUrls: [] };
+  const frames = { opened: [], live: 0, maxLive: 0, nav: [], posts: [], errors: [], frameUrls: [], together: [] };
+  const liveIds = new Set();
   const deliver = (ev) => winListeners.filter(([t]) => t === "message").forEach(([, h]) => h(ev));
   let sandbox = null;
   const body = {
@@ -206,6 +258,10 @@ async function openGenerate(b, href) {
       const src = el.attrs.src;
       const id = new URL(src, ORIGIN).searchParams.get("d");
       frames.opened.push({ id, src, attrs: copy(el.attrs), className: el.className });
+      // Which frames were on the page together, each time one opened.
+      liveIds.add(id);
+      el.__id = id;
+      frames.together.push([...liveIds].sort());
       const parent = frameParent(() => sandbox.window, deliver, () => el.contentWindow, frames.posts);
       (async () => {
         const o = Object.assign({}, (b.frameOpts || {})[id] || {});
@@ -228,8 +284,13 @@ async function openGenerate(b, href) {
         frames.frameUrls.push(p.page.loc.pathname + p.page.loc.search);
       })().catch((e) => frames.errors.push(String((e && e.stack) || e)));
     },
-    removeChild(el) { if (el && el.tag === "iframe" && el.parentNode) { el.parentNode = null; frames.live--; } },
+    removeChild(el) {
+      if (el && el.tag === "iframe" && el.parentNode) { el.parentNode = null; frames.live--; liveIds.delete(el.__id); }
+    },
   };
+  // What the page saved through its download links: the file name and the bytes.
+  const saved = [];
+  const blobs = {};
   const document = {
     addEventListener() {}, removeEventListener() {},
     getElementById: (id) => nodes[id] || null,
@@ -239,12 +300,19 @@ async function openGenerate(b, href) {
       ? { tag: "iframe", attrs: {}, listeners: [], parentNode: null, contentWindow: null, className: "",
           setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; },
           addEventListener(ev, h) { this.listeners.push([ev, h]); } }
-      : { style: {}, appendChild() {}, setAttribute() {}, click() {}, classList: { add() {}, remove() {} } }),
+      : { style: {}, appendChild() {}, setAttribute() {}, classList: { add() {}, remove() {} },
+          click() { if (tag === "a") saved.push({ name: this.download, bytes: blobs[this.href] || null }); } }),
     createTextNode: () => ({}), head: { appendChild() {} }, body,
   };
+  // A download saves a Blob through an object URL, as the page's download() does.
+  class HBlob { constructor(parts) { this.text = parts.map((x) => Buffer.from(x).toString()).join(""); } }
+  class HURL extends URL {
+    static createObjectURL(bl) { const u = "blob:" + Object.keys(blobs).length; blobs[u] = bl.text; return u; }
+    static revokeObjectURL() {}
+  }
   sandbox = {
-    console, JSON, Promise, Math, Date: FixedDate, Object, Array, String, Number, Error, URL,
-    URLSearchParams, Map, Set, isFinite, Uint8Array,
+    console, JSON, Promise, Math, Date: FixedDate, Object, Array, String, Number, Error, URL: HURL,
+    URLSearchParams, Map, Set, isFinite, Uint8Array, Blob: HBlob,
     localStorage: b.ls, sessionStorage: b.ss,
     // A timer gets an id, as a browser gives one, and never fires (a save is sent by flushState).
     setTimeout: (() => { let n = 0; return () => ++n; })(), clearTimeout: () => {},
@@ -263,6 +331,8 @@ async function openGenerate(b, href) {
   vm.runInContext(GENERATE, sandbox);
   await sandbox.window.TWGenerate.done;
   for (let i = 0; i < 5; i++) await settle();               // a frame's tail after it reported
+  return snap();
+  function snap() {
   const list = nodes["gen-list"].innerHTML;
   return {
     nav, posted, rows: sandbox.window.TWGenerate.rows(), notes,
@@ -276,11 +346,33 @@ async function openGenerate(b, href) {
     links: [...list.matchAll(/data-row="(\d+)" data-file="([a-z_]+)"/g)].map((x) => x[1] + ":" + x[2]),
     frames, refreshCalls: sandbox.window.TWGenerate.refreshCalls(),
     listening: winListeners.filter(([t]) => t === "message").length,
+    rebuildShown: !nodes["gen-rebuild"].hidden, rebuildDisabled: !!nodes["gen-rebuild"].disabled,
+    /** Press row `i`'s `key` file link, as a person clicks it in the list; resolves with what was
+     *  saved (null when nothing) and the button's own text after. */
+    download: async (i, key) => {
+      const btn = { attrs: { "data-row": String(i), "data-file": key }, innerHTML: "link", textContent: "link",
+                    disabled: false, getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; } };
+      const before = saved.length;
+      const click = nodes["gen-list"].listeners.find(([t]) => t === "click")[1];
+      click({ target: { closest: (sel) => (sel === "button.gen-dl" ? btn : null) } });
+      for (let k = 0; k < 40; k++) await settle();
+      return { saved: saved.length > before ? saved[saved.length - 1] : null, text: btn.textContent };
+    },
+    /** Press "Rebuild all" and wait for the run it starts; resolves with the page as it is then. */
+    rebuildAll: async () => {
+      const click = nodes["gen-rebuild"].listeners.find(([t]) => t === "click")[1];
+      click({});
+      await sandbox.window.TWGenerate.running();
+      for (let k = 0; k < 5; k++) await settle();
+      return snap();
+    },
   };
+  }
 }
 const rowsBrief = (g) => g.rows.map((r) => ({ id: r.id, name: r.name, sheet: r.sheet, status: r.status,
                                               total: r.total, message: r.message, current: r.current }));
 const frameBrief = (g) => ({ opened: g.frames.opened.map((f) => f.id), maxLive: g.frames.maxLive,
+                             together: g.frames.together,
                              live: g.frames.live, nav: g.frames.nav, errors: g.frames.errors,
                              phases: g.frames.posts.map((p) => p.msg.id + ":" + p.msg.phase),
                              targets: [...new Set(g.frames.posts.map((p) => p.target))] });
@@ -368,9 +460,15 @@ async function stagingProject() {
   // ── STAGING'S SHAPE: 3 OF 3, REFRESH ONCE, NEVER LEAVING ────────────────────────────────────
   {
     const b = await stagingProject();
+    const putsBefore = b.server.puts.length;
     const g = await openGenerate(b, "/generate.html?d=d1");
     const c3 = b.server.drafts.c3;
+    const total = (d) => ((d && d.proposal_payload && d.proposal_payload.values) || {}).total_formatted || null;
     out.staging = {
+      // TWO FRAMES AT ONCE, EACH ON ITS OWN DRAFT: every save a frame made, as [draft, its sheet, the
+      // total of the document it saved]; and this project's own saves made while the frames ran.
+      framePuts: (b.server.otherPuts || []).map((p) => [p.id, (p.data.scope_group || {}).label || null, total(p.data)]),
+      d1Puts: b.server.puts.slice(putsBefore).map((p) => [p.proposal_of || null, p.scope_group ? p.scope_group.label : null, total(p)]),
       rows: rowsBrief(g), nav: g.nav, url: g.url, urls: g.urls, frames: frameBrief(g),
       frameAttrs: g.frames.opened.map((f) => ({ className: f.className, inert: f.attrs.inert,
         hidden: f.attrs["aria-hidden"], tab: f.attrs.tabindex,
@@ -586,6 +684,87 @@ async function stagingProject() {
     const v2 = await continued(() => Object.assign(W.draft(), { polish_estimate: { version: 2 } }));
     const g2 = await openGenerate(v2, "/generate.html?d=d1");
     out.pillsV2 = { pills: g2.pills, back: g2.back, next: g2.next };
+  }
+
+  // ── ONLY WHAT CHANGED IS REBUILT (Hanz, 2026-10-29) ────────────────────────────────────────
+  // Three proposals, all built on the first visit. RJ then rewrites Polish's scope and nothing else.
+  // The next visit composes and builds Polish only; Epoxy and Room 2 are "Up to date", with working
+  // links. A restart then expires every token: a link still downloads (it builds again first).
+  // Then "Rebuild all" builds all three again, the cached renders notwithstanding.
+  {
+    const b = await continued();
+    b.server.drafts = { c2: await keyed(child("Polish", { proposal_payload: oldDoc("$8,000.00") })),
+                        c3: await keyed(child("Room 2", { proposal_payload: oldDoc("$6,000.00") })) };
+    b.server.view = view([{ id: "d1", sheet_label: "Epoxy" }, { id: "c2", sheet_label: "Polish" },
+                          { id: "c3", sheet_label: "Room 2" }]);
+    const first = await openGenerate(b, "/generate.html?d=d1");
+    b.server.drafts.c2 = Object.assign(copy(b.server.drafts.c2), { scope_notes: "RJ's new scope for the polish" });
+    const rendersBefore = (b.server.renders || []).length;
+    const pdfsBefore = (b.server.pdfs || []).length;
+    const checksBefore = (b.server.checks || []).length;
+    const g = await openGenerate(b, "/generate.html?d=d1");
+    out.onlyChanged = {
+      first: { rows: rowsBrief(first), note: first.note, posted: first.posted.map((p) => p.id) },
+      rows: rowsBrief(g), note: g.note, notes: g.notes.slice(), links: g.links, nav: g.nav,
+      posted: g.posted.map((p) => p.id), frames: frameBrief(g).opened,
+      rendered: (b.server.renders || []).slice(rendersBefore).map((r) => r.id),
+      pdfs: (b.server.pdfs || []).slice(pdfsBefore),
+      checked: (b.server.checks || []).slice(checksBefore).map((c) => [c.id, !!c.body.draft_version, c.body.hold_placeholders]),
+      c2Scope: ((b.server.drafts.c2.proposal_payload || {}).values || {}).scope_notes || null,
+      rebuildShown: g.rebuildShown, rebuildDisabled: g.rebuildDisabled,
+      statusText: [...g.list.matchAll(/<span class="gen-status">([^<]*)<\/span>/g)].map((x) => x[1]),
+    };
+    // Its links work: Epoxy's .xlsx and Room 2's PDF, off the "Up to date" rows.
+    const xlsx = await g.download(0, "xlsx_download_url");
+    const pdf = await g.download(2, "pdf_download_url");
+    const postedBefore = g.posted.length;
+    // A RESTART: every token minted so far has expired.
+    b.server.expireBefore = b.server.gen;
+    const rendersMid = (b.server.renders || []).length;
+    const healed = await g.download(0, "pdf_download_url");
+    out.expired = { xlsx: xlsx.saved, pdf: pdf.saved, healed: healed.saved, healedText: healed.text,
+                    posted: g.posted.slice(postedBefore).map((p) => [p.id, p.body.hold_placeholders, !!p.body.rebuild]),
+                    rendered: (b.server.renders || []).length - rendersMid };
+    // "REBUILD ALL".
+    const rb = { renders: (b.server.renders || []).length, pdfs: (b.server.pdfs || []).length,
+                 checks: (b.server.checks || []).length, posted: g.posted.length, frames: g.frames.opened.length };
+    const r = await g.rebuildAll();
+    out.rebuild = {
+      rows: rowsBrief(r), note: r.note, nav: r.nav, links: r.links,
+      posted: r.posted.slice(rb.posted).map((p) => [p.id, !!p.body.rebuild]),
+      rendered: (b.server.renders || []).slice(rb.renders).map((x) => [x.id, x.rebuild]),
+      pdfs: (b.server.pdfs || []).length - rb.pdfs, checks: (b.server.checks || []).length - rb.checks,
+      frames: r.frames.opened.length - rb.frames, rebuildShown: r.rebuildShown, rebuildDisabled: r.rebuildDisabled,
+    };
+  }
+
+  // ── AN ESTIMATE-ONLY CHANGE IS REBUILT ─────────────────────────────────────────────────────
+  // Both built and cached. Then the Polish sheet is re-priced on the estimate ($8,000 -> $9,500): no
+  // word of either proposal changed, and the server still holds each one's OLD document, rendered,
+  // with its PDF. Polish's copy of the estimate is behind; Refresh re-copies it. Both are rebuilt;
+  // neither may be called up to date off the old document.
+  {
+    const polishAt = (t) => W.tabs(10000, 320).map((x) => (x.id === "Polish" ? Object.assign(x, { total: t }) : x));
+    const b = await continued();
+    b.server.drafts = { c2: await keyed(child("Polish", { proposal_payload: oldDoc("$8,000.00") })) };
+    b.server.view = view([{ id: "d1", sheet_label: "Epoxy" }, { id: "c2", sheet_label: "Polish" }]);
+    const first = await openGenerate(b, "/generate.html?d=d1");
+    await W.editElsewhere(b, { priced_tabs: polishAt(9500) });
+    b.server.view.members[1].stale = true;
+    b.server.onRefresh = () => {
+      b.server.drafts.c2 = Object.assign(copy(b.server.drafts.c2), { estimate_digest: "E2",
+        priced_tabs: polishAt(9500).concat(b.server.drafts.c2.priced_tabs.slice(2)) });
+      b.server.view.members.forEach((m) => { m.stale = false; });
+      return { refreshed: ["c2"], skipped: [] };
+    };
+    const rendersBefore = (b.server.renders || []).length;
+    const g = await openGenerate(b, "/generate.html?d=d1");
+    out.estimateOnly = {
+      first: rowsBrief(first).map((x) => [x.id, x.status, x.total]),
+      rows: rowsBrief(g).map((x) => [x.id, x.status, x.total]), note: g.note,
+      posted: g.posted.map((p) => p.id), frames: frameBrief(g).opened, refreshCalls: g.refreshCalls,
+      rendered: (b.server.renders || []).slice(rendersBefore).map((x) => [x.id, x.payload.values.total_formatted]),
+    };
   }
 
   // ── NO PROJECT ─────────────────────────────────────────────────────────────────────────────

@@ -38,11 +38,30 @@
  *     door marks it `proposal_auto_built`, so Send all still holds it while it prints Kyle's
  *     placeholders (main._send_all_placeholders), and its row says to review it before sending;
  *   * a sibling closed lost or on hold on the board is not built.
+ *
+ * ONLY WHAT CHANGED IS REBUILT, AND IN PARALLEL (Hanz, 2026-10-29: "there are multiple proposals why
+ * not generate them in parallel also ... if we only edited one proposal then it should only
+ * regenerate that proposal"). A proposal is UP TO DATE, and costs no build, only when all of this is
+ * proven, and anything short of it is rebuilt:
+ *   * its saved document holds for its saved draft (TW.documentHolds: `proposal_payload_key` equals
+ *     the key over every input the draft carries now, the estimate's cells included, and over the
+ *     document itself), it is not stale or out of step with the estimate, and Refresh did not touch it;
+ *   * the server still has that very saved copy (`draft_version`, its `updated_at`), and its render
+ *     cache holds the render of exactly that document (main._render_key: the payload's hash, which is
+ *     everything the .xlsx and the .docx are filled from, the template and the code) with all three
+ *     files made, the PDF included (POST /api/draft/{id}/documents/held). The files come back under
+ *     fresh tokens; nothing is rendered and LibreOffice does not run.
+ * An estimate-only edit changes the draft's inputs, so its document no longer holds: it is composed
+ * again and rebuilt. A link whose token has expired since (a restart, an hour) builds the files
+ * again and downloads them, as the Files step does. "Rebuild all" builds every one again, cache or
+ * not: the safety net. Compose frames run FRAME_LIMIT at once (each its own window, token, seed and
+ * draft), builds LIMIT at once; the server caps LibreOffice itself (main._PDF_RENDER_SEM).
  */
 (function () {
   "use strict";
   var TW = window.TW;
   var LIMIT = 3;                                   // builds at once
+  var FRAME_LIMIT = 2;                             // hidden Proposal pages composing at once
   var FRAME_MS = 30000;                            // a compose frame that has not reported by then stops
   var FRAME_LOAD_GRACE_MS = 3000;                  // loaded, and still nothing said: it never started
   // The Intake and Estimate steps of the spreadsheet flow (a v2 draft goes to the v2 pages).
@@ -109,22 +128,55 @@
     if (!res.ok || (json && json.ok === false)) return { ok: false, status: res.status, error: sentence(res.status, json) };
     return { ok: true, status: res.status, body: json };
   }
-  async function readDraft(id) {
+  /** The server's copy of draft `id` and the version it was stored as: {data, version}, or null. */
+  async function readRow(id) {
     var r = await call("GET", "/api/draft/" + encodeURIComponent(id));
     var data = r.ok && r.body && r.body.data;
-    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+    if (!(data && typeof data === "object" && !Array.isArray(data))) return null;
+    return { data: data, version: typeof r.body.updated_at === "string" ? r.body.updated_at : "" };
+  }
+  var AUTO_SAID = "Built from the default wording; review it on its Proposal tab before sending.";
+
+  /** Are `row`'s files already built for exactly its saved document? Only asked of a row whose
+   *  document holds for its draft (sort's "build"). True, and the row takes its files, only when the
+   *  server says so of that very saved copy (see "ONLY WHAT CHANGED" at the top); false on any doubt. */
+  async function upToDate(row) {
+    try {
+      var version = row.version;
+      if (!version) {
+        // The open proposal was read through reconcileWithServer, which keeps no version: read again,
+        // and judge only a copy that carries the same document and still holds.
+        var again = await readRow(row.id);
+        if (!again || !TW.documentHolds(again.data) || !row.data
+            || again.data.proposal_payload_key !== row.data.proposal_payload_key) return false;
+        version = again.version;
+      }
+      if (!version) return false;
+      var r = await call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents/held",
+                         { draft_version: version, hold_placeholders: !row.auto });
+      var f = r.ok && r.body && r.body.held === true ? r.body.files : null;
+      if (!f || !f.xlsx_download_url || !f.docx_download_url || !f.pdf_download_url) return false;
+      row.status = "uptodate";
+      row.files = f;
+      row.total = typeof f.document_total === "string" ? f.document_total : "";
+      row.message = row.auto ? AUTO_SAID : "";
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   /** Build one proposal's files: the route the Files step uses, then its PDF, so a PDF that cannot be
    *  made is said here rather than at the Files step. A backup composed from the default wording
    *  (`row.auto`) is built as it stands and says to review it; any other document asks the server to
    *  hold one that was put together unattended and still prints placeholders. */
-  async function build(row) {
+  async function build(row, force) {
     row.status = "building";
     row.message = "";
     paint();
-    var r = await call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents",
-                       { hold_placeholders: !row.auto });
+    var ask = { hold_placeholders: !row.auto };
+    if (force) ask.rebuild = true;                 // "Rebuild all": not the cached render
+    var r = await call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents", ask);
     if (!r.ok) { fail(row, r.error); return; }
     var out = r.body || {};
     if (out.pdf_download_url) {
@@ -138,7 +190,7 @@
     row.status = "built";
     row.files = out;
     row.total = typeof out.document_total === "string" ? out.document_total : "";
-    row.message = row.auto ? "Built from the default wording; review it on its Proposal tab before sending." : "";
+    row.message = row.auto ? AUTO_SAID : "";
     paint();
   }
   function fail(row, why) {
@@ -258,7 +310,8 @@
 
   // ── the list ─────────────────────────────────────────────────────────────────────────────────
   var LABEL = { waiting: "Waiting", building: "Building…", built: "Built", failed: "Not built",
-                skipped: "Not built", rebuilding: "Rebuilding…" };
+                skipped: "Not built", rebuilding: "Rebuilding…", uptodate: "Up to date" };
+  function hasFiles(r) { return (r.status === "built" || r.status === "uptodate") && !!r.files; }
   var FILES = [["xlsx_download_url", "Estimate (.xlsx)", "_estimate.xlsx"],
                ["docx_download_url", "Proposal (.docx)", "_proposal.docx"],
                ["pdf_download_url", "Proposal (.pdf)", "_proposal.pdf"]];
@@ -270,7 +323,7 @@
       // ONE NAME (Hanz, 2026-10-29): a proposal is called what its sheet is called, so no "(sheet)" after it.
       var name = esc(r.name)
         + (r.current && rows.length > 1 ? ' <span class="gen-here">this proposal</span>' : "");
-      var links = r.status === "built" && r.files ? FILES.filter(function (f) { return r.files[f[0]]; })
+      var links = hasFiles(r) ? FILES.filter(function (f) { return r.files[f[0]]; })
         .map(function (f) {
           return '<button type="button" class="download-link gen-dl" data-row="' + i + '" data-file="' + f[0] + '">'
             + icon("arrow-down", 14) + " " + esc(f[1]) + "</button>";
@@ -278,7 +331,7 @@
       return '<li class="gen-row gen-' + esc(r.status) + '" data-id="' + esc(r.id) + '">'
         + '<div class="gen-head"><span class="gen-name">' + name + "</span>"
         + '<span class="gen-status">' + esc(LABEL[r.status] || r.status)
-        + (r.status === "built" && r.total ? " · " + esc(r.total) : "") + "</span></div>"
+        + (hasFiles(r) && r.total ? " · " + esc(r.total) : "") + "</span></div>"
         + (r.message ? '<p class="gen-msg">' + esc(r.message) + "</p>" : "")
         + (links ? '<div class="gen-files">' + links + "</div>" : "")
         + "</li>";
@@ -292,11 +345,18 @@
   }
   function summary() {
     var built = rows.filter(function (r) { return r.status === "built"; }).length;
-    var failed = rows.filter(function (r) { return r.status !== "built"; }).length;
+    var fresh = rows.filter(function (r) { return r.status === "uptodate"; }).length;
+    var failed = rows.length - built - fresh;
+    var why = " The ones not built say why. You can still continue; the Files step can build them again.";
     if (!rows.length) return "";
+    if (fresh) {
+      if (!built && !failed) {
+        return rows.length === 1 ? "The files are up to date." : "All " + rows.length + " proposals are up to date.";
+      }
+      return built + " rebuilt, " + fresh + " up to date" + (failed ? ", " + failed + " not built." + why : ".");
+    }
     if (built === rows.length) return rows.length === 1 ? "The files are built." : "All " + rows.length + " proposals are built.";
-    return built + " of " + rows.length + " built."
-      + (failed ? " The ones not built say why. You can still continue; the Files step can build them again." : "");
+    return built + " of " + rows.length + " built." + (failed ? why : "");
   }
 
   async function download(btn) {
@@ -308,6 +368,16 @@
     btn.disabled = true;
     try {
       var resp = await fetch(TW.absoluteUrl(row.files[key]), { headers: TW.authHeaders() });
+      if (resp.status === 404) {
+        // ITS TOKEN EXPIRED (they live in the server's memory: a restart, or an hour). The files of
+        // its saved document are built again, as the Files step does, and this file is fetched once more.
+        var again = await call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents",
+                               { hold_placeholders: !row.auto });
+        if (!again.ok || !again.body || !again.body[key]) throw new Error(again.error || "HTTP 404");
+        row.files = again.body;
+        if (typeof again.body.document_total === "string") row.total = again.body.document_total;
+        resp = await fetch(TW.absoluteUrl(row.files[key]), { headers: TW.authHeaders() });
+      }
       if (!resp.ok) throw new Error(resp.status === 404 ? "expired" : "HTTP " + resp.status);
       var blob = new Blob([await resp.arrayBuffer()], { type: "application/octet-stream" });
       var url = URL.createObjectURL(blob);
@@ -382,7 +452,7 @@
     return ms;
   }
 
-  async function visit() {
+  async function visit(force) {
     try { await TW.draftReady; } catch (e) { /* the checks below decide */ }
     // initDraftSync is reloading this page onto its own project: the reload decides instead.
     if (TW.reloadPending && TW.reloadPending()) return;
@@ -447,20 +517,31 @@
       }
     }
 
-    var datas = await Promise.all(members.map(function (m) {
-      return m.id === id && seen.server ? Promise.resolve(seen.server) : readDraft(m.id);
+    var reads = await Promise.all(members.map(function (m) {
+      return m.id === id && seen.server ? Promise.resolve({ data: seen.server, version: "" }) : readRow(m.id);
     }));
     rows = members.map(function (m, i) {
-      var data = datas[i];
+      var data = reads[i] ? reads[i].data : null;
       var name = m.display_label || m.label || (data && data.project_name) || st.project_name || "Proposal";
       var plan = sort(m, data, m.id === id, seen, refresh);
       var neverOpened = plan === "frame" && !(data && data.proposal_payload && data.proposal_payload.values);
       return { id: m.id, name: name, sheet: m.sheet_label || "", current: m.id === id,
                status: typeof plan === "object" ? plan.status : "waiting",
                message: typeof plan === "object" ? plan.message : "", files: null, total: "",
-               plan: plan, data: data, neverOpened: neverOpened,
+               plan: plan, data: data, version: reads[i] ? reads[i].version : "", neverOpened: neverOpened,
                auto: neverOpened || !!(data && data.proposal_auto_built === true) };
     });
+    paint();
+
+    // ONLY WHAT CHANGED: a proposal whose document holds is asked whether its files are already built
+    // for exactly that document. Not on "Rebuild all", and never one Refresh moved (it is "frame").
+    var holding = force ? [] : rows.filter(function (r) { return r.plan === "build"; });
+    if (holding.length) {
+      say("Generating files: checking which are up to date…");
+      await pool(holding, LIMIT, async function (r) {
+        if (await upToDate(r)) { r.plan = "uptodate"; paint(); }
+      });
+    }
     var work = rows.filter(function (r) { return r.plan === "build" || r.plan === "frame"; });
     var started = 0;
     function begin(r) {
@@ -470,29 +551,26 @@
     paint();
 
     var framedCurrent = false;
-    async function composeThenBuild(list) {
-      for (var i = 0; i < list.length; i++) {
-        var r = list[i];
-        begin(r);
-        r.status = "rebuilding";
-        r.message = r.neverOpened ? "Writing its proposal from the default wording…"
-          : "Rebuilding its proposal from the latest estimate…";
-        paint();
-        var out = await composeInFrame(r, r.data);
-        if (!out.ok) { fail(r, out.reason); continue; }
-        if (r.current) framedCurrent = true;
-        await build(r);
-      }
+    async function composeThenBuild(r) {
+      begin(r);
+      r.status = "rebuilding";
+      r.message = r.neverOpened ? "Writing its proposal from the default wording…"
+        : "Rebuilding its proposal from the latest estimate…";
+      paint();
+      var out = await composeInFrame(r, r.data);
+      if (!out.ok) { fail(r, out.reason); return; }
+      if (r.current) framedCurrent = true;
+      await build(r, force);
     }
     await Promise.all([
       pool(rows.filter(function (r) { return r.plan === "build"; }), LIMIT,
-           function (r) { begin(r); return build(r); }),
-      composeThenBuild(rows.filter(function (r) { return r.plan === "frame"; })),
+           function (r) { begin(r); return build(r, force); }),
+      pool(rows.filter(function (r) { return r.plan === "frame"; }), FRAME_LIMIT, composeThenBuild),
     ]);
     // The open proposal's document was composed in a frame and saved: this browser's copy takes it,
     // as it was the saved copy until then ("adopted"), so no page here holds the one from before.
     if (framedCurrent) { try { await TW.reconcileWithServer(); } catch (e) { /* the next page asks again */ } }
-    rows.forEach(function (r) { delete r.data; });
+    rows.forEach(function (r) { delete r.data; delete r.version; });
     say(summary());
   }
 
@@ -503,11 +581,30 @@
       if (btn) download(btn);
     });
   }
-  var done = visit().catch(function (e) {
-    say("Something went wrong building the files: " + ((e && e.message) || e) + ". You can still continue.");
-  });
+  // "REBUILD ALL": every proposal built again, cache or not (the safety net). Offered once a run has
+  // finished, and not while one is going.
+  var running = null;
+  function paintRebuild() {
+    var btn = $("gen-rebuild");
+    if (!btn) return;
+    btn.hidden = !rows.length;
+    btn.disabled = !!running;
+  }
+  function start(force) {
+    running = visit(!!force).catch(function (e) {
+      say("Something went wrong building the files: " + ((e && e.message) || e) + ". You can still continue.");
+    }).then(function () { running = null; paintRebuild(); });
+    paintRebuild();
+    return running;
+  }
+  var rebuild = $("gen-rebuild");
+  if (rebuild && rebuild.addEventListener) {
+    rebuild.addEventListener("click", function () { if (!running) start(true); });
+  }
+  var done = start(false);
   window.TWGenerate = {
     done: done,
+    running: function () { return running; },
     rows: function () {
       return JSON.parse(JSON.stringify(rows.map(function (r) {
         var o = {};

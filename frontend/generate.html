@@ -41,11 +41,14 @@
     color: var(--ink-variant); margin-left: 6px;
   }
   .gen-status { font-size: 12px; font-weight: 700; color: var(--ink-variant); }
-  .gen-built .gen-status { color: #1f7a3a; }
+  .gen-built .gen-status, .gen-uptodate .gen-status { color: #1f7a3a; }
   .gen-failed .gen-status { color: var(--treadwell-red); }
   .gen-msg { font-size: 13px; color: var(--ink-variant); margin: 6px 0 0; }
   .gen-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .gen-files .download-link { flex: 0 1 auto; padding: 8px 12px; font-size: 13px; }
+  .gen-tools { display: flex; justify-content: flex-end; margin: -12px 0 24px; }
+  .gen-tools button { padding: 8px 14px; font-size: 13px; }
+  .gen-tools button[hidden] { display: none; }
   .gen-actions { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gen-actions a { text-decoration: none; padding: 12px 20px; }
   /* The hidden compose frame (js/generate.js composeInFrame): laid out in the viewport, so the
@@ -85,11 +88,15 @@
     <h1>Generate files</h1>
     <p class="lede">
       Every visit builds the estimate (.xlsx), the proposal (.docx) and its PDF again from the
-      estimate as it stands, for every proposal of this project. They are your backup of this
-      version. Continue whenever you are ready; one that was not built says why.
+      estimate as it stands, for every proposal of this project that changed since its files were
+      last built; the others say Up to date. They are your backup of this version. Continue
+      whenever you are ready; one that was not built says why.
     </p>
     <p id="gen-note" class="gen-note" role="status" aria-live="polite" hidden></p>
     <ul id="gen-list" class="gen-list"></ul>
+    <div class="gen-tools">
+      <button id="gen-rebuild" type="button" class="btn-secondary" hidden>Rebuild all</button>
+    </div>
     <div class="gen-actions">
       <a id="gen-back" class="btn-secondary" href="/estimate-review.html">← Back to Estimate</a>
       <a id="gen-continue" class="btn-primary" href="/proposal-review.html">Continue to Proposal →</a>
@@ -111,7 +118,7 @@
 <script src="/shared.js"></script>
 <!-- A proposal whose document is older than its draft, or that has none yet, is composed by its own
      Proposal-step door in a hidden frame (.gen-frame; shared.js FRAME): the page never leaves. -->
-<script src="/js/generate.js?v=20261029-1"></script>
+<script src="/js/generate.js?v=20261030-1"></script>
 
 </body>
 </html>
