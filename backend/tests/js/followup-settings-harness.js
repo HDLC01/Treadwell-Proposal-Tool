@@ -244,6 +244,23 @@ async function run() {
   } catch (e) {
     out.errors.flat = e.constructor.name + ": " + e.message + "\n" + e.stack;
   }
+
+  // 11. THE HEADING OVER EACH EMAIL when the portal serves no editor_titles (GET_NEW has none), so
+  //     the page's own fallback says when the email goes out. Read off the page after the real tab
+  //     click handler switched to it. A fresh page, so the switches do not touch the saves above.
+  try {
+    const page = makePage([GET_NEW]);
+    await settle();
+    out.headings = {};
+    for (const key of ["not_viewed", "next_steps", "second_nudge"]) {
+      const btn = { getAttribute: () => key };
+      await page.el("tabs").fire("click", { target: { closest: () => btn } });
+      await settle();
+      out.headings[key] = page.el("which-email").textContent;
+    }
+  } catch (e) {
+    out.errors.headings = e.constructor.name + ": " + e.message + "\n" + e.stack;
+  }
 }
 
 // Press Save with these answers queued for the PUT, and read back everything a person would see.

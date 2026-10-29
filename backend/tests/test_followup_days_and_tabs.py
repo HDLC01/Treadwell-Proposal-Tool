@@ -131,7 +131,8 @@ def test_the_fallback_wording_names_when_the_email_fires():
     code = _code()
     block = code[code.index("var EDITOR_TITLES"):code.index("};", code.index("var EDITOR_TITLES"))]
     assert "Not opened yet — 1st email, days after sending" in block
-    assert "Opened, no decision — 1st email, days after they open it" in block
+    assert "Opened, no decision — 1st email, days after sending" in block
+    assert "days after they open it" not in block
     assert "Recurring check-in" not in block, "a fallback heading for an email nothing sends"
 
 
