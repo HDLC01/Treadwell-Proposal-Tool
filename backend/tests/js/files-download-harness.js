@@ -111,10 +111,11 @@ function page(opts) {
     "TW", "builtAt", ...FRESH.args, '"use strict"; ' + FRESH.body)
     .bind(null, TW, builtAt);
   let painted = 0;
+  let listed = 0;   // step 5's list of every proposal (refreshFilesProposals)
   // done.js's module-level record of the document the estimator downloaded (Send reads it).
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
-    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
+    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "refreshFilesProposals", "fetch", "Blob", "URL", "document",
     "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
     '"use strict"; ' + DOWNLOAD.body);
   // The page's window.confirm: every question asked, answered with `opts.confirm` (OK by default).
@@ -132,9 +133,11 @@ function page(opts) {
     log, posted, fetched, clicked, shown, preEl, asked,
     state: () => st,
     painted: () => painted,
+    listed: () => listed,
     checked: () => checkedDocument.renderId,
     download: (key, name, button) => downloadAs(
-      key, name, button, TW, freshDocuments, () => { painted++; }, fetchStub, BlobStub, URLStub,
+      key, name, button, TW, freshDocuments, () => { painted++; },
+      () => { listed++; }, fetchStub, BlobStub, URLStub,
       documentStub, () => 0, () => "", { error() {} }, checkedDocument, TWPRICE, windowStub),
     generate: () => doGenerate(documentStub, freshDocuments, preEl,
                                (r) => shown.push(r), () => {}, TW, st),
@@ -157,7 +160,7 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     out.stale = { log: p.log, fetched: p.fetched, posted: p.posted.map((x) => x.path),
                   body: p.posted.length ? p.posted[0].body : null, clicked: p.clicked,
                   kept: p.state().generate_result, stamp: p.state().generated_lump_sum,
-                  painted: p.painted(), html: b.innerHTML, checked: p.checked() };
+                  painted: p.painted(), listed: p.listed(), html: b.innerHTML, checked: p.checked() };
   }
 
   // B. A save that cannot land builds nothing.

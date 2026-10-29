@@ -71,6 +71,14 @@ def test_the_new_build_is_remembered_locally_and_never_written_to_the_draft(ran)
     assert s["painted"] == 1
 
 
+def test_a_download_repaints_the_list_of_every_proposal(ran):
+    """Step 5's list of every proposal of the project (refreshFilesProposals, test_files_proposals.py)
+    repaints where the single figure does: after the fresh build a download makes.
+
+    Mutation: drop refreshFilesProposals() from downloadAs -- `listed` stays 0."""
+    assert ran["stale"]["listed"] == 1
+
+
 def test_the_card_shows_the_total_the_server_rendered(ran):
     """The server rendered ITS copy of the payload, which is not always the page's. The card's
     figure is the one that copy printed ($44,000.00), not the page's own ($41,250.00).

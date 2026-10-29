@@ -75,14 +75,28 @@ def test_the_single_figure_still_falls_back_to_the_display(out):
     assert out["display"]["text"] == "$5,000.00" and out["display"]["rows"] is None
 
 
+def test_another_built_proposal_shows_the_total_its_document_prints(out):
+    """`document_total` (proposals_view: that proposal's saved payload's Total) wins over its
+    proposal_lump_sum; one with no digit in it falls back, and an unbuilt one is still not priced."""
+    assert _lines(out["built"]) == [
+        (True, ["Breakroom", "$20,000.00", "(this one)"]),
+        (False, ["Room 2", "$15,250.00"]),
+        (False, ["Kitchen", "not priced yet"]),
+    ]
+
+
 BREAKS = {
     "the list is never drawn": (
         "js/done.js", "      paintReadyProposals(pv, TW.getDraftId(), lumpEl ? lumpEl.textContent : \"\");", "      void 0;",
         lambda r: r["child"]["rows"] is None),
     "this one takes the server's figure": (
-        "js/done.js", "      const fig = mine ? (currentFigure || (n == null ? \"\" : usd(n))) : (n == null ? \"\" : usd(n));",
+        "js/done.js", "      const fig = mine ? (currentFigure || theirs) : theirs;",
         "      const fig = n == null ? \"\" : usd(n);",
         lambda r: _lines(r["child"])[1][1][1] != "$15,999.00"),
+    "another proposal's figure is its lump_sum, not its document's": (
+        "js/done.js", "      const theirs = doc || (n == null ? \"\" : usd(n));",
+        "      const theirs = n == null ? \"\" : usd(n);",
+        lambda r: _lines(r["built"])[1][1][1] != "$15,250.00"),
     "this one is not marked": (
         "js/done.js", "      if (mine) {", "      if (false) {",
         lambda r: "(this one)" not in r["child"]["text"]),

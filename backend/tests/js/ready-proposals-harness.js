@@ -18,7 +18,8 @@ const L = require("./_lib.js");
 const ROOT = path.resolve(process.argv[2]);
 const SRC = L.read(path.join(ROOT, "js", "done.js"));
 
-const PAINT = L.liftSource(SRC, "paintReadyProposals", { indent: "  ", where: "done.js" });
+const PAINT = L.liftSource(SRC, "paintReadyProposals", { indent: "  ", where: "done.js" })
+  + "\n" + L.liftSource(SRC, "proposalName", { indent: "  ", where: "done.js" });
 const CARD = (function () {
   const start = SRC.indexOf("const _rvPp = ");
   const head = SRC.indexOf("(async function readyProposals()", start);
@@ -92,5 +93,10 @@ const DOC = (t) => ({ project_name: "Acme", lump_sum_display: "$1.00", proposal_
   out.throws = await card({ id: "S1", st: DOC("$7,447.00"), throws: true });
   out.notAmong = await card({ id: "X9", st: DOC("$7,447.00"), view: VIEW });
   out.display = await card({ id: "S1", st: { lump_sum_display: "$5,000.00" }, view: null });
+  // Another proposal that was built shows the Total ITS document prints, not its proposal_lump_sum.
+  const BUILT = JSON.parse(JSON.stringify(VIEW));
+  BUILT.members[1].document_total = "$15,250.00";
+  BUILT.members[2].document_total = "—";
+  out.built = await card({ id: "P1", st: DOC("$20,000.00"), view: BUILT });
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

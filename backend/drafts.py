@@ -2797,6 +2797,18 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None,
             "skipped": skipped, "moved": moved_out}
 
 
+def _document_total(data: Dict[str, Any]) -> Optional[str]:
+    """The Total a proposal's built document prints: its saved proposal_payload's
+    `values.total_formatted`, as written ("$15,000.50"), the figure the Files page shows for the
+    proposal it is on (done.js paintLumpSum). None when nothing was built or it holds no digit."""
+    pp = (data or {}).get("proposal_payload")
+    values = pp.get("values") if isinstance(pp, dict) else None
+    total = values.get("total_formatted") if isinstance(values, dict) else None
+    if not isinstance(total, str) or not re.search(r"\d", total):
+        return None
+    return total.strip()
+
+
 def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     """The proposal page's tab strip: the parent first, then its children in the parent's
     `base_tab_ids` order, each {id, label, display_label, sheet_label, lump_sum, index, is_parent,
@@ -2806,7 +2818,8 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     `display_label` is what the strip shows: THE ONE NAME (proposal_names: its base sheet's name on
     the parent's estimate, a clash numbered), which sync_proposal_labels stores on the next save, so
     the strip never waits for one. `sheet_label` is the sheet's own name. `lump_sum` is that
-    proposal's own proposal_lump_sum (a number, or None when it has none yet). `draft_id` is the
+    proposal's own proposal_lump_sum (a number, or None when it has none yet). `document_total` is
+    the Total its built document prints (_document_total), None before it is built. `draft_id` is the
     parent or any child of it. None when it is gone.
 
     Returns {"parent_id", "group_id", "estimate_digest", "members"}; a draft with no children answers
@@ -2831,6 +2844,7 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     members = [{"id": parent_id, "label": pstored, "index": 1,
                 "display_label": names.get(parent_id) or pstored,
                 "sheet_label": psheet, "lump_sum": _money_or_none(parent.get("proposal_lump_sum")),
+                "document_total": _document_total(parent),
                 "is_parent": True, "base_tab_id": parent.get("base_tab_id"), "stale": False,
                 "out_of_step": None, "estimate_synced_at": None}]
     for i, c in enumerate(kids, start=2):
@@ -2840,6 +2854,7 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                         "display_label": names.get(c["id"]) or _shown_label(c["label"], sheet),
                         "sheet_label": sheet,
                         "lump_sum": _money_or_none(c["data"].get("proposal_lump_sum")),
+                        "document_total": _document_total(c["data"]),
                         "is_parent": False, "base_tab_id": tab,
                         "stale": c["data"].get("estimate_digest") != digest,
                         # OUT OF STEP: this proposal does not price a base bid of its own (a base swap
