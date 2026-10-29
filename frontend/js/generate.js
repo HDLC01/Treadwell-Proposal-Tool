@@ -267,7 +267,8 @@
     var list = $("gen-list");
     if (!list) return;
     list.innerHTML = rows.map(function (r, i) {
-      var name = esc(r.name) + (r.sheet && r.sheet !== r.name ? ' <span class="gen-sheet">(' + esc(r.sheet) + ")</span>" : "")
+      // ONE NAME (Hanz, 2026-10-29): a proposal is called what its sheet is called, so no "(sheet)" after it.
+      var name = esc(r.name)
         + (r.current && rows.length > 1 ? ' <span class="gen-here">this proposal</span>' : "");
       var links = r.status === "built" && r.files ? FILES.filter(function (f) { return r.files[f[0]]; })
         .map(function (f) {

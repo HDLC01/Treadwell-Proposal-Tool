@@ -318,7 +318,7 @@ def test_a_double_click_on_the_open_tab_renames_it(out):
     r = out["page"]["rename"]
     assert r["other"] == [False, False, False], "another tab is not renamed from here"
     assert r["open"] == [False, True, False]
-    assert r["fetches"] == [["POST", "/api/draft/C2/scope", {"label": "Lab 2", "rename": True}]]
+    assert r["fetches"] == [["POST", "/api/draft/C2/scope", {"draft_version": "V-1", "label": "Lab 2", "rename": True}]]
     assert r["local"] == [[{"scope_group": {"id": "G1", "label": "Lab 2"}}, {"alreadyOnServer": True}]]
     assert r["labels"] == ["Base Bid 1", "Lab 2", "Base Bid 3"]
     assert r["escape"] == {"fetches": 0, "renaming": False}
@@ -330,8 +330,43 @@ def test_the_tabs_say_the_sheet_and_a_renamed_one_keeps_its_name(out):
     assert s["labels"] == ["Breakroom", "Lab <2>", "Kitchen"]
     assert s["note"].startswith("Lab <2> still has the figures from before.")
     assert s["boxValue"] == "Lab <2>", "the rename box opens on what the tab says"
-    assert s["acceptFetches"] == [["POST", "/api/draft/C2/scope", {"label": "Lab <2>", "rename": True}]],         "accepting the shown sheet name on an old \"Base Bid 2\" saves it, so the board, portal and Dropbox agree"
+    assert s["acceptFetches"] == [["POST", "/api/draft/C2/scope", {"draft_version": "V-1", "label": "Lab <2>", "rename": True}]],         "accepting the shown sheet name on an old \"Base Bid 2\" saves it, so the board, portal and Dropbox agree"
     assert s["unchangedFetches"] == 0, "leaving a stored name unchanged sends nothing"
+
+
+def test_renaming_a_tab_renames_its_sheet_and_base_bid_1s_page_keeps_the_new_name(out):
+    """ONE NAME (Hanz, 2026-10-29): the tab's name IS its sheet's, so a rename is saved and read first, the server renames
+    the sheet on Base Bid 1's estimate, and the strip is the server's answer. On Base Bid 1's own page the estimate's renamed
+    keys (parent_patch) become this page's too, or its next save would put the old sheet name back."""
+    o = out["page"]["oneName"]
+    p = o["parentPage"]
+    assert p["steps"] == ["setState", "flush", "readRow", "POST /api/draft/P1/scope", "setLocalState"]
+    assert p["fetches"][0][2] == {"draft_version": "V-1", "label": "Polish Room", "rename": True}
+    assert p["labels"] == ["Polish Room", "Room 2", "Polish"], "the strip is the server's answer"
+    renamed = {"tab_labels": {"Copy1": "Room 2", "Epoxy": "Polish Room"},
+               "priced_tabs": [{"id": "Epoxy", "name": "Polish Room"}, {"id": "Copy1", "name": "Room 2"},
+                               {"id": "Polish", "name": "Polish"}],
+               "sheet_names_at": "2026-10-29T10:00:00+00:00"}
+    assert p["state"] == renamed, \
+        "this page's own state holds the new sheet name and the rename's stamp (drafts.SHEET_NAMES_MARK)"
+    assert p["local"] == [[dict({"scope_group": {"id": "G1", "label": "Polish Room"}}, **renamed),
+                           {"alreadyOnServer": True}]]
+    assert p["legacy"] == {"tab_labels": renamed["tab_labels"], "sheet_names_at": renamed["sheet_names_at"]}, \
+        "an answer with parent_patch alone still reaches Base Bid 1's page"
+    # A child's page takes what the server wrote to IT (drafts.carry_sheet_names): its own names and the new fence, so its
+    # next save is neither refused (StaleProposalWrite) nor puts the old names back. Never Base Bid 1's stamp.
+    c = o["childPage"]
+    own = {"tab_labels": {"Copy1": "Room 2", "Epoxy": "Polish Room"},
+           "priced_tabs": [{"id": "Copy1", "name": "Room 2"}, {"id": "Epoxy", "name": "Polish Room"}],
+           "estimate_digest": "D-2", "estimate_synced_at": "2026-10-29T10:00:01+00:00"}
+    assert c["local"] == [[dict({"scope_group": {"id": "G1", "label": "Lab 9"}}, **own), {"alreadyOnServer": True}]], \
+        "a child's page takes its own entry of `patches`"
+    assert (c["tab_labels"], c["priced_tabs"], c["estimate_digest"], c["estimate_synced_at"], c["sheet_names_at"]) == \
+        (own["tab_labels"], own["priced_tabs"], "D-2", own["estimate_synced_at"], None)
+    f = o["refused"]
+    assert f["msg"] == ("Not renamed. Base Bid 1's estimate was saved again while this was renaming its sheet. "
+                        "Reload the page and try again.")
+    assert f["local"] == 0 and f["tab_labels"] == {"Copy1": "Room 2"}
 
 
 def test_the_x_asks_then_sends_a_child_to_the_trash(out):
@@ -633,6 +668,38 @@ BREAKS = {
     "a rename of this page's draft is not remembered": (
         "js/proposal-review.js", "if (m.id === id && TW.setLocalState) TW.setLocalState(", "if (false) TW.setLocalState(",
         lambda r: r["page"]["rename"]["local"] == []),
+    # one name (2026-10-29)
+    "a tab rename is sent without saving first": (
+        "js/proposal-review.js", '        const j = await post("/scope", { label, rename: true }, "renamed");',
+        '        const j = await send("POST", urlOf(m.id, "/scope"), { label, rename: true });',
+        lambda r: "flush" not in r["page"]["oneName"]["parentPage"]["steps"]),
+    "Base Bid 1's page keeps the old sheet name in its state": (
+        "js/proposal-review.js", "        Object.keys(own).forEach((k) => { state[k] = own[k]; });", "        void 0;",
+        lambda r: r["page"]["oneName"]["parentPage"]["state"]["tab_labels"].get("Epoxy") != "Polish Room"),
+    "Base Bid 1's page drops the rename's stamp (its next save is refused)": (
+        "js/proposal-review.js", "        Object.keys(own).forEach((k) => { state[k] = own[k]; });",
+        "        Object.keys(own).forEach((k) => { if (k in state) state[k] = own[k]; });",
+        lambda r: r["page"]["oneName"]["parentPage"]["state"]["sheet_names_at"] is None),
+    "a child's page ignores what the server wrote to it": (
+        "js/proposal-review.js", '        const mine = (j.patches && typeof j.patches === "object") ? j.patches[id]',
+        '        const mine = (j.patches && typeof j.patches === "object") ? null',
+        lambda r: r["page"]["oneName"]["childPage"]["estimate_synced_at"] is None),
+    "an answer with parent_patch alone is ignored": (
+        "js/proposal-review.js", "          : (j.parent_id === id ? j.parent_patch : null);", "          : null;",
+        lambda r: r["page"]["oneName"]["parentPage"]["legacy"]["sheet_names_at"] is None),
+    "Base Bid 1's page keeps the old sheet name in its local copy": (
+        "js/proposal-review.js", "TW.setLocalState(Object.assign({ scope_group: { id: j.group_id, label: m.label } }, own),",
+        "TW.setLocalState(Object.assign({ scope_group: { id: j.group_id, label: m.label } }, {}),",
+        lambda r: "tab_labels" not in r["page"]["oneName"]["parentPage"]["local"][0][0]),
+    "a child's page takes Base Bid 1's estimate keys": (
+        "js/proposal-review.js", '        const mine = (j.patches && typeof j.patches === "object") ? j.patches[id]',
+        '        const mine = (j.patches && typeof j.patches === "object") ? j.patches[j.parent_id]',
+        lambda r: "sheet_names_at" in r["page"]["oneName"]["childPage"]["local"][0][0]),
+    "the strip ignores the server's answer to a rename": (
+        "js/proposal-review.js",
+        "        if (j.proposals && Array.isArray(j.proposals.members)) view = j.proposals;   // every proposal's name may have followed",
+        "        void 0;",
+        lambda r: r["page"]["oneName"]["parentPage"]["labels"] != ["Polish Room", "Room 2", "Polish"]),
     "the x deletes without asking": (
         "js/proposal-review.js", "      const ok = await TW.confirmDanger({", "      const ok = true; void ({",
         lambda r: "DELETE /api/draft/C3" in r["page"]["del"]["cancel"]["steps"]),

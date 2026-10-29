@@ -352,6 +352,19 @@ async function stagingProject() {
 (async function () {
   const out = {};
 
+  // ── ONE NAME (Hanz, 2026-10-29): GEN_NAMES_VIEW is the strip the SERVER answered (drafts.proposals_view, run by
+  //    test_proposal_names.py on staging's shape and re-keyed to d1 / c2 / c3). Step 3 names each row by it, with no
+  //    "(sheet)" after it. Only this scenario runs.
+  if (process.env.GEN_NAMES_VIEW) {
+    const b = await stagingProject();
+    b.server.view = JSON.parse(process.env.GEN_NAMES_VIEW);
+    b.server.onRefresh = () => ({ refreshed: [], skipped: [] });
+    const g = await openGenerate(b, "/generate.html?d=d1");
+    const text = g.list.replace(/<[^>]*>/g, "|").split("|").map((s) => s.trim()).filter(Boolean);
+    process.stdout.write(JSON.stringify({ names: { rows: rowsBrief(g).map((r) => r.name), list: g.list, text } }));
+    return;
+  }
+
   // ── STAGING'S SHAPE: 3 OF 3, REFRESH ONCE, NEVER LEAVING ────────────────────────────────────
   {
     const b = await stagingProject();
