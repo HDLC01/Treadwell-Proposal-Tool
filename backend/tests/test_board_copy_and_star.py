@@ -273,6 +273,70 @@ def test_a_trashed_or_archived_proposal_is_not_copied(fake_supabase, monkeypatch
     assert _row(store, out["id"])["data"]["scope_group"]["label"] == "Epoxy"
 
 
+LOST = {"reason": "not_low_bid", "at": "2026-10-23", "by": "k", "note": "went with another"}
+HELD = {"reason": "on_hold", "note": "", "by": "k", "at": "2026-10-23", "until": ""}
+
+
+@pytest.mark.parametrize("mark, value", [("closed_lost", LOST), ("on_hold", HELD)])
+def test_a_proposal_closed_lost_or_on_hold_is_left_out_of_the_copy(fake_supabase, monkeypatch, mark, value):
+    """Review of this branch, 2026-10-30: the copy drops every outcome mark, so a declined scope copied
+    along came back as a live unsent proposal, and the copy's Send all would email the customer the
+    proposal they turned down (#748 keeps it out of the original's)."""
+    store = _three(fake_supabase, monkeypatch)
+    _parent, kids = _family(store, "p1")
+    kids[1]["data"][mark] = dict(value)                    # Lab 3, declined or paused
+    out = drafts.copy_project("p1", "t@x")
+    assert [_row(store, i)["data"]["scope_group"]["label"] for i in out["ids"]] == ["Epoxy", "Room 2"]
+    assert out["left_out"] == [{"id": kids[1]["id"], "why": mark, "label": "Lab 3"}]
+    assert all(mark not in _row(store, i)["data"] for i in out["ids"])
+    assert _row(store, out["ids"][1])["data"]["proposal_of"] == out["id"]
+
+
+def test_pressing_copy_on_the_lost_card_copies_it_and_leaves_its_lost_neighbour(fake_supabase, monkeypatch):
+    store = _three(fake_supabase, monkeypatch)
+    _parent, kids = _family(store, "p1")
+    kids[0]["data"]["closed_lost"] = dict(LOST)
+    kids[1]["data"]["closed_lost"] = dict(LOST)
+    out = drafts.copy_project(kids[0]["id"], "t@x")
+    assert [_row(store, i)["data"]["scope_group"]["label"] for i in out["ids"]] == ["Epoxy", "Room 2"]
+    assert out["id"] == out["ids"][1] and "closed_lost" not in _row(store, out["id"])["data"]
+    assert [x["id"] for x in out["left_out"]] == [kids[1]["id"]]
+
+
+def test_a_child_whose_parent_was_left_out_is_copied_as_a_proposal_of_its_own(fake_supabase, monkeypatch):
+    store = _three(fake_supabase, monkeypatch)
+    parent, kids = _family(store, "p1")
+    parent["data"]["closed_lost"] = dict(LOST)
+    out = drafts.copy_project(kids[0]["id"], "t@x")
+    copies = [_row(store, i)["data"] for i in out["ids"]]
+    assert [c["scope_group"]["label"] for c in copies] == ["Room 2", "Lab 3"]
+    for c in copies:
+        for k in ("proposal_of", "estimate_digest", "estimate_synced_at"):
+            assert k not in c, "a copy points at an estimate the copy does not have: %s" % k
+        assert c["cell_values"] == parent["data"]["cell_values"], "it keeps its own copy of the estimate"
+    assert [x["id"] for x in out["left_out"]] == ["p1"]
+
+
+def test_a_proposal_the_portal_closed_lost_is_left_out_through_the_route(fake_supabase, monkeypatch):
+    """A SENT proposal the customer declined is closed lost on the portal, not on the draft."""
+    store = _three(fake_supabase, monkeypatch)
+    _parent, kids = _family(store, "p1")
+    asked = []
+    monkeypatch.setattr(main, "_pipeline_snapshot", lambda: (asked.append(1) or [
+        {"proposal_id": kids[1]["id"], "proposal_status": "closed_lost"},
+        {"proposal_id": kids[0]["id"], "proposal_status": "sent"},
+        {"proposal_id": "p1", "proposal_status": "approved"}], "live"))
+    j = client.post("/api/draft/p1/copy").json()
+    assert j["ok"] is True and len(j["ids"]) == 2, j
+    assert j["left_out"] == [{"id": kids[1]["id"], "why": "closed_lost", "label": "Lab 3"}]
+    assert asked == [1]
+    # A project of one proposal never asks the portal.
+    single = _seed(fake_supabase, monkeypatch, [_draft("solo", PARENT)])
+    asked.clear()
+    j = client.post("/api/draft/solo/copy").json()
+    assert j["ok"] is True and j["left_out"] == [] and asked == [] and len(single["drafts"]) == 2
+
+
 def test_a_scope_group_with_no_proposal_of_is_copied_as_one_project(fake_supabase, monkeypatch):
     """RJ's scopes (#711): three separately priced scopes, none made from another's estimate."""
     base = {"project_name": "RJ Labs", "is_test": False, "work_type": "polish", "contact_email": "rj@c.test"}
@@ -326,7 +390,9 @@ def test_MUTATION_without_the_drop_list_the_send_history_rides_along(fake_supaba
 def test_the_copy_route(fake_supabase, monkeypatch):
     store = _three(fake_supabase, monkeypatch)
     monkeypatch.setattr(main, "_user_email", lambda request: "troy@x.test")
-    monkeypatch.setattr(main, "_portal", lambda *a, **k: pytest.fail("copy must never call the portal"))
+    monkeypatch.setattr(main, "_portal", lambda *a, **k: pytest.fail("copy must never write to the portal"))
+    # The one read a copy of several proposals makes: which of them the portal calls closed lost.
+    monkeypatch.setattr(main, "_pipeline_snapshot", lambda: ([], "live"))
     r = client.post("/api/draft/p1/copy")
     assert r.status_code == 200, r.text
     j = r.json()
@@ -453,6 +519,64 @@ def test_a_stale_tab_neither_clears_nor_seeds_the_star(fake_supabase, monkeypatc
     client.put("/api/draft/fresh", json={"data": {"project_name": "Sandbox", "starred": held,
                                                   "copied_from": {"id": "p1"}}})
     assert "starred" not in _row(store, "fresh")["data"] and "copied_from" not in _row(store, "fresh")["data"]
+
+
+def _save_under_the_star(monkeypatch, store, edits, times):
+    """An estimator's autosave (save_draft) landing between set_starred's read and its write, on the
+    first `times` reads set_starred makes."""
+    real = drafts.get_client()
+    state = {"left": times, "busy": False}
+    # A clock that moves on every read: Windows' ticks coarsely enough for two saves in one test to
+    # stamp the same `updated_at`, which no real save the fence is for would.
+    ticks = iter(range(10**6))
+    monkeypatch.setattr(drafts, "_now_iso", lambda: "2026-10-30T00:00:00.%06d+00:00" % next(ticks))
+
+    class Racing:
+        def table(self, name):
+            t = real.table(name)
+            if name != "drafts" or state["busy"]:
+                return t
+            orig = t.execute
+
+            def execute():
+                res = orig()
+                if t._op == "select" and state["left"] > 0:
+                    # What PostgREST answers is a COPY of the row; the fake hands back the stored
+                    # dict itself, which the save below would change under the reader's feet.
+                    res.data = copy.deepcopy(res.data)
+                    state["left"] -= 1
+                    state["busy"] = True
+                    try:
+                        cur = copy.deepcopy(_row(store, "p1")["data"])
+                        drafts.save_draft("p1", dict(cur, **edits), keep_server_owned=True)
+                    finally:
+                        state["busy"] = False
+                return res
+            t.execute = execute
+            return t
+    monkeypatch.setattr(drafts, "get_client", lambda: Racing())
+
+
+def test_a_save_between_the_stars_read_and_write_is_kept(fake_supabase, monkeypatch):
+    """Review of this branch, 2026-10-30: the star rewrote the whole blob it had read, so an autosave
+    landing in between lost the estimator's edits. The write is fenced on `updated_at` and retried."""
+    store = _seed(fake_supabase, monkeypatch, [_draft("p1", PARENT)])
+    _save_under_the_star(monkeypatch, store, {"scope_notes": "typed while Kyle starred it"}, times=1)
+    r = client.post("/api/draft/p1/star", json={"starred": True})
+    assert r.status_code == 200, r.text
+    d = _row(store, "p1")["data"]
+    assert d["scope_notes"] == "typed while Kyle starred it", "the star's write lost the autosave"
+    assert d["starred"]["at"]
+    assert [e["action"] for e in store["events"]] == ["starred"]
+
+
+def test_a_star_that_keeps_losing_the_race_writes_nothing_and_says_so(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch, [_draft("p1", PARENT)])
+    _save_under_the_star(monkeypatch, store, {"scope_notes": "busy"}, times=drafts.STAR_TRIES)
+    r = client.post("/api/draft/p1/star", json={"starred": True})
+    assert r.status_code == 409 and r.json()["code"] == "star_busy"
+    assert "starred" not in _row(store, "p1")["data"] and _row(store, "p1")["data"]["scope_notes"] == "busy"
+    assert not [e for e in store["events"] if e["action"] == "starred"]
 
 
 def test_a_browser_save_of_a_copy_keeps_it_a_copy(fake_supabase, monkeypatch):
@@ -590,3 +714,28 @@ def test_MUTATION_a_lookup_that_cannot_read_the_star_or_copy_id_does_nothing(tmp
                           "|| \"\";", also=("js/crm-core.js",))
     out = _run(broken)
     assert out["starOn"]["requests"] == [] and out["copyDone"]["requests"] == []
+
+
+def test_copy_says_which_proposals_it_leaves_behind(ran):
+    """The copy leaves a neighbour closed lost or on hold behind (drafts.copy_project), and the
+    question before it says so instead of promising all of them."""
+    two = ran["copyBehind"]["prompts"][0]["message"]
+    assert "with 1 of its 3 proposals (the 2 closed lost or on hold are left out)" in two, two
+    assert "with all" not in two
+    one = ran["copyBehindOne"]["prompts"][0]["message"]
+    assert "with 2 of its 3 proposals (the 1 closed lost or on hold is left out)" in one, one
+    assert ran["copyBehind"]["requests"] == [] and ran["copyBehindOne"]["requests"] == []
+
+
+def test_an_older_board_read_answered_last_does_not_undo_a_newer_one(ran):
+    """Review of this branch, 2026-10-30: the 25s poll's read, started before a star was saved and
+    answered after the star's own re-read, painted the card unstarred again. load() paints only the
+    reply to the newest read it started."""
+    assert ran["loadInFlight"] == 2
+    assert ran["loadRace"] == {"all": ["r-1*"], "painted": [["r-1*"]]}
+
+
+def test_MUTATION_without_the_read_number_the_older_reply_wins(tmp_path):
+    broken = break_source(tmp_path, "js/portal.js", "const gen = ++LOAD_GEN;", "const gen = LOAD_GEN;",
+                          also=("js/crm-core.js",))
+    assert _run(broken)["loadRace"]["all"] == ["r-1"]

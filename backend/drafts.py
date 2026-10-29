@@ -694,6 +694,13 @@ def set_handed_off(draft_id: str, handed_off: bool, actor_email: Optional[str] =
     return True
 
 
+STAR_TRIES = 4
+
+
+class StarBusy(Exception):
+    """set_starred found the project saved again between its read and its write, STAR_TRIES times."""
+
+
 def set_starred(draft_id: str, starred: bool, actor_email: Optional[str] = None) -> bool:
     """Star a project, or take its star off. `starred` False clears it.
 
@@ -710,17 +717,36 @@ def set_starred(draft_id: str, starred: bool, actor_email: Optional[str] = None)
     pressed on and no other.
 
     `updated_at` is NOT bumped: a star is not work on the estimate, and the board's "Last activity"
-    sort must not call a project active because somebody starred it. Returns True if it existed."""
+    sort must not call a project active because somebody starred it. Returns True if it existed.
+
+    THE WRITE IS FENCED ON `updated_at` (review of the copy-and-star branch, 2026-10-30). The star is
+    written as the whole blob, read a moment before; an estimator's autosave (save_draft, which does
+    bump `updated_at`) landing between that read and this write would otherwise be overwritten by
+    the older blob, and the edits lost. So the write applies only if the row has not been saved
+    since it was read, and is re-read and tried again when it has (STAR_TRIES, then StarBusy, a 409).
+    THE OTHER ORDER IS STILL OPEN: an autosave that read the row BEFORE this write and stores AFTER
+    it drops the star (save_draft keeps a server-owned key only if the row it read had one), and the
+    History keeps this "starred" line. That window is the length of one save request, not a stale
+    tab; closing it needs a single-key jsonb update in the database (an RPC: DDL on both databases),
+    which this does not add."""
     sb = get_client()
-    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
-    if not cur.data:
-        return False
-    data = dict(cur.data[0].get("data") or {})
-    if starred:
-        data["starred"] = {"at": _now_iso(), "by": actor_email or ""}
+    for _try in range(STAR_TRIES):
+        cur = sb.table("drafts").select("data,updated_at").eq("id", draft_id).limit(1).execute()
+        if not cur.data:
+            return False
+        data = dict(cur.data[0].get("data") or {})
+        if starred:
+            data["starred"] = {"at": _now_iso(), "by": actor_email or ""}
+        else:
+            data.pop("starred", None)
+        q = sb.table("drafts").update({"data": data}).eq("id", draft_id)
+        seen = cur.data[0].get("updated_at")
+        if seen:
+            q = q.eq("updated_at", seen)
+        if q.execute().data:
+            break
     else:
-        data.pop("starred", None)
-    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+        raise StarBusy(draft_id)
     log_event(draft_id, actor_email, "starred" if starred else "unstarred",
               {"project_name": data.get("project_name"), "id": draft_id})
     _cache_clear()
@@ -2995,7 +3021,19 @@ def _renamed_copy(src: Dict[str, Any], new_name: str) -> Dict[str, Any]:
     return out
 
 
-def copy_project(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
+def _copy_left_closed(blob: Dict[str, Any]) -> Optional[str]:
+    """Why a proposal of a project is left out of its copy, or None: the board closed it lost or put
+    it on hold (the draft-side marks, set_close_lost / set_on_hold, the two #748 keeps out of Send
+    all)."""
+    if blob.get("closed_lost"):
+        return "closed_lost"
+    if blob.get("on_hold"):
+        return "on_hold"
+    return None
+
+
+def copy_project(draft_id: str, actor: Optional[str] = None,
+                 closed_ids: Optional[Callable[[], Any]] = None) -> Dict[str, Any]:
     """COPY A PROJECT: a new, unsent draft of the same job, named "<project> (copy)", owned by
     `actor`, in the board's "Created but not sent" column straight away (main._not_sent_rows reads
     `copied_from`).
@@ -3009,6 +3047,17 @@ def copy_project(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
     RJ's scope groups (#711, members with no `proposal_of`) are copied the same way, as one project.
     A draft that is in no live group (or is pressed while archived) is copied on its own.
 
+    A PROPOSAL THE CUSTOMER DECLINED OR THAT IS PAUSED IS LEFT OUT (review of this branch,
+    2026-10-30), unless it is the card that was pressed: one closed lost or on hold on the board
+    (_copy_left_closed), or closed lost on the portal (`closed_ids`, called only when the project has
+    more than one proposal, answers the ids the portal's pipeline calls closed_lost). The copy drops
+    every outcome mark, so a declined scope copied along would come back as a live unsent proposal,
+    and the copy's Send all would email the customer the proposal they already turned down: the
+    thing #748 stops on the original. Pressing Copy ON the lost card copies it, since that is asking
+    for it. A child whose parent was left out is copied as a proposal of its own (no `proposal_of`,
+    as an RJ scope is): it keeps its own copy of the estimate and its sheet's name, and is never
+    re-priced from an estimate the copy does not have.
+
     Kept: everything of the job (the blob less COPY_DROPS), `assigned_estimator` (the same job, so
     the same estimator chases it), `audience` (Direct stays Direct, GC stays GC), the kind (`is_test`
     is stored as the original's draft_is_test, so a Test project's copy is Test and a real one's is
@@ -3016,7 +3065,8 @@ def copy_project(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
 
     Every row is inserted FIRST-TO-LAST and taken back when one fails (_undo_split_children). Each
     copy gets ONE event, `copied`. Returns {"id" (the copy of `draft_id`), "ids" (every copy, in
-    order), "project_name", "group_id", "from"}. RAISES ScopeError not_found (404), copy_failed (503)."""
+    order), "project_name", "group_id", "from", "left_out" ([{"id", "label", "why"}] of the original's
+    proposals not copied for being closed: closed_lost or on_hold)}. RAISES ScopeError not_found (404), copy_failed (503)."""
     sb = get_client()
     cur = sb.table("drafts").select("id,data,deleted_at").eq("id", draft_id).limit(1).execute()
     if not cur.data or cur.data[0].get("deleted_at"):
@@ -3039,6 +3089,16 @@ def copy_project(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
         if row:
             blobs[i] = row.get("data") or {}
     order = [i for i in order if i in blobs]
+    # Declined or paused neighbours stay behind (see the docstring); the pressed card never does.
+    portal_lost = set(closed_ids() or ()) if closed_ids and len(order) > 1 else set()
+    left_out: List[Dict[str, Any]] = []
+    for i in order:
+        why = None if i == draft_id else (
+            _copy_left_closed(blobs[i]) or ("closed_lost" if i in portal_lost else None))
+        if why:
+            left_out.append({"id": i, "why": why,
+                             "label": str((blobs[i].get("scope_group") or {}).get("label") or "")})
+    order = [i for i in order if i not in {x["id"] for x in left_out}]
 
     new_id = {i: str(uuid.uuid4()) for i in order}
     new_gid = uuid.uuid4().hex if gid else None
@@ -3111,7 +3171,7 @@ def copy_project(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
     _cache_clear()
     return {"id": new_id[draft_id], "ids": [new_id[i] for i in order],
             "project_name": out[draft_id].get("project_name"), "group_id": new_gid,
-            "from": draft_id}
+            "from": draft_id, "left_out": left_out}
 
 
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:

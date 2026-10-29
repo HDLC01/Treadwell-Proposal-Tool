@@ -9697,12 +9697,30 @@ def api_draft_star(draft_id: str, payload: DraftStarIn, request: Request) -> Any
     (nav_access: /api/draft/* is never gated). Never touches the portal: the board stamps the star
     onto a sent project's row from the drafts list (api_portal_pipeline).
 
-    200 {ok, starred}; 404 {ok: false, code: not_found}."""
+    200 {ok, starred}; 404 {ok: false, code: not_found}; 409 {ok: false, code: star_busy} when the
+    project kept being saved under the press (drafts.StarBusy: nothing was written)."""
     draft_id = _safe_id(draft_id)
-    if not drafts.set_starred(draft_id, bool(payload.starred), _user_email(request)):
+    try:
+        found = drafts.set_starred(draft_id, bool(payload.starred), _user_email(request))
+    except drafts.StarBusy:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "star_busy",
+            "error": "The project was being saved at the same moment, so the star was not changed. "
+                     "Press it again."})
+    if not found:
         return JSONResponse(status_code=404, content={"ok": False, "code": "not_found",
                                                       "error": "That project is not there any more."})
     return {"ok": True, "starred": bool(payload.starred)}
+
+
+def _copy_portal_lost() -> List[str]:
+    """The proposal ids the portal's pipeline calls closed_lost (a sent proposal the customer declined
+    or a rep closed from its drawer), for drafts.copy_project to leave out of a copy. The live answer,
+    else the cached one (_pipeline_snapshot); with neither, none, and only the board's own marks on
+    the drafts count."""
+    rows, _status = _pipeline_snapshot()
+    return [str(p.get("proposal_id")) for p in rows
+            if isinstance(p, dict) and str(p.get("proposal_status") or "") == "closed_lost"]
 
 
 @app.post("/api/draft/{draft_id}/copy")
@@ -9712,15 +9730,18 @@ def api_draft_copy(draft_id: str, request: Request) -> Any:
 
     The copy is the same job without its send history, owned by whoever pressed Copy, named
     "<project> (copy)", and on the board's "Created but not sent" column at once. A project of
-    several proposals is copied whole, whichever card was pressed. Nothing is sent, published,
-    filed to Dropbox or emailed, and the portal is not called: the copy has no portal row until
-    somebody sends it.
+    several proposals is copied whole, whichever card was pressed, less the proposals closed lost or
+    on hold (drafts.copy_project). Nothing is sent, published, filed to Dropbox or emailed, and the
+    copy has no portal row until somebody sends it. The portal is only READ, and only for a project
+    of several proposals: its pipeline (_pipeline_snapshot, the board's own read and its cache) is
+    where a SENT proposal the customer declined is closed lost (_copy_portal_lost).
 
-    200 {ok, id, ids, project_name, group_id, from}; refusals are flat {ok: false, code, error}:
-    404 not_found, 503 copy_failed."""
+    200 {ok, id, ids, project_name, group_id, from, left_out}; refusals are flat {ok: false, code,
+    error}: 404 not_found, 503 copy_failed."""
     draft_id = _safe_id(draft_id)
     try:
-        return {"ok": True, **drafts.copy_project(draft_id, _user_email(request))}
+        return {"ok": True, **drafts.copy_project(draft_id, _user_email(request),
+                                                  closed_ids=_copy_portal_lost)}
     except drafts.ScopeError as exc:
         return _scope_refusal(exc)
 

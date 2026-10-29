@@ -324,6 +324,14 @@
   // repaint (and can't blink) on every tick — only a real change in status or timestamp does.
   let DEGRADED_SIG = "";
 
+  // Which load() is the newest one started. load() runs from the 25s poll, from refreshLive every
+  // 12s while a drawer is open, and after every action, so two can be in flight at once, and their
+  // replies can arrive in either order. A reply to an OLDER request read the board before the
+  // newer one did; painting it last put back what an action had just changed (a star pressed
+  // between the poll's request and its reply came off again for up to 25s). So only the newest
+  // request's reply is painted. Review of the copy-and-star branch, 2026-10-30.
+  let LOAD_GEN = 0;
+
   /** The banner above the board saying WHY it looks the way it does. Lives outside #board on
    *  purpose (see .crm-degraded in portal.html) so renderBoard's full innerHTML replacement
    *  never touches it and this never has to re-fire renderBoard to appear.
@@ -689,10 +697,20 @@
     const row = cardRowOf(btn);
     if (!row) return;
     const many = row.scope_group && row.scope_count > 1 ? row.scope_count : 0;
+    // The proposals the copy leaves behind (drafts.copy_project): a neighbour closed lost or on hold
+    // is not copied, so a declined scope never comes back as a live one the copy's Send all would
+    // email. The pressed card is always copied. Counted off the board's own rows, so the question
+    // says what the copy will hold.
+    const behind = many ? ALL.filter((x) => x !== row && x.scope_group === row.scope_group
+      && (isLost(x) || C.followup(x).on_hold_reason)).length : 0;
+    const kept = many - behind;
     const name = (row.project_name || "this project");
     const go = await TW.confirmDanger({
       title: "Copy this project?",
-      message: "This makes “" + name + " (copy)”" + (many ? ", with all " + many + " of its proposals," : "") +
+      message: "This makes “" + name + " (copy)”" + (!many ? ""
+        : !behind ? ", with all " + many + " of its proposals,"
+        : ", with " + kept + " of its " + many + " proposals (the " + behind + " closed lost or on hold " +
+          (behind === 1 ? "is" : "are") + " left out),") +
         " under Created but not sent: the same customer, estimate and proposal wording. Nothing is sent, " +
         "and the copy has none of this project's sends, files or outcome.",
       confirmText: "Copy it", cancelText: "Cancel", tone: "warn", icon: "copy",
@@ -703,7 +721,9 @@
       const r = await api("/api/draft/" + encodeURIComponent(row.proposal_id) + "/copy", { method: "POST" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false || !j.id) throw new Error(j.error || j.detail || ("HTTP " + r.status));
-      await load();
+      // Twice at most: a poll started during the first re-read makes that one's reply the older
+      // (LOAD_GEN), so it paints nothing and the copy is not on ALL yet.
+      for (let i = 0; i < 2 && !ALL.some((x) => x.proposal_id === j.id); i++) await load();
       if (ALL.some((x) => x.proposal_id === j.id)) openDetail(j.id);
     } catch (err) {
       btn.disabled = false;
@@ -959,10 +979,15 @@
   }
 
   async function load() {
+    // Numbered BEFORE the token wait, in call order, so the last load() called is the newest.
+    const gen = ++LOAD_GEN;
     await tokenReady();
     try {
       const r = await api("/api/portal/pipeline");
       const j = await r.json();
+      // A newer load() was started while this one waited: its reply is the fresher board, and it
+      // paints (and opens any ?open= drawer). This one paints nothing, error included.
+      if (gen !== LOAD_GEN) return;
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       const every = j.proposals || [];
       // A LINK TO A PROJECT ON THE OTHER BOARD GOES TO THE OTHER BOARD, query and hash kept, so the
@@ -992,6 +1017,7 @@
       renderDegraded(j);
       renderBoard();
     } catch (err) {
+      if (gen !== LOAD_GEN) return;
       // Only when there is nothing to keep. This runs on a 25s timer, so a single blip on a
       // page a rep leaves open all day would otherwise throw the whole board away and flash an
       // error over work they were reading. Stale rows beat that.

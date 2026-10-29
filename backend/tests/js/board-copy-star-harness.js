@@ -207,6 +207,24 @@ const body = `"use strict";
   };`;
 page = new Function(...NAMES, body)(...NAMES.map((n) => deps[n]));
 
+// ── load() itself, lifted with a network whose replies arrive in the order a scenario says ──────
+// The board re-reads /api/portal/pipeline from a 25s poll, from refreshLive and after every action,
+// so two reads can be in flight at once; the scenario answers the NEWER one first.
+const loadPage = new Function("C", "esc", "$", `"use strict";
+  let ALL = [], BOARD_SIG = "", DEGRADED_SIG = "", LOAD_GEN = 0;
+  let CUR_PID = null, REDIRECTED = false, DEEPLINK_USED = false;
+  const PIPELINE = C.PIPELINE_DIRECT;
+  const location = { search: "", hash: "", replace() {} };
+  const tokenReady = async () => {};
+  const pending = [];
+  const api = () => new Promise((resolve) => { pending.push(resolve); });
+  const renderDegraded = () => {};
+  const painted = [];
+  const renderBoard = () => { painted.push(ALL.map((p) => p.proposal_id + (p.starred_at ? "*" : ""))); };
+  const openDetail = () => {};
+  ${fn("load")}
+  return { load, pending, painted, all: () => ALL };`)(C, deps.esc, () => null);
+
 async function tick() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
 
 /** The cards of each column, in the order the paint drew them. */
@@ -292,9 +310,34 @@ async function press(which, id) {
     // The re-read has not brought this copy (yet): the drawer is not opened on a card that is not there.
     net.respond = { ok: true, id: "copy-many", ids: ["copy-many", "c2", "c3"], project_name: "Proj m-1 (copy)" };
     out.copyMany = await press("copy", "m-1");
+    // A project of three whose other two proposals are closed lost and on hold: the copy leaves
+    // them behind (drafts.copy_project), and the question says so before anything is made.
+    const grp = (id, extra) => Object.assign(unsent(id, null, 17, 5000, "kyle"),
+      { scope_group: "grp", scope_count: 3, scope_label: id }, extra);
+    page.setBoard(clone().concat([
+      grp("m-2", { proposal_status: "closed_lost", followup_state: { closed_lost_reason: "not_low_bid" } }),
+      grp("m-3", { followup_state: { on_hold_reason: "on_hold", paused_until: "" } })]));
+    confirmed.answers = [false];
+    out.copyBehind = await press("copy", "m-1");
+    page.setBoard(clone().concat([grp("m-2", { proposal_status: "closed_lost" })]));
+    confirmed.answers = [false];
+    out.copyBehindOne = await press("copy", "m-1");
+    page.setBoard(clone());
     net.fails = true;
     out.copyFailed = await press("copy", "d-c5");
     net.fails = false;
+    // ── two board reads in flight, the newer answered first ──
+    const reply = (rows) => ({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, proposals: rows }) });
+    const poll = loadPage.load();              // the 25s poll: read the board before the star
+    const fresh = loadPage.load();             // toggleCardStar's re-read, after the star was saved
+    await tick();
+    out.loadInFlight = loadPage.pending.length;
+    loadPage.pending[1](reply([Object.assign(unsent("r-1", null, 5, 10, "amy"), { starred_at: T(29) })]));
+    await fresh;
+    loadPage.pending[0](reply([unsent("r-1", null, 5, 10, "amy")]));
+    await poll;
+    out.loadRace = { all: loadPage.all().map((p) => p.proposal_id + (p.starred_at ? "*" : "")),
+                     painted: loadPage.painted.slice() };
   } catch (e) {
     out.errors.run = e.constructor.name + ": " + e.message + "\n" + (e.stack || "");
   }
