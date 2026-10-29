@@ -52,6 +52,23 @@ const FRESH = lift("freshDocuments");
 const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const GENERATE = lift("doGenerate");
+// The name every download on the page saves under, and the Sent versions download that uses it too.
+const STEM = lift("fileStem");
+const REVISION = lift("downloadRevision");
+// THE BUTTONS' FILE NAMES. The stretch of showPostGenerate that names the files and wires the three
+// download buttons, verbatim: from the info-sheet link to the end of the PDF button, the nested
+// downloadAs and the cover-letter banner included. Each press runs the REAL downloadAs, so what is
+// captured is the `a.download` the browser saves the file under.
+const WIRING = (function () {
+  const start = SRC.indexOf("function showPostGenerate(result) {");
+  const from = SRC.indexOf("// Carry the draft across", start);
+  const to = SRC.indexOf("// NO SEPARATE COVER-LETTER DOWNLOAD", from);
+  if (start < 0 || from < 0 || to < 0) {
+    throw new Error("showPostGenerate's download wiring could not be lifted out of done.js. "
+      + "Repoint this harness; do not delete the scenarios.");
+  }
+  return SRC.slice(from, to);
+})();
 
 const OLD = { work_type: "epoxy", xlsx_download_url: "/api/file/OLDX",
               docx_download_url: "/api/file/OLD", pdf_download_url: "/api/file/OLD/pdf" };
@@ -111,10 +128,11 @@ function page(opts) {
     "TW", "builtAt", ...FRESH.args, '"use strict"; ' + FRESH.body)
     .bind(null, TW, builtAt);
   let painted = 0;
+  let listed = 0;   // step 5's list of every proposal (refreshFilesProposals)
   // done.js's module-level record of the document the estimator downloaded (Send reads it).
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
-    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
+    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "refreshFilesProposals", "fetch", "Blob", "URL", "document",
     "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
     '"use strict"; ' + DOWNLOAD.body);
   // The page's window.confirm: every question asked, answered with `opts.confirm` (OK by default).
@@ -128,16 +146,59 @@ function page(opts) {
   const doGenerate = new AsyncFunction(
     "document", "freshDocuments", "preEl", "showPostGenerate", "alert", "TW", "state",
     '"use strict"; ' + GENERATE.body);
+  // done.js's module-level record of step 5's list (refreshFilesProposals); `opts.pv` is a list
+  // already read, as it is by the time the estimator presses a button.
+  const filesProposals = { seq: 0, pv: opts.pv || null };
+  const stem = new Function(...STEM.args, "TW", "filesProposals", '"use strict"; ' + STEM.body);
+  const fileStem = (project) => stem(project, TW, filesProposals);
+  const downloadRevision = new AsyncFunction(
+    ...REVISION.args, "TW", "fetch", "Blob", "URL", "document", "setTimeout", "icon", "console",
+    "fileStem", '"use strict"; ' + REVISION.body);
   return {
     log, posted, fetched, clicked, shown, preEl, asked,
     state: () => st,
     painted: () => painted,
+    listed: () => listed,
     checked: () => checkedDocument.renderId,
     download: (key, name, button) => downloadAs(
-      key, name, button, TW, freshDocuments, () => { painted++; }, fetchStub, BlobStub, URLStub,
+      key, name, button, TW, freshDocuments, () => { painted++; },
+      () => { listed++; }, fetchStub, BlobStub, URLStub,
       documentStub, () => 0, () => "", { error() {} }, checkedDocument, TWPRICE, windowStub),
     generate: () => doGenerate(documentStub, freshDocuments, preEl,
                                (r) => shown.push(r), () => {}, TW, st),
+    /** showPostGenerate's download wiring run over three buttons, then each one pressed: the file
+     *  name every press saved, by button. `state` is the page's module-top snapshot. */
+    names: async (result) => {
+      const btns = {};
+      const handlers = {};
+      ["dl-xlsx", "dl-docx", "dl-pdf"].forEach((id) => {
+        btns[id] = Object.assign(button(), { style: {},
+          addEventListener: (ev, fn) => { if (ev === "click") handlers[id] = fn; } });
+      });
+      const doc = Object.assign({}, documentStub, { getElementById: (id) => btns[id] || null });
+      const wire = new Function(
+        "result", "state", "TW", "document", "freshDocuments", "paintLumpSum", "refreshFilesProposals",
+        "fetch", "Blob", "URL", "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
+        "coverLetterCheck", "fileStem", '"use strict";\n' + WIRING);
+      wire(result, JSON.parse(JSON.stringify(opts.state)), TW, doc, freshDocuments, () => { painted++; },
+           () => { listed++; }, fetchStub, BlobStub, URLStub, () => 0, () => "", { error() {} },
+           checkedDocument, TWPRICE, windowStub, async () => ({ enabled: false }), fileStem);
+      const saved = {};
+      for (const id of Object.keys(handlers)) {
+        const before = clicked.length;
+        await handlers[id]();
+        saved[id] = clicked.slice(before);
+      }
+      return saved;
+    },
+    /** A Sent versions press (downloadRevision, run verbatim): the file names it saved. */
+    revision: async (revNo, kind) => {
+      const before = clicked.length;
+      await downloadRevision(String(revNo), kind,
+        { textContent: "PDF", disabled: false, innerHTML: "" }, TW, fetchStub, BlobStub, URLStub,
+        documentStub, () => 0, () => "", { error() {} }, fileStem);
+      return clicked.slice(before);
+    },
   };
 }
 
@@ -157,7 +218,7 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     out.stale = { log: p.log, fetched: p.fetched, posted: p.posted.map((x) => x.path),
                   body: p.posted.length ? p.posted[0].body : null, clicked: p.clicked,
                   kept: p.state().generate_result, stamp: p.state().generated_lump_sum,
-                  painted: p.painted(), html: b.innerHTML, checked: p.checked() };
+                  painted: p.painted(), listed: p.listed(), html: b.innerHTML, checked: p.checked() };
   }
 
   // B. A save that cannot land builds nothing.
@@ -262,6 +323,67 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
     const b = button();
     await p.download("pdf_download_url", "x.pdf", b);
     out.serverCopy.unreadable = { asked: p.asked, log: p.log, clicked: p.clicked, button: b.textContent };
+  }
+
+  // I. THE NAME EACH BUTTON SAVES UNDER. Hanz, 2026-10-29: the proposal's name is its sheet's,
+  //    "in the generate file and in the files". One proposal: the project's name, as always. One of
+  //    several (scope_group): "<project>_<its name>", the project part cut to fit, the name kept.
+  {
+    const R = { xlsx_download_url: "/x", docx_download_url: "/d", pdf_download_url: "/p" };
+    const LONG = "Kansas State University Biosciences Research Facility Phase Two Renovation";
+    const ID = "1a2b3c4d-5e6f-4a8b-9c0d-112233445566";   // this draft's id
+    out.names = {};
+    for (const [name, st, result] of [
+      ["single", { proposal_payload: SAVED, project_name: "Multiple proposals" }, R],
+      ["group", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                  scope_group: { id: "G1", label: "Polish Room 2" } }, R],
+      ["groupNoPdf", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                       scope_group: { id: "G1", label: "Polish Room 2" } },
+       { xlsx_download_url: "/x", docx_download_url: "/d" }],
+      ["longProject", { proposal_payload: SAVED, project_name: LONG,
+                        scope_group: { id: "G1", label: "Epoxy Lab 2 (North Wing)" } }, R],
+      ["longSingle", { proposal_payload: SAVED, project_name: LONG }, R],
+      ["blankLabel", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                       scope_group: { id: "G1", label: "  " } }, R],
+      ["noProject", { proposal_payload: SAVED, scope_group: { id: "G1", label: "Office" } }, R],
+    ]) {
+      out.names[name] = await page({ state: st, draftId: ID }).names(result);
+    }
+    // THE NAME THE HEADER SHOWS. Step 5's header names this proposal by the list's display_label;
+    // the stored label can trail it until the estimate is saved again (sync_proposal_labels).
+    const G = { proposal_payload: SAVED, project_name: "Multiple proposals",
+                scope_group: { id: "G1", label: "Base Bid 2" } };
+    const LIST = { group_id: "G1", members: [{ id: "P0", display_label: "Polish" },
+                                             { id: ID, display_label: "Room 2" }] };
+    out.names.listRead = await page({ state: G, draftId: ID, pv: LIST }).names(R);
+    out.names.listOfOthers = await page({ state: G, draftId: ID,
+      pv: { members: [{ id: "P0", display_label: "Polish" }] } }).names(R);
+    // A NAME NO FILE NAME CAN HOLD: no letter or digit survives the rule.
+    for (const [name, label] of [["cjk", "研磨"], ["cjk2", "研磨 2"], ["punct", "—!—"]]) {
+      out.names[name] = await page({ state: { proposal_payload: SAVED, project_name: "Proj",
+                                              scope_group: { id: "G1", label: label } },
+                                     draftId: ID }).names(R);
+    }
+    // A SCOPE'S NAME CAN BE 80 CHARACTERS (SCOPE_LABEL_MAX). Two that part after the 60th.
+    const SC = "North Campus Science Building Level Two East Wing Corridor Labs";
+    for (const [name, tail] of [["scopeA", " Phase A Floors"], ["scopeB", " Phase B Floors"]]) {
+      out.names[name] = await page({ state: { proposal_payload: SAVED, project_name: LONG,
+                                              scope_group: { id: "G1", label: SC + tail } },
+                                     draftId: ID }).names(R);
+    }
+    out.scopeLabels = [SC + " Phase A Floors", SC + " Phase B Floors"];
+    // SENT VERSIONS. The same name, with the revision's number.
+    out.revisions = {};
+    for (const [name, st, pv] of [
+      ["single", { proposal_payload: SAVED, project_name: "Multiple proposals" }, null],
+      ["group", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                  scope_group: { id: "G1", label: "Polish Room 2" } }, null],
+      ["listRead", G, LIST],
+    ]) {
+      const p = page({ state: st, draftId: ID, pv: pv });
+      out.revisions[name] = { pdf: await p.revision(1, "pdf"), xlsx: await p.revision(1, "xlsx"),
+                              docx: await p.revision(3, "docx"), posted: p.posted.map((x) => x.path) };
+    }
   }
 
   process.stdout.write(JSON.stringify(out));
