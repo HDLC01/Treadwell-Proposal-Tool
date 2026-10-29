@@ -593,15 +593,16 @@ def test_a_same_as_base_never_built_child_is_not_built(fake_supabase, monkeypatc
     ({"on_hold": {"reason": "on_hold", "note": "owner paused", "by": EST, "at": "2026-10-20",
                   "until": "2026-11-20"}}, "on_hold"),
 ])
-@pytest.mark.parametrize("files", ["never_built", "built_no_files"])
+@pytest.mark.parametrize("files", ["never_built", "built_no_files", "built_with_files"])
 def test_a_proposal_closed_or_paused_on_the_board_is_never_built_or_sent(fake_supabase, monkeypatch,
                                                                          mark, code, files):
     """Before the press built proposals itself, one without files stopped it. A proposal closed lost
-    or on hold on the board must still stop it, not be built and emailed by its neighbours' press."""
+    or on hold on the board must still stop it, not be built and emailed by its neighbours' press,
+    and having files already (its own Download) changes nothing: it is still lost or paused."""
     rows = _three()
     if files == "never_built":
         rows[1] = _draft("s2", "Room 2", "2026-10-02", files=False)
-    else:
+    elif files == "built_no_files":
         del rows[1]["data"]["generate_result"]
     rows[1]["data"].update(copy.deepcopy(mark))
     w = World(fake_supabase, monkeypatch, rows)
