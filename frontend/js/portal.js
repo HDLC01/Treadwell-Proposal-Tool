@@ -3620,6 +3620,9 @@
           <button class="btn btn-s" id="fu-toggle" ${isLost(p) ? "disabled" : ""}
             title="${isLost(p) ? "This proposal is closed. Reactivate it first."
                    : enabled ? "Stop sending automatic follow-ups for this project"
+                   : f.enrolled ? "Turn the follow-ups back on. They still count from the day the"
+                                  + " proposal was sent, so an email that is already due goes out"
+                                  + " at the next check."
                              : "Start the follow-up cadence from today"}">${
             enabled ? "Turn automation off" : "Turn automation on"}</button>
         </div>
@@ -3817,8 +3820,9 @@
         </div>
         <p class="note fu-msg" id="fu-sched-alert" role="status"></p>
         <p class="note">The tool emails the customer automatically: at most 2 follow-up emails before
-        they open the proposal and 2 after they open it, as set on Auto Followups. The days count
-        from the day the proposal was sent, and it stops when they approve. Moving this date moves the next one; an empty box puts it back on the usual
+        they open the proposal and 2 after they open it, as set on Auto Followups. Each step's 1st
+        email counts from the day the proposal was sent, its 2nd from the 1st, and it stops when
+        they approve. Moving this date moves the next one; an empty box puts it back on the usual
         schedule. The "Tell the estimator" email goes to the assigned estimator, chosen under
         Assigned to below.</p>
       </div>`;

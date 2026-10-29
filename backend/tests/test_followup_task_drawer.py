@@ -137,15 +137,42 @@ def test_the_panel_says_the_tool_emails_the_customer_automatically(fu):
 
 
 def test_the_schedule_says_the_days_count_from_the_day_it_was_sent(fu):
-    """Hanz, 2026-10-29: "the days should be based off the date it was sent". Both steps count from
-    the send, so the drawer must not say the opened emails count from the day they open it.
+    """Hanz, 2026-10-29: "the days should be based off the date it was sent". Each step's 1st email
+    counts from the send, so the drawer must not say the opened emails count from the day they open
+    it. The 2nd email of a step still counts from its 1st (followup_rules.plan), so the drawer must
+    not say "the days" all count from the send either: an estimator would expect a 7-day 2nd email
+    on day 7 and it goes on day 10.
 
-    Mutation: put back "as set on Auto Followups, and it stops when they approve" (no sent date)
-    and the first assert fails."""
+    Mutation: put back "The days count from the day the proposal was sent" and this fails."""
     text = _text(fu["schedule"]["html"])
-    assert ("as set on Auto Followups. The days count from the day the proposal was sent, and it "
-            "stops when they approve.") in text
+    assert ("as set on Auto Followups. Each step's 1st email counts from the day the proposal was "
+            "sent, its 2nd from the 1st, and it stops when they approve.") in text
+    assert "The days count from the day the proposal was sent" not in text
     assert "days after they open" not in text
+
+
+def _toggle_title(html: str) -> str:
+    m = re.search(r'<button[^>]*id="fu-toggle"[^>]*\stitle="([^"]*)"', html)
+    assert m, "no Follow-ups switch with a title"
+    return re.sub(r"\s+", " ", _decode(m.group(1))).strip()
+
+
+def test_the_switch_does_not_promise_a_fresh_start_when_turned_back_on(fu):
+    """Turning follow-ups back on keeps the proposal's send date (set_followup_enabled coalesces
+    followup_enrolled_at), and both steps count from it, so an email already due goes at the next
+    check. The switch used to say "Start the follow-up cadence from today" here.
+
+    Mutation: drop the f.enrolled branch of the title and this fails."""
+    title = _toggle_title(fu["toggleReenable"]["html"])
+    assert "from today" not in title, title
+    assert title == ("Turn the follow-ups back on. They still count from the day the proposal was "
+                     "sent, so an email that is already due goes out at the next check.")
+
+
+def test_a_never_enrolled_proposal_still_starts_from_today(fu):
+    """A proposal sent before automation existed IS enrolled at the moment it is switched on, so
+    for that one "from today" is true and stays."""
+    assert _toggle_title(fu["toggleNever"]["html"]) == "Start the follow-up cadence from today"
 
 
 def test_an_approved_project_says_the_emails_stopped_and_has_no_schedule(fu):
