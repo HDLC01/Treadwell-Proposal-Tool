@@ -540,8 +540,9 @@
       if (!url) throw new Error("That document isn't available for this revision.");
       const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
       if (!resp.ok) throw new Error("HTTP " + resp.status);
-      const safe = String((out.project_name || TW.getState().project_name || "proposal"))
-        .replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+      // One of several proposals: its own name rides in this one too (fileStem), or every
+      // proposal's "rev1" saves under one name.
+      const safe = fileStem(out.project_name || TW.getState().project_name);
       const ext = kind === "pdf" ? "pdf" : kind;
       const name = `${safe}_rev${revNo}_${kind === "xlsx" ? "estimate" : "proposal"}.${ext}`;
       // octet-stream so the browser saves under our name instead of letting the
@@ -1214,6 +1215,36 @@
     paintFilesProposals(filesProposals.pv, id, figure);
   }
 
+  /** THE NAME A DOWNLOAD ON THIS PAGE SAVES UNDER, before "_proposal.pdf" and the rest: step 5's
+   *  three buttons (showPostGenerate) and Sent versions (downloadRevision). `project` is the
+   *  project's name. Anything but A-Z a-z 0-9 . _ - becomes one _, as it always has.
+   *
+   *  ONE PROPOSAL (no scope_group): the project's name cut at 60, exactly as before.
+   *  ONE OF SEVERAL (Create Multiple Proposals, or a project split into scopes): "<project>_<its
+   *  name>" (Hanz, 2026-10-29: the sheet name verbatim "in the files"), so the proposals of one
+   *  project never save under one name. Its name is the one the header shows: this draft's
+   *  display_label once step 5's list is read (filesProposals), the stored scope_group.label until
+   *  then, which sync_proposal_labels keeps equal to it (#741). The name is kept whole (a sheet's is
+   *  31 characters at most, a scope's SCOPE_LABEL_MAX = 80); the project part is the one cut, to fit
+   *  80 beside it and never below 20, so the stem is 101 characters at most. A name with no letter
+   *  or digit left (blank, or all non-Latin) would tell no two proposals apart, so the draft's own
+   *  id stands in for it. */
+  function fileStem(project) {
+    const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const proj = safe(project || "proposal");
+    const g = (TW.getState() || {}).scope_group;
+    if (!g || typeof g !== "object") return proj.slice(0, 60);
+    const id = TW.getDraftId() || "";
+    const pv = filesProposals.pv;
+    const me = pv && Array.isArray(pv.members) ? pv.members.find((m) => m && m.id === id) : null;
+    const shown = (me && typeof me.display_label === "string" && me.display_label.trim())
+      || (typeof g.label === "string" ? g.label.trim() : "");
+    let name = safe(shown).slice(0, 80);
+    if (!/[A-Za-z0-9]/.test(name)) name = safe(id).slice(0, 8);
+    if (!name) return proj.slice(0, 60);
+    return proj.slice(0, Math.max(20, 80 - name.length - 1)) + "_" + name;
+  }
+
   function showPreGenerate() {
     preEl.style.display = "";
     // Show the project deadline as a compact YY.MM.DD due date.
@@ -1557,20 +1588,6 @@
     const infoLink = document.getElementById("info-sheet-link");
     if (infoLink) infoLink.href = TW.withDraft("/info-sheet.html");
 
-    // ONE OF SEVERAL PROPOSALS (Create Multiple Proposals, or a project split into scopes): its
-    // files are named "<project>_<its name>", its name being scope_group.label, which #741 keeps
-    // equal to its sheet's (Hanz, 2026-10-29: the sheet name verbatim "in the files"), so three
-    // proposals of one project no longer download under one name. The project part is the one
-    // cut to fit; the proposal's name is kept whole. No group: the name is exactly as before.
-    const _fileSafe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_");
-    const _fileGroup = (TW.getState() || {}).scope_group;
-    const _fileLabel = (_fileGroup && typeof _fileGroup === "object" && typeof _fileGroup.label === "string")
-      ? _fileSafe(_fileGroup.label.trim()).slice(0, 60) : "";
-    const safeName = /[A-Za-z0-9]/.test(_fileLabel)
-      ? _fileSafe(state.project_name || "proposal").slice(0, Math.max(20, 80 - _fileLabel.length - 1))
-        + "_" + _fileLabel
-      : _fileSafe(state.project_name || "proposal").slice(0, 60);
-
     async function downloadAs(urlKey, filename, button) {
       const orig = button.textContent;
       button.disabled = true;
@@ -1703,15 +1720,17 @@
     const xlsxBtn = document.getElementById("dl-xlsx");
     const docxBtn = document.getElementById("dl-docx");
     const pdfBtn  = document.getElementById("dl-pdf");
+    // Named at the press, not here: by then step 5's list has been read, so the name is the one the
+    // header shows (fileStem).
     xlsxBtn.addEventListener("click", () => downloadAs(
-      "xlsx_download_url", `${safeName}_estimate.xlsx`, xlsxBtn));
+      "xlsx_download_url", `${fileStem(state.project_name)}_estimate.xlsx`, xlsxBtn));
     docxBtn.addEventListener("click", () => downloadAs(
-      "docx_download_url", `${safeName}_proposal.docx`, docxBtn));
+      "docx_download_url", `${fileStem(state.project_name)}_proposal.docx`, docxBtn));
     // PDF is rendered on demand from the .docx (LibreOffice). Only wire the
     // button when the backend returned a pdf url (older cached results won't).
     if (result.pdf_download_url) {
       pdfBtn.addEventListener("click", () => downloadAs(
-        "pdf_download_url", `${safeName}_proposal.pdf`, pdfBtn));
+        "pdf_download_url", `${fileStem(state.project_name)}_proposal.pdf`, pdfBtn));
     } else {
       pdfBtn.style.display = "none";
     }

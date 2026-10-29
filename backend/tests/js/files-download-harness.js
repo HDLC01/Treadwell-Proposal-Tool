@@ -52,6 +52,9 @@ const FRESH = lift("freshDocuments");
 const BUILT_AT = lift("builtAt");
 const DOWNLOAD = lift("downloadAs");
 const GENERATE = lift("doGenerate");
+// The name every download on the page saves under, and the Sent versions download that uses it too.
+const STEM = lift("fileStem");
+const REVISION = lift("downloadRevision");
 // THE BUTTONS' FILE NAMES. The stretch of showPostGenerate that names the files and wires the three
 // download buttons, verbatim: from the info-sheet link to the end of the PDF button, the nested
 // downloadAs and the cover-letter banner included. Each press runs the REAL downloadAs, so what is
@@ -143,6 +146,14 @@ function page(opts) {
   const doGenerate = new AsyncFunction(
     "document", "freshDocuments", "preEl", "showPostGenerate", "alert", "TW", "state",
     '"use strict"; ' + GENERATE.body);
+  // done.js's module-level record of step 5's list (refreshFilesProposals); `opts.pv` is a list
+  // already read, as it is by the time the estimator presses a button.
+  const filesProposals = { seq: 0, pv: opts.pv || null };
+  const stem = new Function(...STEM.args, "TW", "filesProposals", '"use strict"; ' + STEM.body);
+  const fileStem = (project) => stem(project, TW, filesProposals);
+  const downloadRevision = new AsyncFunction(
+    ...REVISION.args, "TW", "fetch", "Blob", "URL", "document", "setTimeout", "icon", "console",
+    "fileStem", '"use strict"; ' + REVISION.body);
   return {
     log, posted, fetched, clicked, shown, preEl, asked,
     state: () => st,
@@ -168,10 +179,10 @@ function page(opts) {
       const wire = new Function(
         "result", "state", "TW", "document", "freshDocuments", "paintLumpSum", "refreshFilesProposals",
         "fetch", "Blob", "URL", "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
-        "coverLetterCheck", '"use strict";\n' + WIRING);
+        "coverLetterCheck", "fileStem", '"use strict";\n' + WIRING);
       wire(result, JSON.parse(JSON.stringify(opts.state)), TW, doc, freshDocuments, () => { painted++; },
            () => { listed++; }, fetchStub, BlobStub, URLStub, () => 0, () => "", { error() {} },
-           checkedDocument, TWPRICE, windowStub, async () => ({ enabled: false }));
+           checkedDocument, TWPRICE, windowStub, async () => ({ enabled: false }), fileStem);
       const saved = {};
       for (const id of Object.keys(handlers)) {
         const before = clicked.length;
@@ -179,6 +190,14 @@ function page(opts) {
         saved[id] = clicked.slice(before);
       }
       return saved;
+    },
+    /** A Sent versions press (downloadRevision, run verbatim): the file names it saved. */
+    revision: async (revNo, kind) => {
+      const before = clicked.length;
+      await downloadRevision(String(revNo), kind,
+        { textContent: "PDF", disabled: false, innerHTML: "" }, TW, fetchStub, BlobStub, URLStub,
+        documentStub, () => 0, () => "", { error() {} }, fileStem);
+      return clicked.slice(before);
     },
   };
 }
@@ -312,6 +331,7 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
   {
     const R = { xlsx_download_url: "/x", docx_download_url: "/d", pdf_download_url: "/p" };
     const LONG = "Kansas State University Biosciences Research Facility Phase Two Renovation";
+    const ID = "1a2b3c4d-5e6f-4a8b-9c0d-112233445566";   // this draft's id
     out.names = {};
     for (const [name, st, result] of [
       ["single", { proposal_payload: SAVED, project_name: "Multiple proposals" }, R],
@@ -327,7 +347,42 @@ const SAVED = { values: { total_formatted: "$41,250.00", project_name: "Niagara"
                        scope_group: { id: "G1", label: "  " } }, R],
       ["noProject", { proposal_payload: SAVED, scope_group: { id: "G1", label: "Office" } }, R],
     ]) {
-      out.names[name] = await page({ state: st }).names(result);
+      out.names[name] = await page({ state: st, draftId: ID }).names(result);
+    }
+    // THE NAME THE HEADER SHOWS. Step 5's header names this proposal by the list's display_label;
+    // the stored label can trail it until the estimate is saved again (sync_proposal_labels).
+    const G = { proposal_payload: SAVED, project_name: "Multiple proposals",
+                scope_group: { id: "G1", label: "Base Bid 2" } };
+    const LIST = { group_id: "G1", members: [{ id: "P0", display_label: "Polish" },
+                                             { id: ID, display_label: "Room 2" }] };
+    out.names.listRead = await page({ state: G, draftId: ID, pv: LIST }).names(R);
+    out.names.listOfOthers = await page({ state: G, draftId: ID,
+      pv: { members: [{ id: "P0", display_label: "Polish" }] } }).names(R);
+    // A NAME NO FILE NAME CAN HOLD: no letter or digit survives the rule.
+    for (const [name, label] of [["cjk", "研磨"], ["cjk2", "研磨 2"], ["punct", "—!—"]]) {
+      out.names[name] = await page({ state: { proposal_payload: SAVED, project_name: "Proj",
+                                              scope_group: { id: "G1", label: label } },
+                                     draftId: ID }).names(R);
+    }
+    // A SCOPE'S NAME CAN BE 80 CHARACTERS (SCOPE_LABEL_MAX). Two that part after the 60th.
+    const SC = "North Campus Science Building Level Two East Wing Corridor Labs";
+    for (const [name, tail] of [["scopeA", " Phase A Floors"], ["scopeB", " Phase B Floors"]]) {
+      out.names[name] = await page({ state: { proposal_payload: SAVED, project_name: LONG,
+                                              scope_group: { id: "G1", label: SC + tail } },
+                                     draftId: ID }).names(R);
+    }
+    out.scopeLabels = [SC + " Phase A Floors", SC + " Phase B Floors"];
+    // SENT VERSIONS. The same name, with the revision's number.
+    out.revisions = {};
+    for (const [name, st, pv] of [
+      ["single", { proposal_payload: SAVED, project_name: "Multiple proposals" }, null],
+      ["group", { proposal_payload: SAVED, project_name: "Multiple proposals",
+                  scope_group: { id: "G1", label: "Polish Room 2" } }, null],
+      ["listRead", G, LIST],
+    ]) {
+      const p = page({ state: st, draftId: ID, pv: pv });
+      out.revisions[name] = { pdf: await p.revision(1, "pdf"), xlsx: await p.revision(1, "xlsx"),
+                              docx: await p.revision(3, "docx"), posted: p.posted.map((x) => x.path) };
     }
   }
 

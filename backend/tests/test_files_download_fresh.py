@@ -283,6 +283,64 @@ def test_a_long_project_name_is_cut_and_the_sheet_name_survives(ran):
     assert len(pdf) - len("_proposal.pdf") <= 80, pdf
 
 
-def test_a_blank_proposal_name_falls_back_to_the_project_name(ran):
-    """A group whose label is blank names nothing new: the one-proposal names, not "<project>__"."""
-    assert _saved(ran["names"]["blankLabel"]) == _saved(ran["names"]["single"])
+def test_a_name_with_no_letter_or_digit_never_takes_the_one_proposal_name(ran):
+    """A group whose name leaves no letter or digit (blank, all non-Latin, punctuation) would save
+    under the one-proposal name, the collision this exists to remove: the draft's id stands in.
+
+    Mutation: fall back to the project's name alone -- every name here loses "_1a2b3c4d"."""
+    assert _saved(ran["names"]["blankLabel"]) == {
+        "dl-xlsx": "Multiple_proposals_1a2b3c4d_estimate.xlsx",
+        "dl-docx": "Multiple_proposals_1a2b3c4d_proposal.docx",
+        "dl-pdf": "Multiple_proposals_1a2b3c4d_proposal.pdf"}
+    assert _saved(ran["names"]["cjk"])["dl-pdf"] == "Proj_1a2b3c4d_proposal.pdf"
+    assert _saved(ran["names"]["punct"])["dl-pdf"] == "Proj_1a2b3c4d_proposal.pdf"
+    # A digit survives, so it is the name, and it is not the first one's.
+    assert _saved(ran["names"]["cjk2"])["dl-pdf"] == "Proj__2_proposal.pdf"
+
+
+def test_the_file_takes_the_name_the_header_shows_once_the_list_is_read(ran):
+    """Step 5's header names the proposal by the list's display_label; the stored label can trail it
+    until the estimate is saved again (sync_proposal_labels). Once the list is read the file says
+    what the header says; a list that does not hold this draft leaves the stored label.
+
+    Mutation: name from scope_group.label only -- "listRead" saves "Base_Bid_2"."""
+    assert _saved(ran["names"]["listRead"]) == {
+        "dl-xlsx": "Multiple_proposals_Room_2_estimate.xlsx",
+        "dl-docx": "Multiple_proposals_Room_2_proposal.docx",
+        "dl-pdf": "Multiple_proposals_Room_2_proposal.pdf"}
+    assert _saved(ran["names"]["listOfOthers"])["dl-pdf"] == "Multiple_proposals_Base_Bid_2_proposal.pdf"
+
+
+def test_a_scope_name_of_up_to_80_characters_survives_whole(ran):
+    """A scope's name can be 80 characters (drafts.SCOPE_LABEL_MAX). It is never cut, so two that
+    part after the 60th character still save apart; the project keeps its 20, so the stem is at
+    most 20 + 1 + 80 characters.
+
+    Mutation: cut the name at 60 (the code before) -- both save under one name."""
+    from drafts import SCOPE_LABEL_MAX
+    labels = ran["scopeLabels"]
+    assert all(60 < len(x) <= SCOPE_LABEL_MAX for x in labels) and labels[0][:60] == labels[1][:60]
+    a = _saved(ran["names"]["scopeA"])["dl-pdf"]
+    b = _saved(ran["names"]["scopeB"])["dl-pdf"]
+    assert a != b
+    for name, label in zip((a, b), labels):
+        stem = name[:-len("_proposal.pdf")]
+        assert stem == "Kansas_State_Univers_" + label.replace(" ", "_"), name
+        assert len(stem) <= 20 + 1 + SCOPE_LABEL_MAX
+
+
+def test_sent_versions_carry_the_proposals_name_too(ran):
+    """Sent versions (downloadRevision) on the same page: one of several proposals saves
+    "<project>_<its name>_rev<N>_...", so every proposal's rev1 no longer saves under one name; one
+    proposal keeps exactly the names it had.
+
+    Mutation: name a revision from the project only (the code before) -- "group" and "listRead"
+    lose their proposal's name."""
+    r = ran["revisions"]
+    assert r["single"]["pdf"] == ["Multiple_proposals_rev1_proposal.pdf"]
+    assert r["single"]["xlsx"] == ["Multiple_proposals_rev1_estimate.xlsx"]
+    assert r["single"]["docx"] == ["Multiple_proposals_rev3_proposal.docx"]
+    assert r["group"]["pdf"] == ["Multiple_proposals_Polish_Room_2_rev1_proposal.pdf"]
+    assert r["group"]["xlsx"] == ["Multiple_proposals_Polish_Room_2_rev1_estimate.xlsx"]
+    assert r["group"]["docx"] == ["Multiple_proposals_Polish_Room_2_rev3_proposal.docx"]
+    assert r["listRead"]["pdf"] == ["Multiple_proposals_Room_2_rev1_proposal.pdf"]
