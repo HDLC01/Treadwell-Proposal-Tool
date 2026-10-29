@@ -59,11 +59,34 @@ def test_the_card_reads_as_the_approved_mock():
     assert "Sent → Approved. Stops when approved, lost, or the project's Follow-ups switch is off." in text
     for legend in ("Not opened yet", "Opened, no decision", "Estimator"):
         assert ">%s</legend>" % legend in HTML, legend
-    for unit in ("days after sending", "days after they open it", "days after the 1st",
-                 "days after the last email"):
+    for unit in ("days after sending", "days after the 1st", "days after the last email"):
         assert unit in text, unit
     assert text.count("days after the 1st") == 2, "each step has its own 2nd email"
+    # Hanz, 2026-10-29: "the days should be based off the date it was sent", for both steps.
+    assert text.count("days after sending") == 2, "each step's 1st email counts from sending"
+    assert "days after they open it" not in text
     assert "Tell the estimator" in text
+
+
+def test_the_intro_says_both_steps_count_from_the_day_it_was_sent():
+    """Hanz, 2026-10-29: "the days should be based off the date it was sent". The opened step used
+    to count from the day they opened it; it counts from the send now, like the first step.
+
+    Mutation: put back the old intro (no sent date) and this fails."""
+    text = _visible(HTML)
+    assert ("Both steps count from the day the proposal was sent: a 1st email goes out that many "
+            "days after the send, never sooner than that after the email before it, and a 2nd "
+            "email that many days after its 1st.") in text
+
+
+def test_the_opened_email_heading_says_it_counts_from_sending(ran):
+    """The page's own heading over each email (its fallback, when the portal serves none), read off
+    the page after the real tab click. Mutation: put back "days after they open it" and this fails."""
+    h = ran["headings"]
+    assert h["next_steps"] == "Opened, no decision — 1st email, days after sending"
+    assert h["not_viewed"] == "Not opened yet — 1st email, days after sending"
+    assert h["second_nudge"] == "Opened, no decision — 2nd email, days after the 1st"
+    assert not [k for k, v in h.items() if "open it" in v], h
 
 
 def test_nothing_repeats_any_more():
