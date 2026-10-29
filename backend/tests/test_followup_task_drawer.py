@@ -136,6 +136,18 @@ def test_the_panel_says_the_tool_emails_the_customer_automatically(fu):
     assert "Following up automatically until the customer approves, replies" not in text
 
 
+def test_the_schedule_says_the_days_count_from_the_day_it_was_sent(fu):
+    """Hanz, 2026-10-29: "the days should be based off the date it was sent". Both steps count from
+    the send, so the drawer must not say the opened emails count from the day they open it.
+
+    Mutation: put back "as set on Auto Followups, and it stops when they approve" (no sent date)
+    and the first assert fails."""
+    text = _text(fu["schedule"]["html"])
+    assert ("as set on Auto Followups. The days count from the day the proposal was sent, and it "
+            "stops when they approve.") in text
+    assert "days after they open" not in text
+
+
 def test_an_approved_project_says_the_emails_stopped_and_has_no_schedule(fu):
     """Approved is the end of the cadence again: no deposit chase. The old sentence promised
     follow-ups "until the deposit is in"."""

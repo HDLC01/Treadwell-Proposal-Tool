@@ -3817,8 +3817,8 @@
         </div>
         <p class="note fu-msg" id="fu-sched-alert" role="status"></p>
         <p class="note">The tool emails the customer automatically: at most 2 follow-up emails before
-        they open the proposal and 2 after they open it, as set on Auto Followups, and it stops when
-        they approve. Moving this date moves the next one; an empty box puts it back on the usual
+        they open the proposal and 2 after they open it, as set on Auto Followups. The days count
+        from the day the proposal was sent, and it stops when they approve. Moving this date moves the next one; an empty box puts it back on the usual
         schedule. The "Tell the estimator" email goes to the assigned estimator, chosen under
         Assigned to below.</p>
       </div>`;
