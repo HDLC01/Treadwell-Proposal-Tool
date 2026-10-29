@@ -540,8 +540,9 @@
       if (!url) throw new Error("That document isn't available for this revision.");
       const resp = await fetch(TW.absoluteUrl(url), { headers: TW.authHeaders() });
       if (!resp.ok) throw new Error("HTTP " + resp.status);
-      const safe = String((out.project_name || TW.getState().project_name || "proposal"))
-        .replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+      // One of several proposals: its own name rides in this one too (fileStem), or every
+      // proposal's "rev1" saves under one name.
+      const safe = fileStem(out.project_name || TW.getState().project_name);
       const ext = kind === "pdf" ? "pdf" : kind;
       const name = `${safe}_rev${revNo}_${kind === "xlsx" ? "estimate" : "proposal"}.${ext}`;
       // octet-stream so the browser saves under our name instead of letting the
@@ -1069,9 +1070,15 @@
    *  lump sum, this one marked "(this one)" and carrying `currentFigure`; one with no figure yet
    *  says "not priced yet". NO TOTAL: they are separate proposals, each approved on its own, so a
    *  sum would be a price nobody is offered. Anything else leaves the row exactly as it is.
-   *  Generate still builds only this proposal. */
-  function paintReadyProposals(pv, currentId, currentFigure) {
-    const el = document.getElementById("rv-lump");
+   *  Generate still builds only this proposal.
+   *
+   *  Another proposal's figure is the Total ITS document prints (`document_total`, the server's
+   *  read of that proposal's saved payload, the same figure its own Files page shows), and its
+   *  `lump_sum` only before it was ever built. `opts` is how step 5 FILES reuses this list
+   *  (paintFilesProposals): `into` another element than #rv-lump, its own `note`, and `link`, which
+   *  makes each other proposal's name a link to its own Files page. */
+  function paintReadyProposals(pv, currentId, currentFigure, opts) {
+    const el = document.getElementById((opts && opts.into) || "rv-lump");
     const ms = pv && Array.isArray(pv.members) ? pv.members : [];
     if (!el || ms.length < 2 || !ms.some((m) => m && m.id === currentId)) return false;
     const usd = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1079,16 +1086,19 @@
     list.className = "rv-props";
     ms.forEach((m) => {
       const mine = m.id === currentId;
-      const name = m.display_label || m.sheet_label || m.label || ("Base Bid " + (m.index || ""));
+      const name = proposalName(m);
       const li = document.createElement("li");
       li.className = "rv-prop" + (mine ? " current" : "");
-      const nm = document.createElement("span");
+      const nm = document.createElement(opts && opts.link && !mine ? "a" : "span");
       nm.className = "rv-prop-nm";
+      if (opts && opts.link && !mine) nm.href = "/done.html?d=" + encodeURIComponent(m.id);
       nm.textContent = name;
       li.appendChild(nm);
       const sum = document.createElement("span");
+      const doc = typeof m.document_total === "string" && money(m.document_total) != null ? m.document_total : "";
       const n = typeof m.lump_sum === "number" && isFinite(m.lump_sum) ? m.lump_sum : null;
-      const fig = mine ? (currentFigure || (n == null ? "" : usd(n))) : (n == null ? "" : usd(n));
+      const theirs = doc || (n == null ? "" : usd(n));
+      const fig = mine ? (currentFigure || theirs) : theirs;
       sum.className = fig && fig !== "—" ? "rv-prop-sum" : "rv-prop-sum none";
       sum.textContent = fig && fig !== "—" ? fig : "not priced yet";
       li.appendChild(sum);
@@ -1102,12 +1112,137 @@
     });
     const note = document.createElement("p");
     note.className = "rv-props-note";
-    note.textContent = "Separate proposals, each approved on its own. Generate builds this one.";
+    note.textContent = (opts && opts.note) || "Separate proposals, each approved on its own. Generate builds this one.";
     el.textContent = "";
     el.classList.remove("money");
     el.appendChild(list);
     el.appendChild(note);
     return true;
+  }
+
+  /** A proposal's name as the strip shows it: its sheet's name (proposals_view `display_label`,
+   *  #741), verbatim. */
+  function proposalName(m) {
+    return m.display_label || m.sheet_label || m.label || ("Base Bid " + (m.index || ""));
+  }
+
+  /** STEP 5 FILES OF A PROJECT WITH SEVERAL PROPOSALS (Hanz, 2026-10-29: "could we also show
+   *  multiple lump sums here? before we send out", and "show the sheet names in the 5. Files
+   *  section as well"). `pv`, `currentId`, `currentFigure` as paintReadyProposals takes them;
+   *  `currentFigure` is what paintLumpSum put on the card ("" when it hid the row).
+   *
+   *  With two proposals or more, and this draft among them: the LUMP SUM column becomes the Ready
+   *  card's list (same names, same figures, same order, NO TOTAL), each other name a link to its own
+   *  Files page; the header names this proposal by its sheet; the Sent versions card says whose
+   *  versions they are; and the Send card names the proposals its one email is for. Anything else
+   *  (one proposal, a list that cannot be read) takes every one of those away and leaves the single
+   *  figure exactly as paintLumpSum painted it. */
+  function paintFilesProposals(pv, currentId, currentFigure) {
+    const row = document.getElementById("lump-row");
+    const val = document.getElementById("lump-sum");
+    const key = document.getElementById("lump-key");
+    const which = document.getElementById("which-proposal");
+    const revWhich = document.getElementById("revisions-which");
+    const sendWhich = document.getElementById("send-which");
+    [which, revWhich, sendWhich].forEach((el) => { if (el) { el.textContent = ""; el.hidden = true; } });
+    // THE WHOLE PROJECT, not only this estimate's strip: a project split into scopes (#711) holds
+    // the other scopes and their proposals too (`group_others`, after the strip), and Send all
+    // sends every one of them, so the list and the sentences below never name a smaller set.
+    const others = pv && Array.isArray(pv.group_others) ? pv.group_others : [];
+    if (pv && Array.isArray(pv.members) && others.length) {
+      pv = Object.assign({}, pv, { members: pv.members.concat(others.filter((o) => o && o.id).map((o) => (
+        { id: o.id, display_label: o.label, lump_sum: o.lump_sum, document_total: o.document_total }))) });
+    }
+    const many = paintReadyProposals(pv, currentId, currentFigure, {
+      into: "lump-sum", link: true,
+      note: "Separate proposals, each approved on its own. The files here are this one's.",
+    });
+    if (row) row.classList.toggle("fp-money--list", many);
+    if (key) key.textContent = many ? "Lump sums" : "Lump sum";
+    if (!many) {
+      // The single figure, as paintLumpSum leaves it: a list painted earlier on this page is put back.
+      if (row && val) { if (currentFigure) val.textContent = currentFigure; else row.hidden = true; }
+      return false;
+    }
+    if (row) row.hidden = false;
+    const ms = pv.members;
+    const at = ms.findIndex((m) => m && m.id === currentId);
+    const names = ms.map(proposalName);
+    if (which) {
+      const nm = document.createElement("strong");
+      nm.className = "fp-which-nm";
+      nm.textContent = names[at];
+      which.appendChild(nm);
+      const pos = document.createElement("span");
+      pos.className = "fp-which-of";
+      pos.textContent = " · proposal " + (at + 1) + " of " + ms.length;
+      which.appendChild(pos);
+      which.hidden = false;
+    }
+    if (revWhich) {
+      revWhich.textContent = "Sent versions of " + names[at] + " only. Each proposal keeps its own.";
+      revWhich.hidden = false;
+    }
+    // Only where the button is the project's one press (showPostGenerate labels it from scope_group).
+    const g = (TW.getState() || {}).scope_group;
+    if (sendWhich && g && typeof g === "object" && g.id && pv.group_id === g.id) {
+      const said = names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1] : names[0];
+      sendWhich.textContent = "One email for " + said + ". It names each one that is new or changed "
+        + "since the customer last got it.";
+      sendWhich.hidden = false;
+    }
+    return true;
+  }
+
+  /** Read this project's proposals and paint them onto step 5 (paintFilesProposals). Called right
+   *  after every paintLumpSum, so the list repaints wherever the single figure does: each arrival
+   *  (a regenerate, the page Send all comes back to after building) and each download, which builds
+   *  fresh. The last list read is painted at once and then replaced by the new read; a read that
+   *  fails keeps it, and an older read answering late is dropped. */
+  const filesProposals = { seq: 0, pv: null };
+  async function refreshFilesProposals() {
+    const id = TW.getDraftId();
+    const row = document.getElementById("lump-row");
+    const val = document.getElementById("lump-sum");
+    // Taken NOW, straight after paintLumpSum wrote it: the list replaces that text below.
+    const figure = row && val && !row.hidden ? val.textContent : "";
+    const seq = ++filesProposals.seq;
+    if (filesProposals.pv) paintFilesProposals(filesProposals.pv, id, figure);
+    let pv = null;
+    try { pv = TW.readProposals ? await TW.readProposals(id) : null; } catch { pv = null; }
+    if (seq !== filesProposals.seq) return;
+    if (pv) filesProposals.pv = pv;
+    paintFilesProposals(filesProposals.pv, id, figure);
+  }
+
+  /** THE NAME A DOWNLOAD ON THIS PAGE SAVES UNDER, before "_proposal.pdf" and the rest: step 5's
+   *  three buttons (showPostGenerate) and Sent versions (downloadRevision). `project` is the
+   *  project's name. Anything but A-Z a-z 0-9 . _ - becomes one _, as it always has.
+   *
+   *  ONE PROPOSAL (no scope_group): the project's name cut at 60, exactly as before.
+   *  ONE OF SEVERAL (Create Multiple Proposals, or a project split into scopes): "<project>_<its
+   *  name>" (Hanz, 2026-10-29: the sheet name verbatim "in the files"), so the proposals of one
+   *  project never save under one name. Its name is the one the header shows: this draft's
+   *  display_label once step 5's list is read (filesProposals), the stored scope_group.label until
+   *  then, which sync_proposal_labels keeps equal to it (#741). The name is kept whole (a sheet's is
+   *  31 characters at most, a scope's SCOPE_LABEL_MAX = 80); the project part is the one cut, to fit
+   *  80 beside it and never below 20, so the stem is 101 characters at most. A name with no letter
+   *  or digit left (blank, or all non-Latin) would tell no two proposals apart, so the draft's own
+   *  id stands in for it. */
+  function fileStem(project) {
+    const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_");
+    const proj = safe(project || "proposal");
+    const g = (TW.getState() || {}).scope_group;
+    if (!g || typeof g !== "object") return proj.slice(0, 60);
+    const id = TW.getDraftId() || "";
+    const pv = filesProposals.pv;
+    const me = pv && Array.isArray(pv.members) ? pv.members.find((m) => m && m.id === id) : null;
+    const shown = (me && typeof me.display_label === "string" && me.display_label.trim())
+      || (typeof g.label === "string" ? g.label.trim() : "");
+    let name = safe(shown).slice(0, 80);
+    if (!/[A-Za-z0-9]/.test(name)) name = safe(id).slice(0, 8);
+    if (!name) return proj.slice(0, 60);
+    return proj.slice(0, Math.max(20, 80 - name.length - 1)) + "_" + name;
   }
 
   function showPreGenerate() {
@@ -1446,15 +1581,12 @@
       `${state.project_name} · ${wt} · ${audience}`;
 
     paintLumpSum();
+    refreshFilesProposals();   // every proposal of the project, beside the figure
 
     // Carry the draft across so the info sheet opens on THIS project rather than
     // whichever one the browser last held.
     const infoLink = document.getElementById("info-sheet-link");
     if (infoLink) infoLink.href = TW.withDraft("/info-sheet.html");
-
-    const safeName = (state.project_name || "proposal")
-      .replace(/[^A-Za-z0-9._-]+/g, "_")
-      .slice(0, 60);
 
     async function downloadAs(urlKey, filename, button) {
       const orig = button.textContent;
@@ -1484,6 +1616,7 @@
         // saved again since the copy the question was asked of.
         const out = await freshDocuments(checkedVersion);
         paintLumpSum();
+        refreshFilesProposals();
         const url = out && out[urlKey];
         if (!url) throw new Error("That file isn't available for this project.");
         // Downloads now require the Supabase bearer (no longer a public
@@ -1587,15 +1720,17 @@
     const xlsxBtn = document.getElementById("dl-xlsx");
     const docxBtn = document.getElementById("dl-docx");
     const pdfBtn  = document.getElementById("dl-pdf");
+    // Named at the press, not here: by then step 5's list has been read, so the name is the one the
+    // header shows (fileStem).
     xlsxBtn.addEventListener("click", () => downloadAs(
-      "xlsx_download_url", `${safeName}_estimate.xlsx`, xlsxBtn));
+      "xlsx_download_url", `${fileStem(state.project_name)}_estimate.xlsx`, xlsxBtn));
     docxBtn.addEventListener("click", () => downloadAs(
-      "docx_download_url", `${safeName}_proposal.docx`, docxBtn));
+      "docx_download_url", `${fileStem(state.project_name)}_proposal.docx`, docxBtn));
     // PDF is rendered on demand from the .docx (LibreOffice). Only wire the
     // button when the backend returned a pdf url (older cached results won't).
     if (result.pdf_download_url) {
       pdfBtn.addEventListener("click", () => downloadAs(
-        "pdf_download_url", `${safeName}_proposal.pdf`, pdfBtn));
+        "pdf_download_url", `${fileStem(state.project_name)}_proposal.pdf`, pdfBtn));
     } else {
       pdfBtn.style.display = "none";
     }

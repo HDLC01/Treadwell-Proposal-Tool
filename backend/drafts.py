@@ -38,6 +38,16 @@ from supabase_client import get_client
 _log = logging.getLogger("drafts")
 
 
+def _log_safe(value: object, limit: int = 200) -> str:
+    """A caller-controlled value (a draft id off the URL, an exception carrying a typed sheet name)
+    made safe for a log line: repr() writes a newline as the two characters \\n, so nobody can forge
+    a log line. The same rule as main._log_safe, which this module cannot import."""
+    text = "" if value is None else str(value)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return repr(text)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -175,12 +185,12 @@ def save_draft(draft_id: str, data: Dict[str, Any],
                 carry_sheet_names(draft_id, prior, data)
             except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
                 _log.warning("save of %s: the sheet names were not carried into its proposals: %s",
-                             draft_id, exc)
+                             _log_safe(draft_id), _log_safe(exc))
             try:
                 sync_proposal_labels(draft_id, owner_email, parent=data)
             except Exception as exc:  # noqa: BLE001 — the estimate itself is saved
                 _log.warning("save of %s: the proposals were not renamed after their sheets: %s",
-                             draft_id, exc)
+                             _log_safe(draft_id), _log_safe(exc))
     else:
         if keep_server_owned:
             data = {k: v for k, v in data.items() if k not in _NEVER_SEEDED_BY_A_BROWSER}
@@ -2797,6 +2807,18 @@ def refresh_proposals(draft_id: str, actor: Optional[str] = None,
             "skipped": skipped, "moved": moved_out}
 
 
+def _document_total(data: Dict[str, Any]) -> Optional[str]:
+    """The Total a proposal's built document prints: its saved proposal_payload's
+    `values.total_formatted`, as written ("$15,000.50"), the figure the Files page shows for the
+    proposal it is on (done.js paintLumpSum). None when nothing was built or it holds no digit."""
+    pp = (data or {}).get("proposal_payload")
+    values = pp.get("values") if isinstance(pp, dict) else None
+    total = values.get("total_formatted") if isinstance(values, dict) else None
+    if not isinstance(total, str) or not re.search(r"\d", total):
+        return None
+    return total.strip()
+
+
 def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     """The proposal page's tab strip: the parent first, then its children in the parent's
     `base_tab_ids` order, each {id, label, display_label, sheet_label, lump_sum, index, is_parent,
@@ -2806,11 +2828,13 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     `display_label` is what the strip shows: THE ONE NAME (proposal_names: its base sheet's name on
     the parent's estimate, a clash numbered), which sync_proposal_labels stores on the next save, so
     the strip never waits for one. `sheet_label` is the sheet's own name. `lump_sum` is that
-    proposal's own proposal_lump_sum (a number, or None when it has none yet). `draft_id` is the
+    proposal's own proposal_lump_sum (a number, or None when it has none yet). `document_total` is
+    the Total its built document prints (_document_total), None before it is built. `draft_id` is the
     parent or any child of it. None when it is gone.
 
-    Returns {"parent_id", "group_id", "estimate_digest", "members"}; a draft with no children answers
-    its own row alone."""
+    Returns {"parent_id", "group_id", "estimate_digest", "members", "group_others"}; a draft with no
+    children answers its own row alone. `group_others` is the rest of its scope group
+    (_group_others), [] for a draft in none."""
     prow = _resolve_parent(draft_id)
     if prow is None:
         return None
@@ -2831,6 +2855,7 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
     members = [{"id": parent_id, "label": pstored, "index": 1,
                 "display_label": names.get(parent_id) or pstored,
                 "sheet_label": psheet, "lump_sum": _money_or_none(parent.get("proposal_lump_sum")),
+                "document_total": _document_total(parent),
                 "is_parent": True, "base_tab_id": parent.get("base_tab_id"), "stale": False,
                 "out_of_step": None, "estimate_synced_at": None}]
     for i, c in enumerate(kids, start=2):
@@ -2840,6 +2865,7 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                         "display_label": names.get(c["id"]) or _shown_label(c["label"], sheet),
                         "sheet_label": sheet,
                         "lump_sum": _money_or_none(c["data"].get("proposal_lump_sum")),
+                        "document_total": _document_total(c["data"]),
                         "is_parent": False, "base_tab_id": tab,
                         "stale": c["data"].get("estimate_digest") != digest,
                         # OUT OF STEP: this proposal does not price a base bid of its own (a base swap
@@ -2847,7 +2873,32 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                         # strip says so and Refresh moves it (refresh_proposals).
                         "out_of_step": why.get(c["id"]),
                         "estimate_synced_at": c["data"].get("estimate_synced_at")})
-    return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members}
+    return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members,
+            "group_others": _group_others(rows, {m["id"] for m in members})}
+
+
+def _group_others(rows: List[Dict[str, Any]], mine: set) -> List[Dict[str, Any]]:
+    """The scope group's LIVE members that are not in this strip (`mine`), oldest first: the other
+    scopes of a project split into scopes (#711), and the proposals made from THEIR estimates. "Send
+    all proposals in one email" sends every live member (main.py _send_all_publish reads the same
+    _group_rows), so the Files page lists and names these too, never a smaller set than it sends.
+    Each is {id, label, lump_sum, document_total}; `label` is the name the press says
+    (main.py _send_all_label). Only these are loaded, so a strip with none costs nothing."""
+    out = []
+    for m in rows or []:
+        if m["id"] in mine:
+            continue
+        row = load_draft(m["id"])
+        data = (row or {}).get("data") or {}
+        if not row:
+            continue
+        stored = m.get("label") or ""
+        out.append({"id": m["id"],
+                    "label": _shown_label(stored, proposal_sheet_label(data, data.get("base_tab_id")))
+                    or "A proposal",
+                    "lump_sum": _money_or_none(data.get("proposal_lump_sum")),
+                    "document_total": _document_total(data)})
+    return out
 
 
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:

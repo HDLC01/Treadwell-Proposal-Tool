@@ -223,6 +223,21 @@ def test_a_failed_rename_never_fails_the_save(fake_supabase, monkeypatch):
     assert _label(store, kid["Polish"]) == "Polish"
 
 
+def test_a_failed_rename_writes_no_raw_line_break_into_the_log(fake_supabase, monkeypatch, caplog):
+    # A typed sheet name inside the error must not forge a second log line (CodeQL py/log-injection).
+    store, kid = _staging(fake_supabase, monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("Room 2\nADMIN deleted every project")
+    monkeypatch.setattr(drafts, "carry_sheet_names", boom)
+    monkeypatch.setattr(drafts, "_sync_names", boom)
+    with caplog.at_level("WARNING", logger="drafts"):
+        _put(store, "p1", **_renamed_polish())
+    lines = [r.getMessage() for r in caplog.records if r.name == "drafts"]
+    assert len(lines) == 2 and all("ADMIN deleted" in m for m in lines)
+    assert not any("\n" in m for m in lines)
+
+
 def _gen_names(view, frontend=None):
     """Step 3's rows (the real generate.js) for the server's strip `view`, re-keyed to the harness's
     drafts d1 / c2 / c3."""

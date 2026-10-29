@@ -217,7 +217,7 @@ async function tab(local, server, opts) {
     .bind(null, TW, builtAt);
   const checkedDocument = { renderId: "" };
   const downloadAs = new AsyncFunction(
-    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "fetch", "Blob", "URL", "document",
+    ...DOWNLOAD.args, "TW", "freshDocuments", "paintLumpSum", "refreshFilesProposals", "fetch", "Blob", "URL", "document",
     "setTimeout", "icon", "console", "checkedDocument", "TWPrice", "window",
     '"use strict"; ' + DOWNLOAD.body);
 
@@ -245,7 +245,7 @@ async function tab(local, server, opts) {
     download: () => downloadAs(
       "pdf_download_url", "X_proposal.pdf",
       { textContent: "Download PDF", disabled: false, innerHTML: "" },
-      TW, freshDocuments, () => {}, fetch, class { constructor() {} },
+      TW, freshDocuments, () => {}, () => {}, fetch, class { constructor() {} },
       { createObjectURL: () => "blob:1", revokeObjectURL() {} }, sandbox.document,
       () => 0, () => "", { error: (e) => { rec.downloadError = String(e); } }, checkedDocument,
       TWPRICE, sandbox.window),
