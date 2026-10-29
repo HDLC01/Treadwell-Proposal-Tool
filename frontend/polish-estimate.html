@@ -421,12 +421,48 @@
     .tk-h{display:flex;align-items:center;gap:9px;margin:0 0 13px}
     @media (max-width:760px){ .tk-h{flex-wrap:wrap} }
     .tk-h .tag{font:700 10.5px var(--mono);letter-spacing:.06em;color:var(--ink-v)}
-    /* A category heading over its rows (Admin > Item categories), Kyle's "MATERIAL - Patch", with the
-       rows' subtotal on the right. */
-    .tk-cat{display:flex;align-items:baseline;gap:12px;margin:16px 0 8px;padding:0 0 5px;border-bottom:1px solid var(--line)}
-    .tk-cat-h{margin:0;font:700 11.5px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-v)}
-    .tk-cat-sub{margin-left:auto;font:600 12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-v)}
+    /* A category heading (Admin > Item categories), Kyle's "MATERIAL - Patch", AS ITS OWN CONTAINER (Hanz,
+       2026-10-29: "each category should have a different container like we have for the review tab"): the
+       Review card's shape (.rev: a 1px border, a 10px radius, a tinted title band) with the heading's name
+       and its rows' subtotal in the band and its cards inside. One muted hue per heading, picked by
+       data-cat-tone, which js/polish-estimate.js's catTone reads off the heading's place in the Admin list,
+       so a heading keeps its colour on every bid and after a reload. Warm and cool hues alternate, and the
+       tones step in lightness too, so a tone and the next two after it in the cycle stay apart for a
+       red-green colour-blind eye as well (simulated deuteranopia and protanopia, CIELAB delta E 10 or more;
+       test_item_categories_ui checks it). Further apart, when two or more headings between them are empty
+       on this bid, two tones can read alike to that eye; the name is always the band's title, so the colour
+       is never the only way to tell two apart. Other wears no tint at all: a white band and a dashed border,
+       so it differs from every tone by its outline, not by a hue. Ink and --ink-v on every band clear WCAG
+       AA (5.4:1 or better; checked too). The body stays white, so the cards' own --surf-low and their
+       white boxes read as they do everywhere else. No overflow:hidden, so nothing a card opens is clipped:
+       the band rounds its own top corners instead. Light only, as the rest of the page. */
+    :root{
+      --cat-1-band:#eddca7;   /* the sheet's yellow */
+      --cat-2-band:#c7d6c1;   /* sage */
+      --cat-3-band:#d3c1d2;   /* mauve */
+      --cat-4-band:#d5ede9;   /* pale sea */
+      --cat-5-band:#e6cdb6;   /* the sheet's tan */
+      --cat-6-band:#c4d3e3;   /* slate */
+      --cat-other-band:#ffffff}
+    .tk-cat{--cat-band:var(--cat-other-band);border:1px solid var(--cat-band);border-radius:10px;
+       background:var(--card);margin:0 0 14px}
+    .tk-cat[data-cat-tone="other"]{border:1px dashed var(--ink-3)}
+    .tk-cat[data-cat-tone="other"] .tk-cat-head{border-bottom:1px dashed var(--ink-3)}
+    .tk-cat[data-cat-tone="1"]{--cat-band:var(--cat-1-band)}
+    .tk-cat[data-cat-tone="2"]{--cat-band:var(--cat-2-band)}
+    .tk-cat[data-cat-tone="3"]{--cat-band:var(--cat-3-band)}
+    .tk-cat[data-cat-tone="4"]{--cat-band:var(--cat-4-band)}
+    .tk-cat[data-cat-tone="5"]{--cat-band:var(--cat-5-band)}
+    .tk-cat[data-cat-tone="6"]{--cat-band:var(--cat-6-band)}
+    .tk-cat-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:9px 14px;
+       background:var(--cat-band);border-radius:9px 9px 0 0}
+    .tk-cat-h{margin:0;min-width:0;overflow-wrap:anywhere;font:700 11.5px var(--sans);letter-spacing:.06em;
+       text-transform:uppercase;color:var(--ink)}
+    .tk-cat-sub{margin-left:auto;font:600 12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-v);
+       white-space:nowrap}
     .tk-cat-sub b{color:var(--ink)}
+    .tk-cat-body{padding:11px 11px 0}
+    @media (max-width:640px){ .tk-cat-body{padding:8px 8px 0} .tk-cat-head{padding:8px 10px} }
     /* A row nobody has searched on yet. Amber because that is this app's "waiting on a person"
        colour -- the sandbox note, the rail's att pip -- and a pill because it labels. It leaves
        the moment a name resolves, so a finished takeoff shows none of them. */

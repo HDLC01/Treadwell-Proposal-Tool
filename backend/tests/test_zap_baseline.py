@@ -601,6 +601,9 @@ PORTAL_GETS = {
     "/api/admin/followup-tasks": "service",
     "/api/admin/followup-task/{task_id}": "service",
     "/api/admin/followup-task/{task_id}/draft": "service",
+    # Read 2026-10-29 from the portal's instant-tabs change (822ad2c): returns the fixed Speculation
+    # Rules JSON (prefetch the other proposal tabs, never prerender); no session, no writes, no mail.
+    "/speculation-rules.json": "static (prefetch rules)",
 }
 
 
