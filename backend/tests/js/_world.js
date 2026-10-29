@@ -84,7 +84,8 @@ const KEYS = {
 };
 // Mirror of drafts._SERVER_OWNED_KEYS. test_v2_new_estimate_test_flag.py compares the two.
 const SERVER_OWNED = ["is_test", "archived", "assigned_estimator", "scope_group",
-  "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id"];
+  "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id",
+  "starred", "copied_from"];
 const KEEPALIVE_CAP = 64 * 1024;
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));

@@ -124,9 +124,15 @@ function itemsHook(items, cats) {
 /** Every heading the panel drew, in order, with the cards under it and its subtotal as shown. */
 function groupsOn(html) {
   const out = [];
-  const re = /<div class="tk-cat" data-cat-group="([^"]*)"><h3 class="tk-cat-h">([^<]*)<\/h3><span class="tk-cat-sub">Subtotal <b data-cat-sub="([^"]*)">([^<]*)<\/b>/g;
+  // Each heading is its own container (2026-10-29): the band (name, subtotal) on top, its cards in its body.
+  const re = /<section class="tk-cat" data-cat-group="([^"]*)" data-cat-tone="([^"]*)" aria-label="([^"]*)"><div class="tk-cat-head"><h3 class="tk-cat-h">([^<]*)<\/h3><span class="tk-cat-sub">Subtotal <b data-cat-sub="([^"]*)">([^<]*)<\/b><\/span><\/div><div class="tk-cat-body">/g;
   let m;
-  while ((m = re.exec(html))) out.push({ id: m[1], name: m[2], keys: m[3], shown: m[4], at: m.index });
+  while ((m = re.exec(html))) {
+    out.push({ id: m[1], tone: m[2], label: m[3], name: m[4], keys: m[5], shown: m[6], at: m.index,
+               end: html.indexOf("</div></section>", m.index) });
+  }
+  // Every container the page opened, matched or not: one this regex misses is a heading drawn some other way.
+  const opened = (html.match(/<section class="tk-cat"/g) || []).length;
   // Which cards sit under each heading, read off the order they were drawn in.
   const cards = [];
   const cre = /data-row-card="(\d+)"/g;
@@ -135,13 +141,16 @@ function groupsOn(html) {
   const conds = [];
   const kre = /data-condfig="([a-z_]+)\.sub"|<div class="tk cond[^"]*">[\s\S]*?data-cond="([a-z_]+)"/g;
   while ((m = kre.exec(html))) conds.push({ key: m[1] || m[2], at: m.index });
-  out.forEach((g, k) => {
-    const end = k + 1 < out.length ? out[k + 1].at : Infinity;
-    g.cards = cards.filter((c) => c.at > g.at && c.at < end).map((c) => c.i);
-    g.conds = conds.filter((c) => c.at > g.at && c.at < end).map((c) => c.key);
-    delete g.at;
+  // A card belongs to a heading only while it is INSIDE that heading's container (before its </section>).
+  const inside = (c) => out.some((g) => c.at > g.at && c.at < g.end);
+  const loose = out.length ? cards.filter((c) => !inside(c)).map((c) => c.i)
+    .concat(conds.filter((c) => !inside(c)).map((c) => c.key)) : [];
+  out.forEach((g) => {
+    g.cards = cards.filter((c) => c.at > g.at && c.at < g.end).map((c) => c.i);
+    g.conds = conds.filter((c) => c.at > g.at && c.at < g.end).map((c) => c.key);
+    delete g.at; delete g.end;
   });
-  return { groups: out, cards: cards.map((c) => c.i), conds: conds.map((c) => c.key) };
+  return { groups: out, cards: cards.map((c) => c.i), conds: conds.map((c) => c.key), loose: loose, opened: opened };
 }
 const money = (t) => Number(String(t).replace(/[^0-9.\-]/g, ""));
 
@@ -198,6 +207,10 @@ async function main() {
     moneyAutoOf: drawn.groups.map((x) => g.api.moneyAuto(x.cards.reduce((s, i) => s + rowTotal(i), 0))),
     shownText: drawn.groups.map((x) => x.shown),
     matTotalStill: /data-mat-total/.test(panel(g)),
+    // Each heading its own container, coloured by its place in the Admin list (2026-10-29).
+    tones: drawn.groups.map((x) => x.tone), labels: drawn.groups.map((x) => x.label),
+    loose: drawn.loose, opened: drawn.opened,
+    subtotalSum: drawn.groups.reduce((s, x) => s + money(x.shown), 0), materialTotal: g.api.materialTotal(),
   };
   // A typed measurement moves the heading's subtotal in place (repaintNumbers), without a panel rebuild.
   const before = g.dom.get("panels").htmlWrites;
@@ -221,6 +234,7 @@ async function main() {
   const removed = clone(STORE); removed.work_types.polish = removed.work_types.polish.filter((c) => c.id !== "polish-patch");
   const rm = await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, removed) });
   out.removedHeading = groupsOn(panel(rm)).groups.map((x) => [x.name, x.cards]);
+  out.removedTones = groupsOn(panel(rm)).groups.map((x) => [x.name, x.tone]);
   // Renamed (same id): the material follows the new name with no write to it.
   const renamed = clone(STORE); renamed.work_types.polish[0].name = "Patch and Prep";
   const rn = await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, renamed) });
@@ -229,9 +243,11 @@ async function main() {
   const reordered = clone(STORE); reordered.work_types.polish.reverse();
   const ro = await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, reordered) });
   out.reorderedHeading = groupsOn(panel(ro)).groups.map((x) => x.name);
+  out.reorderedTones = groupsOn(panel(ro)).groups.map((x) => [x.name, x.tone]);
   // A SAVED bid as the server hands it back (jsonb sorts every object's keys): the same headings.
   const rl = await boot({ blob: polishBlob(), reloaded: true, fetchHook: itemsHook(ITEMS, STORE) });
   out.reloaded = groupsOn(panel(rl)).groups.map((x) => [x.name, x.cards]);
+  out.reloadedTones = groupsOn(panel(rl)).groups.map((x) => [x.name, x.tone]);
 
   // ── THE CONDITION CARDS, on and priced: each under its heading, its cost in that heading's subtotal ──
   {
@@ -248,6 +264,9 @@ async function main() {
     const c = await boot({ blob: polishBlob(), fetchHook: itemsHook(ITEMS, STORE) });
     on(c);
     out.condCards = read(c);
+    { const d = groupsOn(panel(c)); out.condCards.loose = d.loose;
+      out.condCards.subtotalSum = d.groups.reduce((s, x) => s + money(x.shown), 0);
+      out.condCards.materialTotal = c.api.materialTotal(); }
     // A typed measurement moves the condition card's subtotal in place, as it moves the card.
     const before = c.dom.get("panels").htmlWrites;
     P.typeInto(c, '[data-tk="0"][data-k="measurement"]', "20000");
@@ -318,7 +337,9 @@ async function epoxyTotals() {
     b.clock.fire();
     await flush();
     const saved = b.rec.saves[b.rec.saves.length - 1] || {};
-    return { groups: groupsOn(panel(b)).groups.map((x) => [x.name, x.cards]), total: b.api.activeBid().total,
+    return { groups: groupsOn(panel(b)).groups.map((x) => [x.name, x.cards]),
+             tones: groupsOn(panel(b)).groups.map((x) => [x.name, x.tone]), loose: groupsOn(panel(b)).loose,
+             total: b.api.activeBid().total,
              lump: saved.proposal_lump_sum, computed: saved.computed_bid && saved.computed_bid.lump_sum,
              saves: JSON.stringify(b.rec.saves) };
   }

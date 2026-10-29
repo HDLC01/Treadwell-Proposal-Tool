@@ -648,9 +648,24 @@
   // Each field opens the way you'd want to read it first.
   var NATURAL_DIR = { stage: "desc", activity: "desc", estimator: "asc", total: "desc" };
 
+  /** Is this card starred (backend drafts.set_starred, stamped on the row as `starred_at`)? */
+  function isStarred(p) {
+    return !!(p && p.starred_at);
+  }
+
+  /** STARRED FIRST, then the order the sort dropdown picked. Hanz, 2026-10-29: "the ability to Star
+   *  a project and it always gets put up to the top of the pipeline." So the star is applied OVER
+   *  every field and both directions, never as one more field: flipping a sort reorders the starred
+   *  cards among themselves and the rest among themselves, and never sinks a star. The kanban groups
+   *  this order into columns (group keeps it), so a star sits at the top of its own column. */
   function sort(list, field, dirWord) {
     var make = COMPARE[field] || COMPARE.activity;
-    return list.slice().sort(make(dirWord === "asc" ? 1 : -1));
+    var by = make(dirWord === "asc" ? 1 : -1);
+    return list.slice().sort(function (x, y) {
+      var sx = isStarred(x), sy = isStarred(y);
+      if (sx !== sy) return sx ? -1 : 1;
+      return by(x, y);
+    });
   }
 
   /** Group into kanban columns. Unknown stages are dropped rather than thrown —
@@ -835,7 +850,7 @@
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,
     initialsOf: initialsOf, colorOf: colorOf, avatarHtml: avatarHtml, identityKey: identityKey,
     AVATAR_COLORS: AVATAR_COLORS, AVATAR_NONE: AVATAR_NONE,
-    sort: sort, group: group, groupHandedOff: groupHandedOff,
+    sort: sort, isStarred: isStarred, group: group, groupHandedOff: groupHandedOff,
     scopeSendOutcome: scopeSendOutcome,
   };
 });

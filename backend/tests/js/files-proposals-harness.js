@@ -22,11 +22,12 @@ const ROOT = path.resolve(process.argv[2]);
 const SRC = L.read(path.join(ROOT, "js", "done.js"));
 
 const FNS = ["money", "paintLumpSum", "paintReadyProposals", "proposalName", "paintFilesProposals",
-             "refreshFilesProposals", "paintRowFiles"].map((n) => L.liftSource(SRC, n, { indent: "  ", where: "done.js" }));
+             "refreshFilesProposals", "wireFilesLinks", "openFilesLink", "paintRowFiles"]
+  .map((n) => L.liftSource(SRC, n, { indent: "  ", where: "done.js" }));
 // Each line's own buttons (paintRowFiles, #744) and the records they read; their presses are driven
 // in files-row-downloads-harness.js.
 const NL = String.fromCharCode(10);
-const RECORD = ["filesProposals", "ROW_FILES", "rowFiles"]
+const RECORD = ["filesProposals", "filesLinks", "ROW_FILES", "rowFiles"]
   .map((n) => L.grabConst(SRC, n, { indent: "  ", where: "done.js" })).join(NL);
 const HEAD = (function () {
   const start = SRC.indexOf("function showPostGenerate(result) {");

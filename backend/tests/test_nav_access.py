@@ -294,7 +294,8 @@ def test_the_v2_estimates_feed_really_is_a_single_caller_route():
 # that tab's entry: the board owns its FEED and nothing else.
 SHARED = ["/api/analytics", "/api/library/items", "/api/library/assemblies",
           "/api/portal/pipeline", "/api/notifications", "/api/notifications/seen",
-          "/api/drafts", "/api/draft/abc", "/api/estimators", "/api/generate",
+          "/api/drafts", "/api/draft/abc", "/api/draft/abc/copy", "/api/draft/abc/star",
+          "/api/estimators", "/api/generate",
           "/api/file/tok", "/api/portal/notify-recipients", "/api/portal/notify-overrides-all",
           "/api/me", "/api/price", "/api/reference/counties", "/api/dropbox/folders",
           "/api/portal/proposal/p1", "/api/portal/proposal/p1/reply",

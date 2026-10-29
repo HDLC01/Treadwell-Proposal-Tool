@@ -1251,33 +1251,48 @@
   /** A division of Kyle's, read as the work type it is priced on. */
   var DIVISION_WORK_TYPE = { "polished concrete": "polish", "epoxy": "epoxy", "gypsum underlayment": "gyp" };
 
-  /** The work types this material gets a Category select for, in the Admin order: those that have
-   *  headings AND that the material belongs to (its divisions, its Defaults-tab work types, or a category
-   *  it already holds). A material that belongs to none of them is offered every work type with headings,
-   *  because any section of a bid can buy it. */
-  function categoryWorkTypes(it) {
+  /** The work type a division is priced on ("Polished Concrete" -> "polish"), or "" for a division no
+   *  work type answers to. Kyle's three by name, then any work type whose Admin label the division
+   *  spells ("Seal"). backend/item_categories.py division_work_type is the server's copy. */
+  function divisionWorkType(name) {
+    var key = String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
     var order = (CATS && CATS.order) || [];
     var labels = (CATS && CATS.labels) || {};
-    var withCats = order.filter(function (wt) { return L.categoriesFor(CATS, wt).length > 0; });
+    return DIVISION_WORK_TYPE[key] ||
+      order.filter(function (w) { return String(labels[w] || "").toLowerCase() === key; })[0] || "";
+  }
+
+  /** The work types this material gets a Category select for, in the Admin order: those that have
+   *  headings AND that one of its DIVISIONS is priced on. Nothing else widens it -- not the Defaults-tab
+   *  work types, not a category it already holds. Hanz, 2026-10-29: "Category and Division should always
+   *  be tied together." A material in no division gets no select (categoryCell says to pick one first). */
+  function categoryWorkTypes(it) {
+    var order = (CATS && CATS.order) || [];
     var mine = {};
-    itemDivisions(it).forEach(function (d) {
-      var key = String(d).toLowerCase();
-      var wt = DIVISION_WORK_TYPE[key] ||
-        order.filter(function (w) { return String(labels[w] || "").toLowerCase() === key; })[0];
-      if (wt) mine[wt] = true;
-    });
-    ((it && it.default_work_types) || []).forEach(function (wt) { mine[wt] = true; });
-    Object.keys((it && it.material_categories) || {}).forEach(function (wt) { mine[wt] = true; });
-    var own = withCats.filter(function (wt) { return mine[wt]; });
-    return own.length ? own : withCats;
+    itemDivisions(it).forEach(function (d) { var wt = divisionWorkType(d); if (wt) mine[wt] = true; });
+    return order.filter(function (wt) { return mine[wt] && L.categoriesFor(CATS, wt).length > 0; });
+  }
+
+  /** The material's category map cut down to the work types its divisions are priced on, as a NEW
+   *  object. Unticking a division takes that work type's category out in the same save, so no material
+   *  keeps a heading for a division it is not in. Untouched (a copy) when the categories have not loaded:
+   *  without the Admin labels a "Seal" division cannot be read, and the server makes the same cut anyway. */
+  function categoriesInDivisions(it) {
+    var map = (it && it.material_categories) || {};
+    var out = {};
+    var mine = {};
+    itemDivisions(it).forEach(function (d) { var wt = divisionWorkType(d); if (wt) mine[wt] = true; });
+    Object.keys(map).forEach(function (wt) { if (map[wt] && (!CATS || mine[wt])) out[wt] = map[wt]; });
+    return out;
   }
 
   /** The Category cell: one select per work type (categoryWorkTypes), each offering that work type's
    *  headings in the Admin order and None. A heading that has been removed reads as None. */
   function categoryCell(it) {
     if (!CATS_WRITABLE) return '<span class="builtin" title="The database needs backend/ops/item_categories.sql first">Not on this database yet</span>';
+    if (!itemDivisions(it).length) return '<span class="catnote">Pick a division first</span>';
     var wts = categoryWorkTypes(it);
-    if (!wts.length) return '<span class="builtin" title="Set them up on the Admin page, under Item categories">None set up</span>';
+    if (!wts.length) return '<span class="builtin" title="None of this material\'s divisions has categories. Set them up on the Admin page, under Item categories">None set up</span>';
     return wts.map(function (wt) {
       var label = String(((CATS && CATS.labels) || {})[wt] || wt);
       var cur = L.itemCategory(it, CATS, wt);
@@ -1289,6 +1304,16 @@
         '<select data-f="material_category" data-wt="' + esc(wt) + '" aria-label="' +
         esc(label + " category of " + (it.name || "this material")) + '">' + opts + "</select></label>";
     }).join("");
+  }
+
+  /** Redraws ONE row's Category cell and nothing else in the row. A division chip click must not
+   *  re-render the row (divisionPick: it would throw away the focus on the chip), but the Category
+   *  selects follow the divisions, so a tick has to bring its select in and an untick has to take one
+   *  out at once -- a select left on screen for an unticked division still shows a category the save
+   *  just took out, and picking from it would send that category straight back. */
+  function paintCategoryCell(it) {
+    var cell = document.querySelector('#items-body [data-item="' + it.id + '"] .cell-cat');
+    if (cell) cell.innerHTML = categoryCell(it);
   }
 
   /** `map` with work type `wt` set to category `id` (or taken out for ""), as a NEW object. */
@@ -5150,8 +5175,17 @@
         .filter(Boolean);
       it.divisions = vals;
       it.category = vals[0] || "";
+      // CATEGORY FOLLOWS DIVISION: an unticked division's category leaves in the SAME save. A new map,
+      // not written into, so the snapshot rememberItem took still holds the old one for a Cancel.
+      var divBody = { divisions: vals };
+      var keptCats = categoriesInDivisions(it);
+      if (Object.keys(keptCats).length !== Object.keys(it.material_categories || {}).length) {
+        it.material_categories = keptCats;
+        divBody.material_categories = keptCats;
+      }
+      paintCategoryCell(it);
       renderList(); renderPanel();
-      patchSoon("items", it.id, { divisions: vals });
+      patchSoon("items", it.id, divBody);
       return;
     }
     // ONE PRICE BREAK'S QUANTITY OR COST. The list is rebuilt, not written into, and the body that

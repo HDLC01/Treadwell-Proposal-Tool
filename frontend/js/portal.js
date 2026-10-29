@@ -324,6 +324,14 @@
   // repaint (and can't blink) on every tick — only a real change in status or timestamp does.
   let DEGRADED_SIG = "";
 
+  // Which load() is the newest one started. load() runs from the 25s poll, from refreshLive every
+  // 12s while a drawer is open, and after every action, so two can be in flight at once, and their
+  // replies can arrive in either order. A reply to an OLDER request read the board before the
+  // newer one did; painting it last put back what an action had just changed (a star pressed
+  // between the poll's request and its reply came off again for up to 25s). So only the newest
+  // request's reply is painted. Review of the copy-and-star branch, 2026-10-30.
+  let LOAD_GEN = 0;
+
   /** The banner above the board saying WHY it looks the way it does. Lives outside #board on
    *  purpose (see .crm-degraded in portal.html) so renderBoard's full innerHTML replacement
    *  never touches it and this never has to re-fire renderBoard to appear.
@@ -452,6 +460,10 @@
         return `
         <div class="deal" data-id="${esc(p.proposal_id)}">
           ${p.unread ? `<span class="unread" title="${p.unread} customer message${p.unread === 1 ? "" : "s"} awaiting a reply">${p.unread}</span>` : ""}
+          <div class="deal-tools">
+            <button type="button" class="deal-tool" data-copy="${esc(encodeURIComponent(p.proposal_id))}" title="Copy this project: a new one with the same customer, estimate and proposals, nothing sent, under Created but not sent" aria-label="Copy ${esc(p.project_name || "this project")}">${icon("copy", 14)}</button>
+            <button type="button" class="deal-tool deal-star${p.starred_at ? " is-on" : ""}" data-star="${esc(encodeURIComponent(p.proposal_id))}" aria-pressed="${p.starred_at ? "true" : "false"}" title="${p.starred_at ? "Starred: always at the top of its column. Press to take the star off" : "Star it: keeps it at the top of its column for the whole team"}" aria-label="Star ${esc(p.project_name || "this project")}">${icon("star", 15)}</button>
+          </div>
           <div class="name">${esc(p.project_name || "Proposal")}</div>
           ${p.scope_group && p.scope_count > 1
             // One scope of a project split into several proposals: its place and its name, and its
@@ -587,7 +599,7 @@
       const email = estimatorOf(p);
       const chips = chipsHtml(p);
       return `<tr class="trow" data-id="${esc(p.proposal_id)}" tabindex="0">
-        <td class="t-name">${esc(p.project_name || "Proposal")}${
+        <td class="t-name">${p.starred_at ? `<span class="t-star" title="Starred: always at the top" aria-label="Starred">${icon("star", 12)}</span> ` : ""}${esc(p.project_name || "Proposal")}${
           p.scope_group && p.scope_label && p.scope_count > 1 ? ` <span class="scope-tag" title="Scope ${esc(p.scope_index)} of ${esc(p.scope_count)}">${esc(p.scope_label)}</span>` : ""}${
           p.unread ? ` <span class="unread-dot" title="${p.unread} unread customer message${p.unread === 1 ? "" : "s"}">${p.unread}</span>` : ""}</td>
         <td>${esc(p.customer_name || p.customer_email || "")}</td>
@@ -619,7 +631,11 @@
     }
     // These three run BEFORE the row branch below and each returns, because every one of them
     // sits inside a .deal — without the early return a click would both act and open the drawer,
-    // and the drawer would win the paint.
+    // and the drawer would win the paint. The star and Copy (2026-10-29) are two more of them.
+    const star = e.target.closest("[data-star]");
+    if (star) { toggleCardStar(star); return; }
+    const copyBtn = e.target.closest("[data-copy]");
+    if (copyBtn) { copyCardProject(copyBtn); return; }
     const won = e.target.closest("[data-won]");
     if (won) { markCardWon(won); return; }
     const handoff = e.target.closest("[data-handoff]");
@@ -640,8 +656,80 @@
    *  A missing row is still possible (the project was trashed in another tab) and both callers
    *  check. */
   function cardRowOf(btn) {
-    const id = btn.dataset.won || btn.dataset.lost || btn.dataset.handoff || "";
+    const id = btn.dataset.won || btn.dataset.lost || btn.dataset.handoff
+      || btn.dataset.star || btn.dataset.copy || "";
     return ALL.find((x) => String(x.proposal_id) === decodeURIComponent(id)) || null;
+  }
+
+  /** The star, from the card. Hanz, 2026-10-29: "the ability to Star a project and it always gets
+   *  put up to the top of the pipeline." One star per project, the team's (drafts.set_starred), on
+   *  its own route so no autosave can take it off. C.sort puts a starred card at the top of its
+   *  column under every sort. The row is patched so the card moves on this paint, then load()
+   *  re-reads. A failure leaves the card as it was and says so on the button. */
+  async function toggleCardStar(btn) {
+    const row = cardRowOf(btn);
+    if (!row) return;
+    const want = !row.starred_at;
+    btn.disabled = true;
+    try {
+      const r = await api("/api/draft/" + encodeURIComponent(row.proposal_id) + "/star", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ starred: want }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      row.starred_at = want ? new Date().toISOString() : null;
+      renderBoard();
+      load();
+    } catch (err) {
+      btn.disabled = false;
+      btn.title = "The star was not saved: " + (err.message || "try again");
+    }
+  }
+
+  /** Copy, from the card. Hanz, 2026-10-29: "we should be able to copy a project ... the copied
+   *  project should live under Created but not sent." The server makes the copy (drafts.copy_project):
+   *  the same job with nothing sent, every proposal of a project of several. Asks first, because it
+   *  makes a project. Then re-reads the board and opens the copy's drawer, so the estimator sees what
+   *  was made. Nothing is sent, published or emailed. */
+  async function copyCardProject(btn) {
+    const row = cardRowOf(btn);
+    if (!row) return;
+    const many = row.scope_group && row.scope_count > 1 ? row.scope_count : 0;
+    // The proposals the copy leaves behind (drafts.copy_project): a neighbour closed lost or on hold
+    // is not copied, so a declined scope never comes back as a live one the copy's Send all would
+    // email. The pressed card is always copied. Counted off the board's own rows, so the question
+    // says what the copy will hold.
+    const behind = many ? ALL.filter((x) => x !== row && x.scope_group === row.scope_group
+      && (isLost(x) || C.followup(x).on_hold_reason)).length : 0;
+    const kept = many - behind;
+    const name = (row.project_name || "this project");
+    const go = await TW.confirmDanger({
+      title: "Copy this project?",
+      message: "This makes “" + name + " (copy)”" + (!many ? ""
+        : !behind ? ", with all " + many + " of its proposals,"
+        : ", with " + kept + " of its " + many + " proposals (the " + behind + " closed lost or on hold " +
+          (behind === 1 ? "is" : "are") + " left out),") +
+        " under Created but not sent: the same customer, estimate and proposal wording. Nothing is sent, " +
+        "and the copy has none of this project's sends, files or outcome.",
+      confirmText: "Copy it", cancelText: "Cancel", tone: "warn", icon: "copy",
+    });
+    if (!go) return;
+    btn.disabled = true;
+    try {
+      const r = await api("/api/draft/" + encodeURIComponent(row.proposal_id) + "/copy", { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false || !j.id) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+      // Twice at most: a poll started during the first re-read makes that one's reply the older
+      // (LOAD_GEN), so it paints nothing and the copy is not on ALL yet.
+      for (let i = 0; i < 2 && !ALL.some((x) => x.proposal_id === j.id); i++) await load();
+      if (ALL.some((x) => x.proposal_id === j.id)) openDetail(j.id);
+    } catch (err) {
+      btn.disabled = false;
+      await TW.confirmDanger({ title: "Nothing was copied", message: err.message || "Try again in a minute.",
+                               confirmText: "OK", cancelText: "Close", tone: "warn", icon: "warning" });
+    }
   }
 
   /** Mark as won, from the card. The label said "Mark as closed" until 2026-08-22; it posted the
@@ -891,10 +979,15 @@
   }
 
   async function load() {
+    // Numbered BEFORE the token wait, in call order, so the last load() called is the newest.
+    const gen = ++LOAD_GEN;
     await tokenReady();
     try {
       const r = await api("/api/portal/pipeline");
       const j = await r.json();
+      // A newer load() was started while this one waited: its reply is the fresher board, and it
+      // paints (and opens any ?open= drawer). This one paints nothing, error included.
+      if (gen !== LOAD_GEN) return;
       if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || ("HTTP " + r.status));
       const every = j.proposals || [];
       // A LINK TO A PROJECT ON THE OTHER BOARD GOES TO THE OTHER BOARD, query and hash kept, so the
@@ -924,6 +1017,7 @@
       renderDegraded(j);
       renderBoard();
     } catch (err) {
+      if (gen !== LOAD_GEN) return;
       // Only when there is nothing to keep. This runs on a 25s timer, so a single blip on a
       // page a rep leaves open all day would otherwise throw the whole board away and flash an
       // error over work they were reading. Stale rows beat that.

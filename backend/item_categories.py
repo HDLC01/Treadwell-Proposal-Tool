@@ -209,3 +209,31 @@ def coerce_item_categories(raw: Any) -> Dict[str, str]:
         if key in WORK_TYPES and val and ID_RE.match(val):
             out[key] = val
     return {wt: out[wt] for wt in WORK_TYPES if wt in out}
+
+
+# Kyle's three divisions by the work type each is priced on. frontend/js/library.js DIVISION_WORK_TYPE is
+# the page's copy, and test_item_categories_ui.py runs both over the same names.
+DIVISION_WORK_TYPE = {"polished concrete": "polish", "epoxy": "epoxy", "gypsum underlayment": "gyp"}
+
+
+def division_work_type(name: Any) -> str:
+    """The work type a division is priced on, or "" when none answers to it.
+
+    Kyle's three by name, then any work type whose label the division spells ("Seal", "Leveling")."""
+    key = " ".join(str(name if name is not None else "").split()).lower()
+    if key in DIVISION_WORK_TYPE:
+        return DIVISION_WORK_TYPE[key]
+    for wt in WORK_TYPES:
+        if LABELS[wt].lower() == key:
+            return wt
+    return ""
+
+
+def within_divisions(cats: Any, divisions: Any) -> Dict[str, str]:
+    """A material's category map with every work type its divisions are not priced on taken out.
+
+    Hanz, 2026-10-29: "Category and Division should always be tied together." A material keeps a
+    heading only for a work type one of its divisions is priced on; no division, no category.
+    """
+    mine = {division_work_type(d) for d in (divisions or [])} - {""}
+    return {wt: cid for wt, cid in coerce_item_categories(cats).items() if wt in mine}

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-tw-drawn="#main">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -22,6 +22,10 @@
        What is left in the <style> block below is beta-only and nothing else: the verbal panel, its
        floating cheat sheet, the BETA badge, and three guards that each say where they sit. -->
   <link rel="stylesheet" href="/styles.css" />
+  <!-- The page-to-page cross-fade and its hold (reveal.css, js/reveal.js). In <head> on purpose:
+       reveal.js listens for `pagereveal`, which fires before the first frame. -->
+  <link rel="stylesheet" href="/reveal.css" />
+  <script src="/js/reveal.js"></script>
   <!-- Kept even though styles.css opts out too: this covers FIRST PAINT, before the stylesheet has
        arrived, on a Chromium/Brave running auto-dark. -->
   <meta name="color-scheme" content="only light" />

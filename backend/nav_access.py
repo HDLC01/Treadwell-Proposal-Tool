@@ -98,7 +98,9 @@ _VERSION = 1
 #                                 them stops the tool making proposals. That includes the scope
 #                                 routes (/scope, /split) and, since 2026-10-27, Create Multiple
 #                                 Proposals' /proposals and /proposals/refresh, which the proposal
-#                                 step calls: claimed here, under /api/draft/*, on purpose.
+#                                 step calls: claimed here, under /api/draft/*, on purpose. So are
+#                                 the board's Copy and Star (/copy, /star, 2026-10-29): whoever
+#                                 can see a pipeline may copy or star a project on it.
 #
 # So those five tabs are PAGE-REFUSAL ONLY: the tab leaves the menu and the page paints a refusal
 # card, but their data stays reachable to somebody who types the URL and knows the route. The Admin
