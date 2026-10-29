@@ -1755,6 +1755,22 @@
             // The element stays, because the DRIFT WARNING below still needs somewhere to land,
             // and that one must never be dropped: it is the only thing that says the customer
             // received different numbers from the ones on this screen.
+            //
+            // SENT AFTER A WON MARK OR A HAND-OFF, AND THE PORTAL WAS NOT TOLD. The publish still
+            // answers 200, but `followups_note` (main.py _followups_off_after_publish) says the
+            // new proposal is still enrolled in the automatic emails, so the customer would be
+            // chased about a job already won. Drawn here, with the one place to switch it off,
+            // because the button's "Sent" is otherwise the only thing this page shows.
+            if (j && typeof j.followups_note === "string" && j.followups_note) {
+              const fu = document.createElement("p");
+              fu.className = "portal-drift";
+              fu.textContent = j.followups_note + " ";
+              const fuLink = document.createElement("a");
+              fuLink.href = "/portal.html?open=" + encodeURIComponent(draftId) + "&sec=followup";
+              fuLink.textContent = "Open the Follow-up tab";
+              fu.appendChild(fuLink);
+              r.appendChild(fu);
+            }
             const drift = publishDrift(j.sent_snapshot);
             if (drift) {
               const w = document.createElement("p");

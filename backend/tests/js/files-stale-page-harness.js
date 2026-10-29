@@ -123,7 +123,8 @@ async function tab(local, server, opts) {
       if (server.refuse) return json(409, server.refuse);
       // A colleague's save that lands while the publish is running.
       if (server.duringPublish) Object.assign(server.d1, server.duringPublish);
-      return json(200, { ok: true, revision_no: 1 });
+      // `publishAnswer`: extra keys api_portal_publish adds to its 200 (followups_note, ...).
+      return json(200, Object.assign({ ok: true, revision_no: 1 }, server.publishAnswer || {}));
     }
     if (method === "PUT" && url.includes("/api/draft/d1")) {
       const b = JSON.parse(opts.body);
@@ -159,11 +160,15 @@ async function tab(local, server, opts) {
   const msgEl = { value: (opts && opts.message) || "" };
   sandbox.document = {
     addEventListener() {}, removeEventListener() {}, querySelectorAll: () => [],
-    createElement: () => ({ style: {}, appendChild() {}, setAttribute() {}, click() {},
-                            classList: { add() {}, remove() {} } }),
+    // Elements keep what is appended to them, so a scenario can read what the page drew.
+    createElement: (tag) => ({ tag, style: {}, children: [],
+                               appendChild(c) { this.children.push(c); }, setAttribute() {},
+                               click() {}, classList: { add() {}, remove() {} } }),
     createTextNode: () => ({}), head: { appendChild() {} },
     body: { appendChild() {}, removeChild() {} },
-    getElementById: (id) => (id === "portal-message" ? msgEl : null),
+    // `resultEl`: the page's #portal-result, when the scenario reads what lands in it.
+    getElementById: (id) => (id === "portal-message" ? msgEl
+      : (id === "portal-result" && opts && opts.resultEl) ? opts.resultEl : null),
   };
   vm.createContext(sandbox);
   vm.runInContext(SHARED, sandbox);
@@ -511,6 +516,37 @@ function current() {
       r.send = { asked, posted: t.rec.published.length, err: t.rec.err || null };
     }
     out.serverCopyAsked = r;
+  }
+
+  // O. Review of the production follow-ups port. A proposal sent after its project was marked
+  //    Won, while the portal could not be told to switch its follow-up emails off: the publish
+  //    answers 200 with `followups_note` (main.py _followups_off_after_publish). The page must
+  //    draw that sentence, with the way to the Follow-up tab, in #portal-result. And with no note
+  //    (the switch-off worked, or there was no mark) nothing extra is drawn.
+  {
+    const r = {};
+    const NOTE = "Sent. This project is marked won, but the automatic follow-up emails could not "
+      + "be switched off for this proposal, because the customer portal did not answer. Press "
+      + "Turn automation off on the Follow-up tab.";
+    for (const [name, answer] of [["note", { followups_note: NOTE, followups_failed: ["d1"] }],
+                                  ["noNote", { followups_note: "", followups_off: ["d1"] }],
+                                  ["noKey", {}]]) {
+      const w = current();
+      w.server.publishAnswer = answer;
+      const resultEl = { style: { display: "none" }, textContent: "", children: [],
+                         appendChild(c) { this.children.push(c); } };
+      const t = await tab(w.local, w.server, { resultEl });
+      await t.send();
+      r[name] = {
+        posted: t.rec.published.length, err: t.rec.err || null,
+        shown: resultEl.style.display,
+        drawn: resultEl.children.map((p) => ({
+          tag: p.tag, cls: p.className || "", text: p.textContent || "",
+          links: (p.children || []).map((a) => ({ tag: a.tag, href: a.href, text: a.textContent })),
+        })),
+      };
+    }
+    out.followupsNote = r;
   }
 
   // G. The saved copy cannot be read at Send: nothing can be checked, so nothing is sent.
