@@ -86,8 +86,16 @@ def init_db() -> None:
 # last matched against, so the proposal a base swap leaves on Base Bid 1's sheet can take the sheet
 # the parent gave up. Written only by fan_out_proposals and refresh_proposals; a stale tab that put
 # an old one back would send that proposal to the wrong sheet.
+#
+# `starred` and `copied_from` joined on 2026-10-29 (Hanz: "the ability to Star a project and it always
+# gets put up to the top of the pipeline", and "we should be able to copy a project"). The star is the
+# whole team's, toggled from the board (set_starred), so a tab left open on the project from before
+# somebody starred it must not take the star off with its next autosave. `copied_from` is written once,
+# by copy_project, and is what keeps a copy with no files yet on the board's "Created but not sent"
+# column (main._not_sent_rows); a browser save that dropped it would take the copy off the board.
 _SERVER_OWNED_KEYS = ("is_test", "archived", "assigned_estimator", "scope_group",
-                      "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id")
+                      "proposal_of", "estimate_digest", "estimate_synced_at", "proposals_base_tab_id",
+                      "starred", "copied_from")
 
 # Stamped on a draft the moment split_draft rewrites it, and carried by every copy of the draft that
 # was read AFTER the split. A browser save whose blob does not carry the stamp the row has was built
@@ -110,9 +118,10 @@ SHEET_NAMES_MARK = "sheet_names_at"
 # bid under a NEW id (polish-sandbox.js), and a copy that carried the real bid's group would join the
 # customer's project: drawn beside its scopes, and holding the combined email back until the test copy
 # was published too (the portal's scopes_not_published). The proposal keys likewise: a copy that
-# carried `proposal_of` would be drawn as one more proposal tab of the real bid.
+# carried `proposal_of` would be drawn as one more proposal tab of the real bid. A sandbox copy of a
+# starred or copied bid likewise must not arrive starred, or on the board as a copy nobody made.
 _NEVER_SEEDED_BY_A_BROWSER = ("scope_group", "proposal_of", "estimate_digest", "estimate_synced_at",
-                              "proposals_base_tab_id")
+                              "proposals_base_tab_id", "starred", "copied_from")
 
 
 class StaleSplitWrite(Exception):
@@ -680,6 +689,39 @@ def set_handed_off(draft_id: str, handed_off: bool, actor_email: Optional[str] =
         data.pop("handed_off", None)
     sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
     log_event(draft_id, actor_email, "handed_off" if handed_off else "not_handed_off",
+              {"project_name": data.get("project_name"), "id": draft_id})
+    _cache_clear()
+    return True
+
+
+def set_starred(draft_id: str, starred: bool, actor_email: Optional[str] = None) -> bool:
+    """Star a project, or take its star off. `starred` False clears it.
+
+    Hanz, 2026-10-29: "We must have the ability to Star a project and it always gets put up to the
+    top of the pipeline." ONE STAR PER PROJECT, the whole team's: anybody can put it on or take it
+    off, and everybody sees it, because the board is the sales meeting's and a star only one person
+    could see would not move anything up the board the meeting is reading.
+
+    Stored on the draft blob beside `won` and `handed_off`, for the same reasons: an unsent project
+    has no portal row, and a sent one's row belongs to the portal. Server-owned (_SERVER_OWNED_KEYS),
+    so a tab that read the project before somebody starred it cannot take the star off with its
+    next whole-blob save. ONE CARD, NOT ITS SIBLINGS: a project split into several proposals is one
+    card per proposal, each moving through the columns on its own, so a star pins the card it was
+    pressed on and no other.
+
+    `updated_at` is NOT bumped: a star is not work on the estimate, and the board's "Last activity"
+    sort must not call a project active because somebody starred it. Returns True if it existed."""
+    sb = get_client()
+    cur = sb.table("drafts").select("data").eq("id", draft_id).limit(1).execute()
+    if not cur.data:
+        return False
+    data = dict(cur.data[0].get("data") or {})
+    if starred:
+        data["starred"] = {"at": _now_iso(), "by": actor_email or ""}
+    else:
+        data.pop("starred", None)
+    sb.table("drafts").update({"data": data}).eq("id", draft_id).execute()
+    log_event(draft_id, actor_email, "starred" if starred else "unstarred",
               {"project_name": data.get("project_name"), "id": draft_id})
     _cache_clear()
     return True
@@ -2901,6 +2943,177 @@ def _group_others(rows: List[Dict[str, Any]], mine: set) -> List[Dict[str, Any]]
     return out
 
 
+# ── copy a project (Hanz, 2026-10-29) ────────────────────────────────────────────────────────────
+# "In the pipeline, both we should be able to copy a project. For example, we want to copy the
+# Multiple Proposals Project but there is no way. When we copy a project, the copied project should
+# live under Created but not sent."
+#
+# A COPY IS THE JOB WITHOUT ITS SEND HISTORY. It keeps the customer, the intake, the estimate and
+# every proposal's own wording (the blob, deep-copied), and gets a new id for everything. What it
+# drops is what happened to the ORIGINAL after it was priced: the files built and filed (the board's
+# has_files reads generate_result), the outcome marks, the hand-off paperwork of a won job, the
+# board's own marks on the original's card, and the fences recording the original's splits and
+# renames. The portal row, its link, the follow-ups and the revisions live in other tables keyed by
+# the original's id, so a new id leaves every one of them behind.
+COPY_SUFFIX = " (copy)"
+COPY_DROPS = (
+    # the files built for a send, filed to Dropbox, and the message it went with
+    "generate_result", "generated_lump_sum", "dropbox_result", "portal_message",
+    # the outcome marks (set_won, set_close_lost, set_on_hold, set_handed_off)
+    "won", "closed_lost", "on_hold", "handed_off",
+    # a won job's hand-off paperwork: its job number and its Project Info Sheet
+    "job_number", "info_cell_values", "info_tab_structs", "info_template_version",
+    # the board's marks on the original's card (a copy is active, unstarred, and copied_from is set
+    # afresh below)
+    "archived", "starred", "copied_from",
+    # the original's own history: a split's fence and record, a rename's fence
+    SPLIT_MARK, SPLIT_HAD_FILES, "split_from", "split_failed", SHEET_NAMES_MARK,
+)
+# The keys holding another DRAFT'S id, which a copy points at the copy of that draft instead.
+_COPY_PROPOSAL_KEYS = ("proposal_of", "estimate_digest", "estimate_synced_at")
+
+
+def _copy_name(name: Any) -> str:
+    base = re.sub(r"\s+", " ", str(name or "")).strip() or "Untitled project"
+    return base + COPY_SUFFIX
+
+
+def _renamed_copy(src: Dict[str, Any], new_name: str) -> Dict[str, Any]:
+    """`src` less COPY_DROPS, deep-copied (nothing shared with `src`), named `new_name` wherever it
+    carried its old name: the project, the job-name alias and the composed document's values."""
+    old = src.get("project_name")
+    out = {k: copy.deepcopy(v) for k, v in src.items() if k not in COPY_DROPS}
+    out["project_name"] = new_name
+    if old is not None and out.get("job_name") == old:
+        out["job_name"] = new_name
+    values = (out.get("proposal_payload") or {}).get("values") if isinstance(
+        out.get("proposal_payload"), dict) else None
+    if isinstance(values, dict):
+        for k in ("project_name", "job_name"):
+            if old is not None and values.get(k) == old:
+                values[k] = new_name
+    return out
+
+
+def copy_project(draft_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
+    """COPY A PROJECT: a new, unsent draft of the same job, named "<project> (copy)", owned by
+    `actor`, in the board's "Created but not sent" column straight away (main._not_sent_rows reads
+    `copied_from`).
+
+    A PROJECT OF SEVERAL PROPOSALS IS COPIED WHOLE, whichever of its cards was pressed: every LIVE
+    member of its scope group (live_scope_members: not trashed, not archived, of the group's kind)
+    becomes a member of ONE NEW group, in the same order. Create Multiple Proposals' children point at
+    the copy of their parent (`proposal_of`), and a child that was up to date with its parent's
+    estimate is up to date with the copy's (its `estimate_digest` is the copy's), so no copy says
+    "Estimate changed"; one that was out of date stays out of date, since its numbers still differ.
+    RJ's scope groups (#711, members with no `proposal_of`) are copied the same way, as one project.
+    A draft that is in no live group (or is pressed while archived) is copied on its own.
+
+    Kept: everything of the job (the blob less COPY_DROPS), `assigned_estimator` (the same job, so
+    the same estimator chases it), `audience` (Direct stays Direct, GC stays GC), the kind (`is_test`
+    is stored as the original's draft_is_test, so a Test project's copy is Test and a real one's is
+    real whatever the new name looks like). Each proposal is named after its sheet (proposal_names).
+
+    Every row is inserted FIRST-TO-LAST and taken back when one fails (_undo_split_children). Each
+    copy gets ONE event, `copied`. Returns {"id" (the copy of `draft_id`), "ids" (every copy, in
+    order), "project_name", "group_id", "from"}. RAISES ScopeError not_found (404), copy_failed (503)."""
+    sb = get_client()
+    cur = sb.table("drafts").select("id,data,deleted_at").eq("id", draft_id).limit(1).execute()
+    if not cur.data or cur.data[0].get("deleted_at"):
+        raise ScopeError("not_found", "That project is not there any more.", 404)
+    src = cur.data[0].get("data") or {}
+    gid, _label = _scope_of(src)
+    order = [draft_id]
+    if gid:
+        live = [m["id"] for m in _group_rows(gid)]
+        if draft_id in live:
+            order = live
+        else:
+            gid = None
+    blobs: Dict[str, Dict[str, Any]] = {}
+    for i in order:
+        if i == draft_id:
+            blobs[i] = src
+            continue
+        row = load_draft(i)
+        if row:
+            blobs[i] = row.get("data") or {}
+    order = [i for i in order if i in blobs]
+
+    new_id = {i: str(uuid.uuid4()) for i in order}
+    new_gid = uuid.uuid4().hex if gid else None
+    now = datetime.now(timezone.utc)
+    stamp = now.isoformat()
+    out: Dict[str, Dict[str, Any]] = {}
+    fresh: set = set()
+    for i in order:
+        old = blobs[i]
+        d = _renamed_copy(old, _copy_name(old.get("project_name")))
+        d["is_test"] = draft_is_test(old)
+        if gid:
+            d["scope_group"] = dict(old["scope_group"], id=new_gid)
+        else:
+            d.pop("scope_group", None)
+        parent = old.get("proposal_of")
+        if gid and parent in new_id and parent != i:
+            d["proposal_of"] = new_id[parent]
+            # Up to date with its parent before, up to date with the copy of its parent now.
+            # Its digest is set below, from the parent's FINAL copy; an out-of-date one keeps its own.
+            if old.get("estimate_digest") == estimate_digest(blobs[parent]):
+                fresh.add(i)
+            d["estimate_synced_at"] = stamp
+        else:
+            for k in _COPY_PROPOSAL_KEYS:
+                d.pop(k, None)
+        if "__draft_id" in d:
+            d["__draft_id"] = new_id[i]
+        d["copied_from"] = {"id": i, "project_name": old.get("project_name") or "", "at": stamp,
+                            "by": actor or ""}
+        out[i] = d
+    # The digests last, once every parent copy is final.
+    for i in fresh:
+        out[i]["estimate_digest"] = estimate_digest(out[blobs[i]["proposal_of"]])
+    # THE ONE NAME (proposal_names): each proposal of an estimate is named after its base sheet.
+    created = {i: _stamp_at(now, n) for n, i in enumerate(order)}
+    if gid:
+        for p in order:
+            kids = [i for i in order if blobs[i].get("proposal_of") == p and i != p
+                    and out[i].get("proposal_of") == new_id[p]]
+            if not kids or out[p].get("proposal_of"):
+                continue
+            rank = _strip_rank(out[p])
+            kids.sort(key=lambda i: rank(out[i].get("base_tab_id"), created[i]))
+            fam = [p] + kids
+            label = lambda i: str((out[i].get("scope_group") or {}).get("label") or "")  # noqa: E731
+            members = [{"id": i, "label": label(i), "base_tab_id": out[i].get("base_tab_id")}
+                       for i in fam]
+            reserved = {label(i) for i in order if i not in fam and label(i)}
+            for i, name in proposal_names(out[p], members, reserved).items():
+                out[i]["scope_group"] = dict(out[i]["scope_group"], label=name)
+
+    made: List[str] = []
+    try:
+        for i in order:
+            # On the cleanup list BEFORE the insert, as split_draft does: an insert can commit and
+            # lose its answer, and deleting an id that was never written is harmless.
+            made.append(new_id[i])
+            sb.table("drafts").insert({"id": new_id[i], "data": out[i], "owner_email": actor,
+                                       "created_at": created[i], "updated_at": created[i]}).execute()
+    except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal once cleaned up
+        _undo_split_children(sb, made)
+        raise ScopeError("copy_failed", "Nothing was copied: the database did not take every part "
+                                        "of it, and the parts that were made have been removed. "
+                                        "Try again in a minute.", 503) from exc
+    for i in order:
+        log_event(new_id[i], actor, "copied",
+                  {"project_name": out[i].get("project_name"), "id": new_id[i], "from": i,
+                   "from_name": blobs[i].get("project_name") or ""})
+    _cache_clear()
+    return {"id": new_id[draft_id], "ids": [new_id[i] for i in order],
+            "project_name": out[draft_id].get("project_name"), "group_id": new_gid,
+            "from": draft_id}
+
+
 def list_drafts(limit: int = 300) -> List[Dict[str, Any]]:
     """Unified ACTIVE project list (all owners), newest-updated first."""
     return _list_summaries(trashed=False, limit=limit)
@@ -3049,7 +3262,12 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
                 # reason `won_at` gives: the board opens such a scope on its proposal page.
                 "proposal_of:data->>proposal_of,"
                 # A split cleared this project's files, which were on the board (SPLIT_HAD_FILES).
-                "split_had_files:data->>split_had_files")
+                "split_had_files:data->>split_had_files,"
+                # Starred (set_starred) and copied (copy_project). Named for the reason `won_at`
+                # gives: a key this projection does not name reaches no card, and the star would
+                # appear to save and the copy would never reach "Created but not sent".
+                "starred_at:data->starred->>at,"
+                "copied_from:data->copied_from->>id")
         try:
             res = _filtered(sb.table("drafts").select(cols)) \
                 .order(order_col, desc=True).limit(limit).execute()
@@ -3089,6 +3307,8 @@ def _build_summaries(trashed: bool, limit: int) -> List[Dict[str, Any]]:
             "scope_label": r.get("scope_label") or None,
             "proposal_of": r.get("proposal_of") or None,
             "split_had_files": _truthy(r.get("split_had_files")),
+            "starred_at": r.get("starred_at") or None,
+            "copied_from": r.get("copied_from") or None,
             "created_at": r.get("created_at"),
             "updated_at": r.get("updated_at"),
             "deleted_at": r.get("deleted_at"),
@@ -3442,6 +3662,11 @@ def _summary(row: Dict[str, Any]) -> Dict[str, Any]:
         "scope_label": (_scope_of(data)[1]),
         "proposal_of": data.get("proposal_of") or None,
         "split_had_files": _truthy(data.get(SPLIT_HAD_FILES)),
+        # Starred and copied — both paths, for the reason the won mark gives.
+        "starred_at": ((data.get("starred") or {}).get("at") or None)
+        if isinstance(data.get("starred"), dict) else None,
+        "copied_from": ((data.get("copied_from") or {}).get("id") or None)
+        if isinstance(data.get("copied_from"), dict) else None,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "deleted_at": row.get("deleted_at"),
