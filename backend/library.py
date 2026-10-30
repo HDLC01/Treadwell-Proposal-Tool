@@ -973,7 +973,10 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
     send them (lineForSave() in library.js still queues them on purpose — see
     test_the_typed_query_never_reaches_the_server), so dropping them here rather than trusting the
     frontend is what stops an old tab from writing a per-line override back over the material's
-    own value."""
+    own value.
+
+    EXCEPT ONE, ON ITS OWN KEY (2026-10-30): `coverage_override`, this assembly's own coverage per
+    unit for the line. See _coverage_override. The legacy `coverage` key is still dropped."""
     if raw in (None, ""):
         return []
     if not isinstance(raw, list):
@@ -993,8 +996,29 @@ def _clean_lines(raw: Any) -> List[Dict[str, Any]]:
         # the UI on 2026-08-15 but stays in the data, so an older line keeps its label.)
         if not item_id and not role:
             continue
-        out.append({"role": role, "item_id": item_id or None, "note": note or None})
+        line: Dict[str, Any] = {"role": role, "item_id": item_id or None, "note": note or None}
+        own = _coverage_override(entry.get("coverage_override"))
+        if own is not None:
+            line["coverage_override"] = own
+        out.append(line)
     return out
+
+
+def _coverage_override(raw: Any) -> Optional[float]:
+    """A line's OWN coverage per unit, for this assembly only, or None (use the material's).
+
+    THE ONE NUMBER A LINE MAY CARRY AGAIN. Hanz, 2026-10-30: "under the Assemblies tab, we should be
+    able to edit the Coverage per unit", and he chose THIS ASSEMBLY ONLY -- the same primer covers
+    300 SF in one system and 250 in another. Waste and roundup stay on the material.
+
+    A NEW KEY, never `coverage`. Lines saved before 2026-09-22 may still hold an old `coverage`, which
+    _clean_lines drops and library-core's priceLine ignores; reusing that key would bring those stale
+    numbers back into the price. Checked as the material's own coverage is (validate_item): the same
+    ceiling, a negative or a non-number refused and named, and blank or zero meaning "not set" -- one
+    unit covering nothing would price the job as infinite material. Not set is NOT stored, so a line
+    nobody typed one on is saved exactly as it was."""
+    cov = _number(raw, field="Coverage", maximum=_MAX_COVERAGE)
+    return cov if (cov is not None and cov > 0) else None
 
 
 def validate_assembly(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str, Any]:
@@ -1048,6 +1072,12 @@ def _waste_of(line: Any) -> float:
     return min(v, 100.0)
 
 
+def _shaped_override(v: Any) -> Optional[float]:
+    """A stored coverage_override as the page reads it: a positive number up to the cap, else None."""
+    f = _as_float(v)
+    return f if (f is not None and 0 < f <= _MAX_COVERAGE) else None
+
+
 def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
     lines = row.get("lines")
     if not isinstance(lines, list):
@@ -1062,6 +1092,10 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             "role": (ln or {}).get("role") or "",
             "item_id": (ln or {}).get("item_id") or "",
             "coverage": _as_float((ln or {}).get("coverage")),
+            # This assembly's own coverage for the line (see _coverage_override), or None for "the
+            # material's". Read-shaped to the writer's rule, so a stored value that is not a positive
+            # number reads as not set rather than reaching the pricer.
+            "coverage_override": _shaped_override((ln or {}).get("coverage_override")),
             # Both read-shaped with the same defaults the writer applies, so a line stored before
             # these columns existed prices identically whether or not it has been re-saved since.
             "waste_pct": _waste_of(ln),

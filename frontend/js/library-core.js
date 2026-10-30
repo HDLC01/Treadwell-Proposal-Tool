@@ -259,7 +259,20 @@
     // would be two sources for one number, which is the shape of defect this repo keeps paying
     // for. The migration copies every line's values onto its material BEFORE this lands, so
     // there is nothing to fall back to and nothing that silently reprices.
-    var cov = num(item.coverage);
+    //
+    // ONE EXCEPTION, FOR COVERAGE ONLY (Hanz, 2026-10-30): "under the Assemblies tab, we should
+    // be able to edit the Coverage per unit". He chose THIS ASSEMBLY ONLY: the same primer can
+    // cover 300 SF in one system and 250 in another. So a line may carry `coverage_override`,
+    // and a positive one is what the line divides by. Blank, null, zero or absent is the
+    // material's coverage, exactly as before. Waste and roundup stay on the material.
+    //
+    // A NEW KEY, NOT `line.coverage`. Lines saved before 2026-09-22 still carry their old
+    // `coverage`, and this function ignores it on purpose (see above): reusing that key would
+    // quietly start pricing those stale numbers again. `coverage_override` only exists once
+    // somebody types it on the Assemblies tab.
+    var own = num(line.coverage_override);
+    var useOwn = own !== null && own > 0;
+    var cov = useOwn ? own : num(item.coverage);
     if (cov === null || cov <= 0) return { ok: false, reason: "no_coverage", qty: 0, cost: 0 };
 
     var packCost = num(item.unit_cost);
@@ -281,6 +294,9 @@
                  buy_qty: pack, pack_cost: packCost, unit_price: packCost / pack, item: item };
     // Only named when the material has said so: a row without the columns answers as it always did.
     if (bulk) base.bulk = true;
+    // Named only when the line set its own coverage, so a line without one answers in exactly
+    // the shape it always did. `material_coverage` is what the material says, for the marker.
+    if (useOwn) { base.coverage_own = true; base.material_coverage = num(item.coverage); }
     var basis = coverageBasis(item);
     if (basis) base.basis = basis;
 

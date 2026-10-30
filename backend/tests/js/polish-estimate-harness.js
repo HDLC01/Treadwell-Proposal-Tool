@@ -2712,8 +2712,33 @@ const rendered = [];      // every string the page put on screen, for the Labour
       const asmSwitched = { boxes: (b.doc.querySelector('[data-row-card="1"]').innerHTML.match(/data-asmcov=/g) || []).length };
       const asmTyped = { savedBefore: savedBefore, afterEdit: afterEdit, savedAfter: savedAfter,
                          blankRow: blankRow, staleRow: staleRow, expectedSaved: asmWith(swap("i1", 300)) };
+      // AN ASSEMBLY'S OWN COVERAGE (Items & Assemblies, 2026-10-30) reaches the bid: a1's first line
+      // covers 300 here instead of its material's 275, and the row prices exactly as the library page
+      // prices that assembly. A row SAVED with this bid's own line_cov still wins over it.
+      const ownAsms = clone(ASMS).map((a) => a.id !== "a1" ? a : Object.assign(a, {
+        lines: a.lines.map((ln, j) => j === 0 ? Object.assign({}, ln, { coverage_override: 300 }) : ln) }));
+      const own = clone(MODEL);
+      own.takeoff = [{ assembly_id: "a1", assembly_name: "Polish 800 Grit", measurement: 12500, unit: "SF" }];
+      const ob = build({ blob: blob({ polish_estimate: own }), asms: ownAsms });
+      await ob.api.init();
+      ob.api.go(0);
+      const ownBid = clone(own);
+      ownBid.takeoff[0].line_cov = { 0: "350" };
+      const obb = build({ blob: blob({ polish_estimate: ownBid }), asms: ownAsms });
+      await obb.api.init();
+      obb.api.go(0);
+      const asmOwnCoverage = {
+        row: ob.api.rowPrice(ob.api.model().takeoff[0]).total,
+        expected: L.priceAssembly(ownAsms[0], ITEMS, 12500).total,
+        material: L.priceAssembly(ASMS[0], ITEMS, 12500).total,
+        coverage: ob.api.rowPrice(ob.api.model().takeoff[0]).rows[0].coverage,
+        bidRow: obb.api.rowPrice(obb.api.model().takeoff[0]).total,
+        bidCoverage: obb.api.rowPrice(obb.api.model().takeoff[0]).rows[0].coverage,
+        bidExpected: L.priceAssembly(ASMS[0], swap("i1", 350), 12500).total,
+      };
       out.rowCoverage = { first: first, matTyped: matTyped, asmTyped: asmTyped,
                           matBackToLib: matBackToLib, switched: switched, asmSwitched: asmSwitched,
+                          asmOwnCoverage: asmOwnCoverage,
                           expectedFirstAsm: asmWith(ITEMS),
                           expectedFirstMat: L.priceLine({ item_id: "i1" }, ITEMS, 5500).cost };
     }
