@@ -148,6 +148,46 @@ def test_a_proposal_in_the_trash_is_not_made_again(fan):
 
 
 @needs_node
+def test_an_archived_proposal_is_not_made_again_and_is_called_archived(fan):
+    a = fan["archived"]
+    assert a["asked"] == [["Polish"]] and a["kids"] == ["Copy1"]
+    assert a["alert"] == ("Polish's proposal is archived, so it was not made again. Unarchive it on the "
+                          "board, or untick it as a base bid.")
+
+
+MOVED_ON = "so no new proposals were made here. Press Create Multiple Proposals on the Proposal step if you want them."
+
+
+@needs_node
+@pytest.mark.parametrize("key, said, asked", [
+    ("won", "This project is won, ", []), ("lost", "This project is closed as lost, ", []),
+    ("hold", "This project is on hold, ", []), ("sent", "This project was already sent, ", [True])])
+def test_a_project_that_moved_on_or_was_sent_gets_no_proposals_on_its_own(fan, key, said, asked):
+    """Won, lost or on hold: step 3 does not ask. Sent: it asks as `auto`, and the server says no.
+    Either way nothing is made, the top says so once, Base Bid 1 is built, Continue as always."""
+    m = fan["movedOn_" + key]
+    assert m["fanouts"] == asked and m["kids"] == 0
+    assert m["alert"] == said + MOVED_ON and m["alerts"] == [said + MOVED_ON]
+    assert m["rows"] == [["d1", "Epoxy", "built"]] and m["nav"] == [] and m["nextDisabled"] is False
+
+
+@needs_node
+def test_a_save_that_failed_says_so(fan):
+    a = fan["aheadFailed"]
+    assert a["fanouts"] == 0 and a["nav"] == []
+    assert a["alert"] == ("No proposals were made for the other base bids: this browser's changes could not "
+                          "be saved. Check your connection, then reload this page.")
+
+
+@needs_node
+def test_a_copy_saved_since_is_said_in_one_sentence(fan):
+    c = fan["changedSince"]
+    assert c["alert"] == ("No proposals were made for the other base bids: this project was saved again after "
+                          "this page read it, from another page or computer. Reload this page and they will be made.")
+    assert "Nothing changed" not in c["alert"] and c["rows"] == [["d1", "built"]]
+
+
+@needs_node
 def test_one_base_bid_makes_nothing_and_keeps_the_project_name(fan):
     o = fan["oneBase"]
     assert o["fanouts"] == 0 and o["alert"] == "" and o["nav"] == []
@@ -211,8 +251,8 @@ MUTATIONS = [
      lambda f: f["v1Direct"]["fanouts"][0]["base_ids"] != ["Epoxy", "Copy1", "Polish"]
      or f["v2Direct"]["fanouts"][0]["base_ids"] != ["Polish", "Epoxy", "Copy1"]),
     ("the-saved-copys-version", G,
-     "                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [] });",
-     "                       { base_ids: ids, leave_out: leaveOut || [] });",
+     "                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [], auto: true });",
+     "                       { base_ids: ids, leave_out: leaveOut || [], auto: true });",
      lambda f: len(f["v1Direct"]["rows"]) != 3),
     ("existing-kept", G,
      "      return !members.some(function (m) { return m && !m.is_parent && m.base_tab_id === tab; });",
@@ -220,14 +260,29 @@ MUTATIONS = [
     ("not-on-a-child", G,
      '    if (!st || typeof st !== "object" || (typeof st.proposal_of === "string" && st.proposal_of)) return [];',
      '    if (!st || typeof st !== "object") return [];', lambda f: f["child"]["fanouts"] != 0),
-    ("not-off-a-kept-copy", G, "    if (missing.length && NOT_SAVED[seen.status]) {", "    if (false) {",
+    ("not-off-a-kept-copy", G, "    } else if (missing.length && NOT_SAVED[seen.status]) {", "    } else if (false) {",
      lambda f: f["kept"]["fanouts"] != 0),
     ("trashed-not-made-again", G,
      "    var leaveOut = missing.filter(function (tab) { return Object.prototype.hasOwnProperty.call(binned, tab); });",
      "    var leaveOut = [];",
      lambda f: "Copy1" in f["trashed"]["kids"] or f["trashed"]["alert"] == ""),
-    ("refusal-said", G, "        tops.push(notMade(fan.error));", "",
+    ("refusal-said", G, "        tops.push(notMade(fan));", "",
      lambda f: f["refusedTestMix"]["alert"] == "" and f["refusedPortal"]["alert"] == ""),
+    ("not-on-its-own-when-moved-on", G, "    var moved = movedOn(st);", '    var moved = "";',
+     lambda f: f["movedOn_won"]["fanouts"] != [] or f["movedOn_lost"]["kids"] != 0),
+    ("says-it-is-step-3s-own-call", G,
+     "                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [], auto: true });",
+     "                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [] });",
+     lambda f: f["movedOn_sent"]["kids"] != 0),
+    ("ahead-says-the-save-failed", G, '    } else if (missing.length && seen.status === "ahead") {',
+     "    } else if (false) {",
+     lambda f: "could not be saved" not in f["aheadFailed"]["alert"]),
+    ("changed-since-said-once", G, '    if (code === "document_changed") {', "    if (false) {",
+     lambda f: not f["changedSince"]["alert"].endswith("Reload this page and they will be made.")),
+    ("archived-said-as-archived", G,
+     '        out[t.base_tab_id] = { name: t.sheet_label || t.base_tab_id, where: t.where === "archived" ? "archived" : "trash" };',
+     '        out[t.base_tab_id] = { name: t.sheet_label || t.base_tab_id, where: "trash" };',
+     lambda f: "archived" not in f["archived"]["alert"]),
     ("no-reload", G, "    if (TW.useServerCopy) await TW.useServerCopy();",
      "    if (TW.useServerCopy && await TW.useServerCopy()) window.location.reload();",
      lambda f: f["v1Direct"]["nav"] != []),
@@ -342,7 +397,7 @@ def test_the_strip_names_a_base_bid_whose_proposal_is_in_the_trash(fake_supabase
                   extra=[_binned("t1", "p1", "Copy1"), _binned("t2", "other", "Polish"),
                          _binned("t3", "p1", "Seal")])
     g = client.get("/api/draft/p1/proposals").json()
-    assert g["trashed"] == [{"id": "t1", "base_tab_id": "Copy1", "sheet_label": "Room 2"}]
+    assert g["trashed"] == [{"id": "t1", "base_tab_id": "Copy1", "where": "trash", "sheet_label": "Room 2"}]
     # Once a live proposal prices Polish and Room 2, nothing is listed.
     monkeypatch.setattr(main, "_portal", _no_portal_row)
     assert client.post("/api/draft/p1/proposals", json={"draft_version": V, "base_ids": ["Epoxy", "Copy1", "Polish"]}).status_code == 200
@@ -371,7 +426,8 @@ def test_leave_out_keeps_the_tick_and_makes_nothing_for_it(fake_supabase, monkey
             assert live == ["Polish"] and j["left_out"] == ["Copy1"]
             assert [c["base_tab_id"] for c in j["children"]] == ["Polish"]
             assert [m["display_label"] for m in j["proposals"]["members"]] == ["Epoxy", "Polish"]
-            assert j["proposals"]["trashed"] == [{"id": "t1", "base_tab_id": "Copy1", "sheet_label": "Room 2"}]
+            assert j["proposals"]["trashed"] == [{"id": "t1", "base_tab_id": "Copy1", "where": "trash",
+                                                  "sheet_label": "Room 2"}]
         else:
             assert live == ["Copy1", "Polish"] and j["left_out"] == []
         assert _row(store, "p1")["data"]["base_tab_ids"] == ["Epoxy", "Copy1", "Polish"], "a tick was lost"
@@ -380,3 +436,104 @@ def test_leave_out_keeps_the_tick_and_makes_nothing_for_it(fake_supabase, monkey
     r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "leave_out": ["Epoxy"],
                                                      "base_ids": ["Epoxy", "Copy1"]})
     assert r.status_code == 200 and r.json()["left_out"] == [] and len(_kids(store)) == 1
+
+
+# ── step 3's own call: nothing for a project that moved on or was sent (review of 99c5cff0) ──
+@pytest.mark.parametrize("mark, code", [({"won": {"at": "x"}}, "closed"),
+                                        ({"closed_lost": {"reason": "price"}}, "closed"),
+                                        ({"on_hold": {"reason": "budget"}}, "closed"),
+                                        ({"handed_off": {"at": "x"}}, "closed"),
+                                        (None, "already_sent")])
+def test_an_auto_fan_out_of_a_project_that_moved_on_makes_nothing(fake_supabase, monkeypatch, mark, code):
+    """`auto` (step 3): 409, flat, the sentence step 3 shows, and nothing written. The same press
+    without `auto` (the button) goes through as before."""
+    for auto in (True, False):
+        data = dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1"], **(mark or {}))
+        store = _seed(fake_supabase, monkeypatch, data)
+        if mark is None:
+            store["draft_revisions"].append({"project_id": "p1", "revision_no": 1})
+        monkeypatch.setattr(main, "_portal", _no_portal_row)
+        before = copy.deepcopy(_row(store, "p1")["data"])
+        r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "auto": auto,
+                                                         "base_ids": ["Epoxy", "Copy1"]})
+        if auto:
+            assert r.status_code == 409, r.text
+            j = r.json()
+            assert j["ok"] is False and j["code"] == code
+            assert j["error"].endswith(" so no new proposals were made here. Press Create Multiple "
+                                       "Proposals on the Proposal step if you want them.")
+            assert _kids(store) == [] and _row(store, "p1")["data"] == before
+        else:
+            assert r.status_code == 200, r.text
+            assert len(_kids(store)) == 1
+
+
+# ── two fan-outs of one parent at once make one group (review of 99c5cff0) ────────────────────
+def _race(fake_supabase, monkeypatch, locked):
+    """Two presses of one parent at once. Each, once it has read the parent, waits (up to 1 s) for
+    the other to have read it too: without the lock both read it before either writes."""
+    import threading
+    import contextlib
+    import drafts
+    store = _seed(fake_supabase, monkeypatch, dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1", "Polish"]))
+    monkeypatch.setattr(main, "_portal", _no_portal_row)
+    if not locked:
+        monkeypatch.setattr(drafts, "_fan_lock", lambda pid: contextlib.nullcontext())
+    real_copy = drafts._proposal_copy
+    arrived = []
+    both = threading.Event()
+
+    def slow_copy(*a, **k):
+        if threading.current_thread().name not in arrived:
+            arrived.append(threading.current_thread().name)
+            if len(arrived) >= 2:
+                both.set()
+            both.wait(1.0)
+        return real_copy(*a, **k)
+    monkeypatch.setattr(drafts, "_proposal_copy", slow_copy)
+    out = []
+
+    def press():
+        out.append(client.post("/api/draft/p1/proposals", json={
+            "draft_version": V, "auto": True, "base_ids": ["Epoxy", "Copy1", "Polish"]}))
+    ts = [threading.Thread(target=press, name="press-%d" % i) for i in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(20)
+    return store, out
+
+
+def test_two_fan_outs_at_once_make_one_group_and_no_duplicate(fake_supabase, monkeypatch):
+    store, out = _race(fake_supabase, monkeypatch, locked=True)
+    assert [r.status_code for r in out] == [200, 200], [r.text for r in out]
+    kids = _kids(store)
+    assert sorted(k["data"]["base_tab_id"] for k in kids) == ["Copy1", "Polish"], "a duplicate proposal"
+    assert len({k["data"]["scope_group"]["id"] for k in kids}) == 1
+    assert {r.json()["group_id"] for r in out} == {_row(store, "p1")["data"]["scope_group"]["id"]}
+    assert sorted(c["created"] for r in out for c in r.json()["children"]) == [False, False, True, True]
+
+
+def test_the_race_is_real_without_the_lock(fake_supabase, monkeypatch):
+    """The control: the same two presses with the lock taken away make two groups and duplicate
+    proposals, so the test above proves the lock and not the timing."""
+    store, out = _race(fake_supabase, monkeypatch, locked=False)
+    kids = _kids(store)
+    assert len(kids) == 4 and len({k["data"]["scope_group"]["id"] for k in kids}) == 2
+
+
+# ── an archived proposal is not made again either ─────────────────────────────────────────────
+def test_the_strip_names_a_base_bid_whose_proposal_is_archived(fake_supabase, monkeypatch):
+    """Room 2's proposal is archived on the board (not deleted): `trashed` lists it as archived, and
+    one in the Trash as trash."""
+    data = dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1", "Polish"],
+                scope_group={"id": "grp_x", "label": "Epoxy"})
+    arch = {"id": "a1", "data": {"project_name": "Acme HQ", "is_test": True, "proposal_of": "p1",
+                                 "base_tab_id": "Copy1", "archived": True,
+                                 "scope_group": {"id": "grp_x", "label": "Room 2"}},
+            "owner_email": "k", "created_at": "2026-10-02", "updated_at": V, "deleted_at": None}
+    _seed(fake_supabase, monkeypatch, data, extra=[arch, _binned("t1", "p1", "Polish")])
+    g = client.get("/api/draft/p1/proposals").json()
+    assert [m["id"] for m in g["members"]] == ["p1"], "an archived proposal is in the strip"
+    assert g["trashed"] == [{"id": "a1", "base_tab_id": "Copy1", "where": "archived", "sheet_label": "Room 2"},
+                            {"id": "t1", "base_tab_id": "Polish", "where": "trash", "sheet_label": "Polish"}]

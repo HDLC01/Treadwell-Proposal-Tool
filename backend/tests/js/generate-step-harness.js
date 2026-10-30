@@ -149,6 +149,11 @@ async function openGenerate(b, href) {
       if (!body.draft_version || body.draft_version !== (b.server.version || VERSION)) {
         return json(409, { ok: false, code: "document_changed", error: "Nothing was made. This project was saved again after this page read it." });
       }
+      // main.py: step 3's own call (`auto`) for a project the customer already has makes nothing.
+      if (body.auto === true && b.server.sent) {
+        return json(409, { ok: false, code: "already_sent", error: "This project was already sent, so no new "
+          + "proposals were made here. Press Create Multiple Proposals on the Proposal step if you want them." });
+      }
       const r = b.server.onFanOut ? b.server.onFanOut(body) : { refuse: [400, "too_few_bases", "Tick two base bids or more."] };
       if (r.refuse) return json(r.refuse[0], { ok: false, code: r.refuse[1], error: r.refuse[2] });
       return json(200, Object.assign({ ok: true, group_id: "G1" }, r,
@@ -244,6 +249,7 @@ async function openGenerate(b, href) {
     if (m) {
       const id = decodeURIComponent(m[1]);
       if (method === "PUT") {
+        if (b.server.failPut) return json(503, { detail: "The database is not answering." });
         const data = JSON.parse(opts.body).data;
         if (id === "d1") { b.server.puts.push(copy(data)); b.server.d1 = copy(data); }
         else b.server.drafts[id] = copy(data);
@@ -639,6 +645,44 @@ async function fanProject(o) {
                       alerts, note: g.note, nav: g.nav, nextDisabled: g.nextDisabled,
                       again: { fanouts: (b.server.fanouts || []).length, alert: r.alert, nav: r.nav,
                                rows: rowsBrief(r).map((x) => [x.id, x.status]) } };
+    }
+    // AN ARCHIVED PROPOSAL IS NOT MADE AGAIN EITHER, and the top says it is archived.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.view.trashed = [{ id: "cA", base_tab_id: "Polish", sheet_label: "Polish", where: "archived" }];
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.archived = { asked: (b.server.fanouts || []).map((f) => f.body.leave_out), alert: g.alert,
+                       kids: Object.keys(b.server.drafts).map((k) => b.server.drafts[k].base_tab_id) };
+    }
+    // A PROJECT THAT MOVED ON, OR WAS SENT: nothing is made on its own; the rest is built.
+    for (const [key, mark] of Object.entries({ won: { won: { at: "x" } }, lost: { closed_lost: { reason: "price" } },
+                                               hold: { on_hold: { reason: "budget" } }, sent: null })) {
+      const b = await fanProject({ v2: false, audience: key === "sent" ? "GC" : "Direct" });
+      if (mark) {
+        b.server.d1 = Object.assign(copy(b.server.d1), mark);
+        b.ls.setItem(STATE_KEY, JSON.stringify(Object.assign(copy(b.server.d1), { [STAMP]: "d1" })));
+      } else b.server.sent = true;
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan["movedOn_" + key] = { fanouts: (b.server.fanouts || []).map((f) => f.body.auto === true),
+                                alert: g.alert, alerts: g.alerts.slice(), nav: g.nav, nextDisabled: g.nextDisabled,
+                                kids: Object.keys(b.server.drafts).length,
+                                rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]) };
+    }
+    // THIS BROWSER'S CHANGES COULD NOT BE SAVED ("ahead", the save fails): it says so.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.ls.setItem(STATE_KEY, JSON.stringify(Object.assign(W.local(b), { notes_text: "Kyle's note, not saved yet" })));
+      b.server.failPut = true;
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.aheadFailed = { fanouts: (b.server.fanouts || []).length, alert: g.alert, nav: g.nav };
+    }
+    // A COPY SAVED SINCE (409 document_changed): one sentence, not "not made" and "nothing changed".
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.onFanOut = () => ({ refuse: [409, "document_changed", "Nothing changed. This project was saved again "
+        + "after this page read it (from another page or computer). Reload, check it, then try again."] });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.changedSince = { alert: g.alert, rows: rowsBrief(g).map((x) => [x.id, x.status]) };
     }
     // ONE BASE BID: no fan-out, and the row keeps the project's name.
     {

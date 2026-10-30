@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import re
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -2518,10 +2519,33 @@ def adopt_sheet_label(draft_id: str, actor: Optional[str] = None) -> Optional[st
     return want
 
 
+# ONE FAN-OUT OF A PARENT AT A TIME (review of 99c5cff0): two at once (step 3 open in two tabs, or
+# step 3 and the button) each read the parent before the other wrote it, and each made a group and
+# children of its own. Production runs one uvicorn worker, so a lock per parent in this process is
+# enough: the second waits, then reads the parent and its children again and reuses the first's.
+_FAN_LOCKS: Dict[str, threading.Lock] = {}
+_FAN_LOCKS_GUARD = threading.Lock()
+
+
+def _fan_lock(parent_id: str) -> threading.Lock:
+    with _FAN_LOCKS_GUARD:
+        return _FAN_LOCKS.setdefault(str(parent_id), threading.Lock())
+
+
 def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] = None,
                       sent: bool = False,
                       child_sent: Optional[Callable[[str], bool]] = None,
                       leave_out: Optional[List[Any]] = None) -> Dict[str, Any]:
+    """_fan_out_proposals under the parent's lock (_fan_lock): everything it reads, it reads after
+    any fan-out of the same parent already running has written."""
+    with _fan_lock(parent_id):
+        return _fan_out_proposals(parent_id, base_ids, actor, sent, child_sent, leave_out)
+
+
+def _fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] = None,
+                       sent: bool = False,
+                       child_sent: Optional[Callable[[str], bool]] = None,
+                       leave_out: Optional[List[Any]] = None) -> Dict[str, Any]:
     """CREATE MULTIPLE PROPOSALS: one child draft per base bid of `parent_id` after the first.
 
     `base_ids` are the ticked base sheets in Base Bid order; `base_ids[0]` must be the parent's own
@@ -2958,33 +2982,50 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
 
 def _trashed_proposals(parent_id: str, parent: Dict[str, Any],
                        members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The base bids of `parent` whose proposal is IN THE TRASH (a draft with deleted_at set and
-    proposal_of `parent_id`) and that no live proposal prices, each {id, base_tab_id, sheet_label},
-    in Base Bid order. 3 · Generate Files makes a base bid's missing proposal (fan_out_proposals),
-    except these: a proposal somebody deleted is not made again (Hanz, 2026-10-30). Read only when
-    the parent has a base bid to make one for, as a small projection; [] when it has none, or when
-    the Trash cannot be read (logged)."""
+    """The base bids of `parent` whose proposal somebody put away, and that no live proposal
+    prices: IN THE TRASH (a draft with deleted_at set and proposal_of `parent_id`) or ARCHIVED on the
+    board (a not-deleted child of its group with `archived`; live_scope_members leaves it out of the
+    strip). Each {id, base_tab_id, sheet_label, where: "trash" | "archived"}, in Base Bid order.
+    3 · Generate Files makes a base bid's missing proposal (fan_out_proposals), except these: a
+    proposal somebody deleted or archived is not made again (Hanz, 2026-10-30). Read only when the
+    parent has a base bid to make one for, as small projections; [] when it has none. A read that
+    fails is logged and adds nothing.
+
+    The Trash read is not filtered by proposal_of in the database: no query here filters on a JSON
+    path yet, and the projection is a few dozen bytes a row (as _group_rows_all's)."""
     wanted = _wanted_sheets(parent) or []
     live = {m.get("base_tab_id") for m in members}
     open_tabs = [t for t in wanted if t not in live]
     if not open_tabs or parent.get("proposal_of"):
         return []
+    put_away: Dict[str, Tuple[str, str]] = {}
+    gid = _scope_of(parent)[0]
+    if gid:
+        try:
+            for m in _group_rows_all(gid):
+                tab = m.get("base_tab_id")
+                if (m.get("archived") and m.get("proposal_of") == parent_id and tab in open_tabs
+                        and tab not in put_away):
+                    put_away[tab] = (str(m["id"]), "archived")
+        except Exception as exc:  # noqa: BLE001 — the strip still answers
+            _log.warning("the archived proposals could not be read for draft %s: %s",
+                         _log_safe(parent_id), type(exc).__name__)
     try:
         res = (get_client().table("drafts")
                .select("id,deleted_at,proposal_of:data->>proposal_of,base_tab_id:data->>base_tab_id")
                .not_.is_("deleted_at", "null").execute())
-    except Exception as exc:  # noqa: BLE001 — the strip still answers; step 3 then asks as before
+    except Exception as exc:  # noqa: BLE001 — the strip still answers
         _log.warning("the Trash could not be read for draft %s: %s", _log_safe(parent_id), type(exc).__name__)
-        return []
-    binned: Dict[str, str] = {}
-    for r in res.data or []:
+        res = None
+    for r in (res.data if res is not None else None) or []:
         blob = r.get("data") or {}
         of = r["proposal_of"] if "proposal_of" in r else blob.get("proposal_of")
         tab = r["base_tab_id"] if "base_tab_id" in r else blob.get("base_tab_id")
-        if of == parent_id and tab in open_tabs and tab not in binned and r.get("id"):
-            binned[tab] = str(r["id"])
-    return [{"id": binned[t], "base_tab_id": t, "sheet_label": proposal_sheet_label(parent, t) or t}
-            for t in open_tabs if t in binned]
+        if of == parent_id and tab in open_tabs and tab not in put_away and r.get("id"):
+            put_away[tab] = (str(r["id"]), "trash")
+    return [{"id": put_away[t][0], "base_tab_id": t, "where": put_away[t][1],
+             "sheet_label": proposal_sheet_label(parent, t) or t}
+            for t in open_tabs if t in put_away]
 
 
 def _group_others(rows: List[Dict[str, Any]], mine: set) -> List[Dict[str, Any]]:

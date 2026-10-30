@@ -30,8 +30,10 @@
  * goes on, once per visit. A refusal says the server's sentence once at the top (#gen-alert) and the
  * proposals that exist are built. Never from a copy of this browser the server does not have.
  * A DELETED PROPOSAL IS NOT MADE AGAIN: a base bid whose proposal is in the Trash (the strip's
- * `trashed`) is sent as `leave_out` (it stays ticked; the server makes nothing for it), and the top
- * says to restore it or untick it.
+ * `trashed`, archived ones included) is sent as `leave_out` (it stays ticked; the server makes nothing
+ * for it), and the top says to restore it or untick it. NOT ON ITS OWN FOR A PROJECT THAT MOVED ON:
+ * won, lost, on hold or handed off is skipped here, and the call says `auto`, so the route also
+ * refuses a project the customer already has (409 already_sent / closed); the button still can.
  *
  * ONE NAME PER ROW (Hanz, 2026-10-30: "it should show the 3 sheet names instead of this one project
  * name only"): a project of two or more base bids names every row after its sheet, Base Bid 1's
@@ -152,7 +154,10 @@
     catch (e) { return { ok: false, status: 0, error: "The server could not be reached. Check your connection." }; }
     var json = null;
     try { json = await res.json(); } catch (e) { json = null; }
-    if (!res.ok || (json && json.ok === false)) return { ok: false, status: res.status, error: sentence(res.status, json) };
+    if (!res.ok || (json && json.ok === false)) {
+      return { ok: false, status: res.status, error: sentence(res.status, json),
+               code: json && typeof json.code === "string" ? json.code : "" };
+    }
     return { ok: true, status: res.status, body: json };
   }
   /** The server's copy of draft `id` and the version it was stored as: {data, version}, or null. */
@@ -520,7 +525,7 @@
     }
     fanOutCalls++;
     var r = await call("POST", "/api/draft/" + encodeURIComponent(id) + "/proposals",
-                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [] });
+                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [], auto: true });
     if (!r.ok) return r;
     if (TW.useServerCopy) await TW.useServerCopy();
     return { ok: true, body: r.body || {} };
@@ -541,22 +546,51 @@
     var out = {};
     (view && Array.isArray(view.trashed) ? view.trashed : []).forEach(function (t) {
       if (t && typeof t.base_tab_id === "string" && missing.indexOf(t.base_tab_id) >= 0) {
-        out[t.base_tab_id] = t.sheet_label || t.base_tab_id;
+        out[t.base_tab_id] = { name: t.sheet_label || t.base_tab_id, where: t.where === "archived" ? "archived" : "trash" };
       }
     });
     return out;
   }
-  function trashSaid(names) {
-    var own = names.map(function (n) { return n + "'s"; });
-    var list = own.length < 2 ? own[0] : own.slice(0, -1).join(", ") + " and " + own[own.length - 1];
-    return own.length < 2
-      ? list + " proposal is in the Trash, so it was not made again. Restore it from the Trash, or untick it as a base bid."
-      : list + " proposals are in the Trash, so they were not made again. Restore them from the Trash, or untick them as base bids.";
+  /** One sentence per kind: the ones in the Trash, then the archived ones (drafts._trashed_proposals). */
+  function trashSaid(put) {
+    function line(names, trash) {
+      var own = names.map(function (n) { return n + "'s"; });
+      var list = own.length < 2 ? own[0] : own.slice(0, -1).join(", ") + " and " + own[own.length - 1];
+      if (trash) {
+        return own.length < 2
+          ? list + " proposal is in the Trash, so it was not made again. Restore it from the Trash, or untick it as a base bid."
+          : list + " proposals are in the Trash, so they were not made again. Restore them from the Trash, or untick them as base bids.";
+      }
+      return own.length < 2
+        ? list + " proposal is archived, so it was not made again. Unarchive it on the board, or untick it as a base bid."
+        : list + " proposals are archived, so they were not made again. Unarchive them on the board, or untick them as base bids.";
+    }
+    var trash = put.filter(function (p) { return p.where === "trash"; }).map(function (p) { return p.name; });
+    var kept = put.filter(function (p) { return p.where === "archived"; }).map(function (p) { return p.name; });
+    return [trash.length ? line(trash, true) : "", kept.length ? line(kept, false) : ""].filter(Boolean).join(" ");
   }
-  /** The sentence at the top for a fan-out that did not go through: the server's own. */
-  function notMade(why) {
-    var s = String(why || "").trim() || "Try again.";
-    return /^No proposals were made/.test(s) ? s : "No proposals were made for the other base bids. " + s;
+  /** What the board says this project is when it has moved on: step 3 then makes no proposals on
+   *  its own (the route refuses an `auto` call for it too, main._auto_fan_out_closed). "" otherwise.
+   *  SENT is the server's to say (its revisions and the portal): nothing in the draft says it
+   *  reliably, and `generate_result` is written by this page's own builds. */
+  function movedOn(st) {
+    if (!st) return "";
+    if (st.closed_lost) return "closed as lost";
+    if (st.on_hold) return "on hold";
+    if (st.handed_off) return "handed off";
+    if (st.won) return "won";
+    return "";
+  }
+  /** The sentence at the top for a fan-out that did not go through: the server's own, said once. */
+  function notMade(fan) {
+    var s = String((fan && fan.error) || "").trim() || "Try again.";
+    var code = fan && fan.code;
+    if (code === "already_sent" || code === "closed") return s;
+    if (code === "document_changed") {
+      return "No proposals were made for the other base bids: this project was saved again after this page "
+        + "read it, from another page or computer. Reload this page and they will be made.";
+    }
+    return /^(No proposals were made|Nothing (was|changed))/.test(s) ? s : "No proposals were made for the other base bids. " + s;
   }
   /** The name of the sheet `d` prices, when the strip did not say (it was not read). */
   function sheetOf(d) {
@@ -629,19 +663,26 @@
     var made = "";
     var tops = [];
     var missing = view && bases.length >= 2 ? unproposed(bases, members) : [];
-    // One in the Trash stays ticked and is not made again: the route is told to leave it out.
+    // One in the Trash, or archived, stays ticked and is not made again: the route is told to leave it out.
     var binned = inTheTrash(view, missing);
     var leaveOut = missing.filter(function (tab) { return Object.prototype.hasOwnProperty.call(binned, tab); });
     missing = missing.filter(function (tab) { return leaveOut.indexOf(tab) < 0; });
     if (leaveOut.length) tops.push(trashSaid(leaveOut.map(function (tab) { return binned[tab]; })));
-    if (missing.length && NOT_SAVED[seen.status]) {
+    var moved = movedOn(st);
+    if (missing.length && moved) {
+      tops.push("This project is " + moved + ", so no new proposals were made here. Press Create Multiple "
+        + "Proposals on the Proposal step if you want them.");
+    } else if (missing.length && seen.status === "ahead") {
+      tops.push("No proposals were made for the other base bids: this browser's changes could not be saved. "
+        + "Check your connection, then reload this page.");
+    } else if (missing.length && NOT_SAVED[seen.status]) {
       tops.push("No proposals were made for the other base bids: this browser's copy of the project "
         + "doesn't match the saved one. Open the Files step to choose which copy to keep, then come back.");
     } else if (missing.length) {
       say("Generating files: making a proposal for each base bid on the estimate…");
       var fan = await fanOut(id, bases, leaveOut);
       if (!fan.ok) {
-        tops.push(notMade(fan.error));
+        tops.push(notMade(fan));
       } else {
         made = fanSaid(fan.body);
         st = TW.getState() || st;
