@@ -8492,6 +8492,12 @@ class ProposalsIn(BaseModel):
     first being this draft's own base; `draft_version` is the scope routes' stale-copy guard."""
     draft_version: Optional[str] = None
     base_ids: List[str] = Field(default_factory=list)
+    # Base bids that stay ticked but get no new proposal: 3 · Generate Files names the ones whose
+    # proposal is in the Trash (drafts.proposals_view `trashed`), so a deleted one is not made again.
+    leave_out: List[str] = Field(default_factory=list)
+    # True from 3 · Generate Files, which fans out on its own: refused (409 already_sent / closed) for
+    # a project the customer has, or one won, lost, on hold or handed off. The button sends none.
+    auto: bool = False
 
 
 class ProposalsRefreshIn(BaseModel):
@@ -8537,6 +8543,15 @@ def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Req
         return _scope_refusal(drafts.ScopeError(
             "not_fanned_from_child", "This proposal was made from Base Bid 1's estimate. Base bids "
                                      "are picked on Base Bid 1's tab."))
+    # STEP 3 NEVER FANS OUT ON ITS OWN A PROJECT THAT HAS MOVED ON (review of 99c5cff0): won, lost,
+    # on hold or handed off on the board, or already with the customer. Nothing is made; the
+    # Proposal step's button still can.
+    closed = _auto_fan_out_closed(row.get("data") or {}) if payload.auto else None
+    if closed:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "closed",
+            "error": "This project is %s, so no new proposals were made here. Press Create Multiple "
+                     "Proposals on the Proposal step if you want them." % closed})
     try:
         sent = _draft_was_sent(draft_id)
     except HTTPException as exc:
@@ -8546,11 +8561,16 @@ def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Req
             "ok": False, "code": "portal_unreachable",
             "error": "No proposals were made. The customer portal is not answering, so the tool "
                      "cannot tell whether this proposal was already sent. Try again in a minute."})
+    if payload.auto and sent:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "code": "already_sent",
+            "error": "This project was already sent, so no new proposals were made here. Press "
+                     "Create Multiple Proposals on the Proposal step if you want them."})
     try:
         # A proposal a base swap left out of step is MOVED to the base bid it should price, unless
         # the customer has it: the same question, asked of that child (drafts._plan_reconcile).
         out = drafts.fan_out_proposals(draft_id, payload.base_ids, _user_email(request), sent,
-                                       child_sent=_draft_was_sent)
+                                       child_sent=_draft_was_sent, leave_out=payload.leave_out)
     except drafts.ScopeError as exc:
         return _scope_refusal(exc)
     except HTTPException as exc:
@@ -8558,6 +8578,17 @@ def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Req
                     "proposal to move was sent (%s)", _log_safe(draft_id), exc.status_code)
         return _proposals_portal_silent("No proposals were made.")
     return {"ok": True, **out, "proposals": drafts.proposals_view(draft_id)}
+
+
+def _auto_fan_out_closed(data: Dict[str, Any]) -> Optional[str]:
+    """What the board says this project is when it has moved on ("won", "closed as lost", "on
+    hold", "handed off"), else None. The marks are drafts.set_won / set_close_lost / set_on_hold /
+    set_handed_off's, each an object while set."""
+    for key, said in (("closed_lost", "closed as lost"), ("on_hold", "on hold"),
+                      ("handed_off", "handed off"), ("won", "won")):
+        if data.get(key):
+            return said
+    return None
 
 
 def _proposals_portal_silent(head: str) -> JSONResponse:
