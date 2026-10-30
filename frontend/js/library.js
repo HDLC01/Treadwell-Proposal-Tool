@@ -29,6 +29,10 @@
   // offers. library.html loads it ahead of this file, and a page that did not would otherwise fail later
   // in some filter, so it says so by name here.
   var WT = window.TWWorkTypes;
+  // The estimate's two formula pricers, asked only WHICH assemblies they price (formulaPriced): a
+  // Cove or Gyp area assembly's Coverage cell is read-only because the bid never reads its lines.
+  var COVE_PRICER = window.TWEpoxyTakeoff || null;
+  var GYP_PRICER = window.TWGypTakeoff || null;
   if (!WT) throw new Error("library.js needs work-types.js loaded before it");
   var $ = function (id) { return document.getElementById(id); };
 
@@ -2990,6 +2994,96 @@
       "</div>";
   }
 
+  /** The most a coverage can be: library.py's _MAX_COVERAGE, which refuses anything above it. A box
+   *  over it is marked and never sent, because a refused save is requeued and would fail again on
+   *  every later edit of the assembly. */
+  var MAX_COVERAGE = 1e6;
+  var COV_TOO_BIG = "Too large. A coverage can be at most 1,000,000.";
+
+  /** A typed coverage read the way the server reads it (library.py's _number, Python's float):
+   *  "$1,250", " 275 ", "300." and "1e5" are numbers. Null for blank or anything that is not one. */
+  function coverageNumber(v) {
+    if (typeof v === "number") return isFinite(v) ? v : null;
+    if (v === null || v === undefined || typeof v === "boolean") return null;
+    var s = String(v).replace(/[$,\s]/g, "");
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return null;
+    var n = Number(s);
+    return isFinite(n) ? n : null;
+  }
+
+  /** A line's own coverage as a number, or null when it has none. Only a positive figure up to the
+   *  server's ceiling counts: blank, zero, a negative or a half-typed "." all mean "use the
+   *  material's", the reading library-core's priceLine and library.py's _coverage_override give it. */
+  function ownCoverage(v) {
+    var n = coverageNumber(v);
+    return (n !== null && n > 0 && n <= MAX_COVERAGE) ? n : null;
+  }
+
+  /** True when the box holds a number the server would refuse as too large. */
+  function coverageTooBig(v) {
+    var n = coverageNumber(v);
+    return n !== null && n > MAX_COVERAGE;
+  }
+
+  /** The small line under a line's Coverage box. "Material: 300" when the line's own figure differs
+   *  from its material's; the too-large message when `typed` (what the box holds right now, when the
+   *  caller has it) is over the ceiling; empty when the line has no coverage of its own, when it
+   *  typed the material's own figure, or when the material is gone (the row says "Item removed"). */
+  function covMarkText(ln, it, typed) {
+    if (typed !== undefined && coverageTooBig(typed)) return COV_TOO_BIG;
+    var own = ownCoverage((ln || {}).coverage_override);
+    if (own === null || !it) return "";
+    var mat = ownCoverage(it.coverage);
+    if (mat !== null && mat === own) return "";
+    return "Material: " + (mat === null ? "none" : qtyText(mat));
+  }
+
+  /** ASSEMBLIES THE BID PRICES BY A FORMULA, NOT BY THEIR LINES: the twelve Cove assemblies
+   *  (epoxy-takeoff.js prices a cove row with the sheet's own cove formula) and the three Gyp area
+   *  assemblies (gyp-takeoff.js prices them by thickness and mix). A coverage typed on one of their
+   *  lines would move this page's figure and not the bid's, so their Coverage cell stays read-only.
+   *  Asked of the SAME two functions the estimate asks (coveVariant, bucketOfAssembly), passed in so
+   *  this stays a function of its arguments; library.html loads both files. library.py's
+   *  FORMULA_PRICED_ASSEMBLY_IDS is the server's copy, pinned to these by a test. */
+  function formulaPriced(asm, cove, gyp) {
+    var id = asm && asm.id;
+    if (!id) return false;
+    return !!((cove && cove.coveVariant(id)) || (gyp && gyp.bucketOfAssembly(id)));
+  }
+
+  /** THE COVERAGE CELL OF AN ASSEMBLY LINE, typed here for THIS ASSEMBLY ONLY (Hanz, 2026-10-30:
+   *  "under the Assemblies tab, we should be able to edit the Coverage per unit"). The same primer
+   *  can cover 300 SF in one system and 250 in another, so a line may set its own; empty uses the
+   *  material's, and the material's figure is the placeholder so the box never looks blank of a
+   *  number. Saved as `coverage_override`, never as the legacy `coverage` key old lines still carry.
+   *  A line with no material picked yet has nothing to override and shows a dash.
+   *
+   *  `locked` is the priced row of a line in an assembly the bid prices by a formula (formulaPriced):
+   *  its cell is the read-only figure it always was, what this page priced with, and says why. */
+  function lineCoverageHtml(ln, it, locked) {
+    if (locked) {
+      return '<div class="line-primary">' + (locked.coverage == null ? "—" : esc(qtyText(locked.coverage))) +
+        '</div><div class="calc">Priced by a formula on the bid</div>';
+    }
+    if (!ln || !ln.item_id) return '<div class="line-primary"><span class="dash">—</span></div>';
+    var own = ownCoverage(ln.coverage_override);
+    var mat = it ? ownCoverage(it.coverage) : null;
+    var mark = covMarkText(ln, it);
+    return '<div class="line-primary"><input data-lf="coverage_override" class="num" value="' +
+        (own === null ? "" : esc(String(own))) + '" placeholder="' + (mat === null ? "" : esc(String(mat))) +
+        '" autocomplete="off" aria-label="Coverage per unit in this assembly. Leave it empty to use the material\'s">' +
+      "</div>" +
+      '<div class="calc cov-own" data-cov-own' + (mark ? "" : " hidden") + ">" + esc(mark) + "</div>";
+  }
+
+  /** Put a material on a line. A DIFFERENT MATERIAL DROPS THE LINE'S OWN COVERAGE: "300 SF a
+   *  gallon" was said about the product that was on the line, and carried over to another one it
+   *  would price that product at a figure nobody gave it. Picking the same material again keeps it. */
+  function swapLineItem(ln, id) {
+    if (ln.item_id !== id) ln.coverage_override = null;
+    ln.item_id = id;
+  }
+
   /** Resolve typed text to a material. Exact name first, then a unique case-insensitive match —
    *  never a "closest" guess, because silently picking the wrong primer is worse than saying no. */
   function itemByName(text) {
@@ -3025,6 +3119,7 @@
     $("asm-save").hidden = !FRESH.assemblies[asm.id];
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
+    var locked = formulaPriced(asm, COVE_PRICER, GYP_PRICER);
     var out = "";
     for (var i = 0; i < asm.lines.length; i++) {
       var ln = asm.lines[i], r = p.rows[i];
@@ -3067,25 +3162,24 @@
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
         '<td class="n"><div class="line-primary">' + esc(orderAmount(lineItem)) + "</div></td>" +
-        // PULLED IN FROM THE MATERIAL, NOT TYPED HERE. Hanz, 2026-09-22: "we must have coverage
-        // per unit, waste factor, roundup, and materials tab. And then it gets pulled in to
-        // assemblies instead of it being in assemblies."
-        //
-        // STILL SHOWN, though. "It gets pulled in" is a statement about where the numbers are
-        // SET, not about hiding them: an estimator reading an assembly has to see the coverage a
-        // line is priced at without opening another tab, and a blank column would make the
-        // arithmetic in the two derived cells beside it unfollowable.
-        //
-        // READ OFF `r`, THE PRICED ROW, rather than off `ln`. r.coverage is what the engine
-        // actually used, so this cell cannot disagree with the cost cell next to it -- and a
-        // legacy line still carrying its own numbers displays the material's, which is the whole
-        // point. A line whose material is missing has no r.coverage, hence the em dash.
-        // qtyText, which this file already uses for every quantity -- NOT a formatter invented
-        // here. The first draft of this line called num0(), which does not exist in this file or
-        // any it loads: an unbound identifier that a regex over the markup could never catch and
-        // that would have thrown on the first assembly anybody opened.
-        '<td class="n cov derived"><div class="line-primary">' +
-          (r.coverage == null ? "—" : esc(qtyText(r.coverage))) + "</div></td>" +
+        // COVERAGE COMES FROM THE MATERIAL UNLESS THIS ASSEMBLY SETS ITS OWN. Hanz, 2026-09-22,
+        // moved coverage, waste and roundup onto the material ("it gets pulled in to assemblies
+        // instead of it being in assemblies"); on 2026-10-30 he asked for coverage to be editable
+        // here again, for THIS ASSEMBLY ONLY. So the box is empty while the line uses the
+        // material's figure (shown as the placeholder), holds a number when the line has its own,
+        // and says "Material: N" under it when the two differ. Waste and roundup stay on the
+        // material and stay read-only below. See lineCoverageHtml; refreshNumbers repaints only
+        // the "Material: N" line, never the box, so typing in it keeps the caret.
+        // `line-cov`, NOT the old `cov` class: `.lines .cov input` pins a box to 82px, and this one
+        // is meant to be the Items tab's coverage box -- same classes, same width (167px measured).
+        // A Cove or Gyp area assembly keeps the old read-only cell: the bid prices it by a formula
+        // that never reads a line's coverage (see formulaPriced).
+        (locked
+          ? '<td class="n cov derived">' + lineCoverageHtml(ln, lineItem, r) + "</td>"
+          : '<td class="n w-cov line-cov">' + lineCoverageHtml(ln, lineItem) + "</td>") +
+        // Waste and roundup: PULLED IN FROM THE MATERIAL, NOT TYPED HERE, and READ OFF `r`, THE
+        // PRICED ROW, so these cells cannot disagree with the cost cell next to them. A line whose
+        // material is missing has no r.waste_pct, hence the em dash.
         '<td class="n derived"><div class="line-primary">' +
           (r.waste_pct == null ? "—" : r.waste_pct + " %") + "</div></td>" +
         '<td class="ru derived"><div class="line-primary">' +
@@ -5505,7 +5599,10 @@
     return ln ? { asm: asm, ln: ln } : null;
   }
 
-  $("lines-body").addEventListener("input", function (e) {
+  // NAMED (2026-10-30) so library-ui-harness.js can run the real thing: typing a line's own coverage
+  // must reprice the row and queue the save WITHOUT rebuilding the box being typed in.
+  $("lines-body").addEventListener("input", onLineInput);
+  function onLineInput(e) {
     var f = e.target.getAttribute("data-lf");
     // Picker filters are temporary UI state; item selection itself happens by stable item id.
     if (!f || f === "roundup") return;
@@ -5519,13 +5616,24 @@
       repaintItemResults(e.target);
       return;
     }
-    ctx.ln[f] = (f === "coverage" || f === "waste_pct") ? L.num(e.target.value) : e.target.value;
+    if (f === "coverage_override") {
+      // THIS ASSEMBLY'S OWN COVERAGE: a positive number, or null for "the material's" (an emptied box
+      // goes back to the material). Never the raw text, which would save "3." mid-keystroke. An
+      // assembly the bid prices by a formula takes none (its cell has no box; this is the belt).
+      if (formulaPriced(ctx.asm, COVE_PRICER, GYP_PRICER)) return;
+      // Over the server's ceiling: say so under the box and send nothing (the model keeps what it
+      // had), rather than a save the server refuses and the page then retries on every edit.
+      if (coverageTooBig(e.target.value)) { refreshNumbers(); return; }
+      ctx.ln[f] = ownCoverage(e.target.value);
+    } else {
+      ctx.ln[f] = (f === "coverage" || f === "waste_pct") ? L.num(e.target.value) : e.target.value;
+    }
     renderList();
     // Only the totals need redrawing, and re-rendering the table would move the caret out of
     // the field being typed in. So the numbers are refreshed without rebuilding the rows.
     refreshNumbers();
     patchSoon("assemblies", ctx.asm.id, { lines: ctx.asm.lines });
-  });
+  }
 
   $("lines-body").addEventListener("change", function (e) {
     var f = e.target.getAttribute("data-lf");
@@ -5595,7 +5703,16 @@
   document.addEventListener("mousedown", function (e) {
     if (pickerOpen === null) return;
     if (e.target.closest && e.target.closest(".item-picker")) return;
+    // Pressing a line's Coverage box while a picker is open: closing the picker rebuilds the rows,
+    // which would destroy the box under the pointer and leave the focus nowhere. Put it in the new one.
+    var covBox = e.target.getAttribute && e.target.getAttribute("data-lf") === "coverage_override"
+      && e.target.closest && e.target.closest("[data-line]");
+    var covLine = covBox ? covBox.getAttribute("data-line") : null;
     closeItemPicker();
+    if (covLine !== null) {
+      var again = $("lines-body").querySelector('[data-line="' + covLine + '"] [data-lf="coverage_override"]');
+      if (again) { e.preventDefault(); again.focus(); }
+    }
   });
 
   /** Redraw the computed cells and totals WITHOUT rebuilding the inputs.
@@ -5612,11 +5729,27 @@
     // Waste · Roundup? · Quantity · Cost · delete. Adding a column ahead of them without moving these writes the
     // quantity into the waste box.
     var QTY_TD = 5, COST_TD = 6;
+    // The Coverage cell. Only its "Material: N" line is repainted, NEVER its box: the box is what
+    // somebody is typing in, and rebuilding it would throw the caret out.
+    var COV_TD = 2;
     for (var i = 0; i < rows.length; i++) {
       var r = p.rows[i];
       if (!r) continue;
       var tds = rows[i].querySelectorAll("td");
       if (tds.length <= COST_TD) continue;
+      var mk = tds[COV_TD].querySelector ? tds[COV_TD].querySelector("[data-cov-own]") : null;
+      if (mk) {
+        // What the box holds NOW, so a figure over the ceiling (which never reaches the model) is
+        // named under it and the box is marked, until it is corrected.
+        var covBox = tds[COV_TD].querySelector('[data-lf="coverage_override"]');
+        var mkText = covMarkText(asm.lines[i], itemOf((asm.lines[i] || {}).item_id),
+                                 covBox ? covBox.value : undefined);
+        var tooBig = mkText === COV_TOO_BIG;
+        mk.textContent = mkText;
+        mk.hidden = !mkText;
+        if (mk.classList) mk.classList.toggle("gone", tooBig);
+        if (covBox && covBox.setAttribute) covBox.setAttribute("aria-invalid", tooBig ? "true" : "false");
+      }
       // The pricing core tells them apart now (reason "no_item" vs "missing_item"), so this no
       // longer re-derives it from the line. One source of truth: renderPanel, renderList and the
       // Polish page all read the same distinction.
@@ -5673,12 +5806,11 @@
       var ctxPick = lineOf(pickItem);
       var picked = itemOf(pickItem.getAttribute("data-pick-item"));
       if (!ctxPick || !picked) return;
-      ctxPick.ln.item_id = picked.id;
+      swapLineItem(ctxPick.ln, picked.id);
       // Picking answers the question, so the list closes and the box goes back to showing the
       // chosen item. Leaving it open over the rows below reads as "still editing this line".
       delete ctxPick.ln._item_search;
       pickerOpen = null;
-      if (!(Number(ctxPick.ln.coverage) > 0)) ctxPick.ln.coverage = picked.coverage;
       say("");
       paint();
       patchSoon("assemblies", ctxPick.asm.id, { lines: ctxPick.asm.lines });

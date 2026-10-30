@@ -3216,6 +3216,23 @@ def r_switched(ran):
 
 
 @needs_node
+def test_an_assemblys_own_line_coverage_prices_the_takeoff_row_and_a_bids_own_still_wins(ran):
+    """Items & Assemblies, 2026-10-30: an assembly line may set its own coverage (`coverage_override`),
+    for that assembly only. The v2 estimate reads assemblies live off the library, so a takeoff row of
+    that assembly must price exactly as the library page prices it (library-core priceAssembly over
+    the same rows): a1's first line at 300 instead of OPF's 275. A row SAVED with this bid's own
+    line_cov (350) was priced with that figure and must keep it: the bid's figure beats the
+    assembly's, which beats the material's.
+
+    Mutation: priceLine ignores coverage_override (row == material); priceAssemblyRow keeps the
+    override on its swapped line (bidCoverage 300, not 350)."""
+    o = ran["rowCoverage"]["asmOwnCoverage"]
+    assert o["coverage"] == 300 and o["row"] == o["expected"], o
+    assert o["row"] != o["material"], "the override did not change the price at all: %s" % o
+    assert o["bidCoverage"] == 350 and o["bidRow"] == o["bidExpected"], o
+
+
+@needs_node
 def test_joint_filler_and_dye_cards_carry_a_per_bid_coverage_box(ran):
     """The two condition cards get the same Coverage box. The library kit is set to 2,000 (not
     3,500) so "the library's figure" and "the old constant" cannot be confused: 6,000 SF is 3

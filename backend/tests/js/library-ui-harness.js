@@ -46,6 +46,10 @@ const CRM = require(path.join(ROOT, "js", "crm-core.js"));
 // appliesToWorkType and the three Takeoff conditions it lists are read off it, so a made-up copy here would
 // agree with the page by construction and prove nothing. Handed to the scope as `WT`, the page's own alias.
 const WT = require(path.join(ROOT, "js", "work-types.js"));
+// The estimate's REAL Cove and Gyp area pricers, which library.html loads so the Assemblies tab can ask
+// which assemblies the bid prices by a formula (library.js formulaPriced).
+const COVE_PRICER = require(path.join(ROOT, "js", "epoxy-takeoff.js"));
+const GYP_PRICER = require(path.join(ROOT, "js", "gyp-takeoff.js"));
 
 /** Lift a named function out of the page's IIFE (two-space indent), braces balanced.
  *
@@ -148,6 +152,21 @@ function tableFromHtml(html) {
   return rows.map((rowHtml) => {
     const cells = rowHtml.split("<td").slice(1).map((c) => ({
       initial: c, written: null,
+      // The Coverage cell's "Material: N" line, the one part of that cell refreshNumbers repaints.
+      mark: /data-cov-own/.test(c) ? { textContent: (/data-cov-own[^>]*>([^<]*)</.exec(c) || ["", ""])[1],
+                                         hidden: /data-cov-own hidden/.test(c),
+                                         classes: new Set(),
+                                         get classList() {
+                                           const set = this.classes;
+                                           return { toggle(cl, on) { if (on) set.add(cl); else set.delete(cl); } };
+                                         } } : null,
+      box: /data-lf="coverage_override"/.test(c) ? {
+        value: (/data-lf="coverage_override" class="num" value="([^"]*)"/.exec(c) || ["", ""])[1], attrs: {},
+        setAttribute(k, v) { this.attrs[k] = String(v); } } : null,
+      querySelector(sel) {
+        if (sel === "[data-cov-own]") return this.mark;
+        return sel === '[data-lf="coverage_override"]' ? this.box : null;
+      },
       set innerHTML(v) { this.written = v; },
       get innerHTML() { return this.written === null ? this.initial : this.written; },
     }));
@@ -308,6 +327,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // ships on, dye ships off -- so a fixture that made those up would prove nothing about what a
   // new estimate actually opens with.
   var window = state.window || {};
+  // library.js reads these two off window as it loads; handed in by build(), the real modules.
+  var COVE_PRICER = state.COVE_PRICER || null, GYP_PRICER = state.GYP_PRICER || null;
   var openId = state.openId;
   // Which line's item picker is showing its results. pickerFor() reads it, so a test can render
   // the closed state (null, the default) or the open one by passing state.pickerOpen.
@@ -698,6 +719,21 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("itemResultsHtml")}
   ${fn("lineForSave")}
   ${fn("pickerFor")}
+  // A line's own coverage (2026-10-30): renderPanel draws the box through lineCoverageHtml, and
+  // refreshNumbers repaints its "Material: N" line through covMarkText. onLineInput is the lines
+  // table's real input handler, run against a typed event; lineOf is how it finds the line.
+  ${grab(/^  var MAX_COVERAGE = .*$/m, "the MAX_COVERAGE declaration")}
+  ${grab(/^  var COV_TOO_BIG = .*$/m, "the COV_TOO_BIG declaration")}
+  ${fn("coverageNumber")}
+  ${fn("ownCoverage")}
+  ${fn("coverageTooBig")}
+  ${fn("formulaPriced")}
+  ${fn("covMarkText")}
+  ${fn("lineCoverageHtml")}
+  ${fn("swapLineItem")}
+  ${fn("lineOf")}
+  function repaintItemResults() {}
+  ${fn("onLineInput")}
   ${fn("itemByName")}
   ${fn("renderList")}
   ${fn("renderPanel")}
@@ -796,6 +832,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
            numberHits, FILTERS,
            renderItems, datesHtml, byHtml, renderVendors, renderPanel, renderList, refreshNumbers,
            pickerFor, itemByName, similarNames, pick, adoptSaved,
+           ownCoverage, covMarkText, lineCoverageHtml, onLineInput, swapLineItem, coverageNumber, formulaPriced,
            onItemEdit, breaksForSave, toggleItemMore, addPriceBreak, removePriceBreak,
            itemMoreOpenNow: function () { return itemMoreOpen; },
            QUEUED, NUMERIC_ITEM_FIELDS, SERVER_OWNED_ITEM_FIELDS, ITEMS, VENDORS,
@@ -926,7 +963,7 @@ function build(overrides, docSelectors) {
     VENDOR_USE: { "sherwin-williams": 1, sika: 0 },
     DIVISION_USE: { epoxy: 1, "polished concrete": 1 },
     UNIT_USE: { gal: 1, gallon: 1 },
-    ADMIN: false, openId: "a1",
+    ADMIN: false, openId: "a1", COVE_PRICER, GYP_PRICER,
   }, overrides || {});
   // A SCENARIO THAT ASKS FOR THE POLISH VIEW IS ABOUT POLISH'S OWN ROWS. These fixtures were written
   // when an untyped favorite was simply "a Polish default"; now an untyped one is a Global row and
@@ -1418,13 +1455,16 @@ const out = {};
     noEditableRoundupOnTheLine: !/type="checkbox" data-lf="roundup"/.test(body),
     // Both rows must show THEIR OWN material's numbers even though the fixture's ASMS lines
     // (above) carry deliberately wrong ones — proof the material wins over a disagreeing line.
-    firstRowCoverage: (/<td class="n cov derived"><div class="line-primary">([^<]*)</
-      .exec(firstRow) || ["", ""])[1],
+    // The Coverage cell is a box now (2026-10-30, this assembly's own figure): EMPTY while the line
+    // uses the material's, with the material's figure as its placeholder. The fixture's legacy
+    // `coverage: 999` must reach neither.
+    firstRowCoverage: (/data-lf="coverage_override"[^>]*placeholder="([^"]*)"/.exec(firstRow) || ["", ""])[1],
+    firstRowCoverageValue: (/data-lf="coverage_override" class="num" value="([^"]*)"/.exec(firstRow) || ["", "?"])[1],
     firstRowWaste: (/<td class="n derived"><div class="line-primary">([^<]*)</
       .exec(firstRow) || ["", ""])[1],
     firstRowRoundup: (/<td class="ru derived"><div class="line-primary">([^<]*)</
       .exec(firstRow) || ["", ""])[1],
-    secondRowCoverage: (/<td class="n cov derived"><div class="line-primary">([^<]*)</
+    secondRowCoverage: (/data-lf="coverage_override"[^>]*placeholder="([^"]*)"/
       .exec(body.split("</tr>")[1]) || ["", ""])[1],
     secondRowWaste: (/<td class="n derived"><div class="line-primary">([^<]*)</
       .exec(body.split("</tr>")[1]) || ["", ""])[1],
@@ -1460,6 +1500,10 @@ const out = {};
   const qm = /var QTY_TD = (\d+), COST_TD = (\d+);/.exec(rn);
   out.lines.updaterIndexes = qm ? [Number(qm[1]), Number(qm[2])] : null;
   out.lines.indexesAgree = !!qm && Number(qm[1]) === qtyIdx && Number(qm[2]) === costIdx;
+  // …and the Coverage cell, whose "Material: N" line refreshNumbers repaints by position too.
+  const cm = /var COV_TD = (\d+);/.exec(rn);
+  out.lines.covIdx = tds.findIndex((t) => /data-lf="coverage_override"/.test(t));
+  out.lines.covIndexAgrees = !!cm && Number(cm[1]) === out.lines.covIdx;
   // The empty-state placeholder has to span the columns that now exist.
   const empty = build({ ASMS: [{ id: "a1", name: "Bare", unit: "SF", lines: [] }] });
   empty.api.renderPanel();
@@ -7235,6 +7279,114 @@ async function manualSaveChecks() {
     patch: facet("Patch"), floor: facet("floor"), none: facet(NONE), off: facet(""),
     barOptions: (facet("").bar.match(/<option value="([^"]*)"/g) || []).map((x) => /value="([^"]*)"/.exec(x)[1]),
     NONE,
+  };
+}
+
+// ── EXECUTED: a line's OWN coverage, for this assembly only (Hanz, 2026-10-30) ─────────────────────
+// "under the Assemblies tab, we should be able to edit the Coverage per unit", applied to THIS
+// ASSEMBLY ONLY. Line 0 carries an override of 300 over its material's 275 AND a legacy `coverage`
+// of 999 (a pre-2026-09-22 line), which must stay ignored. Line 1 has no override.
+{
+  const mk = (lines) => build({ ASMS: [{ id: "a1", name: "MACRO Flake", unit: "SF", lines }] });
+  const b = mk([
+    { role: "", item_id: "i1", coverage: 999, coverage_override: 300, waste_pct: 0, roundup: false, note: "" },
+    { role: "", item_id: "i2", coverage: 999, waste_pct: 99, roundup: true, note: "" },
+  ]);
+  b.api.renderPanel();
+  const body0 = b.dom.nodes["lines-body"].innerHTML;
+  const row = (html, i) => html.split("</tr>")[i];
+  const box = (r) => ({
+    value: (/data-lf="coverage_override" class="num" value="([^"]*)"/.exec(r) || [null, null])[1],
+    placeholder: (/data-lf="coverage_override"[^>]*placeholder="([^"]*)"/.exec(r) || [null, null])[1],
+    mark: (/data-cov-own[^>]*>([^<]*)</.exec(r) || [null, null])[1],
+    markHidden: /data-cov-own hidden/.test(r),
+    qty: (/<div class="calc mono">([^<]*)</.exec(r) || [null, null])[1],
+  });
+  const rendered = [box(row(body0, 0)), box(row(body0, 1))];
+
+  // TYPING, through the page's real input handler, on the row renderPanel drew.
+  const rows = b.dom.nodes["lines-body"].querySelectorAll("[data-line]");
+  const type = (i, value) => {
+    const r = rows[i];
+    const before = b.dom.nodes["lines-body"].innerHTML;
+    const focusedBefore = b.dom.focused.length;
+    const target = r.cells[2].box;
+    target.value = value;
+    target.getAttribute = (k) => (k === "data-lf" ? "coverage_override" : null);
+    target.closest = (sel) => (sel === "[data-line]" ? r : null);
+    const queuedBefore = b.api.QUEUED.length;
+    b.api.onLineInput({ target });
+    const q = b.api.QUEUED[b.api.QUEUED.length - 1];
+    return {
+      model: b.api.ASMS[0].lines[i].coverage_override,
+      queued: q ? q.body.lines[i].coverage_override : "none",
+      queuedLegacy: q ? q.body.lines[i].coverage : "none",
+      // the table was not rebuilt and nothing took the focus: the box being typed in survives
+      tableUntouched: b.dom.nodes["lines-body"].innerHTML === before,
+      focusMoved: b.dom.focused.length !== focusedBefore,
+      qty: (/<div class="calc mono">([^<]*)</.exec(r.cells[5].innerHTML) || [null, null])[1],
+      mark: r.cells[2].mark ? r.cells[2].mark.textContent : null,
+      markHidden: r.cells[2].mark ? r.cells[2].mark.hidden : null,
+      markWarns: r.cells[2].mark ? r.cells[2].mark.classes.has("gone") : null,
+      invalid: target.attrs["aria-invalid"] || null,
+      sent: b.api.QUEUED.length > queuedBefore,
+    };
+  };
+  const typed250 = type(0, "250");
+  const typedSame = type(0, "275");
+  const typedNegative = type(0, "-5");
+  const cleared = type(0, "");
+  const typedOnOther = type(1, "400");
+  // Over the server's 1,000,000 ceiling: named under the box, the box marked, nothing saved and the
+  // model keeps its last good figure. Back under it, the save goes out and the mark goes.
+  const typedExp = type(0, "1e5");
+  const typedTooBig = type(0, "2000000");
+  const typedTrailingDot = type(0, "300.");
+  const typedAtCeiling = type(0, "1000000");
+
+  // ASSEMBLIES THE BID PRICES BY A FORMULA keep a read-only Coverage cell: a Cove assembly and a Gyp
+  // area assembly, asked of the real epoxy-takeoff.js / gyp-takeoff.js.
+  const lockedPanel = (id) => {
+    const lk = build({ openId: id, ASMS: [{ id, name: "Locked", unit: "LF", lines: [
+      { role: "", item_id: "i1", waste_pct: 5, roundup: true, note: "" }] }] });
+    lk.api.renderPanel();
+    const html = lk.dom.nodes["lines-body"].innerHTML;
+    const rr = lk.dom.nodes["lines-body"].querySelectorAll("[data-line]")[0];
+    const before = JSON.stringify(lk.api.ASMS[0].lines);
+    // the belt: even an event that names the box changes nothing on such an assembly
+    lk.api.onLineInput({ target: { value: "300", getAttribute: (k) => (k === "data-lf" ? "coverage_override" : null),
+                                   closest: (sel) => (sel === "[data-line]" ? rr : null) } });
+    return { hasBox: /data-lf="coverage_override"/.test(html),
+             note: /Priced by a formula on the bid/.test(html),
+             readOnlyCell: (/<td class="n cov derived"><div class="line-primary">([^<]*)</.exec(html) || [null, null])[1],
+             modelUntouched: JSON.stringify(lk.api.ASMS[0].lines) === before, queued: lk.api.QUEUED.length };
+  };
+  const locked = { cove: lockedPanel("wb-epoxy-cove-epoxy-4in"), coveWrCap: lockedPanel("wb-epoxy-cove-wr-8in-plus-cap"),
+                   gyp: lockedPanel("wb-gyp-area-corridor"), ordinary: lockedPanel("wb-epoxy-macro-flake") };
+  const formulaPricedNoModules = b.api.formulaPriced({ id: "wb-epoxy-cove-epoxy-4in" }, null, null);
+
+  // A line with no material yet has nothing to override; a line whose material is gone shows no
+  // "Material: N" (the row already says Item removed).
+  const blank = mk([{ role: "", item_id: "", waste_pct: 5, roundup: true, note: "" }]);
+  blank.api.renderPanel();
+  const gone = mk([{ role: "", item_id: "deleted", coverage_override: 300, waste_pct: 5, roundup: true, note: "" }]);
+  gone.api.renderPanel();
+
+  // Picking a different material drops the override; picking the same one keeps it.
+  const a = { item_id: "i1", coverage_override: 300 };
+  b.api.swapLineItem(a, "i1");
+  const keptOnSame = a.coverage_override;
+  b.api.swapLineItem(a, "i2");
+
+  out.lineCoverage = {
+    rendered, typed250, typedSame, typedNegative, cleared, typedOnOther,
+    typedTooBig, typedExp, typedTrailingDot, typedAtCeiling, locked, formulaPricedNoModules,
+    // the reader on its own: what a stored or typed figure becomes
+    readsAs: [2000000, "1000000", "$1,250", "300.", "1e5", "-5", "abc", ""].map((v) => b.api.ownCoverage(v)),
+    blankHasBox: /data-lf="coverage_override"/.test(blank.dom.nodes["lines-body"].innerHTML),
+    goneMark: box(row(gone.dom.nodes["lines-body"].innerHTML, 0)).mark,
+    goneValue: box(row(gone.dom.nodes["lines-body"].innerHTML, 0)).value,
+    keptOnSame, droppedOnSwap: a.coverage_override, swappedTo: a.item_id,
   };
 }
 

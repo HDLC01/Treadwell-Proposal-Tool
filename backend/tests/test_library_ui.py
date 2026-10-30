@@ -1336,6 +1336,10 @@ def test_coverage_waste_and_roundup_are_read_only_and_come_from_the_material(ran
     lines = ran["lines"]
     assert lines["noEditableWasteOnTheLine"], "a waste input still lives on the line"
     assert lines["noEditableRoundupOnTheLine"], "a roundup checkbox still lives on the line"
+    # Coverage is a box since 2026-10-30 (this assembly's own figure), and with no figure of the
+    # line's own it is EMPTY with the material's 275 as its placeholder. The legacy 999 the fixture's
+    # lines carry must show in neither.
+    assert lines["firstRowCoverageValue"] == "", lines["firstRowCoverageValue"]
     assert lines["firstRowCoverage"] == "275" and lines["firstRowWaste"] == "5 %" \
         and lines["firstRowRoundup"] == "Yes", (
             "row 1 does not read the material's own numbers: %r/%r/%r"
@@ -1344,6 +1348,146 @@ def test_coverage_waste_and_roundup_are_read_only_and_come_from_the_material(ran
         and lines["secondRowRoundup"] == "No", (
             "row 2 does not read the material's own numbers: %r/%r/%r"
             % (lines["secondRowCoverage"], lines["secondRowWaste"], lines["secondRowRoundup"]))
+
+
+# ── a line's OWN coverage, this assembly only (Hanz, 2026-10-30) ──────────────────────────────────
+@needs_node
+def test_an_assembly_line_can_set_its_own_coverage_and_says_when_it_differs(ran):
+    """Hanz, 2026-10-30: "under the Assemblies tab, we should be able to edit the Coverage per unit",
+    for THIS ASSEMBLY ONLY. The real renderPanel: a line with its own 300 over its material's 275
+    shows 300 in the box, 275 as the placeholder, "Material: 275" under it, and prices at 300. A line
+    with none shows an empty box and no marker, and prices at the material's 275 (never the legacy
+    999 both fixture lines carry).
+
+    Mutation: render the material's coverage as the value; drop the placeholder; always hide (or
+    always show) the marker; read `line.coverage` instead of `coverage_override` in priceLine."""
+    own, plain = ran["lineCoverage"]["rendered"]
+    assert (own["value"], own["placeholder"], own["mark"], own["markHidden"]) == \
+        ("300", "275", "Material: 275", False), own
+    assert "÷ 300" in own["qty"], own["qty"]
+    assert (plain["value"], plain["placeholder"], plain["mark"], plain["markHidden"]) == \
+        ("", "275", "", True), plain
+    assert "÷ 275" in plain["qty"] and "999" not in plain["qty"], plain["qty"]
+
+
+@needs_node
+def test_typing_a_line_coverage_reprices_and_saves_without_rebuilding_the_box(ran):
+    """The REAL lines-table input handler (onLineInput) on the row renderPanel drew. Typing reprices
+    the row in place, repaints only the "Material: N" line, queues the whole lines array for the
+    existing assembly save (version-checked, 409-protected), and never rebuilds the table or moves
+    the focus: the box being typed in survives every keystroke. Typing the material's own figure
+    hides the marker; a negative or an emptied box goes back to the material's (null).
+
+    Mutation: call renderPanel() instead of refreshNumbers() in the handler; save the raw text; save
+    a negative; skip the marker repaint in refreshNumbers."""
+    lc = ran["lineCoverage"]
+    for k in ("typed250", "typedSame", "typedNegative", "cleared", "typedOnOther"):
+        t = lc[k]
+        assert t["tableUntouched"] and not t["focusMoved"], (k, t)
+        # the legacy key rides along untouched on the line and is dropped by the server (see
+        # test_items_and_assemblies), never repurposed
+        assert t["queuedLegacy"] == 999, (k, t)
+    t = lc["typed250"]
+    assert (t["model"], t["queued"], t["mark"], t["markHidden"]) == (250, 250, "Material: 275", False), t
+    assert "÷ 250" in t["qty"], t["qty"]
+    t = lc["typedSame"]
+    assert (t["model"], t["mark"], t["markHidden"]) == (275, "", True), t
+    for k in ("typedNegative", "cleared"):
+        t = lc[k]
+        assert (t["model"], t["queued"], t["markHidden"]) == (None, None, True), (k, t)
+        assert "÷ 275" in t["qty"], (k, t["qty"])
+    t = lc["typedOnOther"]
+    assert (t["model"], t["mark"]) == (400, "Material: 275") and "÷ 400" in t["qty"], t
+
+
+@needs_node
+def test_a_line_coverage_over_the_servers_ceiling_is_named_and_never_sent(ran):
+    """library.py refuses a coverage over 1,000,000, and a refused assembly save is requeued and
+    fails again on every later edit. So the page reads a typed figure the way the server does
+    ("1e5" and "300." are numbers), and one over the ceiling is named under the box, marks the box
+    invalid, is NOT queued, and leaves the model on its last good figure. 1,000,000 itself is fine.
+
+    Mutation: drop the ceiling from ownCoverage/coverageTooBig; queue the too-large figure; skip the
+    aria-invalid mark; parse with L.num (which reads "1e5" and "300." as nothing)."""
+    lc = ran["lineCoverage"]
+    assert lc["readsAs"] == [None, 1000000, 1250, 300, 100000, None, None, None], lc["readsAs"]
+    big = lc["typedTooBig"]
+    assert big["sent"] is False and big["model"] == 100000, big
+    assert big["mark"] == "Too large. A coverage can be at most 1,000,000." and big["markWarns"], big
+    assert big["invalid"] == "true" and big["tableUntouched"] and not big["focusMoved"], big
+    for k, want in (("typedExp", 100000), ("typedTrailingDot", 300), ("typedAtCeiling", 1000000)):
+        t = lc[k]
+        assert (t["sent"], t["model"], t["queued"], t["invalid"], t["markWarns"]) == \
+            (True, want, want, "false", False), (k, t)
+
+
+@needs_node
+def test_a_cove_or_gyp_area_assembly_keeps_a_read_only_coverage_cell(ran):
+    """The bid prices the twelve Cove assemblies and the three Gyp area assemblies by a formula
+    (epoxy-takeoff.js priceCoveRow, gyp-takeoff.js priceAreaRow) that never reads a line's coverage.
+    A box there would move this page's figure and not the bid's, so the cell stays the read-only
+    figure it was and says why; even an input event naming the box changes nothing and saves
+    nothing. Asked of the REAL coveVariant / bucketOfAssembly, which library.html now loads; an
+    ordinary assembly still has its box.
+
+    Mutation: drop the formulaPriced check from renderPanel or from onLineInput; ask only one of the
+    two pricers."""
+    lk = ran["lineCoverage"]["locked"]
+    for k in ("cove", "coveWrCap", "gyp"):
+        assert lk[k] == {"hasBox": False, "note": True, "readOnlyCell": "275",
+                         "modelUntouched": True, "queued": 0}, (k, lk[k])
+    assert lk["ordinary"]["hasBox"] is True and lk["ordinary"]["note"] is False, lk["ordinary"]
+    assert ran["lineCoverage"]["formulaPricedNoModules"] is False
+
+
+@needs_node
+def test_the_library_page_loads_the_two_formula_pricers_before_its_own_script():
+    """formulaPriced reads window.TWEpoxyTakeoff / TWGypTakeoff as library.js loads, and both need
+    excel-math and library-core ahead of them (they throw otherwise). EXECUTED the way a browser
+    loads them: library.html's own script tags, in its order, each run as a plain script on one
+    shared `self`, up to library.js; then the two are asked about a Cove and a Gyp area id.
+
+    Mutation: drop either tag, or move one below library.js or above excel-math / library-core."""
+    script = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const root = process.argv[1];
+const html = fs.readFileSync(path.join(root, "library.html"), "utf8");
+const want = ["excel-math.js", "library-core.js", "epoxy-takeoff.js", "gyp-takeoff.js"];
+const ctx = vm.createContext({});
+ctx.self = ctx;
+const srcs = Array.from(html.matchAll(/<script src="\/js\/([^"]+)"><\/script>/g), (m) => m[1]);
+const ran = [];
+for (const s of srcs) {
+  if (s === "library.js") break;
+  if (want.indexOf(s) === -1) continue;
+  vm.runInContext(fs.readFileSync(path.join(root, "js", s), "utf8"), ctx);
+  ran.push(s);
+}
+console.log(JSON.stringify({ ran: ran.sort(),
+  cove: !!(ctx.TWEpoxyTakeoff && ctx.TWEpoxyTakeoff.coveVariant("wb-epoxy-cove-epoxy-4in")),
+  gyp: ctx.TWGypTakeoff ? ctx.TWGypTakeoff.bucketOfAssembly("wb-gyp-area-soft") : null }));
+"""
+    proc = subprocess.run(["node", "-e", script, str(FRONTEND)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert got == {"ran": sorted(["excel-math.js", "library-core.js", "epoxy-takeoff.js", "gyp-takeoff.js"]),
+                   "cove": True, "gyp": "soft"}, got
+
+
+@needs_node
+def test_a_line_coverage_needs_a_material_and_leaves_with_it(ran):
+    """A line with no material has no box (nothing to override). A line whose material was deleted
+    keeps its figure visible but claims no "Material: N" (the row already says Item removed).
+    Picking a DIFFERENT material drops the override, since the figure was said about the old
+    product; picking the same one keeps it.
+
+    Mutation: draw the box on an unpicked line; keep the override on a swap; drop it on a re-pick."""
+    lc = ran["lineCoverage"]
+    assert lc["blankHasBox"] is False
+    assert lc["goneValue"] == "300" and lc["goneMark"] == "", lc
+    assert lc["keptOnSame"] == 300
+    assert lc["droppedOnSwap"] is None and lc["swappedTo"] == "i2", lc
 
 
 @needs_node
@@ -1456,6 +1600,10 @@ def test_the_live_updater_writes_into_the_cells_the_row_actually_has(ran):
     assert lines["indexesAgree"], (
         "refreshNumbers writes %s but the row's qty/cost cells are at %s"
         % (lines["updaterIndexes"], [lines["qtyIdx"], lines["costIdx"]]))
+    # The Coverage box's "Material: N" line is repainted by position as well (2026-10-30).
+    assert lines["covIdx"] == 2 and lines["covIndexAgrees"], (
+        "refreshNumbers' COV_TD does not point at the row's Coverage cell (rendered at %s)"
+        % lines["covIdx"])
 
 
 @needs_node
