@@ -8566,6 +8566,13 @@ def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Req
             "ok": False, "code": "already_sent",
             "error": "This project was already sent, so no new proposals were made here. Press "
                      "Create Multiple Proposals on the Proposal step if you want them."})
+    if payload.auto:
+        # THE BOARD READS A PROJECT OF SEVERAL PROPOSALS AS ONE ("a won mark on any scope stops the
+        # lot", _followups_off_for_outcome): any live proposal of it that moved on or was sent
+        # stops step 3 too, not only Base Bid 1 (review of 028b1701).
+        refused = _auto_fan_out_group_refusal(draft_id, row.get("data") or {})
+        if refused is not None:
+            return refused
     try:
         # A proposal a base swap left out of step is MOVED to the base bid it should price, unless
         # the customer has it: the same question, asked of that child (drafts._plan_reconcile).
@@ -8588,6 +8595,42 @@ def _auto_fan_out_closed(data: Dict[str, Any]) -> Optional[str]:
                       ("handed_off", "handed off"), ("won", "won")):
         if data.get(key):
             return said
+    return None
+
+
+_AUTO_TAIL = ", so no new proposals were made here. Press Create Multiple Proposals on the Proposal step if you want them."
+
+
+def _auto_fan_out_group_refusal(parent_id: str, parent: Dict[str, Any]) -> Optional[JSONResponse]:
+    """Step 3's own fan-out (`auto`) refused for a LIVE proposal of `parent_id` (drafts._proposal_rows:
+    its children not trashed and not archived) that is won, lost, on hold or handed off (409 closed),
+    or that the customer has (409 already_sent), named by its sheet; None when none is. Marks first
+    (no read), then each child's revisions, the portal asked only for one with none
+    (_draft_was_sent's order). A portal that cannot say refuses (502 portal_unreachable): step 3
+    never makes proposals on a guess. Writes nothing."""
+    gid = drafts._scope_of(parent)[0]
+    kids = drafts._proposal_rows(parent_id, gid) if gid else []
+
+    def name(c: Dict[str, Any]) -> str:
+        return (drafts.proposal_sheet_label(parent, (c.get("data") or {}).get("base_tab_id"))
+                or c.get("label") or "A proposal of this project")
+    for c in kids:
+        said = _auto_fan_out_closed(c.get("data") or {})
+        if said:
+            return JSONResponse(status_code=409, content={
+                "ok": False, "code": "closed", "error": "%s is %s%s" % (name(c), said, _AUTO_TAIL)})
+    for c in kids:
+        try:
+            sent = _draft_was_sent(c["id"])
+        except HTTPException as exc:
+            log.warning("create proposals (auto) refused for draft %s: the portal could not say "
+                        "whether proposal %s was sent (%s)", _log_safe(parent_id), _log_safe(c["id"]),
+                        exc.status_code)
+            return _proposals_portal_silent("No proposals were made.")
+        if sent:
+            return JSONResponse(status_code=409, content={
+                "ok": False, "code": "already_sent",
+                "error": "%s was already sent%s" % (name(c), _AUTO_TAIL)})
     return None
 
 
