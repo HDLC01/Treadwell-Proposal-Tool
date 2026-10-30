@@ -537,3 +537,56 @@ def test_the_strip_names_a_base_bid_whose_proposal_is_archived(fake_supabase, mo
     assert [m["id"] for m in g["members"]] == ["p1"], "an archived proposal is in the strip"
     assert g["trashed"] == [{"id": "a1", "base_tab_id": "Copy1", "where": "archived", "sheet_label": "Room 2"},
                             {"id": "t1", "base_tab_id": "Polish", "where": "trash", "sheet_label": "Polish"}]
+
+
+# ── any live proposal of the project stops step 3, not only Base Bid 1 (review of 028b1701) ──
+@pytest.mark.parametrize("what, code, said", [
+    ("sent", "already_sent", "Room 2 was already sent"),
+    ("won", "closed", "Room 2 is won"),
+    ("on_hold", "closed", "Room 2 is on hold")])
+def test_a_child_that_moved_on_or_was_sent_stops_the_auto_fan_out(fake_supabase, monkeypatch, what, code, said):
+    """The adversarial repro: p1 fanned out with Room 2 (Copy1); Room 2 is then sent, won or put on
+    hold on its own card; Polish is ticked on p1. Step 3's `auto` call is refused, flat, naming Room
+    2, and makes nothing; the button's call (no `auto`) still makes Polish's proposal."""
+    for auto in (True, False):
+        store = _seed(fake_supabase, monkeypatch, dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1"]))
+        monkeypatch.setattr(main, "_portal", _no_portal_row)
+        r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "base_ids": ["Epoxy", "Copy1"]})
+        assert r.status_code == 200, r.text
+        kid = _kids(store)[0]
+        if what == "sent":
+            store["draft_revisions"].append({"project_id": kid["id"], "revision_no": 1})
+        else:
+            kid["data"][what] = {"at": "2026-10-30", "reason": "x"}
+        _row(store, "p1")["data"]["base_tab_ids"] = ["Epoxy", "Copy1", "Polish"]
+        r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "auto": auto,
+                                                         "base_ids": ["Epoxy", "Copy1", "Polish"]})
+        bases = sorted(k["data"]["base_tab_id"] for k in _kids(store))
+        if auto:
+            assert r.status_code == 409, r.text
+            j = r.json()
+            assert j["ok"] is False and j["code"] == code
+            assert j["error"] == said + ", so no new proposals were made here. Press Create Multiple " \
+                                        "Proposals on the Proposal step if you want them."
+            assert bases == ["Copy1"], "a proposal was made"
+        else:
+            assert r.status_code == 200, r.text
+            assert bases == ["Copy1", "Polish"]
+
+
+def test_a_portal_that_cannot_say_whether_a_child_was_sent_refuses_the_auto_fan_out(fake_supabase, monkeypatch):
+    store = _seed(fake_supabase, monkeypatch, dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1"]))
+    monkeypatch.setattr(main, "_portal", _no_portal_row)
+    assert client.post("/api/draft/p1/proposals", json={"draft_version": V, "base_ids": ["Epoxy", "Copy1"]}).status_code == 200
+    kid = _kids(store)[0]["id"]
+
+    def portal(path, method="GET", body=None):
+        if kid in path:
+            raise main.HTTPException(500, "portal down")
+        raise main.HTTPException(404, "not_found")
+    monkeypatch.setattr(main, "_portal", portal)
+    _row(store, "p1")["data"]["base_tab_ids"] = ["Epoxy", "Copy1", "Polish"]
+    r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "auto": True,
+                                                     "base_ids": ["Epoxy", "Copy1", "Polish"]})
+    assert r.status_code == 502 and r.json()["code"] == "portal_unreachable"
+    assert len(_kids(store)) == 1
