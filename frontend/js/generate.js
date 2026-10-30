@@ -17,6 +17,31 @@
  * what is being built, and each row ends Built (its price and its three files) or with the reason it
  * was not. Only Continue to Proposal, Back and the step pills leave.
  *
+ * EVERY BASE BID GETS ITS PROPOSAL FIRST (Hanz, 2026-10-30: "Create them, then build all"; a project
+ * with Epoxy, Room 2 and Polish ticked as base bids showed ONE row, because the proposals are made by
+ * the Proposal step's Create Multiple Proposals button and step 3 comes before step 4). When this
+ * draft is a parent (no `proposal_of`) with a base of its own, two or more base bids (TWPrice.baseIds
+ * over TW.v2PricingView of the draft: the button's own order, proposal-review.js create(); v1 ticks
+ * and v2 "Separate base bid" switches alike), and a base bid no live proposal prices yet, step 3 makes
+ * them first, the button's way: this page's save flushed, the server's row read for its version,
+ * POST /api/draft/{id}/proposals {draft_version, base_ids} (drafts.fan_out_proposals: idempotent,
+ * the test rule its own), then the server's copy taken in place of this browser's (TW.useServerCopy).
+ * NO RELOAD: this page holds no snapshot of the draft, so it reads the strip the answer carries and
+ * goes on, once per visit. A refusal says the server's sentence once at the top (#gen-alert) and the
+ * proposals that exist are built. Never from a copy of this browser the server does not have.
+ * A DELETED PROPOSAL IS NOT MADE AGAIN: a base bid whose proposal is in the Trash (the strip's
+ * `trashed`, archived ones included) is sent as `leave_out` (it stays ticked; the server makes nothing
+ * for it), and the top says to restore it or untick it. NOT ON ITS OWN FOR A PROJECT THAT MOVED ON:
+ * won, lost, on hold or handed off is skipped here, and the call says `auto`, so the route also
+ * refuses a project the customer already has (409 already_sent / closed); the button still can.
+ *
+ * ONE NAME PER ROW (Hanz, 2026-10-30: "it should show the 3 sheet names instead of this one project
+ * name only"): a project of two or more base bids names every row after its sheet, Base Bid 1's
+ * included (the strip's display_label, else its sheet_label), and says the project's name once, above.
+ *
+ * NO DOWNLOADS HERE (Hanz, 2026-10-30: "There should be no button downloads in the Generate Files
+ * tab"): a row says Built or Up to date and its price, or why not; the files are downloaded on 5 Files.
+ *
  * EVERY LIVE PROPOSAL IS BUILT, off the SERVER's copy of each:
  *   * a child whose copy of the estimate is older than the estimate (`stale`), or that prices no base
  *     bid of its own (`out_of_step`): the project's Refresh runs first, once, the very call the
@@ -49,12 +74,10 @@
  *   * the server still has that very saved copy (`draft_version`, its `updated_at`), and its render
  *     cache holds the render of exactly that document (main._render_key: the payload's hash, which is
  *     everything the .xlsx and the .docx are filled from, the template and the code) with all three
- *     files made, the PDF included (POST /api/draft/{id}/documents/held). The files come back under
- *     fresh tokens; nothing is rendered and LibreOffice does not run.
+ *     files made, the PDF included (POST /api/draft/{id}/documents/held). Nothing is rendered and
+ *     LibreOffice does not run.
  * An estimate-only edit changes the draft's inputs, so its document no longer holds: it is composed
- * again and rebuilt. A link whose token has expired since (a restart, an hour) builds the files of
- * the copy its row was judged on again (`draft_version`) and downloads them, as the Files step does;
- * a copy saved since is refused and the link says to reload. "Rebuild all" builds every one again,
+ * again and rebuilt. "Rebuild all" builds every one again,
  * cache or not: the safety net. Compose frames run FRAME_LIMIT at once (each its own window, token,
  * seed and draft); builds run LIMIT at once in all, the frames' included (`buildSlot`); the server
  * caps the template fills (main._GENERATE_SEM) and LibreOffice (main._PDF_RENDER_SEM) itself.
@@ -75,6 +98,7 @@
   var ESTIMATE = "/estimate-review.html";
   var rows = [];
   var refreshCalls = 0;
+  var fanOutCalls = 0;
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -82,7 +106,6 @@
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
-  function icon(name, size) { return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : ""; }
 
   /** The draft whose Intake and Estimate these are: a proposal made from another draft's estimate
    *  has none of its own, so its parent's (TW.redirectProposalChild's rule). */
@@ -131,7 +154,10 @@
     catch (e) { return { ok: false, status: 0, error: "The server could not be reached. Check your connection." }; }
     var json = null;
     try { json = await res.json(); } catch (e) { json = null; }
-    if (!res.ok || (json && json.ok === false)) return { ok: false, status: res.status, error: sentence(res.status, json) };
+    if (!res.ok || (json && json.ok === false)) {
+      return { ok: false, status: res.status, error: sentence(res.status, json),
+               code: json && typeof json.code === "string" ? json.code : "" };
+    }
     return { ok: true, status: res.status, body: json };
   }
   /** The server's copy of draft `id` and the version it was stored as: {data, version}, or null. */
@@ -354,28 +380,21 @@
   var LABEL = { waiting: "Waiting", building: "Building…", built: "Built", failed: "Not built",
                 skipped: "Not built", rebuilding: "Rebuilding…", uptodate: "Up to date" };
   function hasFiles(r) { return (r.status === "built" || r.status === "uptodate") && !!r.files; }
-  var FILES = [["xlsx_download_url", "Estimate (.xlsx)", "_estimate.xlsx"],
-               ["docx_download_url", "Proposal (.docx)", "_proposal.docx"],
-               ["pdf_download_url", "Proposal (.pdf)", "_proposal.pdf"]];
 
+  /** Every row: its name, its status and price, and its note. NO DOWNLOAD CONTROL (Hanz, 2026-10-30):
+   *  the files are downloaded on 5 · Files. */
   function paint() {
     var list = $("gen-list");
     if (!list) return;
-    list.innerHTML = rows.map(function (r, i) {
+    list.innerHTML = rows.map(function (r) {
       // ONE NAME (Hanz, 2026-10-29): a proposal is called what its sheet is called, so no "(sheet)" after it.
       var name = esc(r.name)
         + (r.current && rows.length > 1 ? ' <span class="gen-here">this proposal</span>' : "");
-      var links = hasFiles(r) ? FILES.filter(function (f) { return r.files[f[0]]; })
-        .map(function (f) {
-          return '<button type="button" class="download-link gen-dl" data-row="' + i + '" data-file="' + f[0] + '">'
-            + icon("arrow-down", 14) + " " + esc(f[1]) + "</button>";
-        }).join("") : "";
       return '<li class="gen-row gen-' + esc(r.status) + '" data-id="' + esc(r.id) + '">'
         + '<div class="gen-head"><span class="gen-name">' + name + "</span>"
         + '<span class="gen-status">' + esc(LABEL[r.status] || r.status)
         + (hasFiles(r) && r.total ? " · " + esc(r.total) : "") + "</span></div>"
         + (r.message ? '<p class="gen-msg">' + esc(r.message) + "</p>" : "")
-        + (links ? '<div class="gen-files">' + links + "</div>" : "")
         + "</li>";
     }).join("");
   }
@@ -384,6 +403,20 @@
     if (!n) return;
     n.textContent = text || "";
     n.hidden = !text;
+  }
+  /** The one sentence at the top of the page: why the base bids' proposals were not made. */
+  function alertTop(text) {
+    var n = $("gen-alert");
+    if (!n) return;
+    n.textContent = text || "";
+    n.hidden = !text;
+  }
+  /** The project's name, said once above the rows when they are named after their sheets. */
+  function heading(name) {
+    var n = $("gen-project");
+    if (!n) return;
+    n.textContent = name || "";
+    n.hidden = !name;
   }
   function summary() {
     var built = rows.filter(function (r) { return r.status === "built"; }).length;
@@ -399,50 +432,6 @@
     }
     if (built === rows.length) return rows.length === 1 ? "The files are built." : "All " + rows.length + " proposals are built.";
     return built + " of " + rows.length + " built." + (failed ? why : "");
-  }
-
-  async function download(btn) {
-    var row = rows[Number(btn.getAttribute("data-row"))];
-    var key = btn.getAttribute("data-file");
-    var f = FILES.filter(function (x) { return x[0] === key; })[0];
-    if (!row || !row.files || !f) return;
-    var orig = btn.innerHTML;
-    btn.disabled = true;
-    try {
-      var resp = await fetch(TW.absoluteUrl(row.files[key]), { headers: TW.authHeaders() });
-      if (resp.status === 404) {
-        // ITS TOKEN EXPIRED (they live in the server's memory: a restart, or an hour). The files of
-        // its saved document are built again, as the Files step does, and this file is fetched once more.
-        // OF THE COPY THE ROW SHOWS, OR NOT AT ALL (review of c6016a9d): the build names the saved copy
-        // the row was judged on (`draft_version`), so a copy saved since, from another tab, is refused
-        // (409) and the link says to reload this page, which judges it again, as before the heal.
-        if (!row.version) throw new Error("expired");
-        var again = await buildSlot(function () {
-          return call("POST", "/api/draft/" + encodeURIComponent(row.id) + "/documents",
-                      { hold_placeholders: !row.auto, draft_version: row.version });
-        });
-        if (again.status === 409) throw new Error("expired");
-        if (!again.ok || !again.body || !again.body[key]) throw new Error(again.error || "HTTP 404");
-        row.files = again.body;
-        if (typeof again.body.document_total === "string") row.total = again.body.document_total;
-        paint();
-        resp = await fetch(TW.absoluteUrl(row.files[key]), { headers: TW.authHeaders() });
-      }
-      if (!resp.ok) throw new Error(resp.status === 404 ? "expired" : "HTTP " + resp.status);
-      var blob = new Blob([await resp.arrayBuffer()], { type: "application/octet-stream" });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = String(row.name || "proposal").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) + f[2];
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
-      btn.disabled = false;
-    } catch (e) {
-      btn.textContent = /expired/.test(String(e && e.message)) ? "Expired, reload this page" : "Failed, try again";
-      setTimeout(function () { btn.innerHTML = orig; btn.disabled = false; }, 2200);
-    }
   }
 
   // ── the visit ────────────────────────────────────────────────────────────────────────────────
@@ -502,6 +491,117 @@
     return ms;
   }
 
+  // ── the base bids with no proposal yet (see EVERY BASE BID GETS ITS PROPOSAL FIRST, at the top) ──
+  /** The base bids of draft `st` in Base Bid order, as Create Multiple Proposals sends them: the
+   *  button's own TWPrice.baseIds over the draft the Proposal step reads (TW.v2PricingView), so a v1
+   *  tick and a v2 "Separate base bid" switch are read alike. [] when this draft cannot be fanned out
+   *  here: a child (its base bids are its parent's), or no base of its own (a combo's or a v2 bid's
+   *  combined Epoxy + Polish base is one proposal; the server would say combined_base). */
+  function baseBidsOf(st) {
+    if (!st || typeof st !== "object" || (typeof st.proposal_of === "string" && st.proposal_of)) return [];
+    if (typeof st.base_tab_id !== "string" || !st.base_tab_id) return [];
+    if (typeof TWPrice === "undefined" || !TWPrice || typeof TWPrice.baseIds !== "function") return [];
+    var ids = TWPrice.baseIds(TW.v2PricingView ? TW.v2PricingView(st) : st);
+    return ids.length >= 2 && ids[0] === st.base_tab_id ? ids : [];
+  }
+  /** The base bids after the first that no live proposal of the strip prices yet. */
+  function unproposed(ids, members) {
+    return ids.slice(1).filter(function (tab) {
+      return !members.some(function (m) { return m && !m.is_parent && m.base_tab_id === tab; });
+    });
+  }
+  /** CREATE MULTIPLE PROPOSALS, the Proposal step's sequence (proposal-review.js create() / post()):
+   *  this page's save flushed and waited for, the server's row read for its version, the proposals
+   *  asked of exactly that copy, then the server's copy taken in place of this browser's. No reload:
+   *  nothing on this page was built from the copy before. {ok, body} or {ok: false, error}. */
+  async function fanOut(id, ids, leaveOut) {
+    if ((await TW.flushState()) === false) {
+      return { ok: false, error: "This page's changes did not reach the server, so no proposals were made. "
+        + "Reload this page and try again." };
+    }
+    var row = TW.readServerRow ? await TW.readServerRow() : null;
+    if (!row || !row.version) {
+      return { ok: false, error: "The saved copy could not be read, so no proposals were made. Reload this page and try again." };
+    }
+    fanOutCalls++;
+    var r = await call("POST", "/api/draft/" + encodeURIComponent(id) + "/proposals",
+                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [], auto: true });
+    if (!r.ok) return r;
+    if (TW.useServerCopy) await TW.useServerCopy();
+    return { ok: true, body: r.body || {} };
+  }
+  /** What a fan-out did, for the progress line. */
+  function fanSaid(body) {
+    var kids = Array.isArray(body && body.children) ? body.children : [];
+    var made = kids.filter(function (c) { return c && c.created === true; }).length;
+    var moved = kids.filter(function (c) { return c && c.moved_from; }).length;
+    var out = [];
+    if (made) out.push("Made " + made + " more proposal" + (made === 1 ? "" : "s") + " from the base bids on the estimate.");
+    if (moved) out.push((moved === 1 ? "1 proposal was" : moved + " proposals were") + " moved to the base bid it should price.");
+    return out.join(" ");
+  }
+  /** A DELETED PROPOSAL IS NOT MADE AGAIN (Hanz, 2026-10-30). The base bids of `missing` whose
+   *  proposal is in the Trash (the strip's `trashed`), as {tab: its sheet's name}. */
+  function inTheTrash(view, missing) {
+    var out = {};
+    (view && Array.isArray(view.trashed) ? view.trashed : []).forEach(function (t) {
+      if (t && typeof t.base_tab_id === "string" && missing.indexOf(t.base_tab_id) >= 0) {
+        out[t.base_tab_id] = { name: t.sheet_label || t.base_tab_id, where: t.where === "archived" ? "archived" : "trash" };
+      }
+    });
+    return out;
+  }
+  /** One sentence per kind: the ones in the Trash, then the archived ones (drafts._trashed_proposals). */
+  function trashSaid(put) {
+    function line(names, trash) {
+      var own = names.map(function (n) { return n + "'s"; });
+      var list = own.length < 2 ? own[0] : own.slice(0, -1).join(", ") + " and " + own[own.length - 1];
+      if (trash) {
+        return own.length < 2
+          ? list + " proposal is in the Trash, so it was not made again. Restore it from the Trash, or untick it as a base bid."
+          : list + " proposals are in the Trash, so they were not made again. Restore them from the Trash, or untick them as base bids.";
+      }
+      return own.length < 2
+        ? list + " proposal is archived, so it was not made again. Unarchive it on the board, or untick it as a base bid."
+        : list + " proposals are archived, so they were not made again. Unarchive them on the board, or untick them as base bids.";
+    }
+    var trash = put.filter(function (p) { return p.where === "trash"; }).map(function (p) { return p.name; });
+    var kept = put.filter(function (p) { return p.where === "archived"; }).map(function (p) { return p.name; });
+    return [trash.length ? line(trash, true) : "", kept.length ? line(kept, false) : ""].filter(Boolean).join(" ");
+  }
+  /** What the board says this project is when it has moved on: step 3 then makes no proposals on
+   *  its own (the route refuses an `auto` call for it too, main._auto_fan_out_closed). "" otherwise.
+   *  SENT is the server's to say (its revisions and the portal): nothing in the draft says it
+   *  reliably, and `generate_result` is written by this page's own builds. */
+  function movedOn(st) {
+    if (!st) return "";
+    if (st.closed_lost) return "closed as lost";
+    if (st.on_hold) return "on hold";
+    if (st.handed_off) return "handed off";
+    if (st.won) return "won";
+    return "";
+  }
+  /** The sentence at the top for a fan-out that did not go through: the server's own, said once. */
+  function notMade(fan) {
+    var s = String((fan && fan.error) || "").trim() || "Try again.";
+    var code = fan && fan.code;
+    if (code === "already_sent" || code === "closed") return s;
+    if (code === "document_changed") {
+      return "No proposals were made for the other base bids: this project was saved again after this page "
+        + "read it, from another page or computer. Reload this page and they will be made.";
+    }
+    return /^(No proposals were made|Nothing (was|changed))/.test(s) ? s : "No proposals were made for the other base bids. " + s;
+  }
+  /** The name of the sheet `d` prices, when the strip did not say (it was not read). */
+  function sheetOf(d) {
+    var tab = d && typeof d.base_tab_id === "string" ? d.base_tab_id : "";
+    if (!tab) return "";
+    var labels = d.tab_labels && typeof d.tab_labels === "object" ? d.tab_labels : {};
+    if (typeof labels[tab] === "string" && labels[tab].trim()) return labels[tab].trim();
+    var t = (Array.isArray(d.priced_tabs) ? d.priced_tabs : []).filter(function (x) { return x && x.id === tab; })[0];
+    return t && typeof t.name === "string" && t.name.trim() ? t.name.trim() : "";
+  }
+
   async function visit(force) {
     try { await TW.draftReady; } catch (e) { /* the checks below decide */ }
     // initDraftSync is reloading this page onto its own project: the reload decides instead.
@@ -518,13 +618,25 @@
       return;
     }
     say("Generating files…");
+    alertTop("");
 
     var view = await TW.readProposals(id);
     var members = membersOf(view, id, st);
     var seen = await TW.reconcileWithServer();
+    // ONE NAME PER ROW once the project has two base bids or more (see the top).
+    var bases = baseBidsOf(st);
+    var bySheet = bases.length >= 2 || members.length > 1;
+    function nameOf(m, data) {
+      if (bySheet) {
+        return m.display_label || m.sheet_label || sheetOf(data) || m.label
+          || (data && data.project_name) || st.project_name || "Proposal";
+      }
+      return m.display_label || m.label || (data && data.project_name) || st.project_name || "Proposal";
+    }
     if (seen.status === "unreachable") {
+      heading(bySheet ? st.project_name : "");
       rows = members.map(function (m) {
-        return { id: m.id, name: m.display_label || m.label || st.project_name, sheet: m.sheet_label || "",
+        return { id: m.id, name: nameOf(m, m.id === id ? st : null), sheet: m.sheet_label || "",
                  current: m.id === id, status: "failed",
                  message: "The saved project could not be read, so nothing was built. Check your connection, then reload this page." };
       });
@@ -539,6 +651,50 @@
       TW.setState({});
       if (await TW.flushState()) seen = await TW.reconcileWithServer();
     }
+    // The copy this browser holds now: the saved one, unless it was "kept" (read again: "adopted").
+    st = TW.getState() || st;
+    bases = baseBidsOf(st);
+    bySheet = bases.length >= 2 || members.length > 1;
+    heading(bySheet ? st.project_name : "");
+
+    // EVERY BASE BID GETS ITS PROPOSAL FIRST, ONCE PER VISIT, when one has none yet. Off the saved
+    // copy only: a copy of this browser's the server does not have is decided on the Files step
+    // first, as Refresh is (NOT_SAVED). The strip it answers is the list built below.
+    var made = "";
+    var tops = [];
+    var missing = view && bases.length >= 2 ? unproposed(bases, members) : [];
+    // One in the Trash, or archived, stays ticked and is not made again: the route is told to leave it out.
+    var binned = inTheTrash(view, missing);
+    var leaveOut = missing.filter(function (tab) { return Object.prototype.hasOwnProperty.call(binned, tab); });
+    missing = missing.filter(function (tab) { return leaveOut.indexOf(tab) < 0; });
+    if (leaveOut.length) tops.push(trashSaid(leaveOut.map(function (tab) { return binned[tab]; })));
+    var moved = movedOn(st);
+    if (missing.length && moved) {
+      tops.push("This project is " + moved + ", so no new proposals were made here. Press Create Multiple "
+        + "Proposals on the Proposal step if you want them.");
+    } else if (missing.length && seen.status === "ahead") {
+      tops.push("No proposals were made for the other base bids: this browser's changes could not be saved. "
+        + "Check your connection, then reload this page.");
+    } else if (missing.length && NOT_SAVED[seen.status]) {
+      tops.push("No proposals were made for the other base bids: this browser's copy of the project "
+        + "doesn't match the saved one. Open the Files step to choose which copy to keep, then come back.");
+    } else if (missing.length) {
+      say("Generating files: making a proposal for each base bid on the estimate…");
+      var fan = await fanOut(id, bases, leaveOut);
+      if (!fan.ok) {
+        tops.push(notMade(fan));
+      } else {
+        made = fanSaid(fan.body);
+        st = TW.getState() || st;
+        var strip = fan.body.proposals && Array.isArray(fan.body.proposals.members) ? fan.body.proposals
+          : await TW.readProposals(id);
+        if (strip) { view = strip; members = membersOf(strip, id, st); }
+        // The server's copy is this browser's now (useServerCopy): the two agree.
+        seen = await TW.reconcileWithServer();
+        if (seen.status === "unreachable") seen = { status: "same", server: null };
+      }
+    }
+    alertTop(tops.join(" "));
 
     // REFRESH FIRST, ONCE, when a child is behind the estimate or out of step with the base bids.
     var refresh = null;
@@ -572,7 +728,7 @@
     }));
     rows = members.map(function (m, i) {
       var data = reads[i] ? reads[i].data : null;
-      var name = m.display_label || m.label || (data && data.project_name) || st.project_name || "Proposal";
+      var name = nameOf(m, data);
       var plan = sort(m, data, m.id === id, seen, refresh);
       var neverOpened = plan === "frame" && !(data && data.proposal_payload && data.proposal_payload.values);
       return { id: m.id, name: name, sheet: m.sheet_label || "", current: m.id === id,
@@ -610,31 +766,20 @@
       var out = await composeInFrame(r, r.data);
       if (!out.ok) { fail(r, out.reason); return; }
       if (r.current) framedCurrent = true;
-      // The copy its frame saved, so a link healed later builds that copy or says to reload.
-      var saved = await readRow(r.id);
-      r.version = saved && saved.data && saved.data.proposal_payload ? saved.version : "";
       await build(r, force);
     }
     await Promise.all([
       pool(rows.filter(function (r) { return r.plan === "build"; }), LIMIT,
-           async function (r) { begin(r); await versionOf(r); return build(r, force); }),
+           async function (r) { begin(r); return build(r, force); }),
       pool(rows.filter(function (r) { return r.plan === "frame"; }), FRAME_LIMIT, composeThenBuild),
     ]);
     // The open proposal's document was composed in a frame and saved: this browser's copy takes it,
     // as it was the saved copy until then ("adopted"), so no page here holds the one from before.
     if (framedCurrent) { try { await TW.reconcileWithServer(); } catch (e) { /* the next page asks again */ } }
-    // `version` stays: it is the saved copy each row's files are of, which an expired link heals from.
     rows.forEach(function (r) { delete r.data; });
-    say(summary());
+    say((made ? made + " " : "") + summary());
   }
 
-  var list = $("gen-list");
-  if (list && list.addEventListener) {
-    list.addEventListener("click", function (e) {
-      var btn = e.target && e.target.closest ? e.target.closest("button.gen-dl") : null;
-      if (btn) download(btn);
-    });
-  }
   // "REBUILD ALL": every proposal built again, cache or not (the safety net). Offered once a run has
   // finished, and not while one is going.
   var running = null;
@@ -667,5 +812,6 @@
       })));
     },
     refreshCalls: function () { return refreshCalls; },
+    fanOutCalls: function () { return fanOutCalls; },
   };
 })();

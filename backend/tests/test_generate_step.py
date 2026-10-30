@@ -100,7 +100,7 @@ def test_staging_shape_builds_all_three_without_leaving_the_page(ran):
     assert s["frames"]["nav"] == [], "a frame navigated"
     assert s["frames"]["errors"] == []
     assert s["renders"] == [["d1", "$12,500"], ["c2", "$8,000"], ["c3", "$6,000"]]
-    assert len(s["links"]) == 9
+    assert s["links"] == [], "step 3 offers a download"
     assert s["note"] == "All 3 proposals are built."
     assert s["next"] == "/proposal-review.html?d=d1"
 
@@ -208,7 +208,7 @@ def test_a_changed_estimate_is_composed_in_a_frame_then_built_without_leaving(ra
     assert o["rendered"] == [{"id": "d1", "texture": "Orange Peel", "total": "$12,500"}], o["rendered"]
     assert o["rows"] == [{"id": "d1", "name": "Door Test", "sheet": "", "status": "built",
                           "total": "$12,500", "message": "", "current": True}]
-    assert o["links"] == ["0:xlsx_download_url", "0:docx_download_url", "0:pdf_download_url"]
+    assert o["links"] == []
     assert o["note"] == "The files are built."
     assert o["mark"] is None, "a document a person composed was marked as built by nobody"
     assert o["slotTotal"] == "$12,500"
@@ -232,8 +232,8 @@ def test_an_unchanged_arrival_is_up_to_date_and_builds_nothing(ran):
 def test_only_the_edited_proposal_is_rebuilt(ran):
     """"If we only edited one proposal then it should only regenerate that proposal." Three built on
     the first visit; RJ then rewrote Polish's scope. The next visit composes and builds Polish only;
-    Epoxy and Room 2 are "Up to date" with their prices and their three links, each asked of the
-    server with the version of the copy judged."""
+    Epoxy and Room 2 are "Up to date" with their prices, each asked of the server with the version
+    of the copy judged."""
     o = ran["onlyChanged"]
     assert [r["status"] for r in o["first"]["rows"]] == ["built"] * 3 and o["first"]["posted"] == ["d1", "c2", "c3"]
     assert [(r["id"], r["status"], r["total"]) for r in o["rows"]] == [
@@ -242,37 +242,10 @@ def test_only_the_edited_proposal_is_rebuilt(ran):
     assert o["posted"] == ["c2"] and o["frames"] == ["c2"] and o["rendered"] == ["c2"] and o["pdfs"] == ["c2"]
     assert o["c2Scope"] == "RJ's new scope for the polish"
     assert sorted(o["checked"]) == [["c3", True, True], ["d1", True, True]]
-    assert len(o["links"]) == 9
+    assert o["links"] == []
     assert o["note"] == "1 rebuilt, 2 up to date."
     assert o["notes"][-1] == "1 rebuilt, 2 up to date."
     assert o["nav"] == [] and o["rebuildShown"] and not o["rebuildDisabled"]
-
-
-@needs_node
-def test_up_to_date_links_download_and_heal_after_a_restart(ran):
-    """The links of an "Up to date" row download its files. After a restart (every token expired) a
-    link builds the files of the saved document again (the render is still cached: no new render)
-    and downloads, as the Files step does, instead of dead-ending."""
-    e = ran["expired"]
-    assert e["xlsx"] == {"name": "Epoxy_estimate.xlsx", "bytes": "X d1"}
-    assert e["pdf"] == {"name": "Room_2_proposal.pdf", "bytes": "%PDF c3"}
-    assert e["healed"] == {"name": "Epoxy_proposal.pdf", "bytes": "%PDF d1"}
-    assert e["healedFrame"] == {"name": "Polish_proposal.pdf", "bytes": "%PDF c2"}
-    # Each heal names the saved copy its row was judged on (Polish: the copy its frame saved).
-    assert e["posted"] == [["d1", True, False, VERSION], ["c2", True, False, VERSION]]
-    assert e["rendered"] == 0
-
-
-@needs_node
-def test_a_link_of_a_copy_saved_since_says_reload_and_builds_nothing(ran):
-    """Review of c6016a9d: Epoxy was re-priced and saved in another tab ($12,000) after its row was
-    judged ($10,000), then every token expired. Its link must not build and download the $12,000 copy
-    under a row that reads $10,000: the heal names the copy judged, the server refuses (409), and the
-    link says to reload this page, which judges the row again."""
-    s = ran["savedSince"]
-    assert s["posted"] == [["d1", VERSION]]
-    assert s["saved"] is None and s["text"] == "Expired, reload this page"
-    assert s["rendered"] == 0 and s["row"] == ["built", "$10,000"] and s["statusText"] == "Built · $10,000"
 
 
 @needs_node
@@ -285,7 +258,7 @@ def test_rebuild_all_builds_every_one_again(ran):
     assert sorted(r["rendered"]) == [["c2", True], ["c3", True], ["d1", True]]
     assert r["pdfs"] == 3 and r["checks"] == 0 and r["frames"] == 0
     assert r["note"] == "All 3 proposals are built." and r["nav"] == []
-    assert r["rebuildShown"] and not r["rebuildDisabled"] and len(r["links"]) == 9
+    assert r["rebuildShown"] and not r["rebuildDisabled"] and r["links"] == []
 
 
 @needs_node
@@ -427,7 +400,7 @@ def test_a_sent_child_a_lost_sibling_and_failed_builds_say_why(ran):
     assert _row(rows, "c4")["message"] == ("The estimate and proposal were built, but the PDF could "
                                            "not be made: Failed to render the PDF. Please try again.")
     assert h["posted"] == ["d1", "c2", "c4"]
-    assert h["links"] == ["0:xlsx_download_url", "0:docx_download_url", "0:pdf_download_url"]
+    assert h["links"] == []
     assert h["note"].startswith("1 of 5 built.") and "You can still continue" in h["note"]
     assert h["next"] == "/proposal-review.html?d=d1" and h["nextDisabled"] is False
 
@@ -477,6 +450,47 @@ def test_back_and_the_pills_follow_the_draft(ran):
 @needs_node
 def test_no_project_builds_nothing(ran):
     assert ran["empty"] == {"emptyShown": True, "posted": 0, "nav": []}
+
+
+# ── no downloads on step 3 (Hanz, 2026-10-30) ─────────────────────────────────────────────────
+DOWNLOAD_CONTROL = re.compile(r"<button|<a\b|download|data-file|gen-dl|gen-files|_url", re.I)
+
+
+def _download_controls(lists):
+    """Every list step 3 drew, in every scenario of a run, that offers anything to press or fetch."""
+    return [x for x in lists if DOWNLOAD_CONTROL.search(x)]
+
+
+@needs_node
+def test_no_row_offers_a_download(ran):
+    """"There should be no button downloads in the Generate Files tab." Every list drawn in every
+    scenario of the run (built, up to date, failed, skipped, rebuilt) holds rows, each a name, a
+    status with its price, and a note; nothing to press and no file's address. The files are built
+    exactly as before: they are downloaded on 5 · Files."""
+    assert len(ran["lists"]) >= 15, "the run drew too few lists to say anything"
+    assert sum("Built · " in x for x in ran["lists"]) >= 5, "no built row was drawn"
+    assert _download_controls(ran["lists"]) == []
+    assert ran["staging"]["links"] == [] and ran["onlyChanged"]["links"] == []
+
+
+@needs_node
+def test_a_download_button_put_back_is_seen(tmp_path):
+    """The proof of the one above: one button back in each row and the run sees it."""
+    front = _mutant(tmp_path, "js/generate.js",
+                    "        + (r.message ? '<p class=\"gen-msg\">' + esc(r.message) + \"</p>\" : \"\")\n",
+                    "        + '<button type=\"button\" class=\"download-link gen-dl\" data-row=\"0\" "
+                    "data-file=\"pdf_download_url\">Proposal (.pdf)</button>'\n"
+                    "        + (r.message ? '<p class=\"gen-msg\">' + esc(r.message) + \"</p>\" : \"\")\n")
+    o = _run(front)
+    assert _download_controls(o["lists"]), "a download button in every row went unnoticed"
+
+
+@needs_node
+def test_the_page_says_where_to_download():
+    html = (FRONTEND / "generate.html").read_text(encoding="utf-8")
+    assert "download them on the Files step" in html
+    js = (FRONTEND / "js" / "generate.js").read_text(encoding="utf-8")
+    assert "gen-dl" not in js and "createObjectURL" not in js and "async function download" not in js
 
 
 # ── mutations: each scenario above goes red without the line it relies on ───────────────────
@@ -534,8 +548,6 @@ MUTATIONS = [
     ("up-to-date-needs-the-document-to-hold", G, '    return TW.documentHolds(data) ? "build" : "frame";',
      '    return "build";',
      lambda o: o["estimateOnly"]["rows"][1] != ["c2", "built", "$9,500"]),
-    ("expired-link-heals", G, "      if (resp.status === 404) {", "      if (false) {",
-     lambda o: o["expired"]["healed"] is None),
     ("builds-share-one-limit", G, "    return buildSlot(function () { return buildNow(row, force); });",
      "    return buildNow(row, force);", lambda o: o["buildCap"]["peak"] > 3),
     ("load-not-in-compose-time", G, "      timer = setTimeout(tooLong, FRAME_OPEN_MS);",
@@ -544,15 +556,6 @@ MUTATIONS = [
     ("compose-limit-armed-at-started", G,
      "          timer = setTimeout(tooLong, FRAME_MS);\n          return;", "          return;",
      lambda o: 30000 not in o["slowLoad"]["limits"]),
-    ("heal-names-the-copy", G,
-     "                      { hold_placeholders: !row.auto, draft_version: row.version });",
-     "                      { hold_placeholders: !row.auto });",
-     lambda o: o["savedSince"]["saved"] is not None),
-    ("heal-409-says-reload", G, '        if (again.status === 409) throw new Error("expired");', "",
-     lambda o: o["savedSince"]["text"] != "Expired, reload this page"),
-    ("frame-row-keeps-its-version", G,
-     '      r.version = saved && saved.data && saved.data.proposal_payload ? saved.version : "";',
-     '      r.version = "";', lambda o: o["expired"]["healedFrame"] is None),
     ("rebuild-all-is-fresh", G, "    if (force) ask.rebuild = true;", "    if (false) ask.rebuild = true;",
      lambda o: o["rebuild"]["rendered"] == []),
     ("rebuild-all-asks-nothing", G,
