@@ -10101,7 +10101,7 @@
       const ok = await TW.confirmDanger({
         title: "Delete this proposal?", name: nameOf(m), before: "",
         after: " goes to the Trash. Base Bid 1 and the estimate stay as they are.",
-        detail: "Its sheet is still set to Base bid, so Create Multiple Proposals or the next Generate Files would make it again: set the sheet to Option or Off to stop that.",
+        detail: "Its sheet is still set to Base bid, so Create Multiple Proposals would make it again: set the sheet to Option or Off to stop that.",
         confirmText: "Delete proposal" });
       if (!ok) return;
       busy = true;

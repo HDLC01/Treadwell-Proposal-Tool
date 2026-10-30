@@ -2520,7 +2520,8 @@ def adopt_sheet_label(draft_id: str, actor: Optional[str] = None) -> Optional[st
 
 def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] = None,
                       sent: bool = False,
-                      child_sent: Optional[Callable[[str], bool]] = None) -> Dict[str, Any]:
+                      child_sent: Optional[Callable[[str], bool]] = None,
+                      leave_out: Optional[List[Any]] = None) -> Dict[str, Any]:
     """CREATE MULTIPLE PROPOSALS: one child draft per base bid of `parent_id` after the first.
 
     `base_ids` are the ticked base sheets in Base Bid order; `base_ids[0]` must be the parent's own
@@ -2544,7 +2545,14 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
     "created"[, "moved_from"]}], "out_of_step": [{"id", "label", "code"[, "message"]}]}. RAISES
     ScopeError: not_found (404); too_few_bases, no_such_sheet, option_only_base, combined_base,
     base_order, not_fanned_from_child, invalid_scope_group (400); test_mix, label_taken,
-    too_many_scopes (409); split_failed (503). `child_sent` may raise; nothing is written then."""
+    too_many_scopes (409); split_failed (503). `child_sent` may raise; nothing is written then.
+
+    `leave_out`: base bids of `base_ids` that get NO NEW child this time, though they stay ticked
+    (`base_tab_ids` records every one). 3 · Generate Files names those whose proposal is in the Trash
+    (proposals_view `trashed`; Hanz, 2026-10-30: a deleted proposal is not made again). A live child
+    already on such a sheet is kept, and one out of step may still move to it; Base Bid 1 is never
+    left out. Each left out is listed in `left_out` and in no `children` entry."""
+    skip = {str(t) for t in (leave_out or []) if isinstance(t, str) and t}
     sb = get_client()
     cur = sb.table("drafts").select("id,data").eq("id", parent_id).limit(1).execute()
     if not cur.data:
@@ -2595,7 +2603,8 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
     moved = {tab: c for c, tab in rec["moves"]}
     members = [m for m in (_group_rows(gid) if isinstance(existing, dict) else [])
                if m["id"] != parent_id]
-    new_tabs = [t for t in ids[1:] if t not in kept and t not in moved]
+    skip.discard(ids[0])
+    new_tabs = [t for t in ids[1:] if t not in kept and t not in moved and t not in skip]
     if len(members) + len(new_tabs) + 1 > MAX_SCOPES:
         raise ScopeError("too_many_scopes",
                          "A project can be split into %d proposals at most." % MAX_SCOPES, 409)
@@ -2620,7 +2629,7 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
     plan: List[Tuple[str, str]] = []
     moves: List[Tuple[Dict[str, Any], str, str]] = []
     for pos, tab in enumerate(ids[1:], start=2):
-        if tab in kept:
+        if tab in kept or (tab in skip and tab not in moved):
             continue
         if tab in moved and moved[tab]["id"] not in renamed:
             moves.append((moved[tab], tab, moved[tab]["label"]))
@@ -2698,10 +2707,11 @@ def fan_out_proposals(parent_id: str, base_ids: List[Any], actor: Optional[str] 
             c, lab = by_move[tab]
             children.append({"id": c["id"], "label": lab, "base_tab_id": tab, "created": False,
                              "moved_from": c["data"].get("base_tab_id")})
-        else:
+        elif tab in by_tab:
             children.append(by_tab[tab])
     return {"group_id": gid, "parent": {"id": parent_id, "label": parent_label},
-            "children": children, "out_of_step": rec["stuck"]}
+            "children": children, "out_of_step": rec["stuck"],
+            "left_out": [t for t in ids[1:] if t in skip and t not in kept and t not in by_move]}
 
 
 def _move_child(sb: Any, parent: Dict[str, Any], c: Dict[str, Any], tab: str, label: str,
@@ -2942,7 +2952,39 @@ def proposals_view(draft_id: str) -> Optional[Dict[str, Any]]:
                         "out_of_step": why.get(c["id"]),
                         "estimate_synced_at": c["data"].get("estimate_synced_at")})
     return {"parent_id": parent_id, "group_id": gid, "estimate_digest": digest, "members": members,
-            "group_others": _group_others(rows, {m["id"] for m in members})}
+            "group_others": _group_others(rows, {m["id"] for m in members}),
+            "trashed": _trashed_proposals(parent_id, parent, members)}
+
+
+def _trashed_proposals(parent_id: str, parent: Dict[str, Any],
+                       members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The base bids of `parent` whose proposal is IN THE TRASH (a draft with deleted_at set and
+    proposal_of `parent_id`) and that no live proposal prices, each {id, base_tab_id, sheet_label},
+    in Base Bid order. 3 · Generate Files makes a base bid's missing proposal (fan_out_proposals),
+    except these: a proposal somebody deleted is not made again (Hanz, 2026-10-30). Read only when
+    the parent has a base bid to make one for, as a small projection; [] when it has none, or when
+    the Trash cannot be read (logged)."""
+    wanted = _wanted_sheets(parent) or []
+    live = {m.get("base_tab_id") for m in members}
+    open_tabs = [t for t in wanted if t not in live]
+    if not open_tabs or parent.get("proposal_of"):
+        return []
+    try:
+        res = (get_client().table("drafts")
+               .select("id,deleted_at,proposal_of:data->>proposal_of,base_tab_id:data->>base_tab_id")
+               .not_.is_("deleted_at", "null").execute())
+    except Exception as exc:  # noqa: BLE001 — the strip still answers; step 3 then asks as before
+        _log.warning("the Trash could not be read for draft %s: %s", _log_safe(parent_id), type(exc).__name__)
+        return []
+    binned: Dict[str, str] = {}
+    for r in res.data or []:
+        blob = r.get("data") or {}
+        of = r["proposal_of"] if "proposal_of" in r else blob.get("proposal_of")
+        tab = r["base_tab_id"] if "base_tab_id" in r else blob.get("base_tab_id")
+        if of == parent_id and tab in open_tabs and tab not in binned and r.get("id"):
+            binned[tab] = str(r["id"])
+    return [{"id": binned[t], "base_tab_id": t, "sheet_label": proposal_sheet_label(parent, t) or t}
+            for t in open_tabs if t in binned]
 
 
 def _group_others(rows: List[Dict[str, Any]], mine: set) -> List[Dict[str, Any]]:

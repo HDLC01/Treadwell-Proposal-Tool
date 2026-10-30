@@ -128,6 +128,25 @@ def test_only_the_missing_one_is_made_and_the_existing_one_kept(fan):
     assert p["note"] == "Made 1 more proposal from the base bids on the estimate. All 3 proposals are built."
 
 
+TRASH_SAID = ("Room 2's proposal is in the Trash, so it was not made again. Restore it from the Trash, "
+              "or untick it as a base bid.")
+
+
+@needs_node
+def test_a_proposal_in_the_trash_is_not_made_again(fan):
+    """Room 2's proposal was deleted. The fan-out still names every base bid (the estimate keeps its
+    ticks) and asks the server to leave Room 2 out; Polish's is made. The top says so in one line,
+    and Rebuild all asks nothing again (the only one missing is in the Trash)."""
+    t = fan["trashed"]
+    assert t["asked"] == [{"base_ids": ["Epoxy", "Copy1", "Polish"], "leave_out": ["Copy1"]}]
+    assert t["kids"] == ["Polish"]
+    assert t["rows"] == [["d1", "Epoxy", "built"], ["c2", "Polish", "built"]]
+    assert t["alert"] == TRASH_SAID and t["alerts"] == [TRASH_SAID]
+    assert t["note"] == "Made 1 more proposal from the base bids on the estimate. All 2 proposals are built."
+    assert t["nav"] == [] and t["nextDisabled"] is False
+    assert t["again"] == {"fanouts": 1, "alert": TRASH_SAID, "nav": [], "rows": [["d1", "built"], ["c2", "built"]]}
+
+
 @needs_node
 def test_one_base_bid_makes_nothing_and_keeps_the_project_name(fan):
     o = fan["oneBase"]
@@ -191,8 +210,9 @@ MUTATIONS = [
      "    var ids = [st.base_tab_id].concat(st.base_tab_ids.filter(function (x) { return x !== st.base_tab_id; }));",
      lambda f: f["v1Direct"]["fanouts"][0]["base_ids"] != ["Epoxy", "Copy1", "Polish"]
      or f["v2Direct"]["fanouts"][0]["base_ids"] != ["Polish", "Epoxy", "Copy1"]),
-    ("the-saved-copys-version", G, "                       { draft_version: row.version, base_ids: ids });",
-     "                       { base_ids: ids });",
+    ("the-saved-copys-version", G,
+     "                       { draft_version: row.version, base_ids: ids, leave_out: leaveOut || [] });",
+     "                       { base_ids: ids, leave_out: leaveOut || [] });",
      lambda f: len(f["v1Direct"]["rows"]) != 3),
     ("existing-kept", G,
      "      return !members.some(function (m) { return m && !m.is_parent && m.base_tab_id === tab; });",
@@ -202,7 +222,11 @@ MUTATIONS = [
      '    if (!st || typeof st !== "object") return [];', lambda f: f["child"]["fanouts"] != 0),
     ("not-off-a-kept-copy", G, "    if (missing.length && NOT_SAVED[seen.status]) {", "    if (false) {",
      lambda f: f["kept"]["fanouts"] != 0),
-    ("refusal-said", G, "        alertTop(notMade(fan.error));", '        alertTop("");',
+    ("trashed-not-made-again", G,
+     "    var leaveOut = missing.filter(function (tab) { return Object.prototype.hasOwnProperty.call(binned, tab); });",
+     "    var leaveOut = [];",
+     lambda f: "Copy1" in f["trashed"]["kids"] or f["trashed"]["alert"] == ""),
+    ("refusal-said", G, "        tops.push(notMade(fan.error));", "",
      lambda f: f["refusedTestMix"]["alert"] == "" and f["refusedPortal"]["alert"] == ""),
     ("no-reload", G, "    if (TW.useServerCopy) await TW.useServerCopy();",
      "    if (TW.useServerCopy && await TW.useServerCopy()) window.location.reload();",
@@ -297,3 +321,62 @@ def test_the_route_refuses_flat_so_step_3_can_say_it(fake_supabase, monkeypatch)
     j = r.json()
     assert j["ok"] is False and j["code"] == "test_mix" and isinstance(j["error"], str) and j["error"]
     assert _kids(store) == []
+
+
+# ── a proposal in the Trash is not made again (Hanz, 2026-10-30) ──────────────────────────────
+def _binned(rid, parent, tab, **data):
+    """A proposal of `parent` on sheet `tab`, sent to the Trash (deleted_at set)."""
+    return {"id": rid, "data": dict({"project_name": "Acme HQ", "is_test": True, "proposal_of": parent,
+                                     "base_tab_id": tab, "scope_group": {"id": "grp_x", "label": "Room 2"}},
+                                    **data),
+            "owner_email": "k", "created_at": "2026-10-02", "updated_at": V,
+            "deleted_at": "2026-10-29T12:00:00+00:00"}
+
+
+def test_the_strip_names_a_base_bid_whose_proposal_is_in_the_trash(fake_supabase, monkeypatch):
+    """`trashed`: Room 2's proposal is in the Trash and no live one prices Room 2. A trashed proposal
+    of ANOTHER project, one on a sheet that is no base bid, and a sheet a live proposal prices are
+    not listed."""
+    data = dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1", "Polish"])
+    store = _seed(fake_supabase, monkeypatch, data,
+                  extra=[_binned("t1", "p1", "Copy1"), _binned("t2", "other", "Polish"),
+                         _binned("t3", "p1", "Seal")])
+    g = client.get("/api/draft/p1/proposals").json()
+    assert g["trashed"] == [{"id": "t1", "base_tab_id": "Copy1", "sheet_label": "Room 2"}]
+    # Once a live proposal prices Polish and Room 2, nothing is listed.
+    monkeypatch.setattr(main, "_portal", _no_portal_row)
+    assert client.post("/api/draft/p1/proposals", json={"draft_version": V, "base_ids": ["Epoxy", "Copy1", "Polish"]}).status_code == 200
+    assert client.get("/api/draft/p1/proposals").json()["trashed"] == []
+    # One base bid: the Trash is not even read.
+    store2 = _seed(fake_supabase, monkeypatch, dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy"]),
+                   extra=[_binned("t1", "p1", "Copy1")])
+    assert client.get("/api/draft/p1/proposals").json()["trashed"] == []
+    assert store and store2
+
+
+def test_leave_out_keeps_the_tick_and_makes_nothing_for_it(fake_supabase, monkeypatch):
+    """What step 3 sends for Room 2 in the Trash: every base bid, Room 2 left out. Polish's proposal
+    is made, Room 2's is not, and the parent still records all three ticks. Without `leave_out` the
+    same press makes Room 2's again (the button's behaviour, unchanged)."""
+    for leave in (["Copy1"], []):
+        data = dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1", "Polish"])
+        store = _seed(fake_supabase, monkeypatch, data, extra=[_binned("t1", "p1", "Copy1")])
+        monkeypatch.setattr(main, "_portal", _no_portal_row)
+        r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "leave_out": leave,
+                                                         "base_ids": ["Epoxy", "Copy1", "Polish"]})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        live = sorted(k["data"]["base_tab_id"] for k in _kids(store) if not k.get("deleted_at"))
+        if leave:
+            assert live == ["Polish"] and j["left_out"] == ["Copy1"]
+            assert [c["base_tab_id"] for c in j["children"]] == ["Polish"]
+            assert [m["display_label"] for m in j["proposals"]["members"]] == ["Epoxy", "Polish"]
+            assert j["proposals"]["trashed"] == [{"id": "t1", "base_tab_id": "Copy1", "sheet_label": "Room 2"}]
+        else:
+            assert live == ["Copy1", "Polish"] and j["left_out"] == []
+        assert _row(store, "p1")["data"]["base_tab_ids"] == ["Epoxy", "Copy1", "Polish"], "a tick was lost"
+    # Base Bid 1 is never left out.
+    store = _seed(fake_supabase, monkeypatch, dict(copy.deepcopy(PARENT), base_tab_ids=["Epoxy", "Copy1"]))
+    r = client.post("/api/draft/p1/proposals", json={"draft_version": V, "leave_out": ["Epoxy"],
+                                                     "base_ids": ["Epoxy", "Copy1"]})
+    assert r.status_code == 200 and r.json()["left_out"] == [] and len(_kids(store)) == 1

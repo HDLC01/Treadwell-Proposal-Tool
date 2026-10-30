@@ -8492,6 +8492,9 @@ class ProposalsIn(BaseModel):
     first being this draft's own base; `draft_version` is the scope routes' stale-copy guard."""
     draft_version: Optional[str] = None
     base_ids: List[str] = Field(default_factory=list)
+    # Base bids that stay ticked but get no new proposal: 3 · Generate Files names the ones whose
+    # proposal is in the Trash (drafts.proposals_view `trashed`), so a deleted one is not made again.
+    leave_out: List[str] = Field(default_factory=list)
 
 
 class ProposalsRefreshIn(BaseModel):
@@ -8550,7 +8553,7 @@ def api_draft_proposals_create(draft_id: str, payload: ProposalsIn, request: Req
         # A proposal a base swap left out of step is MOVED to the base bid it should price, unless
         # the customer has it: the same question, asked of that child (drafts._plan_reconcile).
         out = drafts.fan_out_proposals(draft_id, payload.base_ids, _user_email(request), sent,
-                                       child_sent=_draft_was_sent)
+                                       child_sent=_draft_was_sent, leave_out=payload.leave_out)
     except drafts.ScopeError as exc:
         return _scope_refusal(exc)
     except HTTPException as exc:

@@ -530,9 +530,14 @@ async function fanProject(o) {
   b.server.onFanOut = (body) => {
     const p = b.server.d1;
     const children = [];
+    // `leave_out` stays ticked and gets no new child (a proposal of it is in the Trash).
+    const skip = Array.isArray(body.leave_out) ? body.leave_out : [];
+    const binned = (b.server.view && b.server.view.trashed) || [];
+    const leftOut = [];
     body.base_ids.slice(1).forEach((tab) => {
       const have = Object.keys(b.server.drafts).filter((k) => b.server.drafts[k].base_tab_id === tab)[0];
       if (have) { children.push({ id: have, label: sheet(tab), base_tab_id: tab, created: false }); return; }
+      if (skip.indexOf(tab) >= 0) { leftOut.push(tab); return; }
       const cid = "c" + (++n);
       const c = copy(p);
       ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "proposal_auto_built",
@@ -551,7 +556,8 @@ async function fanProject(o) {
     const kids = Object.keys(b.server.drafts);
     b.server.view = view([{ id: "d1", sheet_label: parentSheet, base_tab_id: p.base_tab_id }].concat(kids.map((k) => ({
       id: k, sheet_label: sheet(b.server.drafts[k].base_tab_id), base_tab_id: b.server.drafts[k].base_tab_id }))));
-    return { parent: { id: "d1", label: parentSheet }, children, out_of_step: [] };
+    b.server.view.trashed = binned.filter((t) => !kids.some((k) => b.server.drafts[k].base_tab_id === t.base_tab_id));
+    return { parent: { id: "d1", label: parentSheet }, children, out_of_step: [], left_out: leftOut };
   };
   return b;
 }
@@ -618,6 +624,21 @@ async function fanProject(o) {
       const g = await openGenerate(b, "/generate.html?d=d1");
       fan.partial = { fanouts: (b.server.fanouts || []).map((f) => f.body.base_ids),
                       rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]), note: g.note, nav: g.nav };
+    }
+    // A PROPOSAL IN THE TRASH IS NOT MADE AGAIN (Hanz, 2026-10-30): Room 2's was deleted, so the
+    // fan-out leaves it out and makes Polish's; the top says so. Rebuild all asks nothing again.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.view.trashed = [{ id: "cT", base_tab_id: "Copy1", sheet_label: "Room 2" }];
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      const asked = (b.server.fanouts || []).map((f) => ({ base_ids: f.body.base_ids, leave_out: f.body.leave_out }));
+      const kids = Object.keys(b.server.drafts).map((k) => b.server.drafts[k].base_tab_id);
+      const alerts = g.alerts.slice();
+      const r = await g.rebuildAll();
+      fan.trashed = { asked, kids, rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]), alert: g.alert,
+                      alerts, note: g.note, nav: g.nav, nextDisabled: g.nextDisabled,
+                      again: { fanouts: (b.server.fanouts || []).length, alert: r.alert, nav: r.nav,
+                               rows: rowsBrief(r).map((x) => [x.id, x.status]) } };
     }
     // ONE BASE BID: no fan-out, and the row keeps the project's name.
     {
