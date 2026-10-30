@@ -1078,6 +1078,18 @@ def _shaped_override(v: Any) -> Optional[float]:
     return f if (f is not None and 0 < f <= _MAX_COVERAGE) else None
 
 
+# ASSEMBLIES THE BID PRICES BY A FORMULA, NOT BY THEIR LINES: the twelve Cove assemblies (the
+# estimate's epoxy-takeoff.js COVE, priced by the sheet's own cove formula) and the three Gyp area
+# assemblies (gyp-takeoff.js AREA_ASSEMBLIES, priced by thickness and mix). A line's own coverage
+# would move the library page's figure and never the bid's, so update_assembly drops one sent for
+# these and _shape_assembly reads none back. The Assemblies tab asks the same two JS functions
+# (library.js formulaPriced). test_assembly_line_coverage pins this set to those two tables.
+FORMULA_PRICED_ASSEMBLY_IDS = frozenset(
+    ["wb-epoxy-cove-%s-%s%s" % (kind, size, cap)
+     for kind in ("epoxy", "wr") for size in ("4in", "6in", "8in") for cap in ("", "-plus-cap")]
+    + ["wb-gyp-area-soft", "wb-gyp-area-hard", "wb-gyp-area-corridor"])
+
+
 def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
     lines = row.get("lines")
     if not isinstance(lines, list):
@@ -1095,7 +1107,8 @@ def _shape_assembly(row: Dict[str, Any]) -> Dict[str, Any]:
             # This assembly's own coverage for the line (see _coverage_override), or None for "the
             # material's". Read-shaped to the writer's rule, so a stored value that is not a positive
             # number reads as not set rather than reaching the pricer.
-            "coverage_override": _shaped_override((ln or {}).get("coverage_override")),
+            "coverage_override": (None if row.get("id") in FORMULA_PRICED_ASSEMBLY_IDS
+                                  else _shaped_override((ln or {}).get("coverage_override"))),
             # Both read-shaped with the same defaults the writer applies, so a line stored before
             # these columns existed prices identically whether or not it has been re-saved since.
             "waste_pct": _waste_of(ln),
@@ -1172,6 +1185,11 @@ def update_assembly(asm_id: str, payload: Dict[str, Any],
     patch = validate_assembly(payload, partial=True)
     if not patch:
         return get_assembly(asm_id)
+    if asm_id in FORMULA_PRICED_ASSEMBLY_IDS and isinstance(patch.get("lines"), list):
+        # The bid prices this one by a formula and never reads its lines' coverage, so no caller
+        # may give a line one: it would move the library page's figure and not the bid's.
+        for ln in patch["lines"]:
+            ln.pop("coverage_override", None)
     patch["updated_at"] = _now_iso()
     patch["updated_by"] = _actor(editor_email)
     sb = get_client()

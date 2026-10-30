@@ -463,6 +463,8 @@
     .lines .role input { width:100%; min-width:96px; }
     .lines select { width:100%; min-width:150px; }
     .lines .cov input { width:82px; }
+    /* A line's own coverage over the server's ceiling: marked, named under the box, never sent. */
+    .lines input[aria-invalid="true"] { border-color:var(--warn); }
     .lines .line-primary { min-height:32px; display:flex; align-items:center; justify-content:flex-end; }
     .lines .line-primary .gone { margin-top:0; }
     .lines .line-action { justify-content:center; }
@@ -1704,6 +1706,12 @@
   <script src="/js/bid-engine.js"></script>
   <script src="/js/bid-model.js"></script>
   <script src="/js/library-core.js"></script>
+  <!-- The estimate's Cove and Gyp area pricers, for ONE question: which assemblies the bid prices by a
+       formula instead of by their lines (coveVariant, bucketOfAssembly). Those keep a read-only Coverage
+       cell here, since a coverage typed on their lines would never reach the bid. Pure functions over
+       excel-math and library-core (both loaded above), no DOM, nothing runs on load. -->
+  <script src="/js/epoxy-takeoff.js"></script>
+  <script src="/js/gyp-takeoff.js"></script>
   <!-- ONE FUNCTION out of this file, and the eighteenth page to load it: TWCrm.nameOf, which is
        the app's single email→display-name convention ("kyle.loseke@…" → "Kyle Loseke"). The
        Assemblies rail sorts and labels by who created an assembly, and the alternative was a

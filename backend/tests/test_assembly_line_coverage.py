@@ -185,6 +185,51 @@ def test_a_bad_line_coverage_is_a_readable_400_and_writes_nothing(store, as_user
     assert store["library_assemblies"][0]["lines"][0] == {"role": "", "item_id": "opf", "note": None}
 
 
+# ── assemblies the bid prices by a formula take no line coverage ─────────────────────────────
+@needs_node
+def test_the_servers_formula_priced_ids_are_exactly_the_estimates_cove_and_gyp_area_assemblies():
+    """library.py's FORMULA_PRICED_ASSEMBLY_IDS is the server's copy of what the estimate prices by a
+    formula: epoxy-takeoff.js COVE (twelve cove assemblies) and gyp-takeoff.js AREA_ASSEMBLIES (three).
+    Pinned to the real tables, so a cove added there without one here fails."""
+    got = node("const E = require(%s), G = require(%s);"
+               "out(Object.keys(E.COVE).concat(Object.keys(G.AREA_ASSEMBLIES).map((k) => G.AREA_ASSEMBLIES[k].id)))"
+               % (json.dumps(str(FRONTEND / "js" / "epoxy-takeoff.js")),
+                  json.dumps(str(FRONTEND / "js" / "gyp-takeoff.js"))))
+    assert len(got) == 15 and set(got) == set(library.FORMULA_PRICED_ASSEMBLY_IDS), got
+
+
+def _put_assembly(store, asm_id, lines):
+    store["library_assemblies"].append({"id": asm_id, "name": asm_id, "unit": "LF", "lines": lines,
+                                        "created_at": "t0", "updated_at": "t0", "deleted_at": None})
+
+
+@pytest.mark.parametrize("asm_id", ["wb-epoxy-cove-epoxy-4in", "wb-epoxy-cove-wr-8in-plus-cap", "wb-gyp-area-hard"])
+def test_no_caller_can_give_a_cove_or_gyp_area_line_its_own_coverage(store, as_user, asm_id):
+    """The bid prices these by a formula that never reads a line's coverage, so a figure here would
+    move only the library page. The route takes the rest of the edit and drops the override; one
+    already stored (a hand-edited row) reads back as none. An ordinary assembly keeps its own.
+
+    Mutation: drop the strip in update_assembly, or the id check in _shape_assembly."""
+    _put_assembly(store, asm_id, [{"role": "Cove liquids", "item_id": "wb-epoxy-cove-rez"}])
+    r = client.patch("/api/library/assemblies/%s" % asm_id, json={
+        "expected_updated_at": "t0",
+        "lines": [{"role": "Cove liquids", "item_id": "wb-epoxy-cove-rez", "coverage_override": 30,
+                   "note": "kept"}]})
+    assert r.status_code == 200, r.text
+    stored = store["library_assemblies"][0]["lines"][0]
+    assert "coverage_override" not in stored and stored["note"] == "kept", stored
+    assert r.json()["assembly"]["lines"][0]["coverage_override"] is None
+    store["library_assemblies"][0]["lines"][0]["coverage_override"] = 30
+    assert library.get_assembly(asm_id)["lines"][0]["coverage_override"] is None
+
+
+def test_an_ordinary_seeded_assembly_still_takes_a_line_coverage(store, as_user):
+    _put_assembly(store, "wb-epoxy-macro-flake", [{"item_id": "opf"}])
+    r = client.patch("/api/library/assemblies/wb-epoxy-macro-flake", json={
+        "lines": [{"item_id": "opf", "coverage_override": 300}]})
+    assert r.status_code == 200 and r.json()["assembly"]["lines"][0]["coverage_override"] == 300.0
+
+
 # ── existing assemblies price to the cent as they did ─────────────────────────────────────────
 @needs_node
 def test_every_seeded_assembly_prices_exactly_as_before_this_change(tmp_path):

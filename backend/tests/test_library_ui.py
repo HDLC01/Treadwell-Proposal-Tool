@@ -1401,6 +1401,81 @@ def test_typing_a_line_coverage_reprices_and_saves_without_rebuilding_the_box(ra
 
 
 @needs_node
+def test_a_line_coverage_over_the_servers_ceiling_is_named_and_never_sent(ran):
+    """library.py refuses a coverage over 1,000,000, and a refused assembly save is requeued and
+    fails again on every later edit. So the page reads a typed figure the way the server does
+    ("1e5" and "300." are numbers), and one over the ceiling is named under the box, marks the box
+    invalid, is NOT queued, and leaves the model on its last good figure. 1,000,000 itself is fine.
+
+    Mutation: drop the ceiling from ownCoverage/coverageTooBig; queue the too-large figure; skip the
+    aria-invalid mark; parse with L.num (which reads "1e5" and "300." as nothing)."""
+    lc = ran["lineCoverage"]
+    assert lc["readsAs"] == [None, 1000000, 1250, 300, 100000, None, None, None], lc["readsAs"]
+    big = lc["typedTooBig"]
+    assert big["sent"] is False and big["model"] == 100000, big
+    assert big["mark"] == "Too large. A coverage can be at most 1,000,000." and big["markWarns"], big
+    assert big["invalid"] == "true" and big["tableUntouched"] and not big["focusMoved"], big
+    for k, want in (("typedExp", 100000), ("typedTrailingDot", 300), ("typedAtCeiling", 1000000)):
+        t = lc[k]
+        assert (t["sent"], t["model"], t["queued"], t["invalid"], t["markWarns"]) == \
+            (True, want, want, "false", False), (k, t)
+
+
+@needs_node
+def test_a_cove_or_gyp_area_assembly_keeps_a_read_only_coverage_cell(ran):
+    """The bid prices the twelve Cove assemblies and the three Gyp area assemblies by a formula
+    (epoxy-takeoff.js priceCoveRow, gyp-takeoff.js priceAreaRow) that never reads a line's coverage.
+    A box there would move this page's figure and not the bid's, so the cell stays the read-only
+    figure it was and says why; even an input event naming the box changes nothing and saves
+    nothing. Asked of the REAL coveVariant / bucketOfAssembly, which library.html now loads; an
+    ordinary assembly still has its box.
+
+    Mutation: drop the formulaPriced check from renderPanel or from onLineInput; ask only one of the
+    two pricers."""
+    lk = ran["lineCoverage"]["locked"]
+    for k in ("cove", "coveWrCap", "gyp"):
+        assert lk[k] == {"hasBox": False, "note": True, "readOnlyCell": "275",
+                         "modelUntouched": True, "queued": 0}, (k, lk[k])
+    assert lk["ordinary"]["hasBox"] is True and lk["ordinary"]["note"] is False, lk["ordinary"]
+    assert ran["lineCoverage"]["formulaPricedNoModules"] is False
+
+
+@needs_node
+def test_the_library_page_loads_the_two_formula_pricers_before_its_own_script():
+    """formulaPriced reads window.TWEpoxyTakeoff / TWGypTakeoff as library.js loads, and both need
+    excel-math and library-core ahead of them (they throw otherwise). EXECUTED the way a browser
+    loads them: library.html's own script tags, in its order, each run as a plain script on one
+    shared `self`, up to library.js; then the two are asked about a Cove and a Gyp area id.
+
+    Mutation: drop either tag, or move one below library.js or above excel-math / library-core."""
+    script = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const root = process.argv[1];
+const html = fs.readFileSync(path.join(root, "library.html"), "utf8");
+const want = ["excel-math.js", "library-core.js", "epoxy-takeoff.js", "gyp-takeoff.js"];
+const ctx = vm.createContext({});
+ctx.self = ctx;
+const srcs = Array.from(html.matchAll(/<script src="\/js\/([^"]+)"><\/script>/g), (m) => m[1]);
+const ran = [];
+for (const s of srcs) {
+  if (s === "library.js") break;
+  if (want.indexOf(s) === -1) continue;
+  vm.runInContext(fs.readFileSync(path.join(root, "js", s), "utf8"), ctx);
+  ran.push(s);
+}
+console.log(JSON.stringify({ ran: ran.sort(),
+  cove: !!(ctx.TWEpoxyTakeoff && ctx.TWEpoxyTakeoff.coveVariant("wb-epoxy-cove-epoxy-4in")),
+  gyp: ctx.TWGypTakeoff ? ctx.TWGypTakeoff.bucketOfAssembly("wb-gyp-area-soft") : null }));
+"""
+    proc = subprocess.run(["node", "-e", script, str(FRONTEND)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert got == {"ran": sorted(["excel-math.js", "library-core.js", "epoxy-takeoff.js", "gyp-takeoff.js"]),
+                   "cove": True, "gyp": "soft"}, got
+
+
+@needs_node
 def test_a_line_coverage_needs_a_material_and_leaves_with_it(ran):
     """A line with no material has no box (nothing to override). A line whose material was deleted
     keeps its figure visible but claims no "Material: N" (the row already says Item removed).
