@@ -60,6 +60,8 @@ const W = new Function("require", "__dirname", "process",
 const SHARED = read("shared.js");
 const CHAIN = read(path.join("js", "send-all-chain.js"));
 const GENERATE = read(path.join("js", "generate.js"));
+// generate.html loads it before generate.js: TWPrice.baseIds, the order Create Multiple Proposals sends.
+const PRICE = read(path.join("js", "price-lines-core.js"));
 const HTML = read("generate.html");
 const STATE_KEY = (/const STATE_KEY\s*=\s*"([^"]+)"/.exec(SHARED) || [])[1];
 const DRAFT_ID_KEY = (/const DRAFT_ID_KEY\s*=\s*"([^"]+)"/.exec(SHARED) || [])[1];
@@ -69,6 +71,8 @@ const webcrypto = require("crypto").webcrypto;
 const KEY = "treadwell.sendall.chain";
 const ORIGIN = "https://tool";
 const settle = () => new Promise((r) => setImmediate(r));
+// Every list step 3 drew, in every scenario of the run (no row may offer a download).
+const LISTS = [];
 const VERSION = "2026-10-28T10:00:00Z";            // every draft's updated_at, unless b.server.version
 /** A document's identity as main._canonical_sha256 reads it: canonical JSON (sorted keys). */
 const canon = (x) => JSON.stringify(x, (k, v) => (v && typeof v === "object" && !Array.isArray(v)
@@ -137,6 +141,24 @@ async function openGenerate(b, href) {
                                      { proposals: Object.assign({ ok: true }, copy(b.server.view)) }));
     }
     m = /^\/api\/draft\/([^/]+)\/proposals$/.exec(u);
+    if (m && method === "POST") {
+      // main.py api_draft_proposals_create: the version of the copy the page read, then
+      // drafts.fan_out_proposals as the scenario plays it (b.server.onFanOut), the strip after it.
+      const body = JSON.parse((opts && opts.body) || "{}");
+      (b.server.fanouts = b.server.fanouts || []).push({ id: decodeURIComponent(m[1]), body });
+      if (!body.draft_version || body.draft_version !== (b.server.version || VERSION)) {
+        return json(409, { ok: false, code: "document_changed", error: "Nothing was made. This project was saved again after this page read it." });
+      }
+      // main.py: step 3's own call (`auto`) for a project the customer already has makes nothing.
+      if (body.auto === true && b.server.sent) {
+        return json(409, { ok: false, code: "already_sent", error: "This project was already sent, so no new "
+          + "proposals were made here. Press Create Multiple Proposals on the Proposal step if you want them." });
+      }
+      const r = b.server.onFanOut ? b.server.onFanOut(body) : { refuse: [400, "too_few_bases", "Tick two base bids or more."] };
+      if (r.refuse) return json(r.refuse[0], { ok: false, code: r.refuse[1], error: r.refuse[2] });
+      return json(200, Object.assign({ ok: true, group_id: "G1" }, r,
+                                     { proposals: Object.assign({ ok: true }, copy(b.server.view)) }));
+    }
     if (m) return b.server.view ? json(200, Object.assign({ ok: true }, copy(b.server.view))) : json(404, { ok: false });
     // main.py's render cache, as _render_documents keeps it: one render per document (its payload,
     // canonical), reused by every later build of the same document unless `rebuild` asks for a new
@@ -227,6 +249,7 @@ async function openGenerate(b, href) {
     if (m) {
       const id = decodeURIComponent(m[1]);
       if (method === "PUT") {
+        if (b.server.failPut) return json(503, { detail: "The database is not answering." });
         const data = JSON.parse(opts.body).data;
         if (id === "d1") { b.server.puts.push(copy(data)); b.server.d1 = copy(data); }
         else b.server.drafts[id] = copy(data);
@@ -242,8 +265,15 @@ async function openGenerate(b, href) {
     textContent: "", innerHTML: "", attrs: {}, listeners: [],
     setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; },
     addEventListener(ev, h) { this.listeners.push([ev, h]); } });
-  ["gen-list", "gen-note", "gen-back", "gen-continue", "gen-empty", "gen-main", "gen-rebuild"].forEach(node);
+  ["gen-list", "gen-note", "gen-back", "gen-continue", "gen-empty", "gen-main", "gen-rebuild",
+   "gen-alert", "gen-project"].forEach(node);
   nodes["gen-rebuild"].hidden = true;
+  nodes["gen-alert"].hidden = true;
+  nodes["gen-project"].hidden = true;
+  // Every sentence the top alert showed, in order.
+  const alerts = [];
+  let alertText = "";
+  Object.defineProperty(nodes["gen-alert"], "textContent", { get: () => alertText, set: (v) => { alertText = v; if (v) alerts.push(v); } });
   nodes["gen-back"].attrs.href = "/estimate-review.html";
   nodes["gen-continue"].attrs.href = "/proposal-review.html";
   // Every line the progress note showed, in order.
@@ -348,13 +378,18 @@ async function openGenerate(b, href) {
   sandbox.history = history;
   vm.createContext(sandbox);
   vm.runInContext(SHARED, sandbox);
+  vm.runInContext(PRICE, sandbox);
   vm.runInContext(GENERATE, sandbox);
   await sandbox.window.TWGenerate.done;
   for (let i = 0; i < 5; i++) await settle();               // a frame's tail after it reported
   return snap();
   function snap() {
   const list = nodes["gen-list"].innerHTML;
+  LISTS.push(list);
   return {
+    alert: nodes["gen-alert"].hidden ? "" : nodes["gen-alert"].textContent, alerts,
+    project: nodes["gen-project"].hidden ? "" : nodes["gen-project"].textContent,
+    fanOutCalls: sandbox.window.TWGenerate.fanOutCalls(),
     nav, posted, rows: sandbox.window.TWGenerate.rows(), notes,
     note: nodes["gen-note"].hidden ? "" : nodes["gen-note"].textContent,
     list, emptyShown: !nodes["gen-empty"].hidden,
@@ -369,17 +404,6 @@ async function openGenerate(b, href) {
     rebuildShown: !nodes["gen-rebuild"].hidden, rebuildDisabled: !!nodes["gen-rebuild"].disabled,
     /** The rows and the list as they are NOW (the fields above are as they were when snapped). */
     liveRows: () => sandbox.window.TWGenerate.rows(), liveList: () => nodes["gen-list"].innerHTML,
-    /** Press row `i`'s `key` file link, as a person clicks it in the list; resolves with what was
-     *  saved (null when nothing) and the button's own text after. */
-    download: async (i, key) => {
-      const btn = { attrs: { "data-row": String(i), "data-file": key }, innerHTML: "link", textContent: "link",
-                    disabled: false, getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; } };
-      const before = saved.length;
-      const click = nodes["gen-list"].listeners.find(([t]) => t === "click")[1];
-      click({ target: { closest: (sel) => (sel === "button.gen-dl" ? btn : null) } });
-      for (let k = 0; k < 40; k++) await settle();
-      return { saved: saved.length > before ? saved[saved.length - 1] : null, text: btn.textContent };
-    },
     /** Press "Rebuild all" and wait for the run it starts; resolves with the page as it is then. */
     rebuildAll: async () => {
       const click = nodes["gen-rebuild"].listeners.find(([t]) => t === "click")[1];
@@ -463,6 +487,87 @@ async function stagingProject() {
   return b;
 }
 
+/** PRODUCTION'S "Multiple PRoposals test" (2026-10-30): a Test project whose estimate has three base
+ *  bids ticked and no proposal made from them yet. v1: Epoxy, Room 2 (sheet Copy1) and Polish ticked
+ *  on the Estimate step; v2: the root (Breakroom, the Polish sheet) and two sections switched to
+ *  "Separate base bid". `base_tab_ids` is stored out of order on purpose: step 3 must send the
+ *  button's order. The server's fan-out (b.server.onFanOut) plays drafts.fan_out_proposals: a child
+ *  per base bid after the first that has none, holding the estimate, its own base, empty words and
+ *  the parent's is_test and audience; the parent joins the group, its children's sheets stop being
+ *  its options, and its updated_at does not move. */
+async function fanProject(o) {
+  const v2 = !!o.v2;
+  const make = () => {
+    const d = W.draft();
+    d.project_name = d.job_name = "Multiple PRoposals test";
+    d.audience = o.audience || "Direct";
+    d.is_test = o.isTest === undefined ? true : o.isTest;
+    const room = { id: "Copy1", name: v2 ? "Lab 2" : "Room 2", role: "epoxy", kind: v2 ? "option" : "base", total: 6000,
+                   sales_tax: 190, remodel: 0, system_desc: "Treadwell MACRO Flake", notes_auto: [], sf: { epoxy_sf: 600, cove_lf: 0 } };
+    const t = W.tabs(10000, 320);
+    if (v2) {
+      d.work_type = "polish";
+      d.base_tab_id = "Polish";
+      d.polish_estimate = { version: 2, label: "Breakroom", takeoff: [],
+        tabs: { Epoxy: { kind: "option", label: "Lab 1", takeoff: [] },
+                Copy1: { kind: "option", sheet: "Epoxy", label: "Lab 2", takeoff: [] } } };
+      d.priced_tabs = [Object.assign(t[1], { name: "Breakroom", v2: true }),
+                       Object.assign(t[0], { name: "Lab 1", kind: "option", v2: true }), Object.assign(room, { v2: true })];
+      d.proposal_lump_sum = 8000;
+      d.proposal_sales_tax = 250;
+      d.base_tab_ids = o.bases || ["Copy1", "Polish", "Epoxy"];
+    } else {
+      d.priced_tabs = [t[0], room, t[1]];
+      d.tab_labels = { Copy1: "Room 2" };
+      d.base_tab_ids = o.bases || ["Polish", "Copy1", "Epoxy"];
+    }
+    return d;
+  };
+  const b = await continued(make);
+  const sheet = (tab) => (v2 ? { Polish: "Breakroom", Epoxy: "Lab 1", Copy1: "Lab 2" }
+                             : { Epoxy: "Epoxy", Copy1: "Room 2", Polish: "Polish" })[tab];
+  const parentSheet = sheet(b.server.d1.base_tab_id);
+  b.server.drafts = {};
+  // drafts.proposals_view of a draft with no proposals: its own row alone, unnamed, its sheet said.
+  b.server.view = { parent_id: "d1", group_id: null, estimate_digest: "E1", members: [{ id: "d1", label: "",
+    display_label: "", sheet_label: parentSheet, index: 1, is_parent: true, base_tab_id: b.server.d1.base_tab_id,
+    stale: false, out_of_step: null }] };
+  let n = 1;
+  b.server.onFanOut = (body) => {
+    const p = b.server.d1;
+    const children = [];
+    // `leave_out` stays ticked and gets no new child (a proposal of it is in the Trash).
+    const skip = Array.isArray(body.leave_out) ? body.leave_out : [];
+    const binned = (b.server.view && b.server.view.trashed) || [];
+    const leftOut = [];
+    body.base_ids.slice(1).forEach((tab) => {
+      const have = Object.keys(b.server.drafts).filter((k) => b.server.drafts[k].base_tab_id === tab)[0];
+      if (have) { children.push({ id: have, label: sheet(tab), base_tab_id: tab, created: false }); return; }
+      if (skip.indexOf(tab) >= 0) { leftOut.push(tab); return; }
+      const cid = "c" + (++n);
+      const c = copy(p);
+      ["proposal_payload", "proposal_payload_key", "generate_result", "dropbox_result", "proposal_auto_built",
+       "base_tab_ids", "tab_opts"].forEach((k) => delete c[k]);
+      const pt = p.priced_tabs.filter((x) => x.id === tab)[0];
+      Object.assign(c, { proposal_of: "d1", base_tab_id: tab, scope_group: { id: "G1", label: sheet(tab) },
+                         estimate_digest: "E1", tab_opts: {}, proposal_lump_sum: pt.total, proposal_sales_tax: pt.sales_tax,
+                         work_type: pt.role, scope_notes: "", schedule_notes: "", exclusions: "" });
+      if (v2) c.priced_tabs = p.priced_tabs.map((x) => Object.assign(copy(x), { kind: x.id === tab ? "base" : "option" }));
+      b.server.drafts[cid] = c;
+      children.push({ id: cid, label: sheet(tab), base_tab_id: tab, created: true });
+    });
+    const opts = Object.assign({}, p.tab_opts || {});
+    body.base_ids.slice(1).forEach((tab) => { opts[tab] = Object.assign({}, opts[tab] || {}, { is_option: false }); });
+    b.server.d1 = Object.assign(copy(p), { scope_group: { id: "G1", label: parentSheet }, tab_opts: opts });
+    const kids = Object.keys(b.server.drafts);
+    b.server.view = view([{ id: "d1", sheet_label: parentSheet, base_tab_id: p.base_tab_id }].concat(kids.map((k) => ({
+      id: k, sheet_label: sheet(b.server.drafts[k].base_tab_id), base_tab_id: b.server.drafts[k].base_tab_id }))));
+    b.server.view.trashed = binned.filter((t) => !kids.some((k) => b.server.drafts[k].base_tab_id === t.base_tab_id));
+    return { parent: { id: "d1", label: parentSheet }, children, out_of_step: [], left_out: leftOut };
+  };
+  return b;
+}
+
 (async function () {
   const out = {};
 
@@ -476,6 +581,154 @@ async function stagingProject() {
     const g = await openGenerate(b, "/generate.html?d=d1");
     const text = g.list.replace(/<[^>]*>/g, "|").split("|").map((s) => s.trim()).filter(Boolean);
     process.stdout.write(JSON.stringify({ names: { rows: rowsBrief(g).map((r) => r.name), list: g.list, text } }));
+    return;
+  }
+
+  // ── EVERY BASE BID GETS ITS PROPOSAL FIRST (Hanz, 2026-10-30: "Create them, then build all") ──
+  //    Production's "Multiple PRoposals test": three base bids ticked, no proposal made yet, step 3
+  //    showed one row. Only these scenarios run (GEN_FANOUT=1).
+  if (process.env.GEN_FANOUT) {
+    const fan = {};
+    for (const [key, o] of Object.entries({
+      v1Direct: { v2: false, audience: "Direct" }, v1GC: { v2: false, audience: "GC" },
+      v2Direct: { v2: true, audience: "Direct" }, v2GC: { v2: true, audience: "GC" },
+      v1Real: { v2: false, audience: "Direct", isTest: false } })) {
+      const b = await fanProject(o);
+      const putsBefore = b.server.puts.length;
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      const kids = Object.keys(b.server.drafts || {});
+      const kidData = kids.map((k) => { const d = b.server.drafts[k]; return { id: k, base: d.base_tab_id, test: d.is_test,
+        audience: d.audience, auto: d.proposal_auto_built === undefined ? null : d.proposal_auto_built, scope: d.scope_notes }; });
+      const r = await g.rebuildAll();
+      fan[key] = {
+        fanouts: (b.server.fanouts || []).map((f) => ({ id: f.id, base_ids: f.body.base_ids, versioned: f.body.draft_version === VERSION })),
+        rows: rowsBrief(g).map((x) => [x.id, x.name, x.status, x.total, x.message]),
+        note: g.note, notes: g.notes, alert: g.alert, project: g.project, nav: g.nav, url: g.url, urls: g.urls,
+        next: g.next, nextDisabled: g.nextDisabled, frames: frameBrief(g).opened.slice().sort(),
+        frameErrors: g.frames.errors, kids, kidData,
+        holds: Object.fromEntries(g.posted.map((p) => [p.id, p.body.hold_placeholders])),
+        // This browser's copy after: the server's, the fan-out's marks on it.
+        slotGroup: (W.local(b).scope_group || {}).label || null, slotOwner: W.local(b)[STAMP],
+        serverGroup: (b.server.d1.scope_group || {}).label || null,
+        d1PutsGroup: b.server.puts.slice(putsBefore).map((x) => (x.scope_group || {}).label || null),
+        again: { fanouts: (b.server.fanouts || []).length, rows: rowsBrief(r).map((x) => [x.id, x.name, x.status]),
+                 note: r.note, nav: r.nav, fanOutCalls: r.fanOutCalls },
+      };
+    }
+    // THE PROPOSALS ALREADY EXIST: no fan-out.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.onFanOut({ base_ids: ["Epoxy", "Copy1", "Polish"] });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.exist = { fanouts: (b.server.fanouts || []).length, rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]),
+                    nav: g.nav, alert: g.alert, note: g.note };
+    }
+    // ONE OF TWO EXISTS: the missing one is made, the existing one kept.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.onFanOut({ base_ids: ["Epoxy", "Copy1"] });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.partial = { fanouts: (b.server.fanouts || []).map((f) => f.body.base_ids),
+                      rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]), note: g.note, nav: g.nav };
+    }
+    // A PROPOSAL IN THE TRASH IS NOT MADE AGAIN (Hanz, 2026-10-30): Room 2's was deleted, so the
+    // fan-out leaves it out and makes Polish's; the top says so. Rebuild all asks nothing again.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.view.trashed = [{ id: "cT", base_tab_id: "Copy1", sheet_label: "Room 2" }];
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      const asked = (b.server.fanouts || []).map((f) => ({ base_ids: f.body.base_ids, leave_out: f.body.leave_out }));
+      const kids = Object.keys(b.server.drafts).map((k) => b.server.drafts[k].base_tab_id);
+      const alerts = g.alerts.slice();
+      const r = await g.rebuildAll();
+      fan.trashed = { asked, kids, rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]), alert: g.alert,
+                      alerts, note: g.note, nav: g.nav, nextDisabled: g.nextDisabled,
+                      again: { fanouts: (b.server.fanouts || []).length, alert: r.alert, nav: r.nav,
+                               rows: rowsBrief(r).map((x) => [x.id, x.status]) } };
+    }
+    // AN ARCHIVED PROPOSAL IS NOT MADE AGAIN EITHER, and the top says it is archived.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.view.trashed = [{ id: "cA", base_tab_id: "Polish", sheet_label: "Polish", where: "archived" }];
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.archived = { asked: (b.server.fanouts || []).map((f) => f.body.leave_out), alert: g.alert,
+                       kids: Object.keys(b.server.drafts).map((k) => b.server.drafts[k].base_tab_id) };
+    }
+    // A PROJECT THAT MOVED ON, OR WAS SENT: nothing is made on its own; the rest is built.
+    for (const [key, mark] of Object.entries({ won: { won: { at: "x" } }, lost: { closed_lost: { reason: "price" } },
+                                               hold: { on_hold: { reason: "budget" } }, sent: null })) {
+      const b = await fanProject({ v2: false, audience: key === "sent" ? "GC" : "Direct" });
+      if (mark) {
+        b.server.d1 = Object.assign(copy(b.server.d1), mark);
+        b.ls.setItem(STATE_KEY, JSON.stringify(Object.assign(copy(b.server.d1), { [STAMP]: "d1" })));
+      } else b.server.sent = true;
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan["movedOn_" + key] = { fanouts: (b.server.fanouts || []).map((f) => f.body.auto === true),
+                                alert: g.alert, alerts: g.alerts.slice(), nav: g.nav, nextDisabled: g.nextDisabled,
+                                kids: Object.keys(b.server.drafts).length,
+                                rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]) };
+    }
+    // THIS BROWSER'S CHANGES COULD NOT BE SAVED ("ahead", the save fails): it says so.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.ls.setItem(STATE_KEY, JSON.stringify(Object.assign(W.local(b), { notes_text: "Kyle's note, not saved yet" })));
+      b.server.failPut = true;
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.aheadFailed = { fanouts: (b.server.fanouts || []).length, alert: g.alert, nav: g.nav };
+    }
+    // A COPY SAVED SINCE (409 document_changed): one sentence, not "not made" and "nothing changed".
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.onFanOut = () => ({ refuse: [409, "document_changed", "Nothing changed. This project was saved again "
+        + "after this page read it (from another page or computer). Reload, check it, then try again."] });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.changedSince = { alert: g.alert, rows: rowsBrief(g).map((x) => [x.id, x.status]) };
+    }
+    // ONE BASE BID: no fan-out, and the row keeps the project's name.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct", bases: ["Epoxy"] });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.oneBase = { fanouts: (b.server.fanouts || []).length, rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]),
+                      project: g.project, nav: g.nav, alert: g.alert, note: g.note };
+    }
+    // ON A CHILD: no fan-out, though its parent's Polish has no proposal.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.server.onFanOut({ base_ids: ["Epoxy", "Copy1"] });
+      const cid = Object.keys(b.server.drafts)[0];
+      b.server.drafts[cid].base_tab_ids = ["Copy1", "Epoxy", "Polish"];
+      b.ls.setItem(STATE_KEY, JSON.stringify(Object.assign(copy(b.server.drafts[cid]), { [STAMP]: cid })));
+      b.ls.setItem(DRAFT_ID_KEY, cid);
+      const g = await openGenerate(b, "/generate.html?d=" + cid);
+      fan.child = { fanouts: (b.server.fanouts || []).length, rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]),
+                    nav: g.nav, alert: g.alert };
+    }
+    // REFUSED: the server's sentence once at the top, Base Bid 1 still built and named after its
+    // sheet, Continue as always, no navigation; Rebuild all asks once more, once.
+    for (const [key, refuse] of Object.entries({
+      refusedTestMix: [409, "test_mix", "Acme HQ is a test project and Lab is not: a project's scopes are all test or all real."],
+      refusedPortal: [502, "portal_unreachable", "No proposals were made. The customer portal is not answering, so the tool cannot tell whether this proposal was already sent. Try again in a minute."] })) {
+      const b = await fanProject({ v2: false, audience: "GC" });
+      b.server.onFanOut = () => ({ refuse });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      const alerts = g.alerts.slice();
+      const r = await g.rebuildAll();
+      fan[key] = { fanouts: (b.server.fanouts || []).length, rows: rowsBrief(g).map((x) => [x.id, x.name, x.status, x.total]),
+                   alert: g.alert, alerts, note: g.note, nav: g.nav, next: g.next,
+                   nextDisabled: g.nextDisabled, project: g.project,
+                   again: { fanouts: (b.server.fanouts || []).length, nav: r.nav, alerts: r.alerts.length,
+                            rows: rowsBrief(r).map((x) => [x.id, x.status]) } };
+    }
+    // THIS BROWSER'S COPY IS NOT THE SAVED ONE ("kept"): no fan-out from it, and the top says why.
+    {
+      const b = await fanProject({ v2: false, audience: "Direct" });
+      b.ls.setItem(STATE_KEY, JSON.stringify(Object.assign(W.local(b), { notes_text: "Kyle's note, never saved" })));
+      b.server.d1 = Object.assign(copy(b.server.d1), { texture: "Saved by RJ" });
+      const g = await openGenerate(b, "/generate.html?d=d1");
+      fan.kept = { fanouts: (b.server.fanouts || []).length, alert: g.alert, nav: g.nav,
+                   rows: rowsBrief(g).map((x) => [x.id, x.name, x.status]) };
+    }
+    process.stdout.write(JSON.stringify({ fan, lists: LISTS }));
     return;
   }
 
@@ -710,9 +963,8 @@ async function stagingProject() {
 
   // ── ONLY WHAT CHANGED IS REBUILT (Hanz, 2026-10-29) ────────────────────────────────────────
   // Three proposals, all built on the first visit. RJ then rewrites Polish's scope and nothing else.
-  // The next visit composes and builds Polish only; Epoxy and Room 2 are "Up to date", with working
-  // links. A restart then expires every token: a link still downloads (it builds again first).
-  // Then "Rebuild all" builds all three again, the cached renders notwithstanding.
+  // The next visit composes and builds Polish only; Epoxy and Room 2 are "Up to date". Then
+  // "Rebuild all" builds all three again, the cached renders notwithstanding.
   {
     const b = await continued();
     b.server.drafts = { c2: await keyed(child("Polish", { proposal_payload: oldDoc("$8,000.00") })),
@@ -736,21 +988,6 @@ async function stagingProject() {
       rebuildShown: g.rebuildShown, rebuildDisabled: g.rebuildDisabled,
       statusText: [...g.list.matchAll(/<span class="gen-status">([^<]*)<\/span>/g)].map((x) => x[1]),
     };
-    // Its links work: Epoxy's .xlsx and Room 2's PDF, off the "Up to date" rows.
-    const xlsx = await g.download(0, "xlsx_download_url");
-    const pdf = await g.download(2, "pdf_download_url");
-    const postedBefore = g.posted.length;
-    // A RESTART: every token minted so far has expired.
-    b.server.expireBefore = b.server.gen;
-    const rendersMid = (b.server.renders || []).length;
-    const healed = await g.download(0, "pdf_download_url");
-    // Polish was composed in its frame and built: its link heals off the copy that frame saved.
-    const healedFrame = await g.download(1, "pdf_download_url");
-    out.expired = { xlsx: xlsx.saved, pdf: pdf.saved, healed: healed.saved, healedText: healed.text,
-                    healedFrame: healedFrame.saved, healedFrameText: healedFrame.text,
-                    posted: g.posted.slice(postedBefore).map((p) => [p.id, p.body.hold_placeholders, !!p.body.rebuild,
-                                                                     p.body.draft_version || null]),
-                    rendered: (b.server.renders || []).length - rendersMid };
     // "REBUILD ALL".
     const rb = { renders: (b.server.renders || []).length, pdfs: (b.server.pdfs || []).length,
                  checks: (b.server.checks || []).length, posted: g.posted.length, frames: g.frames.opened.length };
@@ -762,20 +999,6 @@ async function stagingProject() {
       pdfs: (b.server.pdfs || []).length - rb.pdfs, checks: (b.server.checks || []).length - rb.checks,
       frames: r.frames.opened.length - rb.frames, rebuildShown: r.rebuildShown, rebuildDisabled: r.rebuildDisabled,
     };
-    // SAVED SINCE, IN ANOTHER TAB: Epoxy is re-priced and saved elsewhere ($12,000), then every token
-    // expires. Epoxy's link must not build that copy under the row that shows $10,000: it says to reload.
-    b.server.version = "2026-10-28T11:00:00Z";
-    b.server.d1 = Object.assign(copy(b.server.d1), { proposal_payload: Object.assign(copy(b.server.d1.proposal_payload),
-      { values: Object.assign(copy(b.server.d1.proposal_payload.values), { total_formatted: "$12,000" }) }) });
-    b.server.expireBefore = b.server.gen;
-    const sincePosted = r.posted.length;
-    const sinceRenders = (b.server.renders || []).length;
-    const since = await r.download(0, "pdf_download_url");
-    out.savedSince = { saved: since.saved, text: since.text,
-                       posted: r.posted.slice(sincePosted).map((p) => [p.id, p.body.draft_version || null]),
-                       rendered: (b.server.renders || []).length - sinceRenders,
-                       row: [r.liveRows()[0].status, r.liveRows()[0].total],
-                       statusText: [...r.liveList().matchAll(/<span class="gen-status">([^<]*)<\/span>/g)].map((x) => x[1])[0] };
   }
 
   // ── AT MOST THREE BUILDS AT ONCE, THE FRAMES' INCLUDED (review of c6016a9d) ────────────────
@@ -860,5 +1083,6 @@ async function stagingProject() {
     out.empty = { emptyShown: g.emptyShown, posted: g.posted.length, nav: g.nav };
   }
 
+  out.lists = LISTS;
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stderr.write(String((e && e.stack) || e)); process.exit(1); });
