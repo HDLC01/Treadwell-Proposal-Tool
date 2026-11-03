@@ -5323,6 +5323,9 @@ out.page = {
   paneintroStillUsed: (html.match(/class="paneintro"/g) || []).length,
   coveragePerUnitHeader: /Coverage per Unit/.test(html),
   wasteHeader: /Waste Factor/.test(html),
+  // Hanz, 2026-11-04: both Waste Factor headers (Items tab, assembly lines) carry the % sign.
+  wasteHeadersShowPercent: (html.match(/>Waste Factor \(%\)<\/span><\/th>/g) || []).length === 2 &&
+    !/>Waste Factor<\/span><\/th>/.test(html),
   roundupHeader: /Roundup\?/.test(html),
   vendorsTab: /id="tab-vendors"/.test(html),
   // The fourth tab, and WHERE it sits: Hanz asked for it beside Administration, so the order in

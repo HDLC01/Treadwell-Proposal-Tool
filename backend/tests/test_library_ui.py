@@ -944,6 +944,8 @@ def test_the_material_column_names_the_manufacturer(ran):
 def test_the_headers_hanz_asked_to_change_have_changed(ran):
     p = ran["page"]
     assert p["coveragePerUnitHeader"] and p["wasteHeader"] and p["roundupHeader"]
+    # Hanz, 2026-11-04: "we need the percentage symbol on the waste factor header as well"
+    assert p["wasteHeadersShowPercent"]
     assert p["vendorsTab"], "there is no Vendors tab"
     assert p["noCoverageSfHeader"], "Coverage (SF) is still on the Items tab"
     assert p["noRoleHeader"], "the Role column is still there"
