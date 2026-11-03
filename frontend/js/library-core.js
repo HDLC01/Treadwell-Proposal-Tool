@@ -32,6 +32,11 @@
 // 3. Coverage is per SINGLE unit and `unit_cost` is what the PACK costs (Hanz, 2026-08-15: Cost
 //    is "the cost of that Qty+Unit purchase"). So a 5-gallon pail covering 275 SF/Gal covers
 //    1,375 SF, and the two numbers can no longer be divided into each other directly.
+//    FROM 2026-11-04 EVERY MATERIAL IS BOUGHT BY THE SINGLE UNIT (Hanz: "remove the order
+//    quantity"): the server stores buy_qty 1 and unit_cost is the price of ONE unit, so Roundup
+//    buys whole units. The pack arithmetic below is kept, untouched, because with buy_qty 1 it
+//    already is that, and a database not yet converted (backend/ops/library_per_unit_cost.sql)
+//    still prices correctly through it.
 //
 // 4. The total sums UNROUNDED line costs, then rounds once for display. Adding the rounded
 //    lines instead shifts the total by a cent or two, and Excel (Kyle's sheet) sums the
@@ -652,6 +657,57 @@
     return qty4(row.needed) + " ÷ " + qtyText(row.buy_qty) + " × " + price4(row.pack_cost);
   }
 
+  /** What the Items tab's "Show the math" line calls each measure: the material's own coverage basis. */
+  function basisWord(item) {
+    var b = coverageBasis(item);
+    return b === "lf" ? "LF" : b === "each" ? "each" : "SF";
+  }
+
+  /** THE ITEMS TAB'S WORKING LINE (Hanz, 2026-11-04: "a way to see how the logic is being solved to
+   *  come up with a cost"). One material priced at `area` (read in the material's own basis: SF, LF or
+   *  a count) by priceLine itself, so the line can never tell a different story from a bid:
+   *
+   *      1,000 SF ÷ 275 + 5% = 3.8182 → 4 Gallon × $42.00 = $168.00 ($0.168/SF)
+   *
+   *  Roundup on names the whole units bought (the arrow only when rounding moved the number); off, the
+   *  exact fractional amount. A price break that applies is the price shown, and says where it starts.
+   *  A material that cannot price says what it is missing ("Needs a coverage", "Needs a cost"); no area
+   *  yet is "". A legacy row still bought by the pack (buy_qty above 1) shows the pack, as qtyLabel and
+   *  costWorking do. */
+  function itemWorking(item, area, opts) {
+    if (!item || typeof item !== "object") return "";
+    var probe = Object.assign({}, item, { id: "__working" });
+    var row = priceLine({ item_id: "__working" }, [probe], area, opts);
+    if (!row.ok) {
+      if (row.reason === "no_coverage") return "Needs a coverage";
+      if (row.reason === "no_cost") return "Needs a cost";
+      return "";
+    }
+    if (!row.priced) return "";
+    // A cost of 0 prices (priceLine's check is "not blank, not negative"), but the Items tab files 0
+    // under "No price set" (materialPriceText), so the working line says the same, never "$0.00".
+    if (!(num(item.unit_cost) > 0)) return "Needs a cost";
+    var a = num(area);
+    var word = basisWord(item);
+    var unit = (row.item && row.item.unit) || "unit";
+    var s = qtyText(a) + " " + word + " ÷ " + row.coverage.toLocaleString("en-US");
+    if (row.waste_pct) s += " + " + qtyText(row.waste_pct) + "%";
+    s += " = " + qty4(row.needed);
+    if (row.roundup) {
+      if (row.buy_qty !== 1) s += " → " + qtyLabel(row);
+      else if (Math.abs(row.units - row.needed) > 1e-9) s += " → " + qtyText(row.units) + " " + unit;
+      else s += " " + unit;
+      s += " × " + price4(row.pack_cost);
+    } else {
+      s += " " + unit;
+      if (row.buy_qty !== 1) s += " ÷ " + qtyText(row.buy_qty);
+      s += " × " + price4(row.pack_cost);
+    }
+    if (row.price_break) s += " (price break from " + qtyText(row.price_break.min_qty) + " " + unit + ")";
+    s += " = " + money(row.cost) + " (" + perUnit(row.cost / a) + "/" + word + ")";
+    return s;
+  }
+
   /** The POST body for a copy of a material. Every priced field comes across, so the copy does not
    *  price differently from the original. The three Phase 11 columns ride along ONLY for an admin
    *  (the server refuses them from anybody else) and ONLY when the source has them, so a database
@@ -661,7 +717,7 @@
     var body = {
       name: name,
       unit: src.unit || "",
-      buy_qty: src.buy_qty,
+      // NO buy_qty: every material is bought by the single unit and the server stores 1 on create.
       unit_cost: src.unit_cost,
       coverage: src.coverage,
       waste_pct: src.waste_pct,
@@ -873,7 +929,7 @@
     num: num, findItem: findItem, priceLine: priceLine, priceAssembly: priceAssembly,
     money: money, perUnit: perUnit, explain: explain,
     wastePct: wastePct, buyQty: buyQty, qtyText: qtyText, qty4: qty4, price4: price4,
-    qtyLabel: qtyLabel, costWorking: costWorking,
+    qtyLabel: qtyLabel, costWorking: costWorking, itemWorking: itemWorking, basisWord: basisWord,
     coverageBasis: coverageBasis, areaFor: areaFor, priceBreaks: priceBreaks, breakAt: breakAt,
     pricePool: pricePool, poolId: poolId, allocate: allocate, itemsForBid: itemsForBid,
     materialPriceText: materialPriceText, assemblyPriceText: assemblyPriceText,

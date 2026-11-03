@@ -1006,12 +1006,15 @@ class LibraryItemIn(BaseModel):
     # `Any`, because these arrive pasted from a spreadsheet as "$85.38" and "2,875".
     unit_cost: Optional[Any] = None
     coverage: Optional[Any] = None
-    # How many units are in the purchase — the "5" of "5 Gal", with unit_cost the price of that
-    # pack. Same `Any`: it is typed into a text input beside a dropdown.
+    # STILL ACCEPTED, NEVER STORED AS SENT (2026-11-04): every material is bought by the single
+    # unit, so library.validate_item writes 1 whatever arrives. Declared so a page loaded before
+    # that change, which still sends its Order Quantity box, saves rather than tripping anything.
     buy_qty: Optional[Any] = None
     sku: Optional[str] = None
     vendor: Optional[str] = None
     notes: Optional[str] = None
+    # The Items tab's Cost Comment, a free-text note on the price. Declared or Pydantic drops it.
+    cost_comment: Optional[str] = None
     # Shared/team-wide, not per-user -- see library.validate_item's note.
     favorite: Optional[bool] = None
     # Whether this default STARTS ON in a new bid (the Defaults tab slider). Undeclared = dropped.
@@ -1078,9 +1081,13 @@ def api_library_items() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("item categories unreadable for /api/library/items: %s", exc)
         cats = None
-    items, has_column = library.list_items_and_category_column()
+    items, columns = library.list_items_and_columns()
     # False until backend/ops/item_categories.sql has run: the Items tab then offers no Category select.
-    return {"ok": True, "items": items, "item_categories": cats, "categories_writable": has_column}
+    # cost_comment_writable: false until backend/ops/library_cost_comment.sql has run, and the Items
+    # tab then shows the Cost Comment read-only instead of offering a box whose save would fail.
+    return {"ok": True, "items": items, "item_categories": cats,
+            "categories_writable": columns["material_categories"],
+            "cost_comment_writable": columns["cost_comment"]}
 
 
 # ─── Item categories: the Material step's headings, per work type ─────

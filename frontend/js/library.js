@@ -45,6 +45,10 @@
   // False on a database without the material_categories column (backend/ops/item_categories.sql not
   // run yet), read off GET /api/library/items' `categories_writable`: no Category select is offered.
   var CATS_WRITABLE = true;
+  // False on a database without the cost_comment column (backend/ops/library_cost_comment.sql not run
+  // yet), read off GET /api/library/items' `cost_comment_writable`: the Cost Comment is shown read-only
+  // and never sent, because a save naming a column the database lacks fails.
+  var COMMENT_WRITABLE = true;
   var DIVISION_REFS = [];
   var UNIT_REFS = [];
   var VENDOR_USE = {};             // casefolded vendor name → how many materials name it
@@ -148,6 +152,7 @@
       ITEMS = items.items || [];
       CATS = items.item_categories || null;
       CATS_WRITABLE = items.categories_writable !== false;
+      COMMENT_WRITABLE = items.cost_comment_writable !== false;
       ASMS = asms.assemblies || [];
       // The vendor list failing must not take the materials down with it — an item's vendor is a
       // string it already holds, so the worst case is a dropdown with only the current value in it.
@@ -439,7 +444,8 @@
   // loud failure — but it would also have to be un-picked afterwards, and this is the better
   // shape regardless.
   var ITEM_FIELD_LABELS = {
-    name: "Name", unit: "Unit", unit_cost: "Cost", buy_qty: "Order amount",
+    name: "Name", unit: "Unit", unit_cost: "Cost per unit", buy_qty: "Order amount",
+    cost_comment: "Cost comment",
     coverage: "Coverage per unit", waste_pct: "Waste factor", roundup: "Roundup",
     vendor: "Vendor", divisions: "Division", material_categories: "Category",
     bulk_cost: "Bulk cost", coverage_basis: "Coverage measured per", price_breaks: "Price breaks",
@@ -549,8 +555,9 @@
     if (!before || !it) { endItemRound(id); return true; }
     // A CATEGORY MOVES NO PRICE (it is the heading the estimate draws the row under), so it is never
     // the reason to ask: the question is about what the assemblies built on this material cost.
+    // Nor does a COST COMMENT: it is a note about the price, not the price.
     var fields = Object.keys(payload).filter(function (f) {
-      return f !== "expected_updated_at" && f !== "material_categories" &&
+      return f !== "expected_updated_at" && f !== "material_categories" && f !== "cost_comment" &&
         shownValue(payload[f]) !== shownValue(before[f]);
     });
     // A no-op payload is still SENT — harmless, and an existing test pins it — but the snapshot
@@ -742,6 +749,8 @@
         // they are looking at it loses their work and hides the reason.
         say(j.detail || j.error || "That change didn't save.");
         saving("Not saved");
+        // A refused cost comment comes back out first, the same way (true: nothing left to send).
+        if (dropRefusedComment(kind, id, payload, j.detail || j.error)) return;
         if (!dropRefusedCategory(kind, id, payload, j.detail || j.error)) requeueFailed(key, payload);
         return;
       }
@@ -807,6 +816,24 @@
     renderItems();
     var left = Object.keys(payload).filter(function (f) { return f !== "expected_updated_at"; });
     if (left.length) return false;
+    if (FRESH.items[id] !== "new") { delete FRESH.items[id]; if (typeof hideUnsaved === "function") hideUnsaved(kind, id); }
+    return true;
+  }
+
+  /** A COST COMMENT THE DATABASE CANNOT HOLD (no cost_comment column yet), dropRefusedCategory's twin:
+   *  taken back out of the failed save rather than requeued, so it cannot ride every later edit of the
+   *  row and fail each one. The comment goes back to what the server holds (nothing) and the Cost Comment
+   *  boxes turn read-only. True when nothing is left to send. */
+  function dropRefusedComment(kind, id, payload, detail) {
+    if (kind !== "items" || !payload || !("cost_comment" in payload) ||
+        !/cost_comment/.test(String(detail || ""))) return false;
+    delete payload.cost_comment;
+    COMMENT_WRITABLE = false;
+    var it = itemOf(id);
+    if (it) it.cost_comment = "";
+    renderItems();
+    var rest = Object.keys(payload).filter(function (f) { return f !== "expected_updated_at"; });
+    if (rest.length > 0) return false;
     if (FRESH.items[id] !== "new") { delete FRESH.items[id]; if (typeof hideUnsaved === "function") hideUnsaved(kind, id); }
     return true;
   }
@@ -1379,11 +1406,6 @@
     return String(Math.round(n * 1000) / 1000).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
   }
 
-  function orderAmount(it) {
-    if (!it) return "—";
-    return qtyText((it.buy_qty == null ? 1 : it.buy_qty)) + " " + String(it.unit || "Unit");
-  }
-
   function optionsHtml(list, selected) {
     var out = '<option value="">—</option>';
     var sel = String(selected || "").toLowerCase();
@@ -1557,7 +1579,7 @@
    *  renderItems only for an admin: these three set how a price is reached, and the server refuses
    *  anybody else.
    *
-   *  A price break says "from this many units bought, one purchase costs this instead". It starts
+   *  A price break says "from this many units bought, one unit costs this instead". It starts
    *  AT its quantity (Kyle's flake pays the bulk price at 240 lb, not above it), and below the
    *  first break the ordinary Cost applies. `data-brk-i` is the break's place in the list, so an
    *  edit lands on the right one without reading the page back. */
@@ -1570,10 +1592,10 @@
       rows += '<div class="brk">From ' +
         '<input data-f="brk_qty" data-brk-i="' + i + '" class="num" value="' + esc(b.min_qty) +
           '" aria-label="Price break ' + (i + 1) + ', the quantity it starts at, in ' + unit + '"> ' +
-        unit + ' bought, one purchase costs ' +
+        unit + ' bought, one unit costs ' +
         '<span class="money"><span>$</span><input data-f="brk_cost" data-brk-i="' + i +
           '" class="num cell-cost" value="' + esc(b.unit_cost) + '" aria-label="Price break ' +
-          (i + 1) + ', the cost of one purchase at that quantity"></span> ' +
+          (i + 1) + ', the cost of one unit at that quantity"></span> ' +
         '<button class="icon danger" type="button" data-del-break="' + id + '" data-brk-i="' + i +
           '" title="Remove this price break" aria-label="Remove price break ' + (i + 1) + '">' +
           icon("trash") + "</button></div>";
@@ -1590,11 +1612,11 @@
     return '<tr class="item-more" data-item-more="' + id + '"><td></td><td colspan="12">' +
       '<label class="morefield">Bulk cost ' +
         '<span class="money"><span>$</span><input data-f="bulk_cost" class="num cell-cost" value="' +
-        esc(it.bulk_cost) + '" aria-label="Bulk cost of one purchase, used when the bid has Bulk ' +
+        esc(it.bulk_cost) + '" aria-label="Bulk cost of one unit, used when the bid has Bulk ' +
         'Discount on"></span></label>' +
       '<label class="morefield">Coverage is per ' + select + "</label>" +
       '<div class="breaks"><div class="breakhead">Price breaks <span class="th-sub">A break starts ' +
-        "at its quantity. Below the first one, the Cost column applies.</span></div>" + rows +
+        "at its quantity. Below the first one, the Cost per Unit column applies.</span></div>" + rows +
         '<button class="btn ghost sm" type="button" data-add-break="' + id + '">Add a price ' +
         "break</button></div>" +
       "</td></tr>";
@@ -1731,6 +1753,79 @@
     return false;
   }
 
+  /** The Cost Comment cell: a box that grows with its text, saved through the ordinary item path
+   *  (data-f="cost_comment" reaches onItemEdit's generic branch). Read-only text on a database
+   *  without the column, which COMMENT_WRITABLE says, so nothing is offered that cannot save. */
+  function costCommentCell(it) {
+    var text = it.cost_comment == null ? "" : String(it.cost_comment);
+    if (!COMMENT_WRITABLE) {
+      return '<span class="commentro" title="The database needs backend/ops/library_cost_comment.sql first">' +
+        (text ? esc(text) : "Not on this database yet") + "</span>";
+    }
+    return '<textarea data-f="cost_comment" class="cell-comment" rows="1" maxlength="4000" ' +
+      'aria-label="Cost comment for ' + esc(it.name || "this material") + ', a note on the price">' +
+      esc(text) + "</textarea>";
+  }
+
+  /** The area the Items tab shows its working at (#item-area), or the reference area when the box
+   *  is missing. A blank box is blank: itemWorking answers "" and the lines go empty. */
+  function itemMathArea() {
+    var box = $("item-area");
+    return box ? box.value : L.REFERENCE_AREA;
+  }
+
+  /** One material's working line, library-core's itemWorking at the Items tab's area: the same
+   *  priceLine a bid prices with, so a price break that applies is the price it shows. Grey and
+   *  worded as a need when the material cannot price yet. The reserved Remove-existing row buys
+   *  nothing and has no line. */
+  function itemMathHtml(it) {
+    if (!it || it.id === WT.itemIdOf("remove_existing_jf")) return "";
+    var text = itemMathText(it);
+    return '<span class="calc mono item-math' + (itemMathNeeds(text) ? " needs" : "") + '" data-item-math>' +
+      esc(text) + "</span>";
+  }
+
+  /** The working line's words: library-core's itemWorking, or, when the area box holds no positive
+   *  number (blank, 0, a bad value restored from localStorage), a grey "Enter an area above" so an
+   *  empty column never leaves the estimator guessing why. A material missing a number still says
+   *  what it needs, whatever the area. */
+  function itemMathText(it) {
+    var area = itemMathArea();
+    var text = L.itemWorking(it, area);
+    if (!text && !(L.num(area) > 0)) return "Enter an area above";
+    return text;
+  }
+
+  function itemMathNeeds(text) {
+    return text === "Needs a coverage" || text === "Needs a cost" || text === "Enter an area above";
+  }
+
+  /** The Items-tab fields that move a working line. A keystroke in the Name, Vendor or Cost Comment box
+   *  changes no price, so it repaints nothing. */
+  var ITEM_MATH_FIELDS = ["unit_cost", "coverage", "waste_pct", "roundup", "unit", "bulk_cost",
+    "brk_qty", "brk_cost", "coverage_basis"];
+  function onItemMathEdit(e) {
+    var f = e && e.target && e.target.getAttribute && e.target.getAttribute("data-f");
+    if (ITEM_MATH_FIELDS.indexOf(f) !== -1) paintItemMath();
+  }
+
+  /** Repaint ONLY the working lines, never the table: a rebuild while somebody types in the area
+   *  box or a cost would throw the caret out (the refreshNumbers rule). Reads the model, so it
+   *  follows an edit as soon as onItemEdit has put the value there. */
+  function paintItemMath() {
+    var body = $("items-body");
+    if (!body || !body.querySelectorAll) return;
+    var rows = body.querySelectorAll("tr[data-item]");
+    for (var i = 0; i < rows.length; i++) {
+      var slot = rows[i].querySelector("[data-item-math]");
+      var it = itemOf(rows[i].getAttribute("data-item"));
+      if (!slot || !it) continue;
+      var text = itemMathText(it);
+      slot.textContent = text;
+      if (slot.classList) slot.classList.toggle("needs", itemMathNeeds(text));
+    }
+  }
+
   function renderItems() {
     var out = "";
     var shown = visibleItems();
@@ -1750,7 +1845,8 @@
         // THE CATEGORY, per work type (Admin > Item categories): the heading this material sits under on
         // the v2 estimate's Material step. See categoryCell.
         '<td class="cell-cat">' + categoryCell(it) + "</td>" +
-        '<td class="n"><input data-f="buy_qty" class="num cell-qty" value="' + (it.buy_qty == null ? "" : it.buy_qty) + '" aria-label="How many units come in one purchase"></td>' +
+        // NO ORDER QUANTITY CELL (Hanz, 2026-11-04: "remove the order quantity"). Every material is
+        // bought by the single unit; the server stores buy_qty 1 whatever a client sends.
         "<td>" + pick("unit", it.unit, unitNames(), "Unit", ' class="cell-unit"') + "</td>" +
         // COVERAGE, WASTE AND ROUNDUP LIVE ON THE MATERIAL, from 2026-09-22. Hanz: "we must have
         // coverage per unit, waste factor, roundup, and materials tab. And then it gets pulled in
@@ -1766,15 +1862,19 @@
         // "absent means yes" (library-core.js's priceLine), so the box must not show unticked for
         // a material nobody has touched yet.
         '<td class="w-ru"><input type="checkbox" data-f="roundup"' +
-          (it.roundup === false ? "" : " checked") + ' aria-label="Round up to whole purchase units"></td>' +
+          (it.roundup === false ? "" : " checked") + ' aria-label="Round up to whole units"></td>' +
         // REMOVE EXISTING JOINT FILLER BUYS NOTHING, so its cost cell says so instead of offering
         // a box. It is a fourth hand on the joint-filler line, priced on the Labor step, and the
         // Polish estimate never reads a material price off this row -- a figure typed here would
         // sit in the library looking like a charge that no bid makes.
         '<td class="n">' + (it.id === WT.itemIdOf("remove_existing_jf")
           ? '<span class="builtin">No material cost</span>'
-          : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one purchase"></span>') + "</td>" +
+          : '<span class="money"><span>$</span><input data-f="unit_cost" class="num cell-cost" value="' + (it.unit_cost == null ? "" : it.unit_cost) + '" aria-label="Cost of one unit"></span>' +
+            // SHOW THE MATH under the cost, at the area in #item-area. See itemMathHtml.
+            itemMathHtml(it)) + "</td>" +
         "<td>" + pick("vendor", it.vendor, vendorNames(), "Vendor", ' class="cell-vendor"') + "</td>" +
+        // THE COST COMMENT, between Vendor and History (Hanz, 2026-11-04). See costCommentCell.
+        "<td>" + costCommentCell(it) + "</td>" +
         '<td class="datescell">' + datesHtml(it) + "</td>" +
         '<td class="rowact">' +
           // PRICE BREAKS, BULK COST AND COVERAGE BASIS live behind More, for an admin or a member
@@ -2966,7 +3066,7 @@
       return '<button class="item-result" type="button" data-pick-item="' + esc(candidate.id) + '"' +
         (candidate.id === line.item_id ? ' aria-pressed="true"' : ' aria-pressed="false"') + ">" +
         "<b>" + esc(candidate.name) + "</b>" +
-        "<span>" + esc(divs) + " &middot; " + esc(vendor) + " &middot; " + esc(orderAmount(candidate)) + "</span>" +
+        "<span>" + esc(divs) + " &middot; " + esc(vendor) + " &middot; " + esc(L.materialPriceText(candidate)) + "</span>" +
         "</button>";
     }).join("");
   }
@@ -3163,7 +3263,8 @@
         "<td>" + pickerFor(ln, i) +
           (!r.ok && r.reason === "missing_item"
             ? '<div class="gone">Pick a replacement item — this line is not priced</div>' : "") + "</td>" +
-        '<td class="n"><div class="line-primary">' + esc(orderAmount(lineItem)) + "</div></td>" +
+        // NO ORDER AMOUNT CELL (2026-11-04): every material is bought by the single unit, so it
+        // would say "1 Gallon" on every line. The unit is in the Quantity cell's own working.
         // COVERAGE COMES FROM THE MATERIAL UNLESS THIS ASSEMBLY SETS ITS OWN. Hanz, 2026-09-22,
         // moved coverage, waste and roundup onto the material ("it gets pulled in to assemblies
         // instead of it being in assemblies"); on 2026-10-30 he asked for coverage to be editable
@@ -3195,7 +3296,7 @@
       "</tr>";
     }
     if (!asm.lines.length) {
-      out = '<tr><td colspan="8" class="lines-empty">' +
+      out = '<tr><td colspan="7" class="lines-empty">' +
             "No lines yet. Add one and search for an item.</td></tr>";
     }
     $("lines-body").innerHTML = out;
@@ -5032,7 +5133,7 @@
         '<span class="bulk-nm"><b>' + esc(it.name) + "</b><span>" +
           esc(divs) + " &middot; " + esc(vendor) + "</span></span>" +
         (on ? '<span class="bulk-in">On this assembly</span>'
-            : '<span class="bulk-cost">' + esc(orderAmount(it)) + "</span>") +
+            : '<span class="bulk-cost">' + esc(L.materialPriceText(it)) + "</span>") +
         "</label>";
     }).join("");
 
@@ -5503,6 +5604,23 @@
 
   $("items-body").addEventListener("input", onItemEdit);
   $("items-body").addEventListener("change", onItemEdit);
+  // The working lines read the model, which onItemEdit (registered first, so it runs first) has
+  // just written. A repaint, never a rebuild, so the box being typed in keeps the caret; and only for
+  // a field that moves a price (ITEM_MATH_FIELDS), never a keystroke in a name or a comment.
+  $("items-body").addEventListener("input", onItemMathEdit);
+  $("items-body").addEventListener("change", onItemMathEdit);
+  // SHOW THE MATH FOR [1,000] SF: remembered per browser as a convenience (try/catch: a private
+  // window or blocked storage just opens at 1,000), never saved with anything.
+  if ($("item-area")) {
+    try {
+      var keptArea = window.localStorage.getItem("tw_library_item_area");
+      if (keptArea !== null && keptArea !== "") $("item-area").value = keptArea;
+    } catch (e) { /* convenience only */ }
+    $("item-area").addEventListener("input", function (e) {
+      try { window.localStorage.setItem("tw_library_item_area", e.target.value); } catch (err) { /* convenience only */ }
+      paintItemMath();
+    });
+  }
   // …and the event that actually triggers the save. `focusout` and not `blur`, because blur does
   // not bubble and this is one listener on a tbody whose rows are replaced on every render.
   $("items-body").addEventListener("focusout", onItemRowFocusOut);
@@ -5727,13 +5845,13 @@
     var area = $("area").value;
     var p = L.priceAssembly(asm, ITEMS, area);
     var rows = $("lines-body").querySelectorAll("[data-line]");
-    // BY POSITION, so these two indexes are load-bearing: Items · Order Amount · Coverage ·
-    // Waste · Roundup? · Quantity · Cost · delete. Adding a column ahead of them without moving these writes the
-    // quantity into the waste box.
-    var QTY_TD = 5, COST_TD = 6;
+    // BY POSITION, so these two indexes are load-bearing: Items · Coverage · Waste · Roundup? ·
+    // Quantity · Cost · delete (the Order Amount column came out 2026-11-04). Adding a column ahead
+    // of them without moving these writes the quantity into the waste box.
+    var QTY_TD = 4, COST_TD = 5;
     // The Coverage cell. Only its "Material: N" line is repainted, NEVER its box: the box is what
     // somebody is typing in, and rebuilding it would throw the caret out.
-    var COV_TD = 2;
+    var COV_TD = 1;
     for (var i = 0; i < rows.length; i++) {
       var r = p.rows[i];
       if (!r) continue;
