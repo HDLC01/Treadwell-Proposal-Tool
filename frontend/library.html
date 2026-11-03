@@ -238,7 +238,7 @@
     .items-table thead th:first-child, .items-table thead th.rowsave + th { text-align:left; }
     .th-sub { font-weight:400; text-transform:none; letter-spacing:0; }
     /* Widths as classes. They were eight inline style attributes on the <th> row. */
-    .w-order { width:112px; } .w-cov { width:116px; } .w-waste { width:104px; }
+    .w-cov { width:116px; } .w-waste { width:104px; }
     /* The Defaults tab's starting-state slider (the same .mw-sw the estimate draws, via
        TWBidModel.sliderHtml). */
     .w-on { width:84px; white-space:nowrap; } .rowon { white-space:nowrap; }
@@ -263,8 +263,19 @@
     .catnote { font:italic 400 12px var(--ui); color:var(--ink-v); white-space:nowrap; }
     .cell-ref { width:100%; min-width:170px; }
     .cell-note { width:100%; min-width:190px; }
-    .cell-qty { width:64px; }
     .cell-cost { width:92px; }
+    /* THE COST COMMENT (Hanz, 2026-11-04): a note on the price. A one-line box that grows with what
+       is typed in it (field-sizing), capped so a long quote does not make the row a page tall. */
+    .cell-comment { width:100%; min-width:180px; display:block; resize:vertical; font:inherit;
+      field-sizing:content; min-height:32px; max-height:140px; line-height:1.35; }
+    .commentro { display:block; min-width:160px; max-width:260px; white-space:pre-wrap;
+      font-size:12.5px; color:var(--ink-v); }
+    /* SHOW THE MATH: the working line under each Cost per Unit, priced at the Items tab's own area.
+       Wraps inside a bounded width so the cost column does not stretch to the whole sentence. */
+    .item-math { display:block; min-width:210px; max-width:250px; margin-left:auto; text-align:right;
+      white-space:normal; line-height:1.35; }
+    .item-math.needs { font-family:var(--ui); font-weight:600; }
+    #items-mathband { margin:0 0 10px; }
     .rowact { white-space:nowrap; }
     /* THE ITEMS ROW'S SAVE BUTTON, FIRST COLUMN, LEFT OF THE NAME. Hanz, 2026-10-06: "the save
        button only pops up when we click away" -- the button was in the last column of a table about
@@ -940,6 +951,17 @@
           </span>
         </div>
       </div>
+      <!-- SHOW THE MATH (Hanz, 2026-11-04: "add a way to see how the logic is being solved to come up
+           with a cost in the items tab"). One area for the whole tab; every material's working line
+           under its Cost per Unit is priced at it by library-core's own priceLine, the function a bid
+           prices with. Read in each material's own measure: SF, or LF for a material measured per
+           LF, or a count for one priced each. Remembered per browser; never saved with anything. -->
+      <div class="areaband quiet" id="items-mathband">
+        <label for="item-area">Show the math for</label>
+        <input id="item-area" class="num" inputmode="decimal" value="1000" />
+        <span>SF</span>
+        <span class="why" id="item-area-why">LF for a material measured per LF, a count for one priced each.</span>
+      </div>
       <div class="card">
         <!-- Hanz, 2026-08-28: the foot-of-list placement (2026-08-27) got lost below the
              horizontal scrollbar and a table full of rows — nobody was finding it. Moved above
@@ -975,16 +997,16 @@
                 <th>Materials <span class="th-sub">(how the manufacturer names it)</span></th>
                 <th>Division</th>
                 <th><span class="th-help" tabindex="0" title="The heading this material sits under on an estimate's Material step, per work type. The headings are set on the Admin page, under Item categories." aria-label="Category. The heading this material sits under on an estimate's Material step, per work type. The headings are set on the Admin page, under Item categories.">Category</span></th>
-                <th class="n">Order Quantity</th><th>Unit</th>
+                <th>Unit</th>
                 <!-- COVERAGE, WASTE AND ROUNDUP LIVE HERE NOW, from 2026-09-22. Hanz: "for the
                      materials, we must have coverage per unit, waste factor, roundup, and
                      materials tab. And then it gets pulled in to assemblies instead of it being
                      in assemblies." Same three width classes (.n.w-cov / .n.w-waste / .w-ru) and
                      the same copy the assembly-lines <thead> already uses for these properties
                      below — one description of what each one means, not two. -->
-                <th class="n w-cov"><span class="th-help" tabindex="0" title="How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. Per unit, not per pack: a 5 gallon pail at 275 a gallon covers 1,375." aria-label="Coverage per Unit. How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. Per unit, not per pack: a 5 gallon pail at 275 a gallon covers 1,375.">Coverage per Unit</span></th>
+                <th class="n w-cov"><span class="th-help" tabindex="0" title="How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. One unit is one of whatever the Unit says: a primer at 275 SF a gallon covers 275 per gallon." aria-label="Coverage per Unit. How much one unit of this material covers, in whatever an assembly measures in - square feet or linear feet. One unit is one of whatever the Unit says: a primer at 275 SF a gallon covers 275 per gallon.">Coverage per Unit</span></th>
                 <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated amount needed, to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated amount needed, to account for waste, spills, and overage.">Waste Factor (%)</span></th>
-                <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the amount needed up to whole purchase units, so an assembly buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the amount needed up to whole purchase units, so an assembly buys complete packs, kits, bags, or other units.">Roundup?</span></th>
+                <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the amount needed up to the next whole unit, no decimals: 3.8 gallons is bought as 4 gallons. Off, the estimate prices the exact amount." aria-label="Roundup. Rounds the amount needed up to the next whole unit, no decimals: 3.8 gallons is bought as 4 gallons. Off, the estimate prices the exact amount.">Roundup?</span></th>
                 <!-- "Dates" until 2026-09-04. The cell names who added the material and who
                      last changed it, not only when, so the heading stopped promising only
                      dates.
@@ -994,7 +1016,15 @@
                      than anyone reads. Added-and-by and Edited-and-by stay; "Price not since
                      we started tracking" went. cost_updated_at is STILL stored, still
                      returned, and still what the Price-updated sort orders by. -->
-                <th class="n">Cost</th><th>Vendor</th><th>History</th>
+                <!-- COST PER UNIT, AND A COMMENT ON IT (Hanz, 2026-11-04): "relabel cost to cost per
+                     unit ... add the dollar sign on that cost header ... between the vendor and
+                     history headers, we put a cost comment field". The Order Quantity column went
+                     the same day: every material is bought by the single unit, so this is the
+                     price of one. -->
+                <th class="n"><span class="th-help" tabindex="0" title="The price of ONE unit of this material - one gallon, one bag, one pound - not of a pack. The line under it shows the math at the area in the box above the table." aria-label="Cost per Unit, in dollars. The price of ONE unit of this material - one gallon, one bag, one pound - not of a pack. The line under it shows the math at the area in the box above the table.">Cost per Unit ($)</span></th>
+                <th>Vendor</th>
+                <th><span class="th-help" tabindex="0" title="A note on the price: a quote number, who gave it, why it is what it is." aria-label="Cost Comment. A note on the price: a quote number, who gave it, why it is what it is.">Cost Comment</span></th>
+                <th>History</th>
                 <!-- NO DEFAULT COLUMN. It lived here for one day. Hanz, 2026-09-17: "all the
                      default items in assemblies should be handled in default items in assemblies
                      tab" -- one screen owns defaults, and a switch here would be a second place to
@@ -1021,8 +1051,8 @@
         </div>
         <div id="items-empty" class="empty" hidden>
           <h3>No materials yet</h3>
-          <p>Add the products you buy, named the way the manufacturer names them — how much comes
-            in a purchase, and what that purchase costs.</p>
+          <p>Add the products you buy, named the way the manufacturer names them, with the price of
+            one unit (one gallon, one bag, one pound).</p>
           <button class="btn" type="button" data-add-item>Add your first material</button>
         </div>
       </div>
@@ -1555,13 +1585,12 @@
             <table class="lines">
               <thead>
                 <tr>
-                  <th><span class="th-help" tabindex="0" title="The material this line uses. Pick one from the library; its cost and pack size come with it." aria-label="Items. The material this line uses. Pick one from the library; its cost and pack size come with it.">Items</span></th>
-                  <th class="n w-order"><span class="th-help" tabindex="0" title="How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon." aria-label="Order Amount. How much comes in one purchase of this material, and the unit it is bought in - a 5 gallon pail is 5 Gallon.">Order Amount</span></th>
-                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much one single unit of this material covers, in whatever this assembly is measured in. Per unit, not per pack - a 5 gallon pail at 275 a gallon covers 1,375. It comes from the material; type a figure here to use a different one in this assembly only, or leave it empty to use the material's." aria-label="Coverage per Unit. How much one single unit of this material covers, in whatever this assembly is measured in. Per unit, not per pack - a 5 gallon pail at 275 a gallon covers 1,375. It comes from the material; type a figure here to use a different one in this assembly only, or leave it empty to use the material's.">Coverage per Unit</span></th>
+                  <th><span class="th-help" tabindex="0" title="The material this line uses. Pick one from the library; its cost per unit comes with it." aria-label="Items. The material this line uses. Pick one from the library; its cost per unit comes with it.">Items</span></th>
+                  <th class="n w-cov"><span class="th-help" tabindex="0" title="How much one single unit of this material covers, in whatever this assembly is measured in - a primer at 275 SF a gallon covers 275 per gallon. It comes from the material; type a figure here to use a different one in this assembly only, or leave it empty to use the material's." aria-label="Coverage per Unit. How much one single unit of this material covers, in whatever this assembly is measured in - a primer at 275 SF a gallon covers 275 per gallon. It comes from the material; type a figure here to use a different one in this assembly only, or leave it empty to use the material's.">Coverage per Unit</span></th>
                   <th class="n w-waste"><span class="th-help" tabindex="0" title="Adds this percentage to the calculated item amount to account for waste, spills, and overage." aria-label="Waste Factor. Adds this percentage to the calculated item amount to account for waste, spills, and overage.">Waste Factor (%)</span></th>
-                  <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units." aria-label="Roundup. Rounds the required amount up to whole order quantities so the estimate buys complete packs, kits, bags, or other units.">Roundup?</span></th>
+                  <th class="w-ru"><span class="th-help" tabindex="0" title="Rounds the required amount up to the next whole unit, no decimals, so the estimate buys complete gallons, bags, kits or whatever the unit is. Set on the material." aria-label="Roundup. Rounds the required amount up to the next whole unit, no decimals, so the estimate buys complete gallons, bags, kits or whatever the unit is. Set on the material.">Roundup?</span></th>
                   <th class="n w-qty derived"><span class="th-help" tabindex="0" title="How much of this material the test area needs, after waste and rounding. The working is shown underneath." aria-label="Quantity. How much of this material the test area needs, after waste and rounding. The working is shown underneath.">Quantity</span></th>
-                  <th class="n w-qty derived"><span class="th-help" tabindex="0" title="What that quantity costs at this material's purchase price. The working is shown underneath." aria-label="Cost. What that quantity costs at this material's purchase price. The working is shown underneath.">Cost</span></th>
+                  <th class="n w-qty derived"><span class="th-help" tabindex="0" title="What that quantity costs at this material's cost per unit. The working is shown underneath." aria-label="Cost, in dollars. What that quantity costs at this material's cost per unit. The working is shown underneath.">Cost ($)</span></th>
                   <th class="w-act"></th>
                 </tr>
               </thead>
