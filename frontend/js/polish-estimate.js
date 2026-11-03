@@ -341,7 +341,8 @@
    *
    *  COVERAGE IS TYPED ON THE ROW as THIS ESTIMATE'S OWN OVERRIDE, applied here in the page, not
    *  inside priceLine -- the library rule (2026-09-22) moved coverage onto the material, so
-   *  priceLine itself no longer reads a line's coverage at all. Hanz, 2026-09-30: keep the box,
+   *  priceLine reads no coverage off a line except an ASSEMBLY's own `coverage_override` (set on
+   *  the Assemblies tab, 2026-10-30). Hanz, 2026-09-30: keep the box,
    *  because the same product is used at different coverages on different jobs, but the override
    *  is a per-job fact about THIS estimate, not a second source of truth for the material -- it is
    *  never written back onto the item (see priceMaterialRow). Blank still falls back to the
@@ -471,7 +472,11 @@
       var tmp = "__cov" + j;
       // `pool_of` keeps the typed-over copy the same material for the section's pool (library-core pricePool)
       items = items.concat([Object.assign({}, real, { id: tmp, coverage: cov, pool_of: real.id })]);
-      return Object.assign({}, ln, { item_id: tmp, item: undefined });
+      // THIS BID'S FIGURE BEATS THE ASSEMBLY'S OWN. A line may carry `coverage_override` (set on the
+      // Assemblies tab, 2026-10-30), and priceLine prefers it to the material's coverage -- so left on
+      // the swapped line it would win over the copy's `coverage` and quietly undo what this bid typed.
+      // Order: this bid's line_cov, then the assembly's override, then the material.
+      return Object.assign({}, ln, { item_id: tmp, item: undefined, coverage_override: undefined });
     });
     if (!any) return L.priceAssembly(asm, lib, area);
     return L.priceAssembly(Object.assign({}, asm, { lines: swapped }), items, area);
