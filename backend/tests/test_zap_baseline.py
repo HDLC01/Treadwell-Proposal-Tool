@@ -584,6 +584,10 @@ PORTAL_GETS = {
     "/api/portal/{token}/pdf": "session",
     "/api/portal/{token}/deposit-invoice.pdf": "session",
     "/api/portal/{token}/signed-contract.pdf": "session",
+    # Read 2026-11-04 from the portal's approve-several change (#32): lists the project's proposals
+    # the signed-in customer may approve together. Session-gated (_require); reads only (the pinned
+    # draft and whether the document was opened); no writes, no mail. The approval itself is a POST.
+    "/api/portal/{token}/approve-several": "session",
     "/api/admin/pipeline": "service",
     "/api/admin/recent-messages": "service",
     "/api/admin/proposal/{proposal_id}": "service",
