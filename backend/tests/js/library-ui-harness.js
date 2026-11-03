@@ -1013,6 +1013,7 @@ const out = {};
       .split("<option").slice(1).map((o) => (/>([^<]*)</.exec(o) || ["", ""])[1]),
     hasVendorDropdown: /<select data-f="vendor"/.test(row),
     costWearsADollarSign: /<span class="money"><span>\$<\/span><input data-f="unit_cost"/.test(row),
+    wasteWearsAPercentSign: /<span class="pct"><input data-f="waste_pct"[^>]*><span aria-hidden="true">%<\/span><\/span>/.test(row),
     // Back, 2026-09-22: coverage, waste and roundup moved from the assembly line onto the
     // material — see the ITEMS/ASMS comment above. The material name is also no longer a bare
     // text box (see nameOffersAutosuggest below).

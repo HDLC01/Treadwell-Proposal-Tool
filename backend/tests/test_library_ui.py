@@ -1102,6 +1102,13 @@ def test_the_cost_wears_a_dollar_sign(ran):
 
 
 @needs_node
+def test_the_waste_factor_wears_a_percent_sign(ran):
+    """Hanz, 2026-11-04: "please put a percentage label on the waste factor". The % sits inside the
+    box, after the number, the way the $ sits inside a cost box."""
+    assert ran["items"]["wasteWearsAPercentSign"]
+
+
+@needs_node
 def test_coverage_waste_and_roundup_live_on_the_items_tab(ran):
     """Inverts test_coverage_left_the_items_tab. Hanz, 2026-09-21: "for the materials, we must
     have coverage per unit, waste factor, roundup, and materials tab. And then it gets pulled in

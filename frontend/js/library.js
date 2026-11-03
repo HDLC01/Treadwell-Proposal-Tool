@@ -1759,7 +1759,9 @@
         // classes (.n.w-cov / .n.w-waste / .w-ru) the assembly-lines table already defines for
         // these three columns — reused here, not reinvented.
         '<td class="n w-cov"><input data-f="coverage" class="num" value="' + (it.coverage == null ? "" : it.coverage) + '" aria-label="Coverage per unit"></td>' +
-        '<td class="n w-waste"><input data-f="waste_pct" class="num" value="' + (it.waste_pct == null ? "" : it.waste_pct) + '" aria-label="Waste factor, percent"></td>' +
+        // THE % SITS INSIDE THE BOX (Hanz, 2026-11-04: "put a percentage label on the waste factor"),
+        // the way the $ sits inside a cost box: a bare 5 could be read as 5 gallons.
+        '<td class="n w-waste"><span class="pct"><input data-f="waste_pct" class="num" value="' + (it.waste_pct == null ? "" : it.waste_pct) + '" aria-label="Waste factor, percent"><span aria-hidden="true">%</span></span></td>' +
         // Unchecked only when roundup is explicitly false. NULL and true both read as checked --
         // "absent means yes" (library-core.js's priceLine), so the box must not show unticked for
         // a material nobody has touched yet.
