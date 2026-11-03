@@ -514,6 +514,16 @@
     .money input:focus-visible { outline:none; }
     /* The Labor rate box, the same width as the Hotel and Per Diem boxes beside it on the next tab. */
     .areaband .money input { width:92px; }
+    /* A percentage wears its sign the same way, on the other side: the Items tab's Waste Factor box. */
+    .pct { display:inline-flex; align-items:center; border:1px solid var(--line);
+      border-radius:var(--r-md); background:var(--card); padding-right:8px; }
+    .pct:hover { border-color:var(--red); }
+    .pct span { color:var(--ink-v); font-size:12.5px; }
+    .pct input { border:0; border-radius:var(--r-md) 0 0 var(--r-md); padding-right:4px;
+      background:none; width:64px; }
+    .pct input:hover { border-color:transparent; }
+    .pct:focus-within { outline:2px solid var(--red); outline-offset:2px; }
+    .pct input:focus-visible { outline:none; }
 
     /* Two dates, both muted: when the material was added, and when its price last moved. The
        second is the one an estimator actually asks about. */
