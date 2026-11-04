@@ -19,9 +19,14 @@ the workbook itself, through js/bid-model.js priceSection, the function the esti
      gypsum, extras, sand and sound mat (before E38 rounds it), the rolls and the truckload, the tooling, the material
      total, the sub-total, the gross profit, the taxes and the total have to be EQUAL, to the dollar, for every job.
 
-NO DECLARED DEPARTURES. The Epoxy proof carries ten (price breaks judged on two lines, coverage kept to three places, a
-cost kept to four). Gyp has none: every price is a whole number of cents except the USG primer, which is stored as the
-drum it is bought in (53 gallons at $891) so a gallon is exactly the sheet's `=891/53`, and a bag's yield is code. The
+ONE DECLARED DEPARTURE, from 2026-11-04. The Epoxy proof carries ten (price breaks judged on two lines, coverage kept to
+three places, a cost kept to four). Gyp had none: every price is a whole number of cents except the USG primer, which was
+stored as the drum it is bought in (53 gallons at $891) so a gallon was exactly the sheet's `=891/53`. Hanz, 2026-11-04:
+"remove the order quantity" -- every library row is bought by the single unit now, so the primer is $16.8113 a gallon,
+the four places a library cost holds: two thousandths of a cent a gallon under the sheet. The raw extras on a USG tab
+(the primer is part of them) may therefore sit that far under the workbook (PRIMER_SHORT below); every figure the
+workbook rounds -- the material total, the sub-total, the taxes and the total -- is still EQUAL to the dollar on every
+job, and Gyp (FR)'s $27.90 a gallon divides exactly. A bag's yield is code. The
 labor is the one input the proof hands in rather than derives: the sheet works its hours out of the takeoff
 (mobilizations, bags a pour hour, the hard area a mat hour) and v2 types them, so a job is priced on the labor dollars
 the workbook's own lines came to (E52), and the hours the sheet suggests are proved separately (`hours` below).
@@ -73,6 +78,16 @@ JOB_PAIRS = (("material", "E38"), ("material_escalation", "E39"), ("shipping", "
 
 def _tolerance(raw):
     return 1e-9 * max(raw, 1.0) + 1e-6
+
+
+# The USG primer's four-place gallon ($16.8113) against the sheet's 891 / 53, as a share of what it costs: the most the
+# raw extras of a USG job can sit under the workbook, since the primer is at most all of them (see the docstring).
+PRIMER_SHORT = (891 / 53 - 16.8113) / (891 / 53)
+
+
+def _extras_tolerance(case_id, raw):
+    usg = not str(case_id).startswith("Gyp (FR)")
+    return _tolerance(raw) + (raw * PRIMER_SHORT if usg else 0.0)
 
 
 # ── the recorded answers are the workbook's, and current ─────────────────────────────────────────
@@ -227,7 +242,9 @@ def test_every_recorded_job_is_equal_to_the_workbook_to_the_dollar_on_every_tab(
         w, g = case["out"], by_id[case["id"]]
         assert g["priceable"] is True, case["id"]
         assert g["raw"]["gyp"] == pytest.approx(w["gyp"], abs=_tolerance(w["gyp"])), (case["id"], "gypsum")
-        assert g["raw"]["extras"] == pytest.approx(w["extras"], abs=_tolerance(w["extras"])), (case["id"], "extras")
+        assert g["raw"]["extras"] == pytest.approx(w["extras"], abs=_extras_tolerance(case["id"], w["extras"])), (
+            case["id"], "extras")
+        assert g["raw"]["extras"] <= w["extras"] + _tolerance(w["extras"]), (case["id"], "the primer only ever reads low")
         assert g["raw"]["sand"] == pytest.approx(w["E33"], abs=_tolerance(w["E33"])), (case["id"], "sand")
         assert g["raw"]["soundMat"] == pytest.approx(w["E36"], abs=_tolerance(w["E36"])), (case["id"], "sound mat")
         assert g["rolls"] == w["B36"] and g["truckload"] == w["H36"], (case["id"], "rolls and truckload")

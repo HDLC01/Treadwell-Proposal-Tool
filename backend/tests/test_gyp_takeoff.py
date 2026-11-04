@@ -145,22 +145,30 @@ def check_prices(mod):
             assert spec["cell"] == cell_fallback, (tab, key)
             assert spec["fallback"] == pytest.approx(float(_v(tab, spec["cell"])), abs=1e-9), (tab, key)
             row = PLAN.items[spec["id"]]
-            assert row["unit_cost"] / row["buy_qty"] == pytest.approx(spec["fallback"], abs=1e-9), (tab, key, spec["id"])
+            # 5e-5, not 1e-9, since 2026-11-04: every row is bought by the single unit (buy_qty 1) and holds its unit
+            # price to the four places a library cost has. Only the USG primer (891 / 53 = 16.81132...) is not exact
+            # at four places; it is $16.8113, two thousandths of a cent a gallon under the sheet's float.
+            assert row["buy_qty"] == 1.0, (tab, key, spec["id"])
+            assert row["unit_cost"] == pytest.approx(spec["fallback"], abs=5e-5), (tab, key, spec["id"])
 
 
 def test_every_fallback_equals_the_template_cell_of_its_tab_and_the_row_the_seed_plans(mod):
     check_prices(mod)
 
 
-def test_the_primer_is_bought_by_the_drum_so_a_gallon_is_exactly_what_the_sheet_says():
-    """USG!D27 is `=891/53`: stored as a pack of 53 gallons at $891 the gallon is the sheet's own float, and the
-    four-place price a plain per-gallon row would have held ($16.8113) is not what the workbook charges."""
+def test_the_primer_is_priced_by_the_gallon_to_four_places():
+    """WAS test_the_primer_is_bought_by_the_drum_so_a_gallon_is_exactly_what_the_sheet_says. USG!D27 is `=891/53`,
+    and the row used to be a pack of 53 gallons at $891 so a gallon was the sheet's own float. Hanz, 2026-11-04:
+    "remove the order quantity" -- every row is bought by the single unit, so it is now $16.8113 a gallon, the
+    four-place price a library cost holds (two thousandths of a cent a gallon under the sheet). The bid's fallback
+    (gyp-takeoff.js USG_PRIMER) is still the sheet's 891 / 53. backend/ops/library_per_unit_cost.sql converts the
+    row already in a database to the same figure."""
     row = PLAN.items["wb-gyp-usg-primer-53-gallon-drum"]
-    assert (row["buy_qty"], row["unit_cost"]) == (53.0, 891.0)
-    assert row["unit_cost"] / row["buy_qty"] == float(_v(FIRST, "D27"))
+    assert (row["buy_qty"], row["unit_cost"]) == (1.0, 16.8113)
+    assert row["unit_cost"] == pytest.approx(float(_v(FIRST, "D27")), abs=5e-5)
     assert "wb-gyp-usg-primer-53-gallon-drum-per-gallon" not in PLAN.items
     tp1 = PLAN.items["wb-gyp-treadstone-primer-tp1-gallon"]
-    assert tp1["unit_cost"] / tp1["buy_qty"] == float(_v(FR, "D27"))
+    assert (tp1["buy_qty"], tp1["unit_cost"]) == (1.0, float(_v(FR, "D27")))
 
 
 # ── the formula is the template's ────────────────────────────────────────────
@@ -424,10 +432,12 @@ def test_a_price_edited_on_the_library_row_reaches_the_price_and_no_row_prices_a
            json.dumps(FR), json.dumps(FIRST), json.dumps(FIRST)))
     assert got["rows"] == pytest.approx(got["none"], abs=1e-9), "the seeded rows and the fallbacks must price the same"
     assert got["edited"] == pytest.approx(got["rows"] * 20 / 14.08)
-    assert got["primerRows"] == pytest.approx(got["primerNone"], abs=1e-9)
+    # The library's USG primer is $16.8113 a gallon to the sheet's 891 / 53 (see the test above): a few hundredths of
+    # a cent on a 4,000 SF floor, never a cent.
+    assert got["primerRows"] == pytest.approx(got["primerNone"], abs=1e-3)
     assert got["frRows"] == pytest.approx(got["frNone"]) and got["frRows"] == pytest.approx(4000 / 40 * 1.03 * 14.65)
     assert got["unit"]["from"] == "library" and got["unitNone"]["from"] == "fallback"
-    assert got["unit"]["cost"] == got["unitNone"]["cost"] == 891 / 53
+    assert got["unit"]["cost"] == 16.8113 and got["unitNone"]["cost"] == 891 / 53
 
 
 def test_an_area_row_is_priced_in_the_shape_a_library_row_is_and_a_row_that_is_not_an_area_is_refused(mod):

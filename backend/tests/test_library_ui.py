@@ -944,6 +944,8 @@ def test_the_material_column_names_the_manufacturer(ran):
 def test_the_headers_hanz_asked_to_change_have_changed(ran):
     p = ran["page"]
     assert p["coveragePerUnitHeader"] and p["wasteHeader"] and p["roundupHeader"]
+    # Hanz, 2026-11-04: "we need the percentage symbol on the waste factor header as well"
+    assert p["wasteHeadersShowPercent"]
     assert p["vendorsTab"], "there is no Vendors tab"
     assert p["noCoverageSfHeader"], "Coverage (SF) is still on the Items tab"
     assert p["noRoleHeader"], "the Role column is still there"
@@ -1082,10 +1084,12 @@ def test_the_on_state_is_not_colour_alone(ran):
 
 
 @needs_node
-def test_buy_by_became_a_quantity_and_a_unit(ran):
-    """"5 Gal" is two facts, and pricing needs them apart: the pack size is what turns a needed
-    16.8 gallons into four pails."""
-    assert ran["items"]["hasBuyQty"] and ran["items"]["hasUnitDropdown"]
+def test_the_order_quantity_is_gone_and_the_unit_stays(ran):
+    """WAS test_buy_by_became_a_quantity_and_a_unit. Hanz, 2026-11-04: "remove the order quantity".
+    Every material is bought by the single unit, so the row offers a Unit and no pack-size box (the
+    server stores buy_qty 1 whatever a client sends)."""
+    assert not ran["items"]["hasBuyQty"], "the Order Quantity box is still on the Items row"
+    assert ran["items"]["hasUnitDropdown"]
     assert all(u in ran["items"]["unitOptions"] for u in ["Gallon", "Kit", "Bag"])
 
 
@@ -1525,7 +1529,8 @@ def test_one_line_item_is_one_row(ran):
         "the results list is rendered before anyone opened it, so every row is a tall block")
     assert lines["pickerHasNoInRowFilters"], (
         "a Divisions label or a filter dropdown is still inside the row")
-    assert lines["primaryLineCount"] >= 6, "numeric/action cells lost their first-line wrappers"
+    # Five since the Order Amount cell came out (2026-11-04): Waste, Roundup, Quantity, Cost, delete.
+    assert lines["primaryLineCount"] >= 5, "numeric/action cells lost their first-line wrappers"
     assert lines["deleteControlAligned"], "the delete icon no longer shares the first-line height"
 
 
@@ -1575,6 +1580,15 @@ def test_the_picker_opens_only_the_line_being_edited(ran):
 
 
 @needs_node
+def test_a_picker_row_says_what_one_unit_costs_not_an_order_amount(ran):
+    """Hanz removed Order Quantity / Order Amount (2026-11-04). With buy_qty always 1 the old
+    "· 1 Gal" was noise; the row now carries materialPriceText, the same price words the
+    search pop-ups use."""
+    got = ran["itemSearch"]["resultSaysThePriceNotAnOrderAmount"]
+    assert got == {"price": True, "noOrderAmount": True}, got
+
+
+@needs_node
 def test_the_typed_query_never_reaches_the_server(ran):
     """`_item_search` rides on the line while somebody types, and patchSoon sends the whole lines
     array. The server rebuilds each line from known keys so this cannot corrupt data — but a save
@@ -1602,13 +1616,14 @@ def test_the_live_updater_writes_into_the_cells_the_row_actually_has(ran):
     built by a different function. Adding a column ahead of them puts the quantity in the waste box
     with no error anywhere."""
     lines = ran["lines"]
-    assert lines["qtyIdx"] == 5 and lines["costIdx"] == 6, \
+    # 4 and 5 since the Order Amount column came out (2026-11-04).
+    assert lines["qtyIdx"] == 4 and lines["costIdx"] == 5, \
         "the rendered row moved its computed cells: %s" % lines
     assert lines["indexesAgree"], (
         "refreshNumbers writes %s but the row's qty/cost cells are at %s"
         % (lines["updaterIndexes"], [lines["qtyIdx"], lines["costIdx"]]))
     # The Coverage box's "Material: N" line is repainted by position as well (2026-10-30).
-    assert lines["covIdx"] == 2 and lines["covIndexAgrees"], (
+    assert lines["covIdx"] == 1 and lines["covIndexAgrees"], (
         "refreshNumbers' COV_TD does not point at the row's Coverage cell (rendered at %s)"
         % lines["covIdx"])
 
@@ -1659,7 +1674,8 @@ def test_the_live_updater_recomputes_each_rounding_mode_separately(ran):
 
 @needs_node
 def test_the_empty_state_spans_the_columns_that_now_exist(ran):
-    assert ran["lines"]["placeholderColspan"] == ran["lines"]["tdCount"] == 8
+    # Seven since the Order Amount column came out (2026-11-04).
+    assert ran["lines"]["placeholderColspan"] == ran["lines"]["tdCount"] == 7
 
 
 @needs_node
@@ -1690,7 +1706,7 @@ def test_an_item_change_is_confirmed_before_it_is_sent(ran):
     assert g["asked"] == 1, "the save was sent without asking, or asked more than once"
     assert g["title"] == "Save this change?"
     assert g["name"] == "Densifier", "the dialog does not say which item"
-    assert g["detail"] == "Cost:  42  \u2192  58", g["detail"]
+    assert g["detail"] == "Cost per unit:  42  \u2192  58", g["detail"]
     assert g["confirmText"] == "Save change", (
         "confirmDanger defaults its button to 'Delete', which is the wrong verb and the wrong "
         "promise for a save")
@@ -1708,7 +1724,7 @@ def test_two_fields_edited_in_one_pause_ask_once(ran):
     g = ran["itemConfirmTwoFields"]
     assert g["asked"] == 1, "two fields in one quiet period produced %s dialogs" % g["asked"]
     assert g["title"] == "Save these changes?", "the title did not pluralise"
-    assert g["detail"] == "Cost:  42  \u2192  58\nVendor:  Sika  \u2192  Euclid", g["detail"]
+    assert g["detail"] == "Cost per unit:  42  \u2192  58\nVendor:  Sika  \u2192  Euclid", g["detail"]
 
 
 @needs_node
@@ -1929,7 +1945,7 @@ def test_the_dialog_fires_on_leaving_the_row_not_on_a_typing_pause(ran):
         "tabbing between two cells of the SAME row counted as leaving it")
     assert g["askedOnLeaving"] == 1, (
         "leaving the row did not ask: %s dialogs" % g["askedOnLeaving"])
-    assert g["detail"] == "Cost:  42  →  58\nVendor:  Sika  →  Euclid", g["detail"]
+    assert g["detail"] == "Cost per unit:  42  →  58\nVendor:  Sika  →  Euclid", g["detail"]
 
 
 @needs_node
@@ -4054,8 +4070,10 @@ def test_one_edit_to_any_material_field_shows_save_in_the_pinned_cell(ran):
     cell from renderItems (shown red on all nine); drop the th (headerCells != rowCells); drop
     position:sticky from the CSS (cssPinsTheCell red)."""
     v = ran["saveVisible"]
-    assert sorted(v["fieldsInRow"]) == sorted(["name", "divisions", "buy_qty", "unit", "coverage",
-                                               "waste_pct", "roundup", "unit_cost", "vendor"]), (
+    # buy_qty left the row and cost_comment joined it on 2026-11-04.
+    assert sorted(v["fieldsInRow"]) == sorted(["name", "divisions", "unit", "coverage",
+                                               "waste_pct", "roundup", "unit_cost", "vendor",
+                                               "cost_comment"]), (
         "the Items row's editable fields changed; give the new one an action in the harness",
         v["fieldsInRow"])
     for f, r in v["fields"].items():

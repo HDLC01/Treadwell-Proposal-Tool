@@ -523,7 +523,10 @@ def test_duplicate_carries_every_priced_field_for_an_admin():
     assert got["price_breaks"] == [{"min_qty": 240, "unit_cost": 80}]
     assert (got["bulk_cost"], got["coverage_basis"]) == (70, "lf")
     assert (got["coverage"], got["waste_pct"], got["roundup"]) == (12, 3, False)
-    assert (got["name"], got["buy_qty"], got["unit_cost"], got["divisions"]) == ("OPF (2)", 40, 90, ["Epoxy"])
+    assert (got["name"], got["unit_cost"], got["divisions"]) == ("OPF (2)", 90, ["Epoxy"])
+    # No buy_qty (2026-11-04): the server stores 1 on create, so sending a pack size would only copy a
+    # pack PRICE onto a single unit on a database the per-unit conversion has not reached yet.
+    assert "buy_qty" not in got
 
 
 @needs_node

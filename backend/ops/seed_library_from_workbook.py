@@ -534,12 +534,16 @@ def plan_epoxy(sheets: Dict[str, Sheet], plan: Plan) -> None:
 
 
 # the price sources the code-priced formulas read. id -> (what it is, where its price sits, the unit, the pack)
+#
+# EVERY ROW IS ONE UNIT (Hanz, 2026-11-04: "remove the order quantity"). The two cove aggregates were "50 lb bag"
+# rows priced per bag; the cove formula reads them per POUND, so they are pounds now, priced per pound, exactly as
+# backend/ops/library_per_unit_cost.sql converts the rows already in a database.
 RESERVED_PRICE_ROWS: Dict[str, Dict[str, Any]] = {
     "wb-epoxy-patch": {"name": "Patch, per SF", "cell": "C18", "unit": "SF", "pack": 1},
     "wb-epoxy-cove-rez": {"name": "Cove Rez, per gallon", "cell": "T152", "unit": "Gallon", "pack": 1},
     "wb-epoxy-cove-wr": {"name": "WR cove kit", "cell": "T167", "unit": "Kit", "pack": 1},
-    "wb-epoxy-cove-silica": {"name": "Silica for cove, 50 lb bag", "cell": "W145", "unit": "Bag", "pack": 50},
-    "wb-epoxy-cove-q28": {"name": "Q28 / 40-S quartz for cove, 50 lb bag", "cell": "W148", "unit": "Bag", "pack": 50},
+    "wb-epoxy-cove-silica": {"name": "Silica for cove, per lb", "cell": "W145", "unit": "lb", "pack": 1},
+    "wb-epoxy-cove-q28": {"name": "Q28 / 40-S quartz for cove, per lb", "cell": "W148", "unit": "lb", "pack": 1},
     "wb-epoxy-cove-zinc-cap": {"name": "Zinc cove cap, per LF", "cell": "W150", "unit": "LF", "pack": 1},
 }
 
@@ -623,14 +627,15 @@ GYP_CREW = [
 ]
 
 
-def _gyp_item(plan: Plan, sheet: Sheet, id_: str, name: str, unit: str, addr: str, pack: float = 1.0,
+def _gyp_item(plan: Plan, sheet: Sheet, id_: str, name: str, unit: str, addr: str,
               coverage: Optional[float] = None, cost: Optional[float] = None) -> str:
-    """One Gyp product at the price its cell holds. `pack` is the units a purchase buys (a 53 gallon drum), so the
-    row's cost is the cell's value times the pack and a price per unit comes back exactly (891 / 53)."""
+    """One Gyp product at the price its cell holds, which is the price of ONE unit (one gallon of a 53 gallon drum).
+    Every library row is bought by the single unit since 2026-11-04 (buy_qty 1), so the cell's value is the row's
+    cost to the four places a library cost has: the USG primer's 891 / 53 is 16.8113."""
     v = sheet.value(addr) if cost is None else cost
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise PlanError("%s!%s should hold the price of %s, found %r" % (sheet.name, addr, name, v))
-    return plan.add_item(_item(id_, name, unit, pack, _money4(float(v) * pack), coverage,
+    return plan.add_item(_item(id_, name, unit, 1.0, _money4(float(v)), coverage,
                                "Gypsum Underlayment", "gyp", GYP_NOTE % (sheet.name, addr)))
 
 
@@ -661,7 +666,7 @@ def plan_gyp(sheets: Dict[str, Sheet], plan: Plan) -> None:
     # the USG tabs: bag, primer (a 53 gallon drum, so the gallon is exactly 891 / 53), ISO strip, tape, sand
     _gyp_item(plan, sh, "wb-gyp-levelrock-2500-bag", "Levelrock 2500, bag", "Bag", "D23")
     _gyp_item(plan, sh, "wb-gyp-levelrock-3500-bag", "Levelrock 3500, bag", "Bag", "V37")
-    _gyp_item(plan, sh, "wb-gyp-usg-primer-53-gallon-drum", "USG primer, 53 gallon drum", "Gallon", "D27", pack=53.0,
+    _gyp_item(plan, sh, "wb-gyp-usg-primer-53-gallon-drum", "USG primer, 53 gallon drum", "Gallon", "D27",
               cost=_number(sh.value("D27"), GYP_SHEET + "!D27"))
     _gyp_item(plan, sh, "wb-gyp-wood-primer-5-gallon-per-gallon", "Wood primer, 5 gallon, per gallon", "Gallon", "T38")
     _gyp_item(plan, sh, "wb-gyp-iso-strip-3-inch-adhesive-roll", "ISO strip, 3 inch adhesive roll", "Roll", "D28")
@@ -671,7 +676,7 @@ def plan_gyp(sheets: Dict[str, Sheet], plan: Plan) -> None:
     # tabs' do, which the plan checks rather than assumes.
     _gyp_item(plan, fr, "wb-gyp-treadstone-fr25-bag", "Treadstone FR25, bag", "Bag", "D23")
     _gyp_item(plan, fr, "wb-gyp-treadstone-primer-tp1-gallon", "Treadstone primer TP1, 5 gallon", "Gallon", "D27",
-              pack=5.0, cost=_number(fr.value("D27"), GYP_FR_SHEET + "!D27"))
+              cost=_number(fr.value("D27"), GYP_FR_SHEET + "!D27"))
     _gyp_item(plan, fr, "wb-gyp-iso-strip-roll", "ISO strip, roll (Gyp FR)", "Roll", "D28")
     for addr in ("D29", "D33"):
         if sh.value(addr) != fr.value(addr):
