@@ -265,10 +265,17 @@
     .cell-note { width:100%; min-width:190px; }
     .cell-cost { width:92px; }
     /* THE COST COMMENT (Hanz, 2026-11-04): a note on the price. A one-line box that grows with what
-       is typed in it (field-sizing), capped so a long quote does not make the row a page tall. */
-    .cell-comment { width:100%; min-width:180px; display:block; resize:vertical; font:inherit;
-      field-sizing:content; min-height:32px; max-height:140px; line-height:1.35; }
-    .commentro { display:block; min-width:160px; max-width:260px; white-space:pre-wrap;
+       is typed in it (field-sizing), capped so a long quote does not make the row a page tall.
+       IT GROWS DOWN, NEVER SIDEWAYS (Hanz, 2026-11-04: "should expand down below not to the side").
+       field-sizing:content sizes BOTH ways, and a percentage width inside an auto-layout table cell
+       lets the box's content width push the column wider, so a long line ran off to the side. A fixed
+       width pins the column; overflow-wrap:anywhere breaks even one long unspaced word onto the next
+       line. Browsers without field-sizing get the same height from growCommentBox in library.js. */
+    .cell-comment { width:260px; min-width:260px; max-width:260px; box-sizing:border-box; display:block;
+      resize:vertical; font:inherit; field-sizing:content; min-height:32px; max-height:140px;
+      line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word;
+      overflow-x:hidden; overflow-y:auto; }
+    .commentro { display:block; min-width:160px; max-width:260px; white-space:pre-wrap; overflow-wrap:anywhere;
       font-size:12.5px; color:var(--ink-v); }
     /* SHOW THE MATH: the working line under each Cost per Unit, priced at the Items tab's own area.
        Wraps inside a bounded width so the cost column does not stretch to the whole sentence. */
@@ -299,7 +306,7 @@
        is pinned to its LEFT edge), and overflow-x:auto makes overflow-y auto too. So a top:0 cell
        here would stick to a box that never scrolls down, and pinning it to the window instead would
        mean taking away the sideways scroller the Save column needs. The box scrolls down instead:
-       it is held to the screen (less the 52px #tw-topbar and what sits under it, see below) and
+       it is held to the screen (less the 52px #tw-topbar, see below) and
        the headings stick to ITS top while the rows scroll under them. The .card around it clips
        (overflow:hidden), which is harmless: it is outside the scroller and does not scroll.
        Opaque fill (--surf-low, the heading row's own colour) and the heading row's own hairline,
@@ -307,14 +314,15 @@
        the Save heading is pinned both ways and sits over the rest of the row at 4. The page sets
        color-scheme: only light and has no dark theme; these are tokens, so one would carry over.
        scroll-margin-top keeps a field the keyboard moves to from parking under the headings.
-       THE 310px BUDGET is what has to stay on screen when the PAGE is scrolled to its end (the
-       wheel scrolls this box first, then carries on into the page): the 52px #tw-topbar above
-       the box, and under it the bottom pager (48), the card border, the .foot note (20px margin,
-       three to four 12px lines, its 12px bottom margin) and the body's 90px bottom padding --
-       measured 226px at 1366 wide and 245px at 390. With 190 the box's top, and the headings on
-       it, slid 36-55px up under the topbar. The 320px floor still wins on a very short screen. */
-    #items-scroll { overflow:auto; max-height:max(320px, calc(100vh - 310px));
-      max-height:max(320px, calc(100dvh - 310px)); }
+       FULL SCREEN TALL (Hanz, 2026-11-04: "expand this container", the full-screen choice). The
+       box is the screen less only the fixed 52px #tw-topbar and a 12px gap, so with the page
+       scrolled to put the box just under the topbar the table fills the window. It used to be
+       100vh - 310px, which kept the bottom pager and .foot note on screen too but cut ~250px of
+       rows; now the bottom pager is reached by scrolling the page on past the box (the wheel
+       scrolls this box first, then carries on into the page), and the top pager is still over
+       the table. The 320px floor still wins on a very short screen. */
+    #items-scroll { overflow:auto; max-height:max(320px, calc(100vh - 64px));
+      max-height:max(320px, calc(100dvh - 64px)); }
     #items-scroll thead th { position:sticky; top:0; z-index:3; background:var(--surf-low);
       border-bottom:1px solid var(--line); }
     #items-scroll thead th.rowsave { left:0; z-index:4; }

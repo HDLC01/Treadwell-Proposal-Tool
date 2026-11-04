@@ -101,6 +101,49 @@ def test_the_help_says_one_unit_and_whole_units():
         assert "whole unit" in t and "no decimals" in t and "pack" not in t, t
 
 
+def _css_rule(selector: str) -> dict:
+    page = _page()
+    m = re.search(r"(?:^|[}\s])" + re.escape(selector) + r"\s*\{([^}]*)\}", page)
+    assert m, selector
+    out = {}
+    for decl in m.group(1).split(";"):
+        if ":" in decl:
+            k, v = decl.split(":", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def test_the_comment_box_grows_down_never_sideways():
+    """Hanz, 2026-11-04: "Cost comment should expand down below not to the side so it wont become
+    too long" (his test text was one long unspaced word). field-sizing:content sizes a box BOTH
+    ways, and a percentage width in an auto-layout table cell let the text push the column wider.
+    So: a fixed px width (min = max), field-sizing for the height, a cap, and a line break allowed
+    anywhere in a word. Measured in Chromium: the 129-character word wraps to 84px tall at 260 wide,
+    scrollWidth == clientWidth.
+
+    Mutation: width back to 100%, drop the max-width, or drop overflow-wrap:anywhere."""
+    r = _css_rule(".cell-comment")
+    assert re.fullmatch(r"\d+px", r.get("width", "")), r
+    assert r.get("min-width") == r.get("max-width") == r["width"], r
+    assert r.get("field-sizing") == "content", r
+    assert r.get("overflow-wrap") == "anywhere", r
+    assert r.get("overflow-x") == "hidden", r
+    assert re.fullmatch(r"\d+px", r.get("max-height", "")), r
+    assert "anywhere" in _css_rule(".commentro").get("overflow-wrap", ""), "the read-only comment wraps too"
+
+
+def test_a_browser_without_field_sizing_grows_the_box_in_script():
+    """Firefox has no field-sizing: growCommentBox sets the height as the box is typed in or
+    focused, and does nothing where CSS does it already.
+
+    Mutation: unwire either listener, or drop the CSS.supports check."""
+    js = (FRONTEND / "js" / "library.js").read_text(encoding="utf-8")
+    assert 'CSS.supports("field-sizing", "content")' in js
+    assert re.search(r'function growCommentBox\(e\)\s*\{[^}]*GROWS_ITSELF[^}]*cell-comment', js)
+    assert '$("items-body").addEventListener("input", growCommentBox);' in js
+    assert '$("items-body").addEventListener("focusin", growCommentBox);' in js
+
+
 def test_the_empty_library_says_one_unit_not_a_purchase():
     page = _page()
     start = page.index('<div id="items-empty"')
