@@ -53,8 +53,8 @@
   /** THE OFFICE, the one place the page knows it. backend/distance.py OFFICE_ADDRESS / OFFICE_LAT /
    *  OFFICE_LON are the server's copy; tests/test_polish_intake_page.py pins the two together so
    *  they can never drift. lat/lon are also the centre every Photon query is asked around. */
-  var OFFICE = { name: "Treadwell office", line1: "1707 E 123rd Ter", city: "Olathe", state: "KS",
-                 zip: "66061", county: "Johnson", lat: 38.90391, lon: -94.79032 };
+  var OFFICE = { name: "Treadwell office", company: "Treadwell", line1: "1707 E 123rd Ter", city: "Olathe",
+                 state: "KS", zip: "66061", county: "Johnson", lat: 38.90391, lon: -94.79032 };
 
   /** THE PHOTON QUESTION. Chosen from live calls on 2026-11-05 (miles = nearest row returned):
    *    "Oak Street"   zoom 10: 11 mi   zoom 12: 3 mi   zoom 14: 1 mi
@@ -425,7 +425,13 @@
                   zip: p.postcode || "", county: p.county || "", place: p.city || "" });
     }
 
+    /** THE OFFICE ALSO NAMES THE COMPANY (Hanz, 2026-11-05: "make sure to put the Treadwell as company as
+     *  well"). Picked from the Address box, an EMPTY Project name / company box gets "Treadwell"; a name
+     *  already typed there is kept (the same rule the business lookup follows: it can carry a job
+     *  description). Written BEFORE fillBoxes so the `input` pings on City/State/Zip, which the v2 intake
+     *  saves on, carry it in the same save. No ping on the name box itself: that would re-open its list. */
     function fillOffice() {
+      if (businessInput && !String(businessInput.value || "").trim()) businessInput.value = OFFICE.company;
       fillBoxes({ line1: OFFICE.line1, city: OFFICE.city, state: OFFICE.state, zip: OFFICE.zip,
                   county: OFFICE.county, place: OFFICE.city });
     }
@@ -458,8 +464,9 @@
     }
 
     function officeRow(business) {
+      var place = OFFICE.city + ", " + OFFICE.state + " " + OFFICE.zip;
       return { l1: business ? OFFICE.name : OFFICE.line1,
-               l2: OFFICE.city + ", " + OFFICE.state + " " + OFFICE.zip, pick: fillOffice };
+               l2: business ? place : OFFICE.company + " · " + place, pick: fillOffice };
     }
 
     function renderAddr() {

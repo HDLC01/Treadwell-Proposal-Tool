@@ -325,6 +325,11 @@ async function nearest() {
     await w.type("address", "treadwell");
     o.officeAddr = { rows: w.rows(), server: w.rec.server.length };
     o.officeAddr.pick = w.pick("address", 0);
+    // a company name already typed is kept when the office is picked from the Address box
+    const wk = nearWorld({ photon: () => PH.treadwell });
+    wk.dom.business.value = "Smith Warehouse remodel";
+    await wk.type("address", "treadwell");
+    o.officeKeepsName = wk.pick("address", 0).business;
     const w2 = nearWorld({ photon: () => PH.officeRow, server: () => CENSUS_NIEMAN });
     await w2.type("address", "1707 e 123rd ter");
     o.officeStreet = { rows: w2.rows(), server: w2.rec.server.length,
