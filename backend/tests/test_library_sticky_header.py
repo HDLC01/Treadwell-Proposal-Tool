@@ -113,29 +113,21 @@ def test_the_scroller_is_the_items_tables_own_wrapper_and_it_scrolls_down():
     assert box.get("max-height") and all("vh" in v for v in box["max-height"]), box
 
 
-def test_the_box_leaves_room_for_the_topbar_and_what_sits_under_it():
-    """With the page scrolled to its END, the box's top (and the headings on it) must stay below
-    the fixed 52px #tw-topbar. The box is 100vh less its budget tall, so the budget has to cover the
-    topbar plus everything under the box: the bottom pager (48px), the card's 1px border, the
-    .foot note's top margin, up to four 12px lines at 1.55 and its 12px bottom margin, and the
-    body's bottom padding. Measured in Chromium 2026-10-28: 226px under the box at 1366 wide,
-    245px at 390; at 190 the headings sat 36-55px up under the topbar.
+def test_the_box_is_the_full_screen_less_only_the_topbar():
+    """Hanz, 2026-11-04: "expand this container as well", the full-screen choice. The box is the
+    window less the fixed 52px #tw-topbar and a small gap, so with the page scrolled to put it just
+    under the topbar the table fills the screen. It used to be 100vh - 310px (room for the bottom
+    pager and the .foot note as well), which cut ~250px of rows; now the bottom pager is reached
+    by scrolling the page on past the box.
 
-    Mutation: put the budget back to 190px, or raise the body's bottom padding past the slack."""
-    def px(value: str) -> float:
-        m = re.fullmatch(r"(\d+(?:\.\d+)?)px", value.strip())
-        assert m, value
-        return float(m.group(1))
-
+    Mutation: put the budget back to 310px (too short), or below 52px (the box's top, and the
+    headings on it, would sit under the topbar even with the page placed right)."""
     box = _rule("#items-scroll")
     budgets = [int(b) for v in box["max-height"]
                for b in re.findall(r"calc\(100d?vh\s*-\s*(\d+)px\)", v)]
     assert len(budgets) == len(box["max-height"]) == 2, box
-    body_pad_bottom = px(_rule("body")["padding"][0].split()[2])
-    foot = _rule(".foot")
-    under = (48 + 1 + px(foot["margin-top"][0]) + 4 * 12 * 1.55 + 12 + body_pad_bottom)
     for b in budgets:
-        assert b >= 52 + under, (b, 52 + under)
+        assert 52 <= b <= 80, ("the box should be the screen less only the 52px topbar", b)
 
 
 def test_nothing_between_the_headings_and_their_scroller_clips():

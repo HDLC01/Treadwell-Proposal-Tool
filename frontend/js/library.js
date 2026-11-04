@@ -5609,6 +5609,18 @@
   // a field that moves a price (ITEM_MATH_FIELDS), never a keystroke in a name or a comment.
   $("items-body").addEventListener("input", onItemMathEdit);
   $("items-body").addEventListener("change", onItemMathEdit);
+  // THE COST COMMENT GROWS DOWN (Hanz, 2026-11-04). field-sizing:content does it in CSS; a
+  // browser without it (Firefox today) gets the same height here as the box is typed in or
+  // focused, capped by the CSS max-height (140px), past which the box scrolls.
+  var GROWS_ITSELF = !!(window.CSS && CSS.supports && CSS.supports("field-sizing", "content"));
+  function growCommentBox(e) {
+    var t = e.target;
+    if (GROWS_ITSELF || !t || !t.classList || !t.classList.contains("cell-comment")) return;
+    t.style.height = "auto";
+    t.style.height = t.scrollHeight + 2 + "px";
+  }
+  $("items-body").addEventListener("input", growCommentBox);
+  $("items-body").addEventListener("focusin", growCommentBox);
   // SHOW THE MATH FOR [1,000] SF: remembered per browser as a convenience (try/catch: a private
   // window or blocked storage just opens at 1,000), never saved with anything.
   if ($("item-area")) {
