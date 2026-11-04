@@ -1968,13 +1968,16 @@ def test_the_treadwell_office_is_pinned_first_and_fills_every_box(addr):
     Mutation: drop the officeRow push in renderAddr and row 0 is Murray, GA."""
     nr = addr["near"]
     a = nr["officeAddr"]
-    assert a["rows"][0] == {"l1": "1707 E 123rd Ter", "l2": "Olathe, KS 66061"}
+    assert a["rows"][0] == {"l1": "1707 E 123rd Ter", "l2": "Treadwell · Olathe, KS 66061"}
     assert not any("Ontario" in r["l2"] or "Alfred" in r["l2"] for r in a["rows"]), "Canada is not the US"
     assert a["pick"] == {"address": "1707 E 123rd Ter", "city": "Olathe", "state": "KS", "zip": "66061",
-                         "business": "", "onPick": {"county": "Johnson", "state": "KS", "place": "Olathe"}}
+                         "business": "Treadwell", "onPick": {"county": "Johnson", "state": "KS", "place": "Olathe"}}
+    # Hanz, 2026-11-05: "make sure to put the Treadwell as company as well" -- an empty company box is
+    # filled; a name already typed there is kept.
+    assert nr["officeKeepsName"] == "Smith Warehouse remodel"
     assert a["server"] == 0
     s = nr["officeStreet"]
-    assert s["rows"] == [{"l1": "1707 E 123rd Ter", "l2": "Olathe, KS 66061"}], \
+    assert s["rows"] == [{"l1": "1707 E 123rd Ter", "l2": "Treadwell · Olathe, KS 66061"}], \
         "the tenant's OSM row at the same address is dropped under the pin"
     assert s["server"] == 0, "the office needs no Census question"
     assert s["q"] == "1707 East 123rd Terrace"
@@ -1983,7 +1986,7 @@ def test_the_treadwell_office_is_pinned_first_and_fills_every_box(addr):
     assert b["pick"]["business"] == "Treadwell office", "the project name is never replaced"
     assert (b["pick"]["address"], b["pick"]["zip"], b["pick"]["onPick"]["county"]) == ("1707 E 123rd Ter", "66061", "Johnson")
     assert b["server"] == 0
-    assert nr["officePhotonDown"] == {"rows": [{"l1": "1707 E 123rd Ter", "l2": "Olathe, KS 66061"}], "open": True}
+    assert nr["officePhotonDown"] == {"rows": [{"l1": "1707 E 123rd Ter", "l2": "Treadwell · Olathe, KS 66061"}], "open": True}
     assert nr["isOffice"] == [True, True, True, True, True, True, False, False]
 
 
