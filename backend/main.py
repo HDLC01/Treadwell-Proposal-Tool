@@ -63,6 +63,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 import acceptance_signature
+import address_suggest
 import analytics_export
 import audit
 import basisboard_client
@@ -4525,6 +4526,38 @@ def api_county(payload: DistanceIn, request: Request) -> Dict[str, Any]:
         return {"ok": False, "county": "", "state": "", "fips": "", "place": "", "place_sure": True,
                 "reason": "busy"}
     return distance.county_lookup(payload.address, payload.city, payload.state, payload.zip)
+
+
+class AddressSuggestIn(BaseModel):
+    # Any, not str: whatever arrives is turned into text by address_suggest.clean, so a body with a
+    # number or a null in it is answered like any other and never a 422.
+    q: Any = ""
+
+
+@app.post("/api/address-suggest")
+def api_address_suggest(payload: AddressSuggestIn, request: Request) -> Dict[str, Any]:
+    """House-numbered suggestions for the intake's Address box from the US Census geocoder, for the
+    numbers OpenStreetMap lacks (Hanz, 2026-11-05: "there are some addresses that are missing").
+    js/address-lookup.js asks only when the text starts with a house number and a street and Photon
+    had no row with that number. See backend/address_suggest.py.
+
+    ALWAYS 200, never raises: `{ok, rows, reason}`, rows [] whenever there is nothing to show (thin,
+    not_found, error, busy). Same permission rule as /api/county: any signed-in user (the auth gate
+    above), no tab owns it and it is deliberately not in nav_access.TABS, because the intake that
+    calls it is open to every estimator. A cached answer is returned BEFORE the rate limit, so a
+    repeat costs nothing; a new question spends its own bucket ("addr:<user>"), never the distance
+    or county allowance. A sync handler, so the threadpool carries the Census wait."""
+    try:
+        hit = address_suggest.cached(payload.q)
+        if hit is not None:
+            return hit
+        who = getattr(request.state, "user_email", None) or "anon"
+        if distance.rate_limited("addr:" + who):
+            return {"ok": False, "rows": [], "reason": "busy"}
+        return address_suggest.suggest(payload.q)
+    except Exception as exc:  # noqa: BLE001 -- a convenience: never a 500
+        log.warning("address suggest route failed: %s", type(exc).__name__)
+        return {"ok": False, "rows": [], "reason": "error"}
 
 
 @app.post("/api/price")
