@@ -362,7 +362,6 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("divisionNames")}
   ${fn("unitNames")}
   ${fn("qtyText")}
-  ${fn("orderAmount")}
   ${fn("optionsHtml")}
   ${fn("divisionPick")}
   ${fn("vendorNames")}
@@ -405,6 +404,19 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("paintPager")}
   ${fn("turnPage")}
   ${fn("showItemPage")}
+  // THE COST COMMENT CELL AND THE SHOW-THE-MATH LINE (2026-11-04), asked for by renderItems. The flag
+  // is the page's COMMENT_WRITABLE (GET /api/library/items' cost_comment_writable); a scenario hands
+  // it in the way it hands in CATS_WRITABLE.
+  var COMMENT_WRITABLE = state.COMMENT_WRITABLE === undefined ? true : state.COMMENT_WRITABLE;
+  ${fn("costCommentCell")}
+  ${fn("itemMathArea")}
+  ${fn("itemMathHtml")}
+  ${fn("itemMathText")}
+  ${fn("itemMathNeeds")}
+  var ITEM_MATH_FIELDS = ["unit_cost", "coverage", "waste_pct", "roundup", "unit", "bulk_cost",
+    "brk_qty", "brk_cost", "coverage_basis"];
+  ${fn("onItemMathEdit")}
+  ${fn("paintItemMath")}
   ${fn("renderItems")}
   // THE DEFAULTS TAB'S OWN RENDERERS, lifted so they are EXECUTED rather than read. A source-text
   // assertion cannot catch an unbound identifier, and this repo has taken production down that
@@ -760,6 +772,7 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   ${fn("arm")}
   ${fn("requeueFailed")}
   ${fn("dropRefusedCategory")}
+  ${fn("dropRefusedComment")}
   ${fn("flush")}
   ${fn("saveNow")}
   ${fn("flushAllPending")}
@@ -810,7 +823,8 @@ const scope = new Function("L", "$", "TW", "state", "document", "CRM", "WT", `
   // Test glue, and the only piece in this file: load() replaces DIVISIONS with the Administration
   // tab list, and a test of "an added division reaches the filter chips" has to be able to do the
   // same thing to a scope that is ALREADY built, or renderFilterBar has nothing to notice.
-  return { setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
+  return { paintItemMath, itemMathHtml, onItemMathEdit, costCommentCell,
+           setDivisions: function (list) { DIVISIONS = list; }, renderFilterBar, parseQuery, matchesFilters, anyFilterActive, filterSummary,
            categoryCell, categoryHits, categoryFilterNames, categoryWorkTypes, CATEGORY_NONE,
            divisionWorkType, categoriesInDivisions,
            setCats: function (c) { CATS = c; },
@@ -1542,6 +1556,12 @@ const out = {};
   out.itemSearch.resultNamesDivisionAndVendor =
     /Polished Concrete &middot; Gone Supply Co/.test(resultsHtml);
   out.itemSearch.resultsAreButtonsKeyedByItemId = /data-pick-item="i2"/.test(resultsHtml);
+  // NO ORDER AMOUNT (2026-11-04): a row says what one unit costs, never "1 Gal" (buy_qty is always 1).
+  const opfHtml = api.itemResultsHtml({ item_id: "i2", _item_search: "OPF" });
+  out.itemSearch.resultSaysThePriceNotAnOrderAmount = {
+    price: /Sherwin-Williams &middot; \$85\.38 per Gal<\/span>/.test(opfHtml),
+    noOrderAmount: !/&middot; 1 Gal<\/span>/.test(opfHtml),
+  };
   out.itemSearch.emptySearchSaysSo =
     /No items match that search/.test(api.itemResultsHtml({ _item_search: "zzzz" }));
 
@@ -1582,18 +1602,19 @@ const out = {};
   const second = rows[1].cells.map((c) => c.written);
   out.liveUpdate = {
     untouchedBefore: before.every((r) => r.every((c) => c === null)),
-    // Cell 4 is Quantity, cell 5 is Cost — per the <thead> the page ships.
-    qtyCellGotTheQuantity: /class="qty">11 Gal</.test(first[5] || ""),
-    costCellGotTheMoney: /class="qty">\$939/.test(first[6] || ""),
+    // Cell 4 is Quantity, cell 5 is Cost — per the <thead> the page ships (the Order Amount column
+    // ahead of them came out on 2026-11-04).
+    qtyCellGotTheQuantity: /class="qty">11 Gal</.test(first[4] || ""),
+    costCellGotTheMoney: /class="qty">\$939/.test(first[5] || ""),
     // …and neither got the other's content, which is the transposition, stated directly.
-    qtyCellHasNoDollarAmount: !/\$[\d,]+\.\d\d</.test(first[5] || ""),
-    costCellHasNoUnitLabel: !/>1?1 Gal</.test(first[6] || ""),
+    qtyCellHasNoDollarAmount: !/\$[\d,]+\.\d\d</.test(first[4] || ""),
+    costCellHasNoUnitLabel: !/>1?1 Gal</.test(first[5] || ""),
     // The columns a user types in must not be written at all, or the input under the caret dies.
-    inputCellsUntouched: [0, 1, 2, 3, 4].every((i) => first[i] === null),
-    deleteCellUntouched: first[7] === null,
+    inputCellsUntouched: [0, 1, 2, 3].every((i) => first[i] === null),
+    deleteCellUntouched: first[6] === null,
     // The fractional row shows its own working, not the rounded one's.
-    secondRowQty: (/class="qty">([^<]*)</.exec(second[5] || "") || ["", ""])[1],
-    secondRowWorking: (/class="calc mono">([^<]*)</.exec(second[6] || "") || ["", ""])[1],
+    secondRowQty: (/class="qty">([^<]*)</.exec(second[4] || "") || ["", ""])[1],
+    secondRowWorking: (/class="calc mono">([^<]*)</.exec(second[5] || "") || ["", ""])[1],
     totalWritten: d.nodes["t-total"].textContent,
     perUnitWritten: d.nodes["t-unit"].textContent,
   };
@@ -1641,10 +1662,10 @@ const out = {};
   const brows = broken.dom.nodes["lines-body"].querySelectorAll("[data-line]");
   broken.api.refreshNumbers();
   const bcells = brows[0].cells.map((c) => c.written);
-  out.liveUpdate.brokenSaysSoInTheQtyCell = /Item removed/.test(bcells[5] || "");
-  out.liveUpdate.brokenCostCellCleared = bcells[6] === "—";
-  out.liveUpdate.brokenCostCellClearedInsideAlignment = /line-primary/.test(bcells[6] || "") &&
-    !/\$|Item removed|Needs/.test(bcells[6] || "");
+  out.liveUpdate.brokenSaysSoInTheQtyCell = /Item removed/.test(bcells[4] || "");
+  out.liveUpdate.brokenCostCellCleared = bcells[5] === "—";
+  out.liveUpdate.brokenCostCellClearedInsideAlignment = /line-primary/.test(bcells[5] || "") &&
+    !/\$|Item removed|Needs/.test(bcells[5] || "");
   out.liveUpdate.brokenRowFlagged = brows[0].classList.has("broken");
 }
 
@@ -1751,8 +1772,11 @@ async function conflictChecks() {
     ${fn("arm")}
     // flush calls it on a refused save: a category pick the database has no column for.
     var CATS_WRITABLE = true;
+    // ...and its twin, a cost comment on a database without the column (2026-11-04).
+    var COMMENT_WRITABLE = true;
     ${fn("requeueFailed")}
     ${fn("dropRefusedCategory")}
+    ${fn("dropRefusedComment")}
     ${fn("flush")}
     ${fn("forgetItem")}
     ${fn("flushItemRow")}
@@ -1794,7 +1818,8 @@ async function conflictChecks() {
              // so the guard is defence for the next code path that empties this buffer, and a
              // test of it has to construct the state deliberately rather than pretend otherwise.
              dropBuffer: function () { pendingPatch = {}; },
-             catsWritable: function () { return CATS_WRITABLE; } };
+             catsWritable: function () { return CATS_WRITABLE; },
+             commentWritable: function () { return COMMENT_WRITABLE; } };
   `);
 
   /** Just enough DOM for the row-leave rules: one item row per id, one focusable control per
@@ -1910,7 +1935,7 @@ async function conflictChecks() {
                               buy_qty: 1, vendor: "Sika", divisions: [],
                               updated_at: "T1", cost_updated_at: "STAMP-1" }],
                     VENDORS: [] };
-    const doc = makeRowDom(["i1", "i2"], ["name", "unit_cost", "vendor", "buy_qty", "unit"]);
+    const doc = makeRowDom(["i1", "i2"], ["name", "unit_cost", "vendor", "buy_qty", "unit", "cost_comment"]);
     const s = saveScope(api, clock, hooks, state, TW, L, doc);
     return { hooks, clock, s, state, release, doc, TW, fire: async () => {
       const now = due; due = [];
@@ -2205,6 +2230,47 @@ async function conflictChecks() {
       model: c.state.ITEMS[0].material_categories };
     out.categoryRefused = { alone, mixed, other,
       noErrors: [a, b, c].every((x) => x.hooks.errors.length === 0) };
+  }
+
+  // ── EXECUTED: the Cost Comment through the real save path (2026-11-04) ──
+  // A comment is a note about the price, not the price, so it never raises "Save this change?" even on a
+  // material an assembly prices from (a cost edit on the same row does, which is the control). On a
+  // database without the column, update_item's 400 takes the comment back out of the failed save, the
+  // way a refused category pick is: requeued, it would ride and fail every later edit of the row.
+  {
+    const MISSING = "Cost comments can't be saved on this database yet: it needs the cost_comment " +
+      "column (backend/ops/library_cost_comment.sql).";
+    const refused = { status: 400, ok: false, json: async () => ({ detail: MISSING }) };
+    const okItem = { status: 200, ok: true, json: async () => ({ item:
+      { id: "i1", updated_at: "T2", cost_updated_at: "STAMP-1" } }) };
+    const q = run409();
+    q.hooks.autoReply = okItem;
+    q.type("i1", "cost_comment", "Quote 4471");
+    const qStill = await q.s.saveNow("items", "i1");
+    const quiet = { asked: q.hooks.asked.length, saved: qStill === false,
+                    body: q.hooks.bodies.slice(-1)[0] || "" };
+    const k = run409();
+    k.hooks.autoReply = okItem;
+    k.type("i1", "unit_cost", "50");
+    await k.s.saveNow("items", "i1");
+    quiet.costAsks = k.hooks.asked.length;
+    const a = run409();
+    a.hooks.autoReply = refused;
+    a.type("i1", "cost_comment", "Quote 4471");
+    const aStill = await a.s.saveNow("items", "i1");
+    const alone = { stillUnsaved: aStill, pending: a.s.pending(), marked: !!a.s.fresh().items.i1,
+                    writable: a.s.commentWritable(), model: a.state.ITEMS[0].cost_comment };
+    const b = run409();
+    b.hooks.autoReply = refused;
+    b.type("i1", "cost_comment", "Quote 4471");
+    b.type("i1", "unit_cost", "61");
+    await b.s.saveNow("items", "i1");
+    const mixed = { pending: b.s.pending() };
+    b.hooks.autoReply = okItem;
+    await b.s.saveNow("items", "i1");
+    mixed.resentBody = b.hooks.bodies.slice(-1)[0] || "";
+    out.commentSave = { quiet, alone, mixed,
+      noErrors: [q, k, a, b].every((x) => x.hooks.errors.length === 0) };
   }
 
   // ── EXECUTED: a second save cannot go out while the first is on the wire ────
@@ -3431,9 +3497,9 @@ async function dialogChecks() {
   blank.api.refreshNumbers();
   const row = blank.dom.nodes["lines-body"].rows[0];
   out.blankLine = {
-    qtyCell: row.cells[5].innerHTML,
-    saysPick: /Pick a material/.test(row.cells[5].innerHTML),
-    saysRemoved: /Item removed/.test(row.cells[5].innerHTML),
+    qtyCell: row.cells[4].innerHTML,
+    saysPick: /Pick a material/.test(row.cells[4].innerHTML),
+    saysRemoved: /Item removed/.test(row.cells[4].innerHTML),
     flaggedBroken: row.classList.has("broken"),
   };
   // …while a line pointing at a material that really is gone still says so, and still is.
@@ -3446,7 +3512,7 @@ async function dialogChecks() {
   gone.api.refreshNumbers();
   const grow = gone.dom.nodes["lines-body"].rows[0];
   out.removedLine = {
-    saysRemoved: /Item removed/.test(grow.cells[5].innerHTML),
+    saysRemoved: /Item removed/.test(grow.cells[4].innerHTML),
     flaggedBroken: grow.classList.has("broken"),
   };
 }
@@ -5323,6 +5389,9 @@ out.page = {
   paneintroStillUsed: (html.match(/class="paneintro"/g) || []).length,
   coveragePerUnitHeader: /Coverage per Unit/.test(html),
   wasteHeader: /Waste Factor/.test(html),
+  // Hanz, 2026-11-04: both Waste Factor headers (Items tab, assembly lines) carry the % sign.
+  wasteHeadersShowPercent: (html.match(/>Waste Factor \(%\)<\/span><\/th>/g) || []).length === 2 &&
+    !/>Waste Factor<\/span><\/th>/.test(html),
   roundupHeader: /Roundup\?/.test(html),
   vendorsTab: /id="tab-vendors"/.test(html),
   // The fourth tab, and WHERE it sits: Hanz asked for it beside Administration, so the order in
@@ -5937,7 +6006,7 @@ function itemRowDoc(rowHtml, id) {
   // checkbox and a division chip report change -- both events reach the same handler.
   const ACTIONS = {
     name: (t) => { t.value = "OPF II"; return "input"; },
-    buy_qty: (t) => { t.value = "2"; return "input"; },
+    cost_comment: (t) => { t.value = "Quote 4471, Sika rep"; return "input"; },
     coverage: (t) => { t.value = "300"; return "input"; },
     waste_pct: (t) => { t.value = "7"; return "input"; },
     unit_cost: (t) => { t.value = "90"; return "input"; },
@@ -7311,7 +7380,7 @@ async function manualSaveChecks() {
     const r = rows[i];
     const before = b.dom.nodes["lines-body"].innerHTML;
     const focusedBefore = b.dom.focused.length;
-    const target = r.cells[2].box;
+    const target = r.cells[1].box;
     target.value = value;
     target.getAttribute = (k) => (k === "data-lf" ? "coverage_override" : null);
     target.closest = (sel) => (sel === "[data-line]" ? r : null);
@@ -7325,10 +7394,10 @@ async function manualSaveChecks() {
       // the table was not rebuilt and nothing took the focus: the box being typed in survives
       tableUntouched: b.dom.nodes["lines-body"].innerHTML === before,
       focusMoved: b.dom.focused.length !== focusedBefore,
-      qty: (/<div class="calc mono">([^<]*)</.exec(r.cells[5].innerHTML) || [null, null])[1],
-      mark: r.cells[2].mark ? r.cells[2].mark.textContent : null,
-      markHidden: r.cells[2].mark ? r.cells[2].mark.hidden : null,
-      markWarns: r.cells[2].mark ? r.cells[2].mark.classes.has("gone") : null,
+      qty: (/<div class="calc mono">([^<]*)</.exec(r.cells[4].innerHTML) || [null, null])[1],
+      mark: r.cells[1].mark ? r.cells[1].mark.textContent : null,
+      markHidden: r.cells[1].mark ? r.cells[1].mark.hidden : null,
+      markWarns: r.cells[1].mark ? r.cells[1].mark.classes.has("gone") : null,
       invalid: target.attrs["aria-invalid"] || null,
       sent: b.api.QUEUED.length > queuedBefore,
     };
@@ -7388,6 +7457,87 @@ async function manualSaveChecks() {
     goneMark: box(row(gone.dom.nodes["lines-body"].innerHTML, 0)).mark,
     goneValue: box(row(gone.dom.nodes["lines-body"].innerHTML, 0)).value,
     keptOnSame, droppedOnSwap: a.coverage_override, swappedTo: a.item_id,
+  };
+}
+
+// ── EXECUTED: the Items tab's Cost Comment and its "Show the math" lines (Hanz, 2026-11-04) ──────────
+// The real renderItems draws both; the real paintItemMath repaints the working lines in place when the
+// area box changes. The items-body stub below hands paintItemMath the rows renderItems actually drew,
+// each with the one slot it may write, so a repaint that rebuilt the table (innerHTML) or moved the
+// focus shows up as a change rather than passing quietly.
+{
+  const withComment = JSON.parse(JSON.stringify(ITEMS));
+  withComment[0].cost_comment = "Quote 4471 <Sika> rep, good to Dec";
+  const b = build({ ITEMS: withComment });
+  b.dom.nodes["item-area"] = b.dom.el("item-area");
+  b.dom.el("item-area").value = "1000";
+  b.api.renderItems();
+  const body = b.dom.nodes["items-body"];
+  const html = body.innerHTML;
+  const rowOf = (id) => html.split("</tr>").find((r) => r.indexOf('data-item="' + id + '"') !== -1) || "";
+  const cells = (r) => r.split("<td").slice(1);
+  const mathOf = (r) => (/data-item-math>([^<]*)</.exec(r) || [null, null])[1];
+  const r1 = rowOf("i1");
+  const costIdx = cells(r1).findIndex((c) => /data-f="unit_cost"/.test(c));
+  const vendorIdx = cells(r1).findIndex((c) => /data-f="vendor"/.test(c));
+  const commentIdx = cells(r1).findIndex((c) => /data-f="cost_comment"/.test(c));
+  const historyIdx = cells(r1).findIndex((c) => /class="datescell"/.test(c));
+  // the repaint: one slot per drawn row, read back after the area changes
+  const slots = {};
+  const drawn = html.split("</tr>").filter((r) => /data-item="/.test(r)).map((r) => {
+    const id = /data-item="([^"]*)"/.exec(r)[1];
+    const slot = { textContent: mathOf(r), cls: new Set(), get classList() {
+      const set = this.cls; return { toggle(c, on) { if (on) set.add(c); else set.delete(c); } }; } };
+    slots[id] = slot;
+    return { getAttribute: (k) => (k === "data-item" ? id : null),
+             querySelector: (sel) => (sel === "[data-item-math]" ? slot : null) };
+  });
+  body.querySelectorAll = (sel) => (sel === "tr[data-item]" ? drawn : []);
+  const focusedBefore = b.dom.focused.length;
+  b.dom.el("item-area").value = "2,875";
+  b.api.paintItemMath();
+  const after2875 = { i1: slots.i1.textContent, i2: slots.i2.textContent };
+  b.dom.el("item-area").value = "";
+  b.api.paintItemMath();
+  const afterBlank = slots.i1.textContent;
+  const afterBlankGrey = slots.i1.cls.has("needs");
+  b.dom.el("item-area").value = "abc";
+  b.api.paintItemMath();
+  const afterBad = slots.i1.textContent;
+  // ONLY A PRICE FIELD REPAINTS: a keystroke in a name or a comment leaves the lines alone.
+  b.dom.el("item-area").value = "1000";
+  const target = (f) => ({ target: { getAttribute: (k) => (k === "data-f" ? f : null) } });
+  slots.i1.textContent = "untouched";
+  b.api.onItemMathEdit(target("name"));
+  b.api.onItemMathEdit(target("cost_comment"));
+  const afterNameEdit = slots.i1.textContent;
+  b.api.onItemMathEdit(target("unit_cost"));
+  const afterCostEdit = slots.i1.textContent;
+  // a material that cannot price says what it needs, in the grey "needs" style
+  const needs = build({ ITEMS: [Object.assign({}, ITEMS[0], { coverage: null }),
+                                Object.assign({}, ITEMS[1], { id: "i3", unit_cost: null })] });
+  needs.dom.el("item-area").value = "1000";
+  needs.api.renderItems();
+  const nh = needs.dom.nodes["items-body"].innerHTML;
+  // a database without the column: no box, the comment shown as text
+  const ro = build({ ITEMS: withComment, COMMENT_WRITABLE: false });
+  ro.api.renderItems();
+  const roRow = ro.dom.nodes["items-body"].innerHTML.split("</tr>")[0];
+  out.itemsMath = {
+    costIdx, vendorIdx, commentIdx, historyIdx,
+    commentBox: /<textarea data-f="cost_comment" class="cell-comment"[^>]*>Quote 4471 &lt;Sika&gt; rep, good to Dec<\/textarea>/.test(r1),
+    firstMath: mathOf(r1),
+    firstMathInCostCell: /data-item-math/.test(cells(r1)[costIdx] || ""),
+    secondMath: mathOf(rowOf("i2")),
+    expectedFirst: L.itemWorking(withComment[0], "1000"),
+    after2875, expected2875: L.itemWorking(withComment[0], "2,875"),
+    afterBlank, afterBlankGrey, afterBad, afterNameEdit, afterCostEdit,
+    tableUntouched: body.innerHTML === html,
+    focusUntouched: b.dom.focused.length === focusedBefore,
+    needsCoverage: /item-math needs" data-item-math>Needs a coverage</.test(nh),
+    needsCost: /item-math needs" data-item-math>Needs a cost</.test(nh),
+    readOnly: { noBox: !/data-f="cost_comment"/.test(roRow),
+                showsText: /class="commentro"[^>]*>Quote 4471 &lt;Sika&gt; rep, good to Dec</.test(roRow) },
   };
 }
 

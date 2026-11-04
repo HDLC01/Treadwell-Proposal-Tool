@@ -89,10 +89,14 @@ LABOR = "library_labor"
 # These tuples DOCUMENT that contract; they do not enforce it. The enforcement is
 # validate_item / validate_assembly, which build their output from an explicit key list and drop
 # everything else — so an added column is safe by default and has to be opted IN to be writable.
-ITEM_WRITABLE = ("name", "category", "divisions", "unit", "buy_qty", "unit_cost", "coverage",
+#
+# `buy_qty` IS NOT HERE ANY MORE (Hanz, 2026-11-04: "remove the order quantity"). Every material is
+# bought by the single unit, so validate_item stores 1 whatever a client sends (an old page may still
+# send it) and unit_cost is the price of ONE unit. See per_unit_conversion for the rows that held a pack.
+ITEM_WRITABLE = ("name", "category", "divisions", "unit", "unit_cost", "coverage",
                  "waste_pct", "roundup", "sku", "vendor", "notes", "default_work_types",
                  "default_on", "price_breaks", "bulk_cost", "coverage_basis",
-                 "material_categories")
+                 "material_categories", "cost_comment")
 ASM_WRITABLE = ("name", "category", "description", "unit", "lines", "default_work_types",
                 "default_on")
 VENDOR_WRITABLE = ("name", "notes")
@@ -411,6 +415,77 @@ def _coerce_coverage_basis(raw: Any) -> Optional[str]:
     return word
 
 
+# ── per-unit cost, 2026-11-04 ─────────────────────────────────────────────────
+# Hanz: "remove the order quantity. Then round up would be to just the nearest single unit". A row
+# that held a pack (buy_qty 5, unit_cost the pail) is rewritten to the price of ONE unit with
+# buy_qty 1, which prices every bid exactly as before with Roundup off, and buys whole units instead
+# of whole packs with Roundup on. backend/ops/library_per_unit_cost.sql is the migration and THIS
+# FUNCTION IS ITS ARITHMETIC, line for line (tests/test_library_per_unit_cost.py holds the two
+# together by reading the SQL file):
+#
+#   unit_cost              round(unit_cost / buy_qty, 4)     numeric(12,4): four places is the column
+#   bulk_cost              round(bulk_cost / buy_qty, 4)     the bulk cost was a PACK cost (priceLine swaps it in)
+#   price_breaks[].unit_cost  round(cost / buy_qty, 4)       a break's cost was a pack cost too
+#   price_breaks[].min_qty    unchanged                      already counted in UNITS bought (breakAt)
+#   buy_qty                1
+#
+# The two cove aggregates are "50 lb bag" rows the cove formula reads per POUND (epoxy-takeoff.js
+# falls back to 0.47 and 0.44 a pound), so their unit becomes 'lb' as their price does, and their
+# seeded name stops saying "50 lb bag" (a "50 lb bag" at $0.44 invites a "correction" to $22, 50 times
+# too dear). Only the seeded name is replaced: a name somebody changed by hand is theirs.
+PER_POUND_ITEM_IDS = ("wb-epoxy-cove-q28", "wb-epoxy-cove-silica")
+PER_POUND_RENAMES = {
+    "wb-epoxy-cove-q28": ("Q28 / 40-S quartz for cove, 50 lb bag", "Q28 / 40-S quartz for cove, per lb"),
+    "wb-epoxy-cove-silica": ("Silica for cove, 50 lb bag", "Silica for cove, per lb"),
+}
+_NUMERIC_TEXT = re.compile(r"^\s*-?[0-9]*\.?[0-9]+\s*$")
+
+
+def _per_unit4(value: Any, pack: Any) -> Any:
+    """`round(value / pack, 4)` the way Postgres rounds a numeric (half away from zero), on the
+    decimal digits the database holds rather than on a binary float."""
+    from decimal import Decimal, ROUND_HALF_UP
+    q = Decimal(str(value)) / Decimal(str(pack))
+    return float(q.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
+def per_unit_conversion(row: Dict[str, Any]) -> Dict[str, Any]:
+    """The patch backend/ops/library_per_unit_cost.sql applies to one library_items row ({} when it
+    changes nothing, which is every row on a second run). Pure: reads `row`, never writes it."""
+    patch: Dict[str, Any] = {}
+    if row.get("deleted_at") is not None:
+        return patch
+    pack = _as_float(row.get("buy_qty"))
+    pack = 1.0 if pack is None else pack
+    if pack != 1 and pack > 0:
+        if row.get("unit_cost") is not None:
+            patch["unit_cost"] = _per_unit4(row["unit_cost"], pack)
+        if row.get("bulk_cost") is not None:
+            patch["bulk_cost"] = _per_unit4(row["bulk_cost"], pack)
+        breaks = row.get("price_breaks")
+        if isinstance(breaks, str):
+            try:
+                breaks = json.loads(breaks)
+            except ValueError:
+                breaks = None
+        if isinstance(breaks, list):
+            out = []
+            for e in breaks:
+                cost = e.get("unit_cost") if isinstance(e, dict) else None
+                if (isinstance(cost, (int, float, str)) and not isinstance(cost, bool)
+                        and _NUMERIC_TEXT.match(str(cost))):
+                    e = dict(e, unit_cost=_per_unit4(cost, pack))
+                out.append(e)
+            patch["price_breaks"] = out
+        patch["buy_qty"] = 1.0
+    if row.get("id") in PER_POUND_ITEM_IDS and row.get("unit") != "lb":
+        patch["unit"] = "lb"
+    rename = PER_POUND_RENAMES.get(row.get("id"))
+    if rename and row.get("name") == rename[0]:
+        patch["name"] = rename[1]
+    return patch
+
+
 # ── administration reference lists ───────────────────────────────────────────
 def _ref_defaults(table: str) -> tuple:
     if table == DIVISION_REFS:
@@ -574,13 +649,14 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
         out["category"] = divisions[0] if divisions else None
 
     if "buy_qty" in payload or not partial:
-        # How many units come in the purchase — the "5" of "5 Gal". `unit_cost` is what that pack
-        # costs, so this is what turns a needed 16.8 gallons into four pails.
-        #
-        # Zero or blank means 1, not "free": a pack of nothing would divide the cost by zero, and
-        # every row written before this column existed is genuinely a pack of one.
-        qty = _number(payload.get("buy_qty"), field="Qty", maximum=_MAX_BUY_QTY)
-        out["buy_qty"] = qty if (qty is not None and qty > 0) else 1.0
+        # ALWAYS ONE, from 2026-11-04 (Hanz: "remove the order quantity. Then round up would be to
+        # just the nearest single unit"). Every material is bought by the single unit and
+        # `unit_cost` is the price of one, so Roundup buys whole units. Whatever a client sends is
+        # ignored rather than refused: a page loaded before this change still sends the box it
+        # drew, and a 400 would make that row unsaveable. Written on create, and on an update
+        # only when the request names it, so an ordinary edit never touches a row this database
+        # has not converted yet (backend/ops/library_per_unit_cost.sql converts them).
+        out["buy_qty"] = 1.0
 
     if "unit_cost" in payload or not partial:
         out["unit_cost"] = _number(payload.get("unit_cost"),
@@ -628,6 +704,18 @@ def validate_item(payload: Dict[str, Any], *, partial: bool = False) -> Dict[str
     if "material_categories" in payload:
         cats = item_categories.coerce_item_categories(payload.get("material_categories"))
         out["material_categories"] = cats or None
+    # THE COST COMMENT (Hanz, 2026-11-04): a free-text note on the price -- the quote number, who
+    # said so, why it is what it is. NOT `notes`, which holds the seed's provenance and stays
+    # hidden. Written ONLY when the request carries it, for the reason the columns above are: a
+    # database that has not had backend/ops/library_cost_comment.sql applied must never be sent a
+    # column it lacks. Trimmed; blank is NULL; longer than a note may be is refused, not cut.
+    if "cost_comment" in payload:
+        raw_comment = payload.get("cost_comment")
+        text = "" if raw_comment is None else str(raw_comment).strip()
+        if len(text) > _MAX_NOTES:
+            raise ValidationError("The cost comment is too long. Keep it under %d characters."
+                                  % _MAX_NOTES)
+        out["cost_comment"] = text or None
 
     for col, limit in (("category", _MAX_TEXT), ("sku", 80),
                        ("vendor", _MAX_TEXT), ("notes", _MAX_NOTES)):
@@ -698,6 +786,9 @@ def _shape_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "sku": row.get("sku") or "",
         "vendor": row.get("vendor") or "",
         "notes": row.get("notes") or "",
+        # The Items tab's Cost Comment. "" for a material with none and for every row read from a
+        # database without the column yet; list_items_and_columns says which of the two it is.
+        "cost_comment": row.get("cost_comment") or "",
         # A row written before this column existed has never been starred by anybody -- reads
         # False, same read-shaping every other column added to this table already gets.
         "favorite": bool(row.get("favorite")),
@@ -741,14 +832,29 @@ def list_items_and_category_column() -> "tuple[List[Dict[str, Any]], bool]":
     Category select: a pick on such a database fails, and a failed save stays queued with every
     later edit of that row folded into it, so one pick would make the material unsaveable. An empty
     library cannot tell, and answers True: it has no row to pick a category on."""
+    items, columns = list_items_and_columns()
+    return items, columns["material_categories"]
+
+
+# The optional library_items columns the Items tab asks about before it offers an input for one.
+OPTIONAL_ITEM_COLUMNS = ("material_categories", "cost_comment")
+
+
+def list_items_and_columns() -> "tuple[List[Dict[str, Any]], Dict[str, bool]]":
+    """The materials, and which of OPTIONAL_ITEM_COLUMNS this database has yet: {column: bool}.
+
+    The same reading list_items_and_category_column documents: select("*") names every column a
+    row has, so a row WITHOUT the key is a database that has not had that column's DDL applied
+    (backend/ops/item_categories.sql, backend/ops/library_cost_comment.sql). An empty library cannot
+    tell, and answers True for each."""
     sb = get_client()
     res = (sb.table(ITEMS).select("*")
            .is_("deleted_at", "null")
            .order("name")
            .limit(2000).execute())
     rows = res.data or []
-    has_column = not rows or any("material_categories" in r for r in rows)
-    return [_shape_item(r) for r in rows], has_column
+    columns = {col: (not rows or any(col in r for r in rows)) for col in OPTIONAL_ITEM_COLUMNS}
+    return [_shape_item(r) for r in rows], columns
 
 
 def get_item(item_id: str) -> Optional[Dict[str, Any]]:
@@ -861,7 +967,16 @@ def create_item(payload: Dict[str, Any], owner_email: Optional[str]) -> Dict[str
     row["updated_by"] = row["owner_email"]
     row["created_at"] = row["updated_at"] = _now_iso()
     sb = get_client()
-    sb.table(ITEMS).insert(row).execute()
+    try:
+        sb.table(ITEMS).insert(row).execute()
+    except Exception as exc:  # noqa: BLE001 - re-raised unless it is the missing comment column
+        # update_item's twin: a database without backend/ops/library_cost_comment.sql refuses an
+        # insert that names the column. A readable 400, not a 500 (a stale or scripted client).
+        if "cost_comment" in row and "cost_comment" in str(exc):
+            raise ValidationError(
+                "Cost comments can't be saved on this database yet: it needs the cost_comment "
+                "column (backend/ops/library_cost_comment.sql).") from exc
+        raise
     return _shape_item(row)
 
 
@@ -916,6 +1031,10 @@ def update_item(item_id: str, payload: Dict[str, Any],
             raise ValidationError(
                 "Categories can't be saved on this database yet: it needs the material_categories "
                 "column (backend/ops/item_categories.sql).") from exc
+        if "cost_comment" in patch and "cost_comment" in str(exc):
+            raise ValidationError(
+                "Cost comments can't be saved on this database yet: it needs the cost_comment "
+                "column (backend/ops/library_cost_comment.sql).") from exc
         raise
     return get_item(item_id)
 

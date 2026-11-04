@@ -8,9 +8,11 @@ WHAT THIS FILE IS DEFENDING. Every one of these can be wrong in a way that still
 price, which is why each is pinned from BOTH directions — what a caller may write, and what a row
 written before the column existed reads back as:
 
-  * **`buy_qty` and the pack price.** `unit_cost` now means what the PACK costs. Read it as a
+  * **`buy_qty` and the pack price.** `unit_cost` meant what the PACK costs. Read it as a
     per-unit price and a five-gallon pail prices the job at five times the bid; read a missing
-    pack size as 0 and the arithmetic divides by zero.
+    pack size as 0 and the arithmetic divides by zero. FROM 2026-11-04 every material is bought by
+    the single unit (Hanz: "remove the order quantity"): the server stores buy_qty 1 whatever is
+    sent, and backend/ops/library_per_unit_cost.sql turned the pack prices into unit prices.
   * **Waste on every line.** 5% when absent — and it must be the same 5% on both sides, because a
     row displaying 5% that was priced at 0% is a row lying about its own working.
   * **Roundup absent means yes.** The page has promised "you cannot buy 3.7 kits" since it
@@ -61,12 +63,34 @@ def _mk_item(**kw):
     return library.create_item(body, "hanz@wetreadwell.com")
 
 
-# ── the pack: Qty + Unit, and a Cost that means the pail ──────────────
-def test_a_pack_size_is_stored_so_a_cost_can_mean_the_pail():
-    """`buy_qty` is the "5" of "5 Gal" and `unit_cost` is what that pail costs. Keeping them apart
-    is what turns a needed 16.8 gallons into four pails instead of 16.8 mystery units."""
-    assert library.validate_item({"name": "OPF", "buy_qty": "5"})["buy_qty"] == 5.0
-    assert library.validate_item({"name": "OPF", "buy_qty": 2.5})["buy_qty"] == 2.5
+# ── the pack: gone. Every material is bought by the single unit (2026-11-04) ──────────────
+def test_the_server_stores_a_pack_of_one_whatever_is_sent():
+    """WAS test_a_pack_size_is_stored_so_a_cost_can_mean_the_pail. Hanz, 2026-11-04: "remove the
+    order quantity. Then round up would be to just the nearest single unit". `unit_cost` is the
+    price of ONE unit now, so a pack size from a client is ignored, not stored: a 5 kept here would
+    divide a per-unit price by five."""
+    assert library.validate_item({"name": "OPF", "buy_qty": "5"})["buy_qty"] == 1.0
+    assert library.validate_item({"name": "OPF", "buy_qty": 2.5})["buy_qty"] == 1.0
+    assert library.validate_item({"name": "OPF"})["buy_qty"] == 1.0, "a create always says one"
+
+
+def test_a_create_that_sends_a_pack_size_stores_one(store):
+    it = library.create_item({"name": "OPF", "unit": "Gallon", "unit_cost": 42, "buy_qty": 5},
+                             "hanz@wetreadwell.com")
+    assert it["buy_qty"] == 1.0 and store["library_items"][0]["buy_qty"] == 1.0
+
+
+def test_an_edit_that_does_not_name_the_pack_leaves_it_for_the_migration(store):
+    """An ordinary edit (a name, a vendor) must not quietly set buy_qty 1 on a row a database has not
+    converted yet: its unit_cost is still the pack price, and dropping the pack under it would price
+    that material at the pack price per UNIT. backend/ops/library_per_unit_cost.sql converts both
+    numbers together; until it has run, only a request that names buy_qty writes it."""
+    it = _mk_item(unit_cost=210)
+    store["library_items"][0]["buy_qty"] = 5          # a row the migration has not reached
+    library.update_item(it["id"], {"name": "OPF Primer"})
+    assert store["library_items"][0]["buy_qty"] == 5
+    library.update_item(it["id"], {"buy_qty": 5})
+    assert store["library_items"][0]["buy_qty"] == 1.0
 
 
 @pytest.mark.parametrize("raw", [0, "0", "", None])
@@ -77,10 +101,12 @@ def test_a_pack_of_nothing_is_a_pack_of_one(raw):
     assert library.validate_item({"name": "x", "buy_qty": raw})["buy_qty"] == 1.0
 
 
-def test_a_negative_or_nonsense_pack_size_is_refused_with_a_readable_message():
+def test_a_negative_or_nonsense_pack_size_is_ignored_not_refused():
+    """WAS ..._is_refused_with_a_readable_message. A page loaded before 2026-11-04 still draws the
+    Order Quantity box and sends what is in it; a 400 over a field the server no longer stores would
+    make that row unsaveable for no reason. It is ignored and the row stores 1."""
     for bad in (-3, "abc", True):
-        with pytest.raises(library.ValidationError):
-            library.validate_item({"name": "x", "buy_qty": bad})
+        assert library.validate_item({"name": "x", "buy_qty": bad})["buy_qty"] == 1.0
 
 
 def test_a_legacy_row_reads_as_a_pack_of_one_without_being_rewritten(store):
@@ -92,9 +118,12 @@ def test_a_legacy_row_reads_as_a_pack_of_one_without_being_rewritten(store):
     assert store["library_items"][0].get("buy_qty") is None, "the stored row was rewritten"
 
 
-def test_a_pasted_pack_size_survives_the_paste(store):
+def test_an_old_page_sending_a_pack_size_saves_and_stores_one(store):
+    """WAS test_a_pasted_pack_size_survives_the_paste: through the real route, a pasted " 5 " from an
+    old page answers 200 and the row says one."""
     r = client.patch("/api/library/items/%s" % _mk_item()["id"], json={"buy_qty": " 5 "})
-    assert r.status_code == 200 and r.json()["item"]["buy_qty"] == 5.0
+    assert r.status_code == 200 and r.json()["item"]["buy_qty"] == 1.0
+    assert store["library_items"][0]["buy_qty"] == 1.0
 
 
 def test_a_division_or_unit_typed_in_the_wrong_case_becomes_the_offered_spelling():
