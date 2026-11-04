@@ -1877,6 +1877,262 @@ def test_leaving_the_address_box_closes_its_list_and_a_late_answer_never_reopens
     assert addr["noBusinessBox"] == {"threw": False}
 
 
+# ── NEAREST FIRST (Hanz, 2026-11-05) ─────────────────────────────────────────────────────────────
+# "it is suggesting places that are far away from Kansas... the first suggestions should be the nearest
+# ones. And there are some addresses that are missing... when we type in Treadwell it's in Delaware,
+# Berryville, Murray, Aquila." The harness drives the real module with Photon answers recorded live
+# that day; the server half (POST /api/address-suggest) is tests/test_address_suggest.py.
+
+def test_the_page_and_the_server_name_the_same_office(addr):
+    """The office lives in ONE place on each side: js/address-lookup.js OFFICE and backend/distance.py.
+    A move of the office that updates one of them and not the other fails here.
+
+    Mutation: change OFFICE.zip (or the lat) in the page and this goes red."""
+    import distance
+    o = addr["office"]
+    street, city, st_zip = [p.strip() for p in distance.OFFICE_ADDRESS.split(",")]
+    st, zip5 = st_zip.split()
+    assert o["line1"] == street.replace(".", ""), (o["line1"], street)
+    assert (o["city"], o["state"], o["zip"]) == (city, st, zip5)
+    assert (o["lat"], o["lon"]) == (distance.OFFICE_LAT, distance.OFFICE_LON)
+    assert o["county"] == "Johnson"           # Olathe is the Johnson County seat
+
+
+@needs_node
+def test_the_photon_question_is_asked_around_the_office_inside_the_us(addr):
+    """The old question was downtown KC, limit 6, no box, foreign rows dropped AFTER the limit:
+    "8200 Nieman" filled its six slots with France and Finland and then showed nothing.
+
+    Mutation: put the old lat/lon back, or drop &bbox, and this fails."""
+    u = addr["near"]["url"]
+    o = addr["office"]
+    assert u["host"] == "photon.komoot.io" and u["calls"] == 1
+    assert (float(u["lat"]), float(u["lon"])) == (o["lat"], o["lon"])
+    w, s, e, n = [float(x) for x in u["bbox"].split(",")]
+    assert w <= -124 and e >= -67 and s <= 25 and n >= 49, "the box must hold the continental US"
+    assert int(u["limit"]) >= 15
+    assert 0 < float(u["bias"]) <= 0.3, "0 makes text relevance collapse; it must lean local, not dominate"
+    assert int(u["zoom"]) == addr["photon"]["zoom"]
+    assert u["q"] == "8200 Nieman Road", "the abbreviation is spelled out for Photon"
+    assert u["box"] == "8200 Nieman Rd", "the box keeps what the estimator typed"
+
+
+@needs_node
+def test_foreign_rows_and_transit_stops_never_reach_the_list(addr):
+    nr = addr["near"]
+    assert [r["l1"] for r in nr["foreign"]["rows"]] == ["Nieman Road"] * 3
+    assert not any("Montauban" in r["l2"] or "Joensuu" in r["l2"] for r in nr["foreign"]["rows"])
+    oak = [r["l1"] for r in nr["oak"]["rows"]]
+    assert not any("Southbound" in l or "201 North Oak" in l or "Platform" in l for l in oak), oak
+    olathe = [r["l2"] for r in nr["olathe"]["rows"]]
+    assert len(olathe) == 2, "the railway yard and the junction named Olathe are clutter: %s" % olathe
+
+
+@needs_node
+def test_the_nearest_rows_come_first_and_show_their_miles(addr):
+    """Photon's own order for "N Oak Street" started in Kansas City, 16 miles out; the street a mile
+    from the office was tenth. Ranked here by straight-line miles, at most 8 shown.
+
+    The streets that carry the typed word (Oak, Oakview, Oakmont) come first, nearest first; the rows
+    Photon matched some other way follow, nearest first too.
+
+    Mutation: drop the sort in rankFeatures and the first row is Kansas City."""
+    rows = addr["near"]["oak"]["rows"]
+    assert len(rows) == 8, "at most 8 rows"
+    assert rows[0]["l1"] == "North Oakview Street" and rows[0]["l2"].endswith("· under 1 mi")
+    miles = [0 if r["l2"].endswith("under 1 mi") else int(re.search(r"· (\d+) mi$", r["l2"]).group(1))
+             for r in rows]
+    oak = [i for i, r in enumerate(rows) if "Oak" in r["l1"]]
+    assert oak == list(range(len(oak))) and len(oak) == 6, rows
+    assert miles[:6] == sorted(miles[:6]) and miles[6:] == sorted(miles[6:]), miles
+
+
+@needs_node
+def test_the_typed_house_number_and_a_town_typed_by_name_come_first(addr):
+    nr = addr["near"]
+    assert nr["prairie"]["rows"][0]["l1"] == "600 East Prairie Street"
+    assert [r["l1"] for r in nr["prairie"]["rows"][1:]] == ["West Prairie Street", "Prairie Street"]
+    assert nr["prairie"]["server"] == 0, "Photon had the number, so the Census was not asked"
+    w = nr["wichita"]["rows"]
+    assert w[0] == {"l1": "Wichita", "l2": "Sedgwick, KS · 162 mi"}, w
+    assert nr["rankPure"][0] == "Wichita", "a half-typed town name still finds the town"
+    # Wichita County, Texas (~410 mi) is past TOWN_BOOST_MILES, so it no longer outranks the nearer road.
+    assert nr["rankPure"][1] == "Wichita Road", nr["rankPure"]
+
+
+@needs_node
+def test_the_treadwell_office_is_pinned_first_and_fills_every_box(addr):
+    """OSM has no "Treadwell" in Olathe (it names 1707 East 123rd Terrace after a tenant), so typing the
+    company's name found hamlets in New York, Virginia, Georgia and Texas.
+
+    Mutation: drop the officeRow push in renderAddr and row 0 is Murray, GA."""
+    nr = addr["near"]
+    a = nr["officeAddr"]
+    assert a["rows"][0] == {"l1": "1707 E 123rd Ter", "l2": "Treadwell · Olathe, KS 66061"}
+    assert not any("Ontario" in r["l2"] or "Alfred" in r["l2"] for r in a["rows"]), "Canada is not the US"
+    assert a["pick"] == {"address": "1707 E 123rd Ter", "city": "Olathe", "state": "KS", "zip": "66061",
+                         "business": "Treadwell", "onPick": {"county": "Johnson", "state": "KS", "place": "Olathe"}}
+    # Hanz, 2026-11-05: "make sure to put the Treadwell as company as well" -- an empty company box is
+    # filled; a name already typed there is kept.
+    assert nr["officeKeepsName"] == "Smith Warehouse remodel"
+    assert a["server"] == 0
+    s = nr["officeStreet"]
+    assert s["rows"] == [{"l1": "1707 E 123rd Ter", "l2": "Treadwell · Olathe, KS 66061"}], \
+        "the tenant's OSM row at the same address is dropped under the pin"
+    assert s["server"] == 0, "the office needs no Census question"
+    assert s["q"] == "1707 East 123rd Terrace"
+    b = nr["officeBiz"]
+    assert b["rows"][0] == {"l1": "Treadwell office", "l2": "Olathe, KS 66061"}
+    assert b["pick"]["business"] == "Treadwell office", "the project name is never replaced"
+    assert (b["pick"]["address"], b["pick"]["zip"], b["pick"]["onPick"]["county"]) == ("1707 E 123rd Ter", "66061", "Johnson")
+    assert b["server"] == 0
+    assert nr["officePhotonDown"] == {"rows": [{"l1": "1707 E 123rd Ter", "l2": "Treadwell · Olathe, KS 66061"}], "open": True}
+    assert nr["isOffice"] == [True, True, True, True, True, True, False, False]
+
+
+@needs_node
+def test_a_far_town_with_the_typed_name_is_not_lifted_above_nearer_rows(addr):
+    """Browser walk, 2026-11-05: "Treadwell" still listed the Treadwell hamlets in Georgia, Virginia and
+    New York (617-1,059 mi) above Treadwell Drive in Galesburg (274 mi), because a town typed by name is
+    lifted. The lift now stops at TOWN_BOOST_MILES; past it a town is ranked by distance like the rest.
+
+    Mutation: drop the miles condition on group 1 and Galesburg falls below Murray, GA."""
+    rows = addr["near"]["officeAddr"]["rows"]
+    assert rows[0]["l1"] == "1707 E 123rd Ter"
+    places = [r["l2"] for r in rows[1:]]
+    assert places[0].startswith("Galesburg, IL"), places
+    miles = [int(r.rsplit("·", 1)[1].split()[0].replace(",", "")) for r in places]
+    assert miles == sorted(miles), ("nearest first once the office is pinned", places)
+
+
+@needs_node
+def test_street_abbreviations_are_spelled_out_but_saint_is_not_a_street(addr):
+    """Photon does not expand abbreviations: "Nieman Rd" found nothing, "Nieman Road" the street.
+
+    Mutation: make every St after a word a Street (ignore the period) and "Lake St. Louis" becomes
+    "Lake Street Louis"."""
+    x = addr["near"]["expand"]
+    assert x["8200 Nieman Rd"] == "8200 Nieman Road"
+    assert x["1707 e 123rd ter"] == "1707 East 123rd Terrace"
+    assert x["1707 E. 123rd Terr"] == "1707 East 123rd Terrace"
+    assert x["St. Joseph"] == "St. Joseph"
+    assert x["St Joseph Ave"] == "St Joseph Avenue"
+    assert x["Lake St. Louis"] == "Lake St. Louis"
+    assert x["100 St Louis Ave"] == "100 St Louis Avenue"
+    assert x["Main St"] == "Main Street" and x["Main St."] == "Main Street"
+    assert x["Main St, Olathe"] == "Main Street, Olathe"
+    assert x["100 Main St Olathe KS"] == "100 Main Street Olathe KS"
+    assert x["Dr Martin Luther King Jr Blvd"] == "Dr Martin Luther King Jr Boulevard"
+    assert x["8200 Nieman Rd, KS"] == "8200 Nieman Road, KS"
+    assert x["Roadhouse Rd"] == "Roadhouse Road", "whole words only"
+    for typed, want in [("500 Oak Dr", "500 Oak Drive"), ("12 Elm Ln", "12 Elm Lane"), ("3 Pine Ct", "3 Pine Court"),
+                        ("9 Ward Pkwy", "9 Ward Parkway"), ("10 Old Hwy 7", "10 Old Highway 7"),
+                        ("4 Rose Pl", "4 Rose Place"), ("5 Lake Cir", "5 Lake Circle"), ("6 Bike Trl", "6 Bike Trail"),
+                        ("7 Town Sq", "7 Town Square"), ("8 Metcalf Av", "8 Metcalf Avenue"),
+                        ("1 Lee's Summit Expy", "1 Lee's Summit Expressway")]:
+        assert x[typed] == want, (typed, x[typed])
+    assert addr["near"]["houseNumber"] == {"nieman": "8200", "dir": "8200", "thin": "", "none": ""}
+
+
+@needs_node
+def test_census_rows_land_on_top_when_the_server_answers(addr):
+    """OSM lacks the house number for 8200 Nieman Rd; the server asks the Census, which has it. Photon's
+    rows show first (300 ms); the Census step waits longer (600 ms) so typing does not fire one per key.
+
+    Mutation: drop the `addr.census.forEach` in renderAddr and the first row stays the bare street."""
+    c = addr["near"]["census"]
+    assert c["before"]["server"] == 0 and c["before"]["pending"] == [600]
+    assert [r["l1"] for r in c["before"]["rows"]] == ["Nieman Road"] * 3
+    assert c["calls"] == 1 and c["method"] == "POST" and c["body"] == {"q": "8200 Nieman Rd"}
+    assert c["auth"] == "Bearer t" and c["type"] == "application/json" and c["signal"] is True
+    assert c["rows"][0]["l1"] == "8200 Nieman Rd"
+    assert c["rows"][0]["l2"].startswith("Overland Park, KS, 66214") and c["rows"][0]["l2"].endswith("US Census")
+    assert [r["l1"] for r in c["rows"][1:]] == ["Nieman Road"] * 3
+    assert c["pick"] == {"address": "8200 Nieman Rd", "city": "Overland Park", "state": "KS", "zip": "66214",
+                         "business": "", "onPick": {"county": "", "state": "KS", "place": "Overland Park"}}
+    assert addr["near"]["authReady"] == {"readyResolved": True, "calls": 1, "census": True}
+
+
+@needs_node
+def test_census_rows_never_land_for_a_text_that_moved_on_or_a_box_that_was_left(addr):
+    """Mutation: drop the `gen !== addr.gen` check in censusStep and the Nieman row lands on the Oak list."""
+    nr = addr["near"]
+    assert nr["movedOn"]["calls"] == 1
+    assert not any("Nieman" in r["l1"] for r in nr["movedOn"]["rows"]), nr["movedOn"]["rows"]
+    assert nr["leftBox"] == {"openBefore": True, "open": False, "calls": 1}
+    assert nr["photonHasIt"]["calls"] == 0, "Photon had the number: no server question"
+    assert nr["photonHasIt"]["first"]["l1"] == "8200 Nieman Road"
+    assert nr["businessNoCensus"] == {"calls": 0, "rows": 3}, "the business box never asks the Census"
+
+
+@needs_node
+def test_a_failing_server_leaves_photons_rows_and_throws_nothing(addr):
+    for mode, got in addr["near"]["fails"].items():
+        assert got == {"threw": False, "rows": 3, "census": 0, "open": True}, (mode, got)
+
+
+@needs_node
+def test_the_typed_number_on_another_street_is_not_the_address(addr):
+    """Review, live 2026-11-05: "123 Main St, Lees Summit" brought back a bar at 123 SE 3rd Street.
+    Matching the number alone ranked it first AND stopped the Census question, so the real
+    123 NE / SW / SE Main St were never offered.
+
+    Mutation: compare only the housenumber in hasTypedNumber and calls is 0, row 0 is the bar."""
+    lm = addr["near"]["leesMain"]
+    assert lm["pure"] is False and lm["onMain"] is True
+    assert lm["calls"] == 1, "the Census was not asked"
+    assert [r["l1"] for r in lm["rows"][:3]] == ["123 NE Main St", "123 SW Main St", "123 SE Main St"]
+    assert lm["rows"][-1]["l1"] == "123 Southeast 3rd Street", "the bar is the least likely row"
+    assert lm["rows"][-1]["l2"].startswith("Third Street Social · "), "a shop row says whose it is"
+    assert addr["near"]["keyWord"] == ["main", "75th", "oak", "123rd", "treadwell", "joseph", "niem"]
+
+
+@needs_node
+def test_streets_with_the_typed_word_come_before_shops_named_after_it(addr):
+    """Review, live 2026-11-05: "Oak St" listed eight nearby shops and shelters Photon matched on their
+    own NAME, shown as their street ("15241 West 119th Street"), and cut the real Red Oak Street.
+
+    Mutation: drop the group-2 rule in rankFeatures and Red Oak Street is not in the list at all."""
+    rows = addr["near"]["oakSt"]["rows"]
+    assert [r["l1"] for r in rows[:2]] == ["Red Oak Street", "Oak Street"], rows
+    assert len(rows) == 8
+    pizza = [r for r in rows if r["l1"] == "15241 West 119th Street"]
+    assert pizza and pizza[0]["l2"].startswith("Smokin Oak Wood-fired Pizza · "), pizza
+
+
+@needs_node
+def test_a_pick_ends_the_census_question_still_out(addr):
+    """Review, 2026-11-05: the Census answer (600 ms wait + ~1.6 s) landed after the estimator had
+    picked a Photon street, re-opened the list over City, State and Zip, and a second click overwrote
+    the pick.
+
+    Mutation: drop `addr.gen++` (and the timer clears) in fillBoxes and openAfter is True."""
+    p = addr["near"]["pickThenLate"]
+    assert p["asked"] == 1, "the Census question was never out, so this proves nothing"
+    assert p["openAfter"] is False, "the late Census answer re-opened the list over the picked address"
+    assert (p["box"], p["zip"], p["picks"]) == ("Nieman Road", "66213", 0)
+    b = addr["near"]["pickBeforeCensus"]
+    assert b == {"calls": 0, "open": False, "box": "Nieman Road", "zip": "66210"}, b
+
+
+@needs_node
+def test_a_click_picks_the_row_it_shows_below_the_inserted_rows(addr):
+    """The office and Census rows are inserted ABOVE Photon's rows; a click on any row must fill that
+    row's own text. The harness reads each row's data-idx from the markup, as the browser does.
+
+    Mutation: draw data-idx as i - 1 for i > 0 and row 1 fills the Census row."""
+    def zip_in(shown):
+        m = re.search(r"\b(\d{5})\b", shown)
+        return m.group(1) if m else ""
+    for got in addr["near"]["pickIdx"]["census"] + addr["near"]["pickIdx"]["office"]:
+        assert got["shown"].startswith(got["address"] + " | "), got
+        assert got["city"] in got["shown"] and got["zip"] == zip_in(got["shown"]), got
+    cities = [g["city"] for g in addr["near"]["pickIdx"]["office"]]
+    assert cities == ["Olathe", "Galesburg", "Aquilla"], cities   # nearest first under the office pin
+    zips = [g["zip"] for g in addr["near"]["pickIdx"]["census"]]
+    assert zips == ["66214", "66213", "66210", "66221"], zips
+
+
 @needs_node
 def test_the_local_job_switch_is_gone_but_the_hidden_answer_still_reaches_b4(ran):
     """Kyle 9/18, Hanz 2026-10-05: distance decides local. No switch is drawn and none can flip it,
