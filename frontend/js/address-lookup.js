@@ -68,6 +68,9 @@
   var PHOTON = { url: "https://photon.komoot.io/api/", limit: 15, zoom: 14, bias: 0.2,
                  bbox: "-125,24,-66,50" };
   var MAX_ROWS = 8;
+  var SEARCHING = "Searching…";
+  // Photon answers remembered for the page's life, keyed by the exact URL asked (see lookup()).
+  var PHOTON_CACHE = new Map();
   var CENSUS_DELAY_MS = 600;   // later than Photon's 300 ms, so typing does not fire one per keystroke
   var CENSUS_TIMEOUT_MS = 8000;
 
@@ -391,7 +394,7 @@
 
     // What the address list holds for the text now in the box: the office pin, the Census rows
     // (when they have come back) and Photon's rows. Drawn again whenever one of them lands.
-    var addr = { gen: 0, q: "", office: false, census: [], photon: null, photonDone: null };
+    var addr = { gen: 0, q: "", office: false, census: [], photon: null, photonDone: null, censusPending: false };
     var addrTimer = null, censusTimer = null, businessTimer = null, businessSeq = 0;
 
     /** Fill the four boxes, tell the form, then the page's hook. `loc` is
@@ -440,11 +443,15 @@
       fillBoxes({ line1: r.line1, city: r.city, state: r.state, zip: r.zip, county: "", place: r.city });
     }
 
-    /** Draw a list of {l1, l2, pick} into `results`, or the message when there are none. */
-    function draw(results, mayOpen, rows, emptyText) {
+    /** Draw a list of {l1, l2, pick} into `results`, or the message when there are none.
+     *  `pendingText` (optional): Photon has not answered yet. With no rows it is the message instead
+     *  of `emptyText` (nothing has been ruled out yet); with rows (the office pin, Census rows) it is a
+     *  faint last line, not clickable and not counted in the data-idx numbering, so a click always
+     *  picks the row it shows. */
+    function draw(results, mayOpen, rows, emptyText, pendingText) {
       if (!mayOpen()) return;              // the box was left while the answer was on its way
       if (!rows.length) {
-        results.innerHTML = '<div class="addr-row addr-msg">' + emptyText + "</div>";
+        results.innerHTML = '<div class="addr-row addr-msg">' + (pendingText || emptyText) + "</div>";
         results.classList.add("open");
         return;
       }
@@ -452,12 +459,13 @@
       results.innerHTML = rows.map(function (it, i) {
         return '<div class="addr-row" data-idx="' + i + '"><div class="addr-l1">' + esc(it.l1) +
           '</div><div class="addr-l2">' + esc(it.l2) + "</div></div>";
-      }).join("");
+      }).join("") + (pendingText ? '<div class="addr-row addr-msg">' + pendingText + "</div>" : "");
       results.classList.add("open");
       results.querySelectorAll(".addr-row").forEach(function (row) {
         row.addEventListener("click", function () {
           var it = rows[+row.dataset.idx];
-          if (it) it.pick();
+          if (!it) return;                 // the "Searching…" line: nothing to pick, the list stays
+          it.pick();
           results.classList.remove("open");
         });
       });
@@ -476,13 +484,19 @@
         rows.push({ l1: r.line1, l2: withMiles([r.city, r.state, r.zip].filter(Boolean).join(", "), r.miles) +
                     " · US Census", pick: function () { fillCensus(r); } });
       });
-      addressRows(addr.photon || []).forEach(function (it) {
+      // The Census and Photon now race, so both can bring the same address: shown once, as the Census
+      // row (it carries the zip).
+      var photon = (addr.photon || []).filter(function (x) {
+        return !addr.census.length || !hasTypedNumber((x.f || {}).properties || {}, addr.q);
+      });
+      addressRows(photon).forEach(function (it) {
         rows.push({ l1: it.l1, l2: it.l2, pick: function () { fillLocation(it.f.properties || {}); } });
       });
-      draw(addrResults, addrMayOpen, rows, "No matches — keep typing the address");
+      draw(addrResults, addrMayOpen, rows, "No matches — keep typing the address",
+           (addr.photon === null || addr.censusPending) ? SEARCHING : "");
     }
 
-    function renderBusinesses(q, ranked) {
+    function renderBusinesses(q, ranked, pending) {
       var rows = [];
       if (isOfficeQuery(q)) rows.push(officeRow(true));
       businessRows(ranked).forEach(function (it) {
@@ -490,36 +504,72 @@
         // only a location lookup, not a replacement for the project name.
         rows.push({ l1: it.name, l2: it.address, pick: function () { fillLocation(it.f.properties || {}); } });
       });
-      draw(businessResults, businessMayOpen, rows, "No business matches — enter the address manually");
+      draw(businessResults, businessMayOpen, rows, "No business matches — enter the address manually",
+           pending ? SEARCHING : "");
     }
 
-    /** Photon, asked around the office, answered as ranked {f, miles} rows. */
-    function lookup(q, office, business) {
-      return fetch(photonUrl(q)).then(function (r) { return r.json(); }).then(function (data) {
-        return rankFeatures((data && data.features) || [], q, { dropOffice: office, business: business });
+    /** Photon, asked around the office, answered as ranked {f, miles} rows.
+     *
+     *  FASTER (2026-11-05, the public Photon at 3-5 s a question):
+     *   - an answer is remembered for the page's life (PHOTON_CACHE, the last 60 questions), so
+     *     backspacing to a text already asked, or typing it again, draws at once;
+     *   - `signal` aborts a question the box has moved past, so a slow server is not left working
+     *     through a queue of stale questions ahead of the one that matters (an aborted fetch rejects;
+     *     every caller checks its generation / seq first, so it is never read as "Photon is down"). */
+    function lookup(q, office, business, signal) {
+      var url = photonUrl(q);
+      var hit = PHOTON_CACHE.get(url);
+      var got = hit ? Promise.resolve(hit) : fetch(url, signal ? { signal: signal } : undefined)
+        .then(function (r) { return r.json(); }).then(function (data) {
+          var feats = (data && data.features) || [];
+          PHOTON_CACHE.set(url, feats);
+          if (PHOTON_CACHE.size > 60) PHOTON_CACHE.delete(PHOTON_CACHE.keys().next().value);
+          return feats;
+        });
+      return got.then(function (feats) {
+        return rankFeatures(feats, q, { dropOffice: office, business: business });
       });
     }
 
-    /** The Census step, for the text the box held when it was armed. It waits for Photon's answer
-     *  for the same text, and asks only when Photon has no row with the typed house number. Its rows
-     *  are drawn only if the box still holds that text (the generation has not moved on) and the
-     *  list may open (the box was not left; draw() checks). */
+    /** A fresh AbortController for the next question, aborting the one before; null where the
+     *  browser (or a test) has none. */
+    function nextAbort(prev) {
+      if (prev && prev.abort) { try { prev.abort(); } catch (e) { /* already done */ } }
+      return typeof AbortController === "function" ? new AbortController() : null;
+    }
+    var addrAbort = null, businessAbort = null;
+
+    /** The typed number on the typed STREET is among Photon's rows (the number on some other street
+     *  does not count). */
+    function photonHasTheAddress(ranked, q) {
+      return (ranked || []).some(function (x) { return hasTypedNumber((x.f || {}).properties || {}, q); });
+    }
+
+    /** The Census step, for the text the box held when it was armed. Its rows are drawn only if the
+     *  box still holds that text (the generation has not moved on) and the list may open (the box was
+     *  not left; draw() checks).
+     *
+     *  IT NO LONGER WAITS FOR PHOTON (Hanz, 2026-11-05: "why is the lookup taking a bit some time").
+     *  Measured that day: the public Photon took 3-5 s a question (from the VPS and from Manila), the
+     *  Census 0.14 s from the VPS. Waiting for Photon made an exact address ~4 s away. Now: if Photon
+     *  has ALREADY answered with the address when the step fires, it is not asked (no wasted
+     *  question); otherwise it is asked at once, in parallel with the Photon still on its way. */
     function censusStep(gen) {
       if (gen !== addr.gen) return;
       var q = addr.q;
-      (addr.photonDone || Promise.resolve([])).then(function (ranked) {
-        if (gen !== addr.gen) return null;
-        // The typed number on the typed STREET; the number on some other street does not count.
-        var numbered = (ranked || []).some(function (x) {
-          return hasTypedNumber((x.f || {}).properties || {}, q);
-        });
-        if (numbered) return null;
-        return askServer(q);
-      }).then(function (rows) {
-        if (gen !== addr.gen || !rows || !rows.length) return;
-        addr.census = rows;
-        renderAddr();
-      }).catch(function () { /* a convenience: no rows */ });
+      if (addr.photon !== null && photonHasTheAddress(addr.photon, q)) { addr.censusPending = false; return; }
+      addr.censusPending = true;
+      askServer(q).then(function (rows) {
+        if (gen !== addr.gen) return;
+        addr.censusPending = false;
+        if (rows && rows.length) addr.census = rows;
+        // Redrawn either way once Photon has answered: its "Searching…" line goes.
+        if ((rows && rows.length) || addr.photon !== null) renderAddr();
+      }).catch(function () {
+        if (gen !== addr.gen) return;
+        addr.censusPending = false;
+        if (addr.photon !== null) renderAddr();
+      });
     }
 
     addrInput.addEventListener("input", function () {
@@ -528,20 +578,33 @@
       if (censusTimer) clearTimeout(censusTimer);
       var gen = ++addr.gen;
       addr.q = q; addr.census = []; addr.photon = null; addr.photonDone = null;
+      // A house number means a Census question is coming (unless Photon already has the address):
+      // until it answers, an empty Photon list reads "Searching…", not "No matches".
+      addr.censusPending = !isOfficeQuery(q) && !!houseNumberOf(q);
       if (q.length < 4) { addrResults.classList.remove("open"); return; }
       addr.office = isOfficeQuery(q);
+      // The office needs no server: its row is drawn on the keystroke, with "Searching…" under it
+      // until Photon answers.
+      if (addr.office) renderAddr();
       addrTimer = setTimeout(function () {
         if (gen !== addr.gen) return;   // a newer keystroke already owns the box
-        var done = lookup(expandQuery(q), addr.office);
+        addrAbort = nextAbort(addrAbort);
+        if (!addr.office && !addr.census.length) renderAddr();   // "Searching…" while Photon thinks
+        var done = lookup(expandQuery(q), addr.office, false, addrAbort && addrAbort.signal);
         addr.photonDone = done.catch(function () { return []; });
         done.then(function (ranked) {
           if (gen !== addr.gen) return;
           addr.photon = ranked;
+          // Photon has the address itself: no Census question is coming (censusStep will skip it).
+          if (photonHasTheAddress(ranked, q)) addr.censusPending = false;
           renderAddr();
         }).catch(function () {
           if (gen !== addr.gen) return;
-          // Photon is down: the office pin or Census rows still stand; with neither, close.
-          if (addr.office || addr.census.length) { addr.photon = []; renderAddr(); }
+          // Photon is down: it has answered "nothing" (so no "Searching…" waits on it). The office pin
+          // or Census rows still stand, and a Census question still out keeps the list open for its
+          // answer; with none of them, close.
+          addr.photon = [];
+          if (addr.office || addr.census.length || addr.censusPending) renderAddr();
           else addrResults.classList.remove("open");
         });
       }, 300);  // debounce
@@ -554,10 +617,12 @@
       var q = businessInput.value.trim();
       if (businessTimer) clearTimeout(businessTimer);
       if (q.length < 3) { businessResults.classList.remove("open"); return; }
+      if (isOfficeQuery(q)) renderBusinesses(q, [], true);   // the office row at once, "Searching…" under it
       businessTimer = setTimeout(function () {
         var seq = ++businessSeq;
+        businessAbort = nextAbort(businessAbort);
         // A business name is asked as typed: "Dr Pepper" and "St. Luke's" are names, not streets.
-        lookup(q, isOfficeQuery(q), true).then(function (ranked) {
+        lookup(q, isOfficeQuery(q), true, businessAbort && businessAbort.signal).then(function (ranked) {
           if (seq !== businessSeq) return;
           renderBusinesses(q, ranked);
         }).catch(function () {
