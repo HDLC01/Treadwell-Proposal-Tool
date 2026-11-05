@@ -2171,3 +2171,56 @@ def test_the_beta_intake_repaints_the_drawings_box_after_it_fills_the_audience(r
     Mutation: delete the TWAudienceBox.sync() call from hydrate() and a GC draft opens with the box
     hidden."""
     assert ran["gcSpec"]["syncsAfterBoot"] == 1
+
+
+# -- FASTER (Hanz, 2026-11-05: "why is the lookup taking a bit some time") ------------------------------
+# Measured that day: the public Photon answered in 3-5 s, the Census in 0.14 s from the VPS. The Census
+# step used to wait for Photon, so an exact address was ~4 s away.
+
+@needs_node
+def test_a_slow_photon_no_longer_holds_up_the_census_row(addr):
+    """Mutation: make censusStep wait for addr.photonDone again and the server is not asked while
+    Photon is held (server == 0)."""
+    s = addr["near"]["slowPhoton"]
+    assert s["server"] == 1, "the Census is asked at its own 600 ms, not after Photon"
+    assert s["rows"][0]["l1"] == "8200 Nieman Rd" and "US Census" in s["rows"][0]["l2"], s
+    assert s["searching"], "while Photon is out the list says it is still searching"
+    assert s["after"]["rows"][0] == "8200 Nieman Rd" and "Nieman Road" in s["after"]["rows"]
+    assert not s["after"]["searching"], "once Photon has answered the line goes"
+
+
+@needs_node
+def test_an_address_both_find_is_shown_once_as_the_census_row(addr):
+    rows = addr["near"]["dupOnce"]
+    assert len(rows) == 1 and "US Census" in rows[0], rows
+
+
+@needs_node
+def test_the_office_row_is_drawn_on_the_keystroke(addr):
+    """Mutation: drop the renderAddr() call in the input handler and the list is empty until Photon."""
+    o = addr["near"]["officeNow"]
+    assert o["photon"] == 0, "no timer has run yet"
+    assert o["rows"] and o["rows"][0]["l1"] == "1707 E 123rd Ter", o
+    assert o["searching"]
+
+
+@needs_node
+def test_a_text_already_asked_is_answered_from_memory(addr):
+    """Mutation: drop the PHOTON_CACHE lookup and the third question goes to Photon again (3)."""
+    c = addr["near"]["cached"]
+    assert c["photon"] == 2, c
+    assert c["rows"] > 0
+
+
+@needs_node
+def test_a_question_the_box_moved_past_is_aborted(addr):
+    """Mutation: drop nextAbort's abort() and the first question is left running."""
+    a = addr["near"]["aborted"]
+    assert a["asked"] == 2 and a["firstAborted"] and not a["lastAborted"], a
+
+
+@needs_node
+def test_an_empty_photon_with_the_census_still_out_says_searching(addr):
+    c = addr["near"]["censusOut"]
+    assert c["searching"] and not c["noMatches"], c
+    assert c["after"]["rows"] == ["8200 Nieman Rd"] and not c["after"]["searching"], c
