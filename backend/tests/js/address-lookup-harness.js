@@ -203,6 +203,9 @@ function nearWorld(opts) {
     if (host === "photon.komoot.io") {
       const q = new URL(url).searchParams.get("q");
       rec.photon.push(url);
+      rec.photonSignals = rec.photonSignals || [];
+      rec.photonSignals.push(init && init.signal ? init.signal : null);
+      if (opts.photonGate) await opts.photonGate.p;
       if (opts.photonFails) throw new Error("photon down");
       return { json: async () => ({ features: JSON.parse(JSON.stringify((opts.photon || (() => []))(q))) }) };
     }
@@ -461,6 +464,51 @@ async function nearest() {
       office: await picksAt(PH.treadwell, null, "treadwell", [0, 1, 2]),
     };
   }
+  // 6. FASTER (Hanz, 2026-11-05: "why is the lookup taking a bit some time"; the public Photon took 3-5 s).
+  {
+    const searching = (w) => /Searching\u2026/.test(w.dom.ar.html);
+    // a) Photon slow: the Census is asked at its own 600 ms, NOT after Photon, and its row shows with
+    //    "Searching\u2026" under it; when Photon lands, the line goes.
+    const g = gate();
+    const w = nearWorld({ photon: () => PH.nieman, photonGate: g, server: () => CENSUS_NIEMAN });
+    await w.type("address", "8200 Nieman Rd");
+    o.slowPhoton = { server: w.rec.server.length, rows: w.rows(), searching: searching(w) };
+    g.release(); await w.settle();
+    o.slowPhoton.after = { rows: w.rows().map((r) => r.l1), searching: searching(w) };
+    // b) both bring the same address: shown once, as the Census row.
+    const g2 = gate();
+    const dup = [F(US({ osm_key: "place", osm_value: "house", housenumber: "8200", street: "Nieman Road",
+                         city: "Overland Park", state: "Kansas", postcode: "66214" }), -94.7146, 38.981)].concat(PH.nieman);
+    const w2 = nearWorld({ photon: () => dup, photonGate: g2, server: () => CENSUS_NIEMAN });
+    await w2.type("address", "8200 Nieman Rd");
+    g2.release(); await w2.settle();
+    o.dupOnce = w2.rows().filter((r) => /^8200 /.test(r.l1)).map((r) => r.l1 + " | " + r.l2);
+    // c) the office row is drawn on the keystroke, before any timer has run.
+    const w3 = nearWorld({ photon: () => PH.treadwell, photonGate: gate() });
+    await w3.type("address", "treadwell", -1);
+    o.officeNow = { rows: w3.rows(), searching: searching(w3), photon: w3.rec.photon.length };
+    // d) an answer is remembered: the same text again asks Photon nothing.
+    const w4 = nearWorld({ photon: () => PH.oak });
+    await w4.type("address", "Oak Street");
+    await w4.type("address", "Oak Stree");
+    await w4.type("address", "Oak Street");
+    o.cached = { photon: w4.rec.photon.length, rows: w4.rows().length };
+    // e) a question the box moved past is aborted.
+    const w5 = nearWorld({ photon: () => PH.oak, photonGate: gate() });
+    await w5.type("address", "Oak Street");
+    await w5.type("address", "Oak Streets");
+    const sig = w5.rec.photonSignals || [];
+    o.aborted = { asked: sig.length, firstAborted: !!(sig[0] && sig[0].aborted),
+                  lastAborted: !!(sig[1] && sig[1].aborted) };
+    // f) Photon finds nothing while the Census is still out: "Searching\u2026", not "No matches".
+    const sg = gate();
+    const w6 = nearWorld({ photon: () => [], server: () => CENSUS_NIEMAN, serverGate: sg });
+    await w6.type("address", "8200 Nieman Rd");
+    o.censusOut = { searching: searching(w6), noMatches: /No matches/.test(w6.dom.ar.html) };
+    sg.release(); await w6.settle();
+    o.censusOut.after = { rows: w6.rows().map((r) => r.l1), searching: searching(w6) };
+  }
+
   return o;
 }
 
