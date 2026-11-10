@@ -91,6 +91,10 @@ EXPOSE 8888
 # tini as PID 1 → handles SIGTERM correctly when docker stops the container
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
+# The name the box's housekeeping prunes by (deploy/remote-deploy.sh): `docker image prune` takes
+# a label filter but no repository filter, and the VPS hosts a dozen other apps' images.
+LABEL org.opencontainers.image.title="treadwell-proposal-tool"
+
 # Health check — nginx will fail fast if container goes unhealthy
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fsS http://localhost:8888/healthz || exit 1

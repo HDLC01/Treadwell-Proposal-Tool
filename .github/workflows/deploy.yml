@@ -20,14 +20,18 @@ name: Deploy
 #
 # Rollback is one variable: every build is tagged with its commit SHA, so
 #   TW_IMAGE=ghcr.io/<owner>/treadwell-proposal-tool:sha-<old> docker compose up -d
-# on the box puts the previous image back without a build or a revert commit.
+# on the box puts the previous image back without a build or a revert commit. A deploy whose
+# health check fails does that by itself (deploy/remote-deploy.sh).
 #
 # `deploy/ship.sh` remains the manual fallback for when CI or the registry is unavailable
 # (it builds locally and ships the tarball over SSH). The compose `build:` blocks are
 # kept for the same reason.
 #
-# Auth: `VPS_SSH_KEY` / `VPS_HOST` / `VPS_USER` secrets for the box; the built-in
-# `GITHUB_TOKEN` for GHCR — no long-lived registry credential exists anywhere.
+# Auth: `VPS_HOST` / `VPS_PORT` / `VPS_FINGERPRINT` for the box, and `VPS_DEPLOY_USER` /
+# `VPS_DEPLOY_KEY` for a box account of this app's own that can run ONE program, never a shell
+# and never as root by itself (see the deploy jobs below and deploy/README.md). The built-in
+# `GITHUB_TOKEN` is the GHCR login, on the runner and inside the request to the box: no long-lived
+# registry credential exists anywhere, and the box keeps it in a throw-away DOCKER_CONFIG.
 #
 # Every `uses:` in these workflows is a full commit SHA with its release tag in the trailing
 # comment. A tag is whatever the action's owner points it at today, and the SSH steps below are
@@ -109,219 +113,83 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ── the two deploy jobs: ONE request line each, to a key that can run only the box's program ──
+  #
+  # The deploy key (VPS_DEPLOY_KEY) belongs to a box account of the proposal tool's own
+  # (VPS_DEPLOY_USER), not in the docker or sudo group, whose authorized_keys line forces
+  # /usr/local/sbin/treadwell-tool-deploy: a root-owned copy of deploy/remote-deploy.sh, installed by
+  # deploy/install-deploy-account.sh. The `script:` below is therefore NOT a shell script: it is the
+  # one line that program reads from SSH_ORIGINAL_COMMAND and matches by regex (never runs). The box
+  # then, in this order: takes a lock shared with the other environment's deploys, fetches the
+  # branch and refuses a commit that is not on it, keeps and checks the Zetta Serif files in
+  # /opt/treadwell-fonts, logs in to GHCR with this job's token in a throw-away DOCKER_CONFIG and
+  # pulls exactly sha-<12>, fast-forwards the checkout to exactly this commit (staying on its
+  # branch), applies staging's schema, `docker compose up -d` (NEVER --build), health-checks the
+  # new image and ROLLS BACK to the previous checkout and image when that fails, re-points the
+  # moving tag, and keeps three sha images of this app. deploy/README.md has the whole runbook.
+  #
+  # Why: the old steps logged in as root with a key that ran any script, and repository secrets are
+  # readable by a workflow run on ANY branch of this repository. The production environment's
+  # reviewer gate stays, but it was never what protected the key.
+  #
+  # An empty VPS_FINGERPRINT would make the SSH action accept ANY host key, so a spoofed endpoint
+  # could take the request (and its registry token) and answer "healthy". Each job refuses that
+  # before it connects.
   staging:
     if: github.ref == 'refs/heads/staging'
     needs: build
     runs-on: ubuntu-latest
     environment: staging
-    # The job's GITHUB_TOKEN goes to the VPS as GHCR_TOKEN for `docker compose pull`, so it gets
+    # The job's GITHUB_TOKEN goes to the box inside the request, for the image pull, so it gets
     # exactly that and nothing else: no repo contents, no write to anything.
     permissions:
       packages: read
     steps:
-      - name: Pull + restart staging over SSH
+      - name: The deploy account and the box's host key are configured
+        env:
+          VPS_DEPLOY_USER: ${{ secrets.VPS_DEPLOY_USER }}
+          VPS_FINGERPRINT: ${{ secrets.VPS_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VPS_DEPLOY_USER" ]; then
+            echo "::error::The VPS_DEPLOY_USER repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+          fi
+          if [ -z "$VPS_FINGERPRINT" ]; then
+            echo "::error::The VPS_FINGERPRINT repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+          fi
+
+      - name: Deploy staging on the VPS (the key runs only the box's deploy program)
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
+          username: ${{ secrets.VPS_DEPLOY_USER }}
+          key: ${{ secrets.VPS_DEPLOY_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
-          script_stop: true          # abort on the first failing command
-          envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
-          script: |
-            set -euo pipefail
-            # THE FONT BEFORE THE IMAGE. Zetta Serif is licensed, so since 2026-09-26 no image
-            # carries it: compose bind-mounts it from the host. Without the files Docker mounts an
-            # EMPTY directory and every PDF prints in a substitute font with nothing failing. So
-            # stop here, before anything is pulled or restarted; the running container keeps serving.
-            # First, keep this checkout's copy: until its first pull past the change that untracked
-            # the files, git still has them here, and the pull below deletes them. Never over a
-            # file the box already has. (backend/tests/test_proposal_fonts.py runs this block
-            # against temp directories.)
-            TW_FONT_DIR=/opt/treadwell-fonts
-            TW_FONT_SEED=/opt/treadwell-staging/backend/fonts
-            for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
-              if [ ! -s "$TW_FONT_DIR/$f" ] && [ -s "$TW_FONT_SEED/$f" ]; then
-                if mkdir -p "$TW_FONT_DIR" && cp "$TW_FONT_SEED/$f" "$TW_FONT_DIR/$f"; then
-                  echo "Kept $TW_FONT_SEED/$f in $TW_FONT_DIR before the pull below deletes it."
-                fi
-              fi
-              if [ ! -s "$TW_FONT_DIR/$f" ]; then
-                echo "::error::$TW_FONT_DIR/$f is missing on the VPS. Copy both Zetta Serif files there from the team Dropbox (see backend/fonts/README.md), then re-run this deploy."
-                exit 1
-              fi
-            done
-            cd /opt/treadwell-staging
-            git pull --ff-only origin staging
-            # Keep staging's self-hosted Postgres schema in step with the code. The
-            # initdb mount only runs on a fresh Docker volume; these statements are
-            # intentionally idempotent so deploys can apply additive DDL safely.
-            docker compose -f docker-compose.staging.yml up -d db
-            db_ok=0
-            for i in $(seq 1 24); do
-              if docker compose -f docker-compose.staging.yml exec -T db \
-                   pg_isready -U postgres -d treadwell >/dev/null; then db_ok=1; break; fi
-              sleep 5
-            done
-            if [ "$db_ok" != "1" ]; then echo "staging database healthcheck failed"; exit 1; fi
-            # FED FROM THE CHECKOUT, NOT READ THROUGH THE MOUNT. The db container sees
-            # schema_pg.sql through a single-file bind mount, and `git pull` replaces the
-            # file with a new inode, so the mounted path kept serving the 2026-09-25 copy:
-            # every deploy after that applied a stale schema and reported success (found
-            # 2026-09-30 when library_labor.favorite never arrived).
-            docker compose -f docker-compose.staging.yml exec -T db \
-              psql -U postgres -d treadwell -v ON_ERROR_STOP=1 \
-              < backend/staging/schema_pg.sql
-            # The token is short-lived and job-scoped; logging out again means no registry
-            # credential is ever left sitting on the box.
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-            docker compose -f docker-compose.staging.yml pull app
-            docker compose -f docker-compose.staging.yml up -d     # NO --build
-            docker compose -f docker-compose.staging.yml exec -T db \
-              psql -U postgres -d treadwell -c "notify pgrst, 'reload schema';"
-            ok=0
-            for i in $(seq 1 24); do
-              if curl -fsS http://localhost:8889/healthz >/dev/null; then ok=1; break; fi
-              sleep 5
-            done
-            if [ "$ok" != "1" ]; then echo "staging post-deploy healthcheck failed"; exit 1; fi
-            echo "staging healthy on $TW_IMAGE"
-
-            # Housekeeping. Each deploy leaves a ~1.7GB image behind, and on 2026-08-11 there
-            # were FIFTY of them: the disk was at 55% and clearing them freed 6GB. Hanz asked for
-            # this to happen on its own rather than be remembered.
-            #
-            # AFTER the healthcheck, deliberately. A deploy that failed still has its predecessor
-            # sitting on the box to roll back to.
-            #
-            # Keeps the three newest, so the documented rollback
-            # (TW_IMAGE=...:sha-<old> docker compose up -d) resolves locally instead of reaching
-            # for ghcr, which returned 403s and 500s on the day this was written.
-            #
-            # Never `image prune -a`: this box hosts a dozen other apps and that would reach
-            # their images too.
-            KEEP=$(docker ps -a --format '{{.Image}}' | sort -u)
-            NEWEST=$(docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
-                     | grep 'treadwell-proposal-tool:sha-' | sort -r | head -3 | cut -d'|' -f2)
-            for img in $(docker images --format '{{.Repository}}:{{.Tag}}' \
-                         | grep 'treadwell-proposal-tool:sha-' || true); do
-              if echo "$KEEP" | grep -qx "$img"; then continue; fi
-              if echo "$NEWEST" | grep -qx "$img"; then continue; fi
-              docker rmi "$img" >/dev/null 2>&1 || true
-            done
-            docker image prune -f >/dev/null 2>&1 || true
-            docker builder prune -f >/dev/null 2>&1 || true
-            df -h / | tail -1
-        env:
-          TW_IMAGE: ${{ needs.build.outputs.image }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          command_timeout: 30m
+          script: deploy staging ${{ github.sha }} ${{ secrets.GITHUB_TOKEN }}
 
       # ── the tests CI cannot run ────────────────────────────────────────────
-      # A handful of tests need LibreOffice, because the PDF every customer receives is
-      # produced by `soffice --headless`, not by Word. Installing it on the runner would add
-      # minutes and a few hundred MB to every build, so those tests carry a skipif and were
-      # silently skipping in CI AND on the dev box — nothing was checking them anywhere.
-      #
-      # That mattered most for box resizing. Project experience is that LibreOffice ignores
-      # docx text-box autofit (which is why the writer scales run sizes directly), so whether
-      # it honours an explicit box extent was an open question — and if it didn't, an estimator
-      # would resize a box, see it change in Word, and the customer's PDF would be unchanged.
-      # Measured in this container: 7 of 60 lines reach the PDF at the template's box height,
-      # 50 of 60 once the box is enlarged. It honours it.
-      #
-      # Runs in a THROWAWAY container from the image just deployed, with the checkout mounted
-      # read-only, so a test run can never disturb the live staging service or leave packages
-      # behind in it.
+      # A handful of tests need LibreOffice, because the PDF every customer receives is produced
+      # by `soffice --headless`, not by Word. They carry a skipif and were silently skipping in CI
+      # AND on the dev box, so this step runs them on the box, in a THROWAWAY container of the
+      # image staging was just deployed with (deploy/remote-deploy.sh, run_pdf_smoke, holds the
+      # test script and why each line of it is there).
       #
       # This step FAILS the run when the check fails or silently skips, and that is deliberate.
       # Staging is already deployed and healthy by now, so failing does not roll anything back —
-      # what it buys is a red run somebody notices. `continue-on-error` would leave a failed
-      # step inside a green run, which is precisely the kind of thing that gets missed and is
-      # how this test came to be skipping everywhere in the first place. The one tolerated
-      # non-failure is pip being unable to reach the index; that is infrastructure, not the
-      # product, and it exits 0 with a message.
+      # what it buys is a red run somebody notices. `continue-on-error` would leave a failed step
+      # inside a green run, which is how this test came to be skipping everywhere in the first place.
       - name: PDF fidelity smoke (LibreOffice, in the deployed image)
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
+          username: ${{ secrets.VPS_DEPLOY_USER }}
+          key: ${{ secrets.VPS_DEPLOY_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
-          script_stop: true
-          envs: TW_IMAGE
-          script: |
-            set -euo pipefail
-            # The font mount too: the image carries no Zetta Serif, and these tests measure how
-            # many lines LibreOffice fits in a box, which is a question about the real face.
-            docker run --rm \
-              -e PYTHONDONTWRITEBYTECODE=1 -e HOME=/tmp \
-              -v /opt/treadwell-staging:/src:ro \
-              -v /opt/treadwell-fonts:/usr/share/fonts/truetype/treadwell:ro \
-              "$TW_IMAGE" \
-              sh -c 'pip install --quiet --no-input pytest pymupdf >/dev/null 2>&1 || {
-                       echo "could not install pytest/pymupdf - skipping"; exit 0; }
-                     cd /src/backend
-                     # `set -e` FROM HERE. The `set -euo pipefail` above belongs to the SSH shell and
-                     # governs only the exit code of `docker run`; this container script is `sh -c` with
-                     # no -e of its own, so until 2026-09-09 a pytest invocation that FAILED was simply
-                     # discarded and the script went on to exit 0 from its closing `if`. The two greps
-                     # below caught a skip and caught zero passes, but a red test read exactly like a
-                     # green one -- which is the same false reassurance this whole step exists to remove.
-                     # Placed AFTER the pip block on purpose: the `exit 0` early-out in that block is a
-                     # deliberate skip when the image cannot install pytest/pymupdf.
-                     set -e
-                     # test_box_resize.py (size), test_box_move.py (position) and test_docx_merge.py
-                     # (the cover letter merged onto the front of the proposal) are the only files
-                     # with genuinely LibreOffice-gated tests. test_pdf_export.py monkeypatches
-                     # docx_to_pdf away in every case, so running it here would imply PDF coverage
-                     # that does not exist.
-                     #
-                     # test_docx_merge.py joined this list on 2026-09-09, with the merge itself. Its
-                     # renderer test asserts the one thing no XML check can: that LibreOffice still
-                     # yields letter-pages + proposal-pages, letter on page 1, from a document the
-                     # merge takes from one section to three. Until it was listed here, the number of
-                     # LibreOffice assertions covering that output -- on the dev box, in CI and in the
-                     # image alike -- was zero.
-                     python -m pytest tests/test_box_resize.py tests/test_box_move.py \
-                       tests/test_docx_merge.py \
-                       -q -p no:cacheprovider -p no:warnings
-                     # Fail loudly if the tests this step exists for silently skipped - a green
-                     # "150 passed, 3 skipped" with the PDF cases skipped is the exact false
-                     # reassurance this step was added to remove. Counted rather than hardcoded,
-                     # so adding another PDF case does not quietly turn the gate off.
-                     #
-                     # `-k "pdf or libreoffice"`, not `-k pdf`: the merge renderer test is named for
-                     # the renderer rather than for the format, and a gate matching only "pdf" would
-                     # have let it skip in the one image that can actually run it -- silently, which is
-                     # the reassurance-without-coverage this whole block exists to prevent.
-                     python -m pytest tests/test_box_resize.py tests/test_box_move.py \
-                       tests/test_docx_merge.py \
-                       -p no:cacheprovider -p no:warnings -q \
-                       -k "pdf or libreoffice" 2>&1 | tee /tmp/pdf.out
-                     grep -qE "[0-9]+ passed" /tmp/pdf.out || {
-                       echo "PDF fidelity tests did not RUN (skipped or missing)"; exit 1; }
-                     if grep -q "skipped" /tmp/pdf.out; then
-                       echo "a PDF fidelity test SKIPPED in the image that has LibreOffice"
-                       exit 1
-                     fi
-                     # AND THE MERGE TEST BY NAME. The gate above is a `-k` expression, so it is coupled
-                     # to a test NAME: rename `test_libreoffice_renders_the_letter_as_page_one...` and the
-                     # selection silently shrinks from four tests to three, with every check still green.
-                     # This asserts the one that covers the cover-letter merge ran and passed, so a rename
-                     # breaks the build loudly instead of quietly dropping the only LibreOffice assertion
-                     # on a document a customer receives.
-                     python -m pytest tests/test_docx_merge.py -k libreoffice \
-                       -p no:cacheprovider -p no:warnings -q 2>&1 | tee /tmp/merge.out
-                     grep -qE "^1 passed" /tmp/merge.out || {
-                       echo "the cover-letter merge renderer test did not run+pass (renamed? errored?)"
-                       exit 1; }'
-        env:
-          # Each ssh-action step gets its own environment, so TW_IMAGE has to be passed again
-          # here — without it `set -u` aborts on the first line and the step never runs the
-          # check it exists for.
-          TW_IMAGE: ${{ needs.build.outputs.image }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          command_timeout: 30m
+          script: pdf-smoke staging ${{ github.sha }}
 
   production:
     if: github.ref == 'refs/heads/main'
@@ -331,61 +199,26 @@ jobs:
     permissions:
       packages: read                 # the pull on the box; same reasoning as the staging job
     steps:
-      - name: Pull + restart production over SSH
+      - name: The deploy account and the box's host key are configured
+        env:
+          VPS_DEPLOY_USER: ${{ secrets.VPS_DEPLOY_USER }}
+          VPS_FINGERPRINT: ${{ secrets.VPS_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VPS_DEPLOY_USER" ]; then
+            echo "::error::The VPS_DEPLOY_USER repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+          fi
+          if [ -z "$VPS_FINGERPRINT" ]; then
+            echo "::error::The VPS_FINGERPRINT repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+          fi
+
+      - name: Deploy production on the VPS (the key runs only the box's deploy program)
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
+          username: ${{ secrets.VPS_DEPLOY_USER }}
+          key: ${{ secrets.VPS_DEPLOY_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
-          script_stop: true
-          envs: TW_IMAGE,GHCR_TOKEN,GHCR_USER
-          script: |
-            set -euo pipefail
-            # The font before the image: the same keep-then-check as the staging step, for the
-            # same reasons, from this step's own checkout.
-            TW_FONT_DIR=/opt/treadwell-fonts
-            TW_FONT_SEED=/opt/treadwell/backend/fonts
-            for f in "Zetta Serif-Book.otf" "Zetta Serif.otf"; do
-              if [ ! -s "$TW_FONT_DIR/$f" ] && [ -s "$TW_FONT_SEED/$f" ]; then
-                if mkdir -p "$TW_FONT_DIR" && cp "$TW_FONT_SEED/$f" "$TW_FONT_DIR/$f"; then
-                  echo "Kept $TW_FONT_SEED/$f in $TW_FONT_DIR before the pull below deletes it."
-                fi
-              fi
-              if [ ! -s "$TW_FONT_DIR/$f" ]; then
-                echo "::error::$TW_FONT_DIR/$f is missing on the VPS. Copy both Zetta Serif files there from the team Dropbox (see backend/fonts/README.md), then re-run this deploy."
-                exit 1
-              fi
-            done
-            cd /opt/treadwell
-            git pull --ff-only
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-            docker compose pull proposal-tool
-            docker compose up -d                                   # NO --build
-            ok=0
-            for i in $(seq 1 24); do
-              if curl -fsS http://localhost:8888/healthz >/dev/null; then ok=1; break; fi
-              sleep 5
-            done
-            if [ "$ok" != "1" ]; then echo "prod post-deploy healthcheck failed"; exit 1; fi
-            echo "prod healthy on $TW_IMAGE"
-
-            # Same housekeeping as the staging step; see the long note there for why it runs after
-            # the healthcheck and why it keeps three.
-            KEEP=$(docker ps -a --format '{{.Image}}' | sort -u)
-            NEWEST=$(docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
-                     | grep 'treadwell-proposal-tool:sha-' | sort -r | head -3 | cut -d'|' -f2)
-            for img in $(docker images --format '{{.Repository}}:{{.Tag}}' \
-                         | grep 'treadwell-proposal-tool:sha-' || true); do
-              if echo "$KEEP" | grep -qx "$img"; then continue; fi
-              if echo "$NEWEST" | grep -qx "$img"; then continue; fi
-              docker rmi "$img" >/dev/null 2>&1 || true
-            done
-            docker image prune -f >/dev/null 2>&1 || true
-            docker builder prune -f >/dev/null 2>&1 || true
-            df -h / | tail -1
-        env:
-          TW_IMAGE: ${{ needs.build.outputs.image }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          command_timeout: 30m
+          script: deploy main ${{ github.sha }} ${{ secrets.GITHUB_TOKEN }}

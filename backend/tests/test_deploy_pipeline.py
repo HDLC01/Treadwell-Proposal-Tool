@@ -12,6 +12,11 @@ edits the workflow next.
 The second half of this file (from "SUPPLY CHAIN" down) holds what the 2026-09-28 security
 review asked for: every action and base image pinned to an immutable reference, a manual run
 that can only deploy from main or staging, and each job's token cut to what it uses.
+
+The last part ("THE LOCKED-DOWN DEPLOY ACCOUNT") pins the 2026-11 change that took root off the
+deploy: the workflow sends one request line to an account whose key can run only
+deploy/remote-deploy.sh, and that program is EXECUTED here against stub docker/curl and real git
+checkouts (the same approach as the BD CRM's deploy tests).
 """
 import fnmatch
 import os
@@ -31,6 +36,17 @@ DOCKERFILE = ROOT / "Dockerfile"
 DEPENDABOT = ROOT / ".github" / "dependabot.yml"
 COMPOSES = [ROOT / "docker-compose.yml", ROOT / "docker-compose.staging.yml"]
 IMAGE = "ghcr.io/hdlc01/treadwell-proposal-tool"
+REMOTE = ROOT / "deploy" / "remote-deploy.sh"
+INSTALL = ROOT / "deploy" / "install-deploy-account.sh"
+RUNBOOK = ROOT / "deploy" / "README.md"
+DEPLOY_BIN = "/usr/local/sbin/treadwell-tool-deploy"
+FORCED = 'restrict,command="sudo -n %s"' % DEPLOY_BIN
+
+
+def _remote_code():
+    """deploy/remote-deploy.sh without its comment lines."""
+    return "\n".join(ln for ln in REMOTE.read_text(encoding="utf-8").splitlines()
+                     if not ln.strip().startswith("#"))
 
 
 def _workflow_image() -> str:
@@ -58,11 +74,15 @@ def test_staging_applies_the_schema_it_just_pulled():
     """The staging deploy feeds backend/staging/schema_pg.sql from the checkout into psql. It
     used to read /docker-entrypoint-initdb.d/01_schema.sql, a single-file bind mount that goes
     stale as soon as `git pull` replaces the file, so from 2026-09-25 every deploy re-applied an
-    old schema and reported success (library_labor.favorite never arrived on 2026-09-30)."""
-    code = " ".join(ln.split("#", 1)[0] for ln in DEPLOY.read_text(encoding="utf-8").splitlines())
-    assert "< backend/staging/schema_pg.sql" in code, "staging no longer applies the pulled schema"
-    assert "/docker-entrypoint-initdb.d/01_schema.sql" not in code, (
-        "staging applies the schema through the bind mount again, which serves a stale copy")
+    old schema and reported success (library_labor.favorite never arrived on 2026-09-30). The
+    deploy runs on the box now (deploy/remote-deploy.sh); the executed tests below check the
+    schema that reaches psql is the deployed commit's."""
+    code = _remote_code()
+    assert "-v ON_ERROR_STOP=1 < backend/staging/schema_pg.sql" in code, "staging no longer applies the pulled schema"
+    for path in (DEPLOY, REMOTE):
+        text = " ".join(ln.split("#", 1)[0] for ln in path.read_text(encoding="utf-8").splitlines())
+        assert "/docker-entrypoint-initdb.d/01_schema.sql" not in text, (
+            "staging applies the schema through the bind mount again, which serves a stale copy")
 
 
 def test_no_deploy_step_builds_on_the_box():
@@ -71,9 +91,15 @@ def test_no_deploy_step_builds_on_the_box():
     # Comments stripped first: the prose above explains the outage using the very flag it
     # forbids, and each command carries a trailing `# NO --build`. Matching those would
     # make this test fail on its own documentation.
-    code = [ln.split("#", 1)[0] for ln in DEPLOY.read_text(encoding="utf-8").splitlines()]
-    offenders = [ln.strip() for ln in code if "docker compose" in ln and "--build" in ln]
-    assert not offenders, ("a deploy step still builds on the VPS: " + "; ".join(offenders))
+    for path in (DEPLOY, REMOTE):
+        code = [ln.split("#", 1)[0] for ln in path.read_text(encoding="utf-8").splitlines()]
+        offenders = [ln.strip() for ln in code
+                     if "--build" in ln or "docker build" in ln or "compose build" in ln]
+        assert not offenders, ("%s still builds on the VPS: " % path.name + "; ".join(offenders))
+    # what the box does instead: pull the exact image, then `up -d`
+    code = _remote_code()
+    assert 'docker pull --quiet "$image"' in code
+    assert "compose up -d || up_ok=0" in code
 
 
 def test_the_image_is_built_on_a_runner_and_pushed():
@@ -108,10 +134,15 @@ def test_the_runner_needs_packages_write():
 
 def test_no_long_lived_registry_credential():
     """The built-in GITHUB_TOKEN is job-scoped and expires. A PAT in secrets would sit
-    on the VPS's docker config after the first deploy."""
+    on the VPS's docker config after the first deploy. On the box the login goes into a
+    throw-away DOCKER_CONFIG that the program deletes on exit, never root's ~/.docker."""
     text = DEPLOY.read_text(encoding="utf-8")
     assert "secrets.GITHUB_TOKEN" in text
-    assert "docker logout" in text, "the box keeps a registry login after deploying"
+    code = _remote_code()
+    assert "DOCKER_CONFIG=$(mktemp -d)" in code and "export DOCKER_CONFIG" in code
+    assert """trap 'rm -rf "$DOCKER_CONFIG"' EXIT""" in code, "the box keeps a registry login after deploying"
+    assert code.index("export DOCKER_CONFIG") < code.index("docker login")
+    assert "--password-stdin" in code and ".docker/config.json" not in code
 
 
 def test_the_build_runs_before_the_approval_gate():
@@ -244,14 +275,14 @@ def test_every_job_declares_its_own_minimal_permissions():
 
 
 def test_both_deploy_jobs_can_still_pull_the_image():
-    """Their token IS the registry login on the VPS (GHCR_TOKEN). Trimmed below `packages: read`,
-    `docker compose pull` fails on the box and nothing here would say why."""
+    """Their token IS the registry login on the VPS: it rides in the request line. Trimmed below
+    `packages: read`, the pull fails on the box and nothing here would say why."""
     wf = _load(DEPLOY)
     for name in ("staging", "production"):
         job = wf["jobs"][name]
         assert job["permissions"] == {"packages": "read"}, (name, job["permissions"])
-        tokens = [s["env"]["GHCR_TOKEN"] for s in job["steps"] if "GHCR_TOKEN" in s.get("env", {})]
-        assert tokens == ["${{ secrets.GITHUB_TOKEN }}"], (name, tokens)
+        deploys = [s["with"]["script"] for s in _ssh_steps(job) if s["with"]["script"].startswith("deploy ")]
+        assert len(deploys) == 1 and deploys[0].endswith(" ${{ secrets.GITHUB_TOKEN }}"), (name, deploys)
 
 
 # ── the manual-run guard, EVALUATED ───────────────────────────────────────────────────────
@@ -519,3 +550,599 @@ def test_dependabot_moves_every_kind_of_pin():
     held = {i["dependency-name"]: set(i["update-types"]) for i in docker.get("ignore", [])}
     # digest bumps yes; a move off Python 3.11 is a decision, not a weekly PR
     assert "version-update:semver-minor" in held.get("python", set()), held
+
+
+# ── THE LOCKED-DOWN DEPLOY ACCOUNT ────────────────────────────────────────────────────────
+#
+# Until 2026-11 both deploy jobs logged in as root (VPS_USER / VPS_SSH_KEY) and ran a shell script
+# they sent along. Repository secrets reach a workflow run on ANY branch of this repository, so that
+# key was a root shell on a box that hosts a dozen other sites. Now each job sends ONE request line
+# to an account of the proposal tool's own, whose only key is forced to /usr/local/sbin/
+# treadwell-tool-deploy: a root-owned copy of deploy/remote-deploy.sh, installed by
+# deploy/install-deploy-account.sh with one sudoers rule. deploy/README.md is the runbook.
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+TOKEN = "ghs_" + "Zz09" * 9
+# The job token's CURRENT shape, measured (masked) on the BD CRM's first real deploy on 2026-11-05:
+# ~377 characters, `ghs_` + a segment + `_` + 36 + `.` + ~330.
+LONG_TOKEN = "ghs_" + "Ab1Cd" + "_" + "E2f3" * 9 + "." + "G4h5" * 83
+REQUESTS = {
+    "staging": ["deploy staging ${{ github.sha }} ${{ secrets.GITHUB_TOKEN }}",
+                "pdf-smoke staging ${{ github.sha }}"],
+    "production": ["deploy main ${{ github.sha }} ${{ secrets.GITHUB_TOKEN }}"],
+}
+
+
+def _ssh_steps(job):
+    return [s for s in job.get("steps", []) if s.get("uses", "").startswith("appleboy/ssh-action@")]
+
+
+def test_each_ssh_step_sends_one_request_line_as_the_deploy_account():
+    """No `envs`, no `env`, no shell script: the `script:` is the one line the box program matches.
+    The account and key are the NEW secrets, so this change could not half-work on the old root key."""
+    wf = _load(DEPLOY)
+    for name, expected in REQUESTS.items():
+        steps = _ssh_steps(wf["jobs"][name])
+        assert [s["with"]["script"].strip() for s in steps] == expected, name
+        for step in steps:
+            assert set(step["with"]) == {"host", "username", "key", "port", "fingerprint",
+                                         "command_timeout", "script"}, (name, sorted(step["with"]))
+            assert step["with"]["host"] == "${{ secrets.VPS_HOST }}"
+            assert step["with"]["username"] == "${{ secrets.VPS_DEPLOY_USER }}"
+            assert step["with"]["key"] == "${{ secrets.VPS_DEPLOY_KEY }}"
+            assert step["with"]["port"] == "${{ secrets.VPS_PORT || '22' }}"
+            assert step["with"]["fingerprint"] == "${{ secrets.VPS_FINGERPRINT }}", "an unchecked host key gets the token"
+            assert "\n" not in step["with"]["script"].strip(), "one line, never a script"
+            assert "env" not in step, "nothing is exported into a shell on the box"
+    text = DEPLOY.read_text(encoding="utf-8")
+    for old in ("secrets.VPS_USER", "secrets.VPS_SSH_KEY", "script_stop", "envs:"):
+        assert not re.search(re.escape(old) + r"(?!\w)", text), "the root-era %s is still in deploy.yml" % old
+
+
+def test_production_still_waits_for_its_reviewer():
+    wf = _load(DEPLOY)
+    prod = wf["jobs"]["production"]
+    assert prod["environment"] == "production"
+    assert prod["needs"] == "build" and prod["if"] == "github.ref == 'refs/heads/main'"
+    assert wf["jobs"]["staging"]["needs"] == "build"
+
+
+def test_an_empty_account_or_fingerprint_secret_stops_the_deploy_before_ssh():
+    """An empty fingerprint would make the SSH action accept ANY host key, so a spoofed endpoint
+    could take the request and its registry token and answer "healthy"."""
+    bash = _bash()
+    if bash is None:
+        pytest.skip("no bash to execute the check with")
+    wf = _load(DEPLOY)
+    for name in REQUESTS:
+        steps = wf["jobs"][name]["steps"]
+        check = next(s for s in steps if "VPS_FINGERPRINT" in str(s.get("env", {})))
+        assert steps.index(check) < steps.index(_ssh_steps(wf["jobs"][name])[0]), name
+        assert check["env"] == {"VPS_DEPLOY_USER": "${{ secrets.VPS_DEPLOY_USER }}",
+                                "VPS_FINGERPRINT": "${{ secrets.VPS_FINGERPRINT }}"}, "never the key itself"
+
+        def rc(user, fingerprint):
+            env = {**os.environ, "VPS_DEPLOY_USER": user, "VPS_FINGERPRINT": fingerprint}
+            return subprocess.run([bash, "-c", check["run"]], capture_output=True, text=True,
+                                  timeout=30, env=env).returncode
+        assert rc("tooldeploy", "") != 0
+        assert rc("", "SHA256:" + "A" * 43) != 0
+        assert rc("tooldeploy", "SHA256:" + "A" * 43) == 0
+
+
+def _patterns():
+    text = REMOTE.read_text(encoding="utf-8")
+    found = {name: re.search(r"^%s='([^']+)'$" % name, text, re.M) for name in ("DEPLOY_RE", "SMOKE_RE")}
+    assert all(found.values()), found
+    return {name: re.compile(m.group(1)) for name, m in found.items()}
+
+
+def _matches(line):
+    return [name for name, rx in _patterns().items() if rx.fullmatch(line)]
+
+
+def test_the_request_patterns_match_what_the_workflow_sends_and_nothing_else():
+    for scripts in REQUESTS.values():
+        for script in scripts:
+            for token in (TOKEN, LONG_TOKEN):
+                line = script.replace("${{ github.sha }}", SHA).replace("${{ secrets.GITHUB_TOKEN }}", token)
+                assert len(_matches(line)) == 1, line[:60]
+    bad = [
+        "deploy Staging %s %s" % (SHA, TOKEN), "deploy feature %s %s" % (SHA, TOKEN),
+        "deploy staging %s %s" % (SHA[:12], TOKEN), "deploy staging %s %s; rm -rf /" % (SHA, TOKEN),
+        "deploy staging $(id) %s" % TOKEN, "deploy staging %s %s extra" % (SHA, TOKEN),
+        "deploy staging %s" % SHA, "deploy staging %s not-a-token" % SHA,
+        "pdf-smoke main %s" % SHA, "pdf-smoke staging %s %s" % (SHA, TOKEN), "pdf-smoke staging $(id)",
+        "bash -s", "", "deploy  staging %s %s" % (SHA, TOKEN),
+    ]
+    bad += ["deploy staging %s %s" % (SHA, LONG_TOKEN + tail)
+            for tail in (" x", ";id", "$(id)", "`id`", "'", '"', "|sh", "&&id")]
+    for line in bad:
+        assert not _matches(line), line[:80]
+
+
+def test_the_request_is_matched_and_never_run():
+    code = _remote_code()
+    assert 'done <<< "${SSH_ORIGINAL_COMMAND:-}"' in code
+    assert code.count("SSH_ORIGINAL_COMMAND") == 1, "the request is read in exactly one place"
+    assert not re.search(r"\beval\b", code), "nothing is ever evaluated"
+    assert "source " not in code and not re.search(r"(?m)^\s*\.\s", code)
+    # the only `sh -c` is the fixed PDF smoke script, inside a throw-away container
+    shells = [ln.strip() for ln in code.splitlines() if re.search(r"\b(?:ba)?sh -c\b", ln)]
+    assert shells == ['sh -c "$smoke"'], shells
+    assert "smoke=$(cat <<'SMOKE'" in code, "the smoke script is a quoted here-document, never expanded"
+    assert '[ "${#TOKEN}" -le 2000 ]' in code
+    assert "printf '%s' \"$TOKEN\" | docker login ghcr.io -u HDLC01 --password-stdin" in code
+    assert code.count("$TOKEN") == 1, "the token goes nowhere but docker login"
+
+
+def test_the_forced_command_is_the_same_everywhere():
+    """authorized_keys (written by the install script), the program's header and the runbook agree,
+    and the workflow names the program it reaches."""
+    install = INSTALL.read_text(encoding="utf-8")
+    assert ("FORCED='%s'" % FORCED) in install
+    assert "DEPLOY_BIN=%s" % DEPLOY_BIN in install
+    assert FORCED in REMOTE.read_text(encoding="utf-8")
+    assert FORCED in RUNBOOK.read_text(encoding="utf-8")
+    assert DEPLOY_BIN in DEPLOY.read_text(encoding="utf-8")
+
+
+def _install_code():
+    return "\n".join(ln for ln in INSTALL.read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#"))
+
+
+def test_install_restricts_the_deploy_account_to_one_program():
+    code = _install_code()
+    assert 'install -o root -g root -m 0755 "$SOURCE" "$DEPLOY_BIN"' in code
+    assert 'SOURCE="$HERE/remote-deploy.sh"' in code
+    assert 'Defaults:$ACCOUNT env_keep += "SSH_ORIGINAL_COMMAND"' in code
+    assert '$ACCOUNT ALL=(root) NOPASSWD: $DEPLOY_BIN ""' in code, 'the "" allows no arguments'
+    assert 'visudo -cf "$rule"' in code and 'install -o root -g root -m 0440 "$rule" "$SUDOERS"' in code
+    assert "SUDOERS=/etc/sudoers.d/treadwell-tool-deploy" in code
+    assert code.index('visudo -cf "$rule"') < code.index('install -o root -g root -m 0440 "$rule" "$SUDOERS"')
+    assert "visudo -c >/dev/null" in code, "the whole sudo configuration is re-checked with the rule in it"
+    assert '*" docker "*) stop' in code, "a deploy account in the docker group is root"
+    assert '*" sudo "*|*" admin "*|*" wheel "*|*" root "*)' in code
+    assert "printf '%s\\n' \"$line\" > \"$keys\"" in code, "the key file holds the one forced key"
+    assert 'grep -vqF "$FORCED "' in code, "any other key in that account stops the script"
+    assert "adduser --disabled-password" in code and "ACCOUNT=tooldeploy" in code
+
+
+def test_install_never_touches_the_firewall_packages_or_containers():
+    """SSH moved off 22 on 2026-09-28; deploy/install-vps.sh (the original whole-box setup) still
+    runs `ufw allow 22/tcp`, which re-opens it. This script must not copy that, nor do anything
+    beyond the account, the program, sudo and the key."""
+    code = _install_code()
+    for word in ("ufw", "allow 22", "iptables", "apt-get", "apt ", "docker compose", "docker run",
+                 "systemctl restart", "--build", "curl -"):
+        assert word not in code, word
+    assert "sshd_config" not in code, "sshd is only read (sshd -T), never edited"
+
+
+def _run_install(*args, **env):
+    bash = _bash()
+    if bash is None:
+        pytest.skip("no bash to run the install script with")
+    return subprocess.run([bash, INSTALL.as_posix(), *args], capture_output=True, text=True, timeout=60,
+                          env={**os.environ, **env})
+
+
+def test_install_prints_the_sudoers_rule_it_installs(tmp_path):
+    proc = _run_install("--print-sudoers")
+    assert proc.returncode == 0, proc.stderr
+    rule = [ln for ln in proc.stdout.splitlines() if ln and not ln.startswith("#")]
+    assert rule == ['Defaults:tooldeploy env_keep += "SSH_ORIGINAL_COMMAND"',
+                    'tooldeploy ALL=(root) NOPASSWD: %s ""' % DEPLOY_BIN]
+    other = _run_install("--print-sudoers", "--account", "tw-deploy")
+    assert "tw-deploy ALL=(root) NOPASSWD: %s \"\"" % DEPLOY_BIN in other.stdout
+    visudo = shutil.which("visudo")
+    if visudo:
+        rule_file = tmp_path / "tool-deploy-sudoers"
+        rule_file.write_text(proc.stdout, encoding="utf-8")
+        check = subprocess.run([visudo, "-cf", str(rule_file)], capture_output=True, text=True)
+        assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_install_prints_the_forced_key_line_and_refuses_anything_else(tmp_path):
+    pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample tool-deploy"
+    (tmp_path / "k.pub").write_text(pub + "\n", encoding="utf-8")
+    proc = _run_install("--print-key-line", (tmp_path / "k.pub").as_posix())
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == FORCED + " " + pub
+    (tmp_path / "k").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n",
+                                encoding="utf-8")
+    private = _run_install("--print-key-line", (tmp_path / "k").as_posix())
+    assert private.returncode == 1 and "PRIVATE key" in private.stderr
+    (tmp_path / "rsa.pub").write_text("ssh-rsa AAAAB3Nza tool-deploy\n", encoding="utf-8")
+    assert _run_install("--print-key-line", (tmp_path / "rsa.pub").as_posix()).returncode == 1
+    (tmp_path / "evil.pub").write_text(pub + ' ,command="sh"\n', encoding="utf-8")
+    assert _run_install("--print-key-line", (tmp_path / "evil.pub").as_posix()).returncode == 1
+    for bad in ("root", "Bad Name", "x;id"):
+        proc = _run_install("--print-sudoers", "--account", bad)
+        assert proc.returncode == 1 and "STOP:" in proc.stderr, bad
+
+
+def test_install_refuses_to_change_anything_unless_root():
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("running as root: the refusal cannot be observed")
+    proc = _run_install()
+    assert proc.returncode == 1 and "run this as root" in proc.stderr
+
+
+def test_housekeeping_keeps_three_and_touches_no_other_app():
+    """The box runs ~11 other apps' containers. The old steps ran a bare `docker image prune -f`
+    (every app's dangling images) and `docker builder prune -f` (every app's build cache: their next
+    build starts cold on one core). Now: this repository's sha images only, a prune limited to this
+    image's label, and no builder prune, since nothing of ours is ever built on the box."""
+    code = _remote_code()
+    assert "REPO=ghcr.io/hdlc01/treadwell-proposal-tool" in code
+    assert 'docker images "$REPO"' in code and 'grep "^$REPO:sha-"' in code and "head -3" in code
+    for path in (DEPLOY, REMOTE):
+        text = "\n".join(ln.split("#", 1)[0] for ln in path.read_text(encoding="utf-8").splitlines())
+        for word in ("prune -a", "system prune", "builder prune", "volume prune", "network prune"):
+            assert word not in text, (path.name, word)
+    prunes = [ln.strip() for ln in code.splitlines() if "prune" in ln]
+    assert prunes and all('--filter "label=org.opencontainers.image.title=treadwell-proposal-tool"' in p
+                          for p in prunes), prunes
+    assert re.search(r'(?m)^LABEL org\.opencontainers\.image\.title="treadwell-proposal-tool"\s*$',
+                     DOCKERFILE.read_text(encoding="utf-8"))
+    assert "df -h /" in code
+    deploy = code[code.index("run_deploy() {"):]
+    assert deploy.index('healthy "$image"') < deploy.index("housekeeping"), "housekeeping only after a healthy deploy"
+
+
+def test_one_deploy_at_a_time_and_the_checkout_stays_on_its_branch():
+    code = _remote_code()
+    assert 'LOCK="${TOOL_DEPLOY_LOCK:-/run/lock/treadwell-tool-deploy.lock}"' in code
+    assert 'flock -w "$LOCK_WAIT" 9' in code
+    main = code[code.index("main() {"):]
+    assert main.index("take_lock") < main.index("run_deploy") and main.index("take_lock") < main.index("run_pdf_smoke")
+    # never detached: a fast-forward, or `reset --keep` back to an older commit of the branch
+    assert "--detach" not in code and not re.search(r"git_in checkout\b", code)
+    assert 'git_in merge --ff-only --quiet "$1"' in code and 'git_in reset --quiet --keep "$1"' in code
+    assert 'git_in merge-base --is-ancestor "$COMMIT" "origin/$BRANCH" || refuse' in code
+
+
+# ── deploy/remote-deploy.sh, EXECUTED against stub docker / curl / flock and real git ──────
+
+_DOCKER_STUB = r"""#!/usr/bin/env bash
+# A stand-in for docker: logs every call; a container's running image lives in running.<name>.
+printf '%s|TW_IMAGE=%s|DOCKER_CONFIG=%s\n' "$*" "${TW_IMAGE:-}" "${DOCKER_CONFIG:-}" >> "$STUB/docker.log"
+case "$1" in
+  login)
+    cat > "$STUB/login.stdin"
+    if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "$DOCKER_CONFIG" ]; then echo "$DOCKER_CONFIG" > "$STUB/login.config"; fi ;;
+  pull) [ ! -f "$STUB/pull.fails" ] || exit 1; echo "$3" >> "$STUB/pulled" ;;
+  inspect) if [ -f "$STUB/running.$4" ]; then cat "$STUB/running.$4"; else exit 1; fi ;;
+  image) if [ "$2" = inspect ]; then grep -qxF "$3" "$STUB/pulled" 2>/dev/null || exit 1; fi ;;
+  run) [ ! -f "$STUB/smoke.fails" ] || exit 1 ;;
+  compose)
+    shift
+    file=docker-compose.yml
+    if [ "$1" = -f ]; then file="$2"; shift 2; fi
+    container=treadwell-proposal-tool
+    if [ "$file" = docker-compose.staging.yml ]; then container=treadwell-staging; fi
+    case "$*" in
+      "up -d") [ ! -f "$STUB/up.fails" ] || exit 1; printf '%s\n' "$TW_IMAGE" > "$STUB/running.$container" ;;
+      *pg_isready*) [ ! -f "$STUB/db.down" ] || exit 1 ;;
+      *" -c "*) echo "$*" >> "$STUB/notify" ;;
+      *psql*) cat > "$STUB/schema.in" ;;
+    esac ;;
+esac
+exit 0
+"""
+
+_CURL_STUB = r"""#!/usr/bin/env bash
+# A stand-in for curl on /healthz: healthy unless the container's image is listed as broken.
+url="${@: -1}"
+case "$url" in *:8889/*) c=treadwell-staging ;; *) c=treadwell-proposal-tool ;; esac
+img=$(cat "$STUB/running.$c" 2>/dev/null || true)
+[ -n "$img" ] || exit 7
+if [ -f "$STUB/broken" ] && grep -qxF "$img" "$STUB/broken"; then exit 22; fi
+echo '{"ok": true}'
+"""
+
+_FLOCK_STUB = r"""#!/usr/bin/env bash
+echo "$*" >> "$STUB/flock.log"
+exit 0
+"""
+
+
+def _git(cwd, *args):
+    # core.autocrlf off, as on the Linux box: a Windows dev PC's global `true` would turn the
+    # clone's files into CRLF copies of what was committed.
+    return subprocess.run(["git", "-c", "core.autocrlf=false", *args], cwd=str(cwd), capture_output=True,
+                          text=True, timeout=60, check=True).stdout.strip()
+
+
+def _image(commit):
+    return "%s:sha-%s" % (IMAGE, commit[:12])
+
+
+@pytest.fixture
+def box(tmp_path):
+    """An origin with `staging` and `main` (commits old -> new) and a `feature` commit on neither,
+    the box's two checkouts (staging on `staging`, prod on `main`, both at old), the env files, the
+    font folder, and stub docker / curl / flock on PATH."""
+    bash = _bash()
+    if bash is None or shutil.which("git") is None:
+        pytest.skip("no bash or git to run deploy/remote-deploy.sh with")
+    work, origin, staging, prod, fonts, stub = (tmp_path / n for n in
+                                                 ("work", "origin.git", "staging", "prod", "fonts", "stub"))
+    for d in (work, fonts, stub):
+        d.mkdir()
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    _git(tmp_path, "init", "-q", str(work))
+    for k, v in (("user.email", "ci@example.com"), ("user.name", "ci"), ("commit.gpgsign", "false"),
+                 ("core.autocrlf", "false")):
+        _git(work, "config", k, v)
+
+    def write(rel, body):
+        path = work / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8", newline="\n")
+
+    (work / "deploy").mkdir()
+    shutil.copy(REMOTE, work / "deploy" / "remote-deploy.sh")
+    write("docker-compose.yml", "# v1\n")
+    write("docker-compose.staging.yml", "# v1\n")
+    write("backend/staging/schema_pg.sql", "-- schema v1\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "one")
+    _git(work, "branch", "-M", "staging")
+    old = _git(work, "rev-parse", "HEAD")
+    write("docker-compose.yml", "# v2\n")
+    write("docker-compose.staging.yml", "# v2\n")
+    write("backend/staging/schema_pg.sql", "-- schema v2\n")
+    _git(work, "commit", "-q", "-am", "two")
+    new = _git(work, "rev-parse", "HEAD")
+    _git(work, "branch", "main")
+    _git(work, "checkout", "-q", "-b", "feature")
+    write("docker-compose.yml", "# not reviewed\n")
+    _git(work, "commit", "-q", "-am", "feature")
+    feature = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "-q", str(origin), "staging", "main", "feature")
+    for path, branch, env_file in ((staging, "staging", ".env.staging"), (prod, "main", ".env")):
+        _git(tmp_path, "clone", "-q", "--config", "core.autocrlf=false", "--branch", branch, str(origin), str(path))
+        _git(path, "reset", "-q", "--hard", old)          # on its branch, one commit behind
+        (path / env_file).write_text("X=1\n", encoding="utf-8", newline="\n")
+    for name in ("Zetta Serif-Book.otf", "Zetta Serif.otf"):
+        (fonts / name).write_bytes(b"OTTO font")
+    for name, body in (("docker", _DOCKER_STUB), ("curl", _CURL_STUB), ("flock", _FLOCK_STUB)):
+        (stub / name).write_text(body, encoding="utf-8", newline="\n")
+        (stub / name).chmod(0o755)
+
+    def run(request, **extra):
+        env = {**os.environ, "SSH_ORIGINAL_COMMAND": request,
+               "TOOL_STAGING_DIR": staging.as_posix(), "TOOL_PROD_DIR": prod.as_posix(),
+               "TOOL_FONT_DIR": fonts.as_posix(), "TOOL_DEPLOY_LOCK": (tmp_path / "deploy.lock").as_posix(),
+               "TOOL_HEALTH_TRIES": "2", "TOOL_HEALTH_PAUSE": "0", "STUB": stub.as_posix(),
+               "PATH": str(stub) + os.pathsep + os.environ.get("PATH", ""), **extra}
+        proc = subprocess.run([bash, REMOTE.as_posix()], capture_output=True, text=True, timeout=120, env=env)
+        log = (stub / "docker.log").read_text(encoding="utf-8") if (stub / "docker.log").exists() else ""
+        return proc, log
+
+    return {"run": run, "staging": staging, "prod": prod, "fonts": fonts, "stub": stub,
+            "old": old, "new": new, "feature": feature}
+
+
+def _running(box, container):
+    path = box["stub"] / ("running." + container)
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+def _set_running(box, container, image):
+    (box["stub"] / ("running." + container)).write_text(image + "\n", encoding="utf-8")
+
+
+def _where(checkout):
+    """(commit, branch) of a box checkout; branch is "" when HEAD is detached."""
+    head = _git(checkout, "rev-parse", "HEAD")
+    branch = subprocess.run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=str(checkout),
+                            capture_output=True, text=True).stdout.strip()
+    return head, branch
+
+
+def _calls(log):
+    return [ln.split("|")[0] for ln in log.splitlines()]
+
+
+@pytest.mark.parametrize("request_line", [
+    "",
+    "deploy staging 0123 x",
+    "deploy feature %s %s" % (SHA, TOKEN),
+    "deploy staging %s %s; touch /tmp/pwned" % (SHA, TOKEN),
+    "deploy staging %s %s\ndeploy main %s %s" % (SHA, TOKEN, SHA, TOKEN),
+    "deploy staging %s %s\npdf-smoke staging %s" % (SHA, TOKEN, SHA),
+    "pdf-smoke main %s" % SHA,
+    "bash -i",
+])
+def test_a_malformed_request_is_refused_before_anything_runs(box, request_line):
+    proc, log = box["run"](request_line)
+    assert proc.returncode == 2, proc.stderr
+    assert "refusing: the request must be exactly one line" in proc.stderr
+    assert log == "", "docker ran for a refused request"
+    assert not (box["stub"] / "flock.log").exists(), "not even the lock is taken"
+
+
+def test_a_commit_that_is_not_on_the_branch_is_refused(box):
+    proc, log = box["run"]("deploy staging %s %s" % (box["feature"], TOKEN))
+    assert proc.returncode == 2 and "is not on staging" in proc.stderr, proc.stderr
+    assert log == ""
+    assert _where(box["staging"]) == (box["old"], "staging"), "the checkout moved"
+
+
+def test_a_staging_deploy_pulls_applies_the_schema_and_stays_on_its_branch(box):
+    old_image, new_image = _image(box["old"]), _image(box["new"])
+    _set_running(box, "treadwell-staging", old_image)
+    # Extra lines an SSH action may add around the request are ignored, never run.
+    proc, log = box["run"]("export FOO=bar\ndeploy staging %s %s\n" % (box["new"], TOKEN))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    calls = _calls(log)
+    order = ["login ghcr.io -u HDLC01 --password-stdin", "pull --quiet " + new_image,
+             "compose -f docker-compose.staging.yml up -d db",
+             "compose -f docker-compose.staging.yml exec -T db pg_isready -U postgres -d treadwell",
+             "compose -f docker-compose.staging.yml exec -T db psql -U postgres -d treadwell -v ON_ERROR_STOP=1",
+             "compose -f docker-compose.staging.yml up -d",
+             "tag %s %s:staging" % (new_image, IMAGE)]
+    assert [c for c in order if c not in calls] == [], calls
+    assert [calls.index(c) for c in order] == sorted(calls.index(c) for c in order), calls
+    assert not any("build" in c for c in calls)
+    up = next(ln for ln in log.splitlines() if ln.startswith("compose -f docker-compose.staging.yml up -d|"))
+    assert "TW_IMAGE=" + new_image + "|" in up
+    assert _running(box, "treadwell-staging") == new_image and "staging healthy on " + new_image in proc.stdout
+    # PostgREST told to reload, and the schema that reached psql is the DEPLOYED commit's
+    assert "notify pgrst" in (box["stub"] / "notify").read_text(encoding="utf-8")
+    assert (box["stub"] / "schema.in").read_text(encoding="utf-8") == "-- schema v2\n"
+    # exactly the dispatched commit, and still ON the branch: `git pull --ff-only` keeps working
+    assert _where(box["staging"]) == (box["new"], "staging")
+    assert _where(box["prod"]) == (box["old"], "main"), "production's checkout was not touched"
+    # the token went in on stdin, into a DOCKER_CONFIG that existed for this run only
+    assert (box["stub"] / "login.stdin").read_text(encoding="utf-8") == TOKEN
+    config_dir = (box["stub"] / "login.config").read_text(encoding="utf-8").strip()
+    assert config_dir and "/.docker" not in config_dir
+    after_login = log[log.index("login ghcr.io"):].splitlines()
+    assert all("DOCKER_CONFIG=" + config_dir in ln for ln in after_login), "one config for the whole run"
+    assert not pathlib.Path(config_dir).exists(), "the throw-away DOCKER_CONFIG is removed"
+    assert TOKEN not in proc.stdout + proc.stderr
+    assert "-w 1200 9" in (box["stub"] / "flock.log").read_text(encoding="utf-8"), "the box lock is taken"
+
+
+def test_a_production_deploy_uses_its_own_checkout_compose_and_tag(box):
+    new_image = _image(box["new"])
+    _set_running(box, "treadwell-proposal-tool", _image(box["old"]))
+    proc, log = box["run"]("deploy main %s %s" % (box["new"], LONG_TOKEN))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    calls = _calls(log)
+    assert "compose -f docker-compose.yml up -d" in calls
+    assert not any("staging" in c or "pg_isready" in c or "psql" in c for c in calls), calls
+    assert "tag %s %s:prod" % (new_image, IMAGE) in calls
+    assert _running(box, "treadwell-proposal-tool") == new_image and "prod healthy on" in proc.stdout
+    assert _where(box["prod"]) == (box["new"], "main")
+    assert _where(box["staging"]) == (box["old"], "staging")
+
+
+def test_a_failed_health_check_rolls_back_to_the_previous_image_and_checkout(box):
+    old_image, new_image = _image(box["old"]), _image(box["new"])
+    _set_running(box, "treadwell-proposal-tool", old_image)
+    (box["stub"] / "broken").write_text(new_image + "\n", encoding="utf-8")
+    proc, log = box["run"]("deploy main %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1
+    assert "prod post-deploy healthcheck failed" in proc.stdout + proc.stderr
+    ups = [ln for ln in log.splitlines() if ln.startswith("compose -f docker-compose.yml up -d|")]
+    assert len(ups) == 2 and "TW_IMAGE=" + old_image + "|" in ups[1], ups
+    assert _running(box, "treadwell-proposal-tool") == old_image and "rolled back" in proc.stdout
+    assert _where(box["prod"]) == (box["old"], "main"), "the previous checkout is back, on its branch"
+    assert " tag " not in " " + " ".join(_calls(log)) and "rmi" not in log, "no re-tag, no housekeeping"
+
+
+def test_a_failing_up_rolls_back_too(box):
+    old_image = _image(box["old"])
+    _set_running(box, "treadwell-staging", old_image)
+    (box["stub"] / "up.fails").write_text("", encoding="utf-8")
+    proc, log = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and "post-deploy healthcheck failed" in proc.stdout + proc.stderr
+    assert _where(box["staging"]) == (box["old"], "staging")
+
+
+def test_a_failed_first_deploy_says_there_is_nothing_to_roll_back_to(box):
+    (box["stub"] / "broken").write_text(_image(box["new"]) + "\n", encoding="utf-8")
+    proc, log = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and "no previous container" in proc.stdout + proc.stderr
+    assert len([ln for ln in log.splitlines() if ln.startswith("compose -f docker-compose.staging.yml up -d|")]) == 1
+
+
+def test_a_failed_pull_changes_nothing(box):
+    (box["stub"] / "pull.fails").write_text("", encoding="utf-8")
+    proc, log = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode != 0
+    assert "compose" not in log
+    assert _where(box["staging"]) == (box["old"], "staging")
+
+
+def test_a_staging_database_that_never_answers_puts_the_checkout_back(box):
+    _set_running(box, "treadwell-staging", _image(box["old"]))
+    (box["stub"] / "db.down").write_text("", encoding="utf-8")
+    proc, log = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and "staging database" in proc.stderr
+    assert "compose -f docker-compose.staging.yml up -d" not in _calls(log), "the app was not restarted"
+    assert _where(box["staging"]) == (box["old"], "staging")
+
+
+def test_a_missing_font_stops_the_deploy_before_anything_changes(box):
+    for f in box["fonts"].iterdir():
+        f.unlink()
+    proc, log = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and "Dropbox" in proc.stdout
+    assert log == "" and _where(box["staging"]) == (box["old"], "staging")
+
+
+def test_a_checkout_off_its_branch_or_ahead_of_github_is_refused(box):
+    _git(box["prod"], "checkout", "-q", "--detach", box["old"])
+    proc, log = box["run"]("deploy main %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and "not main" in proc.stderr and log == ""
+    _git(box["prod"], "checkout", "-q", "main")
+    (box["prod"] / "local.txt").write_text("x\n", encoding="utf-8")
+    _git(box["prod"], "add", "local.txt")
+    _git(box["prod"], "-c", "user.email=ci@example.com", "-c", "user.name=ci", "-c", "commit.gpgsign=false",
+         "commit", "-q", "-m", "made on the box")
+    local = _git(box["prod"], "rev-parse", "HEAD")
+    proc, log = box["run"]("deploy main %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and "not on origin/main" in proc.stderr and log == ""
+    assert _where(box["prod"]) == (local, "main"), "the box's own commit is never thrown away"
+
+
+def test_re_deploying_an_older_commit_moves_back_and_stays_on_the_branch(box):
+    _set_running(box, "treadwell-staging", _image(box["new"]))
+    _git(box["staging"], "merge", "-q", "--ff-only", box["new"])
+    proc, _ = box["run"]("deploy staging %s %s" % (box["old"], TOKEN))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _where(box["staging"]) == (box["old"], "staging")
+    assert _running(box, "treadwell-staging") == _image(box["old"])
+
+
+def test_a_missing_env_file_stops_with_a_plain_message(box):
+    (box["staging"] / ".env.staging").unlink()
+    proc, log = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 1 and ".env.staging is missing" in proc.stderr
+    assert log == ""
+
+
+def test_the_pdf_smoke_runs_the_deployed_image_against_the_deployed_checkout(box):
+    proc, _ = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 0, proc.stderr
+    proc, log = box["run"]("pdf-smoke staging %s" % box["new"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run = next(ln for ln in log.splitlines() if ln.startswith("run --rm"))
+    assert "-v %s:/src:ro" % box["staging"].as_posix() in run
+    assert "-v %s:/usr/share/fonts/truetype/treadwell:ro" % box["fonts"].as_posix() in run
+    assert " %s sh -c " % _image(box["new"]) in run and "pytest" in run and "--build" not in run
+    (box["stub"] / "smoke.fails").write_text("", encoding="utf-8")
+    proc, _ = box["run"]("pdf-smoke staging %s" % box["new"])
+    assert proc.returncode != 0, "a failed smoke turns the run red"
+
+
+def test_the_pdf_smoke_refuses_a_commit_staging_is_no_longer_at(box):
+    proc, log = box["run"]("pdf-smoke staging %s" % box["new"])      # staging is still at old
+    assert proc.returncode == 2 and "is at %s, not %s" % (box["old"], box["new"]) in proc.stderr
+    assert "run --rm" not in log
+    _git(box["staging"], "merge", "-q", "--ff-only", box["new"])
+    proc, log = box["run"]("pdf-smoke staging %s" % box["new"])      # at new, but never pulled
+    assert proc.returncode == 1 and "is not on this box" in proc.stderr and "run --rm" not in log
+
+
+def test_the_program_says_when_its_installed_copy_is_stale(box):
+    """The box runs a COPY (install-deploy-account.sh); after a commit changes
+    deploy/remote-deploy.sh the deploy warns that the copy must be re-installed."""
+    proc, _ = box["run"]("deploy staging %s %s" % (box["new"], TOKEN))
+    assert proc.returncode == 0 and "re-run deploy/install-deploy-account.sh" not in proc.stdout
+    script = box["staging"] / "deploy" / "remote-deploy.sh"
+    script.write_text(script.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8", newline="\n")
+    _git(box["staging"], "-c", "user.email=ci@example.com", "-c", "user.name=ci", "-c", "commit.gpgsign=false",
+         "commit", "-q", "-am", "changed")
+    changed = _git(box["staging"], "rev-parse", "HEAD")
+    _git(box["staging"], "push", "-q", "origin", "HEAD:refs/heads/staging")
+    _git(box["staging"], "reset", "-q", "--hard", box["new"])
+    proc, _ = box["run"]("deploy staging %s %s" % (changed, TOKEN))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "re-run deploy/install-deploy-account.sh" in proc.stdout

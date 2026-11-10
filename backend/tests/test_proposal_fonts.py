@@ -405,31 +405,39 @@ def test_the_module_reads_the_mount_first_then_the_dev_copy():
     assert proposal_fonts.MOUNT_DIR.as_posix().startswith("/usr/share/fonts/")
 
 
-def _deploy_scripts():
-    wf = yaml.safe_load((REPO / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8"))
-    return {(job, step.get("name", "")): step["with"]["script"]
-            for job in ("staging", "production")
-            for step in wf["jobs"][job]["steps"]
-            if "script" in step.get("with", {})}
+# The CI deploy runs ON THE BOX as deploy/remote-deploy.sh (the program the GitHub deploy key is
+# forced to; deploy/README.md). Both environments go through its one font block, with the checkout
+# it is about to move as the seed: /opt/treadwell for production, /opt/treadwell-staging for staging.
+REMOTE_DEPLOY = REPO / "deploy" / "remote-deploy.sh"
+
+
+def _remote_function(name):
+    """The body of one function of deploy/remote-deploy.sh, as text."""
+    text = REMOTE_DEPLOY.read_text(encoding="utf-8")
+    m = re.search(r"^%s\(\) \{\n(.*?)^\}\n" % re.escape(name), text, re.S | re.M)
+    assert m, "deploy/remote-deploy.sh has no function %s" % name
+    return m.group(1)
 
 
 def test_the_ci_pdf_smoke_run_mounts_the_fonts_too():
     """It overrides CMD with its own `sh -c` in a throwaway container, and its tests count how many
     lines LibreOffice fits in a box: a question about the real face, which only the mount has."""
-    script = next(s for (job, name), s in _deploy_scripts().items() if name.startswith("PDF fidelity"))
-    run = script[script.index("docker run"):script.index('"$TW_IMAGE"')]
-    assert "-v " + MOUNT in run, run
+    script = _remote_function("run_pdf_smoke")
+    start = script.index("docker run")
+    run = script[start:script.index('"$image"', start)]
+    assert '-v "$FONT_DIR:%s:ro"' % proposal_fonts.MOUNT_DIR.as_posix() in run, run
+    text = REMOTE_DEPLOY.read_text(encoding="utf-8")
+    assert 'FONT_DIR="${TOOL_FONT_DIR:-%s}"' % proposal_fonts.HOST_DIR in text
 
 
 def _font_checks():
     """Every deploy path's font check, as the text that runs on the VPS."""
     checks = {}
-    for (job, name), script in _deploy_scripts().items():
-        if "TW_FONT_DIR=" in script:
-            lines = script.splitlines()
-            start = next(i for i, ln in enumerate(lines) if ln.startswith("TW_FONT_DIR="))
-            end = next(i for i in range(start, len(lines)) if lines[i].strip() == "done")
-            checks[job] = ("\n".join(lines[start:end + 1]), script)
+    remote = REMOTE_DEPLOY.read_text(encoding="utf-8")
+    lines = remote.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.strip().startswith("TW_FONT_DIR="))
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "done")
+    checks["remote-deploy.sh"] = ("\n".join(lines[start:end + 1]), remote)
     ship = (REPO / "deploy" / "ship.sh").read_text(encoding="utf-8")
     m = re.search(r"""\n"\$\{SSH\[@\]\}" '(for f in [^']*done)'\n""", ship)
     assert m, "deploy/ship.sh no longer checks the font on the box"
@@ -492,6 +500,10 @@ def _seed(where, block, script):
     if where == "ship.sh":
         pulled = re.search(r'^APP_DIR="([^"]+)"$', script, re.M).group(1)
         assert re.search(r"^\s*cd \$APP_DIR\n\s*git pull\b", script, re.M), "ship.sh pulls elsewhere"
+    elif where == "remote-deploy.sh":
+        # Each environment's own checkout, the one `git_in` moves: never one checkout for both.
+        assert re.search(r'^git_in\(\) \{ git -C "\$APP_DIR" "\$@"; \}$', script, re.M)
+        pulled = "$APP_DIR"
     else:
         pulled = re.search(r"^cd (\S+)\ngit pull\b", script, re.M).group(1)
     seed = pulled + "/backend/fonts"
@@ -504,6 +516,12 @@ def _runnable(where, host, checkout):
     backend/fonts/ swapped for temp ones (and nothing else changed)."""
     block, script = _font_checks()[where]
     seed = _seed(where, block, script)
+    if where == "remote-deploy.sh":
+        # The block reads the host dir from FONT_DIR and the checkout from APP_DIR, both set at
+        # the top of the program; set them to the temp ones and change nothing in the block itself.
+        assert checkout.as_posix().endswith("/backend/fonts")
+        app = checkout.as_posix()[:-len("/backend/fonts")]
+        return "set -euo pipefail\nFONT_DIR=%s\nAPP_DIR=%s\n%s" % (host.as_posix(), app, block)
     code = "set -euo pipefail\n" + (block.replace(proposal_fonts.HOST_DIR, host.as_posix())
                                     .replace(seed, checkout.as_posix()))
     assert proposal_fonts.HOST_DIR not in code and seed not in code
@@ -516,10 +534,21 @@ def test_every_deploy_path_checks_the_font_before_it_changes_anything():
     before its `git pull` (which deletes the checkout's tracked copy, see the next test), before
     the first `docker compose` in the CI deploys, before the build in ship.sh."""
     checks = _font_checks()
-    assert set(checks) == {"staging", "production", "ship.sh", *README_DEPLOYS}
+    assert set(checks) == {"remote-deploy.sh", "ship.sh", *README_DEPLOYS}
     for where, (block, script) in checks.items():
         for filename in proposal_fonts.FONTS.values():
             assert '"%s"' % filename in block, (where, filename)
+        if where == "remote-deploy.sh":
+            # Both environments call the one block before anything changes on the box: before the
+            # registry login and pull, before the checkout moves, before any compose.
+            assert 'TW_FONT_DIR="$FONT_DIR"' in block
+            assert 'TW_FONT_SEED="$APP_DIR/backend/fonts"' in block
+            assert 'FONT_DIR="${TOOL_FONT_DIR:-%s}"' % proposal_fonts.HOST_DIR in script
+            deploy = _remote_function("run_deploy")
+            font = deploy.index("keep_and_check_fonts")
+            for later in ("docker login", "docker pull", 'move_checkout_to "$COMMIT"', "compose up"):
+                assert font < deploy.index(later), "the deploy runs %s before it keeps the font" % later
+            continue
         assert proposal_fonts.HOST_DIR in block, where
         first = script.index("docker build" if where == "ship.sh" else "docker compose")
         assert script.index(block) < first, "%s checks the font after it has started" % where
@@ -542,7 +571,7 @@ def _bash():
     return None
 
 
-@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"] + README_DEPLOYS)
+@pytest.mark.parametrize("where", ["remote-deploy.sh", "ship.sh"] + README_DEPLOYS)
 def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, synthetic_dir):
     """EXECUTED, with only the host path swapped for a temp one. A box missing either file, or
     holding an empty placeholder, stops the deploy; a box with both goes ahead."""
@@ -574,7 +603,7 @@ def test_the_deploy_font_check_refuses_a_box_without_the_files(where, tmp_path, 
     assert list(checkout.iterdir()) == [], "the check never writes into the checkout"
 
 
-@pytest.mark.parametrize("where", ["staging", "production", "ship.sh"] + README_DEPLOYS)
+@pytest.mark.parametrize("where", ["remote-deploy.sh", "ship.sh"] + README_DEPLOYS)
 def test_the_first_deploy_keeps_the_checkouts_copy_before_its_pull_deletes_it(
         where, tmp_path, synthetic_dir):
     """Review, 2026-09-26: untracking the files deletes them from every checkout at its next pull,
