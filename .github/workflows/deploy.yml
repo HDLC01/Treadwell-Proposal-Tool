@@ -18,10 +18,13 @@ name: Deploy
 # nobody is waiting on it, and the reviewer should only ever be asked to approve an
 # artifact that already exists.
 #
-# Rollback is one variable: every build is tagged with its commit SHA, so
-#   TW_IMAGE=ghcr.io/<owner>/treadwell-proposal-tool:sha-<old> docker compose up -d
+# The box runs the image BY DIGEST (`<image>@sha256:...`, the build job's output), never by a tag:
+# a tag is a name that any workflow allowed to push to the package can re-point, on any branch. The
+# build also records a signed build-provenance attestation for that digest. Rollback is one
+# variable:
+#   TW_IMAGE=ghcr.io/<owner>/treadwell-proposal-tool@sha256:<old digest> docker compose up -d
 # on the box puts the previous image back without a build or a revert commit. A deploy whose
-# health check fails does that by itself (deploy/remote-deploy.sh).
+# health check fails does that by itself (deploy/remote-deploy.sh). deploy/README.md, Roll back.
 #
 # `deploy/ship.sh` remains the manual fallback for when CI or the registry is unavailable
 # (it builds locally and ships the tarball over SSH). The compose `build:` blocks are
@@ -29,7 +32,10 @@ name: Deploy
 #
 # Auth: `VPS_HOST` / `VPS_PORT` / `VPS_FINGERPRINT` for the box, and `VPS_DEPLOY_USER` /
 # `VPS_DEPLOY_KEY` for a box account of this app's own that can run ONE program, never a shell
-# and never as root by itself (see the deploy jobs below and deploy/README.md). The built-in
+# and never as root by itself (see the deploy jobs below and deploy/README.md). The deploy secrets
+# are ENVIRONMENT secrets, one key per environment, never repository secrets: the `staging`
+# environment (branch `staging` only) holds the staging key, `Production` (branch `main` only,
+# required reviewer) the production key, and the box forces each key to its own environment. The built-in
 # `GITHUB_TOKEN` is the GHCR login, on the runner and inside the request to the box: no long-lived
 # registry credential exists anywhere, and the box keeps it in a throw-away DOCKER_CONFIG.
 #
@@ -67,8 +73,12 @@ jobs:
     permissions:
       contents: read
       packages: write         # push to GHCR with the built-in token
+      id-token: write         # the build-provenance attestation's signing identity (OIDC)
+      attestations: write     # store that attestation with the repository
     outputs:
       image: ${{ steps.meta.outputs.image }}
+      # The image's content hash: the ONLY name the box deploys by (a tag can be re-pointed).
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       # The same guard, exactly. Every string comparison in a GitHub expression ignores case, so
       # the `if:` above would also pass a branch named `Main` or `STAGING`. This one is bash and
@@ -101,6 +111,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -113,24 +124,45 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # A signed statement that THIS workflow, at this commit and ref, built this digest. Check it
+      # from anywhere with:
+      #   gh attestation verify oci://ghcr.io/hdlc01/treadwell-proposal-tool@sha256:<digest> \
+      #     --repo HDLC01/Treadwell-Proposal-Tool \
+      #     --signer-workflow HDLC01/Treadwell-Proposal-Tool/.github/workflows/deploy.yml
+      - name: Record the image's build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: false
+
   # ── the two deploy jobs: ONE request line each, to a key that can run only the box's program ──
   #
-  # The deploy key (VPS_DEPLOY_KEY) belongs to a box account of the proposal tool's own
-  # (VPS_DEPLOY_USER), not in the docker or sudo group, whose authorized_keys line forces
-  # /usr/local/sbin/treadwell-tool-deploy: a root-owned copy of deploy/remote-deploy.sh, installed by
-  # deploy/install-deploy-account.sh. The `script:` below is therefore NOT a shell script: it is the
+  # Each environment's deploy key (VPS_DEPLOY_KEY) belongs to a box account of the proposal tool's
+  # own (VPS_DEPLOY_USER), not in the docker or sudo group, whose authorized_keys line for that key
+  # forces `/usr/local/sbin/treadwell-tool-deploy <its environment>`: a root-owned copy of
+  # deploy/remote-deploy.sh, installed by deploy/install-deploy-account.sh, which refuses a request
+  # for the other environment. The `script:` below is therefore NOT a shell script: it is the
   # one line that program reads from SSH_ORIGINAL_COMMAND and matches by regex (never runs). The box
   # then, in this order: takes a lock shared with the other environment's deploys, fetches the
-  # branch and refuses a commit that is not on it, keeps and checks the Zetta Serif files in
-  # /opt/treadwell-fonts, logs in to GHCR with this job's token in a throw-away DOCKER_CONFIG and
-  # pulls exactly sha-<12>, fast-forwards the checkout to exactly this commit (staying on its
-  # branch), applies staging's schema, `docker compose up -d` (NEVER --build), health-checks the
-  # new image and ROLLS BACK to the previous checkout and image when that fails, re-points the
-  # moving tag, and keeps three sha images of this app. deploy/README.md has the whole runbook.
+  # branch and refuses a commit that is not on it (production only moves forward), keeps and
+  # checks the Zetta Serif files in /opt/treadwell-fonts, logs in to GHCR with this job's token in a
+  # throw-away DOCKER_CONFIG and pulls exactly the build job's DIGEST, fast-forwards the checkout to
+  # exactly this commit (staying on its branch), applies staging's schema, `docker compose up -d`
+  # (NEVER --build), health-checks the new image and ROLLS BACK to the previous checkout and image
+  # when that fails, re-points the moving tag, and keeps three sha images of this app.
+  # deploy/README.md has the whole runbook.
   #
-  # Why: the old steps logged in as root with a key that ran any script, and repository secrets are
-  # readable by a workflow run on ANY branch of this repository. The production environment's
-  # reviewer gate stays, but it was never what protected the key.
+  # Why: the old steps logged in as root with a key that ran any script, and a REPOSITORY secret is
+  # readable by a workflow run on ANY branch of this repository. So VPS_DEPLOY_KEY is now an
+  # ENVIRONMENT secret with a different key in each environment: `staging` releases its key only to
+  # branch `staging`, `Production` only to `main` and only after the required reviewer approves, and
+  # the box forces each key to its own environment (deploy/install-deploy-account.sh). That makes the
+  # reviewer gate the thing that protects production's key, not just the normal path.
+  #
+  # command_timeout is the whole budget of one box run: a lock wait of up to 8 minutes behind the
+  # other environment, a pull of up to 10, and a failed health check plus its rollback (~12). The
+  # box ignores a dropped session, so a timeout here never stops a deploy or rollback halfway.
   #
   # An empty VPS_FINGERPRINT would make the SSH action accept ANY host key, so a spoofed endpoint
   # could take the request (and its registry token) and answer "healthy". Each job refuses that
@@ -152,10 +184,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$VPS_DEPLOY_USER" ]; then
-            echo "::error::The VPS_DEPLOY_USER repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+            echo "::error::The VPS_DEPLOY_USER secret of this job's environment is empty (deploy/README.md, One-time setup, step 4)."; exit 1
           fi
           if [ -z "$VPS_FINGERPRINT" ]; then
-            echo "::error::The VPS_FINGERPRINT repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+            echo "::error::The VPS_FINGERPRINT secret of this job's environment is empty (deploy/README.md, One-time setup, step 4)."; exit 1
           fi
 
       - name: Deploy staging on the VPS (the key runs only the box's deploy program)
@@ -166,15 +198,16 @@ jobs:
           key: ${{ secrets.VPS_DEPLOY_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
           fingerprint: ${{ secrets.VPS_FINGERPRINT }}
-          command_timeout: 30m
-          script: deploy staging ${{ github.sha }} ${{ secrets.GITHUB_TOKEN }}
+          command_timeout: 45m
+          script: deploy staging ${{ github.sha }} ${{ needs.build.outputs.digest }} ${{ secrets.GITHUB_TOKEN }}
 
       # ── the tests CI cannot run ────────────────────────────────────────────
       # A handful of tests need LibreOffice, because the PDF every customer receives is produced
       # by `soffice --headless`, not by Word. They carry a skipif and were silently skipping in CI
       # AND on the dev box, so this step runs them on the box, in a THROWAWAY container of the
-      # image staging was just deployed with (deploy/remote-deploy.sh, run_pdf_smoke, holds the
-      # test script and why each line of it is there).
+      # image staging was just deployed with, with only backend/ mounted and no network
+      # (deploy/remote-deploy.sh, run_pdf_smoke, holds the test script and why each line of it is
+      # there).
       #
       # This step FAILS the run when the check fails or silently skips, and that is deliberate.
       # Staging is already deployed and healthy by now, so failing does not roll anything back —
@@ -188,8 +221,8 @@ jobs:
           key: ${{ secrets.VPS_DEPLOY_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
           fingerprint: ${{ secrets.VPS_FINGERPRINT }}
-          command_timeout: 30m
-          script: pdf-smoke staging ${{ github.sha }}
+          command_timeout: 45m
+          script: pdf-smoke staging ${{ github.sha }} ${{ needs.build.outputs.digest }}
 
   production:
     if: github.ref == 'refs/heads/main'
@@ -206,10 +239,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$VPS_DEPLOY_USER" ]; then
-            echo "::error::The VPS_DEPLOY_USER repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+            echo "::error::The VPS_DEPLOY_USER secret of this job's environment is empty (deploy/README.md, One-time setup, step 4)."; exit 1
           fi
           if [ -z "$VPS_FINGERPRINT" ]; then
-            echo "::error::The VPS_FINGERPRINT repository secret is empty (deploy/README.md, One-time setup)."; exit 1
+            echo "::error::The VPS_FINGERPRINT secret of this job's environment is empty (deploy/README.md, One-time setup, step 4)."; exit 1
           fi
 
       - name: Deploy production on the VPS (the key runs only the box's deploy program)
@@ -220,5 +253,5 @@ jobs:
           key: ${{ secrets.VPS_DEPLOY_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}   # SSH moved off 22 on 2026-09-28
           fingerprint: ${{ secrets.VPS_FINGERPRINT }}
-          command_timeout: 30m
-          script: deploy main ${{ github.sha }} ${{ secrets.GITHUB_TOKEN }}
+          command_timeout: 45m
+          script: deploy main ${{ github.sha }} ${{ needs.build.outputs.digest }} ${{ secrets.GITHUB_TOKEN }}

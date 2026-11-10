@@ -4,21 +4,29 @@
 # box, as root. Safe to run again: every step checks first and skips or rewrites what is there.
 #
 # The Deploy workflow (.github/workflows/deploy.yml) logs in with the VPS_DEPLOY_USER /
-# VPS_DEPLOY_KEY secrets. This script makes that login worth exactly one thing: running
-# deploy/remote-deploy.sh, which deploys a commit that is already on staging or main.
+# VPS_DEPLOY_KEY secrets, held as ENVIRONMENT secrets: the `staging` environment holds the staging
+# key, the `Production` environment the production key (never one repository-level key: those reach
+# a workflow on any branch). This script makes each key worth exactly one thing: running
+# deploy/remote-deploy.sh for ITS environment, which deploys a commit that is already on that
+# branch. The staging key can never deploy production.
 #
 #   1. the account (default `tooldeploy`): created with a disabled password when missing; refused
 #      when it is root, in the docker group (that is root on this box) or in a sudo/admin/wheel
 #      group; its login shell must be a real shell, because sshd runs the forced command through it;
 #   2. /usr/local/sbin/treadwell-tool-deploy: a root-owned COPY (0755) of the remote-deploy.sh that
-#      sits next to this script, so a commit can never change what the key runs until a person
+#      sits next to this script, so a commit can never change what a key runs until a person
 #      re-runs this script;
-#   3. /etc/sudoers.d/treadwell-tool-deploy: the account may run that one program as root, with
-#      no arguments (the ""), keeping only SSH_ORIGINAL_COMMAND (the one-line request it parses).
-#      Checked with `visudo -cf` before it is installed and with `visudo -c` after;
-#   4. the account's authorized_keys: with --deploy-key FILE (the PUBLIC half), replaced by the one
-#      line below; without it, every key already there must be forced the same way:
-#          restrict,command="sudo -n /usr/local/sbin/treadwell-tool-deploy" ssh-ed25519 AAAA... tool-deploy
+#   3. /etc/sudoers.d/treadwell-tool-deploy: the account may run that one program as root with
+#      exactly `staging` or exactly `main` as its argument (no other argument list), keeping only
+#      SSH_ORIGINAL_COMMAND (the one-line request it parses). Checked with `visudo -cf` before it
+#      is installed and with `visudo -c` after;
+#   4. the account's authorized_keys: one key per environment, each forced to the program WITH
+#      its environment, which the program checks the request against:
+#          restrict,command="sudo -n /usr/local/sbin/treadwell-tool-deploy staging" ssh-ed25519 AAAA... tool-deploy-staging
+#          restrict,command="sudo -n /usr/local/sbin/treadwell-tool-deploy main" ssh-ed25519 AAAA... tool-deploy-main
+#      --staging-key FILE / --main-key FILE (PUBLIC halves) write that environment's line and keep
+#      the other's. Every key there must be one of these two forced lines, and the two keys must
+#      differ (one key for both would let the staging copy deploy production);
 #   5. a check that sshd lets the account in at all (AllowUsers / AllowGroups), and the host key
 #      fingerprints for the VPS_FINGERPRINT secret.
 #
@@ -29,22 +37,28 @@
 # Before this change is merged, the box has no checkout holding these files, so copy both files
 # over into a folder only root can read and run them there (deploy/README.md, "One-time setup"):
 #     ssh treadwell-vps 'install -d -m 700 /root/tool-deploy-setup'
-#     scp deploy/remote-deploy.sh deploy/install-deploy-account.sh tool-deploy.pub treadwell-vps:/root/tool-deploy-setup/
-#     ssh treadwell-vps 'bash /root/tool-deploy-setup/install-deploy-account.sh --deploy-key /root/tool-deploy-setup/tool-deploy.pub'
+#     scp deploy/remote-deploy.sh deploy/install-deploy-account.sh tool-deploy-staging.pub tool-deploy-main.pub treadwell-vps:/root/tool-deploy-setup/
+#     ssh treadwell-vps 'bash /root/tool-deploy-setup/install-deploy-account.sh --staging-key /root/tool-deploy-setup/tool-deploy-staging.pub --main-key /root/tool-deploy-setup/tool-deploy-main.pub'
 # Later, after deploy/remote-deploy.sh changes, from the staging checkout:
 #     ssh treadwell-vps 'bash /opt/treadwell-staging/deploy/install-deploy-account.sh'
 #
 # Options:
 #   --account NAME          the deploy account (default tooldeploy)
-#   --deploy-key FILE       the deploy key's PUBLIC half; replaces the account's keys with it
+#   --staging-key FILE      the staging deploy key's PUBLIC half (its line replaces staging's)
+#   --main-key FILE         the production deploy key's PUBLIC half (likewise, for main)
 #   --print-sudoers         print the sudoers rule and stop (no root needed, nothing changed)
-#   --print-key-line FILE   print the authorized_keys line for FILE and stop (likewise)
+#   --print-key-line ENV FILE
+#                           print the authorized_keys line of FILE for ENV (staging or main) and
+#                           stop (likewise)
+#   --check-keys FILE       check an authorized_keys file the way step 4 does, and stop (likewise)
 set -euo pipefail
 
 ACCOUNT=tooldeploy
 DEPLOY_BIN=/usr/local/sbin/treadwell-tool-deploy
 SUDOERS=/etc/sudoers.d/treadwell-tool-deploy
-FORCED='restrict,command="sudo -n /usr/local/sbin/treadwell-tool-deploy"'
+ENVIRONMENTS="staging main"
+# The forced command of the key for environment $1; the program refuses any other environment.
+forced() { printf 'restrict,command="sudo -n %s %s"' "$DEPLOY_BIN" "$1"; }
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SOURCE="$HERE/remote-deploy.sh"
 
@@ -54,43 +68,78 @@ stop() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
 sudoers_rule() {
   cat <<RULE
 # Treadwell Proposal Tool (deploy/install-deploy-account.sh): the GitHub deploy account runs ONE
-# program as root, with no arguments (the ""), keeping only SSH_ORIGINAL_COMMAND, the one-line
-# request that program parses and never runs.
+# program as root, with exactly "staging" or exactly "main" as its argument (each deploy key is
+# forced to one of them), keeping only SSH_ORIGINAL_COMMAND, the one-line request that program
+# parses and never runs.
 Defaults:$ACCOUNT env_keep += "SSH_ORIGINAL_COMMAND"
-$ACCOUNT ALL=(root) NOPASSWD: $DEPLOY_BIN ""
+$ACCOUNT ALL=(root) NOPASSWD: $DEPLOY_BIN staging, $DEPLOY_BIN main
 RULE
 }
 
-key_line() {  # the authorized_keys line for the public key in $1
+valid_env() { case "$1" in staging|main) return 0 ;; *) return 1 ;; esac; }
+
+key_line() {  # the authorized_keys line for environment $1 and the public key in $2
   local pub
-  [ -f "$1" ] || stop "$1 does not exist."
-  if grep -q 'PRIVATE KEY' "$1"; then
-    stop "$1 is a PRIVATE key. Pass the .pub file; the private half goes into the VPS_DEPLOY_KEY secret only."
+  valid_env "$1" || stop "'$1' is not an environment: staging or main."
+  [ -f "$2" ] || stop "$2 does not exist."
+  if grep -q 'PRIVATE KEY' "$2"; then
+    stop "$2 is a PRIVATE key. Pass the .pub file; the private half goes into the $1 environment's VPS_DEPLOY_KEY secret only."
   fi
-  pub=$(grep -m1 -E '^ssh-ed25519 [A-Za-z0-9+/=]+( [A-Za-z0-9@._-]+)?$' "$1" || true)
-  [ -n "$pub" ] || stop "$1 is not an ed25519 public key (one line: ssh-ed25519 AAAA... comment)."
-  printf '%s %s\n' "$FORCED" "$pub"
+  pub=$(grep -m1 -E '^ssh-ed25519 [A-Za-z0-9+/=]+( [A-Za-z0-9@._-]+)?$' "$2" || true)
+  [ -n "$pub" ] || stop "$2 is not an ed25519 public key (one line: ssh-ed25519 AAAA... comment)."
+  printf '%s %s\n' "$(forced "$1")" "$pub"
 }
 
-DEPLOY_KEY=""
+# The lines of file $2 that START with environment $1's forced command. A forced command that only
+# appears later in a line (say, in the comment of an unforced key) does not count.
+lines_for() { awk -v p="$(forced "$1") " 'index($0, p) == 1' "$2"; }
+# The lines on stdin that start with neither environment's forced command.
+others() { awk -v s="$(forced staging) " -v m="$(forced main) " 'index($0, s) != 1 && index($0, m) != 1'; }
+
+# The key material of each ed25519 line on stdin.
+key_blobs() { awk '{ for (i = 1; i <= NF; i++) if ($i == "ssh-ed25519") { print $(i + 1); break } }'; }
+
+check_keys() {  # every key line in file $1 is one environment's forced line; one per environment, all different
+  local rest env n total distinct
+  rest=$(grep -vE '^[[:space:]]*(#|$)' "$1" | others || true)
+  for env in $ENVIRONMENTS; do
+    n=$(lines_for "$env" "$1" | grep -c . || true)
+    [ "${n:-0}" -le 1 ] || stop "$1 holds $n keys for $env; keep one."
+  done
+  if [ -n "${rest//[[:space:]]/}" ]; then
+    stop "$1 holds a key that is not forced to $DEPLOY_BIN with its environment (staging or main): an older single-key line, or a shell. Run this again with --staging-key FILE --main-key FILE."
+  fi
+  total=$(grep -vE '^[[:space:]]*(#|$)' "$1" | key_blobs | grep -c . || true)
+  distinct=$(grep -vE '^[[:space:]]*(#|$)' "$1" | key_blobs | sort -u | grep -c . || true)
+  [ "$total" = "$distinct" ] \
+    || stop "$1 uses ONE key for both environments: then the staging copy could deploy production. Make a key per environment."
+}
+
+STAGING_KEY=""
+MAIN_KEY=""
 PRINT=""
+PRINT_ENV=""
 PRINT_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --account) shift; ACCOUNT="${1:-}" ;;
-    --deploy-key) shift; DEPLOY_KEY="${1:-}"; [ -n "$DEPLOY_KEY" ] || stop "--deploy-key needs a file" ;;
+    --staging-key) shift; STAGING_KEY="${1:-}"; [ -n "$STAGING_KEY" ] || stop "--staging-key needs a file" ;;
+    --main-key) shift; MAIN_KEY="${1:-}"; [ -n "$MAIN_KEY" ] || stop "--main-key needs a file" ;;
+    --deploy-key) stop "--deploy-key is gone: one key for both environments let staging deploy production. Pass --staging-key FILE and --main-key FILE." ;;
     --print-sudoers) PRINT=sudoers ;;
-    --print-key-line) shift; PRINT=key; PRINT_FILE="${1:-}" ;;
+    --check-keys) shift; PRINT=check; PRINT_FILE="${1:-}" ;;
+    --print-key-line) shift; PRINT=key; PRINT_ENV="${1:-}"; [ $# -gt 0 ] && shift; PRINT_FILE="${1:-}" ;;
     *) stop "unknown option $1 (see the top of this script)" ;;
   esac
-  shift
+  [ $# -gt 0 ] && shift
 done
 [[ "$ACCOUNT" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || stop "'$ACCOUNT' is not a valid account name."
 [ "$ACCOUNT" != root ] || stop "the deploy account must never be root."
 
 case "$PRINT" in
   sudoers) sudoers_rule; exit 0 ;;
-  key) key_line "$PRINT_FILE"; exit 0 ;;
+  key) key_line "$PRINT_ENV" "$PRINT_FILE"; exit 0 ;;
+  check) [ -f "$PRINT_FILE" ] || stop "$PRINT_FILE does not exist."; check_keys "$PRINT_FILE"; say "$PRINT_FILE: every key is forced to its own environment."; exit 0 ;;
 esac
 
 # Everything below changes accounts, sudoers and a program root runs.
@@ -139,30 +188,41 @@ if ! visudo -c >/dev/null 2>&1; then
   rm -f "$SUDOERS"
   stop "sudo's whole configuration did not validate with $SUDOERS in it; removed it again."
 fi
-say "[3/5] $SUDOERS lets $ACCOUNT run $DEPLOY_BIN, with no arguments, as root."
+say "[3/5] $SUDOERS lets $ACCOUNT run '$DEPLOY_BIN staging' and '$DEPLOY_BIN main', nothing else, as root."
 
 # ── 4. the key ───────────────────────────────────────────────────────────────────────────────
 home=$(getent passwd "$ACCOUNT" | cut -d: -f6)
 ssh_dir="$home/.ssh"
 keys="$ssh_dir/authorized_keys"
-if [ -n "$DEPLOY_KEY" ]; then
-  line=$(key_line "$DEPLOY_KEY")
+if [ -n "$STAGING_KEY$MAIN_KEY" ]; then
+  # The new file: the given environment(s)' lines, and the other environment's existing line kept.
+  new=$(mktemp)
+  for env in $ENVIRONMENTS; do
+    file=$STAGING_KEY; [ "$env" = main ] && file=$MAIN_KEY
+    if [ -n "$file" ]; then
+      key_line "$env" "$file" >> "$new"
+    elif [ -f "$keys" ]; then
+      lines_for "$env" "$keys" >> "$new" || true
+    fi
+  done
+  ( check_keys "$new" ) || { rm -f "$new"; exit 1; }
   install -d -o "$ACCOUNT" -g "$ACCOUNT" -m 0700 "$ssh_dir"
-  printf '%s\n' "$line" > "$keys"
-  chown "$ACCOUNT": "$keys"
-  chmod 600 "$keys"
-  say "[4/5] $ACCOUNT's authorized_keys is now the one forced deploy key."
+  install -o "$ACCOUNT" -g "$ACCOUNT" -m 0600 "$new" "$keys"
+  rm -f "$new"
+  say "[4/5] $ACCOUNT's authorized_keys was rewritten with the forced deploy key(s) given."
 fi
 if [ -f "$keys" ]; then
-  # Every key of this account must be forced to the deploy program, so none of them is a shell.
-  if grep -vE '^[[:space:]]*(#|$)' "$keys" | grep -vqF "$FORCED "; then
-    stop "$keys holds a key that is not forced to $DEPLOY_BIN. Remove it, or run this again with --deploy-key FILE."
-  fi
-  [ -n "$DEPLOY_KEY" ] || say "[4/5] every key of $ACCOUNT is forced to $DEPLOY_BIN."
+  # Every key of this account must be forced to the deploy program with its environment, so none of
+  # them is a shell and the staging key never reaches production.
+  check_keys "$keys"
+  for env in $ENVIRONMENTS; do
+    lines_for "$env" "$keys" | grep -q . || say "WARNING: $ACCOUNT has no $env key yet; that environment cannot deploy. Run this again with --$env-key FILE."
+  done
+  say "[4/5] every key of $ACCOUNT is forced to $DEPLOY_BIN with its own environment."
 else
-  say "[4/5] $ACCOUNT has no deploy key yet. Run this again with --deploy-key FILE (the .pub), or put"
-  say "      exactly this line, with the public key filled in, in $keys:"
-  say "      $FORCED ssh-ed25519 AAAA... tool-deploy"
+  say "[4/5] $ACCOUNT has no deploy keys yet. Run this again with --staging-key FILE --main-key FILE"
+  say "      (the .pub files), or put exactly these lines, with the public keys filled in, in $keys:"
+  for env in $ENVIRONMENTS; do say "      $(forced "$env") ssh-ed25519 AAAA... tool-deploy-$env"; done
 fi
 
 # ── 5. can sshd let it in? ───────────────────────────────────────────────────────────────────
@@ -183,5 +243,7 @@ for f in /etc/ssh/ssh_host_ecdsa_key.pub /etc/ssh/ssh_host_ed25519_key.pub; do
 done
 
 say ""
-say "Next (deploy/README.md): the GitHub repository secrets VPS_DEPLOY_USER = $ACCOUNT,"
-say "VPS_DEPLOY_KEY = the deploy key's private half, VPS_FINGERPRINT = the SHA256:... above."
+say "Next (deploy/README.md, step 4): ENVIRONMENT secrets, never repository secrets. In BOTH the"
+say "staging and the Production environment: VPS_DEPLOY_USER = $ACCOUNT, VPS_FINGERPRINT = the"
+say "SHA256:... above; VPS_DEPLOY_KEY = the staging key's private half in staging ONLY, the main"
+say "key's private half in Production ONLY. Deployment branches: staging -> staging, Production -> main."
