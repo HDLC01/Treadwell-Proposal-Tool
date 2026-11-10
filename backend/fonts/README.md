@@ -32,8 +32,8 @@ past the commit that untracked them (the VPS checkouts too, at their next `git p
 * **VPS (staging and prod):** `/opt/treadwell-fonts/` on the host. Both compose files bind-mount
   that directory read-only onto `/usr/share/fonts/truetype/treadwell` in the container, where
   LibreOffice (PDF export) and `GET /api/proposal-font/{name}` (the editor) both read it.
-  Every deploy path (the staging and prod steps of `.github/workflows/deploy.yml`, and
-  `deploy/ship.sh`) first copies a file that is missing there from its own checkout's
+  Every deploy path (the CI deploy's program on the box, `deploy/remote-deploy.sh`, for staging
+  and prod, and `deploy/ship.sh`) first copies a file that is missing there from its own checkout's
   `backend/fonts/`, then refuses to go on while either file is still missing. The copy matters
   once: before the first pull past this change, the VPS checkouts still track the files and that
   pull deletes them. After that, a new box needs them copied in from Dropbox.

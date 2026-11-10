@@ -70,7 +70,10 @@ Deploys are CD (`.github/workflows/deploy.yml`): a push to `main` builds the ima
 runner and, once the `production` environment is approved, the VPS only pulls it. **A push that
 got no deploy** (it happens: #439 got no push event) is re-run from the Actions tab (**Deploy**,
 `workflow_dispatch`), or shipped with `bash deploy/ship.sh`. Never `docker compose up -d --build`
-on the VPS: building there browns out every site on the box.
+on the VPS: building there browns out every site on the box. The workflow does not log in as root:
+it sends one request line to a box account whose key can run only `deploy/remote-deploy.sh`
+(installed by `deploy/install-deploy-account.sh`), which pulls, health-checks and rolls back by
+itself. `deploy/README.md` is that runbook.
 
 **The proposal font comes first.** Zetta Serif is licensed, so since 2026-09-26 neither git nor
 the image carries it: compose mounts `/opt/treadwell-fonts` from the host, and a checkout's first
@@ -78,7 +81,8 @@ the image carries it: compose mounts `/opt/treadwell-fonts` from the host, and a
 With the host directory missing or empty the app still boots and passes `/healthz`, and every PDF
 prints in a substitute font. Every deploy path above keeps the checkout's copy and refuses to go on
 without the files; anything run by hand on the box must do the same, before its pull. This is the
-block `deploy.yml` runs, inside one `bash` so a refusal ends the deploy and not your SSH session:
+block the CI deploy runs on the box (`deploy/remote-deploy.sh`), inside one `bash` so a refusal ends
+the deploy and not your SSH session:
 
 ```bash
 # on the VPS: prod, by hand
