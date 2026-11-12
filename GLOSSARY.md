@@ -59,6 +59,39 @@ The pipeline for Projects where the Customer is the owner.
 **GC**:
 The pipeline for Projects where the Customer is a general contractor.
 
+### Scheduling
+
+**Project Calendar**:
+The schedule of crews on Treadwell's jobs, and the deadlines those jobs must meet.
+_Avoid_: Schedule, ops calendar
+
+**Duration**:
+The stretch of days a job is booked for on the Project Calendar, marked in red.
+
+**Deadline**:
+The last day of a job's Duration: the day the work must be finished.
+_Avoid_: Due date, end date
+
+**Job number**:
+The number a Project receives once it is going ahead, such as 26.125, used to name it on the Project Calendar and in accounting.
+_Avoid_: Project number, job no.
+
+**Mobilization**:
+One continuous stretch of a crew on site for a job. A job may take several Mobilizations ("1st Mob", "2nd Mob").
+_Avoid_: Mob (in writing), phase, visit
+
+**Punch**:
+A short Mobilization after the main work to fix or finish items on the Customer's punch list.
+_Avoid_: Touch-up
+
+**Crew size**:
+How many people a Mobilization puts on site each workday.
+_Avoid_: Headcount, guys
+
+**Crew lead**:
+The person in charge of a crew on site, named on its Mobilization.
+_Avoid_: Lead (that is an inbound opportunity), foreman
+
 ### Outcomes
 
 Each outcome belongs to one Scope. A Project has no outcome of its own.

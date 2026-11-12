@@ -501,6 +501,11 @@
       navItem("/leads.html", "inbox", "Lead Inbox") +
       navItem("/crm.html", "funnel", "Bid Pipeline") +
       navItem("/calendar.html", "calendar", "Bid Calendar") +
+      // THE CREWS' SCHEDULE, read only from the "Treadwell Projects" Google calendar. Directly under
+      // the Bid Calendar because it is the same question one stage later: that one is "what is due
+      // to bid", this one is "where are the crews, and what must be finished when". The glyph is
+      // `table` (a schedule grid), since `calendar` is the Bid Calendar's and no two rows share one.
+      navItem("/project-calendar.html", "table", "Project Calendar") +
       // THE LOOK-BACK PAGES. These four had three headings between them until 2026-08-25 -
       // Analytics, Database, Records - and none of the three earned a line of its own. Their ORDER still
       // carries the decision that arranged them: Analytics above the Proposals Database at Hanz's ask on

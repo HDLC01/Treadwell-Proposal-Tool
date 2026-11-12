@@ -93,6 +93,7 @@ import v2_pipeline
 import price_rules
 import pricing
 import profiles
+import project_calendar
 import proposal_fonts
 import proposal_writer
 import pull_window
@@ -990,6 +991,19 @@ def api_calendar_delete(event_id: str, request: Request) -> Dict[str, Any]:
     # Soft delete — a calendar is a work queue, and a destroyed bid deadline could cost a
     # job. The row keeps its deleted_at and can be brought back by hand.
     return {"ok": True, "deleted": event_id}
+
+
+# ── Project Calendar ──────────────────────────────────────────────────────────
+# The crews' job schedule, read from ONE Google calendar (PROJECT_CALENDAR_ID) and never written.
+# Separate from the Bid Calendar above, which is BasisBoard's. Everything lives in
+# backend/project_calendar.py; this route only turns a bad range into a 400. A Google failure is
+# a 200 with stale:true or an error message, never a 500 (see that module's docstring).
+@app.get("/api/project-calendar")
+def api_project_calendar(start: str = "", end: str = "") -> Dict[str, Any]:
+    try:
+        return project_calendar.fetch(start, end)
+    except project_calendar.RangeError as exc:
+        raise HTTPException(400, str(exc))
 
 
 # ── Item Library ──────────────────────────────────────────────────────────────
