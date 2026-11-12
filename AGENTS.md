@@ -390,3 +390,19 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Feature workflow
+
+Every new feature follows these steps in order. Steps 1 to 3 happen before any code is written. Steps 4 to 9 repeat for each ticket.
+
+1. `/grill-with-docs`: interview until every decision is settled, updating `GLOSSARY.md` as terms are resolved.
+2. `/to-spec`: publish the spec as a GitHub issue labelled `ready-for-agent`. Questions nobody answered are listed as open questions, not filled in with quiet defaults.
+3. `/to-tickets`: split the spec into vertical-slice issues.
+4. `/implement`: build ONE ticket test-first, on a branch cut from `staging`.
+5. `/code-review`: review the branch against the repo's standards and its ticket. Fix the findings and run it again until it is clean. Do this before pushing.
+6. Push, then `/pr`: open a PR into `staging` whose body names the ticket ("Closes #N"). One ticket per PR.
+7. When CI is green with no code-scanning alerts, merge to `staging`, confirm the Deploy run, and wake staging.
+8. Hanz checks it on staging, on a Test project only.
+9. Promote to prod only on Hanz's go.
+
+If a step is skipped, say which one and what it leaves undecided. When CI or staging shows a bug, use `/diagnosing-bugs` instead of guessing. Bug fixes and small changes are not features.

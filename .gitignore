@@ -31,6 +31,13 @@ ENV/
 .env.local
 .env.*.local
 .env.staging
+# Google credentials for the Project Calendar: keys, OAuth clients and the sign-in file
+# made by backend/google_calendar_oauth.py. They belong in the host .env, never in git.
+*service-account*.json
+*service_account*.json
+*client_secret*.json
+*client-secret*.json
+.google-calendar-oauth*.env
 
 # IDE
 .idea/
