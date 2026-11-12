@@ -430,3 +430,27 @@ def test_the_deadline_list_says_when_it_could_not_load():
     assert "Couldn't load Deadlines. " in js
     assert "P.upcomingDeadlines(visible(SIDE.events), TODAY, SIDE_DAYS)" in js
     assert "P.centralStamp(SIDE.fetched_at)" in js
+
+
+def test_the_servers_message_reaches_the_screen_when_there_are_bars():
+    """A free/busy-only calendar, or a stale copy after the Google sign-in was revoked, comes with
+    bars AND a message saying what to fix. With no bars the state box shows it; with bars the
+    alert line must, as text, never markup."""
+    js = _page_js()
+    assert "if (current.error && events.length) notice.push(String(current.error));" in js
+    assert "showAlert(notice.join(\" \"));" in js
+    assert '$("alert").textContent = text' in js
+    assert "if (!events.length && current.error)" in js
+
+
+def test_a_notice_rides_beside_the_grid_and_never_reads_as_a_failed_read():
+    """A free/busy-only read that worked comes back with `notice`, not `error`. An empty month read
+    that way must draw its empty weeks with the notice in the alert line, not the "Couldn't read
+    the calendar" box, and the Deadlines list must not say "Couldn't load"."""
+    js = _page_js()
+    assert "if (current.notice) notice.push(String(current.notice));" in js
+    i = js.index("if (!events.length && current.error)")
+    assert "notice" not in js[i:js.index("\n", i)], "the failure box keys on a notice"
+    j = js.index("Couldn't load Deadlines. \" + esc(SIDE.error)")
+    assert "notice" not in js[js.rfind("\n", 0, j - 80):j]
+    assert "cached.notice" in js, "a changed notice must repaint"

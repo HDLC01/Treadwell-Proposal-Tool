@@ -7,8 +7,8 @@
 // version of the truth. A bar opens a details panel, and the panel's one way out is "Open in
 // Google Calendar".
 //
-// WHAT THE SERVER HAS ALREADY DONE (GET /api/project-calendar). It reads that one calendar with a
-// service account, parses each free-text title into Job number, Crew size, Mobilization, Crew lead
+// WHAT THE SERVER HAS ALREADY DONE (GET /api/project-calendar). It reads that one calendar as the
+// connected Google account, parses each free-text title into Job number, Crew size, Mobilization, Crew lead
 // and flags, and turns Google's dates into inclusive Central days. When the calendar is not
 // connected it says so (connected:false) and this page shows a plain message, not an error. When
 // Google fails it serves the last good copy with stale:true, and this page says when that copy is
@@ -254,7 +254,8 @@
     const cached = CACHE[key] || null;
     const loadErr = ERR[key] || "";
     const sig = JSON.stringify([key, MODE, Q, DUR, TODAY, loadErr, CONNECTED,
-      cached && [cached.connected, cached.stale, cached.fetched_at, cached.error, cached.events],
+      cached && [cached.connected, cached.stale, cached.fetched_at, cached.error, cached.notice,
+        cached.events],
       SIDE && [SIDE.fetched_at, SIDE.events]]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
@@ -304,16 +305,22 @@
     const events = current.events || [];
 
     // The stale notice wins over the refresh-failed one: either way the bars are a saved copy,
-    // and "from when" is the useful part.
+    // and "from when" is the useful part. The server's `error` (the read FAILED, e.g. a sign-in
+    // to reconnect) follows whenever there are bars to show; with no bars the state box below
+    // says it instead. The server's `notice` (the read WORKED but hides something, e.g. free/busy
+    // access) always goes here, never in the failure box: an empty month read that way is still
+    // an empty month. textContent: never markup.
+    const notice = [];
     if (current.stale) {
       const at = P.centralStamp(current.fetched_at);
-      showAlert(at ? "Showing the last copy from " + at + " (Central)."
-                   : "Showing the last copy of the Project Calendar.");
+      notice.push(at ? "Showing the last copy from " + at + " (Central)."
+                    : "Showing the last copy of the Project Calendar.");
     } else if (loadErr) {
-      showAlert("Couldn't refresh just now (" + loadErr + "). Showing what was loaded before.");
-    } else {
-      showAlert("");
+      notice.push("Couldn't refresh just now (" + loadErr + "). Showing what was loaded before.");
     }
+    if (current.error && events.length) notice.push(String(current.error));
+    if (current.notice) notice.push(String(current.notice));
+    showAlert(notice.join(" "));
 
     if (!events.length && current.error) {
       showState("<b>Couldn't read the Treadwell Projects calendar</b>" + esc(current.error));
