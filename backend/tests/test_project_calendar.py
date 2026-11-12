@@ -30,7 +30,7 @@ import nav_access
 import project_calendar as pc
 import supabase_client
 
-CAL_ID = "made-up-crew-schedule@group.calendar.example"
+CAL_ID = "made-up-crew-schedule@group.calendar.google.com"
 URL = "/api/project-calendar"
 
 
@@ -786,7 +786,8 @@ SA_KEY = {"client_email": "reader@made-up.iam.example", "private_key": _PEM, "pr
 
 @pytest.fixture
 def fresh_source_slot(monkeypatch):
-    monkeypatch.setattr(pc, "_SOURCE", {"key": None, "source": None, "warned": None})
+    monkeypatch.setattr(pc, "_SOURCE", {"key": None, "source": None})
+    monkeypatch.setattr(pc, "_PARTIAL_WARNED", set())
 
 
 @pytest.fixture
@@ -926,9 +927,10 @@ def _fail(fake, how):
         fake.events_error = {"error": {"code": fake.events_status, "message": "made-up"}}
 
 
-RECONNECT = "The Google sign-in for the Project Calendar has expired or was removed. Reconnect it."
-API_OFF = ("The Google Calendar API is turned off in the Google Cloud project the Project "
-           "Calendar connects through. Turn it on under APIs & Services > Library.")
+RECONNECT = ("The Google sign-in for the Project Calendar has expired or was removed. An admin "
+             "needs to reconnect the Google sign-in.")
+API_OFF = ("The Google Calendar API is turned off for the Project Calendar's Google sign-in. An "
+           "admin needs to turn it on.")
 
 FAILURES = [
     ("invalid_grant", RECONNECT),
@@ -939,7 +941,7 @@ FAILURES = [
     ("token_401_unauthorized_client", RECONNECT),
     ("events_403_api_off", API_OFF),
     ("events_403_service_disabled", API_OFF),
-    ("events_404", "The Treadwell Projects calendar isn't shared with the connected Google account."),
+    ("events_404", "The Treadwell Projects calendar isn't shared with the connected Google account. An admin needs to share it with that account."),
     ("events_403", "The connected Google account isn't allowed to read the Treadwell Projects calendar."),
     ("events_403_rate", "Google Calendar could not be reached."),
     ("events_500", "Google Calendar could not be reached."),
@@ -987,9 +989,9 @@ def test_a_refusal_keeps_its_message_through_the_backoff(client, oauth_google, h
     assert second["error"] == first["error"] != pc._ERR_UPSTREAM
 
 
-FREE_BUSY = ("The Treadwell Projects calendar is shared with the connected account as free/busy "
-             "only, so titles and colours are hidden. Connect the Google sign-in as the "
-             "calendar's owner (backend/google_calendar_oauth.py).")
+FREE_BUSY = ("The connected Google account can only see free/busy times on this calendar, so "
+             "titles and colours are hidden. An admin needs to reconnect the sign-in as the "
+             "calendar's owner.")
 
 
 def test_free_busy_access_keeps_the_events_and_says_how_to_fix_it(client, oauth_google, monkeypatch):
@@ -1143,3 +1145,122 @@ def test_the_service_account_never_says_reconnect_the_sign_in(client, google, st
 def test_the_service_account_reads_an_api_that_is_off_the_same_way(client, google):
     _fail(google, "events_403_api_off")
     assert get(client)["error"] == API_OFF
+
+
+# ── review fixes, round three ────────────────────────────────────────────────
+@pytest.mark.parametrize("reason", sorted(pc.MESSAGES))
+def test_every_staff_message_is_plain_words_with_no_path_or_console_menu(reason):
+    """Staff read these on the page (docs/v2-architecture.md section 5 rule 11). HOW to fix it, the
+    script and the Google Cloud menus, is for the admin: module docstring, .env.example, the
+    script's own output."""
+    text = pc.MESSAGES[reason]
+    for bad in (".py", "backend", ".env", " > ", "APIs & Services", "Library", "\u2014", "\u2013"):
+        assert bad not in text, "%s message carries %r: %s" % (reason, bad, text)
+
+
+def test_the_messages_that_need_an_admin_say_so_and_say_what_to_do():
+    assert "has expired or was removed" in RECONNECT
+    assert "An admin needs to reconnect the Google sign-in." in RECONNECT
+    assert "can only see free/busy times on this calendar" in FREE_BUSY
+    assert "titles and colours are hidden" in FREE_BUSY
+    assert "An admin needs to reconnect the sign-in as the calendar's owner." in FREE_BUSY
+    assert "Google Calendar API is turned off" in API_OFF and "An admin needs to turn it on." in API_OFF
+
+
+def test_how_to_fix_each_message_lives_in_the_module_docstring():
+    doc = pc.__doc__
+    assert "backend/google_calendar_oauth.py" in doc
+    assert "APIs & Services > Library" in doc
+    assert "OWNS the calendar" in doc
+
+
+def test_backing_off_is_a_real_field_of_the_error():
+    assert pc.CalendarError(pc.REASON_SIGNIN).backing_off is False
+    exc = pc.CalendarError(pc.REASON_SIGNIN, "made-up", backing_off=True)
+    assert exc.backing_off is True and exc.reason == pc.REASON_SIGNIN
+
+
+def test_a_backoff_answer_does_not_restart_the_backoff(oauth_google):
+    src = oauth_google.source
+    src._backoff_until = 1e12
+    with pytest.raises(pc.CalendarError) as exc:
+        src.list_events(CAL_ID, "2026-11-01T00:00:00-05:00", "2026-12-01T00:00:00-06:00")
+    assert exc.value.backing_off is True
+    assert src._backoff_until == 1e12, "the wait was restarted by its own answer"
+
+
+def test_the_events_request_and_its_401_retry_share_one_helper(client, oauth_google, monkeypatch):
+    src = oauth_google.source
+    seen = []
+    real = pc._GoogleSource._events_page
+
+    def spy(client_, url, params, token):
+        seen.append(token)
+        return real(client_, url, params, token)
+
+    monkeypatch.setattr(src, "_events_page", spy)
+    oauth_google.events_status = 401
+    get(client)
+    events = [r for r in oauth_google.requests if r.url.host == "www.googleapis.com"]
+    assert len(seen) == len(events) == 2, "a GET was written outside the helper"
+
+
+def test_reading_the_sign_in_config_logs_nothing(monkeypatch, fresh_source_slot, caplog):
+    """_oauth_config only reads; the partial-sign-in warning is _make_source's, kept in its own
+    lock-guarded set, not in the source slot."""
+    _unconfigure(monkeypatch)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", OAUTH["GOOGLE_OAUTH_CLIENT_ID"])
+    with caplog.at_level("WARNING", logger="treadwell.project_calendar"):
+        state, creds, missing = pc._oauth_config()
+    assert (state, creds) == ("partial", None)
+    assert missing == ("GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN")
+    assert "partly configured" not in caplog.text
+    assert "warned" not in pc._SOURCE and pc._PARTIAL_WARNED == set()
+
+
+def test_a_gap_warns_again_once_the_sign_in_was_whole_in_between(monkeypatch, fresh_source_slot,
+                                                                  caplog):
+    _unconfigure(monkeypatch)
+    with caplog.at_level("WARNING", logger="treadwell.project_calendar"):
+        monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", OAUTH["GOOGLE_OAUTH_CLIENT_ID"])
+        assert pc._make_source() is None and pc._make_source() is None
+        assert pc._PARTIAL_WARNED == {("GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN")}
+        _set(monkeypatch, OAUTH)
+        assert isinstance(pc._make_source(), pc.OAuthUserSource)
+        assert pc._PARTIAL_WARNED == set()
+        monkeypatch.delenv("GOOGLE_OAUTH_REFRESH_TOKEN")
+        assert pc._make_source() is None
+    warnings = [r for r in caplog.records if "partly configured" in r.getMessage()]
+    assert len(warnings) == 2
+
+
+def test_a_partial_sign_in_still_beats_a_service_account_key(monkeypatch, fresh_source_slot):
+    """S4 stays: half a sign-in reads not connected even with a working service-account key."""
+    _unconfigure(monkeypatch)
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", json.dumps(SA_KEY))
+    monkeypatch.setenv("GOOGLE_OAUTH_REFRESH_TOKEN", OAUTH["GOOGLE_OAUTH_REFRESH_TOKEN"])
+    assert pc._make_source() is None
+
+
+# ── code-review round 2: the server holds the one-calendar rule itself ─────────────────────────────
+@pytest.mark.parametrize("bad", ["primary", "PRIMARY", "someone@made-up.example",
+                                 "made-up@group.calendar.google.com.evil.example",
+                                 "made-up@group.calendar.example"])
+def test_the_server_never_reads_a_personal_calendar(client, source, monkeypatch, caplog, bad):
+    """With the OAuth sign-in, "primary" or an address would show Hanz's OWN calendar to staff.
+    The server refuses any id that is not a shared calendar's, says "not connected", never asks
+    Google, and logs the problem once without the value."""
+    monkeypatch.setenv("PROJECT_CALENDAR_ID", bad)
+    pc._BAD_ID_WARNED.clear()
+    with caplog.at_level("WARNING"):
+        body = get(client)
+        get(client)
+    assert body["connected"] is False and body["events"] == []
+    assert source.calls == [], "Google was asked for a personal calendar"
+    warnings = [r for r in caplog.records if "not a shared calendar" in r.getMessage()]
+    assert len(warnings) == 1, "the bad id is logged once, not on every request"
+    assert bad not in caplog.text, "the id may be a person's address; it is never logged"
+
+
+def test_the_not_shared_message_says_what_to_do():
+    assert pc.MESSAGES[pc.REASON_NOT_SHARED].endswith("An admin needs to share it with that account.")

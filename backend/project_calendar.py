@@ -48,6 +48,16 @@ and served with stale:true; with nothing to fall back on the answer is ok:true, 
 short plain error. `error` is set ONLY when the read failed; a read that worked but hides what the
 page is for (free/busy access) says so in `notice` instead, so an empty month read that way is an
 empty month, not a failure. Version 1 stores nothing of its own and never writes to Google.
+
+WHAT THE PAGE SAYS, AND WHAT AN ADMIN DOES ABOUT IT. The MESSAGES are for staff: plain words, no
+file paths, no console menus. The fix for each lives here, in .env.example and in the setup
+script's own output:
+  * "expired or was removed" (signin_revoked): run backend/google_calendar_oauth.py again, signed
+    in as the calendar's owner, and replace the three GOOGLE_OAUTH_* lines in the host .env.
+  * "free/busy times" (free_busy): the connected account is not the owner. Run the same script
+    signed in with the Google account that OWNS the calendar.
+  * "API is turned off" (api_disabled): in the Google Cloud project that holds the OAuth client,
+    APIs & Services > Library > "Google Calendar API" > Enable.
 """
 from __future__ import annotations
 
@@ -58,7 +68,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Protocol, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Protocol, Set, Tuple
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -109,19 +119,18 @@ _ERR_UPSTREAM = "Google Calendar could not be reached."
 MESSAGES: Dict[str, str] = {
     REASON_UPSTREAM: _ERR_UPSTREAM,
     REASON_SIGNIN: ("The Google sign-in for the Project Calendar has expired or was removed. "
-                    "Reconnect it."),
+                    "An admin needs to reconnect the Google sign-in."),
     REASON_NOT_SHARED: ("The Treadwell Projects calendar isn't shared with the connected Google "
-                        "account."),
+                        "account. An admin needs to share it with that account."),
     REASON_FORBIDDEN: ("The connected Google account isn't allowed to read the Treadwell Projects "
                        "calendar."),
     # The Workspace policy caps sharing with outside accounts at free/busy, so "share it with
     # more" cannot be followed; connecting as the calendar's owner can.
-    REASON_FREE_BUSY: ("The Treadwell Projects calendar is shared with the connected account as "
-                       "free/busy only, so titles and colours are hidden. Connect the Google "
-                       "sign-in as the calendar's owner (backend/google_calendar_oauth.py)."),
-    REASON_API_OFF: ("The Google Calendar API is turned off in the Google Cloud project the "
-                     "Project Calendar connects through. Turn it on under APIs & Services > "
-                     "Library."),
+    REASON_FREE_BUSY: ("The connected Google account can only see free/busy times on this "
+                       "calendar, so titles and colours are hidden. An admin needs to reconnect "
+                       "the sign-in as the calendar's owner."),
+    REASON_API_OFF: ("The Google Calendar API is turned off for the Project Calendar's Google "
+                     "sign-in. An admin needs to turn it on."),
 }
 
 # A 403 from Google is also how it says "slow down". Those are a passing outage, not a refusal.
@@ -140,11 +149,14 @@ class RangeError(ValueError):
 
 class CalendarError(RuntimeError):
     """A failed read of the calendar. `reason` is one of the REASON_* codes; the text is for the
-    log only and never holds a key, secret, token or response body."""
+    log only and never holds a key, secret, token or response body. `backing_off` is True when
+    Google was not asked at all because a recent failure is still being waited out, so that
+    failure must not restart the wait."""
 
-    def __init__(self, reason: str, detail: str = ""):
+    def __init__(self, reason: str, detail: str = "", backing_off: bool = False):
         super().__init__(detail or reason)
         self.reason = reason if reason in MESSAGES else REASON_UPSTREAM
+        self.backing_off = backing_off
 
 
 def message_for(exc: BaseException) -> str:
@@ -160,8 +172,32 @@ class EventList(list):
 
 
 # ─── config ───────────────────────────────────────────────────────────────────
+# A shared calendar's id ends with this. "primary", or a person's own address, would read that
+# person's OWN calendar (with the OAuth sign-in, Hanz's), so neither is ever accepted: the same
+# rule backend/google_calendar_oauth.py applies before it opens the browser.
+SHARED_CALENDAR_SUFFIX = "@group.calendar.google.com"
+_BAD_ID_WARNED: set = set()
+_BAD_ID_WARNED_LOCK = threading.Lock()
+
+
+def is_shared_calendar_id(value: str) -> bool:
+    cal = (value or "").strip().lower()
+    return bool(cal) and cal != "primary" and cal.endswith(SHARED_CALENDAR_SUFFIX)
+
+
 def calendar_id() -> str:
-    return (os.environ.get("PROJECT_CALENDAR_ID") or "").strip()
+    """PROJECT_CALENDAR_ID when it names a shared calendar, else "" (the page then says "not
+    connected"). A wrong id is logged once, without its value, which may be someone's address."""
+    raw = (os.environ.get("PROJECT_CALENDAR_ID") or "").strip()
+    if raw and not is_shared_calendar_id(raw):
+        with _BAD_ID_WARNED_LOCK:
+            first = raw not in _BAD_ID_WARNED
+            _BAD_ID_WARNED.add(raw)
+        if first:
+            log.warning("project calendar: PROJECT_CALENDAR_ID is not a shared calendar's id (it "
+                        "must end with %s); not connected", SHARED_CALENDAR_SUFFIX)
+        return ""
+    return raw
 
 
 def _ttl_s() -> float:
@@ -193,25 +229,37 @@ def _service_account_info() -> Optional[Dict[str, Any]]:
     return info
 
 
-def _oauth_config() -> Tuple[str, Optional[Tuple[str, str, str]]]:
-    """("none", None), ("partial", None) or ("full", (client_id, client_secret, refresh_token)).
-
-    A partial setup is logged once per distinct gap, naming the missing variables; no value is
-    ever logged."""
+def _oauth_config() -> Tuple[str, Optional[Tuple[str, str, str]], Tuple[str, ...]]:
+    """What the environment says about the Google sign-in, read only (it logs nothing):
+    ("none", None, ()), ("full", (client_id, client_secret, refresh_token), ()) or
+    ("partial", None, <the names of the missing variables>)."""
     vals = tuple((os.environ.get(name) or "").strip() for name in OAUTH_ENV)
-    if all(vals) or not any(vals):
-        if _SOURCE.get("warned") is not None:
-            with _SOURCE_LOCK:
-                _SOURCE["warned"] = None          # fixed: a later gap is worth a warning again
-        return ("full", (vals[0], vals[1], vals[2])) if all(vals) else ("none", None)
-    missing = tuple(name for name, v in zip(OAUTH_ENV, vals) if not v)
-    with _SOURCE_LOCK:
-        warned = _SOURCE.get("warned") == missing
-        _SOURCE["warned"] = missing
-    if not warned:
+    if all(vals):
+        return "full", (vals[0], vals[1], vals[2]), ()
+    if not any(vals):
+        return "none", None, ()
+    return "partial", None, tuple(name for name, v in zip(OAUTH_ENV, vals) if not v)
+
+
+# The partial-sign-in gaps already logged, so a half-finished setup warns once per distinct gap,
+# not on every request. Emptied once the setup is whole (or gone), so a later gap warns again.
+_PARTIAL_WARNED: Set[Tuple[str, ...]] = set()
+_PARTIAL_WARNED_LOCK = threading.Lock()
+
+
+def _warn_partial_once(missing: Tuple[str, ...]) -> None:
+    """Log a partial sign-in once per distinct gap, naming the missing variables, never a value."""
+    with _PARTIAL_WARNED_LOCK:
+        first = missing not in _PARTIAL_WARNED
+        _PARTIAL_WARNED.add(missing)
+    if first:
         log.warning("project calendar: the Google sign-in is only partly configured (%s missing), "
                     "so the calendar is not connected", ", ".join(missing))
-    return "partial", None
+
+
+def _forget_partial_warnings() -> None:
+    with _PARTIAL_WARNED_LOCK:
+        _PARTIAL_WARNED.clear()
 
 
 # ─── the source seam ──────────────────────────────────────────────────────────
@@ -285,9 +333,8 @@ class _GoogleSource:
 
     def _backing_off(self) -> CalendarError:
         # Say the same thing the failure said: a revoked sign-in stays "reconnect it".
-        exc = CalendarError(self._backoff_reason, "backing off after a recent Google failure")
-        exc.backing_off = True            # type: ignore[attr-defined]
-        return exc
+        return CalendarError(self._backoff_reason, "backing off after a recent Google failure",
+                             backing_off=True)
 
     def _note_failure(self, exc: BaseException) -> None:
         self._backoff_reason = exc.reason if isinstance(exc, CalendarError) else REASON_UPSTREAM
@@ -348,9 +395,15 @@ class _GoogleSource:
         try:
             return self._list_events(calendar_id, time_min, time_max)
         except Exception as exc:
-            if not getattr(exc, "backing_off", False):
+            if not (isinstance(exc, CalendarError) and exc.backing_off):
                 self._note_failure(exc)
             raise
+
+    @staticmethod
+    def _events_page(client, url: str, params: Dict[str, str], token: str):
+        """One events.list GET with `token`. The only place the request is written."""
+        return client.get(url, params=params, headers={"Authorization": "Bearer " + token,
+                                                       "Accept": "application/json"})
 
     def _list_events(self, calendar_id: str, time_min: str, time_max: str) -> EventList:
         url = "%s/calendars/%s/events" % (API_BASE, quote(calendar_id, safe=""))
@@ -365,19 +418,15 @@ class _GoogleSource:
                           "timeMax": time_max, "maxResults": str(_PAGE_SIZE)}
                 if page_token:
                     params["pageToken"] = page_token
-                resp = client.get(url, params=params,
-                                  headers={"Authorization": "Bearer " + token,
-                                           "Accept": "application/json"})
+                resp = self._events_page(client, url, params, token)
                 if resp.status_code == 401 and not retried:
                     # A token revoked early (the app's access removed, say): forget it and mint
-                    # once more in this request, so a dead sign-in reads "Reconnect it" now
+                    # once more in this request, so a dead sign-in says so (an admin must reconnect it) now
                     # rather than "could not be reached" for a backoff window first.
                     retried = True
                     self._drop_token(token)
                     token = self._access_token(client)
-                    resp = client.get(url, params=params,
-                                      headers={"Authorization": "Bearer " + token,
-                                               "Accept": "application/json"})
+                    resp = self._events_page(client, url, params, token)
                 if resp.status_code == 401:
                     self._drop_token(token)       # the next request mints a fresh one
                 if resp.status_code == 404:
@@ -434,7 +483,7 @@ class OAuthUserSource(_GoogleSource):
 
     # A revoked or expired refresh token (invalid_grant), and a deleted, rotated or mistyped
     # OAuth client (invalid_client, deleted_client, unauthorized_client): re-running
-    # backend/google_calendar_oauth.py is the only fix, so the page says "Reconnect it".
+    # backend/google_calendar_oauth.py is the only fix, so the page says an admin needs to reconnect the sign-in.
     _SIGNIN_ERRORS = frozenset({"invalid_grant", "invalid_client", "deleted_client",
                                 "unauthorized_client"})
 
@@ -451,8 +500,8 @@ class OAuthUserSource(_GoogleSource):
 
 
 # One real source per process, so its token cache survives between requests. Rebuilt when the
-# configuration in the environment changes. "warned" is the last partial-sign-in gap logged.
-_SOURCE: Dict[str, Any] = {"key": None, "source": None, "warned": None}
+# configuration in the environment changes.
+_SOURCE: Dict[str, Any] = {"key": None, "source": None}
 _SOURCE_LOCK = threading.Lock()
 
 
@@ -462,9 +511,11 @@ def _make_source() -> Optional[CalendarSource]:
     A full Google sign-in wins over a service account; a partial one connects nothing, so a
     half-finished switch never falls back to the account that only sees free/busy. Tests
     replace this."""
-    state, oauth = _oauth_config()
+    state, oauth, missing = _oauth_config()
     if state == "partial":
+        _warn_partial_once(missing)
         return None
+    _forget_partial_warnings()
     if oauth is not None:
         key: Tuple[Any, ...] = ("oauth",) + oauth
         build = lambda: OAuthUserSource(*oauth)  # noqa: E731
@@ -648,7 +699,8 @@ def parse_range(start: Any, end: Any) -> Tuple[_dt.date, _dt.date]:
     return first, last
 
 
-def _rfc3339_midnight(day: _dt.date) -> str:
+def rfc3339_midnight(day: _dt.date) -> str:
+    """Central midnight at the start of `day`, RFC 3339 (the offset follows DST)."""
     return _dt.datetime(day.year, day.month, day.day, tzinfo=CENTRAL).isoformat()
 
 
@@ -772,8 +824,8 @@ def fetch(start: Any, end: Any) -> Dict[str, Any]:
         fetched_at, events, notice = cached[1], cached[2], cached[3]
     else:
         try:
-            raw = source.list_events(cal, _rfc3339_midnight(first),
-                                     _rfc3339_midnight(last + _dt.timedelta(days=1)))
+            raw = source.list_events(cal, rfc3339_midnight(first),
+                                     rfc3339_midnight(last + _dt.timedelta(days=1)))
             # Free/busy access is a read that worked but hides what the page is for: keep the
             # (title-less, colourless) blocks Google sent and say how to fix it, as a notice.
             notice = (MESSAGES[REASON_FREE_BUSY]

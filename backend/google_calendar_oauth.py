@@ -20,9 +20,20 @@ token, reads the Project Calendar once to prove it works, and writes three lines
     GOOGLE_OAUTH_CLIENT_SECRET=...
     GOOGLE_OAUTH_REFRESH_TOKEN=...
 
-to --out (default: .google-calendar-oauth.env at the repo root, git-ignored), owner-only where the
-OS allows it. Copy those lines into the host .env. The calendar id comes from --calendar-id or
-PROJECT_CALENDAR_ID.
+to --out, owner-only where the OS allows it. The default is OUTSIDE the repo, in your home folder:
+~/.treadwell/google-calendar-oauth.env (the folder is made owner-only too). An --out inside the
+repo is refused unless git ignores it (checked with `git check-ignore`; without git, refused), so
+the secrets cannot end up in a commit of this public repo. Copy the lines into the host .env.
+
+The calendar id comes from --calendar-id or PROJECT_CALENDAR_ID. It must be the shared Project
+Calendar's own id, which ends with @group.calendar.google.com (Google Calendar > the calendar's
+Settings > Integrate calendar > Calendar ID). "primary", anyone's own main calendar, is refused
+before the browser opens.
+
+When the server's Project Calendar page reports a problem, the fix is:
+  * the sign-in "has expired or was removed": run this script again and replace the three lines;
+  * "can only see free/busy times": run it again, signed in as the calendar's OWNER;
+  * "the Google Calendar API is turned off": step 1 above, in the project that holds the client.
 
 It prints the file's PATH, never its contents: no client secret, code, access token or refresh
 token is ever printed. The browser wait gives up after five minutes.
@@ -37,17 +48,19 @@ import http.server
 import json
 import os
 import secrets
+import subprocess
 import sys
 import time
 import urllib.parse
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
-DEFAULT_OUT = Path(__file__).resolve().parent.parent / ".google-calendar-oauth.env"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SHARED_CALENDAR_SUFFIX = "@group.calendar.google.com"
 WAIT_S = 5 * 60
 
 _CLOSE_PAGE = (b"<!doctype html><meta charset=utf-8><title>Project Calendar</title>"
@@ -150,19 +163,76 @@ def check_tokens(tokens: Mapping[str, Any]) -> str:
     return refresh
 
 
+def check_calendar_id(calendar_id: Optional[str]) -> str:
+    """The Project Calendar's id, or a SetupError. Only a shared calendar's id is accepted (it
+    ends with @group.calendar.google.com): "primary", or anyone's own address, would read a
+    person's own calendar instead."""
+    cal = (calendar_id or "").strip()
+    if not cal:
+        raise SetupError("No calendar to check: pass --calendar-id or set PROJECT_CALENDAR_ID.")
+    if cal.lower() == "primary" or not cal.lower().endswith(SHARED_CALENDAR_SUFFIX):
+        raise SetupError("That is not the Project Calendar's id. Use the shared calendar's own id, "
+                         "which ends with %s (Google Calendar > the calendar's Settings > "
+                         "Integrate calendar > Calendar ID). \"primary\", your own main calendar, "
+                         "is never read. Nothing was saved." % SHARED_CALENDAR_SUFFIX)
+    return cal
+
+
+def default_out() -> Path:
+    """Where the three lines go by default: the home folder, outside any repo."""
+    return Path.home() / ".treadwell" / "google-calendar-oauth.env"
+
+
+def check_out_path(path: Path, repo: Path = REPO_ROOT,
+                   run: Callable[..., Any] = subprocess.run) -> Path:
+    """The absolute --out path, or a SetupError when it is inside the repo and git does not ignore
+    it (this repo is public). Asked of git itself (`git check-ignore -q`); if git cannot answer, a
+    path inside the repo is refused. A path outside the repo is never checked."""
+    target = Path(path).expanduser().resolve()
+    root = Path(repo).resolve()
+    try:
+        rel = target.relative_to(root)
+    except ValueError:
+        return target
+    try:
+        done = run(["git", "check-ignore", "-q", rel.as_posix()], cwd=str(root),
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=15)
+        ignored = done.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ignored = False
+    if not ignored:
+        raise SetupError("%s is inside the repository and git does not ignore it, so the secrets "
+                         "could end up in a commit. Nothing was saved. Leave --out off (the "
+                         "default is %s) or pick a folder outside the repository."
+                         % (target, default_out()))
+    return target
+
+
 def env_text(client_id: str, client_secret: str, refresh_token: str) -> str:
     return ("GOOGLE_OAUTH_CLIENT_ID=%s\nGOOGLE_OAUTH_CLIENT_SECRET=%s\n"
             "GOOGLE_OAUTH_REFRESH_TOKEN=%s\n" % (client_id, client_secret, refresh_token))
 
 
+def _ensure_folder(folder: Path) -> None:
+    """Make `folder` (and its parents) when missing. A folder made here is owner-only where the
+    OS supports it (0700 on POSIX); one that already exists is left as it is."""
+    if folder.is_dir():
+        return
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == "posix":
+        os.chmod(str(folder), 0o700)
+
+
 def write_env_file(path: Path, text: str) -> Path:
     """Write the three lines, owner-only where the OS supports it (0600 on POSIX; on Windows the
-    file keeps the folder's permissions). Returns the absolute path.
+    file keeps the folder's permissions). A missing folder is made owner-only too. Returns the
+    absolute path.
 
     An existing file keeps its old mode through os.open, so the mode is narrowed on the open
     descriptor BEFORE anything is written: a 0644 file never holds the secrets."""
     path = Path(path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_folder(path.parent)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     if hasattr(os, "fchmod"):             # POSIX; Windows (before 3.13) has none and needs none
         try:
@@ -176,14 +246,21 @@ def write_env_file(path: Path, text: str) -> Path:
     return path
 
 
+def _server():
+    """The server's own project_calendar module, so the check reads the way the page does."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import project_calendar
+    return project_calendar
+
+
 def month_bounds(today: _dt.date) -> Tuple[str, str]:
     """[first of this month, first of next month) at Central midnight, RFC 3339."""
-    from zoneinfo import ZoneInfo
-    central = ZoneInfo("America/Chicago")
+    pc = _server()
     first = today.replace(day=1)
     nxt = (first + _dt.timedelta(days=32)).replace(day=1)
-    return (_dt.datetime(first.year, first.month, 1, tzinfo=central).isoformat(),
-            _dt.datetime(nxt.year, nxt.month, 1, tzinfo=central).isoformat())
+    return pc.rfc3339_midnight(first), pc.rfc3339_midnight(nxt)
 
 
 def summarize(events: Any) -> Dict[str, Any]:
@@ -218,15 +295,20 @@ def exchange_code(client_id: str, client_secret: str, code: str, verifier: str,
 def verify(client_id: str, client_secret: str, refresh_token: str, calendar_id: str,
            today: Optional[_dt.date] = None, transport: Any = None) -> Dict[str, Any]:
     """Read this month of the one calendar through the server's own OAuthUserSource."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import project_calendar as pc
+    pc = _server()
     src = pc.OAuthUserSource(client_id, client_secret, refresh_token, transport=transport)
     lo, hi = month_bounds(today or pc.today_central())
     try:
         events = src.list_events(calendar_id, lo, hi)
     except Exception as exc:  # noqa: BLE001 — say it plainly, never the exception's text
-        raise SetupError("The sign-in was saved, but reading the calendar failed: %s"
-                         % pc.message_for(exc)) from None
+        # The page's message says WHAT is wrong; here, at the console, also say HOW to fix it.
+        how = {pc.REASON_API_OFF: " Turn it on in Google Cloud, in the project that holds the "
+                                  "OAuth client: APIs & Services > Library > Google Calendar API "
+                                  "> Enable. Then run this script again.",
+               pc.REASON_SIGNIN: " Run this script again."}
+        reason = exc.reason if isinstance(exc, pc.CalendarError) else None
+        raise SetupError("The sign-in was saved, but reading the calendar failed: %s%s"
+                         % (pc.message_for(exc), how.get(reason, ""))) from None
     return summarize(events)
 
 
@@ -278,16 +360,18 @@ def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description="One-time Google sign-in for the Project Calendar.")
     ap.add_argument("--client-file", required=True,
                     help="the OAuth client JSON downloaded from Google Cloud (Desktop app)")
-    ap.add_argument("--out", default=str(DEFAULT_OUT),
-                    help="where to write the three env lines (default: %(default)s)")
+    ap.add_argument("--out", default=None,
+                    help="where to write the three env lines (default: %s, outside the repo; "
+                         "a path inside the repo must be git-ignored)" % default_out())
     ap.add_argument("--calendar-id", default=None,
-                    help="the calendar to check (default: PROJECT_CALENDAR_ID)")
+                    help="the calendar to check, ending with %s (default: PROJECT_CALENDAR_ID)"
+                         % SHARED_CALENDAR_SUFFIX)
     args = ap.parse_args(argv)
 
     try:
-        cal = (args.calendar_id or os.environ.get("PROJECT_CALENDAR_ID") or "").strip()
-        if not cal:
-            raise SetupError("No calendar to check: pass --calendar-id or set PROJECT_CALENDAR_ID.")
+        # Everything that can be refused is refused here, before the browser opens.
+        cal = check_calendar_id(args.calendar_id or os.environ.get("PROJECT_CALENDAR_ID"))
+        out = check_out_path(Path(args.out) if args.out else default_out())
         try:
             text = Path(args.client_file).expanduser().read_text(encoding="utf-8")
         except OSError as exc:
@@ -300,7 +384,7 @@ def main(argv: Optional[list] = None) -> int:
         tokens = exchange_code(client_id, client_secret, code, verifier, redirect_uri)
         refresh = check_tokens(tokens)
 
-        path = write_env_file(Path(args.out), env_text(client_id, client_secret, refresh))
+        path = write_env_file(out, env_text(client_id, client_secret, refresh))
         print("Saved the sign-in to: %s" % path)
         print("Copy its three lines into the host .env, then delete the file.")
 

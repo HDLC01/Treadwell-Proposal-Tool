@@ -16,18 +16,22 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
+import subprocess
 import urllib.parse
 
 import httpx
 import pytest
 
 import google_calendar_oauth as g
+import project_calendar as pc
 
 CLIENT_ID = "made-up-client.apps.example"
 SECRET = "made-up-client-secret-4d2b"
 REFRESH = "made-up-refresh-token-81aa"
 CODE = "made-up-auth-code-55e0"
 ACCESS = "made-up-access-token-0c7d"
+CAL = "made-up-project-calendar@group.calendar.google.com"
 
 
 # ── the consent URL ───────────────────────────────────────────────────────────
@@ -214,12 +218,119 @@ def test_rewriting_the_env_file_replaces_it(tmp_path):
     assert "old stuff" not in p.read_text(encoding="utf-8")
 
 
-def test_the_default_output_is_the_git_ignored_file_at_the_repo_root():
-    assert g.DEFAULT_OUT.name == ".google-calendar-oauth.env"
-    assert (g.DEFAULT_OUT.parent / "backend" / "google_calendar_oauth.py").exists()
+def test_the_default_output_is_in_the_home_folder_outside_the_repo(monkeypatch, tmp_path):
+    real = g.default_out()
+    assert real == pathlib.Path.home() / ".treadwell" / "google-calendar-oauth.env"
+    with pytest.raises(ValueError):
+        real.resolve().relative_to(g.REPO_ROOT.resolve())
+    monkeypatch.setattr(g.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    assert g.default_out() == tmp_path / "home" / ".treadwell" / "google-calendar-oauth.env"
+
+
+def test_a_new_output_folder_is_made_owner_only(tmp_path):
+    p = g.write_env_file(tmp_path / "home" / ".treadwell" / "out.env",
+                         g.env_text(CLIENT_ID, SECRET, REFRESH))
+    assert p.parent.is_dir() and REFRESH in p.read_text(encoding="utf-8")
+    if os.name == "posix":
+        assert (p.parent.stat().st_mode & 0o777) == 0o700
+
+
+def test_main_writes_to_the_home_folder_by_default(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "home"
+    monkeypatch.setattr(g.Path, "home", staticmethod(lambda: home))
+    rc, _out = _run_main(monkeypatch, tmp_path, out=None)
+    want = home / ".treadwell" / "google-calendar-oauth.env"
+    assert rc == 0 and REFRESH in want.read_text(encoding="utf-8")
+    assert str(want.resolve()) in capsys.readouterr().out
+
+
+# ── --out inside the repo ─────────────────────────────────────────────────────
+def test_an_out_inside_the_repo_that_git_does_not_ignore_is_refused():
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append((cmd, kw.get("cwd")))
+        return subprocess.CompletedProcess(cmd, 1)
+
+    with pytest.raises(g.SetupError) as exc:
+        g.check_out_path(g.REPO_ROOT / "backend" / "made-up.env", run=run)
+    assert "inside the repository" in str(exc.value) and "Nothing was saved" in str(exc.value)
+    assert seen == [(["git", "check-ignore", "-q", "backend/made-up.env"], str(g.REPO_ROOT))]
+
+
+def test_an_out_inside_the_repo_that_git_ignores_is_allowed():
+    run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0)  # noqa: E731
+    target = g.REPO_ROOT / ".google-calendar-oauth.env"
+    assert g.check_out_path(target, run=run) == target.resolve()
+
+
+@pytest.mark.parametrize("boom", [FileNotFoundError("git"), subprocess.TimeoutExpired("git", 15)])
+def test_without_git_an_out_inside_the_repo_is_refused(boom):
+    def run(cmd, **kw):
+        raise boom
+
+    with pytest.raises(g.SetupError, match="inside the repository"):
+        g.check_out_path(g.REPO_ROOT / ".google-calendar-oauth.env", run=run)
+
+
+def test_git_errors_are_a_refusal_not_a_pass():
+    run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 128)  # noqa: E731
+    with pytest.raises(g.SetupError):
+        g.check_out_path(g.REPO_ROOT / ".google-calendar-oauth.env", run=run)
+
+
+def test_an_out_outside_the_repo_never_asks_git(tmp_path):
+    run = lambda *a, **k: pytest.fail("git was asked about a path outside the repo")  # noqa: E731
+    assert g.check_out_path(tmp_path / "out.env", run=run) == (tmp_path / "out.env").resolve()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_the_real_git_check_tells_an_ignored_file_from_a_tracked_folder():
+    g.check_out_path(g.REPO_ROOT / ".google-calendar-oauth.env")
+    with pytest.raises(g.SetupError):
+        g.check_out_path(g.REPO_ROOT / "backend" / "made-up-calendar-sign-in.txt")
+
+
+def test_main_refuses_an_out_inside_the_repo_before_the_browser(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(g, "_wait_for_code", lambda *a: pytest.fail("the browser was opened"))
+    monkeypatch.setattr(g.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1))
+    out = g.REPO_ROOT / "backend" / "made-up-out.env"
+    rc = g.main(["--client-file", str(tmp_path / "x.json"), "--out", str(out),
+                 "--calendar-id", CAL])
+    assert rc == 1 and "inside the repository" in capsys.readouterr().err
+    assert not out.exists()
+
+
+# ── the calendar id ───────────────────────────────────────────────────────────
+@pytest.mark.parametrize("cal", ["primary", "PRIMARY", "someone@made-up.example",
+                                 "made-up@group.calendar.example",
+                                 "made-up@group.calendar.google.com.example"])
+def test_a_calendar_id_that_is_not_a_shared_calendar_is_refused(cal):
+    with pytest.raises(g.SetupError) as exc:
+        g.check_calendar_id(cal)
+    assert "@group.calendar.google.com" in str(exc.value)
+
+
+def test_a_shared_calendar_id_is_accepted():
+    assert g.check_calendar_id("  " + CAL + " ") == CAL
+
+
+@pytest.mark.parametrize("cal", ["primary", "someone@made-up.example"])
+def test_main_refuses_a_bad_calendar_id_before_the_browser(monkeypatch, tmp_path, capsys, cal):
+    monkeypatch.setattr(g, "_wait_for_code", lambda *a: pytest.fail("the browser was opened"))
+    rc = g.main(["--client-file", str(tmp_path / "x.json"), "--out", str(tmp_path / "o.env"),
+                 "--calendar-id", cal])
+    assert rc == 1 and "@group.calendar.google.com" in capsys.readouterr().err
+    assert not (tmp_path / "o.env").exists()
 
 
 # ── the check read and what gets printed ──────────────────────────────────────
+def test_the_month_bounds_use_the_servers_own_central_midnight(monkeypatch):
+    monkeypatch.setattr(pc, "rfc3339_midnight", lambda day: "made-up " + day.isoformat())
+    assert g.month_bounds(_dt.date(2026, 12, 31)) == ("made-up 2026-12-01", "made-up 2027-01-01")
+
+
 def test_the_month_bounds_are_central_midnights():
     assert g.month_bounds(_dt.date(2026, 11, 12)) == ("2026-11-01T00:00:00-05:00",
                                                       "2026-12-01T00:00:00-06:00")
@@ -245,7 +356,7 @@ def _fake_google(role="owner", events_status=200, token_status=200, events_body=
 
 
 def test_the_check_counts_events_and_titles_through_the_servers_own_source():
-    got = g.verify(CLIENT_ID, SECRET, REFRESH, "made-up@group.calendar.example",
+    got = g.verify(CLIENT_ID, SECRET, REFRESH, "made-up@group.calendar.google.com",
                    today=_dt.date(2026, 11, 12), transport=_fake_google("owner"))
     assert got == {"access_role": "owner", "events": 3, "titled": 1}
 
@@ -253,20 +364,25 @@ def test_the_check_counts_events_and_titles_through_the_servers_own_source():
 @pytest.mark.parametrize("kw,words", [
     ({"events_status": 404}, "isn't shared"),
     ({"events_status": 403}, "isn't allowed"),
-    ({"token_status": 400}, "Reconnect it"),
+    ({"token_status": 400}, "reconnect the Google sign-in"),
+    ({"token_status": 400}, "Run this script again."),
     ({"events_status": 403, "events_body": {"error": {
         "code": 403, "errors": [{"domain": "usageLimits", "reason": "accessNotConfigured"}],
         "status": "PERMISSION_DENIED"}}}, "Google Calendar API is turned off"),
+    # The page's message says what is wrong; the console also says where to fix it.
+    ({"events_status": 403, "events_body": {"error": {
+        "code": 403, "errors": [{"domain": "usageLimits", "reason": "accessNotConfigured"}],
+        "status": "PERMISSION_DENIED"}}}, "APIs & Services > Library > Google Calendar API"),
 ])
 def test_a_failed_check_says_which_failure_in_plain_words(kw, words):
     with pytest.raises(g.SetupError) as exc:
-        g.verify(CLIENT_ID, SECRET, REFRESH, "made-up@group.calendar.example",
+        g.verify(CLIENT_ID, SECRET, REFRESH, "made-up@group.calendar.google.com",
                  today=_dt.date(2026, 11, 12), transport=_fake_google(**kw))
     assert words in str(exc.value)
     assert REFRESH not in str(exc.value) and SECRET not in str(exc.value)
 
 
-def _run_main(monkeypatch, tmp_path, role="owner"):
+def _run_main(monkeypatch, tmp_path, role="owner", out="out.env"):
     """main() end to end with the browser, Google and the check replaced."""
     client_file = tmp_path / "client_secret_made_up.json"
     client_file.write_text(json.dumps({"installed": {"client_id": CLIENT_ID,
@@ -276,10 +392,11 @@ def _run_main(monkeypatch, tmp_path, role="owner"):
         "access_token": ACCESS, "refresh_token": REFRESH, "scope": g.SCOPE})
     monkeypatch.setattr(g, "verify", lambda *a, **k: {"access_role": role, "events": 7,
                                                       "titled": 7 if role != "freeBusyReader" else 0})
-    out = tmp_path / "out.env"
-    rc = g.main(["--client-file", str(client_file), "--out", str(out),
-                 "--calendar-id", "made-up@group.calendar.example"])
-    return rc, out
+    args = ["--client-file", str(client_file), "--calendar-id", CAL]
+    if out:
+        out = tmp_path / out
+        args += ["--out", str(out)]
+    return g.main(args), out
 
 
 def test_main_prints_the_path_and_never_a_secret(monkeypatch, tmp_path, capsys):
@@ -302,6 +419,23 @@ def test_main_warns_when_the_account_only_sees_free_busy(monkeypatch, tmp_path, 
     # advice that works is signing in as the owner.
     assert "See all event details" not in text
     assert "owns the calendar" in text
+
+
+def test_the_env_example_names_the_project_calendar_and_the_home_folder_file():
+    """GLOSSARY.md lists "Schedule" under Avoid for the Project Calendar."""
+    example = (pathlib.Path(g.__file__).resolve().parent / ".env.example").read_text(encoding="utf-8")
+    block = example[example.index("# Project Calendar"):example.index("PROJECT_CALENDAR_TTL_S")]
+    assert "crews' job schedule" not in block
+    assert "ONE Google calendar, the\n# Project Calendar" in block
+    assert "~/.treadwell/google-calendar-oauth.env" in block
+    assert ".google-calendar-oauth.env (git-ignored)" not in block
+    assert "@group.calendar.google.com" in block and '"primary"' in block
+
+
+def test_the_docstring_gives_the_new_default_and_the_calendar_id_rule():
+    assert "~/.treadwell/google-calendar-oauth.env" in g.__doc__
+    assert "git check-ignore" in g.__doc__
+    assert "@group.calendar.google.com" in g.__doc__ and '"primary"' in g.__doc__
 
 
 def test_the_setup_steps_say_to_turn_on_the_calendar_api():
