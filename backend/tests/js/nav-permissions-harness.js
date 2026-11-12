@@ -249,6 +249,8 @@ const CAPS = [
   { href: "/leads.html", label: "Lead Inbox", api: [], locked: false },
   { href: "/crm.html", label: "Bid Pipeline", api: [], locked: false },
   { href: "/calendar.html", label: "Bid Calendar", api: [], locked: false },
+  // The crews' schedule, read only from Google, 2026-11-12.
+  { href: "/project-calendar.html", label: "Project Calendar", api: [], locked: false },
   { href: "/info-sheet.html", label: "Info Sheet", api: [], locked: false },
   { href: "/followups.html", label: "Follow-ups", api: [], locked: false },
   { href: "/v2-board.html", label: "Estimating Tool v2", api: [], locked: false },

@@ -169,6 +169,19 @@ TABS: Dict[str, Dict[str, Any]] = {
         "pages": ("/calendar.html",),
         "api": (),
     },
+    "/project-calendar.html": {
+        # The crews' job schedule, read from one Google calendar (backend/project_calendar.py).
+        # Added 2026-11-12. Separate from the Bid Calendar above, which is BasisBoard's.
+        #
+        # Single-caller measurement: /api/project-calendar (exact match, no children) is read by
+        # this page's script alone. It is NOT claimed in `api`, because every tab is hide-only
+        # since 2026-10-27 (see the note above TABS): denying the row hides the tab and refuses the
+        # page, and the route still answers. Put ("/api/project-calendar",) here if tabs are ever
+        # sealed again.
+        "label": "Project Calendar",
+        "pages": ("/project-calendar.html",),
+        "api": (),
+    },
     "/info-sheet.html": {
         "label": "Info Sheet",
         # NO SIDEBAR ROW since 2026-08-20 — it moved into the project drawer's Proposal tab. The

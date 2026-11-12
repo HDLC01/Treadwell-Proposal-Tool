@@ -382,6 +382,10 @@ DOORS = [
     ("js/proposal-review.js", '["/estimate-review.html", "/polish-estimate.html", "/polish-intake.html"]', 1, SHEET,
      "parentStepHref re-points a child's Estimate link to its parent's estimate"),
     ("js/leads.js", "&edit=1", 2, INTAKE, "Leads: open the project a lead became"),
+    # Project Calendar (2026-11-12): an event whose Job number matches a saved Project links to it. The
+    # same door as the Lead Inbox's; index.js sends a v2 draft on to the v2 intake.
+    ("js/project-calendar.js", "&amp;edit=1", 1, INTAKE,
+     "Project Calendar: open the Project an event's Job number matches"),
     # 3 since 2026-10-27: the drawer's scope list opens a sibling not on the board yet on the intake
     # (index.js sends a v2 draft on to the v2 intake). The "New scope for this project" button that made
     # the 4th door is gone: Create Multiple Proposals on the Proposal step replaced it.

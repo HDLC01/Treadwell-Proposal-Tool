@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Calendar · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- Styles itself, like calendar.html. Without the opt-out Chromium synthesizes a dark theme,
+       which would repaint the crews' own Google colours. There is no dark theme in this repo. -->
+  <meta name="color-scheme" content="only light" />
+  <style>
+    /* The Bid Calendar's tokens, so the two calendars read as one family. The bar colours are NOT
+       tokens: they are Google's own event palette, set per bar from the API, because the crews
+       recognise a job by the colour it was given in Google. */
+    :root { color-scheme: only light;
+      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec; --red-wash:#fdf5f6;
+      --ink:#1b1c1c; --ink-v:#5c403f; --ink-mut:#8a857c;
+      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea; --surf-high:#eae6dd;
+      --line:rgba(27,28,28,.1); --line-soft:#f0ece4;
+      --late:#b3261e; --late-bg:#fdf1f0;
+      --soon:#9a5b00; --soon-bg:#fdf5e8;
+      --calm:#4a6b8a;
+      --warn:#7a5c00;
+      /* A bar with no Google colour. Warm stone, so it reads as "no colour chosen" and not as
+         a meaning of its own. */
+      --bar-neutral:#8a857c;
+      --shadow:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.055);
+      --shadow-lift:0 2px 4px rgba(60,50,40,.06), 0 10px 28px rgba(60,50,40,.10);
+      --display:'Georgia','Iowan Old Style','Times New Roman',serif; }
+    * { box-sizing:border-box; }
+    /* The `hidden` attribute loses to any class rule that sets display, so it is re-asserted once
+       for the whole page. */
+    [hidden] { display:none !important; }
+    body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
+      font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1660px; margin:0 auto 6px;
+      flex-wrap:wrap; }
+    .logo { width:54px; height:34px; display:block; flex:none; }
+    h1 { font:400 29px/1.15 var(--display); letter-spacing:-.012em; margin:0; text-wrap:balance; }
+    .ro { margin-left:auto; font:700 9.5px system-ui; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-v); background:var(--surf-high); padding:4px 9px; border-radius:999px; }
+    .hint { max-width:1660px; margin:0 auto 18px; color:var(--ink-v); font-size:13.5px; }
+    .wrap { max-width:1660px; margin:0 auto; }
+
+    /* ── toolbar ── */
+    .toolbar { display:flex; align-items:center; gap:9px; flex-wrap:wrap; background:var(--card);
+      border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+      box-shadow:var(--shadow); margin-bottom:12px; }
+    .range { font:400 17px var(--display); letter-spacing:-.005em; min-width:170px; }
+    .btn { min-height:34px; padding:6px 12px; border:1px solid var(--line); background:var(--card);
+      border-radius:9px; font:600 13px system-ui; color:var(--ink); cursor:pointer;
+      display:inline-flex; align-items:center; gap:6px; text-decoration:none; }
+    .btn:hover { background:var(--surf-low); }
+    .btn:active { transform:translateY(1px); }
+    .btn:disabled { color:var(--ink-mut); background:var(--surf-low); cursor:default; transform:none; }
+    .btn.icon { width:34px; padding:0; justify-content:center; }
+    .nav { display:flex; gap:4px; }
+    .seg { display:inline-flex; background:var(--surf-low); border:1px solid var(--line);
+      border-radius:10px; padding:2px; gap:2px; }
+    .seg button { border:0; background:none; padding:6px 11px; border-radius:8px;
+      font:600 12.5px system-ui; color:var(--ink-v); cursor:pointer; }
+    .seg button[aria-pressed="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(60,50,40,.08); }
+    .grow { flex:1; }
+    .tw-search { min-height:34px; padding:6px 10px; border:1px solid var(--line);
+      border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink);
+      width:220px; }
+    .tw-search:focus, .btn:focus-visible, .seg button:focus-visible, .bar:focus-visible,
+    .dl-row:focus-visible, .dlg-close:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+
+    /* ── notices and states ── */
+    .alert { border:1px solid #e8dcc0; border-left:3px solid var(--warn); background:#fdf9ee;
+      color:var(--warn); border-radius:10px; padding:10px 13px; font-size:12.5px; margin:0 0 12px; }
+    .msg { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      padding:34px; text-align:center; color:var(--ink-v); box-shadow:var(--shadow); }
+    .msg b { display:block; color:var(--ink); font:400 18px var(--display); margin-bottom:6px; }
+    .note { color:var(--ink-v); font-size:12.5px; margin:0 0 10px; }
+
+    /* ── layout: calendar + side list ── */
+    .main { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; align-items:start; }
+    @media (max-width:1100px) { .main { grid-template-columns:minmax(0,1fr); } }
+
+    /* ── the grid: one row per week, bars span day columns ── */
+    /* On a phone seven day columns cannot fit 375px, so the weeks scroll sideways INSIDE their
+       own box and the page itself never does. */
+    .weeks-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
+    .weeks { min-width:700px; }
+    .dows { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:0 6px; margin-bottom:6px; }
+    .dow { font:700 9.5px system-ui; text-transform:uppercase; letter-spacing:.08em;
+      color:var(--ink-mut); padding:0 6px; }
+    /* Rows, bar positions and colours are set from js/project-calendar.js through the CSSOM
+       (element.style), never through inline style attributes, so the nginx CSP stays as it is. */
+    .week { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); column-gap:6px; row-gap:3px;
+      margin-bottom:6px; position:relative; }
+    .day { grid-row:1; background:var(--card); border:1px solid var(--line); border-radius:11px;
+      padding:5px 8px; z-index:0; }
+    .day.we { background:#f8f6f1; }
+    .day.today { border-color:var(--red); box-shadow:0 0 0 2px var(--red-tint); }
+    .day.other-month .dn { color:var(--ink-mut); }
+    .dn { font:600 13px system-ui; font-variant-numeric:tabular-nums; display:flex; align-items:baseline;
+      gap:6px; }
+    .day.today .dn { color:var(--red-dark); }
+    .dn .tag { font:700 8.5px system-ui; text-transform:uppercase; letter-spacing:.06em;
+      color:#fff; background:var(--red); padding:2px 5px; border-radius:5px; }
+
+    .bar { z-index:1; position:relative; display:flex; align-items:center; gap:6px; min-width:0;
+      height:24px; margin:0 3px; padding:0 8px; border:0; border-radius:6px; cursor:pointer;
+      background:var(--bar-neutral); color:#fff; font:600 11.5px/1 system-ui; text-align:left;
+      box-shadow:0 1px 1px rgba(60,50,40,.08); transition:box-shadow .12s, filter .12s; }
+    .bar:hover { box-shadow:var(--shadow-lift); filter:brightness(1.04); }
+    @media (prefers-reduced-motion:reduce) { .bar { transition:none; } }
+    /* A bar that carries on from the row above, or onto the row below, loses its rounded corner
+       on that side, so the two pieces read as one Mobilization. */
+    .bar.cont-l { border-top-left-radius:0; border-bottom-left-radius:0; }
+    .bar.cont-r { border-top-right-radius:0; border-bottom-right-radius:0; }
+    .bar .bn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
+    .bar .bm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 0;
+      font-weight:500; opacity:.86; font-variant-numeric:tabular-nums; }
+    /* The Deadline marker: on the LAST day of a red Duration bar. */
+    .bar .dlm { flex:none; margin-left:auto; font:700 8.5px system-ui; text-transform:uppercase;
+      letter-spacing:.06em; padding:2px 5px; border-radius:999px; background:#fff; color:var(--late); }
+    .bar.dl-end { box-shadow:inset -4px 0 0 rgba(0,0,0,.28), 0 1px 1px rgba(60,50,40,.08); }
+
+    /* ── side list ── */
+    .side { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      box-shadow:var(--shadow); padding:14px 14px 10px; }
+    .side h2 { font:400 17px var(--display); margin:0 0 2px; }
+    .side .sub { margin:0 0 10px; font-size:12px; color:var(--ink-v); }
+    .dl-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+    .dl-row { width:100%; display:grid; grid-template-columns:62px minmax(0,1fr); gap:8px;
+      align-items:start; text-align:left; background:var(--card); border:1px solid var(--line);
+      border-left:3px solid var(--calm); border-radius:8px; padding:7px 9px; cursor:pointer;
+      font:inherit; color:inherit; }
+    .dl-row:hover { background:var(--surf-low); }
+    .dl-row.st-today { border-left-color:var(--late); background:var(--late-bg); }
+    .dl-row.st-soon { border-left-color:var(--soon); background:var(--soon-bg); }
+    .dl-date { font:600 12px system-ui; font-variant-numeric:tabular-nums; color:var(--ink); }
+    .dl-date small { display:block; font:500 10.5px system-ui; color:var(--ink-mut); }
+    .dl-name { font:600 12.5px/1.3 system-ui; overflow:hidden; display:-webkit-box;
+      -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+    .dl-meta { font-size:11px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
+    .side .empty { color:var(--ink-v); font-size:12.5px; padding:6px 2px 8px; }
+
+    .legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; font-size:11.5px;
+      color:var(--ink-mut); align-items:center; }
+    .legend .sw { display:inline-block; width:18px; height:9px; border-radius:3px; margin-right:5px;
+      vertical-align:-1px; }
+    .legend .sw.red { background:#d50000; }
+    .legend .sw.other { background:#039be5; }
+    .legend .sw.none { background:var(--bar-neutral); }
+    .legend .mk { font:700 8.5px system-ui; text-transform:uppercase; letter-spacing:.06em;
+      padding:2px 5px; border-radius:999px; background:#fff; color:var(--late);
+      border:1px solid #f0d9dd; margin-right:5px; }
+
+    /* ── details panel ── */
+    dialog { border:0; border-radius:16px; padding:0; max-width:520px; width:calc(100% - 32px);
+      box-shadow:0 16px 48px rgba(0,0,0,.30); color:var(--ink); background:var(--card); }
+    dialog::backdrop { background:rgba(27,28,28,.42); }
+    .dlg-body { padding:18px 20px 16px; }
+    .dlg-head { display:flex; align-items:flex-start; gap:10px; margin-bottom:4px; }
+    .dlg-sw { flex:none; width:12px; height:12px; border-radius:3px; margin-top:7px;
+      background:var(--bar-neutral); }
+    .dlg-head h2 { font:400 20px/1.25 var(--display); margin:0; flex:1; min-width:0;
+      overflow-wrap:anywhere; }
+    .dlg-close { flex:none; width:32px; height:32px; border:1px solid var(--line); border-radius:8px;
+      background:var(--card); color:var(--ink-v); cursor:pointer; display:inline-flex;
+      align-items:center; justify-content:center; }
+    .dlg-close:hover { background:var(--surf-low); color:var(--ink); }
+    .raw { margin:2px 0 12px 22px; font-size:12px; color:var(--ink-v); overflow-wrap:anywhere; }
+    .facts { display:grid; grid-template-columns:118px minmax(0,1fr); gap:6px 12px; margin:0;
+      font-size:13px; }
+    .facts dt { font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-mut); padding-top:3px; }
+    .facts dd { margin:0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .chip { display:inline-flex; align-items:center; font:600 11px system-ui; padding:2px 8px;
+      border-radius:999px; background:var(--surf-high); color:var(--ink-v); margin:0 4px 3px 0; }
+    .chip.st-overdue { background:var(--surf-high); color:var(--ink-v); }
+    .chip.st-today { background:var(--late-bg); color:var(--late); }
+    .chip.st-upcoming { background:#eef3f7; color:var(--calm); }
+    .dlg-foot { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:16px;
+      padding-top:12px; border-top:1px solid var(--line-soft); }
+    .dlg-foot .muted { font-size:12px; color:var(--ink-mut); }
+
+    @media (max-width:767px) {
+      body { padding:18px 16px 70px; }
+      h1 { font-size:23px; }
+      .tw-search { width:100%; }
+      .toolbar .grow { display:none; }
+      .facts { grid-template-columns:100px minmax(0,1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
+    <h1>Project Calendar</h1>
+    <span class="ro" title="This page reads the Treadwell Projects Google calendar and never changes it">Read only</span>
+  </div>
+  <p class="hint">The crews' schedule from the Treadwell Projects Google calendar, in Central time.
+    Red bars are a job's Duration, and the last day of a red bar is its Deadline. Every other colour
+    is the one it was given in Google. Changes are made in Google Calendar.</p>
+
+  <div class="wrap">
+    <div id="toolbar" class="toolbar" hidden>
+      <span id="range" class="range"></span>
+      <span class="nav">
+        <button type="button" id="prev" class="btn icon" aria-label="Previous range"></button>
+        <button type="button" id="next" class="btn icon" aria-label="Next range"></button>
+        <button type="button" id="today" class="btn">Today</button>
+      </span>
+      <span id="modes" class="seg" role="group" aria-label="Range length"></span>
+      <span class="grow"></span>
+      <input id="q" type="search" class="tw-search" placeholder="Search job, number, crew lead…"
+             aria-label="Search the Project Calendar" autocomplete="off" />
+      <span class="seg" role="group" aria-label="Which bars to show">
+        <button type="button" id="durations" aria-pressed="false">Durations only</button>
+      </span>
+    </div>
+
+    <p id="alert" class="alert" role="status" hidden></p>
+
+    <div id="state" class="msg">Loading the Project Calendar…</div>
+
+    <div id="main" class="main" hidden>
+      <section aria-label="Calendar">
+        <p id="note" class="note" hidden></p>
+        <div class="weeks-scroll">
+          <div class="weeks">
+            <div id="dows" class="dows" aria-hidden="true"></div>
+            <div id="grid"></div>
+          </div>
+        </div>
+        <div id="legend" class="legend"></div>
+      </section>
+      <aside id="side" class="side" aria-labelledby="side-h">
+        <h2 id="side-h">Upcoming Deadlines</h2>
+        <p id="side-sub" class="sub"></p>
+        <div id="side-body"></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- The details panel. <dialog> gives focus trapping, Esc and the backdrop for free.
+       Read only: nothing in here edits anything. -->
+  <dialog id="dlg" aria-labelledby="dlg-title">
+    <div class="dlg-body">
+      <div class="dlg-head">
+        <span id="dlg-sw" class="dlg-sw" aria-hidden="true"></span>
+        <h2 id="dlg-title"></h2>
+        <button type="button" id="dlg-close" class="dlg-close" aria-label="Close"></button>
+      </div>
+      <p id="dlg-raw" class="raw"></p>
+      <dl id="dlg-facts" class="facts"></dl>
+      <div id="dlg-foot" class="dlg-foot"></div>
+    </div>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <!-- The Bid Calendar's date engine (ranges, paging, labels). Read here, never edited from here. -->
+  <script src="/js/calendar-core.js"></script>
+  <script src="/js/project-calendar-core.js"></script>
+  <script src="/js/project-calendar.js"></script>
+</body>
+</html>
