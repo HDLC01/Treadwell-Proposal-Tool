@@ -187,7 +187,7 @@ def test_the_file_is_owner_only_before_a_secret_is_written(tmp_path, monkeypatch
     p = tmp_path / "out.env"
     p.write_text("old stuff\n", encoding="utf-8")
     if os.name == "posix":
-        os.chmod(str(p), 0o644)
+        os.chmod(str(p), 0o640)   # readable by others than the owner, as a hand-made file can be
     seen = []
     real = getattr(os, "fchmod", None)
 

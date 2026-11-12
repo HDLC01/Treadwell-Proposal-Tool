@@ -238,7 +238,18 @@ def _oauth_config() -> Tuple[str, Optional[Tuple[str, str, str]], Tuple[str, ...
         return "full", (vals[0], vals[1], vals[2]), ()
     if not any(vals):
         return "none", None, ()
-    return "partial", None, tuple(name for name, v in zip(OAUTH_ENV, vals) if not v)
+    return "partial", None, _missing_oauth_names()
+
+
+def _missing_oauth_names() -> Tuple[str, ...]:
+    """The NAMES of the sign-in variables that are not set. Built from the constant names alone,
+    never from a tuple that also holds the values, so nothing secret can travel toward the log
+    line that reports a half-finished setup (CodeQL py/clear-text-logging-sensitive-data)."""
+    return tuple(name for name in OAUTH_ENV if not _env_is_set(name))
+
+
+def _env_is_set(name: str) -> bool:
+    return bool((os.environ.get(name) or "").strip())
 
 
 # The partial-sign-in gaps already logged, so a half-finished setup warns once per distinct gap,
