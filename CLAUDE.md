@@ -409,3 +409,17 @@ email = Resend, from the portal, including an automated cadence.
    (which owns `portal_*`). The old "don't add a DB" rule is void. What still holds: don't add a
    SECOND store for something the draft blob already carries, and remember every save PUTs the
    whole blob, so two tabs can clobber each other.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for HDLC01/Treadwell-Proposal-Tool (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
