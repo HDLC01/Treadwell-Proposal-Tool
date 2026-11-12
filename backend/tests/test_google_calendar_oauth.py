@@ -186,8 +186,8 @@ def test_the_file_is_owner_only_before_a_secret_is_written(tmp_path, monkeypatch
     the open descriptor, while the file is still empty."""
     p = tmp_path / "out.env"
     p.write_text("old stuff\n", encoding="utf-8")
-    if os.name == "posix":
-        os.chmod(str(p), 0o640)   # readable by others than the owner, as a hand-made file can be
+    # Left at the mode a new file gets (0644 under the usual umask on the Linux CI box): readable
+    # by others, as a hand-made file is. No chmod here, so no world-readable mode is ever set.
     seen = []
     real = getattr(os, "fchmod", None)
 

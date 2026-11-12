@@ -845,8 +845,9 @@ def test_a_partial_sign_in_is_not_connected_and_names_what_is_missing(
     missing = [k for k in pc.OAUTH_ENV if k not in present]
     warnings = [r.getMessage() for r in caplog.records if "partly configured" in r.getMessage()]
     assert len(warnings) == 1, "warned once, not on every request: %r" % warnings
-    for k in missing:
-        assert k in warnings[0]
+    assert "%d of the 3" % len(missing) in warnings[0]
+    for k in pc.OAUTH_ENV:
+        assert k not in warnings[0], "no variable name is logged (CodeQL reads ..._SECRET as sensitive)"
     for v in OAUTH.values():
         assert v not in caplog.text
 
