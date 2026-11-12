@@ -14,7 +14,7 @@ THE CONNECTION, two ways, the first that is fully configured wins:
      "busy" blocks. Google has no per-calendar OAuth scope, so the guard is this code: it only
      ever asks for PROJECT_CALENDAR_ID's events, with the narrowest read-only scope, and the
      refresh token lives only in the server .env. One or two of the three set is a mistake, not
-     a fallback: the calendar reads "not connected" and a warning names the missing variable.
+     a fallback: the calendar reads "not connected" and a warning says how many of the three are missing.
   2. AS A SERVICE ACCOUNT (ServiceAccountSource): GOOGLE_SERVICE_ACCOUNT_JSON (the JSON text) or
      GOOGLE_SERVICE_ACCOUNT_FILE (a path), minted with the JWT bearer grant (PyJWT RS256).
 Both share one base (_GoogleSource): events.list paging, a single-flight token cached until a
@@ -238,7 +238,18 @@ def _oauth_config() -> Tuple[str, Optional[Tuple[str, str, str]], Tuple[str, ...
         return "full", (vals[0], vals[1], vals[2]), ()
     if not any(vals):
         return "none", None, ()
-    return "partial", None, tuple(name for name, v in zip(OAUTH_ENV, vals) if not v)
+    return "partial", None, _missing_oauth_names()
+
+
+def _missing_oauth_names() -> Tuple[str, ...]:
+    """The NAMES of the sign-in variables that are not set. Built from the constant names alone,
+    never from a tuple that also holds the values, so nothing secret can travel toward the log
+    line that reports a half-finished setup (CodeQL py/clear-text-logging-sensitive-data)."""
+    return tuple(name for name in OAUTH_ENV if not _env_is_set(name))
+
+
+def _env_is_set(name: str) -> bool:
+    return bool((os.environ.get(name) or "").strip())
 
 
 # The partial-sign-in gaps already logged, so a half-finished setup warns once per distinct gap,
@@ -248,13 +259,15 @@ _PARTIAL_WARNED_LOCK = threading.Lock()
 
 
 def _warn_partial_once(missing: Tuple[str, ...]) -> None:
-    """Log a partial sign-in once per distinct gap, naming the missing variables, never a value."""
+    """Log a partial sign-in once per distinct gap. It says HOW MANY of the three are missing and
+    names none of them: CodeQL treats the variable name ..._CLIENT_SECRET itself as sensitive data
+    (py/clear-text-logging-sensitive-data), and with three variables the count is enough."""
     with _PARTIAL_WARNED_LOCK:
         first = missing not in _PARTIAL_WARNED
         _PARTIAL_WARNED.add(missing)
     if first:
-        log.warning("project calendar: the Google sign-in is only partly configured (%s missing), "
-                    "so the calendar is not connected", ", ".join(missing))
+        log.warning("project calendar: the Google sign-in is only partly configured (%d of the 3 "
+                    "GOOGLE_OAUTH_* values missing), so the calendar is not connected", len(missing))
 
 
 def _forget_partial_warnings() -> None:
