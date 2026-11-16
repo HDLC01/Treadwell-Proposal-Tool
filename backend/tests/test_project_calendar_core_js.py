@@ -383,7 +383,7 @@ def test_the_sidebar_row_sits_right_after_the_bid_calendar():
     assert proj > bid
     between = src[bid:proj]
     assert between.count("navItem(") == 1, "something sits between the two calendars"
-    assert re.search(r'navItem\("/project-calendar\.html",\s*"[^"]+",\s*"Project Calendar"\)', src)
+    assert re.search(r'navItem\("/project-calendar\.html",\s*"[^"]+",\s*"Project Analytics"\)', src)
 
 
 def test_the_not_connected_state_is_a_plain_message_not_an_error():

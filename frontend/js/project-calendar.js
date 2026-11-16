@@ -285,12 +285,12 @@
         // Nothing to show for this range and the read failed: say so plainly.
         $("toolbar").hidden = CONNECTED === false;
         showAlert("");
-        showState("<b>Couldn't load the Project Calendar</b>" + esc(loadErr)
+        showState("<b>Couldn't load Project Analytics</b>" + esc(loadErr)
           + " It will try again in a few minutes.");
         return;
       }
       if (CONNECTED !== true) {
-        showState("Loading the Project Calendar…");
+        showState("Loading Project Analytics…");
         return;
       }
       // Paging to a range not read yet, on a calendar known to be connected: draw the new range's
@@ -321,7 +321,7 @@
     if (current.stale) {
       const at = P.centralStamp(current.fetched_at);
       notice.push(at ? "Showing the last copy from " + at + " (Central)."
-                    : "Showing the last copy of the Project Calendar.");
+                    : "Showing the last copy of the calendar.");
     } else if (loadErr) {
       notice.push("Couldn't refresh just now (" + loadErr + "). Showing what was loaded before.");
     }

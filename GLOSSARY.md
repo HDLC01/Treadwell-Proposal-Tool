@@ -61,19 +61,19 @@ The pipeline for Projects where the Customer is a general contractor.
 
 ### Scheduling
 
-**Project Calendar**:
-The schedule of crews on Treadwell's jobs, and the deadlines those jobs must meet.
-_Avoid_: Schedule, ops calendar
+**Project Analytics**:
+Treadwell's per-job view of the crews' schedule, the Deadlines, and labor against budget.
+_Avoid_: Project Calendar (its old name), ops calendar, schedule
 
 **Duration**:
-The stretch of days a job is booked for on the Project Calendar, from its start date through its last day. Every bar on the Project Calendar is one, coloured by its job's Work type.
+The stretch of days a job is booked for on the Treadwell Projects calendar, from its start date through its last day. Every bar on that calendar is one, coloured by its job's Work type.
 
 **Deadline**:
-The end of the last day of a job's Duration: the work must be finished by then. The Project Calendar's Deadlines are the only deadlines a job has.
+The end of the last day of a job's Duration: the work must be finished by then. The calendar's Deadlines are the only deadlines a job has.
 _Avoid_: Due date, end date
 
 **Job number**:
-The number a Project receives once it is going ahead, such as 26.125, used to name it on the Project Calendar and in accounting.
+The number a Project receives once it is going ahead, such as 26.125, used to name it on the Treadwell Projects calendar and in accounting.
 _Avoid_: Project number, project #, job no.
 
 **Mobilization**:

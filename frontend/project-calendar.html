@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Project Calendar · Treadwell Proposal Generator</title>
+  <title>Project Analytics · Treadwell Proposal Generator</title>
   <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <!-- Styles itself, like calendar.html. Without the opt-out Chromium synthesizes a dark theme,
@@ -191,7 +191,7 @@
 <body>
   <div class="top">
     <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
-    <h1>Project Calendar</h1>
+    <h1>Project Analytics</h1>
     <span class="ro" title="This page reads the Treadwell Projects Google calendar and never changes it">Read only</span>
   </div>
   <p class="hint">The crews' schedule from the Treadwell Projects Google calendar, in Central time.
@@ -209,12 +209,12 @@
       <span id="modes" class="seg" role="group" aria-label="Range length"></span>
       <span class="grow"></span>
       <input id="q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
-             aria-label="Search the Project Calendar" autocomplete="off" />
+             aria-label="Search Project Analytics" autocomplete="off" />
     </div>
 
     <p id="alert" class="alert" role="status" hidden></p>
 
-    <div id="state" class="msg">Loading the Project Calendar…</div>
+    <div id="state" class="msg">Loading Project Analytics…</div>
 
     <div id="main" class="main" hidden>
       <section aria-label="Calendar">
