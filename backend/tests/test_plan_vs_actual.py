@@ -319,7 +319,7 @@ def test_a_punch_whose_job_number_has_no_job_is_its_own_row(client, google):
 
 # ── a job half relabelled (#792) ──────────────────────────────────────────────
 def test_a_first_mob_without_a_job_number_joins_the_second_mob_that_has_one(client, google):
-    """While Darrin relabels the calendar the 1st Mob still reads by name and the 2nd Mob carries
+    """While the calendar is being relabelled, the 1st Mob still reads by name and the 2nd Mob carries
     the Job number: one row, under the Job number. 1st Mob: Mon Nov 9 to Wed Nov 18 (running today),
     6 people, Nov 9-17 done = 7 Workdays = 336 h. 2nd Mob: Mon Nov 23 to Wed Nov 25, 4 people."""
     google.events = [mob("u1", "example  CLINIC (6) (Pat)", "2026-11-09", "2026-11-18", "11"),
@@ -353,6 +353,20 @@ def test_a_punch_whose_job_number_matches_nothing_joins_the_job_with_its_name(cl
     assert [m["id"] for m in p["punches"]] == ["p"]
     assert p["deadline"] == "2026-11-06"
     assert p["planned_hours"] == 5 * 6 * 8 + 1 * 2 * 8
+
+
+def test_a_punch_whose_job_number_matches_nothing_takes_the_named_job_whose_work_ended_before_it(
+        client, google):
+    """Two jobs at the same place carry different Job numbers, and the Punch's own Job number is
+    neither. Like a Punch with no Job number (#780), it joins the job whose work ended last before
+    the Punch began: 26.401 ended Fri Nov 6, 26.402 was still running on Thu Nov 12."""
+    google.events = [mob("j1", "26.401, Example Tower (3)", "2026-11-02", "2026-11-06"),
+                     mob("j2", "26.402, Example Tower (2)", "2026-11-09", "2026-11-13"),
+                     mob("p", "26.999, Example Tower Punch (2)", "2026-11-12", "2026-11-12")]
+    by_key = {p["key"]: p for p in rows(client)}
+    assert sorted(by_key) == ["job:26.401", "job:26.402"], "no Punch row of its own"
+    assert [m["id"] for m in by_key["job:26.401"]["punches"]] == ["p"]
+    assert by_key["job:26.402"]["punches"] == []
 
 
 def test_with_two_job_numbers_sharing_the_name_the_unnumbered_mob_stays_its_own_row(
