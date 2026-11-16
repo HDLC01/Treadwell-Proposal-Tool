@@ -441,6 +441,18 @@ def _is_not_provisioned(resp) -> bool:
     return isinstance(body, dict) and body.get("code") == "API_KEY_NOT_FOUND"
 
 
+def _path_name(path: str) -> str:
+    """The path as a log line may name it: a literal chosen here, never the path itself, since a
+    path can carry an id read from a Raken response (CodeQL py/clear-text-logging-sensitive-data)."""
+    if path == "/projects":
+        return "/projects"
+    if path == "/timeCards":
+        return "/timeCards"
+    if path.startswith("/projects/") and path.endswith("/productionInsights"):
+        return "/projects/{uuid}/productionInsights"
+    return "a Raken path"
+
+
 def get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """GET one Raken API path, one call at a time with CALL_PAUSE_S between calls. A 401 renews
     the sign-in and tries once more; a 429 is retried at most len(BACKOFF_S) times. Raises
@@ -459,7 +471,7 @@ def get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
                                     headers={"Authorization": "Bearer " + token,
                                              "Accept": "application/json"})
             except Exception as exc:  # noqa: BLE001
-                log.warning("raken: GET %s unreachable (%s)", path, type(exc).__name__)
+                log.warning("raken: GET %s unreachable (%s)", _path_name(path), type(exc).__name__)
                 raise RakenError(UNREACHABLE_MESSAGE) from None
             finally:
                 _LAST_CALL["at"] = monotonic()
@@ -472,19 +484,21 @@ def get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
                 continue
             if resp.status_code == 429:
                 if _is_quota(resp):
-                    log.warning("raken: GET %s refused, daily quota used up", path)
+                    log.warning("raken: GET %s refused, daily quota used up", _path_name(path))
                     raise RakenError(QUOTA_MESSAGE, 429)
                 if tries_429 >= len(BACKOFF_S):
-                    log.warning("raken: GET %s still 429 after %d retries", path, tries_429)
+                    log.warning("raken: GET %s still 429 after %d retries", _path_name(path),
+                                tries_429)
                     raise RakenError(RATE_LIMITED_MESSAGE, 429)
                 sleep(BACKOFF_S[tries_429])
                 tries_429 += 1
                 continue
             if _is_not_provisioned(resp):
-                log.warning("raken: GET %s refused, the account has no Public API access", path)
+                log.warning("raken: GET %s refused, the account has no Public API access",
+                            _path_name(path))
                 raise NotProvisioned()
             if resp.status_code != 200:
-                log.warning("raken: GET %s answered %s", path, resp.status_code)
+                log.warning("raken: GET %s answered %s", _path_name(path), resp.status_code)
                 raise RakenError(UNREACHABLE_MESSAGE)
             try:
                 return resp.json()
@@ -503,7 +517,7 @@ def list_all(path: str, params: Optional[Dict[str, Any]] = None, *,
     offset = 0
     for _ in range(_PAGE_CAP):
         if stop_at_calls is not None and _CALLS["n"] >= stop_at_calls:
-            log.warning("raken: GET %s stopped at its call budget", path)
+            log.warning("raken: GET %s stopped at its call budget", _path_name(path))
             raise ListingTooLong()
         body = get(path, dict(params or {}, limit=_PAGE_SIZE, offset=offset))
         coll = body.get("collection") if isinstance(body, dict) else None
@@ -518,7 +532,7 @@ def list_all(path: str, params: Optional[Dict[str, Any]] = None, *,
         if isinstance(nxt, bool) or not isinstance(nxt, int) or nxt <= offset:
             return items
         offset = nxt
-    log.warning("raken: GET %s stopped after %d pages", path, _PAGE_CAP)
+    log.warning("raken: GET %s stopped after %d pages", _path_name(path), _PAGE_CAP)
     if whole:
         raise ListingTooLong()
     return items

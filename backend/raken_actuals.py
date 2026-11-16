@@ -1,12 +1,15 @@
-"""Plan vs Actual, the Raken side (#782): what Raken's time cards recorded for each listed job.
+"""Plan vs Actual, the Raken side (#782, #783): what Raken's time cards recorded for each listed job,
+and the Budget pair from Raken's production insights.
 
 backend/plan_vs_actual.py builds each Project's plan from the Treadwell Projects calendar. This
 module reads Raken when someone presses "Refresh now", keeps that read on the data volume, and sets
 it beside the plan on every GET. A GET never calls Raken. The words are GLOSSARY.md's: Job number,
-Workday, Actual hours, Days clocked in, On site, Behind, Not linked, In Raken, not on the calendar.
+Workday, Actual hours, Days clocked in, On site, Behind, Not linked, In Raken, not on the calendar,
+Budgeted hours, Projected total hours, Over/under, Over budget, On plan.
 
-WHAT IS READ (developer.rakenapp.com/api/docs, "List Projects" and "List Time Cards", read
-2026-11-16). Every call goes through raken.get / raken.list_all: one call at a time, a fixed pause,
+WHAT IS READ (developer.rakenapp.com/api/docs, "List Projects", "List Time Cards" and "Get
+Production Insights for a Project", read 2026-11-16, with Raken's Postman collection). Every call
+goes through raken.get / raken.list_all: one call at a time, a fixed pause,
 a bounded 429 back-off, NotProvisioned for 403 API_KEY_NOT_FOUND. One refresh asks for no page once
 CALL_CAP calls have been made since it began, /projects included (raken.list_all's stop_at_calls;
 the last page's own 429 retries can pass it by two or three). A listing that would need more, or
@@ -25,6 +28,15 @@ Raken again (plan_vs_actual.refresh), since the daily allowance is the whole com
     card's day is its "date", its worker "worker"."uuid", its project "project"."uuid", and its
     hours "totalHours", else the sum of its "timeEntries"[]."hours". Work logs are never read: they
     repeat the same hours.
+  * GET /projects/{uuid}/productionInsights (#783, "Get Production Insights for a Project"), once
+    for every Raken project linked to a listed row, every page. No fromDate/toDate (Raken then
+    takes the whole job, project start to today), and manualTracking only when
+    INSIGHTS_MANUAL_TRACKING says so. Each item is a cost-code division; its "budgetedHours" and
+    "projectedTotalHours" are added up over every page of the one read, so the two figures never
+    drift. Its "costCodes" are never added too: they make up the division's figures. Raken's
+    /budgets is not used. One project's insights failing (an error answer, an unreadable body)
+    leaves that project "not read" and the refresh goes on; the sign-in, the account, the call
+    cap, a 429 that persisted or the daily quota stop the whole refresh as on any other call.
   The paging envelope is {"page": {..., "nextOffset": "10"}, "collection": [...]}; the docs' example
   gives nextOffset as a STRING. These field names come from the docs and their example responses;
   they are NOT yet checked against a live response, because Raken has not turned its Public API on
@@ -39,9 +51,10 @@ Google outage never shrinks the numbers already on screen.
 
 WHAT IS KEPT (STORE_FILE, through atomic_json.write_json, so a restart keeps it): the Raken
 projects (uuid, name, number), and for each project each day's hours and the distinct workers who
-had hours that day; the span read; and when it was read, in Central. A failed refresh keeps the
-last good read and records why (one of raken.py's fixed messages), so the page can say how old the
-numbers are.
+had hours that day; the span read; each linked project's Budgeted hours and Projected total hours
+(both None when Raken has no budget for it, {"failed": true} when they could not be read); and when
+it was read, in Central. A failed refresh keeps the last good read and records why (one of
+raken.py's fixed messages), so the page can say how old the numbers are.
 
 THE FIGURES, worked out on every GET against the CURRENT calendar rows (apply()):
   * a row links when exactly one Raken project's number, trimmed, equals its Job number. No Job
@@ -53,8 +66,13 @@ THE FIGURES, worked out on every GET against the CURRENT calendar rows (apply())
     earlier day never counts a day it did not read as missed); days clocked in = those days with any
     hours; average on site = the distinct workers on each of those days, added up, divided by the
     days clocked in; Actual hours = every hour read up to the read's last day;
-  * statuses: ["not_linked"], or ["behind"] when days clocked in < days booked, else []. A list,
-    so a later ticket can add Over budget beside Behind.
+  * the Budget pair: Budgeted hours and Projected total hours added up over the row's Raken
+    projects that have a budget, and Over/under = Budgeted - Projected total. "none" when none has
+    a budget (no figures, never Over budget); "not_read" when any of them was not read.
+    projection_below_actual when the projection is below the Actual hours: Raken projects only the
+    work in its budget, while every time card counts as Actual hours;
+  * statuses are flags: ["not_linked"] alone; else "behind" when days clocked in < days booked and
+    "over_budget" when Over/under < 0, both when both; ["on_plan"] when neither.
   * Raken-only: Raken projects with hours in the last RECENT_DAYS of the read whose project is not
     linked to any listed row and whose number is the Job number of no job on the calendar (the
     year read, not only the listed rows).
@@ -70,6 +88,7 @@ import datetime as _dt
 import json
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -86,9 +105,18 @@ STORE_FILE = _DATA_DIR / "raken_actuals.json"
 PIECE_DAYS = 31            # Raken caps fromDate at 31 days before toDate; a piece spans 31 days
 READ_BACK_DAYS = 365
 RECENT_DAYS = 14
-# The most Raken calls one refresh may make. A year of time cards is 12 pieces of a few pages each;
-# a read that needs more than this stops plainly instead of spending the company's daily allowance.
-CALL_CAP = 300
+# The most Raken calls one refresh may make, /projects, /timeCards and productionInsights together.
+# A year of time cards is 12 pieces of a few pages each, which 300 covered (#782). The Budget pair
+# (#783) adds one productionInsights call per linked Raken project (a page holds 100 divisions, so
+# one page each): the 14-day window lists tens of jobs, not a hundred, so 100 more is room enough.
+# A read that needs more than this stops plainly instead of spending the company's daily allowance.
+CALL_CAP = 400
+# Raken's production insights take manualTracking (true/false; Raken's own default is false, the
+# automatic tracking from materials installed). None sends nothing, so Raken uses its default. Which
+# mode matches Raken's own Insights screen is to be settled on one real job once Raken's Public API
+# is on (#781); set True or False here then. (The docs give true/false; Raken's Postman collection
+# shows manualTracking=no. The first real job settles which spelling Raken takes, too.)
+INSIGHTS_MANUAL_TRACKING: Optional[bool] = None
 # How long after a good read "Refresh now" answers from it instead of reading Raken again.
 REFRESH_COOLDOWN_S = 10 * 60
 TOO_MANY_MESSAGE = "Raken has more time cards than one refresh reads. Ask for the limit to be raised."
@@ -115,8 +143,17 @@ ROW_STATES = (STATE_NOT_CONNECTED, STATE_EXPIRED, STATE_NOT_PROVISIONED, STATE_U
 STATE_CONNECTED = raken.STATE_CONNECTED
 
 STATUS_BEHIND = "behind"
+STATUS_OVER_BUDGET = "over_budget"
+STATUS_ON_PLAN = "on_plan"
 STATUS_NOT_LINKED = "not_linked"
-STATUSES = (STATUS_BEHIND, STATUS_NOT_LINKED)
+STATUSES = (STATUS_BEHIND, STATUS_OVER_BUDGET, STATUS_ON_PLAN, STATUS_NOT_LINKED)
+
+# A linked row's Budget pair (#783): shown; none (Raken has no budget for the job); not read (its
+# insights could not be read, or the kept read is older than the Budget pair or the link).
+BUDGET_SHOWN = "shown"
+BUDGET_NONE = "none"
+BUDGET_NOT_READ = "not_read"
+BUDGET_STATES = (BUDGET_SHOWN, BUDGET_NONE, BUDGET_NOT_READ)
 
 REASON_NO_JOB_NUMBER = "no_job_number"
 REASON_NO_RAKEN_PROJECT = "no_raken_project"
@@ -226,6 +263,65 @@ def read_time_cards(first: _dt.date, last: _dt.date,
     return days
 
 
+def read_insights(uuid: str, stop_at_calls: int) -> Dict[str, Optional[float]]:
+    """One project's Budgeted hours and Projected total hours: the sums of its divisions'
+    budgetedHours and projectedTotalHours across every page of ONE read, so the two never drift.
+    Both None when Raken has no budget for it: no division with budgeted hours above zero, or none
+    carrying a projected total (Raken projects only against a budget). The divisions' own figures
+    are read, never their costCodes' (which add up to them)."""
+    params: Dict[str, Any] = {}
+    if INSIGHTS_MANUAL_TRACKING is not None:
+        params["manualTracking"] = "true" if INSIGHTS_MANUAL_TRACKING else "false"
+    budgeted = projected = 0.0
+    projected_seen = False
+    for d in raken.list_all("/projects/%s/productionInsights" % uuid, params,
+                            stop_at_calls=stop_at_calls, whole=True):
+        b, p = _number(d.get("budgetedHours")), _number(d.get("projectedTotalHours"))
+        if b is not None and b > 0:
+            budgeted += b
+        if p is not None:
+            projected += max(p, 0.0)
+            projected_seen = True
+    if budgeted <= 0 or not projected_seen:
+        return {"budgeted_hours": None, "projected_total_hours": None}
+    return {"budgeted_hours": round(budgeted, 2), "projected_total_hours": round(projected, 2)}
+
+
+# A Raken id as it may go into an address: letters, digits and hyphens (a UUID), nothing else.
+_ID_SHAPE = re.compile(r"[A-Za-z0-9-]{1,64}")
+
+
+def _stops_the_refresh(exc: raken.RakenError) -> bool:
+    """A failure that must stop the whole refresh rather than only the one project's insights: the
+    sign-in, the account, the call cap, a rate limit that persisted or the daily quota."""
+    return isinstance(exc, (raken.SignInExpired, raken.NotProvisioned, raken.ListingTooLong)) \
+        or exc.status == 429
+
+
+def read_all_insights(uuids: Iterable[str], stop_at_calls: int) -> Dict[str, Dict[str, Any]]:
+    """{project uuid: read_insights(...)}, or {"failed": True} for a project whose insights could
+    not be read (its row's Budget pair then reads "not read"). One at a time, in a fixed order."""
+    out: Dict[str, Dict[str, Any]] = {}
+    failed = 0
+    for uuid in sorted(set(uuids)):
+        if not _ID_SHAPE.fullmatch(uuid):
+            # The id goes into the address: one with "/", "?" or ".." could point elsewhere.
+            out[uuid] = {"failed": True}
+            failed += 1
+            continue
+        try:
+            out[uuid] = read_insights(uuid, stop_at_calls)
+        except raken.RakenError as exc:
+            if _stops_the_refresh(exc):
+                raise
+            out[uuid] = {"failed": True}
+            failed += 1
+    if failed:
+        # A count only: which project, and what Raken answered, never reach the log.
+        log.warning("raken actuals: production insights not read for %d project(s)", failed)
+    return out
+
+
 def span(listed: Iterable[Dict[str, Any]], today: _dt.date,
          keep_last: bool = False) -> Tuple[_dt.date, _dt.date]:
     """The days the refresh reads: from the earliest listed Start (no further back than
@@ -290,14 +386,33 @@ def _save(store: Dict[str, Any]) -> None:
         log.warning("raken actuals: the result could not be saved (%s)", type(exc).__name__)
 
 
-def read_and_keep(first: _dt.date, last: _dt.date) -> None:
-    """Read Raken over [first, last] and keep the result, or keep why it failed. Never raises."""
+def _insight_uuids(rows: Iterable[Dict[str, Any]], projects: List[Dict[str, Any]],
+                   keep_last: bool, store: Dict[str, Any]) -> Set[str]:
+    """The Raken projects whose production insights a refresh reads: every project linked to a
+    listed row (a Punch's own included), as apply() links them. With `keep_last` (the calendar could
+    not be read, so there are no rows), the projects the kept read had insights for, still known."""
+    index = _by_number(projects)
+    out: Set[str] = set()
+    for r in rows:
+        out.update(p["uuid"] for p in _linked(r, index) or [])
+    if keep_last:
+        known = {p["uuid"] for p in projects}
+        kept = (store.get("result") or {}).get("insights")
+        out.update(u for u in (kept if isinstance(kept, dict) else {}) if u in known)
+    return out
+
+
+def read_and_keep(first: _dt.date, last: _dt.date, rows: Iterable[Dict[str, Any]] = (),
+                  keep_last: bool = False) -> None:
+    """Read Raken over [first, last], and the production insights of every Raken project linked to
+    one of `rows`, and keep the result, or keep why it failed. Never raises."""
     before = raken.calls_made()
     stop_at = before + CALL_CAP
     store = load()
     try:
         projects = read_projects(stop_at)
         days = read_time_cards(first, last, stop_at)
+        insights = read_all_insights(_insight_uuids(rows, projects, keep_last, store), stop_at)
     except raken.SignInExpired:
         # raken.py has marked the stored sign-in expired; the page reads that from the file, so no
         # failure is recorded here (it would outlive a new Connect Raken). The last numbers stay.
@@ -323,11 +438,12 @@ def read_and_keep(first: _dt.date, last: _dt.date) -> None:
         log.warning("raken actuals: refresh failed (%s)", type(exc).__name__)
         return
     result = {"as_of": _central_stamp(), "read_from": first.isoformat(),
-              "through": last.isoformat(), "projects": projects, "days": days}
+              "through": last.isoformat(), "projects": projects, "days": days,
+              "insights": insights}
     _save({"result": result, "failure": None})
-    # Counts of pieces and calls only: nothing derived from the response is logged.
-    log.info("raken actuals: refresh read %d pieces in %d calls",
-             len(pieces(first, last)), raken.calls_made() - before)
+    # Counts of pieces, projects and calls only: nothing derived from the response is logged.
+    log.info("raken actuals: refresh read %d pieces and %d projects' insights in %d calls",
+             len(pieces(first, last)), len(insights), raken.calls_made() - before)
 
 
 def fresh() -> bool:
@@ -411,21 +527,14 @@ def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict
     number = (row.get("job_number") or "").strip()
     if not number:
         return {"state": STATE_NOT_LINKED, "reason": REASON_NO_JOB_NUMBER}, [STATUS_NOT_LINKED], set()
-    found = index.get(number) or []
-    if len(found) != 1:
+    linked = _linked(row, index)
+    if linked is None:
+        found = index.get(number) or []
         side: Dict[str, Any] = {"state": STATE_NOT_LINKED,
                                 "reason": REASON_DUPLICATE if found else REASON_NO_RAKEN_PROJECT}
         if found:
             side["duplicates"] = [_public(p) for p in found]
         return side, [STATUS_NOT_LINKED], {p["uuid"] for p in found}
-    linked = [found[0]]
-    # A Punch's hours count toward its parent: a Punch carrying a Job number of its own brings the
-    # one Raken project with that number.
-    for punch in row.get("punches") or []:
-        n = (punch.get("job_number") or "").strip()
-        extra = (index.get(n) or []) if n and n != number else []
-        if len(extra) == 1 and extra[0] not in linked:
-            linked.append(extra[0])
     uuids = {p["uuid"] for p in linked}
     days = result.get("days") or {}
     hours: Dict[str, float] = {}
@@ -441,10 +550,64 @@ def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict
     clocked = sorted(d for d in booked if hours.get(d, 0) > 0)
     avg = (round(sum(len(workers.get(d, ())) for d in clocked) / len(clocked), 1)
            if clocked else None)
+    actual = round(sum(hours.values()), 2)
     side = {"state": STATE_LINKED, "projects": [_public(p) for p in linked],
             "days_booked": len(booked), "days_clocked": len(clocked), "avg_on_site": avg,
-            "actual_hours": round(sum(hours.values()), 2), "through": hi_s}
-    return side, ([STATUS_BEHIND] if len(clocked) < len(booked) else []), uuids
+            "actual_hours": actual, "through": hi_s}
+    side.update(_budget(uuids, result, actual))
+    statuses = []
+    if len(clocked) < len(booked):
+        statuses.append(STATUS_BEHIND)
+    if side["over_under"] is not None and side["over_under"] < 0:
+        statuses.append(STATUS_OVER_BUDGET)
+    return side, statuses or [STATUS_ON_PLAN], uuids
+
+
+def _linked(row: Dict[str, Any], index: Dict[str, List[Dict[str, Any]]]
+            ) -> Optional[List[Dict[str, Any]]]:
+    """The Raken projects a row links to, its own first, or None when it is Not linked: no Job
+    number, no Raken project carrying it, or two. A Punch's hours count toward its parent, so a
+    Punch carrying a Job number of its own brings the one Raken project with that number."""
+    number = (row.get("job_number") or "").strip()
+    found = (index.get(number) or []) if number else []
+    if len(found) != 1:
+        return None
+    linked = [found[0]]
+    for punch in row.get("punches") or []:
+        n = (punch.get("job_number") or "").strip()
+        extra = (index.get(n) or []) if n and n != number else []
+        if len(extra) == 1 and extra[0] not in linked:
+            linked.append(extra[0])
+    return linked
+
+
+def _budget(uuids: Set[str], result: Dict[str, Any], actual: float) -> Dict[str, Any]:
+    """A linked row's Budget pair from the kept insights of its Raken projects: Budgeted hours,
+    Projected total hours and Over/under (Budgeted - Projected total), each added up over the
+    projects that have a Raken budget. Not read when any of them was not read (the figures would
+    be part of the job's); none when none has a budget. `projection_below_actual` when the
+    projection is below the time-card Actual hours: Raken projects only the work in its budget."""
+    kept = result.get("insights")
+    kept = kept if isinstance(kept, dict) else {}
+    out: Dict[str, Any] = {"budget": BUDGET_NONE, "budgeted_hours": None,
+                           "projected_total_hours": None, "over_under": None,
+                           "projection_below_actual": False}
+    budgeted = projected = 0.0
+    shown = False
+    for u in uuids:
+        got = kept.get(u)
+        if not isinstance(got, dict) or got.get("failed"):
+            out["budget"] = BUDGET_NOT_READ
+            return out
+        b, p = _number(got.get("budgeted_hours")), _number(got.get("projected_total_hours"))
+        if b is not None and p is not None:
+            budgeted, projected, shown = budgeted + b, projected + p, True
+    if shown:
+        out.update(budget=BUDGET_SHOWN, budgeted_hours=round(budgeted, 2),
+                   projected_total_hours=round(projected, 2),
+                   over_under=round(budgeted - projected, 2),
+                   projection_below_actual=round(projected, 2) < actual)
+    return out
 
 
 def _block(state: str, message: Optional[str]) -> Dict[str, Any]:

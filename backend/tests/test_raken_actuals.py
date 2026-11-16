@@ -72,6 +72,11 @@ class FakeRaken:
         self.projects_next = None       # a nextOffset to send on every /projects page instead
         self.in_flight = 0
         self.max_in_flight = 0
+        # GET /projects/{uuid}/productionInsights (#783): each project's divisions, in the docs'
+        # shape. A project not in `insights` has no Raken budget: an empty collection.
+        self.insights = {}
+        self.insight_calls = []         # (project uuid, the full query) of every call
+        self.insight_fail = set()       # project uuids whose insights answer 500
 
     def handle(self, request):
         with self.lock:
@@ -143,6 +148,14 @@ class FakeRaken:
             if q.get("projectUuid"):
                 hits = [c for c in hits if c["project"]["uuid"] == q["projectUuid"]]
             return self._page(hits, url)
+        parts = url.path.split("/")
+        if len(parts) == 5 and parts[:3] == ["", "api", "projects"] \
+                and parts[4] == "productionInsights":
+            uuid = parts[3]
+            self.insight_calls.append((uuid, dict(url.params)))
+            if uuid in self.insight_fail:
+                return httpx.Response(500, json={"message": "made-up insights failure"})
+            return self._page(self.insights.get(uuid, []), url)
         return httpx.Response(404, json={"message": "not in the fake"})
 
     def windows(self):
@@ -260,7 +273,7 @@ def test_a_job_links_to_the_raken_project_whose_number_trimmed_equals_its_job_nu
     assert r["days_booked"] == 2 and r["days_clocked"] == 2
     assert r["avg_on_site"] == 2.5, "2 people Monday, 3 Tuesday"
     assert r["actual_hours"] == 38.5, "approved and unapproved cards both count"
-    assert p["statuses"] == []
+    assert p["statuses"] == ["on_plan"], "linked, not Behind, no Raken budget (#783)"
     # The calendar side is untouched.
     assert p["workdays_so_far"] == 2 and p["planned_hours"] == 2 * 3 * 8
 
@@ -332,7 +345,7 @@ def test_a_punchs_hours_count_toward_its_parent(client, google, fake):
     assert r["days_booked"] == 6 and r["days_clocked"] == 6
     assert r["actual_hours"] == 5 * 2 * 8 + 4
     assert r["avg_on_site"] == round((5 * 2 + 1) / 6, 1)
-    assert p["statuses"] == []
+    assert p["statuses"] == ["on_plan"]
     assert body["raken_only"] == []
 
 
@@ -592,7 +605,7 @@ def test_a_result_from_an_earlier_day_never_counts_days_it_did_not_read_as_misse
     p = by_key(get(client))["job:26.501"]
     assert p["workdays_so_far"] == 3, "the calendar side counts through Wednesday"
     assert p["raken"]["days_booked"] == 2 and p["raken"]["days_clocked"] == 2
-    assert p["statuses"] == []
+    assert p["statuses"] == ["on_plan"]
 
 
 def test_a_store_that_cannot_be_written_still_answers_and_never_500s(
