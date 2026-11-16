@@ -62,8 +62,16 @@ The pipeline for Projects where the Customer is a general contractor.
 ### Scheduling
 
 **Project Analytics**:
-Treadwell's per-job view of the crews' schedule, the Deadlines, and labor against budget.
-_Avoid_: Project Calendar (its old name), ops calendar, schedule
+Treadwell's per-job view of what the crews' schedule planned against what Raken recorded, and of labor against budget.
+_Avoid_: Project Calendar (its old name), ops calendar, schedule (that is only its calendar tab)
+
+**Plan vs Actual**:
+The Project Analytics view that sets each job's plan from the Treadwell Projects calendar beside what Raken recorded for it.
+_Avoid_: Dashboard, report
+
+**Schedule**:
+The Project Analytics tab that shows the Treadwell Projects calendar itself. Not a name for Project Analytics as a whole.
+_Avoid_: Calendar view
 
 **Duration**:
 The stretch of days a job is booked for on the Treadwell Projects calendar, from its start date through its last day. Every bar on that calendar is one, coloured by its job's Work type.
@@ -99,20 +107,39 @@ A Monday to Friday day inside a Duration. Weekends are never workdays.
 _Avoid_: Business day, working day
 
 **Budgeted hours**:
-The labor hours a job is allowed: Raken's budget for the job, or, when Raken has none, the hours in the job's Estimate.
+The labor hours a job is allowed: Raken's budget for the job. A job with no Raken budget has no Budgeted hours.
 _Avoid_: Labor budget (the budget report's dollar column), allotted hours
+
+**Planned hours**:
+The labor hours the schedule implies for a job so far: each Mobilization's Workdays up to yesterday, times that Mobilization's Crew size, times the hours in a workday, added up. Compared against Actual hours to tell whether a job is on plan.
+_Avoid_: Scheduled hours, expected hours
 
 **Actual hours**:
 The labor hours recorded against a job on Raken time cards so far.
 _Avoid_: Spent hours, logged hours
 
 **Projected total hours**:
-Actual hours plus the hours a job is still expected to need before its Deadline.
+Raken's own projection of the labor hours a job will take in all, across the work in its Raken budget. Treadwell never works it out itself, and a job with no Raken budget has none.
 _Avoid_: Forecast, estimated hours
 
 **Over/under**:
 Budgeted hours minus Projected total hours for a job. Below zero, the job is projected to go over budget.
 _Avoid_: Variance, gain or loss
+
+**Behind**:
+A job on which crews clocked in on fewer days than the calendar booked for it so far: a booked Workday was missed. Fewer hours than planned on its own does not make a job Behind. A job can be Behind and Over budget at once.
+_Avoid_: Late, slipping
+
+**Over budget**:
+A job whose Projected total hours are above its Budgeted hours, so its Over/under is below zero.
+_Avoid_: In the red, overrun
+
+**On plan**:
+A job linked to Raken that is neither Behind nor Over budget.
+
+**Not linked**:
+A job on the calendar with no Raken project carrying its Job number, so there is nothing to compare its plan with.
+_Avoid_: Unmatched, missing
 
 ### Outcomes
 

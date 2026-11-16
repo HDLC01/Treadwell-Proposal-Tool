@@ -94,6 +94,7 @@ import price_rules
 import pricing
 import profiles
 import project_calendar
+import plan_vs_actual
 import proposal_fonts
 import proposal_writer
 import pull_window
@@ -1004,6 +1005,14 @@ def api_project_calendar(start: str = "", end: str = "") -> Dict[str, Any]:
         return project_calendar.fetch(start, end)
     except project_calendar.RangeError as exc:
         raise HTTPException(400, str(exc))
+
+
+# Plan vs Actual, the calendar side (#780): one row per Project, built in backend/plan_vs_actual.py
+# from a year of the same calendar read through the same cache. Takes no parameters; like the route
+# above it answers a Google failure with a 200 and a plain message, never a 500.
+@app.get("/api/project-analytics")
+def api_project_analytics() -> Dict[str, Any]:
+    return plan_vs_actual.fetch()
 
 
 # ── Item Library ──────────────────────────────────────────────────────────────

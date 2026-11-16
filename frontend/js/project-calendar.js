@@ -1,5 +1,6 @@
-// Project Calendar: the crews' job schedule, read from the "Treadwell Projects" Google calendar.
-// Externalized (no inline scripts; CSP). Do not add inline handlers.
+// Project Analytics, the Schedule tab: the crews' job schedule, read from the "Treadwell Projects"
+// Google calendar. The Plan vs Actual tab, and the switching between the two, is
+// js/plan-vs-actual.js. Externalized (no inline scripts; CSP). Do not add inline handlers.
 //
 // READ ONLY, ON PURPOSE. This page never writes to Google and stores nothing of its own: no
 // create, edit, drag or delete control exists anywhere on it. The schedule is kept in Google
@@ -42,7 +43,6 @@
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
 
-  const SIDE_DAYS = 60;                // the Upcoming Deadlines window, from today
   const POLL_MS = 5 * 60 * 1000;       // the server caches for about this long anyway
 
   let MODE = P.MODES.some((m) => m.id === ss(SK.mode, "")) ? ss(SK.mode, "two") : "two";
@@ -57,8 +57,6 @@
   const CACHE_ORDER = [];
   const CACHE_MAX = 12;
   const ERR = {};                      // range key -> why the last read of it failed
-  let SIDE_ERR = null;                 // why the last Upcoming Deadlines read failed, if it did
-  let SIDE = null;                     // the last response for the Upcoming Deadlines window
   let CONNECTED = null;                // the last answer the server gave about the connection
   let SEQ = 0;                         // newest range request wins
   let LAST_SIG = "";                   // anti-blink: skip identical repaints
@@ -73,7 +71,7 @@
   }
 
   /** A stable key per event, so a re-read of unchanged data repaints nothing. Google's id where
-   *  there is one; otherwise its position. `src` keeps the two reads' positions apart. */
+   *  there is one; otherwise its position. `src` names the read the event came from. */
   function keyEvents(events, src) {
     events.forEach((e, i) => {
       e._k = src + ":" + (e.id != null && e.id !== "" ? String(e.id) : "#" + i);
@@ -116,16 +114,9 @@
     paint();
   }
 
-  async function loadSide() {
-    const res = await read(TODAY, K.addDays(TODAY, SIDE_DAYS - 1), "s");
-    if (res.ok) { SIDE = res.body; SIDE_ERR = null; } else { SIDE_ERR = res.error; }
-    paint();
-  }
-
   function refreshAll() {
     TODAY = P.centralToday();
     loadRange();
-    loadSide();
   }
 
   // ── rendering helpers ─────────────────────────────────────────────
@@ -222,39 +213,6 @@
     });
   }
 
-  function sideHtml() {
-    if (!SIDE) {
-      return '<p class="empty">' + (SIDE_ERR ? "Couldn't load Deadlines. " + esc(SIDE_ERR)
-        : "Loading…") + "</p>";
-    }
-    if (SIDE.connected === false) return "";
-    // A Google failure with nothing saved must not read as "no Deadlines": say it failed.
-    if (SIDE.error && !(SIDE.events || []).length) {
-      return "<p class=\"empty\">Couldn't load Deadlines. " + esc(SIDE.error) + "</p>";
-    }
-    const note = SIDE.stale
-      ? '<p class="empty">Showing the last copy from ' + esc(P.centralStamp(SIDE.fetched_at)) + ".</p>"
-      : "";
-    const rows = P.upcomingDeadlines(visible(SIDE.events), TODAY, SIDE_DAYS);
-    if (!rows.length) {
-      return note + '<p class="empty">' + (Q ? "No upcoming Deadline matches the search."
-        : "No Deadlines in the next " + SIDE_DAYS + " days.") + "</p>";
-    }
-    return note + '<ul class="dl-list">' + rows.map((r) => {
-      const parts = P.barParts(r.ev);
-      const left = P.workdaysLeft(r.ev, TODAY);
-      const st = r.status === "today" ? "st-today" : (r.days <= 2 ? "st-soon" : "");
-      const when = r.status === "today" ? "Today" : (r.days === 1 ? "Tomorrow" : "In " + r.days + " days");
-      const meta = [r.ev.job_number, left + " workday" + (left === 1 ? "" : "s") + " left"]
-        .filter(Boolean).join(" · ");
-      return '<li><button type="button" class="dl-row ' + st + '" data-k="' + esc(r.ev._k) + '">'
-        + '<span class="dl-date">' + esc(K.dayLabel(r.deadline, false))
-        + "<small>" + esc(when) + "</small></span>"
-        + "<span><span class=\"dl-name\">" + esc(parts.name) + "</span>"
-        + '<span class="dl-meta">' + esc(meta) + "</span></span></button></li>";
-    }).join("") + "</ul>";
-  }
-
   // ── paint ─────────────────────────────────────────────────────────
   function paint() {
     const range = K.rangeFor(ANCHOR, MODE);
@@ -263,14 +221,13 @@
     const loadErr = ERR[key] || "";
     const sig = JSON.stringify([key, MODE, Q, TODAY, loadErr, CONNECTED,
       cached && [cached.connected, cached.stale, cached.fetched_at, cached.error, cached.notice,
-        cached.events],
-      SIDE && [SIDE.fetched_at, SIDE.events]]);
+        cached.events]]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
 
-    // The details panel looks events up by key, from either read.
+    // The details panel looks events up by key.
     BY_KEY = {};
-    [cached, SIDE].forEach((b) => (b && b.events || []).forEach((e) => { BY_KEY[e._k] = e; }));
+    (cached && cached.events || []).forEach((e) => { BY_KEY[e._k] = e; });
 
     $("range").textContent = K.rangeLabel(range, MODE);
     $("today").disabled = K.isCurrent(range, TODAY);
@@ -285,12 +242,12 @@
         // Nothing to show for this range and the read failed: say so plainly.
         $("toolbar").hidden = CONNECTED === false;
         showAlert("");
-        showState("<b>Couldn't load Project Analytics</b>" + esc(loadErr)
+        showState("<b>Couldn't load the Schedule</b>" + esc(loadErr)
           + " It will try again in a few minutes.");
         return;
       }
       if (CONNECTED !== true) {
-        showState("Loading Project Analytics…");
+        showState("Loading the Schedule…");
         return;
       }
       // Paging to a range not read yet, on a calendar known to be connected: draw the new range's
@@ -357,8 +314,6 @@
 
     $("legend").innerHTML = legendHtml();
     paintSwatches($("legend"));
-    $("side-sub").textContent = "Next " + SIDE_DAYS + " days, from today. Dates are Central.";
-    $("side-body").innerHTML = sideHtml();
   }
 
   // ── details panel ─────────────────────────────────────────────────
@@ -461,15 +416,15 @@
     if (b) openDetails(BY_KEY[b.dataset.k]);
   };
   $("grid").addEventListener("click", openFrom);
-  $("side-body").addEventListener("click", openFrom);
   $("dlg-close").addEventListener("click", closeDetails);
   // A click on the backdrop lands on the <dialog> itself, outside its body.
   $("dlg").addEventListener("click", (e) => { if (e.target === $("dlg")) closeDetails(); });
 
-  // Arrow keys page the calendar, "t" goes to today. Not while typing, and not with the panel open.
+  // Arrow keys page the calendar, "t" goes to today. Only while the Schedule tab is shown, not while
+  // typing, and not with the panel open.
   document.addEventListener("keydown", (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if ($("dlg").open) return;
+    if ($("panel-schedule").hidden || $("dlg").open) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
     if (e.key === "ArrowLeft") go(-1);

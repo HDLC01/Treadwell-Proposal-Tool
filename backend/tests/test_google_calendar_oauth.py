@@ -422,7 +422,8 @@ def test_main_warns_when_the_account_only_sees_free_busy(monkeypatch, tmp_path, 
 
 
 def test_the_env_example_names_the_project_calendar_and_the_home_folder_file():
-    """GLOSSARY.md lists "Schedule" under Avoid for the Project Calendar."""
+    """The env example names the feature, not "the crews' job schedule": in GLOSSARY.md, Schedule
+    is only the Project Analytics tab that shows the calendar, never a name for the whole page."""
     example = (pathlib.Path(g.__file__).resolve().parent / ".env.example").read_text(encoding="utf-8")
     block = example[example.index("# Project Calendar"):example.index("PROJECT_CALENDAR_TTL_S")]
     assert "crews' job schedule" not in block
