@@ -593,6 +593,31 @@
     return label ? "No job is " + label + "." : "";
   }
 
+  // ── the Excel download (#785) ──
+  var DOWNLOAD_PATH = "/api/project-analytics/export.xlsx";
+
+  /** The download's address: the list as it is filtered on screen, the pressed count (`status`,
+   *  one of the four counts) and the search text (`q`) as query parameters. The server filters
+   *  with this file's own rule (plan_vs_actual.visible_projects mirrors visibleProjects). A GET:
+   *  it writes nothing. */
+  function downloadHref(q, status) {
+    var parts = [];
+    if (status && SUMMARY_COUNTS.indexOf(status) >= 0) {
+      parts.push("status=" + encodeURIComponent(status));
+    }
+    var text = String(q == null ? "" : q);
+    if (text.trim()) parts.push("q=" + encodeURIComponent(text));
+    return DOWNLOAD_PATH + (parts.length ? "?" + parts.join("&") : "");
+  }
+
+  /** The saved file's name: the server's (it carries the Central day the file was made), else
+   *  one made from `today` (a Central "YYYY-MM-DD"). Only a plain .xlsx name is taken. */
+  function downloadName(disposition, today) {
+    var m = /filename="([A-Za-z0-9._-]+\.xlsx)"/.exec(String(disposition || ""));
+    if (m && m[1].indexOf("..") < 0) return m[1];
+    return "project-analytics-" + today + ".xlsx";
+  }
+
   /** Last week's figure tile: the previous Monday to Friday, Planned hours against Actual hours
    *  over the linked jobs in the list. When Raken has not been read the planned figure still
    *  shows (for every job with a Job number) and Actual hours are a dash, never 0, and the note
@@ -971,7 +996,7 @@
     SUMMARY_COUNTS: SUMMARY_COUNTS, LAST_WEEK: LAST_WEEK, countTiles: countTiles,
     toggleStatus: toggleStatus, statusFilter: statusFilter, countsNote: countsNote,
     lastWeekTile: lastWeekTile, budgetTile: budgetTile, listCountText: listCountText,
-    noMatchText: noMatchText,
+    noMatchText: noMatchText, downloadHref: downloadHref, downloadName: downloadName,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
     RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
     RAKEN: RAKEN, STATUS: STATUS, REASON: REASON, rakenRefreshing: rakenRefreshing,

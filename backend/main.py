@@ -95,6 +95,7 @@ import pricing
 import profiles
 import project_calendar
 import plan_vs_actual
+import plan_vs_actual_xlsx
 import proposal_fonts
 import raken
 import proposal_writer
@@ -1023,6 +1024,30 @@ def api_project_calendar(start: str = "", end: str = "") -> Dict[str, Any]:
 @app.get("/api/project-analytics")
 def api_project_analytics() -> Dict[str, Any]:
     return plan_vs_actual.fetch()
+
+
+# The Excel download (#785): the Plan vs Actual list as it is filtered on screen, its pressed count
+# (`status`) and search text (`q`) applied by the page's own rule, built in
+# backend/plan_vs_actual_xlsx.py from the same response the GET above sends. A GET, never a write;
+# "/export" in the path puts it in the audit log with the other exports. Never a 500: any fault
+# downloads a workbook carrying a plain message instead of rows.
+@app.get("/api/project-analytics/export.xlsx")
+def api_project_analytics_xlsx(q: str = "", status: str = "") -> Response:
+    q, status = q[:200], status[:40]
+    today = project_calendar.today_central()
+    try:
+        data = plan_vs_actual.fetch()
+        today = plan_vs_actual_xlsx.made_on(data, today)
+        content = plan_vs_actual_xlsx.build(data, q, status, today)
+    except Exception as exc:  # noqa: BLE001 - the download must never 500
+        log.warning("plan vs actual: workbook not built (%s)", type(exc).__name__)
+        content = plan_vs_actual_xlsx.message_workbook(plan_vs_actual_xlsx.ERR_BUILD, today)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 'attachment; filename="%s"' % plan_vs_actual_xlsx.file_name(today),
+                 "Cache-Control": "no-store"})
 
 
 # "Refresh now" (#782): reads Raken's time cards and keeps the result (backend/raken_actuals.py),
