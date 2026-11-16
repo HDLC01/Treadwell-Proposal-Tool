@@ -20,6 +20,8 @@ cost something when they are wrong:
 "Today" is Wednesday 2026-11-18 (Central). PUBLIC REPO: every job, project, number and id below is
 made up.
 """
+import json
+
 import pytest
 
 import raken
@@ -294,3 +296,29 @@ def test_a_refresh_while_the_calendar_cannot_be_read_still_reads_the_last_budget
     pc.cache_clear()
     p = by_key(get(client))["job:26.501"]
     assert p["raken"]["over_under"] == -20 and p["statuses"] == ["over_budget"]
+
+
+# ── figures that are not finite numbers ───────────────────────────────────────
+@pytest.mark.parametrize("divisions", [
+    [division("01", 100, "NaN")],
+    [division("01", 100, float("nan"))],
+    [division("01", "Infinity", 90)],
+    [division("01", 1e999, 90)],
+    [division("01", 100, "1e999")],
+], ids=["nan-text", "nan-number", "infinity-text", "infinity-number", "overflow-text"])
+def test_a_figure_that_is_not_a_finite_number_is_no_figure_and_never_500s(
+        client, google, fake, divisions):
+    """JSON has no NaN or Infinity: the app renders with allow_nan=False, and the kept file would
+    carry the value through every restart until a later refresh replaced it. Such a figure is no
+    figure at all."""
+    google.events = [JOB]
+    linked_job(fake, divisions, cards=[card("r-1", "2026-11-16", "w-1", "NaN"),
+                                       card("r-1", "2026-11-17", "w-1", 1e999)])
+    body = refresh(client)
+    json.dumps(body, allow_nan=False)
+    r = by_key(body)["job:26.501"]["raken"]
+    assert r["budget"] == "none" and r["over_under"] is None
+    assert r["actual_hours"] == 0
+    json.dumps(raken_actuals.load(), allow_nan=False)
+    raken_actuals.reset_for_tests()
+    json.dumps(get(client), allow_nan=False)

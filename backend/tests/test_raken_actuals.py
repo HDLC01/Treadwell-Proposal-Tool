@@ -23,6 +23,7 @@ cost something when they are wrong:
 every job, person, project, number and id below is made up.
 """
 import datetime as dt
+import json
 import threading
 import time
 import urllib.parse
@@ -93,11 +94,14 @@ class FakeRaken:
         limit = min(int(url.params.get("limit", "10")), self.page_size)
         chunk = items[offset:offset + limit]
         nxt = offset + limit if offset + limit < len(items) else None
-        return httpx.Response(200, json={
-            "page": {"offset": offset, "limit": limit, "totalElements": len(items),
-                     "previous": None, "next": None if nxt is None else "made-up-next",
-                     "nextOffset": None if nxt is None else str(nxt)},
-            "collection": chunk})
+        body = {"page": {"offset": offset, "limit": limit, "totalElements": len(items),
+                         "previous": None, "next": None if nxt is None else "made-up-next",
+                         "nextOffset": None if nxt is None else str(nxt)},
+                "collection": chunk}
+        # json.dumps writes a float NaN or Infinity as JSON's NaN / Infinity literals, as a
+        # malformed answer could (httpx's own json= refuses them); resp.json() reads them back.
+        return httpx.Response(200, content=json.dumps(body).encode(),
+                              headers={"content-type": "application/json"})
 
     def _handle(self, request):
         url = request.url

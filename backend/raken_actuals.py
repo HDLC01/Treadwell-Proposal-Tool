@@ -87,6 +87,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -184,16 +185,15 @@ def _text(v: Any) -> Optional[str]:
 
 
 def _number(v: Any) -> Optional[float]:
-    if isinstance(v, bool):
+    """A finite number, or None. NaN and Infinity (JSON's literals, the strings, an overflowing
+    "1e999") are no figure: JSON cannot carry them, and the kept file would keep them."""
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
         return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str):
-        try:
-            return float(v.strip())
-        except ValueError:
-            return None
-    return None
+    try:
+        n = float(v.strip() if isinstance(v, str) else v)
+    except (ValueError, OverflowError):
+        return None
+    return n if math.isfinite(n) else None
 
 
 def _hours(c: Dict[str, Any]) -> float:
