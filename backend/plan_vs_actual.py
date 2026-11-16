@@ -19,9 +19,16 @@ talks to Google itself.
 GROUPING. Every event read is grouped into Projects, then only the Projects in the window are listed:
   * a Mobilization that is not a Punch groups by Job number, else by its name (case and spacing
     ignored);
-  * a Punch joins the Project with its Job number; with no Job number, the Project whose name equals
-    the Punch's name with the word "Punch" removed (case and spacing ignored). A Punch that matches
-    no Project is its own row, labelled Punch;
+  * a job half relabelled (#792): a group made by name joins the Job-number group whose name
+    matches (case and spacing ignored), and the row is the Job number's, every Mobilization
+    counted. When two Job numbers share the name, nothing is guessed: the name group stays its own
+    row;
+  * a Punch joins the Project with its Job number; with no Job number, or one that matches no job,
+    the Project whose name equals the Punch's name with the word "Punch" removed (case and spacing
+    ignored). When several Projects share that name, it joins the one whose work ended last before
+    the Punch began, else the one that ends last. A Punch whose Job number matched no job may so
+    join a Project grouped by name; that row then takes the Punch's Job number. A Punch that matches no
+    Project is its own row, labelled Punch;
   * a Project's Start is its first non-Punch Mobilization's first day, and its Deadline the last day
     of its last non-Punch Mobilization. A Punch row's are its Punches' own.
 
@@ -181,17 +188,27 @@ def _group(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
                                     "punches": [], "punch_row": False})
         g["mobs"].append(ev)
 
-    by_name: Dict[str, List[Dict[str, Any]]] = {}
-    for g in groups.values():
-        for name in {_fold(m["name"]) for m in g["mobs"]}:
-            by_name.setdefault(name, []).append(g)
+    # A job half relabelled (#792): a name group joins THE Job-number group of the same name. When
+    # two Job numbers share the name, it could be either, so it stays its own row.
+    by_job_name = _groups_by_name(g for g in groups.values() if g["job_number"])
+    for key in [k for k, g in groups.items() if not g["job_number"]]:
+        matches = by_job_name.get(_fold(groups[key]["mobs"][0]["name"])) or []
+        if len(matches) == 1:
+            matches[0]["mobs"].extend(groups.pop(key)["mobs"])
+
+    by_name = _groups_by_name(groups.values())
 
     for ev in punches:
         parent = None
         if ev["job_number"]:
             parent = groups.get("job:" + ev["job_number"])
-        else:
+        if parent is None:               # no Job number, or one that matches no job (#792)
             parent = _name_parent(by_name.get(_punch_parent_name(ev["name"])) or [], ev)
+            if parent is not None and ev["job_number"] and not parent["job_number"]:
+                # Only the Punch is relabelled yet: its Job number is the job's, so the row reads
+                # under it. The groups dict is done being looked up by key, so renaming is safe.
+                parent["job_number"] = ev["job_number"]
+                parent["key"] = "job:" + ev["job_number"]
         if parent is None:
             key = ("punch:job:" + ev["job_number"] if ev["job_number"]
                    else "punch:name:" + _fold(ev["name"]))
@@ -199,6 +216,15 @@ def _group(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
                                              "mobs": [], "punches": [], "punch_row": True})
         parent["punches"].append(ev)
     return list(groups.values())
+
+
+def _groups_by_name(groups: Iterable[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Each folded Mobilization name, with the Projects that have a Mobilization of that name."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for g in groups:
+        for name in {_fold(m["name"]) for m in g["mobs"]}:
+            out.setdefault(name, []).append(g)
+    return out
 
 
 def _name_parent(candidates: List[Dict[str, Any]], punch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
