@@ -86,6 +86,9 @@ _READ_TIMEOUT_S = 20.0
 STATE_CONNECTED = "connected"
 STATE_NOT_CONNECTED = "not_connected"
 STATE_EXPIRED = "expired"
+# Signed in, but Raken refuses every data call: Raken has not turned its Public API on for the
+# company's account. Only Raken can change that; the sign-in itself is fine and is kept.
+STATE_NOT_PROVISIONED = "not_provisioned"
 
 EXPIRED_MESSAGE = "Raken sign-in has expired. An admin must Connect Raken again."
 NOT_SET_UP_MESSAGE = "Raken is not set up on this server yet."
@@ -97,6 +100,8 @@ RATE_LIMITED_MESSAGE = "Raken is limiting requests right now. Try again later."
 QUOTA_MESSAGE = "Raken's daily request limit is used up. Try again tomorrow."
 UNREACHABLE_MESSAGE = "Raken could not be reached."
 NOT_SAVED_MESSAGE = "Raken sign-in could not be saved."
+NOT_PROVISIONED_MESSAGE = ("Raken has not turned on its Public API for Treadwell's account yet. "
+                           "Raken has to enable it; nothing needs to change here.")
 
 # Replaced by tests.
 TRANSPORT: Any = None
@@ -116,6 +121,13 @@ class RakenError(RuntimeError):
 class SignInExpired(RakenError):
     def __init__(self):
         super().__init__(EXPIRED_MESSAGE, 409)
+
+
+class NotProvisioned(RakenError):
+    """Raken answered 403 with code API_KEY_NOT_FOUND: the account has no Public API access."""
+
+    def __init__(self):
+        super().__init__(NOT_PROVISIONED_MESSAGE, 503)
 
 
 # ─── config ───────────────────────────────────────────────────────────────────
@@ -399,6 +411,19 @@ def _is_quota(resp) -> bool:
     return "limit exceeded" in text.lower()
 
 
+def _is_not_provisioned(resp) -> bool:
+    """True only for Raken's 403 {"code": "API_KEY_NOT_FOUND"} ("This account is not provisioned
+    for the Public API"). The code is compared against the literal and nothing else is read, so no
+    part of the body can reach a log line or a message."""
+    if resp.status_code != 403:
+        return False
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 - not JSON
+        return False
+    return isinstance(body, dict) and body.get("code") == "API_KEY_NOT_FOUND"
+
+
 def get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """GET one Raken API path, one call at a time with CALL_PAUSE_S between calls. A 401 renews
     the sign-in and tries once more; a 429 is retried at most len(BACKOFF_S) times. Raises
@@ -438,6 +463,9 @@ def get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
                 sleep(BACKOFF_S[tries_429])
                 tries_429 += 1
                 continue
+            if _is_not_provisioned(resp):
+                log.warning("raken: GET %s refused, the account has no Public API access", path)
+                raise NotProvisioned()
             if resp.status_code != 200:
                 log.warning("raken: GET %s answered %s", path, resp.status_code)
                 raise RakenError(UNREACHABLE_MESSAGE)
@@ -511,9 +539,11 @@ def _project_summary() -> Dict[str, Any]:
 
 
 def status() -> Dict[str, Any]:
-    """connected / not_connected / expired, with a plain message, and the project counts when
-    connected. Never raises: every failure, a sign-in that cannot be saved included, is a
-    RakenError, and a failed read keeps state "connected" and says why in `error`."""
+    """connected / not_connected / expired / not_provisioned, with a plain message, and the project
+    counts when connected. Never raises: every failure, a sign-in that cannot be saved included, is
+    a RakenError. not_provisioned means signed in but Raken has not turned its Public API on for
+    the account; the stored sign-in is kept. Any other failed read keeps state "connected" and
+    says why in `error`."""
     if not is_configured():
         return {"ok": True, "configured": False, "state": STATE_NOT_CONNECTED,
                 "message": NOT_SET_UP_MESSAGE}
@@ -526,6 +556,9 @@ def status() -> Dict[str, Any]:
         summary = _project_summary()
     except SignInExpired:
         return {"ok": True, "configured": True, "state": STATE_EXPIRED, "message": EXPIRED_MESSAGE}
+    except NotProvisioned:
+        return {"ok": True, "configured": True, "state": STATE_NOT_PROVISIONED,
+                "message": NOT_PROVISIONED_MESSAGE}
     except RakenError as exc:
         return {"ok": True, "configured": True, "state": STATE_CONNECTED,
                 "message": "Connected.", "error": exc.message}

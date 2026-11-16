@@ -68,6 +68,7 @@ class FakeRaken:
         self.refresh_expires_in = 36000
         self.refresh_delay = 0.0
         self.too_many = 0               # answer this many /projects calls with 429 first
+        self.refuse = None              # a JSON body: answer every signed-in /projects call 403 with it
         self.in_flight = 0
         self.max_in_flight = 0
         self.on_projects = None         # a hook run on each /projects call (sees the token used)
@@ -122,6 +123,8 @@ class FakeRaken:
             auth = request.headers.get("authorization", "")
             if not auth.startswith("Bearer ") or auth[7:] not in self.valid_access:
                 return httpx.Response(401, json={"message": "Unauthorized"})
+            if self.refuse is not None:
+                return httpx.Response(403, json=self.refuse)
             if self.too_many:
                 self.too_many -= 1
                 return httpx.Response(429, text="Too Many Requests")
@@ -503,6 +506,53 @@ def test_a_429_that_persists_fails_plainly_and_does_not_loop(client, fake, as_ad
     assert "projects" not in s
     assert s["error"] == "Raken is limiting requests right now. Try again later."
     assert fake.project_calls - calls == 3, "one call and two retries, then stop"
+
+
+# ── Raken's Public API not turned on for the account ──────────────────────────
+# Raken signs the admin in, then refuses every data call with this until Raken turns the Public
+# API on for the company. The message text is made up so a leak of it would show.
+NOT_PROVISIONED = {"message": "made-up refusal text 7731", "code": "API_KEY_NOT_FOUND"}
+NOT_PROVISIONED_LINE = ("Raken has not turned on its Public API for Treadwell's account yet. "
+                        "Raken has to enable it; nothing needs to change here.")
+
+
+def test_an_account_without_the_public_api_says_raken_has_to_turn_it_on(client, fake, as_admin,
+                                                                         caplog):
+    caplog.set_level("DEBUG")
+    connect(client)
+    fake.refuse = NOT_PROVISIONED
+    r = client.get("/api/raken/status")
+    assert r.status_code == 200, r.text
+    s = r.json()
+    assert s["state"] == "not_provisioned"
+    assert s["message"] == NOT_PROVISIONED_LINE
+    assert "error" not in s and "projects" not in s
+    # The sign-in is fine: it is kept, not marked expired, and works once Raken turns the API on.
+    assert stored_refresh_token(raken.TOKEN_FILE) == "made-up-refresh-1"
+    assert json.loads(raken.TOKEN_FILE.read_text(encoding="utf-8"))["expired"] is False
+    for leak in ("made-up refusal text 7731", "API_KEY_NOT_FOUND"):
+        assert leak not in r.text and leak not in caplog.text, leak
+    fake.refuse = None
+    s = client.get("/api/raken/status").json()
+    assert s["state"] == "connected" and s["projects"] == 5
+
+
+@pytest.mark.parametrize("body", [
+    {"message": "made-up refusal text 7731", "code": "MADE_UP_OTHER_CODE"},
+    {"message": "made-up refusal text 7731"},
+    {"message": "made-up refusal text 7731", "code": "api_key_not_found"},
+])
+def test_any_other_403_keeps_the_plain_could_not_be_reached(client, fake, as_admin, caplog, body):
+    caplog.set_level("DEBUG")
+    connect(client)
+    fake.refuse = body
+    r = client.get("/api/raken/status")
+    s = r.json()
+    assert s["state"] == "connected"
+    assert s["error"] == "Raken could not be reached."
+    assert stored_refresh_token(raken.TOKEN_FILE) == "made-up-refresh-1"
+    for leak in ("made-up refusal text 7731", "MADE_UP_OTHER_CODE", "api_key_not_found"):
+        assert leak not in r.text and leak not in caplog.text, leak
 
 
 def test_there_is_a_fixed_pause_between_calls(client, fake, as_admin, monkeypatch):
