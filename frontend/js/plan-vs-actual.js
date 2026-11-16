@@ -36,7 +36,9 @@
 // Behind, Over budget, Not linked; a job Behind and Over budget is counted under both), last week's
 // Planned hours against Actual hours, and the Budget totals. Each count is a button (aria-pressed):
 // pressing it shows only the jobs carrying that status, together with the search box; pressing it
-// again, or "Show all jobs", clears it.
+// again, or "Show all jobs", clears it, and the focus stays on the count. Until Raken is read the
+// counts are not known: each is a dash, cannot be pressed, and a line under them says why. The two
+// figure tiles are the job detail's own pair (pairHtml).
 //
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
@@ -273,10 +275,20 @@
   }
 
   // ── the summary strip (#788) ──────────────────────────────────────
-  /** A count pressed: show only its jobs, or every job when it was already the one pressed. */
+  /** Put the focus on the count tile `id`. A paint rebuilds the strip's buttons, so the one just
+   *  pressed is gone and the focus would drop to <body>. */
+  function focusTile(id) {
+    const tile = Array.from($("pva-sum").querySelectorAll("[data-st]"))
+      .find((b) => b.dataset.st === id);
+    if (tile) tile.focus();
+  }
+
+  /** A count pressed: show only its jobs, or every job when it was already the one pressed. The
+   *  focus stays on the count pressed. */
   function setStatus(id) {
     STATUS_F = P.toggleStatus(STATUS_F, id);
     paint();
+    focusTile(id);
   }
 
   /** "Show all jobs": clear the count filter (the search box stays), and put the focus back on the
@@ -286,46 +298,36 @@
     const was = STATUS_F;
     STATUS_F = "";
     paint();
-    const tile = Array.from($("pva-sum").querySelectorAll("[data-st]"))
-      .find((b) => b.dataset.st === was);
-    if (tile) tile.focus();
+    focusTile(was);
   }
 
+  /** A count tile. An unknown count (Raken not read) is a dash and the tile is disabled. */
   function countTileHtml(t) {
     return '<button type="button" class="sum-tile st-' + esc(t.id) + '" data-st="' + esc(t.id)
-      + '" aria-pressed="' + (t.pressed ? "true" : "false") + '">'
-      + "<b>" + esc(t.count) + "</b><span>" + esc(t.label) + "</span></button>";
+      + '" aria-pressed="' + (t.pressed ? "true" : "false") + '"' + (t.disabled ? " disabled" : "")
+      + ">"
+      + "<b>" + esc(t.count === null ? "—" : t.count) + "</b><span>" + esc(t.label) + "</span></button>";
   }
 
-  /** A figure tile: a heading, the plan beside Raken's figure, an optional line of markup built
-   *  by the caller (`extraHtml`), and a note. Every other value is escaped here. */
-  function figHtml(f) {
-    return '<div class="sum-fig"><h3>' + esc(f.title)
-      + (f.sub ? "<small>" + esc(f.sub) + "</small>" : "") + "</h3>"
-      + '<div class="sum-two"><div><b>' + esc(f.plan) + "</b><small>" + esc(f.planSub)
-      + "</small></div>"
-      + '<div class="rk"><b>' + esc(f.actual) + "</b><small>" + esc(f.actualSub)
-      + "</small></div></div>"
-      + (f.extraHtml || "") + (f.note ? "<p>" + esc(f.note) + "</p>" : "") + "</div>";
-  }
-
+  /** The strip: the four counts, a line saying why they fall short (or are not known), and two
+   *  figure tiles drawn as the job detail's own plan-beside-Raken pair (pairHtml). */
   function paintSummary() {
     const tiles = P.countTiles(DATA, STATUS_F);
     const lw = P.lastWeekTile(DATA);
     const bt = P.budgetTile(DATA);
+    const note = P.countsNote(DATA);
     const box = $("pva-sum");
     box.hidden = !tiles.length;
     let html = tiles.map(countTileHtml).join("");
+    if (tiles.length && note) html += '<p class="sum-note">' + esc(note) + "</p>";
     if (tiles.length && lw) {
-      html += figHtml({ title: "Last week", sub: lw.range, plan: lw.planned,
+      html += pairHtml({ label: "Last week", sub: lw.range, plan: lw.planned,
         planSub: "Planned hours", actual: lw.actual, actualSub: "Actual hours", note: lw.note });
     }
     if (tiles.length && bt) {
-      html += figHtml({ title: "Budget", sub: "", plan: bt.budgeted, planSub: "Budgeted hours",
+      html += pairHtml({ label: "Budget", plan: bt.budgeted, planSub: "Budgeted hours",
         actual: bt.projected, actualSub: "Projected total hours",
-        extraHtml: '<span class="ou' + (bt.over ? " over" : "") + '">Over/under '
-          + esc(bt.over_under) + "</span>",
-        note: bt.note });
+        extra: bt.over_under, over: bt.over, note: bt.note });
     }
     box.innerHTML = html;
   }
@@ -382,9 +384,10 @@
     $("pva-main").hidden = false;
     paintSummary();
 
-    const shown = P.visibleProjects(projects, Q, STATUS_F);
-    $("pva-count").textContent = P.listCountText(shown.length, projects.length, Q, STATUS_F);
-    $("pva-showall").hidden = !STATUS_F;
+    const st = P.statusFilter(DATA, STATUS_F);
+    const shown = P.visibleProjects(projects, Q, st);
+    $("pva-count").textContent = P.listCountText(shown.length, projects.length, Q, st);
+    $("pva-showall").hidden = !st;
     const body = $("pva-body");
     body.innerHTML = shown.map(rowHtml).join("");
     paintSwatches(body);
@@ -392,7 +395,7 @@
 
     const empty = !projects.length
       ? P.pvaEmptyText(DATA)
-      : (!shown.length ? P.noMatchText(Q, STATUS_F) : "");
+      : (!shown.length ? P.noMatchText(Q, st) : "");
     $("pva-empty").textContent = empty;
     $("pva-empty").hidden = !empty;
 
@@ -440,9 +443,11 @@
     return valueHtml ? "<dt>" + esc(label) + "</dt><dd>" + valueHtml + "</dd>" : "";
   }
 
-  /** One of the four pairs, larger: the plan (the calendar) beside Raken's figure. */
+  /** One of the four pairs, larger: the plan (the calendar) beside Raken's figure. The summary
+   *  strip's two figure tiles are drawn with it too, with a `sub` beside the heading. */
   function pairHtml(x) {
-    return '<div class="pd-pair"><h3>' + esc(x.label) + "</h3>"
+    return '<div class="pd-pair"><h3>' + esc(x.label)
+      + (x.sub ? "<small>" + esc(x.sub) + "</small>" : "") + "</h3>"
       + '<div class="pd-two"><div><b>' + esc(x.plan) + "</b><small>" + esc(x.planSub) + "</small></div>"
       + '<div class="rk"><b>' + esc(x.actual) + "</b><small>" + esc(x.actualSub) + "</small></div></div>"
       + (x.extra ? '<small class="ou' + (x.over ? " over" : "") + '">Over/under ' + esc(x.extra) + "</small>" : "")

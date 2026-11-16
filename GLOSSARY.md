@@ -153,6 +153,14 @@ _Avoid_: Unmatched, missing
 A Raken project with time cards in the last two weeks whose Job number belongs to no job on the Treadwell Projects calendar: crews are clocking in to work the schedule does not show. Listed apart in Plan vs Actual and never counted with the jobs.
 _Avoid_: Orphan, unscheduled job
 
+**Last week**:
+The Monday to Friday of the week before this one, in Central time. Plan vs Actual sets its Planned hours against its Actual hours, each added up over the jobs linked to Raken: the two figures for one window across those jobs, not one job so far.
+_Avoid_: Past 7 days, the last five workdays
+
+**Summary strip**:
+The row above the Plan vs Actual list: how many jobs are On plan, Behind, Over budget and Not linked (a job Behind and Over budget is counted under both), Last week's hours, and the Budgeted hours and Projected total hours added up over the linked jobs with a Raken budget. Pressing a count shows only its jobs. Until Raken is read, the counts are not known.
+_Avoid_: Dashboard, KPI bar, scorecard
+
 ### Outcomes
 
 Each outcome belongs to one Scope. A Project has no outcome of its own.

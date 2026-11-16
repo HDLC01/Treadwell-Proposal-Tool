@@ -139,35 +139,31 @@
     .pbar-tick { position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; left:0;
       background:var(--ink); }
     .pva-asof { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
-    /* The summary strip (#788): four count tiles (buttons that filter the list) and two figure
-       tiles, wrapping two counts to a row at phone width. */
+    /* The summary strip (#788): four count tiles (buttons that filter the list), a line saying
+       why the counts fall short, and two figure tiles drawn as the job detail's own pair
+       (.pd-pair / .pd-two, below), only sized here. A tile's status is its 3px LEFT border, the
+       app's status channel; pressed reads like .seg/.tab selected (Oxblood text, no Signal Red),
+       which keeps the red focus ring the only red. */
     .sum { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 12px; }
     .sum-tile { flex:1 1 120px; display:flex; flex-direction:column; align-items:flex-start;
       gap:2px; min-height:64px; padding:10px 12px; text-align:left; cursor:pointer;
       background:var(--card); color:var(--ink); border:1px solid var(--line);
-      border-top:3px solid var(--line); border-radius:12px; box-shadow:var(--shadow); font:inherit; }
+      border-left:3px solid var(--line); border-radius:12px; box-shadow:var(--shadow); font:inherit; }
     .sum-tile b { font:600 22px/1.1 system-ui; font-variant-numeric:tabular-nums; }
     .sum-tile span { font:600 12px system-ui; color:var(--ink-v); }
-    .sum-tile:hover { background:var(--surf-low); }
-    .sum-tile[aria-pressed="true"] { background:var(--red-wash); border-color:var(--red); }
+    .sum-tile:hover:not(:disabled) { background:var(--surf-low); }
+    .sum-tile[aria-pressed="true"] { background:var(--surf-low); color:var(--red-dark);
+      box-shadow:inset 0 0 0 1px var(--ink-v); }
+    .sum-tile[aria-pressed="true"] span { color:var(--red-dark); }
+    .sum-tile:disabled { opacity:.5; cursor:not-allowed; box-shadow:none; }
     .sum-tile:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
-    .sum-tile.st-on_plan { border-top-color:var(--calm); }
-    .sum-tile.st-behind { border-top-color:var(--late); }
-    .sum-tile.st-over_budget { border-top-color:var(--red-dark); }
-    .sum-tile.st-not_linked { border-top-color:var(--ink-mut); }
-    .sum-fig { flex:2 1 260px; padding:10px 12px; background:var(--card);
-      border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); }
-    .sum-fig h3 { margin:0 0 6px; font:700 10px system-ui; text-transform:uppercase;
-      letter-spacing:.07em; color:var(--ink-mut); }
-    .sum-fig h3 small { margin-left:6px; font-weight:500; text-transform:none; letter-spacing:0; }
-    .sum-two { display:flex; gap:8px; }
-    .sum-two > div { flex:1; padding:4px 8px; border-radius:8px; }
-    .sum-two .rk { background:var(--rk-wash); }
-    .sum-two b { display:block; font:600 18px system-ui; font-variant-numeric:tabular-nums; }
-    .sum-two small { display:block; font-size:11.5px; color:var(--ink-mut); }
-    .sum-fig .ou { display:block; margin-top:6px; font:600 12px system-ui; color:var(--ink-v); }
-    .sum-fig .ou.over { color:var(--late); }
-    .sum-fig p { margin:6px 0 0; font-size:12px; color:var(--ink-v); }
+    .sum-tile.st-on_plan { border-left-color:var(--calm); }
+    .sum-tile.st-behind { border-left-color:var(--late); }
+    .sum-tile.st-over_budget { border-left-color:var(--red-dark); }
+    .sum-tile.st-not_linked { border-left-color:var(--ink-mut); }
+    .sum-note { flex:1 1 100%; margin:-4px 0 0; font-size:12px; color:var(--ink-v); }
+    .sum .pd-pair { flex:2 1 260px; padding:10px 12px; }
+    .sum .pd-two b { font-size:20px; }
     .pva-only { margin-top:22px; }
     .pva-h2 { font:400 18px/1.2 var(--display); margin:0 0 4px; }
     .pva-only .pva { min-width:560px; }
@@ -197,6 +193,8 @@
       color:var(--ink-mut); margin:0 0 8px; }
     .pd-two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .pd-two > div { min-width:0; border-radius:9px; padding:6px 8px; }
+    .pd-pair h3 small { display:inline; margin-left:6px; font-weight:500; text-transform:none;
+      letter-spacing:0; }
     .pd-two .rk { background:var(--rk-wash); }
     .pd-two b { display:block; font:600 24px/1.15 system-ui; font-variant-numeric:tabular-nums;
       color:var(--ink); overflow-wrap:anywhere; }

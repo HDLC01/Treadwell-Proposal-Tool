@@ -520,25 +520,15 @@
     return typeof n === "number" && isFinite(n) && n >= 0 ? Math.round(n) : 0;
   }
 
-  /** The four count tiles, On plan, Behind, Over budget, Not linked: the server's counts (a job
-   *  Behind and Over budget is counted under both), and which one is filtering the list (`active`).
-   *  [] when the response has no summary: no strip rather than a row of zeros. */
-  function countTiles(data, active) {
-    var s = summaryOf(data);
-    if (!s) return [];
-    var counts = s.counts && typeof s.counts === "object" ? s.counts : {};
-    var labels = {};
-    STATUS_LABELS.forEach(function (pair) { labels[pair[0]] = pair[1]; });
-    return SUMMARY_COUNTS.map(function (id) {
-      return { id: id, label: labels[id], count: jobCount(counts[id]), pressed: active === id };
-    });
+  /** "1 job", "2 jobs"; with an adjective, "2 linked jobs". */
+  function jobsText(n, adjective) {
+    return n + " " + (adjective ? adjective + " " : "") + "job" + (n === 1 ? "" : "s");
   }
 
-  /** The status filter after a count is pressed: that count, or none when it was already the one
-   *  pressed. Only the four counts filter. */
-  function toggleStatus(active, id) {
-    if (SUMMARY_COUNTS.indexOf(id) < 0) return "";
-    return active === id ? "" : id;
+  /** Whether the server could count the jobs: Raken was read. Until then no row carries a status,
+   *  so its counts are no figure (null), never zeros. */
+  function countsKnown(s) {
+    return !!s && s.raken_read !== false && !!s.counts && typeof s.counts === "object";
   }
 
   function statusLabel(id) {
@@ -548,11 +538,50 @@
     return "";
   }
 
+  /** The four count tiles, On plan, Behind, Over budget, Not linked: the server's counts (a job
+   *  Behind and Over budget is counted under both), and which one is filtering the list (`active`).
+   *  With Raken not read each count is null (the page draws a dash) and the tile is disabled.
+   *  [] when the response has no summary: no strip rather than a row of zeros. */
+  function countTiles(data, active) {
+    var s = summaryOf(data);
+    if (!s) return [];
+    var known = countsKnown(s);
+    return SUMMARY_COUNTS.map(function (id) {
+      return { id: id, label: statusLabel(id), count: known ? jobCount(s.counts[id]) : null,
+        pressed: known && active === id, disabled: !known };
+    });
+  }
+
+  /** The count filtering the list: the one pressed, or none while the counts are not known (no row
+   *  carries a status then, so it would empty the list). */
+  function statusFilter(data, status) {
+    return countsKnown(summaryOf(data)) ? status || "" : "";
+  }
+
+  /** The line under the count tiles: why they are not known, or why they add up to fewer jobs
+   *  than the list holds (a job whose Raken budget was not read is in no count). "" otherwise. */
+  function countsNote(data) {
+    var s = summaryOf(data);
+    if (!s) return "";
+    if (!countsKnown(s)) return "Raken has not been read, so the counts are not known.";
+    var n = jobCount(s.unflagged);
+    if (!n) return "";
+    return n === 1 ? "1 job is in no count: its Raken budget was not read."
+      : jobsText(n) + " are in no count: their Raken budgets were not read.";
+  }
+
+  /** The status filter after a count is pressed: that count, or none when it was already the one
+   *  pressed. Only the four counts filter. */
+  function toggleStatus(active, id) {
+    if (SUMMARY_COUNTS.indexOf(id) < 0) return "";
+    return active === id ? "" : id;
+  }
+
   /** The line beside the search box: "5 jobs", or "2 of 5 jobs" while the search or a count
    *  filters the list. */
   function listCountText(shown, total, q, status) {
     if (String(q || "").trim() || status) return shown + " of " + total + " jobs";
-    return total + " job" + (total === 1 ? "" : "s");
+    return jobsText(total);
   }
 
   /** What a list filtered down to nothing says. "" when nothing filters it. */
@@ -564,15 +593,11 @@
     return label ? "No job is " + label + "." : "";
   }
 
-  /** "2 linked jobs", "1 linked job". */
-  function linkedJobs(n) {
-    return n + " linked job" + (n === 1 ? "" : "s");
-  }
-
   /** Last week's figure tile: the previous Monday to Friday, Planned hours against Actual hours
-   *  over the linked jobs. When Raken has not been read the planned figure still shows (for every
-   *  job) and Actual hours are a dash, never 0, and the note says so plainly. null without a
-   *  summary. The server's `raken` is one of LAST_WEEK. */
+   *  over the linked jobs in the list. When Raken has not been read the planned figure still
+   *  shows (for every job with a Job number) and Actual hours are a dash, never 0, and the note
+   *  says so plainly. A Workday with no Crew size adds nothing to Planned hours, and the note says
+   *  that too. null without a summary. The server's `raken` is one of LAST_WEEK. */
   function lastWeekTile(data) {
     var s = summaryOf(data);
     var w = s && s.last_week && typeof s.last_week === "object" ? s.last_week : null;
@@ -585,19 +610,26 @@
     var out = { range: range, planned: numLabel(w.planned_hours), actual: "—", note: "" };
     if (w.raken === LAST_WEEK.read) {
       out.actual = decLabel(w.actual_hours);
-      out.note = jobs ? "For " + linkedJobs(jobs) : "No job is linked to Raken.";
+      out.note = jobs ? "Over the " + jobsText(jobs, "linked") + " in the list."
+        : "No job is linked to Raken.";
     } else if (w.raken === LAST_WEEK.not_covered) {
       out.note = "Raken's last read stops before the end of last week.";
     } else {
-      out.note = "Raken has not been read, so Actual hours are not known. Planned hours are for all "
-        + jobs + " job" + (jobs === 1 ? "" : "s") + ".";
+      out.note = "Raken has not been read, so Actual hours are not known. Planned hours are for the "
+        + jobsText(jobs) + " with a Job number.";
+    }
+    if (w.crew_size_missing === true) {
+      out.note += typeof w.planned_hours === "number"
+        ? " Some Workdays have no Crew size, so Planned hours are short."
+        : " No Workday last week has a Crew size, so Planned hours are not known.";
     }
     return out;
   }
 
   /** The Budget totals' figure tile: total Budgeted hours against total Projected total hours,
    *  Over/under signed, over the linked jobs whose Raken budget was read, and how many of the
-   *  linked jobs that is. null without a summary. */
+   *  linked jobs that is. Whether Raken was read is the summary's own `raken_read`. null without
+   *  a summary. */
   function budgetTile(data) {
     var s = summaryOf(data);
     var b = s && s.budget && typeof s.budget === "object" ? s.budget : null;
@@ -607,10 +639,9 @@
     var out = { budgeted: numLabel(b.budgeted_hours), projected: numLabel(b.projected_total_hours),
       over_under: overUnderLabel(b.over_under),
       over: typeof b.over_under === "number" && b.over_under < 0, note: "" };
-    var lw = s.last_week && typeof s.last_week === "object" ? s.last_week : {};
-    if (lw.raken === LAST_WEEK.not_read) out.note = "Raken has not been read.";
+    if (s.raken_read === false) out.note = "Raken has not been read.";
     else if (!jobs) out.note = "No linked job has a Raken budget read.";
-    else out.note = jobs + " of " + linkedJobs(linked) + (jobs === 1 ? " has" : " have")
+    else out.note = jobs + " of " + jobsText(linked, "linked") + (jobs === 1 ? " has" : " have")
       + " a Raken budget read";
     return out;
   }
@@ -938,7 +969,7 @@
     TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
     filterByStatus: filterByStatus, visibleProjects: visibleProjects,
     SUMMARY_COUNTS: SUMMARY_COUNTS, LAST_WEEK: LAST_WEEK, countTiles: countTiles,
-    toggleStatus: toggleStatus,
+    toggleStatus: toggleStatus, statusFilter: statusFilter, countsNote: countsNote,
     lastWeekTile: lastWeekTile, budgetTile: budgetTile, listCountText: listCountText,
     noMatchText: noMatchText,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,

@@ -1283,7 +1283,6 @@ def test_a_schedule_bar_asks_one_question_and_gets_the_detail_or_the_line():
                    {"opened": False, "line": ""}, None]
 
 
-
 # ── the summary strip (#788): the counts filter the list ────────────────────────────────────────
 STRIP = """
 const ST = [
@@ -1310,11 +1309,11 @@ def test_a_count_filter_and_the_search_box_work_together():
                    ["job:2"], 5]
 
 
-
 SUMMARY = """
-const SUM = {jobs: 5, counts: {on_plan: 2, behind: 2, over_budget: 1, not_linked: 1},
+const SUM = {jobs: 5, raken_read: true, unflagged: 0,
+  counts: {on_plan: 2, behind: 2, over_budget: 1, not_linked: 1},
   last_week: {from: "2026-11-09", to: "2026-11-13", planned_hours: 184, actual_hours: 47.5,
-    jobs: 2, raken: "read"},
+    crew_size_missing: false, jobs: 2, raken: "read"},
   budget: {budgeted_hours: 1200, projected_total_hours: 1330, over_under: -130, jobs: 2,
     linked_jobs: 4}};
 const data = (o) => ({summary: Object.assign({}, SUM, o)});
@@ -1328,12 +1327,36 @@ def test_the_four_count_tiles_say_on_plan_behind_over_budget_and_not_linked_in_t
               ' P.countTiles(data({counts: {behind: "x", on_plan: -1}}), "").map(t => t.count),'
               ' P.countTiles({summary: null}, ""), P.countTiles(null, "")])')
     assert got[0] == [
-        {"id": "on_plan", "label": "On plan", "count": 2, "pressed": False},
-        {"id": "behind", "label": "Behind", "count": 2, "pressed": True},
-        {"id": "over_budget", "label": "Over budget", "count": 1, "pressed": False},
-        {"id": "not_linked", "label": "Not linked", "count": 1, "pressed": False}]
+        {"id": "on_plan", "label": "On plan", "count": 2, "pressed": False, "disabled": False},
+        {"id": "behind", "label": "Behind", "count": 2, "pressed": True, "disabled": False},
+        {"id": "over_budget", "label": "Over budget", "count": 1, "pressed": False,
+         "disabled": False},
+        {"id": "not_linked", "label": "Not linked", "count": 1, "pressed": False,
+         "disabled": False}]
     assert got[1] == [0, 0, 0, 0], "an odd count reads as none"
     assert got[2] == [] and got[3] == [], "no strip without the server's summary"
+
+
+def test_with_raken_not_read_the_counts_are_unknown_and_cannot_be_pressed():
+    """The server sends no counts until Raken is read: each tile is no figure (the page draws a
+    dash) and is disabled, and a count pressed earlier no longer filters the list."""
+    got = run(PROJECTS + SUMMARY + 'const un = data({raken_read: false, counts: null});'
+              'out([P.countTiles(un, "behind"), P.statusFilter(un, "behind"),'
+              ' P.statusFilter(data({}), "behind"), P.statusFilter(null, "behind")])')
+    assert got[0] == [{"id": i, "label": l, "count": None, "pressed": False, "disabled": True}
+                      for i, l in (("on_plan", "On plan"), ("behind", "Behind"),
+                                   ("over_budget", "Over budget"), ("not_linked", "Not linked"))]
+    assert got[1:] == ["", "behind", ""]
+
+
+def test_the_strip_says_why_the_counts_fall_short_or_are_not_known():
+    got = run(PROJECTS + SUMMARY + 'out([P.countsNote(data({})), P.countsNote(data({unflagged: 1})),'
+              ' P.countsNote(data({unflagged: 2})),'
+              ' P.countsNote(data({raken_read: false, counts: null, unflagged: null})),'
+              ' P.countsNote({summary: null})])')
+    assert got == ["", "1 job is in no count: its Raken budget was not read.",
+                   "2 jobs are in no count: their Raken budgets were not read.",
+                   "Raken has not been read, so the counts are not known.", ""]
 
 
 def test_pressing_a_count_again_clears_it_and_only_known_statuses_filter():
@@ -1343,7 +1366,6 @@ def test_pressing_a_count_again_clears_it_and_only_known_statuses_filter():
     assert got == ["behind", "", "over_budget", "", ""]
 
 
-
 def test_last_week_reads_planned_against_actual_and_says_plainly_when_raken_was_not_read():
     """Raken not read: the planned figure shows and Actual hours are a dash, never 0."""
     got = run(PROJECTS + SUMMARY + 'const lw = (o) => P.lastWeekTile(data({last_week:'
@@ -1351,28 +1373,40 @@ def test_last_week_reads_planned_against_actual_and_says_plainly_when_raken_was_
               'out([lw({}), lw({raken: "not_read", actual_hours: null, jobs: 3, planned_hours: 344}),'
               ' lw({raken: "not_covered", actual_hours: null}), lw({jobs: 1}),'
               ' lw({raken: "read", actual_hours: 0, jobs: 0, planned_hours: 0}),'
-              ' P.lastWeekTile({summary: null})])')
+              ' P.lastWeekTile({summary: null}),'
+              ' lw({crew_size_missing: true, planned_hours: 136}),'
+              ' lw({crew_size_missing: true, planned_hours: null})])')
     assert got[0] == {"range": "Mon, Nov 9 – Fri, Nov 13", "planned": "184", "actual": "47.5",
-                      "note": "For 2 linked jobs"}
+                      "note": "Over the 2 linked jobs in the list."}
     assert got[1] == {"range": "Mon, Nov 9 – Fri, Nov 13", "planned": "344",
                       "actual": "—",
                       "note": "Raken has not been read, so Actual hours are not known. "
-                              "Planned hours are for all 3 jobs."}
+                              "Planned hours are for the 3 jobs with a Job number."}
     assert got[2]["actual"] == "—"
     assert got[2]["note"] == "Raken's last read stops before the end of last week."
-    assert got[3]["note"] == "For 1 linked job"
+    assert got[3]["note"] == "Over the 1 linked job in the list."
     assert got[4]["actual"] == "0" and got[4]["note"] == "No job is linked to Raken."
     assert got[5] is None
+    # A Workday with no Crew size adds nothing: the figure is short, or no figure, and says so.
+    assert got[6]["planned"] == "136"
+    assert got[6]["note"] == ("Over the 2 linked jobs in the list. Some Workdays have no Crew size,"
+                              " so Planned hours are short.")
+    assert got[7]["planned"] == "—"
+    assert got[7]["note"] == ("Over the 2 linked jobs in the list. No Workday last week has a"
+                              " Crew size, so Planned hours are not known.")
 
 
 def test_the_budget_totals_say_how_many_jobs_they_cover():
-    got = run(PROJECTS + SUMMARY + 'const bt = (o, lw) => P.budgetTile(data({budget:'
-              ' Object.assign({}, SUM.budget, o), last_week: Object.assign({}, SUM.last_week, lw)}));'
+    """Whether Raken was read is the summary's own `raken_read`, never last week's state: the
+    tile reads the same with last week missing."""
+    got = run(PROJECTS + SUMMARY + 'const bt = (o, s) => P.budgetTile(data(Object.assign({budget:'
+              ' Object.assign({}, SUM.budget, o)}, s)));'
               'out([bt({}), bt({over_under: 12.4, projected_total_hours: 1187.6}),'
               ' bt({budgeted_hours: null, projected_total_hours: null, over_under: null, jobs: 0}),'
               ' bt({jobs: 1, linked_jobs: 1}),'
               ' bt({budgeted_hours: null, projected_total_hours: null, over_under: null, jobs: 0,'
-              ' linked_jobs: 0}, {raken: "not_read"}), P.budgetTile(null)])')
+              ' linked_jobs: 0}, {raken_read: false, last_week: null}), P.budgetTile(null),'
+              ' bt({}, {last_week: {raken: "not_read"}})])')
     assert got[0] == {"budgeted": "1,200", "projected": "1,330", "over_under": "−130 h",
                       "over": True, "note": "2 of 4 linked jobs have a Raken budget read"}
     assert got[1]["over_under"] == "+12 h" and got[1]["over"] is False
@@ -1381,7 +1415,7 @@ def test_the_budget_totals_say_how_many_jobs_they_cover():
     assert got[3]["note"] == "1 of 1 linked job has a Raken budget read"
     assert got[4]["note"] == "Raken has not been read."
     assert got[5] is None
-
+    assert got[6]["note"] == got[0]["note"], "last week's state is not the Budget tile's"
 
 
 def test_a_filtered_list_says_how_many_it_shows_and_why_it_is_empty():
@@ -1394,10 +1428,24 @@ def test_a_filtered_list_says_how_many_it_shows_and_why_it_is_empty():
                    "No Behind job matches the search.", ""]
 
 
-
 def _strip_world(script):
-    lifted = "\n".join(_lift(PVA, n) for n in ("setStatus", "clearStatus"))
+    lifted = "\n".join(_lift(PVA, n) for n in ("focusTile", "setStatus", "clearStatus"))
     return run(PVA_WORLD + lifted + "\n" + script)
+
+
+# The strip's count tiles as the fake page holds them after a paint: each takes the focus.
+TILES = """
+$("pva-sum").querySelectorAll = () => ["on_plan", "behind", "over_budget", "not_linked"].map(
+  (st) => ({ dataset: { st: st }, focus() { focused.push("tile:" + st); } }));
+"""
+
+
+def test_a_pressed_count_keeps_the_keyboard_focus():
+    """Painting the strip rebuilds its buttons, so the one just pressed (Enter or Space) would take
+    the focus with it to <body>; it goes back to the tile pressed, as "Show all jobs" does."""
+    got = _strip_world(TILES + 'setStatus("behind"); setStatus("behind");'
+                       'setStatus("over_budget"); clearStatus(); out(focused)')
+    assert got == ["tile:behind", "tile:behind", "tile:over_budget", "tile:over_budget"]
 
 
 def test_pressing_a_count_filters_pressing_it_again_or_show_all_clears_it():
@@ -1421,16 +1469,29 @@ def test_the_strip_is_drawn_from_the_core_and_its_counts_are_buttons_with_aria_p
     assert ">Show all jobs<" in html
     assert "P.countTiles(DATA, STATUS_F)" in js
     assert "P.lastWeekTile(DATA)" in js and "P.budgetTile(DATA)" in js
-    assert "P.visibleProjects(projects, Q, STATUS_F)" in js
+    assert "P.countsNote(DATA)" in js
+    # A count pressed while Raken is not read must not empty the list: the core decides.
+    assert "const st = P.statusFilter(DATA, STATUS_F);" in js
+    assert "P.visibleProjects(projects, Q, st)" in js
+    assert "P.listCountText(shown.length, projects.length, Q, st)" in js
+    assert "P.noMatchText(Q, st)" in js and '$("pva-showall").hidden = !st;' in js
     assert 'aria-pressed="' + "' + (t.pressed" in js
     assert '<button type="button" class="sum-tile' in js
+    assert '(t.disabled ? " disabled" : "")' in js, "an unknown count cannot be pressed"
+    assert 'esc(t.count === null ? "—" : t.count)' in js, "an unknown count is a dash, never 0"
     i = js.index('$("pva-sum").addEventListener("click"')
     assert "setStatus(" in js[i:i + 200]
     assert '$("pva-showall").addEventListener("click", clearStatus)' in js
-    # Its values reach markup escaped (figHtml escapes what it is given, once); nothing is styled
+    # The two figure tiles are the job detail's own plan-beside-Raken pair (pairHtml, .pd-pair /
+    # .pd-two), never a second copy of its markup or its rules.
+    i = js.index("function paintSummary(")
+    body = js[i:js.index("\n  }\n", i)]
+    assert body.count("pairHtml({") == 2 and "figHtml" not in js
+    for dup in (".sum-fig", ".sum-two"):
+        assert dup not in html, "%s copies the detail's pair" % dup
+    # Its values reach markup escaped (pairHtml escapes what it is given, once); nothing is styled
     # through a style attribute.
-    for field in ("t.id", "t.label", "t.count", "f.title", "f.sub", "f.plan", "f.planSub",
-                  "f.actual", "f.actualSub", "f.note", "bt.over_under"):
+    for field in ("t.id", "t.label"):
         hits = list(re.finditer(r"(?<![\w.])" + re.escape(field) + r"\b", js))
         assert hits, field
         for m in hits:
@@ -1438,13 +1499,19 @@ def test_the_strip_is_drawn_from_the_core_and_its_counts_are_buttons_with_aria_p
             if "innerHTML" in line or "'<" in line or '"<' in line:
                 assert "esc(" + field in line, "%s reaches markup unescaped: %s" % (field, line)
     for field in ("lw.range", "lw.planned", "lw.actual", "lw.note", "bt.budgeted",
-                  "bt.projected", "bt.note"):
-        assert field in js and "esc(" + field not in js, "%s escaped twice" % field
+                  "bt.projected", "bt.note", "bt.over_under"):
+        assert field in body and "esc(" + field not in js, "%s escaped twice" % field
+    assert "esc(note)" in body, "the counts' note is escaped"
     assert 'style="' not in js and "style='" not in js
-    for cls in (".sum", ".sum-tile", ".sum-fig"):
+    for cls in (".sum", ".sum-tile", ".sum-note"):
         rule = re.search(r"\n\s*" + re.escape(cls) + r"\s*\{([^}]*)\}", html)
         assert rule, cls
         assert "#" not in rule.group(1), "%s uses a new hard-coded colour" % cls
+    # DESIGN.md: a status is a 3-4px LEFT border, and Signal Red is the focus ring's only.
+    tile = re.search(r"\n\s*\.sum-tile\s*\{([^}]*)\}", html).group(1)
+    assert "border-left:3px" in tile and "border-top" not in tile
+    pressed = re.search(r'\.sum-tile\[aria-pressed="true"\]\s*\{([^}]*)\}', html).group(1)
+    assert "var(--red)" not in pressed and "var(--red-wash)" not in pressed
 
 
 def test_the_page_and_the_server_name_the_same_summary_counts_and_last_week_states():
