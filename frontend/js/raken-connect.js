@@ -68,9 +68,11 @@
     }
     if (body.state === "expired") return { text: msg, tone: "warn" };
     // Signed in, but Raken has not turned its Public API on for the account. Only Raken can fix
-    // that, so the line says so and never suggests connecting again.
+    // that, so the line says so and never suggests connecting again. The fallback is the whole of
+    // raken.NOT_PROVISIONED_MESSAGE, so the page reads the same if the server sends no message.
     if (body.state === "not_provisioned") {
-      return { text: msg || "Raken has not turned on its Public API for Treadwell's account yet.", tone: "warn" };
+      return { text: msg || "Raken has not turned on its Public API for Treadwell's account yet. " +
+        "Raken has to enable it; nothing needs to change here.", tone: "warn" };
     }
     return { text: msg || "Raken is not connected.", tone: "muted" };
   }
