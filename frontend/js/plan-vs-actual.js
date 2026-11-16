@@ -155,15 +155,11 @@
    *  hours. */
   function budgetHtml(p) {
     const bc = P.budgetCells(p);
-    if (!bc.shown) {
-      return "<b>" + esc(bc.projected) + "</b>"
-        + (bc.note ? '<small class="why">' + esc(bc.note) + "</small>" : "");
-    }
-    return "<b>" + esc(bc.projected) + "</b>"
-      + "<small>of " + esc(bc.budgeted) + " budgeted</small>"
+    const figures = !bc.shown ? "" : "<small>of " + esc(bc.budgeted) + " budgeted</small>"
       + '<small class="ou' + (bc.over ? " over" : "") + '">' + esc(bc.over_under) + "</small>"
-      + barHtml(bc.bar, true)
-      + (bc.note ? '<small class="why">' + esc(bc.note) + "</small>" : "");
+      + barHtml(bc.bar, true);
+    const note = bc.note ? '<small class="why">' + esc(bc.note) + "</small>" : "";
+    return "<b>" + esc(bc.projected) + "</b>" + figures + note;
   }
 
   function rowHtml(p) {

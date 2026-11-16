@@ -414,12 +414,13 @@
   }
 
   /** Over/under in whole hours, signed: "+12 h" under budget, "−130 h" (a real minus) over it,
-   *  "0 h" on it, a dash when there is none. */
+   *  "0 h" on it, a dash when there is none. Under an hour either way reads "−<1 h" / "+<1 h",
+   *  never "0 h": the server calls any Over/under below zero Over budget. */
   function overUnderLabel(n) {
     if (typeof n !== "number" || !isFinite(n)) return "—";
-    var r = Math.round(n);
-    if (r === 0) return "0 h";
-    return (r > 0 ? "+" : "−") + Math.abs(r).toLocaleString("en-US") + " h";
+    if (n === 0) return "0 h";
+    var r = Math.abs(Math.round(n));
+    return (n > 0 ? "+" : "−") + (r === 0 ? "<1" : r.toLocaleString("en-US")) + " h";
   }
 
   /** A pair's small bar: the plan as a tick, Raken as the fill, both as percentages of the

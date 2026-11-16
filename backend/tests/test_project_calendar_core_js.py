@@ -815,12 +815,15 @@ const budgeted = (o, st) => pr({workdays_so_far:5, planned_hours:160,
 
 def test_over_under_reads_signed_whole_hours():
     """Over/under = Budgeted hours - Projected total hours: below zero is over budget, so it reads
-    with a minus sign (U+2212), and above zero with a plus."""
+    with a minus sign (U+2212), and above zero with a plus. Under an hour either way reads "<1 h"
+    with its sign, never "0 h": the server calls -0.3 Over budget, and the cell is red."""
     got = run('out([P.overUnderLabel(12), P.overUnderLabel(-130), P.overUnderLabel(0),'
               ' P.overUnderLabel(-0.4), P.overUnderLabel(1234.6), P.overUnderLabel(-1500),'
-              ' P.overUnderLabel(null), P.overUnderLabel("12"), P.overUnderLabel(NaN)])')
-    assert got == ["+12 h", "−130 h", "0 h", "0 h", "+1,235 h", "−1,500 h",
-                   "—", "—", "—"]
+              ' P.overUnderLabel(null), P.overUnderLabel("12"), P.overUnderLabel(NaN),'
+              ' P.overUnderLabel(-0.3), P.overUnderLabel(0.3), P.overUnderLabel(-0.5),'
+              ' P.overUnderLabel(-0.01), P.overUnderLabel(0.6)])')
+    assert got == ["+12 h", "−130 h", "0 h", "−<1 h", "+1,235 h", "−1,500 h",
+                   "—", "—", "—", "−<1 h", "+<1 h", "−<1 h", "−<1 h", "+1 h"]
 
 
 def test_a_pair_bar_puts_the_plan_as_a_tick_and_raken_as_the_fill():
