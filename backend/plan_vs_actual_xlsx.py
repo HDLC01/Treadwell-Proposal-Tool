@@ -18,6 +18,13 @@ THE WORKBOOK. Two sheets:
     Last week; the Budget totals).
 Dates are real Excel dates on the Central calendar; the Raken "as of" time is Central wall-clock.
 
+THE SCREEN'S WORDS. The statuses, Workdays left, the Notes and the caveat beside Last week's
+Planned hours are the page's own words (js/project-calendar-core.js statusChips, leftLabel,
+rakenLabel, budgetCells, lastWeekTile), written again here. tests/test_plan_vs_actual_xlsx.py runs
+both on the same rows and checks they agree, so rewording one side alone fails there. Two notes are
+worded for a spreadsheet on purpose: a Job number two Raken projects carry (the file names no Raken
+project) and the booked days a Behind read covered.
+
 TEXT IS NEVER A FORMULA. Job names and Foremen are typed by hand in Google. Every text cell is
 written with the string type and Excel's quote prefix, so a name starting with = + - @ shows as
 typed and stays text even when the cell is edited. Characters a workbook cannot hold are dropped.
@@ -86,6 +93,16 @@ def _day(value: Any) -> Optional[_dt.date]:
         return None
 
 
+def _planned_caveat(lw: Dict[str, Any]) -> str:
+    """The caveat beside Last week's Planned hours when a Workday that week has no Crew size (the
+    page's lastWeekTile). "" otherwise."""
+    if lw.get("crew_size_missing") is not True:
+        return ""
+    if _num(lw.get("planned_hours")) is not None:
+        return "Some Workdays have no Crew size, so Planned hours are short."
+    return "No Workday last week has a Crew size, so Planned hours are not known."
+
+
 def _central_stamp(value: Any) -> Optional[_dt.datetime]:
     """An ISO instant as Central wall-clock with no zone (Excel has none). None when unreadable."""
     try:
@@ -104,6 +121,12 @@ def _day_long(day: Optional[_dt.date]) -> str:
     if day is None:
         return ""
     return "%s, %s %d, %d" % (_DOW[day.weekday()], _MON[day.month - 1], day.day, day.year)
+
+
+def _stamp_long(at: _dt.datetime) -> str:
+    """"Nov 9, 2026, 3:05 PM": a time in words, as the Raken "as of" cell shows one (STAMP_FMT)."""
+    return "%s %d, %d, %d:%02d %s" % (_MON[at.month - 1], at.day, at.year, at.hour % 12 or 12,
+                                       at.minute, "AM" if at.hour < 12 else "PM")
 
 
 def _num(value: Any) -> Optional[float]:
@@ -233,12 +256,13 @@ def _list_sheet(ws: Any, rows: List[Dict[str, Any]], message: str = "") -> None:
 
 
 def _summary_sheet(ws: Any, lines: List[tuple]) -> None:
-    """`lines` as (label, value, number format) rows; a label alone is a section heading."""
+    """`lines` as (label, value, number format, caveat) rows; a label alone is a section heading.
+    A caveat goes in column C, beside the figure it qualifies."""
     ws.column_dimensions["A"].width = 30
     ws.column_dimensions["B"].width = 26
     ws.column_dimensions["C"].width = 60
     for n, line in enumerate(lines, start=1):
-        label, value, fmt = (tuple(line) + (None, None, None))[:3]
+        label, value, fmt, caveat = (tuple(line) + (None, None, None, None))[:4]
         if label is None:
             continue
         cell = _put(ws, n, 1, label)
@@ -246,6 +270,8 @@ def _summary_sheet(ws: Any, lines: List[tuple]) -> None:
             cell.font = Font(bold=True)
             continue
         _put(ws, n, 2, value, fmt)
+        if caveat:
+            _put(ws, n, 3, caveat)
 
 
 def _save(wb: Workbook) -> bytes:
@@ -287,8 +313,7 @@ def build(data: Dict[str, Any], q: str, status: str, today: _dt.date) -> bytes:
     if data.get("stale"):
         at = _central_stamp(data.get("fetched_at"))
         notes.append("The calendar is the last copy read%s." % (
-            " at " + at.strftime("%b %d, %Y, %H:%M") + " (Central)"
-            if at else ""))
+            " at " + _stamp_long(at) + " (Central)" if at else ""))
     for extra in (data.get("error"), data.get("notice"), raken.get("message")):
         if isinstance(extra, str) and extra:
             notes.append(extra)
@@ -301,7 +326,7 @@ def build(data: Dict[str, Any], q: str, status: str, today: _dt.date) -> bytes:
         ("Made", today, DATE_FMT),
         ("Raken as of", _central_stamp(raken.get("as_of")), STAMP_FMT),
         ("Counts so far run through", _day(data.get("so_far_through")), DATE_FMT),
-        ("Status filter", (status_label(st) or st) if st else "All jobs"),
+        ("Status filter", status_label(st) or "All jobs"),
         ("Search", str(q).strip() or None),
         ("Jobs in the list", len(projects), WHOLE_FMT),
         ("Jobs in this file", len(shown), WHOLE_FMT),
@@ -316,7 +341,8 @@ def build(data: Dict[str, Any], q: str, status: str, today: _dt.date) -> bytes:
         ("Last week (linked jobs)",),
         ("Last week from", _day(lw.get("from")), DATE_FMT),
         ("Last week to", _day(lw.get("to")), DATE_FMT),
-        ("Last week Planned hours", _num(lw.get("planned_hours")), WHOLE_FMT),
+        ("Last week Planned hours", _num(lw.get("planned_hours")), WHOLE_FMT,
+         _planned_caveat(lw)),
         ("Last week Actual hours",
          _num(lw.get("actual_hours")) if lw.get("raken") == pva.LAST_WEEK_READ else None,
          TENTH_FMT),

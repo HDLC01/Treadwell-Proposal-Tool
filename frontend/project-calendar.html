@@ -377,15 +377,16 @@
       <div id="pva-list">
       <div class="pva-bar">
         <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
+               maxlength="200"
                aria-label="Search Plan vs Actual" autocomplete="off" />
         <span id="pva-count" class="pva-count" aria-live="polite"></span>
         <button type="button" id="pva-showall" class="btn" hidden>Show all jobs</button>
         <span class="grow"></span>
         <span id="pva-asof" class="pva-asof"></span>
-        <!-- The Excel download (#785): a GET of the list as it is filtered on screen. The script
-             keeps its address in step with the search box and the pressed count, and fetches it
-             with the sign-in header on a click. -->
-        <a id="pva-download" class="btn" href="/api/project-analytics/export.xlsx" download>Download</a>
+        <!-- The Excel download (#785): a GET of the list as it is filtered on screen. A button,
+             not a link: the script fetches it with the sign-in header, carrying the search box
+             and the pressed count. -->
+        <button type="button" id="pva-download" class="btn">Download</button>
         <!-- The page's one write (#782): reads Raken now and keeps the result on the server. It
              changes nothing in Google Calendar or Raken. -->
         <button type="button" id="pva-refresh" class="btn">Refresh now</button>

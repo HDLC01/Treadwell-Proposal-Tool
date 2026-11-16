@@ -240,8 +240,12 @@ def _last_week(rows: List[Dict[str, Any]], read: bool, today: _dt.date) -> Dict[
 # The words the page shows for a row with no Work type, so searching "unknown" finds them
 # (project-calendar-core.js WORK_TYPE_UNKNOWN_LABEL).
 WORK_TYPE_UNKNOWN_LABEL = "Work type unknown"
-# What JavaScript's \s matches, so the search splits into the same words on both sides.
-_JS_SPACE = re.compile("[\t\n\v\f\r    -     　﻿]+")
+# The most of the search text that is read, on the page as here (project-calendar-core.js
+# SEARCH_MAX; the search box takes no more).
+SEARCH_MAX = 200
+# What JavaScript's \s matches, so the search splits into the same words on both sides. Written
+# as escapes: the characters themselves are invisible in the source.
+_JS_SPACE = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")
 
 
 def work_type_of(p: Dict[str, Any]) -> str:
@@ -257,15 +261,17 @@ def counts_known(data: Dict[str, Any]) -> bool:
 
 
 def status_filter(data: Dict[str, Any], status: Any) -> str:
-    """The count the list is filtered by: `status`, or none while the counts are not known."""
-    return str(status or "") if counts_known(data) else ""
+    """The count the list is filtered by: `status` when it is one of the four counts, else none;
+    none too while the counts are not known."""
+    st = str(status or "")
+    return st if counts_known(data) and st in raken_actuals.STATUSES else ""
 
 
 def visible_projects(data: Dict[str, Any], q: Any, status: Any) -> List[Dict[str, Any]]:
     """The rows the page lists for the search text `q` and the pressed count `status`: every word
     of `q` (case ignored) in the Job number, the name, the Foreman or the Work type, and, while the
     counts are known, `status` among the row's statuses."""
-    words = [w for w in _JS_SPACE.split(str(q or "").lower()) if w]
+    words = [w for w in _JS_SPACE.split(str(q or "")[:SEARCH_MAX].lower()) if w]
     st = status_filter(data, status)
     out = []
     for p in data.get("projects") or []:

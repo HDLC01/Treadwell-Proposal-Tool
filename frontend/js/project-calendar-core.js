@@ -347,10 +347,14 @@
   };
   var RAKEN_NOT_CONNECTED = RAKEN.not_connected;
 
+  // The most of the search box that is read: the box takes no more (maxlength), and the server
+  // reads no more of the Excel download's `q` (plan_vs_actual.SEARCH_MAX).
+  var SEARCH_MAX = 200;
+
   /** The search box: every word typed must match the Job number, the name, the Foreman or the
    *  Work type (as the page words it, so "unknown" finds the jobs with none). */
   function filterProjects(projects, q) {
-    var words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+    var words = String(q || "").slice(0, SEARCH_MAX).toLowerCase().split(/\s+/).filter(Boolean);
     return (Array.isArray(projects) ? projects : []).filter(function (p) {
       if (!p || typeof p !== "object") return false;
       if (!words.length) return true;
@@ -553,9 +557,10 @@
   }
 
   /** The count filtering the list: the one pressed, or none while the counts are not known (no row
-   *  carries a status then, so it would empty the list). */
+   *  carries a status then, so it would empty the list). Only the four counts filter
+   *  (plan_vs_actual.status_filter is the same rule on the server). */
   function statusFilter(data, status) {
-    return countsKnown(summaryOf(data)) ? status || "" : "";
+    return countsKnown(summaryOf(data)) && SUMMARY_COUNTS.indexOf(status) >= 0 ? status : "";
   }
 
   /** The line under the count tiles: why they are not known, or why they add up to fewer jobs
@@ -605,7 +610,7 @@
     if (status && SUMMARY_COUNTS.indexOf(status) >= 0) {
       parts.push("status=" + encodeURIComponent(status));
     }
-    var text = String(q == null ? "" : q);
+    var text = String(q == null ? "" : q).slice(0, SEARCH_MAX);
     if (text.trim()) parts.push("q=" + encodeURIComponent(text));
     return DOWNLOAD_PATH + (parts.length ? "?" + parts.join("&") : "");
   }
@@ -992,6 +997,7 @@
     layout: layout, focusDay: focusDay, uniqueById: uniqueById,
     dayLong: dayLong, spanLabel: spanLabel, centralStamp: centralStamp,
     TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
+    SEARCH_MAX: SEARCH_MAX,
     filterByStatus: filterByStatus, visibleProjects: visibleProjects,
     SUMMARY_COUNTS: SUMMARY_COUNTS, LAST_WEEK: LAST_WEEK, countTiles: countTiles,
     toggleStatus: toggleStatus, statusFilter: statusFilter, countsNote: countsNote,

@@ -29,13 +29,18 @@ import json
 import shutil
 import subprocess
 import zipfile
+from zoneinfo import ZoneInfo
 
 import openpyxl
 import pytest
 
+import main
 import plan_vs_actual
+import plan_vs_actual_xlsx
+import supabase_client
 from test_plan_vs_actual import mob
 from test_project_calendar_core_js import CORE, FRONTEND
+from test_project_calendar_core_js import run as run_core
 from test_raken_actuals import (JOB, _clean, card, client, fake, get, google,  # noqa: F401
                                 project, refresh)
 from test_raken_budget import division
@@ -88,6 +93,12 @@ def summary(wb):
     """The Summary sheet as {label in column A: value in column B}."""
     return {r[0].value: r[1].value for r in wb[SUMMARY].iter_rows(min_row=1)
             if r[0].value is not None}
+
+
+def caveats(wb):
+    """The Summary sheet's caveats beside a figure: {label in column A: text in column C}."""
+    return {r[0].value: r[2].value for r in wb[SUMMARY].iter_rows(min_row=1, max_col=3)
+            if r[0].value is not None and r[2].value is not None}
 
 
 def names(wb):
@@ -190,7 +201,8 @@ def _page_rows(data, q, status):
 
 INPUTS = [("", ""), ("", "behind"), ("", "over_budget"), ("", "on_plan"), ("", "not_linked"),
           ("PAT", ""), ("  example   clinic ", ""), ("work type unknown", ""), ("26.50", "behind"),
-          ("lee", "not_linked"), ("punch", ""), ("zzz", "on_plan"), ("", "made_up_status")]
+          ("lee", "not_linked"), ("punch", ""), ("zzz", "on_plan"), ("", "made_up_status"),
+          ("pat" + " " * 300 + "zzz", "")]   # past 200 characters: neither side reads the zzz
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
@@ -224,6 +236,31 @@ def test_the_summary_sheet_carries_the_strips_figures(client, world):
     assert s["Last week Planned hours"] == lw["planned_hours"]
     assert s["Last week Actual hours"] == lw["actual_hours"]
     assert (s["Status filter"], s["Search"]) == ("Behind", None)
+    assert "Last week Planned hours" not in caveats(wb), "every Workday last week had a Crew size"
+
+
+BARN = mob("g", "26.507, Example Barn (Lee)", "2026-11-10", "2026-11-12")   # no Crew size
+
+
+@pytest.mark.parametrize("annex_linked, planned, caveat", [
+    (False, None, "No Workday last week has a Crew size, so Planned hours are not known."),
+    (True, 5 * 2 * 8, "Some Workdays have no Crew size, so Planned hours are short."),
+])
+def test_the_summary_sheet_says_when_last_weeks_planned_hours_are_short(
+        client, world, annex_linked, planned, caveat):
+    """The screen's Last week tile puts a caveat beside Planned hours when a Workday that week has
+    no Crew size; the file pasted into the budget report carries the same words beside the figure.
+    The Barn (no Crew size) is the only linked job last week, or the Annex (two a day) is too."""
+    google, fake = world
+    google.events = google.events + [BARN]
+    fake.projects = fake.projects + [project("r-7", "26.507", "Example Barn")] + (
+        [project("r-3", "26.503", "Example Annex")] if annex_linked else [])
+    refresh(client)
+    lw = get(client)["summary"]["last_week"]
+    assert lw["crew_size_missing"] is True and lw["planned_hours"] == planned
+    _r, wb = download(client)
+    assert summary(wb)["Last week Planned hours"] == planned
+    assert caveats(wb)["Last week Planned hours"] == caveat
 
 
 # ── dates and the file name ───────────────────────────────────────────────────
@@ -287,3 +324,114 @@ def test_any_fault_building_the_list_still_downloads_a_workbook(client, google, 
     r, wb = download(client)
     assert wb[SHEET]["A2"].value == "The download could not be built just now. Try again in a minute."
     assert r.headers["content-disposition"].endswith('-2026-11-18.xlsx"')
+
+
+# ── access ────────────────────────────────────────────────────────────────────
+def test_every_signed_in_role_downloads_the_workbook(client, world, monkeypatch):
+    """Any signed-in staff member may download it, as every Plan vs Actual route (hide-only)."""
+    refresh(client)
+    for role in ("user", "estimator", "admin"):
+        monkeypatch.setattr(main.profiles, "get_by_email",
+                            lambda e, role=role: {"id": "u", "email": e, "role": role,
+                                                  "status": "active"})
+        main._profile_cache_clear()
+        _r, wb = download(client)
+        assert len(rows(wb)) == 5, role
+
+
+def test_signed_out_the_download_is_refused(client, world, monkeypatch, real_verify_token):
+    """It exports every job's labor numbers: nobody signed out gets a workbook."""
+    monkeypatch.setattr(supabase_client, "verify_token", real_verify_token)
+    r = client.get(XLSX, headers={"authorization": ""})
+    assert r.status_code == 401
+    assert not r.content.startswith(b"PK"), "no workbook"
+
+
+def test_a_status_that_is_not_one_of_the_four_counts_filters_nothing(client, world):
+    """Only the four counts filter, on the server as on the page (P.statusFilter): anything else
+    is no filter, and the Summary never repeats it."""
+    refresh(client)
+    for status in ("made_up_status", "BEHIND", "<b>x</b>"):
+        _r, wb = download(client, status=status)
+        assert len(rows(wb)) == 5, status
+        assert summary(wb)["Status filter"] == "All jobs", status
+
+
+def test_with_no_calendar_connected_it_downloads_the_plain_message(client, google, fake,
+                                                                    monkeypatch):
+    monkeypatch.delenv("PROJECT_CALENDAR_ID", raising=False)
+    assert get(client)["connected"] is False
+    _r, wb = download(client)
+    assert wb[SHEET]["A2"].value == "The Treadwell Projects calendar is not connected yet."
+    assert summary(wb)["Note"] == "The Treadwell Projects calendar is not connected yet."
+
+
+def test_a_google_failure_after_a_good_read_lists_the_last_copy_and_says_when_it_was_read(
+        client, world):
+    """The stale copy's rows are listed, and the Note says when it was read, in Central, worded as
+    the rest of the file words a time ("Nov 18, 2026, 9:05 AM")."""
+    google, _fake = world
+    first = get(client)
+    google.fail = True
+    data = get(client)
+    assert data["stale"] is True and data["fetched_at"] == first["fetched_at"]
+    _r, wb = download(client)
+    assert len(rows(wb)) == 5
+    at = dt.datetime.fromisoformat(data["fetched_at"]).astimezone(ZoneInfo("America/Chicago"))
+    when = "%s %d, %d, %d:%02d %s" % (at.strftime("%b"), at.day, at.year, at.hour % 12 or 12,
+                                       at.minute, "AM" if at.hour < 12 else "PM")
+    note = summary(wb)["Note"]
+    assert note.startswith("The calendar is the last copy read at %s (Central)." % when), note
+    assert data["error"] in note
+
+
+# ── the screen's words ────────────────────────────────────────────────────────
+def _variants(projects):
+    """The world's rows, and each kind of row the world lacks, made from them: every Raken state,
+    every Budget pair state, and the Raken projection below Actual hours."""
+    linked = next(p for p in projects if (p.get("raken") or {}).get("state") == "linked")
+    out = [dict(p) for p in projects]
+    for state in ("not_connected", "expired", "not_provisioned", "unreachable", "not_refreshed",
+                  None):
+        out.append(dict(linked, raken={"state": state} if state else {}))
+    for change in ({"budget": "not_read"}, {"budget": "none"},
+                   {"budget": "shown", "projection_below_actual": True}):
+        out.append(dict(linked, raken=dict(linked["raken"], **change)))
+    return out
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_workbook_words_a_row_as_the_page_does(client, world):
+    """The Statuses, the Workdays left and the Notes are the page's own words (statusChips,
+    leftLabel, rakenLabel, budgetCells' note), so rewording one on the page alone fails here. Two
+    notes are worded for a spreadsheet on purpose and are not compared: a Job number two Raken
+    projects carry (the page names them; the file names no Raken project) and the booked days a
+    Behind read covered (the page's "2 of 2" beside the figure)."""
+    refresh(client)
+    rows_in = _variants(get(client)["projects"])
+    got = run_core("out(%s.map((p) => [P.statusChips(p).map((c) => c.label).join(', '),"
+                   " P.leftLabel(p), p.raken && p.raken.state === 'linked'"
+                   " ? P.budgetCells(p).note : P.rakenLabel(p)]))" % json.dumps(rows_in))
+    for p, (statuses, left, note) in zip(rows_in, got):
+        row = dict(zip(HEADERS, plan_vs_actual_xlsx.job_row(p)))
+        assert (row["Statuses"] or "") == statuses, p["name"]
+        n = row["Workdays left"]
+        assert left == (n if isinstance(n, str) else
+                        "%d workday%s left" % (n, "" if n == 1 else "s")), p["name"]
+        notes = (row["Notes"] or "").split("; ")
+        assert (note in notes) if note else True, (p["name"], note, notes)
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_caveat_beside_last_weeks_planned_hours_is_the_tiles_own(client, world):
+    weeks = [{"crew_size_missing": True, "planned_hours": 80},
+             {"crew_size_missing": True, "planned_hours": None},
+             {"crew_size_missing": False, "planned_hours": 80}]
+    for w in weeks:
+        w.update({"from": "2026-11-09", "to": "2026-11-13", "jobs": 2, "raken": "read",
+                  "actual_hours": 60})
+    got = run_core("out(%s.map((w) => P.lastWeekTile({summary: {last_week: w}}).note))"
+                   % json.dumps(weeks))
+    for w, note in zip(weeks, got):
+        caveat = plan_vs_actual_xlsx._planned_caveat(w)
+        assert note.endswith(" " + caveat) if caveat else "Crew size" not in note, (w, note)

@@ -165,15 +165,15 @@
   }
 
   // "Download": a GET of the list as it is filtered on screen. Every /api route needs the sign-in
-  // header, which a plain link cannot send, so a click fetches the file and saves it under the
-  // server's name (it carries the Central day it was made). A read, never a write.
+  // header, which a plain link cannot send (so the control is a button with no address), so a
+  // click fetches the file and saves it under the server's name (it carries the Central day it
+  // was made). A read, never a write.
   let DOWNLOADING = false;
-  async function downloadNow(e) {
-    e.preventDefault();
+  async function downloadNow() {
     if (DOWNLOADING) return;
     DOWNLOADING = true;
     const btn = $("pva-download");
-    btn.setAttribute("aria-disabled", "true");
+    btn.disabled = true;
     btn.textContent = "Downloading…";
     try {
       const r = await api(downloadPath());
@@ -191,7 +191,7 @@
       showAlert("Couldn't download the list just now. Try again in a minute.");
     }
     DOWNLOADING = false;
-    btn.removeAttribute("aria-disabled");
+    btn.disabled = false;
     btn.textContent = "Download";
   }
 
@@ -429,7 +429,6 @@
     const shown = P.visibleProjects(projects, Q, st);
     $("pva-count").textContent = P.listCountText(shown.length, projects.length, Q, st);
     $("pva-showall").hidden = !st;
-    $("pva-download").setAttribute("href", downloadPath());
     const body = $("pva-body");
     body.innerHTML = shown.map(rowHtml).join("");
     paintSwatches(body);
