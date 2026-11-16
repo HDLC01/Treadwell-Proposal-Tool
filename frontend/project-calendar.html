@@ -139,6 +139,31 @@
     .pbar-tick { position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; left:0;
       background:var(--ink); }
     .pva-asof { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    /* The summary strip (#788): four count tiles (buttons that filter the list), a line saying
+       why the counts fall short, and two figure tiles drawn as the job detail's own pair
+       (.pd-pair / .pd-two, below), only sized here. A tile's status is its 3px LEFT border, the
+       app's status channel; pressed reads like .seg/.tab selected (Oxblood text, no Signal Red),
+       which keeps the red focus ring the only red. */
+    .sum { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 12px; }
+    .sum-tile { flex:1 1 120px; display:flex; flex-direction:column; align-items:flex-start;
+      gap:2px; min-height:64px; padding:10px 12px; text-align:left; cursor:pointer;
+      background:var(--card); color:var(--ink); border:1px solid var(--line);
+      border-left:3px solid var(--line); border-radius:12px; box-shadow:var(--shadow); font:inherit; }
+    .sum-tile b { font:600 22px/1.1 system-ui; font-variant-numeric:tabular-nums; }
+    .sum-tile span { font:600 12px system-ui; color:var(--ink-v); }
+    .sum-tile:hover:not(:disabled) { background:var(--surf-low); }
+    .sum-tile[aria-pressed="true"] { background:var(--surf-low); color:var(--red-dark);
+      box-shadow:inset 0 0 0 1px var(--ink-v); }
+    .sum-tile[aria-pressed="true"] span { color:var(--red-dark); }
+    .sum-tile:disabled { opacity:.5; cursor:not-allowed; box-shadow:none; }
+    .sum-tile:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .sum-tile.st-on_plan { border-left-color:var(--calm); }
+    .sum-tile.st-behind { border-left-color:var(--late); }
+    .sum-tile.st-over_budget { border-left-color:var(--red-dark); }
+    .sum-tile.st-not_linked { border-left-color:var(--ink-mut); }
+    .sum-note { flex:1 1 100%; margin:-4px 0 0; font-size:12px; color:var(--ink-v); }
+    .sum .pd-pair { flex:2 1 260px; padding:10px 12px; }
+    .sum .pd-two b { font-size:20px; }
     .pva-only { margin-top:22px; }
     .pva-h2 { font:400 18px/1.2 var(--display); margin:0 0 4px; }
     .pva-only .pva { min-width:560px; }
@@ -168,6 +193,8 @@
       color:var(--ink-mut); margin:0 0 8px; }
     .pd-two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .pd-two > div { min-width:0; border-radius:9px; padding:6px 8px; }
+    .pd-pair h3 small { display:inline; margin-left:6px; font-weight:500; text-transform:none;
+      letter-spacing:0; }
     .pd-two .rk { background:var(--rk-wash); }
     .pd-two b { display:block; font:600 24px/1.15 system-ui; font-variant-numeric:tabular-nums;
       color:var(--ink); overflow-wrap:anywhere; }
@@ -352,6 +379,7 @@
         <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
                aria-label="Search Plan vs Actual" autocomplete="off" />
         <span id="pva-count" class="pva-count" aria-live="polite"></span>
+        <button type="button" id="pva-showall" class="btn" hidden>Show all jobs</button>
         <span class="grow"></span>
         <span id="pva-asof" class="pva-asof"></span>
         <!-- The page's one write (#782): reads Raken now and keeps the result on the server. It
@@ -361,6 +389,9 @@
       <p id="pva-alert" class="alert" role="status" hidden></p>
       <div id="pva-state" class="msg">Loading Plan vs Actual…</div>
       <div id="pva-main" hidden>
+        <!-- The summary strip (#788): the server's counts and figures. Each count is a button that
+             shows only its jobs; pressed again, or "Show all jobs", it clears. -->
+        <section id="pva-sum" class="sum" aria-label="Summary of the jobs" hidden></section>
         <div class="pva-card">
           <div class="pva-scroll">
             <table class="pva">

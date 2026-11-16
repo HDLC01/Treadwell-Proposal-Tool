@@ -32,6 +32,14 @@
 // (P.pvaLookup). "Back", or Esc, returns to where it was opened from: the list, or the Schedule.
 // Leaving by the tab bar closes the detail.
 //
+// THE SUMMARY STRIP (#788), above the list, from the server's `summary`: four counts (On plan,
+// Behind, Over budget, Not linked; a job Behind and Over budget is counted under both), last week's
+// Planned hours against Actual hours, and the Budget totals. Each count is a button (aria-pressed):
+// pressing it shows only the jobs carrying that status, together with the search box; pressing it
+// again, or "Show all jobs", clears it, and the focus stays on the count. Until Raken is read the
+// counts are not known: each is a dash, cannot be pressed, and a line under them says why. The two
+// figure tiles are the job detail's own pair (pairHtml).
+//
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
 // text value is escaped, and every colour is set through element.style once the markup is in
@@ -59,6 +67,7 @@
   let DATA = null;                     // the last good response
   let LOAD_ERR = "";                   // why the last read failed, if it did
   let Q = ss(SK_Q, "");
+  let STATUS_F = "";                   // the count pressed in the summary strip, "" for none
   let LAST_SIG = "";                   // anti-blink: skip identical repaints
   let REFRESHING = false;              // a "Refresh now" is on its way
   let FOLLOW = 0;                      // the timer polling while the server is refreshing
@@ -265,9 +274,67 @@
     root.querySelectorAll(".pbar-tick[data-l]").forEach((el) => { el.style.left = pct(el.dataset.l); });
   }
 
+  // ── the summary strip (#788) ──────────────────────────────────────
+  /** Put the focus on the count tile `id`. A paint rebuilds the strip's buttons, so the one just
+   *  pressed is gone and the focus would drop to <body>. */
+  function focusTile(id) {
+    const tile = Array.from($("pva-sum").querySelectorAll("[data-st]"))
+      .find((b) => b.dataset.st === id);
+    if (tile) tile.focus();
+  }
+
+  /** A count pressed: show only its jobs, or every job when it was already the one pressed. The
+   *  focus stays on the count pressed. */
+  function setStatus(id) {
+    STATUS_F = P.toggleStatus(STATUS_F, id);
+    paint();
+    focusTile(id);
+  }
+
+  /** "Show all jobs": clear the count filter (the search box stays), and put the focus back on the
+   *  count that was pressed, since the button itself goes away. */
+  function clearStatus() {
+    if (!STATUS_F) return;
+    const was = STATUS_F;
+    STATUS_F = "";
+    paint();
+    focusTile(was);
+  }
+
+  /** A count tile. An unknown count (Raken not read) is a dash and the tile is disabled. */
+  function countTileHtml(t) {
+    return '<button type="button" class="sum-tile st-' + esc(t.id) + '" data-st="' + esc(t.id)
+      + '" aria-pressed="' + (t.pressed ? "true" : "false") + '"' + (t.disabled ? " disabled" : "")
+      + ">"
+      + "<b>" + esc(t.count === null ? "—" : t.count) + "</b><span>" + esc(t.label) + "</span></button>";
+  }
+
+  /** The strip: the four counts, a line saying why they fall short (or are not known), and two
+   *  figure tiles drawn as the job detail's own plan-beside-Raken pair (pairHtml). */
+  function paintSummary() {
+    const tiles = P.countTiles(DATA, STATUS_F);
+    const lw = P.lastWeekTile(DATA);
+    const bt = P.budgetTile(DATA);
+    const note = P.countsNote(DATA);
+    const box = $("pva-sum");
+    box.hidden = !tiles.length;
+    let html = tiles.map(countTileHtml).join("");
+    if (tiles.length && note) html += '<p class="sum-note">' + esc(note) + "</p>";
+    if (tiles.length && lw) {
+      html += pairHtml({ label: "Last week", sub: lw.range, plan: lw.planned,
+        planSub: "Planned hours", actual: lw.actual, actualSub: "Actual hours", note: lw.note });
+    }
+    if (tiles.length && bt) {
+      html += pairHtml({ label: "Budget", plan: bt.budgeted, planSub: "Budgeted hours",
+        actual: bt.projected, actualSub: "Projected total hours",
+        extra: bt.over_under, over: bt.over, note: bt.note });
+    }
+    box.innerHTML = html;
+  }
+
   function paint() {
     paintButton();
-    const sig = JSON.stringify([Q, LOAD_ERR, DATA, DETAIL]);
+    const sig = JSON.stringify([Q, STATUS_F, LOAD_ERR, DATA, DETAIL]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
     paintList();
@@ -315,11 +382,12 @@
 
     $("pva-state").hidden = true;
     $("pva-main").hidden = false;
+    paintSummary();
 
-    const shown = P.filterProjects(projects, Q);
-    $("pva-count").textContent = Q
-      ? shown.length + " of " + projects.length + " jobs"
-      : projects.length + " job" + (projects.length === 1 ? "" : "s");
+    const st = P.statusFilter(DATA, STATUS_F);
+    const shown = P.visibleProjects(projects, Q, st);
+    $("pva-count").textContent = P.listCountText(shown.length, projects.length, Q, st);
+    $("pva-showall").hidden = !st;
     const body = $("pva-body");
     body.innerHTML = shown.map(rowHtml).join("");
     paintSwatches(body);
@@ -327,7 +395,7 @@
 
     const empty = !projects.length
       ? P.pvaEmptyText(DATA)
-      : (!shown.length ? "No job matches the search." : "");
+      : (!shown.length ? P.noMatchText(Q, st) : "");
     $("pva-empty").textContent = empty;
     $("pva-empty").hidden = !empty;
 
@@ -375,9 +443,11 @@
     return valueHtml ? "<dt>" + esc(label) + "</dt><dd>" + valueHtml + "</dd>" : "";
   }
 
-  /** One of the four pairs, larger: the plan (the calendar) beside Raken's figure. */
+  /** One of the four pairs, larger: the plan (the calendar) beside Raken's figure. The summary
+   *  strip's two figure tiles are drawn with it too, with a `sub` beside the heading. */
   function pairHtml(x) {
-    return '<div class="pd-pair"><h3>' + esc(x.label) + "</h3>"
+    return '<div class="pd-pair"><h3>' + esc(x.label)
+      + (x.sub ? "<small>" + esc(x.sub) + "</small>" : "") + "</h3>"
       + '<div class="pd-two"><div><b>' + esc(x.plan) + "</b><small>" + esc(x.planSub) + "</small></div>"
       + '<div class="rk"><b>' + esc(x.actual) + "</b><small>" + esc(x.actualSub) + "</small></div></div>"
       + (x.extra ? '<small class="ou' + (x.over ? " over" : "") + '">Over/under ' + esc(x.extra) + "</small>" : "")
@@ -516,6 +586,11 @@
 
   // ── wiring (delegated; CSP forbids inline handlers) ───────────────
   $("pva-refresh").addEventListener("click", refreshNow);
+  $("pva-sum").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-st]");
+    if (b) setStatus(b.dataset.st);
+  });
+  $("pva-showall").addEventListener("click", clearStatus);
   $("pva-body").addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
     const tr = e.target.closest("tr[data-key]");

@@ -56,6 +56,19 @@ cards against a full planned day):
     and carries the plan only; raken_actuals fills each earlier day's people on site, hours and
     "missed" for a linked row.
 
+THE SUMMARY STRIP (#788), in the same response ("summary"), worked out once the Raken side is set:
+  * the four counts (On plan, Behind, Over budget, Not linked) follow each row's own flags, so a job
+    Behind and Over budget counts under both and the counts can add up to more than the jobs; a row
+    whose Budget pair was not read carries no flag and is counted under none ("unflagged" says how
+    many). With Raken not read ("raken_read" false) the counts are no figure, never zeros;
+  * last week (raken_actuals.last_week, the previous Monday to Friday in Central): Planned hours from
+    the day-by-day of each booked Workday that week, against the Actual hours on those days' time
+    cards, over the LINKED rows. With Raken not read, the plan of every row with a Job number and
+    no Actual figure. "crew_size_missing" when a day that week has no Crew size (Planned hours are
+    short, or no figure when no day has one);
+  * the Budget totals: Budgeted hours and Projected total hours added up over the linked rows whose
+    Budget pair was read with a Raken budget, and how many rows that is.
+
 NEVER A 500. Not connected answers connected:false; a Google failure with nothing saved answers
 ok:true, no projects and the plain error; a stale copy is served with stale:true.
 """
@@ -118,13 +131,106 @@ def _response(connected: bool, today: _dt.date, projects: List[Dict[str, Any]], 
         log.warning("plan vs actual: Raken side not set (%s)", type(exc).__name__)
         side = raken_actuals.unavailable(projects)
     side["raken"]["refreshing"] = _REFRESH_LOCK.locked()
+    try:
+        strip: Optional[Dict[str, Any]] = summarise(projects, side["raken"], today)
+    except Exception as exc:  # noqa: BLE001 - no strip rather than a 500 or a wrong one
+        log.warning("plan vs actual: summary strip not worked out (%s)", type(exc).__name__)
+        strip = None
     return {"ok": True, "connected": connected, "stale": stale, "fetched_at": fetched_at,
+            "summary": strip,
             "error": error, "notice": notice, "today": today.isoformat(),
             "so_far_through": (today - _DAY).isoformat(),
             "read_from": first.isoformat(), "read_to": last.isoformat(),
             "hours_per_workday": HOURS_PER_WORKDAY, "window_days": WINDOW_DAYS,
             "work_types": [dict(w) for w in pc.WORK_TYPE_LEGEND], "raken": side["raken"],
             "raken_only": side["raken_only"], "projects": projects}
+
+
+# ─── the summary strip (#788) ─────────────────────────────────────────────────
+# The order the strip shows the counts in; each is a status a row can carry.
+SUMMARY_COUNTS = (raken_actuals.STATUS_ON_PLAN, raken_actuals.STATUS_BEHIND,
+                  raken_actuals.STATUS_OVER_BUDGET, raken_actuals.STATUS_NOT_LINKED)
+# Last week's Actual hours (#788): read; Raken not read (no figure); or the kept read stops before
+# the end of last week (no figure). js/project-calendar-core.js names the same values (P.LAST_WEEK).
+LAST_WEEK_READ = "read"
+LAST_WEEK_NOT_READ = "not_read"
+LAST_WEEK_NOT_COVERED = "not_covered"
+LAST_WEEK_STATES = (LAST_WEEK_READ, LAST_WEEK_NOT_READ, LAST_WEEK_NOT_COVERED)
+
+
+def summarise(projects: List[Dict[str, Any]], raken_block: Dict[str, Any],
+              today: _dt.date) -> Dict[str, Any]:
+    """The summary strip, from the rows as the response carries them (their Raken side set).
+
+    COUNTS follow each row's own flags: a row Behind and Over budget counts under both, so the
+    counts can add up to more than `jobs`. A row whose Budget pair was not read carries no flag
+    (it could be Over budget) and so is counted under none; `unflagged` says how many rows that
+    is, so the strip can say why the counts fall short. With Raken not read (`raken_read` false)
+    no row carries a flag, so the counts and `unflagged` are no figure (None), never zeros."""
+    read = raken_block.get("state") == raken_actuals.STATE_CONNECTED
+    counts: Optional[Dict[str, int]] = None
+    unflagged: Optional[int] = None
+    if read:
+        counts = {s: 0 for s in SUMMARY_COUNTS}
+        unflagged = 0
+        for p in projects:
+            flags = set(p.get("statuses") or []) & set(counts)
+            unflagged += not flags
+            for s in flags:
+                counts[s] += 1
+    linked = [p for p in projects
+              if (p.get("raken") or {}).get("state") == raken_actuals.STATE_LINKED]
+    # Unread, nothing says which rows are linked; a row with no Job number never can be.
+    numbered = [p for p in projects if (p.get("job_number") or "").strip()]
+    return {"jobs": len(projects), "raken_read": read, "counts": counts, "unflagged": unflagged,
+            "last_week": _last_week(linked if read else numbered, read, today),
+            "budget": _budget_totals(linked if read else [])}
+
+
+def _budget_totals(linked: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Total Budgeted hours against total Projected total hours over the linked rows whose Budget
+    pair was read with a Raken budget (raken_actuals.BUDGET_SHOWN), and how many rows that is. A row
+    with no Raken budget, or whose budget was not read, is left out of both totals; with none left,
+    the totals are no figure."""
+    shown = [p["raken"] for p in linked if p["raken"].get("budget") == raken_actuals.BUDGET_SHOWN]
+    out: Dict[str, Any] = {"budgeted_hours": None, "projected_total_hours": None,
+                           "over_under": None, "jobs": len(shown), "linked_jobs": len(linked)}
+    if shown:
+        budgeted = round(sum(r["budgeted_hours"] for r in shown), 2)
+        projected = round(sum(r["projected_total_hours"] for r in shown), 2)
+        out.update(budgeted_hours=budgeted, projected_total_hours=projected,
+                   over_under=round(budgeted - projected, 2))
+    return out
+
+
+def _last_week(rows: List[Dict[str, Any]], read: bool, today: _dt.date) -> Dict[str, Any]:
+    """Last week's Planned hours against Actual hours (raken_actuals.last_week: the previous Monday
+    to Friday). Planned hours are the day-by-day's own figure for each booked Workday that week
+    (that day's planned crew x HOURS_PER_WORKDAY), added up; Actual hours every hour the rows'
+    time cards put on those days. `rows` are the linked rows when Raken was read; when it was not,
+    nothing says which rows are linked, so the plan of every row with a Job number (summarise()
+    passes those) is shown and Actual hours are no
+    figure (LAST_WEEK_NOT_READ), never 0. LAST_WEEK_NOT_COVERED when the kept read stops short of
+    the week.
+
+    `crew_size_missing` when any booked Mobilization that week has no Crew size: its days add
+    nothing, so Planned hours are short. When no day booked that week has a Crew size at all,
+    Planned hours are no figure (None), never 0."""
+    mon, fri = raken_actuals.last_week(today)
+    lo, hi = mon.isoformat(), fri.isoformat()
+    days = [d for p in rows for d in p.get("day_by_day") or [] if lo <= d["date"] <= hi]
+    known = [d["planned_hours"] for d in days if isinstance(d.get("planned_hours"), int)]
+    planned: Optional[int] = sum(known) if known or not days else None
+    missing = any(d.get("crew_size_missing") or d.get("planned_hours") is None for d in days)
+    state, actual = LAST_WEEK_NOT_READ, None
+    if read:
+        week = [(p.get("raken") or {}).get("last_week_hours") for p in rows]
+        if any(h is None for h in week):
+            state = LAST_WEEK_NOT_COVERED
+        else:
+            state, actual = LAST_WEEK_READ, round(sum(week), 2)
+    return {"from": lo, "to": hi, "planned_hours": planned, "actual_hours": actual,
+            "crew_size_missing": missing, "jobs": len(rows), "raken": state}
 
 
 # ─── reading ──────────────────────────────────────────────────────────────────
