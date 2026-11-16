@@ -425,7 +425,7 @@ def refresh() -> Dict[str, Any]:
                 # last time, so the numbers on screen never shrink during an outage.
                 calendar_failed = not connected or (not projects and bool(meta.get("error")))
                 first, last = raken_actuals.span(projects, today, keep_last=calendar_failed)
-                raken_actuals.read_and_keep(first, last, projects, keep_last=calendar_failed)
+                raken_actuals.read_and_keep(first, last, rows=projects, keep_last=calendar_failed)
         except Exception as exc:  # noqa: BLE001 - "Refresh now" must never 500 the page
             log.warning("plan vs actual: Raken not refreshed (%s)", type(exc).__name__)
     finally:
