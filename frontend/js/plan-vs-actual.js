@@ -17,6 +17,11 @@
 // section; the read's "as of" time is shown in Central, and when Raken cannot be read the server's
 // one plain sentence goes in the notice. A GET never reads Raken; "Refresh now" does.
 //
+// THE BUDGET PAIR (#783): Projected total hours against Budgeted hours, both Raken's, with
+// Over/under signed ("+12 h", "−130 h"). The Hours and Budget pairs each carry a small bar, the plan
+// a tick and Raken the fill, its widths set through the CSSOM. Statuses are flags: On plan, or any of
+// Behind and Over budget (both when both), or Not linked alone.
+//
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
 // text value is escaped, and every colour is set through element.style once the markup is in
@@ -136,6 +141,31 @@
     $("pva-count").textContent = "";
   }
 
+  /** A pair's small bar (P.pairBar): empty spans carrying the widths as data, set through the
+   *  CSSOM by paintBars() once the markup is in place. "" when there is no bar. */
+  function barHtml(bar, colourOver) {
+    if (!bar) return "";
+    return '<span class="pbar' + (colourOver && bar.over ? " over" : "") + '" aria-hidden="true">'
+      + '<i class="pbar-fill" data-w="' + esc(bar.fill) + '"></i>'
+      + '<i class="pbar-tick" data-l="' + esc(bar.tick) + '"></i></span>';
+  }
+
+  /** The Budget pair's cell: Projected total hours, "of" Budgeted hours, Over/under, its bar,
+   *  and a note when there is no budget, it was not read, or the projection is below Actual
+   *  hours. */
+  function budgetHtml(p) {
+    const bc = P.budgetCells(p);
+    if (!bc.shown) {
+      return "<b>" + esc(bc.projected) + "</b>"
+        + (bc.note ? '<small class="why">' + esc(bc.note) + "</small>" : "");
+    }
+    return "<b>" + esc(bc.projected) + "</b>"
+      + "<small>of " + esc(bc.budgeted) + " budgeted</small>"
+      + '<small class="ou' + (bc.over ? " over" : "") + '">' + esc(bc.over_under) + "</small>"
+      + barHtml(bc.bar, true)
+      + (bc.note ? '<small class="why">' + esc(bc.note) + "</small>" : "");
+  }
+
   function rowHtml(p) {
     const sub = [P.workTypeOf(p), p.foreman ? "Foreman " + p.foreman : "",
       !p.is_punch && Array.isArray(p.punches) && p.punches.length
@@ -160,7 +190,8 @@
       + '<td class="num"><b>' + esc(P.numLabel(p.crew_size)) + "</b></td>"
       + '<td class="num rk"><b>' + esc(rc.on_site) + "</b></td>"
       + '<td class="num"><b>' + esc(P.numLabel(p.planned_hours)) + "</b></td>"
-      + '<td class="num rk"><b>' + esc(rc.hours) + "</b></td>"
+      + '<td class="num rk"><b>' + esc(rc.hours) + "</b>" + barHtml(P.hoursBar(p), false) + "</td>"
+      + '<td class="num rk">' + budgetHtml(p) + "</td>"
       + '<td class="status">' + flags + (why ? "<small>" + esc(why) + "</small>" : "") + "</td>"
       + "</tr>";
   }
@@ -188,6 +219,17 @@
       const c = el.dataset.color;
       if (c && /^#[0-9a-f]{6}$/i.test(c)) el.style.background = c;
     });
+  }
+
+  /** The pair bars' fill widths and tick places, through the CSSOM (the CSP forbids style
+   *  attributes). Only a percentage from 0 to 100 is ever set. */
+  function paintBars(root) {
+    const pct = (v) => {
+      const n = Number(v);
+      return isFinite(n) && n >= 0 && n <= 100 ? n + "%" : "";
+    };
+    root.querySelectorAll(".pbar-fill[data-w]").forEach((el) => { el.style.width = pct(el.dataset.w); });
+    root.querySelectorAll(".pbar-tick[data-l]").forEach((el) => { el.style.left = pct(el.dataset.l); });
   }
 
   function paint() {
@@ -244,6 +286,7 @@
     const body = $("pva-body");
     body.innerHTML = shown.map(rowHtml).join("");
     paintSwatches(body);
+    paintBars(body);
 
     const empty = !projects.length
       ? P.pvaEmptyText(DATA)
