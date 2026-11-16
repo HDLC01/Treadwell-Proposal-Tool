@@ -22,9 +22,13 @@ BUILT LIKE THE 6 AM DIGEST (backend/digest_worker.py), for the same reasons:
 
 A RUN ALREADY GOING IS WAITED FOR, NOT DOUBLED. A "Refresh now" pressed just before 5:00 holds
 plan_vs_actual's one refresh lock; the daily run waits for it to finish and takes its outcome
-instead of reading Raken a second time (plan_vs_actual.refresh(wait=True)). A "Refresh now" pressed
-while the daily run is going answers at once saying a refresh is running, and the page polls until
-it is done, exactly as for two presses.
+instead of reading Raken a second time (plan_vs_actual.refresh_for_daily_run()). A "Refresh now"
+pressed while the daily run is going answers at once saying a refresh is running, and the page
+polls until it is done, exactly as for two presses.
+
+ONE PROCESS. The Dockerfile runs uvicorn with `--workers 1`: one process, one refresh lock, one
+thread. The stamp file is not a cross-process lock; with a second worker process both could run at
+5 AM.
 
   PVA_REFRESH_ENABLED  on | off   (default ON: it only reads Raken and the calendar, and writes
                                    nothing outside the tool)
@@ -89,14 +93,22 @@ def biz_now(now: Optional[datetime] = None) -> datetime:
 
 # ── state ─────────────────────────────────────────────────────────────────────
 def load_state() -> Dict[str, Any]:
+    """The stamp file, with the in-process stamp winning when it is later. A stamp that could not
+    be saved (a full or read-only volume) leaves yesterday's file in place; trusting the file then
+    would run the day again on every tick and spend the company's Raken allowance. ISO dates
+    compare correctly as strings."""
+    state: Dict[str, Any] = dict(_MEM_STATE)
     try:
         if _STATE_FILE.is_file():
             data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return data
+                state = data
     except Exception as exc:  # noqa: BLE001 - a garbled file must not stop the run
         log.warning("pva refresh: the day stamp is unreadable (%s)", type(exc).__name__)
-    return dict(_MEM_STATE)
+    mem_last = str(_MEM_STATE.get("last_run") or "")
+    if mem_last > str(state.get("last_run") or ""):
+        state["last_run"] = mem_last
+    return state
 
 
 def save_state(state: Dict[str, Any]) -> None:
@@ -129,7 +141,7 @@ def run_once(now: Optional[datetime] = None) -> Dict[str, Any]:
     state = load_state()
     state["last_run"] = biz_now(now).date().isoformat()
     save_state(state)
-    body = plan_vs_actual.refresh(wait=True)
+    body = plan_vs_actual.refresh_for_daily_run()
     raken = body.get("raken") or {}
     # Literal text and counts only: nothing read from Raken or Google reaches the log.
     log.info("pva refresh: daily run done, %d project(s) listed, Raken numbers %s",

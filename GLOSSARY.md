@@ -166,7 +166,7 @@ The "Refresh now" step run by the tool itself once a day at 5:00 AM Central: it 
 _Avoid_: Sync, cron job, nightly import
 
 **Snapshot**:
-One Project's Plan vs Actual figures as a good refresh worked them out, kept once per Project per day in Central; a later good refresh the same day replaces it. Kept so trends can be shown later.
+One listed Plan vs Actual row's figures (a Project, or its Punch) as a good refresh worked them out, kept once per row per day in Central; a later good refresh the same day replaces it. Kept so trends can be shown later.
 _Avoid_: History, backup, log
 
 ### Outcomes

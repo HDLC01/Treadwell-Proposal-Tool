@@ -110,12 +110,30 @@ def test_a_container_restarted_after_five_runs_that_day_once(client, google, fak
     assert fake.project_calls == 2, "the next morning did not run"
 
 
+def test_a_day_stamp_that_cannot_be_saved_still_holds_in_process(monkeypatch):
+    """The volume is full or read-only: the stamp file keeps yesterday's date. The in-process stamp
+    must still win, or every 5-minute tick would read Raken again (up to CALL_CAP calls each)."""
+    worker.save_state({"last_run": "2026-11-17"})       # yesterday's file stays on the volume
+
+    def full(*a, **k):
+        raise OSError("made-up: no space left on the device")
+    monkeypatch.setattr(worker.atomic_json, "write_json", full)
+    ran = []
+    monkeypatch.setattr(plan_vs_actual, "refresh_for_daily_run",
+                        lambda: ran.append(1) or {"ok": True, "projects": [], "raken": {}})
+    worker._tick(at(2026, 11, 18, 11, 0))
+    worker._tick(at(2026, 11, 18, 11, 5))
+    assert ran == [1], "the daily run ran twice in one day because the stamp could not be saved"
+
+
 def test_the_run_is_the_refresh_now_step(monkeypatch):
     seen = []
     monkeypatch.setattr(plan_vs_actual, "refresh",
-                        lambda **kw: seen.append(kw) or {"ok": True, "projects": [], "raken": {}})
+                        lambda: pytest.fail("the daily run must wait its turn, not answer at once"))
+    monkeypatch.setattr(plan_vs_actual, "refresh_for_daily_run",
+                        lambda: seen.append(1) or {"ok": True, "projects": [], "raken": {}})
     worker.run_once(at(2026, 11, 18, 11))
-    assert seen == [{"wait": True}], "the daily run must call the same step, waiting its turn"
+    assert seen == [1], "the daily run must call the same step, waiting its turn"
 
 
 def test_a_refresh_now_already_going_is_waited_for_not_doubled(client, google, fake):
@@ -353,6 +371,25 @@ class Missing(Exception):
     code = "PGRST205"
 
 
+class Undefined(Exception):
+    code = "42P01"
+
+
+def test_one_list_of_table_missing_codes_serves_the_snapshots_and_main():
+    """PostgREST has changed this code before (42P01 -> PGRST205): one list, so a change is made
+    once. Read off `code`, never the message: a timeout is a failure, not a missing table."""
+    import pathlib
+
+    import supabase_client
+    assert supabase_client.table_missing(Missing("made-up")) is True
+    assert supabase_client.table_missing(Undefined("made-up")) is True
+    assert supabase_client.table_missing(RuntimeError("PGRST205 in the words only")) is False
+    here = pathlib.Path(__file__).resolve().parents[1]
+    for name in ("pva_snapshots.py", "main.py"):
+        assert "42P01" not in (here / name).read_text(encoding="utf-8"), (
+            name, "keeps its own copy of the codes")
+
+
 class Broken:
     def __init__(self, exc):
         self.exc, self.calls = exc, 0
@@ -409,6 +446,18 @@ def test_the_switch_is_on_unless_turned_off(monkeypatch, value, on):
     assert worker.enabled() is on
 
 
+def test_staging_does_not_read_raken_at_five_and_prod_does():
+    """Staging has its own Raken sign-in but draws on the same company's daily Raken allowance, and
+    would fire in the same 5-minute window as prod. Like DIGEST_ENABLED, the schedule is off there;
+    staging QA uses "Refresh now". Prod leaves it at the default, on."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2]
+    staging = (root / "docker-compose.staging.yml").read_text(encoding="utf-8")
+    prod = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "- PVA_REFRESH_ENABLED=off" in staging
+    assert "PVA_REFRESH_ENABLED=off" not in prod
+
+
 def test_switched_off_the_tick_does_nothing(monkeypatch):
     monkeypatch.setenv("PVA_REFRESH_ENABLED", "off")
     monkeypatch.setattr(plan_vs_actual, "refresh",
@@ -433,11 +482,13 @@ def test_the_snapshot_table_is_declared_with_its_grant_wherever_it_is_applied(na
     nothing on the other. The upsert's conflict target must be the table's primary key, and the
     grant goes beside the table (a blanket grant only covers tables that existed when it ran)."""
     import pathlib
-    sql = (pathlib.Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
+    import re
+    raw = (pathlib.Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
+    sql = re.sub(r"\s+", " ", raw)                      # how the columns are aligned is not schema
     block = sql[sql.index("create table if not exists public.pva_snapshots ("):]
     block = block[:block.index(");")]
-    for col in ("project_key text not null", "snap_date   date not null",
-                "figures     jsonb not null", "ran_at      timestamptz"):
+    for col in ("project_key text not null", "snap_date date not null",
+                "figures jsonb not null", "ran_at timestamptz"):
         assert col in block, (name, col)
     assert "primary key (project_key, snap_date)" in block, name
     assert pva_snapshots.ON_CONFLICT == "project_key,snap_date"

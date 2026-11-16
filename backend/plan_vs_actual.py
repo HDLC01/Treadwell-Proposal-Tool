@@ -606,22 +606,40 @@ def fetch() -> Dict[str, Any]:
 # runs answers at once as fetch() does, its Raken block saying refreshing: true, and the page polls
 # the GET until it is done. A press within raken_actuals.REFRESH_COOLDOWN_S of a good read answers
 # from that read: Raken's daily allowance is shared by the whole company. Only the daily run
-# (refresh(wait=True)) waits, on its own thread, for a refresh already going, and then answers that
-# refresh's outcome without reading Raken again; it gives up waiting after REFRESH_WAIT_S.
+# (refresh_for_daily_run()) waits, on its own thread, for a refresh already going, and then answers
+# that refresh's outcome without reading Raken again; it gives up waiting after REFRESH_WAIT_S.
 _REFRESH_LOCK = threading.Lock()
 REFRESH_WAIT_S = 30 * 60
 
 
-def refresh(wait: bool = False) -> Dict[str, Any]:
-    """Read Raken over the span the listed Projects need, keep the result, and answer as fetch()
-    does. Never raises: a fault on the Raken side is logged, and the answer shows the kept read.
-
-    `wait` is the daily run's (backend/pva_refresh_worker.py): a refresh already going is waited
-    for, and its outcome answered, rather than answered at once or read a second time."""
+def refresh() -> Dict[str, Any]:
+    """The "Refresh now" step: read Raken over the span the listed Projects need, keep the result,
+    and answer as fetch() does. A refresh already going is answered at once (refreshing: true), never
+    waited for. Never raises: a fault on the Raken side is logged, and the answer shows the kept
+    read."""
     if not _REFRESH_LOCK.acquire(blocking=False):
-        if wait and _REFRESH_LOCK.acquire(timeout=REFRESH_WAIT_S):
+        return fetch()
+    return _refresh_locked()
+
+
+def refresh_for_daily_run() -> Dict[str, Any]:
+    """The daily run's refresh (backend/pva_refresh_worker.py): the same step, but a refresh
+    already going is waited for (up to REFRESH_WAIT_S) and its outcome answered, rather than
+    answered at once or Raken read a second time. Never raises."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        if _REFRESH_LOCK.acquire(timeout=REFRESH_WAIT_S):
             _REFRESH_LOCK.release()
         return fetch()
+    return _refresh_locked()
+
+
+def _calendar_good(connected: bool, meta: Dict[str, Any]) -> bool:
+    """The calendar was read just now: connected, without an error, and not a stale copy."""
+    return bool(connected and not meta.get("error") and not meta.get("stale"))
+
+
+def _refresh_locked() -> Dict[str, Any]:
+    """The refresh itself, entered holding _REFRESH_LOCK, which it releases."""
     read = False
     try:
         today = pc.today_central()
@@ -640,7 +658,8 @@ def refresh(wait: bool = False) -> Dict[str, Any]:
     finally:
         _REFRESH_LOCK.release()
     body = _response(connected, today, projects, **meta)
-    _snapshot(body, today, read, connected and not meta.get("error") and not meta.get("stale"))
+    calendar_good = _calendar_good(connected, meta)
+    _snapshot(body, today, read, calendar_good)
     return body
 
 

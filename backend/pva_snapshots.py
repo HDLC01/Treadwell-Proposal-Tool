@@ -1,8 +1,9 @@
-"""Plan vs Actual snapshots (#784): one row per listed Project per Central day, after a good run.
+"""Plan vs Actual snapshots (#784): one row per listed row (a Project, or its Punch) per Central
+day, after a good run.
 
 After every GOOD refresh (the 5:00 AM daily run or "Refresh now": the calendar read without an
-error or a stale copy, and Raken read and kept), plan_vs_actual.refresh() hands its listed rows to
-write(), which keeps each Project's figures in the `pva_snapshots` table of the data store, so
+error or a stale copy, and Raken read and kept), plan_vs_actual hands its listed rows to write(),
+which keeps each row's figures in the `pva_snapshots` table of the data store, so
 trends can be shown later (showing them is not part of #784). The words are GLOSSARY.md's.
 
   pva_snapshots (project_key text, snap_date date, figures jsonb, ran_at timestamptz,
@@ -30,7 +31,7 @@ import logging
 import threading
 from typing import Any, Dict, Iterable, List, Optional
 
-from supabase_client import get_client
+from supabase_client import get_client, table_missing
 
 log = logging.getLogger("treadwell.pva_snapshots")
 
@@ -45,16 +46,8 @@ RAKEN_FIGURES = ("state", "reason", "days_booked", "days_clocked", "avg_on_site"
                  "last_week_hours", "budget", "budgeted_hours", "projected_total_hours",
                  "over_under", "projection_below_actual", "through")
 
-# PostgREST 12's "not in the schema cache" and Postgres's undefined_table: the table is not on this
-# database yet. Read off the error's code, never its message (as main._table_missing does).
-_MISSING_CODES = ("PGRST205", "42P01")
-
 _LOCK = threading.Lock()
 _MISSING_LOGGED = {"done": False}
-
-
-def _table_missing(exc: BaseException) -> bool:
-    return str(getattr(exc, "code", "") or "") in _MISSING_CODES
 
 
 def figures(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,7 +79,7 @@ def write(projects: Iterable[Dict[str, Any]], snap_date: _dt.date, ran_at: Optio
     try:
         get_client().table(TABLE).upsert(batch, on_conflict=ON_CONFLICT).execute()
     except Exception as exc:  # noqa: BLE001 - a snapshot never fails the refresh
-        if _table_missing(exc):
+        if table_missing(exc):
             with _LOCK:
                 first = not _MISSING_LOGGED["done"]
                 _MISSING_LOGGED["done"] = True
