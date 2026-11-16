@@ -32,12 +32,14 @@ THE TITLE CONVENTION is free text typed by the people who book crews, for exampl
     "26.125, Acme Clinic Psych (6) (Pat)"
     "G25.110, The Example Lofts (3rd and 2nd) - 2nd Mob - (PW) (8) (Sam)"
     "Example Punch - (1) (Lee)"      "Example Shop (3) Night Work"      "Example Patch?"
-Job number, Crew size, Mobilization, Crew lead, Punch, prevailing wage and night work are read out
+Job number, Crew size, Mobilization, Foreman, Punch, prevailing wage and night work are read out
 of it (see `parse_title`). Parsing never throws and never drops an event: what does not parse stays
 in the title, and `name` is whatever is left once the recognised parts are taken out.
 
-RED MEANS A DURATION. Google colorId "11" (Tomato) marks the bar as the job's Duration and its last
-day as the job's Deadline. Every other colour is shown as Google draws it and means nothing here.
+EVERY BAR IS A DURATION; ITS COLOUR IS THE WORK TYPE (Darrin, Operations, 2026-11-12). A bar runs from
+the job's start date through its last day, and the end of that last day is the Deadline, whatever the
+colour. Google colorId "11" (Tomato, red) is Epoxy, "9" (Blueberry) Polish, "10" (Basil) Gyp; any other
+colour, or none, is an unknown Work type. Colours are still drawn exactly as Google draws them.
 
 DATES ARE CENTRAL. An all-day event's end.date is EXCLUSIVE in Google, so its last day is the day
 before. A timed event's start and end are converted to the America/Chicago date. "Today" is never
@@ -91,7 +93,12 @@ PALETTE: Dict[str, str] = {
     "6": "#f4511e", "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043",
     "11": "#d50000",
 }
-DURATION_COLOR_ID = "11"  # Tomato: the bar is the job's Duration; its last day is the Deadline.
+# Google colorId -> Work type (Darrin, 2026-11-12): the ONE copy of this map. Any other colour, or
+# none, has no Work type, and the event's `work_type` is null (the page words that as "unknown").
+# The page draws its legend from WORK_TYPE_LEGEND in every response instead of keeping its own copy.
+WORK_TYPE_BY_COLOR: Dict[str, str] = {"11": "Epoxy", "9": "Polish", "10": "Gyp"}
+WORK_TYPE_LEGEND: List[Dict[str, str]] = [
+    {"name": name, "color_id": cid, "color": PALETTE[cid]} for cid, name in WORK_TYPE_BY_COLOR.items()]
 
 # Upstream limits. Bounded so a slow Google cannot hold a worker: the page waits at most
 # _TIMEOUT per call, and at most _PAGE_CAP pages of _PAGE_SIZE events per range.
@@ -553,7 +560,7 @@ _PUNCH_RE = re.compile(r"\bpunch\b", re.IGNORECASE)
 _NIGHT_RE = re.compile(r"\bnight\s*work\b", re.IGNORECASE)
 _INT_RE = re.compile(r"^\s*(\d{1,3})\s*$")
 _PW_RE = re.compile(r"^\s*pw\s*$", re.IGNORECASE)
-# A crew lead: one or two words of letters (an apostrophe, hyphen or full stop allowed inside).
+# A Foreman: one or two words of letters (an apostrophe, hyphen or full stop allowed inside).
 _NAME_RE = re.compile(r"^\s*([A-Za-z][A-Za-z'.-]*(?: [A-Za-z][A-Za-z'.-]*)?)\s*$")
 
 
@@ -567,16 +574,20 @@ def _tidy(text: str) -> str:
     return t.strip()
 
 
+def _blank_title(raw: str) -> Dict[str, Any]:
+    """What a title reads as when nothing in it is recognised: its own tidied name, nothing else."""
+    return {"name": raw.strip(), "job_number": None, "crew_size": None, "mobilization": None,
+            "foreman": None, "is_punch": False, "prevailing_wage": False, "night_work": False}
+
+
 def parse_title(title: Any) -> Dict[str, Any]:
     """Read the booking convention out of an event title. Never raises.
 
-    Returns name, job_number, crew_size, mobilization, crew_lead, is_punch, prevailing_wage,
+    Returns name, job_number, crew_size, mobilization, foreman, is_punch, prevailing_wage,
     night_work. Anything not recognised stays in `name`; a title with nothing recognisable comes
     back as its own (tidied) name."""
     raw = str(title or "")
-    out: Dict[str, Any] = {"name": raw.strip(), "job_number": None, "crew_size": None,
-                           "mobilization": None, "crew_lead": None, "is_punch": False,
-                           "prevailing_wage": False, "night_work": False}
+    out: Dict[str, Any] = _blank_title(raw)
     try:
         rest = raw
         m = _JOB_RE.match(rest)
@@ -584,7 +595,7 @@ def parse_title(title: Any) -> Dict[str, Any]:
             out["job_number"] = m.group(1).upper()
             rest = rest[m.end():]
 
-        # The Crew lead is the LAST parenthesis, and only when nothing but whitespace follows it.
+        # The Foreman is the LAST parenthesis, and only when nothing but whitespace follows it.
         parens = list(_PAREN_RE.finditer(rest))
         if parens and not rest[parens[-1].end():].strip():
             last = parens[-1]
@@ -592,7 +603,7 @@ def parse_title(title: Any) -> Dict[str, Any]:
             nm = _NAME_RE.match(inner)
             if (nm and not _PW_RE.match(inner) and not _NIGHT_RE.search(inner)
                     and not _PUNCH_RE.search(inner)):
-                out["crew_lead"] = nm.group(1)
+                out["foreman"] = nm.group(1)
                 rest = rest[:last.start()] + " " + rest[last.end():]
 
         # Crew size (the last bare integer wins) and the prevailing-wage flag, removed from the name.
@@ -625,8 +636,7 @@ def parse_title(title: Any) -> Dict[str, Any]:
         out["name"] = name or raw.strip()
     except Exception as exc:  # noqa: BLE001 — a title that breaks the parser still shows, as typed
         log.warning("project calendar: title not parsed (%s)", type(exc).__name__)
-        out.update(name=raw.strip(), job_number=None, crew_size=None, mobilization=None,
-                   crew_lead=None, is_punch=False, prevailing_wage=False, night_work=False)
+        out = _blank_title(raw)
     return out
 
 
@@ -730,7 +740,6 @@ def _shape(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     parsed = parse_title(title)
     color_id = event.get("colorId")
     color_id = str(color_id) if color_id not in (None, "") else None
-    is_duration = color_id == DURATION_COLOR_ID
     link = event.get("htmlLink")
     return {
         "id": str(event.get("id") or ""),
@@ -739,17 +748,17 @@ def _shape(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "job_number": parsed["job_number"],
         "crew_size": parsed["crew_size"],
         "mobilization": parsed["mobilization"],
-        "crew_lead": parsed["crew_lead"],
+        "foreman": parsed["foreman"],
         "is_punch": parsed["is_punch"],
         "prevailing_wage": parsed["prevailing_wage"],
         "night_work": parsed["night_work"],
         "color_id": color_id,
         "color": PALETTE.get(color_id) if color_id else None,
-        "is_duration": is_duration,
+        "work_type": WORK_TYPE_BY_COLOR.get(color_id) if color_id else None,
         "start": first.isoformat(),
         "last_day": last.isoformat(),
         "workdays": workdays(first, last),
-        "deadline": last.isoformat() if is_duration else None,
+        "deadline": last.isoformat(),
         "project": None,
         "html_link": str(link) if isinstance(link, str) and link else None,
     }
@@ -815,7 +824,8 @@ def _response(connected: bool, events: List[Dict[str, Any]], *, stale: bool = Fa
     """`error`: the read failed (events are a stale copy, or none). `notice`: the read worked, but
     something about the connection needs fixing (free/busy access). Never the same message."""
     return {"ok": True, "connected": connected, "stale": stale, "fetched_at": fetched_at,
-            "error": error, "notice": notice, "events": events}
+            "error": error, "notice": notice, "events": events,
+            "work_types": [dict(w) for w in WORK_TYPE_LEGEND]}
 
 
 def fetch(start: Any, end: Any) -> Dict[str, Any]:

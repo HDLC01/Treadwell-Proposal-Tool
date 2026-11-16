@@ -8,7 +8,7 @@
 // Google Calendar".
 //
 // WHAT THE SERVER HAS ALREADY DONE (GET /api/project-calendar). It reads that one calendar as the
-// connected Google account, parses each free-text title into Job number, Crew size, Mobilization, Crew lead
+// connected Google account, parses each free-text title into Job number, Crew size, Mobilization, Foreman
 // and flags, and turns Google's dates into inclusive Central days. When the calendar is not
 // connected it says so (connected:false) and this page shows a plain message, not an error. When
 // Google fails it serves the last good copy with stale:true, and this page says when that copy is
@@ -38,7 +38,7 @@
   };
 
   // ── state ─────────────────────────────────────────────────────────
-  const SK = { mode: "tw_pcal_mode", q: "tw_pcal_q", dur: "tw_pcal_dur" };
+  const SK = { mode: "tw_pcal_mode", q: "tw_pcal_q" };
   const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
 
@@ -47,7 +47,7 @@
 
   let MODE = P.MODES.some((m) => m.id === ss(SK.mode, "")) ? ss(SK.mode, "two") : "two";
   let Q = ss(SK.q, "");
-  let DUR = ss(SK.dur, "") === "1";
+  let WORK_TYPES = [];                 // the server's colour -> Work type list, for the legend
   let TODAY = P.centralToday();        // the Central calendar's today, not the laptop's
   let ANCHOR = TODAY;
 
@@ -106,6 +106,7 @@
     const res = await read(range.from, range.to, "r");
     if (res.ok) {
       remember(key, res.body);         // worth keeping even if the view has moved on
+      if (Array.isArray(res.body.work_types)) WORK_TYPES = res.body.work_types;
       CONNECTED = res.body.connected !== false;
       delete ERR[key];
     } else {
@@ -129,7 +130,7 @@
 
   // ── rendering helpers ─────────────────────────────────────────────
   function visible(events) {
-    return P.filterEvents(events, { q: Q, durationsOnly: DUR });
+    return P.filterEvents(events, { q: Q });
   }
 
   function showAlert(text) {
@@ -150,15 +151,13 @@
   function barHtml(sg) {
     const ev = sg.ev;
     const parts = P.barParts(ev);
-    const dur = P.isDuration(ev);
     const cls = ["bar"];
     if (!sg.starts) cls.push("cont-l");
     if (!sg.ends) cls.push("cont-r");
-    const deadlineHere = dur && sg.ends;
-    if (deadlineHere) cls.push("dl-end");
+    if (sg.ends) cls.push("dl-end");   // every bar is a Duration: its last day is the Deadline
     const tip = (ev.title || parts.name) + " · " + P.spanLabel(ev);
     const aria = parts.name + (parts.meta ? ", " + parts.meta : "") + ", " + P.spanLabel(ev)
-      + (dur ? ", Duration" : "") + (deadlineHere ? ", Deadline " + P.dayLong(sg.ev.deadline || P.spanOf(ev).last) : "")
+      + ", " + P.workTypeOf(ev) + (sg.ends ? ", Deadline " + P.dayLong(sg.ev.deadline || P.spanOf(ev).last) : "")
       + (!sg.starts ? ", continued from the week before" : "");
     return '<button type="button" class="' + cls.join(" ") + '"'
       + ' data-k="' + esc(ev._k) + '" data-c="' + sg.col + '" data-s="' + sg.span + '"'
@@ -166,7 +165,7 @@
       + ' title="' + esc(tip) + '" aria-label="' + esc(aria) + '">'
       + '<span class="bn">' + esc(parts.name) + "</span>"
       + (parts.meta ? '<span class="bm">' + esc(parts.meta) + "</span>" : "")
-      + (deadlineHere ? '<span class="dlm">Deadline</span>' : "")
+      + (sg.ends ? '<span class="dlm">Deadline</span>' : "")
       + "</button>";
   }
 
@@ -207,11 +206,20 @@
     });
   }
 
+  // Drawn from the server's list (the one copy of colour -> Work type); swatches are painted
+  // through the CSSOM in paintSwatches, like the bars.
   function legendHtml() {
-    return '<span><i class="sw red"></i>Red in Google: the job\'s Duration</span>'
-      + '<span><span class="mk">Deadline</span>the last day of a Duration</span>'
-      + '<span><i class="sw other"></i>Any other colour: as set in Google, no meaning here</span>'
-      + '<span><i class="sw none"></i>No colour set</span>';
+    return WORK_TYPES.map((w) => '<span><i class="sw" data-color="' + esc(w.color || "") + '"></i>'
+      + esc(w.name) + "</span>").join("")
+      + "<span>Any other colour, or none: " + esc(P.WORK_TYPE_UNKNOWN_LABEL) + "</span>"
+      + '<span><span class="mk">Deadline</span>the last day of every bar</span>';
+  }
+
+  function paintSwatches(root) {
+    root.querySelectorAll(".sw[data-color]").forEach((el) => {
+      const c = el.dataset.color;
+      if (c && /^#[0-9a-f]{6}$/i.test(c)) el.style.background = c;
+    });
   }
 
   function sideHtml() {
@@ -229,7 +237,7 @@
       : "";
     const rows = P.upcomingDeadlines(visible(SIDE.events), TODAY, SIDE_DAYS);
     if (!rows.length) {
-      return note + '<p class="empty">' + (Q || DUR ? "No upcoming Deadline matches the search."
+      return note + '<p class="empty">' + (Q ? "No upcoming Deadline matches the search."
         : "No Deadlines in the next " + SIDE_DAYS + " days.") + "</p>";
     }
     return note + '<ul class="dl-list">' + rows.map((r) => {
@@ -253,7 +261,7 @@
     const key = rangeKey(range);
     const cached = CACHE[key] || null;
     const loadErr = ERR[key] || "";
-    const sig = JSON.stringify([key, MODE, Q, DUR, TODAY, loadErr, CONNECTED,
+    const sig = JSON.stringify([key, MODE, Q, TODAY, loadErr, CONNECTED,
       cached && [cached.connected, cached.stale, cached.fetched_at, cached.error, cached.notice,
         cached.events],
       SIDE && [SIDE.fetched_at, SIDE.events]]);
@@ -269,7 +277,6 @@
     $("modes").innerHTML = P.MODES.map((m) =>
       '<button type="button" data-mode="' + m.id + '" aria-pressed="'
       + (m.id === MODE ? "true" : "false") + '">' + esc(m.label) + "</button>").join("");
-    $("durations").setAttribute("aria-pressed", DUR ? "true" : "false");
 
     let current = cached;
     let pending = false;
@@ -349,6 +356,7 @@
     placeBars(grid);
 
     $("legend").innerHTML = legendHtml();
+    paintSwatches($("legend"));
     $("side-sub").textContent = "Next " + SIDE_DAYS + " days, from today. Dates are Central.";
     $("side-body").innerHTML = sideHtml();
   }
@@ -372,15 +380,13 @@
     const sw = $("dlg-sw");
     sw.style.background = color || "";
 
-    let deadline = "";
-    if (P.isDuration(ev)) {
-      const dl = P.validDay(ev.deadline) ? ev.deadline : (span && span.last);
-      const st = P.deadlineStatus(dl, TODAY);
-      const n = P.daysUntil(dl, TODAY);
-      const label = st === "today" ? "Today" : st === "overdue" ? "Passed"
-        : (n === 1 ? "Tomorrow" : "In " + n + " days");
-      deadline = esc(P.dayLong(dl)) + (st ? ' <span class="chip st-' + st + '">' + esc(label) + "</span>" : "");
-    }
+    const dl = P.validDay(ev.deadline) ? ev.deadline : (span && span.last);
+    const st = P.deadlineStatus(dl, TODAY);
+    const n = P.daysUntil(dl, TODAY);
+    const dlLabel = st === "today" ? "Today" : st === "overdue" ? "Passed"
+      : (n === 1 ? "Tomorrow" : "In " + n + " days");
+    const deadline = esc(P.dayLong(dl))
+      + (st ? ' <span class="chip st-' + st + '">' + esc(dlLabel) + "</span>" : "");
 
     const flags = P.flagsOf(ev).map((f) => '<span class="chip">' + esc(f) + "</span>").join("");
     const facts =
@@ -390,7 +396,8 @@
       + fact("Deadline", deadline)
       + fact("Job number", esc(ev.job_number || ""))
       + fact("Crew size", typeof ev.crew_size === "number" ? esc(String(ev.crew_size)) : "")
-      + fact("Crew lead", esc(ev.crew_lead || ""))
+      + fact("Work type", esc(P.workTypeOf(ev)))
+      + fact("Foreman", esc(ev.foreman || ""))
       + fact("Marked", flags);
     $("dlg-facts").innerHTML = facts;
 
@@ -443,9 +450,6 @@
     ANCHOR = MODE === "month" ? focus.slice(0, 8) + "01" : K.startOfWeek(focus);
     paint();
     loadRange();
-  });
-  $("durations").addEventListener("click", () => {
-    DUR = !DUR; ssSet(SK.dur, DUR ? "1" : ""); paint();
   });
   $("q").addEventListener("input", (e) => { Q = e.target.value || ""; ssSet(SK.q, Q); paint(); });
   $("q").addEventListener("keydown", (e) => {

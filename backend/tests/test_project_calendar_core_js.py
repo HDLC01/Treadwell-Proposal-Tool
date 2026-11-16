@@ -46,20 +46,20 @@ def run(script: str):
 # A fortnight of made-up events in the API's shape. 2026-11-08 is a Sunday.
 EVENTS = """
 const ev = (o) => Object.assign({id:"x", title:"", name:"", job_number:null, crew_size:null,
-  mobilization:null, crew_lead:null, is_punch:false, prevailing_wage:false, night_work:false,
-  color_id:null, color:null, is_duration:false, start:"", last_day:"", workdays:0,
+  mobilization:null, foreman:null, is_punch:false, prevailing_wage:false, night_work:false,
+  color_id:null, color:null, work_type:null, start:"", last_day:"", workdays:0,
   deadline:null, project:null, html_link:null}, o);
 const EVENTS = [
   ev({id:"a", title:"26.125, Acme Clinic Psych (6) (Pat)", name:"Acme Clinic Psych",
-      job_number:"26.125", crew_size:6, crew_lead:"Pat", color_id:"11", color:"#d50000",
-      is_duration:true, start:"2026-11-10", last_day:"2026-11-19", deadline:"2026-11-19"}),
+      job_number:"26.125", crew_size:6, foreman:"Pat", color_id:"11", color:"#d50000",
+      start:"2026-11-10", last_day:"2026-11-19", deadline:"2026-11-19"}),
   ev({id:"b", title:"Example Diner (4)", name:"Example Diner", crew_size:4, color_id:"7",
       color:"#039be5", start:"2026-11-11", last_day:"2026-11-12"}),
   ev({id:"c", title:"Example Punch - (1) (Lee)", name:"Example Punch", crew_size:1,
-      crew_lead:"Lee", is_punch:true, start:"2026-11-13", last_day:"2026-11-13"}),
+      foreman:"Lee", is_punch:true, start:"2026-11-13", last_day:"2026-11-13"}),
   ev({id:"d", title:"G25.110, The Example Lofts (3rd and 2nd) - 2nd Mob - (PW) (8) (Sam)",
       name:"The Example Lofts (3rd and 2nd)", job_number:"G25.110", crew_size:8,
-      mobilization:2, crew_lead:"Sam", prevailing_wage:true, color_id:"2", color:"#33b679",
+      mobilization:2, foreman:"Sam", prevailing_wage:true, color_id:"2", color:"#33b679",
       start:"2026-11-05", last_day:"2026-11-09"}),
 ];
 const range = K.rangeFor("2026-11-10", "two");
@@ -161,19 +161,21 @@ def test_a_deadline_is_overdue_today_or_upcoming():
     assert got == ["overdue", "today", "upcoming", None, None]
 
 
-def test_upcoming_deadlines_are_durations_from_today_on_soonest_first():
-    """Only red Durations carry a Deadline. One that has passed is not "upcoming"."""
+def test_upcoming_deadlines_are_every_job_from_today_on_soonest_first():
+    """Every bar is a Duration, so every job has a Deadline. One that has passed is not "upcoming"."""
     got = run(EVENTS + 'const extra = [ev({id:"e", name:"Example Plaza", title:"Example Plaza (6)",'
-              ' color_id:"11", is_duration:true, start:"2026-11-02", last_day:"2026-11-12",'
+              ' color_id:"11", start:"2026-11-02", last_day:"2026-11-12",'
               ' deadline:"2026-11-12"}),'
-              ' ev({id:"f", name:"Beta Hall", title:"Beta Hall", color_id:"11", is_duration:true,'
+              ' ev({id:"f", name:"Beta Hall", title:"Beta Hall", color_id:"11",'
               ' start:"2026-11-03", last_day:"2026-11-11", deadline:"2026-11-11"}),'
-              ' ev({id:"g", name:"Alpha Hall", title:"Alpha Hall", color_id:"11", is_duration:true,'
+              ' ev({id:"g", name:"Alpha Hall", title:"Alpha Hall", color_id:"11",'
               ' start:"2026-11-16", last_day:"2026-11-19", deadline:"2026-11-19"})];'
               'out(P.upcomingDeadlines(EVENTS.concat(extra), "2026-11-12")'
               '  .map(r => [r.ev.id, r.deadline, r.status, r.days]))')
-    # Beta Hall (Nov 11) has passed. Acme and Alpha share Nov 19, so they are ordered by name.
-    assert got == [["e", "2026-11-12", "today", 0],
+    # Beta Hall (Nov 11) and the Lofts (Nov 9) have passed. Same-day Deadlines are ordered by name.
+    assert got == [["b", "2026-11-12", "today", 0],
+                   ["e", "2026-11-12", "today", 0],
+                   ["c", "2026-11-13", "upcoming", 1],
                    ["a", "2026-11-19", "upcoming", 7],
                    ["g", "2026-11-19", "upcoming", 7]]
 
@@ -186,13 +188,6 @@ def test_colour_comes_from_the_api_then_googles_palette_then_nothing():
     assert got == ["#d50000", "#f6bf26", "#d50000", None, None, None]
 
 
-def test_only_tomato_is_a_duration():
-    got = run('out([P.isDuration({color_id:"11"}), P.isDuration({color_id:"4"}),'
-              ' P.isDuration({color_id:"11", is_duration:false}), P.isDuration({is_duration:true}),'
-              ' P.isDuration(null)])')
-    assert got == [True, False, False, True, False]
-
-
 def test_text_on_a_bar_stays_readable():
     """White on Tomato and on dark blue; dark ink on Google's yellow."""
     got = run('out([P.textOn("#d50000"), P.textOn("#3f51b5"), P.textOn("#f6bf26"),'
@@ -201,7 +196,7 @@ def test_text_on_a_bar_stays_readable():
 
 
 # ── what a bar says ─────────────────────────────────────────────────────
-def test_a_bar_reads_name_then_job_number_crew_size_and_crew_lead():
+def test_a_bar_reads_name_then_job_number_crew_size_and_foreman():
     got = run(EVENTS + 'out([P.barParts(EVENTS[0]), P.barParts(EVENTS[1]),'
               ' P.barParts({title:"Example Patch?"}), P.barParts({})])')
     assert got == [{"name": "Acme Clinic Psych", "meta": "26.125 · 6 crew · Pat"},
@@ -213,23 +208,22 @@ def test_a_bar_reads_name_then_job_number_crew_size_and_crew_lead():
 def test_flags_are_named_in_plain_words():
     got = run(EVENTS + 'out([P.flagsOf(EVENTS[0]), P.flagsOf(EVENTS[2]), P.flagsOf(EVENTS[3]),'
               ' P.flagsOf(ev({night_work:true, mobilization:1})), P.ordinal(3), P.ordinal(11)])')
-    assert got == [["Duration"], ["Punch"], ["2nd Mobilization", "Prevailing wage"],
+    assert got == [[], ["Punch"], ["2nd Mobilization", "Prevailing wage"],
                    ["1st Mobilization", "Night work"], "3rd", "11th"]
 
 
 # ── filtering ───────────────────────────────────────────────────────────
-def test_search_matches_title_name_job_number_and_crew_lead_case_blind():
+def test_search_matches_title_name_job_number_and_foreman_case_blind():
     got = run(EVENTS + 'const ids = (o) => P.filterEvents(EVENTS, o).map(e => e.id);'
               'out([ids({q:"acme"}), ids({q:"G25.110"}), ids({q:"lee"}), ids({q:"pw"}),'
               ' ids({q:"example lofts"}), ids({q:"lofts diner"}), ids({q:"   "}), ids({})])')
     assert got == [["a"], ["d"], ["c"], ["d"], ["d"], [], ["a", "b", "c", "d"], ["a", "b", "c", "d"]]
 
 
-def test_durations_only_keeps_the_red_bars():
-    got = run(EVENTS + 'out([P.filterEvents(EVENTS,{durationsOnly:true}).map(e => e.id),'
-              ' P.filterEvents(EVENTS,{durationsOnly:true, q:"diner"}).length,'
-              ' P.filterEvents(null,{}).length, P.filterEvents([null, 3, EVENTS[1]],{}).length])')
-    assert got == [["a"], 0, 0, 1]
+def test_filtering_never_throws_on_odd_input():
+    got = run(EVENTS + 'out([P.filterEvents(null,{}).length, P.filterEvents([null, 3, EVENTS[1]],{}).length,'
+              ' P.filterEvents(EVENTS,{q:"diner"}).map(e => e.id)])')
+    assert got == [0, 1, ["b"]]
 
 
 def test_search_can_find_the_matched_project_by_name():
@@ -359,7 +353,9 @@ def test_every_api_value_is_escaped_before_it_reaches_markup():
     """Titles are typed by hand in Google. Each place a free-text field enters an HTML string
     must pass through esc()."""
     js = _page_js()
-    for field in ("parts.name", "parts.meta", "ev.job_number", "ev.crew_lead", "ev.project.name"):
+    fields = ("parts.name", "parts.meta", "ev.job_number", "ev.foreman", "P.workTypeOf(ev)",
+              "ev.project.name")
+    for field in fields:
         for m in re.finditer(re.escape(field), js):
             line = js[js.rfind("\n", 0, m.start()) + 1: js.find("\n", m.end())]
             if "innerHTML" in line or "'<" in line or '"<' in line:
@@ -408,9 +404,9 @@ def test_the_stale_notice_names_the_time_in_central():
 def test_upcoming_deadlines_stay_inside_the_window_they_are_labelled_with():
     """The side list reads "Next 60 days". A Duration that overlaps the window but ends on day 106
     must not appear, and two Deadlines on the same far day are treated the same."""
-    got = run(EVENTS + 'const far = [ev({id:"long", name:"Long Job", color_id:"11", is_duration:true,'
+    got = run(EVENTS + 'const far = [ev({id:"long", name:"Long Job", color_id:"11",'
               ' start:"2026-11-02", last_day:"2027-02-26", deadline:"2027-02-26"}),'
-              ' ev({id:"near", name:"Near Job", color_id:"11", is_duration:true,'
+              ' ev({id:"near", name:"Near Job", color_id:"11",'
               ' start:"2026-11-02", last_day:"2027-01-10", deadline:"2027-01-10"})];'
               'out([P.upcomingDeadlines(far, "2026-11-12", 60).map(r => r.ev.id),'
               '     P.upcomingDeadlines(far, "2026-11-12").map(r => r.ev.id)])')
@@ -454,3 +450,42 @@ def test_a_notice_rides_beside_the_grid_and_never_reads_as_a_failed_read():
     j = js.index("Couldn't load Deadlines. \" + esc(SIDE.error)")
     assert "notice" not in js[js.rfind("\n", 0, j - 80):j]
     assert "cached.notice" in js, "a changed notice must repaint"
+
+
+# ── #778: every bar is a Duration, colour is the Work type, the name is Foreman ───────────────────
+def test_the_page_shows_the_servers_work_type_and_unknown_when_there_is_none():
+    """Which colour is which Work type is the server's alone; the page never works it out again
+    (docs/v2-architecture.md section 5, rule 1). A colour with no Work type arrives as null."""
+    got = run(EVENTS + 'out([ev({work_type:"Epoxy"}), ev({work_type:"Gyp"}), ev({color_id:"11"}),'
+              ' ev({}), ev({work_type:null})].map(e => P.workTypeOf(e)))')
+    assert got == ["Epoxy", "Gyp", "Work type unknown", "Work type unknown", "Work type unknown"]
+
+
+def test_the_legend_is_drawn_from_the_servers_list_not_a_copy():
+    js = _page_js()
+    assert "WORK_TYPES.map(" in js and "res.body.work_types" in js
+    core = (FRONTEND / "js" / "project-calendar-core.js").read_text(encoding="utf-8")
+    assert "WORK_TYPE_BY_COLOR" not in core and "WORK_TYPE_BY_COLOR" not in js
+
+
+def test_every_colour_has_an_upcoming_deadline_not_only_red():
+    got = run(EVENTS + 'const blue = ev({id:"p", name:"Polish Job", color_id:"9", start:"2026-11-12",'
+              ' last_day:"2026-11-14", deadline:"2026-11-14"});'
+              'const none = ev({id:"n", name:"No Colour Job", start:"2026-11-12", last_day:"2026-11-13",'
+              ' deadline:"2026-11-13"});'
+              'out(P.upcomingDeadlines([blue, none], "2026-11-12", 60).map(r => r.ev.id))')
+    assert got == ["n", "p"]
+
+
+def test_a_bar_names_the_foreman_and_search_finds_the_foreman():
+    got = run(EVENTS + 'const f = ev({id:"f", name:"Example Hall", foreman:"Rosa", crew_size:3});'
+              'out([P.barParts(f).meta.indexOf("Rosa") >= 0,'
+              '     P.filterEvents([f], {q: "rosa"}).length])')
+    assert got == [True, 1]
+
+
+def test_the_page_says_foreman_and_never_crew_lead():
+    js, page = _page_js(), (FRONTEND / "project-calendar.html").read_text(encoding="utf-8")
+    assert 'fact("Foreman"' in js
+    for text in (js, page):
+        assert "Crew lead" not in text and "crew_lead" not in text

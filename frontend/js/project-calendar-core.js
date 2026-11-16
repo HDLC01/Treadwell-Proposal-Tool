@@ -3,7 +3,7 @@
 //
 // WHAT THIS FILE KNOWS. The Project Calendar is a read-only view of the crews' Google calendar,
 // "Treadwell Projects". The server has already parsed each event's free-text title into a Job
-// number, Crew size, Mobilization and Crew lead, and already turned Google's dates into inclusive
+// number, Crew size, Mobilization and Foreman, and already turned Google's dates into inclusive
 // Central days ("start" and "last_day", both "YYYY-MM-DD"). What is left for the page is layout and
 // arithmetic, and all of it lives here so it can be pinned under node
 // (backend/tests/test_project_calendar_core_js.py):
@@ -14,7 +14,7 @@
 //     each other;
 //   * workdays (Monday to Friday; a weekend never counts) and workdays left from a Central today;
 //   * whether a Deadline has passed, is today, or is still ahead;
-//   * the text filter and the "Durations only" switch.
+//   * the text filter, and the Work type a bar's colour stands for.
 //
 // DATES. Every day here is a "YYYY-MM-DD" string on the America/Chicago calendar, and the
 // arithmetic is calendar-core.js's (TWCal): parse as UTC midnight, step in whole UTC days, so no
@@ -41,13 +41,15 @@
   ];
 
   // Google's own event palette, the fallback when an event arrives without `color` filled in.
-  // Colour 11 (Tomato) is the one with a meaning here: the bar is a job's Duration.
+  // Every bar is a job's Duration; its colour is the Work type (Darrin, Operations, 2026-11-12).
   var GOOGLE_COLORS = {
     "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6bf26",
     "6": "#f4511e", "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043",
     "11": "#d50000",
   };
-  var DURATION_COLOR_ID = "11";
+  // The words shown for a job whose colour has no Work type (the server sends work_type: null).
+  // Which colour is which Work type is the server's alone: see `work_types` in each response.
+  var WORK_TYPE_UNKNOWN_LABEL = "Work type unknown";
 
   // ── days ─────────────────────────────────────────────────────────────
   var _dayFmt = null;
@@ -141,10 +143,10 @@
     return GOOGLE_COLORS[id] || null;
   }
 
-  function isDuration(ev) {
-    if (!ev) return false;
-    if (typeof ev.is_duration === "boolean") return ev.is_duration;
-    return String(ev.color_id) === DURATION_COLOR_ID;
+  /** The job's Work type as the server worked it out from the bar's colour, or "Work type
+   *  unknown" when the server sent none. */
+  function workTypeOf(ev) {
+    return ev && ev.work_type ? String(ev.work_type) : WORK_TYPE_UNKNOWN_LABEL;
   }
 
   /** The text colour that reads best on `hex`: dark ink or white, whichever has the higher
@@ -164,8 +166,8 @@
   }
 
   // ── what a bar says ──────────────────────────────────────────────────
-  /** The compact pieces of a bar: the tidied name first, then Job number, Crew size and Crew
-   *  lead. The raw title is never lost; the page puts it in the bar's title attribute. */
+  /** The compact pieces of a bar: the tidied name first, then Job number, Crew size and
+   *  Foreman. The raw title is never lost; the page puts it in the bar's title attribute. */
   function barParts(ev) {
     var name = String((ev && (ev.name || ev.title)) || "").trim() || "Untitled";
     var meta = [];
@@ -173,7 +175,7 @@
     if (ev && typeof ev.crew_size === "number" && isFinite(ev.crew_size)) {
       meta.push(ev.crew_size + " crew");
     }
-    if (ev && ev.crew_lead) meta.push(String(ev.crew_lead));
+    if (ev && ev.foreman) meta.push(String(ev.foreman));
     return { name: name, meta: meta.join(" · ") };
   }
 
@@ -181,7 +183,6 @@
   function flagsOf(ev) {
     var out = [];
     if (!ev) return out;
-    if (isDuration(ev)) out.push("Duration");
     if (typeof ev.mobilization === "number" && ev.mobilization > 0) {
       out.push(ordinal(ev.mobilization) + " Mobilization");
     }
@@ -197,12 +198,12 @@
   }
 
   // ── filtering ────────────────────────────────────────────────────────
-  /** Text search across the raw title, the tidied name, Job number, Crew lead and the matched
+  /** Text search across the raw title, the tidied name, Job number, Foreman and the matched
    *  Project's name. Every word typed must match somewhere, in any order. */
   function matches(ev, q) {
     var words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return true;
-    var hay = [ev.title, ev.name, ev.job_number, ev.crew_lead,
+    var hay = [ev.title, ev.name, ev.job_number, ev.foreman,
                ev.project && ev.project.name]
       .map(function (v) { return String(v == null ? "" : v).toLowerCase(); }).join(" \u0001 ");
     for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
@@ -213,7 +214,6 @@
     var o = opts || {};
     return (Array.isArray(events) ? events : []).filter(function (ev) {
       if (!ev || typeof ev !== "object") return false;
-      if (o.durationsOnly && !isDuration(ev)) return false;
       return matches(ev, o.q);
     });
   }
@@ -300,13 +300,14 @@
   }
 
   // ── the side list ────────────────────────────────────────────────────
-  /** Deadlines from today on, soonest first, then by name. Only Durations carry one.
+  /** Deadlines from today on, soonest first, then by name. Every bar is a Duration, so every
+   *  job carries one, whatever its colour.
    *  `withinDays`, when given, drops Deadlines that many days out or more, so a list labelled
    *  "Next 60 days" never shows day 106 just because its Duration overlaps the window. */
   function upcomingDeadlines(events, today, withinDays) {
     var out = [];
     (Array.isArray(events) ? events : []).forEach(function (ev) {
-      if (!ev || !isDuration(ev)) return;
+      if (!ev) return;
       var dl = validDay(ev.deadline) ? ev.deadline : (spanOf(ev) || {}).last;
       if (!validDay(dl) || !validDay(today) || K.diffDays(today, dl) < 0) return;
       if (typeof withinDays === "number" && K.diffDays(today, dl) >= withinDays) return;
@@ -364,11 +365,11 @@
 
   return {
     BIZ_TZ: BIZ_TZ, MODES: MODES, GOOGLE_COLORS: GOOGLE_COLORS,
-    DURATION_COLOR_ID: DURATION_COLOR_ID,
+    WORK_TYPE_UNKNOWN_LABEL: WORK_TYPE_UNKNOWN_LABEL,
     centralToday: centralToday, validDay: validDay, spanOf: spanOf,
     isWorkday: isWorkday, workdaysBetween: workdaysBetween, workdaysOf: workdaysOf,
     workdaysLeft: workdaysLeft, deadlineStatus: deadlineStatus, daysUntil: daysUntil,
-    colorOf: colorOf, isDuration: isDuration, textOn: textOn,
+    colorOf: colorOf, workTypeOf: workTypeOf, textOn: textOn,
     barParts: barParts, flagsOf: flagsOf, ordinal: ordinal,
     matches: matches, filterEvents: filterEvents, byStartThenTitle: byStartThenTitle,
     layout: layout, upcomingDeadlines: upcomingDeadlines, focusDay: focusDay, uniqueById: uniqueById,

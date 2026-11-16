@@ -117,7 +117,7 @@
     .bar .bn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
     .bar .bm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 0;
       font-weight:500; opacity:.86; font-variant-numeric:tabular-nums; }
-    /* The Deadline marker: on the LAST day of a red Duration bar. */
+    /* The Deadline marker: on the LAST day of every bar (every bar is a Duration). */
     .bar .dlm { flex:none; margin-left:auto; font:700 8.5px system-ui; text-transform:uppercase;
       letter-spacing:.06em; padding:2px 5px; border-radius:999px; background:#fff; color:var(--late); }
     .bar.dl-end { box-shadow:inset -4px 0 0 rgba(0,0,0,.28), 0 1px 1px rgba(60,50,40,.08); }
@@ -146,9 +146,6 @@
       color:var(--ink-mut); align-items:center; }
     .legend .sw { display:inline-block; width:18px; height:9px; border-radius:3px; margin-right:5px;
       vertical-align:-1px; }
-    .legend .sw.red { background:#d50000; }
-    .legend .sw.other { background:#039be5; }
-    .legend .sw.none { background:var(--bar-neutral); }
     .legend .mk { font:700 8.5px system-ui; text-transform:uppercase; letter-spacing:.06em;
       padding:2px 5px; border-radius:999px; background:#fff; color:var(--late);
       border:1px solid #f0d9dd; margin-right:5px; }
@@ -198,8 +195,8 @@
     <span class="ro" title="This page reads the Treadwell Projects Google calendar and never changes it">Read only</span>
   </div>
   <p class="hint">The crews' schedule from the Treadwell Projects Google calendar, in Central time.
-    Red bars are a job's Duration, and the last day of a red bar is its Deadline. Every other colour
-    is the one it was given in Google. Changes are made in Google Calendar.</p>
+    Every bar is a job's Duration, and its last day is the Deadline. A bar's colour is its Work type,
+    shown in the key below the calendar. Changes are made in Google Calendar.</p>
 
   <div class="wrap">
     <div id="toolbar" class="toolbar" hidden>
@@ -211,11 +208,8 @@
       </span>
       <span id="modes" class="seg" role="group" aria-label="Range length"></span>
       <span class="grow"></span>
-      <input id="q" type="search" class="tw-search" placeholder="Search job, number, crew lead…"
+      <input id="q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
              aria-label="Search the Project Calendar" autocomplete="off" />
-      <span class="seg" role="group" aria-label="Which bars to show">
-        <button type="button" id="durations" aria-pressed="false">Durations only</button>
-      </span>
     </div>
 
     <p id="alert" class="alert" role="status" hidden></p>

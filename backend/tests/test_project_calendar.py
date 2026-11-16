@@ -171,12 +171,13 @@ def test_the_response_has_every_contract_field(client, source):
     ev = one(client, source, allday("e1", "26.125, Acme Clinic Psych (6) (Pat)",
                                     "2026-11-09", "2026-11-12", "11"))
     body = get(client)
-    assert set(body) == {"ok", "connected", "stale", "fetched_at", "error", "notice", "events"}
+    assert set(body) == {"ok", "connected", "stale", "fetched_at", "error", "notice", "events",
+                         "work_types"}
     assert body["ok"] is True and body["connected"] is True and body["stale"] is False
     assert body["error"] is None and body["notice"] is None and body["fetched_at"].endswith("Z")
     assert set(ev) == {"id", "title", "name", "job_number", "crew_size", "mobilization",
-                       "crew_lead", "is_punch", "prevailing_wage", "night_work", "color_id",
-                       "color", "is_duration", "start", "last_day", "workdays", "deadline",
+                       "foreman", "is_punch", "prevailing_wage", "night_work", "color_id",
+                       "color", "work_type", "start", "last_day", "workdays", "deadline",
                        "project", "html_link"}
     assert ev["id"] == "e1"
     assert ev["title"] == "26.125, Acme Clinic Psych (6) (Pat)"
@@ -187,31 +188,31 @@ def test_the_response_has_every_contract_field(client, source):
 @pytest.mark.parametrize("title,want", [
     ("26.125, Acme Clinic Psych (6) (Pat)",
      dict(name="Acme Clinic Psych", job_number="26.125", crew_size=6, mobilization=None,
-          crew_lead="Pat", is_punch=False, prevailing_wage=False, night_work=False)),
+          foreman="Pat", is_punch=False, prevailing_wage=False, night_work=False)),
     ("G25.110, The Example Lofts (3rd and 2nd) - 2nd Mob - (PW) (8) (Sam)",
      dict(name="The Example Lofts (3rd and 2nd)", job_number="G25.110", crew_size=8,
-          mobilization=2, crew_lead="Sam", is_punch=False, prevailing_wage=True,
+          mobilization=2, foreman="Sam", is_punch=False, prevailing_wage=True,
           night_work=False)),
     ("Example Diner (4)",
-     dict(name="Example Diner", job_number=None, crew_size=4, mobilization=None, crew_lead=None,
+     dict(name="Example Diner", job_number=None, crew_size=4, mobilization=None, foreman=None,
           is_punch=False, prevailing_wage=False, night_work=False)),
     ("Example Plaza (6) - 2nd Mob",
-     dict(name="Example Plaza", job_number=None, crew_size=6, mobilization=2, crew_lead=None,
+     dict(name="Example Plaza", job_number=None, crew_size=6, mobilization=2, foreman=None,
           is_punch=False, prevailing_wage=False, night_work=False)),
     ("Example Punch - (1) (Lee)",
-     dict(name="Example Punch", job_number=None, crew_size=1, mobilization=None, crew_lead="Lee",
+     dict(name="Example Punch", job_number=None, crew_size=1, mobilization=None, foreman="Lee",
           is_punch=True, prevailing_wage=False, night_work=False)),
     ("Example Shop (3) Night Work",
-     dict(name="Example Shop", job_number=None, crew_size=3, mobilization=None, crew_lead=None,
+     dict(name="Example Shop", job_number=None, crew_size=3, mobilization=None, foreman=None,
           is_punch=False, prevailing_wage=False, night_work=True)),
     ("Example Patch?",
      dict(name="Example Patch?", job_number=None, crew_size=None, mobilization=None,
-          crew_lead=None, is_punch=False, prevailing_wage=False, night_work=False)),
+          foreman=None, is_punch=False, prevailing_wage=False, night_work=False)),
     ("Example Annex 1st Mob (5) (Kim)",
-     dict(name="Example Annex", job_number=None, crew_size=5, mobilization=1, crew_lead="Kim",
+     dict(name="Example Annex", job_number=None, crew_size=5, mobilization=1, foreman="Kim",
           is_punch=False, prevailing_wage=False, night_work=False)),
     ("Example Depot 3rd Mob (2)",
-     dict(name="Example Depot", job_number=None, crew_size=2, mobilization=3, crew_lead=None,
+     dict(name="Example Depot", job_number=None, crew_size=2, mobilization=3, foreman=None,
           is_punch=False, prevailing_wage=False, night_work=False)),
 ])
 def test_each_title_shape_is_read(client, source, title, want):
@@ -223,20 +224,20 @@ def test_each_title_shape_is_read(client, source, title, want):
 
 def test_the_last_bare_integer_is_the_crew_size(client, source):
     ev = one(client, source, allday("e1", "Example Hall (2) - (4) (Ann)", "2026-11-09", "2026-11-10"))
-    assert ev["crew_size"] == 4 and ev["crew_lead"] == "Ann" and ev["name"] == "Example Hall"
+    assert ev["crew_size"] == 4 and ev["foreman"] == "Ann" and ev["name"] == "Example Hall"
 
 
-def test_a_name_in_parentheses_that_is_not_last_is_not_a_crew_lead(client, source):
+def test_a_name_in_parentheses_that_is_not_last_is_not_a_foreman(client, source):
     ev = one(client, source, allday("e1", "Example Barn (Ann) (4)", "2026-11-09", "2026-11-10"))
-    assert ev["crew_lead"] is None and ev["crew_size"] == 4
+    assert ev["foreman"] is None and ev["crew_size"] == 4
     assert ev["name"] == "Example Barn (Ann)", "what did not parse stays in the name"
 
 
-def test_pw_and_numbers_are_never_a_crew_lead(client, source):
+def test_pw_and_numbers_are_never_a_foreman(client, source):
     assert one(client, source, allday("e1", "Example Yard (PW)", "2026-11-09", "2026-11-10")
-               )["crew_lead"] is None
+               )["foreman"] is None
     assert one(client, source, allday("e1", "Example Yard (7)", "2026-11-09", "2026-11-10")
-               )["crew_lead"] is None
+               )["foreman"] is None
 
 
 @pytest.mark.parametrize("title", [None, "", "((((", "(", ")", "26.125,", "(3) (4) (5)",
@@ -317,10 +318,10 @@ def test_a_timed_event_across_the_autumn_dst_change(client, source):
 
 
 # ── colours and deadlines ─────────────────────────────────────────────────────
-def test_red_is_a_duration_and_its_last_day_is_the_deadline(client, source):
+def test_red_is_epoxy_and_its_last_day_is_the_deadline(client, source):
     ev = one(client, source, allday("e1", "26.125, Acme Clinic Psych (6) (Pat)",
                                     "2026-11-09", "2026-11-21", "11"))
-    assert ev["is_duration"] is True
+    assert ev["work_type"] == "Epoxy"
     assert ev["color_id"] == "11" and ev["color"] == "#d50000"
     assert ev["deadline"] == ev["last_day"] == "2026-11-20"
 
@@ -329,16 +330,16 @@ def test_red_is_a_duration_and_its_last_day_is_the_deadline(client, source):
                                         ("4", "#e67c73"), ("5", "#f6bf26"), ("6", "#f4511e"),
                                         ("7", "#039be5"), ("8", "#616161"), ("9", "#3f51b5"),
                                         ("10", "#0b8043")])
-def test_other_colours_are_shown_as_google_draws_them_and_carry_no_deadline(client, source, cid, hexval):
+def test_every_colour_is_drawn_as_google_draws_it_and_still_has_a_deadline(client, source, cid, hexval):
     ev = one(client, source, allday("e1", "Example Diner (4)", "2026-11-09", "2026-11-12", cid))
     assert ev["color"] == hexval and ev["color_id"] == cid
-    assert ev["is_duration"] is False and ev["deadline"] is None
+    assert ev["deadline"] == "2026-11-11"
 
 
-def test_no_colour_means_a_null_colour_and_no_deadline(client, source):
+def test_no_colour_means_a_null_colour_an_unknown_work_type_and_still_a_deadline(client, source):
     ev = one(client, source, allday("e1", "Example Diner (4)", "2026-11-09", "2026-11-12"))
-    assert ev["color_id"] is None and ev["color"] is None
-    assert ev["is_duration"] is False and ev["deadline"] is None
+    assert ev["color_id"] is None and ev["color"] is None and ev["work_type"] is None
+    assert ev["deadline"] == "2026-11-11"
 
 
 # ── the range ─────────────────────────────────────────────────────────────────
@@ -409,8 +410,10 @@ def _unconfigure(monkeypatch):
 def test_with_nothing_configured_the_api_says_not_connected(client, monkeypatch, drafts_db):
     _unconfigure(monkeypatch)
     body = get(client)
+    work_types = body.pop("work_types")
     assert body == {"ok": True, "connected": False, "stale": False, "fetched_at": None,
                     "error": None, "notice": None, "events": []}
+    assert [w["name"] for w in work_types] == ["Epoxy", "Polish", "Gyp"], "the legend still has its list"
 
 
 def test_a_calendar_id_without_a_key_is_not_connected(client, monkeypatch, drafts_db):
@@ -716,10 +719,10 @@ def test_if_tabs_are_sealed_again_the_route_is_refused_to_a_denied_role_only(
 
 
 # ── review fixes ──────────────────────────────────────────────────────────────
-def test_a_parenthesised_punch_is_a_punch_not_a_crew_lead(client, source):
+def test_a_parenthesised_punch_is_a_punch_not_a_foreman(client, source):
     ev = one(client, source, allday("e1", "Example Hall (Punch)", "2026-11-09", "2026-11-10"))
     assert ev["is_punch"] is True
-    assert ev["crew_lead"] is None, "the word Punch marks a Punch, never a person"
+    assert ev["foreman"] is None, "the word Punch marks a Punch, never a person"
 
 
 def test_after_a_google_failure_google_is_left_alone_for_a_while(client, google):
@@ -1265,3 +1268,32 @@ def test_the_server_never_reads_a_personal_calendar(client, source, monkeypatch,
 
 def test_the_not_shared_message_says_what_to_do():
     assert pc.MESSAGES[pc.REASON_NOT_SHARED].endswith("An admin needs to share it with that account.")
+
+
+# ── #778: every bar is a Duration, colour is the Work type, the name is Foreman ───────────────────
+@pytest.mark.parametrize("color, work_type", [
+    ("11", "Epoxy"), ("9", "Polish"), ("10", "Gyp"), ("7", None), (None, None)])
+def test_every_bar_is_a_duration_and_its_colour_is_the_work_type(client, source, color, work_type):
+    """Darrin, 2026-11-12: every bar runs from the start date through the last day on the job, and
+    the colour is the Work type (red Epoxy, blue Polish, green Gyp). Any other colour is unknown."""
+    ev = one(client, source, allday("e1", "Example Diner (4)", "2026-11-09", "2026-11-12", color))
+    assert ev["deadline"] == "2026-11-11", "the Deadline is the last day, whatever the colour"
+    assert ev["work_type"] == work_type
+
+
+def test_the_person_named_last_is_the_foreman(client, source):
+    ev = one(client, source, allday("e1", "26.125, Acme Clinic Psych (6) (Pat)", "2026-11-09",
+                                    "2026-11-10", "11"))
+    assert ev["foreman"] == "Pat"
+    assert "crew_lead" not in ev, "the glossary word is Foreman; Crew lead is gone"
+
+
+def test_the_response_carries_the_work_type_colours_the_legend_is_drawn_from(client, source):
+    """One source for colour -> Work type: the server. The page draws its legend from this list
+    instead of keeping a copy of the map (docs/v2-architecture.md section 5, rule 1)."""
+    body = get(client)
+    assert body["work_types"] == [
+        {"name": "Epoxy", "color_id": "11", "color": "#d50000"},
+        {"name": "Polish", "color_id": "9", "color": "#3f51b5"},
+        {"name": "Gyp", "color_id": "10", "color": "#0b8043"},
+    ]

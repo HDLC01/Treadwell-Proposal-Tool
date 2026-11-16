@@ -38,6 +38,11 @@ ENV/
 *client_secret*.json
 *client-secret*.json
 .google-calendar-oauth*.env
+# Any secret file dropped in the repo root (Raken app, Google, ...): never committed.
+*secret*.txt
+*Secret*.txt
+*secret*.json
+*Secret*.json
 
 # IDE
 .idea/
