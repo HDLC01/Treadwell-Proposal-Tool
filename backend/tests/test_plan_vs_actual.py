@@ -168,18 +168,33 @@ def test_the_response_carries_the_calendar_side_and_raken_not_connected(client, 
 
 
 # ── reading a year in pieces ──────────────────────────────────────────────────
-def test_a_year_back_and_two_weeks_ahead_is_read_in_pieces_of_at_most_120_days(client, google):
+def test_a_year_back_and_two_weeks_ahead_is_read_in_pieces_of_at_most_120_days(
+        client, google, monkeypatch):
     """365 days before today to 14 days after, every day once, never more than the reader's cap per
-    request, and only ever the configured calendar."""
-    body = get(client)
+    request, and only ever the configured calendar. The pieces sit on a fixed grid, so the next
+    day asks for the same pieces (and finds the same cache entries) unless the year has reached a
+    new one."""
+    def read_days():
+        google.calls.clear()
+        body = get(client)
+        days = []
+        for cal, time_min, time_max in google.calls:
+            assert cal == CAL_ID
+            a, b = dt.date.fromisoformat(time_min[:10]), dt.date.fromisoformat(time_max[:10])
+            assert 0 < (b - a).days <= pc.MAX_SPAN_DAYS
+            days.extend(a + dt.timedelta(days=i) for i in range((b - a).days))
+        return body, days, list(google.calls)
+
+    body, days, calls = read_days()
     assert body["read_from"] == "2025-11-18" and body["read_to"] == "2026-12-02"
-    days = []
-    for cal, time_min, time_max in google.calls:
-        assert cal == CAL_ID
-        a, b = dt.date.fromisoformat(time_min[:10]), dt.date.fromisoformat(time_max[:10])
-        assert 0 < (b - a).days <= pc.MAX_SPAN_DAYS
-        days.extend(a + dt.timedelta(days=i) for i in range((b - a).days))
-    assert days == [dt.date(2025, 11, 18) + dt.timedelta(days=i) for i in range(380)]
+    assert days == sorted(set(days)), "a day was read twice"
+    assert days[0] <= dt.date(2025, 11, 18) and days[-1] >= dt.date(2026, 12, 2)
+    assert days == [days[0] + dt.timedelta(days=i) for i in range(len(days))], "a day was skipped"
+    assert len(calls) <= 5
+
+    monkeypatch.setattr(pc, "today_central", lambda: TODAY + dt.timedelta(days=1))
+    _body, _days, next_calls = read_days()
+    assert next_calls == calls
 
 
 def test_a_job_longer_than_120_days_is_one_mobilization_counted_once(client, google):
@@ -400,6 +415,31 @@ def test_a_google_failure_after_a_good_read_serves_the_last_copy_as_stale(client
     assert body["stale"] is True and body["error"] == "Google Calendar could not be reached."
     assert [p["key"] for p in body["projects"]] == ["job:26.125"]
     assert body["fetched_at"] == first["fetched_at"]
+
+
+def test_a_google_failure_the_day_after_a_good_read_still_serves_yesterdays_copy(
+        client, google, monkeypatch):
+    """The year read moves by a day at Central midnight. Yesterday's copy must still answer the
+    first read of the new day when Google fails, not an empty list."""
+    google.events = [ACME_2]
+    first = get(client)
+    monkeypatch.setattr(pc, "today_central", lambda: TODAY + dt.timedelta(days=1))
+    google.fail = True
+    body = get(client)
+    assert body["today"] == "2026-11-19"
+    assert body["stale"] is True and body["error"] == "Google Calendar could not be reached."
+    assert [p["key"] for p in body["projects"]] == ["job:26.125"]
+    assert body["fetched_at"] == first["fetched_at"]
+
+
+def test_a_mobilization_before_the_year_read_is_never_counted(client, google):
+    """Only the year before today is read, whatever piece of it Google is asked for, so a job's
+    figures never depend on how the read happens to be cut up."""
+    google.events = [mob("old", "26.040, Example Depot (5) (Kim)", "2025-10-06", "2025-10-10"),
+                     mob("p", "26.040, Example Depot Punch (1) (Kim)", "2026-11-17", "2026-11-17")]
+    (p,) = rows(client)
+    assert p["mobilizations"] == [] and len(p["punches"]) == 1
+    assert p["planned_hours"] == 1 * 1 * 8
 
 
 def test_a_listed_job_links_to_the_tool_project_with_its_job_number(client, google, drafts_db):

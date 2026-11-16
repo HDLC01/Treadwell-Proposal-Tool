@@ -6,9 +6,13 @@ of every row reads {"state": "not_connected"} until Raken is connected (#782), a
 that as "Connect Raken to compare". The words are GLOSSARY.md's: Project, Mobilization, Punch, Job
 number, Crew size, Foreman, Workday, Planned hours, Deadline.
 
-READING. The calendar is read from 365 days before today to 14 days after, in pieces of at most
-project_calendar.MAX_SPAN_DAYS, each through project_calendar.read_range (its cache, its stale
-copies, its plain errors). An event that spans two pieces comes back from both and is kept once.
+READING. The calendar is read from 365 days before today to 14 days after, through
+project_calendar.read_range (its cache, its stale copies, its plain errors), in pieces of
+project_calendar.MAX_SPAN_DAYS laid on a FIXED grid of days counted from GRID_ORIGIN. The pieces do
+not move when the day does, so the first read of a new day finds the same cache entries as the day
+before: if Google fails then, yesterday's copy is served, and the shared cache gains a new entry
+only when the year reaches a new piece. The pieces cover a little more than the year, so what they
+return is cut back to the year. An event that spans two pieces comes back from both and is kept once.
 The calendar stays read-only and only PROJECT_CALENDAR_ID is ever read (ADR 0001): this module never
 talks to Google itself.
 
@@ -56,6 +60,8 @@ ERR_BUILD = "Plan vs Actual could not be worked out just now."
 
 READ_BACK_DAYS = 365
 READ_AHEAD_DAYS = 14
+# Where the grid of read pieces is counted from. Any fixed day works; it must never move with today.
+GRID_ORIGIN = _dt.date(2000, 1, 1)
 WINDOW_DAYS = 14
 # Every Work type, Gyp included, until Operations says otherwise.
 HOURS_PER_WORKDAY = 8
@@ -88,11 +94,14 @@ def read_window(today: _dt.date) -> Tuple[_dt.date, _dt.date]:
 
 
 def pieces(first: _dt.date, last: _dt.date) -> List[Tuple[_dt.date, _dt.date]]:
-    """[first, last] cut into consecutive inclusive pieces of at most MAX_SPAN_DAYS."""
+    """The grid pieces that cover [first, last]: consecutive, inclusive, MAX_SPAN_DAYS each, the
+    first starting on the grid line at or before `first`. The same days always give the same
+    pieces, whatever day the read starts on."""
+    span = pc.MAX_SPAN_DAYS
+    cur = GRID_ORIGIN + _dt.timedelta(days=((first - GRID_ORIGIN).days // span) * span)
     out = []
-    cur = first
     while cur <= last:
-        end = min(last, cur + _dt.timedelta(days=pc.MAX_SPAN_DAYS - 1))
+        end = cur + _dt.timedelta(days=span - 1)
         out.append((cur, end))
         cur = end + _DAY
     return out
@@ -106,6 +115,7 @@ def _read_year(cal: str, source: Any, today: _dt.date) -> Dict[str, Any]:
     """Every piece read; one result as read_range gives it. `events` is None when ANY piece failed
     with nothing saved: a year with a hole in it would under-count every figure."""
     first, last = read_window(today)
+    lo, hi = first.isoformat(), last.isoformat()
     seen = set()
     events: List[Dict[str, Any]] = []
     stale = False
@@ -123,6 +133,8 @@ def _read_year(cal: str, source: Any, today: _dt.date) -> Dict[str, Any]:
         if got["fetched_at"]:
             stamps.append(got["fetched_at"])
         for ev in got["events"]:
+            if ev["last_day"] < lo or ev["start"] > hi:
+                continue                 # read with its piece, but outside the year
             k = _event_key(ev)
             if k not in seen:
                 seen.add(k)
