@@ -44,10 +44,15 @@ ok:true, no projects and the plain error; a stale copy is served with stale:true
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import project_calendar as pc
+
+log = logging.getLogger("treadwell.plan_vs_actual")
+
+ERR_BUILD = "Plan vs Actual could not be worked out just now."
 
 READ_BACK_DAYS = 365
 READ_AHEAD_DAYS = 14
@@ -309,7 +314,11 @@ def fetch() -> Dict[str, Any]:
     got = _read_year(cal, source, today)
     if got["events"] is None:
         return _response(True, today, [], error=got["error"])
-    projects = build(got["events"], today)
+    try:
+        projects = build(got["events"], today)
+    except Exception as exc:  # noqa: BLE001 — a fault here must never 500 the page
+        log.warning("plan vs actual: list not built (%s)", type(exc).__name__)
+        return _response(True, today, [], error=ERR_BUILD)
     # One query for the tool Projects the listed Job numbers belong to, as on the Schedule.
     matches = pc._projects_by_job_number(p["job_number"] for p in projects if p["job_number"])
     for p in projects:

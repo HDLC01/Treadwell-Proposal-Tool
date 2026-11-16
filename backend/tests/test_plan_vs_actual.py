@@ -428,3 +428,16 @@ def test_the_page_route_is_hide_only_like_every_tab(client, google, tmp_path, mo
     monkeypatch.setattr(nav_access, "_DATA_DIR", tmp_path)
     nav_access.save({"user": ["/project-calendar.html"]}, "admin@made-up.example")
     assert client.get(URL).status_code == 200
+
+
+def test_a_fault_building_the_list_is_a_plain_error_not_a_500(client, google, monkeypatch):
+    import plan_vs_actual
+
+    def boom(events, today):
+        raise ValueError("unexpected event shape")
+
+    monkeypatch.setattr(plan_vs_actual, "build", boom)
+    google.events = [ACME_2]
+    body = get(client)
+    assert body["ok"] is True and body["projects"] == []
+    assert body["error"] == "Plan vs Actual could not be worked out just now."
