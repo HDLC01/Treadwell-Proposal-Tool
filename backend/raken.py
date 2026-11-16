@@ -486,7 +486,10 @@ def list_all(path: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[st
         items.extend(x for x in (coll if isinstance(coll, list) else []) if isinstance(x, dict))
         page = body.get("page") if isinstance(body, dict) else None
         nxt = page.get("nextOffset") if isinstance(page, dict) else None
-        if not isinstance(nxt, int) or nxt <= offset:
+        # Raken's docs show nextOffset as a string ("nextOffset": "10"); a number is taken too.
+        if isinstance(nxt, str) and nxt.strip().isdigit():
+            nxt = int(nxt.strip())
+        if isinstance(nxt, bool) or not isinstance(nxt, int) or nxt <= offset:
             return items
         offset = nxt
     log.warning("raken: GET %s stopped after %d pages", path, _PAGE_CAP)
