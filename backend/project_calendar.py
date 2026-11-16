@@ -125,7 +125,7 @@ REASON_API_OFF = "api_disabled"
 _ERR_UPSTREAM = "Google Calendar could not be reached."
 MESSAGES: Dict[str, str] = {
     REASON_UPSTREAM: _ERR_UPSTREAM,
-    REASON_SIGNIN: ("The Google sign-in for the Project Calendar has expired or was removed. "
+    REASON_SIGNIN: ("The Google sign-in for Project Analytics has expired or was removed. "
                     "An admin needs to reconnect the Google sign-in."),
     REASON_NOT_SHARED: ("The Treadwell Projects calendar isn't shared with the connected Google "
                         "account. An admin needs to share it with that account."),
@@ -136,8 +136,8 @@ MESSAGES: Dict[str, str] = {
     REASON_FREE_BUSY: ("The connected Google account can only see free/busy times on this "
                        "calendar, so titles and colours are hidden. An admin needs to reconnect "
                        "the sign-in as the calendar's owner."),
-    REASON_API_OFF: ("The Google Calendar API is turned off for the Project Calendar's Google "
-                     "sign-in. An admin needs to turn it on."),
+    REASON_API_OFF: ("The Google Calendar API is turned off for the Google sign-in that Project "
+                     "Analytics uses. An admin needs to turn it on."),
 }
 
 # A 403 from Google is also how it says "slow down". Those are a passing outage, not a refusal.

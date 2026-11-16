@@ -687,7 +687,7 @@ def nav_file(tmp_path, monkeypatch):
 
 def test_the_row_is_keyed_on_its_href_and_owns_its_page(nav_file):
     tab = nav_access.TABS["/project-calendar.html"]
-    assert tab["label"] == "Project Calendar"
+    assert tab["label"] == "Project Analytics"
     assert tab["pages"] == ("/project-calendar.html",)
     assert "/project-calendar.html" not in nav_access.LOCKED
 
@@ -931,10 +931,10 @@ def _fail(fake, how):
         fake.events_error = {"error": {"code": fake.events_status, "message": "made-up"}}
 
 
-RECONNECT = ("The Google sign-in for the Project Calendar has expired or was removed. An admin "
+RECONNECT = ("The Google sign-in for Project Analytics has expired or was removed. An admin "
              "needs to reconnect the Google sign-in.")
-API_OFF = ("The Google Calendar API is turned off for the Project Calendar's Google sign-in. An "
-           "admin needs to turn it on.")
+API_OFF = ("The Google Calendar API is turned off for the Google sign-in that Project Analytics "
+           "uses. An admin needs to turn it on.")
 
 FAILURES = [
     ("invalid_grant", RECONNECT),

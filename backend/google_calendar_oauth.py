@@ -63,7 +63,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SHARED_CALENDAR_SUFFIX = "@group.calendar.google.com"
 WAIT_S = 5 * 60
 
-_CLOSE_PAGE = (b"<!doctype html><meta charset=utf-8><title>Project Calendar</title>"
+_CLOSE_PAGE = (b"<!doctype html><meta charset=utf-8><title>Project Analytics</title>"
                b"<p style='font-family:sans-serif'>Done. You can close this tab.</p>")
 
 
@@ -171,7 +171,7 @@ def check_calendar_id(calendar_id: Optional[str]) -> str:
     if not cal:
         raise SetupError("No calendar to check: pass --calendar-id or set PROJECT_CALENDAR_ID.")
     if cal.lower() == "primary" or not cal.lower().endswith(SHARED_CALENDAR_SUFFIX):
-        raise SetupError("That is not the Project Calendar's id. Use the shared calendar's own id, "
+        raise SetupError("That is not the Treadwell Projects calendar's id. Use the shared calendar's own id, "
                          "which ends with %s (Google Calendar > the calendar's Settings > "
                          "Integrate calendar > Calendar ID). \"primary\", your own main calendar, "
                          "is never read. Nothing was saved." % SHARED_CALENDAR_SUFFIX)
@@ -357,7 +357,7 @@ def _wait_for_code(state: str, client_id: str, challenge: str,
 
 
 def main(argv: Optional[list] = None) -> int:
-    ap = argparse.ArgumentParser(description="One-time Google sign-in for the Project Calendar.")
+    ap = argparse.ArgumentParser(description="One-time Google sign-in for Project Analytics.")
     ap.add_argument("--client-file", required=True,
                     help="the OAuth client JSON downloaded from Google Cloud (Desktop app)")
     ap.add_argument("--out", default=None,

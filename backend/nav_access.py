@@ -178,7 +178,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         # since 2026-10-27 (see the note above TABS): denying the row hides the tab and refuses the
         # page, and the route still answers. Put ("/api/project-calendar",) here if tabs are ever
         # sealed again.
-        "label": "Project Calendar",
+        "label": "Project Analytics",
         "pages": ("/project-calendar.html",),
         "api": (),
     },
