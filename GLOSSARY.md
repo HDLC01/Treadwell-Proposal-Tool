@@ -161,6 +161,14 @@ _Avoid_: Past 7 days, the last five workdays
 The row above the Plan vs Actual list: how many jobs are On plan, Behind, Over budget and Not linked (a job Behind and Over budget is counted under both), Last week's hours, and the Budgeted hours and Projected total hours added up over the linked jobs with a Raken budget. Pressing a count shows only its jobs. Until Raken is read, the counts are not known.
 _Avoid_: Dashboard, KPI bar, scorecard
 
+**Daily refresh**:
+The "Refresh now" step run by the tool itself once a day at 5:00 AM Central: it reads the Treadwell Projects calendar and Raken. A run that fails keeps the last good numbers on screen with their "as of" time.
+_Avoid_: Sync, cron job, nightly import
+
+**Snapshot**:
+One Project's Plan vs Actual figures as a good refresh worked them out, kept once per Project per day in Central; a later good refresh the same day replaces it. Kept so trends can be shown later.
+_Avoid_: History, backup, log
+
 ### Outcomes
 
 Each outcome belongs to one Scope. A Project has no outcome of its own.

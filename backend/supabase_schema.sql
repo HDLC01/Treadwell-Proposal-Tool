@@ -678,3 +678,23 @@ alter table public.condition_defaults add column if not exists listed boolean;
 -- blanket grant only covers the tables that exist when it runs.
 alter table public.condition_defaults enable row level security;
 grant select, insert, update, delete on public.condition_defaults to service_role;
+
+-- PLAN VS ACTUAL SNAPSHOTS (#784). One row per listed Project per Central day, written after every
+-- good refresh (the 5:00 AM daily run or "Refresh now") by backend/pva_snapshots.py; a second good
+-- run the same day replaces the row. Applied by hand: backend/ops/pva_snapshots.sql. The code reads
+-- an absent table as "keep no snapshots", never a failure.
+create table if not exists public.pva_snapshots (
+  -- The row's own key: "job:<Job number>", "name:<name>" or "punch:...", as the page uses it.
+  project_key text not null,
+  -- The day in Central the run belongs to.
+  snap_date   date not null,
+  -- The row's computed figures: the plan, and the Raken side with its statuses.
+  figures     jsonb not null,
+  -- When Raken was read (Central, with its offset).
+  ran_at      timestamptz,
+  primary key (project_key, snap_date)
+);
+-- Same posture as drafts/events: RLS on, no policies here; the proposal tool holds the service-role
+-- key. Beside the table: a blanket grant only covers the tables that exist when it runs.
+alter table public.pva_snapshots enable row level security;
+grant select, insert, update, delete on public.pva_snapshots to service_role;

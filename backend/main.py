@@ -96,6 +96,7 @@ import profiles
 import project_calendar
 import plan_vs_actual
 import plan_vs_actual_xlsx
+import pva_refresh_worker
 import proposal_fonts
 import raken
 import proposal_writer
@@ -1058,7 +1059,8 @@ def api_project_analytics_xlsx(q: str = "", status: str = "") -> Response:
 # then answers as the GET does. Any signed-in staff member may press it, like every tab's routes
 # (hide-only since 2026-10-27); one refresh runs at a time, a press while one runs answers at once
 # with refreshing: true, and a press soon after a good read answers from it. Raken failing is a 200
-# with a plain message, never a 500.
+# with a plain message, never a 500. The same step runs by itself at 5:00 AM Central (#784,
+# backend/pva_refresh_worker.py), and every good run keeps a snapshot (backend/pva_snapshots.py).
 @app.post("/api/project-analytics/refresh")
 def api_project_analytics_refresh() -> Dict[str, Any]:
     return plan_vs_actual.refresh()
@@ -8281,6 +8283,14 @@ def _start_digest() -> None:
     or not the schedule is enabled."""
     digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
     digest_worker.ensure_started(portal=_portal, run_claude=_autofill_via_cli)
+
+
+@app.on_event("startup")
+def _start_pva_refresh() -> None:
+    """Plan vs Actual's 5:00 AM Central refresh (#784, backend/pva_refresh_worker.py) runs from a
+    startup hook for the digest's reason: nobody opens the page at 5 AM. It runs the "Refresh now"
+    step once a day; PVA_REFRESH_ENABLED=off holds it back. Never raises."""
+    pva_refresh_worker.ensure_started()
 
 
 @app.on_event("startup")
