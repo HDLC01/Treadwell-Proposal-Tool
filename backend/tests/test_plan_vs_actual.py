@@ -49,8 +49,9 @@ class FakeGoogle:
         lo, hi = time_min[:10], time_max[:10]
         out = []
         for ev in self.events:
-            start = ev["start"]["date"]
-            end_excl = ev["end"]["date"]
+            # A timed event's dateTime starts with its date, which is near enough for a fake.
+            start = ev["start"].get("date") or ev["start"]["dateTime"][:10]
+            end_excl = ev["end"].get("date") or ev["end"]["dateTime"][:10]
             if start < hi and end_excl > lo:
                 out.append(copy.deepcopy(ev))
         return out

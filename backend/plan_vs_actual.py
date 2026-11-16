@@ -51,7 +51,7 @@ cards against a full planned day):
   * Workdays left: Monday to Friday from today through the Deadline while the job runs; a job not
     started is TIMING_STARTS (the page says "Starts <date>"), a finished one TIMING_FINISHED.
   * the day-by-day (#789), the job detail's chart: one entry per Workday of its Mobilizations,
-    Punches included, in date order, with the Crew sizes booked that day added up (two
+    Punches included, within the read window (read_window), in date order, with the Crew sizes booked that day added up (two
     Mobilizations can overlap) and that times HOURS_PER_WORKDAY. A day from today on is "future"
     and carries the plan only; raken_actuals fills each earlier day's people on site, hours and
     "missed" for a linked row.
@@ -303,11 +303,16 @@ def _day_by_day(every: List[Dict[str, Any]], today: _dt.date) -> List[Dict[str, 
     None when no Mobilization booked that day has a Crew size, with crew_size_missing set when any
     has none) and whether the day is today or later ("future": the plan only). The Raken side of
     each entry (on_site, hours, missed) stays empty here: raken_actuals.apply fills it for a linked
-    row, from the kept read, up to yesterday."""
+    row, from the kept read, up to yesterday.
+
+    Each Mobilization's days are clamped to the read window first: a mistyped end year (2062 for
+    2026) still overlaps the year read, and unclamped it would put decades of columns in every GET
+    (or, ending on date.max, step past it and lose the whole list to ERR_BUILD)."""
+    first, last = read_window(today)
     crews: Dict[_dt.date, List[Optional[int]]] = {}
     for m in every:
         crew = m["crew_size"] if isinstance(m["crew_size"], int) else None
-        for d in _workday_dates(_day(m["start"]), _day(m["last_day"])):
+        for d in _workday_dates(max(_day(m["start"]), first), min(_day(m["last_day"]), last)):
             crews.setdefault(d, []).append(crew)
     out = []
     for d in sorted(crews):

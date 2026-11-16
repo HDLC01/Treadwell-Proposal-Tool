@@ -126,3 +126,30 @@ def test_the_get_serves_the_days_from_the_kept_read_without_calling_raken(client
     assert (fake.project_calls, len(fake.card_calls), len(fake.insight_calls)) == calls
     assert d["2026-11-16"]["hours"] == 8 and d["2026-11-17"]["hours"] == 6
     assert d["2026-11-17"]["on_site"] == 1
+
+def test_a_mistyped_end_year_never_grows_the_days_past_the_read(client, google, fake):
+    """A Google event ending in 2062 instead of 2026 still overlaps the year read, so it is listed,
+    but its day-by-day stops where the read stops (today + READ_AHEAD_DAYS): no column, and no
+    bytes in every GET, for the decades in between."""
+    google.events = [mob("a", "26.530, Example Mistype (2)", "2026-11-16", "2062-11-20"), JOB]
+    rows = by_key(get(client))
+    entries = rows["job:26.530"]["day_by_day"]
+    assert entries[0]["date"] == "2026-11-16"
+    assert entries[-1]["date"] == "2026-12-02", "the read's last day, Wed Dec 2"
+    assert len(entries) == 13
+    assert "job:26.501" in rows
+
+
+def test_an_event_ending_on_the_last_date_python_has_never_empties_the_list(client, google, fake):
+    """A timed event ending on 9999-12-31 used to step one day past date.max: OverflowError, and
+    the WHOLE list replaced by the build error. Only that event's own row may suffer, and here not
+    even that: its days stop at the read."""
+    google.events = [{"id": "z", "summary": "26.531, Example Forever (2)",
+                      "start": {"dateTime": "2026-11-16T08:00:00-06:00"},
+                      "end": {"dateTime": "9999-12-31T12:00:00-06:00"},
+                      "htmlLink": "https://calendar.example/event?eid=z"}, JOB]
+    body = get(client)
+    assert not body.get("error"), body.get("error")
+    rows = by_key(body)
+    assert "job:26.501" in rows
+    assert rows["job:26.531"]["day_by_day"][-1]["date"] == "2026-12-02"
