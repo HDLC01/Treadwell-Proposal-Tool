@@ -83,6 +83,8 @@ THE FIGURES, worked out on every GET against the CURRENT calendar rows (apply())
     a budget (no figures, never Over budget); "not_read" when any of them was not read.
     projection_below_actual when the projection is below the Actual hours: Raken projects only the
     work in its budget, while every time card counts as Actual hours;
+  * last_week_hours (#788): every hour the row's Raken projects' time cards put on last_week()'s
+    Monday to Friday, booked or not; None when the read does not cover all five days;
   * statuses are flags: ["not_linked"] alone; else "behind" when days clocked in < days booked and
     "over_budget" when Over/under < 0, both when both; ["on_plan"] when neither, unless the
     Budget pair was not read (it could be Over budget): then no status at all;
@@ -571,9 +573,19 @@ def _public(p: Dict[str, Any]) -> Dict[str, Any]:
     return {"uuid": p.get("uuid"), "name": p.get("name"), "number": p.get("number")}
 
 
+def last_week(today: _dt.date) -> Tuple[_dt.date, _dt.date]:
+    """Last week (#788): the Monday and the Friday of the week before today's, in Central (a week
+    starts on Monday, so on a Saturday or a Sunday last week is still the one before)."""
+    monday = today - _dt.timedelta(days=today.weekday() + 7)
+    return monday, monday + _dt.timedelta(days=4)
+
+
 def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict[str, Any]]],
-         lo: _dt.date, hi: _dt.date) -> Tuple[Dict[str, Any], List[str], Set[str]]:
-    """(the row's Raken side, its statuses, the Raken projects it took)."""
+         lo: _dt.date, hi: _dt.date,
+         week: Tuple[_dt.date, _dt.date]) -> Tuple[Dict[str, Any], List[str], Set[str]]:
+    """(the row's Raken side, its statuses, the Raken projects it took). `week` is last_week()'s
+    Monday and Friday: the side's last_week_hours are every hour its Raken projects' time cards
+    put on those five days, booked or not, or None when the read does not cover all five."""
     number, found, linked = _link(row, index)
     if not number:
         return {"state": STATE_NOT_LINKED, "reason": REASON_NO_JOB_NUMBER}, [STATUS_NOT_LINKED], set()
@@ -600,9 +612,12 @@ def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict
            if clocked else None)
     actual = round(sum(hours.values()), 2)
     _fill_days(row, hours, workers, lo_s, hi_s)
+    mon, fri = week
+    in_week = (round(sum(h for d, h in hours.items() if mon.isoformat() <= d <= fri.isoformat()), 2)
+               if lo <= mon and fri <= hi else None)
     side = {"state": STATE_LINKED, "projects": [_public(p) for p in linked],
             "days_booked": len(booked), "days_clocked": len(clocked), "avg_on_site": avg,
-            "actual_hours": actual, "through": hi_s}
+            "actual_hours": actual, "last_week_hours": in_week, "through": hi_s}
     side.update(_budget(uuids, result, actual))
     statuses = []
     if len(clocked) < len(booked):
@@ -744,9 +759,10 @@ def apply(rows: List[Dict[str, Any]], today: _dt.date,
     index = _by_number(projects)
     taken: Set[str] = set()
     numbers: Set[str] = {str(n).strip() for n in calendar_numbers if n and str(n).strip()}
+    week = last_week(today)
     for r in rows:
         _clear_days(r)
-        r["raken"], r["statuses"], used = _row(r, result, index, lo, hi)
+        r["raken"], r["statuses"], used = _row(r, result, index, lo, hi, week)
         taken |= used
         for m in [r] + list(r.get("mobilizations") or []) + list(r.get("punches") or []):
             n = (m.get("job_number") or "").strip()
