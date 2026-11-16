@@ -58,7 +58,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -96,6 +96,7 @@ import profiles
 import project_calendar
 import plan_vs_actual
 import proposal_fonts
+import raken
 import proposal_writer
 import pull_window
 import reference_tax
@@ -273,12 +274,21 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/signed-contract"}
 
 
+# Public for GET only. Raken sends the browser back to /api/raken/callback with no Authorization
+# header (this app has no cookies), so that GET cannot know who is calling. It does nothing but bounce
+# the code and state to the Project Analytics page, which hands them to the admin-only POST on the
+# same path. See backend/raken.py.
+_AUTH_PUBLIC_GET_PATHS = {"/api/raken/callback"}
+
+
 def _auth_is_public(path: str, method: str) -> bool:
     if method == "OPTIONS":
         return True
     if not path.startswith("/api/"):
         return True
     if path in _AUTH_PUBLIC_PATHS:
+        return True
+    if method in ("GET", "HEAD") and path in _AUTH_PUBLIC_GET_PATHS:
         return True
     return False
 
@@ -1013,6 +1023,51 @@ def api_project_calendar(start: str = "", end: str = "") -> Dict[str, Any]:
 @app.get("/api/project-analytics")
 def api_project_analytics() -> Dict[str, Any]:
     return plan_vs_actual.fetch()
+
+
+# ── Connect Raken (#781) ──────────────────────────────────────────────────────
+# An admin signs the tool in to Raken once; backend/raken.py keeps that sign-in encrypted on the
+# data volume and renews it. Start, finish and status are admin-only. The GET callback is the one
+# public step: Raken's redirect carries no identity, so it only bounces the code and state to the
+# page, which hands them to the admin-only POST.
+class RakenCallbackIn(BaseModel):
+    code: str = ""
+    state: str = ""
+
+
+def _raken_admin_email(request: Request) -> str:
+    prof = _require_admin(request)
+    return str(prof.get("email") or _user_email(request) or "")
+
+
+@app.get("/api/raken/connect")
+def api_raken_connect(request: Request) -> Dict[str, Any]:
+    email = _raken_admin_email(request)
+    try:
+        return {"ok": True, "url": raken.start_url(email)}
+    except raken.RakenError as exc:
+        raise HTTPException(exc.status, exc.message)
+
+
+@app.get("/api/raken/callback")
+def api_raken_callback_bounce(request: Request) -> Response:
+    return RedirectResponse(raken.landing_for(dict(request.query_params)), status_code=303)
+
+
+@app.post("/api/raken/callback")
+def api_raken_callback(request: Request, body: RakenCallbackIn) -> Dict[str, Any]:
+    email = _raken_admin_email(request)
+    try:
+        raken.finish_sign_in(body.code, body.state, email)
+    except raken.RakenError as exc:
+        raise HTTPException(exc.status, exc.message)
+    return {"ok": True, "state": raken.STATE_CONNECTED}
+
+
+@app.get("/api/raken/status")
+def api_raken_status(request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    return raken.status()
 
 
 # ── Item Library ──────────────────────────────────────────────────────────────

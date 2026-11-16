@@ -32,6 +32,9 @@ pydantic>=2.13.4
 anthropic>=0.111.0
 supabase>=2.4
 PyJWT[crypto]>=2.13.0
+# Fernet, which encrypts the stored Raken sign-in (backend/raken.py). Ships with PyJWT[crypto]
+# above; declared so the encryption's dependency is its own, not a side effect of another pin.
+cryptography>=50.0.2
 cachetools>=7.1.4
 # Read-only Basisboard API client (backend/basisboard_client.py). Ships
 # transitively via supabase today; pinned explicitly so it's first-class.
