@@ -152,7 +152,7 @@ def _fold(text: Any) -> str:
 
 def _punch_parent_name(name: str) -> str:
     """The Punch's name with the word "Punch" removed, folded for comparison."""
-    return _fold(pc._tidy(_PUNCH_WORD.sub(" ", name or "")))
+    return _fold(pc.tidy(_PUNCH_WORD.sub(" ", name or "")))
 
 
 def _day(value: str) -> _dt.date:
@@ -332,9 +332,6 @@ def fetch() -> Dict[str, Any]:
         log.warning("plan vs actual: list not built (%s)", type(exc).__name__)
         return _response(True, today, [], error=ERR_BUILD)
     # One query for the tool Projects the listed Job numbers belong to, as on the Schedule.
-    matches = pc._projects_by_job_number(p["job_number"] for p in projects if p["job_number"])
-    for p in projects:
-        proj = matches.get(p["job_number"]) if p["job_number"] else None
-        p["project"] = dict(proj) if proj else None
+    projects = pc.link_projects(projects)
     return _response(True, today, projects, stale=got["stale"], fetched_at=got["fetched_at"],
                      error=got["error"], notice=got["notice"])

@@ -564,8 +564,9 @@ _PW_RE = re.compile(r"^\s*pw\s*$", re.IGNORECASE)
 _NAME_RE = re.compile(r"^\s*([A-Za-z][A-Za-z'.-]*(?: [A-Za-z][A-Za-z'.-]*)?)\s*$")
 
 
-def _tidy(text: str) -> str:
-    """Collapse what stripping leaves behind: runs of separators, empty parens, stray spaces."""
+def tidy(text: str) -> str:
+    """Collapse what stripping leaves behind: runs of separators, empty parens, stray spaces.
+    Public: Plan vs Actual tidies a Punch's name the same way to find its job."""
     t = re.sub(r"\(\s*\)", " ", text)
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"\s*-\s*(?:-\s*)+", " - ", t)          # "- -" -> "-"
@@ -632,7 +633,7 @@ def parse_title(title: Any) -> Dict[str, Any]:
         # Punch stays in the name: "Example Punch" reads better than "Example".
         out["is_punch"] = bool(_PUNCH_RE.search(raw))
 
-        name = _tidy(rest)
+        name = tidy(rest)
         out["name"] = name or raw.strip()
     except Exception as exc:  # noqa: BLE001 — a title that breaks the parser still shows, as typed
         log.warning("project calendar: title not parsed (%s)", type(exc).__name__)
@@ -804,6 +805,22 @@ def _projects_by_job_number(job_numbers: Iterable[str]) -> Dict[str, Dict[str, s
     return {job: proj for job, (_rank, proj) in best.items()}
 
 
+def link_projects(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Copies of `rows`, each with "project" set to the tool Project its Job number belongs to
+    ({"id", "name"}) or None. Looked up on every request (one query), so a Job number saved a
+    moment ago shows up without waiting for the Google cache to expire; copies, so a cached list
+    stays clean. The Schedule's events and Plan vs Actual's rows both go through here."""
+    rows = list(rows)
+    matches = _projects_by_job_number(r.get("job_number") for r in rows)
+    out = []
+    for r in rows:
+        row = dict(r)
+        proj = matches.get(r["job_number"]) if r.get("job_number") else None
+        row["project"] = dict(proj) if proj else None
+        out.append(row)
+    return out
+
+
 # ─── the one function the route calls ─────────────────────────────────────────
 # The last good result per (calendar, range): (monotonic time it was fetched, ISO fetched_at,
 # shaped events, the notice that read carried or None). Fresh within the TTL; past it, still served
@@ -901,13 +918,5 @@ def fetch(start: Any, end: Any) -> Dict[str, Any]:
     events, stale, fetched_at = got["events"], got["stale"], got["fetched_at"]
     error, notice = got["error"], got["notice"]
 
-    # Project links are looked up on every request (one query), so a job number saved a moment
-    # ago shows up without waiting for the Google cache to expire. Copies, so the cache stays clean.
-    matches = _projects_by_job_number(e["job_number"] for e in events if e["job_number"])
-    out = []
-    for e in events:
-        row = dict(e)
-        proj = matches.get(e["job_number"]) if e["job_number"] else None
-        row["project"] = dict(proj) if proj else None
-        out.append(row)
-    return _response(True, out, stale=stale, fetched_at=fetched_at, error=error, notice=notice)
+    return _response(True, link_projects(events), stale=stale, fetched_at=fetched_at,
+                     error=error, notice=notice)
