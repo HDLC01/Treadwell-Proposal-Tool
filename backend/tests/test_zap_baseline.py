@@ -563,8 +563,12 @@ def test_the_tools_logged_out_surface_is_the_audited_one():
     # /gc-projects.html (2026-09-30, the General Contractor board): portal.html's own bytes with four
     # strings swapped (pipelines.board_page) -- the same inert shell "/" already serves. No data
     # without the sign-in; every call the page makes goes through the /api auth gate.
+    # /api/raken/callback (2026-11-16, Connect Raken #781): Raken's redirect back carries no
+    # identity, so this GET only answers a 303 to /project-calendar.html with the code, state and
+    # error renamed raken_*. It reads nothing, writes nothing and sends no mail; the exchange is the
+    # admin-only POST on the same path, which the auth gate still covers.
     assert public == {"/", "/healthz", "/api/public-config", "/api/admin/proposal-pdf",
-                      "/gc-projects.html"}, sorted(public)
+                      "/gc-projects.html", "/api/raken/callback"}, sorted(public)
 
 
 # Every GET the portal serves, and why the scan may request it. Read on 2026-09-29 from the
