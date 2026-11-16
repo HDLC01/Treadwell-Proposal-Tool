@@ -12,12 +12,13 @@
  *   2. Raken sends the browser to /api/raken/callback, which bounces back to this page with
  *      raken_code and raken_state (or raken_error) in the address.
  *   3. This script takes them out of the address at once and hands them to POST
- *      /api/raken/callback, then shows the status: "Connected: N Raken projects, M with a Project
- *      Number" plus a few example numbers, which is how an admin checks that Raken's Project
- *      Numbers are our Job numbers.
+ *      /api/raken/callback, then shows the status: "Connected: N Raken projects, M with Raken's
+ *      Project Number filled in" plus a few example numbers, which is how an admin checks that
+ *      Raken's Project Number field holds our Job numbers.
  *
- * Styling goes through classes the page already has (.btn) and the CSSOM, never an inline style
- * attribute (the nginx CSP). Every value from the server is shown with textContent.
+ * Styling is classes only: .btn, and .raken-connect / .raken-status / .raken-ok|warn|muted from the
+ * page's own stylesheet, on its colour tokens. Never an inline style attribute (the nginx CSP).
+ * Every value from the server is shown with textContent.
  */
 (function (root) {
   "use strict";
@@ -79,13 +80,8 @@
     const doc = env.document;
     const box = doc.createElement("span");
     box.className = "raken-connect";
-    box.style.display = "inline-flex";
-    box.style.alignItems = "center";
-    box.style.gap = "8px";
-    box.style.flexWrap = "wrap";
     const line = doc.createElement("span");
-    line.className = "raken-status";
-    line.style.fontSize = "12.5px";
+    line.className = "raken-status raken-muted";
     const btn = doc.createElement("button");
     btn.type = "button";
     btn.className = "btn";
@@ -103,8 +99,7 @@
     const headers = (extra) => Object.assign({}, extra || {}, env.authHeaders());
     const say = (s) => {
       line.textContent = s.text;
-      line.style.color = s.tone === "ok" ? "var(--calm, #4a6b8a)"
-        : s.tone === "warn" ? "var(--warn, #7a5c00)" : "var(--ink-v, #555)";
+      line.className = "raken-status raken-" + (s.tone === "ok" || s.tone === "warn" ? s.tone : "muted");
     };
 
     async function refresh() {

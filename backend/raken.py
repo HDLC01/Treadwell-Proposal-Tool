@@ -16,7 +16,10 @@ THE SIGN-IN is Raken's OAuth 2.0 authorization-code flow (developer.rakenapp.com
      Analytics page (main.py lists it as a public GET for that reason).
   3. The page hands them to POST /api/raken/callback (admin-only). The state must decrypt with our
      key, be under STATE_TTL_S old, name THIS admin, and not have been used already; anything else
-     is refused before Raken is asked. Then the code is exchanged for tokens.
+     is refused before Raken is asked. Then the code is exchanged for tokens. "Used already" is
+     remembered in memory, so it holds for the life of the process: a restart inside STATE_TTL_S
+     forgets it. That gap is narrow (only the same admin's own state passes the other checks) and
+     Raken's code is single-use anyway.
 
 THE STORED SIGN-IN is one JSON file on the data volume (TOKEN_FILE), written through
 atomic_json.write_json, holding the refresh token encrypted with RAKEN_TOKEN_KEY. The key lives only
@@ -93,6 +96,7 @@ CODE_REFUSED_MESSAGE = "Raken did not accept that sign-in. Press Connect Raken a
 RATE_LIMITED_MESSAGE = "Raken is limiting requests right now. Try again later."
 QUOTA_MESSAGE = "Raken's daily request limit is used up. Try again tomorrow."
 UNREACHABLE_MESSAGE = "Raken could not be reached."
+NOT_SAVED_MESSAGE = "Raken sign-in could not be saved."
 
 # Replaced by tests.
 TRANSPORT: Any = None
@@ -224,12 +228,18 @@ def _read_file() -> Dict[str, Any]:
 
 
 def _write_file(refresh_token: Optional[str], expired: bool = False) -> None:
+    """Save the sign-in. A volume that cannot be written (full, read-only, a bad path) raises
+    RakenError(NOT_SAVED_MESSAGE, 503), so a route says so plainly instead of answering 500."""
     payload: Dict[str, Any] = {"version": 1, "expired": bool(expired),
                                "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     if refresh_token:
         payload["refresh_token"] = _fernet().encrypt(refresh_token.encode("utf-8")).decode("ascii")
     with _FILE_LOCK:
-        write_json(TOKEN_FILE, payload)
+        try:
+            write_json(TOKEN_FILE, payload)
+        except OSError as exc:
+            log.warning("raken: the sign-in could not be saved (%s)", type(exc).__name__)
+            raise RakenError(NOT_SAVED_MESSAGE, 503) from None
 
 
 def _stored_refresh_token() -> Tuple[str, Optional[str]]:
@@ -341,7 +351,10 @@ def _renew() -> str:
         body = _token_request({"grant_type": "refresh_token", "refresh_token": refresh})
     except SignInExpired:
         _ACCESS["token"] = None
-        _write_file(None, expired=True)
+        try:
+            _write_file(None, expired=True)
+        except RakenError:
+            pass   # logged in _write_file; the sign-in is dead either way, and the admin is told so
         log.warning("raken: the sign-in was refused at renewal; an admin must connect again")
         raise
     # Raken may rotate it; when it does not, the one we sent stays good.
@@ -462,8 +475,11 @@ def _forget_summary() -> None:
 
 
 def _project_summary() -> Dict[str, Any]:
-    """How many Raken projects there are, how many carry a Project Number, and up to five of the
-    numbers: the check on real data that Raken's Project Number holds our Job numbers."""
+    """How many Raken projects there are, how many have Raken's own "Project Number" field filled
+    in, and up to five of them: the check on real data that the field holds our Job numbers. The
+    message names it as Raken's field, since the tool's own word is Job number (GLOSSARY.md).
+    The field is read from each project's "number" key; until that key is confirmed against a real
+    response, a count of 0 may be a parsing miss rather than an answer."""
     with _SUMMARY_LOCK:
         if _SUMMARY["body"] is not None and monotonic() - _SUMMARY["at"] < _summary_ttl_s():
             return dict(_SUMMARY["body"])
@@ -478,7 +494,7 @@ def _project_summary() -> Dict[str, Any]:
         if len(examples) == 5:
             break
     body = {"projects": len(projects), "with_number": len(with_number), "examples": examples,
-            "message": "Connected: %d Raken project%s, %d with a Project Number"
+            "message": "Connected: %d Raken project%s, %d with Raken's Project Number filled in"
                        % (len(projects), "" if len(projects) == 1 else "s", len(with_number))}
     log.info("raken: status read %d projects in %d calls", len(projects), _CALLS["n"] - before)
     with _SUMMARY_LOCK:
@@ -488,7 +504,8 @@ def _project_summary() -> Dict[str, Any]:
 
 def status() -> Dict[str, Any]:
     """connected / not_connected / expired, with a plain message, and the project counts when
-    connected. Never raises; a failed read keeps state "connected" and says why in `error`."""
+    connected. Never raises: every failure, a sign-in that cannot be saved included, is a
+    RakenError, and a failed read keeps state "connected" and says why in `error`."""
     if not is_configured():
         return {"ok": True, "configured": False, "state": STATE_NOT_CONNECTED,
                 "message": NOT_SET_UP_MESSAGE}

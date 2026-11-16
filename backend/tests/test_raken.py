@@ -219,7 +219,7 @@ def test_sign_in_round_trip_then_status_counts_project_numbers(client, fake, as_
     s = client.get("/api/raken/status").json()
     assert s["state"] == "connected"
     assert s["projects"] == 5 and s["with_number"] == 3
-    assert s["message"] == "Connected: 5 Raken projects, 3 with a Project Number"
+    assert s["message"] == "Connected: 5 Raken projects, 3 with Raken's Project Number filled in"
     assert s["examples"] == ["26.901", "G26.902", "26.903"]
 
 
@@ -433,6 +433,52 @@ def test_concurrent_renewals_never_reuse_a_refresh_token(client, fake, as_admin)
     assert len(fake.refresh_sent) == len(set(fake.refresh_sent)), fake.refresh_sent
     assert fake.refresh_sent[0] == "made-up-refresh-1"
     assert fake.max_in_flight == 1, "Raken was called in parallel"
+
+
+# ── a data volume that cannot be written ──────────────────────────────────────
+def _volume_full(*_a, **_k):
+    raise OSError(28, "No space left on device")
+
+
+@pytest.mark.parametrize("when", ["connect", "renewal", "expiry"])
+def test_a_store_that_cannot_be_written_never_answers_500(client, fake, as_admin, monkeypatch, when):
+    """A full or read-only data volume makes the sign-in impossible to keep. The routes say so in
+    plain words; they never answer 500, and the reason never carries the OS error's text."""
+    client = TestClient(main.app, raise_server_exceptions=False)
+    if when == "connect":
+        monkeypatch.setattr(raken, "write_json", _volume_full)
+        r = connect(client)
+        assert r.status_code == 503, r.text
+        assert r.json()["detail"] == "Raken sign-in could not be saved."
+        assert client.get("/api/raken/status").json()["state"] == "not_connected"
+        return
+    fake.code_expires_in = 0                 # the next status call must renew
+    assert connect(client).status_code == 200
+    if when == "expiry":
+        fake.valid_refresh.clear()           # the renewal is refused, and marking it fails too
+    monkeypatch.setattr(raken, "write_json", _volume_full)
+    r = client.get("/api/raken/status")
+    assert r.status_code == 200, r.text
+    s = r.json()
+    if when == "renewal":
+        assert s["state"] == "connected"
+        assert s["error"] == "Raken sign-in could not be saved."
+        assert "projects" not in s, "an access token whose refresh token was not saved is not used"
+    else:
+        assert s["state"] == "expired"
+        assert s["message"] == "Raken sign-in has expired. An admin must Connect Raken again."
+    assert "No space left" not in r.text
+
+
+def test_a_data_folder_that_is_a_file_fails_the_connect_plainly(client, fake, as_admin, monkeypatch,
+                                                                 tmp_path):
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(raken, "TOKEN_FILE", blocker / "raken_signin.json")
+    client = TestClient(main.app, raise_server_exceptions=False)
+    r = connect(client)
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == "Raken sign-in could not be saved."
 
 
 # ── the client: one at a time, a pause, a bounded 429 ─────────────────────────

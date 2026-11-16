@@ -62,7 +62,7 @@ const out = (v) => console.log(JSON.stringify(v));
 
 CONNECTED = {"ok": True, "state": "connected", "configured": True, "projects": 5, "with_number": 3,
              "examples": ["26.901", "G26.902"],
-             "message": "Connected: 5 Raken projects, 3 with a Project Number"}
+             "message": "Connected: 5 Raken projects, 3 with Raken's Project Number filled in"}
 
 
 def run(script: str):
@@ -108,10 +108,33 @@ def test_an_admin_sees_the_status_and_the_button(role):
 """ % (json.dumps(role), json.dumps(CONNECTED), _texts()))
     assert got["in_top"] is True
     assert got["texts"] == [
-        "Connected: 5 Raken projects, 3 with a Project Number (for example 26.901, G26.902)",
+        "Connected: 5 Raken projects, 3 with Raken's Project Number filled in (for example 26.901, G26.902)",
         "Connect Raken"]
     assert [(c["method"], c["url"]) for c in got["calls"]] == [("GET", "/api/raken/status")]
     assert got["calls"][0]["headers"]["Authorization"] == "Bearer made-up"
+
+
+def test_the_tone_is_a_class_from_the_pages_stylesheet_never_a_style_set_in_script():
+    got = run("""
+(async () => {
+  const results = [];
+  for (const [status, body] of [[200, %s], [200, { state: "expired", message: "x" }],
+                                [200, { state: "not_connected", message: "y" }]]) {
+    const w = world({ user: { role: "admin" }, responses: { "GET /api/raken/status": { status, body } } });
+    const box = await R.boot(w.env);
+    results.push({ box: box.className, line: box.children[0].className,
+                   styles: [box, ...box.children].map((e) => Object.keys(e.style).length) });
+  }
+  out(results);
+})();
+""" % json.dumps(CONNECTED))
+    assert [r["line"] for r in got] == ["raken-status raken-ok", "raken-status raken-warn",
+                                        "raken-status raken-muted"]
+    assert all(r["box"] == "raken-connect" for r in got)
+    assert all(r["styles"] == [0, 0, 0] for r in got)
+    html = (FRONTEND / "project-calendar.html").read_text(encoding="utf-8")
+    for cls in (".raken-connect", ".raken-status", ".raken-ok", ".raken-warn", ".raken-muted"):
+        assert cls in html, cls
 
 
 def test_without_a_header_it_makes_its_own_row():
