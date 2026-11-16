@@ -929,3 +929,196 @@ def test_the_page_shows_the_budget_pair_and_draws_both_bars_through_the_cssom():
         for m in hits:
             line = js[js.rfind("\n", 0, m.start()) + 1: js.find("\n", m.end())]
             assert "esc(" in line, "%s reaches markup unescaped: %s" % (field, line.strip())
+
+
+# ── #789: the job detail, its day-by-day chart, and the Schedule's way into it ──────────────────
+# Day-by-day entries in the shape GET /api/project-analytics sends them (plan_vs_actual._day_by_day,
+# filled by raken_actuals for a linked row). "Today" is Wed Nov 18.
+DAYS = """
+const dd = (date, o) => Object.assign({date: date, planned_crew: 3, planned_hours: 24,
+  crew_size_missing: false, future: false, on_site: null, hours: null, missed: false}, o || {});
+const DAYS = [
+  dd("2026-11-13", {planned_crew: 5, planned_hours: 40, on_site: 6, hours: 47.5}),
+  dd("2026-11-16", {on_site: 2, hours: 16}),
+  dd("2026-11-17", {on_site: 0, hours: 0, missed: true}),
+  dd("2026-11-18", {future: true}),
+  dd("2026-11-19", {future: true, planned_crew: null, planned_hours: null, crew_size_missing: true}),
+];
+"""
+
+
+def test_the_chart_scale_is_the_largest_crew_or_people_on_site():
+    """One scale for the line and the bars: the most people planned or on site on any day, so a
+    day with more people than planned draws its bar past the line, never clipped."""
+    got = run(DAYS + 'const c = P.dayChart(DAYS);'
+              'out([c.scale, c.columns.map(x => [x.bar, x.tick]),'
+              ' P.dayChart([dd("2026-11-16", {planned_crew: 4, on_site: 2})]).scale,'
+              ' P.dayChart([dd("2026-11-16", {planned_crew: null, planned_hours: null})]).scale,'
+              ' P.dayChart([]).columns, P.dayChart(null).columns, P.dayChart("x").scale])')
+    assert got == [6, [[100, 83.3], [33.3, 50], [0, 50], [None, 50], [None, None]],
+                   4, 1, [], [], 1]
+
+
+def test_past_days_compare_and_future_days_carry_the_plan_only():
+    got = run(DAYS + 'out(P.dayChart(DAYS).columns.map(x => [x.kind, x.actual, x.planned]))')
+    assert got == [["clocked", "47.5", "40"], ["clocked", "16", "24"], ["missed", "0", "24"],
+                   ["future", "", "24"], ["future", "", "—"]]
+    # A past day Raken did not read (a Not linked job, or Raken not connected): the plan only,
+    # and never marked missed.
+    got = run(DAYS + 'out(P.dayChart([dd("2026-11-16")]).columns.map(x => [x.kind, x.actual,'
+              ' x.bar]))')
+    assert got == [["plan", "", None]]
+
+
+def test_the_chart_names_each_day_and_marks_where_each_week_starts():
+    got = run(DAYS + 'out(P.dayChart(DAYS).columns.map(x => [x.dow, x.dom, x.week]))')
+    assert got == [["Fri", "13", "Nov 13"], ["Mon", "16", "Nov 16"], ["Tue", "17", ""],
+                   ["Wed", "18", ""], ["Thu", "19", ""]]
+    got = run(DAYS + 'out(P.dayChart(DAYS).columns.map(x => x.label))')
+    assert got[0] == "Fri, Nov 13: 5 planned, 6 on site, 47.5 of 40 hours"
+    assert got[2] == "Tue, Nov 17: 3 planned, nobody clocked in, missed"
+    assert got[3] == "Wed, Nov 18: 3 planned"
+    assert got[4] == "Thu, Nov 19: Crew size missing"
+
+
+def test_a_schedule_bar_finds_its_row_by_the_event_id():
+    """By the EVENT ID, never by Job number or name (#789's note from #792): a merged row holds an
+    unnumbered Mobilization under a Job number, and a Punch with a Job number of its own."""
+    got = run(PROJECTS + 'const rows = ['
+              ' pr({key:"job:26.125", job_number:"26.125", name:"Acme Clinic Psych",'
+              '     mobilizations:[{id:"m1", job_number:"26.125"}, {id:"m2", job_number:null}],'
+              '     punches:[{id:"p1", job_number:"26.912"}]}),'
+              ' pr({key:"name:examplediner", name:"Example Diner", mobilizations:[{id:"m3"}]})];'
+              'const k = (id) => (P.rowForEvent(rows, id) || {}).key || null;'
+              'out([k("m1"), k("m2"), k("p1"), k("m3"), k("26.125"), k("Acme Clinic Psych"),'
+              ' k(""), k(null), (P.rowForEvent(null, "m1") || null),'
+              ' (P.rowForEvent([null, {mobilizations:"x"}], "m1") || null)])')
+    assert got == ["job:26.125", "job:26.125", "job:26.125", "name:examplediner",
+                   None, None, None, None, None, None]
+
+
+def test_a_bar_with_no_row_says_why_only_once_the_list_has_loaded():
+    got = run(PROJECTS + 'const data = {window_days: 14, projects: [pr({key:"job:1",'
+              ' mobilizations:[{id:"m1"}]})]};'
+              'const s = (d, id) => { const r = P.pvaLookup(d, id);'
+              ' return [r.state, r.row ? r.row.key : null]; };'
+              'out([s(data, "m1"), s(data, "zz"), s(null, "m1"), s({projects:"x"}, "m1"),'
+              ' P.notInPvaLine(data), P.notInPvaLine({}), P.notInPvaLine({window_days: 21})])')
+    assert got == [["found", "job:1"], ["absent", None], ["unknown", None], ["unknown", None],
+                   "Not in Plan vs Actual: outside the 14-day window",
+                   "Not in Plan vs Actual: outside the 14-day window",
+                   "Not in Plan vs Actual: outside the 21-day window"]
+
+
+def test_back_returns_to_where_the_detail_was_opened_from():
+    got = run('out([P.detailBack("schedule"), P.detailBack("pva"), P.detailBack(null),'
+              ' P.detailBack("made-up")])')
+    assert got == [{"tab": "schedule", "label": "Back to the Schedule"},
+                   {"tab": "pva", "label": "Back to Plan vs Actual"},
+                   {"tab": "pva", "label": "Back to Plan vs Actual"},
+                   {"tab": "pva", "label": "Back to Plan vs Actual"}]
+
+
+def test_open_project_goes_to_the_project_in_the_tool():
+    got = run('out([P.projectHref({id:"d1e2-f3", name:"x"}), P.projectHref({id:"a b/c"}),'
+              ' P.projectHref({name:"x"}), P.projectHref(null)])')
+    assert got == ["/?d=d1e2-f3&edit=1", "/?d=a%20b%2Fc&edit=1", "", ""]
+
+
+def test_the_detail_lists_mobilizations_and_punches_with_dates_crew_and_google_links():
+    got = run(PROJECTS + 'out(P.detailEvents(pr({'
+              ' mobilizations:[{id:"m2", start:"2026-11-16", last_day:"2026-11-20", crew_size:2,'
+              '   mobilization:2, html_link:"https://calendar.example/e?eid=m2"},'
+              '  {id:"m1", start:"2026-11-02", last_day:"2026-11-06", crew_size:null,'
+              '   mobilization:null, html_link:"javascript:alert(1)"}],'
+              ' punches:[{id:"p1", start:"2026-11-23", last_day:"2026-11-23", crew_size:1,'
+              '   html_link:"https://calendar.example/e?eid=p1"}]})))')
+    assert [g["id"] for g in got] == ["m1", "m2", "p1"], "date order, Punches with the rest"
+    assert [g["kind"] for g in got] == ["Mobilization", "2nd Mobilization", "Punch"]
+    assert [g["crew"] for g in got] == ["Crew size missing", "Crew size 2", "Crew size 1"]
+    assert got[0]["link"] == "", "only an https link is ever offered"
+    assert got[2]["link"] == "https://calendar.example/e?eid=p1"
+    assert got[1]["dates"] == "Mon, Nov 16 – Fri, Nov 20, 2026"
+
+
+def test_the_detail_shows_the_four_pairs():
+    got = run(PROJECTS + BUDGETED + 'out(P.detailPairs(budgeted()).map(x => [x.id, x.label,'
+              ' x.plan, x.actual]))')
+    assert got == [["days", "Days", "5", "5"], ["crew", "Crew", "4", "4"],
+                   ["hours", "Hours so far", "160", "150"],
+                   ["budget", "Budget", "1,200", "1,330"]]
+    got = run(PROJECTS + 'out(P.detailPairs(PROJECTS[0]).map(x => [x.plan, x.actual]))')
+    assert got == [["2", "—"], ["4", "—"], ["64", "—"], ["—", "—"]]
+
+
+def test_the_detail_flags_are_prevailing_wage_and_night_work():
+    got = run(PROJECTS + 'out([P.detailFlags(pr({prevailing_wage:true, night_work:true})),'
+              ' P.detailFlags(pr({})), P.detailFlags(null)])')
+    assert got == [["Prevailing wage", "Night work"], [], []]
+
+
+def test_the_detail_is_a_view_inside_the_plan_vs_actual_panel_with_a_back_button():
+    """Not a new page and no new nav entry: the list and the detail share the Plan vs Actual panel,
+    and the detail starts hidden."""
+    html = _page()
+    panel = html[html.index('id="panel-pva"'):html.index('id="panel-schedule"')]
+    assert 'id="pva-list"' in panel and 'id="pva-detail"' in panel
+    tag = panel[panel.rfind("<section", 0, panel.index('id="pva-detail"')):]
+    assert "hidden" in tag[:tag.index(">")], "the detail starts hidden"
+    detail = tag
+    for el in ('id="pd-back"', 'id="pd-pairs"', 'id="pd-chart"', 'id="pd-events"', 'id="pd-facts"',
+               'id="pd-foot"', 'id="pd-chips"'):
+        assert el in detail, el
+    assert 'class="pd-chart-scroll"' in html
+    assert re.search(r"\.pd-chart-scroll\s*\{[^}]*overflow-x:\s*auto", html), (
+        "the chart's weeks scroll inside their box at phone width")
+
+
+def test_a_row_opens_its_detail_by_keyboard_and_back_or_esc_closes_it():
+    js = _pva_js()
+    assert '<button type="button" class="jlink" data-key="\' + esc(p.key)' in js
+    assert '$("pva-body").addEventListener("click"' in js
+    assert '$("pd-back").addEventListener("click", closeDetail)' in js
+    i = js.index('if (e.key !== "Escape" || !DETAIL')
+    assert "closeDetail()" in js[i:i + 120]
+    assert "P.detailBack(was.origin)" in js and "P.detailBack(DETAIL.origin).label" in js
+
+
+def test_the_detail_draws_its_chart_through_the_cssom_and_escapes_every_value():
+    js = _pva_js()
+    assert ".style.height = pct(" in js and ".style.bottom = pct(" in js
+    assert 'style="' not in js and "style='" not in js
+    for field in ("x.plan", "x.actual", "x.label", "x.note", "x.extra", "c.label", "c.actual",
+                  "c.planned", "c.week", "e.kind", "e.dates", "e.crew", "e.foreman", "e.link",
+                  "f)", "href"):
+        hits = [m for m in re.finditer(re.escape(field), js)]
+        assert hits, field
+        for m in hits:
+            line = js[js.rfind("\n", 0, m.start()) + 1: js.find("\n", m.end())]
+            if "innerHTML" in line or "'<" in line or '"<' in line:
+                assert "esc(" in line or "textContent" in line, (
+                    "%s reaches markup unescaped: %s" % (field, line.strip()))
+    # The Google links are https only (P.detailEvents, through P.httpsLink) and open a new tab.
+    assert "P.detailEvents(p)" in js
+    assert 'target="_blank" rel="noopener noreferrer"' in js
+    assert "P.dayChart(p.day_by_day)" in js and "P.detailPairs(p)" in js
+    assert "P.detailFlags(p)" in js and "P.projectHref(p.project)" in js
+
+
+def test_a_schedule_bar_opens_the_detail_by_event_id_or_the_panel_saying_why():
+    """#789's note from #792: by the EVENT ID, never by Job number or name."""
+    js = _page_js()
+    i = js.index("const openFrom = (e) => {")
+    block = js[i:js.index("  };", i)]
+    assert "pva.lookup(ev.id)" in block
+    assert "job_number" not in block and ".name" not in block
+    assert 'found.state === "absent" ? P.notInPvaLine(pva.data())' in block
+    assert 'pva.openFromSchedule(found.row, b.dataset.k)' in block
+    pva = _pva_js()
+    assert "window.TWPva = {" in pva and "P.pvaLookup(DATA, id)" in pva
+    html = _page()
+    assert 'id="dlg-note"' in html
+    assert '$("dlg-note").textContent = line' in js
+    # One door into the tool's intake for both: built once in the core (P.projectHref).
+    assert "P.projectHref(ev.project)" in js and "edit=1" not in js
+    assert "edit=1" not in pva

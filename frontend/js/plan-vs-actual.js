@@ -22,6 +22,15 @@
 // a tick and Raken the fill, its widths set through the CSSOM. Statuses are flags: On plan, or any of
 // Behind and Over budget (both when both), or Not linked alone.
 //
+// THE JOB DETAIL (#789). A row's name is a button: it opens that job's detail in place of the list
+// (a view inside the page, not a new page): the four pairs larger, the status chips, the day-by-day
+// chart (one column per Workday the server sent in `day_by_day`: the planned crew as a tick, the
+// people on site as a bar, a missed day marked out, Actual hours over Planned hours under it, days
+// from today on the plan only), the Mobilizations and Punches with their links to Google Calendar,
+// the Foreman, the flags and "Open project". A Schedule bar opens the same detail through
+// window.TWPva, found by the bar's EVENT ID (P.pvaLookup). "Back", or Esc, returns to where it was
+// opened from: the list, or the Schedule.
+//
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
 // text value is escaped, and every colour is set through element.style once the markup is in
@@ -31,6 +40,7 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const P = window.TWProjCal;
+  const icon = (name, size) => (typeof window.TWIcon === "function" ? window.TWIcon(name, size) : "");
 
   // Every request, the GET and "Refresh now" alike: waits for sign-in, then sends the headers.
   const api = async (path, init) => {
@@ -51,6 +61,8 @@
   let LAST_SIG = "";                   // anti-blink: skip identical repaints
   let REFRESHING = false;              // a "Refresh now" is on its way
   let FOLLOW = 0;                      // the timer polling while the server is refreshing
+  let DETAIL = null;                   // {key, origin, barKey} while a job's detail is open
+  let SCROLLED_FOR = "";               // the detail whose chart was last scrolled to today
 
   // ── tabs ──────────────────────────────────────────────────────────
   function showTab(id, focus) {
@@ -162,21 +174,33 @@
     return "<b>" + esc(bc.projected) + "</b>" + figures + note;
   }
 
-  function rowHtml(p) {
-    const sub = [P.workTypeOf(p), p.foreman ? "Foreman " + p.foreman : "",
+  /** The line under a job's name: Work type, Foreman, and how many Punches it carries. */
+  function subOf(p) {
+    return [P.workTypeOf(p), p.foreman ? "Foreman " + p.foreman : "",
       !p.is_punch && Array.isArray(p.punches) && p.punches.length
         ? "+ " + p.punches.length + " Punch" + (p.punches.length === 1 ? "" : "es") : ""]
       .filter(Boolean).join(" · ");
-    const chips = (p.label ? ' <span class="chip">' + esc(p.label) + "</span>" : "")
+  }
+
+  /** The Punch label and "Crew size missing", as chips. */
+  function labelChips(p) {
+    return (p.label ? ' <span class="chip">' + esc(p.label) + "</span>" : "")
       + (p.crew_size_missing ? ' <span class="chip warn">Crew size missing</span>' : "");
+  }
+
+  function rowHtml(p) {
+    const sub = subOf(p);
+    const chips = labelChips(p);
     const rc = P.rakenCells(p);
     const flags = P.statusChips(p).map((c) =>
       '<span class="chip st-' + esc(c.id) + '">' + esc(c.label) + "</span>").join("");
     const why = P.rakenLabel(p);
-    return "<tr>"
+    // The row opens the job's detail: its name is the button (keyboard), the whole row the target.
+    return '<tr data-key="' + esc(p.key) + '">'
       + '<td><div class="job"><i class="sw" data-color="' + esc(P.colorOf(p) || "") + '"></i><div>'
       + (p.job_number ? '<span class="jn">' + esc(p.job_number) + "</span>" : "")
-      + '<span class="jname">' + esc(p.name || "Untitled") + "</span>" + chips
+      + '<button type="button" class="jlink" data-key="' + esc(p.key) + '">'
+      + esc(p.name || "Untitled") + "</button>" + chips
       + '<span class="jsub">' + esc(sub) + "</span></div></div></td>"
       + '<td><span class="dd">' + esc(P.dayLong(p.deadline)) + "</span>"
       + "<small>" + esc(P.leftLabel(p)) + "</small></td>"
@@ -217,23 +241,29 @@
     });
   }
 
+  /** A percentage from 0 to 100 as a CSS length, else "": the only value ever set below. */
+  const pct = (v) => {
+    const n = Number(v);
+    return isFinite(n) && n >= 0 && n <= 100 ? n + "%" : "";
+  };
+
   /** The pair bars' fill widths and tick places, through the CSSOM (the CSP forbids style
-   *  attributes). Only a percentage from 0 to 100 is ever set. */
+   *  attributes). */
   function paintBars(root) {
-    const pct = (v) => {
-      const n = Number(v);
-      return isFinite(n) && n >= 0 && n <= 100 ? n + "%" : "";
-    };
     root.querySelectorAll(".pbar-fill[data-w]").forEach((el) => { el.style.width = pct(el.dataset.w); });
     root.querySelectorAll(".pbar-tick[data-l]").forEach((el) => { el.style.left = pct(el.dataset.l); });
   }
 
   function paint() {
     paintButton();
-    const sig = JSON.stringify([Q, LOAD_ERR, DATA]);
+    const sig = JSON.stringify([Q, LOAD_ERR, DATA, DETAIL]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
+    paintList();
+    paintDetail();
+  }
 
+  function paintList() {
     $("pva-asof").textContent = DATA ? P.asOfText(DATA) : "";
     paintOnly();
     if (!DATA) {
@@ -293,8 +323,188 @@
     $("pva-foot").textContent = P.pvaFootText(DATA);
   }
 
+  // ── one job's detail (#789) ───────────────────────────────────────
+  // Drawn from the current DATA on every paint, so a refresh updates an open detail in place.
+  function rowByKey(key) {
+    const list = DATA && Array.isArray(DATA.projects) ? DATA.projects : [];
+    return list.find((p) => p.key === key) || null;
+  }
+
+  /** Open a job's detail. `origin` is "pva" (its row) or "schedule" (its bar, `barKey` the bar's
+   *  data-k, so Back can put the focus on it again). */
+  function openDetail(key, origin, barKey) {
+    if (key == null) return;
+    DETAIL = { key: String(key), origin: origin === "schedule" ? "schedule" : "pva",
+      barKey: barKey ? String(barKey) : "" };
+    if (DETAIL.origin === "schedule") showTab("pva", false);
+    paint();
+    $("pd-title").focus();
+  }
+
+  /** Back (or Esc): to the list, or to the Schedule when the detail was opened from there, with
+   *  the focus on the row or bar it was opened from. */
+  function closeDetail() {
+    if (!DETAIL) return;
+    const was = DETAIL;
+    DETAIL = null;
+    paint();
+    if (P.detailBack(was.origin).tab === "schedule") {
+      showTab("schedule", false);
+      const bar = Array.from(document.querySelectorAll("#grid [data-k]"))
+        .find((b) => b.dataset.k === was.barKey);
+      (bar || $("tab-schedule")).focus();
+    } else {
+      const btn = Array.from($("pva-body").querySelectorAll(".jlink"))
+        .find((b) => b.dataset.key === was.key);
+      if (btn) btn.focus();
+    }
+  }
+
+  function fact(label, valueHtml) {
+    return valueHtml ? "<dt>" + esc(label) + "</dt><dd>" + valueHtml + "</dd>" : "";
+  }
+
+  /** One of the four pairs, larger: the plan (the calendar) beside Raken's figure. */
+  function pairHtml(x) {
+    return '<div class="pd-pair"><h3>' + esc(x.label) + "</h3>"
+      + '<div class="pd-two"><div><b>' + esc(x.plan) + "</b><small>" + esc(x.planSub) + "</small></div>"
+      + '<div class="rk"><b>' + esc(x.actual) + "</b><small>" + esc(x.actualSub) + "</small></div></div>"
+      + (x.extra ? '<small class="ou' + (x.over ? " over" : "") + '">Over/under ' + esc(x.extra) + "</small>" : "")
+      + (x.note ? "<small>" + esc(x.note) + "</small>" : "")
+      + barHtml(x.bar, x.id === "budget") + "</div>";
+  }
+
+  /** One column of the day-by-day chart (P.dayChart). Its bar height and tick place are carried
+   *  as data and set through the CSSOM by paintChart(). The column's words are its aria-label. */
+  function colHtml(c) {
+    return '<div class="pd-col ' + esc(c.kind) + (c.week ? " wk" : "") + (c.over ? " over" : "")
+      + '" role="listitem" aria-label="' + esc(c.label) + '">'
+      + '<span class="pd-wk" aria-hidden="true">' + esc(c.week) + "</span>"
+      + '<span class="pd-plot" aria-hidden="true">'
+      + (c.bar != null ? '<i class="pd-bar" data-h="' + esc(c.bar) + '"></i>' : "")
+      + (c.tick != null ? '<i class="pd-tick" data-b="' + esc(c.tick) + '"></i>' : "")
+      + (c.kind === "missed" ? '<span class="pd-x">\u2715</span>' : "")
+      + "</span>"
+      + '<span class="pd-dow" aria-hidden="true">' + esc(c.dow) + "</span>"
+      + '<span class="pd-dom" aria-hidden="true">' + esc(c.dom) + "</span>"
+      + '<span class="pd-hrs" aria-hidden="true"><span class="pd-a">' + esc(c.actual) + "</span>"
+      + '<span class="pd-p">' + esc(c.planned) + "</span></span></div>";
+  }
+
+  /** The chart's bar heights and tick places, through the CSSOM (the CSP forbids style
+   *  attributes). */
+  function paintChart(root) {
+    root.querySelectorAll(".pd-bar[data-h]").forEach((el) => { el.style.height = pct(el.dataset.h); });
+    root.querySelectorAll(".pd-tick[data-b]").forEach((el) => { el.style.bottom = pct(el.dataset.b); });
+  }
+
+  /** The Mobilizations and Punches, each with its dates, Crew size and Google Calendar link. */
+  function eventHtml(e) {
+    return '<li><span class="pd-kind">' + esc(e.kind) + "</span>"
+      + '<span class="pd-when">' + esc(e.dates) + "</span>"
+      + '<span class="pd-crew">' + esc(e.crew) + (e.foreman ? " · Foreman " + esc(e.foreman) : "") + "</span>"
+      + (e.link ? '<a href="' + esc(e.link) + '" target="_blank" rel="noopener noreferrer">'
+        + "Open in Google Calendar " + icon("external", 13) + "</a>" : "")
+      + "</li>";
+  }
+
+  function paintDetail() {
+    $("pva-list").hidden = !!DETAIL;
+    $("pva-detail").hidden = !DETAIL;
+    if (!DETAIL) { SCROLLED_FOR = ""; return; }
+    $("pd-back").textContent = P.detailBack(DETAIL.origin).label;
+    $("pd-asof").textContent = DATA ? P.asOfText(DATA) : "";
+    const p = rowByKey(DETAIL.key);
+    $("pd-body").hidden = !p;
+    if (!p) {
+      // A refresh can drop a job out of the window while its detail is open.
+      $("pd-title").textContent = "This job is no longer in Plan vs Actual";
+      $("pd-sub").textContent = "";
+      $("pd-chips").innerHTML = "";
+      $("pd-sw").style.background = "";
+      return;
+    }
+
+    $("pd-title").textContent = (p.job_number ? p.job_number + " " : "") + (p.name || "Untitled");
+    $("pd-sub").textContent = subOf(p);
+    $("pd-sw").style.background = P.colorOf(p) || "";
+    const why = P.rakenLabel(p);
+    $("pd-chips").innerHTML = P.statusChips(p).map((c) =>
+      '<span class="chip st-' + esc(c.id) + '">' + esc(c.label) + "</span>").join("") + labelChips(p)
+      + (why ? "<small>" + esc(why) + "</small>" : "");
+
+    const pairs = $("pd-pairs");
+    pairs.innerHTML = P.detailPairs(p).map(pairHtml).join("");
+    paintBars(pairs);
+
+    const chart = P.dayChart(p.day_by_day);
+    const box = $("pd-chart");
+    box.innerHTML = chart.columns.map(colHtml).join("");
+    paintChart(box);
+    $("pd-scale").textContent = chart.columns.length
+      ? "Top of the chart: " + chart.scale + (chart.scale === 1 ? " person" : " people")
+      : "No Workdays are booked for this job.";
+    if (SCROLLED_FOR !== DETAIL.key) {
+      // A long job opens on its latest days: scroll the chart box (never the page) so the last day
+      // before today is in view.
+      SCROLLED_FOR = DETAIL.key;
+      const scroller = box.parentElement;
+      const future = box.querySelector(".pd-col.future");
+      scroller.scrollLeft = future
+        ? Math.max(0, future.offsetLeft - box.offsetLeft - scroller.clientWidth * 0.6)
+        : scroller.scrollWidth;
+    }
+
+    const events = P.detailEvents(p);
+    $("pd-events").innerHTML = events.length ? events.map(eventHtml).join("")
+      : '<li class="muted">No Mobilizations read.</li>';
+
+    const flags = P.detailFlags(p).map((f) => '<span class="chip">' + esc(f) + "</span>").join("");
+    $("pd-facts").innerHTML =
+      fact("Job number", esc(p.job_number || ""))
+      + fact("Work type", esc(P.workTypeOf(p)))
+      + fact("Foreman", esc(p.foreman || ""))
+      + fact("Start", esc(P.dayLong(p.start)))
+      + fact("Deadline", esc(P.dayLong(p.deadline)) + " <span class=\"chip\">" + esc(P.leftLabel(p)) + "</span>")
+      + fact("Marked", flags);
+
+    // "Open project": the same door as the Schedule's details panel (P.projectHref).
+    const href = P.projectHref(p.project);
+    let foot = "";
+    if (href) {
+      foot = '<a class="btn" href="' + esc(href) + '">' + icon("folder", 14) + " Open project: "
+        + esc((p.project && p.project.name) || "this project") + "</a>";
+    } else if (p.job_number) {
+      foot = '<span class="muted">No project in this tool has Job number ' + esc(p.job_number) + " yet.</span>";
+    }
+    $("pd-foot").innerHTML = foot;
+    $("pd-foot").hidden = !foot;
+  }
+
+  // The Schedule (js/project-calendar.js) opens a bar's job here, by the bar's event id.
+  window.TWPva = {
+    lookup: (id) => P.pvaLookup(DATA, id),
+    data: () => DATA,
+    openFromSchedule: (row, barKey) => {
+      if (!row || row.key == null) return false;
+      openDetail(row.key, "schedule", barKey);
+      return true;
+    },
+  };
+
   // ── wiring (delegated; CSP forbids inline handlers) ───────────────
   $("pva-refresh").addEventListener("click", refreshNow);
+  $("pva-body").addEventListener("click", (e) => {
+    if (e.target.closest("a")) return;
+    const tr = e.target.closest("tr[data-key]");
+    if (tr) openDetail(tr.dataset.key, "pva", "");
+  });
+  $("pd-back").addEventListener("click", closeDetail);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !DETAIL || $("dlg").open) return;
+    e.preventDefault();
+    closeDetail();
+  });
   $("pva-q").value = Q;
   $("pva-q").addEventListener("input", (e) => { Q = e.target.value || ""; ssSet(SK_Q, Q); paint(); });
   $("pva-q").addEventListener("keydown", (e) => {
