@@ -7,11 +7,12 @@ claims that cost something when they are wrong:
   * The four counts follow each row's own flags. A job Behind AND Over budget counts under both, so
     the counts can add up to more than the jobs. A job whose Raken budget was not read carries no
     flag (it could be Over budget), so it is counted under none; a job with no Raken budget is never
-    Over budget.
+    Over budget. With Raken not read, the counts are no figure, never four zeros.
   * Last week is the previous Monday to Friday in Central: Planned hours from each booked Workday
     that week (that day's planned crew x 8, the day-by-day's own figure), Actual hours from that
     week's time cards, both summed over LINKED jobs. A weekend adds nothing to either. With Raken
-    not read, the planned figure still shows and Actual hours are no figure, never 0.
+    not read, the planned figure still shows and Actual hours are no figure, never 0. A day with
+    no Crew size is flagged, never quietly short.
   * The Budget totals add up only the jobs whose Budget pair was read with a Raken budget, and say
     how many jobs that is.
 
@@ -62,6 +63,8 @@ def test_the_counts_follow_each_jobs_flags_and_a_job_with_two_counts_under_both(
                      "26.503": ["not_linked"], "26.504": [], "26.505": ["on_plan"]}
     s = summary(body)
     assert s["counts"] == {"on_plan": 2, "behind": 1, "over_budget": 1, "not_linked": 1}
+    assert s["raken_read"] is True
+    assert s["unflagged"] == 1, "26.504, its budget not read, is in no count: the strip says so"
     assert s["jobs"] == 5
     assert summary(get(client)) == s, "the GET carries the same strip"
 
@@ -120,8 +123,48 @@ def test_with_raken_not_read_last_week_shows_the_plan_and_no_actual_figure(clien
         assert s["last_week"]["actual_hours"] is None
         assert s["last_week"]["planned_hours"] == 136 + 48 + 160
         assert s["last_week"]["jobs"] == 3
-        assert s["counts"] == {"on_plan": 0, "behind": 0, "over_budget": 0, "not_linked": 0}
+        assert s["raken_read"] is False
+        assert s["counts"] is None, "unknown, never four zeros"
+        assert s["unflagged"] is None
     assert fake.card_calls == []
+
+
+def test_with_raken_not_read_a_job_with_no_job_number_adds_no_plan(client, google, fake):
+    """A job with no Job number can never be linked, so even unread its plan is left out: the
+    figure is no larger than it can be once Raken is read."""
+    raken.TOKEN_FILE.unlink()
+    gym_depot_annex(google, fake)
+    google.events = google.events + [mob("s1", "Example Shed (2)", "2026-11-09", "2026-11-13")]
+    w = summary(refresh(client))["last_week"]
+    assert w["planned_hours"] == 136 + 48 + 160 and w["jobs"] == 3
+
+
+# Example Kiln, linked to r-8, Mon Nov 9 to Fri Nov 13, its title gives no Crew size.
+KILN = mob("k1", "26.604, Example Kiln (Kim)", "2026-11-09", "2026-11-13")
+
+
+def test_a_workday_last_week_with_no_crew_size_is_flagged_never_quietly_short(
+        client, google, fake):
+    """Its days add nothing to Planned hours, so the figure is short: the strip says so."""
+    gym_depot_annex(google, fake)
+    google.events = google.events + [KILN]
+    fake.projects = fake.projects + [project("r-8", "26.604", "Example Kiln")]
+    w = summary(refresh(client))["last_week"]
+    assert w["planned_hours"] == 136 + 48 and w["crew_size_missing"] is True
+
+
+def test_with_no_crew_size_known_all_last_week_planned_hours_are_no_figure(
+        client, google, fake):
+    """Every Workday booked last week has no Crew size: Planned hours are unknown, never 0."""
+    google.events = [KILN]
+    fake.projects = [project("r-8", "26.604", "Example Kiln")]
+    w = summary(refresh(client))["last_week"]
+    assert w["planned_hours"] is None and w["crew_size_missing"] is True
+
+
+def test_with_every_crew_size_known_last_week_is_not_flagged(client, google, fake):
+    gym_depot_annex(google, fake)
+    assert summary(refresh(client))["last_week"]["crew_size_missing"] is False
 
 
 def test_raken_not_turned_on_yet_is_not_read_too(client, google, fake):
@@ -167,9 +210,6 @@ def test_with_no_raken_budget_read_the_totals_are_no_figure(client, google, fake
 
 
 # ── never a 500 ───────────────────────────────────────────────────────────────
-EMPTY_COUNTS = {"on_plan": 0, "behind": 0, "over_budget": 0, "not_linked": 0}
-
-
 def test_when_the_raken_side_cannot_be_set_the_strip_keeps_its_shape(
         client, google, fake, monkeypatch):
     gym_depot_annex(google, fake)
@@ -180,7 +220,7 @@ def test_when_the_raken_side_cannot_be_set_the_strip_keeps_its_shape(
     monkeypatch.setattr(raken_actuals, "_row", broken)
     s = summary(get(client))
     assert set(s) == set(good) and set(s["last_week"]) == set(good["last_week"])
-    assert s["counts"] == EMPTY_COUNTS
+    assert s["counts"] is None and s["raken_read"] is False, "not read: unknown, not zeros"
     assert s["last_week"]["raken"] == "not_read" and s["last_week"]["actual_hours"] is None
     assert s["budget"]["jobs"] == 0
 
@@ -206,5 +246,5 @@ def test_with_the_calendar_not_connected_the_strip_counts_nothing(client, monkey
     body = get(client)
     assert body["connected"] is False
     s = summary(body)
-    assert s["jobs"] == 0 and s["counts"] == EMPTY_COUNTS
+    assert s["jobs"] == 0 and s["counts"] is None and s["raken_read"] is False
     assert s["last_week"]["planned_hours"] == 0 and s["budget"]["jobs"] == 0
