@@ -66,7 +66,7 @@ The schedule of crews on Treadwell's jobs, and the deadlines those jobs must mee
 _Avoid_: Schedule, ops calendar
 
 **Duration**:
-The stretch of days a job is booked for on the Project Calendar, from its start date through its last day. Every bar on the Project Calendar is one.
+The stretch of days a job is booked for on the Project Calendar, from its start date through its last day. Every bar on the Project Calendar is one, coloured by its job's Work type.
 
 **Deadline**:
 The end of the last day of a job's Duration: the work must be finished by then. The Project Calendar's Deadlines are the only deadlines a job has.

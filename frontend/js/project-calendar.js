@@ -211,7 +211,7 @@
   function legendHtml() {
     return WORK_TYPES.map((w) => '<span><i class="sw" data-color="' + esc(w.color || "") + '"></i>'
       + esc(w.name) + "</span>").join("")
-      + "<span>Any other colour, or none: Work type unknown</span>"
+      + "<span>Any other colour, or none: " + esc(P.WORK_TYPE_UNKNOWN_LABEL) + "</span>"
       + '<span><span class="mk">Deadline</span>the last day of every bar</span>';
   }
 
