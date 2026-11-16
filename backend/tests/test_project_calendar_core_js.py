@@ -529,13 +529,16 @@ def test_the_footer_and_the_empty_list_word_the_servers_numbers():
               ' P.pvaFootText({}), P.pvaEmptyText(null)])')
     assert got == [
         "Counts so far run through yesterday, Tue, Nov 17, 2026. Planned hours = Workdays so far"
-        " × Crew size × 8. Days clocked in, On site and Actual hours come from Raken time cards.",
+        " × Crew size × 8. Days clocked in, On site and Actual hours come from Raken time cards;"
+        " Budgeted hours and Projected total hours from Raken's production insights.",
         "No jobs are running, finished in the last 14 days, or starting in the next 14 days.",
         "Counts so far run through yesterday, Tue, Nov 17, 2026. Planned hours = Workdays so far"
-        " × Crew size × 10. Days clocked in, On site and Actual hours come from Raken time cards.",
+        " × Crew size × 10. Days clocked in, On site and Actual hours come from Raken time cards;"
+        " Budgeted hours and Projected total hours from Raken's production insights.",
         "No jobs are running, finished in the last 21 days, or starting in the next 21 days.",
         "Planned hours = Workdays so far × Crew size × the hours in a workday."
-        " Days clocked in, On site and Actual hours come from Raken time cards.",
+        " Days clocked in, On site and Actual hours come from Raken time cards;"
+        " Budgeted hours and Projected total hours from Raken's production insights.",
         "No jobs are running, finished lately, or starting soon.",
     ]
     js = _pva_js()
@@ -568,6 +571,7 @@ def test_the_page_and_the_server_name_the_same_raken_states_and_statuses():
     assert got[0]["not_connected"] == ra.STATE_NOT_CONNECTED
     assert got[0]["linked"] == ra.STATE_LINKED and got[0]["not_linked"] == ra.STATE_NOT_LINKED
     assert got[1]["behind"] == ra.STATUS_BEHIND and got[1]["not_linked"] == ra.STATUS_NOT_LINKED
+    assert got[1]["over_budget"] == ra.STATUS_OVER_BUDGET and got[1]["on_plan"] == ra.STATUS_ON_PLAN
 
 
 def test_the_page_and_the_server_name_the_same_not_linked_reasons():
@@ -797,3 +801,131 @@ def test_the_page_has_the_refresh_button_the_as_of_line_and_the_raken_only_secti
     # The words the glossary avoids never reach the page.
     for word in ("men", "guys", "headcount"):
         assert not re.search(r"(?<![A-Za-z])%s(?![A-Za-z])" % word, html, re.I), word
+
+
+# ── #783: the Budget pair, Over budget and On plan ──────────────────────────────────────────────
+BUDGETED = """
+const budgeted = (o, st) => pr({workdays_so_far:5, planned_hours:160,
+  raken: Object.assign({state:"linked", projects:[], days_booked:5, days_clocked:5,
+    avg_on_site:4, actual_hours:150, through:"2026-11-17", budget:"shown", budgeted_hours:1200,
+    projected_total_hours:1330, over_under:-130, projection_below_actual:false}, o || {}),
+  statuses: st || ["over_budget"]});
+"""
+
+
+def test_over_under_reads_signed_whole_hours():
+    """Over/under = Budgeted hours - Projected total hours: below zero is over budget, so it reads
+    with a minus sign (U+2212), and above zero with a plus. Under an hour either way reads "<1 h"
+    with its sign, never "0 h": the server calls -0.3 Over budget, and the cell is red."""
+    got = run('out([P.overUnderLabel(12), P.overUnderLabel(-130), P.overUnderLabel(0),'
+              ' P.overUnderLabel(-0.4), P.overUnderLabel(1234.6), P.overUnderLabel(-1500),'
+              ' P.overUnderLabel(null), P.overUnderLabel("12"), P.overUnderLabel(NaN),'
+              ' P.overUnderLabel(-0.3), P.overUnderLabel(0.3), P.overUnderLabel(-0.5),'
+              ' P.overUnderLabel(-0.01), P.overUnderLabel(0.6)])')
+    assert got == ["+12 h", "−130 h", "0 h", "−<1 h", "+1,235 h", "−1,500 h",
+                   "—", "—", "—", "−<1 h", "+<1 h", "−<1 h", "−<1 h", "+1 h"]
+
+
+def test_a_pair_bar_puts_the_plan_as_a_tick_and_raken_as_the_fill():
+    """The longer of the two fills the bar; the widths are percentages of it, one decimal."""
+    got = run('out([P.pairBar(160, 150), P.pairBar(1200, 1330), P.pairBar(100, 100),'
+              ' P.pairBar(0, 16), P.pairBar(64, 0), P.pairBar(0, 0), P.pairBar(null, 5),'
+              ' P.pairBar(5, null), P.pairBar(-3, 5), P.pairBar("160", 150),'
+              ' P.pairBar(3, 1)])')
+    assert got == [
+        {"fill": 93.8, "tick": 100, "over": False},
+        {"fill": 100, "tick": 90.2, "over": True},
+        {"fill": 100, "tick": 100, "over": False},
+        {"fill": 100, "tick": 0, "over": True},
+        {"fill": 0, "tick": 100, "over": False},
+        None, None, None, None, None,
+        {"fill": 33.3, "tick": 100, "over": False},
+    ]
+
+
+def test_the_hours_bar_is_planned_hours_against_actual_hours_for_a_linked_row_only():
+    got = run(PROJECTS + BUDGETED + 'out([P.hoursBar(budgeted()),'
+              ' P.hoursBar(budgeted({actual_hours:200})), P.hoursBar(PROJECTS[0]),'
+              ' P.hoursBar(pr({raken:{state:"not_linked", reason:"no_job_number"}})),'
+              ' P.hoursBar(pr({planned_hours:null, raken:{state:"linked", actual_hours:5}})),'
+              ' P.hoursBar(null)])')
+    assert got == [{"fill": 93.8, "tick": 100, "over": False},
+                   {"fill": 100, "tick": 80, "over": True}, None, None, None, None]
+
+
+def test_the_budget_pair_reads_projected_total_against_budgeted_with_over_under():
+    got = run(PROJECTS + BUDGETED + 'const b = (o) => P.budgetCells(budgeted(o));'
+              'out([b(), b({budgeted_hours:1180, projected_total_hours:1050.4, over_under:129.6}),'
+              ' b({projected_total_hours:140, budgeted_hours:180, over_under:40,'
+              '    projection_below_actual:true})])')
+    assert got[0] == {"shown": True, "projected": "1,330", "budgeted": "1,200",
+                      "over_under": "−130 h", "over": True, "note": "",
+                      "bar": {"fill": 100, "tick": 90.2, "over": True}}
+    assert got[1]["projected"] == "1,050" and got[1]["budgeted"] == "1,180"
+    assert got[1]["over_under"] == "+130 h" and got[1]["over"] is False
+    assert got[2]["note"] == "Raken's projection covers only the work in its budget"
+    assert got[2]["bar"] == {"fill": 77.8, "tick": 100, "over": False}
+
+
+def test_no_raken_budget_or_a_budget_not_read_shows_dashes_and_says_which():
+    dash = "—"
+    got = run(PROJECTS + BUDGETED + 'const nb = {budget:"none", budgeted_hours:null,'
+              ' projected_total_hours:null, over_under:null, projection_below_actual:false};'
+              'out([P.budgetCells(budgeted(nb, ["on_plan"])),'
+              ' P.budgetCells(budgeted(Object.assign({}, nb, {budget:"not_read"}), ["on_plan"])),'
+              ' P.budgetCells(budgeted({budget:undefined, budgeted_hours:undefined,'
+              '   projected_total_hours:undefined, over_under:undefined}, [])),'
+              ' P.budgetCells(PROJECTS[0]),'
+              ' P.budgetCells(pr({raken:{state:"not_linked", reason:"no_job_number"}})),'
+              ' P.budgetCells(null)])')
+    empty = {"shown": False, "projected": dash, "budgeted": dash, "over_under": dash,
+             "over": False, "bar": None}
+    assert got[0] == dict(empty, note="No Raken budget")
+    assert got[1] == dict(empty, note="Raken's budget not read")
+    assert got[2] == dict(empty, note="Raken's budget not read"), "a read from before #783"
+    assert got[3] == dict(empty, note="")
+    assert got[4] == dict(empty, note="")
+    assert got[5] == dict(empty, note="")
+
+
+def test_the_status_chips_are_on_plan_behind_over_budget_and_not_linked():
+    """Statuses are flags: a job Behind and Over budget shows both chips."""
+    got = run(PROJECTS + 'const c = (s) => P.statusChips(pr({statuses:s})).map(x => x.label);'
+              'out([c(["on_plan"]), c(["behind"]), c(["over_budget"]), c(["over_budget", "behind"]),'
+              ' c(["not_linked"]), c([]), c(["made-up"])])')
+    assert got == [["On plan"], ["Behind"], ["Over budget"], ["Behind", "Over budget"],
+                   ["Not linked"], [], []]
+
+
+def test_the_page_and_the_server_name_the_same_budget_states():
+    import raken_actuals as ra
+    got = run("out(P.BUDGET)")
+    assert got == {"shown": ra.BUDGET_SHOWN, "none": ra.BUDGET_NONE, "not_read": ra.BUDGET_NOT_READ}
+    assert sorted(got.values()) == sorted(ra.BUDGET_STATES)
+    core = CORE.read_text(encoding="utf-8")
+    i = core.index("function budgetCells(")
+    body = core[i:core.index("\n  }\n", i)]
+    for literal in ('"shown"', '"none"', '"not_read"', '"linked"'):
+        assert literal not in body, literal
+
+
+def test_the_page_shows_the_budget_pair_and_draws_both_bars_through_the_cssom():
+    html, js = _page(), _pva_js()
+    head = html[html.index('<table class="pva">'):html.index("</thead>")]
+    assert "Projected total hours<small>of Budgeted hours, Over/under</small>" in head
+    assert head.index("Actual hours<small>") < head.index("Projected total hours<small>") \
+        < head.index(">Status<")
+    assert "P.budgetCells(p)" in js and "P.hoursBar(p)" in js
+    # The widths and the tick's place go through element.style once the markup is in place (CSP).
+    assert ".style.width" in js and ".style.left" in js
+    assert 'style="' not in js and "style='" not in js
+    for cls in (".pbar", ".pbar-fill", ".pbar-tick", ".chip.st-over_budget", ".chip.st-on_plan"):
+        rule = re.search(re.escape(cls) + r"\s*\{([^}]*)\}", html)
+        assert rule, cls
+        assert "#" not in rule.group(1), "%s uses a new hard-coded colour" % cls
+    for field in ("bc.projected", "bc.budgeted", "bc.over_under", "bc.note"):
+        hits = list(re.finditer(re.escape(field), js))
+        assert hits, field
+        for m in hits:
+            line = js[js.rfind("\n", 0, m.start()) + 1: js.find("\n", m.end())]
+            assert "esc(" in line, "%s reaches markup unescaped: %s" % (field, line.strip())

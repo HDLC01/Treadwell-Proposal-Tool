@@ -325,7 +325,12 @@
     unreachable: "unreachable", not_refreshed: "not_refreshed", linked: "linked",
     not_linked: "not_linked",
   };
-  var STATUS = { behind: "behind", not_linked: "not_linked" };
+  var STATUS = {
+    behind: "behind", over_budget: "over_budget", on_plan: "on_plan", not_linked: "not_linked",
+  };
+  // A linked row's Budget pair (#783): raken_actuals.py's BUDGET_*. Shown; none (Raken has no
+  // budget for the job); not read (its insights could not be read, or the read predates them).
+  var BUDGET = { shown: "shown", none: "none", not_read: "not_read" };
   var REASON = {
     no_job_number: "no_job_number", no_raken_project: "no_raken_project", duplicate: "duplicate",
   };
@@ -363,7 +368,9 @@
 
   // ── the Raken side (#782): the server's last "Refresh now" read, set beside each row ──
   // The states, statuses and reasons are RAKEN, STATUS and REASON above.
-  var STATUS_LABELS = [[STATUS.not_linked, "Not linked"], [STATUS.behind, "Behind"]];
+  // Statuses are flags (#783): a job Behind and Over budget shows both, in this order.
+  var STATUS_LABELS = [[STATUS.not_linked, "Not linked"], [STATUS.behind, "Behind"],
+    [STATUS.over_budget, "Over budget"], [STATUS.on_plan, "On plan"]];
 
   function rakenOf(p) {
     return p && p.raken && typeof p.raken === "object" ? p.raken : {};
@@ -404,6 +411,58 @@
     }
     return { days: days, days_note: note, on_site: decLabel(r.avg_on_site),
              hours: decLabel(r.actual_hours) };
+  }
+
+  /** Over/under in whole hours, signed: "+12 h" under budget, "−130 h" (a real minus) over it,
+   *  "0 h" on it, a dash when there is none. Under an hour either way reads "−<1 h" / "+<1 h",
+   *  never "0 h": the server calls any Over/under below zero Over budget. */
+  function overUnderLabel(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "—";
+    if (n === 0) return "0 h";
+    var r = Math.abs(Math.round(n));
+    return (n > 0 ? "+" : "−") + (r === 0 ? "<1" : r.toLocaleString("en-US")) + " h";
+  }
+
+  /** A pair's small bar: the plan as a tick, Raken as the fill, both as percentages of the
+   *  longer of the two (one decimal). `over` when Raken is past the plan. null when either is
+   *  missing or negative, or both are zero: no bar beats a misleading one. */
+  function pairBar(plan, raken) {
+    var ok = function (n) { return typeof n === "number" && isFinite(n) && n >= 0; };
+    if (!ok(plan) || !ok(raken)) return null;
+    var scale = Math.max(plan, raken);
+    if (scale <= 0) return null;
+    var pct = function (n) { return Math.round(n / scale * 1000) / 10; };
+    return { fill: pct(raken), tick: pct(plan), over: raken > plan };
+  }
+
+  /** The Hours pair's bar: Planned hours (the tick) against Actual hours (the fill). Linked
+   *  rows only. */
+  function hoursBar(p) {
+    var r = rakenOf(p);
+    if (r.state !== RAKEN.linked) return null;
+    return pairBar(p.planned_hours, r.actual_hours);
+  }
+
+  /** The Budget pair (#783): Projected total hours against Budgeted hours, with Over/under and
+   *  its bar (Budgeted hours the tick, Projected total hours the fill). Dashes unless the row is
+   *  linked and Raken has a budget; `note` says why (no Raken budget, not read) or that Raken's
+   *  projection is below the time-card Actual hours. */
+  function budgetCells(p) {
+    var r = rakenOf(p);
+    var out = { shown: false, projected: "—", budgeted: "—", over_under: "—",
+      over: false, note: "", bar: null };
+    if (r.state !== RAKEN.linked) return out;
+    if (r.budget === BUDGET.none) { out.note = "No Raken budget"; return out; }
+    if (r.budget !== BUDGET.shown) { out.note = "Raken's budget not read"; return out; }
+    out.shown = true;
+    out.projected = numLabel(r.projected_total_hours);
+    out.budgeted = numLabel(r.budgeted_hours);
+    out.over_under = overUnderLabel(r.over_under);
+    out.over = typeof r.over_under === "number" && r.over_under < 0;
+    out.note = r.projection_below_actual === true
+      ? "Raken's projection covers only the work in its budget" : "";
+    out.bar = pairBar(r.budgeted_hours, r.projected_total_hours);
+    return out;
   }
 
   /** The row's status flags as chips, Not linked first. Only flags the page knows. */
@@ -477,7 +536,8 @@
     return (through ? "Counts so far run through yesterday, " + through + ". " : "")
       + "Planned hours = Workdays so far × Crew size × "
       + (hours == null ? "the hours in a workday" : hours)
-      + ". Days clocked in, On site and Actual hours come from Raken time cards.";
+      + ". Days clocked in, On site and Actual hours come from Raken time cards;"
+      + " Budgeted hours and Projected total hours from Raken's production insights.";
   }
 
   /** What an empty list says. The window is the server's (`window_days`). */
@@ -546,7 +606,8 @@
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
     RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
     RAKEN: RAKEN, STATUS: STATUS, REASON: REASON, rakenRefreshing: rakenRefreshing,
-    decLabel: decLabel, rakenCells: rakenCells,
+    decLabel: decLabel, rakenCells: rakenCells, BUDGET: BUDGET, overUnderLabel: overUnderLabel,
+    pairBar: pairBar, hoursBar: hoursBar, budgetCells: budgetCells,
     statusChips: statusChips, notLinkedNote: notLinkedNote, asOfText: asOfText,
     rakenMessage: rakenMessage, rakenOnlyName: rakenOnlyName,
   };

@@ -143,7 +143,7 @@ A job whose Projected total hours are above its Budgeted hours, so its Over/unde
 _Avoid_: In the red, overrun
 
 **On plan**:
-A job linked to Raken that is neither Behind nor Over budget.
+A job linked to Raken that is neither Behind nor Over budget. A job whose Raken budget could not be read is not On plan: whether it is Over budget is unknown. A job with no Raken budget can be On plan.
 
 **Not linked**:
 A job on the calendar with no Raken project carrying its Job number, so there is nothing to compare its plan with.
