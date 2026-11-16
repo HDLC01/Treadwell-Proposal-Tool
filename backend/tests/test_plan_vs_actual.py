@@ -355,6 +355,20 @@ def test_a_punch_whose_job_number_matches_nothing_joins_the_job_with_its_name(cl
     assert p["planned_hours"] == 5 * 6 * 8 + 1 * 2 * 8
 
 
+def test_a_numbered_punch_names_the_job_it_joins_when_the_job_has_no_job_number_yet(client, google):
+    """Only the Punch has been relabelled so far: its Job number is the job's, so the row reads under
+    it (and can link to Raken), with the job's own Mobilization still counted."""
+    google.events = [mob("u1", "Example Studio (3) (Pat)", "2026-11-02", "2026-11-06", "11"),
+                     mob("p", "26.913, Example Studio Punch (2) (Lee)", "2026-11-12", "2026-11-12",
+                         "11")]
+    (p,) = rows(client)
+    assert p["key"] == "job:26.913" and p["job_number"] == "26.913"
+    assert p["is_punch"] is False and p["label"] is None
+    assert [m["id"] for m in p["mobilizations"]] == ["u1"]
+    assert [m["id"] for m in p["punches"]] == ["p"]
+    assert p["planned_hours"] == 5 * 3 * 8 + 1 * 2 * 8
+
+
 def test_a_punch_whose_job_number_matches_nothing_takes_the_named_job_whose_work_ended_before_it(
         client, google):
     """Two jobs at the same place carry different Job numbers, and the Punch's own Job number is

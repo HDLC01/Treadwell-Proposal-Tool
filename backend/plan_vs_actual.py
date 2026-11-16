@@ -27,7 +27,7 @@ GROUPING. Every event read is grouped into Projects, then only the Projects in t
     the Project whose name equals the Punch's name with the word "Punch" removed (case and spacing
     ignored). When several Projects share that name, it joins the one whose work ended last before
     the Punch began, else the one that ends last. A Punch whose Job number matched no job may so
-    join a Project grouped by name, and that row keeps no Job number. A Punch that matches no
+    join a Project grouped by name; that row then takes the Punch's Job number. A Punch that matches no
     Project is its own row, labelled Punch;
   * a Project's Start is its first non-Punch Mobilization's first day, and its Deadline the last day
     of its last non-Punch Mobilization. A Punch row's are its Punches' own.
@@ -204,6 +204,11 @@ def _group(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
             parent = groups.get("job:" + ev["job_number"])
         if parent is None:               # no Job number, or one that matches no job (#792)
             parent = _name_parent(by_name.get(_punch_parent_name(ev["name"])) or [], ev)
+            if parent is not None and ev["job_number"] and not parent["job_number"]:
+                # Only the Punch is relabelled yet: its Job number is the job's, so the row reads
+                # under it. The groups dict is done being looked up by key, so renaming is safe.
+                parent["job_number"] = ev["job_number"]
+                parent["key"] = "job:" + ev["job_number"]
         if parent is None:
             key = ("punch:job:" + ev["job_number"] if ev["job_number"]
                    else "punch:name:" + _fold(ev["name"]))
