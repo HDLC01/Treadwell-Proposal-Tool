@@ -7,7 +7,7 @@
 //
 // WHAT THE SERVER HAS ALREADY DONE (GET /api/project-analytics, backend/plan_vs_actual.py). It
 // reads a year of the Treadwell Projects calendar, groups it into Projects (Punches with their
-// jobs), keeps the ones in the 14-day window and works out each one's calendar side: Deadline,
+// jobs), keeps the ones in its window (`window_days` either side of today) and works out each one's calendar side: Deadline,
 // Workdays left, Workdays booked so far, the planned Crew size and Planned hours, all "so far" up to
 // yesterday in Central. This page only lays the rows out and filters them with the search box.
 // Raken's side reads "Connect Raken to compare" until Raken is connected.
@@ -165,14 +165,12 @@
     paintSwatches(body);
 
     const empty = !projects.length
-      ? "No jobs are running, finished in the last 14 days, or starting in the next 14 days."
+      ? P.pvaEmptyText(DATA)
       : (!shown.length ? "No job matches the search." : "");
     $("pva-empty").textContent = empty;
     $("pva-empty").hidden = !empty;
 
-    const through = P.dayLong(DATA.so_far_through);
-    $("pva-foot").textContent = (through ? "Counts so far run through yesterday, " + through + ". " : "")
-      + "Planned hours = Workdays so far × Crew size × 8. Raken's side fills in once Raken is connected.";
+    $("pva-foot").textContent = P.pvaFootText(DATA);
   }
 
   // ── wiring (delegated; CSP forbids inline handlers) ───────────────

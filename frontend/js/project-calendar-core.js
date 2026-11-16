@@ -313,6 +313,12 @@
   }
 
   // ── Plan vs Actual rows (the server builds them; these only word and filter them) ──
+  // A row's `timing` and its Raken `state`: values backend/plan_vs_actual.py names too
+  // (TIMING_*, RAKEN_NOT_CONNECTED). tests/test_project_calendar_core_js.py holds the two together,
+  // so a state added on one side only fails there.
+  var TIMING = { starts: "starts", running: "running", finished: "finished" };
+  var RAKEN_NOT_CONNECTED = "not_connected";
+
   /** The search box: every word typed must match the Job number, the name, the Foreman or the
    *  Work type (as the page words it, so "unknown" finds the jobs with none). */
   function filterProjects(projects, q) {
@@ -331,8 +337,8 @@
    *  so the count is never negative. */
   function leftLabel(p) {
     if (!p) return "";
-    if (p.timing === "starts") return "Starts " + dayLong(p.start);
-    if (p.timing === "finished") return "Finished";
+    if (p.timing === TIMING.starts) return "Starts " + dayLong(p.start);
+    if (p.timing === TIMING.finished) return "Finished";
     var n = typeof p.workdays_left === "number" ? p.workdays_left : 0;
     return n + " workday" + (n === 1 ? "" : "s") + " left";
   }
@@ -346,7 +352,32 @@
   /** What the Raken side of a row says until Raken is connected (#782 fills it in). */
   function rakenLabel(p) {
     var st = p && p.raken && p.raken.state;
-    return !st || st === "not_connected" ? "Connect Raken to compare" : "—";
+    return !st || st === RAKEN_NOT_CONNECTED ? "Connect Raken to compare" : "—";
+  }
+
+  /** A whole positive number the server sent, or null. */
+  function serverCount(data, key) {
+    var n = data && data[key];
+    return typeof n === "number" && isFinite(n) && n > 0 ? n : null;
+  }
+
+  /** The line under the list. The hours in a workday are the server's (`hours_per_workday`). */
+  function pvaFootText(data) {
+    var through = dayLong(data && data.so_far_through);
+    var hours = serverCount(data, "hours_per_workday");
+    return (through ? "Counts so far run through yesterday, " + through + ". " : "")
+      + "Planned hours = Workdays so far × Crew size × "
+      + (hours == null ? "the hours in a workday" : hours)
+      + ". Raken's side fills in once Raken is connected.";
+  }
+
+  /** What an empty list says. The window is the server's (`window_days`). */
+  function pvaEmptyText(data) {
+    var n = serverCount(data, "window_days");
+    return n == null
+      ? "No jobs are running, finished lately, or starting soon."
+      : "No jobs are running, finished in the last " + n + " days, or starting in the next "
+        + n + " days.";
   }
 
   /** The same event can arrive twice (a range fetch and the side list's own fetch). One row per id. */
@@ -403,6 +434,7 @@
     layout: layout, focusDay: focusDay, uniqueById: uniqueById,
     dayLong: dayLong, spanLabel: spanLabel, centralStamp: centralStamp,
     TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
-    numLabel: numLabel, rakenLabel: rakenLabel,
+    numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
+    RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
   };
 });

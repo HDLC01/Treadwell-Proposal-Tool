@@ -9,7 +9,7 @@ The claims that cost something when they are wrong:
     (by Job number, else by name with "Punch" removed, ignoring case and spacing), and an
     unmatched Punch is its own row labelled Punch.
   * PLANNED HOURS = each Mobilization's Workdays up to YESTERDAY (Central) x its own Crew size x 8.
-    A missing Crew size adds nothing and says so; it never reads as zero men.
+    A missing Crew size adds nothing and says so; it never reads as nobody on site.
   * THE WINDOW. Running today, Deadline in the last 14 days, Start in the next 14 days, or a Punch
     with a Workday within 14 days of today. A listed job's figures use every Mobilization read.
   * NEVER A 500. Google failing is a 200 with a plain error.
@@ -167,6 +167,12 @@ def test_the_response_carries_the_calendar_side_and_raken_not_connected(client, 
     assert p["punches"] == []
 
 
+def test_the_response_names_the_hours_in_a_workday_and_the_window_the_page_words(client, google):
+    """The page says "x 8" and "14 days"; the numbers are the server's, so it reads them from here."""
+    body = get(client)
+    assert body["hours_per_workday"] == 8 and body["window_days"] == 14
+
+
 # ── reading a year in pieces ──────────────────────────────────────────────────
 def test_a_year_back_and_two_weeks_ahead_is_read_in_pieces_of_at_most_120_days(
         client, google, monkeypatch):
@@ -218,8 +224,8 @@ ACME_2 = mob("a2", "26.125, Acme Clinic Psych - 2nd Mob (4) (Kim)", "2026-11-16"
 
 def test_mobilizations_with_one_job_number_are_one_row_and_each_brings_its_own_crew_size(
         client, google):
-    """1st Mob: Mon Nov 2 to Fri Nov 6, 6 men, all five days done = 240 h. 2nd Mob: Mon Nov 16 to
-    Fri Nov 20, 4 men, Mon and Tue done (today is Wed) = 64 h."""
+    """1st Mob: Mon Nov 2 to Fri Nov 6, 6 people, all five days done = 240 h. 2nd Mob: Mon Nov 16 to
+    Fri Nov 20, 4 people, Mon and Tue done (today is Wed) = 64 h."""
     google.events = [ACME_2, ACME_1]
     (p,) = rows(client)
     assert [m["id"] for m in p["mobilizations"]] == ["a1", "a2"]
@@ -255,7 +261,7 @@ def test_a_mobilization_with_no_crew_size_adds_nothing_and_the_row_says_so(clien
     assert p["planned_hours"] == 5 * 6 * 8, "two days with no Crew size add nothing"
     assert p["workdays_so_far"] == 7, "the days are still booked"
     assert p["crew_size_missing"] is True
-    assert p["crew_size"] is None, "never zero men"
+    assert p["crew_size"] is None, "never zero people"
 
 
 def test_with_no_job_number_mobilizations_group_by_name_ignoring_case_and_spacing(client, google):

@@ -36,11 +36,11 @@ cards against a full planned day):
     included, up to yesterday;
   * Planned hours: the sum over its Mobilizations of that Mobilization's Workdays so far x its Crew
     size x HOURS_PER_WORKDAY. A Mobilization with no Crew size adds nothing, and the row says
-    "Crew size missing" (crew_size_missing) rather than counting it as zero men;
+    "Crew size missing" (crew_size_missing) rather than counting it as nobody on site;
   * the Crew pair's plan figure: the Crew size of the Mobilization running today, else the most
     recent one to have started, else the first one still to come;
   * Workdays left: Monday to Friday from today through the Deadline while the job runs; a job not
-    started is "starts" (the page says "Starts <date>"), a finished one "finished".
+    started is TIMING_STARTS (the page says "Starts <date>"), a finished one TIMING_FINISHED.
 
 NEVER A 500. Not connected answers connected:false; a Google failure with nothing saved answers
 ok:true, no projects and the plain error; a stale copy is served with stale:true.
@@ -66,6 +66,14 @@ WINDOW_DAYS = 14
 # Every Work type, Gyp included, until Operations says otherwise.
 HOURS_PER_WORKDAY = 8
 
+# The contract with the page (js/project-calendar-core.js names the same values as P.TIMING and
+# P.RAKEN_NOT_CONNECTED; tests/test_project_calendar_core_js.py holds the two sides together).
+# A row's timing: before its Start, between Start and Deadline, after its Deadline.
+TIMING_STARTS = "starts"
+TIMING_RUNNING = "running"
+TIMING_FINISHED = "finished"
+TIMINGS = (TIMING_STARTS, TIMING_RUNNING, TIMING_FINISHED)
+# The Raken side of every row until Raken is connected (#782).
 RAKEN_NOT_CONNECTED = "not_connected"
 
 _DAY = _dt.timedelta(days=1)
@@ -84,6 +92,7 @@ def _response(connected: bool, today: _dt.date, projects: List[Dict[str, Any]], 
             "error": error, "notice": notice, "today": today.isoformat(),
             "so_far_through": (today - _DAY).isoformat(),
             "read_from": first.isoformat(), "read_to": last.isoformat(),
+            "hours_per_workday": HOURS_PER_WORKDAY, "window_days": WINDOW_DAYS,
             "work_types": [dict(w) for w in pc.WORK_TYPE_LEGEND], "raken": _raken(),
             "projects": projects}
 
@@ -277,11 +286,11 @@ def _project(g: Dict[str, Any], today: _dt.date) -> Optional[Dict[str, Any]]:
     foreman = (plan or {}).get("foreman") or next(
         (m["foreman"] for m in reversed(every) if m["foreman"]), None)
     if today < start:
-        timing, left = "starts", None
+        timing, left = TIMING_STARTS, None
     elif today > deadline:
-        timing, left = "finished", None
+        timing, left = TIMING_FINISHED, None
     else:
-        timing, left = "running", pc.workdays(today, deadline)
+        timing, left = TIMING_RUNNING, pc.workdays(today, deadline)
 
     return {
         "key": g["key"],

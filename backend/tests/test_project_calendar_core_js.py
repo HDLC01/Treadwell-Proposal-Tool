@@ -513,6 +513,55 @@ def test_the_raken_side_says_connect_raken_until_raken_is_connected():
     assert got == ["Connect Raken to compare", "Connect Raken to compare", "\u2014"]
 
 
+def test_the_footer_and_the_empty_list_word_the_servers_numbers():
+    """Planned hours' "x 8" and the window's "14 days" come from the response, so changing either
+    on the server can never leave the page's wording wrong."""
+    got = run('const d = {so_far_through:"2026-11-17", hours_per_workday:8, window_days:14};'
+              'const e = {so_far_through:"2026-11-17", hours_per_workday:10, window_days:21};'
+              'out([P.pvaFootText(d), P.pvaEmptyText(d), P.pvaFootText(e), P.pvaEmptyText(e),'
+              ' P.pvaFootText({}), P.pvaEmptyText(null)])')
+    assert got == [
+        "Counts so far run through yesterday, Tue, Nov 17, 2026. Planned hours = Workdays so far"
+        " × Crew size × 8. Raken's side fills in once Raken is connected.",
+        "No jobs are running, finished in the last 14 days, or starting in the next 14 days.",
+        "Counts so far run through yesterday, Tue, Nov 17, 2026. Planned hours = Workdays so far"
+        " × Crew size × 10. Raken's side fills in once Raken is connected.",
+        "No jobs are running, finished in the last 21 days, or starting in the next 21 days.",
+        "Planned hours = Workdays so far × Crew size × the hours in a workday."
+        " Raken's side fills in once Raken is connected.",
+        "No jobs are running, finished lately, or starting soon.",
+    ]
+    js = _pva_js()
+    assert "P.pvaFootText(DATA)" in js and "P.pvaEmptyText(DATA)" in js
+    assert "× 8" not in js and "14 days" not in js
+
+
+def test_the_page_and_the_server_name_the_same_timing_and_raken_states():
+    """A row's timing and its Raken state are a contract between plan_vs_actual.py and the page.
+    Each side names them once; a state added on one side only fails here."""
+    import plan_vs_actual as pva
+    got = run("out([P.TIMING, P.RAKEN_NOT_CONNECTED])")
+    assert got == [{"starts": pva.TIMING_STARTS, "running": pva.TIMING_RUNNING,
+                    "finished": pva.TIMING_FINISHED}, pva.RAKEN_NOT_CONNECTED]
+    assert sorted(got[0].values()) == sorted(pva.TIMINGS)
+    core = CORE.read_text(encoding="utf-8")
+    i = core.index("function leftLabel(")
+    j = core.index("function rakenLabel(")
+    assert '"starts"' not in core[i:j] and '"finished"' not in core[i:j]
+    assert '"not_connected"' not in core[j:core.index("}", j)]
+
+
+def test_the_column_headings_use_the_glossary_words():
+    """GLOSSARY.md: Workday, Planned hours, Crew size ("people", never "men" or "guys")."""
+    html = _page()
+    head = html[html.index('<table class="pva">'):html.index("</thead>")]
+    assert "Workdays<small>booked so far</small>" in head
+    assert "Planned hours<small>so far</small>" in head
+    assert "Crew size<small>planned</small>" in head
+    for word in ("men", "guys", "Days<small>", "Hours so far"):
+        assert not re.search(r"(?<![A-Za-z])%s(?![A-Za-z])" % re.escape(word), head), word
+
+
 def test_the_side_list_of_upcoming_deadlines_is_gone():
     js, page = _page_js(), _page()
     core = CORE.read_text(encoding="utf-8")
