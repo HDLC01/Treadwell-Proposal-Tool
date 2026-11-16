@@ -229,6 +229,30 @@ out([
     assert got[3]["tone"] == "warn"
 
 
+# Made up: the page passes the server's line through unchanged. test_raken.py pins the real one.
+NOT_PROVISIONED_LINE = "made-up not-provisioned line 4410"
+
+
+def test_an_account_without_the_public_api_shows_that_one_line_as_a_warning():
+    got = run("""
+(async () => {
+  const w = world({ user: { role: "admin" }, responses: { "GET /api/raken/status": { status: 200,
+    body: { ok: true, configured: true, state: "not_provisioned", message: %s } } } });
+  const box = await R.boot(w.env);
+  out({ texts: %s, line: box.children[0].className });
+})();
+""" % (json.dumps(NOT_PROVISIONED_LINE), _texts()))
+    assert got["texts"][0] == NOT_PROVISIONED_LINE
+    assert got["line"] == "raken-status raken-warn"
+    assert "could not be reached" not in got["texts"][0]
+
+
+def test_without_a_server_message_the_line_still_says_only_raken_can_fix_it():
+    got = run("""out(R.statusLine({ state: "not_provisioned" }));""")
+    assert got["tone"] == "warn"
+    assert "Raken has to enable it; nothing needs to change here." in got["text"]
+    assert "Connect" not in got["text"]
+
 def test_the_page_loads_it_last_and_it_writes_no_style_attribute():
     html = (FRONTEND / "project-calendar.html").read_text(encoding="utf-8")
     assert html.index('src="/js/project-calendar.js"') < html.index('src="/js/raken-connect.js"')
