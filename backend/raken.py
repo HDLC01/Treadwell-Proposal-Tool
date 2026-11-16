@@ -38,7 +38,9 @@ THE CLIENT. Raken limits requests per second, concurrent requests and requests p
 429, and publishes no figures (they depend on the plan). So calls run ONE AT A TIME under _CALL_LOCK
 with CALL_PAUSE_S between them; a 429 waits BACKOFF_S[i] and is retried at most twice, then the call
 fails with a plain RakenError. A 429 that says the daily quota is used up is not retried at all.
-Nothing loops: paging stops at _PAGE_CAP pages.
+Nothing loops: paging stops at _PAGE_CAP pages. A caller that must have every page (whole=True) or
+may only spend so many calls (stop_at_calls, against calls_made()) gets ListingTooLong instead of
+part of a listing.
 
 SECRETS. The client id, client secret, redirect address and key come only from the environment
 (RAKEN_CLIENT_ID, RAKEN_CLIENT_SECRET, RAKEN_REDIRECT_URI, RAKEN_TOKEN_KEY). No token, code, secret,
@@ -102,6 +104,7 @@ UNREACHABLE_MESSAGE = "Raken could not be reached."
 NOT_SAVED_MESSAGE = "Raken sign-in could not be saved."
 NOT_PROVISIONED_MESSAGE = ("Raken has not turned on its Public API for Treadwell's account yet. "
                            "Raken has to enable it; nothing needs to change here.")
+TOO_LONG_MESSAGE = "Raken has more records than one read takes."
 
 # Replaced by tests.
 TRANSPORT: Any = None
@@ -121,6 +124,14 @@ class RakenError(RuntimeError):
 class SignInExpired(RakenError):
     def __init__(self):
         super().__init__(EXPIRED_MESSAGE, 409)
+
+
+class ListingTooLong(RakenError):
+    """A listing stopped before its last page: it reached its caller's call budget, or _PAGE_CAP
+    pages when the caller needs every page. Nothing it read is returned."""
+
+    def __init__(self):
+        super().__init__(TOO_LONG_MESSAGE, 502)
 
 
 class NotProvisioned(RakenError):
@@ -403,6 +414,12 @@ _LAST_CALL: Dict[str, float] = {"at": float("-inf")}
 _CALLS: Dict[str, int] = {"n": 0}
 
 
+def calls_made() -> int:
+    """Every Raken data call this process has made (each attempt, 429 retries included), for
+    callers that cap or count their own share. Calls from other callers count too."""
+    return _CALLS["n"]
+
+
 def _is_quota(resp) -> bool:
     try:
         text = resp.text or ""
@@ -475,21 +492,35 @@ def get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
                 raise RakenError(UNREACHABLE_MESSAGE) from None
 
 
-def list_all(path: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def list_all(path: str, params: Optional[Dict[str, Any]] = None, *,
+             stop_at_calls: Optional[int] = None, whole: bool = False) -> List[Dict[str, Any]]:
     """Every item of a paged Raken collection ({"page": {...nextOffset}, "collection": [...]}),
-    page after page, never in parallel, at most _PAGE_CAP pages."""
+    page after page, never in parallel, at most _PAGE_CAP pages. With `stop_at_calls`, no page is
+    asked for once calls_made() has reached it (a page's own 429 retries can still pass it by at
+    most len(BACKOFF_S) + 1); with `whole`, reaching _PAGE_CAP raises too. Either raises
+    ListingTooLong rather than answer with part of the listing."""
     items: List[Dict[str, Any]] = []
     offset = 0
     for _ in range(_PAGE_CAP):
+        if stop_at_calls is not None and _CALLS["n"] >= stop_at_calls:
+            log.warning("raken: GET %s stopped at its call budget", path)
+            raise ListingTooLong()
         body = get(path, dict(params or {}, limit=_PAGE_SIZE, offset=offset))
         coll = body.get("collection") if isinstance(body, dict) else None
         items.extend(x for x in (coll if isinstance(coll, list) else []) if isinstance(x, dict))
         page = body.get("page") if isinstance(body, dict) else None
         nxt = page.get("nextOffset") if isinstance(page, dict) else None
-        if not isinstance(nxt, int) or nxt <= offset:
+        # Raken's docs show nextOffset as a string ("nextOffset": "10"); a number is taken too.
+        # ASCII digits only: "²".isdigit() is True but int("²") raises.
+        if isinstance(nxt, str):
+            text = nxt.strip()
+            nxt = int(text) if text.isascii() and text.isdigit() else None
+        if isinstance(nxt, bool) or not isinstance(nxt, int) or nxt <= offset:
             return items
         offset = nxt
     log.warning("raken: GET %s stopped after %d pages", path, _PAGE_CAP)
+    if whole:
+        raise ListingTooLong()
     return items
 
 

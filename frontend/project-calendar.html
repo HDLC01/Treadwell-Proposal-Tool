@@ -22,6 +22,8 @@
       --soon:#9a5b00; --soon-bg:#fdf5e8;
       --calm:#4a6b8a;
       --warn:#7a5c00;
+      /* The faint wash behind the Raken half of each Plan vs Actual pair. */
+      --rk-wash:#faf8f3;
       /* A bar with no Google colour. Warm stone, so it reads as "no colour chosen" and not as
          a meaning of its own. */
       --bar-neutral:#8a857c;
@@ -95,7 +97,7 @@
     /* On a phone the columns cannot fit 375px, so the list scrolls sideways INSIDE its card and
        the page itself never does. */
     .pva-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
-    .pva { width:100%; min-width:860px; border-collapse:collapse; font-size:13px; }
+    .pva { width:100%; min-width:1080px; border-collapse:collapse; font-size:13px; }
     .pva th { text-align:left; vertical-align:bottom; padding:11px 14px 9px; white-space:nowrap;
       font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-mut);
       border-bottom:1px solid var(--line); }
@@ -115,7 +117,16 @@
     .jsub { display:block; font-size:12px; color:var(--ink-v); margin-top:2px; }
     .dd { display:block; white-space:nowrap; font-variant-numeric:tabular-nums; }
     .pva td small { display:block; font-size:11.5px; color:var(--ink-mut); white-space:nowrap; }
-    .raken { color:var(--ink-mut); font-size:12px; white-space:nowrap; }
+    /* The Raken half of each pair (#782) sits on a faint wash beside its plan column. */
+    .pva .rk { background:var(--rk-wash); }
+    .pva td.status { min-width:150px; }
+    .pva td.status small { white-space:normal; color:var(--ink-v); }
+    .chip.st-behind { background:var(--late-bg); color:var(--late); }
+    .chip.st-not_linked { background:var(--surf-high); color:var(--ink-v); }
+    .pva-asof { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    .pva-only { margin-top:22px; }
+    .pva-h2 { font:400 18px/1.2 var(--display); margin:0 0 4px; }
+    .pva-only .pva { min-width:560px; }
     .chip.warn { background:#fdf5e8; color:var(--warn); }
     .pva-foot { color:var(--ink-mut); font-size:12px; margin:10px 2px 0; }
     .pva-card .note { margin:0; padding:14px; }
@@ -232,12 +243,18 @@
     </div>
 
     <!-- Plan vs Actual: the server builds every row (GET /api/project-analytics); the page lays
-         them out. The Raken side reads "Connect Raken to compare" until Raken is connected. -->
+         them out. The Raken side is the last "Refresh now" read; until Raken is connected it
+         reads "Connect Raken to compare". -->
     <section id="panel-pva" role="tabpanel" aria-labelledby="tab-pva">
       <div class="pva-bar">
         <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
                aria-label="Search Plan vs Actual" autocomplete="off" />
         <span id="pva-count" class="pva-count" aria-live="polite"></span>
+        <span class="grow"></span>
+        <span id="pva-asof" class="pva-asof"></span>
+        <!-- The page's one write (#782): reads Raken now and keeps the result on the server. It
+             changes nothing in Google Calendar or Raken. -->
+        <button type="button" id="pva-refresh" class="btn">Refresh now</button>
       </div>
       <p id="pva-alert" class="alert" role="status" hidden></p>
       <div id="pva-state" class="msg">Loading Plan vs Actual…</div>
@@ -250,9 +267,12 @@
                   <th scope="col">Job</th>
                   <th scope="col">Deadline</th>
                   <th scope="col" class="num">Workdays<small>booked so far</small></th>
+                  <th scope="col" class="num rk">Days clocked in<small>Raken</small></th>
                   <th scope="col" class="num">Crew size<small>planned</small></th>
+                  <th scope="col" class="num rk">On site<small>average a day</small></th>
                   <th scope="col" class="num">Planned hours<small>so far</small></th>
-                  <th scope="col">Raken<small>clocked, crew, hours, budget</small></th>
+                  <th scope="col" class="num rk">Actual hours<small>so far</small></th>
+                  <th scope="col">Status</th>
                 </tr>
               </thead>
               <tbody id="pva-body"></tbody>
@@ -262,6 +282,26 @@
         </div>
         <p id="pva-foot" class="pva-foot"></p>
       </div>
+      <!-- Raken projects logging hours with no job in the list (#782). Not counted with the jobs. -->
+      <section id="pva-only" class="pva-only" aria-labelledby="pva-only-title" hidden>
+        <h2 id="pva-only-title" class="pva-h2">In Raken, not on the calendar</h2>
+        <p class="note">Raken projects with time cards in the last two weeks whose Job number
+          matches no job on the calendar.</p>
+        <div class="pva-card">
+          <div class="pva-scroll">
+            <table class="pva">
+              <thead>
+                <tr>
+                  <th scope="col">Raken project</th>
+                  <th scope="col" class="num">Actual hours<small id="pva-only-from"></small></th>
+                  <th scope="col">Last day with hours</th>
+                </tr>
+              </thead>
+              <tbody id="pva-only-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </section>
 
     <section id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" hidden>

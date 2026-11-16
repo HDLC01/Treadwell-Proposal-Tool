@@ -154,7 +154,7 @@ def test_the_response_carries_the_calendar_side_and_raken_not_connected(client, 
     body = get(client)
     assert body["ok"] is True and body["connected"] is True and body["error"] is None
     assert body["today"] == "2026-11-18" and body["so_far_through"] == "2026-11-17"
-    assert body["raken"] == {"state": "not_connected"}
+    assert body["raken"]["state"] == "not_connected" and body["raken_only"] == []
     assert [w["name"] for w in body["work_types"]] == ["Epoxy", "Polish", "Gyp"]
     (p,) = body["projects"]
     assert p["key"] == "job:26.125"
@@ -486,7 +486,7 @@ def test_with_nothing_configured_it_says_not_connected(client, monkeypatch, draf
     monkeypatch.setattr(pc, "today_central", lambda: TODAY)
     body = get(client)
     assert body["connected"] is False and body["projects"] == [] and body["error"] is None
-    assert body["raken"] == {"state": "not_connected"}
+    assert body["raken"]["state"] == "not_connected" and body["raken_only"] == []
 
 
 def test_a_google_failure_with_nothing_saved_is_a_plain_error_not_a_500(client, google):

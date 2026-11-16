@@ -507,10 +507,17 @@ def test_hours_and_counts_read_as_whole_numbers_or_a_dash():
     assert got == ["1,136", "0", "\u2014", "\u2014", "13"]
 
 
-def test_the_raken_side_says_connect_raken_until_raken_is_connected():
+def test_the_raken_side_says_why_it_has_no_numbers():
     got = run(PROJECTS + 'out([P.rakenLabel(PROJECTS[0]), P.rakenLabel(pr({raken:null})),'
-              ' P.rakenLabel(pr({raken:{state:"linked"}}))])')
-    assert got == ["Connect Raken to compare", "Connect Raken to compare", "\u2014"]
+              ' P.rakenLabel(pr({raken:{state:"linked"}})),'
+              ' P.rakenLabel(pr({raken:{state:"expired"}})),'
+              ' P.rakenLabel(pr({raken:{state:"not_provisioned"}})),'
+              ' P.rakenLabel(pr({raken:{state:"unreachable"}})),'
+              ' P.rakenLabel(pr({raken:{state:"not_refreshed"}})),'
+              ' P.rakenLabel(pr({raken:{state:"made-up"}}))])')
+    assert got == ["Connect Raken to compare", "Connect Raken to compare", "",
+                   "Raken sign-in expired", "Raken not turned on yet", "Raken not reached",
+                   "Press Refresh now", "\u2014"]
 
 
 def test_the_footer_and_the_empty_list_word_the_servers_numbers():
@@ -522,13 +529,13 @@ def test_the_footer_and_the_empty_list_word_the_servers_numbers():
               ' P.pvaFootText({}), P.pvaEmptyText(null)])')
     assert got == [
         "Counts so far run through yesterday, Tue, Nov 17, 2026. Planned hours = Workdays so far"
-        " × Crew size × 8. Raken's side fills in once Raken is connected.",
+        " × Crew size × 8. Days clocked in, On site and Actual hours come from Raken time cards.",
         "No jobs are running, finished in the last 14 days, or starting in the next 14 days.",
         "Counts so far run through yesterday, Tue, Nov 17, 2026. Planned hours = Workdays so far"
-        " × Crew size × 10. Raken's side fills in once Raken is connected.",
+        " × Crew size × 10. Days clocked in, On site and Actual hours come from Raken time cards.",
         "No jobs are running, finished in the last 21 days, or starting in the next 21 days.",
         "Planned hours = Workdays so far × Crew size × the hours in a workday."
-        " Raken's side fills in once Raken is connected.",
+        " Days clocked in, On site and Actual hours come from Raken time cards.",
         "No jobs are running, finished lately, or starting soon.",
     ]
     js = _pva_js()
@@ -551,6 +558,35 @@ def test_the_page_and_the_server_name_the_same_timing_and_raken_states():
     assert '"not_connected"' not in core[j:core.index("}", j)]
 
 
+def test_the_page_and_the_server_name_the_same_raken_states_and_statuses():
+    """A row's Raken state and its statuses are raken_actuals.py's; the page names each once."""
+    import raken_actuals as ra
+    got = run("out([P.RAKEN, P.STATUS])")
+    assert sorted(got[0].values()) == sorted(ra.ROW_STATES)
+    assert all(k == v for k, v in got[0].items())
+    assert sorted(got[1].values()) == sorted(ra.STATUSES)
+    assert got[0]["not_connected"] == ra.STATE_NOT_CONNECTED
+    assert got[0]["linked"] == ra.STATE_LINKED and got[0]["not_linked"] == ra.STATE_NOT_LINKED
+    assert got[1]["behind"] == ra.STATUS_BEHIND and got[1]["not_linked"] == ra.STATUS_NOT_LINKED
+
+
+def test_the_page_and_the_server_name_the_same_not_linked_reasons():
+    """Why a row is Not linked is raken_actuals.py's REASON_*; the page names each once, so a
+    reason renamed on one side fails here instead of falling through to the wrong sentence."""
+    import raken_actuals as ra
+    got = run("out([P.REASON, P.RAKEN_NOT_CONNECTED === P.RAKEN.not_connected])")
+    assert got[0] == {"no_job_number": ra.REASON_NO_JOB_NUMBER,
+                      "no_raken_project": ra.REASON_NO_RAKEN_PROJECT,
+                      "duplicate": ra.REASON_DUPLICATE}
+    assert got[1] is True
+    core = CORE.read_text(encoding="utf-8")
+    assert "var RAKEN_NOT_CONNECTED = RAKEN.not_connected;" in core
+    i = core.index("function notLinkedNote(")
+    body = core[i:core.index("\n  }\n", i)]
+    for literal in ('"no_job_number"', '"no_raken_project"', '"duplicate"'):
+        assert literal not in body, literal
+
+
 def test_the_column_headings_use_the_glossary_words():
     """GLOSSARY.md: Workday, Planned hours, Crew size ("people", never "men" or "guys")."""
     html = _page()
@@ -558,6 +594,10 @@ def test_the_column_headings_use_the_glossary_words():
     assert "Workdays<small>booked so far</small>" in head
     assert "Planned hours<small>so far</small>" in head
     assert "Crew size<small>planned</small>" in head
+    assert "Days clocked in<small>Raken</small>" in head
+    assert "On site<small>average a day</small>" in head
+    assert "Actual hours<small>so far</small>" in head
+    assert ">Status<" in head
     for word in ("men", "guys", "Days<small>", "Hours so far"):
         assert not re.search(r"(?<![A-Za-z])%s(?![A-Za-z])" % re.escape(word), head), word
 
@@ -586,12 +626,19 @@ def test_the_page_has_two_tabs_with_plan_vs_actual_selected_and_the_schedule_hid
     assert i < html.index('id="toolbar"') < j
 
 
-def test_the_plan_vs_actual_script_loads_after_the_core_and_is_read_only():
+def test_the_plan_vs_actual_script_loads_after_the_core_and_its_one_write_is_refresh_now():
+    """Plan vs Actual reads only, with one exception: "Refresh now" (#782) POSTs to
+    /api/project-analytics/refresh, which reads Raken and keeps the result. Nothing else on the
+    page writes, and that POST changes nothing in Google Calendar or Raken."""
     html, js = _page(), _pva_js()
     assert html.index('src="/js/project-calendar-core.js"') < html.index('src="/js/plan-vs-actual.js"')
-    for verb in ('"POST"', '"PATCH"', '"PUT"', '"DELETE"', "method:"):
+    for verb in ('"PATCH"', '"PUT"', '"DELETE"'):
         assert verb not in js, "the read-only page sends a write: %s" % verb
+    assert js.count("method:") == 1 and js.count('"POST"') == 1
+    i = js.index('method: "POST"')
+    assert '"/api/project-analytics/refresh"' in js[i - 200:i], "the one POST is Refresh now"
     assert '"/api/project-analytics"' in js
+    assert ">Refresh now<" in html
 
 
 def test_plan_vs_actual_escapes_every_value_and_styles_through_the_cssom():
@@ -599,7 +646,8 @@ def test_plan_vs_actual_escapes_every_value_and_styles_through_the_cssom():
     assert 'style="' not in js and "style='" not in js
     assert ".style.background" in js
     for field in ("p.name", "p.job_number", "p.foreman", "P.workTypeOf(p)", "P.leftLabel(p)",
-                  "P.rakenLabel(p)", "p.label"):
+                  "P.rakenLabel(p)", "why", "p.label", "c.label", "x.number",
+                  "P.rakenOnlyName(x)", "P.decLabel("):
         hits = list(re.finditer(re.escape(field), js))
         assert hits, field
         for m in hits:
@@ -625,3 +673,127 @@ def test_the_schedule_arrow_keys_only_page_the_calendar_when_it_is_shown():
     js = _page_js()
     i = js.index('document.addEventListener("keydown"')
     assert 'panel-schedule").hidden' in js[i:i + 400]
+
+
+# ── #782: the Raken side ─────────────────────────────────────────────────────────────────────────
+LINKED = """
+const linked = (o) => pr({workdays_so_far:5, raken: Object.assign({state:"linked", projects:[], days_booked:5,
+  days_clocked:4, avg_on_site:3.5, actual_hours:131.5, through:"2026-11-17"}, o || {}),
+  statuses: []});
+"""
+
+
+def test_a_linked_row_shows_days_clocked_people_on_site_and_actual_hours():
+    got = run(PROJECTS + LINKED + 'const c = (p) => P.rakenCells(p);'
+              'out([c(linked()), c(linked({avg_on_site:null, days_clocked:0, actual_hours:0})),'
+              ' c(linked({actual_hours:1136})), c(PROJECTS[0]),'
+              ' c(pr({raken:{state:"not_linked", reason:"no_job_number"}})), c(null)])')
+    dash = "\u2014"
+    assert got == [
+        {"days": "4", "days_note": "", "on_site": "3.5", "hours": "131.5"},
+        {"days": "0", "days_note": "", "on_site": dash, "hours": "0"},
+        {"days": "4", "days_note": "", "on_site": "3.5", "hours": "1,136"},
+        {"days": dash, "days_note": "", "on_site": dash, "hours": dash},
+        {"days": dash, "days_note": "", "on_site": dash, "hours": dash},
+        {"days": dash, "days_note": "", "on_site": dash, "hours": dash},
+    ]
+
+
+def test_days_clocked_in_names_the_days_raken_was_compared_against_when_they_differ():
+    """Behind compares days clocked in with the booked days the read covered. When that is fewer
+    than the row's Workdays booked so far (a read from yesterday, a job older than the read), the
+    pair says so, or "3 booked, 2 clocked in" with no Behind would look wrong."""
+    got = run(PROJECTS + LINKED + 'const c = (p) => P.rakenCells(p);'
+              'out([c(linked({days_booked:2, days_clocked:2})),'
+              ' c(linked({days_booked:2, days_clocked:1, through:null})),'
+              ' c(linked({days_booked:5, days_clocked:5}))])')
+    assert [g["days"] for g in got] == ["2 of 2", "1 of 2", "5"]
+    assert [g["days_note"] for g in got] == ["through Nov 17", "", ""]
+    js = _pva_js()
+    assert "rc.days_note" in js
+
+
+def test_hours_and_averages_keep_one_decimal_only_when_they_need_it():
+    got = run('out([P.decLabel(38.5), P.decLabel(40), P.decLabel(2.333), P.decLabel(1136.25),'
+              ' P.decLabel(null), P.decLabel("7")])')
+    assert got == ["38.5", "40", "2.3", "1,136.3", "\u2014", "\u2014"]
+
+
+def test_the_status_chips_are_the_rows_flags_and_nothing_else():
+    got = run(PROJECTS + LINKED + 'out([P.statusChips(pr({statuses:["behind"]})),'
+              ' P.statusChips(pr({statuses:["not_linked"]})), P.statusChips(linked()),'
+              ' P.statusChips(pr({statuses:["made-up", "behind"]})), P.statusChips(null),'
+              ' P.statusChips(pr({statuses:"behind"}))])')
+    assert got == [[{"id": "behind", "label": "Behind"}],
+                   [{"id": "not_linked", "label": "Not linked"}],
+                   [], [{"id": "behind", "label": "Behind"}], [], []]
+
+
+def test_a_not_linked_row_says_why():
+    got = run(PROJECTS + 'const n = (r, o) => P.notLinkedNote(pr(Object.assign({job_number:"26.125",'
+              ' raken: Object.assign({state:"not_linked", reason:r}, o || {})})));'
+              'out([n("no_job_number"), n("no_raken_project"),'
+              ' n("duplicate", {duplicates:[{name:"Example Clinic"}, {name:"Example Copy"}]}),'
+              ' n("duplicate", {duplicates:[{name:"A"}, {name:null, number:"26.125"}, {name:"C"}]}),'
+              ' P.notLinkedNote(PROJECTS[0])])')
+    assert got == [
+        "No Job number on the calendar",
+        "No Raken project carries Job number 26.125",
+        "Two Raken projects carry Job number 26.125: Example Clinic and Example Copy",
+        "3 Raken projects carry Job number 26.125: A, an unnamed project and C",
+        "",
+    ]
+    # GLOSSARY.md: Job number, never "Project number".
+    for text in (CORE.read_text(encoding="utf-8"), _pva_js(), _page()):
+        assert not re.search(r"project number", text, re.I)
+
+
+def test_the_as_of_line_and_the_one_message():
+    got = run('out([P.asOfText({raken:{state:"connected", as_of:"2026-11-18T09:05:00-06:00"}}),'
+              ' P.asOfText({raken:{state:"not_refreshed", as_of:null}}),'
+              ' P.asOfText({raken:{state:"not_connected", as_of:null}}), P.asOfText(null),'
+              ' P.rakenMessage({raken:{message:"Raken is not connected."}}),'
+              ' P.rakenMessage({raken:{message:null}}), P.rakenMessage({}),'
+              ' P.rakenMessage({raken:{message:{x:1}}})])')
+    assert got == ["Raken as of Nov 18, 9:05 AM (Central)",
+                   "Raken has not been read yet. Press Refresh now.", "", "",
+                   "Raken is not connected.", "", "", ""]
+
+
+def test_the_as_of_line_says_when_a_refresh_is_running_and_the_page_polls_until_done():
+    got = run('out([P.asOfText({raken:{state:"connected", as_of:"2026-11-18T09:05:00-06:00",'
+              ' refreshing:true}}),'
+              ' P.asOfText({raken:{state:"not_refreshed", as_of:null, refreshing:true}}),'
+              ' P.rakenRefreshing({raken:{refreshing:true}}), P.rakenRefreshing({raken:{}}),'
+              ' P.rakenRefreshing(null), P.rakenRefreshing({raken:{refreshing:"yes"}})])')
+    assert got == ["Raken as of Nov 18, 9:05 AM (Central). Refreshing\u2026",
+                   "Refreshing Raken\u2026", True, False, False, False]
+    js = _pva_js()
+    assert "P.rakenRefreshing(DATA)" in js and "setTimeout(" in js
+
+
+def test_refresh_now_goes_through_the_same_api_helper_as_the_get():
+    js = _pva_js()
+    assert 'api("/api/project-analytics/refresh", { method: "POST" })' in js
+    assert js.count("fetch(") == 1, "one fetch, inside api()"
+
+
+def test_a_raken_only_project_is_named_even_without_a_name():
+    got = run('out([P.rakenOnlyName({name:"Example Unscheduled"}), P.rakenOnlyName({name:null}),'
+              ' P.rakenOnlyName(null)])')
+    assert got == ["Example Unscheduled", "Unnamed Raken project", "Unnamed Raken project"]
+
+
+def test_the_page_has_the_refresh_button_the_as_of_line_and_the_raken_only_section():
+    html, js = _page(), _pva_js()
+    for el in ('id="pva-refresh"', 'id="pva-asof"', 'id="pva-only"', 'id="pva-only-body"'):
+        assert el in html, el
+    assert "P.rakenCells(p)" in js and "P.statusChips(p)" in js
+    assert "P.asOfText(DATA)" in js and "P.rakenMessage(DATA)" in js
+    assert "DATA.raken_only" in js
+    assert re.search(r"\.pva \.rk \{ background:var\(--rk-wash\); \}", html)
+    assert "--rk-wash:" in html[html.index(":root"):html.index("}", html.index(":root"))]
+    assert "whose Job number matches no job on the calendar" in " ".join(html.split())
+    # The words the glossary avoids never reach the page.
+    for word in ("men", "guys", "headcount"):
+        assert not re.search(r"(?<![A-Za-z])%s(?![A-Za-z])" % word, html, re.I), word

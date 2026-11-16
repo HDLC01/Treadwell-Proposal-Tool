@@ -118,6 +118,14 @@ _Avoid_: Scheduled hours, expected hours
 The labor hours recorded against a job on Raken time cards so far.
 _Avoid_: Spent hours, logged hours
 
+**Days clocked in**:
+The Workdays the calendar booked for a job so far on which Raken time cards recorded any hours for it. Set against the Workdays booked so far to tell whether a job is Behind.
+_Avoid_: Days worked, attendance
+
+**On site**:
+How many people Raken time cards put on a job on an average day clocked in: the distinct people with hours on each of those days, added up, divided by the Days clocked in. Set against the planned Crew size.
+_Avoid_: Headcount, guys, crew on site
+
 **Projected total hours**:
 Raken's own projection of the labor hours a job will take in all, across the work in its Raken budget. Treadwell never works it out itself, and a job with no Raken budget has none.
 _Avoid_: Forecast, estimated hours
@@ -140,6 +148,10 @@ A job linked to Raken that is neither Behind nor Over budget.
 **Not linked**:
 A job on the calendar with no Raken project carrying its Job number, so there is nothing to compare its plan with.
 _Avoid_: Unmatched, missing
+
+**In Raken, not on the calendar**:
+A Raken project with time cards in the last two weeks whose Job number belongs to no job on the Treadwell Projects calendar: crews are clocking in to work the schedule does not show. Listed apart in Plan vs Actual and never counted with the jobs.
+_Avoid_: Orphan, unscheduled job
 
 ### Outcomes
 

@@ -1,10 +1,12 @@
 """Plan vs Actual, the calendar side (#780): one row per Project, built here, laid out by the page.
 
 Project Analytics opens on Plan vs Actual. Each row sets a job's plan from the Treadwell Projects
-calendar beside what Raken recorded for it. This module builds the PLAN side only; the Raken side
-of every row reads {"state": "not_connected"} until Raken is connected (#782), and the page words
-that as "Connect Raken to compare". The words are GLOSSARY.md's: Project, Mobilization, Punch, Job
-number, Crew size, Foreman, Workday, Planned hours, Deadline.
+calendar beside what Raken recorded for it. This module builds the PLAN side; backend/raken_actuals.py
+sets the last "Refresh now" read of Raken beside every row (#782): each row's "raken" and
+"statuses", the response's "raken" block (state, one plain message, the "as of" time in Central)
+and "raken_only". A GET never calls Raken; refresh() does, one at a time. The words are
+GLOSSARY.md's: Project, Mobilization, Punch, Job number, Crew size, Foreman, Workday, Planned
+hours, Deadline.
 
 READING. The calendar is read from 365 days before today to 14 days after, through
 project_calendar.read_range (its cache, its stale copies, its plain errors), in pieces of
@@ -57,9 +59,11 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import re
+import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import project_calendar as pc
+import raken_actuals
 
 log = logging.getLogger("treadwell.plan_vs_actual")
 
@@ -80,28 +84,42 @@ TIMING_STARTS = "starts"
 TIMING_RUNNING = "running"
 TIMING_FINISHED = "finished"
 TIMINGS = (TIMING_STARTS, TIMING_RUNNING, TIMING_FINISHED)
-# The Raken side of every row until Raken is connected (#782).
-RAKEN_NOT_CONNECTED = "not_connected"
+# The Raken side of every row until Raken is connected: raken_actuals' own state, named once.
+RAKEN_NOT_CONNECTED = raken_actuals.STATE_NOT_CONNECTED
 
 _DAY = _dt.timedelta(days=1)
 _PUNCH_WORD = re.compile(r"\bpunch\b", re.IGNORECASE)
 
 
 def _raken() -> Dict[str, str]:
+    """A row's Raken side as build() leaves it. _response() always overwrites it through
+    raken_actuals.apply (or raken_actuals.unavailable); it is here so a row built on its own still
+    has the key."""
     return {"state": RAKEN_NOT_CONNECTED}
 
 
 def _response(connected: bool, today: _dt.date, projects: List[Dict[str, Any]], *,
               stale: bool = False, fetched_at: Optional[str] = None,
-              error: Optional[str] = None, notice: Optional[str] = None) -> Dict[str, Any]:
+              error: Optional[str] = None, notice: Optional[str] = None,
+              numbers: Iterable[str] = ()) -> Dict[str, Any]:
+    """The whole response. The Raken side of every row, the response's Raken block (its state, one
+    plain message, the "as of" time in Central, and whether a "Refresh now" is running) and the
+    Raken-only list come from the last "Refresh now", set beside the rows here; Raken itself is
+    never called from a GET. `numbers` are the Job numbers of every job read from the calendar."""
     first, last = read_window(today)
+    try:
+        side = raken_actuals.apply(projects, today, numbers)
+    except Exception as exc:  # noqa: BLE001 - the calendar side must still show
+        log.warning("plan vs actual: Raken side not set (%s)", type(exc).__name__)
+        side = raken_actuals.unavailable(projects)
+    side["raken"]["refreshing"] = _REFRESH_LOCK.locked()
     return {"ok": True, "connected": connected, "stale": stale, "fetched_at": fetched_at,
             "error": error, "notice": notice, "today": today.isoformat(),
             "so_far_through": (today - _DAY).isoformat(),
             "read_from": first.isoformat(), "read_to": last.isoformat(),
             "hours_per_workday": HOURS_PER_WORKDAY, "window_days": WINDOW_DAYS,
-            "work_types": [dict(w) for w in pc.WORK_TYPE_LEGEND], "raken": _raken(),
-            "projects": projects}
+            "work_types": [dict(w) for w in pc.WORK_TYPE_LEGEND], "raken": side["raken"],
+            "raken_only": side["raken_only"], "projects": projects}
 
 
 # ─── reading ──────────────────────────────────────────────────────────────────
@@ -266,7 +284,8 @@ def _plan_mob(mobs: List[Dict[str, Any]], today: _dt.date) -> Optional[Dict[str,
 
 
 def _mob_out(ev: Dict[str, Any], yesterday: _dt.date) -> Dict[str, Any]:
-    return {"id": ev["id"], "title": ev["title"], "name": ev["name"], "start": ev["start"],
+    return {"id": ev["id"], "title": ev["title"], "name": ev["name"],
+            "job_number": ev["job_number"], "start": ev["start"],
             "last_day": ev["last_day"], "workdays": ev["workdays"],
             "workdays_so_far": _so_far(ev, yesterday), "crew_size": ev["crew_size"],
             "mobilization": ev["mobilization"], "foreman": ev["foreman"],
@@ -341,6 +360,7 @@ def _project(g: Dict[str, Any], today: _dt.date) -> Optional[Dict[str, Any]]:
         "mobilizations": [_mob_out(m, yesterday) for m in mobs],
         "punches": [_mob_out(m, yesterday) for m in punches],
         "raken": _raken(),
+        "statuses": [],
     }
 
 
@@ -352,21 +372,62 @@ def build(events: Iterable[Dict[str, Any]], today: _dt.date) -> List[Dict[str, A
 
 
 # ─── the one function the route calls ─────────────────────────────────────────
-def fetch() -> Dict[str, Any]:
-    """The Plan vs Actual list. Never raises."""
-    today = pc.today_central()
+def _calendar_side(today: _dt.date) -> Tuple[bool, List[Dict[str, Any]], Dict[str, Any]]:
+    """(connected, the listed rows, the read's stale/fetched_at/error/notice). Never raises."""
     cal, source = pc.connection()
     if source is None:
-        return _response(False, today, [])
+        return False, [], {}
     got = _read_year(cal, source, today)
     if got["events"] is None:
-        return _response(True, today, [], error=got["error"])
+        return True, [], {"error": got["error"]}
+    # Every Job number on the calendar read, listed or not: none of them is Raken-only.
+    numbers = sorted({ev["job_number"] for ev in got["events"] if ev.get("job_number")})
     try:
         projects = build(got["events"], today)
     except Exception as exc:  # noqa: BLE001 — a fault here must never 500 the page
         log.warning("plan vs actual: list not built (%s)", type(exc).__name__)
-        return _response(True, today, [], error=ERR_BUILD)
+        return True, [], {"error": ERR_BUILD, "numbers": numbers}
     # One query for the tool Projects the listed Job numbers belong to, as on the Schedule.
     projects = pc.link_projects(projects)
-    return _response(True, today, projects, stale=got["stale"], fetched_at=got["fetched_at"],
-                     error=got["error"], notice=got["notice"])
+    return True, projects, {"stale": got["stale"], "fetched_at": got["fetched_at"],
+                            "error": got["error"], "notice": got["notice"], "numbers": numbers}
+
+
+def fetch() -> Dict[str, Any]:
+    """The Plan vs Actual list, with the last Raken read beside it. Never raises, never calls
+    Raken."""
+    today = pc.today_central()
+    connected, projects, meta = _calendar_side(today)
+    return _response(connected, today, projects, **meta)
+
+
+# ─── "Refresh now" ────────────────────────────────────────────────────────────
+# One refresh at a time, and no press ever waits for another: a Raken read can take minutes, and a
+# request thread blocked on it is one the whole app's sync routes share. A press while a refresh
+# runs answers at once as fetch() does, its Raken block saying refreshing: true, and the page polls
+# the GET until it is done. A press within raken_actuals.REFRESH_COOLDOWN_S of a good read answers
+# from that read: Raken's daily allowance is shared by the whole company.
+_REFRESH_LOCK = threading.Lock()
+
+
+def refresh() -> Dict[str, Any]:
+    """Read Raken over the span the listed Projects need, keep the result, and answer as fetch()
+    does. Never raises: a fault on the Raken side is logged, and the answer shows the kept read."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        return fetch()
+    try:
+        today = pc.today_central()
+        connected, projects, meta = _calendar_side(today)
+        try:
+            if (raken_actuals.connection()[0] == raken_actuals.STATE_CONNECTED
+                    and not raken_actuals.fresh()):
+                # No rows because the calendar could not be read: read at least as far back as
+                # last time, so the numbers on screen never shrink during an outage.
+                calendar_failed = not connected or (not projects and bool(meta.get("error")))
+                first, last = raken_actuals.span(projects, today, keep_last=calendar_failed)
+                raken_actuals.read_and_keep(first, last)
+        except Exception as exc:  # noqa: BLE001 - "Refresh now" must never 500 the page
+            log.warning("plan vs actual: Raken not refreshed (%s)", type(exc).__name__)
+    finally:
+        _REFRESH_LOCK.release()
+    return _response(connected, today, projects, **meta)
