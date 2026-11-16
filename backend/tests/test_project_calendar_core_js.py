@@ -352,9 +352,17 @@ def test_colours_and_positions_go_through_the_cssom_not_inline_style_attributes(
 
 
 def test_the_google_link_must_be_https():
+    """One tested function owns the https-only rule for both the Schedule's details panel and Plan
+    vs Actual's job detail (#789 review: the page's own safeLink was a copy of it)."""
     js = _page_js()
-    assert "safeLink(ev.html_link)" in js
+    assert "P.httpsLink(ev.html_link)" in js
+    assert "safeLink" not in js, "the rule lives once, in the core"
     assert 'target="_blank" rel="noopener noreferrer"' in js
+    assert run('out([P.httpsLink(" https://calendar.example/e "),'
+               ' P.httpsLink("HTTPS://x.example/"),'
+               ' P.httpsLink("javascript:alert(1)"), P.httpsLink("http://x.example/"),'
+               ' P.httpsLink(null), P.httpsLink(42)])') == [
+        "https://calendar.example/e", "HTTPS://x.example/", "", "", "", ""]
 
 
 def test_the_sidebar_row_sits_right_after_the_bid_calendar():
@@ -975,10 +983,35 @@ def test_the_chart_names_each_day_and_marks_where_each_week_starts():
     assert got == [["Fri", "13", "Nov 13"], ["Mon", "16", "Nov 16"], ["Tue", "17", ""],
                    ["Wed", "18", ""], ["Thu", "19", ""]]
     got = run(DAYS + 'out(P.dayChart(DAYS).columns.map(x => x.label))')
-    assert got[0] == "Fri, Nov 13: 5 planned, 6 on site, 47.5 of 40 hours"
+    # One Workday's people are "clocked in", never "on site": On site is the GLOSSARY's average a
+    # day, shown in the Crew pair just above the chart.
+    assert got[0] == "Fri, Nov 13: 5 planned, 6 clocked in, 47.5 of 40 hours"
     assert got[2] == "Tue, Nov 17: 3 planned, nobody clocked in, missed"
     assert got[3] == "Wed, Nov 18: 3 planned"
     assert got[4] == "Thu, Nov 19: Crew size missing"
+    assert all("on site" not in g for g in got)
+
+
+def test_a_day_with_one_crew_size_missing_says_so_and_is_marked():
+    """Two Mobilizations overlap; one has a Crew size, the other none (the server sets
+    crew_size_missing). The column shows the partial plan, so it must say a Crew size is missing,
+    in words and as a mark, not only when every Mobilization that day lacks one."""
+    got = run(DAYS + 'out(P.dayChart([dd("2026-11-16", {planned_crew: 2, planned_hours: 16,'
+              ' crew_size_missing: true, on_site: 2, hours: 16}), dd("2026-11-17"),'
+              ' dd("2026-11-18", {future: true, planned_crew: null, planned_hours: null,'
+              ' crew_size_missing: true})]).columns.map(x => [x.warn, x.label]))')
+    assert got == [[True, "Mon, Nov 16: 2 planned, a Crew size is missing, 2 clocked in,"
+                          " 16 of 16 hours"],
+                   [False, "Tue, Nov 17: 3 planned"],
+                   [True, "Wed, Nov 18: Crew size missing"]]
+    # The column carries only what is drawn: no copies of the server's fields beside it.
+    keys = run(DAYS + 'out(Object.keys(P.dayChart(DAYS).columns[0]).sort())')
+    assert keys == sorted(["dow", "dom", "week", "kind", "tick", "bar", "over", "warn", "actual",
+                           "planned", "label"])
+    js = _pva_js()
+    assert '(c.warn ? " warn" : "")' in js
+    assert re.search(r"\.pd-col\.warn [^{]*\{[^}]*var\(--warn\)", _page())
+    assert "<i class=\"k-bar\"></i>People clocked in (Raken)" in _page()
 
 
 def test_a_schedule_bar_finds_its_row_by_the_event_id():
@@ -1006,8 +1039,13 @@ def test_a_bar_with_no_row_says_why_only_once_the_list_has_loaded():
               ' P.notInPvaLine(data), P.notInPvaLine({}), P.notInPvaLine({window_days: 21})])')
     assert got == [["found", "job:1"], ["absent", None], ["unknown", None], ["unknown", None],
                    "Not in Plan vs Actual: outside the 14-day window",
-                   "Not in Plan vs Actual: outside the 14-day window",
+                   "Not in Plan vs Actual: outside its window",
                    "Not in Plan vs Actual: outside the 21-day window"]
+    # The window is the server's: with no window_days the line says so without a number, as
+    # pvaEmptyText does, rather than a copy of plan_vs_actual.WINDOW_DAYS.
+    assert run('out([P.notInPvaLine(null), P.notInPvaLine({window_days: "14"}),'
+               ' P.notInPvaLine({window_days: 0})])') == [
+        "Not in Plan vs Actual: outside its window"] * 3
 
 
 def test_back_returns_to_where_the_detail_was_opened_from():
@@ -1023,6 +1061,23 @@ def test_open_project_goes_to_the_project_in_the_tool():
     got = run('out([P.projectHref({id:"d1e2-f3", name:"x"}), P.projectHref({id:"a b/c"}),'
               ' P.projectHref({name:"x"}), P.projectHref(null)])')
     assert got == ["/?d=d1e2-f3&edit=1", "/?d=a%20b%2Fc&edit=1", "", ""]
+
+
+def test_the_open_project_footer_is_worded_once_for_both_panels():
+    """The Schedule's details panel and Plan vs Actual's job detail both end on "Open project", or
+    on why there is none. The words live in the core (#789 review), so changing them is one edit."""
+    got = run('out([P.projectFoot({id:"d1", name:"Example Clinic"}, "26.501"),'
+              ' P.projectFoot({id:"d1"}, null), P.projectFoot(null, "26.501"),'
+              ' P.projectFoot({name:"x"}, ""), P.projectFoot(undefined, undefined)])')
+    assert got == [{"href": "/?d=d1&edit=1", "label": "Open project: Example Clinic"},
+                   {"href": "/?d=d1&edit=1", "label": "Open project: this project"},
+                   {"note": "No project in this tool has Job number 26.501 yet."},
+                   None, None]
+    for js in (_page_js(), _pva_js()):
+        assert "No project in this tool" not in js and "Open project:" not in js
+        assert "P.projectFoot(" in js
+    # The Plan vs Actual status chips are written once on that page, for the row and the detail.
+    assert _pva_js().count('<span class="chip st-') == 1
 
 
 def test_the_detail_lists_mobilizations_and_punches_with_dates_crew_and_google_links():
@@ -1055,6 +1110,11 @@ def test_the_detail_flags_are_prevailing_wage_and_night_work():
     got = run(PROJECTS + 'out([P.detailFlags(pr({prevailing_wage:true, night_work:true})),'
               ' P.detailFlags(pr({})), P.detailFlags(null)])')
     assert got == [["Prevailing wage", "Night work"], [], []]
+    # The two panels word the flags and the "<ordinal> Mobilization" the same way because one
+    # list says them (#789 review): a new flag, or new wording, is written in one place.
+    core = CORE.read_text(encoding="utf-8")
+    for words in ('"Prevailing wage"', '"Night work"', '" Mobilization"'):
+        assert core.count(words) == 1, words
 
 
 def test_the_detail_is_a_view_inside_the_plan_vs_actual_panel_with_a_back_button():
@@ -1074,13 +1134,24 @@ def test_the_detail_is_a_view_inside_the_plan_vs_actual_panel_with_a_back_button
         "the chart's weeks scroll inside their box at phone width")
 
 
+def test_a_big_figure_in_a_pair_never_spills_past_its_card_at_phone_width():
+    """At 375px the pairs sit two across, so each half of a pair is about 65px: a Projected total
+    of "12,345.5" did not fit. Below 420px each pair's two figures stack, and a figure may wrap."""
+    html = _page()
+    assert re.search(r"\.pd-two b \{[^}]*overflow-wrap:\s*anywhere", html)
+    m = re.search(r"@media \(max-width:\s*420px\) \{([^@]*)", html)
+    assert m, "a narrow-phone block"
+    assert re.search(r"\.pd-two \{\s*grid-template-columns:\s*1fr;?\s*\}", m.group(1))
+
+
 def test_a_row_opens_its_detail_by_keyboard_and_back_or_esc_closes_it():
     js = _pva_js()
     assert '<button type="button" class="jlink" data-key="\' + esc(p.key)' in js
     assert '$("pva-body").addEventListener("click"' in js
     assert '$("pd-back").addEventListener("click", closeDetail)' in js
     i = js.index('if (e.key !== "Escape" || !DETAIL')
-    assert "closeDetail()" in js[i:i + 120]
+    assert "closeDetail()" in js[i:i + 200]
+    assert 'document.addEventListener("keydown", onEscape)' in js
     assert "P.detailBack(was.origin)" in js and "P.detailBack(DETAIL.origin).label" in js
 
 
@@ -1102,7 +1173,7 @@ def test_the_detail_draws_its_chart_through_the_cssom_and_escapes_every_value():
     assert "P.detailEvents(p)" in js
     assert 'target="_blank" rel="noopener noreferrer"' in js
     assert "P.dayChart(p.day_by_day)" in js and "P.detailPairs(p)" in js
-    assert "P.detailFlags(p)" in js and "P.projectHref(p.project)" in js
+    assert "P.detailFlags(p)" in js and "P.projectFoot(p.project, p.job_number)" in js
 
 
 def test_a_schedule_bar_opens_the_detail_by_event_id_or_the_panel_saying_why():
@@ -1110,15 +1181,102 @@ def test_a_schedule_bar_opens_the_detail_by_event_id_or_the_panel_saying_why():
     js = _page_js()
     i = js.index("const openFrom = (e) => {")
     block = js[i:js.index("  };", i)]
-    assert "pva.lookup(ev.id)" in block
+    # One call (#789 review): the Schedule never learns Plan vs Actual's states or its data.
+    assert "pva.openEvent(ev.id, b.dataset.k)" in block
+    assert "openDetails(ev, r.line)" in block
     assert "job_number" not in block and ".name" not in block
-    assert 'found.state === "absent" ? P.notInPvaLine(pva.data())' in block
-    assert 'pva.openFromSchedule(found.row, b.dataset.k)' in block
+    assert "lookup" not in block and ".data(" not in block and "notInPvaLine" not in block
     pva = _pva_js()
-    assert "window.TWPva = {" in pva and "P.pvaLookup(DATA, id)" in pva
+    assert "window.TWPva = { openEvent: openEvent };" in pva and "P.pvaLookup(DATA, id)" in pva
     html = _page()
     assert 'id="dlg-note"' in html
     assert '$("dlg-note").textContent = line' in js
-    # One door into the tool's intake for both: built once in the core (P.projectHref).
-    assert "P.projectHref(ev.project)" in js and "edit=1" not in js
+    # One door into the tool's intake for both: built once in the core (P.projectHref, worded by
+    # P.projectFoot).
+    assert "P.projectFoot(ev.project, ev.job_number)" in js and "edit=1" not in js
     assert "edit=1" not in pva
+
+
+# ── the job detail's wiring, run under node: functions lifted out of plan-vs-actual.js ──────────
+def _lift(path, name):
+    """One function out of a page script, by brace-matching (the page is an IIFE that needs a
+    browser, so it cannot be required)."""
+    src = path.read_text(encoding="utf-8")
+    m = re.search(r"^  function " + re.escape(name) + r"\b", src, re.M)
+    assert m, "%s not found in %s" % (name, path.name)
+    depth, j = 0, src.index("{", m.start())
+    for k in range(j, len(src)):
+        depth += {"{": 1, "}": -1}.get(src[k], 0)
+        if depth == 0:
+            return src[m.start():k + 1]
+    raise AssertionError("unterminated " + name)
+
+
+# A fake page: elements by id, the row's name button, the focus and the address. `P` is the real
+# core (run() binds it). The page's own DATA and DETAIL are plain variables, as in the IIFE.
+PVA_WORLD = """
+const els = {};
+const focused = [];
+const $ = (id) => els[id] || (els[id] = { id: id, hidden: false, open: false, tabIndex: 0,
+  dataset: {}, setAttribute() {}, focus() { focused.push(id); }, querySelectorAll: () => [] });
+$("pva-body").querySelectorAll = () => [{ dataset: { key: "job:1" },
+  focus() { focused.push("row:job:1"); } }];
+const location = { hash: "", pathname: "/project-calendar.html", search: "" };
+const history = { replaceState: (a, b, url) => {
+  location.hash = url.indexOf("#") >= 0 ? url.slice(url.indexOf("#")) : ""; } };
+const document = { querySelectorAll: () => [] };
+let painted = 0;
+const paint = () => { painted++; };
+let DATA = { window_days: 14, projects: [{ key: "job:1", mobilizations: [{ id: "m1" }] }] };
+let DETAIL = null;
+const press = (key) => ({ key: key, prevented: false,
+  preventDefault() { this.prevented = true; } });
+"""
+
+
+def _pva_world(script):
+    lifted = "\n".join(_lift(PVA, n) for n in ("showTab", "openDetail", "closeDetail", "onEscape",
+                                               "openEvent"))
+    return run(PVA_WORLD + lifted + "\n" + script)
+
+
+def test_esc_closes_an_open_detail_and_puts_the_focus_back_on_its_row():
+    got = _pva_world('showTab("pva", false); openDetail("job:1", "pva", ""); focused.length = 0;'
+                     'const e = press("Escape"); onEscape(e);'
+                     'out([e.prevented, DETAIL, focused])')
+    assert got == [True, None, ["row:job:1"]]
+
+
+def test_leaving_by_the_tab_closes_the_detail_and_esc_on_the_schedule_does_nothing():
+    """#789 review: the detail outlived a tab switch, so Esc on the Schedule (its search box
+    included) ran closeDetail on a hidden view and moved the focus into it, and coming back showed
+    the old detail instead of the list."""
+    got = _pva_world('showTab("pva", false); openDetail("job:1", "pva", ""); focused.length = 0;'
+                     'showTab("schedule", false);'
+                     'const e = press("Escape"); onEscape(e);'
+                     'const onSchedule = [e.prevented, DETAIL, focused.slice(), location.hash];'
+                     'showTab("pva", false);'
+                     'out([onSchedule, DETAIL, $("panel-pva").hidden])')
+    assert got == [[False, None, [], "#schedule"], None, False]
+
+
+def test_esc_with_the_detail_shown_but_the_schedule_panel_open_leaves_the_detail():
+    """The Schedule's details panel (a dialog) handles its own Esc."""
+    got = _pva_world('showTab("pva", false); openDetail("job:1", "pva", ""); $("dlg").open = true;'
+                     'const e = press("Escape"); onEscape(e); out([e.prevented, DETAIL.key])')
+    assert got == [False, "job:1"]
+
+
+def test_a_schedule_bar_asks_one_question_and_gets_the_detail_or_the_line():
+    """TWPva.openEvent(eventId, barKey): opened, or not with the details panel's line, "" while
+    the list has not loaded (the page cannot know the job is outside the window)."""
+    got = _pva_world('showTab("schedule", false);'
+                     'const a = openEvent("m1", "bar-7"); const opened = [a, DETAIL,'
+                     ' $("panel-pva").hidden, location.hash];'
+                     'DETAIL = null; const b = openEvent("zz", "bar-8");'
+                     'DATA = null; const c = openEvent("m1", "bar-9");'
+                     'out([opened, b, c, DETAIL])')
+    assert got == [[{"opened": True, "line": ""},
+                    {"key": "job:1", "origin": "schedule", "barKey": "bar-7"}, False, ""],
+                   {"opened": False, "line": "Not in Plan vs Actual: outside the 14-day window"},
+                   {"opened": False, "line": ""}, None]

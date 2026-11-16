@@ -25,11 +25,12 @@
 // THE JOB DETAIL (#789). A row's name is a button: it opens that job's detail in place of the list
 // (a view inside the page, not a new page): the four pairs larger, the status chips, the day-by-day
 // chart (one column per Workday the server sent in `day_by_day`: the planned crew as a tick, the
-// people on site as a bar, a missed day marked out, Actual hours over Planned hours under it, days
-// from today on the plan only), the Mobilizations and Punches with their links to Google Calendar,
-// the Foreman, the flags and "Open project". A Schedule bar opens the same detail through
-// window.TWPva, found by the bar's EVENT ID (P.pvaLookup). "Back", or Esc, returns to where it was
-// opened from: the list, or the Schedule.
+// people clocked in that day as a bar, a missed day marked out, a day missing a Crew size marked,
+// Actual hours over Planned hours under it, days from today on the plan only), the Mobilizations
+// and Punches with their links to Google Calendar, the Foreman, the flags and "Open project". A
+// Schedule bar opens the same detail through window.TWPva.openEvent, found by the bar's EVENT ID
+// (P.pvaLookup). "Back", or Esc, returns to where it was opened from: the list, or the Schedule.
+// Leaving by the tab bar closes the detail.
 //
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
@@ -66,6 +67,10 @@
 
   // ── tabs ──────────────────────────────────────────────────────────
   function showTab(id, focus) {
+    // Leaving Plan vs Actual by a tab closes an open detail: coming back shows the list, and Esc on
+    // the Schedule never acts on a view nobody can see. (closeDetail clears DETAIL before it
+    // switches, so its own way back to the Schedule is unaffected.)
+    if (id !== "pva" && DETAIL) { DETAIL = null; paint(); }
     P.TABS.forEach((t) => {
       const on = t.id === id;
       const btn = $("tab-" + t.id);
@@ -188,12 +193,18 @@
       + (p.crew_size_missing ? ' <span class="chip warn">Crew size missing</span>' : "");
   }
 
+  /** The row's statuses (On plan, Behind, Over budget, Not linked) as chips: the list and the
+   *  detail both say them. */
+  function statusChipsHtml(p) {
+    return P.statusChips(p).map((c) =>
+      '<span class="chip st-' + esc(c.id) + '">' + esc(c.label) + "</span>").join("");
+  }
+
   function rowHtml(p) {
     const sub = subOf(p);
     const chips = labelChips(p);
     const rc = P.rakenCells(p);
-    const flags = P.statusChips(p).map((c) =>
-      '<span class="chip st-' + esc(c.id) + '">' + esc(c.label) + "</span>").join("");
+    const flags = statusChipsHtml(p);
     const why = P.rakenLabel(p);
     // The row opens the job's detail: its name is the button (keyboard), the whole row the target.
     return '<tr data-key="' + esc(p.key) + '">'
@@ -378,6 +389,7 @@
    *  as data and set through the CSSOM by paintChart(). The column's words are its aria-label. */
   function colHtml(c) {
     return '<div class="pd-col ' + esc(c.kind) + (c.week ? " wk" : "") + (c.over ? " over" : "")
+      + (c.warn ? " warn" : "")
       + '" role="listitem" aria-label="' + esc(c.label) + '">'
       + '<span class="pd-wk" aria-hidden="true">' + esc(c.week) + "</span>"
       + '<span class="pd-plot" aria-hidden="true">'
@@ -429,8 +441,7 @@
     $("pd-sub").textContent = subOf(p);
     $("pd-sw").style.background = P.colorOf(p) || "";
     const why = P.rakenLabel(p);
-    $("pd-chips").innerHTML = P.statusChips(p).map((c) =>
-      '<span class="chip st-' + esc(c.id) + '">' + esc(c.label) + "</span>").join("") + labelChips(p)
+    $("pd-chips").innerHTML = statusChipsHtml(p) + labelChips(p)
       + (why ? "<small>" + esc(why) + "</small>" : "");
 
     const pairs = $("pd-pairs");
@@ -468,29 +479,40 @@
       + fact("Deadline", esc(P.dayLong(p.deadline)) + " <span class=\"chip\">" + esc(P.leftLabel(p)) + "</span>")
       + fact("Marked", flags);
 
-    // "Open project": the same door as the Schedule's details panel (P.projectHref).
-    const href = P.projectHref(p.project);
+    // "Open project": the same door, in the same words, as the Schedule's details panel.
+    const pf = P.projectFoot(p.project, p.job_number);
     let foot = "";
-    if (href) {
-      foot = '<a class="btn" href="' + esc(href) + '">' + icon("folder", 14) + " Open project: "
-        + esc((p.project && p.project.name) || "this project") + "</a>";
-    } else if (p.job_number) {
-      foot = '<span class="muted">No project in this tool has Job number ' + esc(p.job_number) + " yet.</span>";
+    if (pf && pf.href) {
+      foot = '<a class="btn" href="' + esc(pf.href) + '">' + icon("folder", 14) + " "
+        + esc(pf.label) + "</a>";
+    } else if (pf) {
+      foot = '<span class="muted">' + esc(pf.note) + "</span>";
     }
     $("pd-foot").innerHTML = foot;
     $("pd-foot").hidden = !foot;
   }
 
-  // The Schedule (js/project-calendar.js) opens a bar's job here, by the bar's event id.
-  window.TWPva = {
-    lookup: (id) => P.pvaLookup(DATA, id),
-    data: () => DATA,
-    openFromSchedule: (row, barKey) => {
-      if (!row || row.key == null) return false;
-      openDetail(row.key, "schedule", barKey);
-      return true;
-    },
-  };
+  /** Esc closes the detail, only while it is in view: never from the Schedule, and never under
+   *  the Schedule's details panel, which handles its own Esc. */
+  function onEscape(e) {
+    if (e.key !== "Escape" || !DETAIL || $("dlg").open || $("panel-pva").hidden) return;
+    e.preventDefault();
+    closeDetail();
+  }
+
+  /** The Schedule's one question (js/project-calendar.js), by a bar's event id: open that job's
+   *  detail ({opened: true}), or say what the details panel should ({opened: false, line}), the
+   *  line "" while the list has not loaded, since the page cannot know the job is outside it. */
+  function openEvent(id, barKey) {
+    const found = P.pvaLookup(DATA, id);
+    if (found.state === "found" && found.row.key != null) {
+      openDetail(found.row.key, "schedule", barKey);
+      return { opened: true, line: "" };
+    }
+    return { opened: false, line: found.state === "absent" ? P.notInPvaLine(DATA) : "" };
+  }
+
+  window.TWPva = { openEvent: openEvent };
 
   // ── wiring (delegated; CSP forbids inline handlers) ───────────────
   $("pva-refresh").addEventListener("click", refreshNow);
@@ -500,11 +522,7 @@
     if (tr) openDetail(tr.dataset.key, "pva", "");
   });
   $("pd-back").addEventListener("click", closeDetail);
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !DETAIL || $("dlg").open) return;
-    e.preventDefault();
-    closeDetail();
-  });
+  document.addEventListener("keydown", onEscape);
   $("pva-q").value = Q;
   $("pva-q").addEventListener("input", (e) => { Q = e.target.value || ""; ssSet(SK_Q, Q); paint(); });
   $("pva-q").addEventListener("keydown", (e) => {

@@ -6,8 +6,8 @@
 // create, edit, drag or delete control exists anywhere on it. The schedule is kept in Google
 // Calendar by the people who run the crews, and a second place to change it would be a second
 // version of the truth. A bar opens its job's detail in Plan vs Actual (#789) when the list holds
-// the bar's event, found by the EVENT ID (P.pvaLookup); otherwise it opens a details panel, whose
-// way out is "Open in Google Calendar", saying so when the job is outside the list's window.
+// the bar's event, found by the EVENT ID (TWPva.openEvent); otherwise it opens a details panel,
+// whose way out is "Open in Google Calendar", saying so when the job is outside the list's window.
 //
 // WHAT THE SERVER HAS ALREADY DONE (GET /api/project-calendar). It reads that one calendar as the
 // connected Google account, parses each free-text title into Job number, Crew size, Mobilization, Foreman
@@ -134,10 +134,6 @@
     $("state").innerHTML = html;
     $("state").hidden = false;
     $("main").hidden = true;
-  }
-
-  function safeLink(u) {
-    return typeof u === "string" && /^https:\/\//i.test(u.trim()) ? u.trim() : "";
   }
 
   function barHtml(sg) {
@@ -361,15 +357,14 @@
     $("dlg-facts").innerHTML = facts;
 
     const foot = [];
-    const href = P.projectHref(ev.project);
-    if (href) {
-      foot.push('<a class="btn" href="' + esc(href) + '">'
-        + icon("folder", 14) + " Open project: " + esc(ev.project.name || "this project") + "</a>");
-    } else if (ev.job_number) {
-      foot.push('<span class="muted">No project in this tool has Job number '
-        + esc(ev.job_number) + " yet.</span>");
+    const pf = P.projectFoot(ev.project, ev.job_number);
+    if (pf && pf.href) {
+      foot.push('<a class="btn" href="' + esc(pf.href) + '">' + icon("folder", 14) + " "
+        + esc(pf.label) + "</a>");
+    } else if (pf) {
+      foot.push('<span class="muted">' + esc(pf.note) + "</span>");
     }
-    const link = safeLink(ev.html_link);
+    const link = P.httpsLink(ev.html_link);
     if (link) {
       foot.push('<a class="btn" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">'
         + "Open in Google Calendar " + icon("external", 13) + "</a>");
@@ -423,9 +418,8 @@
     const ev = b && BY_KEY[b.dataset.k];
     if (!ev) return;
     const pva = window.TWPva;
-    const found = pva ? pva.lookup(ev.id) : { state: "unknown", row: null };
-    if (found.state === "found" && pva.openFromSchedule(found.row, b.dataset.k)) return;
-    openDetails(ev, found.state === "absent" ? P.notInPvaLine(pva.data()) : "");
+    const r = pva ? pva.openEvent(ev.id, b.dataset.k) : { opened: false, line: "" };
+    if (!r.opened) openDetails(ev, r.line);
   };
   $("grid").addEventListener("click", openFrom);
   $("dlg-close").addEventListener("click", closeDetails);
