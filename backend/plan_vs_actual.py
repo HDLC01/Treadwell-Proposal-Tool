@@ -233,6 +233,62 @@ def _last_week(rows: List[Dict[str, Any]], read: bool, today: _dt.date) -> Dict[
             "crew_size_missing": missing, "jobs": len(rows), "raken": state}
 
 
+# ─── the list as shown: the search box and the pressed count (#785) ───────────
+# The page filters the list it has (js/project-calendar-core.js visibleProjects); the Excel download
+# filters on the server, by this, the same rule written once more. tests/test_plan_vs_actual_xlsx.py
+# runs both on the same inputs and checks they agree, so a change to one side alone fails there.
+# The words the page shows for a row with no Work type, so searching "unknown" finds them
+# (project-calendar-core.js WORK_TYPE_UNKNOWN_LABEL).
+WORK_TYPE_UNKNOWN_LABEL = "Work type unknown"
+# The most of the search text that is read, on the page as here (project-calendar-core.js
+# SEARCH_MAX; the search box takes no more).
+SEARCH_MAX = 200
+# What JavaScript's \s matches, so the search splits into the same words on both sides. Written
+# as escapes: the characters themselves are invisible in the source.
+_JS_SPACE = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")
+
+
+def work_type_of(p: Dict[str, Any]) -> str:
+    return str(p["work_type"]) if p.get("work_type") else WORK_TYPE_UNKNOWN_LABEL
+
+
+def counts_known(data: Dict[str, Any]) -> bool:
+    """Whether the strip's counts are known (Raken was read). Until then no row carries a status,
+    so the page ignores a pressed count rather than empty the list (P.statusFilter)."""
+    s = data.get("summary")
+    return (isinstance(s, dict) and s.get("raken_read") is not False
+            and isinstance(s.get("counts"), dict))
+
+
+def status_filter(data: Dict[str, Any], status: Any) -> str:
+    """The count the list is filtered by: `status` when it is one of the four counts, else none;
+    none too while the counts are not known."""
+    st = str(status or "")
+    return st if counts_known(data) and st in raken_actuals.STATUSES else ""
+
+
+def visible_projects(data: Dict[str, Any], q: Any, status: Any) -> List[Dict[str, Any]]:
+    """The rows the page lists for the search text `q` and the pressed count `status`: every word
+    of `q` (case ignored) in the Job number, the name, the Foreman or the Work type, and, while the
+    counts are known, `status` among the row's statuses."""
+    words = [w for w in _JS_SPACE.split(str(q or "")[:SEARCH_MAX].lower()) if w]
+    st = status_filter(data, status)
+    out = []
+    for p in data.get("projects") or []:
+        if not isinstance(p, dict):
+            continue
+        if words:
+            hay = " \u0001 ".join("" if v is None else str(v).lower() for v in
+                                  (p.get("job_number"), p.get("name"), p.get("foreman"),
+                                   work_type_of(p)))
+            if not all(w in hay for w in words):
+                continue
+        if st and st not in (p.get("statuses") or []):
+            continue
+        out.append(p)
+    return out
+
+
 # ─── reading ──────────────────────────────────────────────────────────────────
 def read_window(today: _dt.date) -> Tuple[_dt.date, _dt.date]:
     return today - _dt.timedelta(days=READ_BACK_DAYS), today + _dt.timedelta(days=READ_AHEAD_DAYS)

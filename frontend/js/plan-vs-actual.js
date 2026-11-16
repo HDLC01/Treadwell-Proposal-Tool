@@ -40,6 +40,9 @@
 // counts are not known: each is a dash, cannot be pressed, and a line under them says why. The two
 // figure tiles are the job detail's own pair (pairHtml).
 //
+// THE DOWNLOAD (#785): "Download" fetches the list as it is filtered on screen (the search box and
+// the pressed count go as `q` and `status`) as an Excel file, a GET built on the server.
+//
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
 // text value is escaped, and every colour is set through element.style once the markup is in
@@ -152,6 +155,44 @@
     REFRESHING = false;
     follow();
     paint();
+  }
+
+  // ── the Excel download (#785) ─────────────────────────────────────
+  /** The download's address right now: the search box and the count the list is filtered by
+   *  (none while the counts are not known, as the list itself ignores a pressed count then). */
+  function downloadPath() {
+    return P.downloadHref(Q, P.statusFilter(DATA, STATUS_F));
+  }
+
+  // "Download": a GET of the list as it is filtered on screen. Every /api route needs the sign-in
+  // header, which a plain link cannot send (so the control is a button with no address), so a
+  // click fetches the file and saves it under the server's name (it carries the Central day it
+  // was made). A read, never a write.
+  let DOWNLOADING = false;
+  async function downloadNow() {
+    if (DOWNLOADING) return;
+    DOWNLOADING = true;
+    const btn = $("pva-download");
+    btn.disabled = true;
+    btn.textContent = "Downloading…";
+    try {
+      const r = await api(downloadPath());
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const buf = await r.arrayBuffer();
+      const url = URL.createObjectURL(new Blob([buf], { type: "application/octet-stream" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = P.downloadName(r.headers.get("content-disposition"), P.centralToday());
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (err) {
+      showAlert("Couldn't download the list just now. Try again in a minute.");
+    }
+    DOWNLOADING = false;
+    btn.disabled = false;
+    btn.textContent = "Download";
   }
 
   // ── rendering ─────────────────────────────────────────────────────
@@ -586,6 +627,7 @@
 
   // ── wiring (delegated; CSP forbids inline handlers) ───────────────
   $("pva-refresh").addEventListener("click", refreshNow);
+  $("pva-download").addEventListener("click", downloadNow);
   $("pva-sum").addEventListener("click", (e) => {
     const b = e.target.closest("[data-st]");
     if (b) setStatus(b.dataset.st);

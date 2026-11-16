@@ -347,10 +347,14 @@
   };
   var RAKEN_NOT_CONNECTED = RAKEN.not_connected;
 
+  // The most of the search box that is read: the box takes no more (maxlength), and the server
+  // reads no more of the Excel download's `q` (plan_vs_actual.SEARCH_MAX).
+  var SEARCH_MAX = 200;
+
   /** The search box: every word typed must match the Job number, the name, the Foreman or the
    *  Work type (as the page words it, so "unknown" finds the jobs with none). */
   function filterProjects(projects, q) {
-    var words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+    var words = String(q || "").slice(0, SEARCH_MAX).toLowerCase().split(/\s+/).filter(Boolean);
     return (Array.isArray(projects) ? projects : []).filter(function (p) {
       if (!p || typeof p !== "object") return false;
       if (!words.length) return true;
@@ -553,9 +557,10 @@
   }
 
   /** The count filtering the list: the one pressed, or none while the counts are not known (no row
-   *  carries a status then, so it would empty the list). */
+   *  carries a status then, so it would empty the list). Only the four counts filter
+   *  (plan_vs_actual.status_filter is the same rule on the server). */
   function statusFilter(data, status) {
-    return countsKnown(summaryOf(data)) ? status || "" : "";
+    return countsKnown(summaryOf(data)) && SUMMARY_COUNTS.indexOf(status) >= 0 ? status : "";
   }
 
   /** The line under the count tiles: why they are not known, or why they add up to fewer jobs
@@ -591,6 +596,31 @@
     if (searched && label) return "No " + label + " job matches the search.";
     if (searched) return "No job matches the search.";
     return label ? "No job is " + label + "." : "";
+  }
+
+  // ── the Excel download (#785) ──
+  var DOWNLOAD_PATH = "/api/project-analytics/export.xlsx";
+
+  /** The download's address: the list as it is filtered on screen, the pressed count (`status`,
+   *  one of the four counts) and the search text (`q`) as query parameters. The server filters
+   *  with this file's own rule (plan_vs_actual.visible_projects mirrors visibleProjects). A GET:
+   *  it writes nothing. */
+  function downloadHref(q, status) {
+    var parts = [];
+    if (status && SUMMARY_COUNTS.indexOf(status) >= 0) {
+      parts.push("status=" + encodeURIComponent(status));
+    }
+    var text = String(q == null ? "" : q).slice(0, SEARCH_MAX);
+    if (text.trim()) parts.push("q=" + encodeURIComponent(text));
+    return DOWNLOAD_PATH + (parts.length ? "?" + parts.join("&") : "");
+  }
+
+  /** The saved file's name: the server's (it carries the Central day the file was made), else
+   *  one made from `today` (a Central "YYYY-MM-DD"). Only a plain .xlsx name is taken. */
+  function downloadName(disposition, today) {
+    var m = /filename="([A-Za-z0-9._-]+\.xlsx)"/.exec(String(disposition || ""));
+    if (m && m[1].indexOf("..") < 0) return m[1];
+    return "project-analytics-" + today + ".xlsx";
   }
 
   /** Last week's figure tile: the previous Monday to Friday, Planned hours against Actual hours
@@ -967,11 +997,12 @@
     layout: layout, focusDay: focusDay, uniqueById: uniqueById,
     dayLong: dayLong, spanLabel: spanLabel, centralStamp: centralStamp,
     TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
+    SEARCH_MAX: SEARCH_MAX,
     filterByStatus: filterByStatus, visibleProjects: visibleProjects,
     SUMMARY_COUNTS: SUMMARY_COUNTS, LAST_WEEK: LAST_WEEK, countTiles: countTiles,
     toggleStatus: toggleStatus, statusFilter: statusFilter, countsNote: countsNote,
     lastWeekTile: lastWeekTile, budgetTile: budgetTile, listCountText: listCountText,
-    noMatchText: noMatchText,
+    noMatchText: noMatchText, downloadHref: downloadHref, downloadName: downloadName,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
     RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
     RAKEN: RAKEN, STATUS: STATUS, REASON: REASON, rakenRefreshing: rakenRefreshing,

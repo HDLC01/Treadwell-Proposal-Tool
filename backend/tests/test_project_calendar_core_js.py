@@ -1349,6 +1349,15 @@ def test_with_raken_not_read_the_counts_are_unknown_and_cannot_be_pressed():
     assert got[1:] == ["", "behind", ""]
 
 
+def test_only_the_four_counts_filter_the_list():
+    """A status that is not one of the four counts filters nothing (the server's status_filter is
+    the same rule, so the Excel download and the screen agree)."""
+    got = run(PROJECTS + SUMMARY + 'const d = data({});'
+              'out(["behind", "made_up", "BEHIND", "", null, "toString"]'
+              '.map((s) => P.statusFilter(d, s)))')
+    assert got == ["behind", "", "", "", "", ""]
+
+
 def test_the_strip_says_why_the_counts_fall_short_or_are_not_known():
     got = run(PROJECTS + SUMMARY + 'out([P.countsNote(data({})), P.countsNote(data({unflagged: 1})),'
               ' P.countsNote(data({unflagged: 2})),'
@@ -1529,3 +1538,66 @@ def test_the_page_and_the_server_name_the_same_summary_counts_and_last_week_stat
         body = core[i:core.index("\n  }\n", i)]
         for literal in ('"read"', '"not_read"', '"not_covered"'):
             assert literal not in body, literal
+
+
+# ── the Excel download (#785): a GET carrying the pressed count and the search text ─────────────
+def test_the_download_link_carries_the_pressed_count_and_the_search_text():
+    """The server applies the page's own filter to `status` and `q` (plan_vs_actual
+    .visible_projects); test_plan_vs_actual_xlsx.py checks the two agree. Only the four counts go
+    as a status; a blank search goes as none."""
+    got = run('out([P.downloadHref("", ""), P.downloadHref("pat", ""),'
+              ' P.downloadHref("", "behind"), P.downloadHref("example clinic & co", "over_budget"),'
+              ' P.downloadHref("   ", "made_up"), P.downloadHref(null, null),'
+              ' P.downloadHref("26.501#x?y=1", "not_linked")])')
+    base = "/api/project-analytics/export.xlsx"
+    assert got == [base, base + "?q=pat", base + "?status=behind",
+                   base + "?status=over_budget&q=example%20clinic%20%26%20co", base, base,
+                   base + "?status=not_linked&q=26.501%23x%3Fy%3D1"]
+
+
+def test_the_search_is_cut_to_200_characters_on_the_page_as_on_the_server():
+    """The server reads at most SEARCH_MAX characters of `q`; the box takes no more, and the page
+    filters and downloads with the same 200, so a long search lists the same rows in both."""
+    got = run('const q = "pat" + " ".repeat(300) + "zzz";'
+              'const rows = [{job_number: "26.501", name: "Example Clinic", foreman: "Pat"}];'
+              'out([P.SEARCH_MAX, P.filterProjects(rows, q).length,'
+              ' P.downloadHref(q, "").length, P.downloadHref("a".repeat(250), "")])')
+    base = "/api/project-analytics/export.xlsx"
+    assert got[0] == 200
+    assert got[1] == 1, "the words past the 200th character are not searched"
+    assert got[2] == len(base + "?q=pat") + 197 * len("%20")
+    assert got[3] == base + "?q=" + "a" * 200
+    assert re.search(r'<input id="pva-q"[^>]*\smaxlength="200"', _page())
+
+
+def test_the_downloaded_file_takes_the_servers_name_else_the_central_day():
+    got = run('out([P.downloadName(\'attachment; filename="project-analytics-2026-11-18.xlsx"\','
+              ' "2026-11-19"),'
+              ' P.downloadName("", "2026-11-19"), P.downloadName(null, "2026-11-19"),'
+              ' P.downloadName(\'attachment; filename="../evil.exe"\', "2026-11-19")])')
+    assert got == ["project-analytics-2026-11-18.xlsx", "project-analytics-2026-11-19.xlsx",
+                   "project-analytics-2026-11-19.xlsx", "project-analytics-2026-11-19.xlsx"]
+
+
+def test_the_page_downloads_the_list_as_it_is_filtered_on_screen():
+    """The button's address is the search box and the count the list is filtered by right now:
+    none while the counts are not known, as the list itself ignores a pressed count then."""
+    world = ("let Q = 'pat clinic'; let STATUS_F = 'behind';"
+             "let DATA = {summary: {raken_read: true, counts: {behind: 1}}};")
+    lifted = _lift(PVA, "downloadPath")
+    got = run(world + lifted + "\nconst a = downloadPath();"
+              "DATA = {summary: {raken_read: false, counts: null}}; const b = downloadPath();"
+              "Q = ''; STATUS_F = ''; const c = downloadPath(); out([a, b, c])")
+    base = "/api/project-analytics/export.xlsx"
+    assert got == [base + "?status=behind&q=pat%20clinic", base + "?q=pat%20clinic", base]
+
+
+def test_the_download_is_a_get_and_keeps_refresh_now_the_pages_one_write():
+    html, js = _page(), _pva_js()
+    # A button, not a link: every /api route needs the sign-in header, so a link opened, saved or
+    # copied without the script would fetch a refusal and save it as the file.
+    assert '<button type="button" id="pva-download" class="btn">Download</button>' in html
+    assert "export.xlsx" not in html and 'setAttribute("href"' not in js
+    assert "btn.disabled = true;" in js and "btn.disabled = false;" in js
+    assert "P.downloadHref(" in js and "api(downloadPath())" in js
+    assert js.count("method:") == 1 and js.count('"POST"') == 1, "the download is not a write"
