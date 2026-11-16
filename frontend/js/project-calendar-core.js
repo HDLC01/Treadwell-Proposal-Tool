@@ -47,8 +47,9 @@
     "6": "#f4511e", "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043",
     "11": "#d50000",
   };
-  var WORK_TYPE_BY_COLOR = { "11": "Epoxy", "9": "Polish", "10": "Gyp" };
-  var UNKNOWN_WORK_TYPE = "Work type unknown";
+  // The words shown for a job whose colour has no Work type (the server sends work_type: null).
+  // Which colour is which Work type is the server's alone: see `work_types` in each response.
+  var WORK_TYPE_UNKNOWN_LABEL = "Work type unknown";
 
   // ── days ─────────────────────────────────────────────────────────────
   var _dayFmt = null;
@@ -142,12 +143,10 @@
     return GOOGLE_COLORS[id] || null;
   }
 
-  /** The job's Work type: the server's answer when it sent one, else the colour's (red Epoxy,
-   *  blue Polish, green Gyp), else "Work type unknown". */
+  /** The job's Work type as the server worked it out from the bar's colour, or "Work type
+   *  unknown" when the server sent none. */
   function workTypeOf(ev) {
-    if (ev && ev.work_type) return String(ev.work_type);
-    var id = ev && ev.color_id != null ? String(ev.color_id) : "";
-    return WORK_TYPE_BY_COLOR[id] || UNKNOWN_WORK_TYPE;
+    return ev && ev.work_type ? String(ev.work_type) : WORK_TYPE_UNKNOWN_LABEL;
   }
 
   /** The text colour that reads best on `hex`: dark ink or white, whichever has the higher
@@ -366,7 +365,7 @@
 
   return {
     BIZ_TZ: BIZ_TZ, MODES: MODES, GOOGLE_COLORS: GOOGLE_COLORS,
-    WORK_TYPE_BY_COLOR: WORK_TYPE_BY_COLOR, UNKNOWN_WORK_TYPE: UNKNOWN_WORK_TYPE,
+    WORK_TYPE_UNKNOWN_LABEL: WORK_TYPE_UNKNOWN_LABEL,
     centralToday: centralToday, validDay: validDay, spanOf: spanOf,
     isWorkday: isWorkday, workdaysBetween: workdaysBetween, workdaysOf: workdaysOf,
     workdaysLeft: workdaysLeft, deadlineStatus: deadlineStatus, daysUntil: daysUntil,

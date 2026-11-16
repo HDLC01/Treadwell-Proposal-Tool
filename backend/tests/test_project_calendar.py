@@ -171,7 +171,8 @@ def test_the_response_has_every_contract_field(client, source):
     ev = one(client, source, allday("e1", "26.125, Acme Clinic Psych (6) (Pat)",
                                     "2026-11-09", "2026-11-12", "11"))
     body = get(client)
-    assert set(body) == {"ok", "connected", "stale", "fetched_at", "error", "notice", "events"}
+    assert set(body) == {"ok", "connected", "stale", "fetched_at", "error", "notice", "events",
+                         "work_types"}
     assert body["ok"] is True and body["connected"] is True and body["stale"] is False
     assert body["error"] is None and body["notice"] is None and body["fetched_at"].endswith("Z")
     assert set(ev) == {"id", "title", "name", "job_number", "crew_size", "mobilization",
@@ -409,8 +410,10 @@ def _unconfigure(monkeypatch):
 def test_with_nothing_configured_the_api_says_not_connected(client, monkeypatch, drafts_db):
     _unconfigure(monkeypatch)
     body = get(client)
+    work_types = body.pop("work_types")
     assert body == {"ok": True, "connected": False, "stale": False, "fetched_at": None,
                     "error": None, "notice": None, "events": []}
+    assert [w["name"] for w in work_types] == ["Epoxy", "Polish", "Gyp"], "the legend still has its list"
 
 
 def test_a_calendar_id_without_a_key_is_not_connected(client, monkeypatch, drafts_db):
@@ -1283,3 +1286,14 @@ def test_the_person_named_last_is_the_foreman(client, source):
                                     "2026-11-10", "11"))
     assert ev["foreman"] == "Pat"
     assert "crew_lead" not in ev, "the glossary word is Foreman; Crew lead is gone"
+
+
+def test_the_response_carries_the_work_type_colours_the_legend_is_drawn_from(client, source):
+    """One source for colour -> Work type: the server. The page draws its legend from this list
+    instead of keeping a copy of the map (docs/v2-architecture.md section 5, rule 1)."""
+    body = get(client)
+    assert body["work_types"] == [
+        {"name": "Epoxy", "color_id": "11", "color": "#d50000"},
+        {"name": "Polish", "color_id": "9", "color": "#3f51b5"},
+        {"name": "Gyp", "color_id": "10", "color": "#0b8043"},
+    ]

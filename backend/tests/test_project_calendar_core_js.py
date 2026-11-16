@@ -453,11 +453,19 @@ def test_a_notice_rides_beside_the_grid_and_never_reads_as_a_failed_read():
 
 
 # ── #778: every bar is a Duration, colour is the Work type, the name is Foreman ───────────────────
-def test_the_work_type_comes_from_the_colour_and_anything_else_is_unknown():
-    got = run(EVENTS + 'out([ev({color_id:"11"}), ev({color_id:"9"}), ev({color_id:"10"}),'
-              ' ev({color_id:"7"}), ev({}), ev({color_id:"9", work_type:"Polish"})]'
-              '.map(e => P.workTypeOf(e)))')
-    assert got == ["Epoxy", "Polish", "Gyp", "Work type unknown", "Work type unknown", "Polish"]
+def test_the_page_shows_the_servers_work_type_and_unknown_when_there_is_none():
+    """Which colour is which Work type is the server's alone; the page never works it out again
+    (docs/v2-architecture.md section 5, rule 1). A colour with no Work type arrives as null."""
+    got = run(EVENTS + 'out([ev({work_type:"Epoxy"}), ev({work_type:"Gyp"}), ev({color_id:"11"}),'
+              ' ev({}), ev({work_type:null})].map(e => P.workTypeOf(e)))')
+    assert got == ["Epoxy", "Gyp", "Work type unknown", "Work type unknown", "Work type unknown"]
+
+
+def test_the_legend_is_drawn_from_the_servers_list_not_a_copy():
+    js = _page_js()
+    assert "WORK_TYPES.map(" in js and "res.body.work_types" in js
+    core = (FRONTEND / "js" / "project-calendar-core.js").read_text(encoding="utf-8")
+    assert "WORK_TYPE_BY_COLOR" not in core and "WORK_TYPE_BY_COLOR" not in js
 
 
 def test_every_colour_has_an_upcoming_deadline_not_only_red():

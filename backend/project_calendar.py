@@ -93,8 +93,12 @@ PALETTE: Dict[str, str] = {
     "6": "#f4511e", "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043",
     "11": "#d50000",
 }
-# Google colorId -> Work type (Darrin, 2026-11-12). Any other colour, or none, is unknown (None).
+# Google colorId -> Work type (Darrin, 2026-11-12): the ONE copy of this map. Any other colour, or
+# none, has no Work type, and the event's `work_type` is null (the page words that as "unknown").
+# The page draws its legend from WORK_TYPE_LEGEND in every response instead of keeping its own copy.
 WORK_TYPE_BY_COLOR: Dict[str, str] = {"11": "Epoxy", "9": "Polish", "10": "Gyp"}
+WORK_TYPE_LEGEND: List[Dict[str, str]] = [
+    {"name": name, "color_id": cid, "color": PALETTE[cid]} for cid, name in WORK_TYPE_BY_COLOR.items()]
 
 # Upstream limits. Bounded so a slow Google cannot hold a worker: the page waits at most
 # _TIMEOUT per call, and at most _PAGE_CAP pages of _PAGE_SIZE events per range.
@@ -570,6 +574,12 @@ def _tidy(text: str) -> str:
     return t.strip()
 
 
+def _blank_title(raw: str) -> Dict[str, Any]:
+    """What a title reads as when nothing in it is recognised: its own tidied name, nothing else."""
+    return {"name": raw.strip(), "job_number": None, "crew_size": None, "mobilization": None,
+            "foreman": None, "is_punch": False, "prevailing_wage": False, "night_work": False}
+
+
 def parse_title(title: Any) -> Dict[str, Any]:
     """Read the booking convention out of an event title. Never raises.
 
@@ -577,9 +587,7 @@ def parse_title(title: Any) -> Dict[str, Any]:
     night_work. Anything not recognised stays in `name`; a title with nothing recognisable comes
     back as its own (tidied) name."""
     raw = str(title or "")
-    out: Dict[str, Any] = {"name": raw.strip(), "job_number": None, "crew_size": None,
-                           "mobilization": None, "foreman": None, "is_punch": False,
-                           "prevailing_wage": False, "night_work": False}
+    out: Dict[str, Any] = _blank_title(raw)
     try:
         rest = raw
         m = _JOB_RE.match(rest)
@@ -628,8 +636,7 @@ def parse_title(title: Any) -> Dict[str, Any]:
         out["name"] = name or raw.strip()
     except Exception as exc:  # noqa: BLE001 — a title that breaks the parser still shows, as typed
         log.warning("project calendar: title not parsed (%s)", type(exc).__name__)
-        out.update(name=raw.strip(), job_number=None, crew_size=None, mobilization=None,
-                   foreman=None, is_punch=False, prevailing_wage=False, night_work=False)
+        out = _blank_title(raw)
     return out
 
 
@@ -817,7 +824,8 @@ def _response(connected: bool, events: List[Dict[str, Any]], *, stale: bool = Fa
     """`error`: the read failed (events are a stale copy, or none). `notice`: the read worked, but
     something about the connection needs fixing (free/busy access). Never the same message."""
     return {"ok": True, "connected": connected, "stale": stale, "fetched_at": fetched_at,
-            "error": error, "notice": notice, "events": events}
+            "error": error, "notice": notice, "events": events,
+            "work_types": [dict(w) for w in WORK_TYPE_LEGEND]}
 
 
 def fetch(start: Any, end: Any) -> Dict[str, Any]:

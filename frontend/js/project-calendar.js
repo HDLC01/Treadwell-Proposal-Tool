@@ -47,6 +47,7 @@
 
   let MODE = P.MODES.some((m) => m.id === ss(SK.mode, "")) ? ss(SK.mode, "two") : "two";
   let Q = ss(SK.q, "");
+  let WORK_TYPES = [];                 // the server's colour -> Work type list, for the legend
   let TODAY = P.centralToday();        // the Central calendar's today, not the laptop's
   let ANCHOR = TODAY;
 
@@ -105,6 +106,7 @@
     const res = await read(range.from, range.to, "r");
     if (res.ok) {
       remember(key, res.body);         // worth keeping even if the view has moved on
+      if (Array.isArray(res.body.work_types)) WORK_TYPES = res.body.work_types;
       CONNECTED = res.body.connected !== false;
       delete ERR[key];
     } else {
@@ -152,11 +154,10 @@
     const cls = ["bar"];
     if (!sg.starts) cls.push("cont-l");
     if (!sg.ends) cls.push("cont-r");
-    const deadlineHere = sg.ends;   // every bar is a Duration: its last day is the Deadline
-    if (deadlineHere) cls.push("dl-end");
+    if (sg.ends) cls.push("dl-end");   // every bar is a Duration: its last day is the Deadline
     const tip = (ev.title || parts.name) + " · " + P.spanLabel(ev);
     const aria = parts.name + (parts.meta ? ", " + parts.meta : "") + ", " + P.spanLabel(ev)
-      + ", " + P.workTypeOf(ev) + (deadlineHere ? ", Deadline " + P.dayLong(sg.ev.deadline || P.spanOf(ev).last) : "")
+      + ", " + P.workTypeOf(ev) + (sg.ends ? ", Deadline " + P.dayLong(sg.ev.deadline || P.spanOf(ev).last) : "")
       + (!sg.starts ? ", continued from the week before" : "");
     return '<button type="button" class="' + cls.join(" ") + '"'
       + ' data-k="' + esc(ev._k) + '" data-c="' + sg.col + '" data-s="' + sg.span + '"'
@@ -164,7 +165,7 @@
       + ' title="' + esc(tip) + '" aria-label="' + esc(aria) + '">'
       + '<span class="bn">' + esc(parts.name) + "</span>"
       + (parts.meta ? '<span class="bm">' + esc(parts.meta) + "</span>" : "")
-      + (deadlineHere ? '<span class="dlm">Deadline</span>' : "")
+      + (sg.ends ? '<span class="dlm">Deadline</span>' : "")
       + "</button>";
   }
 
@@ -205,12 +206,20 @@
     });
   }
 
+  // Drawn from the server's list (the one copy of colour -> Work type); swatches are painted
+  // through the CSSOM in paintSwatches, like the bars.
   function legendHtml() {
-    return '<span><i class="sw red"></i>Epoxy</span>'
-      + '<span><i class="sw blue"></i>Polish</span>'
-      + '<span><i class="sw green"></i>Gyp</span>'
-      + '<span><i class="sw none"></i>Any other colour: Work type unknown</span>'
+    return WORK_TYPES.map((w) => '<span><i class="sw" data-color="' + esc(w.color || "") + '"></i>'
+      + esc(w.name) + "</span>").join("")
+      + "<span>Any other colour, or none: Work type unknown</span>"
       + '<span><span class="mk">Deadline</span>the last day of every bar</span>';
+  }
+
+  function paintSwatches(root) {
+    root.querySelectorAll(".sw[data-color]").forEach((el) => {
+      const c = el.dataset.color;
+      if (c && /^#[0-9a-f]{6}$/i.test(c)) el.style.background = c;
+    });
   }
 
   function sideHtml() {
@@ -347,6 +356,7 @@
     placeBars(grid);
 
     $("legend").innerHTML = legendHtml();
+    paintSwatches($("legend"));
     $("side-sub").textContent = "Next " + SIDE_DAYS + " days, from today. Dates are Central.";
     $("side-body").innerHTML = sideHtml();
   }
@@ -370,15 +380,13 @@
     const sw = $("dlg-sw");
     sw.style.background = color || "";
 
-    let deadline = "";
-    {
-      const dl = P.validDay(ev.deadline) ? ev.deadline : (span && span.last);
-      const st = P.deadlineStatus(dl, TODAY);
-      const n = P.daysUntil(dl, TODAY);
-      const label = st === "today" ? "Today" : st === "overdue" ? "Passed"
-        : (n === 1 ? "Tomorrow" : "In " + n + " days");
-      deadline = esc(P.dayLong(dl)) + (st ? ' <span class="chip st-' + st + '">' + esc(label) + "</span>" : "");
-    }
+    const dl = P.validDay(ev.deadline) ? ev.deadline : (span && span.last);
+    const st = P.deadlineStatus(dl, TODAY);
+    const n = P.daysUntil(dl, TODAY);
+    const dlLabel = st === "today" ? "Today" : st === "overdue" ? "Passed"
+      : (n === 1 ? "Tomorrow" : "In " + n + " days");
+    const deadline = esc(P.dayLong(dl))
+      + (st ? ' <span class="chip st-' + st + '">' + esc(dlLabel) + "</span>" : "");
 
     const flags = P.flagsOf(ev).map((f) => '<span class="chip">' + esc(f) + "</span>").join("");
     const facts =
