@@ -5,9 +5,10 @@ for Google, because the response is what the page lays out. The fake answers lik
 the events overlapping the window it is asked for, so the year-long read in pieces is really tested.
 The claims that cost something when they are wrong:
 
-  * ONE ROW PER PROJECT. Mobilizations group by Job number, else by name; a Punch joins its job
-    (by Job number, else by name with "Punch" removed, ignoring case and spacing), and an
-    unmatched Punch is its own row labelled Punch.
+  * ONE ROW PER PROJECT. Mobilizations group by Job number, else by name; a name group joins the
+    one Job number with its name (a job half relabelled); a Punch joins its job (by Job number,
+    else by name with "Punch" removed, ignoring case and spacing), and an unmatched Punch is its
+    own row labelled Punch.
   * PLANNED HOURS = each Mobilization's Workdays up to YESTERDAY (Central) x its own Crew size x 8.
     A missing Crew size adds nothing and says so; it never reads as nobody on site.
   * THE WINDOW. Running today, Deadline in the last 14 days, Start in the next 14 days, or a Punch
@@ -314,6 +315,60 @@ def test_a_punch_whose_job_number_has_no_job_is_its_own_row(client, google):
     (p,) = rows(client)
     assert p["key"] == "punch:job:26.999" and p["label"] == "Punch" and p["job_number"] == "26.999"
     assert p["planned_hours"] == 16
+
+
+# ── a job half relabelled (#792) ──────────────────────────────────────────────
+def test_a_first_mob_without_a_job_number_joins_the_second_mob_that_has_one(client, google):
+    """While Darrin relabels the calendar the 1st Mob still reads by name and the 2nd Mob carries
+    the Job number: one row, under the Job number. 1st Mob: Mon Nov 9 to Wed Nov 18 (running today),
+    6 people, Nov 9-17 done = 7 Workdays = 336 h. 2nd Mob: Mon Nov 23 to Wed Nov 25, 4 people."""
+    google.events = [mob("u1", "example  CLINIC (6) (Pat)", "2026-11-09", "2026-11-18", "11"),
+                     mob("n2", "26.210, Example Clinic - 2nd Mob (4) (Kim)", "2026-11-23",
+                         "2026-11-25", "11")]
+    (p,) = rows(client)
+    assert p["key"] == "job:26.210" and p["job_number"] == "26.210"
+    assert [m["id"] for m in p["mobilizations"]] == ["u1", "n2"]
+    assert p["start"] == "2026-11-09" and p["deadline"] == "2026-11-25"
+    assert p["workdays_so_far"] == 7 and p["planned_hours"] == 7 * 6 * 8
+    assert p["crew_size"] == 6 and p["foreman"] == "Pat", "the unnumbered Mob is running today"
+
+
+def test_a_later_mob_without_a_job_number_sets_the_deadline_of_the_numbered_job(client, google):
+    google.events = [mob("n1", "26.211, Example Lofts (3) (Kim)", "2026-11-02", "2026-11-06"),
+                     mob("u2", "Example Lofts - 2nd Mob (2) (Lee)", "2026-11-16", "2026-11-24")]
+    (p,) = rows(client)
+    assert p["key"] == "job:26.211"
+    assert p["deadline"] == "2026-11-24" and p["timing"] == "running" and p["workdays_left"] == 5
+    assert p["workdays_so_far"] == 7 and p["planned_hours"] == 5 * 3 * 8 + 2 * 2 * 8
+    assert p["crew_size"] == 2
+
+
+def test_a_punch_whose_job_number_matches_nothing_joins_the_job_with_its_name(client, google):
+    """The Punch was relabelled with a Job number the job's own Mobilizations do not carry (yet, or
+    by a slip): its name still finds the job before it becomes a row of its own."""
+    google.events = [ACME_1, mob("p", "26.912, Acme Clinic Psych Punch (2) (Lee)",
+                                 "2026-11-12", "2026-11-12", "11")]
+    (p,) = rows(client)
+    assert p["key"] == "job:26.125" and p["is_punch"] is False and p["label"] is None
+    assert [m["id"] for m in p["punches"]] == ["p"]
+    assert p["deadline"] == "2026-11-06"
+    assert p["planned_hours"] == 5 * 6 * 8 + 1 * 2 * 8
+
+
+def test_with_two_job_numbers_sharing_the_name_the_unnumbered_mob_stays_its_own_row(
+        client, google):
+    """Two jobs at the same place carry different Job numbers. A Mobilization with that name and no
+    Job number could belong to either, so it is not merged into one: nothing is guessed."""
+    google.events = [mob("j1", "26.301, Example Tower (3)", "2026-11-09", "2026-11-13"),
+                     mob("j2", "26.302, Example Tower (2)", "2026-11-16", "2026-11-20"),
+                     mob("u", "example tower (5)", "2026-11-17", "2026-11-19")]
+    by_key = {p["key"]: p for p in rows(client)}
+    assert sorted(by_key) == ["job:26.301", "job:26.302", "name:exampletower"]
+    assert [m["id"] for m in by_key["job:26.301"]["mobilizations"]] == ["j1"]
+    assert [m["id"] for m in by_key["job:26.302"]["mobilizations"]] == ["j2"]
+    u = by_key["name:exampletower"]
+    assert u["job_number"] is None and [m["id"] for m in u["mobilizations"]] == ["u"]
+    assert u["planned_hours"] == 1 * 5 * 8
 
 
 # ── the window ────────────────────────────────────────────────────────────────

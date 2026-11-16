@@ -19,9 +19,13 @@ talks to Google itself.
 GROUPING. Every event read is grouped into Projects, then only the Projects in the window are listed:
   * a Mobilization that is not a Punch groups by Job number, else by its name (case and spacing
     ignored);
-  * a Punch joins the Project with its Job number; with no Job number, the Project whose name equals
-    the Punch's name with the word "Punch" removed (case and spacing ignored). A Punch that matches
-    no Project is its own row, labelled Punch;
+  * a job half relabelled (#792): a group made by name joins the Job-number group whose name
+    matches (the word "Punch" removed, case and spacing ignored), and the row is the Job number's,
+    every Mobilization counted. When two Job numbers share the name, nothing is guessed: the name
+    group stays its own row;
+  * a Punch joins the Project with its Job number; with no Job number, or one that matches no job,
+    the Project whose name equals the Punch's name with the word "Punch" removed (case and spacing
+    ignored). A Punch that matches no Project is its own row, labelled Punch;
   * a Project's Start is its first non-Punch Mobilization's first day, and its Deadline the last day
     of its last non-Punch Mobilization. A Punch row's are its Punches' own.
 
@@ -181,6 +185,18 @@ def _group(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
                                     "punches": [], "punch_row": False})
         g["mobs"].append(ev)
 
+    # A job half relabelled (#792): a name group joins THE Job-number group of the same name. When
+    # two Job numbers share the name, it could be either, so it stays its own row.
+    by_job_name: Dict[str, List[Dict[str, Any]]] = {}
+    for g in groups.values():
+        if g["job_number"]:
+            for name in {_punch_parent_name(m["name"]) for m in g["mobs"]}:
+                by_job_name.setdefault(name, []).append(g)
+    for key in [k for k, g in groups.items() if not g["job_number"]]:
+        matches = by_job_name.get(_punch_parent_name(groups[key]["mobs"][0]["name"])) or []
+        if len(matches) == 1:
+            matches[0]["mobs"].extend(groups.pop(key)["mobs"])
+
     by_name: Dict[str, List[Dict[str, Any]]] = {}
     for g in groups.values():
         for name in {_fold(m["name"]) for m in g["mobs"]}:
@@ -190,7 +206,7 @@ def _group(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         parent = None
         if ev["job_number"]:
             parent = groups.get("job:" + ev["job_number"])
-        else:
+        if parent is None:               # no Job number, or one that matches no job (#792)
             parent = _name_parent(by_name.get(_punch_parent_name(ev["name"])) or [], ev)
         if parent is None:
             key = ("punch:job:" + ev["job_number"] if ev["job_number"]
