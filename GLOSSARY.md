@@ -66,31 +66,53 @@ The schedule of crews on Treadwell's jobs, and the deadlines those jobs must mee
 _Avoid_: Schedule, ops calendar
 
 **Duration**:
-The stretch of days a job is booked for on the Project Calendar, marked in red.
+The stretch of days a job is booked for on the Project Calendar, from its start date through its last day. Every bar on the Project Calendar is a Duration; its colour shows the job's Work type (red Epoxy, blue Polish, green Gyp).
 
 **Deadline**:
-The last day of a job's Duration: the day the work must be finished.
+The end of the last day of a job's Duration: the work must be finished by then. The Project Calendar's Deadlines are the only deadlines a job has.
 _Avoid_: Due date, end date
 
 **Job number**:
 The number a Project receives once it is going ahead, such as 26.125, used to name it on the Project Calendar and in accounting.
-_Avoid_: Project number, job no.
+_Avoid_: Project number, project #, job no.
 
 **Mobilization**:
 One continuous stretch of a crew on site for a job. A job may take several Mobilizations ("1st Mob", "2nd Mob").
 _Avoid_: Mob (in writing), phase, visit
 
 **Punch**:
-A short Mobilization after the main work to fix or finish items on the Customer's punch list.
+A short Mobilization after the main work to fix or finish items on the Customer's punch list. A Punch always belongs to an earlier job.
 _Avoid_: Touch-up
 
 **Crew size**:
 How many people a Mobilization puts on site each workday.
 _Avoid_: Headcount, guys
 
-**Crew lead**:
-The person in charge of a crew on site, named on its Mobilization.
-_Avoid_: Lead (that is an inbound opportunity), foreman
+**Foreman**:
+The person running a job on site, named last on its Mobilization ("(Ryan)").
+_Avoid_: Crew lead, lead (that is an inbound opportunity)
+
+### Labor
+
+**Workday**:
+A Monday to Friday day inside a Duration. Weekends are never workdays.
+_Avoid_: Business day, working day
+
+**Budgeted hours**:
+The labor hours a job is allowed: Raken's budget for the job, or, when Raken has none, the hours in the job's Estimate.
+_Avoid_: Labor budget (the budget report's dollar column), allotted hours
+
+**Actual hours**:
+The labor hours recorded against a job on Raken time cards so far.
+_Avoid_: Spent hours, logged hours
+
+**Projected total hours**:
+Actual hours plus the hours still to come before the Deadline: the Workdays left times the Crew size times the hours each man works a day.
+_Avoid_: Forecast, estimated hours
+
+**Over/under**:
+Budgeted hours minus Projected total hours for a job. Below zero, the job is projected to go over budget.
+_Avoid_: Variance, gain or loss
 
 ### Outcomes
 
