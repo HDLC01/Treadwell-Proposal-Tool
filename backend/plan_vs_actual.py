@@ -50,6 +50,11 @@ cards against a full planned day):
     recent one to have started, else the first one still to come;
   * Workdays left: Monday to Friday from today through the Deadline while the job runs; a job not
     started is TIMING_STARTS (the page says "Starts <date>"), a finished one TIMING_FINISHED.
+  * the day-by-day (#789), the job detail's chart: one entry per Workday of its Mobilizations,
+    Punches included, in date order, with the Crew sizes booked that day added up (two
+    Mobilizations can overlap) and that times HOURS_PER_WORKDAY. A day from today on is "future"
+    and carries the plan only; raken_actuals fills each earlier day's people on site, hours and
+    "missed" for a linked row.
 
 NEVER A 500. Not connected answers connected:false; a Google failure with nothing saved answers
 ok:true, no projects and the plain error; a stale copy is served with stale:true.
@@ -292,6 +297,29 @@ def _mob_out(ev: Dict[str, Any], yesterday: _dt.date) -> Dict[str, Any]:
             "work_type": ev["work_type"], "color": ev["color"], "html_link": ev["html_link"]}
 
 
+def _day_by_day(every: List[Dict[str, Any]], today: _dt.date) -> List[Dict[str, Any]]:
+    """One entry per Workday of the Project's Mobilizations, Punches included, in date order: the
+    plan that day (the Crew sizes booked that day added up, and that times HOURS_PER_WORKDAY;
+    None when no Mobilization booked that day has a Crew size, with crew_size_missing set when any
+    has none) and whether the day is today or later ("future": the plan only). The Raken side of
+    each entry (on_site, hours, missed) stays empty here: raken_actuals.apply fills it for a linked
+    row, from the kept read, up to yesterday."""
+    crews: Dict[_dt.date, List[Optional[int]]] = {}
+    for m in every:
+        crew = m["crew_size"] if isinstance(m["crew_size"], int) else None
+        for d in _workday_dates(_day(m["start"]), _day(m["last_day"])):
+            crews.setdefault(d, []).append(crew)
+    out = []
+    for d in sorted(crews):
+        known = [c for c in crews[d] if c is not None]
+        crew = sum(known) if known else None
+        out.append({"date": d.isoformat(), "planned_crew": crew,
+                    "planned_hours": None if crew is None else crew * HOURS_PER_WORKDAY,
+                    "crew_size_missing": len(known) < len(crews[d]), "future": d >= today,
+                    "on_site": None, "hours": None, "missed": False})
+    return out
+
+
 def _in_window(start: _dt.date, deadline: _dt.date, punches: List[Dict[str, Any]],
                today: _dt.date) -> bool:
     lo, hi = today - _dt.timedelta(days=WINDOW_DAYS), today + _dt.timedelta(days=WINDOW_DAYS)
@@ -359,6 +387,7 @@ def _project(g: Dict[str, Any], today: _dt.date) -> Optional[Dict[str, Any]]:
         "project": None,
         "mobilizations": [_mob_out(m, yesterday) for m in mobs],
         "punches": [_mob_out(m, yesterday) for m in punches],
+        "day_by_day": _day_by_day(every, today),
         "raken": _raken(),
         "statuses": [],
     }
