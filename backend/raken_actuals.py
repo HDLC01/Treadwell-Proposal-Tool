@@ -7,7 +7,8 @@ Workday, Actual hours, Behind, Not linked.
 
 WHAT IS READ (developer.rakenapp.com/api/docs, "List Projects" and "List Time Cards", read
 2026-11-16). Every call goes through raken.get / raken.list_all: one call at a time, a fixed pause,
-a bounded 429 back-off, NotProvisioned for 403 API_KEY_NOT_FOUND.
+a bounded 429 back-off, NotProvisioned for 403 API_KEY_NOT_FOUND. One refresh makes at most CALL_CAP
+calls, and each run logs how many it made.
   * GET /projects: every page. A project's Project Number is its "number" field; its "uuid" and
     "name" are kept too. Raken's own `query` search is a substring match, so it is not used: the
     tool compares numbers itself.
@@ -75,6 +76,10 @@ STORE_FILE = _DATA_DIR / "raken_actuals.json"
 PIECE_DAYS = 31            # Raken caps fromDate at 31 days before toDate; a piece spans 31 days
 READ_BACK_DAYS = 365
 RECENT_DAYS = 14
+# The most Raken calls one refresh may make. A year of time cards is 12 pieces of a few pages each;
+# a read that needs more than this stops plainly instead of spending the company's daily allowance.
+CALL_CAP = 300
+TOO_MANY_MESSAGE = "Raken has more time cards than one refresh reads. Ask for the limit to be raised."
 
 # A row's Raken state. The page names the same values (js/project-calendar-core.js, P.RAKEN);
 # tests/test_project_calendar_core_js.py holds the two sides together.
@@ -170,7 +175,11 @@ def read_time_cards(first: _dt.date, last: _dt.date) -> Tuple[Dict[str, Dict[str
     days: Dict[str, Dict[str, Dict[str, Any]]] = {}
     workers: Dict[Tuple[str, str], Set[str]] = {}
     counted = 0
+    start_calls = raken._CALLS["n"]
     for a, b in pieces(first, last):
+        if raken._CALLS["n"] - start_calls >= CALL_CAP:
+            log.warning("raken actuals: refresh stopped at the cap of %d calls", CALL_CAP)
+            raise raken.RakenError(TOO_MANY_MESSAGE)
         for c in raken.list_all("/timeCards", {"fromDate": a.isoformat(), "toDate": b.isoformat()}):
             if c.get("deletedAt"):
                 continue
@@ -291,7 +300,7 @@ def read_and_keep(first: _dt.date, last: _dt.date) -> None:
              len(projects), counted, len(pieces(first, last)), raken._CALLS["n"] - before)
 
 
-_FIXED = (raken.UNREACHABLE_MESSAGE, raken.RATE_LIMITED_MESSAGE, raken.QUOTA_MESSAGE,
+_FIXED = (TOO_MANY_MESSAGE, raken.UNREACHABLE_MESSAGE, raken.RATE_LIMITED_MESSAGE, raken.QUOTA_MESSAGE,
           raken.NOT_SAVED_MESSAGE, raken.NOT_CONNECTED_MESSAGE, raken.NOT_SET_UP_MESSAGE)
 
 

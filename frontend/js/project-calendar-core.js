@@ -349,10 +349,97 @@
     return Math.round(n).toLocaleString("en-US");
   }
 
-  /** What the Raken side of a row says until Raken is connected (#782 fills it in). */
+  // ── the Raken side (#782): the server's last "Refresh now" read, set beside each row ──
+  // A row's Raken state and its statuses: backend/raken_actuals.py names the same values
+  // (ROW_STATES, STATUSES); tests/test_project_calendar_core_js.py holds the two together.
+  var RAKEN = {
+    not_connected: "not_connected", expired: "expired", not_provisioned: "not_provisioned",
+    unreachable: "unreachable", not_refreshed: "not_refreshed", linked: "linked",
+    not_linked: "not_linked",
+  };
+  var STATUS = { behind: "behind", not_linked: "not_linked" };
+  var STATUS_LABELS = [[STATUS.not_linked, "Not linked"], [STATUS.behind, "Behind"]];
+
+  function rakenOf(p) {
+    return p && p.raken && typeof p.raken === "object" ? p.raken : {};
+  }
+
+  /** Why a row's Raken cells are empty, in a few words; "" for a linked row (its numbers speak),
+   *  the reason for a Not linked one. */
   function rakenLabel(p) {
-    var st = p && p.raken && p.raken.state;
-    return !st || st === RAKEN_NOT_CONNECTED ? "Connect Raken to compare" : "—";
+    var st = rakenOf(p).state;
+    if (!st || st === RAKEN_NOT_CONNECTED) return "Connect Raken to compare";
+    if (st === RAKEN.linked) return "";
+    if (st === RAKEN.not_linked) return notLinkedNote(p);
+    if (st === RAKEN.expired) return "Raken sign-in expired";
+    if (st === RAKEN.not_provisioned) return "Raken not turned on yet";
+    if (st === RAKEN.unreachable) return "Raken not reached";
+    if (st === RAKEN.not_refreshed) return "Press Refresh now";
+    return "—";
+  }
+
+  /** A number with thousands separators and at most one decimal, or a dash. */
+  function decLabel(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "—";
+    return (Math.round(n * 10) / 10).toLocaleString("en-US", { maximumFractionDigits: 1 });
+  }
+
+  /** The Raken side of a row's pairs: days clocked in, average on site a day, Actual hours.
+   *  Dashes unless the row is linked. */
+  function rakenCells(p) {
+    var r = rakenOf(p);
+    if (r.state !== RAKEN.linked) return { days: "—", on_site: "—", hours: "—" };
+    return { days: numLabel(r.days_clocked), on_site: decLabel(r.avg_on_site),
+             hours: decLabel(r.actual_hours) };
+  }
+
+  /** The row's status flags as chips, Not linked first. Only flags the page knows. */
+  function statusChips(p) {
+    var st = p && Array.isArray(p.statuses) ? p.statuses : [];
+    var out = [];
+    STATUS_LABELS.forEach(function (pair) {
+      if (st.indexOf(pair[0]) >= 0) out.push({ id: pair[0], label: pair[1] });
+    });
+    return out;
+  }
+
+  /** Why a Not linked row is not linked. "" for any other row. */
+  function notLinkedNote(p) {
+    var r = rakenOf(p);
+    if (r.state !== RAKEN.not_linked) return "";
+    var num = p && p.job_number ? String(p.job_number) : "";
+    if (r.reason === "no_job_number" || !num) return "No Job number on the calendar";
+    var dups = Array.isArray(r.duplicates) ? r.duplicates.filter(Boolean) : [];
+    if (r.reason !== "duplicate" || dups.length < 2) {
+      return "No Raken project has Project Number " + num;
+    }
+    var names = dups.map(function (d) {
+      return d && typeof d.name === "string" && d.name.trim() ? d.name.trim() : "an unnamed project";
+    });
+    var list = names.length === 2 ? names[0] + " and " + names[1]
+      : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+    var count = dups.length === 2 ? "Two" : String(dups.length);
+    return count + " Raken projects have Project Number " + num + ": " + list;
+  }
+
+  /** "Raken as of <Central time>", or what to do when Raken has not been read yet. */
+  function asOfText(data) {
+    var r = data && data.raken && typeof data.raken === "object" ? data.raken : {};
+    var at = centralStamp(r.as_of);
+    if (at) return "Raken as of " + at + " (Central)";
+    if (r.state === RAKEN.not_refreshed) return "Raken has not been read yet. Press Refresh now.";
+    return "";
+  }
+
+  /** The one plain sentence about Raken the server sent (not connected, expired, unreachable…). */
+  function rakenMessage(data) {
+    var m = data && data.raken && data.raken.message;
+    return typeof m === "string" ? m : "";
+  }
+
+  /** A Raken-only project's name, or words for one Raken sent without a name. */
+  function rakenOnlyName(x) {
+    return x && typeof x.name === "string" && x.name.trim() ? x.name.trim() : "Unnamed Raken project";
   }
 
   /** A whole positive number the server sent, or null. */
@@ -368,7 +455,7 @@
     return (through ? "Counts so far run through yesterday, " + through + ". " : "")
       + "Planned hours = Workdays so far × Crew size × "
       + (hours == null ? "the hours in a workday" : hours)
-      + ". Raken's side fills in once Raken is connected.";
+      + ". Days clocked in, On site and Actual hours come from Raken time cards.";
   }
 
   /** What an empty list says. The window is the server's (`window_days`). */
@@ -436,5 +523,8 @@
     TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
     RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
+    RAKEN: RAKEN, STATUS: STATUS, decLabel: decLabel, rakenCells: rakenCells,
+    statusChips: statusChips, notLinkedNote: notLinkedNote, asOfText: asOfText,
+    rakenMessage: rakenMessage, rakenOnlyName: rakenOnlyName,
   };
 });

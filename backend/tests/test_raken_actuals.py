@@ -636,3 +636,13 @@ def test_nothing_read_from_raken_reaches_the_log(client, google, fake, caplog):
     for leak in ("Secretname", "Othername", "Hidden Name", "26.777", "r-made-up-uuid",
                  "w-made-up-worker", "made-up-access", "made-up-refresh"):
         assert leak not in caplog.text, leak
+
+
+def test_a_refresh_that_would_need_too_many_calls_stops_plainly(client, google, fake, monkeypatch):
+    monkeypatch.setattr(raken_actuals, "CALL_CAP", 2)
+    google.events = [mob("j", "26.520, Example Warehouse (2)", "2026-09-01", "2026-11-20")]
+    fake.projects = [project("r-1", "26.520", "Example Warehouse")]
+    body = refresh(client)
+    assert body["raken"]["state"] == "unreachable"
+    assert body["raken"]["message"] == raken_actuals.TOO_MANY_MESSAGE
+    assert fake.project_calls + len(fake.card_calls) <= 3
