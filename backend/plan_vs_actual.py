@@ -147,6 +147,12 @@ def _response(connected: bool, today: _dt.date, projects: List[Dict[str, Any]], 
 # The order the strip shows the counts in; each is a status a row can carry.
 SUMMARY_COUNTS = (raken_actuals.STATUS_ON_PLAN, raken_actuals.STATUS_BEHIND,
                   raken_actuals.STATUS_OVER_BUDGET, raken_actuals.STATUS_NOT_LINKED)
+# Last week's Actual hours (#788): read; Raken not read (no figure); or the kept read stops before
+# the end of last week (no figure). js/project-calendar-core.js names the same values (P.LAST_WEEK).
+LAST_WEEK_READ = "read"
+LAST_WEEK_NOT_READ = "not_read"
+LAST_WEEK_NOT_COVERED = "not_covered"
+LAST_WEEK_STATES = (LAST_WEEK_READ, LAST_WEEK_NOT_READ, LAST_WEEK_NOT_COVERED)
 
 
 def summarise(projects: List[Dict[str, Any]], raken_block: Dict[str, Any],
@@ -191,8 +197,8 @@ def _last_week(rows: List[Dict[str, Any]], read: bool, today: _dt.date) -> Dict[
     (that day's planned crew x HOURS_PER_WORKDAY), added up; Actual hours every hour the rows'
     time cards put on those days. `rows` are the linked rows when Raken was read; when it was not,
     nothing says which rows are linked, so the plan of every row is shown and Actual hours are no
-    figure ("raken": "not_read"), never 0. "not_covered" when the kept read stops short of the
-    week."""
+    figure (LAST_WEEK_NOT_READ), never 0. LAST_WEEK_NOT_COVERED when the kept read stops short of
+    the week."""
     mon, fri = raken_actuals.last_week(today)
     lo, hi = mon.isoformat(), fri.isoformat()
     planned = 0
@@ -200,13 +206,13 @@ def _last_week(rows: List[Dict[str, Any]], read: bool, today: _dt.date) -> Dict[
         for d in p.get("day_by_day") or []:
             if lo <= d["date"] <= hi and isinstance(d.get("planned_hours"), int):
                 planned += d["planned_hours"]
-    state, actual = "not_read", None
+    state, actual = LAST_WEEK_NOT_READ, None
     if read:
         week = [(p.get("raken") or {}).get("last_week_hours") for p in rows]
         if any(h is None for h in week):
-            state = "not_covered"
+            state = LAST_WEEK_NOT_COVERED
         else:
-            state, actual = "read", round(sum(week), 2)
+            state, actual = LAST_WEEK_READ, round(sum(week), 2)
     return {"from": lo, "to": hi, "planned_hours": planned, "actual_hours": actual,
             "jobs": len(rows), "raken": state}
 

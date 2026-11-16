@@ -139,6 +139,35 @@
     .pbar-tick { position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; left:0;
       background:var(--ink); }
     .pva-asof { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    /* The summary strip (#788): four count tiles (buttons that filter the list) and two figure
+       tiles, wrapping two counts to a row at phone width. */
+    .sum { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 12px; }
+    .sum-tile { flex:1 1 120px; display:flex; flex-direction:column; align-items:flex-start;
+      gap:2px; min-height:64px; padding:10px 12px; text-align:left; cursor:pointer;
+      background:var(--card); color:var(--ink); border:1px solid var(--line);
+      border-top:3px solid var(--line); border-radius:12px; box-shadow:var(--shadow); font:inherit; }
+    .sum-tile b { font:600 22px/1.1 system-ui; font-variant-numeric:tabular-nums; }
+    .sum-tile span { font:600 12px system-ui; color:var(--ink-v); }
+    .sum-tile:hover { background:var(--surf-low); }
+    .sum-tile[aria-pressed="true"] { background:var(--red-wash); border-color:var(--red); }
+    .sum-tile:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .sum-tile.st-on_plan { border-top-color:var(--calm); }
+    .sum-tile.st-behind { border-top-color:var(--late); }
+    .sum-tile.st-over_budget { border-top-color:var(--red-dark); }
+    .sum-tile.st-not_linked { border-top-color:var(--ink-mut); }
+    .sum-fig { flex:2 1 260px; padding:10px 12px; background:var(--card);
+      border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); }
+    .sum-fig h3 { margin:0 0 6px; font:700 10px system-ui; text-transform:uppercase;
+      letter-spacing:.07em; color:var(--ink-mut); }
+    .sum-fig h3 small { margin-left:6px; font-weight:500; text-transform:none; letter-spacing:0; }
+    .sum-two { display:flex; gap:8px; }
+    .sum-two > div { flex:1; padding:4px 8px; border-radius:8px; }
+    .sum-two .rk { background:var(--rk-wash); }
+    .sum-two b { display:block; font:600 18px system-ui; font-variant-numeric:tabular-nums; }
+    .sum-two small { display:block; font-size:11.5px; color:var(--ink-mut); }
+    .sum-fig .ou { display:block; margin-top:6px; font:600 12px system-ui; color:var(--ink-v); }
+    .sum-fig .ou.over { color:var(--late); }
+    .sum-fig p { margin:6px 0 0; font-size:12px; color:var(--ink-v); }
     .pva-only { margin-top:22px; }
     .pva-h2 { font:400 18px/1.2 var(--display); margin:0 0 4px; }
     .pva-only .pva { min-width:560px; }
@@ -352,6 +381,7 @@
         <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
                aria-label="Search Plan vs Actual" autocomplete="off" />
         <span id="pva-count" class="pva-count" aria-live="polite"></span>
+        <button type="button" id="pva-showall" class="btn" hidden>Show all jobs</button>
         <span class="grow"></span>
         <span id="pva-asof" class="pva-asof"></span>
         <!-- The page's one write (#782): reads Raken now and keeps the result on the server. It
@@ -361,6 +391,9 @@
       <p id="pva-alert" class="alert" role="status" hidden></p>
       <div id="pva-state" class="msg">Loading Plan vs Actual…</div>
       <div id="pva-main" hidden>
+        <!-- The summary strip (#788): the server's counts and figures. Each count is a button that
+             shows only its jobs; pressed again, or "Show all jobs", it clears. -->
+        <section id="pva-sum" class="sum" aria-label="Summary of the jobs" hidden></section>
         <div class="pva-card">
           <div class="pva-scroll">
             <table class="pva">

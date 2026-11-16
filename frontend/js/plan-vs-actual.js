@@ -32,6 +32,12 @@
 // (P.pvaLookup). "Back", or Esc, returns to where it was opened from: the list, or the Schedule.
 // Leaving by the tab bar closes the detail.
 //
+// THE SUMMARY STRIP (#788), above the list, from the server's `summary`: four counts (On plan,
+// Behind, Over budget, Not linked; a job Behind and Over budget is counted under both), last week's
+// Planned hours against Actual hours, and the Budget totals. Each count is a button (aria-pressed):
+// pressing it shows only the jobs carrying that status, together with the search box; pressing it
+// again, or "Show all jobs", clears it.
+//
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
 // text value is escaped, and every colour is set through element.style once the markup is in
@@ -59,6 +65,7 @@
   let DATA = null;                     // the last good response
   let LOAD_ERR = "";                   // why the last read failed, if it did
   let Q = ss(SK_Q, "");
+  let STATUS_F = "";                   // the count pressed in the summary strip, "" for none
   let LAST_SIG = "";                   // anti-blink: skip identical repaints
   let REFRESHING = false;              // a "Refresh now" is on its way
   let FOLLOW = 0;                      // the timer polling while the server is refreshing
@@ -265,9 +272,67 @@
     root.querySelectorAll(".pbar-tick[data-l]").forEach((el) => { el.style.left = pct(el.dataset.l); });
   }
 
+  // ── the summary strip (#788) ──────────────────────────────────────
+  /** A count pressed: show only its jobs, or every job when it was already the one pressed. */
+  function setStatus(id) {
+    STATUS_F = P.toggleStatus(STATUS_F, id);
+    paint();
+  }
+
+  /** "Show all jobs": clear the count filter (the search box stays), and put the focus back on the
+   *  count that was pressed, since the button itself goes away. */
+  function clearStatus() {
+    if (!STATUS_F) return;
+    const was = STATUS_F;
+    STATUS_F = "";
+    paint();
+    const tile = Array.from($("pva-sum").querySelectorAll("[data-st]"))
+      .find((b) => b.dataset.st === was);
+    if (tile) tile.focus();
+  }
+
+  function countTileHtml(t) {
+    return '<button type="button" class="sum-tile st-' + esc(t.id) + '" data-st="' + esc(t.id)
+      + '" aria-pressed="' + (t.pressed ? "true" : "false") + '">'
+      + "<b>" + esc(t.count) + "</b><span>" + esc(t.label) + "</span></button>";
+  }
+
+  /** A figure tile: a heading, the plan beside Raken's figure, an optional line of markup built
+   *  by the caller (`extraHtml`), and a note. Every other value is escaped here. */
+  function figHtml(f) {
+    return '<div class="sum-fig"><h3>' + esc(f.title)
+      + (f.sub ? "<small>" + esc(f.sub) + "</small>" : "") + "</h3>"
+      + '<div class="sum-two"><div><b>' + esc(f.plan) + "</b><small>" + esc(f.planSub)
+      + "</small></div>"
+      + '<div class="rk"><b>' + esc(f.actual) + "</b><small>" + esc(f.actualSub)
+      + "</small></div></div>"
+      + (f.extraHtml || "") + (f.note ? "<p>" + esc(f.note) + "</p>" : "") + "</div>";
+  }
+
+  function paintSummary() {
+    const tiles = P.countTiles(DATA, STATUS_F);
+    const lw = P.lastWeekTile(DATA);
+    const bt = P.budgetTile(DATA);
+    const box = $("pva-sum");
+    box.hidden = !tiles.length;
+    let html = tiles.map(countTileHtml).join("");
+    if (tiles.length && lw) {
+      html += figHtml({ title: "Last week", sub: lw.range, plan: lw.planned,
+        planSub: "Planned hours", actual: lw.actual, actualSub: "Actual hours", note: lw.note });
+    }
+    if (tiles.length && bt) {
+      html += figHtml({ title: "Budget", sub: "", plan: bt.budgeted, planSub: "Budgeted hours",
+        actual: bt.projected, actualSub: "Projected total hours",
+        extraHtml: '<span class="ou' + (bt.over ? " over" : "") + '">Over/under '
+          + esc(bt.over_under) + "</span>",
+        note: bt.note });
+    }
+    box.innerHTML = html;
+  }
+
   function paint() {
     paintButton();
-    const sig = JSON.stringify([Q, LOAD_ERR, DATA, DETAIL]);
+    const sig = JSON.stringify([Q, STATUS_F, LOAD_ERR, DATA, DETAIL]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
     paintList();
@@ -315,11 +380,11 @@
 
     $("pva-state").hidden = true;
     $("pva-main").hidden = false;
+    paintSummary();
 
-    const shown = P.filterProjects(projects, Q);
-    $("pva-count").textContent = Q
-      ? shown.length + " of " + projects.length + " jobs"
-      : projects.length + " job" + (projects.length === 1 ? "" : "s");
+    const shown = P.visibleProjects(projects, Q, STATUS_F);
+    $("pva-count").textContent = P.listCountText(shown.length, projects.length, Q, STATUS_F);
+    $("pva-showall").hidden = !STATUS_F;
     const body = $("pva-body");
     body.innerHTML = shown.map(rowHtml).join("");
     paintSwatches(body);
@@ -327,7 +392,7 @@
 
     const empty = !projects.length
       ? P.pvaEmptyText(DATA)
-      : (!shown.length ? "No job matches the search." : "");
+      : (!shown.length ? P.noMatchText(Q, STATUS_F) : "");
     $("pva-empty").textContent = empty;
     $("pva-empty").hidden = !empty;
 
@@ -516,6 +581,11 @@
 
   // ── wiring (delegated; CSP forbids inline handlers) ───────────────
   $("pva-refresh").addEventListener("click", refreshNow);
+  $("pva-sum").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-st]");
+    if (b) setStatus(b.dataset.st);
+  });
+  $("pva-showall").addEventListener("click", clearStatus);
   $("pva-body").addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
     const tr = e.target.closest("tr[data-key]");
