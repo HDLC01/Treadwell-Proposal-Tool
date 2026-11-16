@@ -14,7 +14,9 @@
 //     each other;
 //   * workdays (Monday to Friday; a weekend never counts) and workdays left from a Central today;
 //   * whether a Deadline has passed, is today, or is still ahead;
-//   * the text filter, and the Work type a bar's colour stands for.
+//   * the text filter, and the Work type a bar's colour stands for;
+//   * which of the two tabs (Plan vs Actual, Schedule) the address opens, and the wording and
+//     search of the Plan vs Actual rows, which the SERVER builds (GET /api/project-analytics).
 //
 // DATES. Every day here is a "YYYY-MM-DD" string on the America/Chicago calendar, and the
 // arithmetic is calendar-core.js's (TWCal): parse as UTC midnight, step in whole UTC days, so no
@@ -299,26 +301,52 @@
     return K.addDays(range.from, Math.floor(K.diffDays(range.from, range.to) / 2));
   }
 
-  // ── the side list ────────────────────────────────────────────────────
-  /** Deadlines from today on, soonest first, then by name. Every bar is a Duration, so every
-   *  job carries one, whatever its colour.
-   *  `withinDays`, when given, drops Deadlines that many days out or more, so a list labelled
-   *  "Next 60 days" never shows day 106 just because its Duration overlaps the window. */
-  function upcomingDeadlines(events, today, withinDays) {
-    var out = [];
-    (Array.isArray(events) ? events : []).forEach(function (ev) {
-      if (!ev) return;
-      var dl = validDay(ev.deadline) ? ev.deadline : (spanOf(ev) || {}).last;
-      if (!validDay(dl) || !validDay(today) || K.diffDays(today, dl) < 0) return;
-      if (typeof withinDays === "number" && K.diffDays(today, dl) >= withinDays) return;
-      out.push({ ev: ev, deadline: dl, status: deadlineStatus(dl, today),
-                 days: K.diffDays(today, dl) });
+  // ── the two tabs ─────────────────────────────────────────────────────
+  // Plan vs Actual is the default; the address "#schedule" opens the Schedule (the calendar).
+  var TABS = [
+    { id: "pva", label: "Plan vs Actual" },
+    { id: "schedule", label: "Schedule" },
+  ];
+
+  function tabFromHash(hash) {
+    return String(hash || "").replace(/^#/, "").toLowerCase() === "schedule" ? "schedule" : "pva";
+  }
+
+  // ── Plan vs Actual rows (the server builds them; these only word and filter them) ──
+  /** The search box: every word typed must match the Job number, the name, the Foreman or the
+   *  Work type (as the page words it, so "unknown" finds the jobs with none). */
+  function filterProjects(projects, q) {
+    var words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+    return (Array.isArray(projects) ? projects : []).filter(function (p) {
+      if (!p || typeof p !== "object") return false;
+      if (!words.length) return true;
+      var hay = [p.job_number, p.name, p.foreman, workTypeOf(p)]
+        .map(function (v) { return String(v == null ? "" : v).toLowerCase(); }).join(" \u0001 ");
+      for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
+      return true;
     });
-    out.sort(function (a, b) {
-      if (a.deadline !== b.deadline) return a.deadline < b.deadline ? -1 : 1;
-      return barParts(a.ev).name.localeCompare(barParts(b.ev).name);
-    });
-    return out;
+  }
+
+  /** Workdays left, or "Starts <date>" before the job starts and "Finished" after its Deadline,
+   *  so the count is never negative. */
+  function leftLabel(p) {
+    if (!p) return "";
+    if (p.timing === "starts") return "Starts " + dayLong(p.start);
+    if (p.timing === "finished") return "Finished";
+    var n = typeof p.workdays_left === "number" ? p.workdays_left : 0;
+    return n + " workday" + (n === 1 ? "" : "s") + " left";
+  }
+
+  /** A whole number with thousands separators, or a dash when there is none. */
+  function numLabel(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "—";
+    return Math.round(n).toLocaleString("en-US");
+  }
+
+  /** What the Raken side of a row says until Raken is connected (#782 fills it in). */
+  function rakenLabel(p) {
+    var st = p && p.raken && p.raken.state;
+    return !st || st === "not_connected" ? "Connect Raken to compare" : "—";
   }
 
   /** The same event can arrive twice (a range fetch and the side list's own fetch). One row per id. */
@@ -372,7 +400,9 @@
     colorOf: colorOf, workTypeOf: workTypeOf, textOn: textOn,
     barParts: barParts, flagsOf: flagsOf, ordinal: ordinal,
     matches: matches, filterEvents: filterEvents, byStartThenTitle: byStartThenTitle,
-    layout: layout, upcomingDeadlines: upcomingDeadlines, focusDay: focusDay, uniqueById: uniqueById,
+    layout: layout, focusDay: focusDay, uniqueById: uniqueById,
     dayLong: dayLong, spanLabel: spanLabel, centralStamp: centralStamp,
+    TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
+    numLabel: numLabel, rakenLabel: rakenLabel,
   };
 });

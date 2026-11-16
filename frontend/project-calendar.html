@@ -67,7 +67,7 @@
       border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink);
       width:220px; }
     .tw-search:focus, .btn:focus-visible, .seg button:focus-visible, .bar:focus-visible,
-    .dl-row:focus-visible, .dlg-close:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .dlg-close:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
 
     /* ── notices and states ── */
     .alert { border:1px solid #e8dcc0; border-left:3px solid var(--warn); background:#fdf9ee;
@@ -77,9 +77,48 @@
     .msg b { display:block; color:var(--ink); font:400 18px var(--display); margin-bottom:6px; }
     .note { color:var(--ink-v); font-size:12.5px; margin:0 0 10px; }
 
-    /* ── layout: calendar + side list ── */
-    .main { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; align-items:start; }
-    @media (max-width:1100px) { .main { grid-template-columns:minmax(0,1fr); } }
+    /* ── the two tabs: Plan vs Actual (the default) and Schedule ── */
+    .tabs { display:inline-flex; background:var(--surf-low); border:1px solid var(--line);
+      border-radius:12px; padding:3px; gap:3px; margin:0 0 14px; }
+    .tab { border:0; background:none; min-height:36px; padding:7px 16px; border-radius:9px;
+      font:600 13.5px system-ui; color:var(--ink-v); cursor:pointer; }
+    .tab:hover { color:var(--ink); }
+    .tab[aria-selected="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(60,50,40,.08); }
+    .tab:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+
+    /* ── Plan vs Actual: a table-like list in a white card ── */
+    .pva-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 12px; }
+    .pva-count { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    .pva-card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      box-shadow:var(--shadow); }
+    /* On a phone the columns cannot fit 375px, so the list scrolls sideways INSIDE its card and
+       the page itself never does. */
+    .pva-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
+    .pva { width:100%; min-width:860px; border-collapse:collapse; font-size:13px; }
+    .pva th { text-align:left; vertical-align:bottom; padding:11px 14px 9px; white-space:nowrap;
+      font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-mut);
+      border-bottom:1px solid var(--line); }
+    .pva th small { display:block; font:500 10.5px system-ui; text-transform:none; letter-spacing:0;
+      color:var(--ink-mut); margin-top:2px; }
+    .pva td { padding:11px 14px; vertical-align:top; border-bottom:1px solid var(--line-soft); }
+    .pva tbody tr:last-child td { border-bottom:0; }
+    .pva tbody tr:hover td { background:#faf8f4; }
+    .pva .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .pva td.num b { font:600 14px system-ui; color:var(--ink); }
+    .job { display:flex; gap:9px; align-items:flex-start; min-width:230px; }
+    .job .sw { flex:none; width:10px; height:10px; border-radius:3px; margin-top:5px;
+      background:var(--bar-neutral); }
+    .jn { font:600 12px system-ui; color:var(--ink-v); font-variant-numeric:tabular-nums;
+      margin-right:4px; }
+    .jname { font-weight:600; color:var(--ink); }
+    .jsub { display:block; font-size:12px; color:var(--ink-v); margin-top:2px; }
+    .dd { display:block; white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .pva td small { display:block; font-size:11.5px; color:var(--ink-mut); white-space:nowrap; }
+    .raken { color:var(--ink-mut); font-size:12px; white-space:nowrap; }
+    .chip.warn { background:#fdf5e8; color:var(--warn); }
+    .pva-foot { color:var(--ink-mut); font-size:12px; margin:10px 2px 0; }
+    .pva-card .note { margin:0; padding:14px; }
 
     /* ── the grid: one row per week, bars span day columns ── */
     /* On a phone seven day columns cannot fit 375px, so the weeks scroll sideways INSIDE their
@@ -121,26 +160,6 @@
     .bar .dlm { flex:none; margin-left:auto; font:700 8.5px system-ui; text-transform:uppercase;
       letter-spacing:.06em; padding:2px 5px; border-radius:999px; background:#fff; color:var(--late); }
     .bar.dl-end { box-shadow:inset -4px 0 0 rgba(0,0,0,.28), 0 1px 1px rgba(60,50,40,.08); }
-
-    /* ── side list ── */
-    .side { background:var(--card); border:1px solid var(--line); border-radius:14px;
-      box-shadow:var(--shadow); padding:14px 14px 10px; }
-    .side h2 { font:400 17px var(--display); margin:0 0 2px; }
-    .side .sub { margin:0 0 10px; font-size:12px; color:var(--ink-v); }
-    .dl-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
-    .dl-row { width:100%; display:grid; grid-template-columns:62px minmax(0,1fr); gap:8px;
-      align-items:start; text-align:left; background:var(--card); border:1px solid var(--line);
-      border-left:3px solid var(--calm); border-radius:8px; padding:7px 9px; cursor:pointer;
-      font:inherit; color:inherit; }
-    .dl-row:hover { background:var(--surf-low); }
-    .dl-row.st-today { border-left-color:var(--late); background:var(--late-bg); }
-    .dl-row.st-soon { border-left-color:var(--soon); background:var(--soon-bg); }
-    .dl-date { font:600 12px system-ui; font-variant-numeric:tabular-nums; color:var(--ink); }
-    .dl-date small { display:block; font:500 10.5px system-ui; color:var(--ink-mut); }
-    .dl-name { font:600 12.5px/1.3 system-ui; overflow:hidden; display:-webkit-box;
-      -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-    .dl-meta { font-size:11px; color:var(--ink-v); font-variant-numeric:tabular-nums; }
-    .side .empty { color:var(--ink-v); font-size:12.5px; padding:6px 2px 8px; }
 
     .legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; font-size:11.5px;
       color:var(--ink-mut); align-items:center; }
@@ -194,11 +213,53 @@
     <h1>Project Analytics</h1>
     <span class="ro" title="This page reads the Treadwell Projects Google calendar and never changes it">Read only</span>
   </div>
-  <p class="hint">The crews' schedule from the Treadwell Projects Google calendar, in Central time.
-    Every bar is a job's Duration, and its last day is the Deadline. A bar's colour is its Work type,
-    shown in the key below the calendar. Changes are made in Google Calendar.</p>
+  <p class="hint">Each job's plan from the Treadwell Projects Google calendar, next to what Raken
+    recorded. Dates are Central time. Changes are made in Google Calendar.</p>
 
   <div class="wrap">
+    <div class="tabs" role="tablist" aria-label="Project Analytics views">
+      <button type="button" class="tab" role="tab" id="tab-pva" aria-controls="panel-pva"
+              aria-selected="true">Plan vs Actual</button>
+      <button type="button" class="tab" role="tab" id="tab-schedule" aria-controls="panel-schedule"
+              aria-selected="false" tabindex="-1">Schedule</button>
+    </div>
+
+    <!-- Plan vs Actual: the server builds every row (GET /api/project-analytics); the page lays
+         them out. The Raken side reads "Connect Raken to compare" until Raken is connected. -->
+    <section id="panel-pva" role="tabpanel" aria-labelledby="tab-pva">
+      <div class="pva-bar">
+        <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
+               aria-label="Search Plan vs Actual" autocomplete="off" />
+        <span id="pva-count" class="pva-count" aria-live="polite"></span>
+      </div>
+      <p id="pva-alert" class="alert" role="status" hidden></p>
+      <div id="pva-state" class="msg">Loading Plan vs Actual…</div>
+      <div id="pva-main" hidden>
+        <div class="pva-card">
+          <div class="pva-scroll">
+            <table class="pva">
+              <thead>
+                <tr>
+                  <th scope="col">Job</th>
+                  <th scope="col">Deadline</th>
+                  <th scope="col" class="num">Days<small>booked so far</small></th>
+                  <th scope="col" class="num">Crew<small>planned</small></th>
+                  <th scope="col" class="num">Hours so far<small>planned</small></th>
+                  <th scope="col">Raken<small>clocked, men, hours, budget</small></th>
+                </tr>
+              </thead>
+              <tbody id="pva-body"></tbody>
+            </table>
+          </div>
+          <p id="pva-empty" class="note" hidden></p>
+        </div>
+        <p id="pva-foot" class="pva-foot"></p>
+      </div>
+    </section>
+
+    <section id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" hidden>
+    <p class="hint">Every bar is a job's Duration, and its last day is the Deadline. A bar's colour
+      is its Work type, shown in the key below the calendar.</p>
     <div id="toolbar" class="toolbar" hidden>
       <span id="range" class="range"></span>
       <span class="nav">
@@ -214,7 +275,7 @@
 
     <p id="alert" class="alert" role="status" hidden></p>
 
-    <div id="state" class="msg">Loading Project Analytics…</div>
+    <div id="state" class="msg">Loading the Schedule…</div>
 
     <div id="main" class="main" hidden>
       <section aria-label="Calendar">
@@ -227,12 +288,8 @@
         </div>
         <div id="legend" class="legend"></div>
       </section>
-      <aside id="side" class="side" aria-labelledby="side-h">
-        <h2 id="side-h">Upcoming Deadlines</h2>
-        <p id="side-sub" class="sub"></p>
-        <div id="side-body"></div>
-      </aside>
     </div>
+    </section>
   </div>
 
   <!-- The details panel. <dialog> gives focus trapping, Esc and the backdrop for free.
@@ -258,5 +315,6 @@
   <script src="/js/calendar-core.js"></script>
   <script src="/js/project-calendar-core.js"></script>
   <script src="/js/project-calendar.js"></script>
+  <script src="/js/plan-vs-actual.js"></script>
 </body>
 </html>

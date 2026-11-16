@@ -161,25 +161,6 @@ def test_a_deadline_is_overdue_today_or_upcoming():
     assert got == ["overdue", "today", "upcoming", None, None]
 
 
-def test_upcoming_deadlines_are_every_job_from_today_on_soonest_first():
-    """Every bar is a Duration, so every job has a Deadline. One that has passed is not "upcoming"."""
-    got = run(EVENTS + 'const extra = [ev({id:"e", name:"Example Plaza", title:"Example Plaza (6)",'
-              ' color_id:"11", start:"2026-11-02", last_day:"2026-11-12",'
-              ' deadline:"2026-11-12"}),'
-              ' ev({id:"f", name:"Beta Hall", title:"Beta Hall", color_id:"11",'
-              ' start:"2026-11-03", last_day:"2026-11-11", deadline:"2026-11-11"}),'
-              ' ev({id:"g", name:"Alpha Hall", title:"Alpha Hall", color_id:"11",'
-              ' start:"2026-11-16", last_day:"2026-11-19", deadline:"2026-11-19"})];'
-              'out(P.upcomingDeadlines(EVENTS.concat(extra), "2026-11-12")'
-              '  .map(r => [r.ev.id, r.deadline, r.status, r.days]))')
-    # Beta Hall (Nov 11) and the Lofts (Nov 9) have passed. Same-day Deadlines are ordered by name.
-    assert got == [["b", "2026-11-12", "today", 0],
-                   ["e", "2026-11-12", "today", 0],
-                   ["c", "2026-11-13", "upcoming", 1],
-                   ["a", "2026-11-19", "upcoming", 7],
-                   ["g", "2026-11-19", "upcoming", 7]]
-
-
 # ── colour ──────────────────────────────────────────────────────────────
 def test_colour_comes_from_the_api_then_googles_palette_then_nothing():
     got = run('out([P.colorOf({color:"#D50000"}), P.colorOf({color_id:"5"}),'
@@ -401,31 +382,12 @@ def test_the_stale_notice_names_the_time_in_central():
 
 
 # ── review fixes ─────────────────────────────────────────────────────────────
-def test_upcoming_deadlines_stay_inside_the_window_they_are_labelled_with():
-    """The side list reads "Next 60 days". A Duration that overlaps the window but ends on day 106
-    must not appear, and two Deadlines on the same far day are treated the same."""
-    got = run(EVENTS + 'const far = [ev({id:"long", name:"Long Job", color_id:"11",'
-              ' start:"2026-11-02", last_day:"2027-02-26", deadline:"2027-02-26"}),'
-              ' ev({id:"near", name:"Near Job", color_id:"11",'
-              ' start:"2026-11-02", last_day:"2027-01-10", deadline:"2027-01-10"})];'
-              'out([P.upcomingDeadlines(far, "2026-11-12", 60).map(r => r.ev.id),'
-              '     P.upcomingDeadlines(far, "2026-11-12").map(r => r.ev.id)])')
-    assert got == [["near"], ["near", "long"]]
-
-
 def test_switching_view_length_keeps_the_days_being_looked_at():
     """Paged forward in two weeks to a mostly-February range, Month must show February."""
     got = run('out([P.focusDay({from:"2027-01-31", to:"2027-02-13"}, "2026-11-12"),'
               '     P.focusDay({from:"2026-11-08", to:"2026-11-21"}, "2026-11-12"),'
               '     P.focusDay({from:"2026-11-01", to:"2026-12-12"}, "2026-12-20")])')
     assert got == ["2027-02-06", "2026-11-12", "2026-11-21"]
-
-
-def test_the_deadline_list_says_when_it_could_not_load():
-    js = _page_js()
-    assert "Couldn't load Deadlines. " in js
-    assert "P.upcomingDeadlines(visible(SIDE.events), TODAY, SIDE_DAYS)" in js
-    assert "P.centralStamp(SIDE.fetched_at)" in js
 
 
 def test_the_servers_message_reaches_the_screen_when_there_are_bars():
@@ -442,13 +404,11 @@ def test_the_servers_message_reaches_the_screen_when_there_are_bars():
 def test_a_notice_rides_beside_the_grid_and_never_reads_as_a_failed_read():
     """A free/busy-only read that worked comes back with `notice`, not `error`. An empty month read
     that way must draw its empty weeks with the notice in the alert line, not the "Couldn't read
-    the calendar" box, and the Deadlines list must not say "Couldn't load"."""
+    the calendar" box."""
     js = _page_js()
     assert "if (current.notice) notice.push(String(current.notice));" in js
     i = js.index("if (!events.length && current.error)")
     assert "notice" not in js[i:js.index("\n", i)], "the failure box keys on a notice"
-    j = js.index("Couldn't load Deadlines. \" + esc(SIDE.error)")
-    assert "notice" not in js[js.rfind("\n", 0, j - 80):j]
     assert "cached.notice" in js, "a changed notice must repaint"
 
 
@@ -468,15 +428,6 @@ def test_the_legend_is_drawn_from_the_servers_list_not_a_copy():
     assert "WORK_TYPE_BY_COLOR" not in core and "WORK_TYPE_BY_COLOR" not in js
 
 
-def test_every_colour_has_an_upcoming_deadline_not_only_red():
-    got = run(EVENTS + 'const blue = ev({id:"p", name:"Polish Job", color_id:"9", start:"2026-11-12",'
-              ' last_day:"2026-11-14", deadline:"2026-11-14"});'
-              'const none = ev({id:"n", name:"No Colour Job", start:"2026-11-12", last_day:"2026-11-13",'
-              ' deadline:"2026-11-13"});'
-              'out(P.upcomingDeadlines([blue, none], "2026-11-12", 60).map(r => r.ev.id))')
-    assert got == ["n", "p"]
-
-
 def test_a_bar_names_the_foreman_and_search_finds_the_foreman():
     got = run(EVENTS + 'const f = ev({id:"f", name:"Example Hall", foreman:"Rosa", crew_size:3});'
               'out([P.barParts(f).meta.indexOf("Rosa") >= 0,'
@@ -489,3 +440,139 @@ def test_the_page_says_foreman_and_never_crew_lead():
     assert 'fact("Foreman"' in js
     for text in (js, page):
         assert "Crew lead" not in text and "crew_lead" not in text
+
+
+# ── #780: two tabs, Plan vs Actual first; the Schedule loses its side list ──────────────────────
+PVA = FRONTEND / "js" / "plan-vs-actual.js"
+
+# Rows in the shape GET /api/project-analytics sends them. Made-up jobs and people.
+PROJECTS = """
+const pr = (o) => Object.assign({key:"", job_number:null, name:"", is_punch:false, label:null,
+  work_type:null, color:null, foreman:null, start:"2026-11-16", deadline:"2026-11-20",
+  timing:"running", workdays_left:3, workdays_so_far:2, crew_size:4, planned_hours:64,
+  crew_size_missing:false, mobilizations:[], punches:[], raken:{state:"not_connected"}}, o);
+const PROJECTS = [
+  pr({key:"job:26.125", job_number:"26.125", name:"Acme Clinic Psych", work_type:"Epoxy",
+      foreman:"Pat"}),
+  pr({key:"job:G25.110", job_number:"G25.110", name:"The Example Lofts", work_type:"Polish",
+      foreman:"Sam"}),
+  pr({key:"name:examplediner", name:"Example Diner", foreman:"Lee"}),
+  pr({key:"punch:name:exampleshoppunch", name:"Example Shop Punch", is_punch:true, label:"Punch",
+      work_type:"Gyp", foreman:null}),
+];
+"""
+
+
+def _pva_js():
+    return PVA.read_text(encoding="utf-8")
+
+
+def test_the_page_opens_on_plan_vs_actual_unless_the_address_asks_for_the_schedule():
+    got = run('out([P.TABS.map(t => [t.id, t.label]), P.tabFromHash(""), P.tabFromHash("#schedule"),'
+              ' P.tabFromHash("#Schedule"), P.tabFromHash("#plan"), P.tabFromHash(null),'
+              ' P.tabFromHash("#nonsense")])')
+    assert got == [[["pva", "Plan vs Actual"], ["schedule", "Schedule"]],
+                   "pva", "schedule", "schedule", "pva", "pva", "pva"]
+
+
+def test_search_filters_the_list_by_job_number_name_foreman_or_work_type():
+    got = run(PROJECTS + 'const keys = (q) => P.filterProjects(PROJECTS, q).map(p => p.key);'
+              'out([keys("26.125"), keys("g25"), keys("lofts"), keys("LEE"), keys("epoxy"),'
+              ' keys("gyp"), keys("unknown"), keys("acme pat"), keys("acme sam"), keys(""),'
+              ' keys("  ")])')
+    every = ["job:26.125", "job:G25.110", "name:examplediner", "punch:name:exampleshoppunch"]
+    assert got == [["job:26.125"], ["job:G25.110"], ["job:G25.110"], ["name:examplediner"],
+                   ["job:26.125"], ["punch:name:exampleshoppunch"], ["name:examplediner"],
+                   ["job:26.125"], [], every, every]
+
+
+def test_filtering_projects_never_throws_on_odd_input():
+    got = run(PROJECTS + 'out([P.filterProjects(null, "x").length,'
+              ' P.filterProjects([null, 4, PROJECTS[0]], "").length,'
+              ' P.filterProjects([{key:"zz"}], "zz").length])')
+    assert got == [0, 1, 0]
+
+
+def test_workdays_left_read_as_starts_a_count_or_finished():
+    got = run(PROJECTS + 'out([P.leftLabel(pr({timing:"starts", start:"2026-11-23", workdays_left:null})),'
+              ' P.leftLabel(pr({timing:"running", workdays_left:3})),'
+              ' P.leftLabel(pr({timing:"running", workdays_left:1})),'
+              ' P.leftLabel(pr({timing:"finished", workdays_left:null})), P.leftLabel(null)])')
+    assert got == ["Starts Mon, Nov 23, 2026", "3 workdays left", "1 workday left", "Finished", ""]
+
+
+def test_hours_and_counts_read_as_whole_numbers_or_a_dash():
+    got = run('out([P.numLabel(1136), P.numLabel(0), P.numLabel(null), P.numLabel("x"),'
+              ' P.numLabel(12.6)])')
+    assert got == ["1,136", "0", "\u2014", "\u2014", "13"]
+
+
+def test_the_raken_side_says_connect_raken_until_raken_is_connected():
+    got = run(PROJECTS + 'out([P.rakenLabel(PROJECTS[0]), P.rakenLabel(pr({raken:null})),'
+              ' P.rakenLabel(pr({raken:{state:"linked"}}))])')
+    assert got == ["Connect Raken to compare", "Connect Raken to compare", "\u2014"]
+
+
+def test_the_side_list_of_upcoming_deadlines_is_gone():
+    js, page = _page_js(), _page()
+    core = CORE.read_text(encoding="utf-8")
+    for text in (js, page, core):
+        assert "Upcoming Deadlines" not in text and "upcomingDeadlines" not in text
+        assert "SIDE_DAYS" not in text and "side-body" not in text
+
+
+def test_the_page_has_two_tabs_with_plan_vs_actual_selected_and_the_schedule_hidden():
+    html = _page()
+    pva = html.index('id="tab-pva"')
+    sched = html.index('id="tab-schedule"')
+    assert pva < sched, "Plan vs Actual comes first"
+    assert 'role="tablist"' in html
+    tab_pva = html[html.rfind("<button", 0, pva):html.index(">", pva)]
+    tab_sched = html[html.rfind("<button", 0, sched):html.index(">", sched)]
+    assert 'aria-selected="true"' in tab_pva and 'aria-selected="false"' in tab_sched
+    panel = html[html.index('id="panel-schedule"') - 80:html.index('id="panel-schedule"') + 120]
+    assert "hidden" in panel, "the Schedule panel starts hidden"
+    # The calendar moved behind the Schedule tab, with its toolbar and details panel.
+    i, j = html.index('id="panel-schedule"'), html.index('id="grid"')
+    assert i < html.index('id="toolbar"') < j
+
+
+def test_the_plan_vs_actual_script_loads_after_the_core_and_is_read_only():
+    html, js = _page(), _pva_js()
+    assert html.index('src="/js/project-calendar-core.js"') < html.index('src="/js/plan-vs-actual.js"')
+    for verb in ('"POST"', '"PATCH"', '"PUT"', '"DELETE"', "method:"):
+        assert verb not in js, "the read-only page sends a write: %s" % verb
+    assert '"/api/project-analytics"' in js
+
+
+def test_plan_vs_actual_escapes_every_value_and_styles_through_the_cssom():
+    js = _pva_js()
+    assert 'style="' not in js and "style='" not in js
+    assert ".style.background" in js
+    for field in ("p.name", "p.job_number", "p.foreman", "P.workTypeOf(p)", "P.leftLabel(p)",
+                  "P.rakenLabel(p)", "p.label"):
+        hits = list(re.finditer(re.escape(field), js))
+        assert hits, field
+        for m in hits:
+            line = js[js.rfind("\n", 0, m.start()) + 1: js.find("\n", m.end())]
+            if "innerHTML" in line or "'<" in line or '"<' in line:
+                assert "esc(" in line or "textContent" in line, (
+                    "%s reaches markup unescaped: %s" % (field, line.strip()))
+
+
+def test_plan_vs_actual_reads_today_from_the_server_never_the_local_clock():
+    js = _pva_js()
+    for naive in ("getDate()", "getFullYear()", "toISOString().slice(0, 10)", "new Date()"):
+        assert naive not in js, naive
+
+
+def test_the_list_scrolls_sideways_inside_its_card_at_phone_width():
+    html = _page()
+    assert 'class="pva-scroll"' in html
+    assert re.search(r"\.pva-scroll\s*\{[^}]*overflow-x:\s*auto", html)
+
+
+def test_the_schedule_arrow_keys_only_page_the_calendar_when_it_is_shown():
+    js = _page_js()
+    i = js.index('document.addEventListener("keydown"')
+    assert 'panel-schedule").hidden' in js[i:i + 400]
