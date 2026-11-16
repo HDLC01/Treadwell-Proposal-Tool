@@ -2,8 +2,9 @@
 and the Budget pair from Raken's production insights.
 
 backend/plan_vs_actual.py builds each Project's plan from the Treadwell Projects calendar. This
-module reads Raken when someone presses "Refresh now", keeps that read on the data volume, and sets
-it beside the plan on every GET. A GET never calls Raken. The words are GLOSSARY.md's: Job number,
+module reads Raken when someone presses "Refresh now" and at 5:00 AM Central every day (#784, the
+same step: backend/pva_refresh_worker.py), keeps that read on the data volume, and sets it beside
+the plan on every GET. A GET never calls Raken. The words are GLOSSARY.md's: Job number,
 Workday, Actual hours, Days clocked in, On site, Behind, Not linked, In Raken, not on the calendar,
 Budgeted hours, Projected total hours, Over/under, Over budget, On plan.
 
@@ -454,9 +455,10 @@ def _insight_uuids(rows: Iterable[Dict[str, Any]], projects: List[Dict[str, Any]
 
 
 def read_and_keep(first: _dt.date, last: _dt.date, rows: Iterable[Dict[str, Any]] = (),
-                  keep_last: bool = False) -> None:
+                  keep_last: bool = False) -> bool:
     """Read Raken over [first, last], and the production insights of every Raken project linked to
-    one of `rows`, and keep the result, or keep why it failed. Never raises."""
+    one of `rows`, and keep the result, or keep why it failed. True when a good read was kept (a
+    snapshot may follow, #784), False when the last good read stays. Never raises."""
     before = raken.calls_made()
     stop_at = before + CALL_CAP
     store = load()
@@ -469,26 +471,26 @@ def read_and_keep(first: _dt.date, last: _dt.date, rows: Iterable[Dict[str, Any]
         # raken.py has marked the stored sign-in expired; the page reads that from the file, so no
         # failure is recorded here (it would outlive a new Connect Raken). The last numbers stay.
         log.warning("raken actuals: refresh stopped, the sign-in has expired")
-        return
+        return False
     except raken.NotProvisioned:
         _fail(store, STATE_NOT_PROVISIONED, raken.NOT_PROVISIONED_MESSAGE)
         log.warning("raken actuals: refresh stopped, Raken's Public API is not on for the account")
-        return
+        return False
     except raken.ListingTooLong:
         _fail(store, STATE_UNREACHABLE, TOO_MANY_MESSAGE)
         log.warning("raken actuals: refresh stopped at the cap of %d calls or the page cap, "
                     "after %d calls", CALL_CAP, raken.calls_made() - before)
-        return
+        return False
     except raken.RakenError as exc:
         # exc.message is one of raken.py's fixed sentences, never text from a response.
         msg = exc.message if exc.message in _FIXED else raken.UNREACHABLE_MESSAGE
         _fail(store, STATE_UNREACHABLE, msg)
         log.warning("raken actuals: refresh failed after %d calls", raken.calls_made() - before)
-        return
+        return False
     except Exception as exc:  # noqa: BLE001 - a refresh must never 500 the page
         _fail(store, STATE_UNREACHABLE, raken.UNREACHABLE_MESSAGE)
         log.warning("raken actuals: refresh failed (%s)", type(exc).__name__)
-        return
+        return False
     result = {"as_of": _central_stamp(), "read_from": first.isoformat(),
               "through": last.isoformat(), "projects": projects, "days": days,
               "insights": insights}
@@ -496,6 +498,7 @@ def read_and_keep(first: _dt.date, last: _dt.date, rows: Iterable[Dict[str, Any]
     # Counts of pieces, projects and calls only: nothing derived from the response is logged.
     log.info("raken actuals: refresh read %d pieces and %d projects' insights in %d calls",
              len(pieces(first, last)), len(insights), raken.calls_made() - before)
+    return True
 
 
 def fresh() -> bool:

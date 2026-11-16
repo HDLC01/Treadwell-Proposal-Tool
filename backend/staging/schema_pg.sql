@@ -451,3 +451,21 @@ alter table public.condition_defaults add column if not exists listed boolean;
 -- only covers tables that existed when it ran, so a table added later reads fine and every write
 -- fails.
 grant select, insert, update, delete on public.condition_defaults to service_role;
+
+-- PLAN VS ACTUAL SNAPSHOTS (#784). Mirrors supabase_schema.sql; see backend/pva_snapshots.py. One
+-- row per listed Project per Central day; a second good run the same day replaces the row.
+create table if not exists public.pva_snapshots (
+  -- The row's own key: "job:<Job number>", "name:<name>" or "punch:...", as the page uses it.
+  project_key text not null,
+  -- The day in Central the run belongs to.
+  snap_date   date not null,
+  -- The row's computed figures: the plan, and the Raken side with its statuses.
+  figures     jsonb not null,
+  -- When Raken was read (Central, with its offset).
+  ran_at      timestamptz,
+  primary key (project_key, snap_date)
+);
+-- Beside the table, per the measured lesson this file already records: the blanket grant above
+-- only covers tables that existed when it ran, so a table added later reads fine and every write
+-- fails.
+grant select, insert, update, delete on public.pva_snapshots to service_role;

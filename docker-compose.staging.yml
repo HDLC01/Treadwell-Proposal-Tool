@@ -47,6 +47,11 @@ services:
       # POST /api/admin/digest/run (sends now) or GET /api/admin/digest/preview
       # (shows the ranking and the reasons, emails nobody).
       - DIGEST_ENABLED=off
+      # Plan vs Actual's 5:00 AM Central refresh is SCHEDULE-off on staging too.
+      # Staging has its own Raken sign-in but draws on the same company's shared
+      # daily Raken allowance, and would fire in the same window as prod. QA it
+      # with "Refresh now" on Project Analytics (the same step).
+      - PVA_REFRESH_ENABLED=off
     env_file:
       - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
     volumes:

@@ -4,7 +4,9 @@ Project Analytics opens on Plan vs Actual. Each row sets a job's plan from the T
 calendar beside what Raken recorded for it. This module builds the PLAN side; backend/raken_actuals.py
 sets the last "Refresh now" read of Raken beside every row (#782): each row's "raken" and
 "statuses", the response's "raken" block (state, one plain message, the "as of" time in Central)
-and "raken_only". A GET never calls Raken; refresh() does, one at a time. The words are
+and "raken_only". A GET never calls Raken; refresh() does, one at a time, on "Refresh now" and by
+itself at 5:00 AM Central (backend/pva_refresh_worker.py, #784), and after every good run it keeps
+one snapshot of each listed row's figures (backend/pva_snapshots.py). The words are
 GLOSSARY.md's: Project, Mobilization, Punch, Job number, Crew size, Foreman, Workday, Planned
 hours, Deadline.
 
@@ -81,6 +83,7 @@ import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import project_calendar as pc
+import pva_snapshots
 import raken_actuals
 
 log = logging.getLogger("treadwell.plan_vs_actual")
@@ -602,15 +605,42 @@ def fetch() -> Dict[str, Any]:
 # request thread blocked on it is one the whole app's sync routes share. A press while a refresh
 # runs answers at once as fetch() does, its Raken block saying refreshing: true, and the page polls
 # the GET until it is done. A press within raken_actuals.REFRESH_COOLDOWN_S of a good read answers
-# from that read: Raken's daily allowance is shared by the whole company.
+# from that read: Raken's daily allowance is shared by the whole company. Only the daily run
+# (refresh_for_daily_run()) waits, on its own thread, for a refresh already going, and then answers
+# that refresh's outcome without reading Raken again; it gives up waiting after REFRESH_WAIT_S.
 _REFRESH_LOCK = threading.Lock()
+REFRESH_WAIT_S = 30 * 60
 
 
 def refresh() -> Dict[str, Any]:
-    """Read Raken over the span the listed Projects need, keep the result, and answer as fetch()
-    does. Never raises: a fault on the Raken side is logged, and the answer shows the kept read."""
+    """The "Refresh now" step: read Raken over the span the listed Projects need, keep the result,
+    and answer as fetch() does. A refresh already going is answered at once (refreshing: true), never
+    waited for. Never raises: a fault on the Raken side is logged, and the answer shows the kept
+    read."""
     if not _REFRESH_LOCK.acquire(blocking=False):
         return fetch()
+    return _refresh_locked()
+
+
+def refresh_for_daily_run() -> Dict[str, Any]:
+    """The daily run's refresh (backend/pva_refresh_worker.py): the same step, but a refresh
+    already going is waited for (up to REFRESH_WAIT_S) and its outcome answered, rather than
+    answered at once or Raken read a second time. Never raises."""
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        if _REFRESH_LOCK.acquire(timeout=REFRESH_WAIT_S):
+            _REFRESH_LOCK.release()
+        return fetch()
+    return _refresh_locked()
+
+
+def _calendar_good(connected: bool, meta: Dict[str, Any]) -> bool:
+    """The calendar was read just now: connected, without an error, and not a stale copy."""
+    return bool(connected and not meta.get("error") and not meta.get("stale"))
+
+
+def _refresh_locked() -> Dict[str, Any]:
+    """The refresh itself, entered holding _REFRESH_LOCK, which it releases."""
+    read = False
     try:
         today = pc.today_central()
         connected, projects, meta = _calendar_side(today)
@@ -621,9 +651,26 @@ def refresh() -> Dict[str, Any]:
                 # last time, so the numbers on screen never shrink during an outage.
                 calendar_failed = not connected or (not projects and bool(meta.get("error")))
                 first, last = raken_actuals.span(projects, today, keep_last=calendar_failed)
-                raken_actuals.read_and_keep(first, last, rows=projects, keep_last=calendar_failed)
+                read = raken_actuals.read_and_keep(first, last, rows=projects,
+                                                   keep_last=calendar_failed)
         except Exception as exc:  # noqa: BLE001 - "Refresh now" must never 500 the page
             log.warning("plan vs actual: Raken not refreshed (%s)", type(exc).__name__)
     finally:
         _REFRESH_LOCK.release()
-    return _response(connected, today, projects, **meta)
+    body = _response(connected, today, projects, **meta)
+    calendar_good = _calendar_good(connected, meta)
+    _snapshot(body, today, read, calendar_good)
+    return body
+
+
+def _snapshot(body: Dict[str, Any], today: _dt.date, read: bool, calendar_good: bool) -> None:
+    """After a GOOD run, keep today's snapshot of every listed Project (backend/pva_snapshots.py):
+    Raken read and kept just now, and the calendar read without an error or a stale copy. A run
+    that only answered from the kept read (the cooldown, or one waited for) keeps none: the run
+    that read did. Never raises."""
+    if not (read and calendar_good) or body["raken"].get("state") != raken_actuals.STATE_CONNECTED:
+        return
+    try:
+        pva_snapshots.write(body["projects"], today, body["raken"].get("as_of"))
+    except Exception as exc:  # noqa: BLE001 - a snapshot never fails the refresh
+        log.warning("plan vs actual: snapshot not kept (%s)", type(exc).__name__)
