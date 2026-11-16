@@ -66,6 +66,10 @@ class FakeRaken:
         self.refuse = None              # a JSON body: answer every data call 403 with it
         self.down = False               # every data call fails to connect
         self.card_delay = 0.0
+        self.gate = None                # a threading.Event every /timeCards call waits on
+        self.entered = threading.Event()  # set once a /timeCards call has arrived
+        self.project_params = []        # the "statuses" asked for on every /projects call
+        self.projects_next = None       # a nextOffset to send on every /projects page instead
         self.in_flight = 0
         self.max_in_flight = 0
 
@@ -116,7 +120,13 @@ class FakeRaken:
             return httpx.Response(403, json=self.refuse)
         if url.path == "/api/projects":
             self.project_calls += 1
-            return self._page(self.projects, url)
+            self.project_params.append(url.params.get_list("statuses"))
+            resp = self._page(self.projects, url)
+            if self.projects_next is not None:
+                body = resp.json()
+                body["page"]["nextOffset"] = self.projects_next
+                resp = httpx.Response(200, json=body)
+            return resp
         if url.path == "/api/timeCards":
             q = dict(url.params)
             self.card_params.append(q)
@@ -124,6 +134,9 @@ class FakeRaken:
             if (dt.date.fromisoformat(b) - dt.date.fromisoformat(a)).days > 31 or a > b:
                 return httpx.Response(400, json={"message": "made-up range refusal"})
             self.card_calls.append((a, b, int(q.get("offset", "0"))))
+            self.entered.set()
+            if self.gate is not None:
+                self.gate.wait(10)
             if self.card_delay:
                 time.sleep(self.card_delay)
             hits = [c for c in self.cards if a <= c["date"] <= b]
@@ -439,6 +452,20 @@ def test_raken_projects_with_recent_hours_and_no_calendar_job_get_their_own_sect
     assert body["raken"]["read_from"] <= "2026-11-04"
 
 
+def test_a_raken_project_for_a_calendar_job_outside_the_list_is_not_raken_only(
+        client, google, fake):
+    """Raken-only means no job ON THE CALENDAR has the number, not merely none in the list: a job
+    that ended weeks ago with a straggling time card is still a calendar job."""
+    google.events = [JOB, mob("o", "26.530, Example Old Job (2)", "2026-09-28", "2026-10-02")]
+    fake.projects = [project("r-1", "26.501", "Example Clinic"),
+                     project("r-5", "26.530", "Example Old Job"),
+                     project("r-6", "26.701", "Example Unscheduled")]
+    fake.cards = [card("r-5", "2026-11-16", "w-5", 3), card("r-6", "2026-11-16", "w-6", 2)]
+    body = refresh(client)
+    assert [p["key"] for p in body["projects"]] == ["job:26.501"]
+    assert [x["uuid"] for x in body["raken_only"]] == ["r-6"]
+
+
 # ── when Raken cannot be read ─────────────────────────────────────────────────
 def _calendar_side_still_shows(body):
     assert [p["key"] for p in body["projects"]] == ["job:26.501"]
@@ -582,26 +609,152 @@ def test_a_store_that_cannot_be_written_still_answers_and_never_500s(
     assert "No space left" not in r.text
 
 
-def test_a_refresh_while_one_is_running_waits_for_it_and_reads_raken_once(client, google, fake):
+def later(monkeypatch, minutes):
+    """Move the clock `minutes` past the first refresh (Wednesday 09:05 Central)."""
+    at = dt.datetime(2026, 11, 18, 15, 5, tzinfo=dt.timezone.utc) + dt.timedelta(minutes=minutes)
+    monkeypatch.setattr(raken_actuals, "now_utc", lambda: at)
+
+
+def test_a_refresh_while_one_is_running_answers_at_once_and_raken_is_read_once(
+        client, google, fake):
+    """A second press never holds a server thread for the whole Raken read: it answers straight
+    away, saying a refresh is running, and the page polls until it is done."""
     google.events = [JOB]
     fake.projects = [project("r-1", "26.501", "Example Clinic")]
     fake.cards = [card("r-1", "2026-11-16", "w-1", 8)]
-    fake.card_delay = 0.3
+    fake.gate = threading.Event()
     out = []
-
-    def go():
-        out.append(client.post(REFRESH))
-    threads = [threading.Thread(target=go) for _ in range(2)]
-    for t in threads:
-        t.start()
-        time.sleep(0.05)
-    for t in threads:
-        t.join(15)
-    assert [r.status_code for r in out] == [200, 200]
-    for r in out:
-        assert by_key(r.json())["job:26.501"]["raken"]["actual_hours"] == 8
-    assert fake.project_calls == 1, "the second refresh waited and used the first one's read"
+    first = threading.Thread(target=lambda: out.append(client.post(REFRESH)))
+    first.start()
+    try:
+        assert fake.entered.wait(5), "the first refresh never reached Raken"
+        started = time.monotonic()
+        second = refresh(client)
+        during = get(client)
+        assert time.monotonic() - started < 5, "the second press waited for the first"
+    finally:
+        fake.gate.set()
+        first.join(15)
+    assert second["raken"]["refreshing"] is True and during["raken"]["refreshing"] is True
+    assert [r.status_code for r in out] == [200]
+    done = out[0].json()
+    assert done["raken"]["refreshing"] is False
+    assert by_key(done)["job:26.501"]["raken"]["actual_hours"] == 8
+    after = get(client)
+    assert after["raken"]["refreshing"] is False
+    assert by_key(after)["job:26.501"]["raken"]["actual_hours"] == 8
+    assert fake.project_calls == 1, "Raken was read once"
     assert fake.max_in_flight == 1
+
+
+def test_a_second_refresh_soon_after_a_good_one_reads_raken_not_again(
+        client, google, fake, monkeypatch):
+    """Raken's daily allowance is the whole company's: presses inside the cooldown answer from the
+    last read."""
+    google.events = [JOB]
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    fake.cards = [card("r-1", "2026-11-16", "w-1", 8)]
+    refresh(client)
+    calls = (fake.project_calls, len(fake.card_calls))
+    fake.cards.append(card("r-1", "2026-11-17", "w-1", 8))
+    cooldown = raken_actuals.REFRESH_COOLDOWN_S // 60
+    later(monkeypatch, cooldown - 1)
+    for _ in range(3):
+        assert by_key(refresh(client))["job:26.501"]["raken"]["actual_hours"] == 8
+    assert (fake.project_calls, len(fake.card_calls)) == calls, "Raken read inside the cooldown"
+    later(monkeypatch, cooldown + 1)
+    assert by_key(refresh(client))["job:26.501"]["raken"]["actual_hours"] == 16
+    assert fake.project_calls == calls[0] + 1
+
+
+def test_a_refresh_after_a_failed_one_is_never_held_back(client, google, fake, monkeypatch):
+    google.events = [JOB]
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    fake.cards = [card("r-1", "2026-11-16", "w-1", 8)]
+    refresh(client)
+    later(monkeypatch, 60)
+    fake.down = True
+    assert refresh(client)["raken"]["stale"] is True
+    fake.down = False
+    later(monkeypatch, 61)
+    body = refresh(client)
+    assert body["raken"]["stale"] is False and body["raken"]["message"] is None
+
+
+def test_a_refresh_while_the_calendar_cannot_be_read_never_shrinks_the_last_read(
+        client, google, fake, monkeypatch):
+    """With no calendar rows to say how far back to read, the refresh reads at least as far back
+    as the last good read did, so no job's Actual hours drop when the calendar comes back."""
+    google.events = [mob("j", "26.520, Example Warehouse (2)", "2026-09-01", "2026-11-20")]
+    fake.projects = [project("r-1", "26.520", "Example Warehouse")]
+    fake.cards = [card("r-1", "2026-09-01", "w-1", 8), card("r-1", "2026-10-01", "w-1", 8),
+                  card("r-1", "2026-11-17", "w-1", 8)]
+    before = by_key(refresh(client))["job:26.520"]["raken"]
+    assert before["actual_hours"] == 24
+    pc.cache_clear()
+    google.fail = True
+    later(monkeypatch, 60)
+    failing = refresh(client)
+    assert failing["projects"] == [] and failing["error"]
+    assert failing["raken"]["read_from"] == "2026-09-01"
+    google.fail = False
+    pc.cache_clear()
+    after = by_key(get(client))["job:26.520"]["raken"]
+    assert after["actual_hours"] == 24 and after["days_booked"] == before["days_booked"]
+
+
+def test_a_fault_before_the_raken_read_still_answers_and_frees_the_next_refresh(
+        client, google, fake, monkeypatch):
+    google.events = [JOB]
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    fake.cards = [card("r-1", "2026-11-16", "w-1", 8)]
+    real = raken_actuals.span
+
+    def broken(*_a, **_k):
+        raise RuntimeError("made-up fault")
+    monkeypatch.setattr(raken_actuals, "span", broken)
+    r = client.post(REFRESH)
+    assert r.status_code == 200, r.text
+    _calendar_side_still_shows(r.json())
+    assert r.json()["raken"]["state"] == "not_refreshed"
+    monkeypatch.setattr(raken_actuals, "span", real)
+    assert by_key(refresh(client))["job:26.501"]["raken"]["actual_hours"] == 8
+
+
+def test_when_the_raken_side_cannot_be_set_the_block_keeps_its_shape_and_says_so(
+        client, google, fake, monkeypatch):
+    google.events = [JOB]
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    fake.cards = [card("r-1", "2026-11-16", "w-1", 8)]
+    good = refresh(client)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("made-up fault")
+    monkeypatch.setattr(raken_actuals, "_row", broken)
+    body = get(client)
+    _calendar_side_still_shows(body)
+    assert set(body["raken"]) == set(good["raken"]), "the same block, whatever went wrong"
+    assert body["raken"]["state"] == "unreachable"
+    assert body["raken"]["message"] == raken_actuals.NOT_SHOWN_MESSAGE
+    assert body["raken"]["message"] != plan_vs_actual.ERR_BUILD, "not a calendar error"
+    assert body["projects"][0]["raken"] == {"state": "unreachable"}
+    assert body["projects"][0]["statuses"] == [] and body["raken_only"] == []
+
+
+def test_a_load_that_races_a_save_never_puts_the_older_copy_back(fake, monkeypatch):
+    raken_actuals._save({"result": {"as_of": "older"}, "failure": None})
+    raken_actuals.reset_for_tests()
+    real = raken_actuals.STORE_FILE
+    monkeypatch.setattr(raken_actuals, "write_json", lambda *_a, **_k: None)
+
+    class Racing:
+        def read_text(self, encoding=None):
+            text = real.read_text(encoding=encoding)
+            raken_actuals._save({"result": {"as_of": "newer"}, "failure": None})
+            return text
+    monkeypatch.setattr(raken_actuals, "STORE_FILE", Racing())
+    raken_actuals.load()
+    assert raken_actuals.load()["result"]["as_of"] == "newer"
 
 
 # ── access and secrecy ────────────────────────────────────────────────────────
@@ -645,4 +798,53 @@ def test_a_refresh_that_would_need_too_many_calls_stops_plainly(client, google, 
     body = refresh(client)
     assert body["raken"]["state"] == "unreachable"
     assert body["raken"]["message"] == raken_actuals.TOO_MANY_MESSAGE
-    assert fake.project_calls + len(fake.card_calls) <= 3
+    assert fake.project_calls + len(fake.card_calls) <= 2
+
+
+def test_the_call_cap_counts_the_project_calls_and_is_never_passed(
+        client, google, fake, monkeypatch):
+    monkeypatch.setattr(raken_actuals, "CALL_CAP", 3)
+    google.events = [JOB]
+    fake.page_size = 1
+    fake.projects = [project("r-%d" % i, "26.%03d" % (600 + i), "Example %d" % i) for i in range(6)]
+    body = refresh(client)
+    assert body["raken"]["state"] == "unreachable"
+    assert body["raken"]["message"] == raken_actuals.TOO_MANY_MESSAGE
+    assert fake.project_calls + len(fake.card_calls) == 3
+
+
+def test_a_listing_longer_than_the_page_cap_fails_instead_of_keeping_part_of_it(
+        client, google, fake, monkeypatch):
+    """A time-card read cut short would undercount Actual hours and show jobs Behind that are not."""
+    monkeypatch.setattr(raken, "_PAGE_CAP", 2)
+    google.events = [JOB]
+    fake.page_size = 1
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    fake.cards = [card("r-1", "2026-11-16", "w-1", 8), card("r-1", "2026-11-16", "w-2", 8),
+                  card("r-1", "2026-11-17", "w-1", 8)]
+    body = refresh(client)
+    assert body["raken"]["state"] == "unreachable"
+    assert body["raken"]["message"] == raken_actuals.TOO_MANY_MESSAGE
+    assert "actual_hours" not in by_key(body)["job:26.501"]["raken"]
+
+
+def test_a_next_offset_raken_could_not_mean_ends_the_paging(client, google, fake):
+    """A non-ASCII digit passes str.isdigit() but not int(): it ends the paging, as any other
+    unreadable nextOffset does, and never fails the read."""
+    google.events = [JOB]
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    fake.cards = [card("r-1", "2026-11-16", "w-1", 8)]
+    fake.projects_next = "\u00b2"
+    r = by_key(refresh(client))["job:26.501"]["raken"]
+    assert r["state"] == "linked" and r["actual_hours"] == 8
+    assert fake.project_calls == 1
+
+
+def test_inactive_raken_projects_are_asked_for_too(client, google, fake):
+    """A job finished last week may have its Raken project set Inactive already; it must still
+    link."""
+    google.events = [JOB]
+    fake.projects = [project("r-1", "26.501", "Example Clinic")]
+    refresh(client)
+    assert fake.project_params
+    assert all(sorted(s) == ["ACTIVE", "INACTIVE"] for s in fake.project_params)

@@ -1027,8 +1027,9 @@ def api_project_analytics() -> Dict[str, Any]:
 
 # "Refresh now" (#782): reads Raken's time cards and keeps the result (backend/raken_actuals.py),
 # then answers as the GET does. Any signed-in staff member may press it, like every tab's routes
-# (hide-only since 2026-10-27); one refresh runs at a time and a second one waits for it. Raken
-# failing is a 200 with a plain message, never a 500.
+# (hide-only since 2026-10-27); one refresh runs at a time, a press while one runs answers at once
+# with refreshing: true, and a press soon after a good read answers from it. Raken failing is a 200
+# with a plain message, never a 500.
 @app.post("/api/project-analytics/refresh")
 def api_project_analytics_refresh() -> Dict[str, Any]:
     return plan_vs_actual.refresh()

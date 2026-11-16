@@ -317,7 +317,19 @@
   // (TIMING_*, RAKEN_NOT_CONNECTED). tests/test_project_calendar_core_js.py holds the two together,
   // so a state added on one side only fails there.
   var TIMING = { starts: "starts", running: "running", finished: "finished" };
-  var RAKEN_NOT_CONNECTED = "not_connected";
+  // A row's Raken state, its statuses and why it is Not linked (#782): backend/raken_actuals.py
+  // names the same values (ROW_STATES, STATUSES, REASON_*); tests/test_project_calendar_core_js.py
+  // holds the two together.
+  var RAKEN = {
+    not_connected: "not_connected", expired: "expired", not_provisioned: "not_provisioned",
+    unreachable: "unreachable", not_refreshed: "not_refreshed", linked: "linked",
+    not_linked: "not_linked",
+  };
+  var STATUS = { behind: "behind", not_linked: "not_linked" };
+  var REASON = {
+    no_job_number: "no_job_number", no_raken_project: "no_raken_project", duplicate: "duplicate",
+  };
+  var RAKEN_NOT_CONNECTED = RAKEN.not_connected;
 
   /** The search box: every word typed must match the Job number, the name, the Foreman or the
    *  Work type (as the page words it, so "unknown" finds the jobs with none). */
@@ -350,14 +362,7 @@
   }
 
   // ── the Raken side (#782): the server's last "Refresh now" read, set beside each row ──
-  // A row's Raken state and its statuses: backend/raken_actuals.py names the same values
-  // (ROW_STATES, STATUSES); tests/test_project_calendar_core_js.py holds the two together.
-  var RAKEN = {
-    not_connected: "not_connected", expired: "expired", not_provisioned: "not_provisioned",
-    unreachable: "unreachable", not_refreshed: "not_refreshed", linked: "linked",
-    not_linked: "not_linked",
-  };
-  var STATUS = { behind: "behind", not_linked: "not_linked" };
+  // The states, statuses and reasons are RAKEN, STATUS and REASON above.
   var STATUS_LABELS = [[STATUS.not_linked, "Not linked"], [STATUS.behind, "Behind"]];
 
   function rakenOf(p) {
@@ -385,11 +390,19 @@
   }
 
   /** The Raken side of a row's pairs: days clocked in, average on site a day, Actual hours.
-   *  Dashes unless the row is linked. */
+   *  Dashes unless the row is linked. Behind compares days clocked in with the booked days the
+   *  read covered (`days_booked`); when that differs from the row's Workdays booked so far, the
+   *  days read "2 of 2" with `days_note` "through Nov 17", so the pair and the chip agree. */
   function rakenCells(p) {
     var r = rakenOf(p);
-    if (r.state !== RAKEN.linked) return { days: "—", on_site: "—", hours: "—" };
-    return { days: numLabel(r.days_clocked), on_site: decLabel(r.avg_on_site),
+    if (r.state !== RAKEN.linked) return { days: "—", days_note: "", on_site: "—", hours: "—" };
+    var days = numLabel(r.days_clocked);
+    var note = "";
+    if (typeof r.days_booked === "number" && r.days_booked !== (p && p.workdays_so_far)) {
+      days += " of " + numLabel(r.days_booked);
+      note = validDay(r.through) ? "through " + K.dayLabel(r.through, false) : "";
+    }
+    return { days: days, days_note: note, on_site: decLabel(r.avg_on_site),
              hours: decLabel(r.actual_hours) };
   }
 
@@ -408,10 +421,10 @@
     var r = rakenOf(p);
     if (r.state !== RAKEN.not_linked) return "";
     var num = p && p.job_number ? String(p.job_number) : "";
-    if (r.reason === "no_job_number" || !num) return "No Job number on the calendar";
+    if (r.reason === REASON.no_job_number || !num) return "No Job number on the calendar";
     var dups = Array.isArray(r.duplicates) ? r.duplicates.filter(Boolean) : [];
-    if (r.reason !== "duplicate" || dups.length < 2) {
-      return "No Raken project has Project Number " + num;
+    if (r.reason !== REASON.duplicate || dups.length < 2) {
+      return "No Raken project carries Job number " + num;
     }
     var names = dups.map(function (d) {
       return d && typeof d.name === "string" && d.name.trim() ? d.name.trim() : "an unnamed project";
@@ -419,13 +432,22 @@
     var list = names.length === 2 ? names[0] + " and " + names[1]
       : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
     var count = dups.length === 2 ? "Two" : String(dups.length);
-    return count + " Raken projects have Project Number " + num + ": " + list;
+    return count + " Raken projects carry Job number " + num + ": " + list;
   }
 
-  /** "Raken as of <Central time>", or what to do when Raken has not been read yet. */
+  /** True while the server says a "Refresh now" is reading Raken. */
+  function rakenRefreshing(data) {
+    return !!(data && data.raken && data.raken.refreshing === true);
+  }
+
+  /** "Raken as of <Central time>", what to do when Raken has not been read yet, and whether a
+   *  refresh is running. */
   function asOfText(data) {
     var r = data && data.raken && typeof data.raken === "object" ? data.raken : {};
     var at = centralStamp(r.as_of);
+    if (rakenRefreshing(data)) {
+      return at ? "Raken as of " + at + " (Central). Refreshing…" : "Refreshing Raken…";
+    }
     if (at) return "Raken as of " + at + " (Central)";
     if (r.state === RAKEN.not_refreshed) return "Raken has not been read yet. Press Refresh now.";
     return "";
@@ -523,7 +545,8 @@
     TABS: TABS, tabFromHash: tabFromHash, filterProjects: filterProjects, leftLabel: leftLabel,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
     RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
-    RAKEN: RAKEN, STATUS: STATUS, decLabel: decLabel, rakenCells: rakenCells,
+    RAKEN: RAKEN, STATUS: STATUS, REASON: REASON, rakenRefreshing: rakenRefreshing,
+    decLabel: decLabel, rakenCells: rakenCells,
     statusChips: statusChips, notLinkedNote: notLinkedNote, asOfText: asOfText,
     rakenMessage: rakenMessage, rakenOnlyName: rakenOnlyName,
   };

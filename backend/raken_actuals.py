@@ -3,13 +3,19 @@
 backend/plan_vs_actual.py builds each Project's plan from the Treadwell Projects calendar. This
 module reads Raken when someone presses "Refresh now", keeps that read on the data volume, and sets
 it beside the plan on every GET. A GET never calls Raken. The words are GLOSSARY.md's: Job number,
-Workday, Actual hours, Behind, Not linked.
+Workday, Actual hours, Days clocked in, On site, Behind, Not linked, In Raken, not on the calendar.
 
 WHAT IS READ (developer.rakenapp.com/api/docs, "List Projects" and "List Time Cards", read
 2026-11-16). Every call goes through raken.get / raken.list_all: one call at a time, a fixed pause,
-a bounded 429 back-off, NotProvisioned for 403 API_KEY_NOT_FOUND. One refresh makes at most CALL_CAP
-calls, and each run logs how many it made.
-  * GET /projects: every page. A project's Project Number is its "number" field; its "uuid" and
+a bounded 429 back-off, NotProvisioned for 403 API_KEY_NOT_FOUND. One refresh asks for no page once
+CALL_CAP calls have been made since it began, /projects included (raken.list_all's stop_at_calls;
+the last page's own 429 retries can pass it by two or three). A listing that would need more, or
+more than raken's page cap, fails the whole refresh with TOO_MANY_MESSAGE and keeps the last good
+read: part of a read would undercount Actual hours and show jobs Behind that are not. Each run logs
+how many calls it made. A refresh within REFRESH_COOLDOWN_S of the last good one does not read
+Raken again (plan_vs_actual.refresh), since the daily allowance is the whole company's.
+  * GET /projects with statuses ACTIVE and INACTIVE (a job finished last week may already be set
+    Inactive), every page. A project's Project Number is its "number" field; its "uuid" and
     "name" are kept too. Raken's own `query` search is a substring match, so it is not used: the
     tool compares numbers itself.
   * GET /timeCards with fromDate and toDate (yyyy-MM-dd), which Raken caps at 31 days apart, so
@@ -27,7 +33,9 @@ calls, and each run logs how many it made.
 
 THE SPAN. From the earliest Start among the listed Projects (capped at READ_BACK_DAYS before today),
 or RECENT_DAYS before today if that is earlier (the Raken-only section needs the last RECENT_DAYS),
-through YESTERDAY in Central.
+through YESTERDAY in Central. When the calendar could not be read, there are no listed Projects to
+say how far back, so the span reaches back at least as far as the kept read did: a refresh during a
+Google outage never shrinks the numbers already on screen.
 
 WHAT IS KEPT (STORE_FILE, through atomic_json.write_json, so a restart keeps it): the Raken
 projects (uuid, name, number), and for each project each day's hours and the distinct workers who
@@ -48,7 +56,9 @@ THE FIGURES, worked out on every GET against the CURRENT calendar rows (apply())
   * statuses: ["not_linked"], or ["behind"] when days clocked in < days booked, else []. A list,
     so a later ticket can add Over budget beside Behind.
   * Raken-only: Raken projects with hours in the last RECENT_DAYS of the read whose project is not
-    linked to any listed row and whose number is no listed row's Job number.
+    linked to any listed row and whose number is the Job number of no job on the calendar (the
+    year read, not only the listed rows).
+  * When the figures cannot be worked out, unavailable() answers the same block, saying so.
 
 SECRETS AND LOGS. Nothing read from a Raken response is ever logged or worded into a message (CodeQL
 py/clear-text-logging-sensitive-data): log lines carry literal text and counts only, and names reach
@@ -79,7 +89,16 @@ RECENT_DAYS = 14
 # The most Raken calls one refresh may make. A year of time cards is 12 pieces of a few pages each;
 # a read that needs more than this stops plainly instead of spending the company's daily allowance.
 CALL_CAP = 300
+# How long after a good read "Refresh now" answers from it instead of reading Raken again.
+REFRESH_COOLDOWN_S = 10 * 60
 TOO_MANY_MESSAGE = "Raken has more time cards than one refresh reads. Ask for the limit to be raised."
+# When the kept read cannot be set beside the calendar rows. A fixed sentence about Raken's side.
+NOT_SHOWN_MESSAGE = "Raken's numbers could not be shown just now."
+# The only sentences a failure may carry to the page: raken.py's fixed messages and this module's.
+# A RakenError whose text is not one of these is shown as raken.UNREACHABLE_MESSAGE, so no text
+# from a response can ever reach a message (CodeQL py/clear-text-logging-sensitive-data).
+_FIXED = (TOO_MANY_MESSAGE, raken.UNREACHABLE_MESSAGE, raken.RATE_LIMITED_MESSAGE, raken.QUOTA_MESSAGE,
+          raken.NOT_SAVED_MESSAGE, raken.NOT_CONNECTED_MESSAGE, raken.NOT_SET_UP_MESSAGE)
 
 # A row's Raken state. The page names the same values (js/project-calendar-core.js, P.RAKEN);
 # tests/test_project_calendar_core_js.py holds the two sides together.
@@ -157,9 +176,10 @@ def _uuid_of(obj: Any) -> Optional[str]:
     return _text(obj.get("uuid")) if isinstance(obj, dict) else None
 
 
-def read_projects() -> List[Dict[str, Any]]:
+def read_projects(stop_at_calls: int) -> List[Dict[str, Any]]:
     out = []
-    for p in raken.list_all("/projects"):
+    for p in raken.list_all("/projects", {"statuses": ["ACTIVE", "INACTIVE"]},
+                            stop_at_calls=stop_at_calls, whole=True):
         uuid = _text(p.get("uuid"))
         if uuid:
             out.append({"uuid": uuid, "name": _text(p.get("name")),
@@ -167,20 +187,16 @@ def read_projects() -> List[Dict[str, Any]]:
     return out
 
 
-def read_time_cards(first: _dt.date, last: _dt.date) -> Tuple[Dict[str, Dict[str, Any]], int]:
-    """{project uuid: {day: {"h": hours, "w": [worker uuids]}}} for [first, last], and the number
-    of cards counted."""
+def read_time_cards(first: _dt.date, last: _dt.date,
+                    stop_at_calls: int) -> Dict[str, Dict[str, Any]]:
+    """{project uuid: {day: {"h": hours, "w": [worker uuids]}}} for [first, last]."""
     lo, hi = first.isoformat(), last.isoformat()
     seen: Set[str] = set()
     days: Dict[str, Dict[str, Dict[str, Any]]] = {}
     workers: Dict[Tuple[str, str], Set[str]] = {}
-    counted = 0
-    start_calls = raken._CALLS["n"]
     for a, b in pieces(first, last):
-        if raken._CALLS["n"] - start_calls >= CALL_CAP:
-            log.warning("raken actuals: refresh stopped at the cap of %d calls", CALL_CAP)
-            raise raken.RakenError(TOO_MANY_MESSAGE)
-        for c in raken.list_all("/timeCards", {"fromDate": a.isoformat(), "toDate": b.isoformat()}):
+        for c in raken.list_all("/timeCards", {"fromDate": a.isoformat(), "toDate": b.isoformat()},
+                                stop_at_calls=stop_at_calls, whole=True):
             if c.get("deletedAt"):
                 continue
             cid = _text(c.get("uuid"))
@@ -197,7 +213,6 @@ def read_time_cards(first: _dt.date, last: _dt.date) -> Tuple[Dict[str, Dict[str
             hours = _hours(c)
             if not proj or not (lo <= day <= hi) or hours <= 0:
                 continue
-            counted += 1
             slot = days.setdefault(proj, {}).setdefault(day, {"h": 0.0, "w": []})
             slot["h"] += hours
             who = _uuid_of(c.get("worker"))
@@ -208,17 +223,23 @@ def read_time_cards(first: _dt.date, last: _dt.date) -> Tuple[Dict[str, Dict[str
     for per_day in days.values():
         for slot in per_day.values():
             slot["h"] = round(slot["h"], 2)
-    return days, counted
+    return days
 
 
-def span(listed: Iterable[Dict[str, Any]], today: _dt.date) -> Tuple[_dt.date, _dt.date]:
+def span(listed: Iterable[Dict[str, Any]], today: _dt.date,
+         keep_last: bool = False) -> Tuple[_dt.date, _dt.date]:
     """The days the refresh reads: from the earliest listed Start (no further back than
-    READ_BACK_DAYS), or RECENT_DAYS back if that is earlier, through yesterday."""
+    READ_BACK_DAYS), or RECENT_DAYS back if that is earlier, through yesterday. With `keep_last`
+    (the calendar could not be read, so `listed` says nothing), from no later than the kept read's
+    first day either."""
     floor = today - _dt.timedelta(days=READ_BACK_DAYS)
     first = today - _dt.timedelta(days=RECENT_DAYS)
-    for p in listed:
+    starts = [p.get("start") for p in listed]
+    if keep_last:
+        starts.append((load().get("result") or {}).get("read_from"))
+    for s in starts:
         try:
-            first = min(first, _dt.date.fromisoformat(str(p.get("start"))))
+            first = min(first, _dt.date.fromisoformat(str(s)))
         except ValueError:
             continue
     return max(first, floor), today - _DAY
@@ -252,8 +273,10 @@ def load() -> Dict[str, Any]:
     if not isinstance(store["failure"], dict):
         store["failure"] = None
     with _LOCK:
-        _MEMO["loaded"], _MEMO["store"] = True, store
-    return dict(store)
+        # A save that landed while the file was being read is newer than what was read: keep it.
+        if not _MEMO["loaded"]:
+            _MEMO["loaded"], _MEMO["store"] = True, store
+        return dict(_MEMO["store"])
 
 
 def _save(store: Dict[str, Any]) -> None:
@@ -269,11 +292,12 @@ def _save(store: Dict[str, Any]) -> None:
 
 def read_and_keep(first: _dt.date, last: _dt.date) -> None:
     """Read Raken over [first, last] and keep the result, or keep why it failed. Never raises."""
-    before = raken._CALLS["n"]
+    before = raken.calls_made()
+    stop_at = before + CALL_CAP
     store = load()
     try:
-        projects = read_projects()
-        days, counted = read_time_cards(first, last)
+        projects = read_projects(stop_at)
+        days = read_time_cards(first, last, stop_at)
     except raken.SignInExpired:
         # raken.py has marked the stored sign-in expired; the page reads that from the file, so no
         # failure is recorded here (it would outlive a new Connect Raken). The last numbers stay.
@@ -283,11 +307,16 @@ def read_and_keep(first: _dt.date, last: _dt.date) -> None:
         _fail(store, STATE_NOT_PROVISIONED, raken.NOT_PROVISIONED_MESSAGE)
         log.warning("raken actuals: refresh stopped, Raken's Public API is not on for the account")
         return
+    except raken.ListingTooLong:
+        _fail(store, STATE_UNREACHABLE, TOO_MANY_MESSAGE)
+        log.warning("raken actuals: refresh stopped at the cap of %d calls or the page cap, "
+                    "after %d calls", CALL_CAP, raken.calls_made() - before)
+        return
     except raken.RakenError as exc:
         # exc.message is one of raken.py's fixed sentences, never text from a response.
         msg = exc.message if exc.message in _FIXED else raken.UNREACHABLE_MESSAGE
         _fail(store, STATE_UNREACHABLE, msg)
-        log.warning("raken actuals: refresh failed after %d calls", raken._CALLS["n"] - before)
+        log.warning("raken actuals: refresh failed after %d calls", raken.calls_made() - before)
         return
     except Exception as exc:  # noqa: BLE001 - a refresh must never 500 the page
         _fail(store, STATE_UNREACHABLE, raken.UNREACHABLE_MESSAGE)
@@ -296,12 +325,25 @@ def read_and_keep(first: _dt.date, last: _dt.date) -> None:
     result = {"as_of": _central_stamp(), "read_from": first.isoformat(),
               "through": last.isoformat(), "projects": projects, "days": days}
     _save({"result": result, "failure": None})
-    log.info("raken actuals: read %d projects and %d time cards in %d pieces, %d calls",
-             len(projects), counted, len(pieces(first, last)), raken._CALLS["n"] - before)
+    # Counts of pieces and calls only: nothing derived from the response is logged.
+    log.info("raken actuals: refresh read %d pieces in %d calls",
+             len(pieces(first, last)), raken.calls_made() - before)
 
 
-_FIXED = (TOO_MANY_MESSAGE, raken.UNREACHABLE_MESSAGE, raken.RATE_LIMITED_MESSAGE, raken.QUOTA_MESSAGE,
-          raken.NOT_SAVED_MESSAGE, raken.NOT_CONNECTED_MESSAGE, raken.NOT_SET_UP_MESSAGE)
+def fresh() -> bool:
+    """True when the kept read is a good one taken less than REFRESH_COOLDOWN_S ago, so a refresh
+    now would spend Raken's shared allowance to read the same numbers again."""
+    store = load()
+    result = store.get("result")
+    if store.get("failure") or not isinstance(result, dict):
+        return False
+    try:
+        at = _dt.datetime.fromisoformat(str(result.get("as_of")))
+    except ValueError:
+        return False
+    if at.tzinfo is None:
+        return False
+    return 0 <= (now_utc() - at).total_seconds() < REFRESH_COOLDOWN_S
 
 
 def _fail(store: Dict[str, Any], state: str, message: str) -> None:
@@ -405,14 +447,35 @@ def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict
     return side, ([STATUS_BEHIND] if len(clocked) < len(booked) else []), uuids
 
 
-def apply(rows: List[Dict[str, Any]], today: _dt.date) -> Dict[str, Any]:
+def _block(state: str, message: Optional[str]) -> Dict[str, Any]:
+    """The response's Raken block, before any read is set in it. The one place its shape is made.
+    `refreshing` is set by plan_vs_actual while a "Refresh now" is running."""
+    return {"state": state, "message": message, "as_of": None, "through": None,
+            "read_from": None, "stale": False, "refreshing": False}
+
+
+def _without_numbers(rows: List[Dict[str, Any]], block: Dict[str, Any]) -> Dict[str, Any]:
+    for r in rows:
+        r["raken"] = {"state": block["state"]}
+        r["statuses"] = []
+    return {"raken": block, "raken_only": []}
+
+
+def unavailable(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What apply() answers when the figures could not be worked out: every row and the block say
+    so, in the same shape, with NOT_SHOWN_MESSAGE."""
+    return _without_numbers(rows, _block(STATE_UNREACHABLE, NOT_SHOWN_MESSAGE))
+
+
+def apply(rows: List[Dict[str, Any]], today: _dt.date,
+          calendar_numbers: Iterable[str] = ()) -> Dict[str, Any]:
     """Fill every row's "raken" and "statuses" from the kept result. Answers the response's Raken
-    block and the Raken-only list: {"raken": {...}, "raken_only": [...]}."""
+    block and the Raken-only list: {"raken": {...}, "raken_only": [...]}. `calendar_numbers` are
+    the Job numbers of every job on the calendar read, listed or not: none of them is Raken-only."""
     state, message = connection()
     store = load() if state == STATE_CONNECTED else {"result": None, "failure": None}
     result, failure = store.get("result"), store.get("failure")
-    block: Dict[str, Any] = {"state": state, "message": message, "as_of": None, "through": None,
-                             "read_from": None, "stale": False}
+    block = _block(state, message)
     if state == STATE_CONNECTED and result is None:
         if failure:
             block["state"], block["message"] = failure.get("state"), failure.get("message")
@@ -421,10 +484,7 @@ def apply(rows: List[Dict[str, Any]], today: _dt.date) -> Dict[str, Any]:
         else:
             block["state"] = STATE_NOT_REFRESHED
     if state != STATE_CONNECTED or result is None:
-        for r in rows:
-            r["raken"] = {"state": block["state"]}
-            r["statuses"] = []
-        return {"raken": block, "raken_only": []}
+        return _without_numbers(rows, block)
 
     yesterday = today - _DAY
     try:
@@ -439,7 +499,7 @@ def apply(rows: List[Dict[str, Any]], today: _dt.date) -> Dict[str, Any]:
     projects = [p for p in result.get("projects") or [] if isinstance(p, dict) and p.get("uuid")]
     index = _by_number(projects)
     taken: Set[str] = set()
-    numbers: Set[str] = set()
+    numbers: Set[str] = {str(n).strip() for n in calendar_numbers if n and str(n).strip()}
     for r in rows:
         r["raken"], r["statuses"], used = _row(r, result, index, lo, hi)
         taken |= used

@@ -27,9 +27,10 @@
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const P = window.TWProjCal;
 
-  const api = async (path) => {
+  // Every request, the GET and "Refresh now" alike: waits for sign-in, then sends the headers.
+  const api = async (path, init) => {
     try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-    return fetch(TW.resolveApiBase() + path, { headers: TW.authHeaders() });
+    return fetch(TW.resolveApiBase() + path, Object.assign({ headers: TW.authHeaders() }, init));
   };
 
   const SK_Q = "tw_pva_q";
@@ -37,12 +38,14 @@
   const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
 
   const POLL_MS = 5 * 60 * 1000;
+  const REFRESH_POLL_MS = 5 * 1000;    // while the server says a refresh is reading Raken
 
   let DATA = null;                     // the last good response
   let LOAD_ERR = "";                   // why the last read failed, if it did
   let Q = ss(SK_Q, "");
   let LAST_SIG = "";                   // anti-blink: skip identical repaints
   let REFRESHING = false;              // a "Refresh now" is on its way
+  let FOLLOW = 0;                      // the timer polling while the server is refreshing
 
   // ── tabs ──────────────────────────────────────────────────────────
   function showTab(id, focus) {
@@ -77,6 +80,21 @@
     LOAD_ERR = "";
   }
 
+  /** While the server says a refresh is reading Raken (someone else's press, or this one's
+   *  answered early), poll the GET until it is done. One timer at a time. */
+  function follow() {
+    clearTimeout(FOLLOW);
+    FOLLOW = P.rakenRefreshing(DATA) ? setTimeout(load, REFRESH_POLL_MS) : 0;
+  }
+
+  /** The button reads "Refreshing…" while this page's press or the server's refresh runs. */
+  function paintButton() {
+    const busy = REFRESHING || P.rakenRefreshing(DATA);
+    const btn = $("pva-refresh");
+    btn.disabled = busy;
+    btn.textContent = busy ? "Refreshing…" : "Refresh now";
+  }
+
   async function load() {
     if (REFRESHING) return;            // the refresh's own answer is on its way
     try {
@@ -84,27 +102,24 @@
     } catch (err) {
       LOAD_ERR = "Couldn't reach the server.";
     }
+    follow();
     paint();
   }
 
-  // "Refresh now": the page's one write. The server reads Raken (a second press while one runs
-  // waits for it) and answers with the whole list, as the GET does.
+  // "Refresh now": the page's one write. The server reads Raken and answers with the whole list,
+  // as the GET does; when a refresh is already running it answers at once with refreshing: true,
+  // and follow() polls until that one is done.
   async function refreshNow() {
-    if (REFRESHING) return;
+    if (REFRESHING || P.rakenRefreshing(DATA)) return;
     REFRESHING = true;
-    const btn = $("pva-refresh");
-    btn.disabled = true;
-    btn.textContent = "Refreshing…";
+    paintButton();
     try {
-      try { if (window.TWAuth && window.TWAuth.ready) await window.TWAuth.ready; } catch {}
-      await take(await fetch(TW.resolveApiBase() + "/api/project-analytics/refresh", {
-        method: "POST", headers: TW.authHeaders() }));
+      await take(await api("/api/project-analytics/refresh", { method: "POST" }));
     } catch (err) {
       LOAD_ERR = "Couldn't reach the server.";
     }
     REFRESHING = false;
-    btn.disabled = false;
-    btn.textContent = "Refresh now";
+    follow();
     paint();
   }
 
@@ -140,7 +155,8 @@
       + '<td><span class="dd">' + esc(P.dayLong(p.deadline)) + "</span>"
       + "<small>" + esc(P.leftLabel(p)) + "</small></td>"
       + '<td class="num"><b>' + esc(P.numLabel(p.workdays_so_far)) + "</b></td>"
-      + '<td class="num rk"><b>' + esc(rc.days) + "</b></td>"
+      + '<td class="num rk"><b>' + esc(rc.days) + "</b>"
+      + (rc.days_note ? "<small>" + esc(rc.days_note) + "</small>" : "") + "</td>"
       + '<td class="num"><b>' + esc(P.numLabel(p.crew_size)) + "</b></td>"
       + '<td class="num rk"><b>' + esc(rc.on_site) + "</b></td>"
       + '<td class="num"><b>' + esc(P.numLabel(p.planned_hours)) + "</b></td>"
@@ -175,6 +191,7 @@
   }
 
   function paint() {
+    paintButton();
     const sig = JSON.stringify([Q, LOAD_ERR, DATA]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
