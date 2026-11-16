@@ -292,8 +292,16 @@ def _token_request(form: Dict[str, str]) -> Dict[str, Any]:
         raise RakenError(UNREACHABLE_MESSAGE) from None
     if resp.status_code != 200:
         code = _oauth_error(resp)
-        log.warning("raken: token endpoint answered %s %s", resp.status_code,
-                    code if code in ("invalid_grant", "invalid_client", "invalid_request") else "")
+        # Fixed text only. The response answers a request that carried the client secret, so
+        # CodeQL treats anything read from it as secret; the log names a known code by literal.
+        if code == "invalid_grant":
+            log.warning("raken: token endpoint refused the sign-in (invalid_grant)")
+        elif code == "invalid_client":
+            log.warning("raken: token endpoint refused the app's id or secret (invalid_client)")
+        elif code == "invalid_request":
+            log.warning("raken: token endpoint refused the request (invalid_request)")
+        else:
+            log.warning("raken: token endpoint answered with an error")
         if resp.status_code == 400 and code == "invalid_grant":
             raise SignInExpired()
         raise RakenError(UNREACHABLE_MESSAGE)
