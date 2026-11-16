@@ -574,9 +574,10 @@ def _public(p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def last_week(today: _dt.date) -> Tuple[_dt.date, _dt.date]:
-    """Last week (#788): the Monday and the Friday of the week before today's, in Central (a week
-    starts on Monday, so on a Saturday or a Sunday last week is still the one before)."""
-    monday = today - _dt.timedelta(days=today.weekday() + 7)
+    """Last week (#788): the latest Monday to Friday that is over, in Central. Monday to Friday,
+    this week is still running, so it is the week before; on Saturday and Sunday this week's
+    Monday to Friday is over, so it is this week's (Hanz, Q14: the week is not complete until Friday)."""
+    monday = today - _dt.timedelta(days=today.weekday() + (7 if today.weekday() < 5 else 0))
     return monday, monday + _dt.timedelta(days=4)
 
 

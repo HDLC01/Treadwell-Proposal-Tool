@@ -101,6 +101,18 @@ def gym_depot_annex(google, fake):
     fake.cards = GYM_CARDS + DEPOT_CARDS
 
 
+def test_last_week_is_the_latest_monday_to_friday_that_is_over():
+    """Monday to Friday this week is still running, so last week is the one before; on Saturday and
+    Sunday this week's Monday to Friday is over, so that is last week (Hanz, Q14: "this week is not
+    complete until Friday")."""
+    week_before = (dt.date(2026, 11, 9), dt.date(2026, 11, 13))
+    week_just_ended = (dt.date(2026, 11, 16), dt.date(2026, 11, 20))
+    for day in range(16, 21):                       # Mon Nov 16 .. Fri Nov 20
+        assert raken_actuals.last_week(dt.date(2026, 11, day)) == week_before, day
+    assert raken_actuals.last_week(dt.date(2026, 11, 21)) == week_just_ended   # Saturday
+    assert raken_actuals.last_week(dt.date(2026, 11, 22)) == week_just_ended   # Sunday
+
+
 def test_last_week_sets_planned_against_actual_hours_over_linked_jobs(client, google, fake):
     gym_depot_annex(google, fake)
     w = summary(refresh(client))["last_week"]
