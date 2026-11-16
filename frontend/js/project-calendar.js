@@ -5,8 +5,9 @@
 // READ ONLY, ON PURPOSE. This page never writes to Google and stores nothing of its own: no
 // create, edit, drag or delete control exists anywhere on it. The schedule is kept in Google
 // Calendar by the people who run the crews, and a second place to change it would be a second
-// version of the truth. A bar opens a details panel, and the panel's one way out is "Open in
-// Google Calendar".
+// version of the truth. A bar opens its job's detail in Plan vs Actual (#789) when the list holds
+// the bar's event, found by the EVENT ID (TWPva.openEvent); otherwise it opens a details panel,
+// whose way out is "Open in Google Calendar", saying so when the job is outside the list's window.
 //
 // WHAT THE SERVER HAS ALREADY DONE (GET /api/project-calendar). It reads that one calendar as the
 // connected Google account, parses each free-text title into Job number, Crew size, Mobilization, Foreman
@@ -133,10 +134,6 @@
     $("state").innerHTML = html;
     $("state").hidden = false;
     $("main").hidden = true;
-  }
-
-  function safeLink(u) {
-    return typeof u === "string" && /^https:\/\//i.test(u.trim()) ? u.trim() : "";
   }
 
   function barHtml(sg) {
@@ -321,7 +318,8 @@
     return valueHtml ? "<dt>" + esc(label) + "</dt><dd>" + valueHtml + "</dd>" : "";
   }
 
-  function openDetails(ev) {
+  /** `line` is said under the title: why the bar did not open the job's Plan vs Actual detail. */
+  function openDetails(ev, line) {
     if (!ev) return;
     const parts = P.barParts(ev);
     const color = P.colorOf(ev);
@@ -332,6 +330,8 @@
     $("dlg-title").textContent = parts.name;
     $("dlg-raw").textContent = ev.title ? "In Google: " + ev.title : "";
     $("dlg-raw").hidden = !ev.title;
+    $("dlg-note").textContent = line || "";
+    $("dlg-note").hidden = !line;
     const sw = $("dlg-sw");
     sw.style.background = color || "";
 
@@ -357,14 +357,14 @@
     $("dlg-facts").innerHTML = facts;
 
     const foot = [];
-    if (ev.project && ev.project.id) {
-      foot.push('<a class="btn" href="/?d=' + encodeURIComponent(ev.project.id) + '&amp;edit=1">'
-        + icon("folder", 14) + " Open project: " + esc(ev.project.name || "this project") + "</a>");
-    } else if (ev.job_number) {
-      foot.push('<span class="muted">No project in this tool has Job number '
-        + esc(ev.job_number) + " yet.</span>");
+    const pf = P.projectFoot(ev.project, ev.job_number);
+    if (pf && pf.href) {
+      foot.push('<a class="btn" href="' + esc(pf.href) + '">' + icon("folder", 14) + " "
+        + esc(pf.label) + "</a>");
+    } else if (pf) {
+      foot.push('<span class="muted">' + esc(pf.note) + "</span>");
     }
-    const link = safeLink(ev.html_link);
+    const link = P.httpsLink(ev.html_link);
     if (link) {
       foot.push('<a class="btn" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">'
         + "Open in Google Calendar " + icon("external", 13) + "</a>");
@@ -411,9 +411,15 @@
     if (e.key === "Escape") { e.target.value = ""; Q = ""; ssSet(SK.q, ""); paint(); }
   });
 
+  // A bar opens its job's Plan vs Actual detail (js/plan-vs-actual.js, window.TWPva) when the list
+  // holds the bar's event; otherwise the details panel, saying why once the list has loaded.
   const openFrom = (e) => {
     const b = e.target.closest("[data-k]");
-    if (b) openDetails(BY_KEY[b.dataset.k]);
+    const ev = b && BY_KEY[b.dataset.k];
+    if (!ev) return;
+    const pva = window.TWPva;
+    const r = pva ? pva.openEvent(ev.id, b.dataset.k) : { opened: false, line: "" };
+    if (!r.opened) openDetails(ev, r.line);
   };
   $("grid").addEventListener("click", openFrom);
   $("dlg-close").addEventListener("click", closeDetails);

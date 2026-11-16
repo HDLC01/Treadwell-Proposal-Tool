@@ -185,12 +185,23 @@
   function flagsOf(ev) {
     var out = [];
     if (!ev) return out;
-    if (typeof ev.mobilization === "number" && ev.mobilization > 0) {
-      out.push(ordinal(ev.mobilization) + " Mobilization");
-    }
+    var mob = mobilizationLabel(ev.mobilization);
+    if (mob) out.push(mob);
     if (ev.is_punch) out.push("Punch");
-    if (ev.prevailing_wage) out.push("Prevailing wage");
-    if (ev.night_work) out.push("Night work");
+    return out.concat(jobFlags(ev));
+  }
+
+  /** "2nd Mobilization" for a Mobilization number above zero, else "". */
+  function mobilizationLabel(n) {
+    return typeof n === "number" && n > 0 ? ordinal(n) + " Mobilization" : "";
+  }
+
+  /** The flags an event or a whole job carries, in a fixed order: the one list both the Schedule's
+   *  details panel (flagsOf) and Plan vs Actual's job detail (detailFlags) say. */
+  function jobFlags(x) {
+    var out = [];
+    if (x && x.prevailing_wage) out.push("Prevailing wage");
+    if (x && x.night_work) out.push("Night work");
     return out;
   }
 
@@ -549,6 +560,199 @@
         + n + " days.";
   }
 
+  // ── the job detail (#789) ───────────────────────────────────────────
+  /** The four pairs of the job detail, Plan (the calendar) against Actual (Raken), worded as the
+   *  list words them, larger. The Budget pair's plan side is Budgeted hours and its Raken side
+   *  Projected total hours, with Over/under. */
+  function detailPairs(p) {
+    var rc = rakenCells(p);
+    var bc = budgetCells(p);
+    var q = p && typeof p === "object" ? p : {};
+    return [
+      { id: "days", label: "Days", plan: numLabel(q.workdays_so_far),
+        planSub: "Workdays booked so far", actual: rc.days, actualSub: "Days clocked in",
+        note: rc.days_note, extra: "", over: false, bar: null },
+      { id: "crew", label: "Crew", plan: numLabel(q.crew_size), planSub: "Crew size",
+        actual: rc.on_site, actualSub: "On site, average a day", note: "", extra: "",
+        over: false, bar: null },
+      { id: "hours", label: "Hours so far", plan: numLabel(q.planned_hours),
+        planSub: "Planned hours", actual: rc.hours, actualSub: "Actual hours", note: "",
+        extra: "", over: false, bar: hoursBar(p) },
+      { id: "budget", label: "Budget", plan: bc.budgeted, planSub: "Budgeted hours",
+        actual: bc.projected, actualSub: "Projected total hours", note: bc.note,
+        extra: bc.shown ? bc.over_under : "", over: bc.over, bar: bc.bar },
+    ];
+  }
+
+  /** A whole number of people, or null: what a day's planned crew or people on site may be. */
+  function people(n) {
+    return typeof n === "number" && isFinite(n) && n >= 0 ? n : null;
+  }
+
+  /** The Monday a Workday's week starts on, so the chart can mark where each week begins. */
+  function weekOf(day) {
+    return K.addDays(day, -((K.dow(day) + 6) % 7));
+  }
+
+  /** The day-by-day chart (#789): one column per entry the server sent (one per Workday of the
+   *  job's Mobilizations and Punches, in date order). One scale serves the line and the bars: the
+   *  most people planned or on site on any day (at least 1), so a day with more people than
+   *  planned draws its bar past the line. Each column:
+   *    tick     the planned crew as a percentage of the scale (null: no Crew size that day)
+   *    bar      the people clocked in as a percentage (null: no Raken figure for the day)
+   *    over     more people clocked in than planned
+   *    warn     a Crew size is missing that day (the server's crew_size_missing): the plan shown
+   *             is partial, or unknown when no Mobilization that day has one
+   *    kind     "clocked" or "missed" (a past day Raken read), "future" (today on: the plan only)
+   *             or "plan" (a past day with no Raken figure: a Not linked job, Raken not read)
+   *    actual   the day's Actual hours, "" when there is no Raken figure
+   *    planned  the day's Planned hours, a dash when its Crew size is missing
+   *    week     "Nov 16" on the first column of each week, else ""
+   *    label    the column in words, for a screen reader. One day's people are "clocked in":
+   *             On site is the GLOSSARY's average a day, which the Crew pair shows. */
+  function dayChart(entries) {
+    var list = (Array.isArray(entries) ? entries : []).filter(function (e) {
+      return e && typeof e === "object" && validDay(e.date);
+    });
+    var scale = 1;
+    list.forEach(function (e) {
+      var c = people(e.planned_crew), s = e.future ? null : people(e.on_site);
+      if (c != null && c > scale) scale = c;
+      if (s != null && s > scale) scale = s;
+    });
+    var pct = function (n) { return n == null ? null : Math.round(n / scale * 1000) / 10; };
+    var prevWeek = null;
+    var columns = list.map(function (e) {
+      var crew = people(e.planned_crew);
+      var onSite = e.future ? null : people(e.on_site);
+      var hasHours = !e.future && typeof e.hours === "number" && isFinite(e.hours);
+      var kind = e.future ? "future" : (e.missed === true ? "missed"
+        : (onSite != null || hasHours ? "clocked" : "plan"));
+      var wk = weekOf(e.date);
+      var week = wk !== prevWeek ? K.dayLabel(e.date, false) : "";
+      prevWeek = wk;
+      var day = DOW_SHORT[K.dow(e.date)] + ", " + K.dayLabel(e.date, false);
+      var warn = crew == null || e.crew_size_missing === true;
+      var words = crew == null ? ["Crew size missing"]
+        : [crew + " planned"].concat(warn ? ["a Crew size is missing"] : []);
+      if (kind === "missed") words.push("nobody clocked in, missed");
+      else if (kind === "clocked") {
+        if (onSite != null) words.push(onSite + " clocked in");
+        if (hasHours) {
+          words.push(decLabel(e.hours) + (people(e.planned_hours) != null
+            ? " of " + decLabel(e.planned_hours) : "") + " hours");
+        }
+      }
+      return {
+        dow: DOW_SHORT[K.dow(e.date)], dom: String(Number(e.date.slice(8, 10))),
+        week: week, kind: kind, tick: pct(crew), bar: pct(onSite),
+        over: onSite != null && crew != null && onSite > crew, warn: warn,
+        actual: kind === "clocked" || kind === "missed" ? (hasHours ? decLabel(e.hours) : "0") : "",
+        planned: decLabel(e.planned_hours),
+        label: day + ": " + words.join(", "),
+      };
+    });
+    return { scale: scale, columns: columns };
+  }
+
+  /** The Plan vs Actual row holding a Schedule event, found by the EVENT ID among each row's
+   *  Mobilizations and Punches, never by Job number or name: rows merge (#792), so an unnumbered
+   *  Mobilization can sit in a Job number's row, and a row can take a Punch's Job number. */
+  function rowForEvent(projects, id) {
+    if (id == null || id === "") return null;
+    var key = String(id);
+    var rows = Array.isArray(projects) ? projects : [];
+    for (var i = 0; i < rows.length; i++) {
+      var p = rows[i];
+      if (!p || typeof p !== "object") continue;
+      var evs = [].concat(Array.isArray(p.mobilizations) ? p.mobilizations : [],
+                          Array.isArray(p.punches) ? p.punches : []);
+      for (var j = 0; j < evs.length; j++) {
+        if (evs[j] && evs[j].id != null && String(evs[j].id) === key) return p;
+      }
+    }
+    return null;
+  }
+
+  /** What a Schedule bar opens: "found" (that row's detail), "absent" (the list has loaded and no
+   *  row holds the event: the details panel, saying why) or "unknown" (the list has not loaded:
+   *  the details panel, saying nothing it cannot know). */
+  function pvaLookup(data, id) {
+    if (!data || !Array.isArray(data.projects)) return { state: "unknown", row: null };
+    var row = rowForEvent(data.projects, id);
+    return row ? { state: "found", row: row } : { state: "absent", row: null };
+  }
+
+  /** The details panel's line for a bar whose job is not in the list. The window is the
+   *  server's (`window_days`); without it the line names no number, as pvaEmptyText does. */
+  function notInPvaLine(data) {
+    var n = serverCount(data, "window_days");
+    return "Not in Plan vs Actual: outside "
+      + (n == null ? "its window" : "the " + n + "-day window");
+  }
+
+  /** Where the detail's Back button goes: the Schedule when it was opened from there, else the
+   *  list. */
+  function detailBack(origin) {
+    return origin === "schedule" ? { tab: "schedule", label: "Back to the Schedule" }
+      : { tab: "pva", label: "Back to Plan vs Actual" };
+  }
+
+  /** "Open project": the job's Project in the tool, opened on its intake, which sends a v2 draft
+   *  on to its own page (tests/test_v2_routing_guard.py lists this door). "" with no Project. */
+  function projectHref(project) {
+    var id = project && typeof project === "object" ? project.id : null;
+    if ((typeof id !== "string" && typeof id !== "number") || String(id) === "") return "";
+    return "/?d=" + encodeURIComponent(String(id)) + "&edit=1";
+  }
+
+  /** The words that end both the Schedule's details panel and Plan vs Actual's job detail:
+   *  {href, label} for "Open project", {note} when no Project has the Job number yet, or null. */
+  function projectFoot(project, jobNumber) {
+    var href = projectHref(project);
+    if (href) return { href: href, label: "Open project: " + (project.name || "this project") };
+    if (jobNumber) return { note: "No project in this tool has Job number " + jobNumber + " yet." };
+    return null;
+  }
+
+  /** A link the page may offer: https only, so a typed "javascript:" never becomes a link. */
+  function httpsLink(u) {
+    return typeof u === "string" && /^https:\/\//i.test(u.trim()) ? u.trim() : "";
+  }
+
+  /** The job's Mobilizations and Punches in date order, each with its dates, Crew size and the link
+   *  to its event in Google Calendar. */
+  function detailEvents(p) {
+    var q = p && typeof p === "object" ? p : {};
+    var out = [];
+    [[q.mobilizations, false], [q.punches, true]].forEach(function (pair) {
+      (Array.isArray(pair[0]) ? pair[0] : []).forEach(function (m) {
+        if (!m || typeof m !== "object") return;
+        out.push({
+          id: m.id == null ? "" : String(m.id), start: String(m.start || ""),
+          last: String(m.last_day || ""),
+          kind: pair[1] ? "Punch" : (mobilizationLabel(m.mobilization) || "Mobilization"),
+          dates: spanLabel(m) || "No readable date",
+          crew: typeof m.crew_size === "number" && isFinite(m.crew_size)
+            ? "Crew size " + m.crew_size : "Crew size missing",
+          foreman: m.foreman ? String(m.foreman) : "",
+          link: httpsLink(m.html_link),
+        });
+      });
+    });
+    out.sort(function (a, b) {
+      return a.start < b.start ? -1 : a.start > b.start ? 1
+        : a.last < b.last ? -1 : a.last > b.last ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    out.forEach(function (e) { delete e.start; delete e.last; });
+    return out;
+  }
+
+  /** The job's flags, as the details panel words them (jobFlags). */
+  function detailFlags(p) {
+    return jobFlags(p);
+  }
+
   /** The same event can arrive twice (a range fetch and the side list's own fetch). One row per id. */
   function uniqueById(events) {
     var seen = {}, out = [];
@@ -610,5 +814,9 @@
     pairBar: pairBar, hoursBar: hoursBar, budgetCells: budgetCells,
     statusChips: statusChips, notLinkedNote: notLinkedNote, asOfText: asOfText,
     rakenMessage: rakenMessage, rakenOnlyName: rakenOnlyName,
+    detailPairs: detailPairs, dayChart: dayChart, rowForEvent: rowForEvent, pvaLookup: pvaLookup,
+    notInPvaLine: notInPvaLine, detailBack: detailBack, projectHref: projectHref,
+    projectFoot: projectFoot,
+    httpsLink: httpsLink, detailEvents: detailEvents, detailFlags: detailFlags,
   };
 });

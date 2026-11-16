@@ -73,6 +73,11 @@ THE FIGURES, worked out on every GET against the CURRENT calendar rows (apply())
     earlier day never counts a day it did not read as missed); days clocked in = those days with any
     hours; average on site = the distinct workers on each of those days, added up, divided by the
     days clocked in; Actual hours = every hour read up to the read's last day;
+  * the day-by-day (#789): each of the row's booked Workdays the read covered (up to yesterday)
+    gets that day's distinct people with hours (on_site) and its hours, and "missed" when nobody
+    clocked in. The kept "days" already hold both per project per day, so nothing more is kept and
+    a GET still never calls Raken. Days before the read and from today on keep the plan only, as
+    does every day of a row that is not linked;
   * the Budget pair: Budgeted hours and Projected total hours added up over the row's Raken
     projects that have a budget, and Over/under = Budgeted - Projected total. "none" when none has
     a budget (no figures, never Over budget); "not_read" when any of them was not read.
@@ -594,6 +599,7 @@ def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict
     avg = (round(sum(len(workers.get(d, ())) for d in clocked) / len(clocked), 1)
            if clocked else None)
     actual = round(sum(hours.values()), 2)
+    _fill_days(row, hours, workers, lo_s, hi_s)
     side = {"state": STATE_LINKED, "projects": [_public(p) for p in linked],
             "days_booked": len(booked), "days_clocked": len(clocked), "avg_on_site": avg,
             "actual_hours": actual, "through": hi_s}
@@ -608,6 +614,26 @@ def _row(row: Dict[str, Any], result: Dict[str, Any], index: Dict[str, List[Dict
         # row's note says the budget was not read.
         statuses.append(STATUS_ON_PLAN)
     return side, statuses, uuids
+
+
+def _fill_days(row: Dict[str, Any], hours: Dict[str, float], workers: Dict[str, Set[str]],
+               lo_s: str, hi_s: str) -> None:
+    """A linked row's day-by-day (#789), each booked Workday the read covered: the distinct people
+    with hours that day (on_site), the hours, and missed when there were none. A day the read did
+    not cover (before its first day, or from today on) keeps the plan only."""
+    for entry in row.get("day_by_day") or []:
+        day = entry.get("date") if isinstance(entry, dict) else None
+        if not isinstance(day, str) or not (lo_s <= day <= hi_s) or entry.get("future"):
+            continue
+        h = round(hours.get(day, 0.0), 2)
+        entry.update(on_site=len(workers.get(day, ())) if h > 0 else 0, hours=h, missed=h <= 0)
+
+
+def _clear_days(row: Dict[str, Any]) -> None:
+    """The plan only, on every day: what a row shows with no Raken numbers beside it."""
+    for entry in row.get("day_by_day") or []:
+        if isinstance(entry, dict):
+            entry.update(on_site=None, hours=None, missed=False)
 
 
 def _link(row: Dict[str, Any], index: Dict[str, List[Dict[str, Any]]]
@@ -675,6 +701,7 @@ def _without_numbers(rows: List[Dict[str, Any]], block: Dict[str, Any]) -> Dict[
     for r in rows:
         r["raken"] = {"state": block["state"]}
         r["statuses"] = []
+        _clear_days(r)
     return {"raken": block, "raken_only": []}
 
 
@@ -718,6 +745,7 @@ def apply(rows: List[Dict[str, Any]], today: _dt.date,
     taken: Set[str] = set()
     numbers: Set[str] = {str(n).strip() for n in calendar_numbers if n and str(n).strip()}
     for r in rows:
+        _clear_days(r)
         r["raken"], r["statuses"], used = _row(r, result, index, lo, hi)
         taken |= used
         for m in [r] + list(r.get("mobilizations") or []) + list(r.get("punches") or []):
