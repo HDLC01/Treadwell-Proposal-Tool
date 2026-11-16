@@ -828,15 +828,20 @@ def _response(connected: bool, events: List[Dict[str, Any]], *, stale: bool = Fa
             "work_types": [dict(w) for w in WORK_TYPE_LEGEND]}
 
 
-def fetch(start: Any, end: Any) -> Dict[str, Any]:
-    """The whole feature: events overlapping [start, end] (inclusive, Central), shaped per the
-    contract. Raises RangeError for a bad range; otherwise never raises."""
-    first, last = parse_range(start, end)
+def connection() -> Tuple[str, Optional[CalendarSource]]:
+    """(calendar id, source), or ("", None) when the calendar is not connected."""
     cal = calendar_id()
     source = _make_source() if cal else None
-    if not cal or source is None:
-        return _response(False, [])
+    return (cal, source) if cal and source is not None else ("", None)
 
+
+def read_range(cal: str, source: CalendarSource, first: _dt.date,
+               last: _dt.date) -> Dict[str, Any]:
+    """One read of [first, last] (at most MAX_SPAN_DAYS), through the per-range cache.
+
+    Returns {"events", "stale", "fetched_at", "error", "notice"}. `events` are shaped events with
+    `project` still null, and are None when the read failed with no saved copy to fall back on.
+    Never raises; the cached lists are the cache's own, so callers copy before changing them."""
     key = (cal, first.isoformat(), last.isoformat())
     with _CACHE_LOCK:
         cached = _CACHE.get(key)
@@ -876,8 +881,25 @@ def fetch(start: Any, end: Any) -> Dict[str, Any]:
                         str(exc)[:120] if isinstance(exc, CalendarError) else "-")
             error = message_for(exc)
             if cached is None:
-                return _response(True, [], error=error)
+                return {"events": None, "stale": False, "fetched_at": None, "error": error,
+                        "notice": None}
             stale, fetched_at, events, notice = True, cached[1], cached[2], cached[3]
+    return {"events": events, "stale": stale, "fetched_at": fetched_at, "error": error,
+            "notice": notice}
+
+
+def fetch(start: Any, end: Any) -> Dict[str, Any]:
+    """The whole feature: events overlapping [start, end] (inclusive, Central), shaped per the
+    contract. Raises RangeError for a bad range; otherwise never raises."""
+    first, last = parse_range(start, end)
+    cal, source = connection()
+    if source is None:
+        return _response(False, [])
+    got = read_range(cal, source, first, last)
+    if got["events"] is None:
+        return _response(True, [], error=got["error"])
+    events, stale, fetched_at = got["events"], got["stale"], got["fetched_at"]
+    error, notice = got["error"], got["notice"]
 
     # Project links are looked up on every request (one query), so a job number saved a moment
     # ago shows up without waiting for the Google cache to expire. Copies, so the cache stays clean.
