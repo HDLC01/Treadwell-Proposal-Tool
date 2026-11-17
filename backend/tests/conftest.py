@@ -198,7 +198,8 @@ def assert_callable_accepts(fn, args=(), kwargs=None):
 # A tiny stand-in for the supabase-py client so the profiles/admin logic can be
 # unit-tested without a network round-trip (local can't reach Supabase anyway).
 # Supports the exact chains profiles.py uses: table().select()/insert()/update()/
-# delete() with .eq()/.in_()/.order()/.limit()/.or_()/.execute(). Records every
+# delete() with .eq()/.in_()/.order()/.limit()/.or_()/.execute(), and upsert(rows,
+# on_conflict="a,b") as PostgREST's merge-duplicates does it (pva_snapshots.py). Records every
 # .or_() filter string in `.captures` so the injection-sanitization test can
 # assert what actually reached PostgREST.
 class FakeResult:
@@ -225,6 +226,11 @@ class FakeTable:
 
     def delete(self):
         self._op = "delete"; return self
+
+    def upsert(self, rows, on_conflict="id", **k):
+        self._op, self._payload = "upsert", rows
+        self._conflict = [c.strip() for c in str(on_conflict or "id").split(",") if c.strip()]
+        return self
 
     def eq(self, k, v):
         self._filters.append((k, v)); return self
@@ -270,6 +276,18 @@ class FakeTable:
         if self._op == "insert":
             self.store[self.name].append(dict(self._payload))
             return FakeResult(data=[self._payload])
+        if self._op == "upsert":
+            # A row whose conflict columns match an existing one updates it in place (the columns
+            # sent replace theirs); any other row is inserted.
+            batch = self._payload if isinstance(self._payload, list) else [self._payload]
+            for new in batch:
+                key = tuple(new.get(c) for c in self._conflict)
+                same = [r for r in rows if tuple(r.get(c) for c in self._conflict) == key]
+                if same:
+                    same[0].update(dict(new))
+                else:
+                    rows.append(dict(new))
+            return FakeResult(data=[dict(r) for r in batch])
         if self._op == "update":
             for r in self._match(rows):
                 r.update(self._payload)
@@ -297,6 +315,16 @@ def fake_supabase():
     def _make(store=None):
         return FakeClient(store)
     return _make
+
+
+@pytest.fixture(autouse=True)
+def _pva_snapshots_in_memory(monkeypatch):
+    """Every good "Refresh now" writes Plan vs Actual snapshot rows (pva_snapshots.py, #784), and
+    dozens of tests press it. Point those writes at an in-memory FakeClient by default, so none can
+    reach a real data store whatever backend/.env says; a test that reads the rows sets its own."""
+    import pva_snapshots
+    pva_snapshots.reset_for_tests()
+    monkeypatch.setattr(pva_snapshots, "get_client", lambda: FakeClient())
 
 
 # ── module-global state that could leak between tests ─────────────────────────

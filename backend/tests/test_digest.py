@@ -522,3 +522,10 @@ def test_an_unreachable_portal_reports_instead_of_500ing(monkeypatch):
     monkeypatch.setattr(main, "_portal", boom)
     monkeypatch.setattr(main, "_autofill_via_cli", lambda p, s=None: {})
     assert client.post("/api/admin/digest/run").status_code == 502
+
+
+def test_a_state_file_that_is_not_an_object_reads_as_no_state():
+    """A truncated or hand-edited file holding a list must not crash every tick on `.get`; the
+    Plan vs Actual daily refresh (#784) reads its stamp the same way."""
+    dw._STATE_FILE.write_text("[1, 2]", encoding="utf-8")
+    assert dw.load_state() == {}

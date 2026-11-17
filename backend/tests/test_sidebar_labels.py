@@ -361,7 +361,8 @@ def test_the_sidebar_has_exactly_three_headings(sidebar):
     assert grouped["Settings"] == ["/notifications.html", "/followup-settings.html",
                                    "/admin.html"], grouped["Settings"]
     # Ten since 2026-09-29: the General Contractor board joined the daily list, under Direct Projects.
-    assert len(grouped["Active"]) == 10, grouped["Active"]
+    # Eleven since 2026-11-12: the Project Calendar joined it, directly under the Bid Calendar.
+    assert len(grouped["Active"]) == 11, grouped["Active"]
     for beta in beta_hrefs:
         assert beta not in grouped["Active"], "%s leaked into the daily list" % beta
 

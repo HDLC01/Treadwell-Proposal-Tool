@@ -79,6 +79,21 @@ def get_client():
     return create_client(url, key)
 
 
+# PostgREST 12's "not in the schema cache" (prod Supabase, and staging's postgrest v12.2.3) and
+# Postgres's own undefined_table, which an older PostgREST passes through. One list for every
+# caller: PostgREST has changed this code before.
+TABLE_MISSING_CODES = ("PGRST205", "42P01")
+
+
+def table_missing(exc: BaseException) -> bool:
+    """True only for "this table does not exist on this database".
+
+    Read off the error's `code`, never its message: a timeout, a 5xx or a dropped connection is a
+    database that HAS the table and failed to answer, and has to be treated as a failure, not as a
+    migration that has not run."""
+    return str(getattr(exc, "code", "") or "") in TABLE_MISSING_CODES
+
+
 @lru_cache(maxsize=1)
 def get_auth_client():
     """Service-role client bound to the cloud Supabase project for AUTH ADMIN
