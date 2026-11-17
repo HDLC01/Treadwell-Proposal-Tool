@@ -115,8 +115,8 @@ def test_the_sections_survive_a_removed_item(ran):
     active = [e["href"] for e in user if e["section"] == "Active"]
     assert "/leads.html" not in active, "the denied row is still in the menu"
     assert active == ["/portal.html", "/gc-projects.html", "/followups.html", "/crm.html",
-                      "/calendar.html", "/analytics.html", "/projects.html", "/history.html",
-                      "/trash.html"], active
+                      "/calendar.html", "/project-calendar.html", "/analytics.html",
+                      "/projects.html", "/history.html", "/trash.html"], active
 
 
 @needs_node

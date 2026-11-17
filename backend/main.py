@@ -58,7 +58,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -93,7 +93,12 @@ import v2_pipeline
 import price_rules
 import pricing
 import profiles
+import project_calendar
+import plan_vs_actual
+import plan_vs_actual_xlsx
+import pva_refresh_worker
 import proposal_fonts
+import raken
 import proposal_writer
 import pull_window
 import reference_tax
@@ -271,12 +276,21 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/signed-contract"}
 
 
+# Public for GET only. Raken sends the browser back to /api/raken/callback with no Authorization
+# header (this app has no cookies), so that GET cannot know who is calling. It does nothing but bounce
+# the code and state to the Project Analytics page, which hands them to the admin-only POST on the
+# same path. See backend/raken.py.
+_AUTH_PUBLIC_GET_PATHS = {"/api/raken/callback"}
+
+
 def _auth_is_public(path: str, method: str) -> bool:
     if method == "OPTIONS":
         return True
     if not path.startswith("/api/"):
         return True
     if path in _AUTH_PUBLIC_PATHS:
+        return True
+    if method in ("GET", "HEAD") and path in _AUTH_PUBLIC_GET_PATHS:
         return True
     return False
 
@@ -650,6 +664,10 @@ _FILE_CACHE = cachetools.TTLCache(maxsize=256, ttl=3600)
 _PDF_RENDER_SEM = threading.Semaphore(2)
 
 
+# The media type of every .xlsx the tool hands out.
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 def _cache_file(content: bytes, filename: str, content_type: str) -> str:
     token = uuid.uuid4().hex
     _FILE_CACHE[token] = {
@@ -915,7 +933,7 @@ def api_analytics_export(payload: AnalyticsExportIn) -> Dict[str, Any]:
     content = analytics_export.build_workbook(blob)
     stamp = (payload.trailing12.as_of if payload.trailing12 else "") or "export"
     token = _cache_file(content, f"Treadwell Analytics {stamp}.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        XLSX_MEDIA_TYPE)
     return {"ok": True, "xlsx_download_url": f"/api/file/{token}"}
 
 
@@ -990,6 +1008,107 @@ def api_calendar_delete(event_id: str, request: Request) -> Dict[str, Any]:
     # Soft delete — a calendar is a work queue, and a destroyed bid deadline could cost a
     # job. The row keeps its deleted_at and can be brought back by hand.
     return {"ok": True, "deleted": event_id}
+
+
+# ── Project Calendar ──────────────────────────────────────────────────────────
+# The crews' job schedule, read from ONE Google calendar (PROJECT_CALENDAR_ID) and never written.
+# Separate from the Bid Calendar above, which is BasisBoard's. Everything lives in
+# backend/project_calendar.py; this route only turns a bad range into a 400. A Google failure is
+# a 200 with stale:true or an error message, never a 500 (see that module's docstring).
+@app.get("/api/project-calendar")
+def api_project_calendar(start: str = "", end: str = "") -> Dict[str, Any]:
+    try:
+        return project_calendar.fetch(start, end)
+    except project_calendar.RangeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+# Plan vs Actual, the calendar side (#780): one row per Project, built in backend/plan_vs_actual.py
+# from a year of the same calendar read through the same cache. Takes no parameters; like the route
+# above it answers a Google failure with a 200 and a plain message, never a 500.
+@app.get("/api/project-analytics")
+def api_project_analytics() -> Dict[str, Any]:
+    return plan_vs_actual.fetch()
+
+
+# The Excel download (#785): the Plan vs Actual list as it is filtered on screen, its pressed count
+# (`status`) and search text (`q`) applied by the page's own rule, built in
+# backend/plan_vs_actual_xlsx.py from the same response the GET above sends. A GET, never a write;
+# "/export" in the path puts it in the audit log with the other exports. Never a 500: any fault
+# downloads a workbook carrying a plain message instead of rows.
+@app.get("/api/project-analytics/export.xlsx")
+def api_project_analytics_xlsx(q: str = "", status: str = "") -> Response:
+    q, status = q[:plan_vs_actual.SEARCH_MAX], status[:40]
+    today = project_calendar.today_central()
+    try:
+        data = plan_vs_actual.fetch()
+        today = plan_vs_actual_xlsx.made_on(data, today)
+        content = plan_vs_actual_xlsx.build(data, q, status, today)
+    except Exception as exc:  # noqa: BLE001 - the download must never 500
+        log.warning("plan vs actual: workbook not built (%s)", type(exc).__name__)
+        content = plan_vs_actual_xlsx.message_workbook(plan_vs_actual_xlsx.ERR_BUILD, today)
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition":
+                 'attachment; filename="%s"' % plan_vs_actual_xlsx.file_name(today),
+                 "Cache-Control": "no-store"})
+
+
+# "Refresh now" (#782): reads Raken's time cards and keeps the result (backend/raken_actuals.py),
+# then answers as the GET does. Any signed-in staff member may press it, like every tab's routes
+# (hide-only since 2026-10-27); one refresh runs at a time, a press while one runs answers at once
+# with refreshing: true, and a press soon after a good read answers from it. Raken failing is a 200
+# with a plain message, never a 500. The same step runs by itself at 5:00 AM Central (#784,
+# backend/pva_refresh_worker.py), and every good run keeps a snapshot (backend/pva_snapshots.py).
+@app.post("/api/project-analytics/refresh")
+def api_project_analytics_refresh() -> Dict[str, Any]:
+    return plan_vs_actual.refresh()
+
+
+# ── Connect Raken (#781) ──────────────────────────────────────────────────────
+# An admin signs the tool in to Raken once; backend/raken.py keeps that sign-in encrypted on the
+# data volume and renews it. Start, finish and status are admin-only. The GET callback is the one
+# public step: Raken's redirect carries no identity, so it only bounces the code and state to the
+# page, which hands them to the admin-only POST.
+class RakenCallbackIn(BaseModel):
+    code: str = ""
+    state: str = ""
+
+
+def _raken_admin_email(request: Request) -> str:
+    prof = _require_admin(request)
+    return str(prof.get("email") or _user_email(request) or "")
+
+
+@app.get("/api/raken/connect")
+def api_raken_connect(request: Request) -> Dict[str, Any]:
+    email = _raken_admin_email(request)
+    try:
+        return {"ok": True, "url": raken.start_url(email)}
+    except raken.RakenError as exc:
+        raise HTTPException(exc.status, exc.message)
+
+
+@app.get("/api/raken/callback")
+def api_raken_callback_bounce(request: Request) -> Response:
+    return RedirectResponse(raken.landing_for(dict(request.query_params)), status_code=303)
+
+
+@app.post("/api/raken/callback")
+def api_raken_callback(request: Request, body: RakenCallbackIn) -> Dict[str, Any]:
+    email = _raken_admin_email(request)
+    try:
+        raken.finish_sign_in(body.code, body.state, email)
+    except raken.RakenError as exc:
+        raise HTTPException(exc.status, exc.message)
+    return {"ok": True, "state": raken.STATE_CONNECTED}
+
+
+@app.get("/api/raken/status")
+def api_raken_status(request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    return raken.status()
 
 
 # ── Item Library ──────────────────────────────────────────────────────────────
@@ -2231,7 +2350,7 @@ def _commit_publish(prep: Dict[str, Any]) -> Dict[str, Any]:
                                             docx=sent_docs["docx"]["content"], pdf=sent_pdf,
                                             created_by=by)
         except Exception as exc:  # noqa: BLE001 — re-raised as a named refusal
-            if _table_missing(exc):
+            if supabase_client.table_missing(exc):
                 log.error("draft_revision_documents is MISSING on this database: revision %s of "
                           "%s is sent without a frozen PDF. Apply its DDL (supabase_schema.sql 6b "
                           "/ staging/schema_pg.sql), then run backfill_revision_documents.py. %s",
@@ -4746,7 +4865,7 @@ def api_info_sheet_generate(payload: InfoSheetIn, request: Request) -> Dict[str,
     name = str(data.get("project_name") or "project").replace(" ", "_")[:80]
     token = _cache_file(
         content, f"{name}_info_sheet.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        XLSX_MEDIA_TYPE)
 
     # The job number is typed here for the first time in the whole tool, but the
     # deposit invoice already reads `job_number` off the draft. Mirror it back so
@@ -7653,7 +7772,7 @@ def _generate(payload: GenerateIn, request: Request, *,
     xlsx_token = "" if xlsx_bytes is None else _cache_file(
         xlsx_bytes,
         f"{safe_name}_estimate.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        XLSX_MEDIA_TYPE,
     )
     docx_token = _cache_file(
         docx_bytes,
@@ -7949,17 +8068,6 @@ def _documents_out(docs: Dict[str, Any]) -> GenerateOut:
     )
 
 
-def _table_missing(exc: BaseException) -> bool:
-    """True only for "this table does not exist on this database".
-
-    PGRST205 is PostgREST 12's "not in the schema cache" (prod Supabase, and staging's
-    postgrest v12.2.3); 42P01 is Postgres's own undefined_table, which an older PostgREST passes
-    through. Read off the error's `code`, never its message: a timeout, a 5xx or a dropped
-    connection is a database that HAS the table and failed to answer, and has to be treated as a
-    failure, not as a migration that has not run."""
-    return str(getattr(exc, "code", "") or "") in ("PGRST205", "42P01")
-
-
 def _stored_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict[str, Any]]:
     """The files revision `revision_no` was SENT with, or None to re-render it.
 
@@ -7977,7 +8085,7 @@ def _stored_revision_documents(draft_id: str, revision_no: int) -> Optional[Dict
     try:
         return drafts.get_revision_documents(draft_id, revision_no)
     except Exception as exc:  # noqa: BLE001 — sorted into the two cases above
-        if _table_missing(exc):
+        if supabase_client.table_missing(exc):
             log.warning("draft_revision_documents is missing on this database; re-rendering %s "
                         "revision %s from its snapshot: %s", draft_id, revision_no, exc)
             return None
@@ -8164,6 +8272,14 @@ def _start_digest() -> None:
     or not the schedule is enabled."""
     digest_worker.set_hooks(portal=_portal, run_claude=_autofill_via_cli)
     digest_worker.ensure_started(portal=_portal, run_claude=_autofill_via_cli)
+
+
+@app.on_event("startup")
+def _start_pva_refresh() -> None:
+    """Plan vs Actual's 5:00 AM Central refresh (#784, backend/pva_refresh_worker.py) runs from a
+    startup hook for the digest's reason: nobody opens the page at 5 AM. It runs the "Refresh now"
+    step once a day; PVA_REFRESH_ENABLED=off holds it back. Never raises."""
+    pva_refresh_worker.ensure_started()
 
 
 @app.on_event("startup")
@@ -9300,7 +9416,7 @@ def api_scope_group_workbook(group_id: str) -> Any:
     name = str(members[0]["data"].get("project_name") or "project").replace(" ", "_")[:80]
     filename = f"{name}_scopes_estimate.xlsx"
     token = _cache_file(content, filename,
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        XLSX_MEDIA_TYPE)
     return {"ok": True, "xlsx_download_url": f"/api/file/{token}", "filename": filename,
             "tabs": plan_tabs}
 

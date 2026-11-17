@@ -182,7 +182,9 @@ def days_since(ts: Any, now: datetime) -> Optional[float]:
 def load_state() -> Dict[str, Any]:
     try:
         if _STATE_FILE.is_file():
-            return json.loads(_STATE_FILE.read_text(encoding="utf-8")) or {}
+            data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
     except Exception as exc:  # noqa: BLE001 — a garbled file must not stop the digest
         log.warning("digest state read failed: %s", exc)
     return dict(_MEM_STATE)

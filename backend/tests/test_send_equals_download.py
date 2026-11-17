@@ -241,7 +241,7 @@ def test_a_missing_documents_table_falls_back_to_the_render(world, monkeypatch, 
     """A database the DDL has not reached yet must not take every customer's PDF down: a table
     that does not EXIST reads as "nothing stored", which is how every revision was served before.
 
-    Mutation: make `_table_missing` answer False — this is a 503."""
+    Mutation: make `supabase_client.table_missing` answer False — this is a 503."""
     world.store.setdefault("draft_revisions", []).append(
         {"project_id": "d1", "revision_no": 1, "created_by": EST,
          "data": {"project_name": "Old", "proposal_payload": copy.deepcopy(PAYLOAD)}})

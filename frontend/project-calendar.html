@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Analytics · Treadwell Proposal Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- Styles itself, like calendar.html. Without the opt-out Chromium synthesizes a dark theme,
+       which would repaint the crews' own Google colours. There is no dark theme in this repo. -->
+  <meta name="color-scheme" content="only light" />
+  <style>
+    /* The Bid Calendar's tokens, so the two calendars read as one family. The bar colours are NOT
+       tokens: they are Google's own event palette, set per bar from the API, because the crews
+       recognise a job by the colour it was given in Google. */
+    :root { color-scheme: only light;
+      --red:#c8102e; --red-dark:#9e001f; --red-tint:#fbe9ec; --red-wash:#fdf5f6;
+      --ink:#1b1c1c; --ink-v:#5c403f; --ink-mut:#8a857c;
+      --surf:#f4f4f5; --card:#ffffff; --surf-low:#f3f1ea; --surf-high:#eae6dd;
+      --line:rgba(27,28,28,.1); --line-soft:#f0ece4;
+      --late:#b3261e; --late-bg:#fdf1f0;
+      --soon:#9a5b00; --soon-bg:#fdf5e8;
+      --calm:#4a6b8a;
+      --warn:#7a5c00;
+      /* The faint wash behind the Raken half of each Plan vs Actual pair. */
+      --rk-wash:#faf8f3;
+      /* A bar with no Google colour. Warm stone, so it reads as "no colour chosen" and not as
+         a meaning of its own. */
+      --bar-neutral:#8a857c;
+      --shadow:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.055);
+      --shadow-lift:0 2px 4px rgba(60,50,40,.06), 0 10px 28px rgba(60,50,40,.10);
+      --display:'Georgia','Iowan Old Style','Times New Roman',serif; }
+    * { box-sizing:border-box; }
+    /* The `hidden` attribute loses to any class rule that sets display, so it is re-asserted once
+       for the whole page. */
+    [hidden] { display:none !important; }
+    body { margin:0; background:var(--surf); color:var(--ink); padding:28px 22px 90px;
+      font:400 14px/1.5 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .top { display:flex; align-items:center; gap:14px; max-width:1660px; margin:0 auto 6px;
+      flex-wrap:wrap; }
+    .logo { width:54px; height:34px; display:block; flex:none; }
+    h1 { font:400 29px/1.15 var(--display); letter-spacing:-.012em; margin:0; text-wrap:balance; }
+    .ro { margin-left:auto; font:700 9.5px system-ui; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-v); background:var(--surf-high); padding:4px 9px; border-radius:999px; }
+    .hint { max-width:1660px; margin:0 auto 18px; color:var(--ink-v); font-size:13.5px; }
+    .wrap { max-width:1660px; margin:0 auto; }
+
+    /* ── toolbar ── */
+    .toolbar { display:flex; align-items:center; gap:9px; flex-wrap:wrap; background:var(--card);
+      border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+      box-shadow:var(--shadow); margin-bottom:12px; }
+    .range { font:400 17px var(--display); letter-spacing:-.005em; min-width:170px; }
+    .btn { min-height:34px; padding:6px 12px; border:1px solid var(--line); background:var(--card);
+      border-radius:9px; font:600 13px system-ui; color:var(--ink); cursor:pointer;
+      display:inline-flex; align-items:center; gap:6px; text-decoration:none; }
+    .btn:hover { background:var(--surf-low); }
+    .btn:active { transform:translateY(1px); }
+    .btn:disabled { color:var(--ink-mut); background:var(--surf-low); cursor:default; transform:none; }
+    .btn.icon { width:34px; padding:0; justify-content:center; }
+    .nav { display:flex; gap:4px; }
+    .seg { display:inline-flex; background:var(--surf-low); border:1px solid var(--line);
+      border-radius:10px; padding:2px; gap:2px; }
+    .seg button { border:0; background:none; padding:6px 11px; border-radius:8px;
+      font:600 12.5px system-ui; color:var(--ink-v); cursor:pointer; }
+    .seg button[aria-pressed="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(60,50,40,.08); }
+    .grow { flex:1; }
+    .tw-search { min-height:34px; padding:6px 10px; border:1px solid var(--line);
+      border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink);
+      width:220px; }
+    .tw-search:focus, .btn:focus-visible, .seg button:focus-visible, .bar:focus-visible,
+    .dlg-close:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+
+    /* ── notices and states ── */
+    .alert { border:1px solid #e8dcc0; border-left:3px solid var(--warn); background:#fdf9ee;
+      color:var(--warn); border-radius:10px; padding:10px 13px; font-size:12.5px; margin:0 0 12px; }
+    .msg { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      padding:34px; text-align:center; color:var(--ink-v); box-shadow:var(--shadow); }
+    .msg b { display:block; color:var(--ink); font:400 18px var(--display); margin-bottom:6px; }
+    .note { color:var(--ink-v); font-size:12.5px; margin:0 0 10px; }
+
+    /* ── the two tabs: Plan vs Actual (the default) and Schedule ── */
+    .tabs { display:inline-flex; background:var(--surf-low); border:1px solid var(--line);
+      border-radius:12px; padding:3px; gap:3px; margin:0 0 14px; }
+    .tab { border:0; background:none; min-height:36px; padding:7px 16px; border-radius:9px;
+      font:600 13.5px system-ui; color:var(--ink-v); cursor:pointer; }
+    .tab:hover { color:var(--ink); }
+    .tab[aria-selected="true"] { background:var(--card); color:var(--red-dark);
+      box-shadow:0 1px 2px rgba(60,50,40,.08); }
+    .tab:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+
+    /* ── Plan vs Actual: a table-like list in a white card ── */
+    .pva-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 12px; }
+    .pva-count { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    .pva-card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      box-shadow:var(--shadow); }
+    /* On a phone the columns cannot fit 375px, so the list scrolls sideways INSIDE its card and
+       the page itself never does. */
+    .pva-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
+    .pva { width:100%; min-width:1220px; border-collapse:collapse; font-size:13px; }
+    .pva th { text-align:left; vertical-align:bottom; padding:11px 14px 9px; white-space:nowrap;
+      font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-mut);
+      border-bottom:1px solid var(--line); }
+    .pva th small { display:block; font:500 10.5px system-ui; text-transform:none; letter-spacing:0;
+      color:var(--ink-mut); margin-top:2px; }
+    .pva td { padding:11px 14px; vertical-align:top; border-bottom:1px solid var(--line-soft); }
+    .pva tbody tr:last-child td { border-bottom:0; }
+    .pva tbody tr:hover td { background:#faf8f4; }
+    .pva .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .pva td.num b { font:600 14px system-ui; color:var(--ink); }
+    .job { display:flex; gap:9px; align-items:flex-start; min-width:230px; }
+    .job .sw { flex:none; width:10px; height:10px; border-radius:3px; margin-top:5px;
+      background:var(--bar-neutral); }
+    .jn { font:600 12px system-ui; color:var(--ink-v); font-variant-numeric:tabular-nums;
+      margin-right:4px; }
+    .jname { font-weight:600; color:var(--ink); }
+    .jsub { display:block; font-size:12px; color:var(--ink-v); margin-top:2px; }
+    .dd { display:block; white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .pva td small { display:block; font-size:11.5px; color:var(--ink-mut); white-space:nowrap; }
+    /* The Raken half of each pair (#782) sits on a faint wash beside its plan column. */
+    .pva .rk { background:var(--rk-wash); }
+    .pva td.status { min-width:150px; }
+    .pva td.status small { white-space:normal; color:var(--ink-v); }
+    .chip.st-behind { background:var(--late-bg); color:var(--late); }
+    .chip.st-over_budget { background:var(--red-tint); color:var(--red-dark); }
+    .chip.st-on_plan { background:var(--surf-low); color:var(--calm); }
+    .chip.st-not_linked { background:var(--surf-high); color:var(--ink-v); }
+    /* The Budget pair (#783): Over/under under Projected total hours, red when over budget. */
+    .pva td small.ou { font-weight:600; color:var(--ink-v); }
+    .pva td small.ou.over { color:var(--late); }
+    .pva td small.why { white-space:normal; max-width:170px; margin-left:auto; color:var(--ink-v); }
+    /* A pair's small bar: Raken as the fill, the plan as a tick. Its width and the tick's place
+       are set through element.style (CSSOM), never a style attribute. */
+    .pbar { position:relative; display:block; width:96px; height:6px; margin:6px 0 2px auto;
+      border-radius:999px; background:var(--surf-high); }
+    .pbar-fill { position:absolute; left:0; top:0; bottom:0; width:0; border-radius:999px;
+      background:var(--ink-mut); }
+    .pbar.over .pbar-fill { background:var(--late); }
+    .pbar-tick { position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; left:0;
+      background:var(--ink); }
+    .pva-asof { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    /* The summary strip (#788): four count tiles (buttons that filter the list), a line saying
+       why the counts fall short, and two figure tiles drawn as the job detail's own pair
+       (.pd-pair / .pd-two, below), only sized here. A tile's status is its 3px LEFT border, the
+       app's status channel; pressed reads like .seg/.tab selected (Oxblood text, no Signal Red),
+       which keeps the red focus ring the only red. */
+    .sum { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 12px; }
+    .sum-tile { flex:1 1 120px; display:flex; flex-direction:column; align-items:flex-start;
+      gap:2px; min-height:64px; padding:10px 12px; text-align:left; cursor:pointer;
+      background:var(--card); color:var(--ink); border:1px solid var(--line);
+      border-left:3px solid var(--line); border-radius:12px; box-shadow:var(--shadow); font:inherit; }
+    .sum-tile b { font:600 22px/1.1 system-ui; font-variant-numeric:tabular-nums; }
+    .sum-tile span { font:600 12px system-ui; color:var(--ink-v); }
+    .sum-tile:hover:not(:disabled) { background:var(--surf-low); }
+    .sum-tile[aria-pressed="true"] { background:var(--surf-low); color:var(--red-dark);
+      box-shadow:inset 0 0 0 1px var(--ink-v); }
+    .sum-tile[aria-pressed="true"] span { color:var(--red-dark); }
+    .sum-tile:disabled { opacity:.5; cursor:not-allowed; box-shadow:none; }
+    .sum-tile:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+    .sum-tile.st-on_plan { border-left-color:var(--calm); }
+    .sum-tile.st-behind { border-left-color:var(--late); }
+    .sum-tile.st-over_budget { border-left-color:var(--red-dark); }
+    .sum-tile.st-not_linked { border-left-color:var(--ink-mut); }
+    .sum-note { flex:1 1 100%; margin:-4px 0 0; font-size:12px; color:var(--ink-v); }
+    .sum .pd-pair { flex:2 1 260px; padding:10px 12px; }
+    .sum .pd-two b { font-size:20px; }
+    .pva-only { margin-top:22px; }
+    .pva-h2 { font:400 18px/1.2 var(--display); margin:0 0 4px; }
+    .pva-only .pva { min-width:560px; }
+    .chip.warn { background:#fdf5e8; color:var(--warn); }
+    .pva-foot { color:var(--ink-mut); font-size:12px; margin:10px 2px 0; }
+    .pva-card .note { margin:0; padding:14px; }
+    /* A row opens its job's detail (#789): the job's name is the button. */
+    .pva tbody tr[data-key] { cursor:pointer; }
+    .jlink { border:0; background:none; padding:0; font:inherit; font-weight:600; color:var(--ink);
+      cursor:pointer; text-align:left; text-decoration:underline; text-decoration-color:var(--line);
+      text-underline-offset:3px; }
+    .jlink:hover { color:var(--red-dark); text-decoration-color:currentColor; }
+    .jlink:focus-visible, .pd-title:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+
+    /* ── one job's detail (#789): inside the page, in place of the list ── */
+    .pd-top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 12px; }
+    .pd-head { display:flex; gap:10px; align-items:flex-start; margin:0 0 8px; }
+    .pd-head .sw { flex:none; width:12px; height:12px; border-radius:3px; margin-top:9px;
+      background:var(--bar-neutral); }
+    .pd-title { font:400 24px/1.2 var(--display); margin:0; overflow-wrap:anywhere; }
+    .pd-chips { margin:0 0 14px 22px; }
+    .pd-chips small { display:block; color:var(--ink-v); font-size:12px; margin-top:2px; }
+    .pd-pairs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:0 0 14px; }
+    .pd-pair { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      box-shadow:var(--shadow); padding:12px 14px; min-width:0; }
+    .pd-pair h3 { font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-mut); margin:0 0 8px; }
+    .pd-two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .pd-two > div { min-width:0; border-radius:9px; padding:6px 8px; }
+    .pd-pair h3 small { display:inline; margin-left:6px; font-weight:500; text-transform:none;
+      letter-spacing:0; }
+    .pd-two .rk { background:var(--rk-wash); }
+    .pd-two b { display:block; font:600 24px/1.15 system-ui; font-variant-numeric:tabular-nums;
+      color:var(--ink); overflow-wrap:anywhere; }
+    .pd-two small, .pd-pair small { display:block; font-size:11.5px; color:var(--ink-v); }
+    .pd-pair small.ou { font-weight:600; }
+    .pd-pair small.ou.over { color:var(--late); }
+    .pd-pair .pbar { width:100%; margin:10px 0 2px; }
+    .pd-card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+      box-shadow:var(--shadow); padding:14px; margin:0 0 14px; }
+    .pd-h3 { font:400 17px/1.2 var(--display); margin:0 0 4px; }
+    .pd-card .note { margin:0 0 10px; }
+    /* The chart's weeks scroll sideways INSIDE its box at phone width; the page never does. */
+    .pd-chart-scroll { overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:4px; }
+    .pd-chart { display:flex; gap:4px; align-items:flex-end; width:max-content; min-width:100%; }
+    .pd-col { flex:0 0 40px; display:flex; flex-direction:column; text-align:center; }
+    .pd-col.wk { margin-left:10px; }
+    .pd-col.wk:first-child { margin-left:0; }
+    .pd-wk { height:16px; font:700 9.5px system-ui; text-transform:uppercase; letter-spacing:.05em;
+      color:var(--ink-mut); text-align:left; white-space:nowrap; }
+    /* Heights and places are set through element.style (CSSOM) from the data, never a style
+       attribute. */
+    .pd-plot { position:relative; height:120px; border-radius:6px; background:var(--surf-low); }
+    .pd-bar { position:absolute; left:7px; right:7px; bottom:0; height:0;
+      border-radius:4px 4px 0 0; background:var(--ink-mut); }
+    .pd-col.over .pd-bar { background:var(--calm); }
+    .pd-tick { position:absolute; left:2px; right:2px; bottom:0; height:0;
+      border-top:2px solid var(--ink); margin-bottom:-1px; }
+    .pd-col.missed .pd-plot { background:var(--late-bg); box-shadow:inset 0 0 0 1px var(--late); }
+    .pd-x { position:absolute; left:0; right:0; bottom:6px; font:700 13px system-ui; color:var(--late); }
+    .pd-col.future .pd-plot { background:var(--card); box-shadow:inset 0 0 0 1px var(--line); }
+    .pd-col.future .pd-tick { border-top-style:dashed; border-top-color:var(--ink-mut); }
+    .pd-dow { font:600 10.5px system-ui; color:var(--ink-v); margin-top:5px; }
+    .pd-dom { font:600 12px system-ui; font-variant-numeric:tabular-nums; }
+    .pd-hrs { font-size:11px; font-variant-numeric:tabular-nums; margin-top:3px; line-height:1.25; }
+    .pd-hrs .pd-a { display:block; min-height:14px; color:var(--ink); font-weight:600; }
+    .pd-hrs .pd-p { display:block; border-top:1px solid var(--line); color:var(--ink-mut); }
+    .pd-col.missed .pd-a { color:var(--late); }
+    /* A Crew size is missing that day: the plan under it is partial, or unknown. */
+    .pd-col.warn .pd-p { color:var(--warn); font-weight:600; }
+    .pd-key { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:11.5px; color:var(--ink-mut);
+      margin:10px 0 0; }
+    .pd-key i { display:inline-block; width:14px; height:9px; margin-right:5px; vertical-align:-1px;
+      border-radius:2px; }
+    .pd-key .k-bar { background:var(--ink-mut); }
+    .pd-key .k-line { height:0; border-top:2px solid var(--ink); border-radius:0; }
+    .pd-key .k-miss { background:var(--late-bg); box-shadow:inset 0 0 0 1px var(--late); }
+    .pd-key .k-future { box-shadow:inset 0 0 0 1px var(--line); }
+    .pd-key .k-warn { color:var(--warn); font-weight:600; margin-right:5px; }
+    .pd-events { list-style:none; margin:0; padding:0; }
+    .pd-events li { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; padding:9px 0;
+      border-top:1px solid var(--line-soft); font-size:13px; }
+    .pd-events li:first-child { border-top:0; }
+    .pd-events .pd-kind { font-weight:600; min-width:120px; }
+    .pd-events .pd-when { font-variant-numeric:tabular-nums; }
+    .pd-events .pd-crew { color:var(--ink-v); }
+    .pd-events a { margin-left:auto; font-weight:600; color:var(--red-dark); }
+
+    /* ── the grid: one row per week, bars span day columns ── */
+    /* On a phone seven day columns cannot fit 375px, so the weeks scroll sideways INSIDE their
+       own box and the page itself never does. */
+    .weeks-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
+    .weeks { min-width:700px; }
+    .dows { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:0 6px; margin-bottom:6px; }
+    .dow { font:700 9.5px system-ui; text-transform:uppercase; letter-spacing:.08em;
+      color:var(--ink-mut); padding:0 6px; }
+    /* Rows, bar positions and colours are set from js/project-calendar.js through the CSSOM
+       (element.style), never through inline style attributes, so the nginx CSP stays as it is. */
+    .week { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); column-gap:6px; row-gap:3px;
+      margin-bottom:6px; position:relative; }
+    .day { grid-row:1; background:var(--card); border:1px solid var(--line); border-radius:11px;
+      padding:5px 8px; z-index:0; }
+    .day.we { background:#f8f6f1; }
+    .day.today { border-color:var(--red); box-shadow:0 0 0 2px var(--red-tint); }
+    .day.other-month .dn { color:var(--ink-mut); }
+    .dn { font:600 13px system-ui; font-variant-numeric:tabular-nums; display:flex; align-items:baseline;
+      gap:6px; }
+    .day.today .dn { color:var(--red-dark); }
+    .dn .tag { font:700 8.5px system-ui; text-transform:uppercase; letter-spacing:.06em;
+      color:#fff; background:var(--red); padding:2px 5px; border-radius:5px; }
+
+    .bar { z-index:1; position:relative; display:flex; align-items:center; gap:6px; min-width:0;
+      height:24px; margin:0 3px; padding:0 8px; border:0; border-radius:6px; cursor:pointer;
+      background:var(--bar-neutral); color:#fff; font:600 11.5px/1 system-ui; text-align:left;
+      box-shadow:0 1px 1px rgba(60,50,40,.08); transition:box-shadow .12s, filter .12s; }
+    .bar:hover { box-shadow:var(--shadow-lift); filter:brightness(1.04); }
+    @media (prefers-reduced-motion:reduce) { .bar { transition:none; } }
+    /* A bar that carries on from the row above, or onto the row below, loses its rounded corner
+       on that side, so the two pieces read as one Mobilization. */
+    .bar.cont-l { border-top-left-radius:0; border-bottom-left-radius:0; }
+    .bar.cont-r { border-top-right-radius:0; border-bottom-right-radius:0; }
+    .bar .bn { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:0 1 auto; }
+    .bar .bm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 0;
+      font-weight:500; opacity:.86; font-variant-numeric:tabular-nums; }
+    /* The Deadline marker: on the LAST day of every bar (every bar is a Duration). */
+    .bar .dlm { flex:none; margin-left:auto; font:700 8.5px system-ui; text-transform:uppercase;
+      letter-spacing:.06em; padding:2px 5px; border-radius:999px; background:#fff; color:var(--late); }
+    .bar.dl-end { box-shadow:inset -4px 0 0 rgba(0,0,0,.28), 0 1px 1px rgba(60,50,40,.08); }
+
+    .legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; font-size:11.5px;
+      color:var(--ink-mut); align-items:center; }
+    .legend .sw { display:inline-block; width:18px; height:9px; border-radius:3px; margin-right:5px;
+      vertical-align:-1px; }
+    .legend .mk { font:700 8.5px system-ui; text-transform:uppercase; letter-spacing:.06em;
+      padding:2px 5px; border-radius:999px; background:#fff; color:var(--late);
+      border:1px solid #f0d9dd; margin-right:5px; }
+
+    /* ── details panel ── */
+    dialog { border:0; border-radius:16px; padding:0; max-width:520px; width:calc(100% - 32px);
+      box-shadow:0 16px 48px rgba(0,0,0,.30); color:var(--ink); background:var(--card); }
+    dialog::backdrop { background:rgba(27,28,28,.42); }
+    .dlg-body { padding:18px 20px 16px; }
+    .dlg-head { display:flex; align-items:flex-start; gap:10px; margin-bottom:4px; }
+    .dlg-sw { flex:none; width:12px; height:12px; border-radius:3px; margin-top:7px;
+      background:var(--bar-neutral); }
+    .dlg-head h2 { font:400 20px/1.25 var(--display); margin:0; flex:1; min-width:0;
+      overflow-wrap:anywhere; }
+    .dlg-close { flex:none; width:32px; height:32px; border:1px solid var(--line); border-radius:8px;
+      background:var(--card); color:var(--ink-v); cursor:pointer; display:inline-flex;
+      align-items:center; justify-content:center; }
+    .dlg-close:hover { background:var(--surf-low); color:var(--ink); }
+    .raw { margin:2px 0 12px 22px; font-size:12px; color:var(--ink-v); overflow-wrap:anywhere; }
+    .facts { display:grid; grid-template-columns:118px minmax(0,1fr); gap:6px 12px; margin:0;
+      font-size:13px; }
+    .facts dt { font:700 10px system-ui; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--ink-mut); padding-top:3px; }
+    .facts dd { margin:0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .chip { display:inline-flex; align-items:center; font:600 11px system-ui; padding:2px 8px;
+      border-radius:999px; background:var(--surf-high); color:var(--ink-v); margin:0 4px 3px 0; }
+    .chip.st-overdue { background:var(--surf-high); color:var(--ink-v); }
+    .chip.st-today { background:var(--late-bg); color:var(--late); }
+    .chip.st-upcoming { background:#eef3f7; color:var(--calm); }
+    .dlg-foot { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:16px;
+      padding-top:12px; border-top:1px solid var(--line-soft); }
+    .dlg-foot .muted { font-size:12px; color:var(--ink-mut); }
+
+    @media (max-width:767px) {
+      body { padding:18px 16px 70px; }
+      h1 { font-size:23px; }
+      .tw-search { width:100%; }
+      .toolbar .grow { display:none; }
+      .facts { grid-template-columns:100px minmax(0,1fr); }
+      .pd-pairs { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .pd-two b { font-size:20px; }
+      .pd-events a { margin-left:0; }
+    }
+    /* A narrow phone: each pair's plan and Raken figures stack, so "12,345.5" fits its card. */
+    @media (max-width:420px) {
+      .pd-two { grid-template-columns:1fr; }
+    }
+
+    /* Connect Raken (js/raken-connect.js, admins only) */
+    .raken-connect { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .raken-status { font-size:12.5px; }
+    .raken-ok { color:var(--calm); }
+    .raken-warn { color:var(--warn); }
+    .raken-muted { color:var(--ink-v); }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <img class="logo" src="/img/treadwell-bison.svg" width="54" height="34" alt="Treadwell" />
+    <h1>Project Analytics</h1>
+    <span class="ro" title="This page reads the Treadwell Projects Google calendar and never changes it">Read only</span>
+  </div>
+  <p class="hint">Each job's plan from the Treadwell Projects Google calendar, next to what Raken
+    recorded. Dates are Central time. Changes are made in Google Calendar.</p>
+
+  <div class="wrap">
+    <div class="tabs" role="tablist" aria-label="Project Analytics views">
+      <button type="button" class="tab" role="tab" id="tab-pva" aria-controls="panel-pva"
+              aria-selected="true">Plan vs Actual</button>
+      <button type="button" class="tab" role="tab" id="tab-schedule" aria-controls="panel-schedule"
+              aria-selected="false" tabindex="-1">Schedule</button>
+    </div>
+
+    <!-- Plan vs Actual: the server builds every row (GET /api/project-analytics); the page lays
+         them out. The Raken side is the last "Refresh now" read; until Raken is connected it
+         reads "Connect Raken to compare". -->
+    <section id="panel-pva" role="tabpanel" aria-labelledby="tab-pva">
+      <div id="pva-list">
+      <div class="pva-bar">
+        <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
+               maxlength="200"
+               aria-label="Search Plan vs Actual" autocomplete="off" />
+        <span id="pva-count" class="pva-count" aria-live="polite"></span>
+        <button type="button" id="pva-showall" class="btn" hidden>Show all jobs</button>
+        <span class="grow"></span>
+        <span id="pva-asof" class="pva-asof"></span>
+        <!-- The Excel download (#785): a GET of the list as it is filtered on screen. A button,
+             not a link: the script fetches it with the sign-in header, carrying the search box
+             and the pressed count. -->
+        <button type="button" id="pva-download" class="btn">Download</button>
+        <!-- The page's one write (#782): reads Raken now and keeps the result on the server. It
+             changes nothing in Google Calendar or Raken. -->
+        <button type="button" id="pva-refresh" class="btn">Refresh now</button>
+      </div>
+      <p id="pva-alert" class="alert" role="status" hidden></p>
+      <div id="pva-state" class="msg">Loading Plan vs Actual…</div>
+      <div id="pva-main" hidden>
+        <!-- The summary strip (#788): the server's counts and figures. Each count is a button that
+             shows only its jobs; pressed again, or "Show all jobs", it clears. -->
+        <section id="pva-sum" class="sum" aria-label="Summary of the jobs" hidden></section>
+        <div class="pva-card">
+          <div class="pva-scroll">
+            <table class="pva">
+              <thead>
+                <tr>
+                  <th scope="col">Job</th>
+                  <th scope="col">Deadline</th>
+                  <th scope="col" class="num">Workdays<small>booked so far</small></th>
+                  <th scope="col" class="num rk">Days clocked in<small>Raken</small></th>
+                  <th scope="col" class="num">Crew size<small>planned</small></th>
+                  <th scope="col" class="num rk">On site<small>average a day</small></th>
+                  <th scope="col" class="num">Planned hours<small>so far</small></th>
+                  <th scope="col" class="num rk">Actual hours<small>so far</small></th>
+                  <th scope="col" class="num rk">Projected total hours<small>of Budgeted hours, Over/under</small></th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody id="pva-body"></tbody>
+            </table>
+          </div>
+          <p id="pva-empty" class="note" hidden></p>
+        </div>
+        <p id="pva-foot" class="pva-foot"></p>
+      </div>
+      <!-- Raken projects logging hours with no job in the list (#782). Not counted with the jobs. -->
+      <section id="pva-only" class="pva-only" aria-labelledby="pva-only-title" hidden>
+        <h2 id="pva-only-title" class="pva-h2">In Raken, not on the calendar</h2>
+        <p class="note">Raken projects with time cards in the last two weeks whose Job number
+          matches no job on the calendar.</p>
+        <div class="pva-card">
+          <div class="pva-scroll">
+            <table class="pva">
+              <thead>
+                <tr>
+                  <th scope="col">Raken project</th>
+                  <th scope="col" class="num">Actual hours<small id="pva-only-from"></small></th>
+                  <th scope="col">Last day with hours</th>
+                </tr>
+              </thead>
+              <tbody id="pva-only-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <!-- One job's detail (#789), in place of the list: opened from its row, or from its bar on
+           the Schedule. Read only. Back (or Esc) returns to where it was opened from. -->
+      <section id="pva-detail" class="pva-detail" aria-labelledby="pd-title" hidden>
+        <div class="pd-top">
+          <button type="button" id="pd-back" class="btn">Back to Plan vs Actual</button>
+          <span class="grow"></span>
+          <span id="pd-asof" class="pva-asof"></span>
+        </div>
+        <div class="pd-head">
+          <i id="pd-sw" class="sw" aria-hidden="true"></i>
+          <div>
+            <h2 id="pd-title" class="pd-title" tabindex="-1"></h2>
+            <span id="pd-sub" class="jsub"></span>
+          </div>
+        </div>
+        <div id="pd-chips" class="pd-chips"></div>
+        <div id="pd-body">
+          <div id="pd-pairs" class="pd-pairs"></div>
+          <section class="pd-card" aria-labelledby="pd-chart-title">
+            <h3 id="pd-chart-title" class="pd-h3">Day by day</h3>
+            <p class="note">One column per Workday the calendar booked, Punches included. Under
+              each day, its Actual hours over its Planned hours.</p>
+            <div class="pd-chart-scroll">
+              <div id="pd-chart" class="pd-chart" role="list" aria-label="Day by day"></div>
+            </div>
+            <p class="pd-key">
+              <span><i class="k-line"></i>Crew size planned</span>
+              <span><i class="k-bar"></i>People clocked in (Raken)</span>
+              <span><i class="k-miss"></i>Booked, nobody clocked in</span>
+              <span><i class="k-future"></i>From today on: the plan only</span>
+              <span><b class="k-warn">24</b>A Crew size is missing that day</span>
+              <span id="pd-scale"></span>
+            </p>
+          </section>
+          <section class="pd-card" aria-labelledby="pd-events-title">
+            <h3 id="pd-events-title" class="pd-h3">Mobilizations and Punches</h3>
+            <ul id="pd-events" class="pd-events"></ul>
+          </section>
+          <section class="pd-card" aria-label="About this job">
+            <dl id="pd-facts" class="facts"></dl>
+            <div id="pd-foot" class="dlg-foot"></div>
+          </section>
+        </div>
+      </section>
+    </section>
+
+    <section id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" hidden>
+    <p class="hint">Every bar is a job's Duration, and its last day is the Deadline. A bar's colour
+      is its Work type, shown in the key below the calendar.</p>
+    <div id="toolbar" class="toolbar" hidden>
+      <span id="range" class="range"></span>
+      <span class="nav">
+        <button type="button" id="prev" class="btn icon" aria-label="Previous range"></button>
+        <button type="button" id="next" class="btn icon" aria-label="Next range"></button>
+        <button type="button" id="today" class="btn">Today</button>
+      </span>
+      <span id="modes" class="seg" role="group" aria-label="Range length"></span>
+      <span class="grow"></span>
+      <input id="q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
+             aria-label="Search Project Analytics" autocomplete="off" />
+    </div>
+
+    <p id="alert" class="alert" role="status" hidden></p>
+
+    <div id="state" class="msg">Loading the Schedule…</div>
+
+    <div id="main" class="main" hidden>
+      <section aria-label="Calendar">
+        <p id="note" class="note" hidden></p>
+        <div class="weeks-scroll">
+          <div class="weeks">
+            <div id="dows" class="dows" aria-hidden="true"></div>
+            <div id="grid"></div>
+          </div>
+        </div>
+        <div id="legend" class="legend"></div>
+      </section>
+    </div>
+    </section>
+  </div>
+
+  <!-- The details panel. <dialog> gives focus trapping, Esc and the backdrop for free.
+       Read only: nothing in here edits anything. -->
+  <dialog id="dlg" aria-labelledby="dlg-title">
+    <div class="dlg-body">
+      <div class="dlg-head">
+        <span id="dlg-sw" class="dlg-sw" aria-hidden="true"></span>
+        <h2 id="dlg-title"></h2>
+        <button type="button" id="dlg-close" class="dlg-close" aria-label="Close"></button>
+      </div>
+      <p id="dlg-raw" class="raw"></p>
+      <!-- Why the bar opened this panel and not its job's Plan vs Actual detail (#789). -->
+      <p id="dlg-note" class="note" hidden></p>
+      <dl id="dlg-facts" class="facts"></dl>
+      <div id="dlg-foot" class="dlg-foot"></div>
+    </div>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <!-- The Bid Calendar's date engine (ranges, paging, labels). Read here, never edited from here. -->
+  <script src="/js/calendar-core.js"></script>
+  <script src="/js/project-calendar-core.js"></script>
+  <script src="/js/project-calendar.js"></script>
+  <script src="/js/plan-vs-actual.js"></script>
+  <script src="/js/raken-connect.js"></script>
+</body>
+</html>
