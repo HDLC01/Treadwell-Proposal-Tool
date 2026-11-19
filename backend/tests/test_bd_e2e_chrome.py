@@ -15,7 +15,11 @@ collapsible "BD CRM" row. What a person sees:
     there, and both the group and the page say the server's own sentence.
   * A signed-out visit to /bd/ (or to BD's old login page) goes through the tool's sign-in and comes
     back to /bd/.
-  * At 390 and 820 wide the BD home never scrolls sideways.
+  * At 390 and 820 wide This Week, /bd/, never scrolls sideways.
+
+/bd/ is This Week since #807 (it was #806's greeting page): a salesperson is greeted and sees their
+week, a manager or admin is greeted and asked whose week to look at, and the assistant, whose BD
+home is Contacts, is sent to the Contacts page (until it moves, a page saying it is coming).
 
 Runs in the browser job of ci.yml (tests/_bd_browser.py: the live app on a seeded BD test database,
 sign-in faked only inside the test process). Expected values are the fixture seed's made-up people.
@@ -29,12 +33,15 @@ from _bd_browser import DESKTOP, PHONE, TABLET, Page, browser, live_app
 # A proposal-tool admin with no BD login. Everyone else is a plain tool "user".
 TOOL_ADMIN_NO_BD = "pat.tool@example.com"
 
-# The fixture seed's people who may open This Week: (email, first name, BD role as the page says it).
+# The fixture seed's people who may open This Week: (email, first name, what This Week says under the
+# greeting). Avery is a salesperson with one call to go on the seed's week; the others have no weekly
+# list of their own and are asked whose week to look at.
+CHOOSE = "Choose whose week to look at."
 WEEK_PEOPLE = [
-    ("avery.quill@example.com", "Avery", "Salesperson"),
-    ("devon.hale@example.com", "Devon", "Manager"),
-    ("emery.stoll@example.com", "Emery", "Admin"),
-    ("frankie.oduya@example.com", "Frankie", "Super admin"),
+    ("avery.quill@example.com", "Avery", "1 call to go this week."),
+    ("devon.hale@example.com", "Devon", CHOOSE),
+    ("emery.stoll@example.com", "Emery", CHOOSE),
+    ("frankie.oduya@example.com", "Frankie", CHOOSE),
 ]
 SUPER = "frankie.oduya@example.com"
 ASSISTANT = "casey.moret@example.com"
@@ -71,15 +78,16 @@ def _bd_me_requests(p):
     return seen
 
 
-def _role_text(page):
-    page.wait_for_function("() => !/Loading/.test(document.getElementById('bd-role').textContent)",
+def _sub_text(page):
+    """What This Week says under its heading, once it has said something."""
+    page.wait_for_function("() => document.getElementById('week-sub').textContent.trim() !== ''",
                            timeout=10000)
-    return page.locator("#bd-role").inner_text().strip()
+    return page.locator("#week-sub").inner_text().strip()
 
 
 # ── desktop ──────────────────────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("email,first,role", WEEK_PEOPLE)
-def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env, email, first, role):
+@pytest.mark.parametrize("email,first,sub", WEEK_PEOPLE)
+def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env, email, first, sub):
     p = _page(env, email)
     try:
         page = p.open_signed_in("/bd/")
@@ -97,23 +105,30 @@ def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env,
         assert _sections(page) == ["This Week"]
         current = page.locator('#tw-bd-sections [aria-current="page"]')
         assert current.count() == 1 and current.get_attribute("href") == "/bd/"
+        assert _sub_text(page) == sub          # said once the week (or the choice of whose week) is drawn
         assert re.fullmatch(r"Good (morning|afternoon|evening), " + first,
-                            page.locator("#bd-greeting").inner_text().strip())
-        assert _role_text(page) == "Your BD role: " + role
+                            page.locator("#wk-greeting").inner_text().strip())
         assert p.errors == [] and p.bd_errors() == [], (p.errors, p.bd_errors())
     finally:
         p.close()
 
 
 def test_the_assistant_has_no_section_until_her_pages_move(env):
+    """This Week sends her to her BD home, Contacts; there, the BD CRM row is lit and her group is
+    open with no section yet (Contacts joins it when its page moves)."""
     p = _page(env, ASSISTANT)
     try:
         page = p.open_signed_in("/bd/")
+        page.wait_for_url(re.compile(r".*/bd/contacts\.html(\?.*)?$"), timeout=10000)
+        page.wait_for_selector("#tw-bd-chev")
         _wait_sections(page)
         assert _sections(page) == []
         assert page.locator("#tw-bd-sections").inner_text().strip() == "Nothing here for your BD role yet."
-        assert _role_text(page) == "Your BD role: Assistant"
-        assert p.errors == [] and p.bd_errors() == [], (p.errors, p.bd_errors())
+        lit = page.locator("#tw-sidebar .tw-nav-item.active")
+        assert lit.count() == 1 and lit.get_attribute("href") == "/bd/"
+        # The redirect can land while /bd/ is still loading; the browser then cancels the rest of it.
+        errors = [e for e in p.errors if e != "failed /bd/"]
+        assert errors == [] and p.bd_errors() == [], (p.errors, p.bd_errors())
     finally:
         p.close()
 
@@ -131,8 +146,8 @@ def test_without_a_bd_login_the_row_stays_and_the_server_says_why(env, email, se
         assert page.locator('#tw-sidebar .tw-nav-item[href="/bd/"]').count() == 1
         assert _sections(page) == []
         assert page.locator("#tw-bd-sections").inner_text().strip() == sentence
-        assert _role_text(page) == sentence
-        assert page.locator("#bd-home-note").is_hidden()
+        assert _sub_text(page) == sentence
+        assert page.locator("#summary").is_hidden(), "no data"
         assert len(asked) == 1, "the group and the page share one /api/bd/me"
         assert p.bd_errors() == [(403, "/api/bd/me")]
         assert p.errors == [], p.errors
@@ -257,7 +272,7 @@ def test_the_bd_home_never_scrolls_sideways(env, viewport):
     p = _page(env, SUPER, viewport)
     try:
         page = p.open_signed_in("/bd/")
-        _role_text(page)
+        _sub_text(page)
         page.wait_for_timeout(200)
         over = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
         assert over <= 1, "scrolls sideways by %dpx at %d wide" % (over, viewport["width"])
@@ -279,8 +294,7 @@ def test_a_signed_out_visit_signs_in_and_comes_back_to_bd(env, start):
         p.sign_in(SUPER)
         page.goto(p.base + "/login.html")
         page.wait_for_url(re.compile(r".*/bd/$"), timeout=10000)
-        _role_text(page)
-        assert page.locator("#bd-role").inner_text().strip() == "Your BD role: Super admin"
+        assert _sub_text(page) == CHOOSE, "back on This Week, signed in as the super admin"
         assert page.evaluate("sessionStorage.getItem('tw_return_to')") is None, "a return is used once"
     finally:
         p.close()

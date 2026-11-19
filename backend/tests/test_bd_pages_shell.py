@@ -45,7 +45,10 @@ BD_SHELL = ["/bd/js/bd-api.js", "/bd/js/bd-shared.js", "/bd/js/bd-core.js"]
 # Each BD page's own scripts after the BD shell, listed explicitly: a page missing here fails
 # test_script_order (no silent default). A ticket that moves a page adds its row.
 PAGE_SCRIPT = {
-    "bd/index.html": ["/bd/js/bd-home.js"],
+    # This Week (#807): the after-a-call sheet, then the page.
+    "bd/index.html": ["/bd/js/bd-call.js", "/bd/js/bd-week.js"],
+    # The Contacts page's place (#807): plain words until Contacts moves (#808), no script of its own.
+    "bd/contacts.html": [],
 }
 LOGIN_ORDER = ["/bd/js/login-return.js"]
 TITLE = re.compile(r"^\S.* · BD CRM · Treadwell$")
@@ -144,7 +147,7 @@ def script_names(s: Shell):
 
 def test_pages_found():
     names = {rel(p) for p in PAGES}
-    assert {"bd/index.html", "bd/login.html"} <= names, names
+    assert {"bd/index.html", "bd/contacts.html", "bd/login.html"} <= names, names
 
 
 # ── head ─────────────────────────────────────────────────────────────────────────────────────
@@ -275,13 +278,13 @@ CSS_MARKERS = [
     "/* == tokens == */", "/* == end: tokens == */",
     "/* == base == */", "/* == end: base == */",
     "/* == components == */", "/* == end: components == */",
-    "/* == page: home == */", "/* == end: home == */",
+    "/* == page: week == */", "/* == end: week == */",
     "/* == print, reduced motion == */",
 ]
 # Each page section's own class prefixes; a rule in one section may not use another's. A ticket that
 # moves a page adds its section (week: wk- call-, contacts: ct- add-, contact: cd-, mgmt: rv- an- ad-).
 PAGE_PREFIXES = {
-    "home": ["hm-"],
+    "week": ["wk-", "call-"],
 }
 
 

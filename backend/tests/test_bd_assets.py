@@ -189,7 +189,7 @@ def test_no_tool_page_loads_the_bd_stylesheet_or_a_bd_script():
 
 # ── bd.css: scoped, and the tool's colours ───────────────────────────────────────────────────
 def css_rules(css):
-    """(at-rule context, selector list) for every style rule, @media/@supports opened, @keyframes kept
+    """(at-rule context, selector list) for every style rule, @media/@supports/@container opened, @keyframes kept
     whole (their from/to/% steps are not selectors)."""
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     out = []
@@ -206,7 +206,7 @@ def css_rules(css):
                 depth += {"{": 1, "}": -1}.get(text[k], 0)
                 k += 1
             inner = text[j + 1:k - 1]
-            if head.startswith(("@media", "@supports")):
+            if head.startswith(("@media", "@supports", "@container")):
                 walk(inner, ctx + [head])
             elif head.startswith("@"):
                 out.append((ctx + [head], None))
@@ -258,6 +258,8 @@ def test_every_bd_rule_is_scoped_under_the_bd_root():
     ("@font-face { font-family: X; }", ["@font-face"]),
     ("@keyframes spin { to { transform: none; } }", ["@keyframes spin"]),
     (".bd-app .x:where(a, b) { a: b; } @keyframes bd-spin { from { a: b; } }", []),
+    # a container query is a condition like @media: the rules inside it are checked (#807, This Week)
+    ("@container wk-main (min-width: 520px) { .bd-app .wk-row { a: b; } .wk-row { a: b; } }", [".wk-row"]),
 ])
 def test_the_scope_check_itself(css, bad):
     assert unscoped(css) == bad

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Contacts · BD CRM · Treadwell</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- One light theme, like every page of the tool: no synthesized dark mode. -->
+  <meta name="color-scheme" content="only light" />
+  <link rel="stylesheet" href="/bd/bd.css" />
+</head>
+<body class="bd-app">
+  <!-- The Contacts page's place (#807). An assistant's BD home is Contacts, and This Week sends her
+       here. Until the Contacts page moves in (#808, which replaces this file and adds the Add contact
+       link), it is a plain page saying the page is coming, with no link to a page that has not moved. -->
+  <main class="page" id="main">
+    <header class="page-head">
+      <p class="eyebrow">BD CRM</p>
+      <h1 class="page-title">Contacts</h1>
+    </header>
+    <section class="panel-info" role="status" aria-label="Contacts">
+      <p>The Contacts page is coming. It moves into the proposal tool next.</p>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/crm-core.js"></script>
+  <script src="/bd/js/bd-api.js"></script>
+  <script src="/bd/js/bd-shared.js"></script>
+  <script src="/bd/js/bd-core.js"></script>
+</body>
+</html>

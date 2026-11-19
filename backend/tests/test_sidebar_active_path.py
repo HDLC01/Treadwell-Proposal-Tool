@@ -76,6 +76,8 @@ BEFORE = {
     "/bd/": ["/bd/"],
     "/bd/index.html": ["/bd/"],
     "/bd/login.html": ["/bd/"],
+    # The Contacts page's place (#807): where This Week sends the assistant; plain words until it moves.
+    "/bd/contacts.html": ["/bd/"],
 }
 
 # Addresses under /bd/ whose file names are the same as a tool page's. Under an ends-with match each

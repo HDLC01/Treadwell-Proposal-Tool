@@ -161,6 +161,38 @@ def _seed(url: str) -> None:
         conn.close()
 
 
+def reseed(url: str) -> None:
+    """Put the live app's database back to the fixture seed (every BD table emptied, ids restarted,
+    then seeded), as the app's own login. A suite whose tests change data calls it before each test,
+    so every test starts from the same made-up week (#807)."""
+    import _bd_db
+    from bd import db as dbmod
+    from bd.ops import fixture_seed
+
+    conn = dbmod.direct(_bd_db.app_login_url(url), autocommit=True)
+    try:
+        fixture_seed.reset_data(conn)
+        dbmod.prepare_session(conn)
+        fixture_seed.seed(conn)
+    finally:
+        conn.close()
+
+
+def run_sql(url: str, statement: str, params=None) -> list:
+    """One statement on the live app's database, as the app's own login (a test's own arrangement,
+    such as clearing a week so the admin's manual run has one to build). Returns the rows, if any."""
+    import _bd_db
+    from bd import db as dbmod
+
+    conn = dbmod.direct(_bd_db.app_login_url(url), autocommit=True)
+    try:
+        dbmod.prepare_session(conn)
+        cur = conn.execute(statement, params or ())
+        return cur.fetchall() if cur.description else []
+    finally:
+        conn.close()
+
+
 def _wait_until_up(proc, base: str, log_path: pathlib.Path, timeout: float = 90.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -195,6 +227,13 @@ def _scratch_dir():
 @contextlib.contextmanager
 def live_app(tool_roles: dict | None = None):
     """The live app on a fresh, seeded BD test database. Yields its base URL."""
+    with live_app_db(tool_roles) as (base, _url):
+        yield base
+
+
+@contextlib.contextmanager
+def live_app_db(tool_roles: dict | None = None):
+    """live_app, yielding (base URL, the BD test database's admin URL) for reseed() and run_sql()."""
     import _bd_db
 
     admin = _bd_db.admin_url()
@@ -215,7 +254,7 @@ def live_app(tool_roles: dict | None = None):
             try:
                 base = "http://127.0.0.1:%d" % port
                 _wait_until_up(proc, base, log_path)
-                yield base
+                yield base, url
             finally:
                 proc.terminate()
                 try:

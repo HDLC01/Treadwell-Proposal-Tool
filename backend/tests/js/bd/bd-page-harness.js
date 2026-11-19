@@ -14,9 +14,10 @@
  *             responses: {"GET /api/bd/me": {status, body} | {status, text, type}}
  *             fetchFails: true                          every fetch rejects (no network)
  *             calls: [{fn: "get" | "post" | ..., path, body}]
- *             ids: ["bd-greeting", ...] }               elements to report
+ *             ids: ["wk-greeting", ...] }               elements to report
  * out:      { threw, calls: [{ok} | {error: {message, status, code, fields}}], fetches: [{url, method,
- *             headers, body}], els: {id: {text, html, hidden}}, globals: {name: typeof} }
+ *             headers, body}], els: {id: {text, html, hidden}}, globals: {name: typeof},
+ *             replaced: [address, ...] }               every location.replace (a role sent home, #807)
  */
 const fs = require("fs");
 const path = require("path");
@@ -85,11 +86,13 @@ function liftBdFailure() {
 }
 
 const never = new Promise(() => {});
+const replaced = [];
 const ctx = {
   console,
   setTimeout, clearTimeout,
   URLSearchParams, URL, Intl, JSON, Math, Promise,
-  location: { pathname: "/bd/", search: "", hostname: "proposals.example.com", origin: "https://proposals.example.com" },
+  location: { pathname: "/bd/", search: "", hostname: "proposals.example.com", origin: "https://proposals.example.com",
+              replace: (to) => { replaced.push(String(to)); } },
   document: {
     title: "", documentElement: element("html"), body: element("body"),
     getElementById: (id) => byId[id] || null,
@@ -146,5 +149,5 @@ function settle() { return new Promise((r) => setTimeout(r, 20)); }
   for (const id of Object.keys(byId)) els[id] = { text: byId[id].textContent, html: byId[id].innerHTML, hidden: !!byId[id].hidden };
   const globals = {};
   for (const g of ["BDApi", "BD", "BDCore", "TWIcon", "BD_MOCK", "BDMock", "BDAuth"]) globals[g] = typeof ctx[g];
-  process.stdout.write(JSON.stringify({ threw, calls, fetches, els, globals }) + "\n");
+  process.stdout.write(JSON.stringify({ threw, calls, fetches, els, globals, replaced }) + "\n");
 })();
