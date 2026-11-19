@@ -11,7 +11,11 @@ branch, never from a working folder.
   pace       the annual pace bar and the week's progress
   priority   the priority score and its reasons
   serialize  database rows -> the contract's JSON objects (docs/bd/api-contract.md)
+  migrate    the schema runner (python -m bd.migrate, by hand, as the admin login; never at
+             startup) and ledger_behind(), the routes' "database not up to date" check
+  migrations/  the numbered files that make schema bd, and grants.sql, its privilege model
   ops/       BD's command-line scripts, apart from the tool's own ops scripts
+             (staging_schema writes the BD part of backend/staging/schema_pg.sql)
 
 The pure rules have a JavaScript twin, frontend/bd/js/bd-core.js; tests/test_bd_core_js.py is
 the shared table both must answer.
