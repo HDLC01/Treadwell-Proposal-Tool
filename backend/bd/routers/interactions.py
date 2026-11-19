@@ -19,12 +19,11 @@ from typing import Any
 
 from fastapi import Body, Depends
 
-from .. import auth, bizdate, db, errors, events, serialize, web
+from .. import auth, bizdate, db, errors, events, paging, serialize, web
 from .. import interactions_service as svc
 
 router = web.make_router()
 
-_BIGINT_MAX = 2 ** 63 - 1
 # The earliest moment an interaction may be logged at (Central): the importer's dates start in
 # 1990 too. An earlier one (year 1, say) is a typo, and would overflow the Central conversion.
 EARLIEST_OCCURRED = 1990
@@ -36,26 +35,6 @@ NO_INTERACTION = "That interaction does not exist."
 
 
 # ── input helpers ────────────────────────────────────────────────────────────────────────────
-def _path_id(value, message: str) -> int:
-    """A path id as an int; anything that is not a positive bigint is simply unknown (404), as the
-    mock's \\d+ routes make it."""
-    text = str(value or "")
-    if not text.isascii() or not text.isdigit():
-        raise errors.not_found(message)
-    n = int(text)
-    if n < 1 or n > _BIGINT_MAX:
-        raise errors.not_found(message)
-    return n
-
-
-def _body(body) -> dict:
-    if body is None:
-        return {}
-    if not isinstance(body, dict):
-        raise errors.bad_request("Some fields need fixing.", {"body": "Use an object."})
-    return body
-
-
 def _occurred_at(value):
     """A timestamp that has happened (its Central date is not after today) and is not before
     1990, as an aware datetime. Review finding DATA-3: the Central conversion is inside the same
@@ -122,7 +101,7 @@ def _kind_outcome(kind, outcome):
 # ── routes ───────────────────────────────────────────────────────────────────────────────────
 @router.get("/api/bd/contacts/{id}/interactions")
 def list_interactions(id: str, user: dict = Depends(auth.current_user)):
-    cid = _path_id(id, NO_CONTACT)
+    cid = paging.path_id(id, NO_CONTACT)
     with db.connect() as conn:
         c = conn.execute("select id, source, created_at from contacts where id = %s", (cid,)).fetchone()
         if c is None:
@@ -133,13 +112,13 @@ def list_interactions(id: str, user: dict = Depends(auth.current_user)):
 
 @router.post("/api/bd/contacts/{id}/interactions")
 def log_interaction(id: str, body: Any = Body(None), user: dict = Depends(auth.current_user)):
-    body = _body(body)
+    body = paging.json_object(body)
     if user.get("role") == "assistant":
         if body.get("kind") != "note":
             raise errors.forbidden(ASSISTANT_NOTES_ONLY)
     elif not auth.has_role(user, "salesperson"):
         raise errors.forbidden()
-    cid = _path_id(id, NO_CONTACT)
+    cid = paging.path_id(id, NO_CONTACT)
     with db.connect() as conn:
         c = conn.execute("select id from contacts where id = %s for update", (cid,)).fetchone()
         if c is None:
@@ -168,8 +147,8 @@ def log_interaction(id: str, body: Any = Body(None), user: dict = Depends(auth.c
 
 @router.patch("/api/bd/interactions/{id}")
 def patch_interaction(id: str, body: Any = Body(None), user: dict = Depends(auth.current_user)):
-    iid = _path_id(id, NO_INTERACTION)
-    body = _body(body)
+    iid = paging.path_id(id, NO_INTERACTION)
+    body = paging.json_object(body)
     with db.connect() as conn:
         row = conn.execute("select * from interactions where id = %s for update", (iid,)).fetchone()
         if row is None:
@@ -198,7 +177,7 @@ def patch_interaction(id: str, body: Any = Body(None), user: dict = Depends(auth
 
 @router.delete("/api/bd/interactions/{id}")
 def delete_interaction(id: str, user: dict = Depends(auth.require_role())):
-    iid = _path_id(id, NO_INTERACTION)
+    iid = paging.path_id(id, NO_INTERACTION)
     with db.connect() as conn:
         row = conn.execute("select id, contact_id, kind, occurred_at from interactions where id = %s for update",
                            (iid,)).fetchone()

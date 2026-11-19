@@ -615,7 +615,7 @@ BD route serves that path with another method.
 {
   "ok": true,
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
-  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true },
+  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -623,12 +623,15 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week |
-|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes |
-| assistant | | | | yes | yes | | |
-| manager | | yes | | | | | yes |
-| admin, super_admin | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner |
+|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | |
+| assistant | | | | yes | yes | | | |
+| manager | | yes | | | | | yes | yes |
+| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes |
+
+`pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
+"Whose week?" picker. A salesperson sees only their own week.
 
 #### `GET /api/bd/settings` (any BD role)
 

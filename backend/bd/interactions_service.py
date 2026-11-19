@@ -31,6 +31,9 @@ What "recompute" means here
       * the same kinds get a pending fallback Recommendation (fallback_next_action).
 
 Every date rule is Central (bizdate); "today" is bizdate.today_central(), which honours BD_TODAY.
+
+"The mock" and "api.js X" below are BD's retired Phase 1 mock (frontend/js/api.js in the BD
+repository), named only to trace a rule back; docs/bd/api-contract.md is the spec.
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ import datetime as _dt
 import re
 
 from . import bizdate, serialize
+from .events import actor_id
 
 KINDS = ("call", "voicemail", "meeting", "email", "sms", "note", "hosted")
 CALL_OUTCOMES = ("answered", "no_answer", "meeting_set")
@@ -274,14 +278,6 @@ def fetch_interaction_row(conn, interaction_id):
     return conn.execute(serialize.INTERACTION_SELECT + " where i.id = %s", (interaction_id,)).fetchone()
 
 
-def _actor_id(actor):
-    if actor is None:
-        return None
-    if isinstance(actor, dict):
-        return actor.get("id")
-    return int(actor)
-
-
 def log_interaction(conn, contact_id, actor, *, kind, outcome=None, occurred_at=None, direction=None,
                     duration_s=None, summary="", transcript=None, recording_url=None,
                     provider="manual", external_id=None, close_task=True, recommend=True, now=None):
@@ -305,7 +301,7 @@ def log_interaction(conn, contact_id, actor, *, kind, outcome=None, occurred_at=
         " transcript, recording_url, provider, external_id, user_id)"
         " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) returning id",
         (contact_id, kind, direction, outcome, at, duration_s, summary, transcript, recording_url,
-         provider, external_id, _actor_id(actor))).fetchone()["id"]
+         provider, external_id, actor_id(actor))).fetchone()["id"]
     if is_touch(kind, outcome):
         apply_touch(conn, contact_id, at)
     task = close_current_task(conn, contact_id, at, kind) if close_task else None

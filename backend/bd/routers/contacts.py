@@ -6,7 +6,8 @@ contact after a touch, and "not the right person" with no task confirms the cont
 list, duplicates, create, archive and merge move with the contact page (#808) and join this module.
 
 docs/bd/api-contract.md "Contacts" is the spec; where it is silent this follows BD's mock (api.js
-getContact, patchContact, confirmContact), as BD did.
+getContact, patchContact, confirmContact), as BD did. "api.js X" names a function of that retired
+mock, frontend/js/api.js in the BD repository, only to trace a rule back.
 
 Who:
     GET      any BD role
@@ -21,11 +22,11 @@ Reusable by the routers that move later (the review "Add", the importer):
 """
 from __future__ import annotations
 
-import re
+from typing import Any
 
 from fastapi import Body, Depends
 
-from .. import appsettings, auth, bizdate, db, errors, interactions_service, serialize, web
+from .. import appsettings, auth, bizdate, db, errors, interactions_service, paging, serialize, web
 from ..events import log_event
 from ..normalize import clean_name, lock_company_name, normalize_company
 from ..phone import to_e164
@@ -35,7 +36,6 @@ router = web.make_router()
 CONTACT_NOT_FOUND = "That contact does not exist."
 COMPANY_NOT_FOUND = "That company does not exist."
 FIX = "Some fields need fixing."
-MAX_ID = 2 ** 63 - 1
 MISSED_CALL_DAYS = 14          # api.js MISSED_CALL_DAYS: an older unanswered call gets no card
 
 CATEGORIES = ("bd", "maintenance")
@@ -69,24 +69,6 @@ CADENCE_PHRASE = {"weekly": "every week", "monthly": "every month", "quarterly":
 MANAGER_KEYS = ("cadence_override", "cadence_override_until", "frequency_per_year")
 
 # ── small helpers ─────────────────────────────────────────────────────────────────────────────
-def valid_id(value, message: str = CONTACT_NOT_FOUND) -> int:
-    """A path id as an int. Anything that cannot name a row (not digits, 0, past bigint) is a plain
-    404 with the route's sentence. Path ids are taken as text so "abc" is a 404 here too, never
-    FastAPI's 422 -> 400."""
-    if isinstance(value, bool):
-        raise errors.not_found(message)
-    if isinstance(value, int):
-        n = value
-    else:
-        text = str(value if value is not None else "")
-        if not text.isascii() or not text.isdigit():
-            raise errors.not_found(message)
-        n = int(text)
-    if n < 1 or n > MAX_ID:
-        raise errors.not_found(message)
-    return n
-
-
 def as_int(value):
     """An int from a JSON number (6 or 6.0); None for anything else (bools and strings too)."""
     if isinstance(value, bool):
@@ -104,10 +86,6 @@ def _is_date(value) -> bool:
         return isinstance(value, str)
     except (TypeError, ValueError):
         return False
-
-
-def _body(body) -> dict:
-    return body if isinstance(body, dict) else {}
 
 
 def _too_long(sentence_limit: int) -> str:
@@ -185,7 +163,7 @@ def find_duplicates(conn, company=None, email=None, phone=None, except_id=None) 
 
 def company_by_id(conn, company_id):
     cid = as_int(company_id)
-    if cid is None or cid < 1 or cid > MAX_ID:
+    if paging.as_id(cid) is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
     row = conn.execute("select id, name, city, industry from companies where id = %s", (cid,)).fetchone()
     if row is None:
@@ -273,7 +251,7 @@ def _missed_call(conn, summary_row):
 
 @router.get("/api/bd/contacts/{id}")
 def get_contact(id: str, user: dict = Depends(auth.current_user)):
-    cid = valid_id(id)
+    cid = paging.path_id(id, CONTACT_NOT_FOUND)
     with db.connect() as conn:
         row = _summary_row(conn, cid)
         if row is None:
@@ -286,22 +264,6 @@ def get_contact(id: str, user: dict = Depends(auth.current_user)):
 EDITABLE = ("name", "title", "email", "phone", "city", "industry", "lead_source", "stage", "category",
             "account_type", "frequency_per_year", "importance", "next_step", "next_step_date",
             "promised_date", "tags", "notes")
-
-
-def iso(d):
-    return d.isoformat() if d is not None else None
-
-
-def _is_exact_date(value) -> bool:
-    """A real YYYY-MM-DD with nothing around it (no padding, no trailing newline), as the mock reads
-    it. bizdate.parse_date strips its text; the override's last day must not."""
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
-        return False
-    try:
-        bizdate.parse_date(value)
-    except ValueError:
-        return False
-    return True
 
 
 def _override_after(body: dict, row) -> tuple:
@@ -326,7 +288,7 @@ def _validate_cadence(body: dict, row, fields: dict) -> None:
     # One sentence at a time, in this order (api.js patchContact reads it the same way).
     if word is not None and (not isinstance(word, str) or word not in BD_CADENCES):
         fields["cadence_override"] = PICK_CADENCE
-    elif day is not None and "cadence_override_until" in body and not _is_exact_date(day):
+    elif day is not None and "cadence_override_until" in body and bizdate.exact_date(day) is None:
         fields["cadence_override_until"] = "Use a date (YYYY-MM-DD)."
     elif word is not None and day is None:
         fields["cadence_override_until"] = NEED_LAST_DAY
@@ -384,9 +346,9 @@ def _validate_patch(body: dict, user: dict, row=None) -> dict:
 
 
 @router.patch("/api/bd/contacts/{id}")
-def patch_contact(id: str, body: dict | None = Body(None), user: dict = Depends(auth.current_user)):
-    cid = valid_id(id)
-    body = _body(body)
+def patch_contact(id: str, body: Any = Body(None), user: dict = Depends(auth.current_user)):
+    cid = paging.path_id(id, CONTACT_NOT_FOUND)
+    body = paging.json_object(body)
     with db.connect() as conn:
         row = _summary_row(conn, cid)
         if row is None:
@@ -444,8 +406,8 @@ def patch_contact(id: str, body: dict | None = Body(None), user: dict = Depends(
                     was = CADENCE_PHRASE.get(row.get("cadence") or global_word, "every quarter")
                     detail = "%s to %s until %s" % (was[0].upper() + was[1:], CADENCE_PHRASE[word], _day_words(day))
                 log_event(conn, "frequency_changed", actor=user, contact_id=cid, detail=detail,
-                          data={"from": {"cadence_override": old[0], "cadence_override_until": iso(old[1])},
-                                "to": {"cadence_override": word, "cadence_override_until": iso(day)}})
+                          data={"from": {"cadence_override": old[0], "cadence_override_until": bizdate.iso_date(old[1])},
+                                "to": {"cadence_override": word, "cadence_override_until": bizdate.iso_date(day)}})
             sets += ["cadence_override = %s", "cadence_override_until = %s"]
             params += [word, day]
 
@@ -530,12 +492,12 @@ def _release_pinned_tasks(conn, contact_id, new_owner_id) -> None:
 
 
 @router.post("/api/bd/contacts/{id}/confirm")
-def confirm_contact(id: str, body: dict | None = Body(None),
+def confirm_contact(id: str, body: Any = Body(None),
                     user: dict = Depends(auth.require_role("salesperson", "assistant"))):
-    body = _body(body)
+    body = paging.json_object(body)
     if "confirmed" in body and body["confirmed"] is not None and not isinstance(body["confirmed"], bool):
         raise errors.bad_request(FIX, {"confirmed": "Use true or false."})
-    cid = valid_id(id)
+    cid = paging.path_id(id, CONTACT_NOT_FOUND)
     yes = body.get("confirmed") is not False
     with db.connect() as conn:
         row = conn.execute("select id, confirmed from contacts where id = %s", (cid,)).fetchone()

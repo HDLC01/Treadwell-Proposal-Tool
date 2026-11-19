@@ -208,3 +208,23 @@ _Avoid_: Lead (that is an incoming request for a bid), prospect
 **Maintenance account**:
 A company Treadwell already works for, kept in touch with a follow-up every 120 days instead of the weekly BD calls. A whole BD account becomes one, or goes back, with every person at it.
 _Avoid_: maintenance contact (that is one person at it), customer
+
+**This Week**:
+A salesperson's BD home page: their Weekly 10, their Maintenance follow-ups that are due, any names from Give Me 10 More, and their pace for the year. A BD manager or admin chooses whose week to look at; an assistant's BD home is Contacts instead.
+_Avoid_: Home page, dashboard, the list
+
+**Weekly 10**:
+The ten people a salesperson is given to call in one Monday-to-Sunday week, five new and five follow-ups, best score first. "N of 10 done" counts these ten only, and the list never refills itself when one is done or taken off.
+_Avoid_: The 10, weekly list, weekly-10, Troy's list
+
+**Friday batch**:
+How a Weekly 10 is made: every Friday at 4 PM the BD CRM builds each salesperson's list for the next week, with their due Maintenance follow-ups above it, and closes what was left open on this week's list. A BD admin can also make one by hand from This Week. A salesperson has one Friday batch a week.
+_Avoid_: Weekly run (that is the job that makes it), weekly list
+
+**Give Me 10 More**:
+The This Week button that adds the next ten people by score to this week's list, after the Weekly 10. It never changes "N of 10 done", and it never adds anyone already on this week's list.
+_Avoid_: Extra 10, ten more, refill
+
+**Maintenance follow-up**:
+A task on This Week for one person at a Maintenance account whose follow-up is due. It sits under "Due now", above the Weekly 10 and outside it, and stays until a call, meeting, email or text is logged for that person.
+_Avoid_: Pinned task, maintenance task

@@ -195,7 +195,9 @@ def test_the_startup_hook_starts_the_worker(monkeypatch):
 
 def test_the_tools_other_startup_hooks_still_run(monkeypatch):
     """Starting the app runs every startup hook, the BD worker's and the tool's own (a lifespan
-    would have stopped them). Each hook's work is replaced by a note, so nothing really starts."""
+    would have stopped them). Each hook's work is replaced by a note, so nothing really starts. The
+    check is that every hook stubbed here ran, not that these are all the tool's hooks: a hook the
+    tool adds later does not break this BD test."""
     from fastapi.testclient import TestClient
 
     import main
@@ -217,8 +219,10 @@ def test_the_tools_other_startup_hooks_still_run(monkeypatch):
         deadline = time.monotonic() + 10
         while "sheet warm-up" not in ran and time.monotonic() < deadline:   # its own thread
             time.sleep(0.01)
-    assert sorted(ran) == sorted(["proposal font", "drafts", "digest hooks", "digest", "pva refresh",
-                                  "basisboard", "sheet warm-up", "bd weekly"])
+    stubbed = {"proposal font", "drafts", "digest hooks", "digest", "pva refresh", "basisboard",
+               "sheet warm-up", "bd weekly"}
+    assert "bd weekly" in ran
+    assert stubbed <= set(ran), sorted(stubbed - set(ran))
 
 
 # ── the Friday run on the fixture seed ───────────────────────────────────────────────────────

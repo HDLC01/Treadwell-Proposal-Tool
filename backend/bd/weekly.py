@@ -6,6 +6,9 @@ the rules are unchanged. BD's Phase 1 mock was the reference:
     BDCore.taskKind / rankContacts / pickWeekly / pickNext / toTask   frontend/bd/js/bd-core.js
     api.js runWeekly (the Friday batch + rollover), tenMore, addBatch (BD's mock, retired in #806)
 
+"api.js X" below names a function of BD's retired mock, frontend/js/api.js in the BD repository; it
+is kept only to trace a rule back. docs/bd/api-contract.md is the spec.
+
 The routes that build (POST /api/bd/week/ten-more, POST /api/bd/admin/weekly/run) call
 ten_more() and build_batch(); the Friday worker (bd/weekly_worker.py) calls run_due().
 
@@ -47,6 +50,11 @@ savepoint when the caller already has one; run_due builds each owner in its own,
     last_friday_week(conn, owner, up_to=None) -> date | None
     run_due(conn, now=None, commit=False, failed=None) -> [result]   what the worker calls
 
+WHOSE WEEK (the routes' owner rules: This Week's routes and the admin's run share them)
+    week_owner(conn, owner_param, me) -> users dict    GET /api/bd/week's owner (404 when unknown)
+    list_owner(conn, owner_param, me) -> users dict    the builds' owner: a salesperson, else 404
+    monday_or_none(value) -> date | None               a week_start a caller sent
+
 `owner` is a users row/dict with "id", or a bare id. `today` is a Central date (or "YYYY-MM-DD").
 contacts_summary derives last_live_at, attempts_since_live ... as of the SQL bd_today(); when
 `today` is not the connection's business date, these functions set it for their own transaction
@@ -83,7 +91,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from . import appsettings, bizdate, priority, serialize
+from . import appsettings, bizdate, errors, paging, priority, serialize
 
 RUN_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 # The run builds NEXT week's list and its rollover closes this week's open tasks, so it may only
@@ -445,3 +453,60 @@ def run_due(conn: Any, now: Any = None, commit: bool = False, failed: list | Non
         built.append({"owner_id": o["id"], "week_start": week, "batch_id": res["batch"]["id"],
                       "tasks_created": res["tasks_created"]})
     return built
+
+
+# ── whose week ───────────────────────────────────────────────────────────────────────────────
+_ABSENT = object()
+
+
+def _owner_param(value):
+    """The `owner` asked for (query text or a JSON body value), as api.js ownerParam reads it:
+    _ABSENT when none (None, blank text), the id for a whole number (a JSON 1.0 is JavaScript's 1)
+    or digit text with spaces around it, else None (no such user: true, [1], 1.5, "1e0")."""
+    if value is None:
+        return _ABSENT
+    if isinstance(value, float):
+        return paging.as_id(int(value)) if value.is_integer() else None
+    if isinstance(value, str):
+        return _ABSENT if value.strip() == "" else paging.as_id(value.strip())
+    return paging.as_id(value) if isinstance(value, int) else None
+
+
+def week_owner(conn, owner_param, me) -> dict:
+    """The owner whose week is shown (api.js weekOwner): the `owner` asked for, else me when I am
+    a salesperson, else the first active salesperson (else me: nobody has a list yet)."""
+    uid = _owner_param(owner_param)
+    if uid is not _ABSENT:
+        row = conn.execute("select id, name, role, active from users where id = %s", (uid,)).fetchone()             if uid is not None else None
+        if row is None:
+            raise errors.not_found("That user does not exist.")
+        if row["role"] != "salesperson":
+            raise errors.not_found("%s has no weekly list. Only salespeople do." % row["name"])
+        return dict(row)
+    if me.get("role") == "salesperson":
+        return {"id": me["id"], "name": me["name"], "role": me["role"], "active": me.get("active", True)}
+    row = conn.execute("select id, name, role, active from users where role = 'salesperson' and active"
+                       " order by id limit 1").fetchone()
+    if row is not None:
+        return dict(row)
+    return {"id": me["id"], "name": me["name"], "role": me["role"], "active": me.get("active", True)}
+
+
+def list_owner(conn, owner_param, me) -> dict:
+    """week_owner for the builds (ten-more, the admin's run; api.js listOwner): the owner it
+    falls back to when nobody active is a salesperson is me, and only a salesperson has a weekly
+    list, so that is the same 404 as naming one. GET /api/bd/week keeps the fallback (an empty week)."""
+    who = week_owner(conn, owner_param, me)
+    if who.get("role") != "salesperson":
+        raise errors.not_found("%s has no weekly list. Only salespeople do." % who["name"])
+    return who
+
+
+MAX_WEEK_YEAR = 9998          # a week's Sunday must still be a date (9999-12-27 + 6 overflows)
+
+
+def monday_or_none(value):
+    """A week_start the caller sent, as api.js isMondayISO: exactly "YYYY-MM-DD" (nothing around
+    it), a real date in years 1-9998, a Monday; else None."""
+    d = bizdate.exact_date(value)
+    return d if d is not None and d.year <= MAX_WEEK_YEAR and d.weekday() == 0 else None

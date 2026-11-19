@@ -24,7 +24,9 @@ TIMELINE_KINDS = ("created", "confirmed", "unconfirmed", "duplicate_cleared", "o
                   "frequency_changed", "merged", "archived", "restored", "added_from_quote")
 
 
-def _actor_id(actor: Any) -> Any:
+def actor_id(actor: Any) -> Any:
+    """The users id of `actor` (a users row, a bare id, or None for the system). interactions_service
+    reads an interaction's user_id with it too."""
     if actor is None:
         return None
     if isinstance(actor, dict):
@@ -43,10 +45,10 @@ def log_event(conn: Any, kind: str, actor: Any = None, contact_id: int | None = 
         row = conn.execute(
             "insert into events (kind, actor_id, contact_id, detail, data)"
             " values (%s, %s, %s, %s, %s::jsonb) returning id",
-            (kind, _actor_id(actor), contact_id, detail, json.dumps(payload, default=str))).fetchone()
+            (kind, actor_id(actor), contact_id, detail, json.dumps(payload, default=str))).fetchone()
     else:
         row = conn.execute(
             "insert into events (kind, actor_id, contact_id, detail, data, at)"
             " values (%s, %s, %s, %s, %s::jsonb, %s) returning id",
-            (kind, _actor_id(actor), contact_id, detail, json.dumps(payload, default=str), at)).fetchone()
+            (kind, actor_id(actor), contact_id, detail, json.dumps(payload, default=str), at)).fetchone()
     return row["id"] if isinstance(row, dict) else row[0]

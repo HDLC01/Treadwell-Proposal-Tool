@@ -98,6 +98,18 @@ def test_ids_that_name_no_contact_are_404(bd_seeded, bd_as_user, path):
                                                  "message": "That contact does not exist."}
 
 
+@pytest.mark.parametrize("method, path", [("PATCH", "/api/bd/contacts/21"), ("POST", "/api/bd/contacts/21/confirm")])
+@pytest.mark.parametrize("body", [["next_step"], "Call back", 7])
+def test_a_body_that_is_not_an_object_is_400_in_one_sentence(bd_seeded, bd_as_user, bd_db, method, path, body):
+    """The same words every BD route uses for a body that is not a JSON object (bd/paging.py)."""
+    r = bd_as_user(AVERY).request(method, path, json=body)
+    assert r.status_code == 400 and r.json() == {"ok": False, "error": "bad_request",
+                                                 "message": "Some fields need fixing.",
+                                                 "fields": {"body": "Send a JSON object."}}, r.text
+    c = bd_db.execute("select confirmed, next_step from bd.contacts where id = 21").fetchone()
+    assert (c["confirmed"], c["next_step"]) == (True, "Send the epoxy sample board")
+
+
 def test_the_one_contact_routes_need_a_sign_in(bd_seeded, bd_client):
     for method, path in (("GET", "/api/bd/contacts/21"), ("PATCH", "/api/bd/contacts/21"),
                          ("POST", "/api/bd/contacts/21/confirm")):

@@ -1,10 +1,11 @@
 """This Week: GET /api/bd/week, POST /api/bd/week/ten-more, POST /api/bd/tasks/{id}/done|snooze|
 reopen|not-right-person. (The admin's "Run Friday batch now", POST /api/bd/admin/weekly/run, is in
-admin.py and uses list_owner and monday_or_none from here.)
+admin.py; whose week a request means, week_owner / list_owner / monday_or_none, is bd/weekly.py's.)
 
 BD's /api/week and /api/tasks routes, moved under /api/bd/ (#807) with the same checks, answers and
-words. BD's mock (api.js: weekOwner, weekView, taskDone, taskSnooze, taskReopen, taskNotRightPerson)
-was the reference, and the checks run in its order:
+words. docs/bd/api-contract.md "This Week" is the spec. BD's retired mock was the reference where the
+contract is silent ("api.js X" names a function of frontend/js/api.js in the BD repository), and the
+checks run in its order:
 
     GET /api/bd/week       owner (404) -> role (403) -> week_start (400)
     ten-more               salesperson or admin (403) -> owner (404; also when the owner it falls
@@ -14,8 +15,8 @@ was the reference, and the checks run in its order:
                            -> body (400) -> a maintenance task (409) -> state (409)
     reopen                 task (404) -> salesperson or admin (403) -> own list (403)
                            -> body (400) -> state (409)
-    not-right-person       salesperson, assistant or admin (403) -> task (404)
-                           -> a salesperson's own list (403) -> body (400)
+    not-right-person       salesperson, assistant or admin (403) -> task (404) -> body (400);
+                           any list (the contract names no task owner here; review finding C5)
 
 `done_count` / `total` are the LIVE Friday batch's BUSINESS-DEVELOPMENT tasks only (the "did I do
 my 10?" headline: the latest Friday batch of the week, without its `maintenance` tasks; one a
@@ -33,104 +34,26 @@ data alone: the page shows what this route answers and keeps no list of its own.
 from __future__ import annotations
 
 import datetime as _dt
-import re
 from typing import Any
 
 from fastapi import Body, Depends, Path, Query
 
-from .. import appsettings, bizdate, db, errors, serialize, web, weekly
+from .. import appsettings, bizdate, db, errors, paging, serialize, web, weekly
 from .. import pace as pacemod
-from ..auth import current_user, has_role, is_admin
+from ..auth import current_user, has_role, is_admin, require_role
 from ..events import log_event
 
 router = web.make_router()
 
 MAX_REASON = 500
 MAX_NOTE = 2000
-_BIGINT_MAX = 2 ** 63 - 1
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────────────────────
-def _int_id(value):
-    """A positive database id from a path or query string, or None (the mock's \\d+ / Number)."""
-    text = str(value if value is not None else "").strip()
-    if not text.isdigit() or not text.isascii():
-        return None
-    n = int(text)
-    return n if 0 < n <= _BIGINT_MAX else None
-
-
-_ABSENT = object()
-
-
-def _owner_param(value):
-    """The `owner` asked for (query text or a JSON body value), as api.js ownerParam reads it:
-    _ABSENT when none (None, blank text), the id for a whole number (a JSON 1.0 is JavaScript's 1)
-    or digit text with spaces around it, else None (no such user: true, [1], 1.5, "1e0")."""
-    if value is None:
-        return _ABSENT
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if 0 < value <= _BIGINT_MAX else None
-    if isinstance(value, float):
-        return int(value) if value.is_integer() and 0 < value <= _BIGINT_MAX else None
-    if isinstance(value, str):
-        return _ABSENT if value.strip() == "" else _int_id(value)
-    return None
-
-
-def week_owner(conn, owner_param, me) -> dict:
-    """The owner whose week is shown (api.js weekOwner): the `owner` asked for, else me when I am
-    a salesperson, else the first active salesperson (else me: nobody has a list yet)."""
-    uid = _owner_param(owner_param)
-    if uid is not _ABSENT:
-        row = conn.execute("select id, name, role, active from users where id = %s", (uid,)).fetchone() \
-            if uid is not None else None
-        if row is None:
-            raise errors.not_found("That user does not exist.")
-        if row["role"] != "salesperson":
-            raise errors.not_found("%s has no weekly list. Only salespeople do." % row["name"])
-        return dict(row)
-    if me.get("role") == "salesperson":
-        return {"id": me["id"], "name": me["name"], "role": me["role"], "active": me.get("active", True)}
-    row = conn.execute("select id, name, role, active from users where role = 'salesperson' and active"
-                       " order by id limit 1").fetchone()
-    if row is not None:
-        return dict(row)
-    return {"id": me["id"], "name": me["name"], "role": me["role"], "active": me.get("active", True)}
-
-
-def list_owner(conn, owner_param, me) -> dict:
-    """week_owner for the builds (ten-more, the admin's run; api.js listOwner): the owner it
-    falls back to when nobody active is a salesperson is me, and only a salesperson has a weekly
-    list, so that is the same 404 as naming one. GET /api/bd/week keeps the fallback (an empty week)."""
-    who = week_owner(conn, owner_param, me)
-    if who.get("role") != "salesperson":
-        raise errors.not_found("%s has no weekly list. Only salespeople do." % who["name"])
-    return who
-
-
-_ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-MAX_WEEK_YEAR = 9998          # a week's Sunday must still be a date (9999-12-27 + 6 overflows)
-
-
-def monday_or_none(value):
-    """A week_start the caller sent, as api.js isMondayISO: exactly "YYYY-MM-DD" (nothing around
-    it), a real date in years 1-9998, a Monday; else None."""
-    if not isinstance(value, str) or not _ISO_DAY.fullmatch(value):
-        return None
-    try:
-        d = _dt.date.fromisoformat(value)
-    except ValueError:
-        return None
-    return d if d.year <= MAX_WEEK_YEAR and d.weekday() == 0 else None
-
-
 def _parse_week_start(value) -> _dt.date:
     if value is None or value == "":
         return bizdate.week_start()
-    d = monday_or_none(value)
+    d = weekly.monday_or_none(value)
     if d is None:
         raise errors.bad_request("week_start must be a Monday.", {"week_start": "Pick a Monday."})
     return d
@@ -239,7 +162,7 @@ def week_view(conn, owner: dict, week_start: _dt.date) -> dict:
 
 def _load_task(conn, task_id):
     """The task row (locked) with its batch's owner_id, week_start and kind, or 404."""
-    tid = _int_id(task_id)
+    tid = paging.as_id(task_id)
     row = None
     if tid is not None:
         row = conn.execute(
@@ -267,11 +190,7 @@ def _salesperson_task(conn, me, task_id):
 
 def _body_text(body, key: str, limit: int, what: str):
     """An optional text field of an optional JSON object body: stripped, "" -> None."""
-    if body is None:
-        return None
-    if not isinstance(body, dict):
-        raise errors.bad_request("Some fields need fixing.", {"body": "Send a JSON object."})
-    value = body.get(key)
+    value = paging.json_object(body).get(key)
     if value is None:
         return None
     if not isinstance(value, str):
@@ -288,7 +207,7 @@ def _body_text(body, key: str, limit: int, what: str):
 def get_week(owner: str | None = Query(None), week_start: str | None = Query(None),
              me: dict = Depends(current_user)):
     with db.connect() as conn:
-        who = week_owner(conn, owner, me)
+        who = weekly.week_owner(conn, owner, me)
         if not has_role(me, "salesperson", "manager"):
             raise errors.forbidden("The weekly list is the salesperson's.")
         if me.get("role") == "salesperson" and who["id"] != me["id"]:
@@ -299,17 +218,15 @@ def get_week(owner: str | None = Query(None), week_start: str | None = Query(Non
 
 # ── POST /api/bd/week/ten-more ───────────────────────────────────────────────────────────────
 @router.post("/api/bd/week/ten-more")
-def ten_more(body: Any = Body(None), me: dict = Depends(current_user)):
+def ten_more(body: Any = Body(None), me: dict = Depends(require_role("salesperson"))):
     """"Give Me 10 More" (api.js tenMore): a ten_more batch of this week with the next 10 by score,
     leaving out anyone on this week's lists in any state; answers with the whole week."""
-    if not has_role(me, "salesperson"):
-        raise errors.forbidden("Your role can't do that.")
     # api.js reads body.owner, and a body that is not an object has none.
     asked = body.get("owner") if isinstance(body, dict) else None
     if asked is None and me.get("role") == "salesperson":
         asked = me["id"]
     with db.connect() as conn:
-        who = list_owner(conn, asked, me)
+        who = weekly.list_owner(conn, asked, me)
         if not is_admin(me) and who["id"] != me["id"]:
             raise errors.forbidden("You can ask for more only on your own list.")
         today = bizdate.today_central()          # read once: the build and the answer share a week
@@ -325,8 +242,7 @@ def ten_more(body: Any = Body(None), me: dict = Depends(current_user)):
 def task_done(task_id: str = Path(alias="id"), body: Any = Body(None), me: dict = Depends(current_user)):
     with db.connect() as conn:
         task = _salesperson_task(conn, me, task_id)
-        if body is not None and not isinstance(body, dict):
-            raise errors.bad_request("Some fields need fixing.", {"body": "Send a JSON object."})
+        paging.json_object(body)
         _refuse_if_pinned(conn, task)
         if task["status"] == "done":
             raise errors.conflict("That task is already done.")
@@ -366,8 +282,7 @@ def task_snooze(task_id: str = Path(alias="id"), body: Any = Body(None), me: dic
 def task_reopen(task_id: str = Path(alias="id"), body: Any = Body(None), me: dict = Depends(current_user)):
     with db.connect() as conn:
         task = _salesperson_task(conn, me, task_id)
-        if body is not None and not isinstance(body, dict):
-            raise errors.bad_request("Some fields need fixing.", {"body": "Send a JSON object."})
+        paging.json_object(body)
         if task["status"] == "open":
             raise errors.conflict("That task is already open.")
         row = conn.execute(
@@ -379,9 +294,8 @@ def task_reopen(task_id: str = Path(alias="id"), body: Any = Body(None), me: dic
 
 
 @router.post("/api/bd/tasks/{id}/not-right-person")
-def task_not_right_person(task_id: str = Path(alias="id"), body: Any = Body(None), me: dict = Depends(current_user)):
-    if not has_role(me, "salesperson", "assistant"):
-        raise errors.forbidden("Your role can't do that.")
+def task_not_right_person(task_id: str = Path(alias="id"), body: Any = Body(None),
+                          me: dict = Depends(require_role("salesperson", "assistant"))):
     with db.connect() as conn:
         # Any salesperson or the assistant, on anyone's list: the contract names no task owner
         # here (unlike /done, /snooze, /reopen) and api.js taskNotRightPerson checks only the role

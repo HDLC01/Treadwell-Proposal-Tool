@@ -291,7 +291,10 @@ def test_bad_input_is_400_with_fields_and_logs_nothing(bd_seeded, bd_as_user, bd
 def test_a_body_that_is_not_an_object_or_not_json_is_400(bd_seeded, bd_as_user):
     blair = bd_as_user(BLAIR)
     b = envelope(blair.post("/api/bd/contacts/22/interactions", json=["note"]), 400, "bad_request")
-    assert "body" in b["fields"]
+    # One sentence for a body that is not an object, on every BD route that reads one (bd/paging.py).
+    assert b["fields"] == {"body": "Send a JSON object."}
+    b = envelope(blair.patch("/api/bd/interactions/101", json="call"), 400, "bad_request")
+    assert b["fields"] == {"body": "Send a JSON object."}
     envelope(blair.post("/api/bd/contacts/22/interactions", content=b"{kind: note",
                         headers={"Content-Type": "application/json"}), 400, "bad_request")
 

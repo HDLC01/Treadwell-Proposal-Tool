@@ -12,7 +12,6 @@ from fastapi import Body, Depends
 
 from .. import bizdate, db, errors, serialize, web, weekly
 from ..auth import require_role
-from .week import list_owner, monday_or_none
 
 router = web.make_router()
 
@@ -44,13 +43,13 @@ def weekly_run(body: Any = Body(None), me: dict = Depends(ADMIN_ONLY)):
     owner (404, also when nobody active is a salesperson) -> week_start (400) -> 409."""
     b = body if isinstance(body, dict) else {}
     with db.connect() as conn:
-        who = list_owner(conn, b.get("owner"), me)
+        who = weekly.list_owner(conn, b.get("owner"), me)
         today = bizdate.today_central()
         this_monday = bizdate.week_start(today)
         next_monday = bizdate.add_days(this_monday, 7)
         raw = b.get("week_start")
         if _js_truthy(raw):
-            ws = monday_or_none(raw)
+            ws = weekly.monday_or_none(raw)
             if ws is None:
                 raise errors.bad_request("week_start must be a Monday.", {"week_start": "Pick a Monday."})
             if ws != this_monday and ws != next_monday:
