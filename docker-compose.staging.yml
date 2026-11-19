@@ -60,6 +60,10 @@ services:
       # /api/bd/ routes answer here. Off by default, so prod (whose compose file does not set it)
       # keeps answering "not turned on" until its own cut-over (#802).
       - BD_ENABLED=on
+      # The BD CRM's Friday weekly-10 batch (#807), OFF on staging: staging never builds batches
+      # on its own. QA it with "Run Friday batch now" on This Week (the same build). Prod's
+      # compose file leaves it unset (off) until cut-over day turns it on in the prod env.
+      - BD_WEEKLY_ENABLED=off
     env_file:
       - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
     volumes:

@@ -13,6 +13,7 @@ the backend may take a date from `datetime.now()` or `date.today()` directly. Us
     to_iso_central(ts) -> str|None   "2026-11-04T10:05:00-06:00": the offset THAT moment had
     iso_date(d) -> str|None          "2026-11-04"
     parse_date(s) -> date            strict "YYYY-MM-DD" (ValueError otherwise)
+    exact_date(s) -> date | None     exactly "YYYY-MM-DD", nothing around it (no spaces, no newline)
     parse_ts(s) -> datetime          ISO 8601 with an offset (or "Z"); a naive one is read as Central
     add_days(d, n), days_between(a, b), add_months(d, k)
 
@@ -56,6 +57,21 @@ def parse_date(s: Any) -> _dt.date:
     if not _DATE_ONLY.match(text):
         raise ValueError("not a YYYY-MM-DD date: %r" % (s,))
     return _dt.date.fromisoformat(text)
+
+
+_EXACT_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def exact_date(s: Any) -> _dt.date | None:
+    """A date a caller SENT as text, read exactly: "YYYY-MM-DD" with nothing around it (parse_date
+    strips its text; a week_start or an override's last day must not be padded) and a real date. None
+    otherwise, a date object included."""
+    if not isinstance(s, str) or not _EXACT_DATE.fullmatch(s):
+        return None
+    try:
+        return _dt.date.fromisoformat(s)
+    except ValueError:
+        return None
 
 
 def parse_ts(s: Any) -> _dt.datetime:

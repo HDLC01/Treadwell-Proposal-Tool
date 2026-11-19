@@ -178,6 +178,42 @@ def test_the_link_check_sees_a_page_that_is_not_there(tmp_path):
     assert missing_bd_targets(tmp_path) == ["bd/index.html: /bd/contacts.html"]
 
 
+# The BD pages that have moved into the tool so far (#807: This Week). Being served is not enough:
+# /bd/contacts.html is there only as the page an assistant is sent to until Contacts moves (#808), so
+# only the script that sends her there may name it. A link to it would still be a link to Contacts.
+MOVED_PAGES = {"/bd/", "/bd/index.html"}
+REDIRECT_ONLY = {"/bd/contacts.html": {"bd/js/bd-week.js"}}
+
+
+def unmoved_page_refs(frontend=FRONTEND):
+    """'<file>: <address>' for every BD page a BD file names that has not moved (an address under
+    /bd/ that is a page: ends in / or .html)."""
+    out = []
+    for path in sorted(p for p in (frontend / "bd").rglob("*") if p.suffix in (".html", ".js", ".css")):
+        for v in refs_of(path):
+            v = v.split("?", 1)[0].split("#", 1)[0]
+            if not v.startswith("/bd/") or not (v.endswith("/") or v.endswith(".html")):
+                continue
+            if v in MOVED_PAGES or rel(path, frontend) in REDIRECT_ONLY.get(v, ()):
+                continue
+            out.append("%s: %s" % (rel(path, frontend), v))
+    return out
+
+
+def test_bd_files_name_only_pages_that_have_moved():
+    assert unmoved_page_refs() == []
+
+
+def test_the_moved_page_check_sees_a_page_that_has_not_moved(tmp_path):
+    (tmp_path / "bd" / "js").mkdir(parents=True)
+    (tmp_path / "bd" / "index.html").write_text('<a href="/bd/contacts.html?id=1">Contacts</a><a href="/bd/">x</a>',
+                                                encoding="utf-8")
+    (tmp_path / "bd" / "js" / "bd-week.js").write_text('go("/bd/contacts.html"); go("/bd/add.html");', encoding="utf-8")
+    (tmp_path / "bd" / "js" / "x.js").write_text('go("/bd/contacts.html"); go("/bd/js/bd-api.js");', encoding="utf-8")
+    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/contacts.html", "bd/js/bd-week.js: /bd/add.html",
+                                           "bd/js/x.js: /bd/contacts.html"]
+
+
 def test_no_tool_page_loads_the_bd_stylesheet_or_a_bd_script():
     bad = []
     for page in (p for p in tool_files() if p.suffix == ".html"):
@@ -189,7 +225,7 @@ def test_no_tool_page_loads_the_bd_stylesheet_or_a_bd_script():
 
 # ── bd.css: scoped, and the tool's colours ───────────────────────────────────────────────────
 def css_rules(css):
-    """(at-rule context, selector list) for every style rule, @media/@supports opened, @keyframes kept
+    """(at-rule context, selector list) for every style rule, @media/@supports/@container opened, @keyframes kept
     whole (their from/to/% steps are not selectors)."""
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     out = []
@@ -206,7 +242,7 @@ def css_rules(css):
                 depth += {"{": 1, "}": -1}.get(text[k], 0)
                 k += 1
             inner = text[j + 1:k - 1]
-            if head.startswith(("@media", "@supports")):
+            if head.startswith(("@media", "@supports", "@container")):
                 walk(inner, ctx + [head])
             elif head.startswith("@"):
                 out.append((ctx + [head], None))
@@ -258,6 +294,8 @@ def test_every_bd_rule_is_scoped_under_the_bd_root():
     ("@font-face { font-family: X; }", ["@font-face"]),
     ("@keyframes spin { to { transform: none; } }", ["@keyframes spin"]),
     (".bd-app .x:where(a, b) { a: b; } @keyframes bd-spin { from { a: b; } }", []),
+    # a container query is a condition like @media: the rules inside it are checked (#807, This Week)
+    ("@container wk-main (min-width: 520px) { .bd-app .wk-row { a: b; } .wk-row { a: b; } }", [".wk-row"]),
 ])
 def test_the_scope_check_itself(css, bad):
     assert unscoped(css) == bad

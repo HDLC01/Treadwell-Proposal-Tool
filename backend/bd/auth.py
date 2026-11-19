@@ -169,6 +169,9 @@ def can(user) -> dict:
         "import": a or role in ("assistant", "salesperson"),
         "run_batch": a,
         "week": a or role in ("salesperson", "manager"),
+        # Looks at any salesperson's week (This Week's "Whose week?" picker); a salesperson sees only
+        # their own.
+        "pick_owner": a or role == "manager",
     }
 
 

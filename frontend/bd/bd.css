@@ -540,13 +540,345 @@
 @media (min-width: 768px) { .bd-app .show-phone { display: none !important; } }
 /* == end: components == */
 
-/* == page: home == */
-/* /bd/, the BD home: the greeting with the person's name and BD role. This Week moves in next and
-   brings its own section (wk- and call-). */
-.bd-app .hm-role { display: inline-flex; align-items: center; gap: 8px; }
-.bd-app .hm-note { max-width: 560px; }
-.bd-app .hm-note-text { color: var(--bd-ink-2); }
-/* == end: home == */
+/* == page: week == */
+/* /bd/, This Week (bd-week.js) and the after-a-call sheet (bd-call.js), #807: BD's week section,
+   restyled like the proposal tool by the approved BD mock-up (the year | the week progress card with
+   small upper-case labels, a red pace bar and red tracker dots, Next up in a red-edged card, the
+   tray beside the list). Prefixes wk- (the page) and call- (the sheet, and its decide / editor /
+   follow-up pieces wherever they are drawn).
+   The dense layouts follow the MAIN COLUMN's width (a container query on .wk-main), not the
+   window's: beside the tray the column is as narrow as a tablet's. */
+
+/* ── header ─────────────────────────────────────────────────────────────────────────────── */
+.bd-app .wk-head { align-items: flex-end; }
+.bd-app .wk-owner { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+.bd-app .wk-owner .select { min-width: 200px; }
+
+/* ── progress: the year | the week ──────────────────────────────────────────────────────── */
+.bd-app .wk-progress { container: wk-prog / inline-size; padding: 16px 18px; }
+.bd-app .wk-progress-in { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.bd-app .wk-zone-label { margin-bottom: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
+.bd-app .wk-pace-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bd-app .wk-pace-big { line-height: 1.15; }
+.bd-app .wk-pace-num { font-size: 30px; font-weight: 700; letter-spacing: -.02em; color: var(--bd-ink); }
+.bd-app .wk-pace-of { font-size: 14px; font-weight: 500; color: var(--bd-ink-2); }
+.bd-app .wk-bar { height: 8px; margin: 12px 0 30px; }
+.bd-app .wk-bar .progress-fill { background: var(--bd-red); }
+.bd-app .wk-bar .progress-mark { height: 16px; margin-top: -8px; }
+.bd-app .wk-bar .progress-mark-label.is-start { transform: none; }
+.bd-app .wk-pace-words { font-size: 14px; color: var(--bd-ink); }
+.bd-app .wk-delta { font-weight: 600; }
+.bd-app .wk-delta.is-behind { color: var(--bd-warn); }
+.bd-app .wk-delta.is-ahead, .bd-app .wk-delta.is-on { color: var(--bd-ok); }
+.bd-app .wk-pace-caption { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-week { padding-top: 16px; border-top: 1px solid var(--bd-line); }
+.bd-app .wk-week-line { display: flex; flex-direction: column; gap: 12px; }
+.bd-app .wk-count { font-size: 16px; font-weight: 500; line-height: 1.15; color: var(--bd-ink); }
+.bd-app .wk-count-n { font-size: 30px; font-weight: 700; letter-spacing: -.02em; }
+.bd-app .wk-count.is-all { font-size: 22px; font-weight: 700; color: var(--bd-ok); }
+.bd-app .wk-dots { gap: 8px 20px; }
+.bd-app .wk-dots .dot { width: 12px; height: 12px; border-color: var(--bd-red-hover); }
+.bd-app .wk-dots .dot.is-done { background: var(--bd-red-hover); border-color: var(--bd-red-hover); }
+.bd-app .wk-dots .dot.is-off { border-color: var(--bd-control); }
+.bd-app .wk-live { margin-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-due-line { display: inline-flex; margin-top: 10px; padding: 3px 10px; border-radius: var(--bd-r-pill);
+  background: var(--bd-warn-bg); color: var(--bd-warn); font-size: 13px; font-weight: 600; line-height: 1.35; }
+.bd-app .wk-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.bd-app .wk-choices .btn { min-width: 140px; }
+@container wk-prog (min-width: 640px) {
+  .bd-app .wk-progress-in { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0; }
+  .bd-app .wk-pace { padding-right: 24px; }
+  .bd-app .wk-week { padding: 0 0 0 24px; border-top: 0; border-left: 1px solid var(--bd-line); }
+}
+
+/* ── the two columns ────────────────────────────────────────────────────────────────────── */
+.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; margin-top: 14px; }
+.bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1099px) { .bd-app .wk-layout, .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); } }
+.bd-app .wk-main { container: wk-main / inline-size; min-width: 0; }
+.bd-app .wk-main > #lists > :first-child { margin-top: 0; }
+.bd-app .wk-main .section { margin-top: 14px; }
+.bd-app .wk-main .section-title, .bd-app .wk-tray .section-title { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
+.bd-app .wk-main .section-head, .bd-app .wk-tray .section-head { align-items: center; margin-bottom: 8px; }
+.bd-app .wk-main .section-meta { font-size: 12px; font-weight: 600; }
+
+/* ── Next up ────────────────────────────────────────────────────────────────────────────── */
+.bd-app .wk-next { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 16px; border: 1.5px solid rgba(200, 16, 46, .25); }
+.bd-app .wk-next-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bd-app .wk-next-label { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-link); }
+.bd-app .wk-next-kind-top { display: none; }
+.bd-app .wk-next-who { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.bd-app .wk-next-id { min-width: 0; flex: 1; }
+.bd-app .wk-next-namerow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.bd-app .wk-next-name { font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--bd-ink); overflow-wrap: anywhere; }
+.bd-app .wk-next-meta { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .wk-meta-narrow { display: none; }
+.bd-app .wk-meta-narrow > span { display: block; }
+.bd-app .wk-next-reason { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; font-weight: 500; color: var(--bd-ink); }
+.bd-app .wk-next-reason .tw-ico { flex: none; width: 16px; height: 16px; color: var(--bd-ink-2); }
+.bd-app .wk-next-line { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-next-stays { margin-top: 10px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .wk-next-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.bd-app .wk-call { white-space: nowrap; }
+.bd-app .wk-next-phone { margin-top: 12px; font-size: 15px; font-weight: 600; color: var(--bd-ink); }
+.bd-app .wk-next-side { display: none; flex-direction: column; gap: 4px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--bd-line); font-size: 13px; }
+.bd-app .wk-next-label2 { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
+.bd-app .wk-next-when { font-size: 13px; font-weight: 600; color: var(--bd-ink); }
+.bd-app .wk-next-sum { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
+@container wk-main (min-width: 640px) {
+  .bd-app .wk-next { grid-template-columns: minmax(0, 1fr) 230px; }
+  .bd-app .wk-next-side { display: flex; }
+  .bd-app .wk-next-line { display: none; }
+}
+
+/* the end-of-week card (all done / nothing left / finished) */
+.bd-app .wk-end { display: flex; flex-direction: column; gap: 8px; padding: 16px; }
+.bd-app .wk-end-title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; color: var(--bd-ink); }
+.bd-app .wk-end.is-all .wk-end-title .tw-ico { color: var(--bd-ok); }
+.bd-app .wk-end-text { font-size: 14px; color: var(--bd-ink); }
+.bd-app .wk-end .wk-ten, .bd-app .wk-end .wrap-row { margin-top: 8px; }
+
+/* ── rows: Rest of your 10, an extra 10, next week's preview ────────────────────────────── */
+.bd-app .wk-list .wk-row {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
+  grid-template-areas: "av who call" "av pill call" "av reason call";
+  align-items: start; gap: 4px 12px; min-height: 64px; padding: 12px 16px;
+}
+.bd-app .wk-row > .avatar { grid-area: av; }
+.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); }
+.bd-app .wk-who .who-name { font-size: 14px; }
+.bd-app .wk-who .who-sub { font-size: 13px; }
+.bd-app .wk-reason { grid-area: reason; min-width: 0; font-size: 13px; font-weight: 400; color: var(--bd-ink-2); line-height: 20px; text-wrap: pretty; }
+.bd-app .wk-pill { grid-area: pill; min-width: 0; }
+.bd-app .wk-pill:empty, .bd-app .wk-reason:empty { display: none; }
+.bd-app .wk-nowrap { white-space: nowrap; }
+.bd-app .wk-pill .pill { margin: 4px 0 2px; height: 24px; font-size: 12px; }
+.bd-app .wk-pill .pill + .pill { margin-left: 4px; }
+.bd-app .wk-row-call { grid-area: call; align-self: center; }
+.bd-app .wk-row-more { grid-area: more; align-self: center; }
+.bd-app .wk-row-meta { grid-area: call; align-self: center; display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  font-size: 13px; color: var(--bd-ink-2); white-space: nowrap; }
+.bd-app .wk-score { font-size: 12px; color: var(--bd-ink-2); }
+.bd-app .wk-pill .wk-score { display: block; margin-top: 2px; }
+.bd-app .wk-next-score { margin-top: 10px; }
+.bd-app .wk-nophone { font-size: 13px; color: var(--bd-ink-2); }
+@media (min-width: 768px) {
+  .bd-app .wk-list .wk-row { grid-template-columns: 40px minmax(0, 1fr) auto auto;
+    grid-template-areas: "av who call more" "av pill call more" "av reason call more"; }
+}
+/* A row with no phone number on a phone: its More button takes the call column ("No phone" has no
+   button to sit beside), so the row can still be taken off, marked done or flagged. */
+@media (max-width: 767px) {
+  .bd-app .wk-row-nophone .wk-row-call { display: none; }
+  .bd-app .wk-row-nophone .wk-row-more { grid-area: call; }
+}
+/* A middle column (520-719: beside the tray, or a tablet): name and company on the left, the pill
+   over the reason on the right, two lines a row instead of four. */
+@container wk-main (min-width: 520px) and (max-width: 719.98px) {
+  .bd-app .wk-list .wk-row {
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px 44px;
+    grid-template-areas: "av who pill call more" "av who reason call more";
+    align-items: center; gap: 2px 12px; padding: 10px 16px;
+  }
+  .bd-app .wk-list .wk-row.is-readonly { grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) minmax(104px, auto);
+    grid-template-areas: "av who pill call" "av who reason call"; }
+  .bd-app .wk-pill { align-self: end; }
+  .bd-app .wk-reason { align-self: start; }
+  .bd-app .wk-pill .pill { margin: 0; }
+  .bd-app .wk-pill:empty + .wk-reason { grid-row: 1 / span 2; align-self: center; }
+  /* Two pills ("Maintenance . due" and a status pill) side by side need a wider right half. */
+  .bd-app .wk-list .wk-row.wk-row-two { grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.2fr) 44px 44px; }
+  .bd-app .wk-list .wk-row.wk-row-two.is-readonly { grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.2fr) minmax(104px, auto); }
+  /* When the two pills do not fit side by side the second one drops under the first, whole. */
+  .bd-app .wk-row-two .wk-pill { display: flex; flex-wrap: wrap; gap: 4px; }
+  .bd-app .wk-row-two .wk-pill .pill + .pill { margin-left: 0; }
+}
+@container wk-main (min-width: 720px) {
+  .bd-app .wk-list .wk-row {
+    grid-template-columns: 40px minmax(0, 1.15fr) minmax(0, 1fr) 140px 44px 44px;
+    grid-template-areas: "av who reason pill call more";
+    align-items: center; gap: 0 12px; min-height: 64px; padding: 10px 16px;
+  }
+  .bd-app .wk-list .wk-row.is-readonly { grid-template-columns: 40px minmax(0, 1.15fr) minmax(0, 1fr) 140px minmax(104px, auto);
+    grid-template-areas: "av who reason pill call"; }
+  .bd-app .wk-reason { line-height: 1.4; }
+  .bd-app .wk-pill .pill { margin: 0; }
+}
+
+/* done and taken off */
+.bd-app .wk-list .wk-row.wk-done-row {
+  grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: "av who undo" "av outcome undo";
+  align-items: center; gap: 2px 12px; min-height: 56px;
+}
+.bd-app .wk-done-row > .avatar { opacity: .55; }
+.bd-app .wk-outcome { grid-area: outcome; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-undo { grid-area: undo; }
+@container wk-main (min-width: 520px) {
+  .bd-app .wk-list .wk-row.wk-done-row { grid-template-columns: 40px minmax(0, 1fr) auto auto; grid-template-areas: "av who outcome undo";
+    gap: 0 16px; padding: 8px 16px; }
+  .bd-app .wk-outcome { text-align: right; }
+}
+.bd-app .wk-done-head .section-title { margin-right: 4px; }
+.bd-app .wk-cheer { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--bd-ok); }
+.bd-app .wk-cheer .tw-ico { width: 16px; height: 16px; }
+.bd-app .wk-done-toggle {
+  display: none; width: 100%; align-items: center; gap: 12px; min-height: 64px; padding: 12px 16px;
+  color: var(--bd-ink); font: inherit; text-align: left; cursor: pointer;
+}
+.bd-app .wk-done-toggle .who { flex: 1; }
+.bd-app .wk-done-toggle > .tw-ico { color: var(--bd-ink-2); }
+.bd-app .wk-done-ico { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
+  border-radius: 50%; background: var(--bd-ok); color: var(--bd-white); }
+.bd-app .wk-done-cheer { color: var(--bd-ok); }
+.bd-app .wk-sublabel { padding: 10px 16px 4px; border-top: 1px solid var(--bd-line); font-size: 12px; font-weight: 600; color: var(--bd-ink-2); }
+.bd-app .wk-notreached { margin-top: 12px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-names { margin: 4px 0 0; padding-left: 20px; font-size: 13px; color: var(--bd-ink); }
+
+/* Give me 10 more */
+.bd-app .wk-ten { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.bd-app .wk-ten-note { font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-ten-msg { margin-top: 8px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-empty .wk-empty-acts { justify-content: center; margin-top: 8px; }
+.bd-app .wk-empty .wk-empty-acts .btn { margin-top: 0; }
+
+/* loading lines */
+.bd-app .wk-skel-line { display: block; height: 14px; margin: 8px 0; width: 80%; }
+.bd-app .wk-skel-short { display: inline-block; width: 120px; height: 14px; min-height: 14px; vertical-align: middle; }
+.bd-app .wk-skel-banner { height: 64px; border-radius: var(--bd-r-card); }
+
+/* ── the tray: Next steps to confirm ────────────────────────────────────────────────────── */
+.bd-app .wk-tray .section-head { margin-bottom: 8px; }
+.bd-app .wk-tray-head > .count { background: var(--bd-nav-active); color: var(--bd-link); }
+.bd-app .wk-tray-head > .count:last-child:not(:first-child) { margin-left: 0; }
+.bd-app .wk-tray-list { margin: 0; padding: 0; list-style: none; }
+.bd-app .wk-tray-item + .wk-tray-item { border-top: 1px solid var(--bd-line); }
+.bd-app .wk-tray-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 6px; }
+.bd-app .wk-tray-line {
+  display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; min-height: 52px; padding: 6px;
+  border: 0; border-radius: var(--bd-r); background: none; color: var(--bd-ink); font: inherit; text-align: left; cursor: pointer;
+  transition: background-color 120ms var(--bd-ease);
+}
+.bd-app .wk-tray-line:hover { background: var(--bd-recessed); }
+.bd-app .wk-tray-line .who { flex: 1; }
+.bd-app .wk-tray-line .who-name { font-size: 14px; }
+.bd-app .wk-tray-line .who-sub { font-size: 13px; }
+.bd-app .wk-tray-line > .tw-ico { color: var(--bd-ink-2); }
+.bd-app .wk-tray-confirm { flex: none; min-height: 36px; padding: 0 12px; font-size: 13px; }
+.bd-app .wk-tray-body { padding: 14px 16px 16px; border-top: 1px solid var(--bd-line); }
+.bd-app .wk-tray-more { margin-top: 4px; }
+.bd-app .wk-tray-empty { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-tray-empty .tw-ico { color: var(--bd-ok); }
+.bd-app .wk-tray-wait { padding: 14px 16px; }
+.bd-app .wk-tray-banner {
+  display: flex; width: 100%; align-items: center; gap: 12px; min-height: 64px; padding: 12px 16px;
+  color: var(--bd-ink); font: inherit; text-align: left; cursor: pointer;
+}
+.bd-app .wk-tray-banner .who { flex: 1; }
+.bd-app .wk-tray-banner > .tw-ico { color: var(--bd-ink-2); }
+.bd-app .wk-tray-bulb { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
+  border-radius: 50%; background: var(--bd-warn-bg); color: var(--bd-warn); }
+.bd-app .wk-traysheet-list { margin: 0 -8px; padding: 0; list-style: none; }
+.bd-app .wk-traysheet-list li + li { border-top: 1px solid var(--bd-line); }
+
+/* ── phone (< 768): the compact progress card, Next up and the done row ──────────────────── */
+@media (max-width: 767px) {
+  .bd-app .wk-head { margin-bottom: 14px; }
+  .bd-app .wk-owner, .bd-app .wk-owner .select { min-width: 0; width: 100%; }
+  .bd-app .wk-progress { padding: 14px 16px; }
+  .bd-app .wk-progress-in { gap: 0; }
+  .bd-app .wk-pace-num { font-size: 22px; }
+  .bd-app .wk-pace-of { font-size: 14px; }
+  .bd-app .wk-bar { margin: 10px 0 28px; }
+  .bd-app .wk-week { margin-top: 0; padding: 12px 0 0; border-top: 1px solid var(--bd-line); border-left: 0; }
+  .bd-app .wk-week-line { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; margin: 0; }
+  .bd-app .wk-count, .bd-app .wk-count-n { font-size: 16px; }
+  .bd-app .wk-count-n, .bd-app .wk-count-of { font-weight: 700; letter-spacing: 0; }
+  .bd-app .wk-count.is-all { font-size: 16px; }
+  .bd-app .wk-dots { flex-wrap: nowrap; gap: 10px; }
+  .bd-app .wk-dots .dots-row { gap: 4px; }
+  .bd-app .wk-layout { margin-top: 14px; gap: 16px; }
+  .bd-app .wk-next { padding: 14px; gap: 0; }
+  .bd-app .wk-next-kind-top { display: inline-flex; }
+  .bd-app .wk-next-kind { display: none; }
+  .bd-app .wk-meta-wide { display: none; }
+  .bd-app .wk-meta-narrow { display: block; }
+  .bd-app .wk-next-acts { flex-wrap: nowrap; }
+  .bd-app .wk-next-acts .wk-call { flex: 1 1 auto; min-width: 0; }
+  .bd-app .wk-next-acts .wk-next-more { border-color: var(--bd-line-strong); }
+  .bd-app .wk-done-head { display: none; }
+  .bd-app .wk-done-toggle { display: flex; }
+  .bd-app .wk-done-body { margin-top: 12px; }
+  .bd-app .wk-ten { flex-direction: column; align-items: stretch; text-align: center; }
+  .bd-app .wk-ten .btn { width: 100%; }
+  .bd-app .wk-tray { display: none; }
+}
+
+/* ── the after-a-call sheet (bd-call.js) ────────────────────────────────────────────────── */
+.bd-app .call-head .who { min-width: 0; }
+.bd-app .call-name { font-size: 17px; font-weight: 600; line-height: 1.3; }
+.bd-app .call-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-app .call-q { margin: 8px 0 16px; font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; }
+.bd-app .call-tiles .call-tile { align-items: center; justify-content: center; text-align: center; }
+.bd-app .call-err { margin-top: 10px; }
+.bd-app .call-when { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 16px; margin: 4px 0 16px; }
+.bd-app .call-links { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.bd-app .call-regrid { margin-bottom: 20px; }
+.bd-app .call-saved { align-items: center; margin-bottom: 20px; }
+.bd-app .call-saved .tw-ico { margin-top: 0; flex: none; }
+.bd-app .call-saved-text { flex: 1; min-width: 0; }
+.bd-app .call-saved .btn-link { flex: none; }
+.bd-app .call-block { margin-bottom: 20px; }
+.bd-app .call-note { display: flex; flex-direction: column; gap: 8px; }
+.bd-app .call-ai { gap: 4px 12px; }
+.bd-app .call-hint { font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .call-check { align-self: flex-start; }
+.bd-app .call-rec { margin-bottom: 24px; }
+.bd-app .call-rec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.bd-app .call-rec-h { font-size: 15px; font-weight: 600; color: var(--bd-ink-2); }
+.bd-app .call-rec .pill-neutral, .bd-app .call-rec .pill-ai { background: var(--bd-card); }
+.bd-app .call-rec-title { font-size: 17px; font-weight: 600; line-height: 1.35; color: var(--bd-ink); }
+.bd-app .call-rec-date { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 15px; color: var(--bd-ink); }
+.bd-app .call-rec-date .tw-ico { color: var(--bd-ink-2); }
+.bd-app .call-rec-why { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .call-rec-acts { gap: 4px 24px; margin-top: 4px; }
+.bd-app .call-rec-done { margin-bottom: 20px; align-items: center; }
+.bd-app .call-fu { margin-bottom: 8px; }
+.bd-app .call-fu-title { margin-bottom: 10px; font-size: 15px; font-weight: 600; color: var(--bd-ink); }
+.bd-app .call-fu-title .opt { font-weight: 400; }
+.bd-app .call-seg { display: flex; width: 100%; flex-wrap: nowrap; }
+.bd-app .call-seg > button { flex: 1 1 0; min-width: 0; }
+.bd-app .call-fu-none, .bd-app .call-fu-done { margin-top: 12px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .call-fu-done { display: flex; align-items: center; gap: 6px; color: var(--bd-ok); font-weight: 600; }
+.bd-app .call-draft { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.bd-app .call-draft-tag { gap: 8px 12px; }
+.bd-app .call-draft-to { font-size: 13px; color: var(--bd-ink); overflow-wrap: anywhere; }
+.bd-app .call-draft-to-k { font-weight: 600; color: var(--bd-ink-2); }
+.bd-app .call-foot { font-size: 12px; color: var(--bd-ink-2); }
+.bd-app .call-nrp { display: flex; flex-direction: column; gap: 10px; }
+.bd-app .call-nrp-note { font-size: 13px; color: var(--bd-ink); }
+.bd-app .call-bar { flex-direction: column; align-items: stretch; }
+.bd-app .call-bar-err { margin: 0 0 4px; }
+.bd-app .call-editor { display: flex; flex-direction: column; gap: 12px; }
+.bd-app .call-editor-preview { font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .call-editor-acts { gap: 8px 16px; }
+@media (max-width: 767px) {
+  .bd-app .call-sheet.is-tall { height: calc(100dvh - 56px); }
+  .bd-app .call-name { font-size: 16px; }
+}
+/* the same decision in place (the desktop tray; the contact page once it moves) */
+.bd-app .call-decide { display: flex; flex-direction: column; gap: 16px; }
+.bd-app .call-decide .call-rec-head { justify-content: flex-start; margin-bottom: 8px; }
+.bd-app .call-rec-when { font-size: 12px; font-weight: 500; color: var(--bd-ink-2); }
+.bd-app .call-decide .call-rec-title { font-size: 15px; }
+.bd-app .call-decide .call-rec-date { font-size: 13px; }
+.bd-app .call-decide .call-rec-acts { gap: 4px; margin-top: 12px; }
+.bd-app .call-decide .call-rec-acts .btn { padding: 0 12px; }
+.bd-app .call-decide .call-fu { margin: 0; }
+.bd-app .call-decide-lg .call-rec-title { font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.bd-app .call-decide-lg .call-rec-date { margin-top: 8px; font-size: 15px; }
+.bd-app .call-decide-lg .call-rec-why { margin-top: 8px; }
+.bd-app .call-decide-lg .call-rec-acts { margin-top: 16px; }
+/* == end: week == */
 
 /* == print, reduced motion == */
 @media print {

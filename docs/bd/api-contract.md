@@ -615,7 +615,7 @@ BD route serves that path with another method.
 {
   "ok": true,
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
-  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true },
+  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -623,12 +623,15 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week |
-|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes |
-| assistant | | | | yes | yes | | |
-| manager | | yes | | | | | yes |
-| admin, super_admin | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner |
+|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | |
+| assistant | | | | yes | yes | | | |
+| manager | | yes | | | | | yes | yes |
+| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes |
+
+`pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
+"Whose week?" picker. A salesperson sees only their own week.
 
 #### `GET /api/bd/settings` (any BD role)
 
@@ -638,6 +641,109 @@ BD route serves that path with another method.
 
 The active BD logins, compact, for owner pickers: `{ "ok": true, "items": [{ "id", "name", "role" }], "total": N }`,
 paged by `limit` / `offset`.
+
+### This Week (#807)
+
+The week, the task buttons and "Give Me 10 More". BD admins and super admins pass every role check
+below. Every date is Central.
+
+#### `GET /api/bd/week` (salesperson, manager)
+
+`{ "ok": true, "week": WeekView }`. Query: `owner` (a salesperson's id; default: the caller when they
+are a salesperson, else the first active salesperson) and `week_start` (a Monday, `YYYY-MM-DD`;
+default: this week). It never builds anything: a week with no batch is the empty WeekView. Checks in
+this order: an `owner` that is no user is 404 `"That user does not exist."`, one who is not a
+salesperson 404 `"<name> has no weekly list. Only salespeople do."`; an assistant is 403
+`"The weekly list is the salesperson's."`; a salesperson asking for someone else's week is 403
+`"You can see only your own week."`; a `week_start` that is not a Monday is 400 (`fields.week_start`).
+
+#### `POST /api/bd/week/ten-more` (salesperson)
+
+Body `{ "owner"? }`. A `ten_more` batch of this week with the next 10 by the ranking (due maintenance
+first, then by score), leaving out anyone on this week's lists in any state and anyone still open on a
+later week's list. Answers `{ "ok": true, "week": WeekView }` for the week it was built in. A
+salesperson asks on their own list only (403 `"You can ask for more only on your own list."`); nobody
+left is 409 `"Everyone on your list is already covered this week."`.
+
+#### `POST /api/bd/tasks/{id}/done`, `.../snooze`, `.../reopen` (salesperson, own list)
+
+The task is looked up first (404 `"That task does not exist."`), then the role (403), then the list
+(403 `"That task is on someone else's list."`). `snooze` takes `{ "reason"? }` (text, 500 characters
+at most) and runs to the Monday after the task's week. A maintenance task whose contact is still due
+cannot be marked done or skipped: 409 `"A maintenance follow-up stays on the list until you log a
+call, meeting, email or text."`. Done twice is 409 `"That task is already done."`; only an open task
+can be skipped; reopening an open task is 409 `"That task is already open."`.
+
+- done: `{ "ok": true, "task": { "id", "batch_id", "status": "done", "done_at" }, "done_count", "total" }`
+- snooze: `{ "ok": true, "task": { "id", "status": "snoozed", "snoozed_until" }, "done_count", "total" }`
+- reopen: `{ "ok": true, "task": { "id", "status": "open", "done_at": null, "snoozed_until": null } }`
+
+#### `POST /api/bd/tasks/{id}/not-right-person` (salesperson, assistant; any list)
+
+Body `{ "note"? }` (text, 2000 characters at most). The role is checked before the task is looked up.
+The contact becomes unconfirmed (the note is added to its notes, an `unconfirmed` event is logged) and
+the task is marked done: `{ "ok": true, "task": { "id", "status": "done", "done_at" },
+"contact": { "id", "confirmed": false, "notes" } }`.
+
+#### `POST /api/bd/admin/weekly/run` (admin)
+
+"Run Friday batch now". Body `{ "owner"?, "week_start"?, "force"? }`: one salesperson's Friday batch
+for next week, or for `week_start` when it is this Monday or next Monday (400 otherwise). The same
+build as the Friday worker (the rollover first). A week that already has a Friday batch is 409
+`"A Friday batch already exists for <name> that week."` unless `force`. Answers
+`{ "ok": true, "batches": [TaskBatch], "tasks_created": N }`.
+
+### Interactions (#807)
+
+#### `GET /api/bd/contacts/{id}/interactions` (any BD role)
+
+The contact's timeline, newest first: `{ "ok": true, "items": [{ "type": "interaction", "at",
+"interaction": Interaction } | { "type": "event", "at", "event": { "action", "by": UserRef|null,
+"detail" } }] }`. A workbook contact with no logged `created` event gets one at its `created_at`.
+
+#### `POST /api/bd/contacts/{id}/interactions` (salesperson; an assistant logs notes only)
+
+Body `{ "kind", "outcome"?, "occurred_at"?, "direction"?, "duration_s"?, "summary"?, "transcript"? }`.
+`occurred_at` defaults to now and may not be after today (Central). A call, voicemail, meeting or
+hosted event closes this week's new or follow-up task for the contact; anything but a note closes its
+maintenance tasks once the contact is no longer due. Answers `{ "ok": true, "interaction": Interaction,
+"contact": Contact, "task": { "id", "status", "done_at" } | null, "recommendation": Recommendation |
+null, "missed_call": bool }`. A manager is 403; an assistant logging anything but a note is 403
+`"Assistants can add notes only."`.
+
+#### `PATCH /api/bd/interactions/{id}` (whoever logged it; admin)
+
+Any of `kind`, `outcome`, `occurred_at`, `duration_s`, `summary`, `transcript`. Someone else's entry
+is 403 `"Only the person who logged this can change it."`. Answers `{ "ok": true, "interaction": Interaction }`.
+
+#### `DELETE /api/bd/interactions/{id}` (admin)
+
+`{ "ok": true, "deleted": id }`. An `interaction_deleted` audit row is logged with no contact.
+
+### One contact (#807)
+
+The contact list, duplicates, create, archive and merge move with the contact page (#808).
+
+#### `GET /api/bd/contacts/{id}` (any BD role)
+
+`{ "ok": true, "contact": Contact, "open_task": Task | null, "pending_recommendation":
+Recommendation | null, "missed_call": { "interaction_id", "occurred_at", "followup_sent": false } |
+null }`. `open_task` is this week's latest task for the contact, in any state. `missed_call` is the
+latest voicemail or no-answer call when nobody has talked live since, it is at most 14 Central days
+old and nobody has sent a follow-up for it.
+
+#### `PATCH /api/bd/contacts/{id}` (salesperson, assistant; a manager the cadence only)
+
+Any editable Contact field, `company` (`{ "id" }` or `{ "name" }`), `owner_id`, `co_owner_id`,
+`cadence_override` with `cadence_override_until`, and `duplicate_of: null` (the assistant clears a
+flag). A manager may send only `cadence_override`, `cadence_override_until` and a maintenance
+contact's `frequency_per_year` (403 `"Managers can change only how often to follow up."`). Answers
+`{ "ok": true, "contact": Contact, "possible_duplicates": [...] }`.
+
+#### `POST /api/bd/contacts/{id}/confirm` (salesperson, assistant)
+
+Body `{ "confirmed"? }` (default true). `{ "ok": true, "contact": { "id", "confirmed" } }`; a change is
+logged as a `confirmed` or `unconfirmed` event.
 
 #### Not built yet (503 after the role check)
 

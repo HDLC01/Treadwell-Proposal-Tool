@@ -106,6 +106,7 @@ import supabase_client
 import template_versions
 from bd import api as bd_api
 from bd import web as bd_web
+from bd import weekly_worker as bd_weekly_worker
 from bd.routers import pending as bd_pending
 import verbal_intake
 
@@ -8293,6 +8294,15 @@ def _start_pva_refresh() -> None:
     startup hook for the digest's reason: nobody opens the page at 5 AM. It runs the "Refresh now"
     step once a day; PVA_REFRESH_ENABLED=off holds it back. Never raises."""
     pva_refresh_worker.ensure_started()
+
+
+@app.on_event("startup")
+def _start_bd_weekly() -> None:
+    """The BD CRM's Friday weekly-10 batch (#807, backend/bd/weekly_worker.py) runs from a startup
+    hook, never a lifespan: a lifespan would stop every hook in this file running. Only with
+    BD_WEEKLY_ENABLED and BD_ENABLED on (both default off; staging keeps the batch off). The run
+    day and hour come from BD's settings, in Central time. Never raises."""
+    bd_weekly_worker.ensure_started()
 
 
 @app.on_event("startup")

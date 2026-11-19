@@ -1,6 +1,7 @@
 /* The BD CRM's one door to its API, as window.BDApi (#806, spec #802 Q6).
  *
  *   BDApi.get(path) . post(path, body, opts) . patch(path, body) . put(path, body) . del(path)
+ *   BDApi.path("tasks", 7, "done")  ->  "/api/bd/tasks/7/done"   (each part encoded)
  *
  * Every call returns a Promise of the JSON in docs/bd/api-contract.md, or rejects with an Error whose
  * .message is the plain sentence to show, plus .status (HTTP; 0 when the server could not be
@@ -101,8 +102,15 @@
     });
   }
 
+  /** A BD route's address from its parts, each one encoded: path("contacts", 21, "interactions") is
+   *  "/api/bd/contacts/21/interactions". For a path with an id in it; a fixed one is written out. */
+  function path() {
+    return BASE + Array.prototype.map.call(arguments, function (p) { return encodeURIComponent(String(p)); }).join("/");
+  }
+
   window.BDApi = {
     base: BASE,
+    path: path,
     get: function (path) { return request("GET", path); },
     /** opts.keepalive: the request survives the page closing. */
     post: function (path, body, opts) { return request("POST", path, body === undefined ? {} : body, opts); },

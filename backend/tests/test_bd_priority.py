@@ -11,7 +11,9 @@ Three checks:
   * 300 RANDOM fictional contacts + facts on random days (DST weeks, a leap day, UTC "Z" stamps,
     text numbers, bad frequencies, future dates), scored by both: identical score, reasons and
     exclusion, word for word.
-The database half (contacts_summary rows scored like bd-core.js) moves with the Friday batch.
+  * THE DATABASE HALF: the fixture seed's contacts_summary rows (dates and aware datetimes) scored
+    in Python give what bd-core.js gives for the same contacts as the API sends them (text), and
+    a few of them are worked by hand.
 """
 import datetime as dt
 import json
@@ -353,3 +355,60 @@ def test_random_due_reasons_match_bd_core_js(tmp_path):
     assert not wrong, wrong[:3]
     assert "No follow-up logged yet" in results.values()
     assert any(r.startswith("Follow-up was due") for r in results.values())
+
+
+# -- the database half: the fixture seed's rows ---------------------------------------------------
+# Worked by hand on Wed Nov 4 with no open task (bd/ops/fixture_seed.py):
+#   Dana (21)  live call Oct 20 (15 days, x 30 / 91.25 = 4.93 -> 5); promised a call by Thu Nov 5,
+#              within 7 days, +25 (her next step, Nov 6, is the later date); quote Oct 15 (20 days)
+#              +15; key account +20; the Nov 2 voicemail is 1 try since +5 = 70; tried 2 days ago.
+#   Priya (25) never reached after 1 try +40 +5; not confirmed +8 = 53; tried yesterday.
+#   Lena (27)  never contacted +40; key account +20; not confirmed +8 = 68.
+#   Hal (30)   maintenance; live call Aug 20 (76 days, x 30 / 120 = 19); not confirmed +8 = 27;
+#              followed up Aug 20, due Dec 18: not due yet.
+#   Nora (31)  maintenance, never followed up (due); never contacted +40; not confirmed +8 = 48.
+DB_WORKED = {
+    21: (70, True, "tried in the last 3 days"),
+    25: (53, True, "tried in the last 3 days"),
+    27: (68, False, None),
+    30: (27, True, "maintenance, not due yet"),
+    31: (48, False, None),
+}
+
+
+def _seed_rows(db):
+    return {r["id"]: r for r in db.execute("select * from bd.contacts_summary order by id").fetchall()}
+
+
+def test_the_fixture_seeds_rows_worked_by_hand(bd_seeded, bd_db):
+    rows = _seed_rows(bd_db)
+    for cid, (score, excluded, why) in DB_WORKED.items():
+        got = priority.score(rows[cid], {"has_open_task": False}, bd_seeded["today"])
+        assert (got["score"], got["excluded"], got["exclude_reason"]) == (score, excluded, why), cid
+    assert priority.score(rows[27], {"has_open_task": False}, bd_seeded["today"])["reasons"] == [
+        "Never contacted", "Key account", CONFIRM]
+    # On this week's list already: that exclusion comes before "tried in the last 3 days".
+    assert priority.score(rows[21], {"has_open_task": True}, bd_seeded["today"])["exclude_reason"] ==         "already in this week's list"
+
+
+def test_the_fixture_seeds_rows_score_like_bd_core_js(bd_seeded, bd_db, tmp_path):
+    """contacts_summary rows hold dates and aware datetimes; bd-core.js gets the same contacts as
+    the API sends them (serialize.contact: text). Both must agree, for every contact, with and
+    without an open task."""
+    from bd import serialize
+
+    rows = _seed_rows(bd_db)
+    today = bd_seeded["today"].isoformat()
+    cases = []
+    for cid, row in rows.items():
+        for facts in ({"has_open_task": False}, {"has_open_task": True}):
+            cases.append({"id": "%d:%s" % (cid, facts["has_open_task"]), "fn": "scoreContact",
+                          "args": [serialize.contact(row), facts, today], "row": cid})
+    results = _harness([{k: v for k, v in c.items() if k != "row"} for c in cases], tmp_path)
+    wrong = []
+    for case in cases:
+        got = priority.score(rows[case["row"]], case["args"][1], bd_seeded["today"])
+        if got != results[case["id"]]:
+            wrong.append((case["id"], results[case["id"]], got))
+    assert not wrong, wrong[:3]
+    assert len(rows) == 13

@@ -22,6 +22,10 @@
   var BIZ_TZ = "America/Chicago";
   var DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+  /** A glyph from the tool's one icon set (window.TWIcon, js/icons.js) by its canonical name, as
+   *  markup; "" when the icon set did not load. The one copy every BD script uses (BD.icon). */
+  function icon(name, size) { return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : ""; }
+
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -223,7 +227,7 @@
     var name = displayName(who);
     var mark = "";
     if (badge === "done") {
-      var check = typeof window.TWIcon === "function" ? window.TWIcon("check", 11) : "";
+      var check = icon("check", 11);
       mark = '<span class="avatar-badge">' + check + "</span>";
     } else if (badge === "off") {
       mark = '<span class="avatar-badge-off"></span>';
@@ -374,7 +378,7 @@
 
   /** A pill: kind ok | warn | info | neutral | ai | outline, plain text, an optional 14 px glyph. */
   function pill(kind, text, glyph) {
-    var ico = glyph && typeof window.TWIcon === "function" ? window.TWIcon(glyph, 14) : "";
+    var ico = glyph ? icon(glyph, 14) : "";
     return '<span class="pill pill-' + kind + '">' + ico + esc(text) + "</span>";
   }
 
@@ -661,7 +665,7 @@
     var label = anchorBtn.getAttribute("aria-label") || anchorBtn.textContent || "";
     if (label.trim()) el.setAttribute("aria-label", label.trim());
     el.innerHTML = (items || []).map(function (it) {
-      var ico = it.icon && typeof window.TWIcon === "function" ? window.TWIcon(it.icon, 18) : "";
+      var ico = it.icon ? icon(it.icon, 18) : "";
       var cls = "menu-item" + (it.danger ? " is-danger" : "");
       var inner = ico + (it.sub
         ? '<span class="menu-label"><span>' + esc(it.label) + '</span><span class="menu-sub">' + esc(it.sub) + "</span></span>"
@@ -730,9 +734,132 @@
     if (first) first.focus();
   }
 
+  // ── toasts (#807: moved in from BD's own shell, which the tool's shell replaced) ─────────────
+  // The tool's toasts (#tw-toasts, auth.js) are its customer-message previews; BD's are the answers
+  // to what the person just did ("Done. Nothing logged.", with Undo), so they keep their own stack,
+  // #bd-toasts, styled by bd.css and above an open sheet.
+
+  /** The two empty live regions (#bd-live polite, #bd-alert assertive), made on first use and
+   *  left in the page, so the next message lands in a region that is already there. */
+  function liveRegion(urgent) {
+    var id = urgent ? "bd-alert" : "bd-live";
+    var region = document.getElementById(id);
+    if (!region) {
+      region = document.createElement("div");
+      region.id = id;
+      region.className = "sr-only";
+      if (urgent) region.setAttribute("role", "alert");
+      else { region.setAttribute("role", "status"); region.setAttribute("aria-live", "polite"); }
+      document.body.appendChild(region);
+    }
+    return region;
+  }
+
+  /** Screen-reader words (a toast's, or a change a redraw would not announce; BD.announce): errors
+   *  interrupt, everything else waits its turn. One region on <body>, there before the words. */
+  function announce(message, urgent) {
+    var region = liveRegion(urgent);
+    region.textContent = "";
+    setTimeout(function () { region.textContent = message; }, 40);
+  }
+
+  var MAX_TOASTS = 3;          // a desktop shows at most 3 at once, a phone 2: older ones go first
+  var MAX_TOASTS_PHONE = 2;
+
+  /** A short message, bottom right (bottom, full width, on a phone). The text is set as text.
+   *  opts: {kind: "ok"|"error"|"info", action: {label, onClick}, ms (default 4000, errors 7000,
+   *  0 = stays until closed), onGone(reason)}. The timer pauses while the pointer is over the toast
+   *  or focus is inside it. Returns a function that closes it; its .update(message) changes the
+   *  text and starts the timer again. */
+  function toast(message, opts) {
+    var o = opts || {};
+    var doc = document;
+    var box = doc.getElementById("bd-toasts");
+    if (!box) {
+      box = doc.createElement("div");
+      box.id = "bd-toasts";
+      doc.body.appendChild(box);
+    }
+    var kind = o.kind === "error" || o.kind === "ok" ? o.kind : "info";
+    var glyph = kind === "error" ? "warning" : (kind === "ok" ? "check-circle" : "info");
+    var el = doc.createElement("div");
+    el.className = "toast toast-" + kind;
+    el.innerHTML = '<span class="toast-ico">' + icon(glyph, 18) + '</span><span class="toast-msg"></span>' +
+      (o.action ? '<button type="button" class="toast-act"></button>' : "") +
+      '<button type="button" class="toast-x" aria-label="Close">' + icon("x", 16) + "</button>";
+    var msgEl = el.querySelector(".toast-msg");
+    msgEl.textContent = String(message == null ? "" : message);
+    announce(msgEl.textContent, kind === "error");
+
+    var wait = o.ms == null ? (kind === "error" ? 7000 : 4000) : o.ms;
+    var timer = null, left = wait, startedAt = 0, hover = false, focused = false, closed = false;
+    var dismiss = function (reason) {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timer);
+      el.classList.add("toast-out");
+      el.classList.remove("toast-in");
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+      if (typeof o.onGone === "function") o.onGone(typeof reason === "string" ? reason : "dismissed");
+    };
+    var run = function () {
+      if (closed || wait <= 0 || timer || hover || focused) return;
+      startedAt = Date.now();
+      timer = setTimeout(function () { timer = null; dismiss("timeout"); }, left);
+    };
+    var hold = function () {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = null;
+      left = Math.max(1500, left - (Date.now() - startedAt));
+    };
+    el.addEventListener("mouseenter", function () { hover = true; hold(); });
+    el.addEventListener("mouseleave", function () { hover = false; run(); });
+    el.addEventListener("focusin", function () { focused = true; hold(); });
+    el.addEventListener("focusout", function (e) {
+      if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+      focused = false; run();
+    });
+    if (o.action) {
+      var act = el.querySelector(".toast-act");
+      act.textContent = o.action.label;
+      act.addEventListener("click", function () { dismiss("action"); o.action.onClick(); });
+    }
+    el.querySelector(".toast-x").addEventListener("click", function () { dismiss("closed"); });
+    box.appendChild(el);
+    el._bdDismiss = dismiss;
+    el._bdHasAction = !!o.action;
+
+    // Cap the stack: drop the oldest plain messages first, then the oldest of the rest.
+    var phone = window.matchMedia && !window.matchMedia("(min-width: 768px)").matches;
+    var cap = phone ? MAX_TOASTS_PHONE : MAX_TOASTS;
+    var live = Array.prototype.filter.call(box.children, function (t) { return !t.classList.contains("toast-out"); });
+    while (live.length > cap) {
+      var victim = live.filter(function (t) { return !t._bdHasAction && t !== el; })[0] || live[0];
+      if (victim === el) break;
+      if (victim._bdDismiss) victim._bdDismiss("replaced"); else victim.classList.add("toast-out");
+      live = live.filter(function (t) { return t !== victim; });
+    }
+
+    requestAnimationFrame(function () { el.classList.add("toast-in"); });
+    run();
+    var handle = function () { dismiss("dismissed"); };
+    handle.update = function (next) {
+      if (closed) return;
+      msgEl.textContent = String(next == null ? "" : next);
+      announce(msgEl.textContent, kind === "error");
+      clearTimeout(timer);
+      timer = null;
+      left = wait;
+      run();
+    };
+    return handle;
+  }
+
   window.BD = {
     BIZ_TZ: BIZ_TZ,
     esc: esc,
+    icon: icon,
     money: money,
     fmtBizDate: fmtBizDate,
     fmtBizDateTime: fmtBizDateTime,
@@ -774,5 +901,7 @@
     menu: menu,
     safeHref: safeHref,
     closeMenu: closeMenu,
+    toast: toast,
+    announce: announce,
   };
 })();

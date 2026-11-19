@@ -265,15 +265,15 @@ def test_with_the_bd_database_stopped_the_tool_stays_fast_and_bd_answers_503_in_
 # ── signed in, on the fixture seed ───────────────────────────────────────────────────────────
 CAN = {
     "salesperson": {"send": True, "analytics": False, "admin": False, "admin_area": False, "import": True,
-                    "run_batch": False, "week": True},
+                    "run_batch": False, "week": True, "pick_owner": False},
     "assistant": {"send": False, "analytics": False, "admin": False, "admin_area": True, "import": True,
-                  "run_batch": False, "week": False},
+                  "run_batch": False, "week": False, "pick_owner": False},
     "manager": {"send": False, "analytics": True, "admin": False, "admin_area": False, "import": False,
-                "run_batch": False, "week": True},
+                "run_batch": False, "week": True, "pick_owner": True},
     "admin": {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True,
-              "run_batch": True, "week": True},
+              "run_batch": True, "week": True, "pick_owner": True},
     "super_admin": {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True,
-                    "run_batch": True, "week": True},
+                    "run_batch": True, "week": True, "pick_owner": True},
 }
 SEED_PEOPLE = [
     (1, "Avery Quill", "avery.quill@example.com", "salesperson"),
@@ -385,6 +385,29 @@ def _served_by_pending(method, path):
         if route.path == path and method in route.methods:
             return route in pending.router.routes
     return False
+
+
+def router_imports(text):
+    """The lines of a router's source that import another router."""
+    sibling = re.compile(r"^\s*(from \.(?!\.)|from bd\.routers\b|import bd\.routers\b|from \.\. import routers\b).*$", re.M)
+    return [m.group(0).strip() for m in sibling.finditer(text)]
+
+
+def test_no_bd_router_imports_another_router():
+    """What two routers share lives in a bd/ module (weekly.py, paging.py, ...), never in a router, so a
+    router does not depend on another router's import order (#807: admin.py once took week.py's owner
+    rules)."""
+    routers = pathlib.Path(pending.__file__).parent
+    bad = {p.name: router_imports(p.read_text(encoding="utf-8")) for p in sorted(routers.glob("*.py"))
+           if p.name != "__init__.py"}
+    assert {k: v for k, v in bad.items() if v} == {}
+
+
+def test_the_router_import_check_sees_one():
+    assert router_imports("from .. import db, weekly\nfrom .week import list_owner\n") == \
+        ["from .week import list_owner"]
+    assert router_imports("from ..auth import require_role\nfrom bd.routers.week import x\n") == \
+        ["from bd.routers.week import x"]
 
 
 def test_pending_lists_bd_paths_only():
