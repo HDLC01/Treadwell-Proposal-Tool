@@ -40,6 +40,8 @@ THE API (#806), on the proposal tool's app, every route under /api/bd/:
   interactions_service  logging an interaction and what follows (tasks closed, the touch
              clearing a promise, the fallback next step), shared by the routers
   weekly     the weekly 10: the ranking, the Friday batch with its rollover, Give Me 10 More
+  weekly_worker  the Friday batch's thread, started from main.py's startup hooks only with
+             BD_WEEKLY_ENABLED and BD_ENABLED on, never under pytest
 
 The pure rules have a JavaScript twin, frontend/bd/js/bd-core.js; tests/test_bd_core_js.py is
 the shared table both must answer.
