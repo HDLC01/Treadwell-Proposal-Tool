@@ -77,8 +77,8 @@ function children(html, focusName) {
     Object.keys(attrs).forEach((k) => {
       if (k.indexOf("data-") === 0) {
         dataset[k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] =
-          attrs[k].replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-            .replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+          attrs[k].replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+            .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");  // &amp; last: decoded once
       }
     });
     const cls = (attrs.class || "").split(/\s+/).filter(Boolean);
