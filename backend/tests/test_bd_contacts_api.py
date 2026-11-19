@@ -367,6 +367,21 @@ def test_an_empty_or_padded_override_is_refused_and_changes_nothing(bd_seeded, b
     assert contact_row(bd_db, 27) == before
 
 
+def test_the_override_check_in_the_database_matches(bd_seeded, bd_db):
+    """The database's own check (migration 004) refuses an UPDATE that leaves half an override or an
+    unknown cadence, as the route does; a whole override and a whole clear pass. test_bd_cadence_view
+    checks the INSERT side. Dana (21) has none."""
+    import psycopg
+    for sql in ("update bd.contacts set cadence_override = 'monthly' where id = 21",
+                "update bd.contacts set cadence_override_until = '2027-01-31' where id = 21",
+                "update bd.contacts set cadence_override = 'daily', cadence_override_until = '2027-01-31' where id = 21"):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            bd_db.execute(sql)
+    bd_db.execute("update bd.contacts set cadence_override = 'weekly', cadence_override_until = '2027-01-31' where id = 21")
+    bd_db.execute("update bd.contacts set cadence_override = null, cadence_override_until = null where id = 21")
+    assert (contact_row(bd_db, 21)["cadence_override"], contact_row(bd_db, 21)["cadence_override_until"]) == (None, None)
+
+
 def test_patch_flags_a_new_duplicate_once(bd_seeded, bd_as_user):
     blair = bd_as_user(BLAIR)
     body = blair.patch("/api/bd/contacts/22", json={"email": "priya@cedarcreek.example.com"}).json()

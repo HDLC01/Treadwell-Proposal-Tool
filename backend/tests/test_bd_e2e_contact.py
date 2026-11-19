@@ -620,6 +620,8 @@ def test_the_manager_reads_and_changes_only_live_talks_a_year(page_as, expect):
 def test_the_manager_still_sees_the_priority_score(page_as, expect):
     _, pg = page_as(contact_path(DANA), DEVON)
     expect(pg.locator(".cd-score")).to_have_text("Priority 82 this week")
+    _, pg = page_as(contact_path(DANA), EMERY)          # a BD admin too, as on This Week (can.pick_owner)
+    expect(pg.locator(".cd-score")).to_have_text("Priority 82 this week")
     _, pg = page_as(contact_path(DANA), AVERY)
     assert pg.locator(".cd-score").count() == 0, "the score is the manager's"
 

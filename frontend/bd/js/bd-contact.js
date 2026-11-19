@@ -65,14 +65,15 @@
   var KEEP = "keep";
 
   var S = {
-    me: null, role: "", today: "", settings: null, users: null, companies: null,
+    me: null, today: "", settings: null, users: null, companies: null,
     id: "", c: null, task: null, rec: null, missed: null, items: [], others: null,
     shown: TIMELINE_STEP, stepEdit: false, suggest: false, composing: false, asking: null,
     // From /api/bd/me's can (bd/auth.py can()), never worked out from a role name.
-    canSend: false, canEdit: false, canNote: false, canNrp: false,
+    canSend: false,
+    canEdit: false,       // edit_contact: Edit details, a note, confirm, archive, "Not the right person"
     canClearDup: false, canAdd: false, canFreq: false,
     cadenceOnly: false,   // cadence and not edit_contact (the manager): only the cadence sheet
-    seeScore: false,      // pick_owner and not edit_contact (the manager): the week's priority score
+    seeScore: false,      // pick_owner, as on This Week: the week's priority score
     canManage: false,     // manage_entries: delete any logged entry, or fix one somebody else logged
     canWeek: false,       // week: Back to This Week
     editing: null,        // the id of the logged entry being edited in History, or null
@@ -207,16 +208,16 @@
   /** The Log menu's items, filtered by role (the plan's role matrix). */
   function logItems() {
     var out = [];
-    if (archived()) return S.canNote ? [{ act: "log-note", label: "Add a note", icon: "file" }] : [];
+    if (archived()) return S.canEdit ? [{ act: "log-note", label: "Add a note", icon: "file" }] : [];
     if (S.canSend) {
       out.push({ act: "log-call", label: "Log a call", icon: "phone" });
       out.push({ act: "log-meeting", label: "Log a meeting", icon: "users" });
       out.push({ act: "log-hosted", label: "Log a hosted event", icon: "flag" });
     }
-    if (S.canNote) out.push({ act: "log-note", label: "Add a note", icon: "file" });
+    if (S.canEdit) out.push({ act: "log-note", label: "Add a note", icon: "file" });
     // A due maintenance follow-up cannot be taken off by hand (the server says 409).
     if (S.canSend && taskOpen() && S.task.kind !== "maintenance") out.push({ act: "snooze", label: "Not this week", icon: "clock" });
-    if (S.canNrp) out.push({ act: "nrp", label: "Not the right person", icon: "user-x" });
+    if (S.canEdit) out.push({ act: "nrp", label: "Not the right person", icon: "user-x" });
     return out;
   }
 
@@ -488,7 +489,7 @@
 
   // ── History ────────────────────────────────────────────────────────────────────────────────
   function composerHtml() {
-    if (!S.canNote) return "";
+    if (!S.canEdit) return "";
     if (!S.composing) {
       return '<div class="cd-compose"><label class="sr-only" for="cd-note">Add a note</label>' +
         '<input class="input" id="cd-note" type="text" placeholder="Add a note" autocomplete="off" /></div>';
@@ -1414,13 +1415,11 @@
     var c = can || {};
     S.canSend = c.send === true;
     S.canEdit = c.edit_contact === true;
-    S.canNote = S.canEdit;
-    S.canNrp = S.canEdit;
     S.canClearDup = c.clear_duplicate === true;
     S.canAdd = c.add_contact === true;
     S.canFreq = c.cadence === true;
     S.cadenceOnly = S.canFreq && !S.canEdit;
-    S.seeScore = c.pick_owner === true && !S.canEdit;
+    S.seeScore = c.pick_owner === true;
     S.canManage = c.manage_entries === true;
     S.canWeek = c.week === true;
   }

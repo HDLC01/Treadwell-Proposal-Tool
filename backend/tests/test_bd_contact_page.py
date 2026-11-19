@@ -12,7 +12,7 @@ role should see is written out by hand:
       salesperson Avery   Call, Log, a note; Edit on her own call only; no Delete
       assistant Casey     no Call; a note, Edit details and Archive; nothing to edit in History
       manager Devon       no Call, Log, note or Archive; "Edit follow-up cadence"; the priority score
-      admin Emery         Edit and Delete on every entry
+      admin Emery         Edit and Delete on every entry; the priority score (can.pick_owner)
   * the company name is plain text and nothing links to the Contacts page, which has not moved;
     Back is to This Week only for a person who came from it;
   * Add a contact: a person whose can has no add_contact (the manager) is told so and gets no form;
@@ -28,6 +28,8 @@ import html as htmlmod
 import json
 import pathlib
 import re
+
+import pytest
 
 from _node import last_json_line, require_node, run_node
 from bd import auth as bd_auth
@@ -165,6 +167,15 @@ def test_a_bd_admin_edits_and_deletes_any_entry(tmp_path):
     assert sorted(acts(html, "entry-edit")) == ["101", "104", "105"]
     assert sorted(acts(html, "entry-delete")) == ["101", "104", "105"]
     assert 'aria-label="Delete: Call, Tue, Oct 20, 7 min"' in html, "each button names its entry"
+
+
+@pytest.mark.parametrize("role, shown", [("salesperson", False), ("assistant", False), ("manager", True),
+                                         ("admin", True)])
+def test_the_priority_score_shows_to_whoever_may_pick_a_week_as_on_this_week(tmp_path, role, shown):
+    """The score is This Week's (can.pick_owner, bd-week.js): the manager and a BD admin see it, the
+    salesperson and the assistant do not. Not worked out from edit_contact or a role name."""
+    out, html = contact_page(tmp_path, role)
+    assert ("Priority 82 this week" in html) is shown, role
 
 
 def test_the_company_is_plain_text_and_nothing_links_to_contacts(tmp_path):
