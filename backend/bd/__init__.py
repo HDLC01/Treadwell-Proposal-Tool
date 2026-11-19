@@ -34,9 +34,13 @@ THE API (#806), on the proposal tool's app, every route under /api/bd/:
   appsettings  BD's Settings object (defaults merged with bd.settings)
   paging     limit / offset and other query-string numbers
   routers/   meta (me, settings, users), week (This Week and the task buttons), interactions
-             (the timeline and logging), contacts (one contact: get, patch, confirm), admin (the
-             manual weekly run), pending (503 after the role check)
+             (the timeline and logging), contacts (the list, the possible-duplicate person check,
+             create, one contact's get, patch and confirm, archive), companies (the type-ahead,
+             one company, create, patch), admin (the manual weekly run), pending (503 after the
+             role check)
   events     the audit log, which is also a contact timeline's event rows
+  contacts_service  what the contacts and companies routers share: the duplicate check, finding or
+             making a company, a contact's field checks and size limits, making a contact
   interactions_service  logging an interaction and what follows (tasks closed, the touch
              clearing a promise, the fallback next step), shared by the routers
   weekly     the weekly 10: the ranking, the Friday batch with its rollover, Give Me 10 More

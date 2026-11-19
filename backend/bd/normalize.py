@@ -47,9 +47,9 @@ COMPANY_LOCK_NS = 728_100_302
 
 def lock_company_name(conn: Any, normalized_name: str) -> None:
     """Hold, until the caller's transaction ends, the lock every find-or-create of a company by
-    `normalized_name` takes first (routers.contacts.resolve_company and the importer), so two
+    `normalized_name` takes first (contacts_service.resolve_company and the importer), so two
     adds of the same new company at once make ONE row: the second waits, then finds the first's.
-    POST /api/companies always creates (as the mock does) and does not take it."""
+    POST /api/bd/companies always creates (as the mock does) and does not take it."""
     conn.execute("select pg_advisory_xact_lock(%s::integer, hashtext(%s::text))", (COMPANY_LOCK_NS, normalized_name))
 
 

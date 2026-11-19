@@ -1,4 +1,4 @@
-"""Hardening of BD's answers on the proposal tool's app (#806): what every /api/bd/ response must keep.
+"""Hardening of BD's answers on the proposal tool's app (#806, #808): what every /api/bd/ response must keep.
 
 BD's test_hardening, response checks only. Its deploy-file and nginx-zone groups retired with the old
 repo's deploy files (Dockerfile, compose, nginx-bd.conf, install-vps.sh), as ticket #806 lists.
@@ -12,15 +12,18 @@ NOT CARRIED OVER, AND NOT ON #806'S RETIRE LIST (Hanz to approve, recorded in th
     tool's app installs CORSMiddleware with allow_origins=["*"] for every route, its own app-wide
     choice, so BD's "no CORS layer" cannot hold on it.
 
-WAITING FOR THE ROUTES THEY EXERCISE (no /api/bd/ route that stores text exists in this ticket). Each
-moves with the ticket that brings its route, and is run against that real route:
-  * contacts (PATCH and POST /api/bd/contacts, the contacts ticket, #808):
-    test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on,
+MOVED WITH THEIR ROUTES:
+  * contacts (#808, the contact page and Add contact): test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on
+    (here run against the contact, company and interaction routes: the query string, create, patch,
+    archive, a logged note, a new company and a company's city),
     test_an_enormous_contact_note_is_refused, test_an_enormous_tag_list_is_refused,
     test_a_contact_text_field_stops_exactly_at_its_limit, test_tags_stop_at_50_of_60_characters,
-    test_a_new_contact_obeys_the_same_limits;
-  * settings (PUT /api/bd/admin/settings, the ticket that moves BD's Admin page):
-    test_an_enormous_pick_list_is_refused, test_a_pick_list_stops_at_100_values_of_120_characters.
+    test_a_new_contact_obeys_the_same_limits. BD's safety-header asserts in them are not carried (see
+    above); each refusal is checked for no-store instead.
+
+STILL WAITING FOR THEIR ROUTE (PUT /api/bd/admin/settings and the People routes, the ticket that moves
+BD's Admin page): test_an_enormous_pick_list_is_refused, test_a_pick_list_stops_at_100_values_of_120_characters,
+and the settings-list and user-name cases of the "text Postgres cannot hold" check.
 
 What stays, for every BD response class (200, 400, 401, 403, 404, 503 and a forced 500):
   * Cache-Control: no-store on every BD API answer, and never a Set-Cookie;
@@ -32,6 +35,7 @@ What stays, for every BD response class (200, 400, 401, 403, 404, 503 and a forc
 """
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -287,3 +291,110 @@ def test_a_wrong_method_on_a_real_route_still_names_it_plainly(client):
     assert resp.status_code == 400 and resp.json()["message"] == "POST is not allowed on /api/bd/me."
     resp = client.get("/api/bd/interactions/12/recommend", headers=TOKEN)
     assert resp.status_code == 400 and resp.json()["message"] == "GET is not allowed on /api/bd/interactions/12/recommend."
+
+
+# ── text Postgres cannot hold is a 400, never a 500 (moved with the contact routes, #808) ────────
+NUL = json.dumps("a" + chr(0) + "b")                 # the JSON text "a\u0000b"
+SURROGATE = json.dumps("a" + chr(0xD800) + "b")      # a lone surrogate: not encodable as UTF-8
+
+
+def _unsaveable_cases(company_id):
+    """(label, BD user id, method, path, raw JSON body or None). One value Postgres cannot store in
+    each place a person can type contact text; each must be answered with the 400 envelope. Avery (1)
+    is a salesperson. The settings and people cases wait for their routes (the Admin ticket)."""
+    contact = '{"name": %s, "company": {"id": %d}}'
+    return [
+        ("query q", 1, "GET", "/api/bd/contacts?q=%00", None),
+        ("query industry", 1, "GET", "/api/bd/contacts?industry=%00", None),
+        ("duplicates email", 1, "GET", "/api/bd/contacts/duplicates?email=%00", None),
+        ("create name NUL", 1, "POST", "/api/bd/contacts", contact % (NUL, company_id)),
+        ("create name surrogate", 1, "POST", "/api/bd/contacts", contact % (SURROGATE, company_id)),
+        ("create company name NUL", 1, "POST", "/api/bd/contacts", '{"name": "Fictional Person", "company": {"name": %s}}' % NUL),
+        ("update notes NUL", 1, "PATCH", "/api/bd/contacts/21", '{"notes": %s}' % NUL),
+        ("update notes surrogate", 1, "PATCH", "/api/bd/contacts/21", '{"notes": %s}' % SURROGATE),
+        ("archive reason NUL", 1, "POST", "/api/bd/contacts/21/archive", '{"reason": %s}' % NUL),
+        ("log summary NUL", 1, "POST", "/api/bd/contacts/21/interactions", '{"kind": "note", "summary": %s}' % NUL),
+        ("new company name NUL", 1, "POST", "/api/bd/companies", '{"name": %s}' % NUL),
+        ("company city surrogate", 1, "PATCH", "/api/bd/companies/%d" % company_id, '{"city": %s}' % SURROGATE),
+        # 1e999 is a valid JSON number that Python reads as infinity.
+        ("frequency 1e999", 1, "POST", "/api/bd/contacts",
+         '{"name": "Fictional Person", "company": {"id": %d}, "category": "maintenance",'
+         ' "frequency_per_year": 1e999}' % company_id),
+        ("frequency NaN", 1, "POST", "/api/bd/contacts",
+         '{"name": "Fictional Person", "company": {"id": %d}, "category": "maintenance",'
+         ' "frequency_per_year": NaN}' % company_id),
+    ]
+
+
+def test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on(bd_seeded, bd_db, bd_as_user):
+    def counts():
+        return bd_db.execute("select (select count(*) from bd.contacts) as contacts,"
+                             " (select count(*) from bd.companies) as companies,"
+                             " (select count(*) from bd.interactions) as interactions,"
+                             " (select count(*) from bd.events) as events").fetchone()
+
+    before = counts()
+    failures = []
+    for label, who, method, path, raw in _unsaveable_cases(16):
+        kw = {} if raw is None else {"content": raw, "headers": {"Content-Type": "application/json"}}
+        r = bd_as_user(who).request(method, path, **kw)
+        if r.status_code != 400:
+            failures.append((label, r.status_code, r.text[:120]))     # every case is reported, not only the first
+            continue
+        body = _is_envelope(r, 400, "bad_request")
+        assert "Traceback" not in r.text and "psycopg" not in r.text and "Postgres" not in r.text, label
+        assert r.headers["cache-control"] == "no-store", label
+        assert body["message"], label
+    assert not failures, "answered with something other than the 400 envelope: %s" % failures
+    assert counts() == before, "nothing was saved"
+    assert bd_db.execute("select notes from bd.contacts where id = 21").fetchone()["notes"] == "Prefers a call before nine."
+    # The pool is healthy afterwards, and an ordinary request still works.
+    assert bd_as_user(1).get("/api/bd/me").status_code == 200
+    assert bd_as_user(1).get("/api/bd/contacts?q=fictional").status_code == 200
+
+
+# ── size limits on stored contact text (Hanz, 2026-11-11: chosen numbers, in the contract) ──────
+def test_an_enormous_contact_note_is_refused(bd_seeded, bd_as_user):
+    r = bd_as_user(1).patch("/api/bd/contacts/21", json={"notes": "x" * 1_000_000})
+    assert r.status_code == 400, "a 1,000,000 character note was accepted (%s)" % r.status_code
+    _is_envelope(r, 400, "bad_request")
+    assert r.json()["fields"] == {"notes": "Keep this to 20000 characters or fewer."}
+
+
+def test_an_enormous_tag_list_is_refused(bd_seeded, bd_as_user):
+    r = bd_as_user(1).patch("/api/bd/contacts/21", json={"tags": ["tag %d" % n for n in range(5000)]})
+    assert r.status_code == 400, "5,000 tags were accepted (%s)" % r.status_code
+    assert r.json()["fields"] == {"tags": "Use at most 50 tags of 60 characters or fewer."}
+
+
+@pytest.mark.parametrize("field,limit", [("notes", 20000), ("next_step", 500), ("email", 254), ("title", 200),
+                                         ("city", 200), ("name", 200)])
+def test_a_contact_text_field_stops_exactly_at_its_limit(bd_seeded, bd_as_user, bd_db, field, limit):
+    avery = bd_as_user(1)
+    value = ("x" * (limit - 12) + "@example.com") if field == "email" else "x" * limit
+    assert avery.patch("/api/bd/contacts/21", json={field: value}).status_code == 200, field
+    r = avery.patch("/api/bd/contacts/21", json={field: value + "y"})
+    assert r.status_code == 400 and r.json()["fields"] == {field: "Keep this to %d characters or fewer." % limit}
+    assert bd_db.execute("select " + field + " as v from bd.contacts where id = 21").fetchone()["v"] == value
+
+
+def test_tags_stop_at_50_of_60_characters(bd_seeded, bd_as_user):
+    avery = bd_as_user(1)
+    assert avery.patch("/api/bd/contacts/21", json={"tags": ["t" * 60] * 50}).status_code == 200
+    assert avery.patch("/api/bd/contacts/21", json={"tags": ["t" * 60] * 51}).status_code == 400
+    assert avery.patch("/api/bd/contacts/21", json={"tags": ["t" * 61]}).status_code == 400
+
+
+def test_a_new_contact_obeys_the_same_limits(bd_seeded, bd_as_user, bd_db):
+    avery = bd_as_user(1)
+    r = avery.post("/api/bd/contacts", json={"name": "n" * 201, "company": {"name": "c" * 201}, "notes": "x" * 20001,
+                                             "tags": ["t"] * 51, "next_step": "s" * 501})
+    assert r.status_code == 400
+    assert r.json()["fields"] == {"name": "Keep this to 200 characters or fewer.",
+                                  "company": "Keep this to 200 characters or fewer.",
+                                  "notes": "Keep this to 20000 characters or fewer.",
+                                  "next_step": "Keep this to 500 characters or fewer.",
+                                  "tags": "Use at most 50 tags of 60 characters or fewer."}
+    assert bd_db.execute("select count(*) as n from bd.contacts").fetchone()["n"] == 13
+    r = avery.post("/api/bd/contacts", json={"name": "n" * 200, "company": {"name": "c" * 200}, "notes": "x" * 20000})
+    assert r.status_code == 201, r.text
