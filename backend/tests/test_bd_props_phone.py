@@ -1,4 +1,4 @@
-"""phone.py: generated (property) coverage on top of the table in test_phone.py.
+"""phone.py: generated (property) coverage on top of the table in test_bd_phone.py.
 
 The module's contract, as invariants rather than examples:
 
@@ -22,21 +22,13 @@ import pathlib
 import re
 import tempfile
 
-import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from bd import phone
 from _node import last_json_line, run_node
+from _bd_pages import SHARED_JS, needs_bd_page_helpers
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-# BD's page helpers file (BD's shared.js, which holds normalizeCompany, e164 and fmtPhone) moves
-# with the BD pages in a later ticket of #802. Until it does, the frontend half of this parity
-# check has no file to run. The ticket that moves it points SHARED_JS at the moved file and
-# deletes BD_PAGE_HELPERS_NOT_MOVED.
-SHARED_JS = ROOT / "frontend" / "bd" / "js" / "shared.js"
-BD_PAGE_HELPERS_NOT_MOVED = pytest.mark.skip(
-    reason="BD's page helpers (shared.js) move with the BD pages in a later ticket of #802")
 
 ASCII_DIGITS = "0123456789"
 SEPARATORS = " -.()\t/_"
@@ -330,7 +322,7 @@ batches = st.lists(
 )
 
 
-@BD_PAGE_HELPERS_NOT_MOVED
+@needs_bd_page_helpers
 @settings(max_examples=5, deadline=None, suppress_health_check=list(HealthCheck))
 @given(batches)
 def test_python_and_the_frontend_agree_on_a_generated_batch(raws):

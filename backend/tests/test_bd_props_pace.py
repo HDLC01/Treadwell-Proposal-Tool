@@ -1,6 +1,6 @@
 """Generated (property) coverage for backend/bd/pace.py, the annual pace bar.
 
-tests/test_pace.py pins a fixed case table and 300 random cases against bd-core.js. This file adds
+tests/test_bd_pace.py pins a fixed case table and 300 random cases against bd-core.js. This file adds
 invariants that must hold for EVERY input, found by hypothesis (deterministic on CI: conftest.py
 registers the "ci" profile), and fills the gaps that table leaves:
 

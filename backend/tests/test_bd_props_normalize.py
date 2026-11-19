@@ -1,7 +1,7 @@
-"""normalize.py, generated (property) coverage on top of the example cases in test_normalize.py.
+"""normalize.py, generated (property) coverage on top of the example cases in test_bd_normalize.py.
 
 Pure properties of normalize_company, clean_name and email_key, plus ONE batched node run that
-checks normalize_company against frontend/js/shared.js normalizeCompany on a generated list of
+checks normalize_company against frontend/bd/js/shared.js normalizeCompany on a generated list of
 strings. Nothing here touches a database or the network; no dates are involved.
 
 Each property is an invariant of the matching keys, not a copy of the code:
@@ -20,21 +20,13 @@ import re
 import string
 import tempfile
 
-import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from _node import last_json_line, run_node
+from _bd_pages import SHARED_JS, needs_bd_page_helpers
 from bd.normalize import COMPANY_SUFFIXES, clean_name, email_key, normalize_company
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-# BD's page helpers file (BD's shared.js, which holds normalizeCompany, e164 and fmtPhone) moves
-# with the BD pages in a later ticket of #802. Until it does, the frontend half of this parity
-# check has no file to run. The ticket that moves it points SHARED_JS at the moved file and
-# deletes BD_PAGE_HELPERS_NOT_MOVED.
-SHARED_JS = ROOT / "frontend" / "bd" / "js" / "shared.js"
-BD_PAGE_HELPERS_NOT_MOVED = pytest.mark.skip(
-    reason="BD's page helpers (shared.js) move with the BD pages in a later ticket of #802")
 
 ALNUM = string.ascii_letters + string.digits
 ODD_SPACES = "   "
@@ -80,7 +72,7 @@ odd_things = st.one_of(
 
 
 # ── the suffix list is the frontend's, word for word ────────────────────────────────────────────
-@BD_PAGE_HELPERS_NOT_MOVED
+@needs_bd_page_helpers
 def test_company_suffixes_match_the_frontend_list():
     src = SHARED_JS.read_text(encoding="utf-8")
     m = re.search(r"var COMPANY_SUFFIXES = \[([^\]]*)\]", src)
@@ -301,7 +293,7 @@ console.log(JSON.stringify(raws.map((r) => ctx.BD.normalizeCompany(r))));
 """
 
 
-@BD_PAGE_HELPERS_NOT_MOVED
+@needs_bd_page_helpers
 @settings(max_examples=5, suppress_health_check=list(HealthCheck))
 @given(st.lists(js_string, min_size=100, max_size=200))
 def test_python_and_the_frontend_agree_on_generated_names(raws):

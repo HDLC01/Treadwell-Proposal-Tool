@@ -12,8 +12,10 @@ What the part does, on every staging deploy (and on a fresh staging database at 
   1. makes the bd_app login with a STAGING-ONLY password, when it is missing
   2. takes the runner's advisory lock (bd/migrate.py LOCK_KEY), so a hand run and a deploy take turns
   3. creates schema bd and its ledger, bd.schema_migrations, when missing (the runner's bootstrap)
-  4. applies each numbered file ONLY IF the ledger lacks it, with its ledger row, in one transaction
-  5. re-applies grants.sql, the privilege model
+  4. applies each numbered file ONLY IF the ledger lacks it, with its ledger row and grants.sql, in
+     one transaction (psql commits each statement on its own, so a deploy that stops part way never
+     leaves a committed file without the privilege model)
+  5. re-applies grants.sql once more, so a deploy with nothing pending still repairs privileges
   6. releases the lock
 The part goes at the END of the file, after the tool's own tables and roles. It is written with the
 file's own line endings and leaves everything outside its two marker lines as it was.
@@ -64,31 +66,38 @@ def _header() -> str:
         "-- from backend/ with `python -m bd.ops.staging_schema` after changing a migration or grants.sql.\n"
         "-- On every deploy: bd_app is made if missing; under the runner's advisory lock, schema bd and\n"
         "-- its ledger are made if missing, each numbered file is applied ONLY IF the ledger lacks it\n"
-        "-- (with its ledger row, in one transaction), and grants.sql is re-applied. Prod never reads\n"
-        "-- this file: there the runner (python -m bd.migrate) is run by hand on Hanz's go.\n"
+        "-- (with its ledger row and grants.sql, in one transaction), and grants.sql is re-applied.\n"
+        "-- Prod never reads this file: there the runner (python -m bd.migrate) is run by hand on\n"
+        "-- Hanz's go.\n"
         "-- Schema bd is not in PostgREST's schemas, and service_role has no rights in it.\n"
     )
 
 
-def _migration_block(path: pathlib.Path) -> str:
-    body = migrate.read_sql(path)
+def _quoted(name: str, text: str) -> str:
+    """`text` as a dollar-quoted literal for EXECUTE, ending in a newline."""
     for tag in (_DO_TAG, _SQL_TAG):
-        if tag in body:
-            raise SystemExit("%s contains %s, which the staging part uses as its quote" % (path.name, tag))
-    if not body.endswith("\n"):
-        body += "\n"
+        if tag in text:
+            raise SystemExit("%s contains %s, which the staging part uses as its quote" % (name, tag))
+    return "%s\n%s%s" % (_SQL_TAG, text if text.endswith("\n") else text + "\n", _SQL_TAG)
+
+
+def migration_block(path: pathlib.Path) -> str:
+    """One numbered file as ONE statement: applied only if the ledger lacks it, then its ledger row
+    and grants.sql, all in the do block's one transaction (as the runner applies a file), so psql
+    never commits a file without the privilege model."""
     return (
         "-- %(name)s\n"
         "do %(do)s\n"
         "begin\n"
         "  if not exists (select 1 from bd.schema_migrations where name = '%(name)s') then\n"
-        "    execute %(sql)s\n"
-        "%(body)s"
-        "%(sql)s;\n"
+        "    execute %(body)s;\n"
         "    insert into bd.schema_migrations (name) values ('%(name)s');\n"
+        "    execute %(grants)s;\n"
         "  end if;\n"
         "end\n"
-        "%(do)s;\n" % {"name": path.name, "do": _DO_TAG, "sql": _SQL_TAG, "body": body}
+        "%(do)s;\n" % {"name": path.name, "do": _DO_TAG,
+                        "body": _quoted(path.name, migrate.read_sql(path)),
+                        "grants": _quoted(migrate.GRANTS_FILE.name, migrate.grants_sql())}
     )
 
 
@@ -105,7 +114,7 @@ def render_section() -> str:
         migrate.BOOTSTRAP_SQL,
     ]
     for path in migrate.migration_files():
-        parts.append("\n" + _migration_block(path))
+        parts.append("\n" + migration_block(path))
     grants = migrate.grants_sql()
     parts += [
         "\n-- grants.sql, re-applied on every deploy\n",

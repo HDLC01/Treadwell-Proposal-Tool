@@ -26,6 +26,7 @@ import pathlib
 import re
 
 import pytest
+from psycopg.sql import SQL
 
 from bd import serialize
 from bd.bizdate import iso_date
@@ -1143,12 +1144,12 @@ def test_fetch_contact_and_fetch_contacts_agree_and_missing_is_none(bd_seeded, b
     check_shape(one, CONTACT_SPEC)
     assert one["id"] == 33 and one["duplicate_of"]["contact_id"] == 21      # the seed's flagged duplicate
     assert one["duplicate_of"]["reason"] == "Same email"
-    assert serialize.fetch_contacts(bd_db, "cs.id = %s", (33,)) == [one]
+    assert serialize.fetch_contacts(bd_db, SQL("cs.id = %s"), (33,)) == [one]
     assert serialize.fetch_contact(bd_db, 999999) is None
-    assert serialize.fetch_contacts(bd_db, "cs.id = %s", (999999,)) == []
+    assert serialize.fetch_contacts(bd_db, SQL("cs.id = %s"), (999999,)) == []
     # a co-owner named in the workbook with no login yet comes out as {"id": None, "name": ...};
     # one with a login carries the login's id and name
-    co_owners = [c["co_owner"] for c in serialize.fetch_contacts(bd_db, "cs.co_owner_name is not null")]
+    co_owners = [c["co_owner"] for c in serialize.fetch_contacts(bd_db, SQL("cs.co_owner_name is not null"))]
     assert {"id": None, "name": "Jules"} in co_owners
     assert {"id": 2, "name": "Blair Fenn"} in co_owners
 
@@ -1157,10 +1158,10 @@ def test_fetch_contacts_where_params_and_order(bd_seeded, bd_db):
     everyone = serialize.fetch_contacts(bd_db)                               # defaults: true, by id
     assert len(everyone) == len(fixture_seed.FIXTURE["contacts"])
     assert [c["id"] for c in everyone] == sorted(c["id"] for c in everyone)
-    maintenance = serialize.fetch_contacts(bd_db, "cs.category = %s", ("maintenance",), "cs.name desc")
+    maintenance = serialize.fetch_contacts(bd_db, SQL("cs.category = %s"), ("maintenance",), "name_desc")
     assert len(maintenance) == 2 and all(c["category"] == "maintenance" for c in maintenance)
     assert [c["name"] for c in maintenance] == sorted((c["name"] for c in maintenance), reverse=True)
-    some = serialize.fetch_contacts(bd_db, "cs.id = any(%s)", ([25, 23, 29],), "cs.id desc")
+    some = serialize.fetch_contacts(bd_db, SQL("cs.id = any(%s)"), ([25, 23, 29],), "id_desc")
     assert [c["id"] for c in some] == [29, 25, 23]
     for c in everyone:
         assert "archived_at" not in c                                         # nobody is archived yet
@@ -1169,6 +1170,32 @@ def test_fetch_contacts_where_params_and_order(bd_seeded, bd_db):
     assert archived["archived_at"] == "2026-11-03T12:00:00-06:00"
     assert "archived_at" not in serialize.fetch_contact(bd_db, 25)
     assert set(archived) - {"archived_at"} == set(CONTACT_SPEC)
+
+
+def test_fetch_contacts_and_fetch_tasks_take_no_sql_text_from_a_caller(bd_seeded, bd_db):
+    """A sort key or a filter from a query string can never reach the SQL: the order is a key from
+    a fixed list, and the filter must be psycopg's sql.Composable (written in code), not a str."""
+    for fetch in (serialize.fetch_contacts, serialize.fetch_tasks):
+        with pytest.raises(TypeError):
+            fetch(bd_db, "true")
+        with pytest.raises(ValueError):
+            fetch(bd_db, order="id; drop table contacts")
+        with pytest.raises(ValueError):
+            fetch(bd_db, order="cs.id desc")                  # SQL text is not a key either
+    assert set(serialize.CONTACT_ORDERS) >= {"id", "id_desc", "name", "name_desc"}
+    assert set(serialize.TASK_ORDERS) >= {"id", "id_desc", "batch"}
+
+
+def test_fetch_contacts_and_fetch_tasks_are_bounded(bd_seeded, bd_db):
+    assert 100 <= serialize.DEFAULT_LIMIT <= serialize.MAX_LIMIT <= 1000
+    assert [c["id"] for c in serialize.fetch_contacts(bd_db, limit=3)] == [
+        c["id"] for c in serialize.fetch_contacts(bd_db)][:3]
+    assert len(serialize.fetch_tasks(bd_db, limit=2)) == 2
+    for bad in (0, -1, serialize.MAX_LIMIT + 1, "5"):
+        with pytest.raises(ValueError):
+            serialize.fetch_contacts(bd_db, limit=bad)
+        with pytest.raises(ValueError):
+            serialize.fetch_tasks(bd_db, limit=bad)
 
 
 def test_fetch_tasks_attaches_each_tasks_own_compact_contact(bd_seeded, bd_db):
@@ -1181,19 +1208,19 @@ def test_fetch_tasks_attaches_each_tasks_own_compact_contact(bd_seeded, bd_db):
         assert t["contact"]["id"] == expected_contacts[t["id"]]
         assert t["contact"] == serialize.contact_compact(
             bd_db.execute(serialize.CONTACT_SELECT + " where cs.id = %s", (expected_contacts[t["id"]],)).fetchone())
-    assert [t["id"] for t in serialize.fetch_tasks(bd_db, "t.id = any(%s)", ([302, 304],), "t.id desc")] == [304, 302]
+    assert [t["id"] for t in serialize.fetch_tasks(bd_db, SQL("t.id = any(%s)"), ([302, 304],), "id_desc")] == [304, 302]
 
 
 def test_fetch_tasks_joins_the_batch_and_survives_an_archived_contact(bd_seeded, bd_db):
-    assert len(serialize.fetch_tasks(bd_db, "b.kind = %s", ("friday",))) == 5
-    assert len(serialize.fetch_tasks(bd_db, "b.owner_id = %s", (2,))) == 2
-    assert serialize.fetch_tasks(bd_db, "b.kind = %s", ("ten_more",)) == []
-    assert serialize.fetch_tasks(bd_db, "t.id = %s", (999999,)) == []
+    assert len(serialize.fetch_tasks(bd_db, SQL("b.kind = %s"), ("friday",))) == 5
+    assert len(serialize.fetch_tasks(bd_db, SQL("b.owner_id = %s"), (2,))) == 2
+    assert serialize.fetch_tasks(bd_db, SQL("b.kind = %s"), ("ten_more",)) == []
+    assert serialize.fetch_tasks(bd_db, SQL("t.id = %s"), (999999,)) == []
     bd_db.execute("update contacts set archived_at = %s where id = 21", (utc(2026, 11, 3, 18, 0),))
-    task = serialize.fetch_tasks(bd_db, "t.id = %s", (302,))[0]
+    task = serialize.fetch_tasks(bd_db, SQL("t.id = %s"), (302,))[0]
     assert task["contact"] is not None and task["contact"]["id"] == 21      # still shown, never a null card
     bd_db.execute("update tasks set status = 'done', done_at = %s where id = 304", (utc(2026, 11, 4, 16, 0),))
-    done = serialize.fetch_tasks(bd_db, "t.status = %s", ("done",))
+    done = serialize.fetch_tasks(bd_db, SQL("t.status = %s"), ("done",))
     assert [(t["id"], t["done_at"]) for t in done if t["id"] == 304] == [(304, "2026-11-04T10:00:00-06:00")]
 
 

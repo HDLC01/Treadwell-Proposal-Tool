@@ -4,7 +4,9 @@ build on these.
 
 THE TEST SERVER. BD_TEST_DATABASE_URL is an ADMIN url (a superuser on a THROWAWAY Postgres 16,
 e.g. a local container or CI's service). Every test database is created on it as bd_test_<...>
-and dropped afterwards. Unset: the BD database tests SKIP locally and FAIL on CI.
+and dropped afterwards. Unset: the BD database tests SKIP locally and FAIL on CI. A URL whose host
+is not this machine, or a server that looks like Supabase, FAILS the run whatever the machine: the
+roles below have passwords that sit in this public repo, and they stay on the server.
 
 ROLES ARE CLUSTER-WIDE, databases are not. xdist workers share one server, so:
   * roles the tests only ever CREATE (bd_app, the bd_app-like test login, and the staging file's
@@ -41,10 +43,42 @@ SUPABASE_API_ROLES = ("anon", "authenticated", "service_role")
 
 
 # ── the server ─────────────────────────────────────────────────────────────────────────────────
+def is_local_server(url: str) -> bool:
+    """True when every host the URL names is this machine (bd.db.is_local_url)."""
+    from bd import db as dbmod
+
+    return dbmod.is_local_url(url)
+
+
+def looks_like_supabase(url: str) -> bool:
+    """True when the server is Supabase-shaped: a supabase_admin role, or an auth schema here."""
+    with connect(url) as conn:
+        return bool(conn.execute(
+            "select exists (select 1 from pg_catalog.pg_roles where rolname = 'supabase_admin')"
+            " or exists (select 1 from pg_catalog.pg_namespace where nspname = 'auth')").fetchone()[0])
+
+
+def _refuse(why: str):
+    pytest.fail("BD_TEST_DATABASE_URL refused: " + why + ". It must be an admin URL on a throwaway "
+                "Postgres 16 on this machine (a local container, or CI's service).", pytrace=False)
+
+
 def admin_url() -> str:
-    """BD_TEST_DATABASE_URL, or skip (locally) / fail (CI) when it is unset."""
+    """BD_TEST_DATABASE_URL, or skip (locally) / fail (CI) when it is unset. A URL that is not a
+    throwaway server on this machine FAILS the run (see test_bd_test_server.py); the message never
+    quotes the URL."""
+    import psycopg
+
     url = (os.environ.get("BD_TEST_DATABASE_URL") or "").strip()
     if url:
+        if not is_local_server(url):
+            _refuse("it does not point at this machine")
+        try:
+            supabase = looks_like_supabase(url)
+        except psycopg.OperationalError:
+            supabase = False    # unreachable: new_database() skips (locally) or fails (CI)
+        if supabase:
+            _refuse("the server looks like Supabase")
         return url
     if running_in_ci():
         pytest.fail("BD_TEST_DATABASE_URL is not set, and CI must have it: the BD database tests would "
@@ -126,14 +160,14 @@ def ensure_app_login(admin: str) -> None:
 def app_login_url(db_url: str) -> str:
     """The bd_app-like login on that database, with BD's search_path (the pool sets it again on
     every checkout; a member of bd_app does not inherit bd_app's own role setting)."""
-    return url_for(db_url, _dbname(db_url), user=APP_TEST_LOGIN, password=APP_TEST_PASSWORD,
+    return url_for(db_url, dbname(db_url), user=APP_TEST_LOGIN, password=APP_TEST_PASSWORD,
                    options="-c search_path=bd,pg_catalog")
 
 
-def _dbname(url: str) -> str:
-    from psycopg import conninfo
+def dbname(url: str) -> str:
+    from bd import db as dbmod
 
-    return conninfo.conninfo_to_dict(url)["dbname"]
+    return dbmod.dbname(url)
 
 
 # ── applying the schema ────────────────────────────────────────────────────────────────────────

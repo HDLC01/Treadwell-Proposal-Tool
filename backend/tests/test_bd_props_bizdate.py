@@ -1,6 +1,6 @@
 """bizdate.py: generated (property) coverage of the Central business-date maths.
 
-tests/test_bizdate.py pins hand-picked examples. This file states the invariants those examples
+tests/test_bd_bizdate.py pins hand-picked examples. This file states the invariants those examples
 are samples of, and checks them over generated dates (1990..2100) and instants:
 
   * weeks are Monday..Sunday and tile the calendar; years follow the Gregorian rule;

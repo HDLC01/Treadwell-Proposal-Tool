@@ -166,6 +166,20 @@ def test_the_cli_asks_for_the_url_and_never_prints_it(fresh_db, monkeypatch, cap
         assert password not in out.out + out.err
 
 
+@pytest.mark.parametrize("url", [
+    "postgresql://postgres:not-a-real-password-0144@db.example.com:5432/postgres",
+    "postgresql://postgres:not-a-real-password-0144@db:5432/treadwell",
+    "password=not-a-real-password-0144 dbname",
+])
+def test_the_cli_takes_url_on_the_command_line_only_for_this_machine(url, capsys):
+    """--url puts the admin password in shell history and the process list: fine for a local test
+    server, never for staging or prod, where the runner asks for the URL instead."""
+    assert migrate.main(["--url", url, "--status"]) == 2
+    out = capsys.readouterr()
+    assert "not-a-real-password-0144" not in out.out + out.err and "example.com" not in out.err
+    assert "--url" in out.err
+
+
 def test_the_cli_refuses_an_empty_url(monkeypatch):
     monkeypatch.setattr(migrate.getpass, "getpass", lambda prompt="": "  ")
     assert migrate.main([]) == 2
@@ -203,8 +217,9 @@ def test_no_app_module_imports_the_runner():
 
 
 def test_importing_the_app_never_loads_the_runner():
-    """In a fresh interpreter: the app module and every startup hook it registers come up without
-    the runner ever being imported."""
+    """In a fresh interpreter, importing the app (which registers every startup hook) never imports
+    the runner. The hooks are not RUN here (they start the digest, the refreshers and the sheet
+    warm-up); test_no_app_module_imports_the_runner covers what their code imports."""
     code = ("import sys, main\n"
             "assert main.app.router.on_startup, 'no startup hooks found'\n"
             "print('LOADED' if 'bd.migrate' in sys.modules else 'CLEAN')\n")

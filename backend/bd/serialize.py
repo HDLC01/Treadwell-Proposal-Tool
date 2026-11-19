@@ -29,8 +29,11 @@ Objects and the functions that make them:
     (unmatched call)   unmatched_call(row)           unmatched_calls row
     Settings           appsettings.load(conn)        (already the contract's object)
 
-Fetch helpers: fetch_contact(conn, id), fetch_contacts(conn, where, params, order),
-fetch_interaction(conn, id), fetch_tasks(conn, where, params, order), fetch_company(conn, id).
+Fetch helpers: fetch_contact(conn, id), fetch_contacts(conn, where, params, order, limit),
+fetch_interaction(conn, id), fetch_tasks(conn, where, params, order, limit), fetch_company(conn, id).
+A list fetch takes its filter as psycopg's sql.Composable written in code (values in `params`), its
+order as a KEY from CONTACT_ORDERS / TASK_ORDERS and at most MAX_LIMIT rows, so nothing a request
+sends can become SQL text.
 
 Timestamps go out as ISO 8601 in Central with that moment's offset ("2026-10-30T16:00:00-05:00");
 dates as "YYYY-MM-DD"; money (numeric) as a float.
@@ -379,17 +382,46 @@ def unmatched_call(row: Row) -> dict:
 
 
 # ── fetch helpers ────────────────────────────────────────────────────────────────────────────
+DEFAULT_LIMIT = 500
+MAX_LIMIT = 500
+CONTACT_ORDERS = {"id": "cs.id", "id_desc": "cs.id desc", "name": "cs.name, cs.id",
+                  "name_desc": "cs.name desc, cs.id desc"}
+TASK_ORDERS = {"id": "t.id", "id_desc": "t.id desc", "batch": "b.id, t.id"}
+
+
+def _list_sql(head: str, where: Any, order: str, orders: dict, limit: Any) -> Any:
+    """head + where + an allowed order + a bounded limit, as one sql.Composed."""
+    from psycopg import sql
+
+    if not isinstance(where, sql.Composable):
+        raise TypeError("where must be psycopg.sql.Composable (SQL written in code), not %s"
+                        % type(where).__name__)
+    if order not in orders:
+        raise ValueError("unknown order %r (one of %s)" % (order, ", ".join(sorted(orders))))
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
+        raise ValueError("limit must be a whole number from 1 to %d" % MAX_LIMIT)
+    return sql.SQL(" ").join([sql.SQL(head), sql.SQL("where"), where, sql.SQL("order by " + orders[order]),
+                              sql.SQL("limit {}").format(sql.Literal(limit))])
+
+
+def _true() -> Any:
+    from psycopg import sql
+
+    return sql.SQL("true")
+
+
 def fetch_contact(conn: Any, contact_id: Any) -> dict | None:
     """The full Contact, or None."""
     row = conn.execute(CONTACT_SELECT + " where cs.id = %s", (contact_id,)).fetchone()
     return contact(row) if row else None
 
 
-def fetch_contacts(conn: Any, where: str = "true", params: Any = (), order: str = "cs.id") -> list[dict]:
-    """Full Contacts. `where` / `order` are SQL text written by the CALLER (never user input);
-    values go in `params`."""
-    rows = conn.execute(CONTACT_SELECT + " where " + where + " order by " + order, params).fetchall()
-    return [contact(r) for r in rows]
+def fetch_contacts(conn: Any, where: Any = None, params: Any = (), order: str = "id",
+                   limit: int = DEFAULT_LIMIT) -> list[dict]:
+    """Full Contacts. `where` is a psycopg sql.Composable on contacts_summary as `cs` (None: every
+    row), with its values in `params`; `order` is a CONTACT_ORDERS key."""
+    query = _list_sql(CONTACT_SELECT, _true() if where is None else where, order, CONTACT_ORDERS, limit)
+    return [contact(r) for r in conn.execute(query, params).fetchall()]
 
 
 def fetch_company(conn: Any, company_id: Any) -> dict | None:
@@ -402,12 +434,14 @@ def fetch_interaction(conn: Any, interaction_id: Any) -> dict | None:
     return interaction(row) if row else None
 
 
-def fetch_tasks(conn: Any, where: str = "true", params: Any = (), order: str = "t.id") -> list[dict]:
-    """Tasks with their ContactCompact. `where` / `order` refer to the tasks table as `t` (and
-    may join task_batches as `b`)."""
-    rows = conn.execute(
-        "select t.* from tasks t join task_batches b on b.id = t.batch_id where " + where
-        + " order by " + order, params).fetchall()
+def fetch_tasks(conn: Any, where: Any = None, params: Any = (), order: str = "id",
+                limit: int = DEFAULT_LIMIT) -> list[dict]:
+    """Tasks with their ContactCompact. `where` is a psycopg sql.Composable on the tasks table as `t`
+    and task_batches as `b` (None: every row), with its values in `params`; `order` is a
+    TASK_ORDERS key."""
+    query = _list_sql("select t.* from tasks t join task_batches b on b.id = t.batch_id",
+                      _true() if where is None else where, order, TASK_ORDERS, limit)
+    rows = conn.execute(query, params).fetchall()
     if not rows:
         return []
     ids = sorted({r["contact_id"] for r in rows})

@@ -8,7 +8,7 @@
 -- security on the tables it joins still applies).
 set local search_path = bd, pg_catalog;
 
--- 001: the BD CRM's data model (docs/build-plan.md "Data model (001)", docs/api-contract.md).
+-- 001: the BD CRM's data model (docs/bd/api-contract.md).
 --
 -- Conventions
 --   * ids are bigint identity columns ("by default", so the fictional seed can keep the mock's ids;
@@ -334,7 +334,7 @@ create table imports (
 );
 
 -- ── contacts_summary: the Contact object, with every derived field ─────────────────────────────
--- Mirrors BDCore.deriveContact (frontend/js/bd-core.js) exactly:
+-- Mirrors BDCore.deriveContact (frontend/bd/js/bd-core.js) exactly:
 --   * only interactions whose Central date is on or before bd_today() count;
 --   * last_live_at        latest touch (counts_as_touch)
 --   * last_attempt_at     latest call or voicemail, any outcome

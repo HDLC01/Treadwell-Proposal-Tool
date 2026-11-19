@@ -61,8 +61,18 @@ def stopped_url(password: str = "x") -> str:
     return "postgresql://bd_test_app:%s@127.0.0.1:%d/bd_test_stopped" % (password, closed_port())
 
 
+@pytest.fixture
+def pools_made(monkeypatch):
+    """Every ConnectionPool BD creates while the test runs (none is opened: the spy stands in)."""
+    import psycopg_pool
+
+    made = []
+    monkeypatch.setattr(psycopg_pool, "ConnectionPool", lambda *a, **kw: made.append(kw))
+    return made
+
+
 # ── no database needed ─────────────────────────────────────────────────────────────────────────
-def test_nothing_is_created_without_bd_database_url(monkeypatch):
+def test_nothing_is_created_without_bd_database_url(monkeypatch, pools_made):
     monkeypatch.setattr(config, "BD_DATABASE_URL", "")
     previous = dbmod.configure(None)
     try:
@@ -72,7 +82,7 @@ def test_nothing_is_created_without_bd_database_url(monkeypatch):
         with pytest.raises(dbmod.NotConfigured):
             with dbmod.connect():
                 pass
-        assert dbmod._pool is None
+        assert pools_made == []
         assert issubclass(dbmod.NotConfigured, dbmod.Unavailable)
     finally:
         dbmod.configure(previous)
@@ -82,8 +92,9 @@ def test_importing_the_module_opens_no_pool():
     import subprocess
     import sys
 
-    code = ("import os; os.environ['BD_DATABASE_URL'] = 'postgresql://u:p@127.0.0.1:1/bd_test_x';"
-            "from bd import db; assert db._pool is None; print('ok')")
+    code = ("import os, sys; os.environ['BD_DATABASE_URL'] = 'postgresql://u:p@127.0.0.1:1/bd_test_x';"
+            "from bd import db; assert db.is_configured();"
+            "assert 'psycopg_pool' not in sys.modules and 'psycopg' not in sys.modules; print('ok')")
     res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          cwd=str(_bd_db.BACKEND), timeout=60)
     assert res.returncode == 0 and res.stdout.strip() == "ok", res.stderr
@@ -103,13 +114,27 @@ def test_is_test_database(url, want):
     assert dbmod.is_test_database(url) is want
 
 
-def test_under_pytest_the_pool_refuses_a_database_that_is_not_a_test_one(monkeypatch):
+def test_under_pytest_the_pool_refuses_a_database_that_is_not_a_test_one(monkeypatch, pools_made):
     url = "postgresql://bd_app:%s@127.0.0.1:%d/treadwell" % (SECRET, closed_port())
     with pool_on(url, monkeypatch):
         with pytest.raises(dbmod.RefusedDatabase) as err:
             dbmod.get_pool()
-        assert dbmod._pool is None
+        assert pools_made == []
     assert SECRET not in str(err.value) and "treadwell" not in str(err.value)
+
+
+@pytest.mark.parametrize("bad", ["password=%s dbname" % SECRET,
+                                 "host='127.0.0.1 password=%s" % SECRET,
+                                 "postgresql://u:%s@127.0.0.1:5432/bd_test_x?nosuchoption=1" % SECRET])
+def test_a_malformed_bd_database_url_is_refused_before_use_and_never_logged(monkeypatch, caplog, pools_made, bad):
+    caplog.set_level(logging.DEBUG)
+    with pool_on(bad, monkeypatch):
+        with pytest.raises(dbmod.NotConfigured) as err:
+            with dbmod.connect():
+                pass
+    assert pools_made == []
+    assert SECRET not in str(err.value) and SECRET not in caplog.text
+    assert err.value.__cause__ is None and err.value.__context__ is None   # no libpq error rides along
 
 
 def test_the_pool_settings(monkeypatch):
@@ -167,12 +192,57 @@ def test_at_most_eight_bd_requests_hold_a_slot_and_the_ninth_is_refused_at_once(
         pass
 
 
+def test_no_bd_code_is_async():
+    """The request slot is per thread and psycopg blocks: a BD route must be a plain `def`, which
+    FastAPI runs in its threadpool. An `async def` would share the event loop's one thread with
+    every other request (nested slots skipping the bulkhead, the whole tool stalled on a query)."""
+    import ast
+
+    found = []
+    for path in sorted((_bd_db.BACKEND / "bd").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found += ["%s:%d %s" % (path.name, n.lineno, n.name) for n in ast.walk(tree)
+                  if isinstance(n, ast.AsyncFunctionDef)]
+    assert found == []
+
+
 def test_a_slot_is_reentrant_on_one_thread():
-    """A request that holds a slot and then checks out a connection takes ONE slot, not two."""
+    """A request that holds a slot and then checks out a connection takes ONE slot, not two: with a
+    nested slot held here, every other slot can still be taken on other threads, and only then is
+    the next request Busy."""
+    others = dbmod.MAX_CONCURRENT - 1
+    held, release = threading.Barrier(others + 1), threading.Event()
+    refused = []
+
+    def hold():
+        with dbmod.request_slot():
+            held.wait(timeout=10)
+            release.wait(timeout=10)
+
+    def one_more():
+        try:
+            with dbmod.request_slot():
+                pass
+        except dbmod.Busy:
+            refused.append(True)
+
     with dbmod.request_slot():
         with dbmod.request_slot():
-            assert dbmod._slots_in_use() == 1
-    assert dbmod._slots_in_use() == 0
+            threads = [threading.Thread(target=hold) for _ in range(others)]
+            for t in threads:
+                t.start()
+            try:
+                held.wait(timeout=10)            # every other slot was free for the taking
+                late = threading.Thread(target=one_more)
+                late.start()
+                late.join(timeout=10)
+                assert refused == [True]
+            finally:
+                release.set()
+                for t in threads:
+                    t.join(timeout=10)
+    # The nested exit gave back exactly one slot: all of them can be held again at once.
+    test_at_most_eight_bd_requests_hold_a_slot_and_the_ninth_is_refused_at_once()
 
 
 # ── on the BD test database ────────────────────────────────────────────────────────────────────
@@ -280,6 +350,58 @@ def test_a_database_that_refuses_the_login_also_fails_fast(bd_db_url, monkeypatc
                 pass
         assert time.monotonic() - started < 4.5
     assert SECRET not in str(err.value) and SECRET not in caplog.text
+
+
+def test_every_checkout_bounds_its_queries_lock_waits_and_idle_transactions(bd_db_url):
+    with dbmod.connect() as conn:
+        row = conn.execute(
+            "select current_setting('statement_timeout') as st, current_setting('lock_timeout') as lt,"
+            " current_setting('idle_in_transaction_session_timeout') as it").fetchone()
+    for key, limit in (("st", dbmod.STATEMENT_TIMEOUT_MS), ("lt", dbmod.LOCK_TIMEOUT_MS),
+                       ("it", dbmod.IDLE_IN_TRANSACTION_TIMEOUT_MS)):
+        assert row[key] not in ("0", ""), key                 # 0 means wait forever
+        assert row[key] in ("%dms" % limit, "%ds" % (limit // 1000), "%dmin" % (limit // 60000)), (key, row[key])
+    assert 0 < dbmod.LOCK_TIMEOUT_MS <= dbmod.STATEMENT_TIMEOUT_MS <= 60_000
+
+
+def test_a_query_that_runs_too_long_is_unavailable_and_the_slot_comes_back(bd_db_url, monkeypatch):
+    monkeypatch.setattr(dbmod, "STATEMENT_TIMEOUT_MS", 200)
+    started = time.monotonic()
+    with pytest.raises(dbmod.Unavailable):
+        with dbmod.connect() as conn:
+            conn.execute("select pg_sleep(5)")
+    assert time.monotonic() - started < 3
+    with dbmod.connect() as conn:                       # the pool and the slot are fine
+        assert conn.execute("select 1 as ok").fetchone()["ok"] == 1
+
+
+def test_a_lock_wait_that_runs_too_long_is_unavailable(bd_db_url, monkeypatch):
+    monkeypatch.setattr(dbmod, "LOCK_TIMEOUT_MS", 200)
+    with _bd_db.connect(_bd_db.app_login_url(bd_db_url), autocommit=False) as holder:
+        holder.execute("select pg_advisory_xact_lock(805)")
+        started = time.monotonic()
+        with pytest.raises(dbmod.Unavailable):
+            with dbmod.connect() as conn:
+                conn.execute("select pg_advisory_xact_lock(805)")
+        assert time.monotonic() - started < 3
+        holder.rollback()
+
+
+def test_a_connection_lost_mid_request_is_unavailable_and_the_next_checkout_works(bd_db_url):
+    with pytest.raises(dbmod.Unavailable) as err:
+        with dbmod.connect() as conn:
+            conn.execute("select pg_terminate_backend(pg_backend_pid())")
+    assert err.value.__suppress_context__
+    with dbmod.connect() as conn:
+        assert conn.execute("select 1 as ok").fetchone()["ok"] == 1
+
+
+def test_a_callers_own_database_error_is_not_turned_into_unavailable(bd_db_url):
+    import psycopg
+
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        with dbmod.connect() as conn:
+            conn.execute("select * from no_such_table_805")
 
 
 def test_direct_gives_a_plain_connection_with_the_same_session(bd_db_url, monkeypatch):

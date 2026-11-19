@@ -2,7 +2,8 @@
 
     python -m bd.migrate                 # asks for the ADMIN database URL (typed, never stored)
     python -m bd.migrate --status        # list applied / pending, change nothing
-    python -m bd.migrate --url URL       # the URL on the command line instead (tests, local dev)
+    python -m bd.migrate --url URL       # the URL on the command line instead: a database on THIS
+                                         # machine only (tests, local dev); refused for any other
 
     migrate.migrate(url) -> [names applied]
     migrate.ledger_behind(conn) -> bool      # the routes' "database not up to date" check
@@ -148,6 +149,14 @@ def main(argv=None) -> int:
     ap.add_argument("--status", action="store_true", help="list applied and pending, change nothing")
     ap.add_argument("--url", help="the ADMIN database URL (default: asked for, never echoed or stored)")
     args = ap.parse_args(argv)
+    if args.url:
+        from . import db
+
+        if not db.is_local_url(args.url):
+            print("refusing: --url is only for a database on this machine (tests, local dev), because "
+                  "it puts the password in shell history. Leave it out and type the URL when asked.",
+                  file=sys.stderr)
+            return 2
     url = args.url or getpass.getpass("Admin database URL (not echoed): ").strip()
     if not url:
         print("no database URL given", file=sys.stderr)

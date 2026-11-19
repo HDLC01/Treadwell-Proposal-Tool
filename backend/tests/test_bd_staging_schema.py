@@ -87,8 +87,19 @@ def test_each_numbered_file_is_applied_only_when_the_ledger_lacks_it():
         at = here
     lock = section.index("pg_advisory_lock(%d)" % migrate.LOCK_KEY)
     assert lock < section.index(migrate.BOOTSTRAP_SQL) < section.index(files[0].name)
-    assert section.index(migrate.grants_sql()) > at                     # grants after every file
-    assert section.rindex("pg_advisory_unlock(%d)" % migrate.LOCK_KEY) > section.index(migrate.grants_sql())
+    assert section.rindex(migrate.grants_sql()) > at                    # grants again after every file
+    assert section.rindex("pg_advisory_unlock(%d)" % migrate.LOCK_KEY) > section.rindex(migrate.grants_sql())
+
+
+def test_each_migration_block_applies_the_grants_in_its_own_transaction():
+    """As the runner does: a file, its ledger row and grants.sql commit together, so no committed
+    state between two statements of the deploy lacks the privilege model."""
+    grants = migrate.grants_sql()
+    for p in migrate.migration_files():
+        block = staging_schema.migration_block(p)
+        record = block.index("insert into bd.schema_migrations (name) values ('%s');" % p.name)
+        assert block.index(grants) > record, p.name
+        assert block.rstrip().endswith("$bd_migration$;"), p.name     # still ONE do block
 
 
 def test_bd_app_is_made_with_a_staging_only_password():
@@ -103,6 +114,52 @@ def test_bd_app_is_made_with_a_staging_only_password():
         path = BACKEND.parent / rel
         if path.exists():
             assert pw not in path.read_text(encoding="utf-8"), rel
+
+
+# ── the staging compose file ─────────────────────────────────────────────────────────────────────
+STAGING_COMPOSE = BACKEND.parent / "docker-compose.staging.yml"
+
+
+def _staging_compose() -> dict:
+    import yaml
+
+    return yaml.safe_load(STAGING_COMPOSE.read_text(encoding="utf-8"))
+
+
+def _env(service: dict) -> dict:
+    env = service.get("environment") or {}
+    if isinstance(env, dict):
+        return {k: str(v) for k, v in env.items()}
+    return dict(str(item).split("=", 1) for item in env)
+
+
+def test_the_staging_app_reaches_bd_as_bd_app_on_the_staging_postgres():
+    """The seed command and the routes run in the staging app container: without BD_DATABASE_URL
+    the seed refuses ("no database") and BD answers 503."""
+    from psycopg import conninfo
+
+    from bd.ops import seed
+
+    url = _env(_staging_compose()["services"]["app"]).get("BD_DATABASE_URL")
+    assert url, "docker-compose.staging.yml gives the app no BD_DATABASE_URL"
+    d = conninfo.conninfo_to_dict(url)
+    assert d.get("user") == "bd_app"                   # never the owner
+    assert (d.get("host"), d.get("dbname")) == (seed.STAGING_HOST, seed.STAGING_DBNAME)
+    assert d.get("password") == staging_schema.STAGING_ONLY_BD_APP_PASSWORD
+    assert seed.allowed_database(url)
+    lines = STAGING_COMPOSE.read_text(encoding="utf-8").splitlines()
+    at = next(i for i, ln in enumerate(lines) if "BD_DATABASE_URL" in ln and "bd_app" in ln)
+    assert any("staging-only" in ln.lower() for ln in lines[max(at - 4, 0):at]), \
+        "say in a comment just above it that the URL is staging-only"
+
+
+def test_staging_postgrest_does_not_serve_schema_bd():
+    """Seam 2 of #802: schema bd is not in staging PostgREST's schemas (service_role, PostgREST's
+    anon role there, bypasses row level security, so the grants alone would not be enough)."""
+    env = _env(_staging_compose()["services"]["postgrest"])
+    schemas = [s.strip() for s in env["PGRST_DB_SCHEMAS"].split(",")]
+    assert "bd" not in schemas
+    assert "bd" not in [s.strip() for s in env.get("PGRST_DB_EXTRA_SEARCH_PATH", "").split(",")]
 
 
 # ── against a real Postgres 16 ───────────────────────────────────────────────────────────────────
@@ -125,6 +182,31 @@ def test_the_staging_file_applies_twice_to_a_bare_postgres_and_the_second_run_ch
     assert [r[0] for r in first["ledger"]] == [p.name for p in migrate.migration_files()]
     assert first["relations"], "nothing was created"
     assert second == first
+
+
+def test_a_committed_migration_block_already_carries_the_privilege_model(bd_admin):
+    """psql commits each statement of the staging file on its own. If the deploy stops after one
+    migration block (a later file or the final grants fail), what is committed must still have row
+    level security on every table and no BD function executable by public."""
+    first = migrate.migration_files()[0]
+    with _bd_db.cluster_lock(bd_admin, exclusive=False):
+        _bd_db.ensure_bd_app(bd_admin)
+        with _bd_db.new_database(bd_admin) as url:
+            with _bd_db.connect(url) as conn:
+                conn.execute(migrate.BOOTSTRAP_SQL)
+                conn.execute(staging_schema.migration_block(first))     # committed on its own
+                tables_without_rls = conn.execute(
+                    "select c.relname from pg_class c where c.relnamespace = 'bd'::regnamespace"
+                    " and c.relkind in ('r', 'p') and not c.relrowsecurity").fetchall()
+                public_functions = conn.execute(
+                    "select p.oid::regprocedure::text from pg_proc p"
+                    " where p.pronamespace = 'bd'::regnamespace"
+                    " and has_function_privilege('public', p.oid, 'execute')").fetchall()
+                has_functions = conn.execute(
+                    "select count(*) from pg_proc where pronamespace = 'bd'::regnamespace").fetchone()[0]
+    assert has_functions, "001 makes functions; the check below would prove nothing"
+    assert tables_without_rls == []
+    assert public_functions == []
 
 
 def test_the_staging_file_gives_the_same_schema_as_the_runner(bd_admin):

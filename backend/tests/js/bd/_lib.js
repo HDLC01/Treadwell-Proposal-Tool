@@ -6,7 +6,7 @@
  * stripper) and the copies have drifted: one matcher counts braces inside strings, one lifter
  * needs the function at a fixed indent, one tag stripper takes a single pass. The v2 estimating
  * program writes many new harnesses, and every one of them lifts pieces of the page it is about
- * to refactor, so the helpers get their own file, their own tests (test_harness_lib_js.py runs
+ * to refactor, so the helpers get their own file, their own tests (test_bd_harness_lib_js.py runs
  * lib-selftest-harness.js), and ONE behaviour.
  *
  * EXISTING HARNESSES ARE NOT RETROFITTED. They are pinned by tests that read them as they are,

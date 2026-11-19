@@ -1,6 +1,6 @@
 """Generated (property) coverage of backend/bd/priority.py, the contact priority score.
 
-tests/test_priority.py pins a hand-built table, 300 random contacts against bd-core.js and the
+tests/test_bd_priority.py pins a hand-built table, 300 random contacts against bd-core.js and the
 database rows. This file adds what a table cannot say: invariants that must hold for EVERY
 contact, found by hypothesis over a generator shaped like the real field vocabulary.
 

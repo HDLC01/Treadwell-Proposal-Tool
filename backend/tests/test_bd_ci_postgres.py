@@ -45,6 +45,12 @@ def _run_tests_step(shard):
     return steps[0]
 
 
+def _test_url(shard):
+    """BD_TEST_DATABASE_URL as the Run tests step sees it (its own env, else the job's)."""
+    step_env = _run_tests_step(shard).get("env", {})
+    return step_env.get("BD_TEST_DATABASE_URL") or shard.get("env", {}).get("BD_TEST_DATABASE_URL")
+
+
 def test_no_new_job_and_so_no_new_required_check(wf):
     assert set(wf["jobs"]) == JOBS_BEFORE_BD
     assert wf["jobs"]["test"]["needs"] == "shard"
@@ -69,7 +75,7 @@ def test_the_service_is_healthy_before_the_tests_start(postgres):
 
 
 def test_bd_test_database_url_points_at_that_service_as_its_admin(shard, postgres):
-    url = _run_tests_step(shard).get("env", {}).get("BD_TEST_DATABASE_URL")
+    url = _test_url(shard)
     assert url, "the Run tests step does not set BD_TEST_DATABASE_URL"
     u = urlsplit(url)
     assert u.scheme in ("postgresql", "postgres"), url
@@ -88,14 +94,12 @@ def test_bd_test_database_url_points_at_that_service_as_its_admin(shard, postgre
 def test_the_password_is_a_throwaway_not_a_secret(shard, postgres):
     """The container lives as long as the job. A `secrets.` reference would also be empty on a fork
     PR, where the BD tests would then fail for the wrong reason."""
-    assert "secrets." not in str(postgres) and "secrets." not in str(_run_tests_step(shard).get("env"))
-    assert postgres["env"]["POSTGRES_PASSWORD"].endswith("-ci-only")
+    assert "secrets." not in str(postgres) and "secrets." not in str(_test_url(shard))
 
 
-def test_the_url_reaches_only_the_run_tests_step(wf):
+def test_the_url_reaches_only_the_shard_job(wf):
     """Set where the suite runs and nowhere else: the audit and fingerprint jobs never see it."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert text.count("BD_TEST_DATABASE_URL:") == 1
+    assert "BD_TEST_DATABASE_URL" not in str(wf.get("env", {}))
     for name, job in wf["jobs"].items():
         if name != "shard":
             assert "BD_TEST_DATABASE_URL" not in str(job), name

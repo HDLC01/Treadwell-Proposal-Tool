@@ -73,10 +73,13 @@ def parse_people(values) -> list:
 
 
 def _tables_with_rows(conn) -> list:
+    from psycopg import sql
+
     tables = [r["t"] for r in conn.execute(
         "select c.relname as t from pg_class c where c.relnamespace = 'bd'::regnamespace"
         " and c.relkind in ('r', 'p') and c.relname <> 'schema_migrations' order by 1").fetchall()]
-    return [t for t in tables if conn.execute("select exists (select 1 from bd.%s) as x" % t).fetchone()["x"]]
+    return [t for t in tables if conn.execute(
+        sql.SQL("select exists (select 1 from {}) as x").format(sql.Identifier("bd", t))).fetchone()["x"]]
 
 
 def main(argv=None) -> int:

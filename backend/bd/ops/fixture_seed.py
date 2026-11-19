@@ -214,16 +214,30 @@ FIXTURE: dict[str, list[dict[str, Any]]] = {
 }
 
 
-# One round trip: DELETE every table, then restart every id at 1.
-_RESET_SQL = "; ".join(["delete from bd." + t for t in APP_TABLES]
-                       + ["select setval(pg_get_serial_sequence('bd.%s', 'id'), 1, false)" % t
-                          for t in IDENTITY_TABLES])
+# Table and column names go into SQL as psycopg identifiers, never by string formatting (db.py's
+# rule), even though they come from the constants above.
+def _table(table: str) -> Any:
+    from psycopg import sql
+
+    return sql.Identifier("bd", table)
+
+
+def _sequence_of(conn: Any, table: str) -> Any:
+    """pg_get_serial_sequence's first argument: the quoted table name, as a string literal."""
+    from psycopg import sql
+
+    return sql.Literal(_table(table).as_string(conn))
 
 
 def reset_data(conn: Any) -> None:
-    """Empty every BD table and restart its ids at 1 (bd.schema_migrations is kept). Tests only:
-    the seed command never deletes anything."""
-    conn.execute(_RESET_SQL)
+    """Empty every BD table and restart its ids at 1 (bd.schema_migrations is kept), in one round
+    trip. Tests only: the seed command never deletes anything."""
+    from psycopg import sql
+
+    conn.execute(sql.SQL("; ").join(
+        [sql.SQL("delete from {}").format(_table(t)) for t in APP_TABLES]
+        + [sql.SQL("select setval(pg_get_serial_sequence({}, 'id'), 1, false)").format(_sequence_of(conn, t))
+           for t in IDENTITY_TABLES]))
 
 
 def _value(column: str, value: Any) -> Any:
@@ -242,6 +256,8 @@ def seed(conn: Any, people: Any = ()) -> dict:
 
 
 def _seed(conn: Any, people: list) -> dict:
+    from psycopg import sql
+
     from ..normalize import normalize_company
 
     rows_by_table = {t: [dict(r) for r in rows] for t, rows in FIXTURE.items()}
@@ -255,8 +271,9 @@ def _seed(conn: Any, people: list) -> dict:
         for table, rows in rows_by_table.items():
             for row in rows:
                 cols = list(row)
-                cur.execute("insert into bd.%s (%s) values (%s)" % (
-                    table, ", ".join(cols), ", ".join(["%s"] * len(cols))),
+                cur.execute(sql.SQL("insert into {} ({}) values ({})").format(
+                    _table(table), sql.SQL(", ").join(map(sql.Identifier, cols)),
+                    sql.SQL(", ").join(sql.Placeholder() * len(cols))),
                     [_value(c, row[c]) for c in cols])
         for dup, reason, cid in duplicates:
             cur.execute("update bd.contacts set duplicate_of = %s, duplicate_reason = %s where id = %s",
@@ -266,7 +283,8 @@ def _seed(conn: Any, people: list) -> dict:
         for email, name, role in people:
             cur.execute("insert into bd.users (email, name, role, active) values (%s, %s, %s, true)",
                         (email, name, role))
-        cur.execute("select " + ", ".join("(select count(*) from bd.%s) as %s" % (t, t) for t in FIXTURE))
+        cur.execute(sql.SQL("select ") + sql.SQL(", ").join(
+            sql.SQL("(select count(*) from {}) as {}").format(_table(t), sql.Identifier(t)) for t in FIXTURE))
         counts = cur.fetchone()
     values = [counts[t] for t in FIXTURE] if isinstance(counts, dict) else list(counts)
     return dict(zip(FIXTURE, values))
@@ -274,9 +292,11 @@ def _seed(conn: Any, people: list) -> dict:
 
 def bump_sequence(conn: Any, table: str) -> None:
     """Make `table`'s id identity continue after its highest id."""
+    from psycopg import sql
+
     if table not in IDENTITY_TABLES:
         raise ValueError("not an identity table: %r" % table)
-    conn.execute(
-        "select setval(pg_get_serial_sequence('bd.%s', 'id'),"
-        " greatest((select coalesce(max(id), 0) from bd.%s), 1),"
-        " (select count(*) > 0 from bd.%s))" % (table, table, table))
+    conn.execute(sql.SQL(
+        "select setval(pg_get_serial_sequence({seq}, 'id'),"
+        " greatest((select coalesce(max(id), 0) from {t}), 1),"
+        " (select count(*) > 0 from {t}))").format(seq=_sequence_of(conn, table), t=_table(table)))

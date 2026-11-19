@@ -9,16 +9,9 @@ import tempfile
 import pytest
 
 from _node import last_json_line, run_node
+from _bd_pages import SHARED_JS, needs_bd_page_helpers
 from bd.normalize import clean_name, email_key, normalize_company
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-# BD's page helpers file (BD's shared.js, which holds normalizeCompany, e164 and fmtPhone) moves
-# with the BD pages in a later ticket of #802. Until it does, the frontend half of this parity
-# check has no file to run. The ticket that moves it points SHARED_JS at the moved file and
-# deletes BD_PAGE_HELPERS_NOT_MOVED.
-SHARED_JS = ROOT / "frontend" / "bd" / "js" / "shared.js"
-BD_PAGE_HELPERS_NOT_MOVED = pytest.mark.skip(
-    reason="BD's page helpers (shared.js) move with the BD pages in a later ticket of #802")
 
 CASES = [
     (" Kestrelwood Gear Co. ", "kestrelwood gear"),
@@ -51,7 +44,7 @@ def test_normalize_company(raw, want):
     assert normalize_company(raw) == want
 
 
-@BD_PAGE_HELPERS_NOT_MOVED
+@needs_bd_page_helpers
 def test_python_and_the_frontend_agree():
     raws = [raw for raw, _ in CASES]
     script = """

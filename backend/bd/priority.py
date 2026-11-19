@@ -29,7 +29,7 @@ exactly as scoreContact does (a fact with the same name as a field replaces it):
                             writes it), so weekly.py sends no such fact; a later source of quote
                             activity would send it here instead of changing the rules.
 
-THE FACTORS (docs/build-plan.md "Phase 3"; the order below is the order points are added, which
+THE FACTORS (BD's Phase 3 rules; the order below is the order points are added, which
 breaks ties between reasons of equal points):
     never had a live talk     +40  "Never contacted" / "Never reached after N tries"
     cadence                   min(40, round(30 x days_since_live / interval)), interval = 120
