@@ -12,6 +12,11 @@ import supabase_client
 
 import _memo
 
+# The BD CRM's own test setup (tests/_bd_conftest.py): its markers, its hypothesis profiles and,
+# from the database stage of #805 on, its Postgres fixtures. Kept in its own module so the BD
+# fixtures never mix with the proposal tool's.
+pytest_plugins = ["_bd_conftest"]
+
 # One REAL fill_estimate per distinct input, per process (see tests/_memo.py for what that does and
 # does not mean). Installed at import so the /api/generate route and every direct caller share it.
 _memo.install_fill_memo()

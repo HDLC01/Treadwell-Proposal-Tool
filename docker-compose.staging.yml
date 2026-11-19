@@ -52,6 +52,10 @@ services:
       # daily Raken allowance, and would fire in the same window as prod. QA it
       # with "Refresh now" on Project Analytics (the same step).
       - PVA_REFRESH_ENABLED=off
+      # The BD CRM's database (#805): the bd_app login on this compose's own Postgres
+      # (schema bd, made by backend/staging/schema_pg.sql). STAGING-ONLY password, never
+      # reused anywhere else; prod's BD_DATABASE_URL lives only in the prod env file.
+      - BD_DATABASE_URL=postgresql://bd_app:staging_only_bd_app_pw@db:5432/treadwell
     env_file:
       - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
     volumes:

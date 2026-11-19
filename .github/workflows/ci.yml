@@ -140,6 +140,33 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # THE BD CRM'S DATABASE TESTS (#805) need a real Postgres 16. Their fixtures
+    # (backend/tests/_bd_conftest.py) make a throwaway database per xdist worker on this server
+    # from BD_TEST_DATABASE_URL (an ADMIN url, set on the Run tests step below), migrate it with
+    # BD's runner, connect the app as a login holding only bd_app's rights, and drop it at the
+    # end. They FAIL on CI when the variable is missing, so the BD tests can never skip themselves
+    # green. Every shard starts it: harmless where no BD file landed, and one definition for all.
+    # On the job that already runs the suite, so no new check for branch protection to require
+    # (backend/tests/test_bd_ci_postgres.py checks both).
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab # 16.15, BD's own CI pin
+        env:
+          # NOT `bd`: the default search_path is "$user", public, so an admin named bd would
+          # create its unqualified objects inside schema bd (test_bd_ci_postgres.py).
+          POSTGRES_USER: postgres
+          # Services cannot read the `env` context, so this is repeated in BD_TEST_DATABASE_URL
+          # below; the two must agree. A throwaway for a container that lives as long as the
+          # job, not a secret.
+          POSTGRES_PASSWORD: bd-ci-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5439:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: backend
@@ -217,6 +244,9 @@ jobs:
           # the job — which is the designed outcome, but the job is meant to be GREEN and
           # actually comparing, not red.
           TW_PORTAL_REPO: ${{ github.workspace }}/portal
+          # The Postgres service above, as its superuser: the BD fixtures create and drop their
+          # own bd_test_* databases on it (#805).
+          BD_TEST_DATABASE_URL: postgresql://postgres:bd-ci-only@localhost:5439/postgres
         run: python -m pytest $(python ../.github/scripts/shard_tests.py ${{ matrix.group }} ${{ matrix.shard }} ${{ matrix.total }} tests) -q -n auto --dist ${{ matrix.dist }}
 
   # THE REQUIRED CHECK. Branch protection requires a check named `test`; the shards above have

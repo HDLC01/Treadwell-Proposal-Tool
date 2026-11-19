@@ -45,6 +45,21 @@ def test_the_shards_cover_every_test_file_exactly_once(mod, matrix):
     assert sorted(seen) == names
 
 
+def test_every_bd_test_file_lands_in_exactly_one_shard(mod, matrix):
+    """The BD CRM's tests (#805) sit flat in this folder as test_bd_*.py, because the script only
+    looks at the top level: a BD file in a sub-folder would run in no shard. Named on its own so a
+    BD file that fell out of the shards is reported as one, not as a diff of the whole suite."""
+    bd = [n for n in _names() if n.startswith("test_bd_")]
+    assert len(bd) >= 16, bd   # the files #805 moved here; fewer means the glob looks elsewhere
+    assert not list(TESTS.glob("*/test_bd_*.py")), "a BD test file in a sub-folder runs in no shard"
+    landed = {}
+    for group, shard, total, _ in matrix:
+        for n in mod.shard_files(_names(), group, shard, total):
+            if n.startswith("test_bd_"):
+                landed.setdefault(n, []).append((group, shard))
+    assert {n: len(v) for n, v in landed.items()} == {n: 1 for n in bd}, landed
+
+
 def test_each_group_lists_every_one_of_its_shards_once(matrix):
     for group in {g for g, _, _, _ in matrix}:
         rows = [(s, t) for g, s, t, _ in matrix if g == group]
