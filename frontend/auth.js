@@ -250,7 +250,10 @@
     // point of Hanz choosing real blocking: the server refuses this tab's own routes too, so a
     // present-but-hidden link would be a link to a page that says no.
     if (RENDER_DENY.indexOf(href) !== -1) return "";
-    const active = location.pathname.toLowerCase().endsWith(href.toLowerCase()) || alsoActive(href);
+    // THE WHOLE PATH, NOT ITS END (#804). Every page used to sit at the root, so "ends with the href"
+    // and "is the href" were the same test. The BD CRM lives under /bd/ with its own admin.html and
+    // analytics.html, and an ends-with match lit the tool's Admin and Analytics rows there.
+    const active = location.pathname.toLowerCase() === href.toLowerCase() || alsoActive(href);
     // `tag` marks a page as not-yet-finished. Optional so the other twelve callers are
     // untouched, and rendered as a chip rather than folded into the label so it reads as a
     // status on the page rather than part of its name.
@@ -267,7 +270,7 @@
   function alsoActive(href) {
     const ALSO_ACTIVE_ON = { "/v2-board.html": ["/polish-intake.html", "/polish-estimate.html"] };
     const here = location.pathname.toLowerCase();
-    return (ALSO_ACTIVE_ON[href] || []).some((p) => here.endsWith(p));
+    return (ALSO_ACTIVE_ON[href] || []).some((p) => here === p);
   }
 
   // Every role this app has, least privileged first. profiles.py stores exactly one of these

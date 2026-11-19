@@ -12,10 +12,10 @@
  *
  *   * `const path = location.pathname.toLowerCase()` at the top of its IIFE,
  *   * `DENIED_PAGES[path] || DENIED_PAGES[location.pathname]`, the per-role page refusal,
- *   * `location.pathname.toLowerCase().endsWith(href.toLowerCase())` in navItem(), which is
+ *   * `location.pathname.toLowerCase() === href.toLowerCase()` in navItem(), which is
  *     what highlights the row you are standing on in the sidebar.
  *
- * The third is the dangerous one, because it fails SILENTLY: "/" does not end with
+ * The third is the dangerous one, because it fails SILENTLY: "/" is not
  * "/portal.html", so the Active Projects row would simply stop lighting up. No error, no blank
  * page, nothing to investigate — the kind of regression that ships and lives for months.
  *

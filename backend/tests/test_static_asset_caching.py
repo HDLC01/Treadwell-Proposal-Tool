@@ -38,6 +38,8 @@ from fastapi.testclient import TestClient
 
 import main
 
+from _frontend_tree import pages, write_tree
+
 client = TestClient(main.app)
 
 # The shared boot chain (every page loads these), plus a page and the stylesheet. done.html is
@@ -166,10 +168,22 @@ def test_the_assets_under_test_are_the_ones_the_pages_load():
     names. Tie it to the HTML: each one has to be referenced by a real page, or this module is
     measuring the cache policy on files nobody downloads."""
     frontend = pathlib.Path(main.FRONTEND_DIR)
-    pages = "\n".join(p.read_text(encoding="utf-8", errors="replace")
-                      for p in frontend.glob("*.html"))
+    text = all_page_text(frontend)
     for asset in BOOT_ASSETS:
         if asset.endswith(".html"):
             assert (frontend / asset.lstrip("/")).exists(), "%s no longer exists" % asset
             continue
-        assert '"%s"' % asset in pages, "no page loads %s any more" % asset
+        assert '"%s"' % asset in text, "no page loads %s any more" % asset
+
+
+def all_page_text(frontend):
+    """Every page under `frontend`, in every sub-folder (#804), as one string."""
+    return "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in pages(frontend))
+
+
+def test_the_page_text_includes_pages_in_sub_folders(tmp_path):
+    """#804: the BD CRM's pages live under /bd/, and an asset only a page there loads is still loaded."""
+    write_tree(tmp_path, {"index.html": "<p>root</p>",
+                          "bd/index.html": '<script src="/bd/js/bd.js"></script>'})
+    text = all_page_text(tmp_path)
+    assert '"/bd/js/bd.js"' in text and "<p>root</p>" in text
