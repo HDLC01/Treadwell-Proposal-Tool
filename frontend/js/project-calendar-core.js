@@ -387,13 +387,15 @@
   // ── the Work type and Foreman filters (#819) ──
   // plan_vs_actual.py's work_type_filter, foreman_filter and visible_projects are the same rule on
   // the server (the Excel download); tests/test_plan_vs_actual_xlsx.py runs both on the same input.
-  // The value "No foreman" stands for in the Foreman select and the address. No Foreman is written
-  // so on the calendar.
+  // The value "No foreman" stands for in the Foreman select and the address. No Foreman can be
+  // written so on the calendar: a Foreman is the inside of a title's last parenthesis and starts
+  // with a letter (project_calendar._NAME_RE).
   var FOREMAN_NONE = "(none)";
   var NO_FOREMAN_LABEL = "No foreman";
 
-  /** A Foreman (or a filter value) as compared: trimmed, case ignored. "" for none. */
-  function foremanKey(v) {
+  /** A Foreman, a Work type or a filter value as compared: trimmed, case ignored. "" for none.
+   *  plan_vs_actual._key is the same. */
+  function filterKey(v) {
     return String(v == null ? "" : v).trim().toLowerCase();
   }
 
@@ -403,13 +405,13 @@
    *  ignored; an empty value is no filter. */
   function filterByFields(projects, filters) {
     var f = filters && typeof filters === "object" ? filters : {};
-    var wt = foremanKey(f.work_type);
-    var fm = foremanKey(f.foreman);
+    var wt = filterKey(f.work_type);
+    var fm = filterKey(f.foreman);
     return (Array.isArray(projects) ? projects : []).filter(function (p) {
       if (!p || typeof p !== "object") return false;
-      if (wt && workTypeOf(p).trim().toLowerCase() !== wt) return false;
-      if (fm === FOREMAN_NONE) return !foremanKey(p.foreman);
-      return !fm || foremanKey(p.foreman) === fm;
+      if (wt && filterKey(workTypeOf(p)) !== wt) return false;
+      if (fm === FOREMAN_NONE) return !filterKey(p.foreman);
+      return !fm || filterKey(p.foreman) === fm;
     });
   }
 
@@ -453,7 +455,7 @@
 
   /** The option `value` stands for, in the option's own spelling, or "" when no option is it. */
   function pickOption(options, value) {
-    var k = foremanKey(String(value == null ? "" : value).slice(0, SEARCH_MAX));
+    var k = filterKey(String(value == null ? "" : value).slice(0, SEARCH_MAX));
     if (!k) return "";
     for (var i = 0; i < options.length; i++) {
       if (options[i].value.toLowerCase() === k) return options[i].value;
@@ -690,7 +692,7 @@
       var items = [];
       if (f.work_type) items.push(String(f.work_type));
       if (f.foreman) {
-        items.push(foremanKey(f.foreman) === FOREMAN_NONE ? NO_FOREMAN_LABEL
+        items.push(filterKey(f.foreman) === FOREMAN_NONE ? NO_FOREMAN_LABEL
           : "Foreman " + String(f.foreman).trim());
       }
       if (label) items.push(label);
@@ -704,6 +706,11 @@
 
   // ── the Excel download (#785) ──
   var DOWNLOAD_PATH = "/api/project-analytics/export.xlsx";
+  // The search and the three filters, in the order the download's and the address's query strings
+  // name them. VIEW_KEYS add the page and the page size: the address's own keys (#819). Every other
+  // key in the address belongs to someone else (Connect Raken's raken_code and raken_state, #781).
+  var FILTER_KEYS = ["q", "status", "work_type", "foreman"];
+  var VIEW_KEYS = FILTER_KEYS.concat(["page", "per"]);
 
   /** The download's address: the list as it is filtered on screen, the pressed count (`status`,
    *  one of the four counts), the search text (`q`) and the Work type and Foreman filters
@@ -716,9 +723,11 @@
     if (status && SUMMARY_COUNTS.indexOf(status) >= 0) {
       parts.push("status=" + encodeURIComponent(status));
     }
-    [["q", q], ["work_type", f.work_type], ["foreman", f.foreman]].forEach(function (kv) {
-      var text = String(kv[1] == null ? "" : kv[1]).slice(0, SEARCH_MAX);
-      if (text.trim()) parts.push(kv[0] + "=" + encodeURIComponent(text));
+    var given = { q: q, work_type: f.work_type, foreman: f.foreman };
+    FILTER_KEYS.forEach(function (k) {
+      if (k === "status") return;      // first, above: one of the four counts or nothing
+      var text = String(given[k] == null ? "" : given[k]).slice(0, SEARCH_MAX);
+      if (text.trim()) parts.push(k + "=" + encodeURIComponent(text));
     });
     return DOWNLOAD_PATH + (parts.length ? "?" + parts.join("&") : "");
   }
@@ -798,9 +807,9 @@
    *  Unknown keys are ignored, a repeated key's first value is read, junk is the default. */
   function readView(search) {
     var params = new URLSearchParams(String(search == null ? "" : search));
-    var get = function (k) { var x = params.get(k); return x == null ? undefined : x; };
-    return cleanView({ q: get("q"), status: get("status"), work_type: get("work_type"),
-      foreman: get("foreman"), page: get("page"), per: get("per") });
+    var raw = {};
+    VIEW_KEYS.forEach(function (k) { var x = params.get(k); if (x != null) raw[k] = x; });
+    return cleanView(raw);
   }
 
   /** The query string for `view` ("" for the default view), defaults left out, so a plain list
@@ -808,7 +817,7 @@
   function viewQuery(view) {
     var v = cleanView(view);
     var parts = [];
-    ["q", "status", "work_type", "foreman"].forEach(function (k) {
+    FILTER_KEYS.forEach(function (k) {
       if (v[k].trim()) parts.push(k + "=" + encodeURIComponent(v[k]));
     });
     if (v.page !== 1) parts.push("page=" + v.page);
@@ -816,12 +825,29 @@
     return parts.length ? "?" + parts.join("&") : "";
   }
 
+  /** The query string for the address `search` with `view` written into it: the view's own keys
+   *  (VIEW_KEYS) replaced by viewQuery's, every other key kept as it was written, after them. The
+   *  page writes the view with this, so another script's keys (Connect Raken's sign-in coming back
+   *  to this page) are still in the address when that script reads them. */
+  function addressSearch(search, view) {
+    var own = viewQuery(view);
+    var kept = String(search == null ? "" : search).replace(/^\?/, "").split("&")
+      .filter(function (piece) {
+        if (!piece) return false;
+        var key = piece.split("=")[0];
+        try { key = decodeURIComponent(key.replace(/\+/g, " ")); } catch (e) { /* as written */ }
+        return VIEW_KEYS.indexOf(key) < 0;
+      });
+    if (!kept.length) return own;
+    return (own ? own + "&" : "?") + kept.join("&");
+  }
+
   /** The view after `patch`: a change to the search, a filter or the page size goes back to page
    *  1, so the list never sits on a page that no longer exists. `view` itself is not changed. */
   function nextView(view, patch) {
     var cur = cleanView(view);
     var next = cleanView(Object.assign({}, cur, patch || {}));
-    var moved = ["q", "status", "work_type", "foreman", "per"].some(function (k) {
+    var moved = FILTER_KEYS.concat(["per"]).some(function (k) {
       return next[k] !== cur[k];
     });
     if (moved) next.page = 1;
@@ -836,16 +862,21 @@
   /** Whether the search or any filter is set in `view` (Clear filters is shown then). */
   function filtersActive(view) {
     var v = cleanView(view);
-    return !!(v.q.trim() || v.status || v.work_type.trim() || v.foreman.trim());
+    return FILTER_KEYS.some(function (k) { return !!v[k].trim(); });
   }
 
   /** The view once a list has loaded: a Work type or Foreman the selects do not offer is dropped,
-   *  one they offer in another spelling takes theirs. Nothing is dropped before a job is listed. */
+   *  one they offer in another spelling takes theirs, and a Status is dropped while the counts are
+   *  not known (it filters nothing then, statusFilter). Dropping one is a filter change, so the
+   *  view goes back to page 1; a new spelling is not. Nothing is dropped before a job is listed. */
   function settleView(view, data) {
     var v = cleanView(view);
     if (!data || !Array.isArray(data.projects) || !data.projects.length) return v;
-    v.work_type = workTypeFilter(data, v.work_type);
-    v.foreman = foremanFilter(data, v.foreman);
+    var settled = { status: statusFilter(data, v.status),
+      work_type: workTypeFilter(data, v.work_type), foreman: foremanFilter(data, v.foreman) };
+    var dropped = Object.keys(settled).some(function (k) { return v[k].trim() && !settled[k]; });
+    Object.assign(v, settled);
+    if (dropped) v.page = 1;
     return v;
   }
 
@@ -1257,7 +1288,8 @@
     FOREMAN_NONE: FOREMAN_NONE, filterByFields: filterByFields, workTypeOptions: workTypeOptions,
     foremanOptions: foremanOptions, workTypeFilter: workTypeFilter, foremanFilter: foremanFilter,
     PAGE_SIZES: PAGE_SIZES, PAGE_SIZE: PAGE_SIZE, pageModel: pageModel, pageSlice: pageSlice,
-    readView: readView, viewQuery: viewQuery, nextView: nextView, clearedView: clearedView,
+    readView: readView, viewQuery: viewQuery, addressSearch: addressSearch, nextView: nextView,
+    clearedView: clearedView,
     filtersActive: filtersActive, settleView: settleView, viewFilters: viewFilters,
     filterOptions: filterOptions,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,

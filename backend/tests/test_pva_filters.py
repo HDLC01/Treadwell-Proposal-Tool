@@ -294,10 +294,52 @@ def test_a_loaded_list_settles_the_views_filters_to_what_it_offers():
               ' P.settleView(v({work_type: "Combo", foreman: "Juan", status: "behind"}), DATA),'
               ' P.settleView(v({work_type: "Combo", foreman: "Juan"}), {projects: []}),'
               ' P.settleView(v({work_type: "Combo"}), null)])')
-    assert got[0] == dict(DEFAULT, work_type="Polish", foreman="Pat", page=3)
+    assert got[0] == dict(DEFAULT, work_type="Polish", foreman="Pat", page=3), \
+        "another spelling of an offered value is the same filter: the page stays"
     assert got[1] == dict(DEFAULT, status="behind")
     assert got[2] == dict(DEFAULT, work_type="Combo", foreman="Juan")
     assert got[3] == dict(DEFAULT, work_type="Combo")
+
+
+def test_a_dropped_filter_goes_back_to_page_one():
+    """Dropping a filter is a filter change: the page it named belonged to the narrower list."""
+    got = run(ROWS + 'const v = (o) => Object.assign(P.readView(""), o);'
+              'const s = (o) => { const x = P.settleView(v(o), DATA); return [x.work_type,'
+              ' x.foreman, x.page, x.per]; };'
+              'out([s({work_type: "Combo", page: 3}), s({foreman: "Juan", page: 9, per: 50}),'
+              ' s({work_type: "Polish", foreman: "Juan", page: 2}), s({foreman: "LEE", page: 2}),'
+              ' s({page: 4})])')
+    assert got == [["", "", 1, 25], ["", "", 1, 50], ["Polish", "", 1, 25], ["", "Lee", 2, 25],
+                   ["", "", 4, 25]]
+
+
+def test_a_status_the_counts_cannot_back_is_dropped_once_the_list_has_loaded():
+    """While Raken is not read the counts are not known and a Status filters nothing, so the view
+    lets it go (story 14: an address is opened ignoring what the page does not know)."""
+    got = run(ROWS + 'const v = (o) => Object.assign(P.readView(""), o);'
+              'const un = Object.assign({}, DATA, {summary: {raken_read: false, counts: null}});'
+              'out([P.settleView(v({status: "behind", page: 2}), un),'
+              ' P.settleView(v({status: "behind", page: 2}), DATA),'
+              ' P.settleView(v({status: "behind", page: 2}), {projects: []})])')
+    assert got[0] == DEFAULT
+    assert got[1] == dict(DEFAULT, status="behind", page=2)
+    assert got[2] == dict(DEFAULT, status="behind", page=2), "nothing listed: nothing dropped"
+
+
+def test_the_address_keeps_the_query_keys_the_view_does_not_own():
+    """Writing the view replaces only its own keys. Another script's keys stay: Connect Raken comes
+    back to this page with raken_code and raken_state and reads them after this page has run."""
+    got = run('const v = (o) => Object.assign(P.readView(""), o);'
+              'out([P.addressSearch("?raken_code=c1&raken_state=s1&q=x", v({q: "x"})),'
+              ' P.addressSearch("?raken_error=denied", v({})),'
+              ' P.addressSearch("?q=old&page=4&raken_code=c1", v({q: "new"})),'
+              ' P.addressSearch("?status=nope&zzz=1&&q=a&q=b", v({q: "a"})),'
+              ' P.addressSearch("", v({work_type: "Polish", page: 2})),'
+              ' P.addressSearch("?%71=old&per=50", v({})), P.addressSearch(null, v({})),'
+              ' P.addressSearch("raken_state=s1", v({foreman: "(none)", per: 100}))])')
+    assert got == ["?q=x&raken_code=c1&raken_state=s1", "?raken_error=denied",
+                   "?q=new&raken_code=c1", "?q=a&zzz=1", "?work_type=Polish&page=2", "", "",
+                   "?foreman=(none)&per=100&raken_state=s1"]
 
 
 def test_the_filter_options_for_the_page():
@@ -389,6 +431,19 @@ def test_the_status_select_is_disabled_while_the_counts_are_not_known():
     got = page("unknown-counts", "?status=behind")
     assert got["st_disabled"] is True and got["select"] == ""
     assert got["rows"] == 25 and got["count"] == "60 jobs", "an unknown count filters nothing"
+    assert got["note_id"] and got["st_described"] == got["note_id"], \
+        "the disabled select points at the line under the counts that says why"
+    assert got["url"] == "/project-calendar.html", "a Status nothing backs leaves the address"
+    assert got["clear_hidden"] is True, "nothing is filtering, so there is nothing to clear"
+    known = page("open")
+    assert known["st_described"] is None
+
+
+def test_an_unknown_status_in_a_link_does_not_hold_the_other_filters_or_the_page():
+    got = page("unknown-counts", "?status=behind&work_type=Polish&page=2")
+    assert got["url"] == "/project-calendar.html?work_type=Polish"
+    assert got["clear_hidden"] is False and got["current"] == "1"
+    assert got["count"] == "30 of 60 jobs"
 
 
 def test_clear_filters_resets_everything_and_goes_to_page_one():
@@ -442,6 +497,40 @@ def test_the_download_carries_the_filters_on_screen():
     assert got["fetched"] == BASE + "?q=example&work_type=Polish&foreman=Lee"
 
 
+def test_a_foreman_written_as_markup_is_escaped_and_chosen_by_its_own_text():
+    got = page("escape")
+    odd = "<b>O'Neil & \"Co\"</b>"
+    escaped = "&lt;b&gt;O&#39;Neil &amp; &quot;Co&quot;&lt;/b&gt;"
+    assert got["odd"] == odd
+    assert '<option value="%s">%s</option>' % (escaped, escaped) in got["fm_html"]
+    assert "<b>" not in got["fm_html"]
+    assert got["values"]["fm"] == odd, "the option comes back as the Foreman's own text"
+    assert got["rows"] == 1 and got["first"] == "26.732"
+    assert got["url"] == "/project-calendar.html?foreman=%3Cb%3EO%27Neil%20%26%20%22Co%22%3C%2Fb%3E"
+
+
+def test_a_page_button_pressed_from_the_keyboard_keeps_the_focus_in_view():
+    """Enter on a pager button keeps the focus on it and does not scroll it away; a pointer click
+    brings the list's top back into view. Only the page move is announced by the range line; a
+    filter change is announced by the count line alone."""
+    got = page("pager-scroll")
+    assert got["key"] == {"label": "keyboard", "current": "2", "focus": "page:2", "scrolls": 0,
+                          "range_live": "polite"}
+    assert got["click"] == {"label": "pointer", "current": "3", "focus": "page:3", "scrolls": 1,
+                            "range_live": "polite"}
+    assert got["filter"]["current"] == "1" and got["filter"]["range_live"] == "off"
+    assert got["filter"]["scrolls"] == 1
+
+
+def test_a_raken_sign_in_coming_back_to_the_page_survives_the_view_in_the_address():
+    """Connect Raken bounces back to this page with raken_code and raken_state, and its script reads
+    them after this one has written the view: they must still be there for the POST."""
+    got = page("raken", "?raken_code=c1&raken_state=s1&q=example")
+    assert got["posts"] == [["POST", "/api/raken/callback", {"code": "c1", "state": "s1"}]]
+    assert got["url"] == "/project-calendar.html?q=example", "the code leaves the address after"
+    assert got["values"]["q"] == "example"
+
+
 def test_the_no_match_message_names_the_filters():
     got = page("open", "?work_type=Gyp&foreman=(none)")
     assert got["rows"] == 0 and got["empty"] == "No job matches the filters: Gyp, No foreman."
@@ -460,14 +549,16 @@ def test_the_filters_wrap_and_the_pager_stays_usable_at_phone_width():
     assert re.search(r"\.tw-select\s*\{[^}]*max-width", html), "a long Foreman never widens the page"
 
 
-def test_the_new_controls_escape_their_text_and_set_no_style_attribute():
+def test_the_new_controls_set_no_style_attribute():
+    """Their escaping is tested by running the page (a Foreman written as markup, above)."""
     js = PVA.read_text(encoding="utf-8")
     assert 'style="' not in js and "style='" not in js
-    i = js.index("function optionsHtml(")
-    body = js[i:js.index("\n  }\n", i)]
-    assert "esc(o.value)" in body and "esc(o.label)" in body
-    i = js.index("function pagerHtml(")
-    body = js[i:js.index("\n  }\n", i)]
-    assert "esc(" in body
     # The search box no longer keeps its own copy in sessionStorage: the address holds the view.
     assert "tw_pva_q" not in js
+
+
+def test_a_disabled_select_dims_like_a_disabled_count():
+    """DESIGN.md: a disabled control drops to opacity .5, as .sum-tile:disabled does here."""
+    html = PAGE.read_text(encoding="utf-8")
+    rule = re.search(r"\.tw-select:disabled\s*\{([^}]*)\}", html).group(1)
+    assert "opacity:.5" in rule.replace(" ", "")

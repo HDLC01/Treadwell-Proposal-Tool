@@ -279,7 +279,7 @@ _JS_TRIM = re.compile("^%s|%s$" % (_JS_SPACE.pattern, _JS_SPACE.pattern))
 
 def _key(value: Any) -> str:
     """A Foreman, a Work type or a filter value as compared: trimmed as JavaScript's trim() does,
-    case ignored. "" for none (P.foremanKey)."""
+    case ignored. "" for none (P.filterKey)."""
     return _JS_TRIM.sub("", "" if value is None else str(value)).lower()
 
 
@@ -356,8 +356,11 @@ def visible_projects(data: Dict[str, Any], q: Any, status: Any, work_type: Any =
             continue
         if wt and _key(work_type_of(p)) != wt:
             continue
-        if fm and (bool(_key(p.get("foreman"))) if fm == FOREMAN_NONE
-                   else _key(p.get("foreman")) != fm):
+        key = _key(p.get("foreman"))
+        if fm == FOREMAN_NONE:
+            if key:
+                continue
+        elif fm and key != fm:
             continue
         out.append(p)
     return out

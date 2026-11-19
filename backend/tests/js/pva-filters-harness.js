@@ -12,6 +12,9 @@
  * markup, with their data-* and disabled), location and history.replaceState, and a fetch that
  * answers GET /api/project-analytics with the rows below and records every address asked for.
  *
+ * The "raken" scenario also loads js/raken-connect.js after it, as project-calendar.html does, so
+ * a Connect Raken sign-in coming back to this page is seen with both scripts running.
+ *
  * Usage: node pva-filters-harness.js <frontend-dir> <scenario> [search] [hash]  ->  one JSON line
  *
  * PUBLIC REPO: every job and person is made up.
@@ -40,6 +43,9 @@ const PROJECTS = Array.from({ length: 60 }, (_, k) => {
     statuses: i % 6 === 0 ? ["behind", "over_budget"] : (i % 3 === 0 ? ["behind"] : ["on_plan"]),
   };
 });
+// A Foreman whose name is markup, for the escaping check: job 32 has none otherwise.
+const ODD_FOREMAN = "<b>O'Neil & \"Co\"</b>";
+if (SCENARIO === "escape") PROJECTS[31].foreman = ODD_FOREMAN;
 const COUNTS_KNOWN = SCENARIO !== "unknown-counts";
 const DATA = {
   ok: true, connected: true, stale: false, today: "2026-11-18", so_far_through: "2026-11-17",
@@ -56,6 +62,8 @@ const DATA = {
 // ── the fake browser ─────────────────────────────────────────────────────────────────────────────
 const focused = [];
 const fetched = [];
+const calls = [];                      // every request: [method, url, body]
+const scrolls = [];                    // every scrollIntoView, by element id
 
 /** The start tags a paint wrote, as fake elements: their attributes, data-*, disabled, focus. */
 function children(html, focusName) {
@@ -113,9 +121,11 @@ function el(id) {
     addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
     setAttribute(k, v) { this["attr:" + k] = String(v); },
     getAttribute(k) { return this["attr:" + k] == null ? null : this["attr:" + k]; },
+    removeAttribute(k) { delete this["attr:" + k]; },
     focus() { focused.push(id); },
-    scrollIntoView() {},
-    getBoundingClientRect: () => ({ top: 0 }),
+    scrollIntoView() { scrolls.push(id); },
+    rectTop: 0,                        // < 0: the element's top has scrolled out of view
+    getBoundingClientRect() { return { top: this.rectTop }; },
     querySelectorAll(sel) { return children(this.innerHTML, focusNameOf).filter((n) => matches(n, sel)); },
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
   };
@@ -140,13 +150,16 @@ const document = {
   querySelector: (sel) => (sel === '[role="tablist"]' ? tablist : null),
   querySelectorAll: () => [],
   addEventListener() {},
-  createElement: () => ({ click() {}, remove() {} }),
-  body: { appendChild() {} },
+  createElement: (tag) => ({ tag, className: "", textContent: "", children: [],
+    appendChild(c) { this.children.push(c); return c; }, addEventListener() {}, click() {},
+    remove() {} }),
+  body: { firstChild: null, appendChild() {}, insertBefore() {} },
 };
 const window = { TWProjCal: P, addEventListener() {} };
 const TW = { resolveApiBase: () => "", authHeaders: () => ({}) };
-async function fetch(url) {
+async function fetch(url, init) {
   fetched.push(url);
+  calls.push([(init && init.method) || "GET", url, init && init.body ? JSON.parse(init.body) : null]);
   if (url === "/api/project-analytics") {
     return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(DATA)) };
   }
@@ -162,19 +175,31 @@ new Function("window", "document", "location", "history", "TW", "fetch", "setInt
   window, document, location, history, TW, fetch, () => 0, () => 0, () => {},
   Object.assign(function () {}, URL_), Blob);
 
+// Connect Raken, loaded after the page as project-calendar.html loads it, signed in as an admin.
+if (SCENARIO === "raken") {
+  Object.assign(window, { document, location, history, fetch, TW,
+    TWAuth: { ready: Promise.resolve(), user: () => ({ role: "admin" }) } });
+  new Function("window", fs.readFileSync(path.join(ROOT, "js", "raken-connect.js"), "utf8"))(window);
+}
+
 // ── driving it ───────────────────────────────────────────────────────────────────────────────────
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
-function fire(id, type, target) {
-  (el(id).listeners[type] || []).forEach((fn) => fn({ target: target || el(id), key: "",
-    preventDefault() {}, stopPropagation() {} }));
+// `extra` adds to the event: {detail: 1} is a pointer click, a keyboard press has detail 0.
+function fire(id, type, target, extra) {
+  (el(id).listeners[type] || []).forEach((fn) => fn(Object.assign({ target: target || el(id),
+    key: "", detail: 0, preventDefault() {}, stopPropagation() {} }, extra || {})));
 }
 function choose(id, value) { el(id).value = value; fire(id, "change"); }
-function press(containerId, sel, pick) {
+function press(containerId, sel, pick, extra) {
   const node = el(containerId).querySelectorAll(sel).find(pick);
   if (!node) throw new Error("nothing to press in " + containerId + " for " + sel);
-  fire(containerId, "click", node);
+  fire(containerId, "click", node, extra);
 }
-const pressPage = (v) => press("pva-pages", "[data-page]", (n) => n.dataset.page === String(v));
+const pressPage = (v, extra) => press("pva-pages", "[data-page]",
+  (n) => n.dataset.page === String(v), extra);
+// An attribute value as the browser hands it back: the markup's entities undone.
+const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
 const optionsOf = (id) => {
   const out = [];
@@ -198,6 +223,9 @@ function snap() {
     clear_hidden: el("pva-clear").hidden, pager_hidden: el("pva-pager").hidden,
     wt_options: optionsOf("pva-wt"), fm_options: optionsOf("pva-fm"), st_options: optionsOf("pva-st"),
     st_disabled: el("pva-st").disabled, select: el("pva-st").value,
+    st_described: el("pva-st").getAttribute("aria-describedby"),
+    note_id: (/<p id="([^"]*)" class="sum-note">/.exec(el("pva-sum").innerHTML) || [])[1] || null,
+    range_live: el("pva-range").getAttribute("aria-live"),
     values: { q: el("pva-q").value, wt: el("pva-wt").value, fm: el("pva-fm").value,
       st: el("pva-st").value, per: el("pva-per").value },
     pressed: el("pva-sum").querySelectorAll("[data-st]")
@@ -247,6 +275,26 @@ const pick = (s, keys) => Object.fromEntries(keys.map((k) => [k, s[k]]));
     const open = snap();
     fire("pd-back", "click");
     out = Object.assign(snap(), { detail_open: open.detail_open, url_in_detail: open.url });
+  } else if (SCENARIO === "escape") {
+    const html = el("pva-fm").innerHTML;
+    const odd = optionsOf("pva-fm").find((o) => o[1].indexOf("Neil") >= 0);
+    choose("pva-fm", unescape(odd[0]));
+    out = Object.assign(snap(), { fm_html: html, odd_option: odd, odd: ODD_FOREMAN });
+  } else if (SCENARIO === "pager-scroll") {
+    // The list's top has scrolled away (the pager sits under 25 rows).
+    el("pva-main").rectTop = -400;
+    const step = (label) => { const s = snap();
+      return { label, current: s.current, focus: s.focus, scrolls: scrolls.length,
+        range_live: s.range_live }; };
+    pressPage(2);                      // the keyboard: Enter on the page 2 button
+    const key = step("keyboard");
+    pressPage(3, { detail: 1 });       // a pointer click
+    const click = step("pointer");
+    choose("pva-wt", "Polish");        // a filter: the count line says it, not the range
+    out = { key, click, filter: step("filter") };
+  } else if (SCENARIO === "raken") {
+    out = Object.assign(pick(snap(), ["url", "rows", "values"]), {
+      posts: calls.filter((c) => c[0] === "POST") });
   } else if (SCENARIO === "download") {
     fetched.length = 0;
     fire("pva-download", "click");

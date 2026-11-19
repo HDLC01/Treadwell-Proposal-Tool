@@ -50,7 +50,9 @@
 // search, a filter or the page size goes back to page 1, and a page past the end shows the last.
 // THE VIEW (search, filters, page, page size) lives in the address's query string, written with
 // replaceState as it changes, so a reload or a shared link opens the same list; what the list does
-// not offer falls back to "All" (P.readView, P.settleView). The "#schedule" hash still picks the tab.
+// not offer falls back to "All" (P.readView, P.settleView). The "#schedule" hash still picks the tab,
+// and every other key in the address is left alone: Connect Raken (js/raken-connect.js, loaded
+// after this script) comes back here with raken_code and raken_state and reads them later.
 //
 // THE DOWNLOAD (#785): "Download" fetches the list as it is filtered on screen (the search box, the
 // pressed count and the Work type and Foreman filters go as `q`, `status`, `work_type` and
@@ -128,10 +130,10 @@
   }
 
   // ── the view in the address (#819) ────────────────────────────────
-  /** The address carries the view: replaceState, so Back is not flooded. The hash (the tab) is
-   *  kept as it is. */
+  /** The address carries the view: replaceState, so Back is not flooded. Only the view's own keys
+   *  are rewritten (P.addressSearch); any other key and the hash (the tab) are kept as they are. */
   function writeView() {
-    const want = location.pathname + P.viewQuery(VIEW) + location.hash;
+    const want = location.pathname + P.addressSearch(location.search, VIEW) + location.hash;
     if (location.pathname + location.search + location.hash !== want) {
       try { history.replaceState(null, "", want); } catch {}
     }
@@ -404,8 +406,11 @@
     $("pva-fm").value = f.foreman;
     $("pva-st").value = f.status;
     $("pva-st").disabled = !o.status_known;
+    // Disabled, it points at the line under the counts that says why (paintSummary).
+    if (o.status_known) $("pva-st").removeAttribute("aria-describedby");
+    else $("pva-st").setAttribute("aria-describedby", "pva-sum-note");
     $("pva-per").value = String(VIEW.per);
-    $("pva-clear").hidden = !P.filtersActive(VIEW);
+    $("pva-clear").hidden = !P.filtersActive(f);   // what filters the list, not what the view holds
   }
 
   /** Previous, the page numbers (the one shown is aria-current="page"; a gap is an ellipsis) and
@@ -421,25 +426,31 @@
       + btn("next", "Next", pg.next ? "" : " disabled");
   }
 
+  // One live region speaks at a time: "M of N jobs" (#pva-count) says a search or filter change,
+  // and "Showing A–B of N" (#pva-range) is live only while the page itself moved (goPage).
+  let PAGE_MOVED = false;
   function paintPager(pg) {
     $("pva-pager").hidden = !pg.total;
+    $("pva-range").setAttribute("aria-live", PAGE_MOVED ? "polite" : "off");
     $("pva-range").textContent = pg.text;
     $("pva-pages").innerHTML = pg.total ? pagerHtml(pg) : "";
   }
 
   /** A pager button: "prev", "next" or a page number. A paint rebuilds the buttons, so the focus
-   *  goes back to the one pressed, or to the page shown when that one is now disabled; and when
-   *  the top of the list has scrolled away, it comes back into view. */
-  function goPage(which) {
+   *  goes back to the one pressed, or to the page shown when that one is now disabled. A pointer
+   *  click (`pointer`) also brings the top of the list back into view when it has scrolled away;
+   *  a keyboard press does not, so the focused button stays on screen. */
+  function goPage(which, pointer) {
     const n = which === "prev" ? VIEW.page - 1 : (which === "next" ? VIEW.page + 1 : Number(which));
     if (!(n >= 1) || n === VIEW.page) return;
-    setView({ page: n });
+    PAGE_MOVED = true;
+    try { setView({ page: n }); } finally { PAGE_MOVED = false; }
     const btns = Array.from($("pva-pages").querySelectorAll("[data-page]"));
     const same = btns.find((b) => b.dataset.page === String(which) && !b.disabled);
     const cur = btns.find((b) => b.getAttribute("aria-current") === "page");
-    if (same || cur) (same || cur).focus();
+    if (same || cur) (same || cur).focus({ preventScroll: !!pointer });
     const main = $("pva-main");
-    if (main.getBoundingClientRect().top < 0) main.scrollIntoView({ block: "start" });
+    if (pointer && main.getBoundingClientRect().top < 0) main.scrollIntoView({ block: "start" });
   }
 
   /** A count tile. An unknown count (Raken not read) is a dash and the tile is disabled. */
@@ -460,7 +471,7 @@
     const box = $("pva-sum");
     box.hidden = !tiles.length;
     let html = tiles.map(countTileHtml).join("");
-    if (tiles.length && note) html += '<p class="sum-note">' + esc(note) + "</p>";
+    if (tiles.length && note) html += '<p id="pva-sum-note" class="sum-note">' + esc(note) + "</p>";
     if (tiles.length && lw) {
       html += pairHtml({ label: "Last week", sub: lw.range, plan: lw.planned,
         planSub: "Planned hours", actual: lw.actual, actualSub: "Actual hours", note: lw.note });
@@ -531,7 +542,10 @@
     paintFilters(f);
     const shown = P.visibleProjects(projects, f.q, f.status, f);
     const pg = P.pageModel(shown.length, VIEW.page, VIEW.per);
-    if (pg.page !== VIEW.page) {       // a page past the end shows the last page, and says so
+    // A page past the end shows the last page, and the address says so. The one place a paint
+    // changes the view, on purpose: only here is the number of matching jobs known. The next paint
+    // sees a new signature, which is harmless.
+    if (pg.page !== VIEW.page) {
       VIEW = P.nextView(VIEW, { page: pg.page });
       writeView();
     }
@@ -749,7 +763,7 @@
   $("pva-per").addEventListener("change", (e) => setView({ per: Number(e.target.value) }));
   $("pva-pages").addEventListener("click", (e) => {
     const b = e.target.closest("[data-page]");
-    if (b && !b.disabled) goPage(b.dataset.page);
+    if (b && !b.disabled) goPage(b.dataset.page, e.detail > 0);   // detail 0: the keyboard
   });
   $("pva-body").addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
@@ -787,7 +801,7 @@
   });
   window.addEventListener("hashchange", () => showTab(P.tabFromHash(location.hash), false));
 
-  writeView();                         // junk in the address is dropped at once
+  writeView();                         // the view's junk values leave the address at once
   showTab(P.tabFromHash(location.hash), false);
   paint();
   load();

@@ -65,14 +65,13 @@
     .seg button[aria-pressed="true"] { background:var(--card); color:var(--red-dark);
       box-shadow:0 1px 2px rgba(60,50,40,.08); }
     .grow { flex:1; }
-    .tw-search { min-height:34px; padding:6px 10px; border:1px solid var(--line);
-      border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink);
-      width:220px; }
-    /* The Plan vs Actual filters (#819): calendar.html's select, capped so a long Foreman never
-       widens the bar. */
-    .tw-select { min-height:34px; padding:6px 10px; border:1px solid var(--line); border-radius:9px;
-      font:inherit; font-size:13px; background:var(--card); color:var(--ink); max-width:220px; }
-    .tw-select:disabled { color:var(--ink-mut); background:var(--surf-low); cursor:not-allowed; }
+    /* The search box and the Plan vs Actual filters' selects (#819) share one look, as in
+       calendar.html. A select is capped so a long Foreman never widens the bar. */
+    .tw-select, .tw-search { min-height:34px; padding:6px 10px; border:1px solid var(--line);
+      border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink); }
+    .tw-search { width:220px; }
+    .tw-select { max-width:220px; }
+    .tw-select:disabled { opacity:.5; cursor:not-allowed; }
     .tw-select:focus, .tw-search:focus, .btn:focus-visible, .seg button:focus-visible, .bar:focus-visible,
     .dlg-close:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
 
@@ -358,6 +357,9 @@
       .pva-f { flex:1 1 150px; }
       .pva-f .tw-select { flex:1; }
       .tw-select { width:100%; max-width:none; min-width:0; }
+      /* Touch: the selects and the page buttons a little taller, the page buttons further apart. */
+      .tw-select, .pva-pages .pg { min-height:40px; }
+      .pva-pages { gap:6px; }
       .facts { grid-template-columns:100px minmax(0,1fr); }
       .pd-pairs { grid-template-columns:repeat(2,minmax(0,1fr)); }
       .pd-two b { font-size:20px; }
@@ -457,7 +459,7 @@
         <!-- The pager (#819): the page splits the list it has; the server sends it whole, and
              Download takes every matching job. -->
         <nav id="pva-pager" class="pva-pager" aria-label="Pages" hidden>
-          <span id="pva-range" class="pva-range" aria-live="polite"></span>
+          <span id="pva-range" class="pva-range" aria-live="off"></span>
           <span id="pva-pages" class="pva-pages"></span>
           <span class="pva-f"><label for="pva-per">Per page</label>
             <select id="pva-per" class="tw-select">

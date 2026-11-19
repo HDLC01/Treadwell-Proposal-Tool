@@ -1471,22 +1471,16 @@ def test_pressing_a_count_filters_pressing_it_again_or_show_all_clears_it():
 
 
 def test_the_strip_is_drawn_from_the_core_and_its_counts_are_buttons_with_aria_pressed():
-    """The tiles are real buttons (keyboard, screen reader) whose pressed state is aria-pressed;
-    the list shows P.visibleProjects: the search box, the pressed count and (#819) the Work type and
-    Foreman filters together."""
+    """The tiles are real buttons (keyboard, screen reader) whose pressed state is aria-pressed.
+    How the pressed count, the search and the #819 filters narrow the list, and that a count pressed
+    while Raken is not read never empties it, is tested by running the page whole
+    (test_pva_filters.py, tests/js/pva-filters-harness.js)."""
     html, js = _page(), _pva_js()
     assert 'id="pva-sum"' in html and 'id="pva-showall"' in html
     assert html.index('id="pva-sum"') < html.index('<table class="pva">'), "above the list"
     assert ">Show all jobs<" in html
-    assert "P.countTiles(DATA, VIEW.status)" in js
     assert "P.lastWeekTile(DATA)" in js and "P.budgetTile(DATA)" in js
     assert "P.countsNote(DATA)" in js
-    # A count pressed while Raken is not read must not empty the list: the core decides
-    # (P.viewFilters applies statusFilter, #819).
-    assert "const f = P.viewFilters(DATA, VIEW);" in js
-    assert "P.visibleProjects(projects, f.q, f.status, f)" in js
-    assert "P.listCountText(shown.length, projects.length, f.q, f.status, f)" in js
-    assert "P.noMatchText(f.q, f.status, f)" in js and '$("pva-showall").hidden = !f.status;' in js
     assert 'aria-pressed="' + "' + (t.pressed" in js
     assert '<button type="button" class="sum-tile' in js
     assert '(t.disabled ? " disabled" : "")' in js, "an unknown count cannot be pressed"

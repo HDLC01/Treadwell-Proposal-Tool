@@ -545,16 +545,15 @@ def test_the_new_parameters_are_capped_and_never_500(client, crews, monkeypatch)
                    {"work_type": ["Polish", "Epoxy"]}):
         r = client.get(XLSX, params=params)
         assert r.status_code == 200, params
-    seen = {}
-    real = plan_vs_actual_xlsx.build
-
-    def spy(data, q, status, today, work_type="", foreman=""):
-        seen.update(work_type=work_type, foreman=foreman)
-        return real(data, q, status, today, work_type=work_type, foreman=foreman)
-    monkeypatch.setattr(plan_vs_actual_xlsx, "build", spy)
-    download(client, work_type="w" * 999, foreman="f" * 999)
-    assert seen == {"work_type": "w" * plan_vs_actual.SEARCH_MAX,
-                    "foreman": "f" * plan_vs_actual.SEARCH_MAX}
+    # "Polish", 300 spaces, "zzz": only "Polish" and spaces survive the 200-character cut, so the
+    # file is the Polish jobs. Uncut it would name no Work type and filter nothing.
+    _r, wb = download(client, work_type="Polish" + " " * 300 + "zzz",
+                      foreman="Pat" + " " * 300 + "zzz")
+    assert names(wb) == [YARD_ROW]
+    s = summary(wb)
+    # The Foreman is named as the list first spells it: the Yard (Deadline 19 Nov) comes before
+    # the Clinic and writes it "pat".
+    assert (s["Work type filter"], s["Foreman filter"]) == ("Polish", "pat")
 
     def boom(*a, **k):
         raise RuntimeError("made-up fault")
