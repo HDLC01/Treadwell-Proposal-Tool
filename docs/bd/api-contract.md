@@ -840,8 +840,8 @@ Any editable Contact field, `company` (`{ "id" }` or `{ "name" }`), `owner_id`, 
 flag). A manager may send only `cadence_override`, `cadence_override_until` and a maintenance
 contact's `frequency_per_year` (403 `"Managers can change only how often to follow up."`). Size
 limits: `notes` 20000 characters, `next_step` 500, `email` 254, the name and every other text field
-200, at most 50 tags of 60 characters (400 `"Keep this to N characters or fewer."`). Answers
-`{ "ok": true, "contact": Contact, "possible_duplicates": [...] }`.
+200, at most 50 tags of 60 characters, and a `company` `name` 200 (400 `"Keep this to N characters or
+fewer."`). Answers `{ "ok": true, "contact": Contact, "possible_duplicates": [...] }`.
 
 #### `POST /api/bd/contacts/{id}/confirm` (salesperson, assistant)
 
@@ -853,8 +853,8 @@ logged as a `confirmed` or `unconfirmed` event.
 Takes the contact off every list and batch; the history is kept. An open task on any weekly list
 closes as `snoozed`. `{ "archived": false }` restores, and undoes that: a task the archive closed on
 **this** week's list, or on a later one, opens again; an earlier week's stays closed, and a task that
-was already done or skipped is left as it was. An `archived` (with the `reason`) or `restored` event
-is logged.
+was already done or skipped is left as it was. An `archived` (with the `reason`, at most 200
+characters: 400 `"Keep this to 200 characters or fewer."`) or `restored` event is logged.
 
 ```json
 { "archived": true, "reason": "Moved firms" }
@@ -887,7 +887,8 @@ The company and its people who are not archived, in id order, as ContactCompact:
 
 `{ "name", "city"?, "industry"? }`. Always a new company (merging accounts is a later ticket); the
 people already at a company with the same cleaned name come back as `possible_duplicates`. A blank
-name is 400 `"Type the company name."`.
+name is 400 `"Type the company name."`. The name, `city` and `industry` stop at 200 characters, as through
+Add contact (400 `"Keep this to 200 characters or fewer."`).
 
 ```json
 { "ok": true, "company": { "id": 19, "name": "Juniper Hollow Dental", "city": "Lenexa", "industry": "Healthcare", "contact_count": 0, "created_at": "2026-11-04T10:40:00-06:00" }, "possible_duplicates": [] }
@@ -897,7 +898,7 @@ name is 400 `"Type the company name."`.
 
 Any of `name` (blank is 400 `"A company needs a name."`), `city`, `industry` (text or `null`). A
 rename moves the cleaned name with it, so the duplicate check and Add contact find the new name.
-`{ "ok": true, "company": Company }`.
+The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`.
 
 ### Not built yet (503 after the role check)
 

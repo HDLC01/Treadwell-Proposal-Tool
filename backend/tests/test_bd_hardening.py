@@ -398,3 +398,46 @@ def test_a_new_contact_obeys_the_same_limits(bd_seeded, bd_as_user, bd_db):
     assert bd_db.execute("select count(*) as n from bd.contacts").fetchone()["n"] == 13
     r = avery.post("/api/bd/contacts", json={"name": "n" * 200, "company": {"name": "c" * 200}, "notes": "x" * 20000})
     assert r.status_code == 201, r.text
+
+
+# The company routes and the archive reason obey the same rule (Hanz, 2026-11-11: "do all"): a
+# company's name, city and industry stop at 200 characters, wherever a company is named or renamed,
+# and so does the reason an archive keeps in its event. Company 16 is Bluestem Logistics (the seed's).
+LIMIT_200 = "Keep this to 200 characters or fewer."
+
+
+@pytest.mark.parametrize("method,path,body_of,field", [
+    ("POST", "/api/bd/companies", lambda v: {"name": v}, "name"),
+    ("POST", "/api/bd/companies", lambda v: {"name": "Fictional Co", "city": v}, "city"),
+    ("POST", "/api/bd/companies", lambda v: {"name": "Fictional Co", "industry": v}, "industry"),
+    ("PATCH", "/api/bd/companies/16", lambda v: {"name": v}, "name"),
+    ("PATCH", "/api/bd/companies/16", lambda v: {"city": v}, "city"),
+    ("PATCH", "/api/bd/companies/16", lambda v: {"industry": v}, "industry"),
+    ("PATCH", "/api/bd/contacts/21", lambda v: {"company": {"name": v}}, "company"),
+    ("POST", "/api/bd/contacts/21/archive", lambda v: {"reason": v}, "reason"),
+], ids=["new-company-name", "new-company-city", "new-company-industry", "rename", "company-city",
+        "company-industry", "contact-company-name", "archive-reason"])
+def test_company_text_and_the_archive_reason_stop_exactly_at_200(bd_seeded, bd_as_user, bd_db,
+                                                                  method, path, body_of, field):
+    avery = bd_as_user(1)
+    before = bd_db.execute("select (select count(*) from bd.companies) as companies,"
+                           " (select count(*) from bd.events) as events").fetchone()
+    r = avery.request(method, path, json=body_of("x" * 201))
+    assert r.status_code == 400, "201 characters were accepted (%s)" % r.status_code
+    _is_envelope(r, 400, "bad_request")
+    assert r.json()["fields"] == {field: LIMIT_200}
+    assert bd_db.execute("select (select count(*) from bd.companies) as companies,"
+                         " (select count(*) from bd.events) as events").fetchone() == before, "nothing was saved"
+    r = avery.request(method, path, json=body_of("x" * 200))
+    assert r.status_code in (200, 201), r.text
+
+
+def test_the_200_character_values_are_stored_whole(bd_seeded, bd_as_user, bd_db):
+    avery = bd_as_user(1)
+    assert avery.patch("/api/bd/companies/16", json={"name": "n" * 200, "city": "c" * 200,
+                                                     "industry": "i" * 200}).status_code == 200
+    row = bd_db.execute("select name, city, industry from bd.companies where id = 16").fetchone()
+    assert (row["name"], row["city"], row["industry"]) == ("n" * 200, "c" * 200, "i" * 200)
+    assert avery.post("/api/bd/contacts/21/archive", json={"reason": "r" * 200}).status_code == 200
+    assert bd_db.execute("select detail from bd.events where contact_id = 21 and kind = 'archived'"
+                         " order by id desc limit 1").fetchone()["detail"] == "r" * 200

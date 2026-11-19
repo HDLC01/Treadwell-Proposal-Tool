@@ -20,7 +20,8 @@ from typing import Any
 from fastapi import Body, Depends, Request
 
 from .. import auth, db, errors, paging, serialize, web
-from ..contacts_service import COMPANY_NOT_FOUND, FIX, find_duplicates, insert_company
+from ..contacts_service import (COMPANY_NOT_FOUND, FIX, NAME_MAX, TEXT_DEFAULT_MAX, find_duplicates, insert_company,
+                                too_long)
 from ..normalize import clean_name, normalize_company
 
 router = web.make_router()
@@ -30,9 +31,18 @@ _ORDER = 'lower(btrim(co.name)) collate "C", co.id'
 
 
 def _text_fields(body: dict, fields: dict) -> None:
+    """city and industry: text or null, at most 200 characters (the size-limit rule, contacts_service)."""
     for key in ("city", "industry"):
         if key in body and body[key] is not None and not isinstance(body[key], str):
             fields[key] = "Use text."
+        elif isinstance(body.get(key), str) and len(body[key]) > TEXT_DEFAULT_MAX:
+            fields[key] = too_long(TEXT_DEFAULT_MAX)
+
+
+def _name_field(name: str, fields: dict) -> None:
+    """A company's cleaned name stops at 200 characters, as it does through Add contact."""
+    if len(name) > NAME_MAX:
+        fields["name"] = too_long(NAME_MAX)
 
 
 @router.get("/api/bd/companies")
@@ -77,6 +87,7 @@ def post_company(body: Any = Body(None), user: dict = Depends(auth.require_role(
     name = clean_name(body.get("name")) if isinstance(body.get("name"), str) else ""
     if not name:
         raise errors.bad_request("Type the company name.", {"name": "Required."})
+    _name_field(name, fields)
     _text_fields(body, fields)
     if fields:
         raise errors.bad_request(FIX, fields)
@@ -96,6 +107,7 @@ def patch_company(id: str, body: Any = Body(None), user: dict = Depends(auth.req
         name = clean_name(body["name"]) if isinstance(body["name"], str) else ""
         if not name:
             raise errors.bad_request("A company needs a name.", {"name": "Required."})
+        _name_field(name, fields)
     _text_fields(body, fields)
     if fields:
         raise errors.bad_request(FIX, fields)

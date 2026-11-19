@@ -28,9 +28,9 @@ from fastapi import Body, Depends, Request
 
 from .. import appsettings, auth, bizdate, db, errors, interactions_service, paging, serialize, web
 from ..contacts_service import (BD_FREQUENCY_SENTENCE, CATEGORIES, CONTACT_NOT_FOUND, DATE_FIELDS, FIX, NAME_MAX,
-                                TEXT_FIELDS, as_int, check_date, check_tags, check_text, company_spec_ok,
-                                create_contact, find_duplicates, resolve_company, too_long, user_exists)
-from ..contacts_service import tags as _tags
+                                TEXT_DEFAULT_MAX, TEXT_FIELDS, as_int, check_date, check_tags, check_text,
+                                company_spec_ok, create_contact, find_duplicates, resolve_company, tags, too_long,
+                                user_exists)
 from ..events import log_event
 from ..normalize import normalize_company
 from ..phone import digits as phone_digits
@@ -306,6 +306,8 @@ def _validate_patch(body: dict, user: dict, row=None) -> dict:
             fields[key] = "Pick a user."
     if "company" in body and not company_spec_ok(body["company"]):
         fields["company"] = "Pick or type a company."
+    elif isinstance((body.get("company") or {}).get("name"), str) and len(body["company"]["name"].strip()) > NAME_MAX:
+        fields["company"] = too_long(NAME_MAX)
     return fields
 
 
@@ -386,7 +388,7 @@ def patch_contact(id: str, body: Any = Body(None), user: dict = Depends(auth.cur
             elif key == "notes":
                 value = value or ""
             elif key == "tags":
-                value = _tags(value)
+                value = tags(value)
             elif key in DATE_FIELDS:
                 value = value or None
             sets.append(key + " = %s")
@@ -484,6 +486,8 @@ def archive_contact(id: str, body: Any = Body(None),
         fields["archived"] = "Use true or false."
     if body.get("reason") is not None and not isinstance(body["reason"], str):
         fields["reason"] = "Use text."
+    elif isinstance(body.get("reason"), str) and len(body["reason"].strip()) > TEXT_DEFAULT_MAX:
+        fields["reason"] = too_long(TEXT_DEFAULT_MAX)
     if fields:
         raise errors.bad_request(FIX, fields)
     cid = paging.path_id(id, CONTACT_NOT_FOUND)
