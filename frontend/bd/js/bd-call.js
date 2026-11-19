@@ -1,6 +1,6 @@
 /* The BD CRM's after-a-call sheet, as window.BDCall (#807: BD's js/call.js, moved in with This Week).
  * /bd/ loads it after the BD shell (bd-api.js, bd-shared.js, bd-core.js) and before bd-week.js; the
- * contact page loads it too once that page moves. The apply plan, section 2.6; the artboard
+ * contact page (#808) loads it the same way, before bd-contact.js. The apply plan, section 2.6; the artboard
  * CallPhone.dc.html.
  *
  * WHAT CHANGED IN THE MOVE. BD's own shell (BDAuth) is gone: the page hands this file what it read

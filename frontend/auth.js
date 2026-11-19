@@ -357,6 +357,9 @@
   //  - The current section is lit by the page's full path, like every row (#804).
   const BD_SECTIONS = [
     { href: "/bd/", also: ["/bd/index.html"], label: "This Week", can: "week" },
+    // #808. One contact's page (/bd/contact.html) has moved too, but it is not a section: it opens
+    // from a name, and on it no section is lit.
+    { href: "/bd/add.html", label: "Add contact", can: "add_contact" },
   ];
   let BD_OPEN = false;          // the group's state on this page (the live menu's only)
   let bdMePromise = null;

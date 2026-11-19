@@ -91,6 +91,8 @@
   /* Above the tool's top bar (9995), sidebar (9998) and bell panel (10000): an open sheet covers
      the whole window, and bd-shared.js makes everything else on the page inert while it is open. */
   --bd-z-scrim: 10010; --bd-z-sheet: 10020; --bd-z-menu: 10030; --bd-z-toast: 10040;
+  /* The contact page's phone Call / Log bar: over the page, under the tool's top bar (9995) and drawer. */
+  --bd-z-callbar: 9990;
 
   --bd-gutter: 28px;
 }
@@ -114,6 +116,10 @@
 .bd-app :where(main, .sheet, .dialog, .menu) :where(button, input, select, textarea) { font: inherit; color: inherit; }
 .bd-app :where(main, .sheet, .dialog, .menu) :where(:focus-visible) { outline: 2px solid var(--bd-red); outline-offset: 2px; }
 .bd-app [hidden] { display: none !important; }   /* a class display rule must never beat [hidden] */
+/* BD was drawn with border-box sizing (its own global reset, which did not come over): BD's content,
+   sheets, dialogs, menus and toasts get it back, so a 100%-wide field with padding fits its column. */
+.bd-app :where(main, .sheet, .dialog, .menu, .scrim, #bd-toasts),
+.bd-app :where(main, .sheet, .dialog, .menu, .scrim, #bd-toasts) :where(*, *::before, *::after) { box-sizing: border-box; }
 /* an open sheet or dialog (bd-shared.js): the page behind does not scroll */
 .bd-app.bd-locked { overflow: hidden; }
 /* == end: base == */
@@ -610,6 +616,9 @@
 .bd-app .wk-next-who { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .bd-app .wk-next-id { min-width: 0; flex: 1; }
 .bd-app .wk-next-namerow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.bd-app .wk-next-name a { color: var(--bd-ink); text-decoration: none; }
+.bd-app .wk-next-name a:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
+.bd-app .wk-next-open { margin-top: auto; align-self: flex-start; font-size: 13px; }
 .bd-app .wk-next-name { font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--bd-ink); overflow-wrap: anywhere; }
 .bd-app .wk-next-meta { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
 .bd-app .wk-meta-narrow { display: none; }
@@ -645,7 +654,10 @@
   align-items: start; gap: 4px 12px; min-height: 64px; padding: 12px 16px;
 }
 .bd-app .wk-row > .avatar { grid-area: av; }
-.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); }
+.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); text-decoration: none; }
+/* a name opens the contact page (#808) */
+.bd-app .wk-who:hover { color: var(--bd-ink); }
+.bd-app .wk-who:hover .who-name { text-decoration: underline; text-underline-offset: 3px; }
 .bd-app .wk-who .who-name { font-size: 14px; }
 .bd-app .wk-who .who-sub { font-size: 13px; }
 .bd-app .wk-reason { grid-area: reason; min-width: 0; font-size: 13px; font-weight: 400; color: var(--bd-ink-2); line-height: 20px; text-wrap: pretty; }
@@ -879,6 +891,261 @@
 .bd-app .call-decide-lg .call-rec-why { margin-top: 8px; }
 .bd-app .call-decide-lg .call-rec-acts { margin-top: 16px; }
 /* == end: week == */
+
+/* == page: contacts == */
+/* The Contacts page's place (contacts.html) and Add a contact (add.html, bd-add.js) (#808): BD's
+   contacts section, carrying only what has moved. The Contacts list (ct-) arrives with its own ticket.
+   Add a contact: one centred column, company first, the duplicate notice, fields, "Saved as"; the
+   tool's density from the approved mock-up (the form card at 640px, 13px hints). */
+.bd-app .ct-next { margin-top: 16px; }
+
+.bd-app .add-wrap { max-width: 640px; }
+.bd-app .add-title { margin-top: 2px; }
+.bd-app .add-sub { margin-top: 2px; }
+.bd-app .add-note { margin-top: 16px; }
+.bd-app .add-form { display: flex; flex-direction: column; margin-top: 18px; padding: 16px; background: var(--bd-card);
+  border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); }
+.bd-app .add-combo .input { padding-right: 44px; font-weight: 500; }
+.bd-app .add-list {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: var(--bd-z-menu); max-height: 336px; overflow-y: auto;
+  margin: 0; padding: 6px; list-style: none; background: var(--bd-card); border: 1px solid var(--bd-line);
+  border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-menu);
+}
+.bd-app .add-option { display: flex; align-items: center; gap: 12px; min-height: var(--bd-hit); padding: 6px 12px;
+  border-radius: var(--bd-r-sm); color: var(--bd-ink); cursor: pointer; }
+.bd-app .add-option .tw-ico { color: var(--bd-ink-2); }
+.bd-app .add-option:hover, .bd-app .add-option[aria-selected="true"] { background: var(--bd-recessed); }
+.bd-app .add-option.is-new { color: var(--bd-link); font-weight: 600; }
+.bd-app .add-option.is-new .tw-ico { color: var(--bd-link); }
+.bd-app .add-option-text { display: flex; flex-direction: column; min-width: 0; }
+.bd-app .add-option-name { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.bd-app .add-option-sub { font-size: 12px; line-height: 1.3; color: var(--bd-ink-2); }
+.bd-app .add-dupe { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding: 12px 14px;
+  border-radius: var(--bd-r-card); background: var(--bd-info-bg); color: var(--bd-ink); }
+.bd-app .add-dupe-head { display: flex; align-items: center; gap: 12px; }
+.bd-app .add-dupe-q { flex: 1 1 auto; min-width: 0; font-size: 14px; line-height: 1.45; }
+.bd-app .add-dupe-q strong { font-weight: 600; }
+.bd-app .add-dupe-open { flex: none; padding: 0 4px; }
+.bd-app .add-dupe-links { gap: 4px 16px; }
+.bd-app .add-radios { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.bd-app .add-radios .radio-tile { line-height: 1.35; padding-top: 10px; padding-bottom: 10px; background: var(--bd-card); }
+.bd-app .add-radios .radio-tile[aria-checked="false"] { font-weight: 500; }
+.bd-app .add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 20px; }
+.bd-app .add-match { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; font-weight: 500; color: var(--bd-warn); }
+.bd-app .add-defaults { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; padding: 12px 14px;
+  background: var(--bd-recessed); border-radius: var(--bd-r-card); }
+.bd-app .add-defaults-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.bd-app .add-saved-h { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--bd-ink); }
+.bd-app .add-pills { flex: 1 1 300px; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.bd-app .add-change { flex: none; padding: 0 10px; font-weight: 600; }
+.bd-app .add-more { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; padding-top: 14px;
+  border-top: 1px solid var(--bd-line); }
+.bd-app .add-switch-row { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 12px; min-height: var(--bd-hit); padding-top: 4px; }
+.bd-app .add-switch-text { display: flex; flex-direction: column; gap: 2px; }
+.bd-app .add-switch-label { font-size: 14px; font-weight: 600; line-height: 1.85; }
+.bd-app .add-notes { grid-column: 1 / -1; }
+.bd-app .add-notes .textarea { min-height: 88px; }
+.bd-app .add-actions { margin-top: 20px; }
+@media (max-width: 767px) {
+  .bd-app .add-form { margin-top: 14px; padding: 14px 12px; }
+  .bd-app .add-grid { margin-top: 16px; gap: 12px; }
+  .bd-app .add-actions .btn-primary { flex: 1 1 auto; }
+}
+/* == end: contacts == */
+
+/* == page: contact == */
+/* contact.html (bd-contact.js) (#808): the Contact artboard at the tool's density (the approved
+   mock-up). A header with the avatar, name and Log / Email / Text, then the main column (Next step,
+   History) beside the side column (This year, Follow-up cadence, Details, Others, Archive); one
+   column under 1100px; on a phone Details folded and a sticky Call / Log bar at the bottom. Card
+   titles are the mock-up's small capitals. */
+
+/* loading */
+.bd-app .cd-skel-head { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
+.bd-app .cd-skel-avatar { width: 56px; height: 56px; border-radius: 50%; flex: none; }
+.bd-app .cd-skel-lines { display: flex; flex-direction: column; gap: 10px; flex: 1; max-width: 360px; }
+.bd-app .cd-skel-line { height: 14px; max-width: 200px; }
+.bd-app .cd-skel-wide { height: 24px; max-width: 320px; }
+.bd-app .cd-skel-tall { height: 240px; }
+
+/* back link and header */
+.bd-app .cd-back { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; margin-bottom: 4px;
+  font-size: 13px; font-weight: 600; color: var(--bd-link); text-decoration: none; }
+.bd-app .cd-back:hover { color: var(--bd-link-hover); text-decoration: underline; }
+.bd-app .cd-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; margin-top: 4px; }
+.bd-app .cd-who { flex: 1 1 420px; min-width: 0; display: flex; align-items: center; gap: 14px; }
+.bd-app .cd-head .avatar-xl { width: 56px; height: 56px; font-size: 18px; }
+.bd-app .cd-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bd-app .cd-name-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.bd-app .cd-name { overflow-wrap: anywhere; }
+.bd-app .cd-name:focus-visible { outline-offset: 4px; }
+.bd-app .cd-sub { font-size: 14px; line-height: 1.45; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .cd-company { color: var(--bd-ink-2); }
+.bd-app .cd-score { font-size: 12px; font-weight: 500; color: var(--bd-ink-2); }
+.bd-app .cd-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bd-app .cd-log { padding: 0 12px 0 14px; }
+.bd-app .cd-log .tw-ico:last-child { width: 16px; height: 16px; color: var(--bd-ink-2); }
+.bd-app .cd-head .cd-iconbtn { border-color: var(--bd-line-strong); background: var(--bd-card); color: var(--bd-ink); }
+.bd-app .cd-head .cd-iconbtn:hover { border-color: var(--bd-red); color: var(--bd-red-hover); background: var(--bd-card); }
+
+/* the lines under the header: "Did you send something?", "Taken off this week.", notices */
+.bd-app .cd-ask { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px 10px 16px;
+  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); }
+.bd-app .cd-ask-text { flex: 1 1 240px; font-size: 14px; font-weight: 500; }
+.bd-app .cd-off { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.bd-app .cd-off-text { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.bd-app .cd-off-ring { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 2px dashed var(--bd-control); }
+.bd-app .cd-undo { color: var(--bd-link); font-weight: 600; }
+.bd-app .cd-notice { margin-top: 14px; flex-wrap: wrap; align-items: center; }
+.bd-app .cd-notice .tw-ico { margin-top: 0; }
+.bd-app .cd-notice-text { flex: 1 1 220px; }
+.bd-app .cd-notice-acts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.bd-app .cd-notice .btn { color: var(--bd-ink); }
+
+/* two columns */
+.bd-app .cd-layout { margin-top: 18px; gap: 16px; }
+.bd-app .cd-main, .bd-app .cd-side { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+
+/* card titles: the mock-up's small capitals */
+.bd-app .cd-label, .bd-app .cd-card-title { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 700;
+  line-height: 1.3; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
+.bd-app .cd-label .tw-ico { width: 14px; height: 14px; }
+.bd-app .cd-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* the Next step card */
+.bd-app .cd-step-title { margin-top: 10px; font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--bd-ink); overflow-wrap: anywhere; }
+.bd-app .cd-when { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .cd-date { gap: 5px; color: var(--bd-ink); }
+.bd-app .cd-date .tw-ico { width: 14px; height: 14px; }
+.bd-app .cd-none { margin-top: 10px; font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--bd-ink); }
+.bd-app .cd-reason { margin-top: 6px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .cd-actions { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bd-app .cd-actions .btn-tertiary { padding: 0 10px; font-weight: 600; }
+.bd-app .cd-suggest { margin-top: 10px; }
+.bd-app .cd-suggest .cd-step-title { margin-top: 0; }
+.bd-app .cd-call-host + .cd-actions { margin-top: 12px; }
+@media (max-width: 767px) {
+  /* Call lives in the pinned bar on a phone: Change and Clear sit flush under the date */
+  .bd-app .cd-next .cd-actions { margin-top: 8px; }
+  .bd-app .cd-next .cd-actions > .btn-tertiary:first-child,
+  .bd-app .cd-next .cd-actions > .hide-phone:first-child + .btn-tertiary { margin-left: -10px; }
+}
+
+/* the missed-call follow-up slot (BDCall.followup draws inside it) */
+.bd-app .cd-fu-slot { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--bd-line); }
+
+/* History */
+.bd-app .cd-history { padding-bottom: 6px; }
+.bd-app .cd-compose { margin-top: 12px; }
+.bd-app .cd-compose.is-open { display: flex; flex-direction: column; gap: 10px; }
+.bd-app .cd-compose .cd-actions { margin-top: 0; }
+.bd-app .cd-compose .textarea { min-height: 88px; }
+.bd-app .cd-tl { margin: 6px 0 0; padding: 0; list-style: none; }
+.bd-app .cd-tl-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; padding: 10px 0; }
+.bd-app .cd-tl-item + .cd-tl-item { border-top: 1px solid var(--bd-line); }
+.bd-app .cd-tl-ico { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--bd-recessed); color: var(--bd-ink-2); }
+.bd-app .cd-tl-ico.is-touch { background: var(--bd-ok-bg); color: var(--bd-ok); }
+.bd-app .cd-tl-ico .tw-ico { width: 14px; height: 14px; vertical-align: 0; }
+.bd-app .cd-tl-main { min-width: 0; }
+.bd-app .cd-tl-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; min-height: 28px; }
+.bd-app .cd-tl-kind { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bd-app .cd-tl-word { font-size: 14px; font-weight: 700; line-height: 1.3; }
+.bd-app .cd-tl-when { font-size: 12px; color: var(--bd-ink-2); white-space: nowrap; }
+.bd-app .cd-tl-text { margin-top: 2px; max-width: 64ch; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bd-app .cd-tl-by { margin-top: 2px; font-size: 12px; color: var(--bd-ink-2); }
+.bd-app .cd-tl-note { margin-top: 2px; font-size: 13px; line-height: 1.5; color: var(--bd-ink-2); }
+.bd-app .cd-tl-links { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; font-size: 13px; font-weight: 500; }
+.bd-app .cd-tl-links a { display: inline-flex; align-items: center; min-height: 32px; }
+.bd-app .cd-tl-links .btn-link { min-height: 32px; font-size: 13px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.bd-app .cd-tl-transcript { margin-top: 8px; padding: 10px 14px; border-left: 3px solid var(--bd-line); border-radius: 0 var(--bd-r-sm) var(--bd-r-sm) 0;
+  background: var(--bd-recessed); color: var(--bd-ink-2); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Edit (the one who logged it) and Delete (a BD admin) under an entry, and the entry's words in place */
+.bd-app .cd-tl-acts { margin-top: 2px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 14px; }
+.bd-app .cd-tl-act { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; font-size: 12px; font-weight: 600; }
+.bd-app .cd-tl-act .tw-ico { width: 14px; height: 14px; }
+.bd-app .cd-tl-del { color: var(--bd-danger); }
+.bd-app .cd-tl-edit { margin-top: 6px; }
+.bd-app .cd-tl-edit .textarea { min-height: 80px; }
+.bd-app .cd-tl-edit .cd-actions { margin-top: 2px; }
+.bd-app .cd-empty-line { margin-top: 6px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .cd-history .cd-empty-line { padding: 12px 0 8px; }
+.bd-app .cd-more { padding: 4px 0 10px; }
+
+/* This year */
+.bd-app .cd-year-num { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.bd-app .cd-big { font-size: 24px; font-weight: 700; line-height: 1; letter-spacing: -.02em; color: var(--bd-ink); }
+.bd-app .cd-year-unit { font-size: 14px; color: var(--bd-ink-2); }
+.bd-app .cd-year-bar { margin-top: 10px; }
+.bd-app .cd-year-due { margin-top: 10px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .cd-year-due strong { font-weight: 600; color: var(--bd-ink); }
+
+/* Follow-up cadence */
+.bd-app .cd-cad-line { margin-top: 10px; font-size: 14px; line-height: 1.45; color: var(--bd-ink); }
+.bd-app .cd-cad-sub { margin-top: 6px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .cd-cadence .cd-edit-btn { margin-top: 14px; }
+.bd-app .cd-cad-clear { margin-top: 4px; }
+
+/* Details (folded under its heading on a phone) */
+.bd-app .cd-fold-sum { display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; cursor: pointer; }
+.bd-app .cd-fold-sum::-webkit-details-marker { display: none; }
+.bd-app .cd-fold-chev { display: inline-flex; color: var(--bd-ink-2); transition: transform 120ms var(--bd-ease); }
+.bd-app .cd-fold[open] .cd-fold-chev { transform: rotate(180deg); }
+@media (min-width: 768px) {
+  .bd-app .cd-fold-sum { cursor: default; pointer-events: none; }
+  .bd-app .cd-fold-chev { display: none; }
+}
+.bd-app .cd-kv { margin: 12px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+.bd-app .cd-kv-item { min-width: 0; }
+.bd-app .cd-kv-full, .bd-app .cd-kv-rule { grid-column: 1 / -1; }
+.bd-app .cd-kv-rule { height: 1px; background: var(--bd-line); }
+.bd-app .cd-kv dt { font-size: 12px; font-weight: 500; line-height: 1.3; color: var(--bd-ink-2); }
+.bd-app .cd-kv dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; line-height: 1.4; color: var(--bd-ink); overflow-wrap: anywhere; }
+.bd-app .cd-tel { white-space: nowrap; }
+.bd-app .cd-none-val { font-weight: 400; color: var(--bd-ink-2); }
+.bd-app .cd-pre { font-weight: 400; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bd-app .cd-switch { display: inline-flex; align-items: center; gap: 10px; min-height: 26px; }
+.bd-app .cd-switch-word { font-size: 13px; }
+.bd-app .cd-edit-btn { margin-top: 14px; }
+
+/* Others at the company, Archive */
+.bd-app .cd-others { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.bd-app .cd-other { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 0; }
+.bd-app .cd-other + .cd-other { border-top: 1px solid var(--bd-line); }
+.bd-app .cd-other .who-name { font-size: 14px; }
+.bd-app .cd-other .who-sub { font-size: 12px; }
+.bd-app .cd-others-card .cd-skel-line { margin-top: 10px; }
+.bd-app .cd-add-someone { margin-top: 10px; }
+.bd-app .cd-archive { align-self: flex-start; padding: 0 12px; }
+
+/* the Edit details drawer */
+.bd-app .cd-edit-form { display: flex; flex-direction: column; gap: 14px; padding-top: 4px; }
+
+/* phone: one column, Details folded, a sticky Call / Log bar at the bottom of the screen, under the
+   tool's drawer and BD's sheets */
+.bd-app .cd-callbar { display: none; }
+@media (max-width: 767px) {
+  .bd-app .cd-head { gap: 12px; }
+  .bd-app .cd-who { flex-basis: 100%; gap: 12px; align-items: flex-start; }
+  .bd-app .cd-head .avatar-xl { width: 48px; height: 48px; font-size: 16px; }
+  .bd-app .cd-name { font-size: 21px; }
+  .bd-app .cd-head-actions:empty { display: none; }
+  .bd-app .cd-layout { margin-top: 14px; }
+  .bd-app .cd-tl-links .btn-link, .bd-app .cd-tl-links a, .bd-app .cd-tl-act { min-height: var(--bd-hit); }
+  .bd-app .cd-fold-sum { min-height: var(--bd-hit); margin: -12px 0; }
+  .bd-app .cd-fold:not([open]) .cd-kv, .bd-app .cd-fold:not([open]) .cd-edit-btn { display: none; }
+  .bd-app .cd-callbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--bd-z-callbar);
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    background: var(--bd-card); border-top: 1px solid var(--bd-line);
+  }
+  .bd-app .cd-callbar .cd-call { flex: 1 1 auto; min-width: 0; }
+  .bd-app .cd-callbar .cd-callbar-log { flex: 0 0 96px; }
+  .bd-app .cd-callbar.is-log-only .cd-callbar-log { flex: 1 1 auto; }
+  .bd-app.cd-has-callbar .cd-page { padding-bottom: calc(var(--bd-hit) + 48px); }
+  .bd-app.cd-has-callbar #bd-toasts { bottom: calc(var(--bd-hit) + 32px); }
+}
+/* == end: contact == */
 
 /* == print, reduced motion == */
 @media print {

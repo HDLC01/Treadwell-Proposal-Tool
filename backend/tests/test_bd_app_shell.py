@@ -265,15 +265,20 @@ def test_with_the_bd_database_stopped_the_tool_stays_fast_and_bd_answers_503_in_
 # ── signed in, on the fixture seed ───────────────────────────────────────────────────────────
 CAN = {
     "salesperson": {"send": True, "analytics": False, "admin": False, "admin_area": False, "import": True,
-                    "run_batch": False, "week": True, "pick_owner": False},
+                    "run_batch": False, "week": True, "pick_owner": False,
+                    "add_contact": True, "edit_contact": True, "clear_duplicate": False, "cadence": True, "manage_entries": False},
     "assistant": {"send": False, "analytics": False, "admin": False, "admin_area": True, "import": True,
-                  "run_batch": False, "week": False, "pick_owner": False},
+                  "run_batch": False, "week": False, "pick_owner": False,
+                  "add_contact": True, "edit_contact": True, "clear_duplicate": True, "cadence": True, "manage_entries": False},
     "manager": {"send": False, "analytics": True, "admin": False, "admin_area": False, "import": False,
-                "run_batch": False, "week": True, "pick_owner": True},
+                "run_batch": False, "week": True, "pick_owner": True,
+                "add_contact": False, "edit_contact": False, "clear_duplicate": False, "cadence": True, "manage_entries": False},
     "admin": {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True,
-              "run_batch": True, "week": True, "pick_owner": True},
+              "run_batch": True, "week": True, "pick_owner": True,
+              "add_contact": True, "edit_contact": True, "clear_duplicate": True, "cadence": True, "manage_entries": True},
     "super_admin": {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True,
-                    "run_batch": True, "week": True, "pick_owner": True},
+                    "run_batch": True, "week": True, "pick_owner": True,
+                    "add_contact": True, "edit_contact": True, "clear_duplicate": True, "cadence": True, "manage_entries": True},
 }
 SEED_PEOPLE = [
     (1, "Avery Quill", "avery.quill@example.com", "salesperson"),

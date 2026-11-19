@@ -172,6 +172,18 @@ def can(user) -> dict:
         # Looks at any salesperson's week (This Week's "Whose week?" picker); a salesperson sees only
         # their own.
         "pick_owner": a or role == "manager",
+        # The contact page and Add contact (#808). Each key is what one of BD's route checks lets in,
+        # so the pages show a control only to a person the route will not refuse.
+        # Adds a BD contact (POST /api/bd/contacts).
+        "add_contact": a or role in ("salesperson", "assistant"),
+        # Edits a contact's details, confirms, archives, adds a note, flags "not the right person".
+        "edit_contact": a or role in ("salesperson", "assistant"),
+        # Clears a possible-duplicate flag (PATCH {duplicate_of: null}).
+        "clear_duplicate": a or role == "assistant",
+        # Changes how often to follow up: every role (a manager may change only this).
+        "cadence": a or role in ("salesperson", "assistant", "manager"),
+        # Deletes a logged entry, or changes one somebody else logged.
+        "manage_entries": a,
     }
 
 

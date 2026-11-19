@@ -25,9 +25,10 @@ person, ten more); a call logged from the call sheet shows in that contact's his
 outcome changed after a touch saves; the wrong-person fallback with no task confirms the contact;
 each task's contact detail loads (the done line's outcome and the tray); the recommendation and
 follow-up buttons meet the 503 placeholders and say "not built yet"; a BD admin runs the weekly
-batch from This Week; names are not links, and no role's view (menus included) links to a BD page
-that has not moved (MOVED, not "the server answers 200"); the assistant lands on the
-Contacts-is-coming page; desktop and phone width, where a row with no phone number keeps its More menu.
+batch from This Week; a name opens the contact page (#808), and no role's view (menus included) links
+to a BD page that has not moved (MOVED, not "the server answers 200"); the assistant lands on the
+Contacts-is-coming page, which links to Add contact; desktop and phone width, where a row with no phone
+number keeps its More menu.
 
 BD's own tests of This Week are carried over below the ones above, renamed only where the seed's
 numbers differ from BD's mock week; the few that are not (the contact page has not moved, or the
@@ -53,9 +54,9 @@ HAL, DANA, PRIYA = 301, 302, 303          # Avery's tasks
 HAL_C, DANA_C, PRIYA_C = 30, 21, 25
 NORA_C = 31                               # Avery's other maintenance contact (Give Me 10 More's)
 
-# The BD pages that have moved into the tool so far (#807: This Week). /bd/contacts.html is not one:
-# it is only where the assistant is sent until Contacts moves (#808).
-MOVED = {"/bd/", "/bd/index.html"}
+# The BD pages that have moved into the tool so far (#807: This Week; #808: one contact and Add
+# contact). /bd/contacts.html is not one: it is only where the assistant is sent until Contacts moves.
+MOVED = {"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html"}
 
 NOT_BUILT = "This part is not built yet (Phase 5)."
 MAINT_PILL = "Maintenance · due"
@@ -243,15 +244,24 @@ def bd_links(pg):
                        ".filter(h => h.startsWith('/bd/')).map(h => h.split(/[?#]/)[0]))]")
 
 
-def test_names_are_not_links_and_the_menu_links_nowhere(page_as):
+def test_names_open_the_contact_page_and_so_does_the_menu(page_as, expect):
+    """#808: the contact page has moved, so a name, Next up's "Open <name>" and More's "Open contact"
+    go there, with from=week (its Back is to This Week). Every other link is a phone number."""
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     links = pg.locator("#main a[href]").evaluate_all("els => els.map(e => e.getAttribute('href'))")
-    assert links and all(h.startswith("tel:") for h in links), links
+    pages = sorted({h for h in links if not h.startswith("tel:")})
+    assert pages == ["/bd/contact.html?id=%d&from=week" % c for c in sorted((DANA_C, PRIYA_C, HAL_C))], pages
+    expect(pg.locator("#wk-next .wk-next-open")).to_have_text("Open Hal Brecken")
     pg.locator('#wk-rest [data-task="%d"] [data-act="more"]' % DANA).click()
     acts = menu_acts(pg)
-    assert acts == ["snooze", "log-meeting", "nrp", "done"], acts
-    assert pg.locator(".menu a").count() == 0, "no menu item links to a contact page that has not moved"
+    assert acts == ["snooze", "log-meeting", "nrp", "done", "open"], acts
+    assert pg.locator(".menu a").get_attribute("href") == "/bd/contact.html?id=%d&from=week" % DANA_C
+    pg.locator(".menu a").click()
+    pg.wait_for_url(re.compile(r".*/bd/contact\.html\?id=%d&from=week$" % DANA_C))
+    pg.locator("#cd-title").wait_for()
+    expect(pg.locator("#cd-title")).to_have_text("Dana Whitlow")
+    expect(pg.locator(".cd-back")).to_have_attribute("href", "/bd/")
 
 
 @pytest.mark.parametrize("email, path", [(AVERY, "/bd/"), (DEVON, "/bd/"), (DEVON, "/bd/?owner=1"), (EMERY, "/bd/"),
@@ -578,7 +588,8 @@ def test_the_assistant_lands_on_the_contacts_is_coming_page(page_as, expect):
     p, pg = page_as("/bd/", CASEY)
     pg.wait_for_url(re.compile(r".*/bd/contacts\.html(\?.*)?$"), timeout=10000)
     expect(pg.locator("#main")).to_contain_text("The Contacts page is coming.")
-    assert pg.locator("#main a").count() == 0, "no link to a page that has not moved"
+    links = pg.locator("#main a").evaluate_all("els => els.map(e => e.getAttribute('href'))")
+    assert links == ["/bd/add.html"], "Add contact (moved, #808), and no link to a page that has not moved"
     # This Week was replaced in the history, so Back goes to where the tab was before (here the
     # browser's blank page), never back to /bd/ and its redirect.
     pg.go_back()
@@ -745,8 +756,9 @@ def test_a_maintenance_task_cannot_be_taken_off_even_when_forced(page_as, expect
 
 
 def test_logging_a_note_keeps_the_pin_and_an_email_moves_it_to_done(page_as, expect):
-    """BD's test logged them from the contact page, which has not moved (#808): here through the
-    interactions route the contact page will use. A note is not a follow-up; an email is."""
+    """BD's test logged them from the contact page: here through the interactions route the contact
+    page uses (tests/test_bd_e2e_contact.py logs them from the page). A note is not a follow-up; an
+    email is."""
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.evaluate("c => BDApi.post(BDApi.path('contacts', c, 'interactions'), {kind: 'note', summary: 'Looked up the invoice.'})",

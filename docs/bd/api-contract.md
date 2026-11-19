@@ -615,7 +615,8 @@ BD route serves that path with another method.
 {
   "ok": true,
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
-  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false },
+  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false,
+           "add_contact": true, "edit_contact": true, "clear_duplicate": false, "cadence": true, "manage_entries": false },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -623,15 +624,31 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner |
-|---|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes | |
-| assistant | | | | yes | yes | | | |
-| manager | | yes | | | | | yes | yes |
-| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | |
+| assistant | | | | yes | yes | | | | yes | yes | yes | yes | |
+| manager | | yes | | | | | yes | yes | | | | yes | |
+| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 
 `pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
 "Whose week?" picker. A salesperson sees only their own week.
+
+The contact page and Add contact (#808) read these five; each is what one route's check lets in, so a
+page never offers what the server would refuse (tests/test_bd_contact_page_roles.py checks each key
+against its route, person by person):
+
+- `add_contact`: `POST /api/bd/contacts`. The sidebar's Add contact section and the contact page's
+  "Add someone".
+- `edit_contact`: `PATCH /api/bd/contacts/{id}` with any field, confirm, archive, a note, "Not the right
+  person". The contact page's Edit details, the note box, the "Still the right person?" switch and
+  Archive.
+- `clear_duplicate`: `PATCH {"duplicate_of": null}`. "Not a duplicate" on the contact page; Add contact
+  clears the flag it just made only for this person.
+- `cadence`: how often to follow up (a manager's only edit). A person with `cadence` and no
+  `edit_contact` (the manager) gets the cadence sheet alone, and the priority score.
+- `manage_entries`: `DELETE /api/bd/interactions/{id}`, and `PATCH` of an entry somebody else logged.
+  Each logged entry's Delete, and its Edit when it is not this person's own.
 
 #### `GET /api/bd/settings` (any BD role)
 

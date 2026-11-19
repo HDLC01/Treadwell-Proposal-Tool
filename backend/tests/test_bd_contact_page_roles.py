@@ -95,3 +95,43 @@ def test_the_table_covers_every_route_this_stage_moved():
     assert moved <= served
     tabled = {(m, re.sub(r"/[0-9]+(?=/|$)", "/{id}", p.split("?")[0])) for _l, m, p, _b, _w in TABLE}
     assert tabled == moved
+
+
+# ── the page's can keys agree with the routes they stand for ─────────────────────────────────────
+# The contact page and Add contact show a control only when /api/bd/me's can says so (they never read
+# a role name). Each key is checked here against the route it stands for, for each person: the key is
+# true exactly when the route lets that person in. Expected by hand from BD's role checks:
+#   add_contact      POST /api/bd/contacts                      salesperson, assistant, admins
+#   edit_contact     PATCH /api/bd/contacts/{id} (any field)    salesperson, assistant, admins
+#   clear_duplicate  PATCH {duplicate_of: null}                 assistant, admins
+#   cadence          PATCH the override (a manager's only edit) everyone
+#   manage_entries   DELETE /api/bd/interactions/{id}, PATCH someone else's entry    admins
+KEY_ROUTES = {
+    "add_contact": [("POST", "/api/bd/contacts", {"company": {"name": "Tallgrass Dental"}, "name": "Rae Lindgren"})],
+    "edit_contact": [("PATCH", "/api/bd/contacts/32", {"city": "Manhattan"})],
+    "clear_duplicate": [("PATCH", "/api/bd/contacts/33", {"duplicate_of": None})],
+    "cadence": [("PATCH", "/api/bd/contacts/32", {"cadence_override": "monthly", "cadence_override_until": "2026-12-31"})],
+    # 104 is the phone call logged by nobody: nobody's own entry
+    "manage_entries": [("PATCH", "/api/bd/interactions/104", {"summary": "Called from the front desk."}),
+                       ("DELETE", "/api/bd/interactions/104", None)],
+}
+KEY_TABLE = {
+    "add_contact": {"avery": True, "blair": True, "casey": True, "devon": False, "emery": True, "frankie": True},
+    "edit_contact": {"avery": True, "blair": True, "casey": True, "devon": False, "emery": True, "frankie": True},
+    "clear_duplicate": {"avery": False, "blair": False, "casey": True, "devon": False, "emery": True, "frankie": True},
+    "cadence": {who: True for who in ROLES},
+    "manage_entries": {"avery": False, "blair": False, "casey": False, "devon": False, "emery": True, "frankie": True},
+}
+KEY_CASES = [(key, who) for key in KEY_TABLE for who in ROLES]
+
+
+@pytest.mark.parametrize("key, who", KEY_CASES, ids=["%s-%s" % c for c in KEY_CASES])
+def test_each_can_key_is_true_exactly_when_its_route_lets_the_person_in(bd_seeded, bd_as_user, key, who):
+    client = bd_as_user(UID[who])
+    can = client.get("/api/bd/me").json()["can"]
+    assert can[key] is KEY_TABLE[key][who], (key, who, can)
+    for method, path, body in KEY_ROUTES[key]:
+        kw = {"json": body} if body is not None else {}
+        r = client.request(method, path, **kw)
+        assert (r.status_code != 403) is KEY_TABLE[key][who], (key, who, method, path, r.status_code, r.text)
+        assert r.status_code in (200, 201, 403), (key, who, r.status_code, r.text)

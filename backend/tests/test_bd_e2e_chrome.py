@@ -6,7 +6,7 @@ collapsible "BD CRM" row. What a person sees:
 
   * Desktop: the BD CRM row (BETA) is the one lit row on every /bd/ page, its group is open, and the
     sections are exactly the ones the person's BD role may open, the current one lit by full path.
-    In this ticket that is This Week alone, and only for the roles BD's can() gives it to.
+    That is This Week and Add contact (#808), each only for the roles BD's can() gives it to.
   * The chevron is a real button (aria-expanded, aria-controls). On a tool page the group starts
     shut and asks BD nothing; on desktop the last choice is remembered (tw_bd_open), never on a
     phone. The sidebar's Hide menu hides the sections with everything else.
@@ -43,6 +43,10 @@ WEEK_PEOPLE = [
     ("emery.stoll@example.com", "Emery", CHOOSE),
     ("frankie.oduya@example.com", "Frankie", CHOOSE),
 ]
+# The sections each of them sees: Add contact is not the manager's (#808).
+BOTH = ["This Week", "Add contact"]
+SECTIONS = {"avery.quill@example.com": BOTH, "devon.hale@example.com": ["This Week"],
+            "emery.stoll@example.com": BOTH, "frankie.oduya@example.com": BOTH}
 SUPER = "frankie.oduya@example.com"
 ASSISTANT = "casey.moret@example.com"
 TURNED_OFF = "gale.ward@example.com"
@@ -102,7 +106,7 @@ def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env,
         assert chev.get_attribute("aria-expanded") == "true"
         assert chev.get_attribute("aria-controls") == "tw-bd-sections"
         assert page.locator("#tw-bd-sections").is_visible()
-        assert _sections(page) == ["This Week"]
+        assert _sections(page) == SECTIONS[email]
         current = page.locator('#tw-bd-sections [aria-current="page"]')
         assert current.count() == 1 and current.get_attribute("href") == "/bd/"
         assert _sub_text(page) == sub          # said once the week (or the choice of whose week) is drawn
@@ -113,19 +117,25 @@ def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env,
         p.close()
 
 
-def test_the_assistant_has_no_section_until_her_pages_move(env):
+def test_the_assistant_sees_add_contact_and_it_works(env):
     """This Week sends her to her BD home, Contacts; there, the BD CRM row is lit and her group is
-    open with no section yet (Contacts joins it when its page moves)."""
+    open with her one section, Add contact (#808; Contacts joins it when its page moves), which opens
+    the form."""
     p = _page(env, ASSISTANT)
     try:
         page = p.open_signed_in("/bd/")
         page.wait_for_url(re.compile(r".*/bd/contacts\.html(\?.*)?$"), timeout=10000)
         page.wait_for_selector("#tw-bd-chev")
         _wait_sections(page)
-        assert _sections(page) == []
-        assert page.locator("#tw-bd-sections").inner_text().strip() == "Nothing here for your BD role yet."
+        assert _sections(page) == ["Add contact"]
+        assert page.locator('#tw-bd-sections [aria-current="page"]').count() == 0
         lit = page.locator("#tw-sidebar .tw-nav-item.active")
         assert lit.count() == 1 and lit.get_attribute("href") == "/bd/"
+        page.locator('#tw-bd-sections a[href="/bd/add.html"]').click()
+        page.locator("#add-form").wait_for(timeout=15000)
+        _wait_sections(page)
+        current = page.locator('#tw-bd-sections [aria-current="page"]')
+        assert current.count() == 1 and current.get_attribute("href") == "/bd/add.html"
         # The redirect can land while /bd/ is still loading; the browser then cancels the rest of it.
         errors = [e for e in p.errors if e != "failed /bd/"]
         assert errors == [] and p.bd_errors() == [], (p.errors, p.bd_errors())
@@ -170,7 +180,7 @@ def test_on_a_tool_page_the_group_starts_shut_asks_bd_nothing_and_the_chevron_op
         chev.click()
         _wait_sections(page)
         assert chev.get_attribute("aria-expanded") == "true"
-        assert _sections(page) == ["This Week"]
+        assert _sections(page) == BOTH
         assert page.locator('#tw-bd-sections [aria-current="page"]').count() == 0, \
             "This Week is not the page you are on"
         assert page.evaluate("localStorage.getItem('tw_bd_open')") == "1"
@@ -197,7 +207,7 @@ def test_a_bd_page_opens_the_group_whatever_was_remembered(env):
         page = p.open_signed_in("/bd/")
         _wait_sections(page)
         assert page.locator("#tw-bd-chev").get_attribute("aria-expanded") == "true"
-        assert _sections(page) == ["This Week"]
+        assert _sections(page) == BOTH
     finally:
         p.close()
 
@@ -231,9 +241,9 @@ def test_on_a_phone_the_bd_sections_are_inside_the_drawer(env):
         section = page.locator('#tw-sidebar #tw-bd-sections a:has-text("This Week")')
         assert section.is_visible()
         assert page.locator("#tw-bd-chev").get_attribute("aria-expanded") == "true"
-        for sel in ("#tw-bd-chev", "#tw-bd-sections .tw-bd-sec"):
-            box = page.locator(sel).bounding_box()
-            assert box and box["height"] >= 43.5, (sel, box)
+        for target in [page.locator("#tw-bd-chev")] + page.locator("#tw-bd-sections .tw-bd-sec").all():
+            box = target.bounding_box()
+            assert box and box["height"] >= 43.5, (target, box)
         # Keep this page (the link's own navigation is cancelled before the sidebar sees the tap), so
         # what is seen is THIS page shutting its drawer, not the next page starting shut.
         page.evaluate("document.addEventListener('click', e => {"
@@ -258,7 +268,7 @@ def test_on_a_phone_a_tool_page_starts_shut_and_remembers_nothing(env):
         assert page.locator("#tw-bd-sections").is_hidden()
         chev.click()
         _wait_sections(page)
-        assert _sections(page) == ["This Week"]
+        assert _sections(page) == BOTH
         chev.click()
         assert chev.get_attribute("aria-expanded") == "false"
         assert page.locator("#tw-bd-sections").is_hidden()

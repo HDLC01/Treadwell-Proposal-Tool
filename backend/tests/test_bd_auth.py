@@ -105,11 +105,11 @@ def test_current_user_needs_the_gates_identity():
 
 # ── roles ─────────────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("role,want", [
-    ("salesperson", {"send": True, "analytics": False, "admin": False, "admin_area": False, "import": True, "run_batch": False, "week": True, "pick_owner": False}),
-    ("assistant", {"send": False, "analytics": False, "admin": False, "admin_area": True, "import": True, "run_batch": False, "week": False, "pick_owner": False}),
-    ("manager", {"send": False, "analytics": True, "admin": False, "admin_area": False, "import": False, "run_batch": False, "week": True, "pick_owner": True}),
-    ("admin", {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True, "run_batch": True, "week": True, "pick_owner": True}),
-    ("super_admin", {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True, "run_batch": True, "week": True, "pick_owner": True}),
+    ("salesperson", {"send": True, "analytics": False, "admin": False, "admin_area": False, "import": True, "run_batch": False, "week": True, "pick_owner": False, "add_contact": True, "edit_contact": True, "clear_duplicate": False, "cadence": True, "manage_entries": False}),
+    ("assistant", {"send": False, "analytics": False, "admin": False, "admin_area": True, "import": True, "run_batch": False, "week": False, "pick_owner": False, "add_contact": True, "edit_contact": True, "clear_duplicate": True, "cadence": True, "manage_entries": False}),
+    ("manager", {"send": False, "analytics": True, "admin": False, "admin_area": False, "import": False, "run_batch": False, "week": True, "pick_owner": True, "add_contact": False, "edit_contact": False, "clear_duplicate": False, "cadence": True, "manage_entries": False}),
+    ("admin", {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True, "run_batch": True, "week": True, "pick_owner": True, "add_contact": True, "edit_contact": True, "clear_duplicate": True, "cadence": True, "manage_entries": True}),
+    ("super_admin", {"send": True, "analytics": True, "admin": True, "admin_area": True, "import": True, "run_batch": True, "week": True, "pick_owner": True, "add_contact": True, "edit_contact": True, "clear_duplicate": True, "cadence": True, "manage_entries": True}),
 ])
 def test_can_matches_the_contract_table(role, want):
     assert auth.can({"role": role}) == want

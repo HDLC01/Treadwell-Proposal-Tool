@@ -398,6 +398,10 @@ DOORS = [
      "the Pricing options panel's link to the estimate on a v2 draft"),
     ("shared.js", 'searchParams.has("edit")', 1, NOT_A_DOOR,
      "the step-link rewriter reads the parameter, it opens nothing"),
+    # #808: the BD contact page's "Edit details" button: a data-act name and the Next step card's
+    # state, under /bd/; it opens neither the spreadsheet nor the intake.
+    ("bd/js/bd-contact.js", '"edit"', 7, NOT_A_DOOR,
+     "the BD contact page's Edit details action and step-editor state, not the intake's ?edit"),
 ]
 
 

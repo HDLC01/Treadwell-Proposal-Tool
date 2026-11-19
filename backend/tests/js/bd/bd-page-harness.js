@@ -14,7 +14,9 @@
  *             responses: {"GET /api/bd/me": {status, body} | {status, text, type}}
  *             fetchFails: true                          every fetch rejects (no network)
  *             calls: [{fn: "get" | "post" | ..., path, body}]
- *             ids: ["wk-greeting", ...] }               elements to report
+ *             ids: ["wk-greeting", ...]                  elements to report
+ *             search: "?id=21", pathname: "/bd/contact.html" }   the page's address (#808; default
+ *                                                       "" and "/bd/") 
  * out:      { threw, calls: [{ok} | {error: {message, status, code, fields}}], fetches: [{url, method,
  *             headers, body}], els: {id: {text, html, hidden}}, globals: {name: typeof},
  *             replaced: [address, ...] }               every location.replace (a role sent home, #807)
@@ -53,6 +55,7 @@ function element(id) {
     addEventListener(t, fn) { (e.listeners[t] = e.listeners[t] || []).push(fn); },
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     querySelector() { return null; }, querySelectorAll() { return []; }, appendChild() {},
+    focus() {}, contains() { return false; },
   };
   return e;
 }
@@ -91,7 +94,7 @@ const ctx = {
   console,
   setTimeout, clearTimeout,
   URLSearchParams, URL, Intl, JSON, Math, Promise,
-  location: { pathname: "/bd/", search: "", hostname: "proposals.example.com", origin: "https://proposals.example.com",
+  location: { pathname: SC.pathname || "/bd/", search: SC.search || "", hostname: "proposals.example.com", origin: "https://proposals.example.com",
               replace: (to) => { replaced.push(String(to)); } },
   document: {
     title: "", documentElement: element("html"), body: element("body"),

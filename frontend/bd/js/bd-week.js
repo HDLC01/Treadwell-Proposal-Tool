@@ -11,8 +11,9 @@
  *   - ROLE HOME. BD's old shell sent each role to its BD home; that redirect lives here now. A role
  *     whose home is Contacts (the assistant: can.week is false, and the week route refuses her) is
  *     sent to CONTACTS_HOME, which until the Contacts page moves is a plain page saying it is coming.
- *   - NO LINKS TO PAGES THAT HAVE NOT MOVED. A person's name is text, not a link to their contact
- *     page, and the More menu has no "Open contact", until the contact page moves (#808).
+ *   - LINKS ONLY TO PAGES THAT HAVE MOVED. A person's name, Next up's "Open <name>" and the More
+ *     menu's "Open contact" go to their contact page (/bd/contact.html, moved in #808), through
+ *     BD.safeHref. Nothing links to the Contacts page until it moves.
  *   - Toasts are BD.toast's; every route is under /api/bd/.
  *
  * The principle (docs/product-brief.md): the system manages the backlog, the salesperson manages
@@ -50,8 +51,8 @@
   "use strict";
 
   var BD = window.BD, BDApi = window.BDApi;
-  // The Contacts page: the BD home of a role without a weekly list. Until Contacts moves (#808) it
-  // is a plain page saying the page is coming.
+  // The Contacts page: the BD home of a role without a weekly list. Until Contacts moves it is a
+  // plain page saying the page is coming, with a link to Add contact (#808).
   var CONTACTS_HOME = "/bd/contacts.html";
   var esc = BD.esc;
 
@@ -217,6 +218,19 @@
   function own() {
     var w = S.week, meId = S.me && S.me.user && S.me.user.id;
     return !w.owner || w.owner.id === meId;
+  }
+
+  /** The contact page, back to This Week ("" for a contact with no id: then the name is plain text). */
+  function contactHref(c) {
+    return c && c.id != null ? BD.safeHref("/bd/contact.html?id=" + encodeURIComponent(c.id) + "&from=week") : "";
+  }
+
+  /** A row's name and company: a link to the contact page. */
+  function whoHTML(c) {
+    var inner = '<span class="who-name">' + esc(c.name) + "</span>" +
+      '<span class="who-sub">' + esc(c.company ? c.company.name : "") + "</span>";
+    var href = contactHref(c);
+    return href ? '<a class="who wk-who" href="' + esc(href) + '">' + inner + "</a>" : '<span class="who wk-who">' + inner + "</span>";
   }
 
   /** The task's contact, with what GET /api/contacts/{id} added once it has landed. */
@@ -591,8 +605,7 @@
     return '<li class="list-row wk-row' + (two ? " wk-row-two" : "") + (noPhone ? " wk-row-nophone" : "") +
       (S.canAct && !o.preview ? "" : " is-readonly") + '"' + hook + ">" +
       BD.avatarHTML(c.name || "", "") +
-      '<span class="who wk-who"><span class="who-name">' + esc(c.name) + "</span>" +
-      '<span class="who-sub">' + esc(c.company ? c.company.name : "") + "</span></span>" +
+      whoHTML(c) +
       '<span class="wk-reason">' + reasonHTML(reason) + "</span>" +
       '<span class="wk-pill">' + pill + "</span>" + acts + "</li>";
   }
@@ -638,7 +651,8 @@
       '<div class="wk-next-main">' +
       '<div class="wk-next-top"><p class="wk-next-label">Next up</p><span class="wk-next-kind-top">' + kind + "</span></div>" +
       '<div class="wk-next-who">' + BD.avatarHTML(c.name || "", "lg") +
-      '<div class="wk-next-id"><div class="wk-next-namerow"><h2 class="wk-next-name" id="wk-next-name">' + esc(c.name) + "</h2>" +
+      '<div class="wk-next-id"><div class="wk-next-namerow"><h2 class="wk-next-name" id="wk-next-name">' +
+      (contactHref(c) ? '<a href="' + esc(contactHref(c)) + '">' + esc(c.name) + "</a>" : esc(c.name)) + "</h2>" +
       '<span class="wk-next-kind">' + kind + "</span></div>" +
       '<p class="wk-next-meta wk-meta-wide">' + esc(metaWide) + "</p>" +
       '<p class="wk-next-meta wk-meta-narrow"><span>' + esc(c.company ? c.company.name : "") + "</span>" +
@@ -646,7 +660,9 @@
       (reason ? '<p class="wk-next-reason">' + icon("calendar", 18) + "<span>" + esc(reason) + "</span></p>" : "") +
       '<p class="wk-next-line">' + line + "</p>" +
       acts + "</div>" +
-      '<div class="wk-next-side"><p class="wk-next-label2">Last live talk</p>' + side + "</div>" +
+      '<div class="wk-next-side"><p class="wk-next-label2">Last live talk</p>' + side +
+      (contactHref(c) ? '<a class="btn-link wk-next-open" href="' + esc(contactHref(c)) + '">' + esc("Open " + c.name) + icon("arrow-right", 16) + "</a>" : "") +
+      "</div>" +
       "</article></section>";
   }
 
@@ -729,8 +745,7 @@
       ? '<button type="button" class="btn-link wk-undo" data-act="reopen" aria-label="' + esc("Undo for " + c.name) + '">Undo</button>' : "";
     return '<li class="list-row wk-row wk-done-row is-done" data-task="' + esc(t.id) + '" data-status="done">' +
       BD.avatarHTML(c.name || "", "", "done") +
-      '<span class="who wk-who"><span class="who-name">' + esc(c.name) + "</span>" +
-      '<span class="who-sub">' + esc(c.company ? c.company.name : "") + "</span></span>" +
+      whoHTML(c) +
       '<span class="wk-outcome">' + (line == null ? '<span class="skeleton wk-skel-short"></span>' : esc(line)) + "</span>" + undo + "</li>";
   }
 
@@ -740,8 +755,7 @@
       ? '<button type="button" class="btn-link wk-undo" data-act="reopen" aria-label="' + esc("Undo for " + c.name) + '">Undo</button>' : "";
     return '<li class="list-row wk-row wk-done-row is-off" data-task="' + esc(t.id) + '" data-status="snoozed">' +
       BD.avatarHTML(c.name || "", "", "off") +
-      '<span class="who wk-who"><span class="who-name">' + esc(c.name) + "</span>" +
-      '<span class="who-sub">' + esc(c.company ? c.company.name : "") + "</span></span>" +
+      whoHTML(c) +
       '<span class="wk-outcome">Not this week</span>' + undo + "</li>";
   }
 
@@ -1144,6 +1158,7 @@
     items.push({ act: "log-meeting", label: "Log a meeting", icon: "users" });
     items.push({ act: "nrp", label: "Not the right person", icon: "user-x" });
     if (!maint) items.push({ act: "done", label: "Done, nothing to log", icon: "check" });
+    if (contactHref(t.contact)) items.push({ act: "open", label: "Open contact", icon: "arrow-right", href: contactHref(t.contact) });
     return items;
   }
 
