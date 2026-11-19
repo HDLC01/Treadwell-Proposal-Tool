@@ -223,6 +223,18 @@ def test_values_go_in_as_text(tmp_path):
     assert "<img" not in html and "&lt;img" in html
 
 
+def test_an_email_link_carries_the_address_and_nothing_after_it(tmp_path):
+    """The server only length-checks an email, so one stored with a query (through the API or an
+    import) must not open the mail app with a hidden copy or a written body: both Email links stop at
+    the address."""
+    responses = contact_responses()
+    c = responses["GET /api/bd/contacts/21"]["body"]["contact"]
+    c["email"] = "dana.whitlow@prairieridge.example.com?bcc=someone@other.example.com&body=Hi"
+    out, html = contact_page(tmp_path, "salesperson", responses=responses)
+    mailto = re.findall(r'href="(mailto:[^"]*)"', html)
+    assert mailto == ["mailto:dana.whitlow@prairieridge.example.com"] * 2, mailto
+
+
 # ── Add a contact ───────────────────────────────────────────────────────────────────────────────
 ADD_IDS = ["add-root", "add-form", "add-company", "add-company-list", "add-company-check", "add-phone", "add-email",
            "add-pills", "add-confirm", "add-name"]

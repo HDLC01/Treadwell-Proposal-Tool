@@ -222,7 +222,7 @@
 
   /** The contact page, back to This Week ("" for a contact with no id: then the name is plain text). */
   function contactHref(c) {
-    return c && c.id != null ? BD.safeHref("/bd/contact.html?id=" + encodeURIComponent(c.id) + "&from=week") : "";
+    return c && c.id != null ? BD.pageHref("/bd/contact.html?id=", c.id, "&from=week") : "";
   }
 
   /** A row's name and company: a link to the contact page. */
@@ -345,11 +345,6 @@
   /** "Sep 15" from a date (fmtDay without the weekday). */
   function monthDay(iso) { return BD.fmtDay(iso, S.today).replace(/^[A-Za-z]+,\s*/, ""); }
 
-  function minutes(s) {
-    var n = Number(s) || 0;
-    if (!n) return "";
-    return n >= 60 ? Math.round(n / 60) + " min" : BD.fmtDuration(n);
-  }
 
   var KIND_WORD = { call: "call", meeting: "meeting", hosted: "hosted event", voicemail: "voicemail" };
 
@@ -641,7 +636,7 @@
       line = "No live talk yet.";
     } else {
       var bits = [KIND_WORD[live.kind] || live.kind];
-      if (minutes(live.duration_s)) bits.push(minutes(live.duration_s));
+      if (BD.fmtMinutes(live.duration_s)) bits.push(BD.fmtMinutes(live.duration_s));
       side = '<p class="wk-next-when">' + esc(BD.fmtDay(live.occurred_at, S.today) + " · " + bits.join(", ")) + "</p>" +
         (live.summary ? '<p class="wk-next-sum">' + esc(live.summary) + "</p>" : "");
       line = esc("Last talk " + monthDay(live.occurred_at) + (live.summary ? ": " + String(live.summary).replace(/\.+$/, "") : ""));
@@ -1264,7 +1259,7 @@
     if (!S.canPick || !ownerPick) return Promise.resolve();
     return BDApi.get("/api/bd/users").then(function (r) {
       var all = r.items || [];
-      var people = all.filter(function (u) { return u.role === "salesperson"; });
+      var people = BD.withRole(all, ["salesperson"]);
       var cur = S.week && S.week.owner;
       if (cur && !all.some(function (u) { return u.id === cur.id; })) people.push(cur);
       ownerPick.innerHTML = (cur ? "" : '<option value="" disabled selected>Choose someone</option>') +

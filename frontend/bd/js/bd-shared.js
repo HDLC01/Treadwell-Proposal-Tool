@@ -335,6 +335,13 @@
     return r ? m + " min " + r + " s" : m + " min";
   }
 
+  /** A logged entry's length: "7 min" (whole minutes) from a minute up, "40 s" under, "" for none. */
+  function fmtMinutes(s) {
+    var n = Number(s);
+    if (!(n > 0)) return "";
+    return n >= 60 ? Math.round(n / 60) + " min" : fmtDuration(n);
+  }
+
   /** Whole weeks left in `today`'s year, today counted, at least 1 (2026-11-04: 58 days, 8 weeks). */
   function weeksLeft(today) {
     var t = ymd(today);
@@ -637,6 +644,53 @@
     return "";
   }
 
+  /** A /bd/ page's address ending in one id, with anything after it ("/bd/contact.html?id=", 21,
+   *  "&from=week"), through safeHref: "" when the start is not a same-site path. */
+  function pageHref(start, id, rest) { return safeHref(start + encodeURIComponent(id) + (rest || "")); }
+
+  // ── what the BD page scripts share (#808: one copy, not one per page) ─────────────────────────
+  /** The pick lists and the maintenance number a page offers when GET /api/bd/settings did not
+   *  answer: bd/appsettings.py's defaults (test_bd_shared_helpers_js keeps the two the same). */
+  var SETTING_FALLBACK = {
+    lead_sources: ["Current Account", "DSBC Sales", "Website Lead", "Other/Misc"],
+    industries: ["Manufacturing", "Other", "Food Processing", "GC", "Life Science", "Restaurant", "Education", "Warehouse", "Retail", "Healthcare"],
+    stages: ["Meeting Set", "Met", "Proposal", "Won"],
+    account_types: ["Utility", "Manufacturing", "Pharma", "GC"],
+    default_frequency: { maintenance: 3 },
+  };
+
+  /** One setting from GET /api/bd/settings' answer, or the fallback when it is missing or empty. */
+  function setting(settings, key) {
+    var v = settings ? settings[key] : null;
+    if (key === "default_frequency") return v && v.maintenance ? v : SETTING_FALLBACK[key];
+    return v && v.length ? v : SETTING_FALLBACK[key];
+  }
+
+  /** What a failed BDApi call says: its first field's sentence, else its message. */
+  function errText(e) {
+    var f = e && e.fields;
+    if (f) { var k = Object.keys(f)[0]; if (k && f[k]) return f[k]; }
+    return (e && e.message) || "Something went wrong.";
+  }
+
+  /** A button waiting on the server: disabled, .is-busy and aria-busy while `on`. */
+  function setBusy(btn, on) {
+    if (!btn) return;
+    btn.disabled = on;
+    btn.classList.toggle("is-busy", on);
+    if (on) btn.setAttribute("aria-busy", "true"); else btn.removeAttribute("aria-busy");
+  }
+
+  /** The people in a GET /api/bd/users list who hold one of `roles`, each once (by id; a workbook
+   *  name with no login is left out), in the list's order. */
+  function withRole(users, roles) {
+    var seen = {}, out = [];
+    (users || []).forEach(function (u) {
+      if (u && u.id != null && !seen[u.id] && roles.indexOf(u.role) !== -1) { seen[u.id] = true; out.push(u); }
+    });
+    return out;
+  }
+
   function closeMenu(focusAnchor) {
     var m = openMenu;
     if (!m) return;
@@ -888,6 +942,7 @@
     fmtRel: fmtRel,
     chipDate: chipDate,
     fmtDuration: fmtDuration,
+    fmtMinutes: fmtMinutes,
     weeksLeft: weeksLeft,
     paceWords: paceWords,
     pill: pill,
@@ -900,6 +955,11 @@
     dialog: dialog,
     menu: menu,
     safeHref: safeHref,
+    pageHref: pageHref,
+    setting: setting,
+    errText: errText,
+    setBusy: setBusy,
+    withRole: withRole,
     closeMenu: closeMenu,
     toast: toast,
     announce: announce,

@@ -42,7 +42,8 @@ import re
 
 import pytest
 
-from _bd_browser import DESKTOP, PHONE, Page, browser, live_app_db, require_playwright, reseed, run_sql
+from _bd_browser import (DESKTOP, MOVED_PAGES, NOT_BUILT, PHONE, Page, api, bd_links, browser, focus_is_on_the_page,
+                         live_app_db, menu_acts, require_playwright, reseed, run_sql, sideways, toasts)
 
 AVERY = "avery.quill@example.com"         # salesperson
 CASEY = "casey.moret@example.com"         # assistant
@@ -51,9 +52,6 @@ EMERY = "emery.stoll@example.com"         # admin
 
 DANA, MARISA, PRIYA, LENA, HAL, NORA, WES, DUPE = 21, 23, 25, 27, 30, 31, 32, 33
 
-# The BD pages that have moved into the tool so far (#807: This Week; #808: one contact, Add contact).
-MOVED = {"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html"}
-NOT_BUILT = "This part is not built yet (Phase 5)."
 MAINT_RULE = "A follow-up comes due 120 days after the last call, meeting, email or text."
 
 
@@ -94,10 +92,6 @@ def contact_path(cid, extra=""):
     return "/bd/contact.html?id=%d%s" % (cid, extra)
 
 
-def api(pg, path):
-    return pg.evaluate("p => BDApi.get(p)", path)
-
-
 def contact(pg, cid):
     return api(pg, "/api/bd/contacts/%d" % cid)
 
@@ -105,10 +99,6 @@ def contact(pg, cid):
 def interactions(pg, cid):
     items = api(pg, "/api/bd/contacts/%d/interactions" % cid)["items"]
     return [it["interaction"] for it in items if it.get("type") == "interaction"]
-
-
-def toasts(pg):
-    return pg.locator("#bd-toasts")
 
 
 def cad_card(pg):
@@ -134,11 +124,6 @@ def patches(pg):
     return pg.evaluate("window.__patches")
 
 
-def menu_acts(pg):
-    pg.locator(".menu").wait_for()
-    return pg.locator(".menu .menu-item").evaluate_all("els => els.map(e => e.dataset.act)")
-
-
 def history_item(pg, words):
     return pg.locator("#cd-history .cd-tl-item", has_text=words)
 
@@ -147,16 +132,6 @@ def dismiss_suggestion(url):
     """Dana's pending AI suggestion put aside (as a decided one), so her card shows the step itself.
     Deciding a suggestion from the page is a Phase 5 placeholder, so the test arranges it."""
     run_sql(url, "update ai_recommendations set status = 'dismissed' where id = 401")
-
-
-def bd_links(pg):
-    """Every address under /bd/ the rendered page links to, the tool's sidebar included."""
-    return pg.evaluate("() => [...new Set([...document.querySelectorAll('a[href]')].map(a => a.getAttribute('href'))"
-                       ".filter(h => h.startsWith('/bd/')).map(h => h.split(/[?#]/)[0]))]")
-
-
-def no_sideways_scroll(pg):
-    return pg.evaluate("() => document.documentElement.scrollWidth - window.innerWidth") <= 1
 
 
 # ── confirm, and Call ────────────────────────────────────────────────────────────────────────────
@@ -341,13 +316,23 @@ def test_the_log_menu_lists_every_way_to_log(page_as, expect):
     expect(pg.locator(".menu")).to_have_count(0)
 
 
-def test_log_a_hosted_event_opens_the_sheet_in_meeting_mode_on_the_hosted_tile(page_as):
+@pytest.mark.parametrize("act, tiles, focused", [
+    ("log-call", ["answered", "voicemail", "no_answer", "wrong"], '[data-outcome="answered"]'),
+    ("log-meeting", ["meeting", "hosted"], '[data-outcome="meeting"]'),
+    ("log-hosted", ["meeting", "hosted"], '[data-outcome="hosted"]'),
+    ("nrp", [], '[data-field="nrp"]'),
+], ids=["call", "meeting", "hosted", "nrp"])
+def test_log_a_hosted_event_opens_the_sheet_in_meeting_mode_on_the_hosted_tile(page_as, expect, act, tiles, focused):
+    """What a person sees: each Log menu item opens the one call sheet with its own tiles, and Log a
+    hosted event lands on the hosted tile (the meeting sheet's second)."""
     _, pg = page_as(contact_path(DANA), AVERY)
-    pg.evaluate("() => { window.__opened = []; BDCall.open = o => window.__opened.push([o.mode, o.focusOutcome || null]); }")
-    for act in ("log-call", "log-meeting", "log-hosted", "nrp"):
-        pg.locator('.cd-head [data-act="log-menu"]').click()
-        pg.locator('.menu [data-act="%s"]' % act).click()
-    assert pg.evaluate("window.__opened") == [["call", None], ["meeting", None], ["meeting", "hosted"], ["nrp", None]]
+    pg.locator('.cd-head [data-act="log-menu"]').click()
+    pg.locator('.menu [data-act="%s"]' % act).click()
+    sheet = pg.locator("#call-sheet")
+    expect(sheet).to_be_visible()
+    expect(sheet.locator(focused)).to_be_focused()
+    if tiles:
+        assert sheet.locator("[data-outcome]").evaluate_all("els => els.map(e => e.dataset.outcome)") == tiles
 
 
 def test_a_meeting_can_be_logged_for_an_earlier_day(page_as, expect):
@@ -397,11 +382,6 @@ def test_the_call_button_sheet_has_no_day_field(page_as, expect):
     assert pg.locator("#call-day").count() == 0 and pg.locator("#call-min").count() == 0
 
 
-def _focus_is_on_the_page(pg):
-    return pg.evaluate("() => { const a = document.activeElement;"
-                       " return !!a && a !== document.body && document.contains(a); }")
-
-
 @pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
 def test_focus_comes_back_to_the_page_after_a_saved_call(page_as, expect, viewport):
     _, pg = page_as(contact_path(MARISA), AVERY, viewport)
@@ -413,7 +393,7 @@ def test_focus_comes_back_to_the_page_after_a_saved_call(page_as, expect, viewpo
     pg.keyboard.press("Escape")
     expect(sh).to_be_hidden()
     pg.wait_for_timeout(300)                     # the reload after the close
-    assert _focus_is_on_the_page(pg), "focus fell to <body> at %d wide" % viewport["width"]
+    assert focus_is_on_the_page(pg), "focus fell to <body> at %d wide" % viewport["width"]
 
 
 @pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
@@ -757,7 +737,7 @@ def test_phone_call_bar_and_folded_details(page_as, expect):
     expect(pg.locator("#cd-details .cd-kv")).to_be_hidden()
     pg.locator("#cd-details summary").click()
     expect(pg.locator("#cd-details .cd-kv")).to_be_visible()
-    assert no_sideways_scroll(pg), "scrolls sideways at 390 wide"
+    assert sideways(pg) <= 1, "scrolls sideways at 390 wide"
     callbar.locator('[data-act="log-menu"]').click()
     assert menu_acts(pg)[0] == "log-call"
 
@@ -766,7 +746,7 @@ def test_desktop_keeps_details_open_and_has_no_call_bar(page_as, expect):
     _, pg = page_as(contact_path(DANA), AVERY)
     assert pg.locator("#cd-details-fold").evaluate("d => d.open") is True
     expect(pg.locator(".cd-callbar")).to_be_hidden()
-    assert no_sideways_scroll(pg)
+    assert sideways(pg) <= 1
 
 
 # ── follow-up cadence (the cadence rules, PR D) ──────────────────────────────────────────────────
@@ -1048,6 +1028,21 @@ def test_a_maintenance_contact_changes_the_number_in_the_cadence_sheet(page_as, 
     expect(pg.locator("#cd-year .cd-big")).to_have_text("0 of 4")
 
 
+def test_a_fields_hint_is_read_with_it_and_an_error_joins_the_hint(page_as, expect):
+    """An Edit details field's hint is its description, so a screen reader reads it with the field,
+    and an error is added beside the hint rather than in its place."""
+    _, pg = page_as(contact_path(NORA), AVERY)
+    cad_card(pg).locator('[data-act="cadence"]').click()
+    sheet = cad_sheet(pg)
+    n = sheet.locator("#cd-f-frequency_per_year")
+    expect(n).to_have_attribute("aria-describedby", "cd-f-frequency_per_year-hint")
+    expect(sheet.locator("#cd-f-frequency_per_year-hint")).to_have_text("Answered calls, meetings and hosted events count.")
+    n.fill("0")
+    save_cadence(sheet)
+    expect(n).to_have_attribute("aria-describedby", "cd-f-frequency_per_year-hint cd-f-frequency_per_year-err")
+    expect(n).to_have_attribute("aria-invalid", "true")
+
+
 def test_the_manager_changes_only_the_follow_up_cadence(page_as, expect):
     _, pg = page_as(contact_path(MARISA), DEVON)
     assert pg.locator("button", has_text="Edit details").count() == 0
@@ -1112,7 +1107,7 @@ def test_the_cadence_card_on_a_phone_fits_and_the_sheet_has_full_size_targets(pa
     assert btn.bounding_box()["height"] >= 43.5, btn.bounding_box()
     cb = card.bounding_box()
     assert cb["x"] >= 0 and cb["x"] + cb["width"] <= PHONE["width"] + 0.5
-    assert no_sideways_scroll(pg)
+    assert sideways(pg) <= 1
     btn.click()
     sheet = cad_sheet(pg)
     expect(sheet).to_be_visible()
@@ -1187,6 +1182,30 @@ def test_the_company_type_ahead_and_the_possible_duplicate_person(page_as, expec
     expect(dupe.locator('[data-dup="new"]')).to_have_attribute("aria-checked", "true")
     expect(dupe.locator('[data-dup="same"]')).to_have_text("Maybe one of them, check Friday")
     expect(pg.locator("#add-city")).to_have_value("Lenexa")
+
+
+def test_a_screen_reader_hears_each_possible_duplicate_warning(page_as, expect):
+    """Spec #802's possible-duplicate warning, for a person who cannot see it: who already works at the
+    picked company is said in BD's live region (#bd-live) when it appears, and so is whose phone this
+    already is. The phone box is the phone input's description, beside its hint and error, so tabbing
+    back to the input reads it again; the city's "From the company" hint is the city's description."""
+    _, pg = open_add(page_as, AVERY)
+    pg.locator("#add-company").fill("bluestem")
+    pg.locator("#add-company-list .add-option").first.click()
+    expect(pg.locator("#add-dupe")).to_be_visible()
+    expect(pg.locator("#bd-live")).to_have_text(
+        "Lena Ortiz, Sam Achebe and Ines Varga already work at Bluestem Logistics. Is this person someone new?")
+    expect(pg.locator("#add-city")).to_have_attribute("aria-describedby", "add-city-hint")
+    expect(pg.locator("#add-city-hint")).to_have_text("From the company")
+    phone = pg.locator("#add-phone")
+    phone.fill("913-555-01")
+    pg.locator("#add-email").focus()
+    expect(phone).to_have_attribute("aria-describedby", "add-phone-err")
+    phone.fill("913-555-0107")
+    pg.locator("#add-email").focus()
+    expect(pg.locator("#bd-live")).to_have_text("This phone belongs to Lena Ortiz.")
+    expect(phone).to_have_attribute("aria-describedby", "add-phone-match")
+    assert phone.get_attribute("aria-invalid") is None
 
 
 def test_a_phone_already_on_a_contact_is_named_and_adding_still_goes_through(page_as, expect):
@@ -1293,7 +1312,7 @@ def test_each_section_a_role_can_use_works_and_no_other_shows(page_as, expect, e
                                          (AVERY, "/bd/add.html"), (CASEY, "/bd/add.html?company=16")],
                          ids=["salesperson", "assistant", "manager", "admin", "add-salesperson", "add-assistant"])
 def test_no_link_goes_to_a_bd_page_that_has_not_moved(page_as, email, path):
-    """Spec #802, page links: checked against the pages that HAVE moved (MOVED). The Log menu too."""
+    """Spec #802, page links: checked against the pages that HAVE moved (MOVED_PAGES). The Log menu too."""
     wait = "#add-form" if "add.html" in path else "#cd-title"
     _, pg = page_as(path, email, wait=wait)
     pg.locator("#tw-bd-sections a").first.wait_for(timeout=15000)
@@ -1313,7 +1332,7 @@ def test_no_link_goes_to_a_bd_page_that_has_not_moved(page_as, email, path):
         seen |= set(bd_links(pg))
         pg.keyboard.press("Escape")
         pg.locator(".menu").wait_for(state="detached")
-    assert seen and seen <= MOVED, sorted(seen - MOVED)
+    assert seen and seen <= MOVED_PAGES, sorted(seen - MOVED_PAGES)
 
 
 # ── widths ───────────────────────────────────────────────────────────────────────────────────────
@@ -1322,4 +1341,4 @@ def test_nothing_scrolls_sideways(page_as, viewport):
     for path, wait in ((contact_path(DANA), "#cd-title"), ("/bd/add.html", "#add-form")):
         _, pg = page_as(path, AVERY, viewport, wait=wait)
         pg.evaluate("() => document.fonts.ready.then(() => true)")
-        assert no_sideways_scroll(pg), (path, viewport)
+        assert sideways(pg) <= 1, (path, viewport)

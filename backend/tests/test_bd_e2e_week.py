@@ -26,7 +26,7 @@ outcome changed after a touch saves; the wrong-person fallback with no task conf
 each task's contact detail loads (the done line's outcome and the tray); the recommendation and
 follow-up buttons meet the 503 placeholders and say "not built yet"; a BD admin runs the weekly
 batch from This Week; a name opens the contact page (#808), and no role's view (menus included) links
-to a BD page that has not moved (MOVED, not "the server answers 200"); the assistant lands on the
+to a BD page that has not moved (MOVED_PAGES, not "the server answers 200"); the assistant lands on the
 Contacts-is-coming page, which links to Add contact; desktop and phone width, where a row with no phone
 number keeps its More menu.
 
@@ -43,7 +43,9 @@ import urllib.request
 
 import pytest
 
-from _bd_browser import DESKTOP, PHONE, TABLET, Page, browser, live_app_db, require_playwright, reseed, run_sql
+from _bd_browser import (DESKTOP, MOVED_PAGES, NOT_BUILT, PHONE, TABLET, Page, api, bd_links, browser,
+                         focus_is_on_the_page, live_app_db, menu_acts, require_playwright, reseed, run_sql, sideways,
+                         toasts)
 
 AVERY = "avery.quill@example.com"
 CASEY = "casey.moret@example.com"         # assistant
@@ -54,11 +56,6 @@ HAL, DANA, PRIYA = 301, 302, 303          # Avery's tasks
 HAL_C, DANA_C, PRIYA_C = 30, 21, 25
 NORA_C = 31                               # Avery's other maintenance contact (Give Me 10 More's)
 
-# The BD pages that have moved into the tool so far (#807: This Week; #808: one contact and Add
-# contact). /bd/contacts.html is not one: it is only where the assistant is sent until Contacts moves.
-MOVED = {"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html"}
-
-NOT_BUILT = "This part is not built yet (Phase 5)."
 MAINT_PILL = "Maintenance · due"
 STAYS_LINE = "Stays on your list until you log a call, meeting, email or text."
 STAYS_409 = "A maintenance follow-up stays on the list until you log a call, meeting, email or text."
@@ -101,16 +98,8 @@ def wait_week(pg):
     pg.wait_for_function("() => !document.querySelector('#main .skeleton')", timeout=15000)
 
 
-def api(pg, path):
-    return pg.evaluate("p => BDApi.get(p)", path)
-
-
 def sheet(pg):
     return pg.locator("#call-sheet")
-
-
-def toasts(pg):
-    return pg.locator("#bd-toasts")
 
 
 def node(pg, task_id):
@@ -119,11 +108,6 @@ def node(pg, task_id):
 
 def call(nd):
     nd.locator('[data-act="call"]').first.click()      # a tel: link; its handler opens the sheet
-
-
-def menu_acts(pg):
-    pg.locator(".menu").wait_for()
-    return pg.locator(".menu .menu-item").evaluate_all("els => els.map(e => e.dataset.act)")
 
 
 def choose(pg, nd, act):
@@ -238,12 +222,6 @@ def test_the_week_reads_like_the_fixture_seed(page_as, expect):
     assert pg.locator("#owner-field").is_hidden(), "a salesperson has no picker"
 
 
-def bd_links(pg):
-    """Every address under /bd/ the rendered page links to, the tool's sidebar included."""
-    return pg.evaluate("() => [...new Set([...document.querySelectorAll('a[href]')].map(a => a.getAttribute('href'))"
-                       ".filter(h => h.startsWith('/bd/')).map(h => h.split(/[?#]/)[0]))]")
-
-
 def test_names_open_the_contact_page_and_so_does_the_menu(page_as, expect):
     """#808: the contact page has moved, so a name, Next up's "Open <name>" and More's "Open contact"
     go there, with from=week (its Back is to This Week). Every other link is a phone number."""
@@ -269,7 +247,7 @@ def test_names_open_the_contact_page_and_so_does_the_menu(page_as, expect):
                          ids=["salesperson", "manager-asked", "manager-week", "admin-asked", "admin-week", "admin-empty"])
 def test_no_link_goes_to_a_bd_page_that_has_not_moved(env, page_as, email, path):
     """Spec #802, page links: a link to a BD page that has not moved is not drawn. Checked against
-    the pages that HAVE moved (MOVED), not against what the server happens to serve: /bd/contacts.html
+    the pages that HAVE moved (MOVED_PAGES), not against what the server happens to serve: /bd/contacts.html
     is there only as the assistant's redirect target, so a link to it would still be a link to
     Contacts, which has not moved. Every role's view, the admin's empty week (the manual run), and
     the open menus too."""
@@ -290,7 +268,7 @@ def test_no_link_goes_to_a_bd_page_that_has_not_moved(env, page_as, email, path)
         seen |= set(bd_links(pg))
         pg.keyboard.press("Escape")
         pg.locator(".menu").wait_for(state="detached")
-    assert seen <= MOVED, sorted(seen - MOVED)
+    assert seen <= MOVED_PAGES, sorted(seen - MOVED_PAGES)
 
 
 # ── a call from the call sheet ──────────────────────────────────────────────────────────────────
@@ -388,11 +366,6 @@ def test_the_sheet_keeps_focus_inside_and_gives_it_back(page_as, expect):
     assert pg.evaluate("() => document.activeElement === document.querySelector('#wk-next [data-act=\"call\"]')")
 
 
-def _focus_is_on_the_page(pg):
-    return pg.evaluate("() => { const a = document.activeElement;"
-                       " return !!a && a !== document.body && document.contains(a) && !!a.closest('#main'); }")
-
-
 @pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
 def test_after_a_saved_call_focus_lands_on_the_page_not_the_body(page_as, expect, viewport):
     _, pg = page_as("/bd/", AVERY, viewport)
@@ -405,7 +378,7 @@ def test_after_a_saved_call_focus_lands_on_the_page_not_the_body(page_as, expect
     expect(sheet(pg)).to_be_hidden()
     wait_week(pg)
     pg.wait_for_timeout(300)
-    assert _focus_is_on_the_page(pg), "focus fell to <body> at %d wide" % viewport["width"]
+    assert focus_is_on_the_page(pg), "focus fell to <body> at %d wide" % viewport["width"]
 
 
 @pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
@@ -603,7 +576,7 @@ def test_the_assistant_lands_on_the_contacts_is_coming_page(page_as, expect):
 def test_on_a_phone_the_week_fits_and_the_call_sheet_is_a_bottom_sheet(page_as, expect):
     _, pg = page_as("/bd/", AVERY, PHONE)
     wait_week(pg)
-    over = pg.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+    over = sideways(pg)
     assert over <= 1, "scrolls sideways by %dpx" % over
     assert pg.locator("#wk-tray").is_hidden(), "on a phone the tray is a banner"
     expect(pg.locator("#wk-tray-banner")).to_contain_text("1 next step to confirm")
@@ -622,7 +595,7 @@ def test_on_a_phone_the_week_fits_and_the_call_sheet_is_a_bottom_sheet(page_as, 
 def test_nothing_scrolls_sideways(page_as, viewport):
     _, pg = page_as("/bd/", AVERY, viewport)
     wait_week(pg)
-    over = pg.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+    over = sideways(pg)
     assert over <= 1, "scrolls sideways by %dpx at %d wide" % (over, viewport["width"])
     if viewport is DESKTOP:
         assert pg.locator("#wk-tray").is_visible(), "at 1280 the tray sits beside the list"
@@ -755,19 +728,38 @@ def test_a_maintenance_task_cannot_be_taken_off_even_when_forced(page_as, expect
     assert post_status(pg, "/api/bd/tasks/%d/done" % DANA) == {"ok": True}, "a BD task still closes"
 
 
-def test_logging_a_note_keeps_the_pin_and_an_email_moves_it_to_done(page_as, expect):
-    """BD's test logged them from the contact page: here through the interactions route the contact
-    page uses (tests/test_bd_e2e_contact.py logs them from the page). A note is not a follow-up; an
-    email is."""
-    _, pg = page_as("/bd/", AVERY)
+def test_logging_an_email_on_a_due_maintenance_contact_moves_it_to_done(page_as, expect):
+    """The rule, through the real contact page (#808; #807 used the route until the page moved): a
+    NOTE added in the History box does not clear Hal's due maintenance follow-up (task 301, pinned on
+    Avery's week), an EMAIL (the Email button, then "Did you send something?") does. The task leaves
+    Next up and shows in Done as "Emailed" with no Undo (reopening it would leave a pin nobody can
+    clear), and "Due now" goes."""
+    p, pg = page_as("/bd/", AVERY)
     wait_week(pg)
-    pg.evaluate("c => BDApi.post(BDApi.path('contacts', c, 'interactions'), {kind: 'note', summary: 'Looked up the invoice.'})",
-                HAL_C)
-    reload_week(pg)
+    expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(HAL))
+    # a note first: nothing moves
+    pg = p.open("/bd/contact.html?id=%d" % HAL_C)
+    pg.locator("#cd-title").wait_for(timeout=15000)
+    pg.locator("#cd-note").click()
+    pg.locator("#cd-note-text").fill("Looked up their last invoice.")
+    pg.locator('[data-act="note-save"]').click()
+    expect(pg.locator("#cd-history .cd-tl-item", has_text="Looked up their last invoice.")).to_have_count(1)
+    pg = p.open("/bd/")
+    wait_week(pg)
     expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(HAL))
     expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")
-    log_by_api(pg, HAL_C, "email")
-    reload_week(pg)
+    assert node(pg, HAL).first.get_attribute("data-status") == "open", "a note is not a follow-up"
+    # then the email, from the page's Email button (the mail app itself is not opened in the test)
+    pg = p.open("/bd/contact.html?id=%d" % HAL_C)
+    pg.locator("#cd-title").wait_for(timeout=15000)
+    pg.evaluate("() => document.querySelector('[data-act=\"mail-out\"]').addEventListener('click', e => e.preventDefault())")
+    pg.locator('.cd-head [data-act="mail-out"]').click()
+    pg.locator('.cd-ask [data-act="log-sent"]').click()
+    expect(pg.locator(".cd-ask")).to_have_count(0)
+    # Both are logged at the server's pinned "now", so which comes first is not the point.
+    assert sorted(i["kind"] for i in history(pg, HAL_C)[:2]) == ["email", "note"], "the note and the email, on top"
+    pg = p.open("/bd/")
+    wait_week(pg)
     expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(DANA))
     row = pg.locator('#wk-done [data-task="%d"][data-status="done"]' % HAL)
     expect(row.locator(".wk-outcome")).to_have_text("Emailed · Wed, Nov 4")

@@ -50,16 +50,10 @@
   "use strict";
 
   var BD = window.BD, Api = window.BDApi;
-  var esc = BD.esc;
+  var esc = BD.esc, errText = BD.errText, setBusy = BD.setBusy;
   var TIMELINE_STEP = 20;
   var WIDE = "(min-width: 768px)";
 
-  var FALLBACK = {
-    lead_sources: ["Current Account", "DSBC Sales", "Website Lead", "Other/Misc"],
-    industries: ["Manufacturing", "Other", "Food Processing", "GC", "Life Science", "Restaurant", "Education", "Warehouse", "Retail", "Healthcare"],
-    stages: ["Meeting Set", "Met", "Proposal", "Won"],
-    account_types: ["Utility", "Manufacturing", "Pharma", "GC"],
-  };
   var IMPORTANCE = [[1, "Normal"], [2, "Important"], [3, "Key account"]];
   /** The value an owner select uses for a workbook person with no login yet (id null). */
   var KEEP = "keep";
@@ -83,25 +77,15 @@
   function $(id) { return document.getElementById(id); }
   function ico(name, size) { return BD.icon(name, size || 18); }
   function first() { return BD.firstName(S.c && S.c.name) || "them"; }
-  function setting(key) {
-    var s = S.settings || {};
-    return s[key] && s[key].length ? s[key] : FALLBACK[key];
-  }
+  function setting(key) { return BD.setting(S.settings, key); }
   function archived() { return !!(S.c && S.c.archived_at); }
+  /** A mailto: link to the address alone: a stored "?bcc=" or "&body=" never reaches the mail app. */
+  function mailHref(email) { return BD.safeHref("mailto:" + String(email || "").split("?")[0].trim()); }
   function taskOpen() { return !!(S.task && S.task.status === "open"); }
   function wide() { return !!(window.matchMedia && window.matchMedia(WIDE).matches); }
   function fromWeek() { return BD.qs("from") === "week"; }
   // This Week, for a person who came from it. There is no Contacts link until that page moves.
   function back() { return fromWeek() && S.canWeek ? { href: "/bd/", label: "This Week" } : null; }
-  /** A /bd/ page's address ending in one id ("/bd/contact.html?id=" and 21), through BD.safeHref. */
-  function bdHref(start, id) { return BD.safeHref(start + encodeURIComponent(id)); }
-
-  /** "6 min" (whole minutes from a minute up), "40 s" under a minute, "" for none. */
-  function minutes(s) {
-    var n = Number(s);
-    if (!(n > 0)) return "";
-    return n < 60 ? Math.round(n) + " s" : Math.round(n / 60) + " min";
-  }
   /** "Today", or "Tue, Sep 15" ("Mon, Jan 11, 2027" in another year). */
   function dayWord(at) {
     var day = BD.bizDateOf(at);
@@ -117,17 +101,6 @@
       try { el.focus({ preventScroll: false }); } catch (e) { el.focus(); }
       return;
     }
-  }
-  function setBusy(btn, on) {
-    if (!btn) return;
-    btn.disabled = on;
-    btn.classList.toggle("is-busy", on);
-    if (on) btn.setAttribute("aria-busy", "true"); else btn.removeAttribute("aria-busy");
-  }
-  function errText(e) {
-    var f = e && e.fields;
-    if (f) { var k = Object.keys(f)[0]; if (k && f[k]) return f[k]; }
-    return (e && e.message) || "Something went wrong.";
   }
   function fail(e) { BD.toast(errText(e), { kind: "error" }); }
 
@@ -232,7 +205,7 @@
     var actions = "";
     if (logItems().length) actions += logButton(" hide-phone");
     if (c.email) {
-      actions += '<a class="btn btn-icon cd-iconbtn" data-act="mail-out" href="mailto:' + esc(c.email) + '" aria-label="Email ' + esc(c.name) + '">' + ico("mail", 20) + "</a>";
+      actions += '<a class="btn btn-icon cd-iconbtn" data-act="mail-out" href="' + esc(mailHref(c.email)) + '" aria-label="Email ' + esc(c.name) + '">' + ico("mail", 20) + "</a>";
     }
     var sms = BD.telHref(c).replace(/^tel:/, "");
     if (sms) {
@@ -272,7 +245,7 @@
       var d = c.duplicate_of;
       out += '<div class="panel-warn cd-notice cd-dupe">' + ico("copy", 18) + '<span class="cd-notice-text">Possible duplicate of ' + esc(d.name) +
         (d.reason ? " (" + esc(d.reason) + ")" : "") + ".</span>" +
-        '<span class="cd-notice-acts"><a class="btn-link" href="' + esc(bdHref("/bd/contact.html?id=", d.contact_id)) + '">Open ' + esc(d.name) + ico("arrow-right", 16) + "</a>" +
+        '<span class="cd-notice-acts"><a class="btn-link" href="' + esc(BD.pageHref("/bd/contact.html?id=", d.contact_id)) + '">Open ' + esc(d.name) + ico("arrow-right", 16) + "</a>" +
         (S.canClearDup ? '<button type="button" class="btn" data-act="dup-clear">Not a duplicate</button>' : "") + "</span></div>";
     }
     return out;
@@ -530,7 +503,7 @@
 
   function interactionItem(i, n) {
     var when = [dayWord(i.occurred_at)];
-    var dur = minutes(i.duration_s);
+    var dur = BD.fmtMinutes(i.duration_s);
     if (dur) when.push(dur);
     var sent = (i.kind === "email" || i.kind === "sms") && i.direction !== "in";
     var pill = i.counts_as_touch ? '<span class="pill pill-ok">Live talk</span>'
@@ -775,7 +748,7 @@
         '" aria-labelledby="cd-confirm-label"></button><span class="cd-switch-word" aria-hidden="true">' + (c.confirmed ? "Yes" : "No") + "</span></span>"
       : (c.confirmed ? "Yes" : "No");
     var rows = pair("Phone", phoneVal) + pair("City", plain(c.city)) +
-      pair("Email", c.email ? '<a href="mailto:' + esc(c.email) + '">' + esc(c.email) + "</a>" : plain(""), "cd-kv-full") +
+      pair("Email", c.email ? '<a href="' + esc(mailHref(c.email)) + '">' + esc(c.email) + "</a>" : plain(""), "cd-kv-full") +
       '<div class="cd-kv-rule" aria-hidden="true"></div>' +
       pair("Industry", plain(c.industry)) + pair("Lead source", plain(c.lead_source)) +
       pair("Stage", plain(c.stage)) + pair("Importance", plain(imp ? imp[1] : "")) +
@@ -804,10 +777,10 @@
     else if (S.others === "failed") body = '<p class="cd-empty-line">Could not load them.</p>';
     else if (!S.others.length) {
       body = '<p class="cd-empty-line">No one else here yet.</p>' +
-        (S.canAdd && c.company ? '<a class="btn cd-add-someone" href="' + esc(bdHref("/bd/add.html?company=", c.company.id)) + '">' + ico("plus", 18) + "Add someone</a>" : "");
+        (S.canAdd && c.company ? '<a class="btn cd-add-someone" href="' + esc(BD.pageHref("/bd/add.html?company=", c.company.id)) + '">' + ico("plus", 18) + "Add someone</a>" : "");
     } else {
       body = '<ul class="cd-others">' + S.others.map(function (o) {
-        return '<li class="cd-other">' + BD.avatarHTML(o.name, "sm") + '<span class="who"><a class="who-name" href="' + esc(bdHref("/bd/contact.html?id=", o.id)) + '">' +
+        return '<li class="cd-other">' + BD.avatarHTML(o.name, "sm") + '<span class="who"><a class="who-name" href="' + esc(BD.pageHref("/bd/contact.html?id=", o.id)) + '">' +
           esc(o.name) + "</a>" + (o.title ? '<span class="who-sub">' + esc(o.title) + "</span>" : "") + "</span></li>";
       }).join("") + "</ul>";
     }
@@ -1018,7 +991,7 @@
       seen[v] = true;
       out.push([v, u.name]);
     }
-    (S.users || []).forEach(function (u) { if (roles.indexOf(u.role) !== -1) add(u); });
+    BD.withRole(S.users, roles).forEach(add);
     add(current);
     out.sort(function (a, b) { return String(a[1]).localeCompare(String(b[1])); });
     return out;
@@ -1088,22 +1061,24 @@
 
   function fieldHtml(d) {
     var id = "cd-f-" + d.key;
+    // A hint is the field's description, read with it (an error joins it: showFieldErrors).
+    var described = d.hint ? ' aria-describedby="' + id + '-hint"' : "";
     var v = d.get();
     v = v == null ? "" : String(v);
     var control;
     if (d.type === "select") {
       var pairs = d.pairs.slice();
       if (v && !pairs.some(function (p) { return String(p[0]) === v; })) pairs.push([v, v]);
-      control = '<select class="select" id="' + id + '" name="' + d.key + '">' +
+      control = '<select class="select" id="' + id + '" name="' + d.key + '"' + described + ">" +
         (d.blank ? '<option value="">' + esc(d.blank) + "</option>" : "") +
         pairs.map(function (p) {
           return '<option value="' + esc(p[0]) + '"' + (String(p[0]) === v ? " selected" : "") + ">" + esc(p[1]) + "</option>";
         }).join("") + "</select>";
     } else if (d.type === "textarea") {
-      control = '<textarea class="textarea" id="' + id + '" name="' + d.key + '" rows="4">' + esc(v) + "</textarea>";
+      control = '<textarea class="textarea" id="' + id + '" name="' + d.key + '" rows="4"' + described + ">" + esc(v) + "</textarea>";
     } else {
       var type = { tel: "tel", email: "email", number: "number", date: "date" }[d.type] || "text";
-      control = '<input class="input" id="' + id + '" name="' + d.key + '" type="' + type + '" value="' + esc(v) + '"' +
+      control = '<input class="input" id="' + id + '" name="' + d.key + '" type="' + type + '" value="' + esc(v) + '"' + described +
         (d.type === "tel" ? ' inputmode="tel" autocomplete="off"' : "") +
         (d.type === "number" ? ' inputmode="numeric" min="1" max="52" step="1"' : "") +
         (d.type === "date" && d.min ? ' min="' + esc(d.min) + '"' : "") +
@@ -1114,7 +1089,7 @@
     }
     return '<div class="field" data-field="' + d.key + '"><label for="' + id + '">' + esc(d.label) +
       (d.optional ? ' <span class="opt">(optional)</span>' : "") + "</label>" + control +
-      (d.hint ? '<p class="field-hint">' + esc(d.hint) + "</p>" : "") +
+      (d.hint ? '<p class="field-hint" id="' + id + '-hint">' + esc(d.hint) + "</p>" : "") +
       '<p class="field-error" id="' + id + '-err" hidden></p></div>';
   }
 
@@ -1202,13 +1177,20 @@
     });
   }
 
+  /** A field's description: its hint (when it has one), then its error (when one shows). */
+  function describeField(wrap, inp, withError) {
+    var h = wrap.querySelector(".field-hint[id]"), e = wrap.querySelector(".field-error");
+    var ids = [h ? h.id : "", withError && e ? e.id : ""].filter(Boolean);
+    if (ids.length) inp.setAttribute("aria-describedby", ids.join(" ")); else inp.removeAttribute("aria-describedby");
+  }
+
   function showFieldErrors(sheet, errs) {
     Array.prototype.forEach.call(sheet.querySelectorAll(".field"), function (f) {
       f.classList.remove("has-error");
       var e = f.querySelector(".field-error");
       if (e) { e.hidden = true; e.textContent = ""; }
       var inp = f.querySelector("input, select, textarea");
-      if (inp) { inp.removeAttribute("aria-invalid"); inp.removeAttribute("aria-describedby"); }
+      if (inp) { inp.removeAttribute("aria-invalid"); describeField(f, inp, false); }
     });
     var firstBad = null;
     Object.keys(errs).forEach(function (k) {
@@ -1223,7 +1205,7 @@
       var e = wrap.querySelector(".field-error");
       e.textContent = errs[k]; e.hidden = false;
       var inp = wrap.querySelector("input, select, textarea");
-      if (inp) { inp.setAttribute("aria-invalid", "true"); inp.setAttribute("aria-describedby", e.id); if (!firstBad) firstBad = inp; }
+      if (inp) { inp.setAttribute("aria-invalid", "true"); describeField(wrap, inp, true); if (!firstBad) firstBad = inp; }
     });
     if (firstBad) firstBad.focus();
   }

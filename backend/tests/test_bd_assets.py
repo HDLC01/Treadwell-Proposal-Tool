@@ -24,6 +24,7 @@ import re
 
 import pytest
 
+from _bd_browser import MOVED_PAGES
 from _bd_jstokens import tokenize
 from _frontend_tree import rel
 
@@ -178,11 +179,9 @@ def test_the_link_check_sees_a_page_that_is_not_there(tmp_path):
     assert missing_bd_targets(tmp_path) == ["bd/index.html: /bd/contacts.html"]
 
 
-# The BD pages that have moved into the tool so far (#807: This Week; #808: one contact and Add
-# contact). Being served is not enough: /bd/contacts.html is there only as the page an assistant is
-# sent to until Contacts moves, so only the script that sends her there may name it. A link to it,
-# with or without ?company=, would still be a link to Contacts.
-MOVED_PAGES = {"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html"}
+# The BD pages that have moved (tests/_bd_browser.py MOVED_PAGES, the one list the browser suites'
+# per-role link checks read too). /bd/contacts.html is there only as the page an assistant is sent to
+# until Contacts moves, so only the script that sends her there may name it.
 REDIRECT_ONLY = {"/bd/contacts.html": {"bd/js/bd-week.js"}}
 
 

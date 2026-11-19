@@ -235,3 +235,50 @@ def test_store_without_storage_reads_null_and_never_throws():
 ])
 def test_a_menu_href_is_a_site_path_mailto_or_tel(href, want):
     assert one("safeHref", href) == want
+
+
+# ── what the BD pages share (#808: one copy instead of one in each page script) ─────────────────
+def test_err_text_names_the_first_field_else_the_message():
+    assert call(("errText", [{"fields": {"phone": "Use a phone number.", "email": "Use an email."},
+                              "message": "Fix the fields."}]),
+                ("errText", [{"fields": {}, "message": "That contact does not exist."}]),
+                ("errText", [{}]), ("errText", [None])) == \
+        ["Use a phone number.", "That contact does not exist.", "Something went wrong.", "Something went wrong."]
+
+
+def test_page_href_puts_one_id_on_a_bd_page_through_safe_href():
+    assert call(("pageHref", ["/bd/contact.html?id=", 21]),
+                ("pageHref", ["/bd/contact.html?id=", 21, "&from=week"]),
+                ("pageHref", ["/bd/contact.html?id=", "21&owner=2"]),
+                ("pageHref", ["javascript:alert(1)//", 21])) == \
+        ["/bd/contact.html?id=21", "/bd/contact.html?id=21&from=week", "/bd/contact.html?id=21%26owner%3D2", ""]
+
+
+def test_with_role_keeps_each_person_once_in_the_lists_order():
+    users = [{"id": 2, "name": "Blair Fenn", "role": "salesperson"}, {"id": 4, "name": "Devon Hale", "role": "manager"},
+             {"id": 1, "name": "Avery Quill", "role": "salesperson"}, {"id": 2, "name": "Blair Fenn", "role": "salesperson"},
+             {"id": 3, "name": "Casey Moret", "role": "assistant"}, {"id": None, "name": "Jules", "role": "salesperson"}]
+    sales, both, nobody = call(("withRole", [users, ["salesperson"]]), ("withRole", [users, ["salesperson", "manager"]]),
+                               ("withRole", [None, ["salesperson"]]))
+    assert [u["name"] for u in sales] == ["Blair Fenn", "Avery Quill"]
+    assert [u["name"] for u in both] == ["Blair Fenn", "Devon Hale", "Avery Quill"]
+    assert nobody == []
+
+
+@pytest.mark.parametrize("seconds,want", [(None, ""), (0, ""), (-5, ""), ("soon", ""), (35, "35 s"), (40, "40 s"),
+                                          (59.4, "59 s"), (60, "1 min"), (95, "2 min"), (420, "7 min")])
+def test_a_logged_entrys_length_is_whole_minutes_from_a_minute_up(seconds, want):
+    assert one("fmtMinutes", seconds) == want
+
+
+def test_a_pick_list_falls_back_to_the_servers_defaults_when_settings_did_not_load():
+    """The one fallback copy (BD.setting) holds bd/appsettings.py's defaults for the keys the pages
+    read, so a page whose GET /api/bd/settings failed offers what the server would have."""
+    from bd import appsettings
+    server = appsettings.defaults()
+    keys = list(appsettings.PICK_LISTS) + ["default_frequency"]
+    assert call(*[("setting", [None, k]) for k in keys]) == [server[k] for k in keys]
+    assert call(("setting", [{"stages": ["Met"]}, "stages"]), ("setting", [{"stages": []}, "stages"]),
+                ("setting", [{"default_frequency": {"maintenance": 6}}, "default_frequency"]),
+                ("setting", [{"default_frequency": {}}, "default_frequency"])) == \
+        [["Met"], ["Meeting Set", "Met", "Proposal", "Won"], {"maintenance": 6}, {"maintenance": 3}]

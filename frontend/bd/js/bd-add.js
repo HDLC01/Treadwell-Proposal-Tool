@@ -36,15 +36,8 @@
   "use strict";
 
   var BD = window.BD, Api = window.BDApi;
-  var esc = BD.esc;
+  var esc = BD.esc, errText = BD.errText, setBusy = BD.setBusy;
 
-  var FALLBACK = {
-    lead_sources: ["Current Account", "DSBC Sales", "Website Lead", "Other/Misc"],
-    industries: ["Manufacturing", "Other", "Food Processing", "GC", "Life Science", "Restaurant", "Education", "Warehouse", "Retail", "Healthcare"],
-    stages: ["Meeting Set", "Met", "Proposal", "Won"],
-    account_types: ["Utility", "Manufacturing", "Pharma", "GC"],
-    default_frequency: { maintenance: 3 },
-  };
   var DEFAULT_SOURCE = "Other/Misc";
   // a server field name -> this form's field key
   var FIELD_OF = { company: "company", name: "name", title: "title", phone: "phone", email: "email", city: "city",
@@ -67,15 +60,8 @@
 
   function $(id) { return document.getElementById(id); }
   function ico(name, size) { return BD.icon(name, size || 18); }
-  /** A /bd/ page's address ending in one id ("/bd/contact.html?id=" and 21), through BD.safeHref. */
-  function bdHref(start, id) { return BD.safeHref(start + encodeURIComponent(id)); }
   function val(id) { var el = $(id); return el ? String(el.value || "").trim() : ""; }
-  function setting(key) {
-    var s = S.settings || {};
-    var v = s[key];
-    if (key === "default_frequency") return v && v.maintenance ? v : FALLBACK[key];
-    return v && v.length ? v : FALLBACK[key];
-  }
+  function setting(key) { return BD.setting(S.settings, key); }
   /** The number a maintenance contact starts with. A BD contact has no number to type: it follows
    *  the BD cadence (the server derives its yearly count and refuses one sent with a BD create). */
   function defaultFreq() { return setting("default_frequency").maintenance; }
@@ -89,17 +75,6 @@
     var f = window.BDCore && window.BDCore.CADENCE_FREQ;
     return (f && f[bdCadence()]) || 4;
   }
-  function errText(e) {
-    var f = e && e.fields;
-    if (f) { var k = Object.keys(f)[0]; if (k && f[k]) return f[k]; }
-    return (e && e.message) || "Something went wrong.";
-  }
-  function setBusy(btn, on) {
-    if (!btn) return;
-    btn.disabled = on;
-    btn.classList.toggle("is-busy", on);
-    if (on) btn.setAttribute("aria-busy", "true"); else btn.removeAttribute("aria-busy");
-  }
   function options(pairs, selected, placeholder) {
     return (placeholder != null ? '<option value="">' + esc(placeholder) + "</option>" : "") + pairs.map(function (p) {
       return '<option value="' + esc(p[0]) + '"' + (String(p[0]) === String(selected) ? " selected" : "") + ">" + esc(p[1]) + "</option>";
@@ -109,19 +84,8 @@
   function byName(a, b) { return String(a.name).localeCompare(String(b.name)); }
 
   // ── people pickers ─────────────────────────────────────────────────────────────────────────
-  function salespeople() {
-    var seen = {}, out = [];
-    function add(u) { if (u && u.id != null && !seen[u.id]) { seen[u.id] = true; out.push({ id: u.id, name: u.name }); } }
-    S.users.forEach(function (u) { if (u.role === "salesperson") add(u); });
-    return out.sort(byName);
-  }
-  function coOwners() {
-    var seen = {}, out = [];
-    S.users.forEach(function (u) {
-      if ((u.role === "salesperson" || u.role === "manager") && u.id != null && !seen[u.id]) { seen[u.id] = true; out.push(u); }
-    });
-    return out.sort(byName);
-  }
+  function salespeople() { return BD.withRole(S.users, ["salesperson"]).sort(byName); }
+  function coOwners() { return BD.withRole(S.users, ["salesperson", "manager"]).sort(byName); }
   function defaultOwnerId() {
     var sp = salespeople();
     var myId = S.me && S.me.user ? S.me.user.id : null;
@@ -145,7 +109,7 @@
     var freq = defaultFreq();
     return '<div class="add-wrap">' +
       '<p class="eyebrow">BD CRM</p>' +
-      '<h1 class="page-title add-title">Add a contact</h1>' +
+      '<h1 class="page-title add-title">Add contact</h1>' +
       '<p class="page-sub add-sub">Pick the company first. Several people at one company share it.</p>' +
       '<form id="add-form" class="add-form" novalidate autocomplete="off">' +
       // the company, first
@@ -208,8 +172,6 @@
   }
 
   // ── the company combobox ───────────────────────────────────────────────────────────────────
-  // A local helper, so the contract test's scanner reads the path: GET /api/bd/companies?q=
-  function companySearch(path, q) { return Api.get(path + "?q=" + encodeURIComponent(q) + "&limit=8"); }
 
   function exactHit(name) {
     var key = BD.normalizeCompany(name);
@@ -219,7 +181,7 @@
   function search(q) {
     var n = ++S.seq.search;
     if (!q) { S.results = []; closeList(); return; }
-    companySearch("/api/bd/companies", q).then(function (r) {
+    Api.get("/api/bd/companies?q=" + encodeURIComponent(q) + "&limit=8").then(function (r) {
       if (n !== S.seq.search) return;
       S.results = (r.items || []).slice(0, 8);
       if (document.activeElement === $("add-company")) openList();
@@ -367,12 +329,13 @@
     var box = $("add-dupe");
     var ps = S.people;
     if (!ps.length) { box.hidden = true; box.innerHTML = ""; return; }
+    var appearing = box.hidden;
     var open = ps.length === 1
-      ? '<a class="btn-link add-dupe-open" href="' + esc(bdHref("/bd/contact.html?id=", ps[0].id)) + '" aria-label="Open ' + esc(ps[0].name) + '">Open</a>'
+      ? '<a class="btn-link add-dupe-open" href="' + esc(BD.pageHref("/bd/contact.html?id=", ps[0].id)) + '" aria-label="Open ' + esc(ps[0].name) + '">Open</a>'
       : "";
     var links = ps.length > 1
       ? '<div class="wrap-row add-dupe-links">' + ps.slice(0, 6).map(function (p) {
-        return '<a class="btn-link" href="' + esc(bdHref("/bd/contact.html?id=", p.id)) + '">Open ' + esc(p.name) + "</a>";
+        return '<a class="btn-link" href="' + esc(BD.pageHref("/bd/contact.html?id=", p.id)) + '">Open ' + esc(p.name) + "</a>";
       }).join("") + "</div>"
       : "";
     var maybe = ps.length === 1 ? "Maybe " + BD.firstName(ps[0].name) + ", check Friday" : "Maybe one of them, check Friday";
@@ -381,6 +344,8 @@
       '<div class="add-radios" role="radiogroup" aria-labelledby="add-dupe-q">' +
       radio("new", "Yes, someone new") + radio("same", maybe) + "</div>";
     box.hidden = false;
+    // A person who cannot see the box hears the question once, when it appears.
+    if (appearing) BD.announce($("add-dupe-q").textContent);
   }
 
   function radio(key, label) {
@@ -450,11 +415,23 @@
   }
 
   // ── field checks ───────────────────────────────────────────────────────────────────────────
+  /** The input's aria-describedby: its hint, its "This phone belongs to" box and its error, each
+   *  only while it shows (none: no attribute). */
+  function describe(key) {
+    var input = $("add-" + key);
+    if (!input) return;
+    var ids = ["hint", "match", "err"].map(function (part) { return "add-" + key + "-" + part; }).filter(function (id) {
+      var el = $(id);
+      return el && !el.hidden && el.textContent;
+    });
+    if (ids.length) input.setAttribute("aria-describedby", ids.join(" ")); else input.removeAttribute("aria-describedby");
+  }
   function hint(key, words) {
     var h = $("add-" + key + "-hint");
     if (!h) return;
     h.textContent = words || "";
     h.hidden = !words;
+    describe(key);
   }
   function setError(key, words) {
     var wrap = document.querySelector('[data-field="' + key + '"]');
@@ -464,7 +441,8 @@
     e.textContent = words;
     e.hidden = false;
     var input = $("add-" + key);
-    if (input) { input.setAttribute("aria-invalid", "true"); input.setAttribute("aria-describedby", e.id); }
+    if (input) input.setAttribute("aria-invalid", "true");
+    describe(key);
     return input;
   }
   function clearError(key) {
@@ -473,7 +451,8 @@
     if (wrap) wrap.classList.remove("has-error");
     if (e) { e.hidden = true; e.textContent = ""; }
     var input = $("add-" + key);
-    if (input) { input.removeAttribute("aria-invalid"); input.removeAttribute("aria-describedby"); }
+    if (input) input.removeAttribute("aria-invalid");
+    describe(key);
   }
 
   var EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -512,15 +491,21 @@
     var wrap = document.querySelector('[data-field="' + key + '"]');
     var box = wrap && wrap.querySelector(".add-match");
     var m = S.match[key];
-    if (!m) { if (box) box.parentNode.removeChild(box); return; }
+    if (!m) { if (box) box.parentNode.removeChild(box); describe(key); return; }
+    var words = "This " + (key === "phone" ? "phone" : "email") + " belongs to " + m.name + ".";
+    var fresh = !box || box.getAttribute("data-said") !== words;
     if (!box) {
       box = document.createElement("p");
       box.className = "add-match";
       box.id = "add-" + key + "-match";
       wrap.appendChild(box);
     }
-    box.innerHTML = ico("warning", 16) + "<span>This " + (key === "phone" ? "phone" : "email") + " belongs to " + esc(m.name) + ".</span>" +
-      '<a class="btn-link" href="' + esc(bdHref("/bd/contact.html?id=", m.id)) + '" aria-label="Open ' + esc(m.name) + '">Open</a>';
+    box.innerHTML = ico("warning", 16) + "<span>" + esc(words) + "</span>" +
+      '<a class="btn-link" href="' + esc(BD.pageHref("/bd/contact.html?id=", m.id)) + '" aria-label="Open ' + esc(m.name) + '">Open</a>';
+    box.setAttribute("data-said", words);
+    describe(key);
+    // Said once when it appears (or names someone else), for a person who cannot see the box.
+    if (fresh) BD.announce(words);
   }
 
   // ── saving ─────────────────────────────────────────────────────────────────────────────────
@@ -602,7 +587,7 @@
       setBusy(btn, false);
       BD.toast(c.name + " added.", {
         kind: "ok", ms: 8000,
-        action: { label: "Open", onClick: function () { var to = bdHref("/bd/contact.html?id=", c.id); if (to) location.href = to; } },
+        action: { label: "Open", onClick: function () { var to = BD.pageHref("/bd/contact.html?id=", c.id); if (to) location.href = to; } },
       });
       resetForNext(c);
     }, function (err) {
@@ -769,7 +754,7 @@
     var root = $("add-root");
     if (!root) return;
     root.removeAttribute("aria-busy");
-    root.innerHTML = '<div class="add-wrap"><h1 class="page-title add-title">Add a contact</h1>' +
+    root.innerHTML = '<div class="add-wrap"><h1 class="page-title add-title">Add contact</h1>' +
       '<div class="panel-info add-note" role="status">' + ico("info", 18) + "<span>" + esc(words) + "</span></div></div>";
   }
 
