@@ -22,6 +22,10 @@
   var BIZ_TZ = "America/Chicago";
   var DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+  /** A glyph from the tool's one icon set (window.TWIcon, js/icons.js) by its canonical name, as
+   *  markup; "" when the icon set did not load. The one copy every BD script uses (BD.icon). */
+  function icon(name, size) { return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : ""; }
+
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -223,7 +227,7 @@
     var name = displayName(who);
     var mark = "";
     if (badge === "done") {
-      var check = typeof window.TWIcon === "function" ? window.TWIcon("check", 11) : "";
+      var check = icon("check", 11);
       mark = '<span class="avatar-badge">' + check + "</span>";
     } else if (badge === "off") {
       mark = '<span class="avatar-badge-off"></span>';
@@ -374,7 +378,7 @@
 
   /** A pill: kind ok | warn | info | neutral | ai | outline, plain text, an optional 14 px glyph. */
   function pill(kind, text, glyph) {
-    var ico = glyph && typeof window.TWIcon === "function" ? window.TWIcon(glyph, 14) : "";
+    var ico = glyph ? icon(glyph, 14) : "";
     return '<span class="pill pill-' + kind + '">' + ico + esc(text) + "</span>";
   }
 
@@ -661,7 +665,7 @@
     var label = anchorBtn.getAttribute("aria-label") || anchorBtn.textContent || "";
     if (label.trim()) el.setAttribute("aria-label", label.trim());
     el.innerHTML = (items || []).map(function (it) {
-      var ico = it.icon && typeof window.TWIcon === "function" ? window.TWIcon(it.icon, 18) : "";
+      var ico = it.icon ? icon(it.icon, 18) : "";
       var cls = "menu-item" + (it.danger ? " is-danger" : "");
       var inner = ico + (it.sub
         ? '<span class="menu-label"><span>' + esc(it.label) + '</span><span class="menu-sub">' + esc(it.sub) + "</span></span>"
@@ -751,7 +755,8 @@
     return region;
   }
 
-  /** Screen-reader words for a toast: errors interrupt, everything else waits its turn. */
+  /** Screen-reader words (a toast's, or a change a redraw would not announce; BD.announce): errors
+   *  interrupt, everything else waits its turn. One region on <body>, there before the words. */
   function announce(message, urgent) {
     var region = liveRegion(urgent);
     region.textContent = "";
@@ -777,12 +782,11 @@
     }
     var kind = o.kind === "error" || o.kind === "ok" ? o.kind : "info";
     var glyph = kind === "error" ? "warning" : (kind === "ok" ? "check-circle" : "info");
-    var ico = function (name, size) { return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : ""; };
     var el = doc.createElement("div");
     el.className = "toast toast-" + kind;
-    el.innerHTML = '<span class="toast-ico">' + ico(glyph, 18) + '</span><span class="toast-msg"></span>' +
+    el.innerHTML = '<span class="toast-ico">' + icon(glyph, 18) + '</span><span class="toast-msg"></span>' +
       (o.action ? '<button type="button" class="toast-act"></button>' : "") +
-      '<button type="button" class="toast-x" aria-label="Close">' + ico("x", 16) + "</button>";
+      '<button type="button" class="toast-x" aria-label="Close">' + icon("x", 16) + "</button>";
     var msgEl = el.querySelector(".toast-msg");
     msgEl.textContent = String(message == null ? "" : message);
     announce(msgEl.textContent, kind === "error");
@@ -855,6 +859,7 @@
   window.BD = {
     BIZ_TZ: BIZ_TZ,
     esc: esc,
+    icon: icon,
     money: money,
     fmtBizDate: fmtBizDate,
     fmtBizDateTime: fmtBizDateTime,
@@ -897,5 +902,6 @@
     safeHref: safeHref,
     closeMenu: closeMenu,
     toast: toast,
+    announce: announce,
   };
 })();

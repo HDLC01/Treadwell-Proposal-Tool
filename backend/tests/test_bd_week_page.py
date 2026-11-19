@@ -38,12 +38,12 @@ MORNING = "2026-11-04T09:30:00-06:00"
 CONTACTS = "/bd/contacts.html"
 
 # BD's can() by hand (api-contract.md): "week" for every BD role but the assistant; "send" for a
-# salesperson and the admins; "run_batch" for the admins.
+# salesperson and the admins; "run_batch" for the admins; "pick_owner" for a manager and the admins.
 CAN = {
-    "salesperson": {"week": True, "send": True, "run_batch": False},
-    "assistant": {"week": False, "send": False, "run_batch": False},
-    "manager": {"week": True, "send": False, "run_batch": False},
-    "admin": {"week": True, "send": True, "run_batch": True},
+    "salesperson": {"week": True, "send": True, "run_batch": False, "pick_owner": False},
+    "assistant": {"week": False, "send": False, "run_batch": False, "pick_owner": False},
+    "manager": {"week": True, "send": False, "run_batch": False, "pick_owner": True},
+    "admin": {"week": True, "send": True, "run_batch": True, "pick_owner": True},
 }
 
 
@@ -177,3 +177,73 @@ def test_values_go_in_as_text(tmp_path):
         {"id": 1, "name": "<img src=x onerror=alert(1)>", "role": "salesperson"}]}}
     out = run(tmp_path, me("Devon Hale", "manager", uid=4), responses={"GET /api/bd/users": users}, name="hostile")
     assert "<img" not in out["els"]["lists"]["html"] and "&lt;img" in out["els"]["lists"]["html"]
+
+
+# ── the empty week (no list yet): its words and buttons come from the server ─────────────────────
+def empty_week():
+    """A WeekView with no batch (docs/bd/api-contract.md), as GET /api/bd/week answers before Friday."""
+    return {"status": 200, "body": {"ok": True, "week": {
+        "week_start": "2026-11-02", "week_end": "2026-11-08", "owner": {"id": 1, "name": "Avery Quill"},
+        "batch": None, "batches": [], "tasks": [], "done_count": 0, "total": 0, "due_count": 0,
+        "pace": {"year": 2026, "as_of": "2026-11-04", "required_to_date": 0.0, "completed": 0, "target_total": 0,
+                 "pct": 0, "delta": 0, "label": "2026 BD Pace: 0%"},
+        "weekly_meetings": {"count": 0, "goal": 5, "non_dsbc_website": 0, "min": 1}, "touches_this_week": 0}}}
+
+
+def settings(run_day="friday", run_hour=16):
+    return {"status": 200, "body": {"ok": True, "settings": {"ai_enabled": False, "weekly": {
+        "new_count": 5, "followup_count": 5, "run_day": run_day, "run_hour": run_hour, "enabled": True}}}}
+
+
+def empty_text(out):
+    return re.sub(r"\s+", " ", out["els"]["lists"]["text"])
+
+
+@pytest.mark.parametrize("run_day, run_hour, words", [
+    ("thursday", 9, "The next list arrives Thursday at 9 AM."),
+    ("friday", 16, "The next list arrives Friday at 4 PM."),
+    ("monday", 0, "The next list arrives Monday at 12 AM."),
+    ("saturday", 12, "The next list arrives Saturday at 12 PM."),
+    ("sunday", 23, "The next list arrives Sunday at 11 PM."),
+])
+def test_the_empty_week_says_when_the_next_list_arrives_from_the_settings(tmp_path, run_day, run_hour, words):
+    """settings.weekly.run_day / run_hour are what the Friday worker runs on (bd/weekly_worker.py)."""
+    out = run(tmp_path, me("Avery Quill", "salesperson"),
+              responses={"GET /api/bd/week": empty_week(), "GET /api/bd/settings": settings(run_day, run_hour)})
+    assert "Nothing on the list this week." in empty_text(out)
+    assert words in empty_text(out), empty_text(out)
+
+
+def test_without_the_settings_the_empty_week_says_friday_at_4_pm(tmp_path):
+    down = {"status": 503, "body": {"ok": False, "error": "unavailable", "message": "Not now."}}
+    out = run(tmp_path, me("Avery Quill", "salesperson"),
+              responses={"GET /api/bd/week": empty_week(), "GET /api/bd/settings": down})
+    assert "The next list arrives Friday at 4 PM." in empty_text(out), empty_text(out)
+
+
+def test_what_the_page_offers_follows_can_and_not_the_role_name(tmp_path):
+    """The page reads /api/bd/me's can (bd/auth.py can()), never a role name: a login whose can grants
+    only "week" gets no picker and no buttons, whatever its role says, and one whose can grants
+    "send" and "run_batch" gets Give me 10 more and the manual run."""
+    bare = me("Emery Stoll", "admin", uid=5)
+    bare["body"]["can"] = {"week": True, "send": False, "run_batch": False, "pick_owner": False}
+    out = run(tmp_path, bare, responses={"GET /api/bd/week": empty_week(), "GET /api/bd/settings": settings()},
+              name="bare")
+    assert ("GET", "/api/bd/week") in asked(out), "no pick_owner: no chooser, the week is asked for"
+    html = out["els"]["lists"]["html"]
+    assert "Nothing on the list this week." in out["els"]["lists"]["text"]
+    assert 'data-act="ten-more"' not in html and 'data-act="run-weekly"' not in html
+
+    full = me("Avery Quill", "salesperson")
+    full["body"]["can"] = {"week": True, "send": True, "run_batch": True, "pick_owner": False}
+    out = run(tmp_path, full, responses={"GET /api/bd/week": empty_week(), "GET /api/bd/settings": settings()},
+              name="full")
+    html = out["els"]["lists"]["html"]
+    assert 'data-act="ten-more"' in html and 'data-act="run-weekly"' in html
+
+    picker = me("Avery Quill", "salesperson")
+    picker["body"]["can"] = {"week": True, "send": False, "run_batch": False, "pick_owner": True}
+    users = {"status": 200, "body": {"ok": True, "total": 1, "items": [{"id": 1, "name": "Avery Quill", "role": "salesperson"}]}}
+    out = run(tmp_path, picker, responses={"GET /api/bd/users": users}, name="picker")
+    assert ("GET", "/api/bd/week") not in asked(out)
+    assert out["els"]["week-sub"]["text"] == "Choose whose week to look at."

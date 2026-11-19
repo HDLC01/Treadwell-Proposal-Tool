@@ -666,6 +666,12 @@
   .bd-app .wk-list .wk-row { grid-template-columns: 40px minmax(0, 1fr) auto auto;
     grid-template-areas: "av who call more" "av pill call more" "av reason call more"; }
 }
+/* A row with no phone number on a phone: its More button takes the call column ("No phone" has no
+   button to sit beside), so the row can still be taken off, marked done or flagged. */
+@media (max-width: 767px) {
+  .bd-app .wk-row-nophone .wk-row-call { display: none; }
+  .bd-app .wk-row-nophone .wk-row-more { grid-area: call; }
+}
 /* A middle column (520-719: beside the tray, or a tablet): name and company on the left, the pill
    over the reason on the right, two lines a row instead of four. */
 @container wk-main (min-width: 520px) and (max-width: 719.98px) {

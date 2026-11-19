@@ -52,15 +52,7 @@
 
   var BD = window.BD, BDApi = window.BDApi;
   var esc = BD.esc;
-
-  /** A BD route's address from its parts: bdPath("tasks", 7, "done") is "/api/bd/tasks/7/done". Each
-   *  id is encoded. (Written from parts, so no string here reads as a site path of its own.) */
-  function bdPath() {
-    var parts = Array.prototype.map.call(arguments, function (p) { return encodeURIComponent(String(p)); });
-    return BDApi.base + parts.join("/");
-  }
-
-  function icon(name, size) { return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : ""; }
+  var icon = BD.icon;
   // What the page read from /api/bd/me (BDCall.setMe): {today, user: {role}, can: {send}}.
   var ME = null;
   function today() { return (ME && ME.today) || ""; }
@@ -142,7 +134,7 @@
         '<div class="date-chips" role="group" aria-labelledby="' + ids.w + '">' + chips + "</div></div>" +
         '<div class="field"' + (st.chip === "pick" ? "" : " hidden") + '><label for="' + ids.d + '">Date</label>' +
         '<input class="input" type="date" id="' + ids.d + '" data-field="recdate" value="' + esc(st.chip === "pick" ? (st.date !== o.date ? st.date : "") : "") + '"' + min + " /></div>" +
-        '<p class="call-editor-preview" aria-live="polite">' + esc(preview()) + "</p>" +
+        '<p class="call-editor-preview">' + esc(preview()) + "</p>" +
         '<label class="check"><input type="checkbox" data-field="recpromised"' + (st.promised ? " checked" : "") + " /> " +
         esc(o.promisedLabel || "They asked for this date") + "</label>" +
         (st.err ? '<p class="field-error" role="alert">' + esc(st.err) + "</p>" : "") +
@@ -171,6 +163,9 @@
         if (k === "pick" && !st.date) st.date = "";
         draw();
         focus(k === "pick" ? '[data-field="recdate"]' : '[data-chip="' + k + '"]');
+        // The redraw made the preview line anew, and a live region drawn with its words is often
+        // not read out: the words go to BD's one live region instead.
+        BD.announce(preview());
         return;
       }
       var b = e.target.closest ? e.target.closest("[data-act]") : null;
@@ -187,6 +182,7 @@
         st.date = e.target.value; st.err = "";
         var p = el.querySelector(".call-editor-preview");
         if (p) p.textContent = preview();
+        BD.announce(preview());
       }
     };
     // One editor per element at a time: a redraw replaces the old one's listeners.
@@ -275,7 +271,7 @@
     var c = this.contact, self = this;
     if (this.keptReady) return this.keptReady;
     if (c && c.id != null) {
-      this.keptReady = BDApi.get(bdPath("contacts", c.id)).then(function (r) {
+      this.keptReady = BDApi.get(BDApi.path("contacts", c.id)).then(function (r) {
         var x = (r && r.contact) || {};
         self.kept = { next_step: x.next_step || null, next_step_date: x.next_step_date || null, promised_date: x.promised_date || null };
         ["email", "phone", "phone_e164", "title", "city"].forEach(function (k) { if (!self.contact[k] && x[k]) self.contact[k] = x[k]; });
@@ -670,7 +666,7 @@
     f.focusSel = '[data-outcome="' + key + '"]';
     render(f, host);
     f.loadKept().then(function () {
-      return f.req("POST", bdPath("contacts", c.id, "interactions"), bodyFor(key, when));
+      return f.req("POST", BDApi.path("contacts", c.id, "interactions"), bodyFor(key, when));
     }).then(function (r) {
       var i = (r && r.interaction) || {};
       f.busy = null; f.regrid = false;
@@ -710,17 +706,17 @@
       render(f, host);
       f.emit("saved");
     };
-    f.req("PATCH", bdPath("interactions", f.iid), patchFor(key)).then(function () {
+    f.req("PATCH", BDApi.path("interactions", f.iid), patchFor(key)).then(function () {
       var k = f.kept;
       if (wasTouch && !nowTouch && k && (k.next_step || k.next_step_date || k.promised_date)) {
-        return f.req("PATCH", bdPath("contacts", c.id), k);
+        return f.req("PATCH", BDApi.path("contacts", c.id), k);
       }
     }).then(function () {
       if (!hadRec) { saved(null); return; }
       // The outcome is saved. Swapping the suggested step is a second step, and its routes answer
       // 503 until they are built (#807): say so under the step, and keep the saved outcome.
-      f.req("POST", bdPath("recommendations", f.rec.id, "dismiss"), {}).then(function () {
-        return f.req("POST", bdPath("interactions", f.iid, "recommend"), {});
+      f.req("POST", BDApi.path("recommendations", f.rec.id, "dismiss"), {}).then(function () {
+        return f.req("POST", BDApi.path("interactions", f.iid, "recommend"), {});
       }).then(saved, function (e) {
         f.barErr = (e && e.message) || "The next step was not changed. Try again.";
         saved(null);
@@ -737,9 +733,9 @@
     if (!note || f.aiBusy) return;
     f.aiBusy = true; f.aiMsg = "";
     render(f, host);
-    f.req("PATCH", bdPath("interactions", f.iid), { summary: note }).then(function () {
+    f.req("PATCH", BDApi.path("interactions", f.iid), { summary: note }).then(function () {
       f.noteSaved = note;
-      return f.req("POST", bdPath("interactions", f.iid, "recommend"), {});
+      return f.req("POST", BDApi.path("interactions", f.iid, "recommend"), {});
     }).then(function (r) {
       f.aiBusy = false;
       var rec = r && r.recommendation;
@@ -757,7 +753,7 @@
   function dismissRec(f, host, btn) {
     if (!f.rec || btn.disabled) return;
     btn.disabled = true;
-    f.req("POST", bdPath("recommendations", f.rec.id, "dismiss"), {}).then(function () {
+    f.req("POST", BDApi.path("recommendations", f.rec.id, "dismiss"), {}).then(function () {
       f.recState = "dismissed"; f.custom = null;
       f.focusSel = '[data-act="rec-undo"]';
       render(f, host);
@@ -771,7 +767,7 @@
   function undoDismiss(f, host, btn) {
     if (!f.iid || btn.disabled) return;
     btn.disabled = true;
-    f.req("POST", bdPath("interactions", f.iid, "recommend"), {}).then(function (r) {
+    f.req("POST", BDApi.path("interactions", f.iid, "recommend"), {}).then(function (r) {
       f.rec = (r && r.recommendation) || f.rec;
       f.recState = "pending"; f.custom = null;
       f.focusSel = '[data-act="rec-change"]';
@@ -788,7 +784,7 @@
     if (f.channel === ch) { f.channel = null; f.focusSel = '[data-ch="' + ch + '"]'; render(f, host); return; }
     if (ch === "none" && f.inline) {
       f.fuBusy = true;
-      f.req("POST", bdPath("interactions", f.iid, "send-followup"), { channel: "none" }).then(function () {
+      f.req("POST", BDApi.path("interactions", f.iid, "send-followup"), { channel: "none" }).then(function () {
         f.fuBusy = false; f.fuDone = "none"; f.done.fu = true;
         render(f, host);
         f.emit("confirmed");
@@ -806,7 +802,7 @@
     }
     f.fuBusy = true;
     render(f, host);
-    f.req("POST", bdPath("interactions", f.iid, "draft-followup"), { channel: ch }).then(function (r) {
+    f.req("POST", BDApi.path("interactions", f.iid, "draft-followup"), { channel: ch }).then(function (r) {
       f.fuBusy = false;
       var d = (r && r.draft) || {};
       f.drafts[ch] = { id: d.id, to: d.to, subject: d.subject || "", body: d.body || "", source: d.source };
@@ -836,7 +832,7 @@
     var s = sendBody(f);
     if (s.err) { f.fuErr = s.err; render(f, host); return; }
     btn.classList.add("is-busy"); btn.setAttribute("aria-busy", "true");
-    f.req("POST", bdPath("interactions", f.iid, "send-followup"), s.body).then(function () {
+    f.req("POST", BDApi.path("interactions", f.iid, "send-followup"), s.body).then(function () {
       f.sentWhat = f.channel; f.fuDone = "sent"; f.done.fu = true;
       render(f, host);
       toast(f.channel === "sms" ? "Text sent." : "Email sent.", { kind: "ok" });
@@ -855,7 +851,7 @@
     if (f.custom && f.custom.promised) body.promised = true;
     f.barBusy = true; f.barErr = "";
     if (btn) { btn.classList.add("is-busy"); btn.setAttribute("aria-busy", "true"); }
-    f.req("POST", bdPath("recommendations", f.rec.id, "confirm"), body).then(function (r) {
+    f.req("POST", BDApi.path("recommendations", f.rec.id, "confirm"), body).then(function (r) {
       var saved = (r && r.recommendation) || {};
       f.barBusy = false; f.done.rec = true; f.recState = "confirmed";
       f.savedStep = { action: saved.action || body.action || f.rec.action, date: saved.due_date || body.due_date || f.rec.due_date };
@@ -885,12 +881,12 @@
     var note = f.note.trim();
     if (f.iid && f.phase === "saved" && note !== f.noteSaved) {
       chain = chain.then(function () {
-        return f.req("PATCH", bdPath("interactions", f.iid), { summary: note }).then(function () { f.noteSaved = note; });
+        return f.req("PATCH", BDApi.path("interactions", f.iid), { summary: note }).then(function () { f.noteSaved = note; });
       });
     }
     if (!f.wrong && f.iid && (f.outcome === "answered" || f.outcome === "meeting_set") && f.meetingSet !== f.meetingSetSaved) {
       chain = chain.then(function () {
-        return f.req("PATCH", bdPath("interactions", f.iid), { kind: "call", outcome: f.meetingSet ? "meeting_set" : "answered" }).then(function () {
+        return f.req("PATCH", BDApi.path("interactions", f.iid), { kind: "call", outcome: f.meetingSet ? "meeting_set" : "answered" }).then(function () {
           f.meetingSetSaved = f.meetingSet;
           f.outcome = f.meetingSet ? "meeting_set" : "answered";
           if (f.meetingSet && f.meetingDate && !f.custom) {
@@ -903,7 +899,7 @@
       chain = chain.then(function () {
         var body = f.custom ? { action: f.custom.action, due_date: f.custom.date } : {};
         if (f.custom && f.custom.promised) body.promised = true;
-        return f.req("POST", bdPath("recommendations", f.rec.id, "confirm"), body).then(function (r) {
+        return f.req("POST", BDApi.path("recommendations", f.rec.id, "confirm"), body).then(function (r) {
           var saved = (r && r.recommendation) || {};
           f.done.rec = true;
           f.savedStep = { action: saved.action || body.action || f.rec.action, date: saved.due_date || body.due_date || f.rec.due_date };
@@ -912,7 +908,7 @@
     }
     if (!f.wrong && fuPick) {
       chain = chain.then(function () {
-        return f.req("POST", bdPath("interactions", f.iid, "send-followup"), send.body).then(function () {
+        return f.req("POST", BDApi.path("interactions", f.iid, "send-followup"), send.body).then(function () {
           f.done.fu = true;
           f.fuDone = fuPick === "none" ? "none" : "sent";
           if (fuPick !== "none") f.sentWhat = fuPick;
@@ -953,11 +949,11 @@
     var c = f.contact;
     var p;
     if (f.task && f.task.id != null) {
-      p = f.req("POST", bdPath("tasks", f.task.id, "not-right-person"), note ? { note: note } : {});
+      p = f.req("POST", BDApi.path("tasks", f.task.id, "not-right-person"), note ? { note: note } : {});
     } else {
-      p = f.req("POST", bdPath("contacts", c.id, "confirm"), { confirmed: false }).then(function (r) {
+      p = f.req("POST", BDApi.path("contacts", c.id, "confirm"), { confirmed: false }).then(function (r) {
         if (!note) return r;
-        return f.req("POST", bdPath("contacts", c.id, "interactions"), { kind: "note", summary: note });
+        return f.req("POST", BDApi.path("contacts", c.id, "interactions"), { kind: "note", summary: note });
       });
     }
     return p.then(function (r) { f.done.nrp = true; return r; });
@@ -1049,7 +1045,7 @@
     }
     var note = f.note.trim();
     if (f.iid && note !== f.noteSaved) {
-      f.req("PATCH", bdPath("interactions", f.iid), { summary: note }).then(function () { f.noteSaved = note; }, function () {});
+      f.req("PATCH", BDApi.path("interactions", f.iid), { summary: note }).then(function () { f.noteSaved = note; }, function () {});
     }
     var stepWaits = f.rec && !f.done.rec && (f.recState === "pending" || f.recState === "editing");
     var fuWaits = f.fuOn && !f.done.fu;

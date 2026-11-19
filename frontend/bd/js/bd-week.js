@@ -55,13 +55,6 @@
   var CONTACTS_HOME = "/bd/contacts.html";
   var esc = BD.esc;
 
-  /** A BD route's address from its parts: bdPath("tasks", 7, "done") is "/api/bd/tasks/7/done". Each
-   *  id is encoded. (Written from parts, so no string here reads as a site path of its own.) */
-  function bdPath() {
-    var parts = Array.prototype.map.call(arguments, function (p) { return encodeURIComponent(String(p)); });
-    return BDApi.base + parts.join("/");
-  }
-
   var CALL_KEY = "bd_call_started";
   var CALL_KEEP_MS = 2 * 60 * 60 * 1000;     // a dialled call reopens its sheet for 2 hours
 
@@ -71,13 +64,15 @@
     week: null,        // the WeekView
     byId: {},          // task id -> task
     details: {},       // contact id -> {contact, timeline, pending, missed}
-    canAct: false,     // may call, take off, mark done, ask for more
-    canSend: false,    // may decide next steps and send follow-ups (the tray)
-    canRun: false,     // may build the Friday list
-    canPick: false,    // manager or admin: may look at any salesperson's week (sees the score)
+    // What this person may do: /api/bd/me's can (bd/auth.py can()), never worked out from a role name.
+    canAct: false,     // can.send: may call, take off, mark done, ask for more
+    canSend: false,    // can.send: may decide next steps and send follow-ups (the tray)
+    canRun: false,     // can.run_batch: may build the Friday list
+    canPick: false,    // can.pick_owner: may look at any salesperson's week (sees the score)
     owner: null,       // the owner asked for (?owner= or the picker); null = none yet (a manager or admin is asked)
     chooser: false,    // manager or admin with no ?owner=: greeted and asked whose week to look at
     ai: false,         // settings.ai_enabled
+    settings: null,    // GET /api/bd/settings (null until it answers; the empty week reads its run day and hour)
     loadToken: 0,
     nextWeek: undefined,   // undefined: not asked; null: none; else next week's WeekView
     preview: false,    // "See next week's 10" open
@@ -102,7 +97,7 @@
   var trayEl = document.getElementById("wk-tray");
   var layoutEl = document.getElementById("wk-layout");
 
-  function icon(name, size) { return typeof window.TWIcon === "function" ? window.TWIcon(name, size) : ""; }
+  var icon = BD.icon;
   function $(sel, root) { return (root || document).querySelector(sel); }
   function toast(msg, o) { return BD.toast(msg, o || {}); }
   function fail(e) { toast((e && e.message) || "Something went wrong. Try again.", { kind: "error" }); }
@@ -253,8 +248,8 @@
     var need = ids.filter(function (id) { return id != null && (force || !S.details[id]); });
     return Promise.all(need.map(function (id) {
       return Promise.all([
-        BDApi.get(bdPath("contacts", id)),
-        BDApi.get(bdPath("contacts", id, "interactions")),
+        BDApi.get(BDApi.path("contacts", id)),
+        BDApi.get(BDApi.path("contacts", id, "interactions")),
       ]).then(function (rs) {
         var a = rs[0] || {}, b = rs[1] || {};
         S.details[id] = { contact: a.contact || null, pending: a.pending_recommendation || null,
@@ -582,15 +577,19 @@
     // Admin acts AND picks: the manager's "Priority N" caption goes under the pill.
     if (!o.preview && S.canAct && S.canPick && t.score != null && !isMaint(t)) pill += '<span class="wk-score">' + esc("Priority " + t.score) + "</span>";
     var acts;
+    // No phone number: More stays on a phone too, where it takes the call column (bd.css
+    // .wk-row-nophone), or a phone user could not take the task off, mark it done or flag the person.
+    var noPhone = !o.preview && S.canAct && !BD.telHref(c);
     if (o.preview) {
       acts = '<span class="wk-row-meta">' + esc(phoneOf(c)) + "</span>";
     } else if (S.canAct) {
-      acts = '<span class="wk-row-call">' + callBtnHTML(c) + "</span>" + moreBtnHTML(t, "hide-phone wk-row-more");
+      acts = '<span class="wk-row-call">' + callBtnHTML(c) + "</span>" + moreBtnHTML(t, (noPhone ? "" : "hide-phone ") + "wk-row-more");
     } else {
       acts = '<span class="wk-row-meta"><span>' + esc(phoneOf(c)) + "</span>" +
         (S.canPick && t.score != null && !isMaint(t) ? '<span class="wk-score">' + esc("Priority " + t.score) + "</span>" : "") + "</span>";
     }
-    return '<li class="list-row wk-row' + (two ? " wk-row-two" : "") + (S.canAct && !o.preview ? "" : " is-readonly") + '"' + hook + ">" +
+    return '<li class="list-row wk-row' + (two ? " wk-row-two" : "") + (noPhone ? " wk-row-nophone" : "") +
+      (S.canAct && !o.preview ? "" : " is-readonly") + '"' + hook + ">" +
       BD.avatarHTML(c.name || "", "") +
       '<span class="who wk-who"><span class="who-name">' + esc(c.name) + "</span>" +
       '<span class="who-sub">' + esc(c.company ? c.company.name : "") + "</span></span>" +
@@ -791,12 +790,25 @@
       "</ul></div></section>";
   }
 
+  var DAY_WORD = { monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday",
+                   friday: "Friday", saturday: "Saturday", sunday: "Sunday" };
+
+  /** When the Friday worker makes the next list: settings.weekly.run_day and run_hour, the ones it
+   *  runs on (bd/weekly_worker.py). Friday at 4 PM, the default, until the settings answer. */
+  function nextListWords() {
+    var w = (S.settings && S.settings.weekly) || {};
+    var day = DAY_WORD[String(w.run_day || "").toLowerCase()] || "Friday";
+    var hour = Number(w.run_hour);
+    if (w.run_hour == null || w.run_hour === "" || !(hour >= 0 && hour <= 23) || Math.floor(hour) !== hour) hour = 16;
+    return "The next list arrives " + day + " at " + (hour % 12 === 0 ? 12 : hour % 12) + (hour < 12 ? " AM." : " PM.");
+  }
+
   function emptyHTML() {
     var run = S.canRun ? '<button type="button" class="btn" data-act="run-weekly">' + icon("refresh", 18) + "Make this week's list now</button>" : "";
     var more = S.canAct ? '<button type="button" class="btn" id="ten-more-btn" data-act="ten-more">' + icon("plus", 18) + "Give me 10 more</button>" : "";
     return '<div class="card empty wk-empty"><div class="empty-ico">' + icon("calendar", 22) + "</div>" +
       '<p class="empty-title">Nothing on the list this week.</p>' +
-      '<p class="empty-text">The next list arrives Friday at 4 PM.</p>' +
+      '<p class="empty-text">' + esc(nextListWords()) + "</p>" +
       (more || run ? '<div class="wrap-row wk-empty-acts">' + more + run + "</div>" : "") +
       (S.moreMsg ? '<p class="wk-ten-msg" role="status">' + esc(S.moreMsg) + "</p>" : "") + "</div>";
   }
@@ -986,7 +998,7 @@
   }
 
   function doDone(t, btn) {
-    run(btn, function () { return BDApi.post(bdPath("tasks", t.id, "done")); }).then(function (r) {
+    run(btn, function () { return BDApi.post(BDApi.path("tasks", t.id, "done")); }).then(function (r) {
       if (!r) return;
       applyTask(t, r.task);
       renderAll();
@@ -997,7 +1009,7 @@
   }
 
   function doSnooze(t, btn) {
-    run(btn, function () { return BDApi.post(bdPath("tasks", t.id, "snooze"), {}); }).then(function (r) {
+    run(btn, function () { return BDApi.post(BDApi.path("tasks", t.id, "snooze"), {}); }).then(function (r) {
       if (!r) return;
       applyTask(t, r.task);
       S.offNow[t.id] = true;
@@ -1009,7 +1021,7 @@
   }
 
   function doReopen(t, btn) {
-    run(btn, function () { return BDApi.post(bdPath("tasks", t.id, "reopen")); }).then(function (r) {
+    run(btn, function () { return BDApi.post(BDApi.path("tasks", t.id, "reopen")); }).then(function (r) {
       if (!r) return;
       applyTask(t, r.task);
       delete S.offNow[t.id];
@@ -1071,7 +1083,7 @@
     var cid = Number(btn.getAttribute("data-contact"));
     var d = S.details[cid] || {};
     var rec = d.pending && d.pending.id === rid ? d.pending : null;
-    run(btn, function () { return BDApi.post(bdPath("recommendations", rid, "confirm"), {}); }).then(function (r) {
+    run(btn, function () { return BDApi.post(BDApi.path("recommendations", rid, "confirm"), {}); }).then(function (r) {
       if (!r) return;
       var saved = (r && r.recommendation) || rec || {};
       toast("Next step saved: " + (saved.action || (rec && rec.action) || "") + ", " + BD.fmtDay(saved.due_date || (rec && rec.due_date), S.today) + ".", { kind: "ok" });
@@ -1351,18 +1363,21 @@
       S.me = me;
       S.today = me.today || BD.bizToday();
       if (window.BDCall && typeof window.BDCall.setMe === "function") window.BDCall.setMe(me);
-      var role = me.user && me.user.role;
-      var admin = role === "admin" || role === "super_admin";
-      S.canAct = role === "salesperson" || admin;
-      S.canSend = S.canAct && !!(me.can && me.can.send === true);
-      S.canRun = !!(me.can && me.can.run_batch);
-      S.canPick = role === "manager" || admin;
+      S.canAct = S.canSend = me.can.send === true;
+      S.canRun = me.can.run_batch === true;
+      S.canPick = me.can.pick_owner === true;
+      // ai_enabled only shows or hides "Suggest from my note", and the run day and hour only word the
+      // empty week: a failure is just "off" and the default. A week drawn before they answer is
+      // drawn again.
+      BDApi.get("/api/bd/settings").then(function (r) {
+        S.settings = (r && r.settings) || null;
+        S.ai = !!(S.settings && S.settings.ai_enabled);
+        if (S.week) renderMain();
+      }, function () {});
       var asked = Number(BD.qs("owner"));
       S.owner = S.canPick && asked > 0 ? asked : null;
       S.chooser = S.canPick && S.owner == null;
       if (S.chooser) return null;
-      // ai_enabled only shows or hides "Suggest from my note": a failure is just "off".
-      BDApi.get("/api/bd/settings").then(function (r) { S.ai = !!(r && r.settings && r.settings.ai_enabled); }, function () {});
       return loadWeek().catch(function (e) {
         // An ?owner= link to someone who is not there any more, or who has no weekly list (only a
         // salesperson has one): say so and show the default list instead.
