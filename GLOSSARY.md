@@ -184,3 +184,23 @@ A won job that has been given to operations. This is the only outcome that takes
 
 **Lost**:
 A dead deal, whatever stage it died at. A job that was Won and then cancelled counts as Lost only. A Scope becomes Lost only when a person decides it, never because another Scope of its Project was Approved.
+
+**BD CRM**:
+The business-development section of the proposal tool, where salespeople keep their contacts and work their weekly calls. It is in beta.
+_Avoid_: BD tool, bd.wetreadwell.com (its old separate home), Troy's list
+
+**BD role**:
+What a person can do inside the BD CRM: salesperson, assistant, manager, admin or super admin. It is separate from whether they can see the BD CRM at all.
+_Avoid_: BD permission, BD access
+
+**BD account**:
+A company Treadwell is developing business with, holding every person we can reach there. Several people at one company are one BD account.
+_Avoid_: Customer (that is who approves a Proposal), client, company record
+
+**BD contact**:
+One person under a BD account, with the name, phone and email a salesperson reaches them by.
+_Avoid_: Lead (that is an incoming request for a bid), prospect
+
+**Maintenance account**:
+A company Treadwell already works for, kept in touch with a follow-up every 120 days instead of the weekly BD calls. A whole BD account becomes one, or goes back, with every person at it.
+_Avoid_: maintenance contact (that is one person at it), customer

@@ -105,6 +105,7 @@ import reference_tax
 import supabase_client
 import template_versions
 from bd import api as bd_api
+from bd import web as bd_web
 from bd.routers import pending as bd_pending
 import verbal_intake
 
@@ -10573,6 +10574,7 @@ def api_me(request: Request) -> Dict[str, Any]:
                 "role": role, "status": prof.get("status", "active"),
                 "nav_denied": _nav_denied_for(role, prof.get("email") or email),
                 "nav_denied_pages": _nav_denied_pages_for(role, prof.get("email") or email),
+                "nav_off": _nav_off(),
                 "grants": _grants_for(role, prof.get("email") or email)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
@@ -10581,6 +10583,7 @@ def api_me(request: Request) -> Dict[str, Any]:
     return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
             "nav_denied": _nav_denied_for(role),
             "nav_denied_pages": _nav_denied_pages_for(role),
+            "nav_off": _nav_off(),
             "grants": _grants_for(role, "") if role == "super_admin" else []}
 
 
@@ -10656,6 +10659,19 @@ def _nav_denied_for(role: str, email: Any = "") -> List[str]:
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
+
+
+def _nav_off() -> List[str]:
+    """The sidebar rows a switched-off feature takes out of EVERY menu, for /api/me: the BD CRM's row
+    while BD_ENABLED is off (#806, Q26).
+
+    Its own field, NOT folded into nav_denied, because it is not a denial: nobody gets a refusal card
+    for it (the server answers BD's pages and routes "not turned on" itself), it reaches admins and
+    the super admin too, and the Admin page keeps drawing the BD CRM switch so the user-role box can
+    be unticked before the switch goes on. auth.js leaves these rows out of the menu it draws for the
+    person and out of nothing else.
+    """
+    return [] if bd_web.is_enabled() else ["/bd/"]
 
 
 def _nav_denied_pages_for(role: str, email: Any = "") -> Dict[str, str]:

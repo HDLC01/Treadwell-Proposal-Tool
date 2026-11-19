@@ -99,6 +99,9 @@
       '<path d="M12 9.5v4"></path>',
     history: '<path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1L3 8.4"></path><path d="M3 4.2v4.2h4.2"></path>' +
       '<path d="M12 7.6V12l3 1.8"></path>',
+    // the BD CRM row (ticket 806): people to call. Lucide's users.
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle>' +
+      '<path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
 
     // ── controls ──────────────────────────────────────────────────────────────
     menu: '<path d="M3 6h18M3 12h18M3 18h18"></path>',
