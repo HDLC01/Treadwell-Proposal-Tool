@@ -3,7 +3,8 @@ test_shared_helpers_js, moved with the file).
 
 bd-shared.js is loaded the way test_bd_normalize.py loads it: a bare `vm` context (`ctx.window = ctx`,
 no document, no storage, no matchMedia), which is itself the proof that the file touches the DOM
-only inside function bodies. Every date helper takes `today` as an argument (on a page, the `today`
+only inside function bodies. The tool's js/crm-core.js runs first, as on a BD page: BD names people
+through it (window.TWCrm), so a person's name, initials and colour are the tool's. Every date helper takes `today` as an argument (on a page, the `today`
 of /api/bd/me) and never reads a clock.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ import tempfile
 
 import pytest
 
-from _bd_pages import SHARED_JS
+from _bd_pages import CRM_CORE_JS, SHARED_JS
 from _node import last_json_line, require_node, run_node
 
 
@@ -22,11 +23,13 @@ RUNNER = """
 const fs = require("fs"), vm = require("vm");
 const ctx = {}; ctx.window = ctx; vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx);
-const calls = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), ctx);
+const calls = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
 const out = calls.map(([name, args]) => {
   try {
-    const fn = name.split(".").reduce((o, k) => o[k], ctx.BD);
-    return { ok: fn.apply(ctx.BD, args) };
+    const root = name.indexOf("TWCrm.") === 0 ? ctx : ctx.BD;
+    const fn = name.split(".").reduce((o, k) => o[k], root);
+    return { ok: fn.apply(root, args) };
   } catch (e) { return { error: String(e) }; }
 });
 console.log(JSON.stringify(out));
@@ -36,14 +39,15 @@ TODAY = "2026-11-04"
 
 
 def call(*calls):
-    """Run BD.<name>(*args) for each (name, args) in one node process; returns the results."""
+    """Run BD.<name>(*args) (or TWCrm.<name>) for each (name, args) in one node process; returns the
+    results."""
     require_node()
     with tempfile.TemporaryDirectory() as tmp:
         js = pathlib.Path(tmp) / "run.js"
         data = pathlib.Path(tmp) / "calls.json"
         js.write_text(RUNNER, encoding="utf-8")
         data.write_text(json.dumps([[n, list(a)] for n, a in calls]), encoding="utf-8")
-        proc = run_node(js, SHARED_JS, data)
+        proc = run_node(js, CRM_CORE_JS, SHARED_JS, data)
     assert proc.returncode == 0, proc.stderr[-3000:]
     res = last_json_line(proc.stdout)
     errors = [r["error"] for r in res if "error" in r]
@@ -158,13 +162,11 @@ def test_kind_pill_and_first_reason():
     assert none == ""
 
 
-def test_tint_plural_count_duration_tel():
-    t1, t2, t3, p1, p2, c, d1, d2, d3, tel, tel2 = call(
-        ("tintOf", ["Marcus Ebner"]), ("tintOf", ["marcus ebner"]), ("tintOf", ["Victor Almeida"]),
+def test_plural_count_duration_tel():
+    p1, p2, c, d1, d2, d3, tel, tel2 = call(
         ("plural", [1, "call"]), ("plural", [1234, "call"]), ("fmtCount", [1234567]),
         ("fmtDuration", [360]), ("fmtDuration", [95]), ("fmtDuration", [45]),
         ("telHref", [{"phone": "816.555.0102"}]), ("telHref", ["(913) 555-0117"]))
-    assert t1 == t2 and 1 <= t1 <= 5 and 1 <= t3 <= 5
     assert (p1, p2, c) == ("1 call", "1,234 calls", "1,234,567")
     assert (d1, d2, d3) == ("6 min", "1 min 35 s", "45 s")
     assert (tel, tel2) == ("tel:+18165550102", "tel:+19135550117")
@@ -174,7 +176,31 @@ def test_avatar_escapes_its_text_and_hides_from_screen_readers():
     html = one("avatarHTML", "<b>Bo</b> X", "sm", "done")
     assert "<b>" not in html and "&lt;" in html
     assert 'aria-hidden="true"' in html and "avatar avatar-sm" in html and "avatar-badge" in html
-    assert 'data-tint="' in html
+
+
+# A person is named once, by the tool's crm-core.js: BD's pages show the same name, initials and
+# colour as the proposal tool's board. Expected values by hand from crm-core's rules (first and last
+# word; colour keyed on the first name), and checked against TWCrm itself.
+@pytest.mark.parametrize("who,name,initials", [
+    ("dana.whitfield@example.com", "Dana Whitfield", "DW"),
+    ({"name": "Marcus Ebner", "email": "m.e@example.com"}, "Marcus Ebner", "ME"),
+    ({"email": "avery.quill@example.com"}, "Avery Quill", "AQ"),
+    ("Dr. Ian Pruitt", "Dr. Ian Pruitt", "IP"),
+])
+def test_bd_names_a_person_the_way_the_tool_does(who, name, initials):
+    got_name, got_ini, crm_ini, html, colour = call(
+        ("nameOf", [who]), ("initialsOf", [who]), ("TWCrm.initialsOf", [name]),
+        ("avatarHTML", [who]), ("TWCrm.colorOf", [name]))
+    assert (got_name, got_ini) == (name, initials)
+    assert got_ini == crm_ini
+    assert 'style="background:%s"' % colour in html, "the avatar's colour is crm-core's"
+    assert ">%s<" % initials in html
+
+
+def test_one_person_is_one_colour_whatever_bd_knows_them_by():
+    a, b = call(("avatarHTML", ["kyle.loseke@example.com"]), ("avatarHTML", [{"name": "Kyle Loseke"}]))
+    colour = lambda h: h.split('style="background:', 1)[1].split('"', 1)[0]
+    assert colour(a) == colour(b)
 
 
 def test_initials_leave_out_titles_and_suffixes():
@@ -196,3 +222,16 @@ def test_pill_is_shared_and_escapes_its_text():
 def test_store_without_storage_reads_null_and_never_throws():
     got, wrote = call(("store.get", ["x"]), ("store.set", ["x", 1]))
     assert got is None and wrote is False
+
+# A menu item's href is written into an <a>. Only a same-site path, mailto: or tel: survives; anything
+# else (a contact's website typed as javascript:, a data: URL, another site) leaves a plain button.
+@pytest.mark.parametrize("href,want", [
+    ("/bd/contacts.html?id=7", "/bd/contacts.html?id=7"),
+    ("mailto:rowan.pike@example.com", "mailto:rowan.pike@example.com"),
+    ("tel:+18165550102", "tel:+18165550102"),
+    ("javascript:alert(1)", ""), (" JavaScript:alert(1)", ""), ("data:text/html,<b>x</b>", ""),
+    ("//evil.example/x", ""), ("/\\evil.example/x", ""), ("https://example.com", ""),
+    ("/bd/\tx", ""), ("vbscript:x", ""), ("", ""), (None, ""),
+])
+def test_a_menu_href_is_a_site_path_mailto_or_tel(href, want):
+    assert one("safeHref", href) == want

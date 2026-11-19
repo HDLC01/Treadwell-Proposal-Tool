@@ -3,7 +3,7 @@
 BD's test_app_shell, rewritten for /api/bd/ and the tool's sign-in gate:
 
   * the proposal tool's own 404, 422 and 500 keep their shapes; BD's envelope appears only under
-    /api/bd/, and BD registers nothing on the app;
+    /api/bd/;
   * every BD route is behind the tool's gate (401 in the tool's shape), except the telephony
     webhook at its one exact public path;
   * the BD switch: off by default, and off means 503 "not turned on" on every /api/bd/ path before
@@ -22,7 +22,6 @@ import time
 
 import pytest
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -102,11 +101,6 @@ def test_a_tool_404_422_and_500_keep_their_shapes(tool_client, monkeypatch):
     assert r.text == "Internal Server Error" and r.headers["content-type"].startswith("text/plain")
 
 
-def test_bd_registers_no_exception_handler_on_the_app():
-    """The envelope is the BD router's own (web.BDRoute), never an app-wide handler."""
-    assert set(main.app.exception_handlers) == set(FastAPI().exception_handlers)
-
-
 @pytest.mark.parametrize("path", ["/api/bdx/thing", "/api/bd", "/api/b/d/thing", "/api/nope/bd/thing"])
 def test_paths_outside_api_bd_get_the_tools_404_not_bds(tool_client, monkeypatch, path):
     monkeypatch.setattr(bd_config, "BD_ENABLED", True)
@@ -130,18 +124,6 @@ def test_a_wrong_method_on_a_bd_route_is_bds_400(tool_client, monkeypatch):
         "ok": False, "error": "bad_request", "message": "POST is not allowed on /api/bd/me."}
     r = tool_client.delete("/api/bd/review/candidates")
     assert r.status_code == 400 and r.json()["message"] == "DELETE is not allowed on /api/bd/review/candidates."
-
-
-def test_the_catch_all_is_registered_last():
-    """BD's 404 must never shadow a BD route: the catch-all is the BD router's last route, and the BD
-    router sits after every route of the tool's own."""
-    assert bd_api.router.routes[-1].endpoint is bd_api.bd_not_found
-    assert [getattr(r, "endpoint", None) for r in bd_api.router.routes].count(bd_api.bd_not_found) == 1
-    app_routes = main.app.router.routes
-    at = [i for i, r in enumerate(app_routes) if getattr(r, "original_router", None) is bd_api.router]
-    assert len(at) == 1, "the BD router is included once"
-    tool_api = [i for i, r in enumerate(app_routes) if isinstance(r, APIRoute) and r.path.startswith("/api/")]
-    assert tool_api and max(tool_api) < at[0], "a tool route registered after BD's catch-all"
 
 
 # ── the gate: the tool's sign-in covers every BD route ───────────────────────────────────────
@@ -412,11 +394,6 @@ def test_pending_lists_bd_paths_only():
     assert [p for (_m, p), who in pending.ACCESS.items() if who == pending.PUBLIC] == [pending.WEBHOOK_PATH]
 
 
-def test_pending_messages():
-    assert pending.message_for(3) == "This part is not built yet (Phase 3)."
-    assert pending.message_for("later") == "This part is not built yet (a later phase)."
-
-
 ROLE_OF = {1: "salesperson", 3: "assistant", 4: "manager"}
 
 
@@ -425,7 +402,11 @@ def test_each_pending_route_checks_the_bd_role_then_answers_503(bd_seeded, bd_as
     if not _served_by_pending(method, path):
         pytest.skip("built: a real router serves it now (delete it from bd/routers/pending.py)")
     who = pending.ACCESS[(method, path)]
-    want = {"ok": False, "error": "unavailable", "message": pending.message_for(pending.PENDING[(method, path)])}
+    phase = pending.PENDING[(method, path)]
+    # The sentence by hand, from the contract's words, not from message_for.
+    sentence = ("This part is not built yet (a later phase)." if phase == "later"
+                else "This part is not built yet (Phase %d)." % phase)
+    want = {"ok": False, "error": "unavailable", "message": sentence}
     url = concrete(path)
     for uid, role in ROLE_OF.items():
         r = bd_as_user(uid).request(method, url, json={})

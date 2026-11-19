@@ -58,7 +58,13 @@ def test_a_body_is_sent_as_json(tmp_path):
 
 @pytest.mark.parametrize("path", ["/api/me", "/api/bd", "/api/bdx/me", "/bd/index.html", "api/bd/me",
                                   "https://example.com/api/bd/me", "//example.com/api/bd/me",
-                                  "/api/bd/../me", "/api/bd/./me", "/api/bd/me\\x", "/api/drafts"])
+                                  "/api/bd/../me", "/api/bd/./me", "/api/bd/me\\x", "/api/drafts",
+                                  # dot segments fetch would collapse, percent-encoded, in any case
+                                  "/api/bd/%2e%2e/admin/users", "/api/bd/%2E%2E/admin/users",
+                                  "/api/bd/.%2e/admin/users", "/api/bd/%2e./admin/users",
+                                  "/api/bd/%2e/me", "/api/bd/me/%2e%2e/%2e%2e/drafts",
+                                  # an encoded slash or backslash, and a control character
+                                  "/api/bd/..%2fadmin", "/api/bd/..%5cadmin", "/api/bd/me\t/x"])
 def test_a_path_outside_api_bd_is_refused_without_a_request(tmp_path, path):
     out = run(tmp_path, [{"fn": "get", "path": path}])
     assert out["fetches"] == [], "BDApi sent %r" % path
@@ -112,11 +118,18 @@ def test_the_tools_gate_shape_shows_its_own_sentence(tmp_path, status, sentence,
 def test_a_page_that_is_not_json_and_no_network_read_plainly(tmp_path):
     out = run(tmp_path, [{"fn": "get", "path": "/api/bd/me"}],
               {"GET /api/bd/me": {"status": 502, "text": "<html>Bad gateway</html>"}})
-    assert out["calls"][0]["error"]["message"] == "The server had a problem. Try again in a minute."
+    # the same sentence the BD home page and the sidebar's BD group show for a 5xx with no body
+    assert out["calls"][0]["error"]["message"] == "The BD CRM isn't answering right now. Try again in a minute."
     out = run(tmp_path, [{"fn": "get", "path": "/api/bd/me"}], fetch_fails=True, name="net")
     err = out["calls"][0]["error"]
     assert (err["status"], err["code"]) == (0, "network")
     assert err["message"] == "Can't reach the server. Check your connection and try again."
+
+
+def test_an_ordinary_bd_path_with_a_query_is_sent(tmp_path):
+    out = run(tmp_path, [{"fn": "get", "path": "/api/bd/contacts?q=Rowan%20Pike&limit=5"}],
+              {"GET /api/bd/contacts": {"status": 200, "body": {"ok": True, "items": []}}})
+    assert [f["url"] for f in out["fetches"]] == ["/api/bd/contacts?q=Rowan%20Pike&limit=5"]
 
 
 def test_the_mock_mode_is_gone():

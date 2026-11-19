@@ -1,7 +1,8 @@
 "use strict";
 /* Runs BD page scripts the way a BD page runs them (#806): in order, in one bare context, with the
- * tool's shell stood in for by what BD reads from it (TWAuth: ready, tokenReady, token, bdMe) and a
- * fetch that answers what the scenario says. Then it makes the BDApi calls the scenario lists.
+ * tool's shell stood in for by what BD reads from it (TWAuth: ready, tokenReady, token, bdMe, and
+ * bdFailure, which is the REAL one, lifted out of frontend/auth.js) and a fetch that answers what the
+ * scenario says. Then it makes the BDApi calls the scenario lists.
  *
  * Usage: node bd-page-harness.js <frontend-dir> <scenario.json>  ->  one line of JSON
  *
@@ -61,6 +62,16 @@ function respond(url, init) {
   });
 }
 
+// TWAuth.bdFailure is auth.js's own: the one reader of a failed BD answer. It is self-contained (its
+// constants are inside it), so its source is lifted by name and run here as it is.
+function liftBdFailure() {
+  const src = fs.readFileSync(path.join(ROOT, "auth.js"), "utf8").replace(/\r\n/g, "\n");
+  const start = src.indexOf("  function bdFailure(status, body) {");
+  if (start === -1) throw new Error("harness: auth.js has no bdFailure");
+  const end = src.indexOf("\n  }\n", start);
+  return vm.runInNewContext("(" + src.slice(start, end + 4).trim() + ")");
+}
+
 const never = new Promise(() => {});
 const ctx = {
   console,
@@ -80,6 +91,7 @@ const ctx = {
     tokenReady: SC.ready === false ? never : Promise.resolve(SC.token || null),
     token: () => SC.token || null,
     bdMe: () => Promise.resolve(SC.bdMe || { status: 0, body: null }),
+    bdFailure: liftBdFailure(),
   },
 };
 ctx.window = ctx;
@@ -121,6 +133,6 @@ function settle() { return new Promise((r) => setTimeout(r, 20)); }
   const els = {};
   for (const id of Object.keys(byId)) els[id] = { text: byId[id].textContent, html: byId[id].innerHTML, hidden: !!byId[id].hidden };
   const globals = {};
-  for (const g of ["BDApi", "BD", "BDCore", "BDIcon", "TWIcon", "BD_MOCK", "BDMock", "BDAuth"]) globals[g] = typeof ctx[g];
+  for (const g of ["BDApi", "BD", "BDCore", "TWIcon", "BD_MOCK", "BDMock", "BDAuth"]) globals[g] = typeof ctx[g];
   process.stdout.write(JSON.stringify({ threw, calls, fetches, els, globals }) + "\n");
 })();

@@ -10,7 +10,8 @@
  * Usage: node bd-sidebar-group-harness.js <frontend-dir> <scenario.json>  ->  one line of JSON
  *
  * scenario: { pathname, wide, storage: {key: value}, me: {...tool /api/me...},
- *             bdMe: {status, body} | null (no answer at all),
+ *             bdMe: {status, body} | null or false (the fetch rejects: no network) |
+ *                   "pending" (no answer yet, ever),
  *             clicks: ["chev" | "burger" | "section" ...] }
  * out:      { rows, lit, groupInMarkup, insideSidebar, markup: {expanded, controls, hidden},
  *             states: [{expanded, controls, hidden, sections: [{href, label, active, current}],
@@ -94,6 +95,7 @@ win.fetch = (url) => {
       { supabase_url: "https://sb.test", supabase_anon_key: "anon", allowed_domain: "wetreadwell.com" }) });
   }
   if (u.indexOf("/api/bd/me") !== -1) {
+    if (SC.bdMe === "pending") return new Promise(() => {});
     if (!SC.bdMe) return Promise.reject(new Error("harness: no answer"));
     return Promise.resolve({ ok: SC.bdMe.status < 400, status: SC.bdMe.status,
                              json: async () => SC.bdMe.body });
@@ -164,6 +166,8 @@ async function main() {
       controls: (/aria-controls="([^"]*)"/.exec(chevTag) || [])[1] || null,
       type: (/type="([^"]*)"/.exec(chevTag) || [])[1] || null,
       hidden: listTag ? / hidden/.test(listTag) : null,
+      live: (/aria-live="([^"]*)"/.exec(listTag) || [])[1] || null,
+      shut: / tw-shut[" ]/.test(listTag),
     },
     states: [state()],
     fetches: fetches,

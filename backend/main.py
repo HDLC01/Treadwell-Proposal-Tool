@@ -426,7 +426,7 @@ async def _auth_gate(request: Request, call_next):
     # The verified identity stays on the request: the email for the tool's own readers, and the
     # whole of it (email, subject id, display name) for the BD CRM, which trusts this gate (#806).
     request.state.user_email = identity["email"]
-    request.state.auth_claims = identity
+    request.state.auth_identity = identity
     return await call_next(request)
 
 

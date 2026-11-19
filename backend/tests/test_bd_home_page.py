@@ -9,7 +9,8 @@
     tool has refused (its refusal card) is never painted over;
   * every value goes in as text, never as markup.
 
-This Week fills the page in the next ticket. Executed in node by tests/js/bd/bd-page-harness.js, with
+This Week fills the page in the next ticket; until then only a role that will have it (can.week) is
+told it comes next. Executed in node by tests/js/bd/bd-page-harness.js, with the tool's crm-core.js and
 the BD shell's scripts in the page's own order.
 """
 from __future__ import annotations
@@ -35,15 +36,20 @@ def page_scripts():
     return [s.lstrip("/") for s in srcs if s.startswith("/bd/")]
 
 
+# BD's can() "week" by hand (api-contract.md): every BD role but the assistant.
+WEEK = {"salesperson": True, "assistant": False, "manager": True, "admin": True, "super_admin": True}
+
+
 def me(name, role):
     return {"status": 200, "body": {"ok": True, "user": {"id": 4, "name": name, "email": "avery.quill@example.com",
                                                          "role": role, "active": True},
-                                    "can": {}, "today": "2026-11-04", "timezone": "America/Chicago"}}
+                                    "can": {"week": WEEK[role]}, "today": "2026-11-04",
+                                    "timezone": "America/Chicago"}}
 
 
 def run(tmp_path, bd_me, now=MORNING, ready=True, name="s"):
     require_node()
-    sc = {"scripts": page_scripts(), "token": "tok", "ready": ready, "bdMe": bd_me, "now": now, "ids": IDS}
+    sc = {"scripts": ["js/crm-core.js"] + page_scripts(), "token": "tok", "ready": ready, "bdMe": bd_me, "now": now, "ids": IDS}
     f = tmp_path / ("%s.json" % name)
     f.write_text(json.dumps(sc), encoding="utf-8")
     proc = run_node(HARNESS, FRONTEND, f)
@@ -54,8 +60,7 @@ def run(tmp_path, bd_me, now=MORNING, ready=True, name="s"):
 
 
 def test_the_page_runs_the_bd_shell_then_its_own_script():
-    assert page_scripts() == ["bd/js/bd-icons.js", "bd/js/bd-api.js", "bd/js/bd-shared.js",
-                              "bd/js/bd-core.js", "bd/js/bd-home.js"]
+    assert page_scripts() == ["bd/js/bd-api.js", "bd/js/bd-shared.js", "bd/js/bd-core.js", "bd/js/bd-home.js"]
 
 
 @pytest.mark.parametrize("now,hello", [
@@ -82,7 +87,15 @@ def test_each_bd_role_is_named_in_words(tmp_path, role, label):
 def test_the_week_is_said_to_come_next(tmp_path):
     out = run(tmp_path, me("Avery Quill", "salesperson"))
     note = out["els"]["bd-home-note"]
-    assert note["hidden"] is False and "This Week" in out["els"]["bd-home-note-text"]["text"]
+    assert note["hidden"] is False
+    assert out["els"]["bd-home-note-text"]["text"] == "This Week, your list of calls for the week, comes here next."
+
+
+def test_an_assistant_is_not_promised_a_week_she_will_never_have(tmp_path):
+    """An assistant has no This Week (can.week is false): her BD home is Contacts."""
+    out = run(tmp_path, me("Avery Quill", "assistant"))
+    assert out["els"]["bd-home-note"]["hidden"] is False
+    assert out["els"]["bd-home-note-text"]["text"] == "Your BD pages move in here next."
 
 
 @pytest.mark.parametrize("answer,sentence", [

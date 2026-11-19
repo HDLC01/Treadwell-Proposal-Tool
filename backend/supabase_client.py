@@ -192,7 +192,12 @@ def verify_token_claims(authorization: Optional[str]) -> dict:
 
 
 def verify_token(authorization: Optional[str]) -> str:
-    """Verify the token and return just the (lowercased) email."""
+    """Verify the token and return just the (lowercased) email.
+
+    No route calls this since the auth gate moved to verify_identity (#806). It is kept as the seam
+    the tests (conftest.py's sign-in bypass, which verify_identity follows at call time) and
+    ops/terms_render_proof.py patch to sign a caller in, and for any reader that wants only the
+    email."""
     return verify_token_claims(authorization)["email"]
 
 
@@ -205,6 +210,6 @@ def identity_of(claims: dict) -> dict:
 
 def verify_identity(authorization: Optional[str]) -> dict:
     """THE AUTH GATE'S VERIFY STEP (#806): verify the token and return its identity
-    ({email, sub, name}). main._auth_gate keeps it on the request (request.state.auth_claims) for
+    ({email, sub, name}). main._auth_gate keeps it on the request (request.state.auth_identity) for
     whatever reads more than the email; the BD CRM reads it there. Raises as verify_token_claims."""
     return identity_of(verify_token_claims(authorization))

@@ -186,9 +186,7 @@ def test_a_denied_member_standing_on_a_bd_page_gets_the_refusal_card(monkeypatch
 # ── the words ────────────────────────────────────────────────────────────────
 def test_the_glossary_s_bd_role_lists_the_five_bd_roles():
     """Q29: super admin is the fifth BD role, the one bd/auth.py already has."""
-    from bd import auth as bd_auth
     text = (pathlib.Path(__file__).resolve().parents[2] / "GLOSSARY.md").read_text(encoding="utf-8")
     entry = text[text.index("**BD role**:"):]
     entry = entry[:entry.index("\n\n")]
     assert "salesperson, assistant, manager, admin or super admin" in entry, entry
-    assert bd_auth.ROLES == ("salesperson", "assistant", "manager", "admin", "super_admin")

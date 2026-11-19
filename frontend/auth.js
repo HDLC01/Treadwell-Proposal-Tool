@@ -83,6 +83,9 @@
     // BD's /api/bd/me as { status, body }, asked once per page and shared: the sidebar's BD group
     // reads it for its sections, and a BD page can read the same answer rather than ask again.
     bdMe: () => bdMe(),
+    // A failed BD answer in words, { message, code }: the one reader the sidebar's BD group, the BD
+    // home page and BD's API helper (bd-api.js) all use, so the same answer reads the same everywhere.
+    bdFailure: (status, body) => bdFailure(status, body),
   };
 
   function apiBase() { return window.TW_API_BASE || ""; }
@@ -355,9 +358,7 @@
   const BD_SECTIONS = [
     { href: "/bd/", also: ["/bd/index.html"], label: "This Week", can: "week" },
   ];
-  let BD_OPEN = false;          // the group's state on this page
-  let BD_DRAWN = false;         // whether the live menu drew the group at all
-  let RENDER_BD_LIVE = false;   // true only while the live menu (not an Admin-page spec) is built
+  let BD_OPEN = false;          // the group's state on this page (the live menu's only)
   let bdMePromise = null;
 
   function onBdPage() { return location.pathname.toLowerCase().indexOf("/bd/") === 0; }
@@ -386,36 +387,57 @@
     return bdMePromise;
   }
 
-  // The row with its chevron and the (empty) section list. The argument is navItem()'s output, "" when the
-  // row is denied or switched off, and then the whole group goes with it. An Admin-page spec render
-  // draws it shut and empty, so the role matrix reads the same row it always reads.
-  function bdGroup(row) {
+  // A failed BD answer ({ status, body }: status 0 when the server could not be reached) in words:
+  // BD's own sentence (message), else the tool's sign-in gate's (its 401 and 403 put the sentence in
+  // error and send no message), else a plain one by status. The code is BD's (error, when it is a
+  // code, not a sentence), else the status's. Self-contained, so a test can lift it on its own.
+  function bdFailure(status, body) {
+    const CODE = /^[a-z][a-z_]*$/;
+    const STATUS_CODE = { 400: "bad_request", 401: "unauthenticated", 403: "forbidden", 404: "not_found",
+      409: "conflict", 413: "too_large", 429: "rate_limited", 500: "error", 503: "unavailable" };
+    const d = body && typeof body === "object" ? body : {};
+    const err = typeof d.error === "string" ? d.error : "";
+    const isCode = !!err && CODE.test(err);
+    let message = typeof d.message === "string" && d.message ? d.message : (err && !isCode ? err : "");
+    if (!message) {
+      if (!status) message = "Can't reach the server. Check your connection and try again.";
+      else if (status === 401) message = "Sign in again to continue.";
+      else if (status === 403) message = "You don't have a BD role.";
+      else if (status >= 500) message = "The BD CRM isn't answering right now. Try again in a minute.";
+      else message = "Something went wrong.";
+    }
+    const code = isCode ? err : (status ? (STATUS_CODE[status] || "error") : "network");
+    return { message: message, code: code };
+  }
+
+  // The row with its chevron and the (empty) section list. row is navItem()'s output, "" when the row
+  // is denied or switched off, and then the whole group goes with it. open is the state to draw: an
+  // Admin-page spec render passes false, so the role matrix reads the same row it always reads.
+  // Markup only: renderSidebar decides open, and the wiring finds the chevron in what was drawn.
+  function bdGroup(row, open) {
     if (!row) return "";
-    const open = RENDER_BD_LIVE && BD_OPEN;
-    if (RENDER_BD_LIVE) BD_DRAWN = true;
     return '<div class="tw-nav-group" id="tw-bd-group"><div class="tw-nav-grouprow">' + row +
       '<button type="button" class="tw-nav-chev' + (open ? " tw-open" : "") + '" id="tw-bd-chev"' +
       ' aria-expanded="' + (open ? "true" : "false") + '" aria-controls="tw-bd-sections"' +
       ' aria-label="BD CRM sections" title="Show or hide the BD CRM sections">' +
       icon("chev-down", 16) + '</button></div>' +
-      '<div class="tw-nav-sub" id="tw-bd-sections"' + (open ? "" : " hidden") + '></div></div>';
+      '<div class="tw-nav-sub' + (open ? "" : " tw-shut") + '" id="tw-bd-sections" aria-live="polite"' +
+      (open ? "" : " hidden") + '></div></div>';
   }
 
-  // The sections this person's BD role may open, from /api/bd/me's answer. Every value is escaped.
+  function bdNote(text) { return '<div class="tw-bd-note">' + esc(text) + '</div>'; }
+
+  // The sections this person's BD role may open, from /api/bd/me's answer; a failed answer is said in
+  // bdFailure's words, the same sentence the BD home page shows. Every value is escaped.
   function bdSectionsMarkup(res) {
     const body = (res && res.body) || {};
-    const note = (text) => '<div class="tw-bd-note">' + esc(text) + '</div>';
-    if (res && res.status === 403) {
-      return note(typeof body.message === "string" && body.message ? body.message
-        : (typeof body.error === "string" && body.error ? body.error : "You don't have a BD role."));
-    }
     if (!res || res.status < 200 || res.status >= 300 || !body.ok) {
-      return note("The BD CRM isn't answering right now.");
+      return bdNote(bdFailure(res && res.status, res && res.body).message);
     }
     const can = body.can || {};
     const here = location.pathname.toLowerCase();
     const shown = BD_SECTIONS.filter((s) => !s.can || can[s.can] === true);
-    if (!shown.length) return note("Nothing here for your BD role yet.");
+    if (!shown.length) return bdNote("Nothing here for your BD role yet.");
     return shown.map(function (s) {
       const on = here === s.href || (s.also || []).indexOf(here) !== -1;
       return '<a class="tw-bd-sec' + (on ? " active" : "") + '" href="' + esc(s.href) + '"' +
@@ -423,7 +445,10 @@
     }).join("");
   }
 
-  // Puts BD_OPEN on the page: the chevron's state, the list's hidden, and (open) its sections.
+  // Puts BD_OPEN on the page: the chevron's state, the list's hidden, and (open) its sections. Until
+  // /api/bd/me answers, an open list says it is loading rather than sit empty (the list is a polite
+  // live region, so the links, or the reason there are none, are announced when they arrive).
+  let bdSettled = false;
   function paintBdGroup() {
     const chev = document.getElementById("tw-bd-chev");
     const list = document.getElementById("tw-bd-sections");
@@ -431,7 +456,10 @@
     chev.setAttribute("aria-expanded", BD_OPEN ? "true" : "false");
     chev.classList.toggle("tw-open", BD_OPEN);
     list.hidden = !BD_OPEN;
-    if (BD_OPEN) bdMe().then(function (res) { list.innerHTML = bdSectionsMarkup(res); });
+    list.classList.toggle("tw-shut", !BD_OPEN);
+    if (!BD_OPEN) return;
+    if (!bdSettled) list.innerHTML = bdNote("Loading...");
+    bdMe().then(function (res) { bdSettled = true; list.innerHTML = bdSectionsMarkup(res); });
   }
 
   // Every role this app has, least privileged first. profiles.py stores exactly one of these
@@ -591,8 +619,7 @@
     // The live menu also leaves out what a switched-off feature took away (NAV_OFF); a spec render
     // never does, so the Admin page keeps every switch while, say, BD is off.
     if (!spec) RENDER_DENY = RENDER_DENY.concat(NAV_OFF);
-    RENDER_BD_LIVE = !spec;
-    if (!spec) { BD_DRAWN = false; BD_OPEN = bdStartsOpen(); }
+    if (!spec) BD_OPEN = bdStartsOpen();
     const isAdmin = u.role === "admin" || u.role === "super_admin";
     const roleLabel = u.role === "super_admin" ? "SUPER ADMIN" : (u.role === "admin" ? "ADMIN" : "USER");
     const roleClass = u.role === "super_admin" ? "super" : (u.role === "admin" ? "admin" : "user");
@@ -702,7 +729,7 @@
       // First under Beta, as in the approved mock-up. Its glyph is users (people to call), which
       // no other row uses. The row is a collapsible group: bdGroup() adds the chevron and BD's
       // sections under it, and drops the whole group when the row is denied or switched off.
-      bdGroup(navItem("/bd/", "users", "BD CRM", "BETA")) +
+      bdGroup(navItem("/bd/", "users", "BD CRM", "BETA"), !spec && BD_OPEN) +
       // Opens at the beta's INTAKE, step 1 of its own four. A door straight into step 2 starts
       // an estimator on a project with no name, no bid date and no job conditions - and the conditions are
       // exactly what moved onto the intake form in the 2026-08-17 rework, so pricing first would mean
@@ -764,7 +791,6 @@
       '<div class="tw-useremail">' + esc(u.email || "") + '</div></div>' +
       '<button class="tw-signout" id="tw-signout" title="Sign out">' + icon("power", 17) + '</button></div>';
     RENDER_DENY = [];        // the markup is built; nothing else may read this
-    RENDER_BD_LIVE = false;
     // Spec mode stops here: the caller wanted the markup, not a sidebar on the page.
     if (spec) return aside.innerHTML;
     document.body.appendChild(aside);
@@ -837,10 +863,11 @@
       if (!wide() && e.target.closest &&
           (e.target.closest(".tw-nav-item") || e.target.closest(".tw-bd-sec"))) setOpen(false);
     });
-    // The BD CRM group's chevron. Its choice is kept at desktop width only, like the sidebar's own.
-    // Guarded: a fault in one Beta row's group must not cost every page its bell and top bar, which
-    // are wired below. The row itself is a plain link and still works.
-    if (BD_DRAWN) {
+    // The BD CRM group's chevron, when the menu drew the group (a denied or switched-off row takes
+    // it away). Its choice is kept at desktop width only, like the sidebar's own. Guarded: a fault in
+    // one Beta row's group must not cost every page its bell and top bar, which are wired below. The
+    // row itself is a plain link and still works.
+    if (aside.innerHTML.indexOf('id="tw-bd-chev"') !== -1) {
       try {
         const chev = document.getElementById("tw-bd-chev");
         if (chev) chev.addEventListener("click", () => {
@@ -1161,9 +1188,10 @@ text-decoration:none;color:var(--tw-ink);}
   color:var(--tw-red-dark);white-space:nowrap;}
 .tw-nav-item.active .tw-nav-ico{color:var(--tw-red-dark);}
 /* The BD CRM group (#806): the row and its chevron on one line, BD's sections indented under it.
-   No display rule on .tw-nav-sub, so its hidden attribute is what hides it. The chevron points
-   right while shut and down while open, by a class, not an attribute selector (the phone-shell CSS
-   resolver refuses those). */
+   The section list is hidden by its hidden attribute, and .tw-nav-sub.tw-shut, set with it, is the
+   display:none that makes hidden hold whatever else styles the list (DESIGN.md: never hidden alone).
+   A class, not an attribute selector (the phone-shell CSS resolver refuses those). So is the
+   chevron's: it points right while shut and down while open. */
 .tw-nav-grouprow{display:flex;align-items:center;gap:2px;}
 .tw-nav-grouprow .tw-nav-item{flex:1;min-width:0;}
 .tw-nav-chev{flex:none;width:32px;height:32px;border:none;background:none;color:var(--tw-ink-v);
@@ -1172,6 +1200,7 @@ cursor:pointer;border-radius:6px;display:inline-flex;align-items:center;justify-
 .tw-nav-chev .tw-ico{transform:rotate(-90deg);transition:transform .15s ease;}
 .tw-nav-chev.tw-open .tw-ico{transform:none;}
 .tw-nav-sub{margin:2px 0 6px 20px;padding-left:10px;border-left:1px solid rgba(27,28,28,.1);}
+.tw-nav-sub.tw-shut{display:none;}
 .tw-bd-sec{display:flex;align-items:center;min-height:34px;padding:0 10px;border-radius:7px;
 text-decoration:none;color:var(--tw-ink);font-size:13.5px;}
 .tw-bd-sec:hover{background:var(--tw-surf-low);}

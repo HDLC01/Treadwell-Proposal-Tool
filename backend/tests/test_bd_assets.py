@@ -4,20 +4,21 @@
     /js/icons.js, /js/admin.js, /js/analytics.js...); BD's scripts are in bd/js/ and its one
     stylesheet is bd/bd.css;
   * nothing under frontend/bd/ refers to a root tool page or a tool script, apart from the tool's
-    shell scripts (/js/icons.js, /auth.js, /shared.js), its sign-in page and its favicon; BD's API
+    shell scripts (/js/icons.js, /auth.js, /shared.js, and /js/crm-core.js, which names every person),
+    its sign-in page and its favicon; BD's API
     calls go to /api/bd/ only; and no BD file links to a /bd/ page that has not moved yet;
   * no tool page loads the BD stylesheet, or any BD script;
   * every rule in bd.css is scoped under the BD root, .bd-app;
   * bd.css's colours are the tool's: a colour is written only in its tokens block, as one of
     DESIGN.md's colours (or one of the approved BD mock-up's two status grounds), and an rgba() is one
-    of those colours (or the tool's warm shadow) with an alpha; the font stack is DESIGN.md's;
-  * BD's glyphs never touch the tool's icon global: bd-icons.js run after the tool's js/icons.js
-    leaves window.TWIcon exactly as it was, and no BD script mentions TWIcon apart from bd-icons.js,
-    which only reads it.
+    of those colours (or a shadow base DESIGN.md names) with an alpha; the font stack is DESIGN.md's;
+  * muted-ink is never a text colour (it fails WCAG AA for text), and the only black is a shadow
+    DESIGN.md names, on something that floats clear of the page.
+
+BD's glyphs are the tool's: they are in js/icons.js, the app's one icon set (DESIGN.md, Icons).
 """
 from __future__ import annotations
 
-import json
 import pathlib
 import re
 
@@ -25,15 +26,16 @@ import pytest
 
 from _bd_jstokens import tokenize
 from _frontend_tree import rel
-from _node import last_json_line, require_node, run_node
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 BD = FRONTEND / "bd"
 CSS = BD / "bd.css"
 
-# What a BD file may point at outside /bd/: the tool's shell scripts, its sign-in page and its favicon.
-TOOL_SHELL_ALLOWED = {"/js/icons.js", "/auth.js", "/shared.js", "/login.html", "/img/treadwell-bison.svg"}
+# What a BD file may point at outside /bd/: the tool's shell scripts (crm-core.js among them: it names
+# every person), its sign-in page and its favicon.
+TOOL_SHELL_ALLOWED = {"/js/icons.js", "/auth.js", "/shared.js", "/js/crm-core.js", "/login.html",
+                      "/img/treadwell-bison.svg"}
 SUPABASE = re.compile(r"^https://cdn\.jsdelivr\.net/npm/@supabase/supabase-js@\d+\.\d+\.\d+$")
 PRECONNECT = "https://cdn.jsdelivr.net"
 
@@ -133,7 +135,8 @@ def test_nothing_under_bd_refers_to_a_tool_page_or_script(path):
 
 @pytest.mark.parametrize("value,ok", [
     ("/bd/js/bd-api.js", True), ("/bd/", True), ("/js/icons.js", True), ("/login.html", True),
-    ("/api/bd/me", True), ("/portal.html", False), ("/js/crm-core.js", False), ("/styles.css", False),
+    ("/api/bd/me", True), ("/portal.html", False), ("/js/crm-core.js", True), ("/js/portal.js", False),
+    ("/styles.css", False),
     ("/api/me", False), ("/index.html", False), ("js/x.js", False), ("https://example.com/x.js", False),
     ("/admin.html", False), ("data:image/svg+xml,%3Csvg%3E", True),
 ])
@@ -273,6 +276,10 @@ def design_palette():
 MOCKUP_EXTRAS = {"#e8f4ec", "#edf2f7"}
 # The tool's warm shadow base (DESIGN.md: shadows mixed from rgba(60,50,40)).
 SHADOW_RGB = (60, 50, 40)
+# DESIGN.md's Menu and Overlay shadows, the only black: rgba(0,0,0,.18) and rgba(0,0,0,.30).
+BLACK = (0, 0, 0)
+OVERLAY_SHADOWS = {"0 6px 20px rgba(0, 0, 0, .18)", "0 16px 48px rgba(0, 0, 0, .30)",
+                   "0 -16px 48px rgba(0, 0, 0, .30)", "-16px 0 48px rgba(0, 0, 0, .30)"}
 
 
 def _rgb(hex6):
@@ -290,11 +297,33 @@ def test_bd_colours_are_the_tools():
     assert sorted({h.lower() for h in hexes} - allowed) == [], "colours that are not the tool's"
     stray = [h for h in re.findall(r"(?<![%\w])#[0-9a-fA-F]{3,8}\b", rest)]
     assert stray == [], "a colour written outside the tokens block: %r" % stray
-    rgbs = {_rgb(h) for h in allowed} | {SHADOW_RGB}
+    rgbs = {_rgb(h) for h in allowed} | {SHADOW_RGB, BLACK}
     for m in re.finditer(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", css):
         assert tuple(int(x) for x in m.groups()) in rgbs, "rgba(%s, %s, %s) is not a tool colour" % m.groups()
+    blacks = re.findall(r"--bd-shadow-[\w-]+:\s*([^;]*rgba\(0, 0, 0[^;]*);", css)
+    assert blacks and set(blacks) <= OVERLAY_SHADOWS, blacks
+    assert css.count("rgba(0, 0, 0") == len(blacks), "a black written outside DESIGN.md's Menu and Overlay"
     for m in re.finditer(r"%23([0-9a-fA-F]{6})", css):
         assert "#" + m.group(1).lower() in allowed, "a data: image coloured %s" % m.group(1)
+
+
+def test_muted_ink_is_never_text():
+    """Muted-ink (#8a857c) is about 3.6:1 on the paper and the card: below WCAG AA's 4.5:1 for text.
+    BD uses it for borders and the spinner only; captions, hints and placeholders are umber-ink."""
+    css = re.sub(r"/\*.*?\*/", "", CSS.read_text(encoding="utf-8"), flags=re.S)
+    muted = {m.group(1) for m in re.finditer(r"(--bd-[\w-]+):\s*#8a857c", css)}
+    assert muted, "vacuity: no token holds muted-ink"
+    text = [m.group(0) for t in muted for m in re.finditer(r"(?<![-\w])color:\s*var\(%s\)" % t, css)]
+    assert text == [], text
+
+
+def test_cards_lists_and_tables_are_flat_at_rest():
+    """DESIGN.md's Flat-By-Default rule: a hairline, and no resting shadow."""
+    css = re.sub(r"/\*.*?\*/", "", CSS.read_text(encoding="utf-8"), flags=re.S)
+    for sel in (".bd-app .card {", ".bd-app .list {", ".bd-app .table-wrap {", ".bd-app .fatal-box {"):
+        rule = css[css.index(sel):]
+        rule = rule[:rule.index("}")]
+        assert "box-shadow" not in rule and "border: 1px solid var(--bd-line)" in rule, (sel, rule)
 
 
 def test_the_font_is_the_tools():
@@ -305,90 +334,3 @@ def test_the_font_is_the_tools():
     assert "fontFamily: \"'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif\"" in design
     families = re.findall(r"font-family\s*:\s*([^;}]+)", re.sub(r"/\*.*?\*/", "", css, flags=re.S))
     assert all(f.strip() in ("var(--bd-font)", "inherit") for f in families), families
-
-
-# ── BD glyphs never touch the tool's icon global ─────────────────────────────────────────────
-RUNNER = r"""
-const fs = require("fs"), vm = require("vm");
-const [toolIcons, bdIcons, withTool] = process.argv.slice(2);
-const ctx = {}; ctx.window = ctx; vm.createContext(ctx);
-let before = null, names = [], drawn = {};
-if (withTool === "1") {
-  vm.runInContext(fs.readFileSync(toolIcons, "utf8"), ctx);
-  before = ctx.TWIcon; names = ctx.TWIcon.names();
-  names.forEach((n) => { drawn[n] = ctx.TWIcon(n, 18); });
-}
-vm.runInContext(fs.readFileSync(bdIcons, "utf8"), ctx);
-const out = { hasTool: typeof ctx.TWIcon, hasBd: typeof ctx.BDIcon };
-if (withTool === "1") {
-  out.same = ctx.TWIcon === before;
-  out.namesSame = JSON.stringify(ctx.TWIcon.names()) === JSON.stringify(names);
-  out.drawsSame = names.every((n) => ctx.TWIcon(n, 18) === drawn[n]);
-  out.bdDrawsToolNames = names.every((n) => ctx.BDIcon(n, 18) === drawn[n]);
-  out.ownKeys = Object.keys(ctx.TWIcon).sort();
-}
-out.bdNames = ctx.BDIcon.names();
-out.toolNames = names;
-out.phone = ctx.BDIcon("phone", 14);
-out.filter = ctx.BDIcon("filter", 16);
-out.funnel = withTool === "1" ? ctx.TWIcon("funnel", 16) : "";
-out.unknown = ctx.BDIcon("no-such-glyph", 16);
-console.log(JSON.stringify(out));
-"""
-
-
-def run_icons(tmp_path, with_tool):
-    require_node()
-    js = tmp_path / "icons-run.js"
-    js.write_text(RUNNER, encoding="utf-8")
-    proc = run_node(js, FRONTEND / "js" / "icons.js", BD / "js" / "bd-icons.js", "1" if with_tool else "0")
-    assert proc.returncode == 0, proc.stderr[-3000:]
-    return last_json_line(proc.stdout)
-
-
-def test_bd_glyphs_leave_the_tools_icon_global_alone(tmp_path):
-    out = run_icons(tmp_path, True)
-    assert out["hasBd"] == "function"
-    assert out["same"] and out["namesSame"] and out["drawsSame"], "bd-icons.js changed window.TWIcon"
-    assert out["ownKeys"] == ["has", "names"], "something was hung on TWIcon: %r" % out["ownKeys"]
-    assert out["bdDrawsToolNames"], "a name the tool has must be drawn by the tool's own table"
-    assert out["filter"] == out["funnel"], "the alias draws the tool's glyph"
-    bd_only = sorted(set(out["bdNames"]) - set(out["toolNames"]))
-    assert {"phone", "building", "calendar-check", "voicemail", "chevron-right", "filter"} <= set(bd_only)
-    assert 'class="tw-ico"' in out["phone"] and "<path" in out["phone"] and 'width="14"' in out["phone"]
-    assert "<path" not in out["unknown"] and "<circle" not in out["unknown"], "an unknown name is an empty box"
-
-
-def test_bd_glyphs_without_the_tools_table_create_no_tool_global(tmp_path):
-    out = run_icons(tmp_path, False)
-    assert out["hasTool"] == "undefined" and out["hasBd"] == "function"
-    assert "<path" in out["phone"]
-
-
-def test_no_bd_script_writes_or_reads_the_tools_icon_global():
-    for js in sorted(BD.rglob("*.js")):
-        code = re.sub(r"/\*.*?\*/|//[^\n]*", "", js.read_text(encoding="utf-8"), flags=re.S)
-        if rel(js) == "bd/js/bd-icons.js":
-            assert not re.search(r"\bTWIcon\b\s*(\.[\w$]+|\[[^\]]*\])?\s*=(?!=)", code), \
-                "bd-icons.js assigns to the tool's TWIcon"
-            assert "window.BDIcon = BDIcon" in code
-            continue
-        assert "TWIcon" not in code, "%s uses the tool's icon global; BD glyphs are BDIcon" % rel(js)
-
-
-def test_a_bd_glyph_name_never_shadows_a_tool_glyph(tmp_path):
-    """A BD-only table entry with a tool glyph's name would draw that name two ways on one page."""
-    require_node()
-    js = tmp_path / "keys.js"
-    js.write_text(r"""
-const fs = require("fs");
-const src = fs.readFileSync(process.argv[2], "utf8");
-const body = src.slice(src.indexOf("var BD_PATHS = {"), src.indexOf("var ALIASES"));
-const keys = [...body.matchAll(/^\s{4}("?)([\w-]+)\1\s*:/gm)].map((m) => m[2]);
-console.log(JSON.stringify(keys));
-""", encoding="utf-8")
-    proc = run_node(js, BD / "js" / "bd-icons.js")
-    assert proc.returncode == 0, proc.stderr
-    keys = json.loads(proc.stdout.strip().splitlines()[-1])
-    tool = run_icons(tmp_path, True)["toolNames"]
-    assert keys and not (set(keys) & set(tool)), sorted(set(keys) & set(tool))

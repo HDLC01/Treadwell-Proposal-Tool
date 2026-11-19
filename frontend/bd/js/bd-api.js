@@ -16,20 +16,20 @@
  * TWO ERROR SHAPES. A BD route answers {ok: false, error: "<code>", message: "<sentence>"}. The tool's
  * own sign-in gate, which every /api/bd/ request passes first, answers 401 and 403 as
  * {ok: false, error: "<sentence>"} with no message: that sentence is what is shown, and the code is
- * the status's.
+ * the status's. Both are read by TWAuth.bdFailure (/auth.js), the one reader the sidebar's BD group
+ * and the BD home page use too, so a failure reads the same wherever it is shown.
+ *
+ * ONLY /api/bd/, CHECKED AFTER RESOLVING. A path is resolved the way fetch will resolve it before it
+ * is checked, so an encoded dot segment ("%2e%2e") cannot climb out of /api/bd/.
  *
  * BD's old mock mode (mock data, the ?mock and ?as switches, the preview gate) is gone: every call
  * goes to the server. Load order: the tool's shell (Supabase SDK, /js/icons.js, /auth.js,
- * /shared.js), then bd-icons.js, THIS FILE, bd-shared.js, bd-core.js, the page's own scripts.
+ * /shared.js, /js/crm-core.js), then THIS FILE, bd-shared.js, bd-core.js, the page's own scripts.
  */
 (function () {
   "use strict";
 
   var BASE = "/api/bd/";
-
-  var STATUS_CODE = { 400: "bad_request", 401: "unauthenticated", 403: "forbidden", 404: "not_found",
-    409: "conflict", 413: "too_large", 429: "rate_limited", 500: "error", 503: "unavailable" };
-  var CODE = /^[a-z][a-z_]*$/;
 
   function apiError(status, code, message, fields) {
     var e = new Error(message || "Something went wrong.");
@@ -37,26 +37,25 @@
     return e;
   }
 
-  /** The sentence for a failed response whose body is not ours (an nginx 502 page, say). */
-  function plainFailure(status, statusText) {
-    if (status >= 500) return "The server had a problem. Try again in a minute.";
-    return statusText || "Something went wrong.";
-  }
-
-  /** A path this door may send: under /api/bd/, one leading slash, no way back up the tree. */
+  /** A path this door may send: written from the site root, under /api/bd/, and left exactly as it
+   *  was when resolved the way fetch resolves it. A dot segment, plain or percent-encoded ("%2e%2e"),
+   *  is collapsed by that resolving, so a path carrying one is refused rather than sent somewhere
+   *  else. No backslash (a browser reads it as a slash), no encoded slash or backslash, no control
+   *  character. */
   function isBdPath(path) {
     var p = String(path == null ? "" : path);
-    return p.indexOf(BASE) === 0 && !/(^|\/)\.\.?(\/|$|\?)/.test(p) && p.indexOf("\\") === -1;
+    if (p.indexOf(BASE) !== 0 || /[\\\u0000-\u001f\u007f]|%2f|%5c/i.test(p)) return false;
+    var origin = (window.location && window.location.origin) || "https://bd.invalid";
+    var u;
+    try { u = new URL(p, origin); } catch (e) { return false; }
+    return u.origin === new URL(origin).origin && u.pathname === p.split(/[?#]/)[0] &&
+      u.pathname.indexOf(BASE) === 0;
   }
 
-  /** {message, code, fields} from a failed JSON body: BD's envelope, or the tool's gate's. */
-  function readFailure(status, statusText, data) {
-    var d = data && typeof data === "object" ? data : {};
-    var err = typeof d.error === "string" ? d.error : "";
-    var message = typeof d.message === "string" && d.message ? d.message
-      : (err && !CODE.test(err) ? err : plainFailure(status, statusText));
-    var code = err && CODE.test(err) ? err : (STATUS_CODE[status] || "error");
-    return { message: message, code: code, fields: d.fields };
+  /** {message, code, fields} from a failed answer: TWAuth.bdFailure's words, and BD's fields. */
+  function readFailure(status, data) {
+    var f = window.TWAuth.bdFailure(status, data);
+    return { message: f.message, code: f.code, fields: data && typeof data === "object" ? data.fields : undefined };
   }
 
   function request(method, path, body, opts) {
@@ -81,20 +80,24 @@
       var type = (res.headers && res.headers.get && res.headers.get("content-type")) || "";
       if (type.indexOf("application/json") === -1) {
         return res.text().then(function (text) {
-          if (!res.ok) throw apiError(res.status, STATUS_CODE[res.status] || "error", plainFailure(res.status, res.statusText));
+          if (!res.ok) {
+            var p = readFailure(res.status, null);
+            throw apiError(res.status, p.code, p.message);
+          }
           return text;
         });
       }
       return res.json().then(function (data) {
         if (!res.ok || (data && data.ok === false)) {
-          var f = readFailure(res.status, res.statusText, data);
+          var f = readFailure(res.status, data);
           throw apiError(res.status, f.code, f.message, f.fields);
         }
         return data;
       });
     }, function (e) {
       if (e && e.status) throw e;
-      throw apiError(0, "network", "Can't reach the server. Check your connection and try again.");
+      var n = readFailure(0, null);
+      throw apiError(0, n.code, n.message);
     });
   }
 

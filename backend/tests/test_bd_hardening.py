@@ -1,10 +1,26 @@
 """Hardening of BD's answers on the proposal tool's app (#806): what every /api/bd/ response must keep.
 
 BD's test_hardening, response checks only. Its deploy-file and nginx-zone groups retired with the old
-repo's deploy files (Dockerfile, compose, nginx-bd.conf, install-vps.sh). Its safety-header and CORS
-checks do not move either: BD's own header middleware was not carried over, and on the proposal tool
-the security headers come from nginx and CORS is the tool's own app-wide choice. The size limits and
-the "text Postgres cannot hold" checks move with the contact routes they exercise.
+repo's deploy files (Dockerfile, compose, nginx-bd.conf, install-vps.sh), as ticket #806 lists.
+
+NOT CARRIED OVER, AND NOT ON #806'S RETIRE LIST (Hanz to approve, recorded in the PR):
+  * the safety-header checks (test_every_response_class_carries_the_safety_headers and the header
+    asserts in its neighbours): BD's own header middleware was not carried over; on the proposal tool
+    the security headers come from nginx;
+  * the CORS checks (test_a_foreign_origin_gets_no_cors_headers_on_a_get,
+    test_a_preflight_from_a_foreign_origin_is_not_answered, test_no_cors_layer_is_installed): the
+    tool's app installs CORSMiddleware with allow_origins=["*"] for every route, its own app-wide
+    choice, so BD's "no CORS layer" cannot hold on it.
+
+WAITING FOR THE ROUTES THEY EXERCISE (no /api/bd/ route that stores text exists in this ticket). Each
+moves with the ticket that brings its route, and is run against that real route:
+  * contacts (PATCH and POST /api/bd/contacts, the contacts ticket, #808):
+    test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on,
+    test_an_enormous_contact_note_is_refused, test_an_enormous_tag_list_is_refused,
+    test_a_contact_text_field_stops_exactly_at_its_limit, test_tags_stop_at_50_of_60_characters,
+    test_a_new_contact_obeys_the_same_limits;
+  * settings (PUT /api/bd/admin/settings, the ticket that moves BD's Admin page):
+    test_an_enormous_pick_list_is_refused, test_a_pick_list_stops_at_100_values_of_120_characters.
 
 What stays, for every BD response class (200, 400, 401, 403, 404, 503 and a forced 500):
   * Cache-Control: no-store on every BD API answer, and never a Set-Cookie;

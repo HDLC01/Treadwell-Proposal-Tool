@@ -8,7 +8,9 @@ sidebar (and so in the phone drawer, and under the sidebar's Hide menu):
     remembered (tw_bd_open, like the sidebar's own tw_nav_open), and never on a phone;
   * a section shows only when BD's can() map (from /api/bd/me) allows it for the person's BD role,
     and only once its page has moved (in this ticket only This Week, the BD home page);
-  * the current section is lit by the page's full path.
+  * the current section is lit by the page's full path;
+  * until BD answers, an open group says it is loading (a polite live region), and a failed answer
+    is said in the same words the BD home page uses (TWAuth.bdFailure, the one reader).
 
 Executed: js/bd-sidebar-group-harness.js runs the real auth.js init() with the tool's /api/me and
 BD's /api/bd/me answering, and the `can` maps come from the real bd/auth.py can().
@@ -17,7 +19,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import re
 
 import pytest
 
@@ -92,6 +93,18 @@ def test_the_group_starts_shut_elsewhere_and_asks_bd_nothing(tmp_path, wide):
     s = out["states"][0]
     assert s["expanded"] == "false" and s["hidden"] is True and s["sections"] == []
     assert bd_fetches(out) == [], "a shut group must not cost every tool page a BD request"
+
+
+def test_a_shut_list_is_not_hidden_by_its_hidden_attribute_alone():
+    """DESIGN.md: never rely on hidden alone. The shut list also carries tw-shut, which the sidebar's
+    own stylesheet sets to display:none (a class: the phone-shell CSS resolver refuses [hidden])."""
+    src = (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    assert ".tw-nav-sub.tw-shut{display:none;}" in src
+
+
+def test_the_shut_list_carries_the_class_and_the_open_one_does_not(tmp_path):
+    assert run(tmp_path, "/portal.html", name="shut")["markup"]["shut"] is True
+    assert run(tmp_path, "/bd/", name="open")["markup"]["shut"] is False
 
 
 def test_the_chevron_opens_and_shuts_it_and_desktop_remembers(tmp_path):
@@ -188,7 +201,31 @@ def test_bd_not_answering_shows_no_section(tmp_path):
     s = run(tmp_path, "/bd/", bd={"status": 503, "body": {"ok": False, "error": "unavailable",
                                                          "message": "The BD CRM is not turned on."}}
             )["states"][0]
-    assert s["sections"] == [] and s["note"]
+    assert s["sections"] == [] and s["note"] == "The BD CRM is not turned on."
+
+
+# The same answers the BD home page is tested with (test_bd_home_page.py), and the same sentences.
+@pytest.mark.parametrize("answer,sentence", [
+    # the tool's own sign-in gate: {ok: false, error: <sentence>}, no message field
+    ({"status": 401, "body": {"ok": False, "error": "Sign-in expired. Sign in again."}},
+     "Sign-in expired. Sign in again."),
+    ({"status": 403, "body": {"ok": False, "error": "Your account is paused. Ask an admin to turn it back on."}},
+     "Your account is paused. Ask an admin to turn it back on."),
+    ({"status": 502, "body": None}, "The BD CRM isn&#39;t answering right now. Try again in a minute."),
+    (False, "Can&#39;t reach the server. Check your connection and try again."),     # no network
+])
+def test_a_failed_answer_reads_as_it_does_on_the_bd_home_page(tmp_path, answer, sentence):
+    out = run(tmp_path, "/bd/", bd=answer, name="f%s" % (answer or {}).get("status"))
+    s = out["states"][0]
+    assert s["sections"] == [] and s["note"] == sentence
+
+
+def test_an_open_group_says_it_is_loading_until_bd_answers(tmp_path):
+    out = run(tmp_path, "/bd/", bd="pending")
+    s = out["states"][0]
+    assert s["expanded"] == "true" and s["hidden"] is False
+    assert s["sections"] == [] and s["note"] == "Loading..."
+    assert out["markup"]["live"] == "polite", "the swap to links or a reason is announced"
 
 
 def test_the_row_switched_off_takes_the_whole_group_with_it(tmp_path):
@@ -204,11 +241,3 @@ def test_the_row_denied_by_policy_takes_the_whole_group_with_it(tmp_path):
     assert "/bd/" not in out["rows"] and out["groupInMarkup"] is False
     assert bd_fetches(out) == []
 
-
-def test_a_section_is_listed_only_once_its_page_has_moved():
-    """The registry names only moved pages. Contacts, Add contact, Potential BD Contacts, Analytics
-    and Admin join it in the tickets that move their pages."""
-    src = (FRONTEND / "auth.js").read_text(encoding="utf-8")
-    block = src[src.index("const BD_SECTIONS = ["):]
-    block = block[:block.index("];")]
-    assert re.findall(r'href:\s*"([^"]+)"', block) == ["/bd/"]

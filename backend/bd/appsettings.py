@@ -5,9 +5,10 @@
     appsettings.store(conn, changes, actor_id=None)   upsert top-level keys (no validation here:
                                              PUT /api/admin/settings validates the merged result
                                              first, then stores it)
-    appsettings.DEFAULTS, READ_ONLY_KEYS, PICK_LISTS
+    appsettings.defaults() -> dict           a fresh copy of the defaults, the environment applied
+    appsettings.READ_ONLY_KEYS, PICK_LISTS
 
-Read-only keys (READ_ONLY_KEYS) always come from DEFAULTS, whatever a row says: they are the
+Read-only keys (READ_ONLY_KEYS) always come from defaults(), whatever a row says: they are the
 counting rule and the clock, not preferences. `weekly` and `default_frequency` rows are merged
 over their defaults key by key, so a row holding only {"new_count": 6, "followup_count": 4} keeps
 the default run day and hour; a stored sub-key the defaults do not have (the retired
@@ -63,10 +64,6 @@ def defaults() -> dict:
     d["weekly"]["enabled"] = bool(config.BD_WEEKLY_ENABLED)
     d["weekly"]["run_hour"] = int(config.BD_WEEKLY_HOUR)
     return d
-
-
-# Kept for readers; call defaults() for a copy that follows the environment.
-DEFAULTS = copy.deepcopy(_BASE)
 
 
 def merge(base: dict, rows: dict) -> dict:

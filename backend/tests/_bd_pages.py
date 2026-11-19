@@ -14,6 +14,8 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SHARED_JS = ROOT / "frontend" / "bd" / "js" / "bd-shared.js"
+# The tool's people helpers (window.TWCrm), which bd-shared.js names every person through.
+CRM_CORE_JS = ROOT / "frontend" / "js" / "crm-core.js"
 
 needs_bd_page_helpers = pytest.mark.skipif(
     not SHARED_JS.exists(),

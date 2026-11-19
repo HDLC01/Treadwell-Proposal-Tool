@@ -5,15 +5,15 @@ BD's pages live under frontend/bd/ and boot inside the tool. The rules every BD 
   * `lang`, a charset, the phone viewport, and a title "<Page> · BD CRM · Treadwell", each one its own;
   * the one BD stylesheet, /bd/bd.css, and no other local stylesheet (BD's sign-in redirect page, which
     shows nothing, loads none);
-  * the scripts in the tool's shell order (Supabase SDK, /js/icons.js, /auth.js, /shared.js), then
-    BD's shell (bd-icons, bd-api, bd-shared, bd-core), then the page's own; every file exists. BD's own
+  * the scripts in the tool's shell order (Supabase SDK, /js/icons.js, /auth.js, /shared.js,
+    /js/crm-core.js), then BD's shell (bd-api, bd-shared, bd-core), then the page's own; every file exists. BD's own
     auth.js, top bar, rail, mock data and sign-in shell are gone. /bd/login.html runs only its redirect;
   * the only external script is the Supabase SDK, the very tag the tool's pages use (pinned, with
     Subresource Integrity), and the CDN connection is warmed first;
   * no inline <script>, no on*= attribute, no javascript: URL, in a page or in the markup BD's scripts
     build (the CSP);
   * one <main id="main"> on every app page, on a <body class="bd-app"> (the BD root);
-  * no emoji anywhere under frontend/bd/ (BD's glyphs come from bd-icons.js);
+  * no emoji anywhere under frontend/bd/ (BD's glyphs come from the tool's js/icons.js);
   * bd.css: its section markers once each and in order, a page section styles only its own prefix,
     the BD root has the tool's paper ground, and there is no @font-face and no font file.
 """
@@ -38,8 +38,9 @@ APP_PAGES = [p for p in PAGES if rel(p) != LOGIN]
 
 SUPABASE_SRC = re.compile(r"^https://cdn\.jsdelivr\.net/npm/@supabase/supabase-js@\d+\.\d+\.\d+(/[\w./-]+)?$")
 SUPABASE = "supabase-js"
-TOOL_SHELL = [SUPABASE, "/js/icons.js", "/auth.js", "/shared.js"]
-BD_SHELL = ["/bd/js/bd-icons.js", "/bd/js/bd-api.js", "/bd/js/bd-shared.js", "/bd/js/bd-core.js"]
+# crm-core.js names every person (window.TWCrm): BD's people helpers are its, so it is part of the shell.
+TOOL_SHELL = [SUPABASE, "/js/icons.js", "/auth.js", "/shared.js", "/js/crm-core.js"]
+BD_SHELL = ["/bd/js/bd-api.js", "/bd/js/bd-shared.js", "/bd/js/bd-core.js"]
 # Each BD page's own scripts after the BD shell, listed explicitly: a page missing here fails
 # test_script_order (no silent default). A ticket that moves a page adds its row.
 PAGE_SCRIPT = {
@@ -241,11 +242,12 @@ def test_bds_own_shell_is_gone():
     """BD's top bar, rail, phone tab bar, sign-in shell and mock mode do not come over."""
     names = {rel(p) for p in BD.rglob("*")}
     for gone in ("bd/auth.js", "bd/js/auth.js", "bd/js/mock-data.js", "bd/js/api.js", "bd/js/icons.js",
-                 "bd/js/shared.js", "bd/styles.css", "bd/fonts"):
+                 "bd/js/bd-icons.js", "bd/js/shared.js", "bd/styles.css", "bd/fonts"):
         assert gone not in names, "%s came over from BD's own shell" % gone
     for js in JS_FILES:
         code = re.sub(r"/\*.*?\*/|//[^\n]*", "", js.read_text(encoding="utf-8"), flags=re.S)
-        for word in ("BDAuth", "BD_MOCK", "BDMock", "bd-sidebar", "bd-tabbar", "bd-topbar", "renderSidebar"):
+        for word in ("BDAuth", "BD_MOCK", "BDMock", "BDIcon", "bd-sidebar", "bd-tabbar", "bd-topbar",
+                     "renderSidebar"):
             assert word not in code, "%s still reaches for %s" % (rel(js), word)
 
 
@@ -257,7 +259,7 @@ BD_TEXT = sorted(p for p in BD.rglob("*") if p.suffix in (".html", ".js", ".css"
 def test_no_emoji(f):
     bad = ["line %d: U+%04X" % (no, ord(ch))
            for no, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1) for ch in line if is_emoji(ch)]
-    assert not bad, "%s has emoji code points (glyphs come from bd-icons.js):\n%s" % (rel(f), "\n".join(bad))
+    assert not bad, "%s has emoji code points (glyphs come from js/icons.js):\n%s" % (rel(f), "\n".join(bad))
 
 
 def test_emoji_ranges():

@@ -1,9 +1,11 @@
 /* Treadwell BD CRM - small helpers every BD page uses, as window.BD (#806: moved in from BD's
  * js/shared.js, beside the tool's own /shared.js and never in its place).
  *
- * The business-date block is the proposal tool's (frontend/shared.js, BIZ_TZ); the people
- * helpers (nameOf, initialsOf, byTs) follow its js/crm-core.js, so a person looks the same
- * here as on the proposal tool's board.
+ * The business-date block is the proposal tool's (frontend/shared.js, BIZ_TZ). PEOPLE are named by
+ * the tool's js/crm-core.js (window.TWCrm, loaded before this file), the one place that decides a
+ * person's name, initials and avatar colour, so a person looks the same here as on the tool's board.
+ * BD adds only what its data needs: a UserRef or contact object ({name, email}) and a display name
+ * kept as written.
  *
  * DATES. Treadwell works in Central time and the dev PC's clock runs ~13 hours ahead of it, so
  * nothing here reads a date off the viewer's clock zone. A bare "YYYY-MM-DD" is anchored at noon
@@ -11,8 +13,8 @@
  * mistake the tool's fmtBizDay documents). Pages take "today" from /api/bd/me (`today`);
  * bizToday() is the live clock's Central date.
  *
- * GLYPHS come from BD's own icon global, window.BDIcon (bd-icons.js). An open sheet or dialog marks
- * the page's <body> (the BD root, .bd-app) with bd-locked, so the page behind it does not scroll.
+ * GLYPHS come from the tool's one icon set, window.TWIcon (js/icons.js). An open sheet or dialog
+ * marks the page's <body> (the BD root, .bd-app) with bd-locked, so the page behind it does not scroll.
  */
 (function () {
   "use strict";
@@ -124,47 +126,17 @@
     return name === "GMT-5" ? "-05:00" : "-06:00";
   }
 
-  // ── people (from the tool's crm-core.js) ─────────────────────────────────────────────────
+  // ── people (named by the tool's crm-core.js) ─────────────────────────────────────────────
 
-  /** A display name from a UserRef/contact object, a name, or an address
-   *  ("avery.quill@example.com" -> "Avery Quill"). */
-  function nameOf(who) {
-    if (who && typeof who === "object") return String(who.name || who.email || "");
-    var s = String(who || "");
-    if (s.indexOf("@") === -1) return s.trim();
-    return s.split("@")[0].split(/[._-]+/).filter(Boolean).map(function (w) {
-      return w.charAt(0).toUpperCase() + w.slice(1);
-    }).join(" ") || s;
-  }
+  function crm() { return window.TWCrm; }
 
-  // Titles before a name and suffixes after it, left out of the initials ("Dr. Ian Pruitt" -> "IP").
-  var NAME_PREFIX = /^(dr|mr|mrs|ms|mx|miss|prof|rev)\.?$/i;
-  var NAME_SUFFIX = /^(jr|sr|ii|iii|iv|phd|pe|md|esq)\.?$/i;
-
-  /** "Dana Whitfield" -> "DW"; "avery@..." -> "A"; "Dr. Ian Pruitt" -> "IP". First and last word,
-   *  two letters at most, titles and suffixes left out (unless that would leave nothing). */
-  function initialsOf(who) {
-    var all = nameOf(who).split(/\s+/).filter(Boolean);
-    var words = all.filter(function (w, i) {
-      return !(i === 0 && NAME_PREFIX.test(w)) && !(i > 0 && i === all.length - 1 && NAME_SUFFIX.test(w.replace(/,$/, "")));
-    });
-    if (!words.length) words = all;
-    if (!words.length) return "";
-    var first = words[0].charAt(0);
-    return (words.length > 1 ? first + words[words.length - 1].charAt(0) : first).toUpperCase();
-  }
-
-  /** A sort comparator factory on an ISO string: byTs(get)(dir). Blanks stay last both ways. */
-  function byTs(get) {
-    return function (dir) {
-      return function (x, y) {
-        var tx = get(x), ty = get(y);
-        if (!tx && !ty) return 0;
-        if (!tx) return 1;
-        if (!ty) return -1;
-        return dir * String(tx).localeCompare(String(ty));
-      };
-    };
+  /** The display name of a UserRef or contact object, a name, or an address. A name is shown as
+   *  written ("Dr. Ian Pruitt"); an address is named by crm-core ("avery.quill@example.com" ->
+   *  "Avery Quill"). Exported as BD.nameOf. */
+  function displayName(who) {
+    if (who && typeof who === "object") return who.name ? String(who.name) : displayName(who.email);
+    var s = String(who == null ? "" : who);
+    return s.indexOf("@") === -1 ? s.trim() : crm().nameOf(s);
   }
 
   // ── matching ─────────────────────────────────────────────────────────────────────────────
@@ -242,28 +214,22 @@
   // argument and never reads a clock. This file is also loaded in a bare node vm (no document,
   // no storage), so DOM and storage are touched only inside function bodies.
 
-  /** A stable avatar tint 1..5 per person (sdbm of the lower-cased full display name). */
-  function tintOf(name) {
-    var s = nameOf(name).toLowerCase().trim();
-    var h = 0;
-    for (var i = 0; i < s.length; i++) h = (s.charCodeAt(i) + (h << 6) + (h << 16) - h) | 0;
-    return (Math.abs(h) % 5) + 1;
-  }
-
-  /** The one avatar: initials on a soft tint, hidden from screen readers (the name is beside it).
+  /** The one avatar: the person's initials on their colour, both crm-core's (the same colour as on
+   *  the tool's board), hidden from screen readers (the name is beside it).
    *  size "" (40px) | "sm" (32) | "lg" (56) | "xl" (72); badge "done" (green check) | "off"
-   *  (dashed ring, "Not this week") | null. */
-  function avatarHTML(name, size, badge) {
+   *  (dashed ring, "Not this week") | null. The colour is one of crm-core's constants. */
+  function avatarHTML(who, size, badge) {
     var cls = "avatar" + (size ? " avatar-" + size : "");
+    var name = displayName(who);
     var mark = "";
     if (badge === "done") {
-      var check = typeof window.BDIcon === "function" ? window.BDIcon("check", 11) : "";
+      var check = typeof window.TWIcon === "function" ? window.TWIcon("check", 11) : "";
       mark = '<span class="avatar-badge">' + check + "</span>";
     } else if (badge === "off") {
       mark = '<span class="avatar-badge-off"></span>';
     }
-    return '<span class="' + cls + '" data-tint="' + tintOf(name) + '" aria-hidden="true">' +
-      esc(initialsOf(name)) + mark + "</span>";
+    return '<span class="' + cls + '" style="background:' + esc(crm().colorOf(name)) + '" aria-hidden="true">' +
+      esc(crm().initialsOf(name)) + mark + "</span>";
   }
 
   /** "Good morning" / "Good afternoon" / "Good evening" from the wall-clock hour of a Central ISO
@@ -289,7 +255,7 @@
 
   /** "Marcus" from "Marcus Ebner" (or from an address or a UserRef). */
   function firstName(who) {
-    return nameOf(who).split(/\s+/).filter(Boolean)[0] || "";
+    return displayName(who).split(/\s+/).filter(Boolean)[0] || "";
   }
 
   function ymd(iso) {
@@ -408,7 +374,7 @@
 
   /** A pill: kind ok | warn | info | neutral | ai | outline, plain text, an optional 14 px glyph. */
   function pill(kind, text, glyph) {
-    var ico = glyph && typeof window.BDIcon === "function" ? window.BDIcon(glyph, 14) : "";
+    var ico = glyph && typeof window.TWIcon === "function" ? window.TWIcon(glyph, 14) : "";
     return '<span class="pill pill-' + kind + '">' + ico + esc(text) + "</span>";
   }
 
@@ -656,6 +622,17 @@
 
   var openMenu = null;
 
+  /** An href a menu item may carry: a same-site path ("/bd/...": one leading slash, not two, and no
+   *  backslash, which a browser reads as a slash), or a mailto: or tel: link. Anything else (a
+   *  javascript: or data: URL, another site) is "" and the item is drawn as a button. */
+  function safeHref(href) {
+    var h = String(href == null ? "" : href).trim();
+    if (/[\u0000-\u001f\u007f\\]/.test(h)) return "";
+    if (/^\/(?!\/)/.test(h)) return h;
+    if (/^(mailto|tel):\S/i.test(h)) return h;
+    return "";
+  }
+
   function closeMenu(focusAnchor) {
     var m = openMenu;
     if (!m) return;
@@ -670,7 +647,7 @@
   }
 
   /** A small menu for `anchorBtn`, on <body> (outside <main>): items [{act, label, icon, href,
-   *  danger, sub}] (`sub`: an optional second, smaller line under the label). Choosing one dispatches a bubbling "bd-menu" CustomEvent {detail: {act, anchor}}
+   *  danger, sub}] (`sub`: an optional second, smaller line under the label; `href`: see safeHref). Choosing one dispatches a bubbling "bd-menu" CustomEvent {detail: {act, anchor}}
    *  on the anchor and closes the menu. Arrow keys move, Escape closes, an outside click closes.
    *  On a phone it opens as a bottom action sheet. Opening the same anchor again closes it. */
   function menu(anchorBtn, items) {
@@ -684,14 +661,15 @@
     var label = anchorBtn.getAttribute("aria-label") || anchorBtn.textContent || "";
     if (label.trim()) el.setAttribute("aria-label", label.trim());
     el.innerHTML = (items || []).map(function (it) {
-      var ico = it.icon && typeof window.BDIcon === "function" ? window.BDIcon(it.icon, 18) : "";
+      var ico = it.icon && typeof window.TWIcon === "function" ? window.TWIcon(it.icon, 18) : "";
       var cls = "menu-item" + (it.danger ? " is-danger" : "");
       var inner = ico + (it.sub
         ? '<span class="menu-label"><span>' + esc(it.label) + '</span><span class="menu-sub">' + esc(it.sub) + "</span></span>"
         : "<span>" + esc(it.label) + "</span>");
-      if (it.href) {
+      var href = safeHref(it.href);
+      if (href) {
         return '<a class="' + cls + '" role="menuitem" tabindex="-1" data-act="' + esc(it.act) + '" href="' +
-          esc(it.href) + '">' + inner + "</a>";
+          esc(href) + '">' + inner + "</a>";
       }
       return '<button type="button" class="' + cls + '" role="menuitem" tabindex="-1" data-act="' +
         esc(it.act) + '">' + inner + "</button>";
@@ -764,9 +742,9 @@
     bizWeekStart: bizWeekStart,
     bizNowISO: bizNowISO,
     daysBetween: daysBetween,
-    nameOf: nameOf,
-    initialsOf: initialsOf,
-    byTs: byTs,
+    nameOf: displayName,
+    initialsOf: function (who) { return crm().initialsOf(displayName(who)); },
+    byTs: function (get) { return crm().byTs(get); },
     normalizeCompany: normalizeCompany,
     e164: e164,
     fmtPhone: fmtPhone,
@@ -774,7 +752,6 @@
     qs: qs,
     LABELS: LABELS,
     VERB: VERB,
-    tintOf: tintOf,
     avatarHTML: avatarHTML,
     greeting: greeting,
     plural: plural,
@@ -795,6 +772,7 @@
     sheet: { open: sheetOpen, close: sheetClose },
     dialog: dialog,
     menu: menu,
+    safeHref: safeHref,
     closeMenu: closeMenu,
   };
 })();

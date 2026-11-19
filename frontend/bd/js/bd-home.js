@@ -7,15 +7,16 @@
  * Without a BD login (no BD role, a turned-off login, a proposal-tool admin nobody added on BD's
  * People table) the page shows the server's own sentence and no data. So does every other failure:
  * the tool's sign-in gate's 401 and 403 (their sentence is in `error`, there is no `message`), BD's
- * 503s, and no network. Every value is set as text, never as markup.
+ * 503s, and no network. The sentence is TWAuth.bdFailure's, the one reader the sidebar's BD group
+ * also uses, so the two never say different things about the same answer. Every value is set as
+ * text, never as markup.
  *
  * This Week (the weekly list) fills this page in the next ticket, and brings the role-home redirect
- * with it (an assistant's BD home is Contacts).
+ * with it (an assistant's BD home is Contacts). Until then the note about it shows only to a role
+ * that will have the list (can.week); anyone else is told their BD pages move in next.
  */
 (function () {
   "use strict";
-
-  var CODE = /^[a-z][a-z_]*$/;
 
   function el(id) { return document.getElementById(id); }
 
@@ -24,21 +25,9 @@
     if (e) e.textContent = text;
   }
 
-  /** The sentence to show for a failed /api/bd/me: BD's message, or the tool's gate's sentence. */
-  function failureSentence(res) {
-    var status = res && res.status;
-    var body = res && res.body && typeof res.body === "object" ? res.body : {};
-    if (typeof body.message === "string" && body.message) return body.message;
-    if (typeof body.error === "string" && body.error && !CODE.test(body.error)) return body.error;
-    if (!status) return "Can't reach the server. Check your connection and try again.";
-    if (status === 401) return "Sign in again to continue.";
-    if (status === 403) return "You don't have a BD role.";
-    return "The BD CRM isn't answering right now. Try again in a minute.";
-  }
-
   function showRefused(res) {
     setText("bd-greeting", "BD CRM");
-    setText("bd-role", failureSentence(res));
+    setText("bd-role", window.TWAuth.bdFailure(res && res.status, res && res.body).message);
     var note = el("bd-home-note");
     if (note) note.hidden = true;
   }
@@ -51,14 +40,16 @@
     setText("bd-greeting", first ? hello + ", " + first : hello);
     var role = BD.LABELS.role[user.role] || String(user.role || "");
     setText("bd-role", "Your BD role: " + role);
-    setText("bd-home-note-text", "This Week, your list of calls for the week, comes here next.");
+    var week = !!(body.can && body.can.week === true);
+    setText("bd-home-note-text", week ? "This Week, your list of calls for the week, comes here next."
+      : "Your BD pages move in here next.");
     var note = el("bd-home-note");
     if (note) note.hidden = false;
   }
 
   function start() {
     var auth = window.TWAuth;
-    if (!auth || typeof auth.bdMe !== "function") { showRefused({ status: 0 }); return; }
+    if (!auth || typeof auth.bdMe !== "function" || typeof auth.bdFailure !== "function") return;
     auth.bdMe().then(function (res) {
       var ok = res && res.status >= 200 && res.status < 300 && res.body && res.body.ok;
       if (ok) showWelcome(res.body);

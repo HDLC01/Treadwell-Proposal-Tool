@@ -193,6 +193,10 @@ _Avoid_: BD tool, bd.wetreadwell.com (its old separate home), Troy's list
 What a person can do inside the BD CRM: salesperson, assistant, manager, admin or super admin. It is separate from whether they can see the BD CRM at all.
 _Avoid_: BD permission, BD access
 
+**BD login**:
+A person's account inside the BD CRM, one row in its people table, which carries their BD role. It is active or turned off; a turned-off BD login opens nothing in the BD CRM. A proposal-tool admin has no BD login unless the BD CRM's people table gives them one, and only a BD super admin changes an admin's BD login.
+_Avoid_: BD user, BD account (that is a company)
+
 **BD account**:
 A company Treadwell is developing business with, holding every person we can reach there. Several people at one company are one BD account.
 _Avoid_: Customer (that is who approves a Proposal), client, company record

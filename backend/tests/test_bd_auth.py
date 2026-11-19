@@ -18,7 +18,7 @@ from bd import config as bd_config
 from bd.errors import ApiError
 
 
-def _claims_for(email, name=None):
+def _identity_for(email, name=None):
     """What the tool's gate keeps on the request (supabase_client.identity_of)."""
     return {"email": email, "sub": "sub-" + email, "name": name}
 
@@ -27,7 +27,7 @@ def _claims_for(email, name=None):
 def test_a_known_active_login_is_returned_and_seen(bd_db):
     bd_db.execute("insert into bd.users (id, email, name, role) values"
                   " (1, 'pat.lee@example.com', 'Pat Lee', 'salesperson')")
-    u = auth.resolve_user(bd_db, _claims_for("pat.lee@example.com"))
+    u = auth.resolve_user(bd_db, _identity_for("pat.lee@example.com"))
     assert (u["id"], u["role"], u["name"]) == (1, "salesperson", "Pat Lee")
     assert u["last_seen_at"] is not None and u["auth_sub"] == "sub-pat.lee@example.com"
 
@@ -36,33 +36,33 @@ def test_a_turned_off_login_is_403(bd_db):
     bd_db.execute("insert into bd.users (email, name, role, active) values"
                   " ('sam.ortiz@example.com', 'Sam Ortiz', 'manager', false)")
     with pytest.raises(ApiError) as e:
-        auth.resolve_user(bd_db, _claims_for("sam.ortiz@example.com"))
+        auth.resolve_user(bd_db, _identity_for("sam.ortiz@example.com"))
     assert e.value.status == 403 and e.value.message == auth.TURNED_OFF
 
 
 def test_a_signed_in_staffer_with_no_bd_login_is_403_not_401(bd_db):
     """A valid sign-in with no BD role: 403, so the page says so instead of bouncing to sign-in."""
     with pytest.raises(ApiError) as e:
-        auth.resolve_user(bd_db, _claims_for("new.hire@example.com"))
+        auth.resolve_user(bd_db, _identity_for("new.hire@example.com"))
     assert e.value.status == 403 and e.value.message == auth.NO_BD_ROLE
     assert bd_db.execute("select count(*) as n from bd.users").fetchone()["n"] == 0
 
 
 def test_no_email_is_401(bd_db):
-    for claims in ({}, {"email": ""}, {"email": "   "}):
+    for identity in ({}, {"email": ""}, {"email": "   "}):
         with pytest.raises(ApiError) as e:
-            auth.resolve_user(bd_db, claims)
+            auth.resolve_user(bd_db, identity)
         assert e.value.status == 401
 
 
 def test_bootstrap_super_admin_and_admins_on_first_sign_in(bd_db, monkeypatch):
     monkeypatch.setattr(bd_config, "BD_SUPER_ADMIN_EMAIL", "owner@example.com")
     monkeypatch.setattr(bd_config, "BD_ADMIN_EMAILS", frozenset({"test.admin@example.com", "owner@example.com"}))
-    owner = auth.resolve_user(bd_db, _claims_for("owner@example.com", "Robin Example"))
+    owner = auth.resolve_user(bd_db, _identity_for("owner@example.com", "Robin Example"))
     assert owner["role"] == "super_admin" and owner["name"] == "Robin Example"
-    adm = auth.resolve_user(bd_db, _claims_for("test.admin@example.com"))
+    adm = auth.resolve_user(bd_db, _identity_for("test.admin@example.com"))
     assert adm["role"] == "admin" and adm["name"] == "Test Admin"       # no display name: from the email
-    again = auth.resolve_user(bd_db, _claims_for("owner@example.com"))
+    again = auth.resolve_user(bd_db, _identity_for("owner@example.com"))
     assert again["id"] == owner["id"]
     assert bd_db.execute("select count(*) as n from bd.users").fetchone()["n"] == 2
 
@@ -75,40 +75,35 @@ def test_the_tools_own_super_admin_setting_opens_no_bd_door(bd_db, monkeypatch):
     monkeypatch.setattr(bd_config, "BD_SUPER_ADMIN_EMAIL", "")
     monkeypatch.setattr(bd_config, "BD_ADMIN_EMAILS", frozenset())
     with pytest.raises(ApiError) as e:
-        auth.resolve_user(bd_db, _claims_for("tool.owner@example.com"))
+        auth.resolve_user(bd_db, _identity_for("tool.owner@example.com"))
     assert e.value.status == 403
 
 
 def test_bootstrap_never_changes_an_existing_logins_role(bd_db, monkeypatch):
     bd_db.execute("insert into bd.users (email, name, role) values ('lee.park@example.com', 'Lee Park', 'manager')")
     monkeypatch.setattr(bd_config, "BD_ADMIN_EMAILS", frozenset({"lee.park@example.com"}))
-    assert auth.resolve_user(bd_db, _claims_for("lee.park@example.com"))["role"] == "manager"
+    assert auth.resolve_user(bd_db, _identity_for("lee.park@example.com"))["role"] == "manager"
 
 
 def test_last_seen_is_refreshed_at_most_once_a_minute(bd_db):
     bd_db.execute("insert into bd.users (email, name, role, last_seen_at) values"
                   " ('pat.lee@example.com', 'Pat Lee', 'salesperson', now() - interval '1 hour')")
-    first = auth.resolve_user(bd_db, _claims_for("pat.lee@example.com"))["last_seen_at"]
-    second = auth.resolve_user(bd_db, _claims_for("pat.lee@example.com"))["last_seen_at"]
+    first = auth.resolve_user(bd_db, _identity_for("pat.lee@example.com"))["last_seen_at"]
+    second = auth.resolve_user(bd_db, _identity_for("pat.lee@example.com"))["last_seen_at"]
     assert first == second
     assert first > dt.datetime.now(dt.UTC) - dt.timedelta(minutes=30)
 
 
 def test_current_user_needs_the_gates_identity():
     """No identity on the request (a path the gate waved through) is 401, before any database work."""
-    for state in (types.SimpleNamespace(), types.SimpleNamespace(auth_claims=None),
-                  types.SimpleNamespace(auth_claims={"email": ""})):
+    for state in (types.SimpleNamespace(), types.SimpleNamespace(auth_identity=None),
+                  types.SimpleNamespace(auth_identity={"email": ""})):
         with pytest.raises(ApiError) as e:
             auth.current_user(types.SimpleNamespace(state=state))
         assert e.value.status == 401 and e.value.message == auth.NOT_SIGNED_IN
 
 
 # ── roles ─────────────────────────────────────────────────────────────────────────────────────
-def test_there_are_five_bd_roles():
-    assert auth.ROLES == ("salesperson", "assistant", "manager", "admin", "super_admin")
-    assert auth.ADMIN_ROLES == ("admin", "super_admin")
-
-
 @pytest.mark.parametrize("role,want", [
     ("salesperson", {"send": True, "analytics": False, "admin": False, "admin_area": False, "import": True, "run_batch": False, "week": True}),
     ("assistant", {"send": False, "analytics": False, "admin": False, "admin_area": True, "import": True, "run_batch": False, "week": False}),

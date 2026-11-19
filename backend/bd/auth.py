@@ -2,11 +2,13 @@
 
 SIGN-IN IS THE TOOL'S (#806). BD's own token check is not carried over. The tool's auth gate
 (main._auth_gate) verifies the Supabase Google token on every /api/* request and keeps the verified
-identity on the request as `request.state.auth_claims`: {"email", "sub", "name"}. BD reads it there
+identity on the request as `request.state.auth_identity`: {"email", "sub", "name"} (not the token's
+claims: no role, aal or amr). BD reads it there
 and never looks at the Authorization header itself. Tests sign in by overriding the tool's verify
 step (supabase_client.verify_identity), never by switching anything off.
 
-THE BD ROLE IS BD'S. resolve_user(conn, claims) finds the person in bd.users by email:
+THE BD ROLE IS BD'S. resolve_user(conn, identity) finds the person in bd.users by email (a BD login
+is a row there, active or turned off):
   * known and active      -> that row (last_seen_at refreshed at most once a minute)
   * known and inactive    -> 403 "Your BD login is turned off. ..."
   * unknown, but listed in BD_SUPER_ADMIN_EMAIL / BD_ADMIN_EMAILS -> created on this first sign-in
@@ -80,18 +82,18 @@ def bootstrap_role(email: str) -> str | None:
 USER_COLUMNS = "id, email, name, role, active, auth_sub, last_seen_at, created_at"
 
 
-def resolve_user(conn, claims: dict) -> dict:
+def resolve_user(conn, identity: dict) -> dict:
     """The bd.users row for this verified identity (see the module docstring for the rules)."""
-    email = str(claims.get("email") or "").strip().lower()
+    email = str(identity.get("email") or "").strip().lower()
     if not email:
         raise AuthError(401, NOT_SIGNED_IN)
-    sub = str(claims.get("sub") or "") or None
+    sub = str(identity.get("sub") or "") or None
     row = conn.execute("select " + USER_COLUMNS + " from users where email = %s", (email,)).fetchone()
     if row is None:
         role = bootstrap_role(email)
         if role is None:
             raise AuthError(403, NO_BD_ROLE)
-        name = str(claims.get("name") or "").strip() or name_of_email(email)
+        name = str(identity.get("name") or "").strip() or name_of_email(email)
         conn.execute(
             "insert into users (email, name, role, active, auth_sub, last_seen_at)"
             " values (%s, %s, %s, true, %s, bd_now()) on conflict (email) do nothing",
@@ -109,13 +111,13 @@ def resolve_user(conn, claims: dict) -> dict:
     return dict(row)
 
 
-def signed_in_claims(request: Request) -> dict:
+def signed_in_identity(request: Request) -> dict:
     """The identity the tool's auth gate verified for this request. 401 when there is none (a
     public path, or a request that never passed the gate)."""
-    claims = getattr(request.state, "auth_claims", None)
-    if not isinstance(claims, dict) or not claims.get("email"):
+    identity = getattr(request.state, "auth_identity", None)
+    if not isinstance(identity, dict) or not identity.get("email"):
         raise AuthError(401, NOT_SIGNED_IN)
-    return claims
+    return identity
 
 
 def current_user(request: Request) -> dict:
@@ -124,11 +126,11 @@ def current_user(request: Request) -> dict:
     user = getattr(request.state, "bd_user", None)
     if user is not None:
         return user
-    claims = signed_in_claims(request)
+    identity = signed_in_identity(request)
     with db.connect() as conn:
         if ledger.ledger_behind(conn):
             raise ApiError(503, NOT_UP_TO_DATE, code="unavailable")
-        user = resolve_user(conn, claims)
+        user = resolve_user(conn, identity)
     request.state.bd_user = user
     return user
 

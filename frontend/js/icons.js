@@ -103,6 +103,54 @@
     users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle>' +
       '<path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
 
+    // ── the BD CRM's (ticket 806) ─────────────────────────────────────────────
+    // BD's pages, which moved in under /bd/, draw these. They came from BD's own icon table, which
+    // was a copy of this one with these added; one table, so BD and the tool can never draw a name
+    // two ways. BD's old aliases are gone: a BD page asks for chev-right and funnel, as here.
+    "bar-chart": '<path d="M3 3v18h18"></path><path d="M8 17v-3M13 17V6M18 17V10"></path>',
+    building: '<rect x="4" y="2.5" width="16" height="19" rx="1.5"></rect>' +
+      '<path d="M9 21.5v-4h6v4M8.5 7h.01M12 7h.01M15.5 7h.01M8.5 11h.01M12 11h.01M15.5 11h.01"></path>',
+    "calendar-check": '<rect x="3" y="4" width="18" height="18" rx="2"></rect>' +
+      '<path d="M16 2v4M8 2v4M3 10h18M9 16l2 2 4-4"></path>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5M12 15V3"></path>',
+    flag: '<path d="M4 22V4"></path><path d="M4 4.5c5-3 8 3 16 0V14c-8 3-11-3-16 0"></path>',
+    "help-circle": '<circle cx="12" cy="12" r="9.5"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>' +
+      '<path d="M12 17h.01"></path>',
+    lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5 .7 .7 1.3 1.5 1.5 2.5"></path>' +
+      '<path d="M9 18h6M10 22h4"></path>',
+    link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7"></path>' +
+      '<path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"></path>',
+    "log-out": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5M21 12H9"></path>',
+    "map-pin": '<path d="M20 10c0 5.5-8 12-8 12s-8-6.5-8-12a8 8 0 0 1 16 0z"></path>' +
+      '<circle cx="12" cy="10" r="3"></circle>',
+    more: '<circle cx="5" cy="12" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle>',
+    phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 ' +
+      '2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 ' +
+      '2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"></path>',
+    "phone-incoming": '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 ' +
+      '2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 ' +
+      '2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"></path><path d="M16 2v6h6M22 2l-6 6"></path>',
+    "phone-missed": '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 ' +
+      '2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 ' +
+      '2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"></path><path d="M16 2l6 6M22 2l-6 6"></path>',
+    search: '<circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.6-3.6"></path>',
+    settings: '<circle cx="12" cy="12" r="3"></circle>' +
+      '<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21' +
+      'a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8' +
+      ' 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1' +
+      'a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1' +
+      'a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>',
+    sparkles: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path>' +
+      '<path d="M19 15l.7 1.8 1.8.7-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7L19 15z"></path>',
+    "trending-up": '<path d="M22 7l-8.5 8.5-5-5L2 17"></path><path d="M16 7h6v6"></path>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M17 8l-5-5-5 5M12 3v12"></path>',
+    user: '<circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path>',
+    "user-plus": '<circle cx="9" cy="7" r="4"></circle><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1"></path>' +
+      '<path d="M19 8v6M16 11h6"></path>',
+    "user-x": '<circle cx="9" cy="7" r="4"></circle><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1"></path>' +
+      '<path d="M17 8.5l5 5M22 8.5l-5 5"></path>',
+    voicemail: '<circle cx="6.5" cy="12" r="4"></circle><circle cx="17.5" cy="12" r="4"></circle><path d="M6.5 16h11"></path>',
+
     // ── controls ──────────────────────────────────────────────────────────────
     menu: '<path d="M3 6h18M3 12h18M3 18h18"></path>',
     list: '<path d="M8.5 6h12M8.5 12h12M8.5 18h12"></path><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"></path>',

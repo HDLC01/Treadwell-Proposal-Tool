@@ -18,7 +18,13 @@
  *   THE TOOL'S COLOURS. The tokens below are BD's names (prefixed --bd-, so they can never be read as
  *   one of a tool page's own --red or --ink) holding the tool's colours: DESIGN.md's palette, and the
  *   two status grounds of the approved BD mock-up. A colour is written only in the tokens block;
- *   every rule after it reads a token.
+ *   every rule after it reads a token. They are a second set of names for the tool's values because
+ *   the tool has no token sheet a page can load: every tool page declares its own :root block (and
+ *   auth.js its --tw- set), so there is no shared name to point at yet.
+ *
+ *   FLAT AT REST (DESIGN.md, Elevation). Cards, lists and tables carry a hairline and no shadow. Only
+ *   what floats clear of the page casts one, and it is DESIGN.md's black Menu (menus, toasts) or
+ *   Overlay (dialogs, sheets, the desktop drawer, turned to the edge it lifts from).
  *
  * SECTIONS. Each marker appears once and in this order (test_bd_pages_shell.py checks it): tokens,
  * base, components, one section per BD page (each styles only its own class prefix), then print and
@@ -40,7 +46,9 @@
   /* text */
   --bd-ink: #1b1c1c;            /* near-black */
   --bd-ink-2: #5c403f;          /* umber-ink: secondary */
-  --bd-ink-3: #8a857c;          /* muted-ink: dates, captions, counts */
+  /* muted-ink, for borders, hover edges and the spinner only. Never text: 3.6:1 on paper fails
+     WCAG AA's 4.5:1, so captions, hints, counts and placeholders use --bd-ink-2 (9.6:1). */
+  --bd-ink-3: #8a857c;
 
   /* the one red */
   --bd-red: #c8102e;            /* signal-red */
@@ -48,7 +56,7 @@
   --bd-red-press: #6c0015;      /* cellar-red */
   --bd-link: #9e001f;
   --bd-link-hover: #6c0015;
-  --bd-nav-active: #fbe9ec;     /* cool-red-tint */
+  --bd-nav-active: #ffdad8;     /* warm-red-tint (DESIGN.md: prefer it to cool-red-tint in new work) */
 
   /* status: soft ground + strong text */
   --bd-ok: #0f7b34;             /* ledger-green */
@@ -66,14 +74,13 @@
   --bd-danger-edge: #ffdad8;    /* warm-red-tint */
   --bd-danger-press: #6c0015;   /* cellar-red */
 
-  /* avatar grounds (text --bd-ink) */
-  --bd-tint-1: #fbe9ec; --bd-tint-2: #edf2f7; --bd-tint-3: #e8f4ec; --bd-tint-4: #fdf6e3; --bd-tint-5: #e9e8e7;
-
   --bd-scrim: rgba(27, 28, 28, .42);
-  --bd-shadow-card: 0 1px 2px rgba(60, 50, 40, .05), 0 4px 16px rgba(60, 50, 40, .055);
-  --bd-shadow-pop: 0 8px 24px rgba(60, 50, 40, .14);
-  --bd-shadow-sheet: 0 -8px 32px rgba(60, 50, 40, .22);
-  --bd-shadow-drawer: -16px 0 48px rgba(60, 50, 40, .20);
+  /* DESIGN.md's Shadow Vocabulary: Menu, and Overlay (the bottom sheet's and the drawer's turned to
+     the edge they lift from). */
+  --bd-shadow-menu: 0 6px 20px rgba(0, 0, 0, .18);
+  --bd-shadow-overlay: 0 16px 48px rgba(0, 0, 0, .30);
+  --bd-shadow-sheet: 0 -16px 48px rgba(0, 0, 0, .30);
+  --bd-shadow-drawer: -16px 0 48px rgba(0, 0, 0, .30);
 
   --bd-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --bd-r-sm: 6px; --bd-r: 8px; --bd-r-card: 12px; --bd-r-pill: 999px;
@@ -126,7 +133,7 @@
 .bd-app .section-head .section-title { margin: 0; }
 .bd-app .section-head > :last-child:not(:first-child):not(.section-meta) { margin-left: auto; }
 .bd-app .section-title { margin: 0 0 12px; font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--bd-ink); }
-.bd-app .section-meta { font-size: 14px; color: var(--bd-ink-3); }
+.bd-app .section-meta { font-size: 14px; color: var(--bd-ink-2); }
 .bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
 .bd-app .wrap-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bd-app .scroll-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; max-width: 100%; overflow-x: auto;
@@ -139,7 +146,7 @@
 .bd-app .divider { height: 1px; margin: 16px 0; border: 0; background: var(--bd-line); }
 
 /* ── cards and panels ───────────────────────────────────────────────────────────────────── */
-.bd-app .card { background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-card); padding: 16px; }
+.bd-app .card { background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); padding: 16px; }
 .bd-app .card-flush { padding: 0; overflow: hidden; }
 .bd-app .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .bd-app .card-head > h2, .bd-app .card-head > h3, .bd-app .card-head .card-head-title { font-size: 18px; font-weight: 600; }
@@ -227,13 +234,9 @@
 /* ── avatars (BD.avatarHTML) ────────────────────────────────────────────────────────────── */
 .bd-app .avatar {
   position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 40px; height: 40px; border-radius: 50%; background: var(--bd-tint-1); color: var(--bd-ink);
+  width: 40px; height: 40px; border-radius: 50%; background: var(--bd-ink-2); color: var(--bd-white);
   font-size: 14px; font-weight: 600; line-height: 1; letter-spacing: .01em; text-transform: uppercase;
 }
-.bd-app .avatar[data-tint="2"] { background: var(--bd-tint-2); }
-.bd-app .avatar[data-tint="3"] { background: var(--bd-tint-3); }
-.bd-app .avatar[data-tint="4"] { background: var(--bd-tint-4); }
-.bd-app .avatar[data-tint="5"] { background: var(--bd-tint-5); }
 .bd-app .avatar-sm { width: 32px; height: 32px; font-size: 12px; }
 .bd-app .avatar-lg { width: 56px; height: 56px; font-size: 18px; }
 .bd-app .avatar-xl { width: 72px; height: 72px; font-size: 24px; font-weight: 700; }
@@ -247,8 +250,8 @@
 
 /* ── lists and tables ───────────────────────────────────────────────────────────────────── */
 .bd-app .list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column;
-  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-card); overflow: hidden; }
-.bd-app .card-flush > .list, .bd-app .card > .list { border: 0; border-radius: 0; box-shadow: none; }
+  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); overflow: hidden; }
+.bd-app .card-flush > .list, .bd-app .card > .list { border: 0; border-radius: 0; }
 /* flex by default (old markup); a page section sets its own grid template on its row class */
 .bd-app .list-row { display: flex; align-items: center; gap: 12px 16px; min-height: 64px; padding: 12px 20px;
   transition: background-color 120ms var(--bd-ease); }
@@ -262,8 +265,8 @@
 .bd-app a.who-name:hover { text-decoration: underline; color: var(--bd-ink); }
 .bd-app .who-sub { font-size: 14px; color: var(--bd-ink-2); line-height: 1.4; }
 .bd-app .table-wrap { width: 100%; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
-  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-card); }
-.bd-app .card > .table-wrap { border: 0; box-shadow: none; border-radius: 0; }
+  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); }
+.bd-app .card > .table-wrap { border: 0; border-radius: 0; }
 .bd-app .table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 15px; }
 .bd-app .table th, .bd-app .table td { padding: 12px 16px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--bd-line); }
 .bd-app .table td { height: 64px; }
@@ -360,7 +363,7 @@
 /* ── forms ──────────────────────────────────────────────────────────────────────────────── */
 .bd-app .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .bd-app .field > label, .bd-app .label { font-size: 14px; font-weight: 600; color: var(--bd-ink); }
-.bd-app .opt { font-weight: 400; color: var(--bd-ink-3); }
+.bd-app .opt { font-weight: 400; color: var(--bd-ink-2); }
 .bd-app .input, .bd-app .select, .bd-app .textarea {
   width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid var(--bd-control); border-radius: var(--bd-r);
   background: var(--bd-card); color: var(--bd-ink); font-size: 16px; transition: border-color .15s, box-shadow .15s;
@@ -371,8 +374,8 @@
   background-position: calc(100% - 19px) 52%, calc(100% - 14px) 52%; background-size: 5px 5px; background-repeat: no-repeat; }
 .bd-app .input:hover, .bd-app .select:hover, .bd-app .textarea:hover { border-color: var(--bd-ink-3); }
 .bd-app .input:focus, .bd-app .select:focus, .bd-app .textarea:focus { border-color: var(--bd-ink); box-shadow: 0 0 0 3px rgba(200, 16, 46, .14); outline: none; }
-.bd-app .input::placeholder, .bd-app .textarea::placeholder { color: var(--bd-ink-3); }
-.bd-app .input:disabled, .bd-app .select:disabled, .bd-app .textarea:disabled { background: var(--bd-recessed); color: var(--bd-ink-3); cursor: not-allowed; }
+.bd-app .input::placeholder, .bd-app .textarea::placeholder { color: var(--bd-ink-2); }
+.bd-app .input:disabled, .bd-app .select:disabled, .bd-app .textarea:disabled { background: var(--bd-recessed); color: var(--bd-ink-2); cursor: not-allowed; }
 .bd-app .input-search { padding-left: 42px;
   background: var(--bd-card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='%235c403f' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.6-3.6'/%3E%3C/svg%3E") no-repeat 14px 50%; }
 .bd-app .input-wrap { position: relative; display: flex; align-items: center; }
@@ -381,7 +384,7 @@
 .bd-app .input-lead { left: 14px; }
 .bd-app .input-trail { right: 14px; color: var(--bd-ok); }
 .bd-app .input-wrap .input-lead ~ .input { padding-left: 42px; }
-.bd-app .field-hint { font-size: 14px; color: var(--bd-ink-3); }
+.bd-app .field-hint { font-size: 14px; color: var(--bd-ink-2); }
 .bd-app .field-error { font-size: 14px; font-weight: 500; color: var(--bd-danger); }
 .bd-app .field.has-error .input, .bd-app .field.has-error .select, .bd-app .field.has-error .textarea { border-color: var(--bd-danger); }
 .bd-app .check { display: inline-flex; align-items: center; gap: 10px; min-height: var(--bd-hit); cursor: pointer; font-size: 15px; }
@@ -427,7 +430,7 @@
 }
 .bd-app .dialog {
   position: fixed; z-index: var(--bd-z-sheet); top: 50%; left: 50%; width: min(440px, calc(100vw - 32px));
-  padding: 24px; background: var(--bd-card); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-pop);
+  padding: 24px; background: var(--bd-card); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-overlay);
   visibility: hidden; opacity: 0; transform: translate(-50%, -46%); transition: opacity .18s ease, transform .18s var(--bd-ease), visibility 0s linear .18s;
 }
 .bd-app .dialog.is-open { visibility: visible; opacity: 1; transform: translate(-50%, -50%); transition: opacity .2s ease, transform .2s var(--bd-ease), visibility 0s linear 0s; }
@@ -443,7 +446,7 @@
 }
 .bd-app .menu {
   position: absolute; z-index: var(--bd-z-menu); min-width: 220px; padding: 6px; background: var(--bd-card);
-  border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-pop);
+  border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-menu);
 }
 .bd-app .menu-scrim { display: none; }
 .bd-app .menu-item {
@@ -466,7 +469,7 @@
   display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
 .bd-app .toast {
   display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; min-height: 56px; pointer-events: auto;
-  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-pop);
+  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-menu);
   font-size: 15px; color: var(--bd-ink); transform: translateY(12px); opacity: 0;
   transition: transform .24s var(--bd-ease), opacity .24s ease;
 }
@@ -508,14 +511,14 @@
 .bd-app .fatal { position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 16px; padding: 24px; background: var(--bd-paper); color: var(--bd-ink); text-align: center; }
 .bd-app .fatal-box { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 440px; padding: 32px 24px;
-  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); box-shadow: var(--bd-shadow-card); }
+  background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r-card); }
 .bd-app .fatal-msg { max-width: 42ch; font-size: 16px; font-weight: 600; }
 .bd-app .fatal-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 @keyframes bd-spin { to { transform: rotate(360deg); } }
 @keyframes bd-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
 /* ── utilities ──────────────────────────────────────────────────────────────────────────── */
-.bd-app .muted { color: var(--bd-ink-3); }
+.bd-app .muted { color: var(--bd-ink-2); }
 .bd-app .strong { font-weight: 600; }
 .bd-app .text-ok { color: var(--bd-ok); }
 .bd-app .text-warn { color: var(--bd-warn); }
@@ -549,7 +552,6 @@
 @media print {
   .bd-app #bd-toasts, .bd-app .scrim, .bd-app .sheet, .bd-app .menu { display: none !important; }
   .bd-app .page { max-width: none; padding: 0; }
-  .bd-app .card { box-shadow: none; }
 }
 /* Reduced motion: no slides, fades or shimmer, and every visibility switch is instant (a .01ms
    transition would leave a sheet hidden at the moment it takes focus). Busy spinners keep turning,

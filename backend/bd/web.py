@@ -11,8 +11,11 @@ BD response is marked Cache-Control: no-store (it carries people's contact detai
 registered on the app, so a proposal-tool route's 404, 422 and 500 keep their own shapes.
 
 require_enabled is the BD switch (BD_ENABLED, bd/config.py). bd/api.py puts it on the BD router as
-its FIRST dependency, so with the switch off every /api/bd/ path answers 503 "not turned on" before
-anything else runs: no sign-in lookup, no ledger check, no database connection.
+its FIRST dependency, so with the switch off every /api/bd/ path answers 503 "not turned on" before any
+other dependency and any database work: no BD sign-in lookup, no ledger check, no database connection.
+It is not before EVERYTHING: the tool's auth gate (a middleware) answers first, and FastAPI reads a
+route's JSON body before it solves dependencies, so a body-taking BD route sent malformed JSON while
+the switch is off answers 400, not 503. Neither touches BD's database.
 
 not_turned_on_page is the same switch for the pages: main._bd_pages answers it for every address
 under /bd/ while the switch is off.
@@ -90,7 +93,7 @@ def is_enabled() -> bool:
 
 
 def require_enabled() -> None:
-    """The BD switch. Off: 503 "not turned on", before any other check and any database work."""
+    """The BD switch. Off: 503 "not turned on", before any other BD dependency and any database work."""
     if not is_enabled():
         raise errors.ApiError(503, NOT_TURNED_ON, code="unavailable")
 

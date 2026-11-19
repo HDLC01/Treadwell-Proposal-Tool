@@ -58,10 +58,11 @@ def _sections(page):
 
 
 def _wait_sections(page):
-    """The group's list is filled once /api/bd/me answers."""
+    """The group's list is filled once /api/bd/me answers (until then it says it is loading)."""
     page.wait_for_function(
         "() => { const l = document.getElementById('tw-bd-sections');"
-        " return l && !l.hidden && l.children.length > 0; }", timeout=10000)
+        " return l && !l.hidden && l.children.length > 0 && l.textContent.trim() !== 'Loading...'; }",
+        timeout=10000)
 
 
 def _bd_me_requests(p):
