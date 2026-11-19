@@ -26,6 +26,8 @@ import pytest
 
 from _node import last_json_line, run_node
 
+from _frontend_tree import pages, rel, write_tree
+
 TESTS = pathlib.Path(__file__).resolve().parent
 FRONTEND = TESTS.parents[1] / "frontend"
 HARNESS = TESTS / "js" / "reveal-harness.js"
@@ -161,9 +163,9 @@ class _Head(html.parser.HTMLParser):
             self._style = None
 
 
-def head(name):
+def head(name, frontend=FRONTEND):
     p = _Head()
-    p.feed((FRONTEND / name).read_text(encoding="utf-8"))
+    p.feed((frontend / name).read_text(encoding="utf-8"))
     p.close()
     return p
 
@@ -182,10 +184,18 @@ def test_a_wizard_page_loads_the_fade_and_its_hold_in_head(name):
 def test_only_the_wizard_pages_opt_in():
     """A transition runs only when both pages opt in. A page with the fade and no hold would fade to
     its own empty first frame; a page with neither keeps loading the way it always has."""
-    opted = sorted(p.name for p in FRONTEND.glob("*.html") if "/reveal.css" in head(p.name).head_links)
+    opted, held = opted_in()
     assert opted == sorted(WIZARD)
-    held = sorted(p.name for p in FRONTEND.glob("*.html") if "/js/reveal.js" in p.read_text(encoding="utf-8"))
     assert held == sorted(WIZARD)
+
+
+def opted_in(frontend=FRONTEND):
+    """(pages with the fade in their head, pages that load its hold), from every sub-folder (#804),
+    named by the path under frontend/."""
+    found = [rel(p, frontend) for p in pages(frontend)]
+    opted = sorted(n for n in found if "/reveal.css" in head(n, frontend).head_links)
+    held = sorted(n for n in found if "/js/reveal.js" in (frontend / n).read_text(encoding="utf-8"))
+    return opted, held
 
 
 DRAWN_BY_SCRIPT = {"done.html": "js/done.js", "proposal-review.html": "js/proposal-review.js"}
@@ -303,3 +313,12 @@ def test_the_bid_bar_does_not_slide_in_while_the_page_boots():
     broken = css.replace(",\nhtml.tw-booting .bid {", " {").replace(",\r\nhtml.tw-booting .bid {", " {")
     assert broken != css
     assert _bar_transition(broken, booting=True).startswith("left .2s")
+
+
+def test_the_opt_in_scan_sees_a_page_in_a_sub_folder(tmp_path):
+    """#804: the BD CRM's pages live under /bd/. A page there that opts into the fade is found and named
+    by its path under frontend/, so it cannot join the fade without the list above saying so."""
+    page = ('<html><head><link rel="stylesheet" href="/reveal.css">'
+            '<script src="/js/reveal.js"></script></head><body></body></html>')
+    write_tree(tmp_path, {"plain.html": "<html><head></head></html>", "bd/index.html": page})
+    assert opted_in(tmp_path) == (["bd/index.html"], ["bd/index.html"])
