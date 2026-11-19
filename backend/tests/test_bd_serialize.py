@@ -3,16 +3,17 @@
 EVERY router builds its answers with these functions, so the exact key set, the JSON types and the
 null-vs-missing rules of each object can only drift in one place, and these tests pin it there.
 
-This file is the PURE half (no database, no node). The database half (every *_SELECT produces each
-column its serializer reads, and the fetch_* helpers join and filter correctly) arrives with the BD
-test database fixture.
+Two halves:
 
-PURE. Hand-built row dicts go through every serializer. For each shape:
+1. PURE (no database, no node). Hand-built row dicts go through every serializer. For each shape:
    the exact key set (also compared with the JSON example in docs/bd/api-contract.md), the JSON type of
    every field, `json.dumps` cleanly (no Decimal, date or datetime object leaks out), the defaults
    for nulls, and a KeyError for a REQUIRED column that went missing (so a schema drift fails loudly)
    while the optional ones (read with .get) never raise. Timestamps leave in Central with the offset
    THAT moment had, across both DST changes.
+2. DATABASE (the bd_seeded fixture: the fixture seed, backend/bd/ops/fixture_seed.py, read as the
+   bd_app-like login; skipped locally without BD_TEST_DATABASE_URL): every *_SELECT produces each
+   column its serializer reads, and the fetch_* helpers join and filter correctly.
 
 Everything is fictional: 555-01xx phones, example.com emails. No clock is read; every moment is given.
 """
@@ -28,6 +29,7 @@ import pytest
 
 from bd import serialize
 from bd.bizdate import iso_date
+from bd.ops import fixture_seed
 
 UTC = dt.UTC
 D = decimal.Decimal
@@ -1070,3 +1072,163 @@ def test_contact_compact_last_live_is_the_live_touch_not_the_last_attempt():
     assert serialize.contact_compact(row)["last_live_at"] == "2026-10-20T11:00:00-05:00"
     assert serialize.contact_compact(contact_row(last_live_at=None, last_attempt_at=utc(2026, 10, 22, 16, 0)))[
         "last_live_at"] is None
+
+
+# ══ DATABASE: the SELECTs and the fetch helpers (on the fixture seed) ═════════════════════════════
+
+class Spy(dict):
+    """A row that remembers every column a serializer asks for, with [] or .get."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.read = set()
+
+    def __getitem__(self, key):
+        self.read.add(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        self.read.add(key)
+        return super().get(key, default)
+
+
+SELECT_CASES = {
+    "user": ("select * from users order by id", serialize.user),
+    "user_compact": ("select * from users order by id", serialize.user_compact),
+    "company": (serialize.COMPANY_SELECT + " order by co.id", serialize.company),
+    "contact": (serialize.CONTACT_SELECT + " order by cs.id", serialize.contact),
+    "contact_compact": (serialize.CONTACT_SELECT + " order by cs.id", serialize.contact_compact),
+    "contact_ref": (serialize.CONTACT_SELECT + " order by cs.id", serialize.contact_ref),
+    "interaction": (serialize.INTERACTION_SELECT + " order by i.id", serialize.interaction),
+    "task_batch": (serialize.BATCH_SELECT + " order by b.id", serialize.task_batch),
+    "task": ("select * from tasks order by id", serialize.task),
+    "recommendation": (serialize.RECOMMENDATION_SELECT + " order by r.id", serialize.recommendation),
+    "followup_draft": ("select * from followup_drafts order by id", serialize.followup_draft),
+    "candidate": (serialize.CANDIDATE_SELECT + " order by k.id", serialize.candidate),
+    "import_record": (serialize.IMPORT_SELECT + " order by im.id", serialize.import_record),
+    "unmatched_call": ("select * from unmatched_calls order by id", serialize.unmatched_call),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SELECT_CASES))
+def test_every_select_produces_every_column_its_serializer_reads(bd_seeded, bd_db, name):
+    """The *_SELECT constants and the serializers are written apart: a column renamed in one and not
+    the other would, for a .get column, silently turn into null. Read ALL the seeded rows so the
+    conditional branches (owner, co-owner, duplicate, decided_by ...) are exercised too."""
+    sql, func = SELECT_CASES[name]
+    rows = bd_db.execute(sql).fetchall()
+    assert rows, "the seed has no %s rows to check" % name
+    read = set()
+    for row in rows:
+        spy = Spy(row)
+        out = func(spy)
+        json.dumps(out)                                # what the database gives is JSON-able, too
+        read |= spy.read
+    missing = read - set(rows[0])
+    assert not missing, "%s reads columns its SELECT does not give: %s" % (name, sorted(missing))
+
+
+def test_candidate_select_gives_the_possible_duplicate_columns(bd_seeded, bd_db):
+    rows = bd_db.execute(serialize.CANDIDATE_SELECT + " where k.possible_duplicate_id is not null").fetchall()
+    assert rows, "the seed has a candidate with a possible duplicate"
+    for row in rows:
+        out = serialize.candidate(row)
+        assert out["possible_duplicate"]["contact_id"] == row["possible_duplicate_id"]
+        assert out["possible_duplicate"]["name"] is not None
+        assert out["possible_duplicate"]["company"] is not None
+
+
+def test_fetch_contact_and_fetch_contacts_agree_and_missing_is_none(bd_seeded, bd_db):
+    one = serialize.fetch_contact(bd_db, 33)
+    check_shape(one, CONTACT_SPEC)
+    assert one["id"] == 33 and one["duplicate_of"]["contact_id"] == 21      # the seed's flagged duplicate
+    assert one["duplicate_of"]["reason"] == "Same email"
+    assert serialize.fetch_contacts(bd_db, "cs.id = %s", (33,)) == [one]
+    assert serialize.fetch_contact(bd_db, 999999) is None
+    assert serialize.fetch_contacts(bd_db, "cs.id = %s", (999999,)) == []
+    # a co-owner named in the workbook with no login yet comes out as {"id": None, "name": ...};
+    # one with a login carries the login's id and name
+    co_owners = [c["co_owner"] for c in serialize.fetch_contacts(bd_db, "cs.co_owner_name is not null")]
+    assert {"id": None, "name": "Jules"} in co_owners
+    assert {"id": 2, "name": "Blair Fenn"} in co_owners
+
+
+def test_fetch_contacts_where_params_and_order(bd_seeded, bd_db):
+    everyone = serialize.fetch_contacts(bd_db)                               # defaults: true, by id
+    assert len(everyone) == len(fixture_seed.FIXTURE["contacts"])
+    assert [c["id"] for c in everyone] == sorted(c["id"] for c in everyone)
+    maintenance = serialize.fetch_contacts(bd_db, "cs.category = %s", ("maintenance",), "cs.name desc")
+    assert len(maintenance) == 2 and all(c["category"] == "maintenance" for c in maintenance)
+    assert [c["name"] for c in maintenance] == sorted((c["name"] for c in maintenance), reverse=True)
+    some = serialize.fetch_contacts(bd_db, "cs.id = any(%s)", ([25, 23, 29],), "cs.id desc")
+    assert [c["id"] for c in some] == [29, 25, 23]
+    for c in everyone:
+        assert "archived_at" not in c                                         # nobody is archived yet
+    bd_db.execute("update contacts set archived_at = %s where id = 23", (utc(2026, 11, 3, 18, 0),))
+    archived = serialize.fetch_contact(bd_db, 23)
+    assert archived["archived_at"] == "2026-11-03T12:00:00-06:00"
+    assert "archived_at" not in serialize.fetch_contact(bd_db, 25)
+    assert set(archived) - {"archived_at"} == set(CONTACT_SPEC)
+
+
+def test_fetch_tasks_attaches_each_tasks_own_compact_contact(bd_seeded, bd_db):
+    tasks = serialize.fetch_tasks(bd_db)
+    assert [t["id"] for t in tasks] == [301, 302, 303, 304, 305]               # default order: t.id
+    expected_contacts = {301: 30, 302: 21, 303: 25, 304: 22, 305: 28}
+    for t in tasks:
+        check_shape(without(t, "contact"), {k: v for k, v in TASK_SPEC.items() if k != "contact"})
+        assert set(t["contact"]) == set(CONTACT_COMPACT_SPEC)
+        assert t["contact"]["id"] == expected_contacts[t["id"]]
+        assert t["contact"] == serialize.contact_compact(
+            bd_db.execute(serialize.CONTACT_SELECT + " where cs.id = %s", (expected_contacts[t["id"]],)).fetchone())
+    assert [t["id"] for t in serialize.fetch_tasks(bd_db, "t.id = any(%s)", ([302, 304],), "t.id desc")] == [304, 302]
+
+
+def test_fetch_tasks_joins_the_batch_and_survives_an_archived_contact(bd_seeded, bd_db):
+    assert len(serialize.fetch_tasks(bd_db, "b.kind = %s", ("friday",))) == 5
+    assert len(serialize.fetch_tasks(bd_db, "b.owner_id = %s", (2,))) == 2
+    assert serialize.fetch_tasks(bd_db, "b.kind = %s", ("ten_more",)) == []
+    assert serialize.fetch_tasks(bd_db, "t.id = %s", (999999,)) == []
+    bd_db.execute("update contacts set archived_at = %s where id = 21", (utc(2026, 11, 3, 18, 0),))
+    task = serialize.fetch_tasks(bd_db, "t.id = %s", (302,))[0]
+    assert task["contact"] is not None and task["contact"]["id"] == 21      # still shown, never a null card
+    bd_db.execute("update tasks set status = 'done', done_at = %s where id = 304", (utc(2026, 11, 4, 16, 0),))
+    done = serialize.fetch_tasks(bd_db, "t.status = %s", ("done",))
+    assert [(t["id"], t["done_at"]) for t in done if t["id"] == 304] == [(304, "2026-11-04T10:00:00-06:00")]
+
+
+def test_fetch_interaction_and_fetch_company(bd_seeded, bd_db):
+    first = bd_db.execute("select id from interactions order by id limit 1").fetchone()["id"]
+    out = serialize.fetch_interaction(bd_db, first)
+    check_shape(out, INTERACTION_SPEC)
+    assert out["id"] == first and out["contact"]["id"] == out["contact_id"]
+    assert serialize.fetch_interaction(bd_db, 999999) is None
+    company = serialize.fetch_company(bd_db, fixture_seed.MULTI_OWNER_ACCOUNT)
+    check_shape(company, COMPANY_SPEC)
+    assert company["id"] == fixture_seed.MULTI_OWNER_ACCOUNT and company["contact_count"] == 3
+    assert serialize.fetch_company(bd_db, 999999) is None
+
+
+OPTIONAL_FK_CASES = {
+    # name: (table, column nulled, SELECT, alias of the base table in the SELECT, serializer, key that goes None)
+    "interaction": ("interactions", "user_id", serialize.INTERACTION_SELECT, "i", serialize.interaction, "user"),
+    "recommendation": ("ai_recommendations", "decided_by", serialize.RECOMMENDATION_SELECT, "r",
+                       serialize.recommendation, "decided_by"),
+    "candidate": ("candidates", "possible_duplicate_id", serialize.CANDIDATE_SELECT, "k", serialize.candidate,
+                  "possible_duplicate"),
+    "import_record": ("imports", "by_id", serialize.IMPORT_SELECT, "im", serialize.import_record, "by"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OPTIONAL_FK_CASES))
+def test_select_keeps_rows_whose_optional_user_or_contact_is_null(bd_seeded, bd_db, name):
+    """A phone call nobody logged, a pending recommendation, a candidate with no duplicate, an
+    import with no signed-in user: each must still come out (a LEFT join), with the field None."""
+    table, column, select, alias, func, key = OPTIONAL_FK_CASES[name]
+    total = bd_db.execute("select count(*) as n from " + table).fetchone()["n"]
+    assert total > 0
+    bd_db.execute("update " + table + " set " + column + " = null")
+    rows = bd_db.execute(select + " order by " + alias + ".id").fetchall()
+    assert len(rows) == total, "%s dropped rows whose %s is null" % (name, column)
+    for row in rows:
+        assert func(row)[key] is None

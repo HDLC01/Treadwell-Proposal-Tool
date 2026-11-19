@@ -79,3 +79,9 @@ console.log(JSON.stringify(raws.map((r) => ctx.BD.e164(r))));
         proc = run_node(js, SHARED_JS, data)
     assert proc.returncode == 0, proc.stderr
     assert last_json_line(proc.stdout) == [phone.to_e164(r) for r in raws]
+
+
+def test_the_database_derives_the_same_e164(bd_db):
+    for raw, want in CASES:
+        got = bd_db.execute("select bd_e164(%s) as e", (raw,)).fetchone()["e"]
+        assert got == want, (raw, got)

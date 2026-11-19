@@ -154,3 +154,15 @@ def test_without_overrides_today_is_centrals_not_the_machines(monkeypatch):
     real = dt.datetime.now(UTC).astimezone(bizdate.BIZ_TZ).date()
     assert bizdate.today_central() == real
     assert bizdate.now_central().tzinfo is not None
+
+
+def test_the_database_agrees_with_python_on_today_and_now(bd_db, bd_today):
+    """bd_today() / bd_now() read the business clock BD's pool copies from bizdate on every
+    checkout, so the database and Python agree on "today", including under BD_TODAY."""
+    bd_today("2026-11-04")
+    row = bd_db.execute("select bd_today() as d, bd_now() as n, bd_date('2026-11-05T03:00:00Z') as late").fetchone()
+    assert row["d"] == dt.date(2026, 11, 4)
+    assert bizdate.biz_date(row["n"]) == dt.date(2026, 11, 4)
+    assert row["late"] == dt.date(2026, 11, 4)
+    bd_today("2027-01-02")
+    assert bd_db.execute("select bd_today() as d").fetchone()["d"] == dt.date(2027, 1, 2)

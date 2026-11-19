@@ -14,8 +14,12 @@ branch, never from a working folder.
   migrate    the schema runner (python -m bd.migrate, by hand, as the admin login; never at
              startup) and ledger_behind(), the routes' "database not up to date" check
   migrations/  the numbered files that make schema bd, and grants.sql, its privilege model
+  db         the connection pool (lazy, only with BD_DATABASE_URL; 3 s checkouts, 8 request
+             slots, UTC + search_path + the business clock on every checkout)
   ops/       BD's command-line scripts, apart from the tool's own ops scripts
-             (staging_schema writes the BD part of backend/staging/schema_pg.sql)
+             (staging_schema writes the BD part of backend/staging/schema_pg.sql;
+             fixture_seed is the made-up data set; seed loads it into an empty staging or
+             test bd schema: python -m bd.ops.seed --person EMAIL=ROLE ...)
 
 The pure rules have a JavaScript twin, frontend/bd/js/bd-core.js; tests/test_bd_core_js.py is
 the shared table both must answer.

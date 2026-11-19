@@ -29,8 +29,8 @@ Objects and the functions that make them:
     (unmatched call)   unmatched_call(row)           unmatched_calls row
     Settings           appsettings.load(conn)        (already the contract's object)
 
-The fetch helpers that run these SELECTs (fetch_contact, fetch_contacts, fetch_interaction,
-fetch_tasks, fetch_company) arrive with the BD database layer.
+Fetch helpers: fetch_contact(conn, id), fetch_contacts(conn, where, params, order),
+fetch_interaction(conn, id), fetch_tasks(conn, where, params, order), fetch_company(conn, id).
 
 Timestamps go out as ISO 8601 in Central with that moment's offset ("2026-10-30T16:00:00-05:00");
 dates as "YYYY-MM-DD"; money (numeric) as a float.
@@ -376,3 +376,41 @@ def unmatched_call(row: Row) -> dict:
         "summary": row.get("summary"),
         "status": row["status"],
     }
+
+
+# ── fetch helpers ────────────────────────────────────────────────────────────────────────────
+def fetch_contact(conn: Any, contact_id: Any) -> dict | None:
+    """The full Contact, or None."""
+    row = conn.execute(CONTACT_SELECT + " where cs.id = %s", (contact_id,)).fetchone()
+    return contact(row) if row else None
+
+
+def fetch_contacts(conn: Any, where: str = "true", params: Any = (), order: str = "cs.id") -> list[dict]:
+    """Full Contacts. `where` / `order` are SQL text written by the CALLER (never user input);
+    values go in `params`."""
+    rows = conn.execute(CONTACT_SELECT + " where " + where + " order by " + order, params).fetchall()
+    return [contact(r) for r in rows]
+
+
+def fetch_company(conn: Any, company_id: Any) -> dict | None:
+    row = conn.execute(COMPANY_SELECT + " where co.id = %s", (company_id,)).fetchone()
+    return company(row) if row else None
+
+
+def fetch_interaction(conn: Any, interaction_id: Any) -> dict | None:
+    row = conn.execute(INTERACTION_SELECT + " where i.id = %s", (interaction_id,)).fetchone()
+    return interaction(row) if row else None
+
+
+def fetch_tasks(conn: Any, where: str = "true", params: Any = (), order: str = "t.id") -> list[dict]:
+    """Tasks with their ContactCompact. `where` / `order` refer to the tasks table as `t` (and
+    may join task_batches as `b`)."""
+    rows = conn.execute(
+        "select t.* from tasks t join task_batches b on b.id = t.batch_id where " + where
+        + " order by " + order, params).fetchall()
+    if not rows:
+        return []
+    ids = sorted({r["contact_id"] for r in rows})
+    contacts = {r["id"]: contact_compact(r) for r in
+                conn.execute(CONTACT_SELECT + " where cs.id = any(%s)", (ids,)).fetchall()}
+    return [task(r, contacts.get(r["contact_id"])) for r in rows]

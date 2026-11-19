@@ -42,7 +42,9 @@ httpx>=0.27.0
 # IANA tz database for zoneinfo (notifications.py buckets deadlines in Central) —
 # insurance in case the base image lacks system tzdata.
 tzdata>=2024.1
-# The BD CRM's database driver (#805): psycopg 3, pinned at the version BD's suite was tested on.
-# backend/bd/migrate.py (the schema runner, run by hand) uses it now; BD's connection pool joins it
-# with psycopg_pool. No SQLAlchemy, no second client library.
+# The BD CRM's database driver (#805): psycopg 3 and its connection pool, pinned at the versions
+# BD's suite was tested on (psycopg_pool 3.3 has the liveness check on checkout that backend/bd/db.py
+# uses). backend/bd/migrate.py (the schema runner, run by hand) uses psycopg alone. No SQLAlchemy,
+# no second client library.
 psycopg[binary]==3.3.7
+psycopg_pool==3.3.3
