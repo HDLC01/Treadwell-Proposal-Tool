@@ -302,7 +302,9 @@ def test_a_signed_out_visit_signs_in_and_comes_back_to_bd(env, start):
         assert page.evaluate("new URL(location.href).pathname") == "/login.html"
         assert page.evaluate("sessionStorage.getItem('tw_return_to')") == "/bd/"
         p.sign_in(SUPER)
-        page.goto(p.base + "/login.html")
+        # The login page sends a signed-in person straight on, which can abort the navigation goto
+        # is still waiting on (net::ERR_ABORTED); "commit" returns as soon as the page starts loading.
+        page.goto(p.base + "/login.html", wait_until="commit")
         page.wait_for_url(re.compile(r".*/bd/$"), timeout=10000)
         assert _sub_text(page) == CHOOSE, "back on This Week, signed in as the super admin"
         assert page.evaluate("sessionStorage.getItem('tw_return_to')") is None, "a return is used once"
