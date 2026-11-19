@@ -270,12 +270,78 @@ def status_filter(data: Dict[str, Any], status: Any) -> str:
     return st if counts_known(data) and st in raken_actuals.STATUSES else ""
 
 
-def visible_projects(data: Dict[str, Any], q: Any, status: Any) -> List[Dict[str, Any]]:
-    """The rows the page lists for the search text `q` and the pressed count `status`: every word
-    of `q` (case ignored) in the Job number, the name, the Foreman or the Work type, and, while the
-    counts are known, `status` among the row's statuses."""
+# The Work type and Foreman filters (#819). The value "No foreman" stands for in the page's select,
+# its address and the download's `foreman` (project-calendar-core.js FOREMAN_NONE).
+FOREMAN_NONE = "(none)"
+NO_FOREMAN_LABEL = "No foreman"
+_JS_TRIM = re.compile("^%s|%s$" % (_JS_SPACE.pattern, _JS_SPACE.pattern))
+
+
+def _key(value: Any) -> str:
+    """A Foreman, a Work type or a filter value as compared: trimmed as JavaScript's trim() does,
+    case ignored. "" for none (P.foremanKey)."""
+    return _JS_TRIM.sub("", "" if value is None else str(value)).lower()
+
+
+def work_type_options(data: Dict[str, Any]) -> List[str]:
+    """The page's Work type select (P.workTypeOptions): the colour-to-Work-type list the response
+    carries, in its order, then the words for any other colour or none."""
+    out: List[str] = []
+    seen = set()
+    listed = data.get("work_types") if isinstance(data.get("work_types"), list) else []
+    for w in list(listed) + [{"name": WORK_TYPE_UNKNOWN_LABEL}]:
+        name = _JS_TRIM.sub("", w["name"]) if isinstance(w, dict) and isinstance(
+            w.get("name"), str) else ""
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    return out
+
+
+def foreman_options(data: Dict[str, Any]) -> List[str]:
+    """The page's Foreman select (P.foremanOptions): the distinct Foremen of the listed jobs
+    (trimmed, case ignored, the spelling first met kept), sorted without regard to case, then
+    FOREMAN_NONE when a job has none."""
+    names: Dict[str, str] = {}
+    none = False
+    for p in data.get("projects") or []:
+        if not isinstance(p, dict):
+            continue
+        name = _JS_TRIM.sub("", "" if p.get("foreman") is None else str(p.get("foreman")))
+        if not name:
+            none = True
+        else:
+            names.setdefault(name.lower(), name)
+    out = [names[k] for k in sorted(names)]
+    return out + [FOREMAN_NONE] if none else out
+
+
+def _pick(options: List[str], value: Any) -> str:
+    """The option `value` stands for, in the option's own spelling, else "" (P.pickOption)."""
+    k = _key(str(value or "")[:SEARCH_MAX])
+    return next((o for o in options if o.lower() == k), "") if k else ""
+
+
+def work_type_filter(data: Dict[str, Any], value: Any) -> str:
+    """The Work type the list is filtered by: `value` when the page's select offers it, else none."""
+    return _pick(work_type_options(data), value)
+
+
+def foreman_filter(data: Dict[str, Any], value: Any) -> str:
+    """The Foreman the list is filtered by: `value` when the page's select offers it, else none."""
+    return _pick(foreman_options(data), value)
+
+
+def visible_projects(data: Dict[str, Any], q: Any, status: Any, work_type: Any = "",
+                     foreman: Any = "") -> List[Dict[str, Any]]:
+    """The rows the page lists for the search text `q`, the pressed count `status` and the Work
+    type and Foreman filters: every word of `q` (case ignored) in the Job number, the name, the
+    Foreman or the Work type; while the counts are known, `status` among the row's statuses; and,
+    when the page offers them, the row's Work type and Foreman (FOREMAN_NONE: none)."""
     words = [w for w in _JS_SPACE.split(str(q or "")[:SEARCH_MAX].lower()) if w]
     st = status_filter(data, status)
+    wt = work_type_filter(data, work_type).lower()
+    fm = foreman_filter(data, foreman).lower()
     out = []
     for p in data.get("projects") or []:
         if not isinstance(p, dict):
@@ -287,6 +353,11 @@ def visible_projects(data: Dict[str, Any], q: Any, status: Any) -> List[Dict[str
             if not all(w in hay for w in words):
                 continue
         if st and st not in (p.get("statuses") or []):
+            continue
+        if wt and _key(work_type_of(p)) != wt:
+            continue
+        if fm and (bool(_key(p.get("foreman"))) if fm == FOREMAN_NONE
+                   else _key(p.get("foreman")) != fm):
             continue
         out.append(p)
     return out

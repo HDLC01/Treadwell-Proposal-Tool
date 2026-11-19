@@ -1229,7 +1229,7 @@ let painted = 0;
 const paint = () => { painted++; };
 let DATA = { window_days: 14, projects: [{ key: "job:1", mobilizations: [{ id: "m1" }] }] };
 let DETAIL = null;
-let STATUS_F = "";
+let VIEW = P.readView("");
 const press = (key) => ({ key: key, prevented: false,
   preventDefault() { this.prevented = true; } });
 """
@@ -1438,7 +1438,8 @@ def test_a_filtered_list_says_how_many_it_shows_and_why_it_is_empty():
 
 
 def _strip_world(script):
-    lifted = "\n".join(_lift(PVA, n) for n in ("focusTile", "setStatus", "clearStatus"))
+    lifted = "\n".join(_lift(PVA, n) for n in ("focusTile", "setStatus", "clearStatus", "setView",
+                                               "writeView"))
     return run(PVA_WORLD + lifted + "\n" + script)
 
 
@@ -1459,11 +1460,11 @@ def test_a_pressed_count_keeps_the_keyboard_focus():
 
 def test_pressing_a_count_filters_pressing_it_again_or_show_all_clears_it():
     got = _strip_world('const seen = [];'
-                       'setStatus("behind"); seen.push(STATUS_F);'
-                       'setStatus("behind"); seen.push(STATUS_F);'
-                       'setStatus("over_budget"); seen.push(STATUS_F);'
-                       'setStatus("not_linked"); seen.push(STATUS_F);'
-                       'clearStatus(); seen.push(STATUS_F);'
+                       'setStatus("behind"); seen.push(VIEW.status);'
+                       'setStatus("behind"); seen.push(VIEW.status);'
+                       'setStatus("over_budget"); seen.push(VIEW.status);'
+                       'setStatus("not_linked"); seen.push(VIEW.status);'
+                       'clearStatus(); seen.push(VIEW.status);'
                        'const before = painted; clearStatus();'
                        'out([seen, painted - before, painted > 0])')
     assert got == [["behind", "", "over_budget", "not_linked", ""], 0, True]
@@ -1471,19 +1472,21 @@ def test_pressing_a_count_filters_pressing_it_again_or_show_all_clears_it():
 
 def test_the_strip_is_drawn_from_the_core_and_its_counts_are_buttons_with_aria_pressed():
     """The tiles are real buttons (keyboard, screen reader) whose pressed state is aria-pressed;
-    the list shows P.visibleProjects: the search box and the pressed count together."""
+    the list shows P.visibleProjects: the search box, the pressed count and (#819) the Work type and
+    Foreman filters together."""
     html, js = _page(), _pva_js()
     assert 'id="pva-sum"' in html and 'id="pva-showall"' in html
     assert html.index('id="pva-sum"') < html.index('<table class="pva">'), "above the list"
     assert ">Show all jobs<" in html
-    assert "P.countTiles(DATA, STATUS_F)" in js
+    assert "P.countTiles(DATA, VIEW.status)" in js
     assert "P.lastWeekTile(DATA)" in js and "P.budgetTile(DATA)" in js
     assert "P.countsNote(DATA)" in js
-    # A count pressed while Raken is not read must not empty the list: the core decides.
-    assert "const st = P.statusFilter(DATA, STATUS_F);" in js
-    assert "P.visibleProjects(projects, Q, st)" in js
-    assert "P.listCountText(shown.length, projects.length, Q, st)" in js
-    assert "P.noMatchText(Q, st)" in js and '$("pva-showall").hidden = !st;' in js
+    # A count pressed while Raken is not read must not empty the list: the core decides
+    # (P.viewFilters applies statusFilter, #819).
+    assert "const f = P.viewFilters(DATA, VIEW);" in js
+    assert "P.visibleProjects(projects, f.q, f.status, f)" in js
+    assert "P.listCountText(shown.length, projects.length, f.q, f.status, f)" in js
+    assert "P.noMatchText(f.q, f.status, f)" in js and '$("pva-showall").hidden = !f.status;' in js
     assert 'aria-pressed="' + "' + (t.pressed" in js
     assert '<button type="button" class="sum-tile' in js
     assert '(t.disabled ? " disabled" : "")' in js, "an unknown count cannot be pressed"
@@ -1582,12 +1585,12 @@ def test_the_downloaded_file_takes_the_servers_name_else_the_central_day():
 def test_the_page_downloads_the_list_as_it_is_filtered_on_screen():
     """The button's address is the search box and the count the list is filtered by right now:
     none while the counts are not known, as the list itself ignores a pressed count then."""
-    world = ("let Q = 'pat clinic'; let STATUS_F = 'behind';"
+    world = ("let VIEW = Object.assign(P.readView(''), {q: 'pat clinic', status: 'behind'});"
              "let DATA = {summary: {raken_read: true, counts: {behind: 1}}};")
     lifted = _lift(PVA, "downloadPath")
     got = run(world + lifted + "\nconst a = downloadPath();"
               "DATA = {summary: {raken_read: false, counts: null}}; const b = downloadPath();"
-              "Q = ''; STATUS_F = ''; const c = downloadPath(); out([a, b, c])")
+              "VIEW = P.readView(''); const c = downloadPath(); out([a, b, c])")
     base = "/api/project-analytics/export.xlsx"
     assert got == [base + "?status=behind&q=pat%20clinic", base + "?q=pat%20clinic", base]
 

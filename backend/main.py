@@ -1032,18 +1032,23 @@ def api_project_analytics() -> Dict[str, Any]:
 
 
 # The Excel download (#785): the Plan vs Actual list as it is filtered on screen, its pressed count
-# (`status`) and search text (`q`) applied by the page's own rule, built in
-# backend/plan_vs_actual_xlsx.py from the same response the GET above sends. A GET, never a write;
-# "/export" in the path puts it in the audit log with the other exports. Never a 500: any fault
-# downloads a workbook carrying a plain message instead of rows.
+# (`status`), search text (`q`) and Work type and Foreman filters (`work_type`, `foreman`, #819)
+# applied by the page's own rule, built in backend/plan_vs_actual_xlsx.py from the same response the
+# GET above sends. Every matching job: the page's pager never reaches the server. Each text is cut
+# to SEARCH_MAX, as the page cuts it. A GET, never a write; "/export" in the path puts it in the
+# audit log with the other exports. Never a 500: any fault downloads a workbook carrying a plain
+# message instead of rows.
 @app.get("/api/project-analytics/export.xlsx")
-def api_project_analytics_xlsx(q: str = "", status: str = "") -> Response:
-    q, status = q[:plan_vs_actual.SEARCH_MAX], status[:40]
+def api_project_analytics_xlsx(q: str = "", status: str = "", work_type: str = "",
+                               foreman: str = "") -> Response:
+    cap = plan_vs_actual.SEARCH_MAX
+    q, status, work_type, foreman = q[:cap], status[:40], work_type[:cap], foreman[:cap]
     today = project_calendar.today_central()
     try:
         data = plan_vs_actual.fetch()
         today = plan_vs_actual_xlsx.made_on(data, today)
-        content = plan_vs_actual_xlsx.build(data, q, status, today)
+        content = plan_vs_actual_xlsx.build(data, q, status, today, work_type=work_type,
+                                            foreman=foreman)
     except Exception as exc:  # noqa: BLE001 - the download must never 500
         log.warning("plan vs actual: workbook not built (%s)", type(exc).__name__)
         content = plan_vs_actual_xlsx.message_workbook(plan_vs_actual_xlsx.ERR_BUILD, today)
