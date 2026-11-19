@@ -11287,7 +11287,7 @@ async def _root(request: Request) -> Response:
     THE PATHNAME IS THE TRAP, and the page closes it, not this function. `auth.js`
     reads `location.pathname` three times: HOME_PAGE comparisons, the DENIED_PAGES
     permission lookup, and the sidebar's active-row test in navItem(), which is an
-    `endsWith(href)` against "/portal.html". After a 307 the browser's pathname WAS
+    full-path match against "/portal.html". After a 307 the browser's pathname WAS
     "/portal.html"; served here it would be "/", and the Active Projects row would quietly
     stop being highlighted while nothing looked broken enough to investigate.
     frontend/js/root-path.js rewrites the address bar, and portal.html loads it ahead of

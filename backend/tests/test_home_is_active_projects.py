@@ -33,7 +33,7 @@ the ETag and the 304 that the redirect could never have.
 THE COST IS `location.pathname`, and it is the only thing this change can break. After the 307 the
 browser's pathname was "/portal.html". Served at the root it is "/", and auth.js reads that string
 three times: `const path` at the top of its IIFE, the DENIED_PAGES permission lookup, and the
-sidebar's `endsWith(href)` active-row test. The third fails SILENTLY — no error, no blank page, just
+sidebar's full-path active-row test. The third fails SILENTLY — no error, no blank page, just
 a menu that never shows which page you are on.
 
 portal.html closes it with frontend/js/root-path.js, loaded ahead of auth.js. The tests below
@@ -192,12 +192,12 @@ def test_the_guard_leaves_the_pathname_the_redirect_used_to_leave(guard):
 @needs_node
 def test_without_the_guard_the_sidebar_would_stop_highlighting_the_board(guard):
     """The counterexample, and the reason the guard is not optional. `sidebarActiveWithoutGuard`
-    runs auth.js:221's own `pathname.endsWith(href)` against the pathname the server now hands
+    runs navItem()'s own full-path match against the pathname the server now hands
     over. It is False at the root — so the Active Projects row would quietly stop lighting up,
     with nothing on screen to say why."""
     cases, _ = guard
     assert cases["/"]["sidebarActiveWithoutGuard"] is False, (
-        "'/' already ends with /portal.html, so this file proves nothing about the guard")
+        "'/' already reads as /portal.html, so this file proves nothing about the guard")
     assert cases["/"]["sidebarActive"] is True, (
         "the guard ran and the sidebar still does not consider the board active")
 
@@ -262,7 +262,7 @@ def test_auth_js_still_reads_the_pathname_in_the_three_places_the_guard_exists_f
         % AUTH_JS.count("location.pathname"))
     assert "const path = location.pathname.toLowerCase();" in AUTH_JS
     assert "DENIED_PAGES[location.pathname]" in AUTH_JS
-    assert "location.pathname.toLowerCase().endsWith(href.toLowerCase())" in AUTH_JS
+    assert "location.pathname.toLowerCase() === href.toLowerCase()" in AUTH_JS
 
 
 # ── the other half of the decision ───────────────────────────────────────────

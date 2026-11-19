@@ -207,7 +207,7 @@ def test_the_active_highlight_still_comes_from_the_path():
     src = (FRONTEND / "auth.js").read_text(encoding="utf-8")
     body = src[src.index("function navItem"):]
     body = body[:body.index("\n  }") + 4]
-    assert "location.pathname" in body and "endsWith" in body
+    assert "location.pathname.toLowerCase() === href.toLowerCase()" in body
 
 
 # ── starting a bid from the board ────────────────────────────────────────────
