@@ -59,6 +59,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from _node import last_json_line, run_node
 
 client = TestClient(main.app)
 
@@ -67,6 +68,7 @@ AUTH_JS = (FRONTEND / "auth.js").read_text(encoding="utf-8")
 PORTAL_HTML = FRONTEND / "portal.html"
 ROOT_PATH_JS = FRONTEND / "js" / "root-path.js"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "root-pathname-harness.js"
+SIDEBAR_HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "sidebar-active-harness.js"
 
 HOME = "/portal.html"
 
@@ -190,16 +192,18 @@ def test_the_guard_leaves_the_pathname_the_redirect_used_to_leave(guard):
 
 
 @needs_node
-def test_without_the_guard_the_sidebar_would_stop_highlighting_the_board(guard):
-    """The counterexample, and the reason the guard is not optional. `sidebarActiveWithoutGuard`
-    runs navItem()'s own full-path match against the pathname the server now hands
-    over. It is False at the root — so the Active Projects row would quietly stop lighting up,
-    with nothing on screen to say why."""
-    cases, _ = guard
-    assert cases["/"]["sidebarActiveWithoutGuard"] is False, (
-        "'/' already reads as /portal.html, so this file proves nothing about the guard")
-    assert cases["/"]["sidebarActive"] is True, (
-        "the guard ran and the sidebar still does not consider the board active")
+def test_without_the_guard_the_sidebar_would_stop_highlighting_the_board():
+    """The counterexample, and the reason the guard is not optional. js/sidebar-active-harness.js runs
+    the real auth.js at "/", once after root-path.js (as portal.html loads them) and once without it.
+    Without the guard no row is lit at the root, so the Active Projects row would quietly stop
+    lighting up, with nothing on screen to say why."""
+    proc = run_node(SIDEBAR_HARNESS, FRONTEND, "/", "/|root-path")
+    assert proc.returncode == 0, "the sidebar harness itself failed: " + proc.stderr
+    bare, guarded = last_json_line(proc.stdout)["cases"]
+    assert bare["lit"] == [], (
+        "'/' already lights %s without the guard, so this file proves nothing about it" % bare["lit"])
+    assert guarded["lit"] == [HOME], (
+        "the guard ran and the sidebar lights %s, not the board" % guarded["lit"])
 
 
 @needs_node
@@ -262,7 +266,8 @@ def test_auth_js_still_reads_the_pathname_in_the_three_places_the_guard_exists_f
         % AUTH_JS.count("location.pathname"))
     assert "const path = location.pathname.toLowerCase();" in AUTH_JS
     assert "DENIED_PAGES[location.pathname]" in AUTH_JS
-    assert "location.pathname.toLowerCase() === href.toLowerCase()" in AUTH_JS
+    # The third, the sidebar's active row, is pinned by what it produces, not by its spelling: see
+    # test_without_the_guard_the_sidebar_would_stop_highlighting_the_board and test_sidebar_active_path.py.
 
 
 # ── the other half of the decision ───────────────────────────────────────────

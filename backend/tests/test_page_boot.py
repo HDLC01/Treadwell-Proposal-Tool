@@ -12,7 +12,7 @@ import pathlib
 
 import pytest
 
-from _frontend_tree import pages, rel, scripts
+from _frontend_tree import pages, rel, scripts, write_tree
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 SUPABASE_SDK = "@supabase/supabase-js"
@@ -181,6 +181,17 @@ def test_there_is_one_implementation_of_a_person_name():
     assert not offenders, "re-implemented person naming: " + "; ".join(offenders)
 
 
+# Local helpers that share the name but name something other than a person, so they are not a second
+# copy of crm-core.js's. Keyed by script and by the start of the definition, so a person-naming copy
+# added to the same file is still caught. The scan's pattern lost its raw string in #226 and matched
+# nothing until #804 put it back; these three were in the tree all along.
+NOT_A_PERSON = {
+    ("js/bid-model.js", "var nameOf = function (id)"),       # a sheet's entry, by tab id
+    ("js/generate.js", "function nameOf(m, data)"),          # a proposal's display name
+    ("js/proposal-review.js", "const nameOf = (m)"),         # a base bid's label
+}
+
+
 def person_name_copies(frontend=FRONTEND):
     """'<path under frontend/>: <line>' for every script, in every sub-folder, that defines its own
     nameOf or initialsOf rather than aliasing crm-core.js's."""
@@ -194,9 +205,12 @@ def person_name_copies(frontend=FRONTEND):
             continue
         body = js.read_text(encoding="utf-8")
         # A local definition, not a `const nameOf = window.TWCrm.nameOf` alias.
-        for m in _re.finditer(r"(?:function|const|let|var)\s+(nameOf|initialsOf)(.*)", body):
-            if "TWCrm" not in m.group(2):
-                offenders.append(f"{name}: {m.group(0)[:60]}")
+        for m in _re.finditer(r"(?:function|const|let|var)\s+(nameOf|initialsOf)\b(.*)", body):
+            if "TWCrm" in m.group(2):
+                continue
+            if any(name == path and m.group(0).startswith(start) for path, start in NOT_A_PERSON):
+                continue
+            offenders.append(f"{name}: {m.group(0)[:60]}")
     return offenders
 
 
@@ -219,17 +233,13 @@ def test_every_scan_here_sees_a_page_or_script_in_a_sub_folder(tmp_path):
     """The BD CRM moves in under /bd/ with pages named like the root's. Each scan in this file walks
     the whole tree and keys what it finds by its path under frontend/, so bd/admin.html is neither
     skipped nor folded into admin.html."""
-    from _frontend_tree import rel, write_tree
     gated = '<script src="/auth.js"></script>'
-    # The naming pattern in person_name_copies has held a literal backspace after the name since
-    # #226 (a "\b" that lost its raw string), so it only matches a definition that carries one. The
-    # fixture carries one too: this test is about which files the scan reads, not about the pattern.
     write_tree(tmp_path, {
         "admin.html": gated,
         "login.html": gated,
         "bd/admin.html": gated + "<style>.tw-av{color:red}</style>",
         "bd/login.html": gated,
-        "bd/js/people.js": "function nameOf\b(e) { return e; }\n",
+        "bd/js/people.js": "function nameOf(e) { return e; }\n",
     })
     assert [rel(p, tmp_path) for p in app_pages(tmp_path)] == ["admin.html", "bd/admin.html", "bd/login.html"]
     assert chip_redefinitions(tmp_path) == ["bd/admin.html"]

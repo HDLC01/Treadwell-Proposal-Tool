@@ -36,6 +36,8 @@ import subprocess
 
 import pytest
 
+from _frontend_tree import rel, scripts, write_tree
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 BACKEND = ROOT / "backend"
@@ -326,15 +328,16 @@ def role_gated_pages(frontend=FRONTEND):
     """[(script's path under frontend/, the page it belongs to)] for every script, in every sub-folder
     (#804), that branches on role === "admin". A script in a js/ folder belongs to the page named
     after it in the folder above (js/admin.js to /admin.html, bd/js/admin.js to /bd/admin.html); any
-    other script to the page beside it."""
-    from _frontend_tree import rel, scripts
+    script outside a js/ folder (auth.js, shared.js) is shared code that belongs to no page, and is
+    left out."""
     found = []
     for js in scripts(frontend):
         if not re.search(r'role\s*===\s*"admin"', js.read_text(encoding="utf-8")):
             continue
         name = pathlib.PurePosixPath(rel(js, frontend))
-        folder = name.parent.parent if name.parent.name == "js" else name.parent
-        found.append((name.as_posix(), "/" + (folder / (name.stem + ".html")).as_posix()))
+        if name.parent.name != "js":
+            continue
+        found.append((name.as_posix(), "/" + (name.parent.parent / (name.stem + ".html")).as_posix()))
     return found
 
 
@@ -358,9 +361,10 @@ def test_the_admin_page_renders_the_panel_and_styles_it():
 def test_the_role_gate_scan_sees_a_script_in_a_sub_folder_and_maps_it_to_its_own_page(tmp_path):
     """The BD CRM's scripts live under /bd/js/. One that gates on role is found, and maps to the page
     beside it (/bd/admin.html), never to the root page of the same name."""
-    from _frontend_tree import write_tree
     gate = 'if (me.role === "admin") show();'
     write_tree(tmp_path, {"js/admin.js": gate, "bd/js/admin.js": gate, "bd/js/plain.js": "",
-                          "auth.js": gate})
-    assert role_gated_pages(tmp_path) == [("auth.js", "/auth.html"), ("bd/js/admin.js", "/bd/admin.html"),
+                          "auth.js": gate, "bd/helper.js": gate})
+    # auth.js and bd/helper.js sit outside a js/ folder: they are shared code, not one page's script,
+    # so they belong to no page and are not reported.
+    assert role_gated_pages(tmp_path) == [("bd/js/admin.js", "/bd/admin.html"),
                                           ("js/admin.js", "/admin.html")]

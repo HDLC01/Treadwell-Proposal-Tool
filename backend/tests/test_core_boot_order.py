@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import pathlib
 
-from _frontend_tree import pages as all_pages, rel, scripts
+from _frontend_tree import pages as all_pages, rel, scripts, write_tree
 from _golden_support import FRONTEND, declared_dependencies
 from _node import last_json_line, require_node, run_node
 from _page_scripts import local_scripts
@@ -217,7 +217,6 @@ def test_the_executed_check_makes_each_wrong_page_throw_by_name_and_boots_the_ri
 def test_a_page_and_its_modules_in_a_sub_folder_are_checked_too(tmp_path):
     """The BD CRM's pages and scripts live under /bd/. A page there that runs a module before the one
     it declares is named by its path under frontend/, beside a root page of the same name."""
-    from _frontend_tree import write_tree
     write_tree(tmp_path, {
         "bd/js/leaf.js": _umd("leaf.js", "TWBdLeaf"),
         "bd/js/mid.js": _umd("mid.js", "TWBdMid", ("leaf.js", "TWBdLeaf")),

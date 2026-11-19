@@ -26,7 +26,7 @@ import subprocess
 
 import pytest
 
-from _frontend_tree import pages, rel, scripts
+from _frontend_tree import pages, rel, scripts, write_tree
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 
@@ -103,7 +103,6 @@ def inline_scripts(frontend=FRONTEND):
 def test_both_scans_see_a_page_or_script_in_a_sub_folder(tmp_path):
     """#804: the BD CRM's pages and scripts live under /bd/, named like the root's. Both scans walk
     the whole tree and name what they find by its path under frontend/."""
-    from _frontend_tree import rel, write_tree
     write_tree(tmp_path, {
         "shared.js": "", "js/app.js": "", "bd/js/app.js": "",
         "index.html": '<script src="/shared.js"></script>',

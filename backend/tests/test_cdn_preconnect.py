@@ -25,7 +25,7 @@ import re
 import pytest
 
 import main
-from _frontend_tree import pages, rel
+from _frontend_tree import pages, rel, write_tree
 
 FRONTEND = pathlib.Path(main.FRONTEND_DIR)
 HINT = '<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin'
@@ -112,7 +112,6 @@ def test_nothing_was_preloaded_or_self_hosted_along_the_way():
 def test_a_page_in_a_sub_folder_is_sorted_into_one_list_or_the_other(tmp_path):
     """#804: the BD CRM's pages live under /bd/. Both lists are drawn from the whole tree and named by
     the path under frontend/."""
-    from _frontend_tree import rel, write_tree
     write_tree(tmp_path, {
         "plain.html": "<html><head></head><body></body></html>",
         "bd/plain.html": '<html><head></head><body><script src="https://cdn.jsdelivr.net/x.js"></script></body></html>',

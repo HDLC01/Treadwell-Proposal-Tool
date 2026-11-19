@@ -21,7 +21,7 @@ import re
 import pytest
 
 import nav_access
-from _frontend_tree import files, rel
+from _frontend_tree import files, rel, write_tree
 
 
 @pytest.fixture(autouse=True)
@@ -619,7 +619,6 @@ def test_the_store_is_safe_across_threads():
 def test_every_caller_scan_here_sees_a_page_or_script_in_a_sub_folder(tmp_path):
     """The BD CRM's pages and scripts live under /bd/. A second reader there of a route one tab owns
     has to be found, named by its path under frontend/, or that tab's ownership is unchecked."""
-    from _frontend_tree import write_tree
     write_tree(tmp_path, {
         "js/followups.js": "fetch('/api/portal/followups')",
         "bd/js/followups.js": "fetch('/api/portal/followups'); fetch('/api/portal/deposit/1');"

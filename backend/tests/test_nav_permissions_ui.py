@@ -28,6 +28,8 @@ import subprocess
 
 import pytest
 
+from _frontend_tree import files, rel, write_tree
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "nav-permissions-harness.js"
@@ -787,7 +789,6 @@ def test_the_refusal_copy_lives_in_exactly_one_place():
 def refusal_copies(frontend=FRONTEND):
     """Every page or script, in every sub-folder (#804), other than auth.js, that carries the refusal
     copy. Named by the path under frontend/."""
-    from _frontend_tree import files, rel
     return [rel(p, frontend) for p in files(".html", ".js", frontend=frontend)
             if rel(p, frontend) != "auth.js"
             and "Nothing you were doing was lost" in p.read_text(encoding="utf-8")]
@@ -810,7 +811,6 @@ def test_the_denied_page_list_comes_only_from_the_server():
 def test_the_refusal_copy_scan_reaches_sub_folders(tmp_path):
     """#804: the BD CRM's pages and scripts live under /bd/. A copy of the refusal text there is found
     and named by its path under frontend/; auth.js itself, its one home, is not an offender."""
-    from _frontend_tree import write_tree
     text = "Nothing you were doing was lost."
     write_tree(tmp_path, {"auth.js": text, "bd/js/bd.js": text, "bd/index.html": text,
                           "js/clean.js": "", "clean.html": ""})

@@ -60,14 +60,8 @@ function run(from) {
     search: loc.search,
     hash: loc.hash,
     replaced: calls,
-    // navItem() in auth.js decides which sidebar row is highlighted with exactly this expression.
-    // Reported per case so the Python side can assert the consequence rather than restate
-    // the rule: "/" is NOT "/portal.html", which is the bug the guard prevents.
-    sidebarActive: loc.pathname.toLowerCase() === "/portal.html",
-    // …and this is the same expression against the pathname the server now hands over, i.e.
-    // what auth.js would have read if the guard were not there.
-    sidebarActiveWithoutGuard: new URL("https://x" + from).pathname.toLowerCase()
-      === "/portal.html",
+    // Which sidebar row this pathname lights is not worked out here: sidebar-active-harness.js runs
+    // the real auth.js for that, with and without this guard.
   };
 }
 

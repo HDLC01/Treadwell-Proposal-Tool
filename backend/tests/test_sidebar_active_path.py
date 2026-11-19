@@ -13,6 +13,10 @@ Two halves:
   * every address the app serves today lights exactly the row it lit before, written out as a table
     below. The table must name every page in the frontend, so a new page is a decision about its row
     rather than a silent "nothing".
+
+BEFORE is typed out, not recorded. It was checked once, by hand, by running this harness against
+origin/staging's auth.js, icons.js and root-path.js (the code before this ticket): every entry
+matched, and that old code did light Admin on /bd/admin.html and Analytics on /bd/analytics.html.
 """
 from __future__ import annotations
 
@@ -113,7 +117,8 @@ def test_every_page_lights_exactly_the_row_it_lit_before(lit, address):
 
 
 def test_the_home_page_lights_direct_projects(lit):
-    """Named on its own because it is the page staff open the app on (HOME_PAGE, main.py _root)."""
+    """Named on its own because it is the page staff open the app on (HOME_PAGE, main.py _root). It
+    overlaps BEFORE["/|root-path"] above on purpose, so a failure names the home page outright."""
     _, cases = lit
     assert cases["/|root-path"]["lit"] == ["/portal.html"]
 

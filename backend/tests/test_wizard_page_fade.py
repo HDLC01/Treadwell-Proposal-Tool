@@ -26,6 +26,8 @@ import pytest
 
 from _node import last_json_line, run_node
 
+from _frontend_tree import pages, rel, write_tree
+
 TESTS = pathlib.Path(__file__).resolve().parent
 FRONTEND = TESTS.parents[1] / "frontend"
 HARNESS = TESTS / "js" / "reveal-harness.js"
@@ -190,7 +192,6 @@ def test_only_the_wizard_pages_opt_in():
 def opted_in(frontend=FRONTEND):
     """(pages with the fade in their head, pages that load its hold), from every sub-folder (#804),
     named by the path under frontend/."""
-    from _frontend_tree import pages, rel
     found = [rel(p, frontend) for p in pages(frontend)]
     opted = sorted(n for n in found if "/reveal.css" in head(n, frontend).head_links)
     held = sorted(n for n in found if "/js/reveal.js" in (frontend / n).read_text(encoding="utf-8"))
@@ -317,7 +318,6 @@ def test_the_bid_bar_does_not_slide_in_while_the_page_boots():
 def test_the_opt_in_scan_sees_a_page_in_a_sub_folder(tmp_path):
     """#804: the BD CRM's pages live under /bd/. A page there that opts into the fade is found and named
     by its path under frontend/, so it cannot join the fade without the list above saying so."""
-    from _frontend_tree import write_tree
     page = ('<html><head><link rel="stylesheet" href="/reveal.css">'
             '<script src="/js/reveal.js"></script></head><body></body></html>')
     write_tree(tmp_path, {"plain.html": "<html><head></head></html>", "bd/index.html": page})

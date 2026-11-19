@@ -203,11 +203,14 @@ def test_the_follow_ups_board_GAINED_a_permission_when_it_came_back_to_the_menu(
 
 def test_the_active_highlight_still_comes_from_the_path():
     """Why moving items is safe at all: navItem compares location.pathname, never the label or
-    the position. If that ever changed to an index, every move here would break a highlight."""
+    the position. If that ever changed to an index, every move here would break a highlight.
+
+    What the comparison produces is pinned by running auth.js, in test_sidebar_active_path.py (every
+    page lights its own row, and only that row). This only checks navItem still reads the path."""
     src = (FRONTEND / "auth.js").read_text(encoding="utf-8")
     body = src[src.index("function navItem"):]
     body = body[:body.index("\n  }") + 4]
-    assert "location.pathname.toLowerCase() === href.toLowerCase()" in body
+    assert "location.pathname" in body
 
 
 # ── starting a bid from the board ────────────────────────────────────────────

@@ -42,6 +42,8 @@ import re
 
 import pytest
 
+from _frontend_tree import pages, rel, write_tree
+
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 
 # The pictographic ranges, the dingbats and geometric shapes this app had pressed into service as
@@ -202,7 +204,6 @@ def test_the_icon_table_loads_before_the_file_that_draws_the_sidebar():
 
 def pages_without_icon_table(frontend=FRONTEND):
     """Every page, in every sub-folder (#804), that loads auth.js but not js/icons.js."""
-    from _frontend_tree import pages, rel
     missing = []
     for p in pages(frontend):
         html = p.read_text(encoding="utf-8")
@@ -215,7 +216,6 @@ def pages_without_icon_table(frontend=FRONTEND):
 
 def pages_loading_icons_late(frontend=FRONTEND):
     """Every page, in every sub-folder (#804), that loads js/icons.js after auth.js."""
-    from _frontend_tree import pages, rel
     wrong = []
     for p in pages(frontend):
         html = p.read_text(encoding="utf-8")
@@ -301,7 +301,6 @@ def test_an_unknown_name_draws_an_empty_box_rather_than_throwing(icons_src):
 def test_both_page_scans_see_a_page_in_a_sub_folder(tmp_path):
     """The BD CRM's pages live under /bd/ and draw the same sidebar. A page there that loads auth.js
     without the icon table, or after it, is named by its path under frontend/."""
-    from _frontend_tree import write_tree
     auth, icons = '<script src="/auth.js"></script>', '<script src="/js/icons.js"></script>'
     write_tree(tmp_path, {
         "fine.html": icons + auth,
