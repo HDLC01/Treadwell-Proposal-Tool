@@ -11381,6 +11381,22 @@ async def _gc_board(request: Request) -> Response:
 app.include_router(bd_api.router)
 
 
+# ─── The BD CRM's pages (#806) ────────────────────────────────────────
+# Everything under /bd/ is BD's: its pages, its scripts (bd/js/) and its one stylesheet. With
+# BD_ENABLED off, every one of those addresses answers the plain "not turned on" page (503, never
+# stored) before a byte of BD is sent. On, it is served THROUGH the static mount, exactly as every other
+# page is (no-cache with an ETag and its 304, /bd going to /bd/, the mount's 404). Declared before the
+# mount, like `_root`, so it wins for these paths. The switch is read on every request.
+@app.api_route("/bd", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/bd/{rest:path}", methods=["GET", "HEAD"], include_in_schema=False)
+async def _bd_pages(request: Request, rest: str = "") -> Response:
+    if not bd_web.is_enabled():
+        return bd_web.not_turned_on_page()
+    if _frontend_files is None:                 # no frontend dir (API-only deployment)
+        raise HTTPException(404, "Frontend not available")
+    return await _frontend_files.get_response("bd/" + rest if rest else "bd", request.scope)
+
+
 if FRONTEND_DIR.exists():
     _frontend_files = NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True)
     app.mount("/", _frontend_files, name="frontend")

@@ -189,6 +189,13 @@ NOT_A_PERSON = {
     ("js/bid-model.js", "var nameOf = function (id)"),       # a sheet's entry, by tab id
     ("js/generate.js", "function nameOf(m, data)"),          # a proposal's display name
     ("js/proposal-review.js", "const nameOf = (m)"),         # a base bid's label
+    # The BD CRM's own people helpers (#806). BD's pages may not load the tool's crm-core.js (nothing
+    # under bd/ loads a tool script beyond the shell: test_bd_assets.py), and BD's rules are its own:
+    # they take a BD user or contact object and leave titles and suffixes out of the initials
+    # ("Dr. Ian Pruitt" -> "IP"). test_bd_shared_helpers_js.py pins them. They name BD contacts on BD
+    # pages only, never a proposal-tool user beside a crm-core chip.
+    ("bd/js/bd-shared.js", "function nameOf(who)"),
+    ("bd/js/bd-shared.js", "function initialsOf(who)"),
 }
 
 

@@ -74,6 +74,7 @@ BEFORE = {
     # THE BD CRM (#806): its row is lit on every page under /bd/, and only its row. BD's old login
     # page draws no sidebar (it only sends the person to sign-in), but the rule still reads it as BD.
     "/bd/": ["/bd/"],
+    "/bd/index.html": ["/bd/"],
     "/bd/login.html": ["/bd/"],
 }
 
