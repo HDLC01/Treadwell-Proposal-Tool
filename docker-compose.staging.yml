@@ -56,6 +56,10 @@ services:
       # (schema bd, made by backend/staging/schema_pg.sql). STAGING-ONLY password, never
       # reused anywhere else; prod's BD_DATABASE_URL lives only in the prod env file.
       - BD_DATABASE_URL=postgresql://bd_app:staging_only_bd_app_pw@db:5432/treadwell
+      # The BD CRM's switch (#806), on for staging only: its BD CRM row, its /bd/ pages and its
+      # /api/bd/ routes answer here. Off by default, so prod (whose compose file does not set it)
+      # keeps answering "not turned on" until its own cut-over (#802).
+      - BD_ENABLED=on
     env_file:
       - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
     volumes:

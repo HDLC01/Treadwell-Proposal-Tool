@@ -2,8 +2,9 @@
 
 The BD Postgres fixtures (tests/_bd_conftest.py, tests/_bd_db.py) read BD_TEST_DATABASE_URL, an
 ADMIN url on a throwaway server, and FAIL on CI when it is unset. So the workflow has to start that
-server and hand the tests its address, on the shard job that already runs the suite: no new job,
-and so no new check for branch protection to require. This reads the workflow GitHub really runs.
+server and hand the tests its address, on the shard job that already runs the suite. #806 adds one
+job, the browser suites' (tests/test_bd_ci_browser.py), and the required `test` gate needs it, so
+branch protection still requires one check. This reads the workflow GitHub really runs.
 """
 import re
 from pathlib import Path
@@ -15,8 +16,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
-# The jobs ci.yml had before #805. BD adds none: `test` stays the one required check.
+# The jobs ci.yml had before #805. #805 added none; #806 adds the browser job, which the `test`
+# gate needs, so `test` stays the one required check.
 JOBS_BEFORE_BD = {"fingerprint", "shard", "test", "audit"}
+BD_JOBS = {"browser"}
 
 
 @pytest.fixture(scope="module")
@@ -51,9 +54,9 @@ def _test_url(shard):
     return step_env.get("BD_TEST_DATABASE_URL") or shard.get("env", {}).get("BD_TEST_DATABASE_URL")
 
 
-def test_no_new_job_and_so_no_new_required_check(wf):
-    assert set(wf["jobs"]) == JOBS_BEFORE_BD
-    assert wf["jobs"]["test"]["needs"] == "shard"
+def test_the_only_new_job_is_the_browser_job_and_the_required_gate_needs_it(wf):
+    assert set(wf["jobs"]) == JOBS_BEFORE_BD | BD_JOBS
+    assert wf["jobs"]["test"]["needs"] == ["shard", "browser"]
 
 
 def test_the_shard_job_starts_postgres_16_pinned_by_digest(postgres):
@@ -97,9 +100,9 @@ def test_the_password_is_a_throwaway_not_a_secret(shard, postgres):
     assert "secrets." not in str(postgres) and "secrets." not in str(_test_url(shard))
 
 
-def test_the_url_reaches_only_the_shard_job(wf):
-    """Set where the suite runs and nowhere else: the audit and fingerprint jobs never see it."""
+def test_the_url_reaches_only_the_jobs_that_run_tests(wf):
+    """Set where the suite runs and nowhere else: the audit, fingerprint and gate jobs never see it."""
     assert "BD_TEST_DATABASE_URL" not in str(wf.get("env", {}))
     for name, job in wf["jobs"].items():
-        if name != "shard":
+        if name not in ("shard", "browser"):
             assert "BD_TEST_DATABASE_URL" not in str(job), name

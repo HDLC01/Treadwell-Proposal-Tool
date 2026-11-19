@@ -9,3 +9,4 @@ pytest-xdist>=3.5      # -n auto --dist loadfile; see backend/pytest.ini
 # profile is derandomized, so the same version replays the same examples.
 hypothesis==6.170.15   # property tests (tests/test_bd_props_*.py); profiles in tests/_bd_conftest.py
 pyyaml==6.0.3          # BD tests that read the YAML they guard
+playwright==1.64.1     # the BD browser suites (tests/test_bd_e2e_*.py); ci.yml's browser job installs its Chromium
