@@ -122,6 +122,9 @@ def verify_token_claims(authorization: Optional[str]) -> dict:
 
     Raises AuthError(401) if missing/invalid/expired, AuthError(403) if the
     email's domain isn't allowed.
+
+    `exp` is REQUIRED (#806): PyJWT checks it only when present, so a signed token without one
+    would never expire. Supabase always sets it.
     """
     import jwt
 
@@ -132,17 +135,21 @@ def verify_token_claims(authorization: Optional[str]) -> dict:
     try:
         try:
             key = _jwk_client().get_signing_key_from_jwt(token).key
-            payload = jwt.decode(token, key, algorithms=["RS256", "ES256"], audience="authenticated")
+            payload = jwt.decode(token, key, algorithms=["RS256", "ES256"], audience="authenticated",
+                                 options={"require": ["exp"]})
         except Exception:
             secret = os.environ.get("SUPABASE_JWT_SECRET")
             if not secret:
                 raise AuthError(503, "SUPABASE_JWT_SECRET not set for HS256 tokens.")
-            payload = jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
+            payload = jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated",
+                                 options={"require": ["exp"]})
     except AuthError:
         raise
     except Exception as exc:  # bad signature / expired / malformed
-        # The reason stays in the server log; the caller learns only that it failed.
-        log.info("token rejected: %s", exc)
+        # The reason stays in the server log; the caller learns only that it failed. %r, never %s:
+        # the text of a bad-token error can carry the caller's own `kid`, and a line break in it
+        # would forge a log line (CWE-117). repr() escapes every control character.
+        log.info("token rejected: %r", exc)
         raise AuthError(401, "Invalid or expired token.")
 
     # WHO MAY SIGN IN (security audit, 2026-09-28). A good signature and a @wetreadwell.com
@@ -170,15 +177,39 @@ def verify_token_claims(authorization: Optional[str]) -> dict:
             or (oauth_only and methods is not None and "oauth" not in methods)):
         raise AuthError(403, "Sign in with your Treadwell Google account.")
 
-    email = (payload.get("email") or "").strip().lower()
+    raw_email = payload.get("email")
+    raw_email = raw_email.strip() if isinstance(raw_email, str) else ""
+    email = raw_email.lower()
     if not email:
         raise AuthError(401, "Token carries no email.")
-    if not email.endswith("@" + ALLOWED_DOMAIN):
+    # Plain printable ASCII and one "@" only (#806): str.lower() folds the Kelvin sign to "k", so a
+    # look-alike address could otherwise lower-case into a real one, and a NUL cannot be stored.
+    plain = raw_email.isascii() and raw_email.isprintable() and email.count("@") == 1
+    if not plain or not email.endswith("@" + ALLOWED_DOMAIN):
         raise AuthError(403, f"Access is restricted to @{ALLOWED_DOMAIN} accounts.")
     payload["email"] = email
     return payload
 
 
 def verify_token(authorization: Optional[str]) -> str:
-    """Verify the token and return just the (lowercased) email — the gate path."""
+    """Verify the token and return just the (lowercased) email.
+
+    No route calls this since the auth gate moved to verify_identity (#806). It is kept as the seam
+    the tests (conftest.py's sign-in bypass, which verify_identity follows at call time) and
+    ops/terms_render_proof.py patch to sign a caller in, and for any reader that wants only the
+    email."""
     return verify_token_claims(authorization)["email"]
+
+
+def identity_of(claims: dict) -> dict:
+    """The verified identity the gate keeps on the request: email, subject id and display name."""
+    meta = claims.get("user_metadata") if isinstance(claims.get("user_metadata"), dict) else {}
+    name = str(meta.get("full_name") or meta.get("name") or "").strip()
+    return {"email": claims["email"], "sub": str(claims.get("sub") or "") or None, "name": name or None}
+
+
+def verify_identity(authorization: Optional[str]) -> dict:
+    """THE AUTH GATE'S VERIFY STEP (#806): verify the token and return its identity
+    ({email, sub, name}). main._auth_gate keeps it on the request (request.state.auth_identity) for
+    whatever reads more than the email; the BD CRM reads it there. Raises as verify_token_claims."""
+    return identity_of(verify_token_claims(authorization))

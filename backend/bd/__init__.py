@@ -12,7 +12,9 @@ branch, never from a working folder.
   priority   the priority score and its reasons
   serialize  database rows -> the contract's JSON objects (docs/bd/api-contract.md)
   migrate    the schema runner (python -m bd.migrate, by hand, as the admin login; never at
-             startup) and ledger_behind(), the routes' "database not up to date" check
+             startup). Nothing the app imports loads it
+  ledger     the runner's read-only half: ledger_behind(), the routes' "database not up to date"
+             check
   migrations/  the numbered files that make schema bd, and grants.sql, its privilege model
   db         the connection pool (lazy, only with BD_DATABASE_URL; 3 s checkouts, 8 request
              slots, UTC + search_path + the business clock on every checkout)
@@ -20,6 +22,18 @@ branch, never from a working folder.
              (staging_schema writes the BD part of backend/staging/schema_pg.sql;
              fixture_seed is the made-up data set; seed loads it into an empty staging or
              test bd schema: python -m bd.ops.seed --person EMAIL=ROLE ...)
+
+THE API (#806), on the proposal tool's app, every route under /api/bd/:
+  api        the BD router main.py includes: the BD switch first, the routers, the routes not
+             built yet, BD's catch-all 404 last
+  web        BDRoute (BD's error envelope and no-store, applied by the router itself, never
+             app-wide), make_router(), the BD_ENABLED switch
+  errors     the envelope ({"ok": false, "error", "message"}) and handle(), its one entry point
+  auth       the BD login (bd.users) for the identity the tool's gate verified, the five BD roles,
+             can(), and who may change a BD login (only a super admin changes an admin)
+  appsettings  BD's Settings object (defaults merged with bd.settings)
+  paging     limit / offset and other query-string numbers
+  routers/   meta (me, settings, users), pending (503 after the role check)
 
 The pure rules have a JavaScript twin, frontend/bd/js/bd-core.js; tests/test_bd_core_js.py is
 the shared table both must answer.

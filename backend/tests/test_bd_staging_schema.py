@@ -153,6 +153,32 @@ def test_the_staging_app_reaches_bd_as_bd_app_on_the_staging_postgres():
         "say in a comment just above it that the URL is staging-only"
 
 
+def test_staging_turns_the_bd_crm_on_inline_and_says_so(monkeypatch):
+    """#806's one-way step: BD_ENABLED=on, written inline in the staging compose file (not only in
+    .env.staging, which is not in the repo), with a comment just above it. Read as on by BD's own
+    settings reader."""
+    from bd import config as bd_config
+
+    value = _env(_staging_compose()["services"]["app"]).get("BD_ENABLED")
+    assert value == "on", value
+    lines = STAGING_COMPOSE.read_text(encoding="utf-8").splitlines()
+    at = next(i for i, ln in enumerate(lines) if ln.strip() == "- BD_ENABLED=on")
+    assert lines[at - 1].strip().startswith("#") and "BD" in " ".join(lines[max(at - 4, 0):at]),         "say in a comment just above it why staging turns the BD CRM on"
+    monkeypatch.setenv("BD_ENABLED", value)
+    bd_config.reload()
+    try:
+        assert bd_config.BD_ENABLED is True
+    finally:
+        monkeypatch.undo()
+        bd_config.reload()
+
+
+def test_prod_compose_leaves_the_bd_crm_off():
+    """Prod turns BD on only at its cut-over (#802), so its compose file does not set the switch,
+    and the default is off."""
+    assert "BD_ENABLED" not in (BACKEND.parent / "docker-compose.yml").read_text(encoding="utf-8")
+
+
 def test_staging_postgrest_does_not_serve_schema_bd():
     """Seam 2 of #802: schema bd is not in staging PostgREST's schemas (service_role, PostgREST's
     anon role there, bypasses row level security, so the grants alone would not be enough)."""

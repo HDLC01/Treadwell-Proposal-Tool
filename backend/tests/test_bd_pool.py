@@ -195,15 +195,27 @@ def test_at_most_eight_bd_requests_hold_a_slot_and_the_ninth_is_refused_at_once(
 def test_no_bd_code_is_async():
     """The request slot is per thread and psycopg blocks: a BD route must be a plain `def`, which
     FastAPI runs in its threadpool. An `async def` would share the event loop's one thread with
-    every other request (nested slots skipping the bulkhead, the whole tool stalled on a query)."""
-    import ast
+    every other request (nested slots skipping the bulkhead, the whole tool stalled on a query).
 
+    ONE async def is allowed (#806): web.py's bd_handler, the route class's wrapper. FastAPI's own
+    request handler is a coroutine, so the wrapper around it has to be one; it only awaits that
+    handler (which runs the plain-def route in the threadpool) and turns an exception into the
+    envelope, touching no database. Every BD endpoint itself is checked below."""
+    import ast
+    import inspect
+
+    from bd import api as bd_api
+
+    allowed = {("web.py", "bd_handler")}
     found = []
     for path in sorted((_bd_db.BACKEND / "bd").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         found += ["%s:%d %s" % (path.name, n.lineno, n.name) for n in ast.walk(tree)
-                  if isinstance(n, ast.AsyncFunctionDef)]
+                  if isinstance(n, ast.AsyncFunctionDef) and (path.name, n.name) not in allowed]
     assert found == []
+    endpoints = [r.endpoint for r in bd_api.bd_routes()] + [bd_api.bd_not_found]
+    assert len(endpoints) > 10
+    assert [e.__name__ for e in endpoints if inspect.iscoroutinefunction(e)] == []
 
 
 def test_a_slot_is_reentrant_on_one_thread():

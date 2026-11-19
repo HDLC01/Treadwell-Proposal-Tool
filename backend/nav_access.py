@@ -65,6 +65,16 @@ EMPTY: Dict[str, Any] = {"version": 1, "deny": {}, "updated_at": None, "updated_
 _VERSION = 1
 
 
+# EVERY BD PAGE, the BD CRM tab's `pages`: This Week (the folder address and its index.html),
+# Contacts, one contact, Add contact, Potential BD Contacts, Analytics and BD's own Admin page. Listed
+# ahead of their move on purpose: the tab refuses each one from the day it lands. BD's eighth page,
+# its login page, is not here: the tool's sign-in replaced it, and /bd/login.html (ALWAYS_OPEN_PAGES)
+# only sends the person there.
+BD_PAGES: Tuple[str, ...] = (
+    "/bd/", "/bd/index.html", "/bd/contacts.html", "/bd/contact.html", "/bd/add.html",
+    "/bd/review.html", "/bd/analytics.html", "/bd/admin.html",
+)
+
 # ─── What each sidebar tab owns ────────────────────────────────────────────────
 # EVERY `api` TUPLE IS EMPTY SINCE 2026-10-27: EVERY DENIABLE TAB HIDES THE TAB ONLY. Hanz chose it
 # for all tabs, asked outright and told that a member could then still reach the data by typing the
@@ -213,6 +223,23 @@ TABS: Dict[str, Dict[str, Any]] = {
         "pages": ("/followups.html",),
         "api": (),
     },
+    "/bd/": {
+        # THE BD CRM (#806, spec #802), the first Beta row: ONE tab for the whole of BD, keyed on the
+        # sidebar row's href, the BD home page. It lists every BD page (BD_PAGES above, the folder
+        # address too, because the browser asks for "/bd/" itself), so denying the tab refuses each
+        # of them, and a page is covered the day it moves in rather than the day somebody remembers.
+        #
+        # HIDE-ONLY, like every tab (Q31): the BD API is guarded by the person's BD ROLE (bd/auth.py),
+        # never by this table, so `api` stays empty. Hiding it from the user role by default is a
+        # data step on the Admin page (Q10), not code: a missing policy file still denies nothing.
+        #
+        # BD_ENABLED off is not a denial either. /api/me says so in its own field, `nav_off`
+        # (main.py), so the Admin page keeps drawing this switch while BD is off and nobody is shown
+        # a refusal card for a page the server answers "not turned on" for anyway.
+        "label": "BD CRM",
+        "pages": BD_PAGES,
+        "api": (),
+    },
     "/v2-board.html": {
         # ESTIMATING TOOL v2. Its href was /polish-intake.html until 2026-10-15, when Hanz asked for
         # the row to open a board like Direct Projects ("It should be here not V2 estimates") rather
@@ -335,6 +362,8 @@ LOCKED_ROLES: Tuple[str, ...] = ("super_admin",)
 #                    through them (generate.html is step 3, Generate Files, since 2026-10-28)
 #   dropbox.html     — reached from the wizard's step 5, never from the menu
 #   login.html       — signing in cannot require being signed in
+#   bd/login.html    — BD's old login page, which only sends the person to the tool's sign-in with
+#                      a return to /bd/ (#806); the same reason
 #
 # /followups.html LEFT THIS LIST ON 2026-08-24 and took a TABS entry instead, because Hanz put it
 # back in the sidebar (auth.js records all three decisions). The two lists are mutually exclusive by
@@ -344,7 +373,7 @@ LOCKED_ROLES: Tuple[str, ...] = ("super_admin",)
 # rather than deriving one from the other.
 ALWAYS_OPEN_PAGES: Tuple[str, ...] = (
     "/", "/index.html", "/estimate-review.html", "/generate.html", "/proposal-review.html",
-    "/done.html", "/dropbox.html", "/login.html",
+    "/done.html", "/dropbox.html", "/login.html", "/bd/login.html",
 )
 
 # GATED BUT NOT IN THE SIDEBAR — the exact opposite of ALWAYS_OPEN_PAGES above, and the reason both

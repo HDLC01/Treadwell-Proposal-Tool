@@ -104,6 +104,9 @@ import pull_window
 import reference_tax
 import supabase_client
 import template_versions
+from bd import api as bd_api
+from bd import web as bd_web
+from bd.routers import pending as bd_pending
 import verbal_intake
 
 _SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
@@ -273,7 +276,10 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/deposit-invoice",
                       # and for the signed contract: the portal holds the signature
                       # facts, this repo holds the document generator.
-                      "/api/admin/signed-contract"}
+                      "/api/admin/signed-contract",
+                      # The BD CRM's telephony webhook (#806): the provider will prove itself with
+                      # its signature. ONE exact path; not built yet, so it answers 503.
+                      bd_pending.WEBHOOK_PATH}
 
 
 # Public for GET only. Raken sends the browser back to /api/raken/callback with no Authorization
@@ -414,11 +420,13 @@ async def _auth_gate(request: Request, call_next):
     if _auth_is_public(request.url.path, request.method):
         return await call_next(request)
     try:
-        request.state.user_email = supabase_client.verify_token(
-            request.headers.get("authorization")
-        )
+        identity = supabase_client.verify_identity(request.headers.get("authorization"))
     except supabase_client.AuthError as exc:
         return JSONResponse(status_code=exc.status, content={"ok": False, "error": exc.detail})
+    # The verified identity stays on the request: the email for the tool's own readers, and the
+    # whole of it (email, subject id, display name) for the BD CRM, which trusts this gate (#806).
+    request.state.user_email = identity["email"]
+    request.state.auth_identity = identity
     return await call_next(request)
 
 
@@ -10566,6 +10574,7 @@ def api_me(request: Request) -> Dict[str, Any]:
                 "role": role, "status": prof.get("status", "active"),
                 "nav_denied": _nav_denied_for(role, prof.get("email") or email),
                 "nav_denied_pages": _nav_denied_pages_for(role, prof.get("email") or email),
+                "nav_off": _nav_off(),
                 "grants": _grants_for(role, prof.get("email") or email)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
@@ -10574,6 +10583,7 @@ def api_me(request: Request) -> Dict[str, Any]:
     return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
             "nav_denied": _nav_denied_for(role),
             "nav_denied_pages": _nav_denied_pages_for(role),
+            "nav_off": _nav_off(),
             "grants": _grants_for(role, "") if role == "super_admin" else []}
 
 
@@ -10649,6 +10659,19 @@ def _nav_denied_for(role: str, email: Any = "") -> List[str]:
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
+
+
+def _nav_off() -> List[str]:
+    """The sidebar rows a switched-off feature takes out of EVERY menu, for /api/me: the BD CRM's row
+    while BD_ENABLED is off (#806, Q26).
+
+    Its own field, NOT folded into nav_denied, because it is not a denial: nobody gets a refusal card
+    for it (the server answers BD's pages and routes "not turned on" itself), it reaches admins and
+    the super admin too, and the Admin page keeps drawing the BD CRM switch so the user-role box can
+    be unticked before the switch goes on. auth.js leaves these rows out of the menu it draws for the
+    person and out of nothing else.
+    """
+    return [] if bd_web.is_enabled() else ["/bd/"]
 
 
 def _nav_denied_pages_for(role: str, email: Any = "") -> Dict[str, str]:
@@ -11348,6 +11371,30 @@ async def _gc_board(request: Request) -> Response:
     if etag in sent or "*" in sent:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="text/html; charset=utf-8", headers=headers)
+
+
+# ─── The BD CRM's API (#806) ──────────────────────────────────────────
+# One router, every route under /api/bd/, included AFTER every route of the tool's own so BD's
+# catch-all 404 (its last route) can never shadow one. BD's error envelope is applied by that
+# router's route class, never registered on the app. BD_ENABLED off: every /api/bd/ path answers
+# 503 "not turned on" before touching BD's database. See backend/bd/api.py.
+app.include_router(bd_api.router)
+
+
+# ─── The BD CRM's pages (#806) ────────────────────────────────────────
+# Everything under /bd/ is BD's: its pages, its scripts (bd/js/) and its one stylesheet. With
+# BD_ENABLED off, every one of those addresses answers the plain "not turned on" page (503, never
+# stored) before a byte of BD is sent. On, it is served THROUGH the static mount, exactly as every other
+# page is (no-cache with an ETag and its 304, /bd going to /bd/, the mount's 404). Declared before the
+# mount, like `_root`, so it wins for these paths. The switch is read on every request.
+@app.api_route("/bd", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/bd/{rest:path}", methods=["GET", "HEAD"], include_in_schema=False)
+async def _bd_pages(request: Request, rest: str = "") -> Response:
+    if not bd_web.is_enabled():
+        return bd_web.not_turned_on_page()
+    if _frontend_files is None:                 # no frontend dir (API-only deployment)
+        raise HTTPException(404, "Frontend not available")
+    return await _frontend_files.get_response("bd/" + rest if rest else "bd", request.scope)
 
 
 if FRONTEND_DIR.exists():

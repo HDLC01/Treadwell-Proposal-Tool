@@ -19,7 +19,9 @@ once:
             and production. bizdate.today_central() is the only reader.
   BD_NOW    a full ISO timestamp that replaces "now" (tests that need a fixed time of day).
 
-The defaults (#805):
+The defaults (#805, #806):
+  BD_ENABLED                  off     the switch. Off: every /api/bd/ route answers 503 "not turned
+                                      on" before it touches the database. Staging sets it on
   BD_DATABASE_URL             unset   BD's Postgres login (bd_app). Unset: every BD route answers 503
   BD_DB_POOL_MIN / _MAX       1 / 5   the connection pool's sizes
   BD_WEEKLY_ENABLED           off     the Friday batch
@@ -69,6 +71,8 @@ def _emails(name: str) -> frozenset:
 def reload() -> None:
     """(Re)read every setting into this module's globals."""
     g = globals()
+    # ── the switch ──
+    g["BD_ENABLED"] = _bool("BD_ENABLED", False)
     # ── database ──
     g["BD_DATABASE_URL"] = _str("BD_DATABASE_URL")
     g["BD_DB_POOL_MIN"] = _int("BD_DB_POOL_MIN", 1, lo=0)
@@ -87,6 +91,7 @@ def reload() -> None:
 
 
 # Declared for readers and linters; reload() below fills them in.
+BD_ENABLED: bool
 BD_DATABASE_URL: str
 BD_DB_POOL_MIN: int
 BD_DB_POOL_MAX: int

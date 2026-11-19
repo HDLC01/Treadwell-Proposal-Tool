@@ -217,6 +217,18 @@ def test_every_tab_owns_no_api_route_now():
     assert {h: t["api"] for h, t in nav_access.TABS.items() if t["api"]} == {}
 
 
+def test_the_bd_crm_is_one_tab_with_every_bd_page_and_no_api():
+    """#806: ONE tab for the whole of BD, hide-only (the BD API answers by BD role, Q31). Its pages
+    are every BD page, and none of them belongs to any other tab."""
+    bd = [h for h in nav_access.TABS if h.startswith("/bd")]
+    assert bd == ["/bd/"]
+    assert nav_access.TABS["/bd/"]["api"] == ()
+    assert nav_access.TABS["/bd/"]["pages"] == nav_access.BD_PAGES
+    for href, tab in nav_access.TABS.items():
+        if href != "/bd/":
+            assert not [p for p in tab["pages"] if p.startswith("/bd/")], href
+
+
 def test_the_lead_inbox_is_page_refusal_only():
     nav_access.save({"user": ["/leads.html"]}, "k@x.com")
     for path in ("/api/leads", "/api/leads/abc/body", "/api/leads/abc/status"):
@@ -469,6 +481,11 @@ def test_every_tab_in_the_table_is_a_real_page_and_every_sidebar_href_is_in_the_
     import pipelines
     for href, tab in nav_access.TABS.items():
         for page in tab["pages"]:
+            # THE BD CRM'S PAGES ARE LISTED AHEAD OF THEIR MOVE (#806): the one BD tab names every BD
+            # page so it refuses each the day it lands. They are pinned instead, to BD's eight pages,
+            # by test_bd_nav.py; a page that has moved must still be a real file.
+            if page in nav_access.BD_PAGES and not (FRONTEND / page.lstrip("/")).is_file():
+                continue
             if page in pipelines.BOARD_PAGE.values() and not (FRONTEND / page.lstrip("/")).exists():
                 assert (FRONTEND / "portal.html").is_file(), "%s is built from a missing portal.html" % page
                 continue

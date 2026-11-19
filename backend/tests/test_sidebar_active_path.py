@@ -9,7 +9,7 @@ Executed, not grepped: js/sidebar-active-harness.js runs the real auth.js with l
 set to each address and reads which rows the markup marks active.
 
 Two halves:
-  * the BD addresses light no tool row at all;
+  * the BD addresses light no tool row at all, only the BD CRM row (#806);
   * every address the app serves today lights exactly the row it lit before, written out as a table
     below. The table must name every page in the frontend, so a new page is a decision about its row
     rather than a silent "nothing".
@@ -71,15 +71,23 @@ BEFORE = {
     "/dropbox.html": [],
     # the browser lower-cases nothing, but the rule always did
     "/Portal.html": ["/portal.html"],
+    # THE BD CRM (#806): its row is lit on every page under /bd/, and only its row. BD's old login
+    # page draws no sidebar (it only sends the person to sign-in), but the rule still reads it as BD.
+    "/bd/": ["/bd/"],
+    "/bd/index.html": ["/bd/"],
+    "/bd/login.html": ["/bd/"],
 }
 
-# Addresses under /bd/ (and one other sub-folder) whose file names are the same as a tool page's.
-# Under an ends-with match each would light that tool row. None may light any tool row.
-SUB_FOLDER = [
+# Addresses under /bd/ whose file names are the same as a tool page's. Under an ends-with match each
+# would light that tool row. Each lights the BD CRM row (#806) and no tool row.
+BD_SUB_FOLDER = [
     "/bd/admin.html", "/bd/analytics.html", "/bd/index.html", "/bd/", "/bd/portal.html",
     "/bd/projects.html", "/bd/history.html", "/bd/v2-board.html", "/bd/polish-intake.html",
-    "/bd/polish-estimate.html", "/BD/Admin.html", "/other/leads.html",
+    "/bd/polish-estimate.html", "/BD/Admin.html",
 ]
+# Another sub-folder: no row at all.
+OTHER_SUB_FOLDER = ["/other/leads.html"]
+SUB_FOLDER = BD_SUB_FOLDER + OTHER_SUB_FOLDER
 
 
 @pytest.fixture(scope="module")
@@ -101,8 +109,16 @@ def test_the_harness_reads_a_real_sidebar(lit):
     assert cases["/|root-path"]["seen"] == "/portal.html", "the home guard did not run"
 
 
-@pytest.mark.parametrize("address", SUB_FOLDER)
-def test_a_page_in_a_sub_folder_lights_no_tool_row(lit, address):
+@pytest.mark.parametrize("address", BD_SUB_FOLDER)
+def test_a_bd_page_lights_the_bd_crm_row_and_no_tool_row(lit, address):
+    _, cases = lit
+    assert cases[address]["lit"] == ["/bd/"], (
+        "%s lights %s: it must light the BD CRM row alone, and an ends-with match would light the "
+        "tool row of the same file name" % (address, cases[address]["lit"]))
+
+
+@pytest.mark.parametrize("address", OTHER_SUB_FOLDER)
+def test_a_page_in_another_sub_folder_lights_no_row(lit, address):
     _, cases = lit
     assert cases[address]["lit"] == [], (
         "%s lights %s: the sidebar is matching the end of the path, not the whole of it"

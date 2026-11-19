@@ -1,8 +1,11 @@
-"""The CI shards (.github/scripts/shard_tests.py) together run every test file exactly once.
+"""The CI shards (.github/scripts/shard_tests.py) and the browser job together run every test file
+exactly once.
 
 If a file fell between shards it would never run in CI and nothing would say so, which is the
 failure this guards. Executes the real script against the real tests folder, and reads the matrix
-the workflow really runs.
+and the browser job the workflow really runs. The BD browser suites (test_bd_e2e_*.py, #806) need
+Chromium and the live app, so they run in the browser job and in no shard: they count as covered
+there.
 """
 import importlib.util
 import re
@@ -33,26 +36,50 @@ def matrix():
     return [(g, int(s), int(t), d) for g, s, t, d in rows]
 
 
+BROWSER_RUN = "shard_tests.py browser 1 1 tests"
+
+
+@pytest.fixture(scope="module")
+def browser_files(mod):
+    """The files the browser job runs, as the workflow asks the script for them."""
+    assert BROWSER_RUN in WORKFLOW.read_text(encoding="utf-8"), "ci.yml's browser job does not ask for them"
+    return mod.shard_files(_names(), "browser", 1, 1)
+
+
 def _names():
     return sorted(p.name for p in TESTS.glob("test_*.py"))
 
 
-def test_the_shards_cover_every_test_file_exactly_once(mod, matrix):
+def test_the_shards_and_the_browser_job_cover_every_test_file_exactly_once(mod, matrix, browser_files):
     names = _names()
-    seen = []
+    seen = list(browser_files)
     for group, shard, total, _ in matrix:
         seen += mod.shard_files(names, group, shard, total)
     assert sorted(seen) == names
 
 
-def test_every_bd_test_file_lands_in_exactly_one_shard(mod, matrix):
+def test_the_browser_suites_run_in_the_browser_job_and_in_no_shard(mod, matrix, browser_files):
+    """A browser suite in a shard would find no Chromium there and fail; one in neither would never
+    run. Every test_bd_e2e_*.py file is the browser job's, and nothing else is."""
+    names = _names()
+    e2e = [n for n in names if n.startswith("test_bd_e2e_")]
+    assert e2e, "vacuity: no BD browser suite in the tests folder"
+    assert browser_files == e2e
+    assert all(mod.is_browser(n) for n in e2e) and not any(mod.is_heavy(n) for n in e2e)
+    for group, shard, total, _ in matrix:
+        assert not set(mod.shard_files(names, group, shard, total)) & set(e2e), (group, shard)
+    assert "browser" not in {g for g, _, _, _ in matrix}, "the browser group is its own job, not a shard"
+
+
+def test_every_bd_test_file_lands_in_exactly_one_shard(mod, matrix, browser_files):
     """The BD CRM's tests (#805) sit flat in this folder as test_bd_*.py, because the script only
     looks at the top level: a BD file in a sub-folder would run in no shard. Named on its own so a
-    BD file that fell out of the shards is reported as one, not as a diff of the whole suite."""
+    BD file that fell out of the shards is reported as one, not as a diff of the whole suite. The
+    browser job counts as one more shard (#806)."""
     bd = [n for n in _names() if n.startswith("test_bd_")]
     assert len(bd) >= 16, bd   # the files #805 moved here; fewer means the glob looks elsewhere
     assert not list(TESTS.glob("*/test_bd_*.py")), "a BD test file in a sub-folder runs in no shard"
-    landed = {}
+    landed = {n: [("browser", 1)] for n in browser_files}
     for group, shard, total, _ in matrix:
         for n in mod.shard_files(_names(), group, shard, total):
             if n.startswith("test_bd_"):
@@ -105,3 +132,5 @@ def test_a_bad_group_or_shard_is_refused(mod):
         mod.shard_files(["test_a.py"], "rest", 6, 5)
     with pytest.raises(ValueError):
         mod.shard_files(["test_a.py"], "light", 1, 5)
+    with pytest.raises(ValueError):
+        mod.shard_files(["test_bd_e2e_a.py"], "browser", 2, 1)

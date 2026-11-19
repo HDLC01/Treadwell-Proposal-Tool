@@ -6,13 +6,13 @@
                                          # machine only (tests, local dev); refused for any other
 
     migrate.migrate(url) -> [names applied]
-    migrate.ledger_behind(conn) -> bool      # the routes' "database not up to date" check
+    migrate.ledger_behind(conn) -> bool      # the routes' check (lives in bd/ledger.py)
 
 IT NEVER RUNS AT APP STARTUP. Schema changes are made by the database's admin login, by hand on
 prod on Hanz's go, and on staging by the generated BD part of backend/staging/schema_pg.sql (which
 applies the same files under the same lock; backend/bd/ops/staging_schema.py writes it). The app
-connects as bd_app, which cannot change the schema; it only reads the ledger to know whether it
-is behind the code (tests/test_bd_migrate.py proves nothing in the app imports this module).
+connects as bd_app, which cannot change the schema; it only reads the ledger (bd/ledger.py) to know
+whether it is behind the code (tests/test_bd_migrate.py proves nothing in the app imports this module).
 
 How it works (BD's own runner, moved into schema bd):
   * bd.schema_migrations (name text primary key, applied_at timestamptz) is the LEDGER.
@@ -32,14 +32,23 @@ from __future__ import annotations
 import argparse
 import getpass
 import pathlib
-import re
 import sys
 
-MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent / "migrations"
+# The read-only half (which files exist, which the ledger lacks) lives in ledger.py, so the app can
+# ask "is the database behind?" without importing this runner. Re-exported here for the runner's
+# callers and tests.
+from .ledger import (  # noqa: F401
+    MIGRATIONS_DIR,
+    _applied,
+    _tuples,
+    ledger_behind,
+    migration_files,
+    pending,
+)
+
 GRANTS_FILE = MIGRATIONS_DIR / "grants.sql"
 SCHEMA = "bd"
 LEDGER = "bd.schema_migrations"
-_NAME = re.compile(r"^\d{3}_[A-Za-z0-9_\-]+\.sql$")
 # Any constant works; it only has to be the same for every runner and for the staging schema file.
 # Advisory locks are per database, so this never blocks a run against another database.
 LOCK_KEY = 0x0BDC0001
@@ -54,12 +63,6 @@ BOOTSTRAP_SQL = (
 )
 
 
-def migration_files(directory: pathlib.Path = MIGRATIONS_DIR) -> list:
-    """The migration files, in the order they apply."""
-    return sorted((p for p in pathlib.Path(directory).glob("*.sql") if _NAME.match(p.name)),
-                  key=lambda p: p.name)
-
-
 def read_sql(path: pathlib.Path) -> str:
     """A file's SQL with its line endings made LF, so a Windows checkout sends what CI sends."""
     return pathlib.Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -67,31 +70,6 @@ def read_sql(path: pathlib.Path) -> str:
 
 def grants_sql() -> str:
     return read_sql(GRANTS_FILE)
-
-
-def _tuples(conn, sql: str) -> list:
-    """Rows as tuples whatever row factory the connection has (the pool's is dict rows)."""
-    from psycopg.rows import tuple_row
-
-    return conn.cursor(row_factory=tuple_row).execute(sql).fetchall()
-
-
-def _applied(conn) -> set:
-    return {r[0] for r in _tuples(conn, "select name from bd.schema_migrations")}
-
-
-def pending(conn, directory: pathlib.Path = MIGRATIONS_DIR) -> list:
-    """Names of the migration files the ledger lacks, in order. Read-only, so bd_app can call it:
-    a database with no ledger at all has every file pending."""
-    present = _tuples(conn, "select to_regclass('bd.schema_migrations')")[0][0] is not None
-    have = _applied(conn) if present else set()
-    return [p.name for p in migration_files(directory) if p.name not in have]
-
-
-def ledger_behind(conn, directory: pathlib.Path = MIGRATIONS_DIR) -> bool:
-    """True when the code holds a migration the database has not applied (the routes answer 503
-    "database not up to date"). A ledger AHEAD of the code (an older image) is not behind."""
-    return bool(pending(conn, directory))
 
 
 def _has_bd_app(conn) -> bool:

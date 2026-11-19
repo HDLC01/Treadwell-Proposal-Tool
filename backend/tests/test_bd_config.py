@@ -22,6 +22,7 @@ EXAMPLE = BACKEND / ".env.example"
 # The settings table of #805, with the default each one has when it is unset. A setting the code
 # reads must be here, and every one here must be read.
 DEFAULTS = {
+    "BD_ENABLED": False,                 # the switch (#806): off, every /api/bd/ route answers 503
     "BD_DATABASE_URL": "",               # unset: BD answers 503
     "BD_DB_POOL_MIN": 1,
     "BD_DB_POOL_MAX": 5,
@@ -91,6 +92,14 @@ def test_every_setting_read_is_in_the_table_and_every_one_in_the_table_is_read()
 def test_each_setting_has_its_stated_default_when_unset(fresh_env, name):
     value = getattr(config, name)
     assert value == DEFAULTS[name] and type(value) is type(DEFAULTS[name]), (name, value)
+
+
+def test_the_switch_is_off_unless_set_on(fresh_env):
+    assert config.BD_ENABLED is False
+    for value, want in (("on", True), ("true", True), ("1", True), ("off", False), ("", False), ("nope", False)):
+        fresh_env.setenv("BD_ENABLED", value)
+        config.reload()
+        assert config.BD_ENABLED is want, value
 
 
 def test_the_weekly_batch_is_off_when_unset_even_if_the_old_unprefixed_name_is_on(fresh_env):

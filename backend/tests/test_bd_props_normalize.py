@@ -1,7 +1,7 @@
 """normalize.py, generated (property) coverage on top of the example cases in test_bd_normalize.py.
 
 Pure properties of normalize_company, clean_name and email_key, plus ONE batched node run that
-checks normalize_company against frontend/bd/js/shared.js normalizeCompany on a generated list of
+checks normalize_company against frontend/bd/js/bd-shared.js normalizeCompany on a generated list of
 strings. Nothing here touches a database or the network; no dates are involved.
 
 Each property is an invariant of the matching keys, not a copy of the code:
