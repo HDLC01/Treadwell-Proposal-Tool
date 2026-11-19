@@ -22,6 +22,7 @@ from __future__ import annotations
 import html.parser
 import pathlib
 import re
+import urllib.parse
 
 import pytest
 
@@ -201,7 +202,9 @@ def test_the_supabase_tag_is_the_tools(page):
     sc = ours[0]
     assert (sc["src"], sc.get("integrity"), sc.get("crossorigin")) == \
         (tool["src"], tool.get("integrity"), "anonymous")
-    assert "https://cdn.jsdelivr.net" in shell(page).preconnects, "warm the CDN connection first"
+    hosts = [urllib.parse.urlsplit(href) for href in shell(page).preconnects]
+    warm = any(u.scheme == "https" and u.hostname == "cdn.jsdelivr.net" for u in hosts)
+    assert warm, "warm the CDN connection first"
 
 
 @pytest.mark.parametrize("page", PAGES, ids=rel)

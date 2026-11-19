@@ -25,6 +25,18 @@ const vm = require("vm");
 const ROOT = path.resolve(process.argv[2]);
 const SC = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 
+// Text a browser would show for this markup: everything outside <...>. A character walk, not a
+// regex, so a tag split across a replacement (<scr<b>ipt) cannot survive into the text.
+function stripTags(s) {
+  let out = "", inTag = false;
+  for (const ch of s) {
+    if (ch === "<") inTag = true;
+    else if (ch === ">" && inTag) inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out;
+}
+
 const byId = {};
 function element(id) {
   const e = {
@@ -33,7 +45,7 @@ function element(id) {
     get textContent() { return e._text; },
     set textContent(v) { e._text = String(v); e._html = String(v).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); },
     get innerHTML() { return e._html; },
-    set innerHTML(v) { e._html = String(v); e._text = String(v).replace(/<[^>]*>/g, ""); },
+    set innerHTML(v) { e._html = String(v); e._text = stripTags(String(v)); },
     setAttribute(k, v) { e.attrs[k] = String(v); },
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(e.attrs, k) ? e.attrs[k] : null; },
     removeAttribute(k) { delete e.attrs[k]; },
