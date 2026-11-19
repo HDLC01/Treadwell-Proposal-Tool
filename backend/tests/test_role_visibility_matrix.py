@@ -36,6 +36,8 @@ import subprocess
 
 import pytest
 
+from _frontend_tree import rel, scripts, write_tree
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 BACKEND = ROOT / "backend"
@@ -313,20 +315,30 @@ def test_the_note_names_every_member_visible_tab_that_gates_controls_on_role(ran
     """
     labels = {r["href"]: r["label"] for r in ran["matrix"]["rows"]}
     member_visible = {r["href"] for r in ran["matrix"]["rows"] if r["roles"]["user"]}
-    gated = []
-    for js in sorted((FRONTEND / "js").glob("*.js")):
-        src = js.read_text(encoding="utf-8")
-        if not re.search(r'role\s*===\s*"admin"', src):
-            continue
-        href = "/" + js.stem + ".html"
-        if href in member_visible:
-            gated.append(labels[href])
+    gated = [labels[href] for _, href in role_gated_pages() if href in member_visible]
     assert gated, "no page JS gates on role any more; the third note paragraph should go"
     flat = re.sub(r"\s+", " ", ran["panelHtml"]["admin"])
     for label in gated:
         assert "<strong>%s</strong>" % label in flat, (
             "%s gates controls on role but the note does not name it (it names: %s)"
             % (label, re.findall(r"<strong>([^<]+)</strong>", flat)))
+
+
+def role_gated_pages(frontend=FRONTEND):
+    """[(script's path under frontend/, the page it belongs to)] for every script, in every sub-folder
+    (#804), that branches on role === "admin". A script in a js/ folder belongs to the page named
+    after it in the folder above (js/admin.js to /admin.html, bd/js/admin.js to /bd/admin.html); any
+    script outside a js/ folder (auth.js, shared.js) is shared code that belongs to no page, and is
+    left out."""
+    found = []
+    for js in scripts(frontend):
+        if not re.search(r'role\s*===\s*"admin"', js.read_text(encoding="utf-8")):
+            continue
+        name = pathlib.PurePosixPath(rel(js, frontend))
+        if name.parent.name != "js":
+            continue
+        found.append((name.as_posix(), "/" + (name.parent.parent / (name.stem + ".html")).as_posix()))
+    return found
 
 
 # ── the panel is actually on the page ─────────────────────────────────────────
@@ -343,3 +355,16 @@ def test_the_admin_page_renders_the_panel_and_styles_it():
         assert cls in html, "%s has no styling, so the matrix renders as a wall of text" % cls
     # CSP: an inline <script> would silently not run. The panel must stay in admin.js.
     assert "<script>" not in html.replace("<script src", "<script-src")
+
+
+# ── the script scan reaches sub-folders (#804) ───────────────────────────────
+def test_the_role_gate_scan_sees_a_script_in_a_sub_folder_and_maps_it_to_its_own_page(tmp_path):
+    """The BD CRM's scripts live under /bd/js/. One that gates on role is found, and maps to the page
+    beside it (/bd/admin.html), never to the root page of the same name."""
+    gate = 'if (me.role === "admin") show();'
+    write_tree(tmp_path, {"js/admin.js": gate, "bd/js/admin.js": gate, "bd/js/plain.js": "",
+                          "auth.js": gate, "bd/helper.js": gate})
+    # auth.js and bd/helper.js sit outside a js/ folder: they are shared code, not one page's script,
+    # so they belong to no page and are not reported.
+    assert role_gated_pages(tmp_path) == [("bd/js/admin.js", "/bd/admin.html"),
+                                          ("js/admin.js", "/admin.html")]

@@ -5,3 +5,7 @@
 pytest>=8.0
 httpx>=0.28.1          # FastAPI TestClient transport
 pytest-xdist>=3.5      # -n auto --dist loadfile; see backend/pytest.ini
+# The BD CRM's tests (#805). Pinned at the versions BD's suite was tested on: the CI hypothesis
+# profile is derandomized, so the same version replays the same examples.
+hypothesis==6.170.15   # property tests (tests/test_bd_props_*.py); profiles in tests/_bd_conftest.py
+pyyaml==6.0.3          # BD tests that read the YAML they guard

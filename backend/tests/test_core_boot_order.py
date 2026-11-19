@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import pathlib
 
+from _frontend_tree import pages as all_pages, rel, scripts, write_tree
 from _golden_support import FRONTEND, declared_dependencies
 from _node import last_json_line, require_node, run_node
 from _page_scripts import local_scripts
@@ -40,13 +41,14 @@ BOOT = pathlib.Path(__file__).resolve().parent / "js" / "core-boot-harness.js"
 
 # ── discovery ────────────────────────────────────────────────────────────────
 def modules_with_dependencies(frontend: pathlib.Path):
-    """{path under frontend/: the paths it declares} for every script whose header declares any."""
+    """{path under frontend/: the paths it declares} for every script, in every sub-folder, whose
+    header declares any."""
     found = {}
-    for path in sorted([*frontend.glob("*.js"), *(frontend / "js").glob("*.js")]):
-        rel = path.relative_to(frontend).as_posix()
-        deps = declared_dependencies(rel, frontend)
+    for path in scripts(frontend):
+        name = rel(path, frontend)
+        deps = declared_dependencies(name, frontend)
         if deps:
-            found[rel] = deps
+            found[name] = deps
     return found
 
 
@@ -63,14 +65,15 @@ def needed_with_dependencies(rels, modules):
 
 def pages_with_modules(frontend: pathlib.Path):
     """(modules, pages): the discovered modules, and for every page that loads at least one of them
-    (page name, its own scripts in the order a browser runs them, the modules among those)."""
+    (page's path under frontend/, its own scripts in the order a browser runs them, the modules among
+    those). Pages in every sub-folder."""
     modules = modules_with_dependencies(frontend)
     pages = []
-    for page in sorted(frontend.glob("*.html")):
+    for page in all_pages(frontend):
         order = local_scripts(page.read_text(encoding="utf-8"))
         loaded = [s for s in order if s in modules]
         if loaded:
-            pages.append((page.name, order, loaded))
+            pages.append((rel(page, frontend), order, loaded))
     return modules, pages
 
 
@@ -208,3 +211,19 @@ def test_the_executed_check_makes_each_wrong_page_throw_by_name_and_boots_the_ri
     for page, script, message in got:
         assert "loaded before it" in message, (page, script, message)
     assert not [g for g in got if g[0] == "good.html"]
+
+
+# ── the discovery reaches sub-folders (#804) ─────────────────────────────────
+def test_a_page_and_its_modules_in_a_sub_folder_are_checked_too(tmp_path):
+    """The BD CRM's pages and scripts live under /bd/. A page there that runs a module before the one
+    it declares is named by its path under frontend/, beside a root page of the same name."""
+    write_tree(tmp_path, {
+        "bd/js/leaf.js": _umd("leaf.js", "TWBdLeaf"),
+        "bd/js/mid.js": _umd("mid.js", "TWBdMid", ("leaf.js", "TWBdLeaf")),
+        "late.html": _page('<script src="/bd/js/leaf.js"></script><script src="/bd/js/mid.js"></script>'),
+        "bd/late.html": _page('<script src="/bd/js/mid.js"></script><script src="/bd/js/leaf.js"></script>'),
+    })
+    modules, pages = pages_with_modules(tmp_path)
+    assert modules == {"bd/js/mid.js": ["bd/js/leaf.js"]}
+    assert sorted(name for name, *_ in pages) == ["bd/late.html", "late.html"]
+    assert order_problems(tmp_path) == [("bd/late.html", "bd/js/mid.js", "bd/js/leaf.js", "runs after it")]
