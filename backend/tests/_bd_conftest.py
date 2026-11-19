@@ -46,6 +46,20 @@ to the whole run:
      bd_seeded   (function) bd_db + the fixture seed (backend/bd/ops/fixture_seed.py) +
                             BD_TODAY = its day. Returns {"counts": ..., "today": date}.
    BD_TEST_DATABASE_URL unset: SKIP locally, FAIL on CI (as above).
+
+5. THE APP (#806): BD's routes on the proposal tool's app, signed in the way the tool signs in.
+     bd_app       (function) the tool's app with BD_ENABLED on, the tool's verify step
+                             (supabase_client.verify_identity) overridden to accept
+                             "Bearer test:<email>", the sidebar policy files in tmp_path, and every
+                             caller a plain proposal-tool "user" unless bd_app.tool_roles says
+                             otherwise ({email: role}). No database.
+     bd_client    (function) a TestClient over that app on the clean BD database (bd_db).
+                             raise_server_exceptions=False, so a 500 is an answer.
+     bd_as_user   (function) bd_as_user(1) / bd_as_user("assistant") / bd_as_user("x@example.com")
+                             -> a client whose requests carry that BD login's test token, with
+                             .user (the bd.users row). A role nobody holds gets "Test <Role>".
+   THE TOOL'S GATE, NAV GATE AND AUDIT LOG RUN FOR REAL. Only the verify step is replaced, which is
+   the one thing that would need Supabase; tests/test_bd_token_tampering.py runs the real one.
 """
 from __future__ import annotations
 
@@ -220,3 +234,112 @@ def bd_seeded(bd_db, bd_today):
     day = bd_today(fixture_seed.FIXTURE_TODAY)
     counts = fixture_seed.seed(bd_db)
     return {"counts": counts, "today": day}
+
+
+# -- the app: the proposal tool's, with BD switched on (#806) -----------------------------------
+BD_TOKEN_PREFIX = "test:"
+BD_ROLES = ("salesperson", "assistant", "manager", "admin", "super_admin")
+
+
+def fake_verify_identity(authorization):
+    """The test stand-in for the tool's verify step: "Bearer test:<email>" -> that identity.
+    Anything else is refused the way the real step refuses a bad token."""
+    import supabase_client
+
+    raw = str(authorization or "")
+    if not raw.lower().startswith("bearer "):
+        raise supabase_client.AuthError(401, "Missing bearer token.")
+    token = raw.split(" ", 1)[1].strip()
+    if not token.startswith(BD_TOKEN_PREFIX) or "@" not in token:
+        raise supabase_client.AuthError(401, "Invalid or expired token.")
+    email = token[len(BD_TOKEN_PREFIX):].strip().lower()
+    return {"email": email, "sub": "test-" + email, "name": None}
+
+
+def bd_token_headers(email):
+    return {"Authorization": "Bearer " + BD_TOKEN_PREFIX + email}
+
+
+@pytest.fixture
+def bd_app(monkeypatch, tmp_path):
+    import types
+
+    import main
+    import nav_access
+    import special_permissions
+    import supabase_client
+    from bd import config as bd_config
+
+    monkeypatch.setattr(supabase_client, "verify_identity", fake_verify_identity)
+    monkeypatch.setattr(bd_config, "BD_ENABLED", True)
+    for mod in (nav_access, special_permissions):
+        monkeypatch.setattr(mod, "_DATA_DIR", tmp_path)
+        monkeypatch.setattr(mod, "_FILE", tmp_path / mod._FILE.name)
+    tool_roles: dict = {}
+    monkeypatch.setattr(main.profiles, "get_by_email",
+                        lambda email: {"id": "p-" + str(email), "email": email,
+                                       "role": tool_roles.get(email, "user"), "status": "active"})
+    main._profile_cache_clear()
+    return types.SimpleNamespace(app=main.app, tool_roles=tool_roles)
+
+
+@pytest.fixture
+def bd_client(bd_app, bd_db):
+    from fastapi.testclient import TestClient
+
+    return TestClient(bd_app.app, raise_server_exceptions=False)
+
+
+class BDAuthedClient:
+    """A TestClient whose every request carries the test token of one BD login."""
+
+    def __init__(self, client, user):
+        self.client = client
+        self.user = user
+        self.headers = bd_token_headers(user["email"])
+
+    def request(self, method, path, **kw):
+        headers = dict(self.headers)
+        headers.update(kw.pop("headers", None) or {})
+        return self.client.request(method, path, headers=headers, **kw)
+
+    def get(self, path, **kw):
+        return self.request("GET", path, **kw)
+
+    def post(self, path, **kw):
+        return self.request("POST", path, **kw)
+
+    def put(self, path, **kw):
+        return self.request("PUT", path, **kw)
+
+    def patch(self, path, **kw):
+        return self.request("PATCH", path, **kw)
+
+    def delete(self, path, **kw):
+        return self.request("DELETE", path, **kw)
+
+
+@pytest.fixture
+def bd_as_user(bd_client, bd_db):
+    def sign_in(who):
+        key = str(who).strip().lower()
+        if isinstance(who, int) or key.isdigit():
+            row = bd_db.execute("select * from bd.users where id = %s", (int(key),)).fetchone()
+        elif "@" in key:
+            row = bd_db.execute("select * from bd.users where email = %s", (key,)).fetchone()
+        elif key in BD_ROLES:
+            row = bd_db.execute("select * from bd.users where role = %s and active order by id limit 1",
+                                (key,)).fetchone()
+            if row is None:
+                label = key.replace("_", " ").title()
+                row = bd_db.execute(
+                    "insert into bd.users (email, name, role) values (%s, %s, %s) returning *",
+                    ("test.%s@example.com" % key.replace("_", "."), "Test " + label, key)).fetchone()
+        else:
+            row = bd_db.execute("select * from bd.users where lower(name) = %s order by id limit 1",
+                                (key,)).fetchone()
+        if row is None:
+            raise LookupError("no BD login %r in the test database (seed it, or use a role name)" % (who,))
+        return BDAuthedClient(bd_client, dict(row))
+
+    return sign_in

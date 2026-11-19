@@ -34,12 +34,12 @@ numbers and `example.com` emails are made up.
 | HTTP | `error` | When |
 |---|---|---|
 | 400 | `bad_request` | Malformed JSON or a field of the wrong type. FastAPI's 422 is rewrapped into this shape with `"fields": {"name": "plain sentence"}`. |
-| 401 | `unauthenticated` | Not signed in to the proposal tool. |
+| 401 | `unauthenticated` | Not signed in to the proposal tool. The proposal tool's gate answers this one in its own shape, `{ "ok": false, "error": "<sentence>" }` with no `message`; a page shows `error`. |
 | 403 | `forbidden` | Signed in but the role may not do this. |
 | 404 | `not_found` | Unknown id. |
 | 409 | `conflict` | The action is not possible in the current state (task already done, candidate already added, batch already built this week, send outside 8 am–6 pm Central). |
 | 429 | `rate_limited` | Too many AI calls in a minute. |
-| 503 | `unavailable` | AI or the phone provider is down. AI routes return a fallback instead of this where they can. |
+| 503 | `unavailable` | The BD CRM is not turned on (`BD_ENABLED`), BD's database is not up to date or not answering, a route is not built yet, or AI or the phone provider is down. AI routes return a fallback instead of this where they can. |
 
 ### The one counting rule
 
@@ -599,4 +599,58 @@ A call or text whose number matched no contact, as the unmatched-calls list retu
 
 ## Routes
 
-Not carried over. Each ticket of #802 moves its BD routes under `/api/bd/` and documents them here.
+Each ticket of #802 moves its BD routes under `/api/bd/` and documents them here.
+
+Every route below answers 503 `"The BD CRM is not turned on."` while `BD_ENABLED` is off, before any
+other check. Every route but the telephony webhook needs the proposal tool's sign-in (401, the tool's
+shape) and an active BD login (403 `"You don't have a BD role. Ask a BD admin to add you."`, or
+`"Your BD login is turned off. ..."`). A proposal-tool admin has no BD role unless BD's people table
+gives them one. A database behind the code answers 503 `"The BD CRM's database is not up to date. ..."`.
+Any other path under `/api/bd/` is 404 `not_found`, or 400 `"<METHOD> is not allowed on <path>."` when a
+BD route serves that path with another method.
+
+#### `GET /api/bd/me` (any BD role)
+
+```json
+{
+  "ok": true,
+  "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
+  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true },
+  "today": "2026-11-04",
+  "timezone": "America/Chicago"
+}
+```
+
+`can` per BD role:
+
+| Role | send | analytics | admin | admin_area | import | run_batch | week |
+|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes |
+| assistant | | | | yes | yes | | |
+| manager | | yes | | | | | yes |
+| admin, super_admin | yes | yes | yes | yes | yes | yes | yes |
+
+#### `GET /api/bd/settings` (any BD role)
+
+`{ "ok": true, "settings": Settings }`.
+
+#### `GET /api/bd/users` (any BD role)
+
+The active BD logins, compact, for owner pickers: `{ "ok": true, "items": [{ "id", "name", "role" }], "total": N }`,
+paged by `limit` / `offset`.
+
+#### Not built yet (503 after the role check)
+
+| Route | Who |
+|---|---|
+| `POST /api/bd/interactions/{id}/recommend` | salesperson |
+| `POST /api/bd/recommendations/{id}/confirm`, `.../dismiss` | salesperson |
+| `POST /api/bd/interactions/{id}/draft-followup`, `.../send-followup` | salesperson |
+| `GET /api/bd/review/candidates` | salesperson, assistant, manager |
+| `POST /api/bd/review/candidates/{id}/add`, `.../ignore` | salesperson, assistant |
+| `GET /api/bd/analytics`, `GET /api/bd/analytics/export.csv` | manager |
+| `POST /api/bd/contacts/{id}/merge` | assistant |
+| `POST /api/bd/webhooks/telephony/quo` | public (the provider's signature, once built); this exact path only |
+
+BD admins and super admins pass every role check. BD's service-token route (bd-candidates) is not
+carried over.

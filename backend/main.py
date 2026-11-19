@@ -104,6 +104,8 @@ import pull_window
 import reference_tax
 import supabase_client
 import template_versions
+from bd import api as bd_api
+from bd.routers import pending as bd_pending
 import verbal_intake
 
 _SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
@@ -273,7 +275,10 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/deposit-invoice",
                       # and for the signed contract: the portal holds the signature
                       # facts, this repo holds the document generator.
-                      "/api/admin/signed-contract"}
+                      "/api/admin/signed-contract",
+                      # The BD CRM's telephony webhook (#806): the provider will prove itself with
+                      # its signature. ONE exact path; not built yet, so it answers 503.
+                      bd_pending.WEBHOOK_PATH}
 
 
 # Public for GET only. Raken sends the browser back to /api/raken/callback with no Authorization
@@ -414,11 +419,13 @@ async def _auth_gate(request: Request, call_next):
     if _auth_is_public(request.url.path, request.method):
         return await call_next(request)
     try:
-        request.state.user_email = supabase_client.verify_token(
-            request.headers.get("authorization")
-        )
+        identity = supabase_client.verify_identity(request.headers.get("authorization"))
     except supabase_client.AuthError as exc:
         return JSONResponse(status_code=exc.status, content={"ok": False, "error": exc.detail})
+    # The verified identity stays on the request: the email for the tool's own readers, and the
+    # whole of it (email, subject id, display name) for the BD CRM, which trusts this gate (#806).
+    request.state.user_email = identity["email"]
+    request.state.auth_claims = identity
     return await call_next(request)
 
 
@@ -11348,6 +11355,14 @@ async def _gc_board(request: Request) -> Response:
     if etag in sent or "*" in sent:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="text/html; charset=utf-8", headers=headers)
+
+
+# ─── The BD CRM's API (#806) ──────────────────────────────────────────
+# One router, every route under /api/bd/, included AFTER every route of the tool's own so BD's
+# catch-all 404 (its last route) can never shadow one. BD's error envelope is applied by that
+# router's route class, never registered on the app. BD_ENABLED off: every /api/bd/ path answers
+# 503 "not turned on" before touching BD's database. See backend/bd/api.py.
+app.include_router(bd_api.router)
 
 
 if FRONTEND_DIR.exists():
