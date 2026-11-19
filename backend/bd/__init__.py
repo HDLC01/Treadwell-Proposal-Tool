@@ -33,7 +33,13 @@ THE API (#806), on the proposal tool's app, every route under /api/bd/:
              can(), and who may change a BD login (only a super admin changes an admin)
   appsettings  BD's Settings object (defaults merged with bd.settings)
   paging     limit / offset and other query-string numbers
-  routers/   meta (me, settings, users), pending (503 after the role check)
+  routers/   meta (me, settings, users), week (This Week and the task buttons), interactions
+             (the timeline and logging), contacts (one contact: get, patch, confirm), admin (the
+             manual weekly run), pending (503 after the role check)
+  events     the audit log, which is also a contact timeline's event rows
+  interactions_service  logging an interaction and what follows (tasks closed, the touch
+             clearing a promise, the fallback next step), shared by the routers
+  weekly     the weekly 10: the ranking, the Friday batch with its rollover, Give Me 10 More
 
 The pure rules have a JavaScript twin, frontend/bd/js/bd-core.js; tests/test_bd_core_js.py is
 the shared table both must answer.
