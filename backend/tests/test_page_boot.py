@@ -12,46 +12,50 @@ import pathlib
 
 import pytest
 
+from _frontend_tree import pages, rel, scripts
+
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 SUPABASE_SDK = "@supabase/supabase-js"
 
 # Pages that deliberately do not gate: the login page wires sign-in itself, and
-# these are fragments/redirects with no API of their own.
+# these are fragments/redirects with no API of their own. Keyed by the path under
+# frontend/, like every page below (#804): a sub-folder's own login.html is not this one.
 NOT_GATED = {"login.html"}
 
 
-def app_pages():
-    return sorted(p for p in FRONTEND.glob("*.html")
-                  if p.name not in NOT_GATED and "auth.js" in p.read_text(encoding="utf-8"))
+def app_pages(frontend=FRONTEND):
+    """Every page, in every sub-folder, that loads auth.js and is not one of NOT_GATED."""
+    return [p for p in pages(frontend)
+            if rel(p, frontend) not in NOT_GATED and "auth.js" in p.read_text(encoding="utf-8")]
 
 
 def test_there_are_app_pages_to_check():
     """A rename that empties the glob would make every test below vacuously pass."""
-    names = {p.name for p in app_pages()}
+    names = {rel(p) for p in app_pages()}
     assert {"index.html", "projects.html", "done.html", "info-sheet.html", "generate.html"} <= names
 
 
-@pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
+@pytest.mark.parametrize("page", app_pages(), ids=rel)
 def test_page_loads_the_supabase_sdk_before_auth(page):
     html = page.read_text(encoding="utf-8")
     assert SUPABASE_SDK in html, (
-        f"{page.name} pulls in auth.js without the Supabase SDK — auth.js will "
+        f"{rel(page)} pulls in auth.js without the Supabase SDK — auth.js will "
         f"return early, never set window.__TW_TOKEN, and every API call 401s.")
     assert html.index(SUPABASE_SDK) < html.index("/auth.js"), (
-        f"{page.name} loads the Supabase SDK after auth.js; auth.js reads "
+        f"{rel(page)} loads the Supabase SDK after auth.js; auth.js reads "
         f"window.supabase as it runs, so the order matters.")
 
 
-@pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
+@pytest.mark.parametrize("page", app_pages(), ids=rel)
 def test_page_loads_shared(page):
     """Every page script reaches for TW.* helpers. Order against auth.js does
     not matter — nothing calls across at load time — but the file has to be
     there."""
     assert "/shared.js" in page.read_text(encoding="utf-8"), \
-        f"{page.name} is missing shared.js"
+        f"{rel(page)} is missing shared.js"
 
 
-@pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
+@pytest.mark.parametrize("page", app_pages(), ids=rel)
 def test_every_local_script_it_pulls_in_exists(page):
     """A typo'd src is a silent 404 — the page renders and then the first click does
     nothing, which is indistinguishable from a logic bug."""
@@ -63,7 +67,7 @@ def test_every_local_script_it_pulls_in_exists(page):
         src = head.split('src="', 1)[1].split('"', 1)[0]
         path = src.split("?", 1)[0]        # some pages cache-bust with ?v=<date>
         assert (FRONTEND / path.lstrip("/")).is_file(), \
-            f"{page.name} loads {src}, which does not exist"
+            f"{rel(page)} loads {src}, which does not exist"
 
 
 # Names, initials and avatar colours all come from crm-core.js. Every page that renders a
@@ -90,14 +94,19 @@ def test_the_person_chip_is_styled_in_exactly_one_place():
     """`.tw-av` lives in auth.js's injected stylesheet, which every page loads. A second
     copy in a page's own <style> is how one person ends up a different size or a
     different shape on one screen."""
-    import re as _re
     assert ".tw-av{" in (FRONTEND / "auth.js").read_text(encoding="utf-8")
+    dupes = chip_redefinitions()
+    assert not dupes, f"these pages re-define the .tw-av chip: {dupes}"
+
+
+def chip_redefinitions(frontend=FRONTEND):
+    """Every page, in every sub-folder, whose own <style> defines the .tw-av chip."""
+    import re as _re
     # A RULE, not a mention: both pages carry a comment pointing at auth.js, and that
     # comment is the thing telling the next person where the chip lives.
     rule = _re.compile(r"\.tw-av(-dim)?\s*(,[^{}]*)?\{")
-    dupes = [p.name for p in FRONTEND.glob("*.html")
-             if rule.search(p.read_text(encoding="utf-8"))]
-    assert not dupes, f"these pages re-define the .tw-av chip: {dupes}"
+    return [rel(p, frontend) for p in pages(frontend)
+            if rule.search(p.read_text(encoding="utf-8"))]
 
 
 def test_the_per_project_notify_chips_carry_no_identity_colour():
@@ -168,22 +177,30 @@ def test_there_is_one_implementation_of_a_person_name():
     """Four separate copies of email-to-display-name existed, and three of initials —
     including one in auth.js whose paren placement made it return a SINGLE letter for
     every two-word name. One source of truth or the app disagrees with itself."""
+    offenders = person_name_copies()
+    assert not offenders, "re-implemented person naming: " + "; ".join(offenders)
+
+
+def person_name_copies(frontend=FRONTEND):
+    """'<path under frontend/>: <line>' for every script, in every sub-folder, that defines its own
+    nameOf or initialsOf rather than aliasing crm-core.js's."""
     import re as _re
     offenders = []
-    for js in sorted(FRONTEND.glob("*.js")) + sorted((FRONTEND / "js").glob("*.js")):
-        if js.name == "crm-core.js":
+    for js in scripts(frontend):
+        name = rel(js, frontend)
+        # crm-core.js is the one home; auth.js keeps a guarded fallback for login.html, which
+        # loads no page modules.
+        if name in ("js/crm-core.js", "auth.js"):
             continue
         body = js.read_text(encoding="utf-8")
         # A local definition, not a `const nameOf = window.TWCrm.nameOf` alias.
         for m in _re.finditer(r"(?:function|const|let|var)\s+(nameOf|initialsOf)(.*)", body):
             if "TWCrm" not in m.group(2):
-                offenders.append(f"{js.name}: {m.group(0)[:60]}")
-    # auth.js keeps a guarded fallback for login.html, which loads no page modules.
-    offenders = [o for o in offenders if not o.startswith("auth.js")]
-    assert not offenders, "re-implemented person naming: " + "; ".join(offenders)
+                offenders.append(f"{name}: {m.group(0)[:60]}")
+    return offenders
 
 
-@pytest.mark.parametrize("page", app_pages(), ids=lambda p: p.name)
+@pytest.mark.parametrize("page", app_pages(), ids=rel)
 def test_page_has_no_inline_script(page):
     """The CSP blocks inline <script> and onclick=. An inline handler silently
     does nothing in production while working fine from a file:// preview."""
@@ -193,5 +210,27 @@ def test_page_has_no_inline_script(page):
         if "src=" in head:
             continue
         assert not body.split("</script>")[0].strip(), \
-            f"{page.name} has an inline <script> block; the CSP will refuse it"
-    assert "onclick=" not in html.lower(), f"{page.name} has an inline onclick handler"
+            f"{rel(page)} has an inline <script> block; the CSP will refuse it"
+    assert "onclick=" not in html.lower(), f"{rel(page)} has an inline onclick handler"
+
+
+# ── the scans reach sub-folders (#804) ───────────────────────────────────────
+def test_every_scan_here_sees_a_page_or_script_in_a_sub_folder(tmp_path):
+    """The BD CRM moves in under /bd/ with pages named like the root's. Each scan in this file walks
+    the whole tree and keys what it finds by its path under frontend/, so bd/admin.html is neither
+    skipped nor folded into admin.html."""
+    from _frontend_tree import rel, write_tree
+    gated = '<script src="/auth.js"></script>'
+    # The naming pattern in person_name_copies has held a literal backspace after the name since
+    # #226 (a "\b" that lost its raw string), so it only matches a definition that carries one. The
+    # fixture carries one too: this test is about which files the scan reads, not about the pattern.
+    write_tree(tmp_path, {
+        "admin.html": gated,
+        "login.html": gated,
+        "bd/admin.html": gated + "<style>.tw-av{color:red}</style>",
+        "bd/login.html": gated,
+        "bd/js/people.js": "function nameOf\b(e) { return e; }\n",
+    })
+    assert [rel(p, tmp_path) for p in app_pages(tmp_path)] == ["admin.html", "bd/admin.html", "bd/login.html"]
+    assert chip_redefinitions(tmp_path) == ["bd/admin.html"]
+    assert [o.split(":")[0] for o in person_name_copies(tmp_path)] == ["bd/js/people.js"]

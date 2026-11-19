@@ -37,3 +37,13 @@ def scripts(frontend: pathlib.Path = FRONTEND) -> list[pathlib.Path]:
 def rel(path: pathlib.Path, frontend: pathlib.Path = FRONTEND) -> str:
     """`path` named the way every scan keys it: relative to `frontend`, with forward slashes."""
     return pathlib.Path(path).relative_to(frontend).as_posix()
+
+
+def write_tree(root: pathlib.Path, files: dict) -> pathlib.Path:
+    """Write {path under root: text} into `root`, making folders as needed, and return `root`. For the
+    tests that prove a scan sees a page or script placed in a sub-folder."""
+    for name, text in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return root

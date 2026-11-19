@@ -26,25 +26,28 @@ import subprocess
 
 import pytest
 
+from _frontend_tree import pages, rel, scripts
+
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                reason="node is not installed")
 
 
-def js_files():
-    return sorted(list(FRONTEND.glob("*.js")) + list(FRONTEND.glob("js/*.js")))
+def js_files(frontend=FRONTEND):
+    """Every script, in every sub-folder (#804)."""
+    return scripts(frontend)
 
 
 def test_there_are_js_files_to_check():
     """A move or a rename that emptied the glob would make every check below vacuously
     pass — which is the failure mode this whole file exists to prevent."""
-    names = {p.name for p in js_files()}
-    assert {"auth.js", "shared.js", "crm-core.js"} <= names, names
+    names = {rel(p) for p in js_files()}
+    assert {"auth.js", "shared.js", "js/crm-core.js"} <= names, names
     assert len(js_files()) >= 15
 
 
-@pytest.mark.parametrize("path", js_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", js_files(), ids=rel)
 def test_it_parses(path):
     """`node --check` parses without executing, so it needs no DOM and no browser.
 
@@ -53,7 +56,7 @@ def test_it_parses(path):
     proc = subprocess.run(["node", "--check", str(path)],
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, (
-        f"{path.name} does not parse — every page that loads it will break:\n{proc.stderr}")
+        f"{rel(path)} does not parse — every page that loads it will break:\n{proc.stderr}")
 
 
 def test_the_injected_stylesheet_contains_no_backtick():
@@ -81,11 +84,30 @@ def test_the_injected_stylesheet_contains_no_backtick():
 def test_no_frontend_js_uses_an_inline_script_or_handler():
     """Adjacent rule, same blast radius: the CSP forbids inline `<script>` and `onclick=`,
     and a violation fails silently in the browser rather than at build time."""
+    offenders = inline_scripts()
+    assert not offenders, offenders
+
+
+def inline_scripts(frontend=FRONTEND):
+    """'<path under frontend/>: inline <script>' for every page, in every sub-folder (#804), with one."""
     offenders = []
-    for page in sorted(FRONTEND.glob("*.html")):
+    for page in pages(frontend):
         html = page.read_text(encoding="utf-8")
         for chunk in html.split("<script")[1:]:
             head, _, rest = chunk.partition(">")
             if "src=" not in head and rest.strip()[:200].strip():
-                offenders.append(f"{page.name}: inline <script>")
-    assert not offenders, offenders
+                offenders.append(f"{rel(page, frontend)}: inline <script>")
+    return offenders
+
+
+def test_both_scans_see_a_page_or_script_in_a_sub_folder(tmp_path):
+    """#804: the BD CRM's pages and scripts live under /bd/, named like the root's. Both scans walk
+    the whole tree and name what they find by its path under frontend/."""
+    from _frontend_tree import rel, write_tree
+    write_tree(tmp_path, {
+        "shared.js": "", "js/app.js": "", "bd/js/app.js": "",
+        "index.html": '<script src="/shared.js"></script>',
+        "bd/index.html": "<script>alert(1)</script>",
+    })
+    assert [rel(p, tmp_path) for p in js_files(tmp_path)] == ["bd/js/app.js", "js/app.js", "shared.js"]
+    assert inline_scripts(tmp_path) == ["bd/index.html: inline <script>"]

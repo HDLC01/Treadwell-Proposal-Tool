@@ -32,8 +32,17 @@ import re
 
 import pytest
 
+from _frontend_tree import pages, rel
+
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
-PAGES = sorted(FRONTEND.glob("*.html"))
+
+
+def hidden_pages(frontend=FRONTEND):
+    """Every page, in every sub-folder (#804)."""
+    return pages(frontend)
+
+
+PAGES = hidden_pages()
 
 # display values that leave the element on screen. `none` and `contents` do not.
 _ON_SCREEN = re.compile(r"display\s*:\s*(?!none\b|contents\b)([a-z-]+)")
@@ -101,15 +110,27 @@ def _scripts_of(page_text):
     return [FRONTEND / s for s in re.findall(r'src="(js/[\w.-]+\.js)"', page_text)]
 
 
-@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+@pytest.mark.parametrize("page", PAGES, ids=rel)
 def test_everything_marked_hidden_can_actually_be_hidden(page):
     text = page.read_text(encoding="utf-8", errors="replace")
     css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
     if not css.strip():
         pytest.skip("no author CSS on this page")
+    uniq = hidden_but_shown(page)
+    assert not uniq, "%s:\n%s" % (rel(page), "\n".join(
+        '  #%s ships `hidden` and carries .%s (display:%s, from %s) — a class rule beats the UA '
+        '`[hidden]` rule, so hiding it does nothing. Add `.%s[hidden] { display:none; }`.'
+        % (i, c, d, w, c) for w, i, c, d in uniq))
+
+
+def hidden_but_shown(page):
+    """[(where, id, class, display)] for each element `page` ships hidden whose class its own CSS puts
+    on screen with nothing re-hiding it. Empty when the page has no author CSS."""
+    text = page.read_text(encoding="utf-8", errors="replace")
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
     guarded = _guarded(css)
     if "*" in guarded:
-        return                              # a blanket [hidden]{display:none} covers the page
+        return []                           # a blanket [hidden]{display:none} covers the page
     on_screen = _on_screen_classes(css)
 
     candidates = [("markup", e) for e in _hideable(text)]
@@ -129,11 +150,7 @@ def test_everything_marked_hidden_can_actually_be_hidden(page):
         if b[1:] not in seen:
             seen.add(b[1:])
             uniq.append(b)
-
-    assert not uniq, "%s:\n%s" % (page.name, "\n".join(
-        '  #%s ships `hidden` and carries .%s (display:%s, from %s) — a class rule beats the UA '
-        '`[hidden]` rule, so hiding it does nothing. Add `.%s[hidden] { display:none; }`.'
-        % (i, c, d, w, c) for w, i, c, d in uniq))
+    return uniq
 
 
 def test_the_pager_and_the_toolbar_stay_fixed():
@@ -167,3 +184,15 @@ def test_the_scan_is_actually_looking_at_something():
     assert "pp-pager" in _on_screen_classes(css), (
         "the stylesheet parser no longer sees .pp-pager's display, so this page passes vacuously")
     assert "pp-pager" in _guarded(css)
+
+
+def test_a_page_in_a_sub_folder_is_checked_too(tmp_path):
+    """#804: the BD CRM's pages live under /bd/. The page list is drawn from the whole tree, and a
+    page there that ships a hidden element its own CSS puts on screen is caught."""
+    from _frontend_tree import rel, write_tree
+    write_tree(tmp_path, {
+        "bd/broken.html": '<style>.strip{display:flex}</style><div id="s" class="strip" hidden></div>',
+    })
+    found = hidden_pages(tmp_path)
+    assert [rel(p, tmp_path) for p in found] == ["bd/broken.html"]
+    assert [b[2] for b in hidden_but_shown(found[0])] == ["strip"]
