@@ -225,6 +225,14 @@ _Avoid_: Possible duplicate (that is one person), duplicate company
 A BD account whose people were all moved into another BD account by a merge, each keeping their owner. It is kept, marked with who merged it and when, and hidden from the Contacts page, its search and Add contact, and nobody can edit it. Every merge can be undone, which brings it back as it was. The code and its event log call this a company merge (company_merged, merge_companies), the database table's word.
 _Avoid_: Deleted account, duplicate account
 
+**Cut-over copy**:
+The one command that moves BD's data from the old BD CRM's own database into the proposal tool on cut-over day, and back again for a rollback. It proves with each table's row count and checksum that nothing was lost, and that the old database did not change while it ran.
+_Avoid_: Migration (that is a change to the schema), import (that is a Workbook import), sync
+
+**Cut-over record**:
+The file the cut-over copy writes when it moves BD's data in: each table's row count and checksum in the old database, and the time. The way back first checks the old database still matches it. It holds no contact's details.
+_Avoid_: Backup (that is a database dump), log
+
 **Logged entry**:
 A call, voicemail, meeting, hosted event, email, text or note in a BD contact's history. The person who logged it can change its words; a BD admin can change or delete any.
 _Avoid_: Activity, interaction (the API's word for it), log
