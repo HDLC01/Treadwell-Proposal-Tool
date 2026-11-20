@@ -114,6 +114,8 @@ def refs_of(path):
 
 def bad_ref(value):
     """Why `value` may not appear in a BD file, or None."""
+    if value.startswith("#"):
+        return None                   # a place on the same page (Admin's section nav, #809)
     v = value.split("?", 1)[0].split("#", 1)[0]
     if v.startswith("data:"):
         return None
@@ -135,7 +137,7 @@ def test_nothing_under_bd_refers_to_a_tool_page_or_script(path):
 
 
 @pytest.mark.parametrize("value,ok", [
-    ("/bd/js/bd-api.js", True), ("/bd/", True), ("/js/icons.js", True), ("/login.html", True),
+    ("/bd/js/bd-api.js", True), ("/bd/", True), ("#ad-s-users", True), ("ad-s-users", False), ("/js/icons.js", True), ("/login.html", True),
     ("/api/bd/me", True), ("/portal.html", False), ("/js/crm-core.js", True), ("/js/portal.js", False),
     ("/styles.css", False),
     ("/api/me", False), ("/index.html", False), ("js/x.js", False), ("https://example.com/x.js", False),
@@ -208,10 +210,10 @@ def test_the_moved_page_check_sees_a_page_that_has_not_moved(tmp_path):
     (tmp_path / "bd" / "js").mkdir(parents=True)
     (tmp_path / "bd" / "index.html").write_text('<a href="/bd/contacts.html?id=1">Contacts</a><a href="/bd/">x</a>',
                                                 encoding="utf-8")
-    (tmp_path / "bd" / "js" / "bd-week.js").write_text('go("/bd/contacts.html"); go("/bd/review.html");', encoding="utf-8")
+    (tmp_path / "bd" / "js" / "bd-week.js").write_text('go("/bd/contacts.html"); go("/bd/old-page.html");', encoding="utf-8")
     (tmp_path / "bd" / "js" / "x.js").write_text('go("/bd/contacts.html?company=4"); go("/bd/js/bd-api.js"); '
                                                  'go("/bd/contact.html?id=" + id);', encoding="utf-8")
-    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/contacts.html", "bd/js/bd-week.js: /bd/review.html",
+    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/contacts.html", "bd/js/bd-week.js: /bd/old-page.html",
                                            "bd/js/x.js: /bd/contacts.html"]
 
 

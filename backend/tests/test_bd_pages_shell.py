@@ -54,6 +54,10 @@ PAGE_SCRIPT = {
     "bd/contact.html": ["/bd/js/bd-call.js", "/bd/js/bd-contact.js"],
     # Add a contact (#808).
     "bd/add.html": ["/bd/js/bd-add.js"],
+    # Admin, Potential BD Contacts and Analytics (#809).
+    "bd/admin.html": ["/bd/js/bd-admin.js"],
+    "bd/review.html": ["/bd/js/bd-review.js"],
+    "bd/analytics.html": ["/bd/js/bd-analytics.js"],
 }
 LOGIN_ORDER = ["/bd/js/login-return.js"]
 TITLE = re.compile(r"^\S.* · BD CRM · Treadwell$")
@@ -152,7 +156,8 @@ def script_names(s: Shell):
 
 def test_pages_found():
     names = {rel(p) for p in PAGES}
-    assert {"bd/index.html", "bd/contacts.html", "bd/login.html"} <= names, names
+    assert {"bd/index.html", "bd/contacts.html", "bd/login.html", "bd/contact.html", "bd/add.html",
+            "bd/admin.html", "bd/review.html", "bd/analytics.html"} <= names, names
 
 
 # ── head ─────────────────────────────────────────────────────────────────────────────────────
@@ -286,6 +291,7 @@ CSS_MARKERS = [
     "/* == page: week == */", "/* == end: week == */",
     "/* == page: contacts == */", "/* == end: contacts == */",
     "/* == page: contact == */", "/* == end: contact == */",
+    "/* == page: mgmt == */", "/* == end: mgmt == */",
     "/* == print, reduced motion == */",
 ]
 # Each page section's own class prefixes; a rule in one section may not use another's. A ticket that
@@ -295,6 +301,8 @@ PAGE_PREFIXES = {
     # #808: Add a contact and the Contacts page's place (the Contacts list's ct- rules come with it)
     "contacts": ["ct-", "add-"],
     "contact": ["cd-"],
+    # #809: Admin (ad-), Potential BD Contacts (rv-) and Analytics (an-)
+    "mgmt": ["ad-", "rv-", "an-"],
 }
 
 

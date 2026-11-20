@@ -351,7 +351,7 @@
   //    and only once its page has moved. BD_SECTIONS is that list: an entry is ADDED by the ticket
   //    that moves its page (Contacts, Add contact, Potential BD Contacts, Analytics, Admin), so the
   //    sidebar never links to a page that is not there yet. Its can field names the can() key that must be
-  //    true; an empty one means every BD role.
+  //    true, or lists keys of which any one will do; an empty one means every BD role.
   //  - /api/bd/me is asked only when the group is open, once per page: a shut group costs the tool's
   //    own pages nothing.
   //  - The current section is lit by the page's full path, like every row (#804).
@@ -360,6 +360,12 @@
     // #808. One contact's page (/bd/contact.html) has moved too, but it is not a section: it opens
     // from a name, and on it no section is lit.
     { href: "/bd/add.html", label: "Add contact", can: "add_contact" },
+    // #809. Potential BD Contacts is every BD role's, as BD's rail had it. Admin is BD's page gate
+    // (admin_area: the assistant and the admins), and the salesperson's too: they import a workbook
+    // (import), and until the Contacts page moves, the import lives on Admin's Imports.
+    { href: "/bd/review.html", label: "Potential BD Contacts" },
+    { href: "/bd/analytics.html", label: "Analytics", can: "analytics" },
+    { href: "/bd/admin.html", label: "Admin", can: ["admin_area", "import"] },
   ];
   let BD_OPEN = false;          // the group's state on this page (the live menu's only)
   let bdMePromise = null;
@@ -439,7 +445,10 @@
     }
     const can = body.can || {};
     const here = location.pathname.toLowerCase();
-    const shown = BD_SECTIONS.filter((s) => !s.can || can[s.can] === true);
+    const shown = BD_SECTIONS.filter((s) => {
+      const keys = [].concat(s.can || []);
+      return !keys.length || keys.some((k) => can[k] === true);
+    });
     if (!shown.length) return bdNote("Nothing here for your BD role yet.");
     return shown.map(function (s) {
       const on = here === s.href || (s.also || []).indexOf(here) !== -1;

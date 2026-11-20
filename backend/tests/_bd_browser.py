@@ -329,10 +329,17 @@ class Page:
 # ── what every BD browser suite reads off a page (#808: one copy for test_bd_e2e_week and
 # test_bd_e2e_contact, and MOVED_PAGES for test_bd_assets' static scan too) ────────────────────────
 # The BD pages that have moved into the tool so far (#807: This Week; #808: one contact and Add
-# contact). Being served is not enough: /bd/contacts.html is there only as the page an assistant is
+# contact; #809: Admin, Potential BD Contacts and Analytics). Being served is not enough: /bd/contacts.html is there only as the page an assistant is
 # sent to until Contacts moves, so a link to it, with or without ?company=, is a link to a page that
 # has not moved. A page ticket adds its page here, and nowhere else.
-MOVED_PAGES = frozenset({"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html"})
+MOVED_PAGES = frozenset({"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html", "/bd/admin.html",
+                         "/bd/review.html", "/bd/analytics.html"})
+
+# What each BD section's page shows once it has loaded, for a per-role check that clicks every section
+# the sidebar offers (test_bd_e2e_contact, test_bd_e2e_mgmt). A page ticket adds its page here too.
+SECTION_LANDED = {"/bd/": "#summary .wk-progress-in, [data-pick]", "/bd/add.html": "#add-form",
+                  "/bd/review.html": "#rv-body .error-box", "/bd/analytics.html": "#an-body .error-box",
+                  "/bd/admin.html": ".ad-sec:not([hidden])"}
 
 # What a Phase 5 placeholder route's 503 says, wherever a page shows it.
 NOT_BUILT = "This part is not built yet (Phase 5)."

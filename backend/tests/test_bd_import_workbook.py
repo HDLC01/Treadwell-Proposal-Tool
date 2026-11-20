@@ -874,7 +874,7 @@ def test_the_history_on_the_fixture_seed(bd_seeded, bd_as_user):
     assert first == {"ok": True, "total": 1, "items": [{
         "id": 701, "file_name": "bd-fixture-import.csv", "dry_run": True, "started_at": "2026-10-01T10:00:00-05:00",
         "by": {"id": 5, "name": "Emery Stoll"}, "rows_read": 3, "created": 2, "updated": 0, "skipped": 1,
-        "possible_duplicates": 1, "errors": [{"row": 4, "error": "No company name"}]}]}
+        "possible_duplicates": 1, "errors": [{"sheet": "CSV", "row": 4, "message": "No company name."}]}]}
     rec = ok_import(upload(c, b"Company,Name\nNorthvane Plastics,Lou Kim\n", name="BD workbook.csv", mime="text/csv"))
     assert rec["id"] == 702 and rec["by"] == {"id": 3, "name": "Casey Moret"}
     assert_shape(contract_import_example(), {"ok": True, "import": rec})

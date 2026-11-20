@@ -186,6 +186,10 @@ def can(user) -> dict:
         "cadence": a or role in ("salesperson", "assistant", "manager"),
         # Deletes a logged entry, or changes one somebody else logged.
         "manage_entries": a,
+        # Adds a BD admin, or changes an admin's login (#809, Q29): the super admin's alone
+        # (refuse_new_login / refuse_login_change below). BD's Admin page offers the admin roles, and
+        # an admin's row, only to this person, and tells a plain admin why the row is locked.
+        "manage_admins": role == "super_admin",
     }
 
 

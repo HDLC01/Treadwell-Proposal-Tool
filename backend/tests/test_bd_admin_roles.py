@@ -140,17 +140,26 @@ def test_none_of_the_moved_routes_is_a_placeholder_any_more():
 #   admin_area  the unmatched calls (the Admin page)  assistant, admins
 #   import      the import and its history            salesperson, assistant, admins
 #   analytics   the Analytics section                 manager, admins
+#   manage_admins  adds an admin or changes an admin's   the super admin alone (Q29): the People table
+#                  login                                 offers the admin roles, and an admin's row, only
+#                                                        to them. Checked by re-saving the super admin's
+#                                                        own role, which changes nothing: a plain admin
+#                                                        is refused it (an admin's login), anyone else
+#                                                        is refused the People routes.
 KEY_ROUTES = {
     "admin": [("GET", "/api/bd/admin/users"), ("GET", "/api/bd/admin/telephony")],
     "admin_area": [("GET", "/api/bd/admin/unmatched-calls")],
     "import": [("GET", "/api/bd/admin/imports")],
     "analytics": [("GET", "/api/bd/analytics")],
+    "manage_admins": [("PATCH", "/api/bd/admin/users/6", {"role": "super_admin"})],
 }
 KEY_TABLE = {
     "admin": {"avery": False, "blair": False, "casey": False, "devon": False, "emery": True, "frankie": True},
     "admin_area": {"avery": False, "blair": False, "casey": True, "devon": False, "emery": True, "frankie": True},
     "import": {"avery": True, "blair": True, "casey": True, "devon": False, "emery": True, "frankie": True},
     "analytics": {"avery": False, "blair": False, "casey": False, "devon": True, "emery": True, "frankie": True},
+    "manage_admins": {"avery": False, "blair": False, "casey": False, "devon": False, "emery": False,
+                      "frankie": True},
 }
 KEY_CASES = [(key, who) for key in KEY_TABLE for who in ROLES]
 
@@ -159,8 +168,8 @@ KEY_CASES = [(key, who) for key in KEY_TABLE for who in ROLES]
 def test_each_can_key_is_true_exactly_when_its_route_lets_the_person_in(bd_seeded, bd_as_user, key, who):
     client = bd_as_user(UID[who])
     assert client.get("/api/bd/me").json()["can"][key] is KEY_TABLE[key][who]
-    for method, path in KEY_ROUTES[key]:
-        r = client.request(method, path)
+    for method, path, *body in KEY_ROUTES[key]:
+        r = client.request(method, path, json=body[0] if body else None)
         assert (r.status_code != 403) is KEY_TABLE[key][who], (key, who, path, r.status_code, r.text)
 
 

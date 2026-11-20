@@ -616,7 +616,8 @@ BD route serves that path with another method.
   "ok": true,
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
   "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false,
-           "add_contact": true, "edit_contact": true, "clear_duplicate": false, "cadence": true, "manage_entries": false },
+           "add_contact": true, "edit_contact": true, "clear_duplicate": false, "cadence": true, "manage_entries": false,
+           "manage_admins": false },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -624,12 +625,13 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | |
-| assistant | | | | yes | yes | | | | yes | yes | yes | yes | |
-| manager | | yes | | | | | yes | yes | | | | yes | |
-| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries | manage_admins |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | | |
+| assistant | | | | yes | yes | | | | yes | yes | yes | yes | | |
+| manager | | yes | | | | | yes | yes | | | | yes | | |
+| admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | |
+| super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 
 `pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
 "Whose week?" picker. A salesperson sees only their own week. This Week and the contact page show
@@ -650,6 +652,14 @@ against its route, person by person):
   `edit_contact` (the manager) gets the cadence sheet alone.
 - `manage_entries`: `DELETE /api/bd/interactions/{id}`, and `PATCH` of an entry somebody else logged.
   Each logged entry's Delete, and its Edit when it is not this person's own.
+
+BD's Admin page (#809) reads `admin` (People, the Friday list, goals, pick lists, the phone status),
+`admin_area` (the unmatched calls), `import` (the workbook import and past imports) and one more
+(tests/test_bd_admin_roles.py checks each key against its route, person by person):
+
+- `manage_admins`: `POST /api/bd/admin/users` with an admin role, and `PATCH /api/bd/admin/users/{id}`
+  of an admin's login or to an admin role (Q29, the super admin alone). The People table offers the
+  admin roles, and unlocks an admin's row, only to this person; a plain admin's locked row says why.
 
 #### `GET /api/bd/settings` (any BD role)
 
