@@ -376,6 +376,16 @@ def test_a_salesperson_reads_and_edits_a_colleagues_contact(bd_seeded, bd_db, bd
     assert bd_db.execute("select archived_at from bd.contacts where id = %s", (cid,)).fetchone()["archived_at"]
 
 
+def test_a_salesperson_may_hand_a_contact_to_another_owner_by_the_contract(bd_seeded, bd_db, bd_as_user):
+    """`owner_id` is on the PATCH list for salesperson, assistant and admin: Avery hands Dana to Blair.
+    The manager may not hand her back (her one sentence), and Dana stays Blair's."""
+    r = bd_as_user(UID["salesperson"]).patch("/api/bd/contacts/%d" % SHARED_CONTACT, json={"owner_id": BLAIR})
+    assert r.status_code == 200 and r.json()["contact"]["owner"]["id"] == BLAIR, r.text
+    r = bd_as_user(UID["manager"]).patch("/api/bd/contacts/%d" % SHARED_CONTACT, json={"owner_id": UID["salesperson"]})
+    assert (r.status_code, r.json()) == (403, forbidden(MANAGER_SENTENCE)), r.text
+    assert bd_db.execute("select owner_id from bd.contacts where id = %s", (SHARED_CONTACT,)).fetchone()["owner_id"] == BLAIR
+
+
 def test_a_patch_cannot_restore_or_archive_a_contact_by_an_archived_key(bd_seeded, bd_db, bd_as_user):
     """Archiving and restoring go through POST .../archive only. A PATCH that names archived_at or
     archived is taken for its other fields and leaves the archive as it was, both ways."""
