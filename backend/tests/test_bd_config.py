@@ -37,7 +37,9 @@ DEFAULTS = {
     "BD_TEST_DATABASE_URL": "",          # tests only; CI sets it
 }
 # Read on every call (bizdate's business clock), never held as an attribute.
-LIVE = {"BD_TODAY": config.bd_today_override, "BD_NOW": config.bd_now_override}
+LIVE = {"BD_TODAY": config.bd_today_override, "BD_NOW": config.bd_now_override,
+        # the cut-over command's two connection strings (#812), read by bd/ops/cutover.py only
+        "BD_CUTOVER_OLD_URL": config.cutover_old_url, "BD_CUTOVER_TOOL_URL": config.cutover_tool_url}
 
 # How a module reads a variable: config's own helpers, or os.environ / os.getenv directly.
 _READS = re.compile(r"""(?:_str|_bool|_int|_emails|environ\.get|getenv|environ\[)\(?\s*["']([A-Za-z_][A-Za-z0-9_]*)["']""")

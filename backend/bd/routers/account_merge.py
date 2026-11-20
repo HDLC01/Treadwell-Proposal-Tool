@@ -9,13 +9,9 @@ WHO. The assistant, the BD admin and the super admin (Q21, Q36), `can.merge_comp
 is 403 on all four. Nothing merges on its own: no worker, startup hook or read calls a merge
 (tests/test_bd_account_merge.py runs the Friday batch and every read and finds nothing merged).
 
-THE RULE (bd/normalize.py account_key). Two accounts that are not merged away are a likely pair when
-their cleaned names are equal, at least one of them has a BD person who is not archived (they are
-likely duplicate BD accounts: the BD tab shows that one), and the pair was not kept separate. A
-shared phone, or a shared email
-domain that is not a free mail one, among their people who are not archived is shown as a hint; a
-hint alone never makes a pair. The paths sit under /api/bd/contacts/, so the tool's audit log records
-each read (the hints carry phone numbers), by path alone.
+THE RULE: bd/account_pairs_service.py (the cut-over command's duplicates list shares it). The paths
+sit under /api/bd/contacts/, so the tool's audit log records each read (the hints carry phone
+numbers), by path alone.
 
 MERGE (a soft merge). Both companies are locked first, in id order (contacts_service.lock_companies;
 Add contact, a contact's company change and the import read an account FOR SHARE, so they wait for a
@@ -48,6 +44,7 @@ from typing import Any
 
 from fastapi import Body, Depends, Path, Request
 
+from .. import account_pairs_service as pairs
 from .. import auth, db, errors, normalize, paging, serialize, web
 from .. import contacts_service as cs
 from ..contacts_service import ALREADY_MERGED, COMPANY_NOT_FOUND, FIX
@@ -81,46 +78,11 @@ def _people(conn, company_id) -> int:
                         (company_id,)).fetchone()["n"]
 
 
-# ── the list ─────────────────────────────────────────────────────────────────────────────────
-def _pairs(conn) -> list:
-    rows = conn.execute(
-        "select co.id, co.name, co.city,"
-        " (select count(*) from contacts c where c.company_id = co.id and c.archived_at is null)::integer"
-        " as people_count,"
-        " exists (select 1 from contacts c where c.company_id = co.id and c.category = 'bd'"
-        "   and c.archived_at is null) as on_bd"
-        " from companies co where co.merged_into is null order by co.id").fetchall()
-    groups: dict = {}
-    for r in rows:
-        key = normalize.account_key(r["name"])
-        if key:
-            groups.setdefault(key, []).append(r)
-    kept = {(k["account_a"], k["account_b"]) for k in conn.execute(
-        "select account_a, account_b from account_pairs_kept").fetchall()}
-    found = [(key, a, b) for key, members in groups.items()
-             for i, a in enumerate(members) for b in members[i + 1:]
-             if (a["on_bd"] or b["on_bd"]) and (a["id"], b["id"]) not in kept]
-    found.sort(key=lambda p: (p[0], p[1]["id"], p[2]["id"]))
-    return found
-
-
-def _hints(conn, ids: list) -> dict:
-    """{company id: (phones, email domains)} of the people who are not archived."""
-    out: dict = {i: (set(), set()) for i in ids}
-    if ids:
-        for r in conn.execute("select company_id, phone_e164, email_lower from contacts"
-                              " where company_id = any(%s) and archived_at is null", (ids,)).fetchall():
-            phones, domains = out[r["company_id"]]
-            if r["phone_e164"]:
-                phones.add(r["phone_e164"])
-            domain = normalize.email_domain(r["email_lower"])
-            if domain and domain not in normalize.FREE_MAIL_DOMAINS:
-                domains.add(domain)
-    return out
-
-
+# ── the list (the rule itself: bd/account_pairs_service.py) ─────────────────────────────────────
 def _recent_merges(conn) -> list:
-    """The latest merges Undo may still take: not undone, and the survivor not merged on since."""
+    """The latest merges Undo may still take: not undone, the account still marked merged into the
+    survivor (a cut-over copy puts no mark back on an account that gained people in the old app,
+    #812), and the survivor not merged on since."""
     rows = conn.execute(
         "select e.id, e.at, e.data, u.id as by_id, u.name as by_name, lo.name as account_name, su.name as into_name,"
         " (select count(*) from contacts c where c.company_id = su.id and c.archived_at is null)::integer"
@@ -128,8 +90,8 @@ def _recent_merges(conn) -> list:
         " from events e left join users u on u.id = e.actor_id"
         " join companies lo on lo.id = (e.data->>'company_id')::bigint"
         " join companies su on su.id = (e.data->>'into')::bigint"
-        " where e.kind = %s and su.merged_into is null and not exists (select 1 from events x where x.kind = %s"
-        "   and (x.data->>'merge_id')::bigint = e.id)"
+        " where e.kind = %s and lo.merged_into = su.id and su.merged_into is null"
+        " and not exists (select 1 from events x where x.kind = %s and (x.data->>'merge_id')::bigint = e.id)"
         " order by e.id desc limit %s", (MERGED, UNDONE, MERGES_SHOWN)).fetchall()
     return [serialize.account_merge(
         r["id"], serialize.company_ref(r["data"]["company_id"], r["account_name"]),
@@ -142,11 +104,10 @@ def _recent_merges(conn) -> list:
 def list_duplicates(request: Request, me: dict = Depends(auth.require_role(*MERGE_ROLES))):
     limit, offset = paging.page_or_400(request.query_params)
     with db.connect() as conn:
-        found = _pairs(conn)
+        found = pairs.likely_pairs(conn)
         page = found[offset:offset + limit]
-        hints = _hints(conn, sorted({p[1]["id"] for p in page} | {p[2]["id"] for p in page}))
-        items = [serialize.account_pair(a, b, hints[a["id"]][0] & hints[b["id"]][0],
-                                        hints[a["id"]][1] & hints[b["id"]][1]) for _key, a, b in page]
+        hints = pairs.hints(conn, sorted({p[1]["id"] for p in page} | {p[2]["id"] for p in page}))
+        items = [serialize.account_pair(a, b, *pairs.shared(hints, a["id"], b["id"])) for _key, a, b in page]
         merges = _recent_merges(conn)
     return {"ok": True, "total": len(found), "items": items, "merges": merges}
 

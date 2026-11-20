@@ -22,6 +22,13 @@ once:
             and production. bizdate.today_central() is the only reader.
   BD_NOW    a full ISO timestamp that replaces "now" (tests that need a fixed time of day).
 
+The cut-over command's two connection strings (python -m bd.ops.cutover, #812) are read live too, and
+only by that command, so they are never held in this module and never reach the app:
+
+  BD_CUTOVER_OLD_URL   the OLD BD database (its owner login), set only in the one-off container's
+                       environment on cut-over or rollback day
+  BD_CUTOVER_TOOL_URL  the tool's database as bd_app (the same value as BD_DATABASE_URL), likewise
+
 The defaults (#805, #806):
   BD_ENABLED                  off     the switch. Off: every /api/bd/ route answers 503 "not turned
                                       on" before it touches the database. Staging sets it on
@@ -119,3 +126,14 @@ def bd_today_override() -> str:
 def bd_now_override() -> str:
     """The BD_NOW override as typed ("" when unset). Read on every call."""
     return (os.environ.get("BD_NOW") or "").strip()
+
+
+# ── the cut-over command's connection strings (read live, by bd/ops/cutover.py only) ───────────
+def cutover_old_url() -> str:
+    """BD_CUTOVER_OLD_URL ("" when unset). Read on every call; never logged or printed."""
+    return (os.environ.get("BD_CUTOVER_OLD_URL") or "").strip()
+
+
+def cutover_tool_url() -> str:
+    """BD_CUTOVER_TOOL_URL ("" when unset). Read on every call; never logged or printed."""
+    return (os.environ.get("BD_CUTOVER_TOOL_URL") or "").strip()
