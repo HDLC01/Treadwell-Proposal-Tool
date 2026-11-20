@@ -253,7 +253,7 @@ def test_the_move_writes_one_event_with_ids_and_counts_only(bd_seeded, bd_as_use
     d = ev["data"]
     assert set(d) == {"company_id", "to", "people", "contacts", "tasks_off", "pins", "batches"}
     assert (d["company_id"], d["to"], d["people"]) == (t["company"], "maintenance", 5)
-    assert d["contacts"] == [[t[k], 4] for k in ("p1", "p2", "p3", "p4", "p5")]   # the frequency before
+    assert d["contacts"] == [[t[k], 4, 3] for k in ("p1", "p2", "p3", "p4", "p5")]   # the frequency before, after
     assert d["tasks_off"] == sorted([t["t1"], t["t3"]]) and len(d["pins"]) == 3 and len(d["batches"]) == 2
     # Nothing but ids, counts and the direction: no name, phone, email, company name or note.
     assert all(isinstance(v, int) for k in ("tasks_off", "pins", "batches") for v in d[k])
@@ -279,7 +279,7 @@ def test_moving_back_to_bd_removes_the_pin_and_adds_nothing(bd_seeded, bd_as_use
     week = bd_as_user(AVERY).get("/api/bd/week").json()["week"]
     assert week["due_count"] == 0 and (week["done_count"], week["total"]) == (1, 2)
     ev = events(bd_db)[-1]
-    assert ev["data"] == {"company_id": 17, "to": "bd", "people": 2, "contacts": [[30, 3], [31, 2]],
+    assert ev["data"] == {"company_id": 17, "to": "bd", "people": 2, "contacts": [[30, 3, 4], [31, 2, 4]],
                           "tasks_off": [301], "pins": [], "batches": []}
     tabs = {tab: [a["id"] for a in bd_as_user(AVERY).get(
         "/api/bd/contacts/accounts?category=" + tab).json()["items"]] for tab in ("bd", "maintenance")}
@@ -372,7 +372,7 @@ def test_a_later_move_of_someone_new_still_makes_the_earlier_one_stale(bd_seeded
     assert state(bd_db) == after
 
 
-@pytest.mark.parametrize("change", ["call_logged", "call_reopened", "person_edited"])
+@pytest.mark.parametrize("change", ["call_logged", "call_reopened", "person_edited", "frequency_edited"])
 def test_a_change_since_the_move_makes_it_stale(bd_seeded, bd_as_user, bd_db, change):
     t = tallgrass(bd_db)
     avery = bd_as_user(AVERY)
@@ -381,13 +381,94 @@ def test_a_change_since_the_move_makes_it_stale(bd_seeded, bd_as_user, bd_db, ch
         r = avery.post("/api/bd/contacts/%d/interactions" % t["p4"], json={"kind": "call", "outcome": "answered"})
     elif change == "call_reopened":        # a call it took off is put back by hand
         r = avery.post("/api/bd/tasks/%d/reopen" % t["t1"], json={})
-    else:                                  # a person is moved back by hand
+    elif change == "person_edited":        # a person is moved back by hand
         r = avery.patch("/api/bd/contacts/%d" % t["p5"], json={"category": "bd"})
+    else:                                  # a person's follow-ups a year are set by hand: Undo must not undo it
+        r = avery.patch("/api/bd/contacts/%d" % t["p5"], json={"frequency_per_year": 6})
     assert r.status_code in (200, 201), r.text
     after = state(bd_db)
     r = avery.post(UNDO % mid)
     assert (r.status_code, r.json()["message"]) == (409, "Something changed since this move, so it can't be undone.")
     assert state(bd_db) == after
+
+
+# ── two writers at once ─────────────────────────────────────────────────────────────────────────
+def _other_connection(bd_db_url):
+    import _bd_db
+    from bd import db as dbmod
+
+    return dbmod.direct(_bd_db.app_login_url(bd_db_url), autocommit=False)
+
+
+def _in_a_thread(fn):
+    """Runs fn() in a thread. Returns (finished Event, {"r": fn's answer}, the thread)."""
+    import threading
+
+    done, out = threading.Event(), {}
+
+    def go():
+        try:
+            out["r"] = fn()
+        finally:
+            done.set()
+
+    th = threading.Thread(target=go)
+    th.start()
+    return done, out, th
+
+
+def test_a_move_waits_for_a_weekly_build_of_the_owners_list(bd_seeded, bd_as_user, bd_db, bd_db_url):
+    """A build of Avery's list (the Friday run, or Give Me 10 More) holds her list's lock, and its
+    rollover changes her open tasks after taking it. Moving Kaw Valley (Hal and Nora, both Avery's) back
+    to BD takes Hal's pinned follow-up 301 off her list, so the move waits for that lock before it
+    touches a person or a task (it nothing to pin here, so only the early lock makes it wait)."""
+    from bd import weekly
+
+    avery = bd_as_user(AVERY)
+    build = _other_connection(bd_db_url)
+    try:
+        weekly._lock_owner(build, AVERY)                      # the build is running
+        done, out, th = _in_a_thread(lambda: avery.post(MOVE % 17, json={"to": "bd"}))
+        assert not done.wait(1.5), "the move did not wait for the build of Avery's list"
+        assert bd_db.execute("select status from bd.tasks where id = 301").fetchone()["status"] == "open"
+        assert bd_db.execute("select category from bd.contacts where id = 30").fetchone()["category"] == "maintenance"
+        build.commit()                                        # the build is done
+        assert done.wait(30)
+    finally:
+        build.close()
+    th.join(30)
+    assert out["r"].status_code == 200, out["r"].text
+    assert bd_db.execute("select status from bd.tasks where id = 301").fetchone()["status"] == "snoozed"
+
+
+@pytest.mark.parametrize("which", ["pin", "off"])
+def test_an_undo_waits_for_a_task_being_closed_and_then_refuses(bd_seeded, bd_as_user, bd_db, bd_db_url, which):
+    """While Undo runs, a call is logged that closes the follow-up the move pinned for Dell (p4), or This
+    Week marks Arlo's call that the move took off (t1) as done. Undo waits for that to finish, sees
+    it, and changes nothing: it never deletes a done follow-up or reopens a done call, so the
+    salesperson's logged calls keep counting."""
+    t = tallgrass(bd_db)
+    avery = bd_as_user(AVERY)
+    mid = move(avery, t["company"], "maintenance")["move"]["id"]
+    task_id = t["t1"] if which == "off" else bd_db.execute(
+        "select id from bd.tasks where contact_id = %s and kind = 'maintenance'", (t["p4"],)).fetchone()["id"]
+    other = _other_connection(bd_db_url)
+    try:
+        other.execute("update tasks set status = 'done', done_at = bd_now(), snoozed_until = null where id = %s",
+                      (task_id,))
+        done, out, th = _in_a_thread(lambda: avery.post(UNDO % mid, json={}))
+        assert not done.wait(1.5), "Undo did not wait for the task being closed"
+        other.commit()
+        assert done.wait(30)
+    finally:
+        other.close()
+    th.join(30)
+    r = out["r"]
+    assert (r.status_code, r.json()["message"]) == (409, "Something changed since this move, so it can't be undone.")
+    assert bd_db.execute("select status from bd.tasks where id = %s", (task_id,)).fetchone() == {"status": "done"}
+    assert {r["category"] for r in bd_db.execute("select category from bd.contacts where id = any(%s)",
+                                                 ([t[k] for k in ("p1", "p2", "p3", "p4", "p5")],)).fetchall()} == {
+        "maintenance"}
 
 
 @pytest.mark.parametrize("path", [UNDO % 999999, UNDO % "abc", UNDO % 0])

@@ -29,8 +29,8 @@ from fastapi import Body, Depends, Request
 from .. import appsettings, auth, bizdate, db, errors, interactions_service, paging, serialize, web
 from ..contacts_service import (BD_FREQUENCY_SENTENCE, CATEGORIES, CONTACT_NOT_FOUND, DATE_FIELDS, FIX, NAME_MAX,
                                 TEXT_DEFAULT_MAX, TEXT_FIELDS, as_int, check_date, check_tags, check_text,
-                                company_spec_ok, create_contact, find_duplicates, resolve_company, tags, too_long,
-                                user_exists)
+                                company_spec_ok, create_contact, default_frequency, find_duplicates,
+                                resolve_company, tags, too_long, user_exists)
 from ..events import log_event
 from ..normalize import normalize_company
 from ..phone import digits as phone_digits
@@ -398,13 +398,8 @@ def patch_contact(id: str, body: Any = Body(None), user: dict = Depends(auth.cur
             # A flip with no number of its own: the stored number becomes the new category's default
             # (a BD contact's 52 or 12 must not become a maintenance contact's target; the BD number
             # is only a record, as at creation).
-            settings = appsettings.load(conn)
-            if body["category"] == "maintenance":
-                flip_freq = (settings.get("default_frequency") or {}).get("maintenance") or 3
-            else:
-                flip_freq = appsettings.CADENCE_FREQ.get(settings.get("bd_cadence") or "", 4)
             sets.append("frequency_per_year = %s")
-            params.append(int(flip_freq))
+            params.append(default_frequency(appsettings.load(conn), body["category"]))
 
         if "owner_id" in body:
             new_owner = owner["id"] if owner else None

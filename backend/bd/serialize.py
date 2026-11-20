@@ -46,6 +46,7 @@ archived (mock-data.js contacts have no such key; the mock adds it on archive).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import decimal
 from collections.abc import Mapping
 from typing import Any
@@ -263,8 +264,6 @@ def account_move(move_id: Any, company_row: Row, to: str, people: int, calls_off
                  at: Any, undo_seconds: int) -> dict:
     """What a company move answers: its id (for Undo), the company, where it went, how many people,
     how many calls came off this week's lists, how many follow-ups were pinned, and until when Undo works."""
-    import datetime as _dt
-
     return {
         "id": move_id,
         "company": company_ref(company_row["id"], company_row["name"]),

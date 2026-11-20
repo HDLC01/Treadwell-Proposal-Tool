@@ -24,7 +24,7 @@
         <p class="page-sub" id="ct-sub"><span class="skeleton ct-sk-sub"></span></p>
       </div>
       <div class="page-actions ct-actions">
-        <button type="button" class="btn" id="ct-import" aria-haspopup="menu" aria-expanded="false" hidden>Import</button>
+        <button type="button" class="btn" id="ct-import" hidden>Import</button>
         <input type="file" id="ct-import-file" accept=".xlsx,.csv" hidden aria-label="Choose the workbook to import" />
         <a class="btn btn-primary" id="ct-add" href="/bd/add.html" hidden>Add contact</a>
       </div>
@@ -43,6 +43,7 @@
         <button type="button" role="tab" id="ct-tab-bd" data-tab="bd" aria-selected="true" aria-controls="ct-list">BD accounts</button>
         <button type="button" role="tab" id="ct-tab-maintenance" data-tab="maintenance" aria-selected="false" aria-controls="ct-list" tabindex="-1">Maintenance</button>
       </div>
+      <p class="ct-moved" id="ct-moved" hidden></p>
       <div class="ct-searchrow" role="search">
         <div class="input-wrap ct-search">
           <label class="sr-only" for="ct-q">Search accounts and people</label>

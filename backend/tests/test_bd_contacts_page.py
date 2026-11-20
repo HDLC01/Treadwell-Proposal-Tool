@@ -15,7 +15,8 @@ own Contacts page and the 2026-11-20 decisions on #810:
   move_company      the "..." button on each company row (Q5: never the assistant)
 
 The data is made up, shaped like the fixture seed's (bd/ops/fixture_seed.py), on its Wednesday,
-2026-11-04: Bluestem Logistics (3 BD people, three owners: Avery shown, "+2", no live talk yet),
+2026-11-04: Bluestem Logistics (3 BD people; Avery and Blair, the two salespeople there, tie: Avery
+shown, "+1", no live talk yet),
 Prairie Ridge Builders LLC (Dana, an answered call Tue, Oct 20) and, on the Maintenance tab, Kaw Valley
 Cold Storage (Hal and Nora; Hal's answered call Thu, Aug 20). The search answers are the contract's
 shapes (docs/bd/api-contract.md, "GET /api/bd/contacts/search"). The page used for real, in Chromium
@@ -60,7 +61,7 @@ def person(pid, name, owner, **kw):
 
 
 BLUESTEM = {"id": 16, "name": "Bluestem Logistics", "city": "Lenexa", "industry": "Warehousing", "category": "bd",
-            "people_count": 3, "owner": AVERY, "other_owners": 2, "last_live_at": None, "people": [
+            "people_count": 3, "owner": AVERY, "other_owners": 1, "last_live_at": None, "people": [
                 person(29, "Ines Varga", DEVON, title="Purchasing", phone="913-555-0109", phone_e164="+19135550109",
                        email="ines.varga@bluestem.example.com", confirmed=False),
                 person(27, "Lena Ortiz", AVERY, title="Operations Manager", importance=3, cadence="monthly",
@@ -230,7 +231,7 @@ def test_the_bd_tab_lists_each_account_with_its_people_owner_and_last_live_talk(
     assert ids == [(10, "bd"), (16, "bd")], "the server's order (by name)"
     assert words == [
         ("Prairie Ridge <b>Builders</b> LLC", "1 person", "Avery Quill", "Tue, Oct 20"),
-        ("Bluestem Logistics", "3 people", "Avery Quill +2", "Never"),
+        ("Bluestem Logistics", "3 people", "Avery Quill +1", "Never"),
     ]
     assert "<b>Builders</b>" not in markup(out, "ct-list"), "a company name goes in as text"
     assert text(out, "ct-sub") == "4 people at 2 BD accounts · 2 maintenance contacts"

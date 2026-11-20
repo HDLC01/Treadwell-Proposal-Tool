@@ -938,6 +938,9 @@
 .bd-app .ct-call-more { padding: 10px 0; }
 .bd-app .ct-unknown-none { padding: 12px 0; color: var(--bd-ink-2); }
 
+/* The page's own Undo after a company move, for as long as the server allows one (the toast's goes in 10 s). */
+.bd-app .ct-moved { display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; margin: 12px 0 0; padding: 0 14px;
+  border-radius: var(--bd-r); background: var(--bd-ok-bg); color: var(--bd-ok); font-size: 14px; font-weight: 500; }
 .bd-app .ct-searchrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0 10px; }
 .bd-app .ct-search { flex: 1 1 260px; max-width: 420px; }
 .bd-app .ct-sort { display: flex; align-items: center; gap: 8px; }

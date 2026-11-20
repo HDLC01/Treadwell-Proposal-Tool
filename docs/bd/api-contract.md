@@ -317,7 +317,10 @@ A task is one slot in a weekly 10. **Tasks have no due date and can never be ove
   week), not on Monday. `done` tasks never change.
 
 TaskBatch: `{ "id": 41, "kind": "friday", "owner": {"id": 1, "name": "Troy"}, "week_start": "2026-11-02", "generated_at": "2026-10-30T16:00:00-05:00" }`.
-`kind`: `friday` | `ten_more`.
+`kind`: `friday` | `ten_more`. A `ten_more` batch is normally a "Give Me 10 More" list. Since #810 a
+company made a maintenance account can also make one that holds **only pinned `maintenance` tasks**
+(see `POST /api/bd/contacts/accounts/{id}/move`): it is not a "Give Me 10 More" list, holds no BD
+call, and This Week shows its tasks under "Due now", never as "N more (to get ahead)".
 
 How a batch is filled (not AI; `BDCore.rankContacts` / `pickWeekly` / `pickNext`, ported to
 `backend/weekly.py`): every contact the salesperson owns and has not archived is scored; the ones
@@ -371,8 +374,11 @@ What the This Week page draws.
 ```
 
 - `batch` is the latest batch this week; `batches` is every batch this week (the Friday one, then each
-  "Give Me 10 More"). `tasks` holds the tasks of **all** of them in that order (the example leaves it
-  empty to keep it short; it holds Task objects).
+  `ten_more`: a "Give Me 10 More", or a list made by a company move that holds only pinned maintenance
+  follow-ups). `batch` can therefore be such a pin-only list; a page that wants the Friday list or the
+  last "Give Me 10 More" looks in `batches` by `kind` and by whether a batch holds a BD task. `tasks`
+  holds the tasks of **all** of them in that order (the example leaves it empty to keep it short; it
+  holds Task objects).
 - `done_count`/`total` are the **live Friday batch's business-development tasks only** (the latest
   Friday batch of the week, leaving out its `maintenance` tasks; one a forced re-run replaced is still
   listed but not counted): the headline "did I do my 10?". Asking for more never makes the 10 look
@@ -921,8 +927,8 @@ seed on its day, Wednesday 2026-11-04.
 | `id`, `name`, `city`, `industry` | | the company |
 | `category` | string | the tab: `bd` or `maintenance` |
 | `people_count` | int | that tab's people at the account, archived people left out |
-| `owner` | UserRef or null | whoever owns the most of those people. **A tie** goes to the tied owner who logged the most recent live talk at the account (Q41), else to the tied owner first by name. `null` when nobody owns any of them |
-| `other_owners` | int | the "+N": how many other people own someone there |
+| `owner` | UserRef or null | the **salesperson** who owns the most of those people (Q33; people owned by a manager, an admin or nobody count in `people_count` only). **A tie** goes to the tied owner who logged the most recent live talk at the account (Q41), else to the tied owner first by name. `null` when no salesperson owns any of them |
+| `other_owners` | int | the "+N": how many other salespeople own someone there |
 | `last_live_at` | timestamp or null | the latest live touch (the one counting rule: a call where someone talked, a meeting, a hosted event) with **anyone** at the account who is not archived, BD or maintenance (Q34), dated on or before today |
 | `people` | [AccountPerson] | that tab's people, by name (any case), then id |
 
@@ -946,7 +952,7 @@ first; `last_live_at`, latest first and never-talked last; ties by name, then id
   "items": [
     {
       "id": 16, "name": "Bluestem Logistics", "city": "Lenexa", "industry": "Warehousing", "category": "bd",
-      "people_count": 3, "owner": { "id": 1, "name": "Avery Quill" }, "other_owners": 2, "last_live_at": null,
+      "people_count": 3, "owner": { "id": 1, "name": "Avery Quill" }, "other_owners": 1, "last_live_at": null,
       "people": [
         { "id": 29, "name": "Ines Varga", "title": "Purchasing", "phone": "913-555-0109", "phone_e164": "+19135550109",
           "email": "ines.varga@bluestem.example.com", "category": "bd", "confirmed": false, "importance": 1,
@@ -1004,8 +1010,11 @@ takes effect at once:
 - Each person's stored `frequency_per_year` becomes the new category's default, as a contact edit's
   category change sets it.
 - One event, `company_moved`, by the caller, with no contact: `{ "company_id", "to", "people", "contacts":
-  [[id, frequency before]], "tasks_off": [task ids], "pins": [task ids], "batches": [batch ids] }`. Ids
-  and counts only, never a name, phone, email or note.
+  [[id, frequency before, frequency after]], "tasks_off": [task ids], "pins": [task ids], "batches":
+  [batch ids] }`. Ids and counts only, never a name, phone, email or note. "Company" in the event kinds
+  and in `can.move_company` is the table's word; the page says BD account (GLOSSARY.md).
+- A move takes the weekly builds' per-owner lock of every list the people may be on before it changes
+  anything, so it waits for a Friday run or a Give Me 10 More of those lists that is running.
 
 ```json
 { "to": "maintenance" }
@@ -1027,8 +1036,9 @@ for them). `{ "ok": true, "undone": { "id", "company": { "id", "name" }, "to", "
 404 `"That move does not exist."`; 403 `"Only the person who made this move can undo it."` (an admin
 too); 409 `"This move is already undone."`; 409 `"It's too late to undo this move."` (more than two
 minutes after it); 409 `"Something changed since this move, so it can't be undone."` (a later move of
-the company, a person's category changed by hand, a call it took off put back, or a follow-up it pinned
-done).
+the company, a person's category or follow-ups a year changed by hand, a call it took off put back or
+marked done, or a follow-up it pinned done). A call logged or a task closed at the same moment as the
+Undo is either seen (409) or waits until the Undo is done.
 
 ### Companies (#808)
 

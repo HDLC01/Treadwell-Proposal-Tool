@@ -20,10 +20,11 @@ contact id by GET /api/bd/contacts/{id}.
 THE ACCOUNT ROW (Q19, Q33, Q34, Q41):
   * people_count   the tab's people at the account (BD tab: BD people only; Maintenance tab:
                    maintenance people only), archived people left out.
-  * owner          whoever owns the most of those people. A tie goes to the tied owner who logged
-                   the most recent live talk at the account (Q41); when none of them has, to the
-                   tied owner first by name. "+N" is `other_owners`: how many other people own
-                   someone there.
+  * owner          the salesperson who owns the most of those people (Q33: people owned by a
+                   manager, an admin or nobody are counted in people_count but own nothing). A tie
+                   goes to the tied owner who logged the most recent live talk at the account
+                   (Q41); when none of them has, to the tied owner first by name. "+N" is
+                   `other_owners`: how many other salespeople own someone there.
   * last_live_at   the latest live touch (BD's one counting rule, interactions.counts_as_touch: a
                    call where someone talked, a meeting, a hosted event) with ANYONE at the account
                    who is not archived, BD or maintenance (Q34), dated on or before today (Central).
@@ -36,21 +37,29 @@ one category throughout) and nothing else, and takes effect at once:
     10, logged calls still count and the list is never refilled. A person whose maintenance
     follow-up is due by BD's rule (contacts_summary.maintenance_due: 120 days or more since the last
     follow-up, or never followed up) gets the pinned maintenance follow-up on their owner's list at
-    once, made by the Friday batch's own rules (bd/weekly.py rank_contacts). It goes on the owner's
-    live Friday list of that week when the person has no task there; otherwise (the person's BD call
-    that just came off is on it, or there is no Friday list) on a small list of its own for that week
-    (a "ten_more" batch holding only pinned follow-ups, which are never part of the 10).
+    once, made by the Friday batch's own rules (bd/weekly.py pin_due_maintenance, which says which
+    list it goes on).
   * to BD: each person's open pinned maintenance follow-up comes off (snoozed), and nothing is added.
   * the stored frequency becomes the new category's default, as a contact edit's category flip does.
   * ONE event, kind "company_moved", actor_id = who: {"company_id", "to", "people", and the ids
-    needed to undo it: "contacts" [[id, the frequency before]], "tasks_off", "pins", "batches"}.
-    Ids and counts only: no name, phone, email or note.
+    needed to undo it: "contacts" [[id, the frequency before, the frequency it gave]], "tasks_off",
+    "pins", "batches"}. Ids and counts only: no name, phone, email or note.
+  * Before it changes a person or a task it takes the weekly builds' lock of every list those people
+    may be on (weekly.lock_lists), as a build does before its rollover, so a build and a move never
+    cross: a call a running build adds still comes off, and a build that starts later reads the
+    people moved.
+
+The words differ on purpose: the page and GLOSSARY.md say "BD account" (Q19); the table, the stored
+event kinds (company_moved, company_move_undone) and the can key (move_company) say "company", the
+name the table keeps. A company move moves a BD account.
 
 UNDO (Q3). Only the person who made the move, within UNDO_SECONDS of it, and only while it is the
 company's latest move and everything it changed is still as it left it (each person still in the new
-category, each call it took off still off, each follow-up it pinned still open). Then it puts back
-exactly what was there before, the calls it took off included, and writes one "company_move_undone"
-event. A stale undo is 409 and changes nothing.
+category with the frequency it gave, each call it took off still off, each follow-up it pinned still
+open). Then it puts back exactly what was there before, the calls it took off included, and writes
+one "company_move_undone" event. A stale undo is 409 and changes nothing. It locks the people, their
+lists and the tasks before it checks them, so a call logged or a task closed at the same moment is
+either seen (409) or waits for it.
 """
 from __future__ import annotations
 
@@ -59,7 +68,7 @@ from typing import Any
 from fastapi import Body, Depends, Path, Request
 
 from .. import appsettings, auth, bizdate, db, errors, paging, serialize, web, weekly
-from ..contacts_service import COMPANY_NOT_FOUND, FIX
+from ..contacts_service import COMPANY_NOT_FOUND, FIX, default_frequency, too_long
 from ..events import log_event
 from ..normalize import normalize_company
 from ..phone import digits as phone_digits
@@ -97,13 +106,14 @@ _LIVE_AT_COMPANY = (
 
 
 # ── the account list ─────────────────────────────────────────────────────────────────────────
-def _pick_owner(people: list, talks: dict) -> tuple:
-    """(owner UserRef or None, other_owners) of one account's people (contacts_summary rows).
+def _pick_owner(people: list, talks: dict, sellers: set) -> tuple:
+    """(owner UserRef or None, other_owners) of one account's people (contacts_summary rows). Only
+    salespeople own an account (Q33): `sellers` is the ids of the salespeople among the owners.
     `talks` is {user_id: latest live talk they logged at the account}."""
     counts: dict = {}
     names: dict = {}
     for p in people:
-        if p["owner_id"] is not None:
+        if p["owner_id"] in sellers:
             counts[p["owner_id"]] = counts.get(p["owner_id"], 0) + 1
             names[p["owner_id"]] = p["owner_name"]
     if not counts:
@@ -143,9 +153,12 @@ def _accounts(conn, category: str, sort: str, limit: int, offset: int) -> tuple:
                 " and i.counts_as_touch and i.user_id is not null and bd_date(i.occurred_at) <= bd_today()"
                 " group by c.company_id, i.user_id", (ids,)).fetchall():
             talks[t["company_id"]][t["user_id"]] = t["at"]
+    owners = sorted({p["owner_id"] for ps in people.values() for p in ps if p["owner_id"] is not None})
+    sellers = {u["id"] for u in conn.execute(
+        "select id from users where id = any(%s) and role = 'salesperson'", (owners,)).fetchall()} if owners else set()
     items = []
     for r in rows:
-        owner, others = _pick_owner(people[r["id"]], talks[r["id"]])
+        owner, others = _pick_owner(people[r["id"]], talks[r["id"]], sellers)
         items.append(serialize.account(r, category, owner, others, people[r["id"]]))
     return int(total), items
 
@@ -180,7 +193,7 @@ def search(request: Request, user: dict = Depends(auth.current_user)):
     if not needle:
         raise errors.bad_request(FIX, {"q": "Type something to search for."})
     if len(needle) > SEARCH_MAX:
-        raise errors.bad_request(FIX, {"q": "Keep this to %d characters or fewer." % SEARCH_MAX})
+        raise errors.bad_request(FIX, {"q": too_long(SEARCH_MAX)})
     params: dict = {"n": needle}
     account_hit = "strpos(lower(co.name), %(n)s) > 0"
     cleaned = normalize_company(needle)
@@ -225,68 +238,6 @@ def _lock_company(conn, company_id) -> dict:
     return row
 
 
-def _new_frequency(conn, to: str) -> int:
-    """The stored frequency a person takes in `to`, as PATCH /api/bd/contacts/{id}'s category flip
-    sets it: maintenance's default, or the BD cadence's number."""
-    settings = appsettings.load(conn)
-    if to == "maintenance":
-        return int((settings.get("default_frequency") or {}).get("maintenance") or 3)
-    return int(appsettings.CADENCE_FREQ.get(settings.get("bd_cadence") or "", 4))
-
-
-def _list_week(conn, owner_id, today) -> Any:
-    """The week whose list the owner works now: next week's once the Friday run has made its live
-    Friday list (the run has already closed this week's), else this week."""
-    this_week = bizdate.week_start(today)
-    next_week = bizdate.add_days(this_week, 7)
-    made = conn.execute("select 1 from task_batches where owner_id = %s and week_start = %s and kind = 'friday'"
-                        " and replaced_at is null", (owner_id, next_week)).fetchone()
-    return next_week if made else this_week
-
-
-def _pin_due(conn, contact_ids: list, today) -> tuple:
-    """The pinned maintenance follow-up, at once, for each moved person who is due and owned by an
-    active salesperson (only a salesperson has a weekly list). Returns (task ids, batch ids made)."""
-    rows = conn.execute(
-        "select cs.* from contacts_summary cs join users u on u.id = cs.owner_id where cs.id = any(%s)"
-        " and cs.archived_at is null and u.role = 'salesperson' and u.active order by cs.id",
-        (contact_ids,)).fetchall()
-    by_owner: dict = {}
-    for r in rows:
-        by_owner.setdefault(r["owner_id"], []).append(r)
-    pins, batches = [], []
-    for owner_id in sorted(by_owner):
-        weekly.lock_owner(conn, owner_id)
-        ws = _list_week(conn, owner_id, today)
-        facts = weekly.load_facts(conn, owner_id, ws, any_status=False)
-        picks = [p for p in weekly.rank_contacts(by_owner[owner_id], facts, today) if p["kind"] == "maintenance"]
-        if not picks:
-            continue
-        friday = conn.execute("select id from task_batches where owner_id = %s and week_start = %s"
-                              " and kind = 'friday' and replaced_at is null order by id desc limit 1",
-                              (owner_id, ws)).fetchone()
-        on_friday = set()
-        if friday is not None:
-            on_friday = {r["contact_id"] for r in conn.execute(
-                "select contact_id from tasks where batch_id = %s", (friday["id"],)).fetchall()}
-        own_batch = None
-        for p in picks:
-            if friday is not None and p["contact_id"] not in on_friday:
-                batch_id = friday["id"]
-            else:
-                if own_batch is None:
-                    own_batch = conn.execute(
-                        "insert into task_batches (owner_id, week_start, kind) values (%s, %s, 'ten_more')"
-                        " returning id", (owner_id, ws)).fetchone()["id"]
-                    batches.append(own_batch)
-                batch_id = own_batch
-            pins.append(conn.execute(
-                "insert into tasks (batch_id, contact_id, kind, reason, reasons, score)"
-                " values (%s, %s, 'maintenance', %s, %s, %s) returning id",
-                (batch_id, p["contact_id"], p["reason"], list(p["reasons"]), p["score"])).fetchone()["id"])
-    return pins, batches
-
-
 def _take_off(conn, contact_ids: list, kinds: tuple, today) -> list:
     """Each open task of `kinds` for these people on this week's list or a later one comes off, as
     "Not this week" does (snoozed until the Monday after its week). Returns their ids."""
@@ -320,17 +271,20 @@ def move_account(company_id: str = Path(alias="id"), body: Any = Body(None),
         if not people:
             raise errors.conflict(NOBODY_TO_MOVE[to])
         ids = [r["id"] for r in rows]
-        conn.execute("update contacts set category = %s, frequency_per_year = %s where id = any(%s)",
-                     (to, _new_frequency(conn, to), ids))
+        # Every list these people may be on, locked before anything changes: a weekly build running
+        # now finishes first (and its calls come off below), and one starting now reads them moved.
+        weekly.lock_lists(conn, ids, today)
+        freq = default_frequency(appsettings.load(conn), to)
+        conn.execute("update contacts set category = %s, frequency_per_year = %s where id = any(%s)", (to, freq, ids))
         if to == "maintenance":
             off = _take_off(conn, ids, ("new", "followup"), today)
-            pins, batches = _pin_due(conn, ids, today)
+            pins, batches = weekly.pin_due_maintenance(conn, ids, today)
         else:
             off = _take_off(conn, ids, ("maintenance",), today)
             pins, batches = [], []
         event_id = log_event(conn, MOVED, actor=me, data={
             "company_id": cid, "to": to, "people": people,
-            "contacts": [[r["id"], r["frequency_per_year"]] for r in rows],
+            "contacts": [[r["id"], r["frequency_per_year"], freq] for r in rows],
             "tasks_off": off, "pins": pins, "batches": batches})
         at = conn.execute("select at from events where id = %s", (event_id,)).fetchone()["at"]
     return {"ok": True, "move": serialize.account_move(event_id, company, to, people, len(off), len(pins),
@@ -363,25 +317,37 @@ def undo_move(move_id: str = Path(alias="id"), body: Any = Body(None),
         if late:
             raise errors.conflict(TOO_LATE)
         to = data.get("to")
-        pairs = [(int(p[0]), int(p[1])) for p in data.get("contacts") or [] if isinstance(p, list) and len(p) == 2]
-        ids = [p[0] for p in pairs]
+        # [id, the frequency before, the one the move gave]
+        moved = [(int(p[0]), int(p[1]), int(p[2])) for p in data.get("contacts") or []
+                 if isinstance(p, list) and len(p) == 3]
+        ids = [p[0] for p in moved]
         off, pins, batches = _ids(data.get("tasks_off")), _ids(data.get("pins")), _ids(data.get("batches"))
+        # Lock what Undo changes before looking at it (people, their lists, then the tasks), so a call
+        # logged or a task closed meanwhile is either seen here or waits until Undo is done.
+        conn.execute("select id from contacts where id = any(%s) order by id for update", (ids,))
+        weekly.lock_lists(conn, ids, bizdate.today_central(), off + pins)
+        conn.execute("select id from tasks where id = any(%s) order by id for update", (off + pins,))
         later = conn.execute("select 1 from events where kind = %s and id > %s and (data->>'company_id')::bigint = %s",
                              (MOVED, mid, company["id"])).fetchone()
         state = conn.execute(
-            "select (select count(*) from contacts where id = any(%(ids)s) and category = %(to)s) as moved,"
+            "select (select count(*) from contacts c join unnest(%(ids)s::bigint[], %(freq)s::integer[]) as p(id, freq)"
+            " on p.id = c.id where c.category = %(to)s and c.frequency_per_year = p.freq) as moved,"
             " (select count(*) from tasks where id = any(%(off)s) and status = 'snoozed') as off,"
             " (select count(*) from tasks where id = any(%(pins)s) and status = 'open') as pins",
-            {"ids": ids, "to": to, "off": off, "pins": pins}).fetchone()
+            {"ids": ids, "freq": [p[2] for p in moved], "to": to, "off": off, "pins": pins}).fetchone()
         if later or to not in CATEGORIES or (state["moved"], state["off"], state["pins"]) != (
                 len(ids), len(off), len(pins)):
             raise errors.conflict(CHANGED_SINCE)
         back = "bd" if to == "maintenance" else "maintenance"
         conn.execute("update contacts c set category = %s, frequency_per_year = p.freq"
                      " from unnest(%s::bigint[], %s::integer[]) as p(id, freq) where c.id = p.id",
-                     (back, ids, [p[1] for p in pairs]))
-        conn.execute("update tasks set status = 'open', snoozed_until = null where id = any(%s)", (off,))
-        conn.execute("delete from tasks where id = any(%s)", (pins,))
+                     (back, ids, [p[1] for p in moved]))
+        # Guarded as well as locked: a task no longer as the move left it is never changed.
+        reopened = conn.execute("update tasks set status = 'open', snoozed_until = null where id = any(%s)"
+                                " and status = 'snoozed'", (off,)).rowcount
+        removed = conn.execute("delete from tasks where id = any(%s) and status = 'open'", (pins,)).rowcount
+        if (reopened, removed) != (len(off), len(pins)):
+            raise errors.conflict(CHANGED_SINCE)
         conn.execute("delete from task_batches b where b.id = any(%s)"
                      " and not exists (select 1 from tasks t where t.batch_id = b.id)", (batches,))
         log_event(conn, UNDONE, actor=me, data={"move_id": mid, "company_id": company["id"], "to": to,

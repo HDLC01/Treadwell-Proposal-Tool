@@ -690,13 +690,8 @@
   }
 
   // ── side: Follow-up cadence ────────────────────────────────────────────────────────────────
-  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  /** "2027-01-31" -> "Jan 31" (the date as written: no clock, no time zone). */
-  function monDay(iso) {
-    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-    // The year only when the day is not in this (Central) year, like BD.fmtDay: "Jan 31, 2027".
-    return m ? MONTHS[+m[2] - 1] + " " + (+m[3]) + (S.today && m[1] !== String(S.today).slice(0, 4) ? ", " + m[1] : "") : "";
-  }
+  /** "2027-01-31" -> "Jan 31", "Jan 31, 2027" in another year than this (Central) one. */
+  function monDay(iso) { return BD.fmtMonthDay(iso, S.today); }
   /** The BD cadence everyone follows unless a contact has an override: weekly, monthly or quarterly. */
   function globalCadence() {
     var w = S.settings && S.settings.bd_cadence;

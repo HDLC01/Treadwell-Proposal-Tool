@@ -295,6 +295,15 @@
     return d.toLocaleDateString("en-US", o);
   }
 
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  /** "2026-12-31" -> "Dec 31"; "Jan 31, 2027" when the date is not in `today`'s year. The date as
+   *  written (no clock, no time zone), for a day the server stores as a date. "" for nothing. */
+  function fmtMonthDay(iso, today) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+    if (!m) return "";
+    return MONTHS[+m[2] - 1] + " " + (+m[3]) + (today && m[1] !== String(today).slice(0, 4) ? ", " + m[1] : "");
+  }
+
   /** How far off a date is, in plain words, from `today` (calendar days in Central):
    *  "today", "tomorrow", "in 3 days", "in a week", "in 2 weeks", "in 3 weeks", "in about a
    *  month", "about 3 months", "about a year", "about 2 years". A past date gives "". */
@@ -934,14 +943,13 @@
   // again; one copy, not one per page) ───────────────────────────────────────────────────────────
 
   /** A call that matched no contact (GET /api/bd/admin/unmatched-calls) in words: its number
-   *  ("913-555-0199", the number as sent when it is not a 10-digit one, or "Unknown number"), when
+   *  ("913-555-0199" as fmtPhone shows it, a number that is not a US one as sent, or "Unknown number"), when
    *  ("Tue, Nov 3, 4:42 PM", Central), how long ("2 min" from a minute up, or "No talk time") and
    *  which way it went ("Called us" / "We called"). */
   function callWords(u) {
     var c = u || {};
-    var d = String(c.from_e164 || "").replace(/\D/g, "").slice(-10);
     return {
-      phone: d.length === 10 ? d.slice(0, 3) + "-" + d.slice(3, 6) + "-" + d.slice(6) : String(c.from_e164 || "Unknown number"),
+      phone: fmtPhone(c.from_e164) || "Unknown number",
       when: fmtBizDate(c.occurred_at, "short") + ", " + fmtBizTime(c.occurred_at),
       length: c.duration_s ? Math.max(1, Math.round(c.duration_s / 60)) + " min" : "No talk time",
       way: c.direction === "in" ? "Called us" : "We called",
@@ -1101,6 +1109,7 @@
     fmtCount: fmtCount,
     firstName: firstName,
     fmtDay: fmtDay,
+    fmtMonthDay: fmtMonthDay,
     fmtRel: fmtRel,
     chipDate: chipDate,
     fmtDuration: fmtDuration,

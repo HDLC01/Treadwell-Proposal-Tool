@@ -70,6 +70,16 @@ def _round_half_up(value) -> int:
     return int(Decimal(str(value)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
+def default_frequency(settings: dict, category: str) -> int:
+    """The stored frequency a person takes in `category` when nobody gives one: a BD contact's comes
+    from the one BD cadence (the view derives it again live, so this stored number is only a record),
+    anyone else's from that category's default. Creating a contact, a contact's category flip and a
+    company move (bd/routers/accounts.py) all use this one rule."""
+    if category == "bd":
+        return int(appsettings.CADENCE_FREQ.get(settings.get("bd_cadence") or "", 4))
+    return int((settings.get("default_frequency") or {}).get(category) or 3)
+
+
 def clamp_frequency(value, fallback: int) -> int:
     """api.js clampFrequency: 1-52, or the default when missing, 0 or negative."""
     if value is None:
@@ -284,10 +294,9 @@ def create_contact(conn, actor, body: dict, source: str = "manual"):
     if cat == "bd":
         # A BD contact's number comes from the one BD cadence (the view derives it again live, so a
         # later change of the setting moves every BD contact; this stored value is only a record).
-        freq = appsettings.CADENCE_FREQ.get(settings.get("bd_cadence") or "", 4)
+        freq = default_frequency(settings, "bd")
     else:
-        freq = clamp_frequency(body.get("frequency_per_year"),
-                               (settings.get("default_frequency") or {}).get(cat) or 3)
+        freq = clamp_frequency(body.get("frequency_per_year"), default_frequency(settings, cat))
     dup_id, dup_reason = (dups[0]["contact_id"], dups[0]["reason"]) if dups else (None, None)
     raw_email = body.get("email")
     email = raw_email.strip() if raw_email else None

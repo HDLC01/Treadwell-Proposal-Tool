@@ -4,8 +4,8 @@
  *
  * Two tabs, BD and Maintenance, each a list of companies ("BD accounts", Q19; the Maintenance tab is
  * grouped by company too since 2026-11-20, Q6). A company row says how many of that tab's people work
- * there, who owns them (the owner of the most, plus "+N" other owners; a tie goes to whoever had the
- * latest live talk there, Q33 and Q41), and the last live talk with anyone there (Q34). The server
+ * there, who owns them (the salesperson who owns the most, plus "+N" other salespeople; a tie goes to
+ * whoever had the latest live talk there, Q33 and Q41), and the last live talk with anyone there (Q34). The server
  * works all of that out (GET /api/bd/contacts/accounts); the page only draws it. A row opens to its
  * people: name, title, phone, email, the status pill, and a link to each one's contact page.
  *
@@ -17,8 +17,9 @@
  * MAKE MAINTENANCE ACCOUNT / MOVE BACK TO BD (2026-11-20, Q1-Q11). Each company row has a "..." button,
  * and a right-click on the row opens the same menu. One item: "Make maintenance account" on the BD tab,
  * "Move back to BD" on the Maintenance tab. A one-line confirm names the company and how many people
- * move; the server does the rest at once, and an Undo shows in the toast for a few seconds (the server
- * keeps the move undoable for two minutes, and only for whoever made it).
+ * move; the server does the rest at once. The server keeps the move undoable for two minutes, and only
+ * for whoever made it: the toast offers Undo for a few seconds, and a line under the tabs (#ct-moved)
+ * keeps one, focused after the move and announced, until the two minutes are up (WCAG 2.2.1).
  *
  * WHAT A PERSON MAY DO COMES FROM can (bd/auth.py can()), never from a role name:
  *   import          Import (a workbook, BD's practice run first: BD.importWorkbook)
@@ -48,13 +49,14 @@
   var SORTS = [["name", "Account A-Z"], ["people", "Most people"], ["last", "Last live talk"]];
   var CALLS_SHOWN = 3;            // the unknown calls To tidy shows; the rest are on Admin
   var UNDO_MS = 10000;            // the toast's Undo; the server allows two minutes
+  var UNDO_WINDOW_MS = 120000;    // the server's two minutes: the page's own Undo (#ct-moved) lasts this long
   var PAGE = 500;
 
   var S = {
     can: {}, me: null, today: "", ownList: false,
     tab: "bd", lists: { bd: [], maintenance: [] }, loaded: false,
     open: {}, sort: "name", chip: "all",
-    q: "", hits: null, seq: 0,
+    q: "", hits: null, seq: 0, undo: null,
     unknown: null, unknownOpen: false, lastImport: null,
   };
 
@@ -292,19 +294,12 @@
   }
 
   // ── the list ───────────────────────────────────────────────────────────────────────────────
-  function monthDay(iso) {
-    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-    if (!m) return "";
-    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return months[+m[2] - 1] + " " + (+m[3]) + (S.today && m[1] !== String(S.today).slice(0, 4) ? ", " + m[1] : "");
-  }
-
   /** The one cadence pill a person may carry (BD's): a due maintenance follow-up ("Due now"), or an
    *  active override ("Monthly until Dec 31"). */
   function cadPill(p) {
     if (p.category === "maintenance") return p.maintenance_due ? BD.pill("warn", "Due now") : "";
     if (p.cadence_source === "override" && p.cadence && p.cadence_override_until) {
-      return BD.pill("info", p.cadence.charAt(0).toUpperCase() + p.cadence.slice(1) + " until " + monthDay(p.cadence_override_until));
+      return BD.pill("info", p.cadence.charAt(0).toUpperCase() + p.cadence.slice(1) + " until " + BD.fmtMonthDay(p.cadence_override_until, S.today));
     }
     return "";
   }
@@ -521,6 +516,33 @@
       : { act: "to-bd", label: "Move back to BD", icon: "arrow-left" }]);
   }
 
+  /** The page's own Undo for move `m` of account `a`, under the tabs, until the server's window shuts
+   *  (undo_until; the full two minutes when the PC clock disagrees with it). One at a time. */
+  function showUndo(m, a, words) {
+    hideUndo();
+    var line = $("ct-moved");
+    if (!line) return;
+    var ms = Date.parse(m.undo_until) - Date.now();
+    if (!(ms > 0 && ms <= UNDO_WINDOW_MS)) ms = UNDO_WINDOW_MS;
+    var what = m.to === "maintenance" ? "making " + a.name + " a maintenance account" : "moving " + a.name + " back to BD";
+    line.innerHTML = "<span>" + esc(words) + '</span><button type="button" class="btn-link" id="ct-moved-undo">Undo' +
+      '<span class="sr-only"> ' + esc(what) + "</span></button>";
+    line.hidden = false;
+    S.undo = { m: m, a: a, timer: setTimeout(hideUndo, ms) };
+  }
+
+  /** Takes the page's Undo away; focus on it goes to the open tab, never to the page. */
+  function hideUndo() {
+    if (S.undo) clearTimeout(S.undo.timer);
+    S.undo = null;
+    var line = $("ct-moved");
+    if (!line || line.hidden) return;
+    var had = !!(line.contains && document.activeElement && line.contains(document.activeElement));
+    line.hidden = true;
+    line.innerHTML = "";
+    if (had) focusId("ct-tab-" + S.tab);
+  }
+
   /** Both tabs again, after a move, its Undo or an import; a search on show is asked again too, so its
    *  hits follow a company to the tab it is on now. */
   function reload() {
@@ -543,14 +565,14 @@
         var words = (w.to === "maintenance" ? a.name + " is a maintenance account." : a.name + " is back on the BD tab.") +
           (m.calls_off ? " " + off + " came off this week's list." : "") +
           (m.pinned ? " " + plural(m.pinned, "follow-up") + " pinned to this week." : "");
-        var toastIt = function () {
+        var offer = function () {
           BD.toast(words, { kind: "ok", ms: UNDO_MS, action: { label: "Undo", onClick: function () { undo(m, a); } } });
+          showUndo(m, a, words);
+          focusId("ct-moved-undo");
+          BD.announce(words + " Undo is available.");
         };
         // The move is made: its Undo is offered even when the list then fails to reload.
-        return reload().then(function () {
-          focusId("ct-tab-" + S.tab);
-          toastIt();
-        }, toastIt);
+        return reload().then(offer, offer);
       }, function (e) {
         BD.setBusy(btn, false);
         BD.toast(errText(e), { kind: "error" });
@@ -559,7 +581,11 @@
   }
 
   function undo(m, a) {
+    // The page's Undo stays focusable while it is asked (disabling it would drop focus to the page).
+    var held = S.undo && S.undo.m === m ? S.undo : null;
+    if (held) held.busy = true;
     Api.post(Api.path("contacts", "accounts", "moves", m.id, "undo"), {}).then(function () {
+      if (held && S.undo === held) hideUndo();
       var said = function () {
         BD.toast("Put back: " + a.name + " is on the " + TAB_NAME[m.to === "maintenance" ? "bd" : "maintenance"] + " tab again.", { kind: "ok" });
       };
@@ -568,6 +594,7 @@
         said();
       }, said);
     }, function (e) {
+      if (held) held.busy = false;
       BD.toast(errText(e), { kind: "error" });
     });
   }
@@ -658,6 +685,13 @@
         if (dismiss) dismissUnknown(dismiss);
       });
     }
+    var moved = $("ct-moved");
+    if (moved) {
+      moved.addEventListener("click", function (e) {
+        var b = e.target.closest && e.target.closest("#ct-moved-undo");
+        if (b && S.undo && !S.undo.busy) undo(S.undo.m, S.undo.a);
+      });
+    }
     var count = $("ct-count");
     if (count) {
       count.addEventListener("click", function (e) {
@@ -697,7 +731,11 @@
     var imp = $("ct-import"), file = $("ct-import-file");
     if (imp && file) {
       imp.innerHTML = ico("upload", 18) + "<span>Import</span>" + (S.can.admin_area === true ? ico("chev-down", 16) : "");
-      if (S.can.admin_area !== true) imp.removeAttribute("aria-haspopup");
+      // A menu (and so "collapsed" / "expanded") only for someone the Admin page opens for.
+      if (S.can.admin_area === true) {
+        imp.setAttribute("aria-haspopup", "menu");
+        imp.setAttribute("aria-expanded", "false");
+      }
       imp.addEventListener("click", function () {
         // Past imports are on Admin, which opens for admin_area: anyone else goes straight to the file.
         if (S.can.admin_area !== true) { file.click(); return; }

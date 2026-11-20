@@ -7,8 +7,9 @@ before each test, on a server whose business day is pinned to the seed's Wednesd
 expected values are worked by hand from the seed, never read back from the page's own rules:
 
   BD tab, by name (8 accounts, 11 people):
-    16 Bluestem Logistics            Ines 29 (Devon's), Lena 27 (Avery's), Sam 28 (Blair's): a 1-1-1 tie
-                                     with no live talk, so the first by name, Avery, "+2"; "Never"
+    16 Bluestem Logistics            Ines 29 (Devon's), Lena 27 (Avery's), Sam 28 (Blair's): Devon is the
+                                     manager, so Avery and Blair tie with no live talk, the first by
+                                     name, Avery, "+1"; "Never"
     14 Cedar Creek Concrete          Priya (Avery's)
     15 Cedar Crest Concrete          Owen (Blair's)
     12 Cottonwood & Sons Paving      Marisa (Avery's), a meeting Mon, Jun 15
@@ -52,6 +53,7 @@ AVERY = "avery.quill@example.com"         # salesperson
 CASEY = "casey.moret@example.com"         # assistant
 DEVON = "devon.hale@example.com"          # manager
 EMERY = "emery.stoll@example.com"         # admin
+FRANKIE = "frankie.oduya@example.com"     # super admin
 
 BD_NAMES = ["Bluestem Logistics", "Cedar Creek Concrete", "Cedar Crest Concrete", "Cottonwood & Sons Paving",
             "Cottonwood Sons Paving Co.", "Osage Plains Brewing", "Prairie Ridge Builders LLC",
@@ -125,7 +127,7 @@ def test_the_bd_tab_lists_each_account_with_its_people_owner_and_last_live_talk(
     expect(pg.locator("#ct-sub")).to_have_text("11 people at 8 BD accounts · 2 maintenance contacts")
     expect(pg.locator("#ct-tab-bd")).to_have_text(re.compile(r"BD accounts\s*8"))
     expect(pg.locator("#ct-tab-maintenance")).to_have_text(re.compile(r"Maintenance\s*1"))
-    assert cells(acct(pg, 16)) == ["3 people", "Avery Quill +2", "Never"]
+    assert cells(acct(pg, 16)) == ["3 people", "Avery Quill +1", "Never"]
     assert cells(acct(pg, 10)) == ["1 person", "Avery Quill", "Tue, Oct 20"]
     assert cells(acct(pg, 12)) == ["1 person", "Avery Quill", "Mon, Jun 15"]
     assert cells(acct(pg, 11)) == ["2 people", "Blair Fenn", "Never"]
@@ -310,15 +312,60 @@ def test_make_maintenance_account_then_undo(page_as, expect):
     expect(toasts(pg)).to_contain_text("Prairie Ridge Builders LLC is a maintenance account. 1 call came off this week's list.")
     expect(accounts(pg)).to_have_count(7)
     expect(pg.locator("#ct-tab-maintenance")).to_have_text(re.compile(r"Maintenance\s*2"))
-    expect(pg.locator("#ct-tab-bd")).to_be_focused()
+    expect(page_undo(pg)).to_be_focused()
     week = api(pg, "/api/bd/week")["week"]
     assert [t["status"] for t in week["tasks"] if t["id"] == 302] == ["snoozed"]
     toasts(pg).get_by_role("button", name="Undo").click()
     expect(toasts(pg)).to_contain_text("Put back: Prairie Ridge Builders LLC is on the BD tab again.")
+    expect(pg.locator("#ct-moved")).to_be_hidden()           # one Undo used: the page's goes too
     expect(accounts(pg)).to_have_count(8)
     expect(pg.locator("#ct-tab-maintenance")).to_have_text(re.compile(r"Maintenance\s*1"))
     week = api(pg, "/api/bd/week")["week"]
     assert [t["status"] for t in week["tasks"] if t["id"] == 302] == ["open"]
+
+
+def page_undo(pg):
+    return pg.locator("#ct-moved").get_by_role("button", name=re.compile(r"^Undo"))
+
+
+def test_the_page_keeps_its_own_undo_for_as_long_as_the_server_allows_one(page_as, expect):
+    """WCAG 2.2.1. The toast's Undo goes in 10 seconds, too soon to reach from the keyboard, so the page
+    keeps an Undo of its own under the tabs, focused after the move, and says that it is there. It
+    stays when the toast goes and leaves when the server's two minutes are up."""
+    _, pg = page_as("/bd/contacts.html", EMERY)
+    pg.clock.install()
+    acct(pg, 14).locator("[data-more]").focus()
+    pg.keyboard.press("Enter")
+    pg.keyboard.press("Enter")
+    pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").focus()
+    pg.keyboard.press("Enter")
+    line = pg.locator("#ct-moved")
+    expect(line).to_contain_text("Cedar Creek Concrete is a maintenance account.")
+    expect(page_undo(pg)).to_be_focused()
+    expect(page_undo(pg)).to_have_accessible_name("Undo making Cedar Creek Concrete a maintenance account")
+    expect(pg.locator("#bd-live")).to_have_text("Cedar Creek Concrete is a maintenance account. Undo is available.")
+    pg.clock.fast_forward(11000)
+    expect(toasts(pg).locator(".toast")).to_have_count(0)
+    expect(line).to_be_visible()
+    pg.clock.fast_forward(108000)                              # 119 s after the move: still offered
+    expect(line).to_be_visible()
+    pg.clock.fast_forward(2000)
+    expect(line).to_be_hidden()
+    expect(pg.locator("#ct-tab-bd")).to_be_focused(), "focus never drops to the page when the line goes"
+
+
+def test_the_pages_undo_works_from_the_keyboard(page_as, expect):
+    """Make Cedar Creek Concrete a maintenance account, then Enter on the page's Undo puts it back."""
+    _, pg = page_as("/bd/contacts.html", AVERY)
+    acct(pg, 14).locator("[data-more]").click()
+    pg.locator('.menu [data-act="to-maintenance"]').click()
+    pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").click()
+    expect(page_undo(pg)).to_be_focused()
+    pg.keyboard.press("Enter")
+    expect(toasts(pg)).to_contain_text("Put back: Cedar Creek Concrete is on the BD tab again.")
+    expect(acct(pg, 14)).to_have_count(1)
+    expect(pg.locator("#ct-moved")).to_be_hidden()
+    expect(pg.locator("#ct-tab-bd")).to_be_focused()
 
 
 def test_a_move_during_a_search_follows_the_company_to_its_tab(page_as, expect):
@@ -466,6 +513,9 @@ def test_a_salesperson_imports_a_workbook_from_contacts(page_as, expect, tmp_pat
     csv.write_text(CSV, encoding="utf-8")
     _, pg = page_as("/bd/contacts.html", AVERY)
     expect(pg.locator("#ct-import")).to_be_visible()
+    # no menu, so no "Import, collapsed": the button opens the file picker
+    assert pg.locator("#ct-import").evaluate("e => [e.hasAttribute('aria-haspopup'), e.hasAttribute('aria-expanded')]") == [
+        False, False]
     with pg.expect_file_chooser() as chooser:
         pg.locator("#ct-import").click()
     chooser.value.set_files(str(csv))
@@ -483,6 +533,8 @@ def test_a_salesperson_imports_a_workbook_from_contacts(page_as, expect, tmp_pat
 
 def test_the_import_menu_lists_upload_and_past_imports(page_as, expect):
     _, pg = page_as("/bd/contacts.html", CASEY)
+    expect(pg.locator("#ct-import")).to_have_attribute("aria-haspopup", "menu")
+    expect(pg.locator("#ct-import")).to_have_attribute("aria-expanded", "false")
     pg.locator("#ct-import").click()
     assert menu_acts(pg) == ["import-file", "imports"]
     menu = pg.locator(".menu")
@@ -827,7 +879,8 @@ def test_a_created_maintenance_contact_keeps_the_number_typed(page_as, expect):
     (CASEY, ["all", "mine", "confirm", "never", "dupes"], ["name", "people", "last"], True, True, True),
     (DEVON, ["all", "mine", "confirm", "never"], ["name", "people", "last"], False, False, False),
     (EMERY, ["all", "mine", "confirm", "never", "dupes"], ["name", "people", "last"], True, True, True),
-], ids=["salesperson", "assistant", "manager", "admin"])
+    (FRANKIE, ["all", "mine", "confirm", "never", "dupes"], ["name", "people", "last"], True, True, True),
+], ids=["salesperson", "assistant", "manager", "admin", "super_admin"])
 def test_each_role_gets_its_chips_sorts_and_buttons(page_as, expect, email, chips, sorts, add, imp, tidy):
     """BD's rules, read from can: a salesperson working their own list gets All and Mine and no "Last
     live talk" sort (BD's no-overdue-pile rule); Possible duplicates for whoever clears one."""

@@ -3,7 +3,9 @@ Maintenance tab (bd/routers/accounts.py).
 
 On the fixture seed (bd/ops/fixture_seed.py, today Wed 2026-11-04), worked out here by hand. The BD
 people at each account (archived people never count):
-    16 Bluestem Logistics             Ines 29 (Devon's), Lena 27 (Avery's), Sam 28 (Blair's): a 1-1-1 tie
+    16 Bluestem Logistics             Ines 29 (Devon's), Lena 27 (Avery's), Sam 28 (Blair's): Avery and
+                                      Blair tie 1-1 (Devon is the manager, and only salespeople own an
+                                      account, Q33)
     14 Cedar Creek Concrete           Priya 25 (Avery's)           a no-answer call Nov 3: not live
     15 Cedar Crest Concrete           Owen 26 (Blair's)            a text Nov 1: not live
     12 Cottonwood & Sons Paving       Marisa 23 (Avery's)          a meeting Jun 15 14:00 UTC
@@ -30,8 +32,7 @@ PERSON_KEYS = {"id", "name", "title", "phone", "phone_e164", "email", "category"
                "cadence", "cadence_source", "cadence_override_until", "maintenance_due", "maintenance_due_date"}
 AVERY_REF = {"id": AVERY, "name": "Avery Quill"}
 BLAIR_REF = {"id": BLAIR, "name": "Blair Fenn"}
-DEVON_REF = {"id": DEVON, "name": "Devon Hale"}
-EMERY_REF = {"id": EMERY, "name": "Emery Stoll"}
+GALE, GALE_REF = 7, {"id": 7, "name": "Gale Ward"}
 
 
 def accounts(client, query=""):
@@ -68,7 +69,7 @@ def test_the_bd_tab_on_the_seed(bd_seeded, bd_as_user):
     assert [a["id"] for a in body["items"]] == BD_ORDER
     got = {a["id"]: summary(a) for a in body["items"]}
     assert got == {
-        16: (3, AVERY_REF, 2, None, [29, 27, 28]),        # a three-way tie, nobody talked live: by name
+        16: (3, AVERY_REF, 1, None, [29, 27, 28]),        # Avery and Blair tie, nobody talked live: by name
         14: (1, AVERY_REF, 0, None, [25]),
         15: (1, BLAIR_REF, 0, None, [26]),
         12: (1, AVERY_REF, 0, "2026-06-15T09:00:00-05:00", [23]),
@@ -124,39 +125,59 @@ def test_an_account_with_only_maintenance_people_is_not_on_the_bd_tab(bd_seeded,
 
 
 def test_maintenance_people_never_count_on_the_bd_tab(bd_seeded, bd_as_user, bd_db):
-    """A maintenance person at Bluestem, owned by Emery, with an answered call this morning (Q34):
-    the BD row's last live talk moves to it, but the person, and Emery as an owner, do not count."""
-    mx = add_person(bd_db, 16, "Tobin Reyes", EMERY, category="maintenance")
-    talk(bd_db, mx, EMERY, "2026-11-04 14:00:00")
+    """A maintenance person at Bluestem, owned by Gale (a salesperson whose login is off), with an
+    answered call this morning (Q34): the BD row's last live talk moves to it, but the person, and
+    Gale as an owner, do not count there."""
+    mx = add_person(bd_db, 16, "Tobin Reyes", GALE, category="maintenance")
+    talk(bd_db, mx, GALE, "2026-11-04 14:00:00")
     bd_row = by_id(accounts(bd_as_user(AVERY)))[16]
-    assert summary(bd_row) == (3, AVERY_REF, 2, "2026-11-04T08:00:00-06:00", [29, 27, 28])
+    assert summary(bd_row) == (3, AVERY_REF, 1, "2026-11-04T08:00:00-06:00", [29, 27, 28])
     m_rows = by_id(accounts(bd_as_user(AVERY), "?category=maintenance"))
-    assert summary(m_rows[16]) == (1, EMERY_REF, 0, "2026-11-04T08:00:00-06:00", [mx])
+    assert summary(m_rows[16]) == (1, GALE_REF, 0, "2026-11-04T08:00:00-06:00", [mx])
 
 
 # ── the owner and "+N" (Q33, Q41) ───────────────────────────────────────────────────────────────
 def test_a_tie_goes_to_the_owner_with_the_latest_live_talk_at_the_account(bd_seeded, bd_as_user, bd_db):
     talk(bd_db, 27, AVERY, "2026-10-30 15:00:00", kind="meeting", outcome=None)    # Avery meets Lena
     talk(bd_db, 28, BLAIR, "2026-11-02 15:00:00")                                    # Blair talks to Sam
-    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, BLAIR_REF, 2, "2026-11-02T09:00:00-06:00")
+    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, BLAIR_REF, 1, "2026-11-02T09:00:00-06:00")
     talk(bd_db, 29, DEVON, "2026-11-03 18:00:00", kind="hosted", outcome=None)       # Devon hosts Ines
-    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, DEVON_REF, 2, "2026-11-03T12:00:00-06:00")
+    # Devon is the manager: his talk is the latest at the account, but he is not one of its owners.
+    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, BLAIR_REF, 1, "2026-11-03T12:00:00-06:00")
+    talk(bd_db, 27, AVERY, "2026-11-03 20:00:00")                                    # Avery talks to Lena
+    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, AVERY_REF, 1, "2026-11-03T14:00:00-06:00")
 
 
 def test_only_a_live_talk_by_a_tied_owner_breaks_the_tie(bd_seeded, bd_as_user, bd_db):
     talk(bd_db, 28, BLAIR, "2026-11-02 15:00:00")
     talk(bd_db, 27, EMERY, "2026-11-03 20:00:00")                   # not an owner there: moves the date only
-    talk(bd_db, 29, DEVON, "2026-11-04 15:00:00", kind="voicemail", outcome="voicemail")
-    talk(bd_db, 29, DEVON, "2026-11-04 15:30:00", outcome="no_answer")
-    talk(bd_db, 29, DEVON, "2026-11-04 16:00:00", kind="email", outcome=None)
-    talk(bd_db, 29, DEVON, "2026-11-10 15:00:00")                   # dated after today: not yet
-    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, BLAIR_REF, 2, "2026-11-03T14:00:00-06:00")
+    talk(bd_db, 27, AVERY, "2026-11-04 15:00:00", kind="voicemail", outcome="voicemail")
+    talk(bd_db, 27, AVERY, "2026-11-04 15:30:00", outcome="no_answer")
+    talk(bd_db, 27, AVERY, "2026-11-04 16:00:00", kind="email", outcome=None)
+    talk(bd_db, 27, AVERY, "2026-11-10 15:00:00")                   # dated after today: not yet
+    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:4] == (3, BLAIR_REF, 1, "2026-11-03T14:00:00-06:00")
 
 
 def test_the_most_people_wins_over_the_latest_talk(bd_seeded, bd_as_user, bd_db):
     add_person(bd_db, 16, "Quinn Harlow", AVERY)
-    talk(bd_db, 29, DEVON, "2026-11-03 18:00:00")
-    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:3] == (4, AVERY_REF, 2)
+    talk(bd_db, 28, BLAIR, "2026-11-03 18:00:00")
+    assert summary(by_id(accounts(bd_as_user(AVERY)))[16])[:3] == (4, AVERY_REF, 1)
+
+
+def test_only_salespeople_own_an_account(bd_seeded, bd_as_user, bd_db):
+    """Q33: the owner is the SALESPERSON who owns the most people there, and "+N" counts the other
+    salespeople. Devon (manager) gets two more people at Bluestem, three in all: still Avery (1) and
+    Blair (1) tie, Avery by name, "+1". Emery (admin) owns everyone at a new account: nobody owns it."""
+    add_person(bd_db, 16, "Quinn Harlow", DEVON)
+    add_person(bd_db, 16, "Rhea Moss", DEVON)
+    from bd.normalize import normalize_company
+
+    co = bd_db.execute("insert into bd.companies (name, normalized_name) values (%s, %s) returning id",
+                       ("Aspen Row Glass", normalize_company("Aspen Row Glass"))).fetchone()["id"]
+    add_person(bd_db, co, "Uma Fell", EMERY)
+    rows = by_id(accounts(bd_as_user(AVERY)))
+    assert summary(rows[16])[:3] == (5, AVERY_REF, 1)
+    assert summary(rows[co])[:3] == (1, None, 0)
 
 
 def test_archived_people_are_left_out_of_every_number(bd_seeded, bd_as_user, bd_db):
@@ -164,8 +185,8 @@ def test_archived_people_are_left_out_of_every_number(bd_seeded, bd_as_user, bd_
     bd_db.execute("update bd.contacts set archived_at = bd_now() where id in (28, 32)")
     body = accounts(bd_as_user(AVERY))
     assert body["total"] == 7 and 18 not in by_id(body)           # Wes was Osage Plains' only person
-    # Sam gone: his talk no longer counts, Avery and Devon tie with no live talk, Avery by name.
-    assert summary(by_id(body)[16]) == (2, AVERY_REF, 1, None, [29, 27])
+    # Sam gone: his talk no longer counts, and Blair owns nobody there. Avery is the one salesperson.
+    assert summary(by_id(body)[16]) == (2, AVERY_REF, 0, None, [29, 27])
 
 
 # ── paging, sorting, bad queries ────────────────────────────────────────────────────────────────
