@@ -233,6 +233,10 @@ _Avoid_: Migration (that is a change to the schema), import (that is a Workbook 
 The file the cut-over copy writes when it moves BD's data in: each table's row count and checksum in the old database, and the time. The way back first checks the old database still matches it. It holds no contact's details.
 _Avoid_: Backup (that is a database dump), log
 
+**Carried BD-only state**:
+What the proposal tool knows about BD accounts that the old BD CRM has no place for: which accounts were merged away, into which, by whom and when, and which pairs were kept separate. A rollback saves it next to the old BD CRM's data, where the old app never looks, and the next move back into the proposal tool puts it back. An account that gained people in the old app meanwhile is not marked merged again, so nobody is hidden; it is listed instead. The database calls it bd_carry.
+_Avoid_: Backup, leftover data
+
 **Logged entry**:
 A call, voicemail, meeting, hosted event, email, text or note in a BD contact's history. The person who logged it can change its words; a BD admin can change or delete any.
 _Avoid_: Activity, interaction (the API's word for it), log
