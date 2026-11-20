@@ -566,7 +566,9 @@
           (m.calls_off ? " " + off + " came off this week's list." : "") +
           (m.pinned ? " " + plural(m.pinned, "follow-up") + " pinned to this week." : "");
         var offer = function () {
-          BD.toast(words, { kind: "ok", ms: UNDO_MS, action: { label: "Undo", onClick: function () { undo(m, a); } } });
+          // Its handle rides with the move, so an Undo from either place closes the toast's Undo too.
+          m.closeToast = BD.toast(words, { kind: "ok", ms: UNDO_MS,
+            action: { label: "Undo", onClick: function () { undo(m, a); } } });
           showUndo(m, a, words);
           focusId("ct-moved-undo");
           BD.announce(words + " Undo is available.");
@@ -584,6 +586,9 @@
     // The page's Undo stays focusable while it is asked (disabling it would drop focus to the page).
     var held = S.undo && S.undo.m === m ? S.undo : null;
     if (held) held.busy = true;
+    // One Undo asked: the toast's goes at once (it cannot be pressed again while this is asked); the
+    // page's stays until it is done, so a failed Undo can be asked again from there.
+    if (typeof m.closeToast === "function") m.closeToast();
     Api.post(Api.path("contacts", "accounts", "moves", m.id, "undo"), {}).then(function () {
       if (held && S.undo === held) hideUndo();
       var said = function () {
@@ -772,9 +777,10 @@
     BD.note(note, words, "ct-note-panel");
   }
 
-  /** Opens the account ?company= names, on its tab, and brings it into view. */
+  /** Opens the account ?company= names, on its tab, and brings it into view. A company on both tabs
+   *  opens on the tab the link names (?tab=), else on the first that holds it. */
   function openCompany(id) {
-    var t = TABS.filter(function (x) { return !!account(x, id); })[0];
+    var t = account(S.tab, id) ? S.tab : TABS.filter(function (x) { return !!account(x, id); })[0];
     if (!t) return null;
     S.tab = t;
     S.open[key(t, id)] = true;

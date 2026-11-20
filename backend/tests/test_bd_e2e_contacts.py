@@ -361,11 +361,15 @@ def test_the_pages_undo_works_from_the_keyboard(page_as, expect):
     pg.locator('.menu [data-act="to-maintenance"]').click()
     pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").click()
     expect(page_undo(pg)).to_be_focused()
+    expect(toasts(pg).get_by_role("button", name="Undo")).to_have_count(1)
     pg.keyboard.press("Enter")
     expect(toasts(pg)).to_contain_text("Put back: Cedar Creek Concrete is on the BD tab again.")
     expect(acct(pg, 14)).to_have_count(1)
     expect(pg.locator("#ct-moved")).to_be_hidden()
     expect(pg.locator("#ct-tab-bd")).to_be_focused()
+    # One Undo used: the move's toast goes too, so its Undo cannot be pressed a second time.
+    expect(toasts(pg).get_by_role("button", name="Undo")).to_have_count(0)
+    expect(toasts(pg)).not_to_contain_text("Cedar Creek Concrete is a maintenance account.")
 
 
 def test_a_move_during_a_search_follows_the_company_to_its_tab(page_as, expect):

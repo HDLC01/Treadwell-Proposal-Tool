@@ -81,6 +81,9 @@ def test_a_phone_is_matched_on_its_last_ten_digits_only(bd_seeded, bd_as_user):
     assert search(bd_as_user(AVERY), "913-555-0199") == []
     # Ten digits that sit inside Sam's +19135550108 but are not its last ten: no match.
     assert search(bd_as_user(AVERY), "1-913-555-010") == []
+    # Sam's last seven digits under another area code: another number, so no match.
+    assert search(bd_as_user(AVERY), "816-555-0108") == []
+    assert search(bd_as_user(AVERY), "(816) 555-0108") == []
 
 
 @pytest.mark.parametrize("term", ["Rory.Sandell@PrairieRidgeBuilders.Example.com",
@@ -132,6 +135,23 @@ def test_a_blank_or_long_term_is_400(bd_seeded, bd_as_user, query, field):
 
 def test_two_hundred_characters_is_fine(bd_seeded, bd_as_user):
     assert search(bd_as_user(AVERY), "a" * 200) == []
+
+
+def test_at_most_one_hundred_accounts_come_back_and_total_counts_them_all(bd_seeded, bd_as_user, bd_db):
+    """101 made-up companies named Zephyrine Supply 001 to 101, one person each: "zephyrine" finds all
+    101, total says so, and the first 100 by name come back (001 to 100; 101 is left off)."""
+    for n in range(1, 102):
+        name = "Zephyrine Supply %03d" % n
+        co = bd_db.execute("insert into bd.companies (name, normalized_name) values (%s, %s) returning id",
+                           (name, name.lower())).fetchone()["id"]
+        bd_db.execute("insert into bd.contacts (company_id, name, category, owner_id, frequency_per_year)"
+                      " values (%s, %s, 'bd', 1, 4)", (co, "Pat Example %03d" % n))
+    r = bd_as_user(AVERY).get(URL + "?q=zephyrine")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 101
+    names = [i["account"]["name"] for i in body["items"]]
+    assert names == ["Zephyrine Supply %03d" % n for n in range(1, 101)]
 
 
 # ── the term is never written down ──────────────────────────────────────────────────────────────

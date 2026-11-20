@@ -190,6 +190,16 @@ def test_the_company_opens_its_account_on_contacts_and_back_goes_to_contacts(tmp
     assert re.search(r'<a class="back-link cd-back" href="/bd/contacts\.html">.*Contacts</a>', html), html[:400]
 
 
+def test_a_maintenance_contacts_company_opens_its_account_on_the_maintenance_tab(tmp_path):
+    """A company can be on both tabs (one person made maintenance on her own), so a maintenance
+    person's company link names the Maintenance tab, where she is listed."""
+    res = contact_responses()
+    res["GET /api/bd/contacts/21"]["body"]["contact"]["category"] = "maintenance"
+    out, html = contact_page(tmp_path, "salesperson", responses=res, name="maint")
+    assert re.search(r'<a class="cd-company" href="/bd/contacts\.html\?company=10&amp;tab=maintenance">'
+                     r'Prairie Ridge Builders LLC</a>', html), html[:600]
+
+
 def test_from_this_week_back_goes_to_this_week(tmp_path):
     out, html = contact_page(tmp_path, "salesperson", search="?id=21&from=week", name="from-week")
     assert re.search(r'<a class="back-link cd-back" href="/bd/">.*This Week</a>', html), html[:400]

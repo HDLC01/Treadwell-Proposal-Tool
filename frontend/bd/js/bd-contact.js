@@ -170,8 +170,10 @@
   }
 
   function subHtml(c) {
-    // The company opens its account on Contacts (#810), as BD had it.
-    var to = c.company ? BD.pageHref("/bd/contacts.html?company=", c.company.id) : "";
+    // The company opens its account on Contacts (#810), as BD had it; a maintenance person's on the
+    // Maintenance tab, since a company can be on both and she is listed only there.
+    var to = c.company ? BD.pageHref("/bd/contacts.html?company=", c.company.id,
+      c.category === "maintenance" ? "&tab=maintenance" : "") : "";
     var company = c.company
       ? (to ? '<a class="cd-company" href="' + esc(to) + '">' : '<span class="cd-company">') + esc(c.company.name) + (to ? "</a>" : "</span>")
       : "";

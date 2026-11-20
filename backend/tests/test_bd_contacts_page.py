@@ -281,6 +281,30 @@ def test_a_company_link_to_a_maintenance_account_opens_the_maintenance_tab(tmp_p
     assert 'data-more' not in html, "the assistant gets no move menu (Q5)"
 
 
+def test_a_company_on_both_tabs_opens_on_the_tab_the_link_names(tmp_path):
+    """Bluestem Logistics is on both tabs: its BD people on BD accounts, Opal Reyes (made maintenance on
+    her own) on Maintenance. Opal's company link names the Maintenance tab, so it opens there with
+    Opal drawn; without a tab the link opens the BD tab, the first that holds it."""
+    opal = person(33, "Opal Reyes", AVERY, category="maintenance", maintenance_due_date="2027-01-15")
+    bluestem_m = dict(BLUESTEM, category="maintenance", people_count=1, other_owners=0, people=[opal])
+    out = run(tmp_path, me("salesperson"), search="?company=16&tab=maintenance", maint=[KAW, bluestem_m])
+    assert out["els"]["ct-tab-maintenance"]["attrs"].get("aria-selected") == "true"
+    assert out["els"]["ct-tab-bd"]["attrs"].get("aria-selected") == "false"
+    html = markup(out, "ct-list")
+    assert '<div class="ct-acct is-open" data-acct="16" data-tab="maintenance">' in html
+    assert re.findall(r'href="(/bd/contact\.html\?id=\d+)"', html) == ["/bd/contact.html?id=33"]
+    out = run(tmp_path, me("salesperson"), search="?company=16", maint=[KAW, bluestem_m], name="no-tab")
+    assert out["els"]["ct-tab-bd"]["attrs"].get("aria-selected") == "true"
+    assert '<div class="ct-acct is-open" data-acct="16" data-tab="bd">' in markup(out, "ct-list")
+
+
+def test_a_company_link_naming_the_wrong_tab_opens_the_tab_that_holds_it(tmp_path):
+    """Kaw Valley Cold Storage is on Maintenance only; ?tab= never strands a link on an empty tab."""
+    out = run(tmp_path, me("salesperson"), search="?company=17&tab=bd")
+    assert out["els"]["ct-tab-maintenance"]["attrs"].get("aria-selected") == "true"
+    assert '<div class="ct-acct is-open" data-acct="17" data-tab="maintenance">' in markup(out, "ct-list")
+
+
 def test_the_manager_gets_no_add_someone_here(tmp_path):
     out = run(tmp_path, me("manager"), search="?company=16")
     assert "/bd/add.html" not in markup(out, "ct-list")
