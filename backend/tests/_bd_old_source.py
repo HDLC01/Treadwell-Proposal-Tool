@@ -12,6 +12,8 @@
     templates, dbs        the cut-over tests' fixtures (a module's two templates; a test's two clones,
                           the bd_app-like login's url and two record paths), with the plain readings
                           they share: scalar, columns_of, rows, bd_counts, refused_lines
+    leaving_client(url, s) a client that has disconnected but is still listed in pg_stat_activity
+                          for about s seconds; listed(admin, pid) says whether it still is
 
 ROWS is made up and covers every table the old app has, with the awkward values on purpose: nulls
 next to empty strings, odd text (quotes, a backslash, a tab, a newline, an emoji, accents, the word
@@ -429,3 +431,24 @@ def bd_counts(url: str) -> dict:
 
 def refused_lines(err: str) -> list:
     return [x for x in err.splitlines() if x.startswith("refusing")]
+
+
+# ── a client on its way out ─────────────────────────────────────────────────────────────────────
+def leaving_client(url: str, seconds: float) -> int:
+    """A client that has already disconnected while Postgres still lists its session. Every client
+    is in that state for a moment after it disconnects (it never waits for its backend to exit:
+    1 to 70 ms measured on a local server); this one closes in the middle of a pg_sleep, so its
+    backend notices only when the sleep ends and the moment lasts `seconds`. Returns its pid."""
+    conn = _bd_db.connect(url)
+    conn.execute("set client_connection_check_interval = 0")       # the default: no early notice
+    pid = conn.info.backend_pid
+    conn.pgconn.send_query(("select pg_catalog.pg_sleep(%s)" % float(seconds)).encode())
+    conn.pgconn.flush()
+    conn.close()
+    return pid
+
+
+def listed(admin: str, pid: int) -> bool:
+    """Whether pg_stat_activity still lists `pid`, read from the admin database (a session on the
+    old database would itself be another client there)."""
+    return scalar(admin, "select count(*) from pg_stat_activity where pid = %s", (pid,)) == 1

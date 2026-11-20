@@ -447,6 +447,16 @@ def test_the_reverse_copy_refuses_another_client_on_the_old_database(dbs, capsys
     assert old_everything(dbs.old) == old_before
 
 
+def test_the_reverse_copy_waits_for_a_client_that_has_just_disconnected(dbs, bd_admin, capsys):
+    """A rollback straight after the old database container starts, or after a psql that just quit:
+    a session still listed but already gone is waited for, not refused (see OTHER_CLIENTS_WAIT)."""
+    assert forward(dbs, dbs.record) == EXIT_OK
+    pid = src.leaving_client(dbs.old, seconds=2)
+    assert src.listed(bd_admin, pid)
+    assert reverse(dbs) == EXIT_OK, capsys.readouterr().err
+    assert not src.listed(bd_admin, pid)
+
+
 def test_the_reverse_copy_refuses_an_empty_schema_bd(dbs, capsys):
     """An empty schema bd would empty the old database: refused."""
     assert forward(dbs, dbs.record) == EXIT_OK

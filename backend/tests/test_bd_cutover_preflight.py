@@ -19,6 +19,7 @@ from __future__ import annotations
 import pathlib
 import re
 import shutil
+import time
 
 import pytest
 
@@ -95,6 +96,30 @@ def test_another_client_on_the_old_database_is_refused(dbs, capsys):
 def test_the_commands_own_session_is_not_another_client(dbs, capsys):
     code, out = run(dbs, capsys)
     assert code == EXIT_OK, out.err
+
+
+def test_a_client_that_has_just_disconnected_is_not_another_client(dbs, bd_admin, capsys):
+    """The old app stopping, a pg_dump finishing or the previous subcommand ending leaves a session
+    that is gone but still listed for a moment: the preflight waits for it, not refuses."""
+    pid = src.leaving_client(dbs.old, seconds=2)
+    assert src.listed(bd_admin, pid)                               # still listed when the copy starts
+    code, out = run(dbs, capsys)
+    assert code == EXIT_OK, out.err
+    assert not src.listed(bd_admin, pid)
+
+
+def test_a_client_that_stays_connected_is_still_refused_after_the_wait(dbs, bd_admin, capsys):
+    pid = src.leaving_client(dbs.old, seconds=1)
+    with _bd_db.connect(dbs.old) as other:
+        other.execute("select 1")
+        started = time.monotonic()
+        code, out = run(dbs, capsys)
+        waited = time.monotonic() - started
+    assert code == EXIT_REFUSED
+    assert refused_lines(out.err) == ["refusing: 1 other client is connected to the old database"]
+    assert waited >= cutover.OTHER_CLIENTS_WAIT
+    assert not src.listed(bd_admin, pid)
+    assert_nothing_written(dbs)
 
 
 # A plain login on the old database that is neither a superuser nor in pg_read_all_stats. Test

@@ -35,7 +35,8 @@ PREFLIGHT (forward and check). It refuses, naming each problem, before anything 
   * the record file already exists (a cut-over record is never overwritten);
   * the old login cannot see other sessions (it is neither a superuser nor in pg_read_all_stats, so
     Postgres hides the other roles' sessions from it), or any other client is connected to the old
-    database (pg_stat_activity; this command's own session is not counted);
+    database (pg_stat_activity; this command's own session is not counted, and a session still
+    listed for a client that has just disconnected is waited for, up to OTHER_CLIENTS_WAIT seconds);
   * the old database's ledger is not BD's original four migrations;
   * either side's tables and columns differ from MAP (a missing or extra table or column, a type, or
     a column generated on one side only), so no column can be dropped or reinterpreted unnoticed;
@@ -128,6 +129,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 from typing import Any, Callable
 
 OLD_SCHEMA = "public"
@@ -146,6 +148,16 @@ CHECKSUM_FORM = "md5 of each row's md5(json_build_array(non-generated columns)::
 RECORD_NAME = "bd cut-over"
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE, EXIT_COMMIT_UNKNOWN = 0, 1, 2, 3, 4, 5, 6
+
+# A client that has just disconnected is still listed in pg_stat_activity until its backend has
+# finished exiting, which the client never waits for (1 to 70 ms measured on a local server, longer
+# on a loaded one): the old app just stopped, a pg_dump just finished, the previous subcommand just
+# ended. Before refusing over another client the preflight reads the list again, every
+# OTHER_CLIENTS_POLL seconds for up to OTHER_CLIENTS_WAIT seconds; a client still connected then is
+# refused. Postgres waits the same 5 seconds for such sessions before CREATE or DROP DATABASE refuses
+# a database "being accessed by other users".
+OTHER_CLIENTS_WAIT = 5.0
+OTHER_CLIENTS_POLL = 0.05
 
 OLD_URL_ENV = "BD_CUTOVER_OLD_URL"
 TOOL_URL_ENV = "BD_CUTOVER_TOOL_URL"
@@ -387,8 +399,17 @@ def _shape_problems(want: dict, have: dict, schema: str, where: str) -> list:
 
 
 def _other_clients(old: Any) -> int:
-    return _rows(old, "select count(*) from pg_catalog.pg_stat_activity where datname = current_database()"
-                      " and backend_type = 'client backend' and pid <> pg_catalog.pg_backend_pid()")[0][0]
+    """How many other client sessions the old database has, once those that are only leaving have
+    gone (see OTHER_CLIENTS_WAIT). pg_stat_activity is read once per transaction unless its snapshot
+    is cleared, so each new reading clears it first."""
+    deadline = time.monotonic() + OTHER_CLIENTS_WAIT
+    while True:
+        others = _rows(old, "select count(*) from pg_catalog.pg_stat_activity where datname = current_database()"
+                            " and backend_type = 'client backend' and pid <> pg_catalog.pg_backend_pid()")[0][0]
+        if not others or time.monotonic() >= deadline:
+            return others
+        time.sleep(OTHER_CLIENTS_POLL)
+        _rows(old, "select pg_catalog.pg_stat_clear_snapshot()")
 
 
 def _old_login_problems(old: Any) -> list:
