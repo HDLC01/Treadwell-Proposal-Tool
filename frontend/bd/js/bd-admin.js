@@ -16,14 +16,18 @@
  *     /api/bd/me answer the sidebar's BD group reads), and a failed answer is said in
  *     TWAuth.bdFailure's words. Each section is shown by `can`, never by a role name:
  *       admin          People, Friday list, Goals, Pick lists, the phone status
- *       admin_area     the unmatched calls (the assistant's part of the page)
- *       import         Imports: the workbook import and past imports
+ *       admin_area     the page itself (BD's page gate) and the unmatched calls (the assistant's part)
+ *       import         Imports: the workbook import and past imports, for whoever the page opens for
  *       manage_admins  the admin roles in the People table, and an admin's row (Q29: the super admin's
  *                      alone). A plain admin's locked row, and the add form, say why.
- *     A person with none of the first three is told Admin is not part of their BD role.
- *   - THE IMPORT. BD's upload sat on the Contacts page, which has not moved yet; it is here, at the top
- *     of Past imports, as BD drew it there: a practice run first, then "Import now". A salesperson
- *     (can.import) sees this one section.
+ *     A person with neither admin nor admin_area is told Admin is not part of their BD role. That is
+ *     the salesperson too (#810): BD's sidebar never showed them Admin, and their import is back on
+ *     Contacts, where BD had it.
+ *   - THE IMPORT. #809 put it here, at the top of Past imports, while Contacts had not moved; #810 put
+ *     it back on Contacts. Both pages open the one dialog, BD.importWorkbook (bd-shared.js): a
+ *     practice run first, then "Import now".
+ *   - The unknown calls' words and their dismiss dialog are bd-shared.js's (BD.callWords,
+ *     BD.dismissCall): Contacts shows the newest three, with links here to attach them.
  *   - A new login's email is checked by the server (the tool's sign-in domain), not by the page.
  *   - Confirmations are BD.dialog's, the attach form opens with BD.sheet (bd-shared.js's focus trap),
  *     toasts are BD.toast's, and every route is under /api/bd/ (docs/bd/api-contract.md, "Admin").
@@ -644,20 +648,14 @@
   }
 
   // ── the phone system and the unmatched calls ─────────────────────────────────────────────
-  function phoneText(v) {
-    var d = String(v || "").replace(/\D/g, "").slice(-10);
-    return d.length === 10 ? d.slice(0, 3) + "-" + d.slice(3, 6) + "-" + d.slice(6) : String(v || "Unknown number");
-  }
-  function callWhen(u) { return BD.fmtBizDate(u.occurred_at, "short") + ", " + BD.fmtBizTime(u.occurred_at); }
-  function callLength(u) { return u.duration_s ? Math.max(1, Math.round(u.duration_s / 60)) + " min" : "No talk time"; }
-
   function unmatchedRow(u) {
-    var num = esc(phoneText(u.from_e164));
+    var w = BD.callWords(u);
+    var num = esc(w.phone);
     return '<li class="list-row ad-call" data-id="' + esc(u.id) + '">' +
       '<span class="ad-call-ico" aria-hidden="true">' + ico(u.direction === "in" ? "phone-incoming" : "phone", 18) + "</span>" +
       '<div class="ad-call-main"><div class="who"><span class="who-name">' + num + "</span>" +
-      '<span class="who-sub">' + (u.direction === "in" ? "Called us" : "We called") + " · " + esc(callLength(u)) + " · " +
-      esc(callWhen(u)) + "</span>" +
+      '<span class="who-sub">' + esc(w.way) + " · " + esc(w.length) + " · " +
+      esc(w.when) + "</span>" +
       (u.summary ? '<span class="who-sub ad-call-sum">' + esc(u.summary) + "</span>" : "") + "</div>" +
       '<div class="wrap-row ad-call-acts">' +
       '<button type="button" class="btn" id="ad-attach-' + esc(u.id) + '" data-attach>' + ico("link", 18) + 'Attach to a contact<span class="sr-only"> (' + num + ")</span></button>" +
@@ -710,21 +708,12 @@
   function dismissCall(b) {
     var u = callOf(b);
     if (!u) return;
-    BD.dialog({
-      title: "Dismiss this call?",
-      text: "The call from " + phoneText(u.from_e164) + " on " + callWhen(u) + " leaves this list for good. It is not logged on any contact.",
-      yes: "Dismiss call",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
-      setBusy(b, true);
-      Api.post(Api.path("admin", "unmatched-calls", u.id, "dismiss"), {}).then(function () {
-        dropCall(u.id);
-        BD.toast("Call dismissed.", { kind: "ok" });
-      }, function (err) {
-        setBusy(b, false);
-        BD.toast(errText(err), { kind: "error" });
-      });
+    BD.dismissCall(u, b).then(function (done) {
+      if (!done) return;
+      dropCall(u.id);
+      BD.toast("Call dismissed.", { kind: "ok" });
+    }, function (err) {
+      BD.toast(errText(err), { kind: "error" });
     });
   }
 
@@ -742,14 +731,14 @@
     att.call = u; att.picked = null; att.results = []; att.seq += 1;
     var box = $("ad-attach");
     showFieldErrors(box, {});
-    $("ad-attach-call").textContent = phoneText(u.from_e164) + " · " +
-      (u.direction === "in" ? "Called us" : "We called") + " on " + callWhen(u) + " · " + callLength(u) +
+    var w = BD.callWords(u);
+    $("ad-attach-call").textContent = w.phone + " · " + w.way + " on " + w.when + " · " + w.length +
       (u.summary ? ". " + u.summary : "");
     attEl("q").value = "";
     // The same rule the server uses when nobody says: a minute or more is a talk.
     attEl("outcome").value = (Number(u.duration_s) || 0) >= 60 ? "answered" : "no_answer";
     attEl("save").checked = false;
-    attEl("saveLabel").textContent = "Save " + phoneText(u.from_e164) + " on the contact";
+    attEl("saveLabel").textContent = "Save " + w.phone + " on the contact";
     attEl("saveHint").textContent = "";
     setBusy(attEl("yes"), false);
     renderResults("Type a name, company or phone number to find the contact.");
@@ -926,91 +915,6 @@
       .catch(function (e) { sectionError($("ad-imports"), e, loadImports); });
   }
 
-  // The import itself, in a dialog: a practice run first (dry_run), then "Import now" only when the
-  // practice run found something to add or change. BD's contacts page drew it; it is here until the
-  // Contacts page moves.
-  var imp = { file: null, dlg: null };
-
-  function postImport(file, dry) {
-    var fd = new FormData();
-    fd.append("file", file);
-    fd.append("dry_run", dry ? "true" : "false");
-    return Api.post("/api/bd/admin/import", fd).then(function (r) { return r["import"]; });
-  }
-
-  function openImportDialog(file) {
-    imp.file = file;
-    var el = document.createElement("div");
-    el.className = "dialog ad-import-dlg";
-    el.setAttribute("aria-labelledby", "ad-import-title");
-    el.innerHTML = '<h2 class="dialog-title" id="ad-import-title">Import workbook</h2>' +
-      '<div class="ad-import-body" id="ad-import-body" aria-busy="true"><p class="ad-import-wait"><span class="spinner" aria-hidden="true"></span> Reading ' +
-      esc(file.name) + "...</p></div>" +
-      '<div class="dialog-actions" id="ad-import-actions"><button type="button" class="btn" data-act="close">Close</button></div>';
-    el.addEventListener("click", function (e) {
-      var b = e.target.closest && e.target.closest("[data-act]");
-      if (!b) return;
-      if (b.getAttribute("data-act") === "close") BD.sheet.close(el, "close");
-      else if (b.getAttribute("data-act") === "import-now") importNow(b);
-    });
-    imp.dlg = el;
-    BD.sheet.open(el, {
-      initialFocus: '[data-act="close"]',
-      returnFocus: function () { return $("ad-import"); },
-      onClose: function () {
-        imp.dlg = null;
-        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
-      },
-    });
-    postImport(file, true).then(showImportSummary, function (e) {
-      if (imp.dlg !== el) return;
-      $("ad-import-body").setAttribute("aria-busy", "false");
-      $("ad-import-body").innerHTML = '<div class="error-box" role="alert">' + esc(errText(e)) + "</div>";
-    });
-  }
-
-  function showImportSummary(r) {
-    if (!imp.dlg) return;
-    var errs = (r.errors || []).slice(0, 10);
-    // Import now only when the practice run found something to add or change
-    var changes = (Number(r.created) || 0) + (Number(r.updated) || 0) > 0;
-    $("ad-import-body").setAttribute("aria-busy", "false");
-    $("ad-import-body").innerHTML =
-      '<p class="strong">' + esc(BD.plural(r.rows_read, "contact")) + " read, " +
-      esc(BD.plural(r.possible_duplicates, "possible duplicate")) + ".</p>" +
-      '<dl class="ad-import-kv"><dt>File</dt><dd>' + esc(r.file_name) + "</dd>" +
-      "<dt>Would be added</dt><dd>" + esc(r.created) + "</dd>" +
-      "<dt>Would be updated</dt><dd>" + esc(r.updated) + "</dd>" +
-      "<dt>Already match</dt><dd>" + esc(r.skipped) + "</dd>" +
-      "<dt>Possible duplicates</dt><dd>" + esc(r.possible_duplicates) + "</dd></dl>" +
-      (errs.length ? '<p class="label">Rows with problems</p><ul class="ad-errors">' + problemsList(errs) + "</ul>" : "") +
-      '<p class="panel-info">' + ico("info", 18) + "<span>" +
-      (changes ? "This was a practice run. Nothing has been imported yet." : "This was a practice run. Importing this file would change nothing.") +
-      "</span></p>";
-    // Close stays where it is (focus is on it since the dialog opened): Import now is added beside
-    // it, so the redraw never drops focus to the page behind the dialog.
-    if (changes) {
-      $("ad-import-actions").insertAdjacentHTML("beforeend",
-        '<button type="button" class="btn btn-primary" data-act="import-now">Import now</button>');
-    }
-    BD.announce(BD.plural(r.rows_read, "contact") + " read, " + (Number(r.created) || 0) + " would be added, " +
-      (Number(r.updated) || 0) + " would be updated. This was a practice run.");
-    loadImports();          // the practice run is a past import too
-  }
-
-  function importNow(btn) {
-    if (!imp.file) return;
-    setBusy(btn, true);
-    postImport(imp.file, false).then(function (r) {
-      if (imp.dlg) BD.sheet.close(imp.dlg, "done");
-      BD.toast("Imported: " + r.created + " added, " + r.updated + " updated.", { kind: "ok" });
-      loadImports();
-    }, function (e) {
-      setBusy(btn, false);
-      BD.toast(errText(e), { kind: "error" });
-    });
-  }
-
   function wireImports() {
     var btn = $("ad-import"), input = $("ad-import-file");
     btn.insertAdjacentHTML("afterbegin", ico("upload", 18));
@@ -1018,7 +922,8 @@
     input.addEventListener("change", function () {
       var file = input.files && input.files[0];
       input.value = "";
-      if (file) openImportDialog(file);
+      // The practice run is a past import too, so the list is read again after each run.
+      if (file) BD.importWorkbook(file, { returnFocus: function () { return $("ad-import"); }, onRun: loadImports });
     });
   }
 
@@ -1102,11 +1007,16 @@
     S.can = me.can || {};
     S.me = me.user || null;
     S.today = me.today || BD.bizToday();
+    // BD's page gate is admin_area (#810: import no longer opens it; the salesperson imports on Contacts).
     var calls = S.can.admin_area === true, imports = S.can["import"] === true;
-    if (!full() && !calls && !imports) { renderNote("Admin isn't part of your BD role."); return null; }
+    if (!full() && !calls) { renderNote("Admin isn't part of your BD role."); return null; }
     ["ad-s-users", "ad-s-friday", "ad-s-rules", "ad-s-lists"].forEach(function (id) { show(id, full()); });
     show("ad-s-phone", calls);
     show("ad-s-imports", imports);
+    // A link from Contacts (#ad-s-phone: "Attach to a contact"; #ad-s-imports: "Past imports") lands on
+    // its section, now that it shows: the browser looked for it while every section was still hidden.
+    var at = window.location && window.location.hash ? $(window.location.hash.slice(1)) : null;
+    if (at && !at.hidden && at.scrollIntoView) at.scrollIntoView({ block: "start" });
     if (!full()) $("ad-h-phone").textContent = "Unknown calls";
     ["ad-users", "ad-friday", "ad-rules", "ad-lists", "ad-phone", "ad-imports"].forEach(function (id) { wireRetry($(id)); });
     wireNav();

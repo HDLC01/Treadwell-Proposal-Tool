@@ -683,7 +683,7 @@ def test_a_missing_contact_says_so(env, expect):
     try:
         pg = p.open_signed_in(contact_path(999))
         expect(pg.locator("main")).to_contain_text("That contact isn't here")
-        expect(pg.locator('main a[href="/bd/"]')).to_have_text("Back to the BD CRM")
+        expect(pg.locator('main a[href="/bd/contacts.html"]')).to_have_text("Back to Contacts")
         assert p.errors == [], p.errors
     finally:
         p.close()
@@ -708,18 +708,25 @@ def test_history_icons_and_live_talk_pills(page_as, expect):
     assert added.locator(".pill").count() == 0
 
 
-def test_the_company_is_plain_text_and_back_goes_to_this_week(page_as, expect):
-    """The Contacts page has not moved: the company is not a link, and Back is This Week's alone."""
+def test_the_company_opens_its_account_and_back_goes_where_you_came_from(page_as, expect):
+    """#810: Contacts has moved, so BD's links are back. The company opens its account on Contacts, and
+    Back is This Week's when you came from it, else Contacts."""
     _, pg = page_as(contact_path(DANA, "&from=week"), AVERY)
     expect(pg.locator(".cd-sub")).to_contain_text("Project Manager at Prairie Ridge Builders LLC")
-    assert pg.locator(".cd-sub a").count() == 0
     back = pg.locator(".cd-back")
     expect(back).to_have_text("This Week")
     assert back.get_attribute("href") == "/bd/"
     back.click()
     pg.locator("#summary .wk-progress-in").wait_for(timeout=15000)
     _, pg = page_as(contact_path(DANA), AVERY)
-    assert pg.locator(".cd-back").count() == 0, "no Back from anywhere else: Contacts has not moved"
+    expect(pg.locator(".cd-back")).to_have_text("Contacts")
+    company = pg.locator(".cd-sub a")
+    expect(company).to_have_text("Prairie Ridge Builders LLC")
+    assert company.get_attribute("href") == "/bd/contacts.html?company=10"
+    company.click()
+    opened = pg.locator('.ct-acct.is-open[data-acct="10"]')
+    opened.wait_for(timeout=15000)
+    expect(opened.locator(".ct-p-name")).to_have_text(["Dana Whitlow"])
 
 
 # ── phone ────────────────────────────────────────────────────────────────────────────────────────
@@ -1287,10 +1294,11 @@ def test_the_manager_is_told_adding_is_not_part_of_the_role(page_as, expect):
 
 
 # ── the sidebar's BD sections, and links ─────────────────────────────────────────────────────────
-SECTIONS = {AVERY: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/admin.html"],
-            CASEY: ["/bd/add.html", "/bd/review.html", "/bd/admin.html"],
-            DEVON: ["/bd/", "/bd/review.html", "/bd/analytics.html"],
-            EMERY: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"]}
+SECTIONS = {AVERY: ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html"],
+            CASEY: ["/bd/contacts.html", "/bd/add.html", "/bd/review.html"],
+            DEVON: ["/bd/", "/bd/contacts.html", "/bd/review.html", "/bd/analytics.html"],
+            EMERY: ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html", "/bd/analytics.html",
+                    "/bd/admin.html"]}
 
 
 @pytest.mark.parametrize("email", list(SECTIONS), ids=["salesperson", "assistant", "manager", "admin"])

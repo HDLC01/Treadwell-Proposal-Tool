@@ -47,9 +47,8 @@ BD_SHELL = ["/bd/js/bd-api.js", "/bd/js/bd-shared.js", "/bd/js/bd-core.js"]
 PAGE_SCRIPT = {
     # This Week (#807): the after-a-call sheet, then the page.
     "bd/index.html": ["/bd/js/bd-call.js", "/bd/js/bd-week.js"],
-    # The Contacts page's place (#807): plain words and a link to Add contact until Contacts moves, no
-    # script of its own.
-    "bd/contacts.html": [],
+    # Contacts (#810).
+    "bd/contacts.html": ["/bd/js/bd-contacts.js"],
     # One contact (#808): This Week's call sheet (the one copy), then the page.
     "bd/contact.html": ["/bd/js/bd-call.js", "/bd/js/bd-contact.js"],
     # Add a contact (#808).
@@ -298,7 +297,7 @@ CSS_MARKERS = [
 # moves a page adds its section (week: wk- call-, contacts: ct- add-, contact: cd-, mgmt: rv- an- ad-).
 PAGE_PREFIXES = {
     "week": ["wk-", "call-"],
-    # #808: Add a contact and the Contacts page's place (the Contacts list's ct- rules come with it)
+    # #808: Add a contact; #810: Contacts
     "contacts": ["ct-", "add-"],
     "contact": ["cd-"],
     # #809: Admin (ad-), Potential BD Contacts (rv-) and Analytics (an-)

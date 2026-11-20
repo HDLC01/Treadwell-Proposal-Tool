@@ -22,7 +22,8 @@ What it proves, for the ticket:
     sign-in, shows the super-admin-only rule to a plain admin (Q29) and lets the super admin change an
     admin; BD settings (the Friday run day and hour, the goals and cadence, the pick lists) save; the
     phone status; unmatched calls are attached to a contact through the contacts search, or dismissed;
-    the workbook import (a practice run, then Import now) and past imports, for the salesperson too;
+    the workbook import (a practice run, then Import now) and past imports (the salesperson's import is
+    on Contacts since #810: test_bd_e2e_contacts);
   * Potential BD Contacts and Analytics open restyled and say the server's "not built yet";
   * each BD section a role can use works and the others are not shown, and no role's view of these
     pages links to a BD page that has not moved; desktop and phone width.
@@ -145,19 +146,10 @@ def test_the_assistant_keeps_admin_with_her_two_sections(page_as, expect):
     assert asked == [], "nothing admin-only is even asked for her: %r" % asked
 
 
-def test_a_salesperson_sees_only_imports(page_as, expect):
-    p, pg = admin(page_as, AVERY)
-    expect(pg.locator("#ad-s-imports")).to_be_visible()
-    for sec in ("#ad-s-users", "#ad-s-friday", "#ad-s-rules", "#ad-s-lists", "#ad-s-phone"):
-        expect(pg.locator(sec)).to_be_hidden()
-    expect(pg.locator("#ad-navbar")).to_be_hidden()       # one section needs no nav
-    expect(pg.get_by_role("button", name="Import a workbook")).to_be_visible()
-    asked = [r for r in p.requests if "/api/bd/admin/" in r and "/api/bd/admin/imports" not in r]
-    assert asked == [], asked
-
-
-def test_a_manager_is_told_admin_is_not_part_of_the_role(page_as, expect):
-    p, pg = admin(page_as, DEVON)
+@pytest.mark.parametrize("email", [AVERY, DEVON], ids=["salesperson", "manager"])
+def test_admin_is_not_part_of_the_role_for_a_salesperson_or_a_manager(page_as, expect, email):
+    """BD's page gate, admin_area (#810: a salesperson no longer opens Admin; their import is on Contacts)."""
+    p, pg = admin(page_as, email)
     expect(pg.locator("#ad-note")).to_contain_text("Admin isn't part of your BD role.")
     assert pg.locator(".ad-sec:visible").count() == 0
     assert [r for r in p.requests if "/api/bd/admin/" in r] == []
@@ -451,7 +443,7 @@ def test_past_imports_show_the_seeds_practice_run(page_as, expect):
     expect(row.locator(".ad-errors li")).to_have_text("CSV, row 4: No company name.")
 
 
-@pytest.mark.parametrize("email", [AVERY, EMERY], ids=["salesperson", "admin"])
+@pytest.mark.parametrize("email", [CASEY, EMERY], ids=["assistant", "admin"])
 def test_a_workbook_is_imported_after_a_practice_run(page_as, expect, email, tmp_path):
     csv = tmp_path / "made up contacts.csv"
     csv.write_text(CSV, encoding="utf-8")
@@ -461,7 +453,7 @@ def test_a_workbook_is_imported_after_a_practice_run(page_as, expect, email, tmp
     expect(dlg).to_contain_text("1 contact read, 0 possible duplicates.")
     expect(dlg).to_contain_text("This was a practice run. Nothing has been imported yet.")
     # The redraw keeps focus in the dialog (on Close, where it opened) and says what came back.
-    expect(pg.locator("#ad-import-body")).to_have_attribute("aria-busy", "false")
+    expect(pg.locator("#bd-import-body")).to_have_attribute("aria-busy", "false")
     expect(pg.locator("#bd-live")).to_have_text(
         "1 contact read, 1 would be added, 0 would be updated. This was a practice run.")
     focus = pg.evaluate("() => { var a = document.activeElement;"
@@ -566,11 +558,11 @@ def test_analytics_on_a_phone_keeps_all_five_periods_on_screen(page_as, expect):
 
 # ── the sidebar's BD sections, and links ─────────────────────────────────────────────────────────
 SECTIONS = {
-    AVERY: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/admin.html"],
-    CASEY: ["/bd/add.html", "/bd/review.html", "/bd/admin.html"],
-    DEVON: ["/bd/", "/bd/review.html", "/bd/analytics.html"],
-    EMERY: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
-    FRANKIE: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
+    AVERY: ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html"],
+    CASEY: ["/bd/contacts.html", "/bd/add.html", "/bd/review.html"],
+    DEVON: ["/bd/", "/bd/contacts.html", "/bd/review.html", "/bd/analytics.html"],
+    EMERY: ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
+    FRANKIE: ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
 }
 
 
@@ -594,16 +586,18 @@ def test_each_section_a_role_can_use_works_and_no_other_shows(page_as, expect, e
 
 @pytest.mark.parametrize("email, path, wait", [
     (EMERY, "/bd/admin.html", "#ad-s-users tr.ad-user"), (CASEY, "/bd/admin.html", ".ad-call"),
-    (AVERY, "/bd/admin.html", "#ad-s-imports tbody tr"), (DEVON, "/bd/admin.html", "#ad-note .ad-note"),
+    (AVERY, "/bd/admin.html", "#ad-note .ad-note"), (DEVON, "/bd/admin.html", "#ad-note .ad-note"),
     (AVERY, "/bd/review.html", "#rv-body .error-box"), (DEVON, "/bd/analytics.html", "#an-body .error-box"),
 ], ids=["admin-admin", "admin-assistant", "admin-salesperson", "admin-manager", "review", "analytics"])
 def test_no_link_goes_to_a_bd_page_that_has_not_moved(page_as, email, path, wait):
-    """Spec #802, page links: checked against the pages that HAVE moved (MOVED_PAGES). Contacts has not."""
+    """Spec #802, page links: checked against the pages that HAVE moved (MOVED_PAGES): every BD page,
+    Contacts included since #810, which the sidebar now links to."""
     _, pg = page_as(path, email, wait=wait)
     pg.locator("#tw-bd-sections a").first.wait_for(timeout=15000)
     seen = set(bd_links(pg))
     assert seen and seen <= MOVED_PAGES, sorted(seen - MOVED_PAGES)
-    assert "/bd/contacts.html" not in seen
+    assert "/bd/contacts.html" in seen, "Contacts is in every role's sidebar"
+
 
 
 # ── widths ───────────────────────────────────────────────────────────────────────────────────────

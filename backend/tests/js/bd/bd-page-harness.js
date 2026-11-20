@@ -12,13 +12,15 @@
  *             bdMe: {status, body} | null               what TWAuth.bdMe() resolves to
  *             now: "2026-11-04T09:30:00-06:00"         the clock the page reads
  *             responses: {"GET /api/bd/me": {status, body} | {status, text, type}}
+ *             byQuery: {"GET /api/bd/x": {"category=bd": {status, body}}}   one route answered by
+ *                                                       what its query string holds (#810); first match
  *             fetchFails: true                          every fetch rejects (no network)
  *             calls: [{fn: "get" | "post" | ..., path, body}]
  *             ids: ["wk-greeting", ...]                  elements to report
  *             search: "?id=21", pathname: "/bd/contact.html" }   the page's address (#808; default
  *                                                       "" and "/bd/") 
  * out:      { threw, calls: [{ok} | {error: {message, status, code, fields}}], fetches: [{url, method,
- *             headers, body}], els: {id: {text, html, hidden}}, globals: {name: typeof},
+ *             headers, body}], els: {id: {text, html, hidden, attrs}}, globals: {name: typeof},
  *             replaced: [address, ...] }               every location.replace (a role sent home, #807)
  */
 const fs = require("fs");
@@ -70,7 +72,11 @@ function respond(url, init) {
   fetches.push({ url, method, headers: (init && init.headers) || {}, body: (init && init.body) || null });
   if (SC.fetchFails) return Promise.reject(new TypeError("Failed to fetch"));
   const key = method + " " + String(url).split("?")[0];
-  const r = (SC.responses || {})[key] || { status: 404, body: { ok: false, error: "not_found", message: "No such route." } };
+  const query = String(url).split("?")[1] || "";
+  const byQuery = (SC.byQuery || {})[key] || {};
+  const hit = Object.keys(byQuery).filter((k) => query.split("&").indexOf(k) !== -1)[0];
+  const r = (hit && byQuery[hit]) || (SC.responses || {})[key] ||
+    { status: 404, body: { ok: false, error: "not_found", message: "No such route." } };
   const isJson = !("text" in r);
   const type = r.type || (isJson ? "application/json" : "text/html");
   return Promise.resolve({
@@ -152,7 +158,9 @@ function settle() { return new Promise((r) => setTimeout(r, 20)); }
   }
   await settle();
   const els = {};
-  for (const id of Object.keys(byId)) els[id] = { text: byId[id].textContent, html: byId[id].innerHTML, hidden: !!byId[id].hidden };
+  for (const id of Object.keys(byId)) {
+    els[id] = { text: byId[id].textContent, html: byId[id].innerHTML, hidden: !!byId[id].hidden, attrs: byId[id].attrs };
+  }
   const globals = {};
   for (const g of ["BDApi", "BD", "BDCore", "TWIcon", "BD_MOCK", "BDMock", "BDAuth"]) globals[g] = typeof ctx[g];
   process.stdout.write(JSON.stringify({ threw, calls, fetches, els, globals, replaced }) + "\n");

@@ -9,8 +9,8 @@ written out by hand from BD's role checks:
 
   Admin       admin, super admin  People, settings, the phone status, unmatched calls, imports
               assistant           unmatched calls and imports only (nothing admin-only is asked for)
-              salesperson         imports only (they import a workbook; Contacts has not moved)
-              manager             "Admin isn't part of your BD role." and no request
+              salesperson,        "Admin isn't part of your BD role." and no request: BD's page gate is
+              manager             admin_area (#810: the salesperson's import is back on Contacts)
   Review      every BD role       GET /api/bd/review/candidates?status=all (503 "not built yet" today)
   Analytics   manager, admins     GET /api/bd/contacts (the owners) and GET /api/bd/analytics
               anyone else         "Analytics isn't part of your BD role." and no request
@@ -125,14 +125,14 @@ ADMIN_SHOWN = {
     "admin": ["ad-s-friday", "ad-s-imports", "ad-s-lists", "ad-s-phone", "ad-s-rules", "ad-s-users"],
     "super_admin": ["ad-s-friday", "ad-s-imports", "ad-s-lists", "ad-s-phone", "ad-s-rules", "ad-s-users"],
     "assistant": ["ad-s-imports", "ad-s-phone"],
-    "salesperson": ["ad-s-imports"],
+    "salesperson": [],
     "manager": [],
 }
 ADMIN_ASKED = {
     "admin": ["GET /api/bd/admin/imports", "GET /api/bd/admin/telephony", "GET /api/bd/admin/unmatched-calls",
               "GET /api/bd/admin/users", "GET /api/bd/settings"],
     "assistant": ["GET /api/bd/admin/imports", "GET /api/bd/admin/unmatched-calls"],
-    "salesperson": ["GET /api/bd/admin/imports"],
+    "salesperson": [],
     "manager": [],
 }
 ADMIN_ASKED["super_admin"] = ADMIN_ASKED["admin"]
@@ -142,7 +142,7 @@ ADMIN_ASKED["super_admin"] = ADMIN_ASKED["admin"]
 def test_admin_shows_and_asks_for_exactly_what_the_role_may_use(tmp_path, role):
     out = run(tmp_path, "admin.html", ADMIN_IDS, me(role), name=role)
     assert asked(out) == ADMIN_ASKED[role]
-    if role == "manager":
+    if role in ("manager", "salesperson"):
         assert text(out, "ad-note") == "Admin isn't part of your BD role."
         assert out["els"]["ad-note"]["hidden"] is False
         return

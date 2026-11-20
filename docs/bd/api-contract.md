@@ -666,15 +666,21 @@ against its route, person by person):
   Each logged entry's Delete, and its Edit when it is not this person's own.
 
 BD's Admin page (#809) reads `admin` (People, the Friday list, goals, pick lists, the phone status),
-`admin_area` (the unmatched calls), `import` (the workbook import and past imports) and one more
-(tests/test_bd_admin_roles.py checks each key against its route, person by person):
+`admin_area` (the page itself, BD's page gate, and the unmatched calls), `import` (the workbook import and
+past imports, for whoever the page opens for) and one more (tests/test_bd_admin_roles.py checks each key
+against its route, person by person). The sidebar's Admin section is `admin`'s alone, as BD's rail had it;
+the assistant opens the page from the Contacts page's "Attach to a contact" links (#810):
 
 - `manage_admins`: `POST /api/bd/admin/users` with an admin role, and `PATCH /api/bd/admin/users/{id}`
   of an admin's login or to an admin role (Q29, the super admin alone). The People table offers the
   admin roles, and unlocks an admin's row, only to this person; a plain admin's locked row says why.
 
-The Contacts page (#810) reads one more (tests/test_bd_accounts_roles.py checks it against its route,
-person by person):
+The Contacts page (#810) reads `import` (Import: the workbook import, BD's practice run first),
+`add_contact` (Add contact, and "Add someone here" in an opened account), `admin_area` (To tidy this
+Friday with the unknown calls, and "Past imports" in the Import menu, a link to the Admin page, which
+opens for exactly these people), `clear_duplicate` (the Possible duplicates chip), `week` without
+`pick_owner` (a salesperson working their own list: BD's chips and sorts for them, with no "Last live
+talk" sort) and one more (tests/test_bd_accounts_roles.py checks it against its route, person by person):
 
 - `move_company`: `POST /api/bd/contacts/accounts/{id}/move` and undoing your own move (Q5: salesperson,
   manager, admins; never the assistant). A company row's "..." menu offers **Make maintenance account**

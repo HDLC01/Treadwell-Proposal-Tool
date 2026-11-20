@@ -182,9 +182,8 @@ def test_the_link_check_sees_a_page_that_is_not_there(tmp_path):
 
 
 # The BD pages that have moved (tests/_bd_browser.py MOVED_PAGES, the one list the browser suites'
-# per-role link checks read too). /bd/contacts.html is there only as the page an assistant is sent to
-# until Contacts moves, so only the script that sends her there may name it.
-REDIRECT_ONLY = {"/bd/contacts.html": {"bd/js/bd-week.js"}}
+# per-role link checks read too). Since Contacts moved (#810) every BD page has, and no page is named
+# only as a redirect any more.
 
 
 def unmoved_page_refs(frontend=FRONTEND):
@@ -196,7 +195,7 @@ def unmoved_page_refs(frontend=FRONTEND):
             v = v.split("?", 1)[0].split("#", 1)[0]
             if not v.startswith("/bd/") or not (v.endswith("/") or v.endswith(".html")):
                 continue
-            if v in MOVED_PAGES or rel(path, frontend) in REDIRECT_ONLY.get(v, ()):
+            if v in MOVED_PAGES:
                 continue
             out.append("%s: %s" % (rel(path, frontend), v))
     return out
@@ -208,13 +207,13 @@ def test_bd_files_name_only_pages_that_have_moved():
 
 def test_the_moved_page_check_sees_a_page_that_has_not_moved(tmp_path):
     (tmp_path / "bd" / "js").mkdir(parents=True)
-    (tmp_path / "bd" / "index.html").write_text('<a href="/bd/contacts.html?id=1">Contacts</a><a href="/bd/">x</a>',
+    (tmp_path / "bd" / "index.html").write_text('<a href="/bd/merge.html?id=1">Merge</a><a href="/bd/">x</a>',
                                                 encoding="utf-8")
     (tmp_path / "bd" / "js" / "bd-week.js").write_text('go("/bd/contacts.html"); go("/bd/old-page.html");', encoding="utf-8")
     (tmp_path / "bd" / "js" / "x.js").write_text('go("/bd/contacts.html?company=4"); go("/bd/js/bd-api.js"); '
-                                                 'go("/bd/contact.html?id=" + id);', encoding="utf-8")
-    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/contacts.html", "bd/js/bd-week.js: /bd/old-page.html",
-                                           "bd/js/x.js: /bd/contacts.html"]
+                                                 'go("/bd/contact.html?id=" + id); go("/bd/merge.html");', encoding="utf-8")
+    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/merge.html", "bd/js/bd-week.js: /bd/old-page.html",
+                                           "bd/js/x.js: /bd/merge.html"]
 
 
 def test_no_tool_page_loads_the_bd_stylesheet_or_a_bd_script():
