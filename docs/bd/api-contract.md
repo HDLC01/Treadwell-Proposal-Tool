@@ -1016,13 +1016,14 @@ Response: `{ "ok": true, "settings": Settings }`.
 
 Whether a phone system is connected. It reads only **whether** `BD_TELEPHONY_PROVIDER`,
 `BD_QUO_API_KEY` and `BD_QUO_WEBHOOK_SECRET` are set, the time of the provider's latest integration
-event and the count of open unmatched calls. It never answers a key or a secret. `provider` is
+event, the provider's count of integration events (`events`) and the count of open unmatched calls.
+It never answers a key or a secret. `provider` is
 `"null"` when none is set (`"No phone system connected yet."`); `quo` is connected when both its key
 and its webhook secret are set (`"Quo is connected."`, else `"Quo is picked, but its API key or webhook
 secret is not set."`); any other provider is `"This phone system is not supported yet."`.
 
 ```json
-{ "ok": true, "telephony": { "provider": "null", "connected": false, "last_event_at": null, "unmatched_open": 1, "message": "No phone system connected yet." } }
+{ "ok": true, "telephony": { "provider": "null", "connected": false, "last_event_at": null, "events": 0, "unmatched_open": 1, "message": "No phone system connected yet." } }
 ```
 
 #### `GET /api/bd/admin/unmatched-calls` (assistant, admin)

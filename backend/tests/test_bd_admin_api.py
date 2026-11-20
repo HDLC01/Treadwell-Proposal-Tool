@@ -547,7 +547,7 @@ def phone(monkeypatch):
 def test_telephony_with_no_provider_set(bd_seeded, bd_as_user, phone):
     assert ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony")) == {
         "ok": True, "telephony": {"provider": "null", "connected": False, "last_event_at": None,
-                                  "unmatched_open": 1, "message": "No phone system connected yet."}}
+                                  "events": 0, "unmatched_open": 1, "message": "No phone system connected yet."}}
     phone("null")
     assert ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony"))["telephony"]["connected"] is False
 
@@ -570,8 +570,8 @@ def test_telephony_with_quo_says_only_whether_its_settings_are_set(bd_seeded, bd
     phone("quo", key, secret)
     r = bd_as_user(FRANKIE).get("/api/bd/admin/telephony")
     t = ok(r)["telephony"]
-    assert t == {"provider": "quo", "connected": connected, "last_event_at": None, "unmatched_open": 1,
-                 "message": message}
+    assert t == {"provider": "quo", "connected": connected, "last_event_at": None, "events": 0,
+                 "unmatched_open": 1, "message": message}
     # Never the values themselves.
     assert "not-real" not in r.text
 
@@ -587,6 +587,20 @@ def test_telephony_last_event_is_the_newest_for_the_provider_in_central(bd_seede
     bd_db.execute("delete from bd.integration_events where event_id = 'E2'")
     assert ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony"))["telephony"]["last_event_at"] == \
         "2026-11-01T01:30:00-05:00"
+
+
+def test_telephony_counts_the_providers_integration_events(bd_seeded, bd_as_user, bd_db, phone):
+    """#809's criterion: the count of integration events, for the provider set (2 of quo's, not
+    the other provider's 1)."""
+    phone("quo")
+    bd_db.execute("insert into bd.integration_events (provider, event_id, received_at) values"
+                  " ('quo', 'E1', '2026-11-01T06:30:00Z'), ('quo', 'E2', '2026-11-02T07:30:00Z'),"
+                  " ('other', 'E3', '2026-11-04T07:30:00Z')")
+    assert ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony"))["telephony"]["events"] == 2
+    phone("other")
+    assert ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony"))["telephony"]["events"] == 1
+    phone("")
+    assert ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony"))["telephony"]["events"] == 0
 
 
 def test_an_unknown_provider_is_not_connected(bd_seeded, bd_as_user, phone):

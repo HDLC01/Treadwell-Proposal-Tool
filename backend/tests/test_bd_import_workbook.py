@@ -844,6 +844,26 @@ def test_a_part_over_the_floor_stops_at_100_times_its_packed_size(casey, monkeyp
     assert _answer(casey, _zip({"xl/worksheets/sheet1.xml": b"\0" * 50_001})) == TOO_BIG_TO_READ  # just over it
 
 
+@pytest.mark.parametrize("unpacked,packed,refused", [
+    (2_000_000, 20_000, False),   # exactly 100 times its packed size: kept
+    (2_000_001, 20_000, True),    # one byte over 100 times
+    (2_000_000, 19_999, True),    # one packed byte fewer: 2,000,000 > 1,999,900
+])
+def test_the_ratio_limit_is_exactly_100_times(monkeypatch, unpacked, packed, refused):
+    """The 100x line itself, at BD's real 1 MB floor (2,000,000 bytes is over it and under the
+    20 MB part limit). The sizes are set on the zip directory's entry, which is all check_zip reads."""
+    info = zipfile.ZipInfo("xl/worksheets/sheet1.xml")
+    info.file_size, info.compress_size = unpacked, packed
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", lambda self: [info])
+    data = _zip({"xl/worksheets/sheet1.xml": b"<x/>"})
+    if not refused:
+        iw.check_zip(data)
+        return
+    with pytest.raises(iw.ImportFileError) as e:
+        iw.check_zip(data)
+    assert (e.value.status, e.value.message) == (413, "That workbook is too big to read.")
+
+
 def test_a_real_sized_bomb_is_refused_before_it_is_opened(casey):
     """At BD's own limits: 5 MB of zeros packs about 1000 times (under 20 MB, over 100x)."""
     data = _zip({"xl/worksheets/sheet1.xml": b"\0" * (5 * 1024 * 1024)})

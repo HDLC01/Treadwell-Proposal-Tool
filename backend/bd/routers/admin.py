@@ -33,8 +33,9 @@ The rules worth knowing before changing anything here:
     appsettings.load, and so does the Friday worker (weekly.run_due), so a saved run day or hour moves
     the next Friday batch at once.
   * The telephony status reads only WHETHER BD_TELEPHONY_PROVIDER, BD_QUO_API_KEY and
-    BD_QUO_WEBHOOK_SECRET are set, the latest integration event's time and the count of open
-    unmatched calls. It never answers a key or a secret.
+    BD_QUO_WEBHOOK_SECRET are set, the latest integration event's time, the provider's count of
+    integration events (`events`, added in #809 for its criterion; BD answered only the time) and
+    the count of open unmatched calls. It never answers a key or a secret.
   * Attaching an unmatched call creates the interaction with the outcome the assistant gives, or,
     without one, "answered" only from ANSWER_MIN_SECONDS (a 40-second voicemail must never count
     as a live conversation). The interaction goes in through interactions_service.log_interaction
@@ -376,14 +377,15 @@ def telephony(user: dict = Depends(ADMIN_ONLY)):
     provider = (config.BD_TELEPHONY_PROVIDER or "null").lower()
     connected, message = _telephony_status(provider)
     with db.connect() as conn:
-        last = conn.execute("select max(received_at) as at from integration_events where provider = %s",
-                            (provider,)).fetchone()["at"]
+        seen = conn.execute("select max(received_at) as at, count(*)::integer as n from integration_events"
+                            " where provider = %s", (provider,)).fetchone()
         open_count = conn.execute("select count(*)::integer as n from unmatched_calls where status = 'open'"
                                   ).fetchone()["n"]
     return {"ok": True, "telephony": {
         "provider": provider,
         "connected": connected,
-        "last_event_at": serialize.ts(last),
+        "last_event_at": serialize.ts(seen["at"]),
+        "events": seen["n"],
         "unmatched_open": open_count,
         "message": message,
     }}
