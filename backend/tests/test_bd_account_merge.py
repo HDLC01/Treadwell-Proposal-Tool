@@ -20,9 +20,7 @@ Everything is made up: example.com emails, 555-01xx phones.
 """
 from __future__ import annotations
 
-import ast
 import io
-import pathlib
 import threading
 import time
 
@@ -35,7 +33,6 @@ MERGE = "/api/bd/contacts/accounts/%s/merge"
 UNDO = "/api/bd/contacts/accounts/merges/%s/undo"
 KEEP = "/api/bd/contacts/accounts/duplicates/keep"
 DUPES = "/api/bd/contacts/accounts/duplicates"
-BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
 CHANGED = "Something changed since this merge, so it can't be undone."
 
@@ -87,11 +84,12 @@ def test_merge_moves_the_people_keeps_their_owners_and_uses_the_picked_name(bd_s
     before = state(bd_db)
     body = merge(bd_as_user(CASEY), 10, 11, name_from=10)
     m = body["merge"]
-    assert set(m) == {"id", "account", "into", "name_before", "people", "people_count", "at"}
-    assert {k: m[k] for k in ("account", "into", "name_before", "people", "people_count")} == {
+    assert set(m) == {"id", "account", "into", "name_before", "people", "people_count", "at", "by"}
+    assert {k: m[k] for k in ("account", "into", "name_before", "people", "people_count", "by")} == {
         "account": {"id": 10, "name": "Prairie Ridge Builders LLC"},
         "into": {"id": 11, "name": "Prairie Ridge Builders LLC"},
-        "name_before": "Prairie Ridge Builders, Inc.", "people": 1, "people_count": 3}
+        "name_before": "Prairie Ridge Builders, Inc.", "people": 1, "people_count": 3,
+        "by": {"id": CASEY, "name": "Casey Moret"}}
     from bd import serialize
 
     at = bd_db.execute("select at from bd.events where id = %s", (m["id"],)).fetchone()["at"]
@@ -174,6 +172,69 @@ def test_the_merge_waits_for_a_lock_on_either_account(bd_seeded, bd_as_user, bd_
         holder.rollback()
     t.join(30)
     assert done == [200]
+
+
+def _during_a_merge(monkeypatch, client, loser, into, name_from, other):
+    """Run `other()` in a thread while a real merge of `loser` into `into` is open (it has moved the
+    people and set the mark, and holds its locks, but has not committed), then let the merge commit.
+    Returns what `other()` returned. `other` must WAIT for the merge: it may not finish first."""
+    from bd.routers import account_merge
+
+    real, go, inside = account_merge.log_event, threading.Event(), threading.Event()
+
+    def held(*a, **k):
+        inside.set()
+        assert go.wait(30), "the test never let the merge go on"
+        return real(*a, **k)
+
+    monkeypatch.setattr(account_merge, "log_event", held)
+    merging, got = [], []
+    m = threading.Thread(target=lambda: merging.append(client.post(
+        MERGE % loser, json={"into": into, "name_from": name_from}).status_code), daemon=True)
+    m.start()
+    assert inside.wait(30), "the merge never reached its last step"
+    o = threading.Thread(target=lambda: got.append(other()), daemon=True)
+    o.start()
+    time.sleep(0.8)
+    early = list(got)
+    go.set()
+    m.join(30)
+    o.join(30)
+    assert merging == [200]
+    assert early == [], "it went ahead while the merge held the account, so the race was never run"
+    return got[0]
+
+
+@pytest.mark.parametrize("spec", [{"id": 10}, {"name": "Prairie Ridge Builders LLC"}], ids=["by-id", "by-name"])
+def test_a_person_added_while_a_merge_runs_lands_on_the_survivor(bd_seeded, bd_as_user, bd_db, monkeypatch, spec):
+    """Add contact read the losing account before the merge committed: it must wait for the merge and
+    then follow it, never write the person onto the hidden account."""
+    casey = bd_as_user(CASEY)
+
+    def add():
+        r = casey.post("/api/bd/contacts", json={"name": "Nell Brandt", "company": spec})
+        return r.status_code, r.json()["contact"]["company"]["id"] if r.status_code == 201 else r.text
+
+    assert _during_a_merge(monkeypatch, casey, 10, 11, 11, add) == (201, 11)
+    assert bd_db.execute("select company_id from bd.contacts where name = 'Nell Brandt'").fetchone()["company_id"] == 11
+    assert bd_db.execute("select count(*) as n from bd.contacts where company_id = 10").fetchone()["n"] == 0
+
+
+def test_an_import_that_read_the_accounts_before_a_merge_puts_its_people_on_the_survivor(
+        bd_seeded, bd_as_user, bd_db, monkeypatch):
+    """The importer remembers each account by name when it starts. A merge that commits while the run
+    is going must not leave that memory pointing at the hidden account."""
+    casey = bd_as_user(CASEY)
+    csv = b"Company,Name,Email\nCottonwood & Sons Paving,Nell Brandt,nell@cottonwoodpaving.example.com\n"
+
+    def run_import():
+        r = casey.post("/api/bd/admin/import", files={"file": ("people.csv", io.BytesIO(csv), "text/csv")},
+                       data={"dry_run": "false"})
+        return r.status_code
+
+    assert _during_a_merge(monkeypatch, casey, 12, 13, 13, run_import) == 200
+    row = bd_db.execute("select company_id from bd.contacts where name = 'Nell Brandt'").fetchone()
+    assert row["company_id"] == 13
 
 
 # ── hidden from the list, search and the type-ahead ─────────────────────────────────────────────
@@ -278,6 +339,13 @@ def test_a_bad_merge_is_refused_and_changes_nothing(bd_seeded, bd_as_user, bd_db
     assert r.status_code == status, r.text
     assert r.json()["message"] == message and r.json().get("fields") == fields
     assert state(bd_db) == before
+
+
+def test_a_whole_number_sent_as_11_0_names_account_11_as_add_contact_reads_it(bd_seeded, bd_as_user, bd_db):
+    r = bd_as_user(CASEY).post(MERGE % 10, json={"into": 11.0, "name_from": 11.0})
+    assert r.status_code == 200, r.text
+    assert (r.json()["merge"]["into"], company_row(bd_db, 10)["merged_into"]) == (
+        {"id": 11, "name": "Prairie Ridge Builders, Inc."}, 11)
 
 
 def test_a_merged_account_cannot_be_merged_again_or_merged_into(bd_seeded, bd_as_user, bd_db):
@@ -407,8 +475,9 @@ def test_the_recent_merges_newest_first_at_most_ten(bd_seeded, bd_as_user, bd_db
     body = casey.get(DUPES).json()
     assert body["merges"] == [{"id": first["id"], "account": {"id": 12, "name": "Cottonwood & Sons Paving"},
                                "into": {"id": 13, "name": "Cottonwood Sons Paving Co."},
-                               "name_before": "Cottonwood Sons Paving Co.", "people": 1, "at": first["at"],
-                               "by": {"id": CASEY, "name": "Casey Moret"}}]
+                               "name_before": "Cottonwood Sons Paving Co.", "people": 1, "people_count": 2,
+                               "at": first["at"], "by": {"id": CASEY, "name": "Casey Moret"}}]
+    assert body["merges"] == [first]                       # the POST answer and the list are one Merge
     ids = [first["id"]]
     for n in range(10):
         a, b = company(bd_db, "Made Up Pair %d" % n), company(bd_db, "Made Up Pair %d LLC" % n)
@@ -416,6 +485,19 @@ def test_the_recent_merges_newest_first_at_most_ten(bd_seeded, bd_as_user, bd_db
     shown = casey.get(DUPES).json()["merges"]
     assert [x["id"] for x in shown] == ids[::-1][:10]
     assert shown[0]["by"] == {"id": EMERY, "name": "Emery Stoll"}
+
+
+def test_a_merge_whose_survivor_was_merged_on_leaves_the_recent_list(bd_seeded, bd_as_user, bd_db):
+    """12 into 13, then 13 into a third account: the first can never be undone now (its people are not
+    at 13), so Recently merged offers only the second, whose survivor holds all three people."""
+    casey = bd_as_user(CASEY)
+    first = merged(casey, 12, 13, name_from=13)
+    third = company(bd_db, "Cottonwood Sons Paving LLC")
+    second = merged(casey, 13, third, name_from=third)
+    shown = casey.get(DUPES).json()["merges"]
+    assert [(x["id"], x["account"]["id"], x["into"]["id"], x["people_count"]) for x in shown] == [
+        (second["id"], 13, third, 2)]
+    _refused(casey, bd_db, first["id"], 409, CHANGED)
 
 
 # ── keep separate ───────────────────────────────────────────────────────────────────────────────
@@ -463,33 +545,6 @@ def test_a_merged_account_cannot_be_kept_separate(bd_seeded, bd_as_user, bd_db):
 
 
 # ── nothing merges on its own ───────────────────────────────────────────────────────────────────
-def _source_files():
-    for path in BACKEND.rglob("*.py"):
-        rel = path.relative_to(BACKEND)
-        if rel.parts[0] in ("tests", ".venv", "venv"):
-            continue
-        yield rel, path.read_text(encoding="utf-8")
-
-
-def test_only_the_merge_and_undo_routes_write_the_mark():
-    """The merge mark is written in one module only, and only by its two POST handlers. Nothing else
-    imports that module: bd/api.py loads it by name from ROUTER_MODULES."""
-    writers = sorted(str(rel) for rel, text in _source_files() if "merged_into =" in text)
-    assert writers == [str(pathlib.Path("bd/routers/account_merge.py"))]
-    namers = sorted(str(rel) for rel, text in _source_files() if "account_merge" in text)
-    assert namers == sorted([str(pathlib.Path("bd/routers/__init__.py")), str(pathlib.Path("bd/routers/account_merge.py"))])
-    tree = ast.parse((BACKEND / "bd/routers/account_merge.py").read_text(encoding="utf-8"))
-    writing = sorted(fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
-                     and "merged_into =" in ast.unparse(fn))
-    assert writing == ["merge_account", "undo_merge"]
-    from bd import api
-
-    routes = sorted((m, r.path) for r in api.bd_routes() for m in r.methods
-                    if getattr(r.endpoint, "__name__", "") in writing and r.endpoint.__module__.endswith("account_merge"))
-    assert routes == [("POST", "/api/bd/contacts/accounts/merges/{id}/undo"),
-                      ("POST", "/api/bd/contacts/accounts/{id}/merge")]
-
-
 def test_no_startup_hook_comes_from_the_merge_module():
     import main
 

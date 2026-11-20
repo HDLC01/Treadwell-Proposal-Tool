@@ -7,15 +7,19 @@
 
 WHO. The assistant, the BD admin and the super admin (Q21, Q36), `can.merge_companies`; everyone else
 is 403 on all four. Nothing merges on its own: no worker, startup hook or read calls a merge
-(tests/test_bd_account_merge.py proves the mark is written by the two POST handlers below alone).
+(tests/test_bd_account_merge.py runs the Friday batch and every read and finds nothing merged).
 
 THE RULE (bd/normalize.py account_key). Two accounts that are not merged away are a likely pair when
-their cleaned names are equal and the pair was not kept separate. A shared phone, or a shared email
+their cleaned names are equal, at least one of them has a BD person who is not archived (they are
+likely duplicate BD accounts: the BD tab shows that one), and the pair was not kept separate. A
+shared phone, or a shared email
 domain that is not a free mail one, among their people who are not archived is shown as a hint; a
 hint alone never makes a pair. The paths sit under /api/bd/contacts/, so the tool's audit log records
 each read (the hints carry phone numbers), by path alone.
 
-MERGE (a soft merge). Both companies are locked first, in id order. EVERY person at the merged-away
+MERGE (a soft merge). Both companies are locked first, in id order (contacts_service.lock_companies;
+Add contact, a contact's company change and the import read an account FOR SHARE, so they wait for a
+merge in flight and then follow it). EVERY person at the merged-away
 account moves to the survivor (BD and maintenance, archived too, because the account is hidden after
 and anyone left there would vanish with it). Each keeps their own owner (Q33); their history, tasks
 and recommendations point at the person, so they follow. The survivor takes the name the merger
@@ -24,6 +28,8 @@ other account is not deleted: merged_into / merged_at / merged_by mark it, and t
 search and the type-ahead never show it, nor does Add contact or the import ever put a person on it
 (bd/contacts_service.live_company). One event, `company_merged`, no contact, ids and account names
 only: {company_id, into, name_from, name_before, name_after, contacts: [ids], people}. One transaction.
+The answer and each row of Recently merged are one shape, serialize.account_merge. Recently merged
+leaves out a merge already undone and one whose survivor was merged on since (Undo would refuse it).
 
 UNDO has no time limit ("every merge can be undone"), and anyone who may merge may undo it. It moves
 back exactly the people that merge moved, restores the survivor's name when the merge changed it, and
@@ -43,6 +49,7 @@ from typing import Any
 from fastapi import Body, Depends, Path, Request
 
 from .. import auth, db, errors, normalize, paging, serialize, web
+from .. import contacts_service as cs
 from ..contacts_service import COMPANY_NOT_FOUND, FIX
 from ..events import log_event
 
@@ -65,17 +72,9 @@ PICK_TWO = "Pick two different accounts."
 
 
 def _body_id(value):
-    """A JSON whole number naming a row, else None (text, bools and fractions are refused)."""
-    return paging.as_id(value) if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _lock(conn, ids: list) -> dict:
-    """Lock these companies, in id order, and return them by id. 404 when one does not exist."""
-    rows = conn.execute("select id, name, normalized_name, merged_into, merged_at from companies"
-                        " where id = any(%s) order by id for update", (sorted(set(ids)),)).fetchall()
-    if len(rows) != len(set(ids)):
-        raise errors.not_found(COMPANY_NOT_FOUND)
-    return {r["id"]: r for r in rows}
+    """A JSON number naming a row, read as Add contact's {"id"} is (contacts_service.company_by_id):
+    6 or 6.0; else None (text, bools, fractions)."""
+    return paging.as_id(cs.as_int(value))
 
 
 def _people(conn, company_id) -> int:
@@ -88,7 +87,10 @@ def _pairs(conn) -> list:
     rows = conn.execute(
         "select co.id, co.name, co.city,"
         " (select count(*) from contacts c where c.company_id = co.id and c.archived_at is null)::integer"
-        " as people_count from companies co where co.merged_into is null order by co.id").fetchall()
+        " as people_count,"
+        " exists (select 1 from contacts c where c.company_id = co.id and c.category = 'bd'"
+        "   and c.archived_at is null) as on_bd"
+        " from companies co where co.merged_into is null order by co.id").fetchall()
     groups: dict = {}
     for r in rows:
         key = normalize.account_key(r["name"])
@@ -97,7 +99,8 @@ def _pairs(conn) -> list:
     kept = {(k["account_a"], k["account_b"]) for k in conn.execute(
         "select account_a, account_b from account_pairs_kept").fetchall()}
     found = [(key, a, b) for key, members in groups.items()
-             for i, a in enumerate(members) for b in members[i + 1:] if (a["id"], b["id"]) not in kept]
+             for i, a in enumerate(members) for b in members[i + 1:]
+             if (a["on_bd"] or b["on_bd"]) and (a["id"], b["id"]) not in kept]
     found.sort(key=lambda p: (p[0], p[1]["id"], p[2]["id"]))
     return found
 
@@ -117,23 +120,23 @@ def _hints(conn, ids: list) -> dict:
     return out
 
 
-def _side(row) -> dict:
-    return {"id": row["id"], "name": row["name"], "city": row["city"], "people_count": int(row["people_count"])}
-
-
 def _recent_merges(conn) -> list:
+    """The latest merges Undo may still take: not undone, and the survivor not merged on since."""
     rows = conn.execute(
-        "select e.id, e.at, e.data, u.id as by_id, u.name as by_name, lo.name as account_name, su.name as into_name"
+        "select e.id, e.at, e.data, u.id as by_id, u.name as by_name, lo.name as account_name, su.name as into_name,"
+        " (select count(*) from contacts c where c.company_id = su.id and c.archived_at is null)::integer"
+        "   as people_count"
         " from events e left join users u on u.id = e.actor_id"
         " join companies lo on lo.id = (e.data->>'company_id')::bigint"
         " join companies su on su.id = (e.data->>'into')::bigint"
-        " where e.kind = %s and not exists (select 1 from events x where x.kind = %s"
+        " where e.kind = %s and su.merged_into is null and not exists (select 1 from events x where x.kind = %s"
         "   and (x.data->>'merge_id')::bigint = e.id)"
         " order by e.id desc limit %s", (MERGED, UNDONE, MERGES_SHOWN)).fetchall()
-    return [{"id": r["id"], "account": serialize.company_ref(r["data"]["company_id"], r["account_name"]),
-             "into": serialize.company_ref(r["data"]["into"], r["into_name"]),
-             "name_before": r["data"].get("name_before"), "people": r["data"].get("people"),
-             "at": serialize.ts(r["at"]), "by": serialize.user_ref(r["by_id"], r["by_name"])} for r in rows]
+    return [serialize.account_merge(
+        r["id"], serialize.company_ref(r["data"]["company_id"], r["account_name"]),
+        serialize.company_ref(r["data"]["into"], r["into_name"]), r["data"].get("name_before"),
+        r["data"].get("people"), r["people_count"], r["at"], serialize.user_ref(r["by_id"], r["by_name"]))
+        for r in rows]
 
 
 @router.get("/api/bd/contacts/accounts/duplicates")
@@ -143,11 +146,8 @@ def list_duplicates(request: Request, me: dict = Depends(auth.require_role(*MERG
         found = _pairs(conn)
         page = found[offset:offset + limit]
         hints = _hints(conn, sorted({p[1]["id"] for p in page} | {p[2]["id"] for p in page}))
-        items = []
-        for _key, a, b in page:
-            items.append({"a": _side(a), "b": _side(b), "hints": {
-                "phones": sorted(hints[a["id"]][0] & hints[b["id"]][0]),
-                "email_domains": sorted(hints[a["id"]][1] & hints[b["id"]][1])}})
+        items = [serialize.account_pair(a, b, hints[a["id"]][0] & hints[b["id"]][0],
+                                        hints[a["id"]][1] & hints[b["id"]][1]) for _key, a, b in page]
         merges = _recent_merges(conn)
     return {"ok": True, "total": len(found), "items": items, "merges": merges}
 
@@ -170,7 +170,7 @@ def merge_account(company_id: str = Path(alias="id"), body: Any = Body(None),
     if fields:
         raise errors.bad_request(FIX, fields)
     with db.connect() as conn:
-        rows = _lock(conn, [loser_id, into_id])
+        rows = cs.lock_companies(conn, [loser_id, into_id])
         loser, into = rows[loser_id], rows[into_id]
         if loser["merged_into"] is not None:
             raise errors.conflict(ALREADY_MERGED)
@@ -190,10 +190,9 @@ def merge_account(company_id: str = Path(alias="id"), body: Any = Body(None),
             "name_after": name_after, "contacts": sorted(r["id"] for r in moved), "people": people})
         at = conn.execute("select at from events where id = %s", (event_id,)).fetchone()["at"]
         people_count = _people(conn, into_id)
-    return {"ok": True, "merge": {
-        "id": event_id, "account": serialize.company_ref(loser_id, loser["name"]),
-        "into": serialize.company_ref(into_id, name_after), "name_before": into["name"], "people": people,
-        "people_count": people_count, "at": serialize.ts(at)}}
+    return {"ok": True, "merge": serialize.account_merge(
+        event_id, serialize.company_ref(loser_id, loser["name"]), serialize.company_ref(into_id, name_after),
+        into["name"], people, people_count, at, serialize.user_ref(me["id"], me.get("name")))}
 
 
 # ── undo ─────────────────────────────────────────────────────────────────────────────────────
@@ -208,7 +207,7 @@ def undo_merge(merge_id: str = Path(alias="id"), body: Any = Body(None),
         loser_id, into_id = (_body_id(data.get("company_id")), _body_id(data.get("into"))) if data else (None, None)
         if loser_id is None or into_id is None:
             raise errors.not_found(MERGE_NOT_FOUND)
-        rows = _lock(conn, [loser_id, into_id])
+        rows = cs.lock_companies(conn, [loser_id, into_id])
         loser, into = rows[loser_id], rows[into_id]
         if conn.execute("select 1 from events where kind = %s and (data->>'merge_id')::bigint = %s",
                         (UNDONE, mid)).fetchone():
@@ -233,8 +232,8 @@ def undo_merge(merge_id: str = Path(alias="id"), body: Any = Body(None),
                      (loser_id,))
         log_event(conn, UNDONE, actor=me, data={"merge_id": mid, "company_id": loser_id, "into": into_id,
                                                 "people": data.get("people")})
-    return {"ok": True, "undone": {"id": mid, "account": serialize.company_ref(loser_id, loser["name"]),
-                                   "into": serialize.company_ref(into_id, name), "people": data.get("people")}}
+    return {"ok": True, "undone": serialize.merge_undone(mid, serialize.company_ref(loser_id, loser["name"]),
+                                                         serialize.company_ref(into_id, name), data.get("people"))}
 
 
 # ── keep separate ────────────────────────────────────────────────────────────────────────────
@@ -247,7 +246,7 @@ def keep_separate(body: Any = Body(None), me: dict = Depends(auth.require_role(*
         raise errors.bad_request(FIX, {"accounts": PICK_TWO})
     a, b = sorted(ids)
     with db.connect() as conn:
-        rows = _lock(conn, [a, b])
+        rows = cs.lock_companies(conn, [a, b])
         if rows[a]["merged_into"] is not None or rows[b]["merged_into"] is not None:
             raise errors.conflict(ALREADY_MERGED)
         conn.execute("insert into account_pairs_kept (account_a, account_b, decided_by) values (%s, %s, %s)"
@@ -255,7 +254,6 @@ def keep_separate(body: Any = Body(None), me: dict = Depends(auth.require_role(*
         kept = conn.execute("select k.decided_at, u.id as by_id, u.name as by_name from account_pairs_kept k"
                             " join users u on u.id = k.decided_by where k.account_a = %s and k.account_b = %s",
                             (a, b)).fetchone()
-    return {"ok": True, "kept": {"a": serialize.company_ref(a, rows[a]["name"]),
-                                 "b": serialize.company_ref(b, rows[b]["name"]),
-                                 "decided_by": serialize.user_ref(kept["by_id"], kept["by_name"]),
-                                 "decided_at": serialize.ts(kept["decided_at"])}}
+    return {"ok": True, "kept": serialize.kept_pair(
+        serialize.company_ref(a, rows[a]["name"]), serialize.company_ref(b, rows[b]["name"]),
+        serialize.user_ref(kept["by_id"], kept["by_name"]), kept["decided_at"])}

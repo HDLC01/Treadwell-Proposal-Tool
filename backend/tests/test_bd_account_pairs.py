@@ -53,6 +53,14 @@ def person(db, company_id, name, owner=AVERY, phone=None, email=None, category="
         (company_id, name, owner, phone, email, category, archived)).fetchone()["id"]
 
 
+def bd_pair(db, first, second):
+    """Two made-up accounts, the first with one BD person: a pair is only listed when one side is on
+    the BD tab, so a rule check needs one there."""
+    a, b = company(db, first), company(db, second)
+    person(db, a, "Rae Lindgren")
+    return a, b
+
+
 def duplicates(client, query=""):
     r = client.get(URL + query)
     assert r.status_code == 200, r.text
@@ -81,7 +89,7 @@ def test_the_seeds_two_likely_pairs_and_not_its_near_miss(bd_seeded, bd_as_user)
     ("Harbor Point Engineering LLP", "Harbor Point Eng."),           # an ending Add contact's key keeps
 ])
 def test_cleaned_names_that_are_equal_make_a_pair(bd_seeded, bd_db, bd_as_user, first, second):
-    a, b = company(bd_db, first), company(bd_db, second)
+    a, b = bd_pair(bd_db, first, second)
     assert (a, b) in pairs(bd_as_user(CASEY))
 
 
@@ -93,21 +101,50 @@ def test_cleaned_names_that_are_equal_make_a_pair(bd_seeded, bd_db, bd_as_user, 
     ("Lone Elm Dental", "Lone Oak Dental"),                          # one word differs
 ])
 def test_names_that_differ_once_cleaned_make_no_pair(bd_seeded, bd_db, bd_as_user, first, second):
-    a, b = company(bd_db, first), company(bd_db, second)
+    a, b = bd_pair(bd_db, first, second)
     found = pairs(bd_as_user(CASEY))
     assert (a, b) not in found and (b, a) not in found
 
 
 def test_a_name_with_nothing_left_after_cleaning_never_pairs(bd_seeded, bd_db, bd_as_user):
-    a, b = company(bd_db, "&"), company(bd_db, "And")
+    a, b = bd_pair(bd_db, "&", "And")
     found = pairs(bd_as_user(CASEY))
     assert all(a not in p and b not in p for p in found)
 
 
 def test_three_accounts_with_one_cleaned_name_make_three_pairs(bd_seeded, bd_db, bd_as_user):
     ids = [company(bd_db, n) for n in ("Juniper Hollow Dental", "Juniper Hollow Dental LLC", "Juniper Hollow Dental, Inc.")]
+    for cid in ids:
+        person(bd_db, cid, "Rae Lindgren")
     found = [p for p in pairs(bd_as_user(CASEY)) if p[0] in ids]
     assert found == [(ids[0], ids[1]), (ids[0], ids[2]), (ids[1], ids[2])]
+
+
+# ── only BD accounts ────────────────────────────────────────────────────────────────────────────
+def test_a_pair_is_listed_only_when_one_side_has_a_bd_person(bd_seeded, bd_db, bd_as_user):
+    """Likely duplicate BD accounts: one side must be on the BD tab (a BD person not archived), or the
+    note would name two accounts the list under it never shows. Worked by hand:
+        Evergy Services / Evergy Services Inc      maintenance people only        -> no pair
+        Flint Hills Glass / Flint Hills Glass LLC  nobody at either               -> no pair
+        Kanza Tile / Kanza Tile Co                 an archived BD person and a
+                                                   maintenance person at the first -> no pair
+        Wakarusa Stone / Wakarusa Stone LLC        maintenance at the first, a BD
+                                                   person at the second           -> a pair, 1 and 1 people"""
+    ev = company(bd_db, "Evergy Services"), company(bd_db, "Evergy Services Inc")
+    person(bd_db, ev[0], "Ida Moss", category="maintenance")
+    person(bd_db, ev[1], "Lou Kemp", category="maintenance")
+    flint = company(bd_db, "Flint Hills Glass"), company(bd_db, "Flint Hills Glass LLC")
+    kanza = company(bd_db, "Kanza Tile"), company(bd_db, "Kanza Tile Co")
+    person(bd_db, kanza[0], "Tom Ashby", archived=True)
+    person(bd_db, kanza[0], "Bea Strand", category="maintenance")
+    waka = company(bd_db, "Wakarusa Stone"), company(bd_db, "Wakarusa Stone LLC")
+    person(bd_db, waka[0], "Cole Imrie", category="maintenance")
+    person(bd_db, waka[1], "Dell Okafor", BLAIR)
+    body = duplicates(bd_as_user(CASEY))
+    assert [(p["a"]["id"], p["b"]["id"]) for p in body["items"]] == [(12, 13), (10, 11), waka]
+    assert body["total"] == 3
+    assert [(p["a"]["people_count"], p["b"]["people_count"]) for p in body["items"]][2] == (1, 1)
+    assert all(x not in p for p in pairs(bd_as_user(CASEY)) for x in ev + flint + kanza)
 
 
 # ── hints ───────────────────────────────────────────────────────────────────────────────────────

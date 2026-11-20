@@ -1060,15 +1060,19 @@ endings at the end (LLC, Inc, Co, Corp, Ltd, Company, Corporation, LLP, PC and t
 word) and joins the words, so `Kaw-Point` and `Kaw Point` are one name. A name with nothing left never
 pairs. A shared phone, or a shared email domain that is not a free mail domain (gmail.com, yahoo.com,
 outlook.com, comcast.net and the others the code lists), among the people at the two accounts who are
-not archived, is a **hint** shown with the pair; a hint alone never makes a pair. An account merged
-away, and a pair kept separate, is never listed.
+not archived, is a **hint** shown with the pair; a hint alone never makes a pair. A pair is listed only
+when at least one of the two has a BD person who is not archived (they are likely duplicate BD
+accounts, and the BD tab shows that one): two maintenance-only accounts, or two with nobody, are never
+listed. An account merged away, and a pair kept separate, is never listed.
 
 #### `GET /api/bd/contacts/accounts/duplicates` (assistant)
 
 Query: `limit`, `offset`. `{ "ok": true, "total": N, "items": [Pair], "merges": [Merge] }`. A pair's `a` is
 the account with the lower id; pairs come in cleaned-name order, then by id. `people_count` counts the
 people who are not archived, BD and maintenance alike (all of them move in a merge). `merges` is the
-"Recently merged" list: the latest 10 merges that are not undone, newest first, each with Undo.
+"Recently merged" list: the latest 10 merges Undo may still take, newest first: not undone, and the
+survivor not merged on since (Undo would refuse that one). A Merge here has the same shape as the
+merge route's answer; `people_count` is the survivor's people now.
 
 ```json
 {
@@ -1090,7 +1094,7 @@ That is the fixture seed. Cedar Creek Concrete and Cedar Crest Concrete share a 
 but not a cleaned name, so they are not a pair. A merge in `merges`:
 
 ```json
-{ "id": 41, "account": { "id": 12, "name": "Cottonwood & Sons Paving" }, "into": { "id": 13, "name": "Cottonwood Sons Paving Co." }, "name_before": "Cottonwood Sons Paving Co.", "people": 1, "at": "2026-11-04T10:30:00-06:00", "by": { "id": 3, "name": "Casey Moret" } }
+{ "id": 41, "account": { "id": 12, "name": "Cottonwood & Sons Paving" }, "into": { "id": 13, "name": "Cottonwood Sons Paving Co." }, "name_before": "Cottonwood Sons Paving Co.", "people": 1, "people_count": 2, "at": "2026-11-04T10:30:00-06:00", "by": { "id": 3, "name": "Casey Moret" } }
 ```
 
 #### `POST /api/bd/contacts/accounts/{id}/merge` (assistant)
@@ -1098,12 +1102,15 @@ but not a cleaned name, so they are not a pair. A merge in `merges`:
 `{id}` is the account merged away. Body `{ "into": the surviving account's id, "name_from": the id of the
 account whose name the survivor keeps }`: which account survives and which name it keeps are two
 choices, both sent (`name_from` is `{id}` or `into`). Refused, changing nothing: 400 `fields.into`
-`"Pick the account to merge into."` (missing, or not a whole number) or `"Pick another account."` (itself);
+`"Pick the account to merge into."` (missing, or not a whole number; `11.0` is read as `11`, as Add
+contact reads a company id) or `"Pick another account."` (itself);
 400 `fields.name_from` `"Pick one of the two names."`; 404 `"That company does not exist."` (either
 account); 409 `"This account is already merged into another."`; 409 `"That account was merged into
 another, so nothing can merge into it."`. Any two accounts may be merged, listed as a pair or not.
 
-In one transaction, with both accounts locked first: **every person** at `{id}` moves to `into` (BD
+In one transaction, with both accounts locked first (Add contact, a contact's company change and the
+import read an account with a lock that waits for a merge in flight, then follow it, so a person added
+at that moment never lands on the hidden account): **every person** at `{id}` moves to `into` (BD
 and maintenance, archived too, so nobody is left on a hidden account), each **keeping their own
 owner** (Q33); their history, tasks and recommendations point at the person, so they follow. The
 survivor takes the picked name. `{id}` is not deleted: it is marked merged into the survivor, with who
@@ -1118,7 +1125,7 @@ phone or email.
 ```
 
 ```json
-{ "ok": true, "merge": { "id": 41, "account": { "id": 10, "name": "Prairie Ridge Builders LLC" }, "into": { "id": 11, "name": "Prairie Ridge Builders LLC" }, "name_before": "Prairie Ridge Builders, Inc.", "people": 1, "people_count": 3, "at": "2026-11-04T10:30:00-06:00" } }
+{ "ok": true, "merge": { "id": 41, "account": { "id": 10, "name": "Prairie Ridge Builders LLC" }, "into": { "id": 11, "name": "Prairie Ridge Builders LLC" }, "name_before": "Prairie Ridge Builders, Inc.", "people": 1, "people_count": 3, "at": "2026-11-04T10:30:00-06:00", "by": { "id": 3, "name": "Casey Moret" } } }
 ```
 
 `people` counts the people moved who are not archived; `people_count` the survivor's people now ("Merged.

@@ -7,6 +7,8 @@ checks, and making a contact (#808).
     cs.resolve_company(conn, spec, extra=None) -> {"id", "name", "city", "industry"}
     cs.insert_company(conn, name, city=None, industry=None) -> the same, always a new row
     cs.live_company(conn, normalized_name) -> the account a person with that company name joins, or None
+    cs.company_by_id(conn, id) -> the account a person given that id joins (404 when unknown)
+    cs.lock_companies(conn, ids) -> {id: row}, locked FOR UPDATE in id order (404 when one is unknown)
     cs.create_contact(conn, actor, body, source="manual") -> (Contact dict, possible_duplicates)
 
 Ported from BD's routers/contacts.py, where these lived; here because no BD router imports another
@@ -171,17 +173,39 @@ def find_duplicates(conn, company=None, email=None, phone=None, except_id=None) 
 # A merged-away account (#811) is hidden, so nobody may join it: the find-or-create and an id both
 # lead to the account it was merged into, followed to the end. A chain can never loop (nothing merges
 # into a merged account), so the hop limit is only a guard.
+#
+# Every read that picks the account a person is written to takes the row FOR SHARE. A merge holds
+# both accounts FOR UPDATE until it commits, so a person being added or moved at that moment waits
+# for it, then reads the committed row, sees the mark and follows it; and a merge that starts after
+# the read waits until the person is written, then moves them with everyone else. A plain read would
+# hand back the losing account's id, and the person would land on a hidden account (review, #811).
 _COMPANY_COLUMNS = "id, name, city, industry, normalized_name, merged_into"
 _MAX_HOPS = 100
+
+
+def _company_row(conn, company_id):
+    return conn.execute("select " + _COMPANY_COLUMNS + " from companies where id = %s for share",
+                        (company_id,)).fetchone()
 
 
 def _survivor(conn, row):
     hops = 0
     while row is not None and row["merged_into"] is not None and hops < _MAX_HOPS:
-        row = conn.execute("select " + _COMPANY_COLUMNS + " from companies where id = %s",
-                           (row["merged_into"],)).fetchone()
+        row = _company_row(conn, row["merged_into"])
         hops += 1
     return row
+
+
+def lock_companies(conn, ids) -> dict:
+    """Lock these companies FOR UPDATE, in id order (so two callers never wait on each other in a
+    ring), and return them by id: {id, name, normalized_name, merged_into, merged_at}. 404 when one
+    does not exist. A company move and a merge, Undo or Keep separate (#810, #811) take it first."""
+    want = sorted(set(ids))
+    rows = conn.execute("select id, name, normalized_name, merged_into, merged_at from companies"
+                        " where id = any(%s) order by id for update", (want,)).fetchall()
+    if len(rows) != len(want):
+        raise errors.not_found(COMPANY_NOT_FOUND)
+    return {r["id"]: r for r in rows}
 
 
 def live_company(conn, normalized_name: str):
@@ -189,7 +213,7 @@ def live_company(conn, normalized_name: str):
     merged-away account has the name, the account its merge leads to; else None.
     {id, name, city, industry, normalized_name}."""
     row = conn.execute("select " + _COMPANY_COLUMNS + " from companies where normalized_name = %s"
-                       " order by merged_into is not null, id limit 1", (normalized_name,)).fetchone()
+                       " order by merged_into is not null, id limit 1 for share", (normalized_name,)).fetchone()
     row = _survivor(conn, row)
     return None if row is None else {k: row[k] for k in ("id", "name", "city", "industry", "normalized_name")}
 
@@ -198,8 +222,7 @@ def company_by_id(conn, company_id):
     cid = as_int(company_id)
     if paging.as_id(cid) is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
-    row = _survivor(conn, conn.execute("select " + _COMPANY_COLUMNS + " from companies where id = %s",
-                                       (cid,)).fetchone())
+    row = _survivor(conn, _company_row(conn, cid))
     if row is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
     return {k: row[k] for k in ("id", "name", "city", "industry")}
