@@ -78,6 +78,9 @@ BEFORE = {
     "/bd/login.html": ["/bd/"],
     # The Contacts page's place (#807): where This Week sends the assistant; plain words until it moves.
     "/bd/contacts.html": ["/bd/"],
+    # One contact and Add contact (#808): BD pages like the rest, so the BD CRM row and nothing else.
+    "/bd/contact.html": ["/bd/"],
+    "/bd/add.html": ["/bd/"],
 }
 
 # Addresses under /bd/ whose file names are the same as a tool page's. Under an ends-with match each

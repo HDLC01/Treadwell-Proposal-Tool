@@ -615,7 +615,8 @@ BD route serves that path with another method.
 {
   "ok": true,
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
-  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false },
+  "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false,
+           "add_contact": true, "edit_contact": true, "clear_duplicate": false, "cadence": true, "manage_entries": false },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -623,15 +624,32 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner |
-|---|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes | |
-| assistant | | | | yes | yes | | | |
-| manager | | yes | | | | | yes | yes |
-| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | |
+| assistant | | | | yes | yes | | | | yes | yes | yes | yes | |
+| manager | | yes | | | | | yes | yes | | | | yes | |
+| admin, super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 
 `pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
-"Whose week?" picker. A salesperson sees only their own week.
+"Whose week?" picker. A salesperson sees only their own week. This Week and the contact page show
+this week's priority score to a person with `pick_owner`.
+
+The contact page and Add contact (#808) read these five; each is what one route's check lets in, so a
+page never offers what the server would refuse (tests/test_bd_contact_page_roles.py checks each key
+against its route, person by person):
+
+- `add_contact`: `POST /api/bd/contacts`. The sidebar's Add contact section and the contact page's
+  "Add someone".
+- `edit_contact`: `PATCH /api/bd/contacts/{id}` with any field, confirm, archive, a note, "Not the right
+  person". The contact page's Edit details, the note box, the "Still the right person?" switch and
+  Archive.
+- `clear_duplicate`: `PATCH {"duplicate_of": null}`. "Not a duplicate" on the contact page; Add contact
+  clears the flag it just made only for this person.
+- `cadence`: how often to follow up (a manager's only edit). A person with `cadence` and no
+  `edit_contact` (the manager) gets the cadence sheet alone.
+- `manage_entries`: `DELETE /api/bd/interactions/{id}`, and `PATCH` of an entry somebody else logged.
+  Each logged entry's Delete, and its Edit when it is not this person's own.
 
 #### `GET /api/bd/settings` (any BD role)
 
@@ -720,9 +738,93 @@ is 403 `"Only the person who logged this can change it."`. Answers `{ "ok": true
 
 `{ "ok": true, "deleted": id }`. An `interaction_deleted` audit row is logged with no contact.
 
-### One contact (#807)
+### Contacts (#807, #808)
 
-The contact list, duplicates, create, archive and merge move with the contact page (#808).
+#807 moved one contact (get, patch, confirm) for This Week; #808 moves the rest with the contact page
+and Add contact. Merge is not built yet (below). A body that is not a JSON object is 400
+`{"body": "Send a JSON object."}` on every route here that takes one. The examples use the made-up
+fixture seed (`bd/ops/fixture_seed.py`) on its day, Wednesday 2026-11-04.
+
+#### `GET /api/bd/contacts` (any BD role)
+
+Query (all optional, combined with AND): `q` (name, company, email, title or city, any case; the
+company also by its cleaned name; 3 or more digits also match the phone's digits), `category`
+(`bd`|`maintenance`), `owner` (user id), `industry`, `lead_source`, `stage`, `confirmed`
+(`true`|`false`), `cadence` (`never`|`behind`|`on_track`|`complete`), `company` (company id),
+`duplicates` (`true` = only flagged), `sort` (`name`|`company`|`last_live_at`|`next_due_date`, default
+`company`; an unknown one is 400 `"Unknown sort."`), `limit`, `offset`. Archived contacts are left
+out unless `archived=true`. `q` is text, never a pattern. Answers `{ "ok": true, "total": N,
+"items": [Contact] }`; a bad value is 400 with `fields` naming it.
+
+#### `GET /api/bd/contacts/duplicates` (any BD role)
+
+Add contact's "this person may already exist" check. Query: `company` and/or `email` and/or `phone`,
+and `except` (a contact id to leave out, for the contact being edited). Every contact that is not
+archived at a company with the same cleaned name, else with the same email (any case), else the same
+phone (any format), in id order, each once with the first reason that matches.
+
+```json
+{
+  "ok": true,
+  "items": [
+    { "contact_id": 25, "name": "Priya Nandan", "company": "Cedar Creek Concrete", "city": null, "reason": "Same company name" },
+    { "contact_id": 26, "name": "Owen Pratt", "company": "Cedar Crest Concrete", "city": null, "reason": "Same phone" }
+  ]
+}
+```
+
+That is `?company=Cedar Creek Concrete&phone=785.555.0105`. `reason`: `Same company name` |
+`Same email` | `Same phone`.
+
+#### `POST /api/bd/contacts` (salesperson, assistant)
+
+Add contact. `company` is `{ "id" }` (an existing one; 404 `"That company does not exist."`) or
+`{ "name" }` (the company with the same cleaned name, else a new one with the contact's `city` and
+`industry`). The owner defaults to the caller when they are a salesperson, else the first active
+salesperson. Text is trimmed; a client never sets `source` (always `manual`) or a derived field. A
+possible duplicate is saved anyway (**201**) with `duplicate_of` set to the first match, and the
+matches come back as `possible_duplicates`.
+
+A **BD** contact follows the BD cadence (`settings.bd_cadence`): its stored `frequency_per_year` is
+the cadence's number (52 / 12 / 4) and it **cannot be sent**, even as `null` (400 `fields.frequency_per_year`
+`"BD contacts follow the BD cadence. Set a follow-up override instead."`). A **maintenance** contact
+takes `frequency_per_year` (kept between 1 and 52, rounded half up; 0, less or `null` takes
+`settings.default_frequency.maintenance`). A new contact starts `confirmed: false` unless the request
+says `"confirmed": true`. The size limits are PATCH's.
+
+```json
+{
+  "company": { "name": "Juniper Hollow Dental" },
+  "name": "Ari Mendel",
+  "title": "Office Manager",
+  "email": "ari@juniperhollow.example.com",
+  "phone": "913.555.0113",
+  "lead_source": "Referral",
+  "notes": "Met at the dental expo."
+}
+```
+
+```json
+{
+  "ok": true,
+  "contact": {
+    "id": 34,
+    "company": { "id": 19, "name": "Juniper Hollow Dental" },
+    "name": "Ari Mendel",
+    "owner": { "id": 2, "name": "Blair Fenn" },
+    "confirmed": false,
+    "source": "manual",
+    "frequency_per_year": 4,
+    "cadence": "quarterly",
+    "cadence_source": "global",
+    "cadence_status": "never",
+    "duplicate_of": null
+  },
+  "possible_duplicates": []
+}
+```
+
+(`contact` is the full Contact; trimmed here.) A `created` event `"Added by hand"` is logged.
 
 #### `GET /api/bd/contacts/{id}` (any BD role)
 
@@ -737,15 +839,69 @@ old and nobody has sent a follow-up for it.
 Any editable Contact field, `company` (`{ "id" }` or `{ "name" }`), `owner_id`, `co_owner_id`,
 `cadence_override` with `cadence_override_until`, and `duplicate_of: null` (the assistant clears a
 flag). A manager may send only `cadence_override`, `cadence_override_until` and a maintenance
-contact's `frequency_per_year` (403 `"Managers can change only how often to follow up."`). Answers
-`{ "ok": true, "contact": Contact, "possible_duplicates": [...] }`.
+contact's `frequency_per_year` (403 `"Managers can change only how often to follow up."`). Size
+limits: `notes` 20000 characters, `next_step` 500, `email` 254, the name and every other text field
+200, at most 50 tags of 60 characters, and a `company` `name` 200 (400 `"Keep this to N characters or
+fewer."`). Answers `{ "ok": true, "contact": Contact, "possible_duplicates": [...] }`.
 
 #### `POST /api/bd/contacts/{id}/confirm` (salesperson, assistant)
 
 Body `{ "confirmed"? }` (default true). `{ "ok": true, "contact": { "id", "confirmed" } }`; a change is
 logged as a `confirmed` or `unconfirmed` event.
 
-#### Not built yet (503 after the role check)
+#### `POST /api/bd/contacts/{id}/archive` (salesperson, assistant)
+
+Takes the contact off every list and batch; the history is kept. An open task on any weekly list
+closes as `snoozed`. `{ "archived": false }` restores, and undoes that: a task the archive closed on
+**this** week's list, or on a later one, opens again; an earlier week's stays closed, and a task that
+was already done or skipped is left as it was. An `archived` (with the `reason`, at most 200
+characters: 400 `"Keep this to 200 characters or fewer."`) or `restored` event is logged.
+
+```json
+{ "archived": true, "reason": "Moved firms" }
+```
+
+```json
+{ "ok": true, "contact": { "id": 21, "archived_at": "2026-11-04T10:30:00-06:00" } }
+```
+
+### Companies (#808)
+
+#### `GET /api/bd/companies` (any BD role)
+
+Add contact's company type-ahead. Query: `q`, `limit`, `offset`. A company matches when its cleaned
+name starts with the cleaned `q`, or one of its later words does (`ridge` finds Prairie Ridge, `idge`
+finds nothing; a `q` that cleans to nothing lists every company). Ordered by name, any case.
+`contact_count` counts the people who are not archived.
+
+```json
+{ "ok": true, "total": 1, "items": [{ "id": 16, "name": "Bluestem Logistics", "city": "Lenexa", "industry": "Warehousing", "contact_count": 3, "created_at": "2026-11-04T09:00:00-06:00" }] }
+```
+
+#### `GET /api/bd/companies/{id}` (any BD role)
+
+The company and its people who are not archived, in id order, as ContactCompact:
+`{ "ok": true, "company": Company, "contacts": [ContactCompact] }`. An unknown id is 404
+`"That company does not exist."`.
+
+#### `POST /api/bd/companies` (salesperson, assistant)
+
+`{ "name", "city"?, "industry"? }`. Always a new company (merging accounts is a later ticket); the
+people already at a company with the same cleaned name come back as `possible_duplicates`. A blank
+name is 400 `"Type the company name."`. The name, `city` and `industry` stop at 200 characters, as through
+Add contact (400 `"Keep this to 200 characters or fewer."`).
+
+```json
+{ "ok": true, "company": { "id": 19, "name": "Juniper Hollow Dental", "city": "Lenexa", "industry": "Healthcare", "contact_count": 0, "created_at": "2026-11-04T10:40:00-06:00" }, "possible_duplicates": [] }
+```
+
+#### `PATCH /api/bd/companies/{id}` (salesperson, assistant)
+
+Any of `name` (blank is 400 `"A company needs a name."`), `city`, `industry` (text or `null`). A
+rename moves the cleaned name with it, so the duplicate check and Add contact find the new name.
+The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`.
+
+### Not built yet (503 after the role check)
 
 | Route | Who |
 |---|---|

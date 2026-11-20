@@ -24,6 +24,7 @@ import re
 
 import pytest
 
+from _bd_browser import MOVED_PAGES
 from _bd_jstokens import tokenize
 from _frontend_tree import rel
 
@@ -178,10 +179,9 @@ def test_the_link_check_sees_a_page_that_is_not_there(tmp_path):
     assert missing_bd_targets(tmp_path) == ["bd/index.html: /bd/contacts.html"]
 
 
-# The BD pages that have moved into the tool so far (#807: This Week). Being served is not enough:
-# /bd/contacts.html is there only as the page an assistant is sent to until Contacts moves (#808), so
-# only the script that sends her there may name it. A link to it would still be a link to Contacts.
-MOVED_PAGES = {"/bd/", "/bd/index.html"}
+# The BD pages that have moved (tests/_bd_browser.py MOVED_PAGES, the one list the browser suites'
+# per-role link checks read too). /bd/contacts.html is there only as the page an assistant is sent to
+# until Contacts moves, so only the script that sends her there may name it.
 REDIRECT_ONLY = {"/bd/contacts.html": {"bd/js/bd-week.js"}}
 
 
@@ -208,9 +208,10 @@ def test_the_moved_page_check_sees_a_page_that_has_not_moved(tmp_path):
     (tmp_path / "bd" / "js").mkdir(parents=True)
     (tmp_path / "bd" / "index.html").write_text('<a href="/bd/contacts.html?id=1">Contacts</a><a href="/bd/">x</a>',
                                                 encoding="utf-8")
-    (tmp_path / "bd" / "js" / "bd-week.js").write_text('go("/bd/contacts.html"); go("/bd/add.html");', encoding="utf-8")
-    (tmp_path / "bd" / "js" / "x.js").write_text('go("/bd/contacts.html"); go("/bd/js/bd-api.js");', encoding="utf-8")
-    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/contacts.html", "bd/js/bd-week.js: /bd/add.html",
+    (tmp_path / "bd" / "js" / "bd-week.js").write_text('go("/bd/contacts.html"); go("/bd/review.html");', encoding="utf-8")
+    (tmp_path / "bd" / "js" / "x.js").write_text('go("/bd/contacts.html?company=4"); go("/bd/js/bd-api.js"); '
+                                                 'go("/bd/contact.html?id=" + id);', encoding="utf-8")
+    assert unmoved_page_refs(tmp_path) == ["bd/index.html: /bd/contacts.html", "bd/js/bd-week.js: /bd/review.html",
                                            "bd/js/x.js: /bd/contacts.html"]
 
 

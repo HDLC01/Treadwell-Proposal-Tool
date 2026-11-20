@@ -357,6 +357,9 @@
   //  - The current section is lit by the page's full path, like every row (#804).
   const BD_SECTIONS = [
     { href: "/bd/", also: ["/bd/index.html"], label: "This Week", can: "week" },
+    // #808. One contact's page (/bd/contact.html) has moved too, but it is not a section: it opens
+    // from a name, and on it no section is lit.
+    { href: "/bd/add.html", label: "Add contact", can: "add_contact" },
   ];
   let BD_OPEN = false;          // the group's state on this page (the live menu's only)
   let bdMePromise = null;
@@ -459,7 +462,26 @@
     list.classList.toggle("tw-shut", !BD_OPEN);
     if (!BD_OPEN) return;
     if (!bdSettled) list.innerHTML = bdNote("Loading...");
-    bdMe().then(function (res) { bdSettled = true; list.innerHTML = bdSectionsMarkup(res); });
+    bdMe().then(function (res) {
+      bdSettled = true;
+      list.innerHTML = bdSectionsMarkup(res);
+      bdRevealLit(list);
+    });
+  }
+
+  // On a laptop-height window the menu is taller than the window, and BD's sections sit low in it,
+  // so the lit one (Add contact, on its own page) can land below the menu's fold, behind the user
+  // card. Scroll the menu, and only the menu, just far enough to show the whole row. The page itself
+  // never moves, which is why this is not scrollIntoView: on a phone the menu is a drawer off screen.
+  function bdRevealLit(list) {
+    const lit = list.querySelector(".tw-bd-sec.active");
+    if (!lit) return;
+    const nav = list.closest(".tw-nav");
+    if (!nav) return;
+    const r = lit.getBoundingClientRect();
+    const n = nav.getBoundingClientRect();
+    if (r.bottom > n.bottom) nav.scrollTop += Math.ceil(r.bottom - n.bottom);
+    else if (r.top < n.top) nav.scrollTop -= Math.ceil(n.top - r.top);
   }
 
   // Every role this app has, least privileged first. profiles.py stores exactly one of these

@@ -1,63 +1,50 @@
-"""One contact: GET /api/bd/contacts/{id}, PATCH /api/bd/contacts/{id}, POST /api/bd/contacts/{id}/confirm.
+"""Contacts: GET/POST /api/bd/contacts, GET /api/bd/contacts/duplicates, GET/PATCH /api/bd/contacts/{id},
+POST /api/bd/contacts/{id}/confirm and POST /api/bd/contacts/{id}/archive (merge stays in pending.py).
 
-BD's routes for one contact, moved under /api/bd/ (#807) with the same checks, answers and words,
-because This Week loads each task's contact (its outcome and tray), the call dialog changes a
-contact after a touch, and "not the right person" with no task confirms the contact. The contact
-list, duplicates, create, archive and merge move with the contact page (#808) and join this module.
+BD's contacts routes, moved under /api/bd/ with the same checks, answers and words. #807 brought one
+contact (get, patch, confirm) for This Week; #808 brings the rest with the contact page and Add
+contact: the list, the possible-duplicate person check, create and archive.
 
 docs/bd/api-contract.md "Contacts" is the spec; where it is silent this follows BD's mock (api.js
-getContact, patchContact, confirmContact), as BD did. "api.js X" names a function of that retired
-mock, frontend/js/api.js in the BD repository, only to trace a rule back.
+listContacts, findDuplicates, createContact, getContact, patchContact, confirmContact,
+archiveContact), as BD did. "api.js X" names a function of that retired mock, frontend/js/api.js in
+the BD repository, only to trace a rule back. What this router shares with the companies router (the
+duplicate check, finding or making a company, a contact's field checks, making a contact) is in
+bd/contacts_service.py, because no BD router imports another.
 
 Who:
-    GET      any BD role
+    list, duplicates, GET one   any BD role
+    POST (create), archive      salesperson, assistant, admin
     PATCH    salesperson, assistant, admin; a manager only the cadence override and a maintenance
              contact's frequency_per_year ("Managers can change only how often to follow up.");
              only the assistant (or an admin) clears a duplicate flag
     confirm  salesperson, assistant, admin
-
-Reusable by the routers that move later (the review "Add", the importer):
-    find_duplicates(conn, company, email, phone, except_id=None) -> [duplicate_match dicts]
-    resolve_company(conn, spec, extra=None) -> {"id", "name", "city", "industry"}
 """
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Body, Depends
+from fastapi import Body, Depends, Request
 
 from .. import appsettings, auth, bizdate, db, errors, interactions_service, paging, serialize, web
+from ..contacts_service import (BD_FREQUENCY_SENTENCE, CATEGORIES, CONTACT_NOT_FOUND, DATE_FIELDS, FIX, NAME_MAX,
+                                TEXT_DEFAULT_MAX, TEXT_FIELDS, as_int, check_date, check_tags, check_text,
+                                company_spec_ok, create_contact, find_duplicates, resolve_company, tags, too_long,
+                                user_exists)
 from ..events import log_event
-from ..normalize import clean_name, lock_company_name, normalize_company
+from ..normalize import normalize_company
+from ..phone import digits as phone_digits
 from ..phone import to_e164
 
 router = web.make_router()
 
-CONTACT_NOT_FOUND = "That contact does not exist."
-COMPANY_NOT_FOUND = "That company does not exist."
-FIX = "Some fields need fixing."
 MISSED_CALL_DAYS = 14          # api.js MISSED_CALL_DAYS: an older unanswered call gets no card
 
-CATEGORIES = ("bd", "maintenance")
 BD_CADENCES = appsettings.BD_CADENCES      # weekly | monthly | quarterly
+CADENCES = ("never", "behind", "on_track", "complete")
 
-# Free-text columns a client may set (value: str or null). lead_source and notes are NOT NULL.
-TEXT_FIELDS = ("title", "email", "phone", "city", "industry", "lead_source", "stage", "account_type",
-               "next_step", "notes")
-DATE_FIELDS = ("next_step_date", "promised_date")
-
-# Size limits on stored text (Hanz, 2026-11-11: "do all"; chosen far above real use). A contact's
-# notes match an interaction's summary (interactions_service.SUMMARY_MAX); every other short field,
-# the name and the company name stop at 200 characters (an email at 254, the address standard).
-TEXT_MAX = {"notes": 20000, "next_step": 500, "email": 254}
-TEXT_DEFAULT_MAX = 200
-NAME_MAX = 200
-TAGS_MAX = 50   # tags on one contact
-TAG_MAX = 60    # characters in one tag
-
-# The cadence rules' sentences (api-contract.md "PATCH /api/contacts/{id}"), and how an event says
+# The cadence rules' sentences (api-contract.md "PATCH /api/bd/contacts/{id}"), and how an event says
 # a cadence in words.
-BD_FREQUENCY_SENTENCE = "BD contacts follow the BD cadence. Set a follow-up override instead."
 MANAGER_SENTENCE = "Managers can change only how often to follow up."
 PICK_CADENCE = "Pick weekly, monthly or quarterly."
 PICK_FUTURE_DAY = "Pick a day from today on."
@@ -68,149 +55,126 @@ CADENCE_PHRASE = {"weekly": "every week", "monthly": "every month", "quarterly":
 # refuses with BD_FREQUENCY_SENTENCE: only a maintenance contact has a number of its own).
 MANAGER_KEYS = ("cadence_override", "cadence_override_until", "frequency_per_year")
 
-# ── small helpers ─────────────────────────────────────────────────────────────────────────────
-def as_int(value):
-    """An int from a JSON number (6 or 6.0); None for anything else (bools and strings too)."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    return None
-
-
-def _is_date(value) -> bool:
-    try:
-        bizdate.parse_date(value)
-        return isinstance(value, str)
-    except (TypeError, ValueError):
-        return False
-
-
-def _too_long(sentence_limit: int) -> str:
-    return "Keep this to %d characters or fewer." % sentence_limit
-
-
-def _check_text(body: dict, key: str, fields: dict) -> None:
-    if key in body and body[key] is not None and not isinstance(body[key], str):
-        fields[key] = "Use text."
-    elif isinstance(body.get(key), str) and len(body[key]) > TEXT_MAX.get(key, TEXT_DEFAULT_MAX):
-        fields[key] = _too_long(TEXT_MAX.get(key, TEXT_DEFAULT_MAX))
-
-
-def _check_date(body: dict, key: str, fields: dict) -> None:
-    v = body.get(key)
-    if key in body and v is not None and v != "" and not _is_date(v):
-        fields[key] = "Use a date (YYYY-MM-DD)."
-
-
-def _check_tags(body: dict, fields: dict) -> None:
-    v = body.get("tags")
-    if "tags" in body and v is not None and not (isinstance(v, list) and all(isinstance(t, str) for t in v)):
-        fields["tags"] = "Use a list of words."
-    elif isinstance(v, list) and (len(v) > TAGS_MAX or any(len(t) > TAG_MAX for t in v)):
-        fields["tags"] = "Use at most %d tags of %d characters or fewer." % (TAGS_MAX, TAG_MAX)
-
-
-def _tags(value) -> list:
-    """Tags as sent (the page trims and splits them), like the mock."""
-    return list(value or [])
-
-
-def _user_exists(conn, user_id) -> dict | None:
-    return conn.execute("select id, name from users where id = %s", (user_id,)).fetchone()
+# How each sort orders the list (api.js listContacts `key`): an empty key goes last, ties by id.
+# "C" collation compares like JavaScript's `<` on strings. Only these fixed strings reach the SQL.
+SORTS = {
+    "name": 'lower(cs.name) collate "C", cs.id',
+    "company": 'lower(btrim(cs.company_name)) collate "C", lower(cs.name) collate "C", cs.id',
+    "last_live_at": "cs.last_live_at desc nulls last, cs.id",
+    "next_due_date": "cs.next_due_date nulls last, cs.id",
+}
 
 
 def _summary_row(conn, contact_id):
     return conn.execute(serialize.CONTACT_SELECT + " where cs.id = %s", (contact_id,)).fetchone()
 
 
-# ── duplicates and companies (shared with companies.py, review and the importer) ──────────────
-def find_duplicates(conn, company=None, email=None, phone=None, except_id=None) -> list:
-    """api.js findDuplicates: every active contact at the same normalized company, else with the
-    same email, else the same phone, in id order. Each match carries its first reason."""
-    key = normalize_company(company) if company else ""
-    mail = str(email).strip().lower() if email else ""
-    tel = to_e164(phone) if phone else None
-    tests = []
-    if key:
-        tests.append(("co.normalized_name = %s", key, "Same company name"))
-    if mail:
-        tests.append(("c.email_lower = %s", mail, "Same email"))
-    if tel:
-        tests.append(("c.phone_e164 = %s", tel, "Same phone"))
-    if not tests:
-        return []
-    case_sql = "case " + " ".join("when " + cond + " then %s::text" for cond, _v, _r in tests) + " end"
-    params = []
-    for _cond, value, reason in tests:
-        params += [value, reason]
-    where = ["c.archived_at is null"]
-    params_where = []
-    if except_id is not None:
-        where.append("c.id <> %s")
-        params_where.append(except_id)
-    where.append("(" + " or ".join(cond for cond, _v, _r in tests) + ")")
-    params_where += [v for _c, v, _r in tests]
-    rows = conn.execute(
-        "select c.id, c.name, co.name as company_name, c.city, " + case_sql + " as reason"
-        " from contacts c join companies co on co.id = c.company_id"
-        " where " + " and ".join(where) + " order by c.id",
-        params + params_where).fetchall()
-    return [serialize.duplicate_match(r, r["reason"]) for r in rows]
+# ── the list, the duplicate check and create ──────────────────────────────────────────────────
+def _flag(params, key: str, fields: dict, allowed=("true", "false")):
+    v = params.get(key)
+    if v is None or v == "":
+        return None
+    if v not in allowed:
+        fields[key] = "Use " + " or ".join(allowed) + "."
+        return None
+    return v
 
 
-def company_by_id(conn, company_id):
-    cid = as_int(company_id)
-    if paging.as_id(cid) is None:
-        raise errors.not_found(COMPANY_NOT_FOUND)
-    row = conn.execute("select id, name, city, industry from companies where id = %s", (cid,)).fetchone()
-    if row is None:
-        raise errors.not_found(COMPANY_NOT_FOUND)
-    return dict(row)
+@router.get("/api/bd/contacts")
+def list_contacts(request: Request, user: dict = Depends(auth.current_user)):
+    q = request.query_params
+    fields: dict = {}
+    where, params = [], []
+
+    archived = _flag(q, "archived", fields)
+    where.append("cs.archived_at is not null" if archived == "true" else "cs.archived_at is null")
+    category = q.get("category") or None
+    if category is not None:
+        if category in CATEGORIES:
+            where.append("cs.category = %s")
+            params.append(category)
+        else:
+            fields["category"] = "Use bd or maintenance."
+    owner = paging.query_int(q, "owner", fields)
+    if owner is not None:
+        where.append("cs.owner_id = %s")
+        params.append(owner)
+    for key in ("industry", "lead_source", "stage"):
+        value = q.get(key)
+        if value:
+            where.append("cs." + key + " = %s")
+            params.append(value)
+    confirmed = _flag(q, "confirmed", fields)
+    if confirmed is not None:
+        where.append("cs.confirmed = %s")
+        params.append(confirmed == "true")
+    cadence = q.get("cadence") or None
+    if cadence is not None:
+        if cadence in CADENCES:
+            where.append("cs.cadence_status = %s")
+            params.append(cadence)
+        else:
+            fields["cadence"] = "Use never, behind, on_track or complete."
+    company = paging.query_int(q, "company", fields)
+    if company is not None:
+        where.append("cs.company_id = %s")
+        params.append(company)
+    if _flag(q, "duplicates", fields) == "true":
+        where.append("cs.duplicate_of is not null")
+    raw_needle = q.get("q")
+    if raw_needle:
+        needle = raw_needle.strip().lower()
+        hay = ("lower(coalesce(cs.name, '') || ' ' || coalesce(cs.company_name, '') || ' ' ||"
+               " coalesce(cs.email, '') || ' ' || coalesce(cs.title, '') || ' ' || coalesce(cs.city, ''))")
+        test = "strpos(" + hay + ", %s) > 0 or strpos(cs.company_normalized_name, %s) > 0"
+        params += [needle, normalize_company(needle)]
+        nums = phone_digits(needle)
+        if len(nums) >= 3:
+            test += " or strpos(regexp_replace(coalesce(cs.phone, ''), '[^0-9]', '', 'g'), %s) > 0"
+            params.append(nums)
+        where.append("(" + test + ")")
+    sort = q.get("sort") or "company"
+    if sort not in SORTS:
+        fields["sort"] = "Use name, company, last_live_at or next_due_date."
+    limit, offset = paging.page_params(q, fields)
+    if fields:
+        if list(fields) == ["sort"]:
+            raise errors.bad_request("Unknown sort.", fields)
+        raise errors.bad_request(FIX, fields)
+
+    sql_where = " and ".join(where)
+    with db.connect() as conn:
+        total = conn.execute("select count(*) as n from contacts_summary cs where " + sql_where,
+                             params).fetchone()["n"]
+        rows = conn.execute(serialize.CONTACT_SELECT + " where " + sql_where + " order by " + SORTS[sort]
+                            + " limit %s offset %s", params + [limit, offset]).fetchall()
+    return {"ok": True, "total": int(total), "items": [serialize.contact(r) for r in rows]}
 
 
-def insert_company(conn, name: str, city=None, industry=None) -> dict:
-    row = conn.execute(
-        "insert into companies (name, normalized_name, city, industry) values (%s, %s, %s, %s)"
-        " returning id, name, city, industry",
-        (name, normalize_company(name), city or None, industry or None)).fetchone()
-    return dict(row)
+# Declared before /api/bd/contacts/{id}, so "duplicates" is never read as an id.
+@router.get("/api/bd/contacts/duplicates")
+def contact_duplicates(request: Request, user: dict = Depends(auth.current_user)):
+    """Add contact's "this person may already exist" check: company and/or email and/or phone,
+    and `except` (the contact being edited)."""
+    q = request.query_params
+    fields: dict = {}
+    except_id = paging.query_int(q, "except", fields)
+    if fields:
+        raise errors.bad_request(FIX, fields)
+    with db.connect() as conn:
+        items = find_duplicates(conn, q.get("company"), q.get("email"), q.get("phone"), except_id)
+    return {"ok": True, "items": items}
 
 
-def resolve_company(conn, spec, extra=None) -> dict:
-    """api.js resolveCompany: {"id": n} is that company (404 when unknown); {"name": "..."} is the
-    company with the same normalized name, else a new one (city and industry from `extra`)."""
-    if not isinstance(spec, dict):
-        raise errors.bad_request("Pick or type a company.", {"company": "Required."})
-    if spec.get("id") is not None:
-        return company_by_id(conn, spec["id"])
-    name = clean_name(spec.get("name")) if isinstance(spec.get("name"), str) else ""
-    if not name:
-        raise errors.bad_request("Pick or type a company.", {"company": "Required."})
-    norm = normalize_company(name)
-    # Find-or-create under a per-name lock, so concurrent adds never make two companies with one
-    # normalized name (review finding DATA-2). The lock lasts until this transaction commits.
-    lock_company_name(conn, norm)
-    hit = conn.execute("select id, name, city, industry from companies where normalized_name = %s"
-                       " order by id limit 1", (norm,)).fetchone()
-    if hit:
-        return dict(hit)
-    extra = extra or {}
-    city = extra.get("city") if isinstance(extra.get("city"), str) else None
-    industry = extra.get("industry") if isinstance(extra.get("industry"), str) else None
-    return insert_company(conn, name, city, industry)
+@router.post("/api/bd/contacts", status_code=201)
+def post_contact(body: Any = Body(None), user: dict = Depends(auth.require_role("salesperson", "assistant"))):
+    body = paging.json_object(body)
+    with db.connect() as conn:
+        contact, dups = create_contact(conn, user, body, source="manual")
+    return {"ok": True, "contact": contact, "possible_duplicates": dups}
 
 
-def _company_spec_ok(spec) -> bool:
-    if not isinstance(spec, dict):
-        return False
-    if spec.get("id") is not None:
-        return as_int(spec["id"]) is not None
-    return isinstance(spec.get("name"), str) and bool(clean_name(spec["name"]))
-
-
+# ── one contact ───────────────────────────────────────────────────────────────────────────────
 def _open_task(conn, contact_id):
     """api.js currentTask: the contact's latest task on this week's lists (any owner), or None.
     The same rule (interactions_service.current_task) that logging a call uses to close the task,
@@ -310,7 +274,7 @@ def _validate_patch(body: dict, user: dict, row=None) -> dict:
     if "name" in body and (not isinstance(body["name"], str) or not body["name"].strip()):
         fields["name"] = "A contact needs a name."
     elif "name" in body and len(body["name"].strip()) > NAME_MAX:
-        fields["name"] = _too_long(NAME_MAX)
+        fields["name"] = too_long(NAME_MAX)
     if "category" in body and body["category"] not in CATEGORIES:
         fields["category"] = "Use bd or maintenance."
     # The category this PATCH leaves the contact in decides whether it has a number of its own.
@@ -329,19 +293,21 @@ def _validate_patch(body: dict, user: dict, row=None) -> dict:
         elif user.get("role") == "salesperson":
             raise errors.forbidden("Only the assistant can clear a duplicate flag.")
     for key in TEXT_FIELDS:
-        _check_text(body, key, fields)
+        check_text(body, key, fields)
     if "lead_source" in body and "lead_source" not in fields and not (body["lead_source"] or "").strip():
         fields["lead_source"] = "Pick a lead source."
     for key in DATE_FIELDS:
-        _check_date(body, key, fields)
-    _check_tags(body, fields)
+        check_date(body, key, fields)
+    check_tags(body, fields)
     if "importance" in body and as_int(body["importance"]) not in (1, 2, 3):
         fields["importance"] = "Use 1, 2 or 3."
     for key in ("owner_id", "co_owner_id"):
         if key in body and body[key] is not None and as_int(body[key]) is None:
             fields[key] = "Pick a user."
-    if "company" in body and not _company_spec_ok(body["company"]):
+    if "company" in body and not company_spec_ok(body["company"]):
         fields["company"] = "Pick or type a company."
+    elif isinstance((body.get("company") or {}).get("name"), str) and len(body["company"]["name"].strip()) > NAME_MAX:
+        fields["company"] = too_long(NAME_MAX)
     return fields
 
 
@@ -365,10 +331,10 @@ def patch_contact(id: str, body: Any = Body(None), user: dict = Depends(auth.cur
         # Owners first: a bad one must fail before anything is written.
         owner = None
         if body.get("owner_id") is not None:
-            owner = _user_exists(conn, as_int(body["owner_id"]))
+            owner = user_exists(conn, as_int(body["owner_id"]))
             if owner is None:
                 raise errors.bad_request("That owner does not exist.", {"owner_id": "Pick a user."})
-        if body.get("co_owner_id") is not None and _user_exists(conn, as_int(body["co_owner_id"])) is None:
+        if body.get("co_owner_id") is not None and user_exists(conn, as_int(body["co_owner_id"])) is None:
             raise errors.bad_request("That co-owner does not exist.", {"co_owner_id": "Pick a user."})
 
         # The duplicate hint is re-checked for the fields that change, as an add checks them.
@@ -422,7 +388,7 @@ def patch_contact(id: str, body: Any = Body(None), user: dict = Depends(auth.cur
             elif key == "notes":
                 value = value or ""
             elif key == "tags":
-                value = _tags(value)
+                value = tags(value)
             elif key in DATE_FIELDS:
                 value = value or None
             sets.append(key + " = %s")
@@ -507,3 +473,45 @@ def confirm_contact(id: str, body: Any = Body(None),
             conn.execute("update contacts set confirmed = %s where id = %s", (yes, cid))
             log_event(conn, "confirmed" if yes else "unconfirmed", actor=user, contact_id=cid)
     return {"ok": True, "contact": {"id": cid, "confirmed": yes}}
+
+
+@router.post("/api/bd/contacts/{id}/archive")
+def archive_contact(id: str, body: Any = Body(None),
+                    user: dict = Depends(auth.require_role("salesperson", "assistant"))):
+    """Off every list and batch (the history is kept); {"archived": false} restores it and reopens
+    what the archive closed on this week's list or a later one."""
+    body = paging.json_object(body)
+    fields = {}
+    if "archived" in body and body["archived"] is not None and not isinstance(body["archived"], bool):
+        fields["archived"] = "Use true or false."
+    if body.get("reason") is not None and not isinstance(body["reason"], str):
+        fields["reason"] = "Use text."
+    elif isinstance(body.get("reason"), str) and len(body["reason"].strip()) > TEXT_DEFAULT_MAX:
+        fields["reason"] = too_long(TEXT_DEFAULT_MAX)
+    if fields:
+        raise errors.bad_request(FIX, fields)
+    cid = paging.path_id(id, CONTACT_NOT_FOUND)
+    on = body.get("archived") is not False
+    reason = (body.get("reason") or "").strip() or None
+    with db.connect() as conn:
+        if conn.execute("select id from contacts where id = %s", (cid,)).fetchone() is None:
+            raise errors.not_found(CONTACT_NOT_FOUND)
+        if on:
+            row = conn.execute("update contacts set archived_at = bd_now() where id = %s returning archived_at",
+                               (cid,)).fetchone()
+            # An open task on any weekly list closes; the flag remembers the archive closed it.
+            conn.execute("update tasks set status = 'snoozed', closed_by_archive = true"
+                         " where contact_id = %s and status = 'open'", (cid,))
+        else:
+            row = conn.execute("update contacts set archived_at = null where id = %s returning archived_at",
+                               (cid,)).fetchone()
+            # Undo the archive's own closures on THIS week's lists and on later ones (next week's
+            # Friday batch exists from Friday 16:00); an earlier week stays closed.
+            conn.execute(
+                "update tasks t set status = 'open', snoozed_until = null from task_batches b"
+                " where b.id = t.batch_id and t.contact_id = %s and t.closed_by_archive"
+                " and t.status = 'snoozed' and b.week_start >= %s", (cid, bizdate.week_start()))
+            conn.execute("update tasks set closed_by_archive = false where contact_id = %s and closed_by_archive",
+                         (cid,))
+        log_event(conn, "archived" if on else "restored", actor=user, contact_id=cid, detail=reason)
+    return {"ok": True, "contact": {"id": cid, "archived_at": serialize.ts(row["archived_at"])}}

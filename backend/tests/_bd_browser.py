@@ -324,3 +324,48 @@ class Page:
 
     def close(self):
         self.ctx.close()
+
+
+# ── what every BD browser suite reads off a page (#808: one copy for test_bd_e2e_week and
+# test_bd_e2e_contact, and MOVED_PAGES for test_bd_assets' static scan too) ────────────────────────
+# The BD pages that have moved into the tool so far (#807: This Week; #808: one contact and Add
+# contact). Being served is not enough: /bd/contacts.html is there only as the page an assistant is
+# sent to until Contacts moves, so a link to it, with or without ?company=, is a link to a page that
+# has not moved. A page ticket adds its page here, and nowhere else.
+MOVED_PAGES = frozenset({"/bd/", "/bd/index.html", "/bd/contact.html", "/bd/add.html"})
+
+# What a Phase 5 placeholder route's 503 says, wherever a page shows it.
+NOT_BUILT = "This part is not built yet (Phase 5)."
+
+
+def bd_links(pg) -> list:
+    """Every page address under /bd/ the rendered page links to (the query and hash cut off), the
+    tool's sidebar and any open menu included."""
+    return pg.evaluate("() => [...new Set([...document.querySelectorAll('a[href]')].map(a => a.getAttribute('href'))"
+                       ".filter(h => h.startsWith('/bd/')).map(h => h.split(/[?#]/)[0]))]")
+
+
+def api(pg, path):
+    """GET a BD route through the page's own BDApi (signed in as the page is)."""
+    return pg.evaluate("p => BDApi.get(p)", path)
+
+
+def toasts(pg):
+    return pg.locator("#bd-toasts")
+
+
+def menu_acts(pg) -> list:
+    """The data-act of each item in the open menu, in order."""
+    pg.locator(".menu").wait_for()
+    return pg.locator(".menu .menu-item").evaluate_all("els => els.map(e => e.dataset.act)")
+
+
+def sideways(pg) -> int:
+    """How many pixels the page scrolls sideways (1 or less is none)."""
+    return pg.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+
+
+def focus_is_on_the_page(pg) -> bool:
+    """Focus is on something inside the page's own <main id="main">, not on <body> or a removed node."""
+    return pg.evaluate("() => { const a = document.activeElement;"
+                       " return !!a && a !== document.body && document.contains(a) && !!a.closest('#main'); }")

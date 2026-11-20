@@ -247,3 +247,31 @@ def test_what_the_page_offers_follows_can_and_not_the_role_name(tmp_path):
     out = run(tmp_path, picker, responses={"GET /api/bd/users": users}, name="picker")
     assert ("GET", "/api/bd/week") not in asked(out)
     assert out["els"]["week-sub"]["text"] == "Choose whose week to look at."
+
+
+# ── a task's name opens the contact page (#808) ──────────────────────────────────────────────────
+def week_with_dana():
+    """Avery's week with one open follow-up, Dana Whitlow (contact 21), as GET /api/bd/week answers."""
+    out = empty_week()
+    w = out["body"]["week"]
+    w["batch"] = {"id": 201, "kind": "friday", "owner": {"id": 1, "name": "Avery Quill"}, "week_start": "2026-11-02",
+                  "generated_at": "2026-10-30T16:00:00-05:00"}
+    w["batches"] = [w["batch"]]
+    w["tasks"] = [{"id": 302, "batch_id": 201, "kind": "followup", "status": "open", "score": 82,
+                   "reason": "Key account.", "reasons": ["Key account"], "done_at": None, "snoozed_until": None,
+                   "contact": {"id": 21, "name": "Dana Whitlow", "title": "Project Manager", "phone": "913-555-0101",
+                               "phone_e164": "+19135550101", "company": {"id": 10, "name": "Prairie Ridge Builders LLC"},
+                               "category": "bd", "importance": 3, "confirmed": True}}]
+    w["total"] = 1
+    return out
+
+
+def test_a_task_names_its_contact_with_a_link_to_the_contact_page(tmp_path):
+    """The contact page has moved (#808): the name, Next up's "Open Dana Whitlow" go there, back to This Week."""
+    out = run(tmp_path, me("Avery Quill", "salesperson"),
+              responses={"GET /api/bd/week": week_with_dana(), "GET /api/bd/settings": settings()}, name="dana")
+    html = out["els"]["lists"]["html"]
+    links = re.findall(r'href="(/bd/[^"]*)"', html)
+    assert links and set(links) == {"/bd/contact.html?id=21&amp;from=week"}, links
+    assert "Open Dana Whitlow" in html
+

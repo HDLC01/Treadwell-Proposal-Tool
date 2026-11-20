@@ -205,6 +205,18 @@ _Avoid_: Customer (that is who approves a Proposal), client, company record
 One person under a BD account, with the name, phone and email a salesperson reaches them by.
 _Avoid_: Lead (that is an incoming request for a bid), prospect
 
+**Possible duplicate**:
+A BD contact who may be the same person as one already in the BD CRM, because they share a company name (once cleaned of endings such as LLC), an email or a phone number. Add contact warns about them before saving; the new contact is saved anyway, flagged with the first match, and an assistant or BD admin clears the flag.
+_Avoid_: Duplicate contact, likely duplicate (that is two BD accounts that may be one company)
+
+**Logged entry**:
+A call, voicemail, meeting, hosted event, email, text or note in a BD contact's history. The person who logged it can change its words; a BD admin can change or delete any.
+_Avoid_: Activity, interaction (the API's word for it), log
+
+**Archived contact**:
+A BD contact taken off every list, the Weekly 10 included, with their history kept. Restoring them puts back what the archive closed on this week's list or a later one.
+_Avoid_: Deleted contact, inactive contact
+
 **Maintenance account**:
 A company Treadwell already works for, kept in touch with a follow-up every 120 days instead of the weekly BD calls. A whole BD account becomes one, or goes back, with every person at it.
 _Avoid_: maintenance contact (that is one person at it), customer
