@@ -954,16 +954,15 @@
    duplicates filter, Recently merged under them with an Undo each, and the merge dialog's name choice. */
 .bd-app .ct-dupes { margin: 0 0 14px; }
 .bd-app .ct-pairs { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.bd-app .ct-pair { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--bd-r-card);
-  background: var(--bd-warn-bg); color: var(--bd-warn); font-size: 14px; line-height: 1.45; }
+/* each note is a .panel-warn; only its size differs */
+.bd-app .ct-pair { padding: 10px 12px; font-size: 14px; font-weight: 400; }
 .bd-app .ct-pair-ico { flex: none; display: inline-flex; margin-top: 2px; }
 .bd-app .ct-pair-main { flex: 1 1 auto; min-width: 0; }
 .bd-app .ct-pair-text { overflow-wrap: anywhere; }
 .bd-app .ct-pair-text strong { font-weight: 700; }
 .bd-app .ct-pair-acts { gap: 8px; margin-top: 8px; }
 .bd-app .ct-pairs-none { display: flex; align-items: center; gap: 8px; color: var(--bd-ok); font-size: 14px; font-weight: 500; }
-.bd-app .ct-merged-h { margin: 16px 0 8px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  color: var(--bd-ink-2); }
+.bd-app .ct-merged-h { margin: 16px 0 8px; }                 /* an .eyebrow */
 .bd-app .ct-merged { margin: 0; padding: 0 14px; list-style: none; background: var(--bd-card); border: 1px solid var(--bd-line);
   border-radius: var(--bd-r-card); }
 .bd-app .ct-merged-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 16px; padding: 6px 0; }

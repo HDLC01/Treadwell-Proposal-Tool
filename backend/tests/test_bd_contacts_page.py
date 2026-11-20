@@ -491,6 +491,15 @@ def test_the_notes_follow_merge_companies_not_the_chip(tmp_path):
     assert "1 Duplicate" in text(out, "ct-tidy-cards")
 
 
+@pytest.mark.parametrize("chip", ["mine", "confirm", "never"])
+def test_only_the_duplicates_filter_is_read_from_the_address(tmp_path, chip):
+    """?filter= is the link to the Possible duplicates view (#811) and nothing else: any other chip in
+    the address is no filter, so every BD account shows under All."""
+    out = run(tmp_path, me("assistant"), search="?filter=" + chip, bd=EVERY_BD, dupes=pairs_answer([PAIR_COTTON]))
+    assert '<button type="button" class="chip-filter" data-chip="all" aria-pressed="true">' in markup(out, "ct-chips")
+    assert len(rows(out)[0]) == len(EVERY_BD)
+
+
 def test_recently_merged_lists_each_merge_with_its_undo(tmp_path):
     """The merges the route lists, newest first, each with an Undo naming it; the survivor of each shows
     in the list (Cottonwood & Sons Paving, with the person moved in), the merged-away one does not."""

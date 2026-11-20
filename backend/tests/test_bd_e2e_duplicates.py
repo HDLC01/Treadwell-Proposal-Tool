@@ -24,8 +24,8 @@ What it proves, for the ticket: the assistant, the BD admin and the super admin 
 likely pairs and not the near miss; Merge with the name the merger picked; the survivor holds everyone,
 each with their own owner, and a moved person's calls and follow-up go with them; the merged-away
 account is gone from the list, search and Add contact's type-ahead; Undo (from the toast, and from
-Recently merged after a reload) puts every answer back exactly; Keep separate hides the pair after a
-reload; a salesperson and a manager see no filter, no notes and no buttons, and never ask the route;
+Recently merged after a reload) puts every answer back exactly, and a refused Undo leaves focus on the
+merge's Undo in Recently merged; Keep separate asks first, then hides the pair after a reload; a salesperson and a manager see no filter, no notes and no buttons, and never ask the route;
 phone width.
 
 Runs in the browser job of ci.yml (tests/_bd_browser.py: the live app on a seeded BD test database,
@@ -35,7 +35,8 @@ import re
 
 import pytest
 
-from _bd_browser import DESKTOP, PHONE, Page, api, browser, live_app_db, require_playwright, reseed, sideways, toasts
+from _bd_browser import (DESKTOP, PHONE, Page, api, browser, focus_is_on_the_page, live_app_db, require_playwright,
+                         reseed, sideways, toasts)
 
 AVERY = "avery.quill@example.com"         # salesperson
 CASEY = "casey.moret@example.com"         # assistant
@@ -293,7 +294,8 @@ def test_undo_from_the_toast_puts_everything_back_exactly(page_as, expect):
 
 
 def test_undo_from_recently_merged_after_a_reload(page_as, expect):
-    """No time limit: the toast is long gone after a reload, and Recently merged still offers Undo."""
+    """No time limit: the toast is long gone after a reload, and Recently merged still offers Undo. Its
+    button is busy while the request runs."""
     _, pg = open_filter(page_as, EMERY)
     before = snapshot(pg)
     merge(pg, expect, "12-13")
@@ -303,6 +305,9 @@ def test_undo_from_recently_merged_after_a_reload(page_as, expect):
     expect(pg.locator("#bd-toasts .toast:not(.toast-out)")).to_have_count(0)
     expect(pairs(pg)).to_have_count(1)
     expect(pg.locator("#ct-dupes .ct-merged-what")).to_have_text(["Cottonwood Sons Paving Co. into Cottonwood & Sons Paving"])
+    pg.evaluate("""() => { const b = document.querySelector('#ct-dupes .ct-unmerge'); window.__busy = [];
+        new MutationObserver(() => window.__busy.push(b.disabled && b.getAttribute('aria-busy')))
+          .observe(b, { attributes: true }); }""")
     pg.locator("#ct-dupes .ct-unmerge").click()
     expect(live_toast(pg)).to_contain_text(
         "Put back: Cottonwood Sons Paving Co. and Cottonwood & Sons Paving are two accounts again.")
@@ -310,6 +315,31 @@ def test_undo_from_recently_merged_after_a_reload(page_as, expect):
     expect(pg.locator("#ct-merged-h")).to_have_count(0)
     assert names(pg) == FILTER_NAMES
     assert snapshot(pg) == before
+    assert "true" in pg.evaluate("() => window.__busy"), "Undo in Recently merged was never busy"
+
+
+def test_a_refused_undo_from_the_toast_leaves_focus_on_the_merges_undo(page_as, expect):
+    """Cottonwood merged with the offer kept (Theo moves to 12); Theo is then moved to Bluestem (16), so
+    Undo can no longer put him back. The toast's Undo is refused (409) and nothing changes; focus
+    lands on that merge's Undo in Recently merged, which is free to press again, never on the page."""
+    p, pg = open_filter(page_as, CASEY)
+    merge(pg, expect, "12-13")
+    expect(live_toast(pg)).to_contain_text("Merged. Cottonwood & Sons Paving now has 2 people.")
+    moved = pg.evaluate("() => BDApi.patch('/api/bd/contacts/24', { company: { id: 16 } })"
+                        ".then(r => r.contact.company.id)")
+    assert moved == 16
+    unmerge = pg.locator("#ct-dupes .ct-unmerge")
+    expect(unmerge).to_have_count(1)
+    merge_id = unmerge.get_attribute("data-id")
+    live_toast(pg).locator(".toast-act").click()
+    expect(live_toast(pg)).to_contain_text("Something changed since this merge, so it can't be undone.")
+    expect(pg.locator("#ct-unmerge-" + merge_id)).to_be_focused()
+    expect(pg.locator("#ct-unmerge-" + merge_id)).to_be_enabled()
+    assert not pg.locator("#ct-unmerge-" + merge_id).get_attribute("aria-busy")
+    assert focus_is_on_the_page(pg)
+    assert [a["id"] for a in api(pg, "/api/bd/contacts/accounts")["items"] if a["id"] in (12, 13)] == [12]
+    assert p.bd_errors() == [(409, "/api/bd/contacts/accounts/merges/%s/undo" % merge_id)]
+    p.http.clear()                                                 # the one refusal this test asked for
 
 
 def test_one_undo_closes_the_other(page_as, expect):
@@ -324,11 +354,35 @@ def test_one_undo_closes_the_other(page_as, expect):
 
 
 # ── Keep separate ─────────────────────────────────────────────────────────────────────────────────
+def test_keep_separate_asks_first_and_cancel_changes_nothing(page_as, expect):
+    """Keep separate cannot be undone on the page, so it asks; Cancel (or Escape) keeps both notes and
+    sends nothing, and focus goes back to the button."""
+    p, pg = open_filter(page_as, CASEY)
+    pg.locator("#ct-keep-10-11").click()
+    box = pg.locator(".dialog[role=alertdialog]")
+    expect(box).to_be_visible()
+    expect(box.locator(".dialog-title")).to_have_text("Keep as two accounts?")
+    expect(box.locator(".dialog-text")).to_have_text(
+        "Prairie Ridge Builders LLC and Prairie Ridge Builders, Inc. won't be suggested as one account again.")
+    expect(box.locator('[data-act="yes"]')).to_have_text("Keep separate")
+    box.locator('[data-act="no"]').click()
+    expect(box).to_have_count(0, timeout=3000)
+    expect(pg.locator("#ct-keep-10-11")).to_be_focused()
+    pg.locator("#ct-keep-10-11").click()
+    expect(box).to_be_visible()
+    pg.keyboard.press("Escape")
+    expect(box).to_have_count(0, timeout=3000)
+    expect(pairs(pg)).to_have_count(2)
+    assert not [r for r in p.requests if r.endswith("/duplicates/keep")], p.requests
+    assert len(api(pg, DUPES_ROUTE)["items"]) == 2
+
+
 def test_keep_separate_hides_the_pair_for_good(page_as, expect):
     """Prairie Ridge kept as two: one pair left, To tidy's card 1 + 1 = 2, and the filter still lists
     Prairie Ridge Builders, Inc. for D. Whitlow (a flagged person, #810), not Prairie Ridge Builders LLC."""
     _, pg = open_filter(page_as, CASEY)
     pg.locator("#ct-keep-10-11").click()
+    pg.locator(".dialog[role=alertdialog] [data-act='yes']").click()
     expect(live_toast(pg)).to_contain_text("Kept as two accounts: Prairie Ridge Builders LLC and Prairie Ridge Builders, Inc.")
     expect(live_toast(pg).locator(".toast-act")).to_have_count(0)
     expect(pairs(pg)).to_have_count(1)
