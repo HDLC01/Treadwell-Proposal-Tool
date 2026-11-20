@@ -284,6 +284,12 @@ def _lock_owner(conn: Any, owner_id: Any) -> None:
     conn.execute("select pg_advisory_xact_lock(%s, hashtext(%s))", (_LOCK_KEY, str(owner_id)))
 
 
+def lock_owner(conn: Any, owner: Any) -> None:
+    """The per-owner lock the builds take, for another writer of an owner's list (a company moved to
+    maintenance pins follow-ups on it, bd/routers/accounts.py). Held until the transaction ends."""
+    _lock_owner(conn, _owner_id(owner))
+
+
 def load_owned(conn: Any, owner: Any, today: Any) -> list:
     """Every contact the owner owns and has not archived, as contacts_summary rows as of `today`
     (api.js ownedBy). Call inside _transaction, or through rank()."""

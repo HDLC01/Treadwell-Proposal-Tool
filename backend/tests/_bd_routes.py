@@ -93,6 +93,11 @@ ROUTE_ROLES = {
     ("POST", "/api/bd/contacts/{id}/confirm"): _open("salesperson", "assistant"),
     ("POST", "/api/bd/contacts/{id}/archive"): _open("salesperson", "assistant"),
     ("POST", "/api/bd/contacts/{id}/merge"): _open("assistant"),                         # not built yet
+    # BD accounts: the Contacts page's tabs, search and company moves (#810)
+    ("GET", "/api/bd/contacts/accounts"): ANY,
+    ("GET", "/api/bd/contacts/search"): ANY,
+    ("POST", "/api/bd/contacts/accounts/{id}/move"): _open("salesperson", "manager"),
+    ("POST", "/api/bd/contacts/accounts/moves/{id}/undo"): _open("salesperson", "manager"),  # your own move only
     # Companies
     ("GET", "/api/bd/companies"): ANY,
     ("GET", "/api/bd/companies/{id}"): ANY,

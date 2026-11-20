@@ -205,6 +205,14 @@ _Avoid_: Customer (that is who approves a Proposal), client, company record
 One person under a BD account, with the name, phone and email a salesperson reaches them by.
 _Avoid_: Lead (that is an incoming request for a bid), prospect
 
+**Account owner**:
+The person who owns the most BD contacts at a BD account, shown on its Contacts row with "+N" when N other people own someone there too. On a tie it is whichever of them had the latest live talk at the account.
+_Avoid_: Account manager, main contact (that is a person at the company)
+
+**Last live talk**:
+The latest call where someone talked, meeting or hosted event with anyone at a BD account, BD or maintenance contact. Voicemails, missed calls, emails, texts and notes never count.
+_Avoid_: Last contact, last touch, last activity
+
 **Possible duplicate**:
 A BD contact who may be the same person as one already in the BD CRM, because they share a company name (once cleaned of endings such as LLC), an email or a phone number. Add contact warns about them before saving; the new contact is saved anyway, flagged with the first match, and an assistant or BD admin clears the flag.
 _Avoid_: Duplicate contact, likely duplicate (that is two BD accounts that may be one company)

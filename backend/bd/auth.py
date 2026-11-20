@@ -199,6 +199,9 @@ def can(user) -> dict:
         # (refuse_new_login / refuse_login_change below). BD's Admin page offers the admin roles, and
         # an admin's row, only to this person, and tells a plain admin why the row is locked.
         "manage_admins": role == "super_admin",
+        # Makes a whole company a maintenance account, or moves it back to BD, and undoes that move
+        # (#810, Q5): the Contacts page's "..." menu item. Never the assistant.
+        "move_company": a or role in ("salesperson", "manager"),
     }
 
 
